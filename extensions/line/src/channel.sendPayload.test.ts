@@ -161,6 +161,71 @@ describe("line outbound sendPayload", () => {
     });
   });
 
+  it("falls back to markdown Flex altText when generated bubble exceeds LINE bubble limit", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+    const largeCell = "A".repeat(31 * 1024);
+    const text = `Before\n\n| Name | Value | Notes |\n| --- | --- | --- |\n| Big | ${largeCell} | Done |`;
+
+    await lineOutboundAdapter.sendPayload!({
+      to: "line:group:1",
+      text,
+      payload: { text },
+      accountId: "default",
+      cfg,
+    });
+
+    expect(mocks.pushFlexMessage).not.toHaveBeenCalled();
+    expect(mocks.pushMessageLine).toHaveBeenCalledWith(
+      "line:group:1",
+      expect.stringContaining("Table: 1 rows × 3 cols"),
+      { verbose: false, accountId: "default", cfg },
+    );
+  });
+
+  it("falls back to markdown Flex altText for direct sendText", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+    const largeCell = "A".repeat(31 * 1024);
+    const text = `Before\n\n| Name | Value | Notes |\n| --- | --- | --- |\n| Big | ${largeCell} | Done |`;
+
+    await lineOutboundAdapter.sendText!({
+      to: "line:group:1",
+      text,
+      accountId: "default",
+      cfg,
+    });
+
+    expect(mocks.pushFlexMessage).not.toHaveBeenCalled();
+    expect(mocks.pushMessageLine).toHaveBeenCalledWith(
+      "line:group:1",
+      expect.stringContaining("Table: 1 rows × 3 cols"),
+      { verbose: false, accountId: "default", cfg },
+    );
+  });
+
+  it("preserves literal double pipes for direct sendText", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+    const text = "Condition: if (ready || forced) continue";
+
+    await lineOutboundAdapter.sendText!({
+      to: "line:group:1",
+      text,
+      accountId: "default",
+      cfg,
+    });
+
+    expect(mocks.pushMessageLine).toHaveBeenCalledWith("line:group:1", text, {
+      verbose: false,
+      accountId: "default",
+      cfg,
+    });
+  });
+
   it("reports each platform result for text and media payloads", async () => {
     const { runtime } = createRuntime();
     setLineRuntime(runtime);
@@ -649,6 +714,99 @@ describe("linePlugin config.formatAllowFrom", () => {
       allowFrom: ["line:user:UABC", "line:UDEF"],
     });
     expect(formatted).toEqual(["UABC", "UDEF"]);
+  });
+});
+
+describe("linePlugin messaging.transformReplyPayload", () => {
+  const createOversizedCarousel = () => ({
+    type: "carousel",
+    contents: [
+      {
+        type: "bubble",
+        body: {
+          type: "box",
+          layout: "vertical",
+          contents: [{ type: "text", text: "A".repeat(31 * 1024) }],
+        },
+      },
+    ],
+  });
+
+  const createTooManyBubbleCarousel = () => ({
+    type: "carousel",
+    contents: Array.from({ length: 13 }, () => ({
+      type: "bubble",
+      body: { type: "box", layout: "vertical", contents: [] },
+    })),
+  });
+
+  it("validates prebuilt LINE Flex payloads without directive syntax", () => {
+    const result = linePlugin.messaging?.transformReplyPayload?.({
+      cfg: {} as OpenClawConfig,
+      payload: {
+        text: "plain text",
+        channelData: {
+          line: {
+            flexMessage: { altText: "Carousel", contents: createOversizedCarousel() },
+          },
+        },
+      },
+    });
+
+    expect(result?.channelData?.line).toBeUndefined();
+    expect(result?.text).toContain("內容過長");
+  });
+
+  it("preserves valid prebuilt LINE Flex payloads without directive syntax", () => {
+    const text = "  plain text\n\n\nwith spacing  ";
+    const flexMessage = {
+      altText: "Card",
+      contents: { type: "bubble", body: { type: "box", layout: "vertical", contents: [] } },
+    };
+
+    const result = linePlugin.messaging?.transformReplyPayload?.({
+      cfg: {} as OpenClawConfig,
+      payload: {
+        text,
+        channelData: { line: { flexMessage } },
+      },
+    });
+
+    expect(result?.text).toBe(text);
+    expect(result?.channelData?.line).toEqual({ flexMessage });
+  });
+
+  it("validates flex-only prebuilt LINE Flex payloads", () => {
+    const result = linePlugin.messaging?.transformReplyPayload?.({
+      cfg: {} as OpenClawConfig,
+      payload: {
+        channelData: {
+          line: {
+            flexMessage: { altText: "Carousel", contents: createOversizedCarousel() },
+          },
+        },
+      },
+    });
+
+    expect(result?.channelData).toBeUndefined();
+    expect(result?.text).toContain("內容過長");
+  });
+
+  it("rejects prebuilt carousels with too many bubbles", () => {
+    const result = linePlugin.messaging?.transformReplyPayload?.({
+      cfg: {} as OpenClawConfig,
+      payload: {
+        text: "plain text",
+        channelData: {
+          line: {
+            flexMessage: { altText: "Carousel", contents: createTooManyBubbleCarousel() },
+          },
+        },
+      },
+    });
+
+    expect(result?.channelData?.line).toBeUndefined();
+    expect(result?.text).toContain("內容過長");
   });
 });
 

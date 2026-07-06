@@ -390,4 +390,93 @@ describe("parseLineDirectives", () => {
       expect(getLineData(result).quickReplies).toEqual(["A", "B"]);
     });
   });
+
+  describe("FlexMessage container size validation", () => {
+    it("preserves flexMessage when under the bubble limit", () => {
+      const result = parseLineDirectives({
+        text: "[[media_player: Song | Artist | Speaker | https://example.com/img.jpg | playing]]",
+      });
+      const flexMessage = requireFlexMessage(getLineData(result).flexMessage, "under 32KB");
+      expect(flexMessage.altText).toBe("🎵 Song - Artist");
+    });
+
+    it("falls back to plain text when flexMessage exceeds the bubble limit", () => {
+      const longDescription = "A".repeat(50000);
+      const result = parseLineDirectives({
+        text: `[[event: Test Event | Jan 1 | ${longDescription}]]`,
+      });
+      expect(getLineData(result).flexMessage).toBeUndefined();
+      expect(result.text).toContain("內容過長");
+    });
+
+    it("does nothing when no flexMessage exists", () => {
+      const result = parseLineDirectives({
+        text: "Just plain text",
+      });
+      expect(getLineData(result).flexMessage).toBeUndefined();
+      expect(result.text).toBe("Just plain text");
+    });
+
+    it("preserves carousel flexMessage above the bubble limit when under the carousel limit", () => {
+      const carouselContents = {
+        type: "carousel",
+        contents: [
+          {
+            type: "bubble",
+            body: {
+              type: "box",
+              layout: "vertical",
+              contents: [{ type: "text", text: "A".repeat(16 * 1024) }],
+            },
+          },
+          {
+            type: "bubble",
+            body: {
+              type: "box",
+              layout: "vertical",
+              contents: [{ type: "text", text: "B".repeat(16 * 1024) }],
+            },
+          },
+        ],
+      };
+      const result = parseLineDirectives({
+        text: "Carousel",
+        channelData: {
+          line: {
+            flexMessage: { altText: "Carousel", contents: carouselContents },
+          },
+        },
+      });
+      const flexMessage = getLineData(result).flexMessage;
+      expect(flexMessage).toEqual({ altText: "Carousel", contents: carouselContents });
+    });
+
+    it("falls back when a carousel child bubble exceeds the bubble limit", () => {
+      const carouselContents = {
+        type: "carousel",
+        contents: [
+          {
+            type: "bubble",
+            body: {
+              type: "box",
+              layout: "vertical",
+              contents: [{ type: "text", text: "A".repeat(31 * 1024) }],
+            },
+          },
+        ],
+      };
+
+      const result = parseLineDirectives({
+        text: "Carousel",
+        channelData: {
+          line: {
+            flexMessage: { altText: "Carousel", contents: carouselContents },
+          },
+        },
+      });
+
+      expect(getLineData(result).flexMessage).toBeUndefined();
+      expect(result.text).toContain("內容過長");
+    });
+  });
 });

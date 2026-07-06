@@ -315,6 +315,21 @@ describe("monitorLineProvider lifecycle", () => {
     monitor.stop();
   });
 
+  it("records startup state once after webhook registration", async () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValueOnce(1_000).mockReturnValueOnce(2_000);
+
+    const monitor = await monitorLineProvider({
+      channelAccessToken: "token",
+      channelSecret: "secret", // pragma: allowlist secret
+      config: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+    });
+
+    expect(getLineRuntimeState("default")?.lastStartAt).toBe(1_000);
+    monitor.stop();
+    nowSpy.mockRestore();
+  });
+
   it("does not record running state when bot startup fails", async () => {
     createLineBotMock.mockImplementation(() => {
       throw new Error("line bot startup failed");

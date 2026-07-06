@@ -19,6 +19,10 @@ import { lineStatusAdapter } from "./status.js";
 
 const loadLineChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
 
+function hasPrebuiltLineFlexMessage(payload: { channelData?: { line?: unknown } }): boolean {
+  return Boolean((payload.channelData?.line as { flexMessage?: unknown } | undefined)?.flexMessage);
+}
+
 const lineSecurityAdapter = createRestrictSendersChannelSecurity<ResolvedLineAccount>({
   channelKey: "line",
   resolveDmPolicy: (account) => account.config.dmPolicy,
@@ -53,7 +57,10 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
       },
       resolveInboundConversation: lineBindingsAdapter.resolveInboundConversation,
       transformReplyPayload: ({ payload }) => {
-        if (!payload.text || !hasLineDirectives(payload.text)) {
+        if (
+          !hasPrebuiltLineFlexMessage(payload) &&
+          (!payload.text || !hasLineDirectives(payload.text))
+        ) {
           return payload;
         }
         return parseLineDirectives(payload);

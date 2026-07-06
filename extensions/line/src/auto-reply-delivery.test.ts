@@ -1,4 +1,5 @@
 // Line tests cover auto reply delivery plugin behavior.
+import type { messagingApi } from "@line/bot-sdk";
 import { describe, expect, it, vi } from "vitest";
 import type { LineAutoReplyDeps } from "./auto-reply-delivery.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
@@ -246,6 +247,87 @@ describe("deliverLineAutoReply", () => {
     const pushOrder = pushMessagesLine.mock.invocationCallOrder[0];
     const replyOrder = replyMessageLine.mock.invocationCallOrder[0];
     expect(pushOrder).toBeLessThan(replyOrder);
+  });
+
+  it("falls back to altText when markdown bubble exceeds the bubble size limit", async () => {
+    const largeContents = {
+      type: "bubble",
+      body: {
+        type: "box",
+        layout: "vertical",
+        contents: [{ type: "text", text: "A".repeat(31 * 1024) }],
+      },
+    } as messagingApi.FlexContainer;
+    const chunkMarkdownTextSpy = vi.fn((text: string) => [text]);
+    const sendLineReplyChunksSpy = vi.fn(async () => ({ replyTokenUsed: false }));
+    const { deps, pushMessagesLine } = createDeps({
+      processLineMessage: () => ({
+        text: "some text",
+        flexMessages: [
+          { type: "flex", altText: "Table: 50 rows x 3 cols", contents: largeContents },
+        ],
+      }),
+      chunkMarkdownText: chunkMarkdownTextSpy,
+      sendLineReplyChunks: sendLineReplyChunksSpy,
+    });
+
+    await deliverLineAutoReply({
+      ...baseDeliveryParams,
+      payload: { text: "some text", channelData: { line: {} } },
+      lineData: {},
+      deps,
+    });
+
+    // The text passed to chunkMarkdownText should include the fallback altText
+    expect(chunkMarkdownTextSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Table: 50 rows x 3 cols"),
+      expect.any(Number),
+    );
+    // Verify oversized Flex was NOT added to richMessages
+    expect(pushMessagesLine).not.toHaveBeenCalled();
+  });
+
+  it("keeps markdown carousel flex when it exceeds the bubble limit but fits carousel limit", async () => {
+    const carouselContents = {
+      type: "carousel",
+      contents: [
+        {
+          type: "bubble",
+          body: {
+            type: "box",
+            layout: "vertical",
+            contents: [{ type: "text", text: "A".repeat(16 * 1024) }],
+          },
+        },
+        {
+          type: "bubble",
+          body: {
+            type: "box",
+            layout: "vertical",
+            contents: [{ type: "text", text: "B".repeat(16 * 1024) }],
+          },
+        },
+      ],
+    } as messagingApi.FlexContainer;
+    const { deps, pushMessagesLine } = createDeps({
+      processLineMessage: () => ({
+        text: "summary",
+        flexMessages: [{ type: "flex", altText: "Carousel", contents: carouselContents }],
+      }),
+    });
+
+    await deliverLineAutoReply({
+      ...baseDeliveryParams,
+      payload: { text: "summary", channelData: { line: {} } },
+      lineData: {},
+      deps,
+    });
+
+    expect(pushMessagesLine).toHaveBeenCalledWith(
+      "line:user:1",
+      [createFlexMessage("Carousel", carouselContents)],
+      { cfg: LINE_TEST_CFG, accountId: "acc" },
+    );
   });
 
   it("falls back to push when reply token delivery fails", async () => {
