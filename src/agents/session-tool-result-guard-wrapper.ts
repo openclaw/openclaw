@@ -11,10 +11,12 @@ import {
 } from "../sessions/input-provenance.js";
 import {
   attachRuntimeUserTurnTranscriptRecorder,
-  mergePreparedUserTurnMessageForRuntime,
-  restorePreparedUserTurnOperationalMetaForRuntime,
   takeRuntimeUserTurnTranscriptContext,
   takeRuntimeUserTurnTranscriptRecorder,
+} from "../sessions/user-turn-transcript-runtime-context.js";
+import {
+  mergePreparedUserTurnMessageForRuntime,
+  restorePreparedUserTurnOperationalMetaForRuntime,
   type PersistedUserTurnMessage,
   type UserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";

@@ -34,11 +34,11 @@ import type {
   TextContent,
 } from "../../llm/types.js";
 import { isRetryableAssistantError } from "../../llm/utils/retry.js";
-import {
-  attachRuntimeUserTurnTranscriptContext,
-  type PersistedUserTurnMessage,
-  type UserTurnTranscriptRecorder,
-} from "../../sessions/user-turn-transcript.js";
+import { attachRuntimeUserTurnTranscriptContext } from "../../sessions/user-turn-transcript-runtime-context.js";
+import type {
+  PersistedUserTurnMessage,
+  UserTurnTranscriptRecorder,
+} from "../../sessions/user-turn-transcript.types.js";
 import type {
   Agent,
   AgentEvent,
