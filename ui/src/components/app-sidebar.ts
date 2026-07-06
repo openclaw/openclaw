@@ -133,6 +133,7 @@ export class AppSidebar extends LitElement {
   @state() private sessionsLoading = false;
 
   private stopSessionsSubscription: (() => void) | undefined;
+  private stopSessionCreatedSubscription: (() => void) | undefined;
   private stopAgentsSubscription: (() => void) | undefined;
   private stopAgentSelectionSubscription: (() => void) | undefined;
   private stopGatewaySubscription: (() => void) | undefined;
@@ -159,6 +160,8 @@ export class AppSidebar extends LitElement {
     this.closeSessionSortMenu();
     this.stopSessionsSubscription?.();
     this.stopSessionsSubscription = undefined;
+    this.stopSessionCreatedSubscription?.();
+    this.stopSessionCreatedSubscription = undefined;
     this.stopAgentsSubscription?.();
     this.stopAgentsSubscription = undefined;
     this.stopAgentSelectionSubscription?.();
@@ -178,6 +181,7 @@ export class AppSidebar extends LitElement {
     if (
       !context ||
       this.stopSessionsSubscription ||
+      this.stopSessionCreatedSubscription ||
       this.stopAgentsSubscription ||
       this.stopAgentSelectionSubscription ||
       this.stopGatewaySubscription
@@ -188,6 +192,9 @@ export class AppSidebar extends LitElement {
     this.updateSessions(context.sessions.state);
     this.stopSessionsSubscription = context.sessions.subscribe((snapshot) => {
       this.updateSessions(snapshot);
+    });
+    this.stopSessionCreatedSubscription = context.sessions.subscribeCreated((key) => {
+      this.promoteCreatedSession(key);
     });
     this.stopAgentsSubscription = context.agents.subscribe(() => {
       this.requestUpdate();
@@ -254,6 +261,20 @@ export class AppSidebar extends LitElement {
       (this.sessionCreatedOrder.get(b.key) ?? Number.MAX_SAFE_INTEGER)
     );
   };
+
+  private promoteCreatedSession(sessionKey: string) {
+    const currentOrder = this.sessionCreatedOrder.get(sessionKey);
+    if (currentOrder === 0) {
+      return;
+    }
+    for (const [key, order] of this.sessionCreatedOrder) {
+      if (key !== sessionKey && (currentOrder === undefined || order < currentOrder)) {
+        this.sessionCreatedOrder.set(key, order + 1);
+      }
+    }
+    this.sessionCreatedOrder.set(sessionKey, 0);
+    this.requestUpdate();
+  }
 
   private getSessionNavigationState() {
     const context = this.context;
