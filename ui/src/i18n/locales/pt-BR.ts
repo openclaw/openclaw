@@ -1540,6 +1540,7 @@ export const pt_BR: TranslationMap = {
     },
     runControls: {
       newSession: "New session",
+      newSessionWorktree: "Novo chat no worktree",
       export: "Exportar",
       exportChat: "Export chat",
       queue: "Queue",

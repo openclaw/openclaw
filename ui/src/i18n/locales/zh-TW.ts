@@ -1501,6 +1501,7 @@ export const zh_TW: TranslationMap = {
     },
     runControls: {
       newSession: "New session",
+      newSessionWorktree: "在 worktree 中新增聊天",
       export: "匯出",
       exportChat: "Export chat",
       queue: "Queue",

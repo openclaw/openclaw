@@ -266,12 +266,12 @@ class ChatController internal constructor(
   }
 
   /** Starts a fresh chat for the active gateway session key. */
-  fun startNewChat() {
-    scope.launch { startNewChatAwait() }
+  fun startNewChat(worktree: Boolean = false) {
+    scope.launch { startNewChatAwait(worktree = worktree) }
   }
 
   /** Starts a fresh chat and returns whether the gateway created the session. */
-  suspend fun startNewChatAwait(): Boolean {
+  suspend fun startNewChatAwait(worktree: Boolean = false): Boolean {
     val parentKey = normalizeRequestedSessionKey(_sessionKey.value)
     if (parentKey.isEmpty()) return false
     if (_pendingRunCount.value > 0) {
@@ -295,6 +295,7 @@ class ChatController internal constructor(
             put("emitCommandHooks", JsonPrimitive(true))
           }
           put("label", JsonPrimitive(label))
+          if (worktree) put("worktree", JsonPrimitive(true))
         }
       val res = requestGateway("sessions.create", params.toString())
       if (!isCurrentHistoryLoad(parentKey, _sessionKey.value, requestGeneration, historyLoadGeneration.get())) {

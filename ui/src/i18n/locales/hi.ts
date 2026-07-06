@@ -1522,6 +1522,7 @@ export const hi: TranslationMap = {
     },
     runControls: {
       newSession: "नया सेशन",
+      newSessionWorktree: "वर्कट्री में नई चैट",
       export: "निर्यात करें",
       exportChat: "चैट निर्यात करें",
       queue: "कतार",

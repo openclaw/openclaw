@@ -518,6 +518,23 @@
     color var(--duration-fast) ease;
 }
 
+.sidebar-new-session-group {
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.sidebar-new-session-group > .sidebar-new-session:first-child {
+  flex: 1;
+}
+
+.sidebar-new-session--worktree {
+  width: 34px;
+  flex: 0 0 34px;
+  justify-content: center;
+  padding: 0;
+}
+
 .sidebar-new-session:hover:not(:disabled) {
   background: var(--accent-subtle);
   color: var(--accent-hover);
@@ -1068,6 +1085,11 @@
   min-height: 44px;
   padding: 0;
   border-radius: var(--radius-lg);
+}
+
+.sidebar--collapsed .sidebar-new-session-group {
+  flex-direction: column;
+  gap: 4px;
 }
 
 .sidebar--collapsed .nav-section {

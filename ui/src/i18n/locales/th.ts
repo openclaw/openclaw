@@ -1504,6 +1504,7 @@ export const th: TranslationMap = {
     },
     runControls: {
       newSession: "New session",
+      newSessionWorktree: "แชทใหม่ใน worktree",
       export: "ส่งออก",
       exportChat: "Export chat",
       queue: "Queue",

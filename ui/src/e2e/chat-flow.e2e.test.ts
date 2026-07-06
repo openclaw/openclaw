@@ -1004,6 +1004,33 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("creates a worktree chat from the git-backed agent sidebar action", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.create": { key: "agent:main:dashboard:worktree", ok: true },
+      },
+      workspaceGit: true,
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const worktreeButton = page.getByRole("button", { name: "New chat in worktree" });
+      await worktreeButton.waitFor({ state: "visible", timeout: 10_000 });
+      await worktreeButton.click();
+
+      const request = await gateway.waitForRequest("sessions.create");
+      expect(requireRecord(request.params)).toMatchObject({ agentId: "main", worktree: true });
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("sends the first chat turn while agents startup loading is still pending", async () => {
     const context = await newBrowserContext({
       locale: "en-US",

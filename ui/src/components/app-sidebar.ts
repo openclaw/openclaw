@@ -280,7 +280,7 @@ export class AppSidebar extends LitElement {
     this.selectSession(nextSessionKey);
   };
 
-  private readonly createSession = async () => {
+  private readonly createSession = async (worktree = false) => {
     const context = this.context;
     if (!context) {
       return;
@@ -293,6 +293,7 @@ export class AppSidebar extends LitElement {
     const nextSessionKey = await context.sessions.create({
       currentSessionKey: routeSessionKey,
       agentId: selectedAgentId,
+      ...(worktree ? { worktree: true } : {}),
     });
     if (nextSessionKey) {
       this.selectSession(nextSessionKey);
@@ -647,13 +648,17 @@ export class AppSidebar extends LitElement {
       newSessionDisabled,
       newSessionTitle,
     } = this.getSessionNavigationState();
+    const workspaceGit =
+      context?.agents.state.agentsList?.agents.find(
+        (agent) => normalizeAgentId(agent.id) === normalizeAgentId(selectedAgentId),
+      )?.workspaceGit === true;
     const newSessionButton = html`
       <button
         type="button"
         class="sidebar-new-session"
         aria-label=${t("chat.runControls.newSession")}
         ?disabled=${newSessionDisabled}
-        @click=${this.createSession}
+        @click=${() => void this.createSession()}
       >
         <span class="sidebar-new-session__icon" aria-hidden="true">${icons.plus}</span>
         ${this.collapsed
@@ -663,6 +668,23 @@ export class AppSidebar extends LitElement {
             >`}
       </button>
     `;
+    const newSessionControl = workspaceGit
+      ? html`
+          <div class="sidebar-new-session-group">
+            ${newSessionButton}
+            <button
+              type="button"
+              class="sidebar-new-session sidebar-new-session--worktree"
+              title=${t("chat.runControls.newSessionWorktree")}
+              aria-label=${t("chat.runControls.newSessionWorktree")}
+              ?disabled=${newSessionDisabled}
+              @click=${() => void this.createSession(true)}
+            >
+              <span class="sidebar-new-session__icon" aria-hidden="true">${icons.gitBranch}</span>
+            </button>
+          </div>
+        `
+      : newSessionButton;
     // Pinned rows stay separate from the recency-capped chat list; the active
     // session leads whichever group owns it.
     const allRows = [...(activeSession ? [activeSession] : []), ...recentSessions];
@@ -672,9 +694,9 @@ export class AppSidebar extends LitElement {
       <section class="sidebar-sessions ${this.collapsed ? "sidebar-sessions--collapsed" : ""}">
         ${this.collapsed
           ? html`<openclaw-tooltip .content=${newSessionTitle}
-              >${newSessionButton}</openclaw-tooltip
+              >${newSessionControl}</openclaw-tooltip
             >`
-          : newSessionButton}
+          : newSessionControl}
         ${this.collapsed
           ? nothing
           : html`

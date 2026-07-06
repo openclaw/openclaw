@@ -1529,6 +1529,7 @@ export const vi: TranslationMap = {
     },
     runControls: {
       newSession: "New session",
+      newSessionWorktree: "Cuộc trò chuyện mới trong worktree",
       export: "Xuất",
       exportChat: "Export chat",
       queue: "Queue",

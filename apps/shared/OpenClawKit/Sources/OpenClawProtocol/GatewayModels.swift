@@ -2565,6 +2565,28 @@ public struct SessionsFilesGetResult: Codable, Sendable {
     }
 }
 
+public struct SessionWorktreeInfo: Codable, Sendable {
+    public let id: String
+    public let path: String
+    public let branch: String
+
+    public init(
+        id: String,
+        path: String,
+        branch: String)
+    {
+        self.id = id
+        self.path = path
+        self.branch = branch
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case path
+        case branch
+    }
+}
+
 public struct SessionsCreateParams: Codable, Sendable {
     public let key: String?
     public let agentid: String?
@@ -2574,6 +2596,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let emitcommandhooks: Bool?
     public let task: String?
     public let message: String?
+    public let worktree: Bool?
 
     public init(
         key: String?,
@@ -2583,7 +2606,8 @@ public struct SessionsCreateParams: Codable, Sendable {
         parentsessionkey: String?,
         emitcommandhooks: Bool?,
         task: String?,
-        message: String?)
+        message: String?,
+        worktree: Bool?)
     {
         self.key = key
         self.agentid = agentid
@@ -2593,6 +2617,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.emitcommandhooks = emitcommandhooks
         self.task = task
         self.message = message
+        self.worktree = worktree
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2604,6 +2629,41 @@ public struct SessionsCreateParams: Codable, Sendable {
         case emitcommandhooks = "emitCommandHooks"
         case task
         case message
+        case worktree
+    }
+}
+
+public struct SessionsCreateResult: Codable, Sendable {
+    public let ok: Bool
+    public let key: String
+    public let sessionid: String?
+    public let entry: [String: AnyCodable]?
+    public let runstarted: Bool?
+    public let worktree: SessionWorktreeInfo?
+
+    public init(
+        ok: Bool,
+        key: String,
+        sessionid: String?,
+        entry: [String: AnyCodable]?,
+        runstarted: Bool?,
+        worktree: SessionWorktreeInfo?)
+    {
+        self.ok = ok
+        self.key = key
+        self.sessionid = sessionid
+        self.entry = entry
+        self.runstarted = runstarted
+        self.worktree = worktree
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case key
+        case sessionid = "sessionId"
+        case entry
+        case runstarted = "runStarted"
+        case worktree
     }
 }
 
@@ -4778,6 +4838,7 @@ public struct AgentSummary: Codable, Sendable {
     public let name: String?
     public let identity: [String: AnyCodable]?
     public let workspace: String?
+    public let workspacegit: Bool?
     public let model: [String: AnyCodable]?
     public let agentruntime: [String: AnyCodable]?
     public let thinkinglevels: [[String: AnyCodable]]?
@@ -4789,6 +4850,7 @@ public struct AgentSummary: Codable, Sendable {
         name: String?,
         identity: [String: AnyCodable]?,
         workspace: String?,
+        workspacegit: Bool?,
         model: [String: AnyCodable]?,
         agentruntime: [String: AnyCodable]?,
         thinkinglevels: [[String: AnyCodable]]? = nil,
@@ -4799,6 +4861,7 @@ public struct AgentSummary: Codable, Sendable {
         self.name = name
         self.identity = identity
         self.workspace = workspace
+        self.workspacegit = workspacegit
         self.model = model
         self.agentruntime = agentruntime
         self.thinkinglevels = thinkinglevels
@@ -4811,6 +4874,7 @@ public struct AgentSummary: Codable, Sendable {
         case name
         case identity
         case workspace
+        case workspacegit = "workspaceGit"
         case model
         case agentruntime = "agentRuntime"
         case thinkinglevels = "thinkingLevels"

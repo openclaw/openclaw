@@ -312,6 +312,10 @@ public final class OpenClawChatViewModel {
         Task { await self.fetchSessions(limit: limit, sessionSnapshot: context) }
     }
 
+    public func startNewSession(worktree: Bool = false) async {
+        await self.performStartNewSession(worktree: worktree)
+    }
+
     public func switchSession(to sessionKey: String) {
         self.applySessionSwitch(to: sessionKey, intent: .userInitiated)
     }
@@ -974,7 +978,7 @@ public final class OpenClawChatViewModel {
     private func handleLocalSlashCommandIfNeeded(_ command: String) async -> Bool {
         if command == "/new" {
             self.input = ""
-            await self.performStartNewSession()
+            await self.startNewSession()
             return true
         }
         if Self.resetTriggers.contains(command) {
@@ -1289,7 +1293,7 @@ public final class OpenClawChatViewModel {
         self.startBootstrap(sessionKey: next)
     }
 
-    private func performStartNewSession() async {
+    private func performStartNewSession(worktree: Bool) async {
         let requested = self.generatedNewSessionKey()
         let parentSessionKey = self.sessionKey
         let next: String
@@ -1297,7 +1301,8 @@ public final class OpenClawChatViewModel {
             let created = try await transport.createSession(
                 key: requested,
                 label: nil,
-                parentSessionKey: parentSessionKey)
+                parentSessionKey: parentSessionKey,
+                worktree: worktree ? true : nil)
             let createdKey = created.key.trimmingCharacters(in: .whitespacesAndNewlines)
             next = createdKey.isEmpty ? requested : createdKey
         } catch {

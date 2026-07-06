@@ -1,7 +1,12 @@
 // Gateway maintenance timers.
 // Starts periodic health, dedupe, abort, and media cleanup loops.
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { managedWorktrees, WORKTREE_GC_INTERVAL_MS } from "../agents/worktrees/service.js";
+import {
+  IDLE_GC_MS,
+  managedWorktrees,
+  WORKTREE_GC_INTERVAL_MS,
+} from "../agents/worktrees/service.js";
+import type { ManagedWorktreeOwnerKind } from "../agents/worktrees/types.js";
 import type { HealthSummary } from "../commands/health.js";
 import { sweepStaleRunContexts } from "../infra/agent-events.js";
 import { cleanOldMedia } from "../media/store.js";
@@ -25,6 +30,23 @@ import {
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "./server-shared.js";
 import { formatError } from "./server-utils.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
+import { loadSessionEntry } from "./session-utils.js";
+
+function isManagedWorktreeOwnerActive(
+  ownerKind: ManagedWorktreeOwnerKind,
+  ownerId: string,
+): boolean {
+  if (ownerKind !== "session") {
+    return false;
+  }
+  try {
+    const entry = loadSessionEntry(ownerId, { clone: false }).entry;
+    const activityAt = Math.max(entry?.lastInteractionAt ?? 0, entry?.updatedAt ?? 0);
+    return activityAt > 0 && Date.now() - activityAt <= IDLE_GC_MS;
+  } catch {
+    return false;
+  }
+}
 
 export function startGatewayMaintenanceTimers(params: {
   broadcast: (
@@ -105,7 +127,14 @@ export function startGatewayMaintenanceTimers(params: {
     .refreshGatewayHealthSnapshot({ probe: false })
     .catch((err: unknown) => params.logHealth.error(`initial refresh failed: ${formatError(err)}`));
 
-  const runWorktreeGc = params.runWorktreeGc ?? (() => managedWorktrees.gc());
+  const runWorktreeGc =
+    params.runWorktreeGc ??
+    (() =>
+      managedWorktrees.gc({
+        // Chat runs avoid registry acquire/bump writes; recent session metadata substitutes for
+        // worktree activity so idle GC cannot remove a checkout still used by the session.
+        isOwnerActive: isManagedWorktreeOwnerActive,
+      }));
   const performWorktreeGc = () =>
     runWorktreeGc().catch((err: unknown) => {
       params.logHealth.error(`managed worktree cleanup failed: ${formatError(err)}`);

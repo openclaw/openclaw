@@ -421,6 +421,15 @@ export const icons = {
       <path d="M12 5v14" />
     </svg>
   `,
+  gitBranch: html`
+    <svg viewBox="0 0 24 24">
+      <circle cx="6" cy="5" r="2" />
+      <circle cx="18" cy="6" r="2" />
+      <circle cx="6" cy="19" r="2" />
+      <path d="M6 7v10" />
+      <path d="M8 9h5a5 5 0 0 0 5-5" />
+    </svg>
+  `,
   terminal: html`
     <svg viewBox="0 0 24 24">
       <polyline points="4 17 10 11 4 5" />

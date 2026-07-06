@@ -2659,8 +2659,8 @@ class NodeRuntime private constructor(
     chat.abort()
   }
 
-  fun startNewChat() {
-    chat.startNewChat()
+  fun startNewChat(worktree: Boolean = false) {
+    chat.startNewChat(worktree = worktree)
   }
 
   fun sendChat(
@@ -2795,6 +2795,7 @@ class NodeRuntime private constructor(
             id = id,
             name = name?.takeIf { it.isNotEmpty() },
             emoji = emoji?.takeIf { it.isNotEmpty() },
+            workspaceGit = (obj["workspaceGit"] as? JsonPrimitive)?.content?.toBooleanStrictOrNull() == true,
           )
         } ?: emptyList()
 
@@ -3995,6 +3996,7 @@ data class GatewayAgentSummary(
   val id: String,
   val name: String?,
   val emoji: String?,
+  val workspaceGit: Boolean = false,
 )
 
 data class GatewayModelSummary(

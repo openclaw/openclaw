@@ -1544,6 +1544,7 @@ export const ja_JP: TranslationMap = {
     },
     runControls: {
       newSession: "New session",
+      newSessionWorktree: "ワークツリーで新しいチャット",
       export: "エクスポート",
       exportChat: "Export chat",
       queue: "Queue",
