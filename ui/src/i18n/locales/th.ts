@@ -1428,6 +1428,12 @@ export const th: TranslationMap = {
       },
     },
   },
+  connection: {
+    lostTitle: "การเชื่อมต่อ Gateway ขาดหาย",
+    reconnecting: "กำลังเชื่อมต่อใหม่…",
+    offlineHint: "การอัปเดตสดและการดำเนินการถูกหยุดชั่วคราวจนกว่าการเชื่อมต่อจะกลับมา",
+    retryNow: "ลองอีกครั้งตอนนี้",
+  },
   chat: {
     disconnected: "ตัดการเชื่อมต่อจากเกตเวย์แล้ว",
     archivedSessionDisabled: "กู้คืนเซสชันนี้เพื่อส่งข้อความ",

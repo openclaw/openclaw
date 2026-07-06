@@ -20,6 +20,7 @@ class ChatControllerTranscriptCacheTest {
     var sessions: List<ChatSessionEntry> = emptyList()
     val savedTranscripts = mutableListOf<Triple<String, String, List<ChatMessage>>>()
     val savedSessions = mutableListOf<Pair<String, List<ChatSessionEntry>>>()
+    val retainedSessionKeys = mutableListOf<String?>()
     val deletedSessions = mutableListOf<Pair<String, String>>()
 
     override suspend fun loadSessions(gatewayId: String): List<ChatSessionEntry> = sessions
@@ -32,8 +33,10 @@ class ChatControllerTranscriptCacheTest {
     override suspend fun saveSessions(
       gatewayId: String,
       sessions: List<ChatSessionEntry>,
+      retainedSessionKey: String?,
     ) {
       savedSessions += gatewayId to sessions
+      retainedSessionKeys += retainedSessionKey
     }
 
     override suspend fun saveTranscript(
@@ -258,7 +261,66 @@ class ChatControllerTranscriptCacheTest {
           .second
           .map { it.key },
       )
+      assertEquals(null, cache.retainedSessionKeys.last())
       assertEquals(listOf("main"), controller.sessions.value.map { it.key })
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun truncatedSessionListRetainsActiveDeepTranscript() =
+    runTest {
+      val cache = FakeTranscriptCache()
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            when (method) {
+              "sessions.list" ->
+                """{"totalCount":2,"hasMore":true,"sessions":[{"key":"main","updatedAt":7}]}"""
+              "chat.history" -> """{"sessionId":"session-1","messages":[]}"""
+              else -> "{}"
+            }
+          },
+          transcriptCache = cache,
+          cacheScope = { gatewayScope },
+        )
+
+      controller.load("deep-session")
+      advanceUntilIdle()
+
+      assertEquals("deep-session", cache.retainedSessionKeys.last())
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun completeSessionListRetainsActiveTranscriptBeyondLocalCacheWindow() =
+    runTest {
+      val cache = FakeTranscriptCache()
+      val sessions =
+        (0 until MAX_CACHED_SESSIONS + 10).joinToString(",") { index ->
+          """{"key":"session-$index","updatedAt":${100 - index}}"""
+        }
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            when (method) {
+              "sessions.list" ->
+                """{"totalCount":60,"hasMore":false,"sessions":[$sessions]}"""
+              "chat.history" -> """{"sessionId":"session-55","messages":[]}"""
+              else -> "{}"
+            }
+          },
+          transcriptCache = cache,
+          cacheScope = { gatewayScope },
+        )
+
+      controller.load("session-55")
+      advanceUntilIdle()
+
+      assertEquals("session-55", cache.retainedSessionKeys.last())
     }
 
   @Test

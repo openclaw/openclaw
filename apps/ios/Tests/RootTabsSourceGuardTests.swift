@@ -629,7 +629,8 @@ struct RootTabsSourceGuardTests {
 
         #expect(activitySource.contains("struct IPadActivityScreen: View"))
         #expect(activitySource.contains("self.appModel.makeChatTransport()"))
-        #expect(appModelSource.contains("return IOSGatewayChatTransport(gateway: self.operatorSession)"))
+        #expect(appModelSource.contains("return IOSGatewayChatTransport("))
+        #expect(appModelSource.contains("globalAgentId: self.chatAgentId"))
         #expect(activitySource.contains("IPadSidebarScreenChrome("))
         #expect(!taskSource.contains("struct IPadActivityScreen"))
         #expect(!taskSource.contains("import OpenClawChatUI"))
@@ -1237,7 +1238,9 @@ struct RootTabsSourceGuardTests {
         let transportSource = try String(contentsOf: Self.iOSGatewayChatTransportSourceURL(), encoding: .utf8)
 
         #expect(chatSource.matches(of: /self\.appModel\.makeChatTransport\(\)/).count == 2)
-        #expect(appModelSource.contains("return IOSGatewayChatTransport(gateway: self.operatorSession)"))
+        #expect(chatSource.contains("self.viewModelTransportAgentID != transportAgentID"))
+        #expect(appModelSource.contains("return IOSGatewayChatTransport("))
+        #expect(appModelSource.contains("globalAgentId: self.chatAgentId"))
         #expect(appModelSource.contains("ifCurrentRoute: operatorRoute"))
         #expect(transportSource.matches(of: /ifCurrentRoute: expectedRoute/).count == 3)
         #expect(channelsSource.contains("\"clickclack\": SettingsChannelFallbackMetadata"))

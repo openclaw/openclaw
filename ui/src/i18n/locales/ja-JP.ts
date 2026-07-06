@@ -1466,6 +1466,12 @@ export const ja_JP: TranslationMap = {
       },
     },
   },
+  connection: {
+    lostTitle: "Gateway 接続が失われました",
+    reconnecting: "再接続中…",
+    offlineHint: "接続が復旧するまで、ライブ更新と操作は一時停止されます。",
+    retryNow: "今すぐ再試行",
+  },
   chat: {
     disconnected: "Gateway から切断されました。",
     archivedSessionDisabled: "メッセージを送信するには、このセッションを復元してください。",

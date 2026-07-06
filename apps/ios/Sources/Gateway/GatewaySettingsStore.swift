@@ -309,6 +309,15 @@ enum GatewaySettingsStore {
     enum LastGatewayConnection: Equatable {
         case manual(host: String, port: Int, useTLS: Bool, stableID: String)
         case discovered(stableID: String, useTLS: Bool)
+
+        var stableID: String {
+            switch self {
+            case let .manual(_, _, _, stableID):
+                stableID
+            case let .discovered(stableID, _):
+                stableID
+            }
+        }
     }
 
     private enum LastGatewayKind: String, Codable {

@@ -1271,6 +1271,13 @@ export async function runCodexAppServerAttempt(
         meta && typeof meta === "object" && !Array.isArray(meta)
           ? (meta as Record<string, unknown>).mirrorIdentity
           : undefined;
+      const mirrorOrigin =
+        meta && typeof meta === "object" && !Array.isArray(meta)
+          ? (meta as Record<string, unknown>).mirrorOrigin
+          : undefined;
+      if (mirrorOrigin === "codex-app-server") {
+        return false;
+      }
       if (typeof mirrorIdentity === "string" && mirrorIdentity.startsWith("codex-app-server:")) {
         return false;
       }

@@ -1466,6 +1466,12 @@ export const tr: TranslationMap = {
       },
     },
   },
+  connection: {
+    lostTitle: "Gateway bağlantısı kesildi",
+    reconnecting: "Yeniden bağlanıyor…",
+    offlineHint: "Bağlantı geri gelene kadar canlı güncellemeler ve işlemler duraklatıldı.",
+    retryNow: "Şimdi yeniden dene",
+  },
   chat: {
     disconnected: "Gateway bağlantısı kesildi.",
     archivedSessionDisabled: "Mesaj göndermek için bu oturumu geri yükleyin.",

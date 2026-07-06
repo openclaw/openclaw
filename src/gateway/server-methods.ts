@@ -98,6 +98,10 @@ const loadConnectHandlers = lazyHandlerModule(
   () => import("./server-methods/connect.js"),
   (module) => module.connectHandlers,
 );
+const loadControlUiHandlers = lazyHandlerModule(
+  () => import("./server-methods/control-ui.js"),
+  (module) => module.controlUiHandlers,
+);
 const loadCronHandlers = lazyHandlerModule(
   () => import("./server-methods/cron.js"),
   (module) => module.cronHandlers,
@@ -371,6 +375,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["diagnostics.stability"],
     loadHandlers: loadDiagnosticsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["controlUi.githubPreview"],
+    loadHandlers: loadControlUiHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [

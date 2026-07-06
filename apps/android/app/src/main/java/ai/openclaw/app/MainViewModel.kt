@@ -6,9 +6,6 @@ import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.OutgoingAttachment
-import ai.openclaw.app.chat.deleteChatTranscriptCacheDatabase
-import ai.openclaw.app.gateway.DeviceAuthStore
-import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
 import ai.openclaw.app.node.CameraCaptureManager
@@ -299,18 +296,10 @@ class MainViewModel(
   }
 
   /** Clears setup credentials without starting the runtime just to discard first-run pairing auth. */
-  private suspend fun resetGatewaySetupAuth() {
-    runtimeRef.value?.resetGatewaySetupAuth() ?: resetGatewaySetupAuthWithoutRuntime()
-  }
-
-  private fun resetGatewaySetupAuthWithoutRuntime() {
-    prefs.clearGatewaySetupAuth()
-    val deviceId = DeviceIdentityStore(nodeApp).loadOrCreate().deviceId
-    val deviceAuthStore = DeviceAuthStore(prefs)
-    deviceAuthStore.clearToken(deviceId, "node")
-    deviceAuthStore.clearToken(deviceId, "operator")
-    // No runtime means no open Room handle, so the cache file can be deleted directly.
-    deleteChatTranscriptCacheDatabase(nodeApp)
+  private suspend fun resetGatewaySetupAuth(): Boolean {
+    val reset = nodeApp.resetGatewaySetupAuth()
+    nodeApp.peekRuntime()?.let { runtimeRef.value = it }
+    return reset
   }
 
   internal fun saveGatewayConfigAndConnect(plan: GatewayConnectPlan) {
@@ -319,11 +308,7 @@ class MainViewModel(
     viewModelScope.launch(Dispatchers.Default) {
       val config = plan.config
       val replacesSavedAuth = plan.savedAuthAction != GatewaySavedAuthAction.PRESERVE
-      val hasExplicitAuth =
-        config.token.isNotEmpty() || config.bootstrapToken.isNotEmpty() || config.password.isNotEmpty()
-      if (replacesSavedAuth) {
-        resetGatewaySetupAuth()
-      }
+      if (replacesSavedAuth && !resetGatewaySetupAuth()) return@launch
       prefs.setManualEnabled(true)
       prefs.setManualHost(config.host)
       prefs.setManualPort(config.port)
@@ -331,7 +316,7 @@ class MainViewModel(
 
       // A blank same-endpoint save means "keep access". Secrets remain runtime-owned,
       // including password-only setups that Compose deliberately cannot read back.
-      if (replacesSavedAuth || hasExplicitAuth) {
+      if (replacesSavedAuth) {
         prefs.setGatewayBootstrapToken(config.bootstrapToken)
         prefs.setGatewayToken(config.token)
         prefs.setGatewayPassword(config.password)
@@ -339,7 +324,7 @@ class MainViewModel(
 
       val runtime = ensureRuntime()
       val endpoint = GatewayEndpoint.manual(host = config.host, port = config.port)
-      if (replacesSavedAuth || hasExplicitAuth) {
+      if (replacesSavedAuth) {
         runtime.connect(
           endpoint,
           NodeRuntime.GatewayConnectAuth(
@@ -365,8 +350,7 @@ class MainViewModel(
   /** Re-enters gateway setup after disconnecting and clearing one-time setup credentials. */
   fun pairNewGateway() {
     viewModelScope.launch(Dispatchers.Default) {
-      runtimeRef.value?.disconnect()
-      resetGatewaySetupAuth()
+      if (!resetGatewaySetupAuth()) return@launch
       prefs.setOnboardingCompleted(false)
       _startOnboardingAtGatewaySetup.value = true
     }

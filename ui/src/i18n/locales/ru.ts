@@ -1472,6 +1472,13 @@ export const ru: TranslationMap = {
       },
     },
   },
+  connection: {
+    lostTitle: "Соединение с Gateway потеряно",
+    reconnecting: "Повторное подключение…",
+    offlineHint:
+      "Обновления в реальном времени и действия приостановлены до восстановления соединения.",
+    retryNow: "Повторить сейчас",
+  },
   chat: {
     disconnected: "Отключено от gateway.",
     archivedSessionDisabled: "Восстановите этот сеанс, чтобы отправлять сообщения.",

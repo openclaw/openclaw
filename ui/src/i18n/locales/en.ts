@@ -1450,6 +1450,12 @@ export const en: TranslationMap = {
       },
     },
   },
+  connection: {
+    lostTitle: "Gateway connection lost",
+    reconnecting: "Reconnecting…",
+    offlineHint: "Live updates and actions are paused until the connection returns.",
+    retryNow: "Retry now",
+  },
   chat: {
     disconnected: "Disconnected from gateway.",
     archivedSessionDisabled: "Restore this session to send messages.",

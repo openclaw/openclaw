@@ -330,6 +330,12 @@ struct RootTabsPresentationTests {
         #expect(ChatProTab.defaultHeaderTitle(showsAgentBadge: false, agentDisplayName: "OpenClaw") == "Chat")
     }
 
+    @Test func `chat transport identity distinguishes unresolved and resolved agents`() {
+        #expect(ChatProTab.transportAgentID(nil).isEmpty)
+        #expect(ChatProTab.transportAgentID("   ").isEmpty)
+        #expect(ChatProTab.transportAgentID(" Main ") == "main")
+    }
+
     @Test func `agent routes can open gateway settings from header pill`() {
         let standalone = AgentProTab()
         let routed = AgentProTab(

@@ -1446,6 +1446,12 @@ export const hi: TranslationMap = {
       },
     },
   },
+  connection: {
+    lostTitle: "Gateway कनेक्शन खो गया",
+    reconnecting: "फिर से कनेक्ट हो रहा है…",
+    offlineHint: "कनेक्शन वापस आने तक लाइव अपडेट और कार्रवाइयाँ रोक दी गई हैं।",
+    retryNow: "अभी फिर से प्रयास करें",
+  },
   chat: {
     disconnected: "Gateway से डिस्कनेक्ट हो गया।",
     archivedSessionDisabled: "संदेश भेजने के लिए इस सत्र को बहाल करें।",

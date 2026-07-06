@@ -1477,6 +1477,13 @@ export const fr: TranslationMap = {
       },
     },
   },
+  connection: {
+    lostTitle: "Connexion au Gateway perdue",
+    reconnecting: "Reconnexion…",
+    offlineHint:
+      "Les mises à jour en direct et les actions sont en pause jusqu’au rétablissement de la connexion.",
+    retryNow: "Réessayer maintenant",
+  },
   chat: {
     disconnected: "Déconnecté du Gateway.",
     archivedSessionDisabled: "Restaurez cette session pour envoyer des messages.",

@@ -1452,6 +1452,12 @@ export const vi: TranslationMap = {
       },
     },
   },
+  connection: {
+    lostTitle: "Mất kết nối Gateway",
+    reconnecting: "Đang kết nối lại…",
+    offlineHint: "Cập nhật trực tiếp và thao tác bị tạm dừng cho đến khi kết nối được khôi phục.",
+    retryNow: "Thử lại ngay",
+  },
   chat: {
     disconnected: "Đã ngắt kết nối khỏi gateway.",
     archivedSessionDisabled: "Khôi phục phiên này để gửi tin nhắn.",

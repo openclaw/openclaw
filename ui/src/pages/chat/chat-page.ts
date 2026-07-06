@@ -73,7 +73,10 @@ import {
   type SidebarFullMessageRequest,
 } from "./components/chat-sidebar.ts";
 import { exportChatMarkdown } from "./export.ts";
-import { hasAbortableSessionRun } from "./run-lifecycle.ts";
+import {
+  hasAbortableSessionRun,
+  reconcileStaleChatRunAfterSessionStatePublication,
+} from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import { clearChatMessagesFromCache } from "./session-message-cache.ts";
 
@@ -480,7 +483,10 @@ export class ChatPage extends LitElement {
       });
       return;
     }
-    state.requestUpdate?.();
+    const reconciledLocalCompletion = reconcileStaleChatRunAfterSessionStatePublication(state);
+    if (!reconciledLocalCompletion) {
+      state.requestUpdate?.();
+    }
   }
 
   private applyApplicationConfig(config: ApplicationContext["config"]["current"]) {

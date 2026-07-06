@@ -5495,6 +5495,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Quick start
   - H2: Hook catalog
+  - H3: Channel pairing requests
   - H2: Debug runtime hooks
   - H2: Tool call policy
   - H3: Exec environment hook
@@ -9786,6 +9787,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Activity tab
   - H2: Operator terminal
   - H2: Chat behavior
+  - H2: Connection loss and reconnect
   - H2: PWA install and web push
   - H2: Hosted embeds
   - H2: Chat message width

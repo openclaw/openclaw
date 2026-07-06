@@ -12,13 +12,6 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/components/app-sidebar.ts",
-      "text": "OpenClaw"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
       "path": "ui/src/components/app-topbar.ts",
       "text": "⌘K"
     },
@@ -604,7 +597,7 @@
       "text": "Close"
     },
     {
-      "count": 2,
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/components/file-preview-modal.ts",
@@ -623,6 +616,41 @@
       "name": "text",
       "path": "ui/src/components/file-preview-modal.ts",
       "text": "No files match."
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/github-link-hovercard.ts",
+      "text": "Closed"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/github-link-hovercard.ts",
+      "text": "Draft"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/github-link-hovercard.ts",
+      "text": "Merged"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/github-link-hovercard.ts",
+      "text": "Not planned"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/github-link-hovercard.ts",
+      "text": "Open"
     },
     {
       "count": 1,

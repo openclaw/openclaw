@@ -13,6 +13,7 @@ import androidx.room.withTransaction
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
+import java.io.File
 import java.util.UUID
 
 /** Upper bound of cached session rows per gateway; oldest list positions are evicted on write. */
@@ -21,11 +22,29 @@ internal const val MAX_CACHED_SESSIONS = 50
 internal const val CHAT_TRANSCRIPT_CACHE_DB_NAME = "chat-transcript-cache.db"
 
 /**
- * Deletes the cache database file outright. Only safe while no [RoomChatTranscriptCache] is open
- * in this process; used by pairing-reset paths that run before the node runtime exists.
+ * Deletes the cache database and every SQLite-owned companion file. Only safe while no
+ * [RoomChatTranscriptCache] is open in this process; used before the node runtime exists.
  */
-internal fun deleteChatTranscriptCacheDatabase(context: Context) {
-  context.deleteDatabase(CHAT_TRANSCRIPT_CACHE_DB_NAME)
+internal fun deleteChatTranscriptCacheDatabase(context: Context): Boolean = deleteDatabaseFiles(context, CHAT_TRANSCRIPT_CACHE_DB_NAME)
+
+internal fun deleteDatabaseFiles(
+  context: Context,
+  databaseName: String,
+): Boolean {
+  val databasePath = context.getDatabasePath(databaseName)
+  context.deleteDatabase(databaseName)
+  val fixedFiles =
+    listOf(
+      databasePath,
+      File(databasePath.path + "-journal"),
+      File(databasePath.path + "-shm"),
+      File(databasePath.path + "-wal"),
+    )
+  if (fixedFiles.any(File::exists)) return false
+  val parent = databasePath.parentFile ?: return true
+  val siblings = parent.listFiles() ?: return !parent.exists()
+  val masterJournalPrefix = databasePath.name + "-mj"
+  return siblings.none { file -> file.name.startsWith(masterJournalPrefix) }
 }
 
 /** Upper bound of cached transcript rows per session; only the newest messages are kept. */
@@ -35,7 +54,8 @@ internal const val MAX_CACHED_MESSAGES_PER_SESSION = 200
  * Read-only offline cache of chat sessions and transcripts.
  *
  * The cache is disposable: it only speeds up cold open and enables offline browsing.
- * Live `chat.history` / `sessions.list` responses always replace cached data wholesale.
+ * Live responses replace cached data; the active deep session may be retained outside the newest
+ * session-list window so its transcript remains available offline.
  */
 interface ChatTranscriptCache {
   suspend fun loadSessions(gatewayId: String): List<ChatSessionEntry>
@@ -48,6 +68,7 @@ interface ChatTranscriptCache {
   suspend fun saveSessions(
     gatewayId: String,
     sessions: List<ChatSessionEntry>,
+    retainedSessionKey: String? = null,
   )
 
   suspend fun saveTranscript(
@@ -93,6 +114,12 @@ internal data class CachedMessageEntity(
 internal interface ChatCacheDao {
   @Query("SELECT * FROM cached_sessions WHERE gatewayId = :gatewayId ORDER BY rowOrder ASC")
   suspend fun sessions(gatewayId: String): List<CachedSessionEntity>
+
+  @Query("SELECT * FROM cached_sessions WHERE gatewayId = :gatewayId AND sessionKey = :sessionKey")
+  suspend fun session(
+    gatewayId: String,
+    sessionKey: String,
+  ): CachedSessionEntity?
 
   @Query(
     "SELECT * FROM cached_messages WHERE gatewayId = :gatewayId AND sessionKey = :sessionKey ORDER BY rowOrder ASC",
@@ -221,22 +248,43 @@ class RoomChatTranscriptCache internal constructor(
   override suspend fun saveSessions(
     gatewayId: String,
     sessions: List<ChatSessionEntry>,
+    retainedSessionKey: String?,
   ) {
     val gateway = scopedGatewayId(gatewayId) ?: return
-    val rows =
-      sessions.take(MAX_CACHED_SESSIONS).mapIndexed { index, session ->
-        CachedSessionEntity(
-          gatewayId = gateway,
-          sessionKey = session.key,
-          displayName = session.displayName,
-          updatedAtMs = session.updatedAtMs,
-          rowOrder = index,
-        )
-      }
+    val retainedKey = retainedSessionKey?.trim()?.takeIf { it.isNotEmpty() }
     val dao = database.dao()
     database.withTransaction {
+      val initialSessions = sessions.take(MAX_CACHED_SESSIONS)
+      val needsRetainedRow = retainedKey != null && initialSessions.none { it.key == retainedKey }
+      val retainedEntry = if (needsRetainedRow) sessions.firstOrNull { it.key == retainedKey } else null
+      val retainedRow =
+        if (needsRetainedRow) {
+          retainedEntry?.let { entry ->
+            CachedSessionEntity(
+              gatewayId = gateway,
+              sessionKey = entry.key,
+              displayName = entry.displayName,
+              updatedAtMs = entry.updatedAtMs,
+              rowOrder = 0,
+            )
+          } ?: dao.session(gateway, retainedKey)
+        } else {
+          null
+        }
+      val listedSessionLimit = MAX_CACHED_SESSIONS - if (retainedRow == null) 0 else 1
+      val rows =
+        sessions.take(listedSessionLimit).mapIndexed { index, session ->
+          CachedSessionEntity(
+            gatewayId = gateway,
+            sessionKey = session.key,
+            displayName = session.displayName,
+            updatedAtMs = session.updatedAtMs,
+            rowOrder = index,
+          )
+        }
       dao.deleteSessions(gateway)
       dao.insertSessions(rows)
+      retainedRow?.let { dao.insertSessions(listOf(it.copy(rowOrder = rows.size))) }
       dao.evictOrphanedTranscripts(gateway)
     }
   }

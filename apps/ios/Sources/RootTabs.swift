@@ -918,8 +918,8 @@ struct RootTabs: View {
                         self.showOnboarding = false
                     },
                     onComplete: {
-                        self.selectSidebarDestination(.chat)
                         self.showOnboarding = false
+                        self.selectSidebarDestination(.chat)
                     })
                     .environment(self.appModel)
                     .environment(self.voiceWake)
@@ -1235,7 +1235,9 @@ extension RootTabs {
         if problem.suggestsOnboardingReset {
             // Reset bumps onboarding.requestID, which re-presents the wizard.
             let instanceId = UserDefaults.standard.string(forKey: "node.instanceId") ?? ""
-            GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: instanceId)
+            Task {
+                await GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: instanceId)
+            }
         } else if problem.canTrustRotatedCertificate {
             Task { await self.gatewayController.trustRotatedGatewayCertificate(from: problem) }
         } else if GatewayProblemPrimaryAction.openProtocolMismatchHelpIfNeeded(problem) {

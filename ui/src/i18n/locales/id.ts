@@ -1461,6 +1461,12 @@ export const id: TranslationMap = {
       },
     },
   },
+  connection: {
+    lostTitle: "Koneksi Gateway terputus",
+    reconnecting: "Menghubungkan kembali…",
+    offlineHint: "Pembaruan langsung dan tindakan dijeda hingga koneksi kembali.",
+    retryNow: "Coba lagi sekarang",
+  },
   chat: {
     disconnected: "Terputus dari gateway.",
     archivedSessionDisabled: "Pulihkan sesi ini untuk mengirim pesan.",

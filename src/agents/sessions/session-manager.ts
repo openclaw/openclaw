@@ -145,6 +145,7 @@ export interface SessionInfoEntry extends SessionEntryBase {
 interface PromptReleasedOpaqueEntry {
   type: "prompt_released_opaque";
   record: unknown;
+  preserveActiveLeaf?: true;
 }
 
 type PromptReleasedSessionEntry =
@@ -2201,6 +2202,7 @@ export class SessionManager {
     entries: readonly PromptReleasedSessionEntry[],
     options?: { persistLeaf?: boolean },
   ): PromptReleasedSessionMergeResult | undefined {
+    this.assertPromptReleasedEntriesPreserveActiveLeaf(entries);
     let sideBranchParentId =
       this.promptReleasedSideBranchParentId === undefined
         ? this.leafId
@@ -2324,6 +2326,39 @@ export class SessionManager {
       sessionFileSnapshot: this.sessionFileSnapshot,
       publishedEntries: [{ kind: "id", id: leafEntry.id }],
     };
+  }
+
+  private assertPromptReleasedEntriesPreserveActiveLeaf(
+    entries: readonly PromptReleasedSessionEntry[],
+  ): void {
+    let sideBranchParentId =
+      this.promptReleasedSideBranchParentId === undefined
+        ? this.leafId
+        : this.promptReleasedSideBranchParentId;
+    for (const entry of entries) {
+      if (entry.type !== "prompt_released_opaque") {
+        sideBranchParentId = entry.id;
+        continue;
+      }
+      const leaf = parseOpaqueLeafEntry(entry.record);
+      if (leaf && entry.preserveActiveLeaf) {
+        const appendParentId =
+          leaf.appendParentId === undefined ? leaf.targetId : leaf.appendParentId;
+        if (
+          leaf.appendMode !== "side" ||
+          leaf.targetId !== this.leafId ||
+          leaf.parentId !== sideBranchParentId ||
+          appendParentId !== sideBranchParentId
+        ) {
+          throw new Error("prompt-released side leaf changed the active branch");
+        }
+        continue;
+      }
+      const link = parseParentLinkedOpaqueEntry(entry.record);
+      if (link) {
+        sideBranchParentId = link.id;
+      }
+    }
   }
 
   private appendEntry(entry: SessionEntry, options?: AppendPersistenceOptions): void {

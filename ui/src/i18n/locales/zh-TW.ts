@@ -1425,6 +1425,12 @@ export const zh_TW: TranslationMap = {
       },
     },
   },
+  connection: {
+    lostTitle: "Gateway 連線中斷",
+    reconnecting: "正在重新連線…",
+    offlineHint: "即時更新和操作已暫停，直到連線恢復。",
+    retryNow: "立即重試",
+  },
   chat: {
     disconnected: "已斷開與網關的連接。",
     archivedSessionDisabled: "還原此工作階段以傳送訊息。",
