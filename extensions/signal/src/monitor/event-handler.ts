@@ -33,6 +33,7 @@ import {
 } from "openclaw/plugin-sdk/channel-policy";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth-native";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
+import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createInternalHookEvent,
   fireAndForgetHook,
@@ -639,7 +640,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   const retryAttemptsByKey = new Map<string, number>();
 
   function isRetryableSignalInboundError(error: unknown): boolean {
-    return REPLY_SESSION_INIT_CONFLICT_RE.test(String(error));
+    return collectErrorGraphCandidates(error, (current) => [current.cause, current.error]).some(
+      (candidate) => REPLY_SESSION_INIT_CONFLICT_RE.test(formatErrorMessage(candidate)),
+    );
   }
 
   function buildSignalDebounceKey(entry?: SignalInboundEntry): string | null {

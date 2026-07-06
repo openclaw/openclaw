@@ -2050,16 +2050,20 @@ describe("signal createSignalEventHandler inbound context", () => {
         }),
       );
 
-      // 1 initial + 3 retries = 4 attempts total, then stops
+      // Trigger initial debounce flush (timer at 0ms with debounceMs=0).
+      await vi.advanceTimersByTimeAsync(1);
+
+      // 1 initial + 3 retries = 4 attempts total, then stops.
+      // Each retry cycle: 1 000ms retry delay + debounce flush tick.
       for (let attempt = 1; attempt <= 4; attempt += 1) {
-        await vi.advanceTimersByTimeAsync(1);
-        await vi.advanceTimersByTimeAsync(10);
         expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(attempt);
+        if (attempt < 4) {
+          await vi.advanceTimersByTimeAsync(1_001);
+        }
       }
 
       // 5th attempt should NOT happen (max 3 retries = 4 total)
-      await vi.advanceTimersByTimeAsync(1_000);
-      await vi.advanceTimersByTimeAsync(10);
+      await vi.advanceTimersByTimeAsync(1_001);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(4);
     } finally {
       vi.useRealTimers();
