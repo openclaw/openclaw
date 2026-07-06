@@ -70,6 +70,8 @@ export type AcpEventLedger = {
   readReplay: (params: { sessionId: string; sessionKey: string }) => Promise<AcpEventLedgerReplay>;
   readReplayBySessionId: (params: { sessionId: string }) => Promise<AcpEventLedgerReplay>;
   readReplayBySessionKey: (params: { sessionKey: string }) => Promise<AcpEventLedgerReplay>;
+  /** Release the underlying SQLite database connection so hot reload does not leak file locks. */
+  close: () => void;
 };
 
 type LedgerSession = {
@@ -421,6 +423,10 @@ function createLedgerApi(params: {
         }
         return buildReplay(session);
       });
+    },
+
+    close() {
+      // In-memory stores have no persistent connection to release.
     },
   };
 }
@@ -903,6 +909,12 @@ export function createSqliteAcpEventLedger(
       return read((db) =>
         buildSqliteReplay(readLatestCompleteSqliteSessionByKey(db, replayParams.sessionKey)),
       );
+    },
+
+    close() {
+      const database = openOpenClawStateDatabase(dbOptions);
+      database.walMaintenance.close();
+      database.db.close();
     },
   };
 }

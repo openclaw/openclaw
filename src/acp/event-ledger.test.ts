@@ -249,6 +249,33 @@ describe("ACP event ledger", () => {
     });
   });
 
+  it("releases the SQLite database connection on close so hot reload does not leak file locks", async () => {
+    await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
+      const databasePath = path.join(dir, "openclaw.sqlite");
+      const ledger = createSqliteAcpEventLedger({ path: databasePath, now: () => 2000 });
+      await ledger.startSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:work",
+        cwd: "/work",
+        complete: true,
+      });
+
+      ledger.close();
+
+      // After close, a fresh ledger instance on the same path must still be
+      // able to read previously persisted state — the close releases the
+      // connection, not the data.
+      const second = createSqliteAcpEventLedger({ path: databasePath });
+      const replay = await second.readReplay({
+        sessionId: "session-1",
+        sessionKey: "agent:main:work",
+      });
+
+      expect(replay.complete).toBe(true);
+      expect(replay.events).toHaveLength(0);
+    });
+  });
+
   it("can replay a complete session by Gateway session key", async () => {
     const ledger = createInMemoryAcpEventLedger({ now: () => 1000 });
     await ledger.startSession({
@@ -427,5 +454,4 @@ describe("ACP event ledger", () => {
       ledger.readReplay({ sessionId: "session-1", sessionKey: "agent:main:work" }),
     ).resolves.toEqual({ complete: false, events: [] });
   });
-
 });
