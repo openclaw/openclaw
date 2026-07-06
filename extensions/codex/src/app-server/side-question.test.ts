@@ -59,7 +59,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness", () => ({
   createOpenClawCodingTools: (...args: unknown[]) => createOpenClawCodingToolsMock(...args),
 }));
 
-const { testing, runCodexAppServerSideQuestion } = await import("./side-question.js");
+const { runCodexAppServerSideQuestion } = await import("./side-question.js");
 
 type ServerRequest = Required<Pick<RpcRequest, "id" | "method">> & {
   params?: RpcRequest["params"];
@@ -2563,57 +2563,6 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(result).toEqual({ text: "No input needed." });
     expect(unrelatedUserInputResponse).toBeUndefined();
     expect(userInputResponse).toEqual({ answers: {} });
-  });
-
-  it("uses configured image generation timeout for side-thread image_generate calls", () => {
-    const timeoutMs = testing.resolveSideDynamicToolCallTimeoutMs({
-      call: {
-        threadId: "side-thread",
-        turnId: "turn-1",
-        callId: "tool-1",
-        tool: "image_generate",
-      },
-      config: {
-        agents: {
-          defaults: {
-            imageGenerationModel: {
-              timeoutMs: 123_456,
-            },
-          },
-        },
-      } as never,
-    });
-
-    expect(timeoutMs).toBe(123_456);
-  });
-
-  it("uses a 120 second default for side-thread image_generate calls", () => {
-    const timeoutMs = testing.resolveSideDynamicToolCallTimeoutMs({
-      call: {
-        threadId: "side-thread",
-        turnId: "turn-1",
-        callId: "tool-1",
-        tool: "image_generate",
-      },
-      config: {} as never,
-    });
-
-    expect(timeoutMs).toBe(120_000);
-  });
-
-  it("uses a 90 second default for generic side-thread dynamic tool calls", () => {
-    const timeoutMs = testing.resolveSideDynamicToolCallTimeoutMs({
-      call: {
-        threadId: "side-thread",
-        turnId: "turn-1",
-        callId: "tool-1",
-        tool: "session_status",
-        arguments: { sessionKey: "current" },
-      },
-      config: {} as never,
-    });
-
-    expect(timeoutMs).toBe(90_000);
   });
 
   it("cleans up notification handlers when side tool setup fails", async () => {

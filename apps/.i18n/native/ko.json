@@ -709,6 +709,11 @@
       "translated": "비밀번호(선택 사항)"
     },
     {
+      "id": "native.android.4ddaa88cd4939df2",
+      "source": "CF-Access-Client-Id",
+      "translated": "CF-Access-Client-Id"
+    },
+    {
       "id": "native.android.b735fb6c7d284ecf",
       "source": "Dreaming",
       "translated": "Dreaming"
@@ -4192,6 +4197,36 @@
       "id": "native.android.005e23b33d333f6a",
       "source": "Password",
       "translated": "비밀번호"
+    },
+    {
+      "id": "native.android.43900769f2cf0458",
+      "source": "Custom headers (optional)",
+      "translated": "사용자 지정 헤더(선택 사항)"
+    },
+    {
+      "id": "native.android.6d42cb48a4a32331",
+      "source": "Sent with every connection to this gateway, for example Cloudflare Access service token headers. Stored encrypted and applied on the next reconnect.",
+      "translated": "이 Gateway에 연결할 때마다 전송됩니다. 예: Cloudflare Access 서비스 토큰 헤더. 암호화되어 저장되며 다음 재연결 시 적용됩니다."
+    },
+    {
+      "id": "native.android.c4d4f0299965fe55",
+      "source": "Header value",
+      "translated": "헤더 값"
+    },
+    {
+      "id": "native.android.123e497273b8586e",
+      "source": "This header is managed by the connection and cannot be overridden.",
+      "translated": "이 헤더는 연결에서 관리되며 재정의할 수 없습니다."
+    },
+    {
+      "id": "native.android.94f0633a1fb099bc",
+      "source": "Add header",
+      "translated": "헤더 추가"
+    },
+    {
+      "id": "native.android.ff4c8c3b56827d8e",
+      "source": "Remove %1$s",
+      "translated": "%1$s 제거"
     },
     {
       "id": "native.android.a43f43c1338a6960",

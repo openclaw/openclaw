@@ -709,6 +709,11 @@
       "translated": "รหัสผ่าน (ไม่บังคับ)"
     },
     {
+      "id": "native.android.4ddaa88cd4939df2",
+      "source": "CF-Access-Client-Id",
+      "translated": "CF-Access-Client-Id"
+    },
+    {
       "id": "native.android.b735fb6c7d284ecf",
       "source": "Dreaming",
       "translated": "กำลังฝัน"
@@ -4192,6 +4197,36 @@
       "id": "native.android.005e23b33d333f6a",
       "source": "Password",
       "translated": "รหัสผ่าน"
+    },
+    {
+      "id": "native.android.43900769f2cf0458",
+      "source": "Custom headers (optional)",
+      "translated": "ส่วนหัวที่กำหนดเอง (ไม่บังคับ)"
+    },
+    {
+      "id": "native.android.6d42cb48a4a32331",
+      "source": "Sent with every connection to this gateway, for example Cloudflare Access service token headers. Stored encrypted and applied on the next reconnect.",
+      "translated": "ส่งไปพร้อมกับทุกการเชื่อมต่อไปยัง gateway นี้ เช่น ส่วนหัวโทเค็นบริการ Cloudflare Access จัดเก็บแบบเข้ารหัสและจะนำไปใช้ในการเชื่อมต่อใหม่ครั้งถัดไป"
+    },
+    {
+      "id": "native.android.c4d4f0299965fe55",
+      "source": "Header value",
+      "translated": "ค่าส่วนหัว"
+    },
+    {
+      "id": "native.android.123e497273b8586e",
+      "source": "This header is managed by the connection and cannot be overridden.",
+      "translated": "ส่วนหัวนี้ถูกจัดการโดยการเชื่อมต่อและไม่สามารถเขียนทับได้"
+    },
+    {
+      "id": "native.android.94f0633a1fb099bc",
+      "source": "Add header",
+      "translated": "เพิ่มส่วนหัว"
+    },
+    {
+      "id": "native.android.ff4c8c3b56827d8e",
+      "source": "Remove %1$s",
+      "translated": "ลบ %1$s"
     },
     {
       "id": "native.android.a43f43c1338a6960",

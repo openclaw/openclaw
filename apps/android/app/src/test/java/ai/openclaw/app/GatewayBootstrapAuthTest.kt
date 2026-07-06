@@ -123,7 +123,6 @@ class GatewayBootstrapAuthTest {
     val runtime = app.ensureRuntime()
     writeField(runtime, "connectedEndpoint", GatewayEndpoint.manual("old-gateway.example", 18789))
     val viewModel = MainViewModel(app)
-
     viewModel.pairNewGateway()
     runBlocking {
       withTimeout(5_000) {

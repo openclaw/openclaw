@@ -306,15 +306,16 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     }
 
     private static func invokeRequestData(id: String, command: String, paramsJSON: String?) -> Data {
+        let payload: [String: Any] = [
+            "id": id,
+            "nodeId": "test-node",
+            "command": command,
+            "paramsJSON": paramsJSON ?? NSNull(),
+        ]
         let frame: [String: Any] = [
             "type": "event",
             "event": "node.invoke.request",
-            "payload": [
-                "id": id,
-                "nodeId": "test-node",
-                "command": command,
-                "paramsJSON": paramsJSON ?? (NSNull() as Any),
-            ],
+            "payload": payload,
         ]
         return (try? JSONSerialization.data(withJSONObject: frame)) ?? Data()
     }
@@ -594,7 +595,8 @@ struct GatewayNodeSessionTests {
             clientId: "openclaw-ios-test",
             clientMode: "node",
             clientDisplayName: "iOS Test",
-            includeDeviceIdentity: false)
+            includeDeviceIdentity: false,
+            deviceAuthGatewayID: "gw-a")
 
         try await gateway.connect(
             url: #require(URL(string: "ws://first.example.invalid")),
@@ -606,7 +608,8 @@ struct GatewayNodeSessionTests {
             onConnected: {},
             onDisconnected: { _ in },
             onInvoke: { req in BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil) })
-        let firstRoute = try #require(await gateway.currentRoute())
+        let firstRoute = try #require(await gateway.currentRoute(ifGatewayID: "gw-a"))
+        #expect(await gateway.currentRoute(ifGatewayID: "GW-A") == nil)
 
         try await gateway.connect(
             url: #require(URL(string: "ws://second.example.invalid")),
@@ -632,6 +635,16 @@ struct GatewayNodeSessionTests {
             Issue.record("stale route request unexpectedly reached the replacement channel")
         } catch is CancellationError {
             // Expected: the route lease belongs to the first channel.
+        }
+        do {
+            _ = try await gateway.request(
+                method: "exec.approval.get",
+                paramsJSON: "{}",
+                ifCurrentRoute: firstRoute,
+                distinguishPreDispatchRouteChange: true)
+            Issue.record("typed stale route request unexpectedly reached the replacement channel")
+        } catch is GatewayNodeSessionRequestError {
+            // Expected: callers can distinguish a request rejected before dispatch.
         }
         let replacementTask = try #require(session.latestTask())
         #expect(replacementTask.sentRequestCount(method: "node.event") == 0)

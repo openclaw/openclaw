@@ -21,6 +21,12 @@
     <string name="use_tls">TLS gebruiken</string>
     <string name="token_optional">Token (optioneel)</string>
     <string name="password">Wachtwoord</string>
+    <string name="custom_headers_optional">Aangepaste headers (optioneel)</string>
+    <string name="custom_headers_explainer">Meegestuurd met elke verbinding met deze Gateway, bijvoorbeeld headers voor Cloudflare Access-servicetokens. Versleuteld opgeslagen en toegepast bij de volgende herverbinding.</string>
+    <string name="custom_header_value">Headerwaarde</string>
+    <string name="custom_header_reserved">Deze header wordt beheerd door de verbinding en kan niet worden overschreven.</string>
+    <string name="add_custom_header">Header toevoegen</string>
+    <string name="remove_custom_header">%1$s verwijderen</string>
     <string name="run_onboarding_again">Onboarding opnieuw uitvoeren</string>
     <string name="resolved_endpoint">Opgelost endpoint</string>
     <string name="gateway_trust_first_seen">Controleer de certificaatvingerafdruk voordat je deze gateway vertrouwt.\n\n%1$s</string>

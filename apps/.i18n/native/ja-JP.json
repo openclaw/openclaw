@@ -709,6 +709,11 @@
       "translated": "パスワード (省略可)"
     },
     {
+      "id": "native.android.4ddaa88cd4939df2",
+      "source": "CF-Access-Client-Id",
+      "translated": "CF-Access-Client-Id"
+    },
+    {
       "id": "native.android.b735fb6c7d284ecf",
       "source": "Dreaming",
       "translated": "Dreaming"
@@ -4192,6 +4197,36 @@
       "id": "native.android.005e23b33d333f6a",
       "source": "Password",
       "translated": "パスワード"
+    },
+    {
+      "id": "native.android.43900769f2cf0458",
+      "source": "Custom headers (optional)",
+      "translated": "カスタムヘッダー（任意）"
+    },
+    {
+      "id": "native.android.6d42cb48a4a32331",
+      "source": "Sent with every connection to this gateway, for example Cloudflare Access service token headers. Stored encrypted and applied on the next reconnect.",
+      "translated": "このゲートウェイへのすべての接続で送信されます。たとえば、Cloudflare Access サービス トークン ヘッダーなどです。暗号化して保存され、次回の再接続時に適用されます。"
+    },
+    {
+      "id": "native.android.c4d4f0299965fe55",
+      "source": "Header value",
+      "translated": "ヘッダー値"
+    },
+    {
+      "id": "native.android.123e497273b8586e",
+      "source": "This header is managed by the connection and cannot be overridden.",
+      "translated": "このヘッダーは接続によって管理されており、上書きできません。"
+    },
+    {
+      "id": "native.android.94f0633a1fb099bc",
+      "source": "Add header",
+      "translated": "ヘッダーを追加"
+    },
+    {
+      "id": "native.android.ff4c8c3b56827d8e",
+      "source": "Remove %1$s",
+      "translated": "%1$s を削除"
     },
     {
       "id": "native.android.a43f43c1338a6960",

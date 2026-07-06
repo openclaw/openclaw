@@ -355,6 +355,16 @@ class MainViewModel(
     }
   }
 
+  /** Per-gateway proxy credential headers; values are secrets and must never be logged. */
+  fun gatewayCustomHeaders(stableId: String): Map<String, String> = prefs.loadGatewayCustomHeaders(stableId)
+
+  fun setGatewayCustomHeaders(
+    stableId: String,
+    headers: Map<String, String>,
+  ) {
+    prefs.saveGatewayCustomHeaders(stableId, headers)
+  }
+
   /** Marks onboarding complete and starts the runtime before UI observes connected-state flows. */
   fun setOnboardingCompleted(value: Boolean) {
     if (value) {
@@ -367,6 +377,9 @@ class MainViewModel(
   fun pairNewGateway() {
     viewModelScope.launch(Dispatchers.Default) {
       if (!resetGatewaySetupAuth()) return@launch
+      // Sign out is the explicit forget boundary for proxy credentials. Ordinary same-gateway
+      // auth replacement keeps these per-endpoint values so reconnects do not require re-entry.
+      prefs.clearGatewayCustomHeaders()
       prefs.setOnboardingCompleted(false)
       _startOnboardingAtGatewaySetup.value = true
     }

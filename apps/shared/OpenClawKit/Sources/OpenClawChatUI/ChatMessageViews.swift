@@ -641,6 +641,10 @@ struct ChatOutboxStatusLabel: View {
             "Queued"
         case .sending:
             "Sending…"
+        case .confirming:
+            "Confirming…"
+        case let .failed(reason) where reason == OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError:
+            "Delivery unknown"
         case .failed:
             "Not sent"
         }
@@ -652,6 +656,10 @@ struct ChatOutboxStatusLabel: View {
             "clock"
         case .sending:
             "arrow.up.circle"
+        case .confirming:
+            "checkmark.circle"
+        case let .failed(reason) where reason == OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError:
+            "questionmark.circle"
         case .failed:
             "exclamationmark.circle"
         }
@@ -663,6 +671,10 @@ struct ChatOutboxStatusLabel: View {
             "Queued, sends when reconnected"
         case .sending:
             "Sending"
+        case .confirming:
+            "Sent, waiting for chat history confirmation"
+        case let .failed(reason) where reason == OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError:
+            "Delivery unconfirmed, touch and hold to retry or delete"
         case .failed:
             "Not sent, touch and hold to retry or delete"
         }

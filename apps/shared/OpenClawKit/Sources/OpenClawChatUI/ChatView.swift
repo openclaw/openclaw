@@ -93,6 +93,7 @@ public struct OpenClawChatView: View {
     private let showsAssistantAvatars: Bool
     private let composerChrome: ComposerChrome
     private let isComposerEnabled: Bool
+    private let isAttachmentInputEnabled: Bool
     private let messagePlaceholder: String?
     private let emptyAssistantIntro: String?
     private let emptyAssistantPrompts: [StarterPrompt]
@@ -143,6 +144,7 @@ public struct OpenClawChatView: View {
         showsAssistantAvatars: Bool = true,
         composerChrome: ComposerChrome = .full,
         isComposerEnabled: Bool = true,
+        isAttachmentInputEnabled: Bool? = nil,
         messagePlaceholder: String? = nil,
         emptyAssistantIntro: String? = nil,
         emptyAssistantPrompts: [StarterPrompt] = [],
@@ -161,6 +163,7 @@ public struct OpenClawChatView: View {
         self.showsAssistantAvatars = showsAssistantAvatars
         self.composerChrome = composerChrome
         self.isComposerEnabled = isComposerEnabled
+        self.isAttachmentInputEnabled = isAttachmentInputEnabled ?? isComposerEnabled
         self.messagePlaceholder = messagePlaceholder
         self.emptyAssistantIntro = emptyAssistantIntro
         self.emptyAssistantPrompts = emptyAssistantPrompts
@@ -223,6 +226,7 @@ public struct OpenClawChatView: View {
             assistantAvatarTint: self.assistantAvatarTint,
             composerChrome: self.composerChrome,
             isComposerEnabled: self.isComposerEnabled,
+            isAttachmentInputEnabled: self.isAttachmentInputEnabled,
             messagePlaceholder: self.messagePlaceholder,
             talkControl: self.talkControl)
     }
@@ -420,10 +424,9 @@ public struct OpenClawChatView: View {
                         }
                     }
                 }
-                // No Delete while `.sending`: the transport call is already
-                // in flight and cannot be prevented, so removing the bubble
-                // would hide a message that may still reach the gateway.
-                if outboxState != .sending {
+                // Sending and acknowledged-but-unconfirmed rows may still
+                // reach canonical history, so deletion would hide real work.
+                if !outboxState.preventsDeletion {
                     Button(role: .destructive) {
                         self.viewModel.deleteOutboxMessage(msg.id)
                     } label: {

@@ -709,6 +709,11 @@
       "translated": "Password (facoltativa)"
     },
     {
+      "id": "native.android.4ddaa88cd4939df2",
+      "source": "CF-Access-Client-Id",
+      "translated": "CF-Access-Client-Id"
+    },
+    {
       "id": "native.android.b735fb6c7d284ecf",
       "source": "Dreaming",
       "translated": "Sognando"
@@ -4192,6 +4197,36 @@
       "id": "native.android.005e23b33d333f6a",
       "source": "Password",
       "translated": "Password"
+    },
+    {
+      "id": "native.android.43900769f2cf0458",
+      "source": "Custom headers (optional)",
+      "translated": "Intestazioni personalizzate (facoltativo)"
+    },
+    {
+      "id": "native.android.6d42cb48a4a32331",
+      "source": "Sent with every connection to this gateway, for example Cloudflare Access service token headers. Stored encrypted and applied on the next reconnect.",
+      "translated": "Inviate con ogni connessione a questo gateway, ad esempio le intestazioni dei token del servizio Cloudflare Access. Archiviate crittografate e applicate alla prossima riconnessione."
+    },
+    {
+      "id": "native.android.c4d4f0299965fe55",
+      "source": "Header value",
+      "translated": "Valore dell'intestazione"
+    },
+    {
+      "id": "native.android.123e497273b8586e",
+      "source": "This header is managed by the connection and cannot be overridden.",
+      "translated": "Questa intestazione è gestita dalla connessione e non può essere sovrascritta."
+    },
+    {
+      "id": "native.android.94f0633a1fb099bc",
+      "source": "Add header",
+      "translated": "Aggiungi intestazione"
+    },
+    {
+      "id": "native.android.ff4c8c3b56827d8e",
+      "source": "Remove %1$s",
+      "translated": "Rimuovi %1$s"
     },
     {
       "id": "native.android.a43f43c1338a6960",

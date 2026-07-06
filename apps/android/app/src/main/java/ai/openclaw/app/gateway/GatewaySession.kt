@@ -165,6 +165,7 @@ class GatewaySession(
   private val onEvent: (event: String, payloadJson: String?) -> Unit,
   private val onInvoke: (suspend (InvokeRequest) -> InvokeResult)? = null,
   private val onTlsFingerprint: ((stableId: String, fingerprint: String) -> Unit)? = null,
+  private val customHeadersProvider: ((stableId: String) -> Map<String, String>)? = null,
 ) {
   private companion object {
     // Keep connect timeout above observed gateway unauthorized close on lower-end devices.
@@ -529,8 +530,12 @@ class GatewaySession(
     val remoteAddress: String = formatGatewayAuthority(endpoint.host, endpoint.port)
 
     suspend fun connect(): ConnectedGateway {
-      val url = buildGatewayWebSocketUrl(endpoint.host, endpoint.port, tls != null)
-      val request = Request.Builder().url(url).build()
+      val request =
+        buildGatewayWebSocketUpgradeRequest(
+          endpoint = endpoint,
+          tls = tls,
+          customHeadersProvider = customHeadersProvider,
+        )
       socket = client.newWebSocket(request, listener)
       return connectDeferred.await()
     }
@@ -1533,6 +1538,23 @@ internal fun buildGatewayWebSocketUrl(
 ): String {
   val scheme = if (useTls) "wss" else "ws"
   return "$scheme://${formatGatewayAuthority(host, port)}"
+}
+
+/** Builds one gateway upgrade request without exposing proxy credentials to cleartext routes. */
+internal fun buildGatewayWebSocketUpgradeRequest(
+  endpoint: GatewayEndpoint,
+  tls: GatewayTlsParams?,
+  customHeadersProvider: ((stableId: String) -> Map<String, String>)?,
+): Request {
+  val request = Request.Builder().url(buildGatewayWebSocketUrl(endpoint.host, endpoint.port, tls != null))
+  if (tls == null) return request.build()
+
+  // Read at connect time so edits apply on the next reconnect. Headers may contain service tokens
+  // or Authorization values, so the cleartext branch above must never invoke the provider.
+  for ((name, value) in GatewayCustomHeaders.sanitized(customHeadersProvider?.invoke(tls.stableId).orEmpty())) {
+    request.addHeader(name, value)
+  }
+  return request.build()
 }
 
 /** Formats host/port for gateway URLs, including IPv6 bracket wrapping. */

@@ -3,10 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createImportedCustomThemeFixture } from "../test-helpers/custom-theme.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import {
+  loadGatewaySessionSelection,
   loadLocalUserIdentity,
   loadSettings,
   saveLocalUserIdentity,
   saveSettings,
+  type UiSettings,
 } from "./settings.ts";
 
 function setTestLocation(params: { protocol: string; host: string; pathname: string }) {
@@ -43,6 +45,26 @@ function setControlUiBasePath(value: string | undefined) {
 function expectedGatewayUrl(basePath: string): string {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   return `${proto}://${location.host}${basePath}`;
+}
+
+function makeSettings(gatewayUrl: string, overrides: Partial<UiSettings> = {}): UiSettings {
+  return {
+    gatewayUrl,
+    token: "",
+    sessionKey: "main",
+    lastActiveSessionKey: "main",
+    theme: "claw",
+    themeMode: "system",
+    chatShowThinking: true,
+    chatShowToolCalls: true,
+    splitRatio: 0.6,
+    navCollapsed: false,
+    navWidth: 220,
+    sidebarPinnedRoutes: ["overview"],
+    sidebarMoreExpanded: false,
+    borderRadius: 50,
+    ...overrides,
+  };
 }
 
 describe("loadSettings default gateway URL derivation", () => {
@@ -698,6 +720,100 @@ describe("loadSettings default gateway URL derivation", () => {
       "wss://stale-10.example:8443",
       "wss://gateway.example:8443",
     ]);
+  });
+
+  it("does not let a saved sibling base path override the current page gateway", () => {
+    setTestLocation({ protocol: "https:", host: "multi.example:8443", pathname: "/gateway-a/" });
+    setControlUiBasePath("/gateway-a");
+    saveSettings(makeSettings(expectedGatewayUrl("/gateway-a")));
+
+    setTestLocation({ protocol: "https:", host: "multi.example:8443", pathname: "/gateway-b/" });
+    setControlUiBasePath("/gateway-b");
+
+    expect(loadSettings().gatewayUrl).toBe(expectedGatewayUrl("/gateway-b"));
+    expect(localStorage.getItem("openclaw.control.settings.v1")).toBeNull();
+  });
+
+  it("leaves an ambiguous same-origin legacy sibling for its owning page", () => {
+    setTestLocation({ protocol: "https:", host: "multi.example:8443", pathname: "/gateway-b/" });
+    setControlUiBasePath("/gateway-b");
+    localStorage.setItem(
+      "openclaw.control.settings.v1",
+      JSON.stringify({
+        gatewayUrl: "wss://multi.example:8443/gateway-a",
+        sessionKey: "agent:a:main",
+      }),
+    );
+
+    expect(loadSettings().gatewayUrl).toBe(expectedGatewayUrl("/gateway-b"));
+    expect(loadGatewaySessionSelection(expectedGatewayUrl("/gateway-b"))).toEqual({
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+    });
+    expect(localStorage.getItem("openclaw.control.settings.v1")).not.toBeNull();
+  });
+
+  it("migrates a legacy record that matches the current page", () => {
+    setTestLocation({ protocol: "https:", host: "multi.example:8443", pathname: "/gateway-b/" });
+    setControlUiBasePath("/gateway-b");
+    const gatewayUrl = expectedGatewayUrl("/gateway-b");
+    localStorage.setItem(
+      "openclaw.control.settings.v1",
+      JSON.stringify({
+        gatewayUrl,
+        sessionKey: "agent:b:main",
+        lastActiveSessionKey: "agent:b:main",
+      }),
+    );
+
+    expect(loadSettings()).toMatchObject({ gatewayUrl, sessionKey: "agent:b:main" });
+    expect(
+      localStorage.getItem("openclaw.control.currentGateway.v1:wss://multi.example:8443/gateway-b"),
+    ).toBe(gatewayUrl);
+    expect(localStorage.getItem(`openclaw.control.settings.v1:${gatewayUrl}`)).not.toBeNull();
+    expect(localStorage.getItem("openclaw.control.settings.v1")).toBeNull();
+  });
+
+  it("migrates a legacy custom gateway on a different host", () => {
+    setTestLocation({ protocol: "https:", host: "control.example:8443", pathname: "/openclaw/" });
+    setControlUiBasePath("/openclaw");
+    const remoteUrl = "wss://remote-gateway.example.com";
+    localStorage.setItem(
+      "openclaw.control.settings.v1",
+      JSON.stringify({ gatewayUrl: remoteUrl, sessionKey: "remote-session" }),
+    );
+
+    expect(loadSettings()).toMatchObject({ gatewayUrl: remoteUrl, sessionKey: "remote-session" });
+    expect(
+      localStorage.getItem(
+        "openclaw.control.currentGateway.v1:wss://control.example:8443/openclaw",
+      ),
+    ).toBe(remoteUrl);
+    expect(localStorage.getItem("openclaw.control.settings.v1")).toBeNull();
+  });
+
+  it("keeps custom gateway selections isolated per Control UI base path", () => {
+    setTestLocation({ protocol: "https:", host: "multi.example:8443", pathname: "/gateway-a/" });
+    setControlUiBasePath("/gateway-a");
+    saveSettings(makeSettings("wss://remote-a.example.com", { sessionKey: "agent:a:main" }));
+
+    setTestLocation({ protocol: "https:", host: "multi.example:8443", pathname: "/gateway-b/" });
+    setControlUiBasePath("/gateway-b");
+    saveSettings(makeSettings("wss://remote-b.example.com", { sessionKey: "agent:b:main" }));
+
+    setTestLocation({ protocol: "https:", host: "multi.example:8443", pathname: "/gateway-a/" });
+    setControlUiBasePath("/gateway-a");
+    expect(loadSettings()).toMatchObject({
+      gatewayUrl: "wss://remote-a.example.com",
+      sessionKey: "agent:a:main",
+    });
+
+    setTestLocation({ protocol: "https:", host: "multi.example:8443", pathname: "/gateway-b/" });
+    setControlUiBasePath("/gateway-b");
+    expect(loadSettings()).toMatchObject({
+      gatewayUrl: "wss://remote-b.example.com",
+      sessionKey: "agent:b:main",
+    });
   });
 
   it("persists local user identity separately from gateway settings", () => {

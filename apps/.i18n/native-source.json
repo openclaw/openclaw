@@ -203,7 +203,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2470,
+      "line": 2472,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: this host requires wss:// or Tailscale Serve. No TLS endpoint detected.",
       "surface": "android",
@@ -211,7 +211,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2472,
+      "line": 2474,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.",
       "surface": "android",
@@ -219,7 +219,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2474,
+      "line": 2476,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: couldn't reach the secure gateway endpoint for this host.",
       "surface": "android",
@@ -387,7 +387,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1229,
+      "line": 1234,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
       "source": "Connecting…",
       "surface": "android",
@@ -395,7 +395,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1229,
+      "line": 1234,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt",
       "source": "Reconnecting…",
       "surface": "android",
@@ -1011,7 +1011,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 329,
+      "line": 335,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Last gateway error",
       "surface": "android",
@@ -1019,7 +1019,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 329,
+      "line": 335,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Pairing required",
       "surface": "android",
@@ -1027,7 +1027,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 340,
+      "line": 346,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "OpenClaw Android ${openClawAndroidVersionLabel()}",
       "surface": "android",
@@ -1035,7 +1035,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 381,
+      "line": 387,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Setup code, endpoint, TLS, token, password, onboarding.",
       "surface": "android",
@@ -1043,7 +1043,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 385,
+      "line": 391,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Collapse advanced controls",
       "surface": "android",
@@ -1051,7 +1051,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 385,
+      "line": 391,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Expand advanced controls",
       "surface": "android",
@@ -1059,7 +1059,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 416,
+      "line": 422,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Run these on the gateway host:",
       "surface": "android",
@@ -1067,7 +1067,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 419,
+      "line": 425,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "For Tailscale or public hosts, use wss:// or Tailscale Serve. Private LAN ws:// remains supported.",
       "surface": "android",
@@ -1075,7 +1075,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 448,
+      "line": 454,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Android Emulator",
       "surface": "android",
@@ -1083,7 +1083,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 457,
+      "line": 463,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Localhost",
       "surface": "android",
@@ -1091,7 +1091,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 484,
+      "line": 490,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Port",
       "surface": "android",
@@ -1099,7 +1099,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 484,
+      "line": 490,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Port (optional, defaults to 443)",
       "surface": "android",
@@ -1107,7 +1107,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 510,
+      "line": 516,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Turn this on for Tailscale or public hosts. Private LAN ws:// remains supported.",
       "surface": "android",
@@ -1115,7 +1115,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 536,
+      "line": 542,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Leave blank to keep saved token",
       "surface": "android",
@@ -1123,11 +1123,19 @@
     },
     {
       "kind": "ui-call",
-      "line": 545,
+      "line": 551,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
       "source": "Password (optional)",
       "surface": "android",
       "id": "native.android.8123f2cfbe415437"
+    },
+    {
+      "kind": "ui-call",
+      "line": 653,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
+      "source": "CF-Access-Client-Id",
+      "surface": "android",
+      "id": "native.android.4ddaa88cd4939df2"
     },
     {
       "kind": "ui-named-argument",
@@ -6709,13 +6717,61 @@
       "kind": "resource-string",
       "line": 24,
       "path": "apps/android/app/src/main/res/values/strings.xml",
+      "source": "Custom headers (optional)",
+      "surface": "android",
+      "id": "native.android.43900769f2cf0458"
+    },
+    {
+      "kind": "resource-string",
+      "line": 25,
+      "path": "apps/android/app/src/main/res/values/strings.xml",
+      "source": "Sent with every connection to this gateway, for example Cloudflare Access service token headers. Stored encrypted and applied on the next reconnect.",
+      "surface": "android",
+      "id": "native.android.6d42cb48a4a32331"
+    },
+    {
+      "kind": "resource-string",
+      "line": 26,
+      "path": "apps/android/app/src/main/res/values/strings.xml",
+      "source": "Header value",
+      "surface": "android",
+      "id": "native.android.c4d4f0299965fe55"
+    },
+    {
+      "kind": "resource-string",
+      "line": 27,
+      "path": "apps/android/app/src/main/res/values/strings.xml",
+      "source": "This header is managed by the connection and cannot be overridden.",
+      "surface": "android",
+      "id": "native.android.123e497273b8586e"
+    },
+    {
+      "kind": "resource-string",
+      "line": 28,
+      "path": "apps/android/app/src/main/res/values/strings.xml",
+      "source": "Add header",
+      "surface": "android",
+      "id": "native.android.94f0633a1fb099bc"
+    },
+    {
+      "kind": "resource-string",
+      "line": 29,
+      "path": "apps/android/app/src/main/res/values/strings.xml",
+      "source": "Remove %1$s",
+      "surface": "android",
+      "id": "native.android.ff4c8c3b56827d8e"
+    },
+    {
+      "kind": "resource-string",
+      "line": 30,
+      "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "Run onboarding again",
       "surface": "android",
       "id": "native.android.a43f43c1338a6960"
     },
     {
       "kind": "resource-string",
-      "line": 25,
+      "line": 31,
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "Resolved endpoint",
       "surface": "android",
@@ -6723,7 +6779,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 26,
+      "line": 32,
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "Verify the certificate fingerprint before trusting this gateway.\n\n%1$s",
       "surface": "android",
@@ -6731,7 +6787,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 27,
+      "line": 33,
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "The gateway certificate changed. Continue only if you expected this.\n\nOld SHA-256:\n%1$s\n\nNew SHA-256:\n%2$s",
       "surface": "android",
@@ -7355,7 +7411,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 64,
+      "line": 72,
       "path": "apps/ios/Sources/Design/AgentProTab+Destinations.swift",
       "source": "Skills",
       "surface": "apple",
@@ -7363,7 +7419,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 110,
+      "line": 118,
       "path": "apps/ios/Sources/Design/AgentProTab+Destinations.swift",
       "source": "Cron Jobs",
       "surface": "apple",
@@ -7371,7 +7427,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 140,
+      "line": 148,
       "path": "apps/ios/Sources/Design/AgentProTab+Destinations.swift",
       "source": "Usage",
       "surface": "apple",
@@ -7523,7 +7579,23 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 209,
+      "line": 192,
+      "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
+      "source": "Files",
+      "surface": "apple",
+      "id": "native.apple.f48d33a93f53ae56"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 194,
+      "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
+      "source": "Workspace files",
+      "surface": "apple",
+      "id": "native.apple.b84aa382768fe819"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 216,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Dreaming",
       "surface": "apple",
@@ -7531,7 +7603,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 223,
+      "line": 230,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Scheduled Work",
       "surface": "apple",
@@ -7539,7 +7611,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 302,
+      "line": 309,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Selected agent",
       "surface": "apple",
@@ -7547,7 +7619,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 302,
+      "line": 309,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Selects this agent",
       "surface": "apple",
@@ -7555,7 +7627,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 443,
+      "line": 450,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Cron unavailable",
       "surface": "apple",
@@ -7563,7 +7635,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 443,
+      "line": 450,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "No scheduled jobs",
       "surface": "apple",
@@ -7571,7 +7643,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 446,
+      "line": 453,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Connect a gateway to load scheduled work.",
       "surface": "apple",
@@ -7579,7 +7651,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 446,
+      "line": 453,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "The gateway has no visible cron jobs.",
       "surface": "apple",
@@ -7587,7 +7659,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 566,
+      "line": 573,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Loading skill status.",
       "surface": "apple",
@@ -7595,7 +7667,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 566,
+      "line": 573,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Skill status is available from the gateway.",
       "surface": "apple",
@@ -7603,7 +7675,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 588,
+      "line": 595,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Instance presence is available.",
       "surface": "apple",
@@ -7611,7 +7683,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 588,
+      "line": 595,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Loading instance presence.",
       "surface": "apple",
@@ -7619,7 +7691,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 607,
+      "line": 614,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "\\(cronStatus.jobs)",
       "surface": "apple",
@@ -7627,7 +7699,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 613,
+      "line": 620,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Cron status is available.",
       "surface": "apple",
@@ -7635,7 +7707,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 613,
+      "line": 620,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Loading cron status.",
       "surface": "apple",
@@ -7643,7 +7715,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 618,
+      "line": 625,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Scheduler disabled",
       "surface": "apple",
@@ -7651,7 +7723,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 618,
+      "line": 625,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Scheduler enabled",
       "surface": "apple",
@@ -7659,7 +7731,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 643,
+      "line": 650,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Loading recent usage.",
       "surface": "apple",
@@ -7667,7 +7739,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 643,
+      "line": 650,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Recent usage is available.",
       "surface": "apple",
@@ -7675,7 +7747,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 662,
+      "line": 669,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Background memory status is available.",
       "surface": "apple",
@@ -7683,7 +7755,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 662,
+      "line": 669,
       "path": "apps/ios/Sources/Design/AgentProTab+Overview.swift",
       "source": "Loading dreaming status.",
       "surface": "apple",
@@ -8067,7 +8139,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 58,
+      "line": 59,
       "path": "apps/ios/Sources/Design/AgentProTab.swift",
       "source": "Enabled",
       "surface": "apple",
@@ -8075,7 +8147,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 59,
+      "line": 60,
       "path": "apps/ios/Sources/Design/AgentProTab.swift",
       "source": "Off",
       "surface": "apple",
@@ -8083,7 +8155,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 60,
+      "line": 61,
       "path": "apps/ios/Sources/Design/AgentProTab.swift",
       "source": "Setup",
       "surface": "apple",
@@ -8091,7 +8163,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 61,
+      "line": 62,
       "path": "apps/ios/Sources/Design/AgentProTab.swift",
       "source": "Blocked",
       "surface": "apple",
@@ -8099,7 +8171,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 77,
+      "line": 78,
       "path": "apps/ios/Sources/Design/AgentProTab.swift",
       "source": "All",
       "surface": "apple",
@@ -8107,7 +8179,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 78,
+      "line": 79,
       "path": "apps/ios/Sources/Design/AgentProTab.swift",
       "source": "Online",
       "surface": "apple",
@@ -8115,15 +8187,71 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 79,
+      "line": 80,
       "path": "apps/ios/Sources/Design/AgentProTab.swift",
       "source": "Ready",
       "surface": "apple",
       "id": "native.apple.a97cdae7c8e13f0e"
     },
     {
+      "kind": "ui-named-argument",
+      "line": 18,
+      "path": "apps/ios/Sources/Design/AgentWorkspaceFilesScreen.swift",
+      "source": "Files",
+      "surface": "apple",
+      "id": "native.apple.9c4e8b82edf0b324"
+    },
+    {
+      "kind": "ui-call",
+      "line": 62,
+      "path": "apps/ios/Sources/Design/AgentWorkspaceFilesScreen.swift",
+      "source": "This folder is empty.",
+      "surface": "apple",
+      "id": "native.apple.ada58d7ce8866f71"
+    },
+    {
+      "kind": "ui-call",
+      "line": 134,
+      "path": "apps/ios/Sources/Design/AgentWorkspaceFilesScreen.swift",
+      "source": "Load More",
+      "surface": "apple",
+      "id": "native.apple.35512c4d46a2da28"
+    },
+    {
+      "kind": "ui-call",
+      "line": 140,
+      "path": "apps/ios/Sources/Design/AgentWorkspaceFilesScreen.swift",
+      "source": "\\(self.entries.count) of \\(self.totalEntries)",
+      "surface": "apple",
+      "id": "native.apple.e617cdacc3bce5ea"
+    },
+    {
+      "kind": "ui-modifier",
+      "line": 244,
+      "path": "apps/ios/Sources/Design/AgentWorkspaceFilesScreen.swift",
+      "source": "Share file",
+      "surface": "apple",
+      "id": "native.apple.336a7eeb12d6e5f4"
+    },
+    {
+      "kind": "ui-modifier",
+      "line": 251,
+      "path": "apps/ios/Sources/Design/AgentWorkspaceFilesScreen.swift",
+      "source": "Could not share this file.",
+      "surface": "apple",
+      "id": "native.apple.0ab324ff650d720c"
+    },
+    {
+      "kind": "ui-call",
+      "line": 255,
+      "path": "apps/ios/Sources/Design/AgentWorkspaceFilesScreen.swift",
+      "source": "OK",
+      "surface": "apple",
+      "id": "native.apple.8218f673399060cc"
+    },
+    {
       "kind": "ui-localized-call",
-      "line": 110,
+      "line": 114,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Unable to Export Transcript",
       "surface": "apple",
@@ -8131,7 +8259,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 114,
+      "line": 118,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "OK",
       "surface": "apple",
@@ -8139,7 +8267,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 118,
+      "line": 122,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "OpenClaw could not prepare the Markdown file.",
       "surface": "apple",
@@ -8147,7 +8275,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 138,
+      "line": 143,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "What would you like to work on?",
       "surface": "apple",
@@ -8155,7 +8283,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 149,
+      "line": 154,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "The session attaches once the gateway is ready.",
       "surface": "apple",
@@ -8163,7 +8291,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 238,
+      "line": 253,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Opens Settings / Gateway",
       "surface": "apple",
@@ -8171,7 +8299,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 263,
+      "line": 278,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "New Chat",
       "surface": "apple",
@@ -8179,7 +8307,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 276,
+      "line": 291,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "New Chat in Worktree",
       "surface": "apple",
@@ -8187,7 +8315,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 291,
+      "line": 306,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Export Transcript",
       "surface": "apple",
@@ -8195,7 +8323,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 301,
+      "line": 316,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Chat actions",
       "surface": "apple",
@@ -8203,7 +8331,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 354,
+      "line": 369,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Connected",
       "surface": "apple",
@@ -8211,31 +8339,39 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 354,
+      "line": 369,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Unavailable",
       "surface": "apple",
       "id": "native.apple.04934af85e3b9d6e"
     },
     {
-      "kind": "conditional-branch",
-      "line": 365,
-      "path": "apps/ios/Sources/Design/ChatProTab.swift",
-      "source": "Connect to a gateway",
-      "surface": "apple",
-      "id": "native.apple.889fe76e02b8ad5d"
-    },
-    {
-      "kind": "conditional-branch",
-      "line": 365,
+      "kind": "ui-localized-call",
+      "line": 381,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Message \\(self.agentDisplayName)...",
       "surface": "apple",
-      "id": "native.apple.e8173c7d24457256"
+      "id": "native.apple.4dcedefea4b49a1c"
     },
     {
       "kind": "ui-localized-call",
-      "line": 419,
+      "line": 384,
+      "path": "apps/ios/Sources/Design/ChatProTab.swift",
+      "source": "Message \\(self.agentDisplayName); sends when connected",
+      "surface": "apple",
+      "id": "native.apple.84767ec18054524b"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 386,
+      "path": "apps/ios/Sources/Design/ChatProTab.swift",
+      "source": "Connect to a gateway",
+      "surface": "apple",
+      "id": "native.apple.11b20bef7e51ab69"
+    },
+    {
+      "kind": "ui-localized-call",
+      "line": 454,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Check OpenClaw status",
       "surface": "apple",
@@ -8243,7 +8379,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 420,
+      "line": 455,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Summarize the current OpenClaw status and tell me what needs attention.",
       "surface": "apple",
@@ -8251,7 +8387,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 423,
+      "line": 458,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "What can I control here?",
       "surface": "apple",
@@ -8259,7 +8395,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 424,
+      "line": 459,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Show me which phone controls and device capabilities are available right now.",
       "surface": "apple",
@@ -8267,7 +8403,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 427,
+      "line": 462,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Help me start voice chat",
       "surface": "apple",
@@ -8275,7 +8411,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 428,
+      "line": 463,
       "path": "apps/ios/Sources/Design/ChatProTab.swift",
       "source": "Help me start a realtime voice session from this phone.",
       "surface": "apple",
@@ -9621,13 +9757,21 @@
       "kind": "ui-named-argument",
       "line": 165,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
+      "source": "Files",
+      "surface": "apple",
+      "id": "native.apple.3f2726ccd1acd987"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 170,
+      "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Dreaming",
       "surface": "apple",
       "id": "native.apple.614c9b40919fb103"
     },
     {
       "kind": "ui-named-argument",
-      "line": 170,
+      "line": 175,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Usage",
       "surface": "apple",
@@ -9635,7 +9779,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 175,
+      "line": 180,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Cron Jobs",
       "surface": "apple",
@@ -9643,7 +9787,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 249,
+      "line": 254,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Online",
       "surface": "apple",
@@ -9651,7 +9795,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 250,
+      "line": 255,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Connecting",
       "surface": "apple",
@@ -9659,7 +9803,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 251,
+      "line": 256,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Attention",
       "surface": "apple",
@@ -9667,7 +9811,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 252,
+      "line": 257,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Offline",
       "surface": "apple",
@@ -12307,7 +12451,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2757,
+      "line": 2840,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Action required",
       "surface": "apple",
@@ -12315,7 +12459,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2757,
+      "line": 2840,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Approval needed",
       "surface": "apple",
@@ -12323,7 +12467,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3315,
+      "line": 3398,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connecting…",
       "surface": "apple",
@@ -12331,7 +12475,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3315,
+      "line": 3398,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Reconnecting…",
       "surface": "apple",
@@ -12339,7 +12483,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3319,
+      "line": 3402,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connecting...",
       "surface": "apple",
@@ -12347,7 +12491,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3319,
+      "line": 3402,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Reconnecting...",
       "surface": "apple",
@@ -12355,7 +12499,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3610,
+      "line": 3694,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connected",
       "surface": "apple",
@@ -12363,7 +12507,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 3610,
+      "line": 3694,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Offline",
       "surface": "apple",
@@ -13109,13 +13253,21 @@
       "kind": "ui-named-argument",
       "line": 487,
       "path": "apps/ios/Sources/RootTabs.swift",
+      "source": "Files",
+      "surface": "apple",
+      "id": "native.apple.d1a5c9b0c4acbfe2"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 494,
+      "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Dreaming",
       "surface": "apple",
       "id": "native.apple.ad3c65353227b63e"
     },
     {
       "kind": "ui-named-argument",
-      "line": 494,
+      "line": 501,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Usage",
       "surface": "apple",
@@ -13123,7 +13275,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 501,
+      "line": 508,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Cron Jobs",
       "surface": "apple",
@@ -13131,7 +13283,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 634,
+      "line": 641,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Hide Sidebar",
       "surface": "apple",
@@ -13139,7 +13291,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 761,
+      "line": 768,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Close canvas",
       "surface": "apple",
@@ -13147,7 +13299,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1010,
+      "line": 1017,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Gateway needs attention",
       "surface": "apple",
@@ -13155,7 +13307,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1010,
+      "line": 1017,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "OpenClaw iOS",
       "surface": "apple",
@@ -13163,7 +13315,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1046,
+      "line": 1053,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Available",
       "surface": "apple",
@@ -13171,7 +13323,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1046,
+      "line": 1053,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "Gateway default",
       "surface": "apple",
@@ -13179,7 +13331,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 63,
+      "line": 64,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Chat",
       "surface": "apple",
@@ -13187,7 +13339,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 64,
+      "line": 65,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Talk",
       "surface": "apple",
@@ -13195,7 +13347,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 65,
+      "line": 66,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Overview",
       "surface": "apple",
@@ -13203,7 +13355,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 66,
+      "line": 67,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Activity",
       "surface": "apple",
@@ -13211,7 +13363,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 67,
+      "line": 68,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Agents",
       "surface": "apple",
@@ -13219,7 +13371,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 68,
+      "line": 69,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Workboard",
       "surface": "apple",
@@ -13227,7 +13379,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 69,
+      "line": 70,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Skill Workshop",
       "surface": "apple",
@@ -13235,7 +13387,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 70,
+      "line": 71,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Instances",
       "surface": "apple",
@@ -13243,7 +13395,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 71,
+      "line": 72,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Sessions",
       "surface": "apple",
@@ -13251,7 +13403,15 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 72,
+      "line": 73,
+      "path": "apps/ios/Sources/RootTabsNavigation.swift",
+      "source": "Files",
+      "surface": "apple",
+      "id": "native.apple.253cb2debeb51859"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 74,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Dreaming",
       "surface": "apple",
@@ -13259,7 +13419,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 73,
+      "line": 75,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Usage",
       "surface": "apple",
@@ -13267,7 +13427,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 74,
+      "line": 76,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Cron Jobs",
       "surface": "apple",
@@ -13275,7 +13435,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 75,
+      "line": 77,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Terminal",
       "surface": "apple",
@@ -13283,7 +13443,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 76,
+      "line": 78,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Docs",
       "surface": "apple",
@@ -13291,7 +13451,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 77,
+      "line": 79,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Settings",
       "surface": "apple",
@@ -13299,7 +13459,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 78,
+      "line": 80,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Settings / Gateway",
       "surface": "apple",
@@ -13307,7 +13467,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 84,
+      "line": 86,
       "path": "apps/ios/Sources/RootTabsNavigation.swift",
       "source": "Connection",
       "surface": "apple",
@@ -21371,7 +21531,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 197,
+      "line": 198,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Thinking",
       "surface": "apple",
@@ -21379,7 +21539,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 218,
+      "line": 219,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Model",
       "surface": "apple",
@@ -21387,7 +21547,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 235,
+      "line": 236,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Pinned",
       "surface": "apple",
@@ -21395,7 +21555,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 243,
+      "line": 244,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Recent",
       "surface": "apple",
@@ -21403,7 +21563,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 251,
+      "line": 252,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Models",
       "surface": "apple",
@@ -21411,7 +21571,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 280,
+      "line": 281,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Pin model",
       "surface": "apple",
@@ -21419,7 +21579,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 280,
+      "line": 281,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Unpin model",
       "surface": "apple",
@@ -21427,7 +21587,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 284,
+      "line": 285,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Session",
       "surface": "apple",
@@ -21435,7 +21595,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 348,
+      "line": 349,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Add Image",
       "surface": "apple",
@@ -21443,7 +21603,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 349,
+      "line": 350,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Attachments",
       "surface": "apple",
@@ -21451,7 +21611,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 519,
+      "line": 520,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Talk",
       "surface": "apple",
@@ -21459,7 +21619,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 565,
+      "line": 566,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Start realtime chat",
       "surface": "apple",
@@ -21467,7 +21627,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 565,
+      "line": 566,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Stop realtime chat",
       "surface": "apple",
@@ -21475,7 +21635,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 598,
+      "line": 599,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Start",
       "surface": "apple",
@@ -21483,7 +21643,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 598,
+      "line": 599,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Stop",
       "surface": "apple",
@@ -21491,7 +21651,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 708,
+      "line": 709,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Loading commands",
       "surface": "apple",
@@ -21499,7 +21659,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 717,
+      "line": 718,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Commands unavailable",
       "surface": "apple",
@@ -21507,7 +21667,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 726,
+      "line": 727,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Retry",
       "surface": "apple",
@@ -21515,7 +21675,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 735,
+      "line": 736,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "No matching commands",
       "surface": "apple",
@@ -21523,7 +21683,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 867,
+      "line": 868,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Stop response",
       "surface": "apple",
@@ -21531,7 +21691,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 892,
+      "line": 893,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Send message",
       "surface": "apple",
@@ -21539,7 +21699,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 907,
+      "line": 908,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Refresh",
       "surface": "apple",
@@ -21547,7 +21707,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1015,
+      "line": 1018,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Connecting...",
       "surface": "apple",
@@ -21555,7 +21715,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1015,
+      "line": 1018,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift",
       "source": "Gateway connected",
       "surface": "apple",
@@ -21613,13 +21773,29 @@
       "kind": "conditional-branch",
       "line": 644,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift",
+      "source": "Confirming…",
+      "surface": "apple",
+      "id": "native.apple.38722ea25417ad4f"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 646,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift",
+      "source": "Delivery unknown",
+      "surface": "apple",
+      "id": "native.apple.78682085b14232f8"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 648,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift",
       "source": "Not sent",
       "surface": "apple",
       "id": "native.apple.2888a268bfa49e9e"
     },
     {
       "kind": "conditional-branch",
-      "line": 662,
+      "line": 670,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift",
       "source": "Queued, sends when reconnected",
       "surface": "apple",
@@ -21627,7 +21803,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 664,
+      "line": 672,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift",
       "source": "Sending",
       "surface": "apple",
@@ -21635,7 +21811,23 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 666,
+      "line": 674,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift",
+      "source": "Sent, waiting for chat history confirmation",
+      "surface": "apple",
+      "id": "native.apple.bfe7aab77abe9a2c"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 676,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift",
+      "source": "Delivery unconfirmed, touch and hold to retry or delete",
+      "surface": "apple",
+      "id": "native.apple.7eb6eca416d33bb4"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 678,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift",
       "source": "Not sent, touch and hold to retry or delete",
       "surface": "apple",
@@ -21643,7 +21835,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 761,
+      "line": 773,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift",
       "source": "Running tools…",
       "surface": "apple",
@@ -21651,7 +21843,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 769,
+      "line": 781,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift",
       "source": "\\(display.emoji) \\(display.label)",
       "surface": "apple",
@@ -21667,7 +21859,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 416,
+      "line": 420,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift",
       "source": "Retry Send",
       "surface": "apple",
@@ -21675,7 +21867,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 431,
+      "line": 434,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift",
       "source": "Delete",
       "surface": "apple",
@@ -21683,7 +21875,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 485,
+      "line": 488,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift",
       "source": "Jump to latest",
       "surface": "apple",
@@ -21691,7 +21883,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 496,
+      "line": 499,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift",
       "source": "Jump to latest reply",
       "surface": "apple",
@@ -21699,7 +21891,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 516,
+      "line": 519,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift",
       "source": "Refresh",
       "surface": "apple",
@@ -21707,7 +21899,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 941,
+      "line": 944,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift",
       "source": "Loading chat",
       "surface": "apple",
@@ -21715,7 +21907,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 1021,
+      "line": 1024,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatView.swift",
       "source": "Dismiss",
       "surface": "apple",
@@ -21728,6 +21920,22 @@
       "source": "\\(baseName).jpg",
       "surface": "apple",
       "id": "native.apple.82c2287cd78da56f"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 1350,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel.swift",
+      "source": "delivery unconfirmed",
+      "surface": "apple",
+      "id": "native.apple.2b45abdc56b2caed"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 1350,
+      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatViewModel.swift",
+      "source": "queued after route change",
+      "surface": "apple",
+      "id": "native.apple.722f1f90b97e8e45"
     },
     {
       "kind": "conditional-branch",

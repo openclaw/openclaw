@@ -2,6 +2,7 @@
 
 package ai.openclaw.app
 
+import ai.openclaw.app.gateway.GatewayCustomHeaders
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.core.content.edit
@@ -9,6 +10,7 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
@@ -47,6 +49,7 @@ class SecurePrefs(
     private const val chatModelFavoritesKey = "chat.modelFavorites"
     private const val chatModelRecentsKey = "chat.modelRecents"
     private const val maxChatModelRecents = 5
+    private const val gatewayCustomHeadersKeyPrefix = "gateway.customHeaders."
   }
 
   private val appContext = context.applicationContext
@@ -450,6 +453,42 @@ class SecurePrefs(
     _gatewayToken.value = ""
     _gatewayBootstrapToken.value = ""
   }
+
+  /**
+   * Custom proxy headers are per-gateway credentials (Cloudflare Access-style service tokens).
+   * They live in the encrypted store like the other gateway secrets and are read at connect
+   * time; never log their values.
+   */
+  fun loadGatewayCustomHeaders(stableId: String): Map<String, String> {
+    val raw = securePrefs.getString(gatewayCustomHeadersKey(stableId), null) ?: return emptyMap()
+    val stored =
+      runCatching { json.decodeFromString<Map<String, String>>(raw) }.getOrElse { return emptyMap() }
+    return GatewayCustomHeaders.sanitized(stored)
+  }
+
+  fun saveGatewayCustomHeaders(
+    stableId: String,
+    headers: Map<String, String>,
+  ) {
+    val key = gatewayCustomHeadersKey(stableId)
+    val sanitized = GatewayCustomHeaders.sanitized(headers)
+    if (sanitized.isEmpty()) {
+      securePrefs.edit { remove(key) }
+      return
+    }
+    securePrefs.edit { putString(key, json.encodeToString(sanitized)) }
+  }
+
+  /** Forgets every gateway's proxy credentials during an explicit sign-out/re-pair action. */
+  fun clearGatewayCustomHeaders() {
+    val keys = securePrefs.all.keys.filter { it.startsWith(gatewayCustomHeadersKeyPrefix) }
+    if (keys.isEmpty()) return
+    securePrefs.edit {
+      for (key in keys) remove(key)
+    }
+  }
+
+  private fun gatewayCustomHeadersKey(stableId: String) = "$gatewayCustomHeadersKeyPrefix${stableId.trim()}"
 
   /** Loads the pinned gateway TLS fingerprint for a discovered/manual stable endpoint id. */
   fun loadGatewayTlsFingerprint(stableId: String): String? {
