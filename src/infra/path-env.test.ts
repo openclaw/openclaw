@@ -1,4 +1,5 @@
 // Covers OpenClaw CLI PATH construction.
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureOpenClawCliOnPath } from "./path-env.js";
@@ -108,6 +109,8 @@ describe("ensureOpenClawCliOnPath", () => {
     delete process.env.HOMEBREW_PREFIX;
     delete process.env.HOMEBREW_BREW_FILE;
     delete process.env.XDG_BIN_HOME;
+    delete process.env.PNPM_HOME;
+    delete process.env.NPM_CONFIG_PREFIX;
   }
 
   function expectPathsAfter(parts: string[], anchor: string, expectedPaths: string[]) {
@@ -351,6 +354,90 @@ describe("ensureOpenClawCliOnPath", () => {
       platform: "linux",
     });
     expectPathsAfter(updated, "/usr/bin", [pnpmHome, pnpmHomeBin, npmPrefixBin]);
+  });
+
+  it("ignores relative package-manager env roots", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-package-manager-relative");
+    resetBootstrapEnv("/usr/bin:/bin");
+    process.env.PNPM_HOME = ".";
+    process.env.NPM_CONFIG_PREFIX = "npm-prefix";
+
+    const updated = bootstrapPath({
+      execPath: appCli,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "linux",
+    });
+
+    expect(updated).not.toContain(".");
+    expect(updated).not.toContain("bin");
+    expect(updated).not.toContain(path.join("npm-prefix", "bin"));
+  });
+
+  it("ignores package-manager env roots derived from the active workspace", () => {
+    const homeDir = abs("/tmp/openclaw-path/home");
+    const cwd = path.join(homeDir, "workspace");
+    const appBinDir = path.join(homeDir, "app-bin");
+    const appCli = path.join(appBinDir, "openclaw");
+    const pnpmHome = path.join(cwd, ".pnpm");
+    const npmPrefix = path.join(cwd, ".npm-prefix");
+    for (const dir of [homeDir, cwd, appBinDir, pnpmHome, path.join(pnpmHome, "bin"), npmPrefix]) {
+      setDir(dir);
+    }
+    setDir(path.join(npmPrefix, "bin"));
+    setExe(appCli);
+    resetBootstrapEnv("/usr/bin:/bin");
+    process.env.PNPM_HOME = pnpmHome;
+    process.env.NPM_CONFIG_PREFIX = npmPrefix;
+
+    const updated = bootstrapPath({
+      execPath: appCli,
+      cwd,
+      homeDir,
+      platform: "linux",
+    });
+
+    expect(updated).not.toContain(pnpmHome);
+    expect(updated).not.toContain(path.join(pnpmHome, "bin"));
+    expect(updated).not.toContain(path.join(npmPrefix, "bin"));
+  });
+
+  it("ignores package-manager env roots whose existing parent resolves into the workspace", () => {
+    const homeDir = abs("/tmp/openclaw-path/home");
+    const cwd = path.join(homeDir, "workspace");
+    const appBinDir = path.join(homeDir, "app-bin");
+    const appCli = path.join(appBinDir, "openclaw");
+    for (const dir of [homeDir, cwd, appBinDir]) {
+      setDir(dir);
+    }
+    setExe(appCli);
+    resetBootstrapEnv("/usr/bin:/bin");
+    process.env.PNPM_HOME = "/tmp/workspace-link/missing-pnpm-home";
+
+    const realpathNative = vi.spyOn(fs.realpathSync, "native").mockImplementation((candidate) => {
+      const value = String(candidate);
+      if (value === "/tmp/workspace-link") {
+        return cwd;
+      }
+      if (value === cwd || value === homeDir) {
+        return value;
+      }
+      throw Object.assign(new Error("missing"), { code: "ENOENT" });
+    });
+
+    try {
+      const updated = bootstrapPath({
+        execPath: appCli,
+        cwd,
+        homeDir,
+        platform: "linux",
+      });
+
+      expect(updated).not.toContain(process.env.PNPM_HOME);
+      expect(updated).not.toContain(path.join(process.env.PNPM_HOME, "bin"));
+    } finally {
+      realpathNative.mockRestore();
+    }
   });
 
   it.each([
