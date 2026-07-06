@@ -237,6 +237,9 @@ export function createGrepToolDefinition(
 
             const child = spawn(rgPath, args, { stdio: ["ignore", "pipe", "pipe"] });
             const rl = createInterface({ input: child.stdout });
+            // Suppress readline-internal re-throws of input stream errors; the real
+            // stream error is handled by the child.stdout error listener below.
+            rl.on("error", () => {});
             let stderr = "";
             let matchCount = 0;
             let matchLimitReached = false;
@@ -262,6 +265,14 @@ export function createGrepToolDefinition(
             signal?.addEventListener("abort", onAbort, { once: true });
             child.stderr?.on("data", (chunk) => {
               stderr = appendBoundedTextTail(stderr, chunk);
+            });
+            child.stdout?.on("error", (error) => {
+              cleanup();
+              settle(() => reject(new Error(`ripgrep stdout error: ${error.message}`)));
+            });
+            child.stderr?.on("error", (error) => {
+              cleanup();
+              settle(() => reject(new Error(`ripgrep stderr error: ${error.message}`)));
             });
 
             const formatBlock = async (filePath: string, lineNumber: number): Promise<string[]> => {
