@@ -1357,21 +1357,28 @@ private struct ChatComposerTextView: NSViewRepresentable {
 
         let isEditing = scrollView.window?.firstResponder == textView
 
-        // Always allow clearing the text (e.g. after send), even while editing.
-        // Only skip other updates while editing to avoid cursor jumps.
-        let shouldClear = self.text.isEmpty && !textView.string.isEmpty
-        if isEditing, !shouldClear { return }
+        // While the user is typing, binding updates just echo textDidChange;
+        // rewriting the view then would jump the cursor. A binding value the
+        // coordinator never reported is programmatic (send-clear, slash
+        // completion) and must reach the view even mid-edit.
+        let isEcho = context.coordinator.lastReportedText == self.text
+        if isEditing, isEcho { return }
 
         if textView.string != self.text {
             context.coordinator.isProgrammaticUpdate = true
             defer { context.coordinator.isProgrammaticUpdate = false }
             textView.string = self.text
+            if isEditing {
+                textView.setSelectedRange(NSRange(location: (self.text as NSString).length, length: 0))
+            }
         }
+        context.coordinator.lastReportedText = self.text
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: ChatComposerTextView
         var isProgrammaticUpdate = false
+        var lastReportedText: String?
 
         init(_ parent: ChatComposerTextView) {
             self.parent = parent
@@ -1381,6 +1388,7 @@ private struct ChatComposerTextView: NSViewRepresentable {
             guard !self.isProgrammaticUpdate else { return }
             guard let view = notification.object as? NSTextView else { return }
             guard view.window?.firstResponder === view else { return }
+            self.lastReportedText = view.string
             self.parent.text = view.string
         }
     }

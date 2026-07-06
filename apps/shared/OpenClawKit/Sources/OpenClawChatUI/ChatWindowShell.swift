@@ -399,7 +399,9 @@ private struct ChatSessionSidebar: View {
                     .accessibilityLabel("Unread")
             }
         }
-        .tag(session.key)
+        // The tag type must equal the List selection type (String?) exactly;
+        // a plain String tag silently breaks selection highlighting/clicks.
+        .tag(Optional(session.key))
         .contextMenu {
             Button(session.pinned == true ? "Unpin" : "Pin") {
                 self.viewModel.setSessionPinned(session.key, pinned: session.pinned != true)
