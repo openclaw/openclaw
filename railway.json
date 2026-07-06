@@ -1,0 +1,11 @@
+{
+  "deploy": {
+    "startCommand": "node ./dist/index.js",
+    "buildCommand": "pnpm -w run build"
+  },
+  "env": {
+    "WHATSAPP_ACCESS_TOKEN": { "required": true },
+    "WHATSAPP_PHONE_NUMBER_ID": { "required": true },
+    "WHATSAPP_WEBHOOK_VERIFY_TOKEN": { "required": true }
+  }
+}

@@ -1,11 +1,10 @@
-# OpenClaw WhatsApp
+# WhatsApp extension
 
-Official OpenClaw channel plugin for WhatsApp Web chats.
+This extension exposes a registerWhatsAppRuntime(hostRuntime) helper that registers a webhook handler at /webhook/whatsapp and exposes a whatsappService on the host runtime for outbound sends.
 
-Install from OpenClaw:
+Environment variables required:
 
-```bash
-openclaw plugin add @openclaw/whatsapp
-```
-
-Link a WhatsApp account through the plugin's setup flow, then configure which chats OpenClaw agents should monitor and reply to.
+- WHATSAPP_ACCESS_TOKEN
+- WHATSAPP_PHONE_NUMBER_ID
+- WHATSAPP_WEBHOOK_VERIFY_TOKEN
+- WHATSAPP_BUSINESS_ACCOUNT_ID (optional)
