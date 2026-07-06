@@ -1702,8 +1702,12 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
+    const createdSessionKeys = Array.from(
+      { length: 11 },
+      (_, index) => `agent:main:session-${String.fromCharCode(97 + index)}`,
+    );
     const sessions = {
-      count: 3,
+      count: createdSessionKeys.length + 1,
       defaults: {
         contextTokens: null,
         model: "gpt-5.5",
@@ -1712,23 +1716,19 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       path: "",
       sessions: [
         {
-          key: "agent:main:session-a",
+          key: "agent:main:session-pinned",
           kind: "direct",
-          label: "Session A",
-          updatedAt: 100,
+          label: "Pinned Session",
+          pinned: true,
+          pinnedAt: 1,
+          updatedAt: 50,
         },
-        {
-          key: "agent:main:session-b",
+        ...createdSessionKeys.map((key, index) => ({
+          key,
           kind: "direct",
-          label: "Session B",
-          updatedAt: 300,
-        },
-        {
-          key: "agent:main:session-c",
-          kind: "direct",
-          label: "Session C",
-          updatedAt: 200,
-        },
+          label: `Session ${key.slice(-1).toUpperCase()}`,
+          updatedAt: (index + 1) * 100,
+        })),
       ],
       ts: Date.now(),
     };
@@ -1746,7 +1746,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         });
       await expect
         .poll(() => sidebarSessionOrder(page))
-        .toEqual(["agent:main:session-a", "agent:main:session-b", "agent:main:session-c"]);
+        .toEqual(["agent:main:session-pinned", ...createdSessionKeys.slice(0, 9)]);
 
       await page
         .locator(
@@ -1758,7 +1758,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       });
       await expect
         .poll(() => sidebarSessionOrder(page))
-        .toEqual(["agent:main:session-a", "agent:main:session-b", "agent:main:session-c"]);
+        .toEqual(["agent:main:session-pinned", ...createdSessionKeys.slice(0, 9)]);
 
       const activeWeight = await page
         .locator('.sidebar-recent-session[data-session-key="agent:main:session-b"]')
@@ -1774,13 +1774,19 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.getByRole("menuitemradio", { name: "Last updated" }).click();
       await expect
         .poll(() => sidebarSessionOrder(page))
-        .toEqual(["agent:main:session-b", "agent:main:session-c", "agent:main:session-a"]);
+        .toEqual([
+          "agent:main:session-pinned",
+          "agent:main:session-b",
+          ...createdSessionKeys.slice(2).toReversed(),
+        ]);
 
       await page.getByRole("button", { name: "Sort sessions" }).click();
-      await page.getByRole("menuitemradio", { name: "Created" }).waitFor({
-        state: "visible",
-        timeout: 10_000,
-      });
+      await page.getByRole("menuitemradio", { name: "Created" }).click();
+      await expect
+        .poll(() => sidebarSessionOrder(page))
+        .toEqual(["agent:main:session-pinned", ...createdSessionKeys.slice(0, 9)]);
+
+      await page.getByRole("button", { name: "Sort sessions" }).click();
       await page.getByRole("main").click();
       await expect.poll(() => page.getByRole("menuitemradio", { name: "Created" }).count()).toBe(0);
     } finally {

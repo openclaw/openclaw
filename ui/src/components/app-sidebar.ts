@@ -38,7 +38,6 @@ import {
 import { groupSidebarSessionRows } from "../lib/sessions/grouping.ts";
 import {
   compareSessionRowsByUpdatedAt,
-  getVisibleSessionRows,
   resolveSessionNavigation,
   searchForSession,
 } from "../lib/sessions/index.ts";
@@ -243,6 +242,19 @@ export class AppSidebar extends LitElement {
     return this.sessionKey.trim() || this.context?.gateway.snapshot.sessionKey.trim() || "";
   }
 
+  private readonly compareSidebarSessionRows = (
+    a: SessionsListResult["sessions"][number],
+    b: SessionsListResult["sessions"][number],
+  ) => {
+    if (this.sessionSortMode === "updated") {
+      return compareSessionRowsByUpdatedAt(a, b);
+    }
+    return (
+      (this.sessionCreatedOrder.get(a.key) ?? Number.MAX_SAFE_INTEGER) -
+      (this.sessionCreatedOrder.get(b.key) ?? Number.MAX_SAFE_INTEGER)
+    );
+  };
+
   private getSessionNavigationState() {
     const context = this.context;
     const routeSessionKey = this.getRouteSessionKey();
@@ -253,48 +265,27 @@ export class AppSidebar extends LitElement {
       assistantAgentId:
         context?.agentSelection.state.selectedId ?? context?.gateway.snapshot.assistantAgentId,
       hello: context?.gateway.snapshot.hello,
+      compareSessions: this.compareSidebarSessionRows,
     });
     const toSidebarSession = (row: SessionsListResult["sessions"][number]) => ({
       key: row.key,
       label: resolveSessionDisplayName(row.key, row),
       meta: row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "",
       href: `${pathForRoute("chat", context?.basePath ?? "")}${searchForSession(row.key)}`,
-      active: row.key === navigation.currentSessionKey,
+      active: row.key === navigation.activeRowKey,
       hasActiveRun: Boolean(row.hasActiveRun),
       kind: row.kind,
       pinned: row.pinned === true,
       category: normalizeOptionalString(row.category),
       unread: row.unread === true,
     });
-    const activeSession = navigation.selectedSession
-      ? toSidebarSession(navigation.selectedSession)
-      : null;
-    const visibleRows = getVisibleSessionRows(this.sessionsResult, {
-      currentSessionKey: navigation.currentSessionKey || undefined,
-      agentId: navigation.selectedAgentId,
-      defaultAgentId: navigation.defaultAgentId,
-      filterByAgent: navigation.currentSessionKey.toLowerCase() !== "unknown",
-    });
-    const sortedRows =
-      this.sessionSortMode === "updated"
-        ? visibleRows.toSorted(compareSessionRowsByUpdatedAt)
-        : visibleRows.toSorted(
-            (a, b) =>
-              (this.sessionCreatedOrder.get(a.key) ?? Number.MAX_SAFE_INTEGER) -
-              (this.sessionCreatedOrder.get(b.key) ?? Number.MAX_SAFE_INTEGER),
-          );
-    const visibleSessions = sortedRows.map(toSidebarSession);
-    const recentSessions =
-      activeSession && !visibleSessions.some((session) => session.key === activeSession.key)
-        ? [activeSession, ...visibleSessions]
-        : visibleSessions;
+    const recentSessions = navigation.recentSessions.map(toSidebarSession);
     const newSessionDisabled =
       !this.connected || this.sessionsLoading || Boolean(navigation.selectedSession?.hasActiveRun);
     return {
       routeSessionKey: navigation.currentSessionKey,
       selectedAgentId: navigation.selectedAgentId,
       defaultAgentId: navigation.defaultAgentId,
-      activeSession,
       recentSessions,
       newSessionDisabled,
       newSessionTitle: !this.connected
