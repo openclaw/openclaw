@@ -9,6 +9,16 @@ import {
  */
 import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
 
+/**
+ * Anthropic-message params (built by the managed transport) that carry transient
+ * current-turn runtime context and must be excluded from cache_control
+ * breakpoint selection — otherwise the deepest breakpoint would anchor on the
+ * volatile carrier appended after the active user turn, whose bytes change every
+ * turn. Keyed by object identity so concurrent conversions never collide, and
+ * never serialized to the wire.
+ */
+export const anthropicRuntimeContextCarrierParams = new WeakSet<object>();
+
 /** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
 type AnthropicServiceTier = "auto" | "standard_only";
 
@@ -159,7 +169,7 @@ function applyAnthropicCacheControlToMessages(
     }
 
     const record = message as Record<string, unknown>;
-    if (record.role !== "user") {
+    if (record.role !== "user" || anthropicRuntimeContextCarrierParams.has(record)) {
       continue;
     }
 

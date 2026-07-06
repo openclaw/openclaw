@@ -6,6 +6,7 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
  */
 import { describe, expect, it } from "vitest";
 import {
+  anthropicRuntimeContextCarrierParams,
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
 } from "./anthropic-payload-policy.js";
@@ -104,6 +105,39 @@ describe("anthropic payload policy", () => {
           cache_control: { type: "ephemeral", ttl: "1h" },
         },
       ],
+    });
+  });
+
+  it("anchors the cache marker on the last stable user turn, skipping a trailing runtime-context carrier", () => {
+    const policy = resolveAnthropicPayloadPolicy({
+      provider: "anthropic",
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com/v1",
+      cacheRetention: "long",
+      enableCacheControl: true,
+    });
+    const stableUser = { role: "user", content: [{ type: "text", text: "stable question" }] };
+    const carrier = { role: "user", content: "volatile current-turn metadata" };
+    // The managed transport marks carrier params on conversion; emulate that.
+    anthropicRuntimeContextCarrierParams.add(carrier);
+    const payload: TestPayload = {
+      system: [{ type: "text", text: "system" }],
+      messages: [stableUser, carrier],
+    };
+
+    applyAnthropicPayloadPolicyToParams(payload, policy);
+
+    // Deepest breakpoint anchors on the stable user turn...
+    expect(payload.messages[0]).toEqual({
+      role: "user",
+      content: [
+        { type: "text", text: "stable question", cache_control: { type: "ephemeral", ttl: "1h" } },
+      ],
+    });
+    // ...and NOT on the trailing volatile carrier (left uncached as a plain string).
+    expect(payload.messages[1]).toEqual({
+      role: "user",
+      content: "volatile current-turn metadata",
     });
   });
 

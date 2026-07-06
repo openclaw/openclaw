@@ -64,6 +64,7 @@ import type {
 import "../llm/ai-transport-host.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import {
+  anthropicRuntimeContextCarrierParams,
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
 } from "./anthropic-payload-policy.js";
@@ -406,12 +407,17 @@ function convertAnthropicMessages(
   for (let i = 0; i < transformedMessages.length; i += 1) {
     const msg = transformedMessages[i];
     if (msg.role === "user") {
+      const isRuntimeContextCarrier = msg.runtimeContextCarrier === true;
       if (typeof msg.content === "string") {
         if (msg.content.trim().length > 0) {
-          params.push({
+          const userParam = {
             role: "user",
             content: sanitizeTransportPayloadText(msg.content),
-          });
+          };
+          if (isRuntimeContextCarrier) {
+            anthropicRuntimeContextCarrierParams.add(userParam);
+          }
+          params.push(userParam);
         }
         continue;
       }
@@ -445,10 +451,14 @@ function convertAnthropicMessages(
       if (filteredBlocks.length === 0) {
         continue;
       }
-      params.push({
+      const userParam = {
         role: "user",
         content: filteredBlocks,
-      });
+      };
+      if (isRuntimeContextCarrier) {
+        anthropicRuntimeContextCarrierParams.add(userParam);
+      }
+      params.push(userParam);
       continue;
     }
     if (msg.role === "assistant") {

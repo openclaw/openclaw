@@ -838,6 +838,12 @@ function getCompatCacheControl(
   return { type: "ephemeral", ...(ttl ? { ttl } : {}) };
 }
 
+// Params built from transient runtime-context carrier user messages — excluded
+// from cache_control breakpoint selection so anchoring stays on the last stable
+// user turn, not the volatile carrier appended after it. Keyed by object
+// identity so concurrent conversions never collide, and never serialized.
+const runtimeContextCarrierParams = new WeakSet<object>();
+
 function applyAnthropicCacheControl(
   messages: ChatCompletionMessageParam[],
   tools: OpenAI.Chat.Completions.ChatCompletionTool[] | undefined,
@@ -866,6 +872,9 @@ function addCacheControlToLastConversationMessage(
 ): void {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
+    if (runtimeContextCarrierParams.has(message)) {
+      continue;
+    }
     if (message.role === "user" || message.role === "assistant") {
       if (addCacheControlToMessage(message, cacheControl)) {
         return;
@@ -1017,11 +1026,16 @@ export function convertMessages(
     }
 
     if (msg.role === "user") {
+      const isRuntimeContextCarrier = msg.runtimeContextCarrier === true;
       if (typeof msg.content === "string") {
-        params.push({
+        const userParam: ChatCompletionMessageParam = {
           role: "user",
           content: sanitizeSurrogates(msg.content),
-        });
+        };
+        if (isRuntimeContextCarrier) {
+          runtimeContextCarrierParams.add(userParam);
+        }
+        params.push(userParam);
       } else {
         const content: ChatCompletionContentPart[] = msg.content.map(
           (item): ChatCompletionContentPart => {
@@ -1042,10 +1056,14 @@ export function convertMessages(
         if (content.length === 0) {
           continue;
         }
-        params.push({
+        const userParam: ChatCompletionMessageParam = {
           role: "user",
           content,
-        });
+        };
+        if (isRuntimeContextCarrier) {
+          runtimeContextCarrierParams.add(userParam);
+        }
+        params.push(userParam);
       }
     } else if (msg.role === "assistant") {
       // Some providers don't accept null content, use empty string instead
