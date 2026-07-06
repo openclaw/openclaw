@@ -196,6 +196,24 @@ struct DeviceIdentityStoreTests {
         #expect(!FileManager.default.fileExists(atPath: sharedDeviceURL.path))
     }
 
+    @Test
+    func `legacy app support storage wins when app group storage is not available`() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let legacyURL = tempDir.appendingPathComponent("legacy", isDirectory: true)
+        let sharedURL = tempDir.appendingPathComponent("shared", isDirectory: true)
+
+        let selected = DeviceIdentityPaths.stateDirURL(
+            overrideURL: nil,
+            legacyStateDirURL: legacyURL,
+            appGroupStateDirURL: sharedURL,
+            appGroupStateDirAvailable: false,
+            temporaryDirectory: tempDir)
+
+        #expect(selected == legacyURL)
+    }
+
     @Test(.stateDirectoryIsolated)
     func `secondary profiles use separate identity and auth files`() throws {
         let tempDir = FileManager.default.temporaryDirectory
@@ -323,6 +341,32 @@ struct DeviceIdentityStoreTests {
         let identity = DeviceIdentityStore.loadOrCreate(fileURL: identityURL)
 
         #expect(identity.deviceId != "stale-device-id")
+        #expect(try String(contentsOf: identityURL, encoding: .utf8) == before)
+    }
+
+    @Test
+    func `does not overwrite an existing unrecognized identity file`() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let identityURL = tempDir
+            .appendingPathComponent("identity", isDirectory: true)
+            .appendingPathComponent("device.json", isDirectory: false)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        try FileManager.default.createDirectory(
+            at: identityURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        let stored = """
+        {
+          "schema": "future-openclaw-device-identity",
+          "stableDeviceId": "app-group-device-id"
+        }
+        """
+        try stored.write(to: identityURL, atomically: true, encoding: .utf8)
+        let before = try String(contentsOf: identityURL, encoding: .utf8)
+
+        let identity = DeviceIdentityStore.loadOrCreate(fileURL: identityURL)
+
+        #expect(identity.deviceId != "app-group-device-id")
         #expect(try String(contentsOf: identityURL, encoding: .utf8) == before)
     }
 

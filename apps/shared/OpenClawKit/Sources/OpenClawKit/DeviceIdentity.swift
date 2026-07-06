@@ -1,5 +1,8 @@
 import CryptoKit
 import Foundation
+#if canImport(Security)
+import Security
+#endif
 
 public enum GatewayDeviceIdentityProfile: String, Sendable {
     case primary
@@ -51,6 +54,7 @@ enum DeviceIdentityPaths {
             overrideURL: self.stateDirOverrideURL(),
             legacyStateDirURL: self.legacyStateDirURL(),
             appGroupStateDirURL: self.appGroupStateDirURL(),
+            appGroupStateDirAvailable: self.hasAppGroupEntitlement(OpenClawAppGroup.identifier),
             temporaryDirectory: FileManager.default.temporaryDirectory)
     }
 
@@ -58,12 +62,13 @@ enum DeviceIdentityPaths {
         overrideURL: URL?,
         legacyStateDirURL: URL?,
         appGroupStateDirURL: URL?,
+        appGroupStateDirAvailable: Bool = true,
         temporaryDirectory: URL) -> URL
     {
         if let overrideURL {
             return overrideURL
         }
-        if let appGroupStateDirURL {
+        if appGroupStateDirAvailable, let appGroupStateDirURL {
             return appGroupStateDirURL
         }
         if let legacyStateDirURL {
@@ -89,6 +94,26 @@ enum DeviceIdentityPaths {
             return appSupport.appendingPathComponent("OpenClaw", isDirectory: true)
         }
         return nil
+    }
+
+    private static func hasAppGroupEntitlement(_ identifier: String) -> Bool {
+        #if canImport(Security)
+        guard
+            let task = SecTaskCreateFromSelf(nil),
+            let value = SecTaskCopyValueForEntitlement(
+                task,
+                "com.apple.security.application-groups" as CFString,
+                nil)
+        else {
+            return false
+        }
+        guard let groups = value as? [String] else {
+            return false
+        }
+        return groups.contains(identifier)
+        #else
+        return true
+        #endif
     }
 
     private static func appGroupStateDirURL() -> URL? {
@@ -128,8 +153,11 @@ public enum DeviceIdentityStore {
             case .recognizedInvalid:
                 return self.generate()
             case .unknown:
-                break
+                return self.generate()
             }
+        }
+        if FileManager.default.fileExists(atPath: url.path) {
+            return self.generate()
         }
         let identity = self.generate()
         self.save(identity, to: url)
