@@ -598,7 +598,10 @@ describe("Google image-generation provider", () => {
     ).toBe(false);
   });
 
-  it("treats an empty config apiKey as not configured", () => {
+  it.each([
+    ["empty", ""],
+    ["whitespace-only", "   "],
+  ])("treats a %s config apiKey as not configured", (_label, apiKey) => {
     vi.spyOn(providerAuth, "isProviderApiKeyConfigured").mockReturnValue(false);
 
     const provider = buildGoogleImageGenerationProvider();
@@ -610,7 +613,7 @@ describe("Google image-generation provider", () => {
             providers: {
               google: {
                 baseUrl: "https://gateway.example.test/gemini/v1beta",
-                apiKey: "",
+                apiKey,
                 models: [],
               },
             },
