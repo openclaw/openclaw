@@ -69,7 +69,7 @@ describe("dynamic tool execution helpers", () => {
         },
         config: undefined,
       }),
-    ).toBe(32_000);
+    ).toBe(60_000);
   });
 
   it("prefers timeoutMs over timeoutSeconds", () => {
@@ -208,7 +208,7 @@ describe("dynamic tool execution helpers", () => {
           },
         },
       }),
-    ).toBe(182_000);
+    ).toBe(180_000);
     expect(
       resolveDynamicToolCallTimeoutMs({
         call: {
@@ -302,6 +302,50 @@ describe("dynamic tool execution helpers", () => {
       },
       isError: true,
     });
+  });
+
+  it("lets a structured sessions_send timeout win after setup work", async () => {
+    vi.useFakeTimers();
+    const call = {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-session-send-timeout",
+      namespace: null,
+      tool: "sessions_send",
+      arguments: { sessionKey: "agent:child", message: "ping", timeoutSeconds: 1 },
+    };
+    const structuredTimeout = {
+      success: true,
+      contentItems: [
+        {
+          type: "inputText" as const,
+          text: JSON.stringify({
+            runId: "run-child",
+            status: "timeout",
+            sentBeforeError: true,
+          }),
+        },
+      ],
+    };
+    const response = handleDynamicToolCallWithTimeout({
+      call,
+      toolBridge: {
+        handleToolCall: vi.fn(
+          () =>
+            new Promise((resolve) => {
+              // sessions_send can spend time resolving/snapshotting the target
+              // before its own timeoutSeconds wait starts.
+              setTimeout(() => resolve(structuredTimeout), 6_000);
+            }),
+        ),
+      },
+      signal: new AbortController().signal,
+      timeoutMs: resolveDynamicToolCallTimeoutMs({ call, config: undefined }),
+    });
+
+    await vi.advanceTimersByTimeAsync(6_000);
+
+    await expect(response).resolves.toEqual(structuredTimeout);
   });
 
   it("reports pre-execution cancellations to the private result observer", async () => {
