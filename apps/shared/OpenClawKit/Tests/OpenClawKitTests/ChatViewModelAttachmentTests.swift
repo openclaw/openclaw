@@ -461,6 +461,41 @@ final class ChatViewModelAttachmentTests: XCTestCase {
         XCTAssertTrue(commands.isEmpty)
     }
 
+    func testLegacyGatewayRetainsAttachmentUntilOutboxRestoreCompletes() async throws {
+        let capture = AttachmentSendCapture()
+        let outbox = makeAttachmentOutbox()
+        let viewModel = await MainActor.run {
+            let viewModel = makeDurableAttachmentViewModel(
+                transport: AttachmentProcessingTransport(
+                    capture: capture,
+                    durableOutboxAvailable: false),
+                outbox: outbox)
+            viewModel.attachments = [
+                OpenClawPendingAttachment(
+                    url: nil,
+                    data: Data("restore-race".utf8),
+                    fileName: "restore-race.m4a",
+                    mimeType: "audio/mp4",
+                    preview: nil,
+                    durationSeconds: 2),
+            ]
+            return viewModel
+        }
+
+        await MainActor.run { viewModel.send() }
+        try await waitUntil("legacy draft held during restore") {
+            await MainActor.run { viewModel.errorText?.contains("Restoring queued messages") == true }
+        }
+
+        let state = await MainActor.run { (viewModel.attachments.count, viewModel.input) }
+        let sendCount = await capture.count()
+        let commands = await outbox.loadCommands()
+        XCTAssertEqual(state.0, 1)
+        XCTAssertEqual(state.1, "")
+        XCTAssertEqual(sendCount, 0)
+        XCTAssertTrue(commands.isEmpty)
+    }
+
     func testFailedAttachmentSendWithoutOutboxRestoresDraft() async throws {
         let capture = AttachmentSendCapture()
         let attachmentData = Data("retry-voice-note".utf8)

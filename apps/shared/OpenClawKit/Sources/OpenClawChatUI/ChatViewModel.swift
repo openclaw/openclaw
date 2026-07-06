@@ -1250,7 +1250,6 @@ public final class OpenClawChatViewModel {
             self.outboxStatesByMessageID.values.contains(where: { !$0.isFailed })
         var shouldPersistAttachmentDraft = !draftAttachments.isEmpty
         if shouldPersistAttachmentDraft,
-           !mustPreserveOutboxOrder,
            self.healthOK,
            self.outbox != nil
         {
@@ -1259,6 +1258,16 @@ public final class OpenClawChatViewModel {
             if case let .unavailable(reason) = routeResult,
                reason == OpenClawChatTransportUpgradeMessage.routingContract
             {
+                guard self.hasRestoredOutboxMessages else {
+                    self.errorText = "Restoring queued messages. Try again in a moment."
+                    return
+                }
+                guard !mustPreserveOutboxOrder else {
+                    // A legacy gateway cannot drain the existing durable rows,
+                    // so keep this new attachment in the composer behind them.
+                    self.errorText = reason
+                    return
+                }
                 // Older healthy gateways can send attachments live but cannot
                 // safely replay them. Preserve that shipped live-only path.
                 shouldPersistAttachmentDraft = false
