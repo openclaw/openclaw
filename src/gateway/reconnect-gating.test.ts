@@ -68,8 +68,6 @@ describe("isNonRecoverableConnectError", () => {
   it("allows reconnect for PAIRING_REQUIRED when retry hints keep reconnect active", () => {
     expect(
       isNonRecoverableConnectError({
-        code: "connect_failed",
-        message: "auth failed",
         details: {
           code: ConnectErrorDetailCodes.PAIRING_REQUIRED,
           reason: "not-paired",
