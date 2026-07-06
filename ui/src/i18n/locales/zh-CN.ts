@@ -1590,7 +1590,7 @@ export const zh_CN: TranslationMap = {
       discard: "放弃",
       faster: "更快",
       smarter: "更智能",
-      useDefaultModel: "Use default model",
+      useDefaultModel: "使用默认模型",
     },
     pairingQrExpired: {
       title: "配对二维码已过期",
@@ -1601,10 +1601,10 @@ export const zh_CN: TranslationMap = {
       placeholder: "给 {name} 发消息",
       placeholderWithAttachments: "添加消息或继续粘贴图片...",
       placeholderDisconnected: "连接到 Gateway 后开始聊天...",
-      addAttachment: "Add attachment",
-      attachPhoto: "Photo",
+      addAttachment: "添加附件",
+      attachPhoto: "照片",
       attachFile: "附加文件",
-      attachFileOption: "File",
+      attachFileOption: "文件",
       contextUsage: {
         title: "上下文使用详情",
         open: "打开上下文使用详情",

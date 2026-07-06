@@ -1635,7 +1635,7 @@ export const ja_JP: TranslationMap = {
       discard: "破棄",
       faster: "より速く",
       smarter: "より賢く",
-      useDefaultModel: "Use default model",
+      useDefaultModel: "デフォルトモデルを使用",
     },
     pairingQrExpired: {
       title: "ペアリングQRの有効期限が切れました",
@@ -1646,10 +1646,10 @@ export const ja_JP: TranslationMap = {
       placeholder: "Message {name}",
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
-      addAttachment: "Add attachment",
-      attachPhoto: "Photo",
+      addAttachment: "添付ファイルを追加",
+      attachPhoto: "写真",
       attachFile: "Attach file",
-      attachFileOption: "File",
+      attachFileOption: "ファイル",
       contextUsage: {
         title: "コンテキスト使用量の詳細",
         open: "コンテキスト使用量の詳細を開く",

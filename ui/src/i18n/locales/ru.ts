@@ -1641,7 +1641,7 @@ export const ru: TranslationMap = {
       discard: "Сбросить",
       faster: "Быстрее",
       smarter: "Умнее",
-      useDefaultModel: "Use default model",
+      useDefaultModel: "Использовать модель по умолчанию",
     },
     pairingQrExpired: {
       title: "QR-код сопряжения истек",
@@ -1652,10 +1652,10 @@ export const ru: TranslationMap = {
       placeholder: "Сообщение {name}",
       placeholderWithAttachments: "Добавьте сообщение или вставьте еще изображения...",
       placeholderDisconnected: "Подключитесь к шлюзу, чтобы начать общение...",
-      addAttachment: "Add attachment",
-      attachPhoto: "Photo",
+      addAttachment: "Добавить вложение",
+      attachPhoto: "Фото",
       attachFile: "Прикрепить файл",
-      attachFileOption: "File",
+      attachFileOption: "Файл",
       contextUsage: {
         title: "Сведения об использовании контекста",
         open: "Открыть сведения об использовании контекста",

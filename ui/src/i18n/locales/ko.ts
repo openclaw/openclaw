@@ -1618,7 +1618,7 @@ export const ko: TranslationMap = {
       discard: "버리기",
       faster: "더 빠르게",
       smarter: "더 똑똑하게",
-      useDefaultModel: "Use default model",
+      useDefaultModel: "기본 모델 사용",
     },
     pairingQrExpired: {
       title: "페어링 QR 만료됨",
@@ -1629,10 +1629,10 @@ export const ko: TranslationMap = {
       placeholder: "Message {name}",
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
-      addAttachment: "Add attachment",
-      attachPhoto: "Photo",
+      addAttachment: "첨부 파일 추가",
+      attachPhoto: "사진",
       attachFile: "Attach file",
-      attachFileOption: "File",
+      attachFileOption: "파일",
       contextUsage: {
         title: "컨텍스트 사용량 세부 정보",
         open: "컨텍스트 사용량 세부 정보 열기",

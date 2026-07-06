@@ -1595,7 +1595,7 @@ export const th: TranslationMap = {
       discard: "ละทิ้ง",
       faster: "เร็วขึ้น",
       smarter: "ฉลาดขึ้น",
-      useDefaultModel: "Use default model",
+      useDefaultModel: "ใช้โมเดลเริ่มต้น",
     },
     pairingQrExpired: {
       title: "QR การจับคู่หมดอายุ",
@@ -1606,10 +1606,10 @@ export const th: TranslationMap = {
       placeholder: "Message {name}",
       placeholderWithAttachments: "Add a message or paste more images...",
       placeholderDisconnected: "Connect to the gateway to start chatting...",
-      addAttachment: "Add attachment",
-      attachPhoto: "Photo",
+      addAttachment: "เพิ่มไฟล์แนบ",
+      attachPhoto: "รูปภาพ",
       attachFile: "Attach file",
-      attachFileOption: "File",
+      attachFileOption: "ไฟล์",
       contextUsage: {
         title: "รายละเอียดการใช้บริบท",
         open: "เปิดรายละเอียดการใช้บริบท",
