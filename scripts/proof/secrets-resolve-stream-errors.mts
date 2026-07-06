@@ -8,8 +8,8 @@
 // resolves; without the stream error listeners the unhandled errors would
 // terminate the process.
 
-import { createRequire } from "node:module";
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,7 +17,7 @@ import { fileURLToPath } from "node:url";
 const repoRoot = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url))));
 
 const require = createRequire(import.meta.url);
-const childProcess = require("node:child_process");
+const childProcess = require("node:child_process") as typeof import("node:child_process");
 const originalSpawn = childProcess.spawn;
 
 const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-proof-secrets-"));
@@ -37,7 +37,7 @@ await fs.chmod(fakeSecret, 0o755);
 // emit error events after runExecResolver attaches listeners.
 childProcess.spawn = (...args: Parameters<typeof originalSpawn>) => {
   const child = originalSpawn.apply(childProcess, args);
-  const cmd = String(args[0] ?? "");
+  const cmd = args[0] ?? "";
   if (cmd === fakeSecret) {
     setTimeout(() => {
       child.stdout?.emit("error", new Error("stdout read failed"));
