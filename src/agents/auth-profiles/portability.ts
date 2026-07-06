@@ -62,7 +62,7 @@ export function isAuthProfileCredentialPortableForAgentCopy(
 
 /** Builds an agent-copy store containing only portable credentials. */
 export function buildPortableAuthProfileSecretsStoreForAgentCopy(store: AuthProfileStore): {
-  store: AuthProfileSecretsStore;
+  store: AuthProfileSecretsStore & Pick<AuthProfileStore, "order">;
   copiedProfileIds: string[];
   skippedProfileIds: string[];
 } {
@@ -79,8 +79,17 @@ export function buildPortableAuthProfileSecretsStoreForAgentCopy(store: AuthProf
     }),
   ) as AuthProfileSecretsStore["profiles"];
 
+  const copiedSet = new Set(copiedProfileIds);
+  const order = store.order
+    ? Object.fromEntries(
+        Object.entries(store.order)
+          .map(([provider, ids]) => [provider, ids.filter((id) => copiedSet.has(id))] as const)
+          .filter(([, ids]) => ids.length > 0),
+      )
+    : undefined;
+
   return {
-    store: { version: AUTH_STORE_VERSION, profiles },
+    store: { version: AUTH_STORE_VERSION, profiles, ...(order && { order }) },
     copiedProfileIds,
     skippedProfileIds,
   };
