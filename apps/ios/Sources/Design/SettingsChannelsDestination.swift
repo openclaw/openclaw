@@ -22,6 +22,7 @@ struct SettingsChannelsDestination: View {
             }
             self.channelsCard
         }
+        .font(OpenClawType.body)
         .task(id: self.refreshID) {
             await self.loadChannels(force: false)
         }
@@ -36,9 +37,9 @@ struct SettingsChannelsDestination: View {
                 ProIconBadge(systemName: "point.3.connected.trianglepath.dotted", color: self.summaryColor)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Channels / Integrations")
-                        .font(.headline)
+                        .font(OpenClawType.headline)
                     Text(self.summaryDetail)
-                        .font(.caption)
+                        .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -346,14 +347,14 @@ private struct SettingsChannelRow: View {
                 ProIconBadge(systemName: self.entry.systemImage, color: self.entry.color)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(self.entry.label)
-                        .font(.subheadline.weight(.semibold))
+                        .font(OpenClawType.subheadSemiBold)
                     Text(self.entry.detailText)
-                        .font(.caption)
+                        .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     if let lastError = self.entry.lastError {
                         Text(lastError)
-                            .font(.caption2.weight(.medium))
+                            .font(OpenClawType.caption2Medium)
                             .foregroundStyle(OpenClawBrand.warn)
                             .lineLimit(2)
                     }
@@ -380,35 +381,46 @@ private struct SettingsChannelRow: View {
     private func accountRow(_ account: SettingsChannelAccount) -> some View {
         HStack(spacing: 10) {
             Image(systemName: account.running || account.connected ? "checkmark.circle.fill" : "circle")
+                .font(OpenClawType.captionSemiBold)
                 .foregroundStyle(account.color)
                 .frame(width: 28, height: 28)
             VStack(alignment: .leading, spacing: 2) {
                 Text(account.displayName)
-                    .font(.caption.weight(.semibold))
+                    .font(OpenClawType.captionSemiBold)
                 Text(account.detailText)
-                    .font(.caption2)
+                    .font(OpenClawType.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
             Menu {
                 if account.running {
-                    Button("Stop") {
+                    Button {
                         self.stop(account.id)
+                    } label: {
+                        Text("Stop")
+                            .font(OpenClawType.subhead)
                     }
                 } else {
-                    Button("Start") {
+                    Button {
                         self.start(account.id)
+                    } label: {
+                        Text("Start")
+                            .font(OpenClawType.subhead)
                     }
                     .disabled(!account.configured || !account.enabled)
                 }
                 if account.linked {
-                    Button("Logout", role: .destructive) {
+                    Button(role: .destructive) {
                         self.logout(account.id)
+                    } label: {
+                        Text("Logout")
+                            .font(OpenClawType.subhead)
                     }
                 }
             } label: {
                 Image(systemName: self.actionMenuIcon(account))
+                    .font(OpenClawType.captionSemiBold)
             }
             .buttonStyle(.bordered)
             .controlSize(.mini)
@@ -628,7 +640,7 @@ private struct SettingsChannelsStatesPreview: View {
     {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(.subheadline.weight(.semibold))
+                .font(OpenClawType.subheadSemiBold)
                 .foregroundStyle(.secondary)
             ProCard(padding: 0, radius: SettingsLayout.cardRadius) {
                 VStack(spacing: 0) {

@@ -259,5 +259,6 @@ export function resolveGatewayScopedTools(params: {
   return {
     agentId,
     tools,
+    workspaceDir,
   };
 }

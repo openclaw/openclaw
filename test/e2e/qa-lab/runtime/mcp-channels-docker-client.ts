@@ -1,5 +1,6 @@
 // MCP channels Docker client drives the QA-owned channel bridge smoke.
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   assert,
   ClaudeChannelNotificationSchema,
@@ -28,6 +29,12 @@ function summarizeSessionRows(rows: Array<Record<string, unknown>> | undefined) 
     lastThreadId: entry.lastThreadId,
   }));
 }
+
+function findEventByText(events: Array<Record<string, unknown>> | undefined, text: string) {
+  return (events ?? []).find((entry) => entry.text === text);
+}
+
+const NON_OWNER_PERMISSION_QUIET_WINDOW_MS = 1_000;
 
 function formatUnknownError(error: unknown): string {
   if (error instanceof Error) {
@@ -96,6 +103,7 @@ async function main() {
   assert(gatewayToken, "missing GW_TOKEN");
 
   const gateway = await connectGateway({ url: gatewayUrl, token: gatewayToken });
+  let nonOwnerGateway: GatewayRpcClient | undefined;
   let mcpHandle: Awaited<ReturnType<typeof connectMcpClient>> | undefined;
   const mcpTempState = createMcpClientTempState({ gatewayToken });
 
@@ -271,7 +279,7 @@ async function main() {
         ),
       10_000,
     ).catch(() => undefined);
-    const userEvent = await waitFor(
+    let userEvent = await waitFor(
       "MCP user session.message event",
       async () => {
         const polledValue = await callTool<{
@@ -280,12 +288,11 @@ async function main() {
           name: "events_poll",
           arguments: { session_key: "agent:main:main", after_cursor: assistantCursor, limit: 50 },
         });
-        return (polledValue.structuredContent?.events ?? []).find(
-          (entry) => entry.text === channelMessage,
-        );
+        return findEventByText(polledValue.structuredContent?.events, channelMessage);
       },
       60_000,
     ).catch(() => undefined);
+    let finalPolledEvents: Array<Record<string, unknown>> | undefined;
     if (userEvent?.text !== channelMessage) {
       const polledLocal = await callTool<{
         structuredContent?: { events?: Array<Record<string, unknown>> };
@@ -293,12 +300,19 @@ async function main() {
         name: "events_poll",
         arguments: { session_key: "agent:main:main", after_cursor: assistantCursor, limit: 50 },
       });
+      finalPolledEvents = polledLocal.structuredContent?.events ?? [];
+      const finalUserEvent = findEventByText(finalPolledEvents, channelMessage);
+      if (finalUserEvent?.text === channelMessage) {
+        userEvent = finalUserEvent;
+      }
+    }
+    if (userEvent?.text !== channelMessage) {
       throw new Error(
         `expected user event after chat.send: ${JSON.stringify(
           {
             userEvent: userEvent ?? null,
             rawGatewayUserMessage: rawGatewayUserMessage ?? null,
-            mcpEventsAfterAssistant: polledLocal.structuredContent?.events ?? [],
+            mcpEventsAfterAssistant: finalPolledEvents ?? [],
             recentGatewayEvents: gateway.events.slice(-10).map((entry) => ({
               event: entry.event,
               sessionKey: entry.payload.sessionKey,
@@ -349,6 +363,36 @@ async function main() {
       },
     });
 
+    nonOwnerGateway = await connectGateway({
+      url: gatewayUrl,
+      token: gatewayToken,
+      scopes: ["operator.read", "operator.write"],
+    });
+    await nonOwnerGateway.request("chat.send", {
+      sessionKey: "agent:main:main",
+      message: "yes abcde",
+      idempotencyKey: randomUUID(),
+    });
+    await waitFor(
+      "non-owner reply forwarded as an ordinary Claude channel message",
+      () =>
+        mcpHandle.rawMessages
+          .map((entry) => ClaudeChannelNotificationSchema.safeParse(entry))
+          .find(
+            (entry) =>
+              entry.success &&
+              entry.data.params.meta.session_key === "agent:main:main" &&
+              entry.data.params.content === "yes abcde",
+          )?.data.params,
+      60_000,
+    );
+    await delay(NON_OWNER_PERMISSION_QUIET_WINDOW_MS);
+    const nonOwnerPermission = mcpHandle.rawMessages
+      .map((entry) => ClaudePermissionNotificationSchema.safeParse(entry))
+      .find((entry) => entry.success && entry.data.params.request_id === "abcde");
+    assert(!nonOwnerPermission, "non-owner reply must not resolve the Claude permission");
+
+    const ownerNotificationStart = mcpHandle.rawMessages.length;
     await gateway.request("chat.send", {
       sessionKey: "agent:main:main",
       message: "yes abcde",
@@ -360,6 +404,7 @@ async function main() {
         "Claude permission notification",
         () =>
           mcpHandle.rawMessages
+            .slice(ownerNotificationStart)
             .map((entry) => ClaudePermissionNotificationSchema.safeParse(entry))
             .find((entry) => entry.success && entry.data.params.request_id === "abcde")?.data
             .params,
@@ -389,6 +434,9 @@ async function main() {
         {
           ok: true,
           sessionKey: "agent:main:main",
+          nonOwnerReplyForwarded: true,
+          nonOwnerPermissionBlocked: true,
+          ownerPermissionAllowed: permission.behavior === "allow",
           rawNotifications: mcpHandle.rawMessages.filter(
             (entry) =>
               ClaudeChannelNotificationSchema.safeParse(entry).success ||
@@ -401,6 +449,9 @@ async function main() {
     );
   } finally {
     const closeTasks: Array<Promise<unknown>> = [gateway.close()];
+    if (nonOwnerGateway) {
+      closeTasks.push(nonOwnerGateway.close());
+    }
     if (mcpHandle) {
       closeTasks.push(mcpHandle.client.close(), mcpHandle.transport.close());
     }

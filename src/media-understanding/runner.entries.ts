@@ -43,6 +43,7 @@ import {
 import { resolveOfficialExternalPluginRepairHint } from "../plugins/official-external-plugin-repair-hints.js";
 import { runExec } from "../process/exec.js";
 import { providerOperationRetryConfig } from "../provider-runtime/operation-retry.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import {
   CLI_OUTPUT_MAX_BUFFER,
@@ -65,20 +66,7 @@ import type {
 } from "./types.js";
 
 type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
-type ResolveApiKeyForProvider = typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
-type RequireApiKey = typeof import("../agents/model-auth.js").requireApiKey;
-type IsProviderAuthError = typeof import("../agents/model-auth.js").isProviderAuthError;
-
-let cachedModelAuth: {
-  resolveApiKeyForProvider: ResolveApiKeyForProvider;
-  requireApiKey: RequireApiKey;
-  isProviderAuthError: IsProviderAuthError;
-} | null = null;
-
-async function loadModelAuth() {
-  cachedModelAuth ??= await import("../agents/model-auth.js");
-  return cachedModelAuth;
-}
+const loadModelAuth = createLazyRuntimeModule(async () => await import("../agents/model-auth.js"));
 
 function resolveLiteralProviderApiKey(params: {
   cfg: OpenClawConfig;
@@ -409,7 +397,13 @@ function resolveEntryRunOptions(params: {
   entry: MediaUnderstandingModelConfig;
   cfg: OpenClawConfig;
   config?: MediaUnderstandingConfig;
-}): { maxBytes: number; maxChars?: number; timeoutMs: number; prompt: string } {
+}): {
+  maxBytes: number;
+  maxChars?: number;
+  timeoutMs: number;
+  prompt: string;
+  hasConfiguredPrompt: boolean;
+} {
   const { capability, entry, cfg } = params;
   const maxBytes = resolveMaxBytes({ capability, entry, cfg, config: params.config });
   const maxChars = resolveMaxChars({ capability, entry, cfg, config: params.config });
@@ -419,12 +413,16 @@ function resolveEntryRunOptions(params: {
       cfg.tools?.media?.[capability]?.timeoutSeconds,
     DEFAULT_TIMEOUT_SECONDS[capability],
   );
-  const prompt = resolvePrompt(
-    capability,
-    entry.prompt ?? params.config?.prompt ?? cfg.tools?.media?.[capability]?.prompt,
+  const configuredPrompt =
+    entry.prompt ?? params.config?.prompt ?? cfg.tools?.media?.[capability]?.prompt;
+  const prompt = resolvePrompt(capability, configuredPrompt, maxChars);
+  return {
+    maxBytes,
     maxChars,
-  );
-  return { maxBytes, maxChars, timeoutMs, prompt };
+    timeoutMs,
+    prompt,
+    hasConfiguredPrompt: Boolean(configuredPrompt?.trim()),
+  };
 }
 
 function resolveMediaRequestOverrides(config: MediaUnderstandingConfig | undefined): {
@@ -439,6 +437,28 @@ function resolveMediaRequestOverrides(config: MediaUnderstandingConfig | undefin
     prompt: overrides["_requestPromptOverride"],
     language: overrides["_requestLanguageOverride"],
   };
+}
+
+function resolveAudioProviderPrompt(params: {
+  prompt: string;
+  hasConfiguredPrompt: boolean;
+  language?: string;
+}): string | undefined {
+  const language = params.language?.trim().toLowerCase();
+  const isEnglish =
+    !language ||
+    language === "en" ||
+    language === "eng" ||
+    language === "english" ||
+    language.startsWith("en-") ||
+    language.startsWith("en_");
+  if (params.hasConfiguredPrompt || isEnglish) {
+    return params.prompt;
+  }
+  // OpenAI-compatible transcription prompts guide style/context and should
+  // match the audio language; omit OpenClaw's English default for non-English
+  // language hints unless the user supplied an explicit prompt.
+  return undefined;
 }
 
 type ProviderExecutionAuth =
@@ -739,7 +759,7 @@ export async function runProviderEntry(params: {
   }
   const providerId = normalizeMediaProviderId(providerIdRaw);
   const requestProviderId = normalizeMediaExecutionProviderId(providerIdRaw);
-  const { maxBytes, maxChars, timeoutMs, prompt } = resolveEntryRunOptions({
+  const { maxBytes, maxChars, timeoutMs, prompt, hasConfiguredPrompt } = resolveEntryRunOptions({
     capability,
     entry,
     cfg,
@@ -815,6 +835,18 @@ export async function runProviderEntry(params: {
       timeoutMs,
     });
     assertMinAudioSize({ size: media.size, attachmentIndex: params.attachmentIndex });
+    const audioLanguage =
+      requestOverrides.language ??
+      entry.language ??
+      params.config?.language ??
+      cfg.tools?.media?.audio?.language;
+    const audioPrompt =
+      requestOverrides.prompt ??
+      resolveAudioProviderPrompt({
+        prompt,
+        hasConfiguredPrompt,
+        language: audioLanguage,
+      });
     const { auth, baseUrl, headers, request } = await resolveProviderExecutionContext({
       capability,
       providerId,
@@ -853,12 +885,8 @@ export async function runProviderEntry(params: {
       headers,
       request,
       model,
-      language:
-        requestOverrides.language ??
-        entry.language ??
-        params.config?.language ??
-        cfg.tools?.media?.audio?.language,
-      prompt: requestOverrides.prompt ?? prompt,
+      language: audioLanguage,
+      prompt: audioPrompt,
       query: providerQuery,
       timeoutMs,
       fetchFn,

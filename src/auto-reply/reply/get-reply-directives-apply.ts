@@ -306,6 +306,13 @@ export async function applyInlineDirectiveOverrides(params: {
           model,
           markLiveSwitchPending: true,
         });
+        if (!persisted.sessionChangesApplied) {
+          typing.cleanup();
+          return {
+            kind: "reply",
+            reply: { text: "Model change was not applied because the session changed. Retry." },
+          };
+        }
         const label = `${modelSelection.provider}/${modelSelection.model}`;
         const labelWithAlias = modelSelection.alias ? `${modelSelection.alias} (${label})` : label;
         const parts = [
@@ -431,6 +438,17 @@ export async function applyInlineDirectiveOverrides(params: {
     directiveAck = fastLane.directiveAck;
     provider = fastLane.provider;
     model = fastLane.model;
+    if (!fastLane.sessionChangesApplied) {
+      typing.cleanup();
+      return {
+        kind: "reply",
+        reply:
+          directiveAck ??
+          ({
+            text: "Session settings were not applied because the session changed. Retry.",
+          } satisfies ReplyPayload),
+      };
+    }
   }
 
   const persisted = await (
@@ -443,6 +461,15 @@ export async function applyInlineDirectiveOverrides(params: {
   provider = persisted.provider;
   model = persisted.model;
   contextTokens = persisted.contextTokens;
+  if (!persisted.sessionChangesApplied) {
+    typing.cleanup();
+    return {
+      kind: "reply",
+      reply: {
+        text: "Session settings were not applied because the session changed. Retry.",
+      },
+    };
+  }
 
   const perMessageQueueMode =
     directives.hasQueueDirective && !directives.queueReset ? directives.queueMode : undefined;

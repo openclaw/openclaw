@@ -2290,4 +2290,26 @@ describe("memory index", () => {
       restoreMemoryIndexStateDir();
     }
   });
+  it("status-purpose manager detects unindexed session transcripts as dirty", async () => {
+    // Regression test for #97814: plain openclaw memory status (purpose: status)
+    // must report dirty=true when session files exist without index rows.
+    const cfg = createCfg({ sources: ["sessions"], sessionMemory: true });
+    const stateDirName = ".state-status-dirty-test";
+    setMemoryIndexStateDir(path.join(workspaceDir, stateDirName));
+    try {
+      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+      await fs.mkdir(sessionsDir, { recursive: true });
+      const transcriptPath = path.join(sessionsDir, "status-dirty-test.jsonl");
+      await fs.writeFile(transcriptPath, JSON.stringify({ type: "test", ts: 1 }) + "\n");
+
+      const manager = await getFreshManager(cfg, "status");
+      managersForCleanup.add(manager);
+
+      const result = manager.status();
+      expect(result.dirty).toBe(true);
+    } finally {
+      restoreMemoryIndexStateDir();
+    }
+  });
+
 });

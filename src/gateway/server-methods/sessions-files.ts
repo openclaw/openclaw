@@ -14,12 +14,24 @@ import {
   validateSessionsFilesListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { root as fsSafeRoot, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { visitSessionMessagesAsync } from "../session-transcript-readers.js";
 import { loadSessionEntry } from "../session-utils.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
+import {
+  listWorkspacePath,
+  normalizeRelativePath,
+  readWorkspaceFile,
+  resolveWorkspacePath,
+  sortDirents,
+  sortWorkspaceEntries,
+  statWorkspacePath,
+  toUpdatedAtMs,
+  WORKSPACE_PREVIEW_MAX_BYTES,
+  workspaceStatKind,
+  type WorkspaceDirEntry,
+} from "./workspace-fs.js";
 
 type FileKind = "modified" | "read";
 
@@ -28,16 +40,13 @@ type TouchedFile = {
   kind: FileKind;
 };
 
-type WorkspaceRoot = Awaited<ReturnType<typeof fsSafeRoot>>;
-type WorkspacePathStat = Awaited<ReturnType<WorkspaceRoot["stat"]>>;
-type WorkspaceDirEntry = WorkspacePathStat & { name: string };
 type LoadedSessionFiles = {
   root?: string;
   fileRoot?: string;
   files: TouchedFile[];
 };
 
-const MAX_PREVIEW_BYTES = 256 * 1024;
+const MAX_PREVIEW_BYTES = WORKSPACE_PREVIEW_MAX_BYTES;
 const MAX_BROWSER_ENTRIES = 250;
 const MAX_SEARCH_ENTRIES = 500;
 const MAX_SEARCH_VISITED_ENTRIES = 5_000;
@@ -172,31 +181,6 @@ function toDisplayPath(root: string, resolved: string): string {
   return relative.split(path.sep).join("/");
 }
 
-function normalizeRelativePath(value: string | undefined): string {
-  if (!value) {
-    return "";
-  }
-  return value
-    .replaceAll("\\", "/")
-    .split("/")
-    .filter((part) => part && part !== ".")
-    .join("/");
-}
-
-function resolveWorkspacePath(root: string | undefined, filePath: string): string | undefined {
-  if (!root) {
-    return undefined;
-  }
-  const resolved = path.isAbsolute(filePath)
-    ? path.resolve(filePath)
-    : path.resolve(root, filePath);
-  const relative = path.relative(root, resolved);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    return undefined;
-  }
-  return resolved;
-}
-
 function isInsideRoot(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
   return !relative.startsWith("..") && !path.isAbsolute(relative);
@@ -233,72 +217,6 @@ function resolveFileRoot(params: {
   const resolvedCwd = path.resolve(params.spawnedCwd);
   const resolvedRoot = path.resolve(params.root);
   return isInsideRoot(resolvedRoot, resolvedCwd) ? params.spawnedCwd : params.root;
-}
-
-async function openSessionWorkspaceRoot(rootDir: string): Promise<WorkspaceRoot | undefined> {
-  try {
-    return await fsSafeRoot(rootDir, {
-      hardlinks: "reject",
-      maxBytes: MAX_PREVIEW_BYTES,
-      nonBlockingRead: true,
-      symlinks: "reject",
-    });
-  } catch {
-    return undefined;
-  }
-}
-
-async function statWorkspacePath(
-  rootDir: string,
-  browserPath: string,
-): Promise<WorkspacePathStat | undefined> {
-  const workspaceRoot = await openSessionWorkspaceRoot(rootDir);
-  if (!workspaceRoot) {
-    return undefined;
-  }
-  try {
-    return await workspaceRoot.stat(browserPath || ".");
-  } catch {
-    return undefined;
-  }
-}
-
-async function listWorkspacePath(
-  rootDir: string,
-  browserPath: string,
-): Promise<WorkspaceDirEntry[] | undefined> {
-  const workspaceRoot = await openSessionWorkspaceRoot(rootDir);
-  if (!workspaceRoot) {
-    return undefined;
-  }
-  try {
-    return await workspaceRoot.list(browserPath || ".", { withFileTypes: true });
-  } catch {
-    return undefined;
-  }
-}
-
-async function readWorkspaceFile(
-  rootDir: string,
-  browserPath: string,
-): Promise<ReadResult | undefined | "too-large"> {
-  const workspaceRoot = await openSessionWorkspaceRoot(rootDir);
-  if (!workspaceRoot) {
-    return undefined;
-  }
-  try {
-    return await workspaceRoot.read(browserPath, {
-      hardlinks: "reject",
-      maxBytes: MAX_PREVIEW_BYTES,
-      nonBlockingRead: true,
-      symlinks: "reject",
-    });
-  } catch (err) {
-    if (err instanceof FsSafeError && err.code === "too-large") {
-      return "too-large";
-    }
-    return undefined;
-  }
 }
 
 function relevanceForKind(kind: FileKind): SessionFileRelevance {
@@ -363,36 +281,6 @@ function displayNameForPath(filePath: string): string {
   return base || filePath;
 }
 
-function toUpdatedAtMs(mtimeMs: number): number {
-  return Math.floor(mtimeMs);
-}
-
-function workspaceStatKind(stat: WorkspacePathStat): "file" | "directory" | "symlink" | undefined {
-  const kind = (stat as { kind?: unknown }).kind;
-  if (kind === "file" || kind === "directory" || kind === "symlink") {
-    return kind;
-  }
-  const nodeStat = stat as {
-    isDirectory?: boolean | (() => boolean);
-    isFile?: boolean | (() => boolean);
-    isSymbolicLink?: boolean | (() => boolean);
-  };
-  const isFile = typeof nodeStat.isFile === "function" ? nodeStat.isFile() : nodeStat.isFile;
-  if (isFile) {
-    return "file";
-  }
-  const isDirectory =
-    typeof nodeStat.isDirectory === "function" ? nodeStat.isDirectory() : nodeStat.isDirectory;
-  if (isDirectory) {
-    return "directory";
-  }
-  const isSymbolicLink =
-    typeof nodeStat.isSymbolicLink === "function"
-      ? nodeStat.isSymbolicLink()
-      : nodeStat.isSymbolicLink;
-  return isSymbolicLink ? "symlink" : undefined;
-}
-
 async function toSessionFileEntry(
   touched: TouchedFile,
   root: string | undefined,
@@ -454,21 +342,6 @@ async function toBrowserEntry(
   };
 }
 
-function sortBrowserEntries(
-  entries: readonly SessionFileBrowserEntry[],
-): SessionFileBrowserEntry[] {
-  return entries.toSorted((a, b) => {
-    if (a.kind !== b.kind) {
-      return a.kind === "directory" ? -1 : 1;
-    }
-    return a.name.localeCompare(b.name);
-  });
-}
-
-function sortDirents<T extends { name: string }>(dirents: readonly T[]): T[] {
-  return dirents.toSorted((a, b) => a.name.localeCompare(b.name));
-}
-
 function matchesSearch(entryPath: string, name: string, query: string): boolean {
   const normalizedQuery = query.toLowerCase();
   return (
@@ -518,7 +391,7 @@ async function searchBrowserEntries(params: {
     }
   };
   await visit("");
-  return { entries: sortBrowserEntries(entries), ...(truncated ? { truncated } : {}) };
+  return { entries: sortWorkspaceEntries(entries), ...(truncated ? { truncated } : {}) };
 }
 
 async function buildBrowserResult(params: {
@@ -573,7 +446,7 @@ async function buildBrowserResult(params: {
   return {
     path: browserPath,
     ...(browserPath ? { parentPath: parent === "." ? "" : parent } : {}),
-    entries: sortBrowserEntries(entries.slice(0, MAX_BROWSER_ENTRIES)),
+    entries: sortWorkspaceEntries(entries.slice(0, MAX_BROWSER_ENTRIES)),
     ...(entries.length > MAX_BROWSER_ENTRIES ? { truncated: true } : {}),
   };
 }

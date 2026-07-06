@@ -14,6 +14,7 @@ import type {
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "../../config/config.js";
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "../../config/future-version-guard.js";
+import { isInvalidConfigError } from "../../config/io.invalid-config.js";
 import {
   CONFIG_PATH,
   normalizeStateDirEnv,
@@ -34,6 +35,15 @@ import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  completeGatewayBootLifecycle,
+  GATEWAY_CRASH_LOOP_BREAKER_REASON,
+  GATEWAY_CRASH_LOOP_RECOVERED_REASON,
+  inspectGatewayCrashLoopBreaker,
+  recordGatewayBootStart,
+  type GatewayCrashLoopBreakerDecision,
+  type GatewayBootLifecycleCompletion,
+} from "../../infra/gateway-boot-lifecycle.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
@@ -445,6 +455,10 @@ function resolveGatewayLockErrorExitCode(
   return isHealthyGatewayLockError(err) ? 0 : 1;
 }
 
+function resolveGatewayStartupFailureExitCode(err: unknown): number {
+  return isInvalidConfigError(err) ? EXIT_CONFIG_ERROR : 1;
+}
+
 function normalizeGatewayHealthProbeHost(host: string): string {
   if (host === "0.0.0.0" || host === "::") {
     return "127.0.0.1";
@@ -552,10 +566,13 @@ async function runGatewayLoopWithSupervisedLockRecovery(params: {
   }
 }
 
-async function maybeWriteGatewayStartupFailureBundle(err: unknown): Promise<void> {
+async function maybeWriteGatewayStartupFailureBundle(
+  err: unknown,
+  reason = "gateway.startup_failed",
+): Promise<void> {
   const { writeDiagnosticStabilityBundleForFailureSync } =
     await import("../../logging/diagnostic-stability-bundle.js");
-  const result = writeDiagnosticStabilityBundleForFailureSync("gateway.startup_failed", err);
+  const result = writeDiagnosticStabilityBundleForFailureSync(reason, err);
   if ("message" in result) {
     gatewayLog.warn(result.message);
   }
@@ -704,7 +721,7 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
   const port = portOverride ?? resolveGatewayPort(cfg);
   if (!Number.isFinite(port) || port <= 0 || port > 65_535) {
     defaultRuntime.error(formatInvalidConfigPort("gateway.port"));
-    defaultRuntime.exit(1);
+    defaultRuntime.exit(EXIT_CONFIG_ERROR);
     return;
   }
   // Only capture the *explicit* bind value here.  The container-aware
@@ -944,14 +961,56 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
   gatewayLog.info("starting...");
   startupTrace.mark("cli.gateway-loop");
   let startupConfigSnapshotReadForNextStart = startupConfigSnapshotRead;
-  const deferStartupSidecars =
+  const envSidecarStartupMode =
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
-    isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
+    isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS)
+      ? "defer"
+      : "start";
+  let crashLoopDecision: GatewayCrashLoopBreakerDecision | undefined;
+  let channelAutostartSuppression: { reason: "crash-loop-breaker"; message: string } | undefined;
+  let activeBootId: string | undefined;
+  const beginBoot = async (startedAtMs: number) => {
+    // run-loop calls beginBoot before every startGatewayServer invocation, so
+    // in-process restarts re-evaluate breaker state instead of reusing stale mode.
+    crashLoopDecision = inspectGatewayCrashLoopBreaker(process.env, startedAtMs);
+    const bootStartReason = crashLoopDecision.tripped
+      ? crashLoopDecision.shouldWriteStabilityBundle
+        ? GATEWAY_CRASH_LOOP_BREAKER_REASON
+        : undefined
+      : crashLoopDecision.recovered
+        ? GATEWAY_CRASH_LOOP_RECOVERED_REASON
+        : undefined;
+    activeBootId = recordGatewayBootStart(process.env, startedAtMs, bootStartReason);
+    channelAutostartSuppression = undefined;
+    if (crashLoopDecision.recovered) {
+      gatewayLog.info("gateway restart-loop breaker recovered; channel auto-start restored");
+    }
+    if (!crashLoopDecision.tripped) {
+      return;
+    }
+    const message =
+      `gateway restart-loop breaker tripped: ${crashLoopDecision.uncleanBoots} unclean boot(s) within ${crashLoopDecision.windowMs}ms; ` +
+      "suppressing channel/provider account auto-start. Inspect the stability bundle and fix the startup crash before restarting the service.";
+    channelAutostartSuppression = { reason: "crash-loop-breaker", message };
+    gatewayLog.error(message);
+    if (crashLoopDecision.shouldWriteStabilityBundle) {
+      await maybeWriteGatewayStartupFailureBundle(
+        new Error(message),
+        GATEWAY_CRASH_LOOP_BREAKER_REASON,
+      );
+    }
+  };
+  const completeBoot = (completion: GatewayBootLifecycleCompletion) => {
+    completeGatewayBootLifecycle(activeBootId, completion, process.env);
+    activeBootId = undefined;
+  };
   const startLoop = async () =>
     await runGatewayLoop({
       runtime: defaultRuntime,
       lockPort: port,
       healthHost,
+      beginBoot,
+      completeBoot,
       start: async ({ startupStartedAt } = {}) => {
         const startupConfigSnapshotReadForThisStart = startupConfigSnapshotReadForNextStart;
         startupConfigSnapshotReadForNextStart = undefined;
@@ -963,7 +1022,8 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
           ...(startupConfigSnapshotReadForThisStart
             ? { startupConfigSnapshotRead: startupConfigSnapshotReadForThisStart }
             : {}),
-          ...(deferStartupSidecars ? { deferStartupSidecars: true } : {}),
+          ...(envSidecarStartupMode !== "start" ? { sidecarStartup: envSidecarStartupMode } : {}),
+          ...(channelAutostartSuppression ? { channelAutostartSuppression } : {}),
         });
       },
     });
@@ -1004,13 +1064,14 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
     defaultRuntime.error(
       `Gateway failed to start: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw gateway status --deep")} for diagnostics.`,
     );
-    defaultRuntime.exit(1);
+    defaultRuntime.exit(resolveGatewayStartupFailureExitCode(err));
   }
 }
 
 export const testing = {
   normalizeGatewayHealthProbeHost,
   resolveGatewayLockErrorExitCode,
+  resolveGatewayStartupFailureExitCode,
   runGatewayLoopWithSupervisedLockRecovery,
 };
 export { testing as __testing };

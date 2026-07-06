@@ -26,6 +26,12 @@ describe("parseFfprobeVideoDimensions", () => {
       parseFfprobeVideoDimensions(JSON.stringify({ streams: [{ width: 720.5, height: 1280 }] })),
     ).toBeUndefined();
   });
+
+  it("returns undefined for malformed JSON instead of throwing", () => {
+    for (const stdout of ["{", "", "not json", "null", "42", '"text"', '{"streams":{}}']) {
+      expect(parseFfprobeVideoDimensions(stdout)).toBeUndefined();
+    }
+  });
 });
 
 describe("probeVideoDimensions", () => {

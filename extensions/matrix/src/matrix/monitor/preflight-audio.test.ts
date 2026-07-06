@@ -164,6 +164,24 @@ describe("sendMatrixPreflightAudioTranscriptEcho", () => {
     });
   });
 
+  it("keeps dollar sequences in the transcript literal", async () => {
+    sendDurableMessageBatchMock.mockResolvedValue({ status: "sent", results: [] });
+    await sendMatrixPreflightAudioTranscriptEcho({
+      transcript: "tickets cost $$40, confirm with $&",
+      cfg: {
+        tools: { media: { audio: { echoTranscript: true, echoFormat: "heard: {transcript}" } } },
+      } as import("openclaw/plugin-sdk/config-contracts").OpenClawConfig,
+      accountId: "ops",
+      originatingTo: "room:!room:example.org",
+    });
+
+    expect(sendDurableMessageBatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [{ text: "heard: tickets cost $$40, confirm with $&" }],
+      }),
+    );
+  });
+
   it("does not echo when transcript echo is disabled", async () => {
     await sendMatrixPreflightAudioTranscriptEcho({
       transcript: "hello bot",

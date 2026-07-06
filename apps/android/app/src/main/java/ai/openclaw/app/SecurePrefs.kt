@@ -41,8 +41,12 @@ class SecurePrefs(
       "notifications.forwarding.maxEventsPerMinute"
     private const val notificationsForwardingSessionKeyKey = "notifications.forwarding.sessionKey"
     private const val installedAppsSharingEnabledKey = "device.apps.sharing.enabled"
+    private const val cameraEnabledKey = "camera.enabled"
     private const val voiceMicEnabledKey = "voice.micEnabled"
     private const val appearanceThemeModeKey = "appearance.themeMode"
+    private const val chatModelFavoritesKey = "chat.modelFavorites"
+    private const val chatModelRecentsKey = "chat.modelRecents"
+    private const val maxChatModelRecents = 5
   }
 
   private val appContext = context.applicationContext
@@ -51,6 +55,7 @@ class SecurePrefs(
   // Non-secret UI/runtime preferences stay readable for migration and backup behavior.
   private val plainPrefs: SharedPreferences =
     appContext.getSharedPreferences(plainPrefsName, Context.MODE_PRIVATE)
+  private val hadPlainPrefsBeforeInit = plainPrefs.all.isNotEmpty()
 
   // Gateway credentials and arbitrary secret strings are isolated behind EncryptedSharedPreferences.
   private val masterKey by lazy {
@@ -68,7 +73,7 @@ class SecurePrefs(
     MutableStateFlow(loadOrMigrateDisplayName(context = context))
   val displayName: StateFlow<String> = _displayName
 
-  private val _cameraEnabled = MutableStateFlow(plainPrefs.getBoolean("camera.enabled", true))
+  private val _cameraEnabled = MutableStateFlow(loadCameraEnabled())
   val cameraEnabled: StateFlow<Boolean> = _cameraEnabled
 
   private val _locationMode = MutableStateFlow(loadLocationMode())
@@ -186,6 +191,12 @@ class SecurePrefs(
     MutableStateFlow(AppearanceThemeMode.fromRawValue(plainPrefs.getString(appearanceThemeModeKey, null)))
   val appearanceThemeMode: StateFlow<AppearanceThemeMode> = _appearanceThemeMode
 
+  private val _modelFavorites = MutableStateFlow(loadChatModelRefs(chatModelFavoritesKey))
+  val modelFavorites: StateFlow<List<String>> = _modelFavorites
+
+  private val _modelRecents = MutableStateFlow(loadChatModelRefs(chatModelRecentsKey))
+  val modelRecents: StateFlow<List<String>> = _modelRecents
+
   fun setLastDiscoveredStableId(value: String) {
     val trimmed = value.trim()
     plainPrefs.edit { putString("gateway.lastDiscoveredStableID", trimmed) }
@@ -199,7 +210,7 @@ class SecurePrefs(
   }
 
   fun setCameraEnabled(value: Boolean) {
-    plainPrefs.edit { putBoolean("camera.enabled", value) }
+    plainPrefs.edit { putBoolean(cameraEnabledKey, value) }
     _cameraEnabled.value = value
   }
 
@@ -311,6 +322,7 @@ class SecurePrefs(
       quietEnd = quietEnd,
       maxEventsPerMinute = maxEvents.coerceAtLeast(1),
       sessionKey = sessionKey,
+      selfPackageName = normalizedAppPackage,
     )
   }
 
@@ -529,6 +541,35 @@ class SecurePrefs(
     _appearanceThemeMode.value = mode
   }
 
+  fun toggleModelFavorite(ref: String) {
+    val trimmed = ref.trim()
+    if (trimmed.isEmpty()) return
+    val next =
+      if (trimmed in _modelFavorites.value) {
+        _modelFavorites.value - trimmed
+      } else {
+        _modelFavorites.value + trimmed
+      }
+    persistChatModelRefs(chatModelFavoritesKey, next)
+    _modelFavorites.value = next
+  }
+
+  fun recordModelRecent(ref: String) {
+    val trimmed = ref.trim()
+    if (trimmed.isEmpty()) return
+    val next = (listOf(trimmed) + _modelRecents.value.filterNot { it == trimmed }).take(maxChatModelRecents)
+    persistChatModelRefs(chatModelRecentsKey, next)
+    _modelRecents.value = next
+  }
+
+  private fun persistChatModelRefs(
+    key: String,
+    refs: List<String>,
+  ) {
+    val encoded = JsonArray(refs.map(::JsonPrimitive)).toString()
+    plainPrefs.edit { putString(key, encoded) }
+  }
+
   private fun loadNotificationForwardingPackages(): Set<String> {
     val raw = plainPrefs.getString(notificationsForwardingPackagesKey, null)?.trim()
     if (raw.isNullOrEmpty()) {
@@ -564,12 +605,26 @@ class SecurePrefs(
 
   private fun loadLocationMode(): LocationMode {
     val raw = plainPrefs.getString(locationModeKey, "off")
-    val resolved = LocationMode.fromRawValue(raw)
-    if (raw?.trim()?.lowercase() == "always") {
-      // Migrate old "always" configs to the current while-using contract.
+    val stored = LocationMode.fromRawValue(raw)
+    val resolved =
+      if (stored == LocationMode.Always && !SensitiveFeatureConfig.backgroundLocationEnabled) {
+        LocationMode.WhileUsing
+      } else {
+        stored
+      }
+    if (resolved != stored) {
       plainPrefs.edit { putString(locationModeKey, resolved.rawValue) }
     }
     return resolved
+  }
+
+  private fun loadCameraEnabled(): Boolean {
+    if (plainPrefs.contains(cameraEnabledKey)) {
+      return plainPrefs.getBoolean(cameraEnabledKey, false)
+    }
+    val migratedValue = hadPlainPrefsBeforeInit
+    plainPrefs.edit { putBoolean(cameraEnabledKey, migratedValue) }
+    return migratedValue
   }
 
   private fun loadWakeWords(): List<String> {
@@ -589,6 +644,24 @@ class SecurePrefs(
       WakeWords.sanitize(decoded, defaultWakeWords)
     } catch (_: Throwable) {
       defaultWakeWords
+    }
+  }
+
+  private fun loadChatModelRefs(key: String): List<String> {
+    val raw = plainPrefs.getString(key, null)?.trim()
+    if (raw.isNullOrEmpty()) return emptyList()
+    return try {
+      val array = json.parseToJsonElement(raw) as? JsonArray ?: return emptyList()
+      array
+        .mapNotNull { item ->
+          when (item) {
+            is JsonNull -> null
+            is JsonPrimitive -> item.content.trim().takeIf { it.isNotEmpty() }
+            else -> null
+          }
+        }.distinct()
+    } catch (_: Throwable) {
+      emptyList()
     }
   }
 }
