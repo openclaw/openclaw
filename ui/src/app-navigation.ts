@@ -21,6 +21,7 @@ export const SIDEBAR_NAV_ROUTES = [
   "sessions",
   "usage",
   "cron",
+  "tasks",
   "agents",
   "skills",
   "skill-workshop",
@@ -86,6 +87,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   sessions: "fileText",
   usage: "barChart",
   cron: "loader",
+  tasks: "loader",
   skills: "zap",
   "skill-workshop": "wrench",
   nodes: "monitor",
@@ -170,6 +172,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   sessions: { titleKey: "tabs.sessions", subtitleKey: "subtitles.sessions" },
   usage: { titleKey: "tabs.usage", subtitleKey: "subtitles.usage" },
   cron: { titleKey: "tabs.cron", subtitleKey: "subtitles.cron" },
+  tasks: { titleKey: "tabs.tasks", subtitleKey: "subtitles.tasks" },
   skills: { titleKey: "tabs.skills", subtitleKey: "subtitles.skills" },
   "skill-workshop": {
     titleKey: "tabs.skillWorkshop",

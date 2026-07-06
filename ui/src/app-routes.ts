@@ -18,6 +18,7 @@ import { page as pluginPage } from "./pages/plugin/route.ts";
 import { page as sessionsPage } from "./pages/sessions/route.ts";
 import { page as skillWorkshopPage } from "./pages/skill-workshop/route.ts";
 import { page as skillsPage } from "./pages/skills/route.ts";
+import { page as tasksPage } from "./pages/tasks/route.ts";
 import { page as usagePage } from "./pages/usage/route.ts";
 import { page as workboardPage } from "./pages/workboard/route.ts";
 import { page as worktreesPage } from "./pages/worktrees/route.ts";
@@ -51,6 +52,7 @@ const APP_ROUTE_TREE = [
   skillWorkshopPage,
   skillsPage,
   cronPage,
+  tasksPage,
   nodesPage,
   dreamsPage,
   pluginPage,
