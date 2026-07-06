@@ -14,6 +14,7 @@ import {
   computeBackoffMs,
   getErrnoCode,
   releaseRecoveryEntry as releaseSharedRecoveryEntry,
+  waitForRecoveryReplayPace,
 } from "../delivery-recovery.shared.js";
 import { formatErrorMessage } from "../errors.js";
 import { resolveOutboundChannelMessageAdapter } from "./channel-resolution.js";
@@ -738,6 +739,7 @@ export async function recoverPendingDeliveries(opts: {
 
   const deadline = resolveRecoveryDeadlineMs(opts.maxRecoveryMs);
   const summary = createEmptyRecoverySummary();
+  let attemptedReplayCount = 0;
 
   for (const entry of pending) {
     const now = Date.now();
@@ -778,6 +780,15 @@ export async function recoverPendingDeliveries(opts: {
         continue;
       }
 
+      const paceResult = await waitForRecoveryReplayPace({
+        attemptedReplayCount,
+        deadlineMs: deadline,
+      });
+      if (paceResult === "deadline-exceeded") {
+        opts.log.warn(`Recovery time budget exceeded — remaining entries deferred to next startup`);
+        break;
+      }
+
       const result = await drainQueuedEntry({
         entry: currentEntry,
         cfg: opts.cfg,
@@ -799,6 +810,7 @@ export async function recoverPendingDeliveries(opts: {
           opts.log.warn(`Retry failed for delivery ${failedEntry.id}: ${errMsg}`);
         },
       });
+      attemptedReplayCount += 1;
       if (result === "moved-to-failed") {
         continue;
       }
