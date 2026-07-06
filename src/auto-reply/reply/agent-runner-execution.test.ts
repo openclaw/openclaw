@@ -1994,7 +1994,7 @@ describe("runAgentTurnWithFallback", () => {
     // the session auto-pinned down to spark, and sonnet (the middle tier) has since
     // recovered. Per-model cooldown scoping means the primary-only probe never
     // re-walks to sonnet, so without re-promotion the session sticks on spark.
-    const { resolveAutoFallbackRepromotionTarget } = await import("../../agents/agent-scope.js");
+    const { resolveAutoFallbackRepromotionTarget } = await import("./auto-fallback-repromotion.js");
     const chain = [
       { provider: "openai", model: "gpt-5.5" },
       { provider: "claude-cli", model: "claude-sonnet-5" },
@@ -2054,7 +2054,7 @@ describe("runAgentTurnWithFallback", () => {
   });
 
   it("keeps the pinned auth profile on a same-provider re-promotion climb", async () => {
-    const { resolveAutoFallbackRepromotionTarget } = await import("../../agents/agent-scope.js");
+    const { resolveAutoFallbackRepromotionTarget } = await import("./auto-fallback-repromotion.js");
     // Chain where the climb target stays on the same provider as the current pin,
     // so the (provider-scoped) auth profile remains valid and must be preserved.
     const chain = [

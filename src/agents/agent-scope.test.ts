@@ -26,7 +26,6 @@ import {
   resolveSubagentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
   resolveAutoFallbackPrimaryProbe,
-  resolveAutoFallbackRepromotionTarget,
   resolveAgentIdByWorkspacePath,
   resolveAgentIdsByWorkspacePath,
   setAgentEffectiveModelPrimary,
@@ -1358,77 +1357,5 @@ describe("resolveAgentSkillsFilter", () => {
     };
 
     expect(resolveAgentSkillsFilter(cfg, "writer")).toStrictEqual([]);
-  });
-});
-
-describe("resolveAutoFallbackRepromotionTarget", () => {
-  const chain = [
-    { provider: "openai", model: "gpt-5.5" },
-    { provider: "claude-cli", model: "claude-sonnet-5" },
-    { provider: "openai", model: "gpt-5.3-codex-spark" },
-    { provider: "xai", model: "grok-4.3" },
-  ];
-
-  it("re-promotes past a rate-limited primary to the highest available tier", () => {
-    const cooled = new Set(["openai/gpt-5.5"]);
-    expect(
-      resolveAutoFallbackRepromotionTarget({
-        chain,
-        current: { provider: "openai", model: "gpt-5.3-codex-spark" },
-        isAvailable: (ref) => !cooled.has(`${ref.provider}/${ref.model}`),
-      }),
-    ).toStrictEqual({ provider: "claude-cli", model: "claude-sonnet-5" });
-  });
-
-  it("jumps straight back to the primary once it recovers", () => {
-    expect(
-      resolveAutoFallbackRepromotionTarget({
-        chain,
-        current: { provider: "openai", model: "gpt-5.3-codex-spark" },
-        isAvailable: () => true,
-      }),
-    ).toStrictEqual({ provider: "openai", model: "gpt-5.5" });
-  });
-
-  it("stays put when only lower tiers are available (no downward move, no thrash)", () => {
-    const cooled = new Set(["openai/gpt-5.5"]);
-    expect(
-      resolveAutoFallbackRepromotionTarget({
-        chain,
-        current: { provider: "claude-cli", model: "claude-sonnet-5" },
-        isAvailable: (ref) => !cooled.has(`${ref.provider}/${ref.model}`),
-      }),
-    ).toBeUndefined();
-  });
-
-  it("skips a rate-limited higher tier and picks the next available one above current", () => {
-    const cooled = new Set(["openai/gpt-5.5", "claude-cli/claude-sonnet-5"]);
-    expect(
-      resolveAutoFallbackRepromotionTarget({
-        chain,
-        current: { provider: "xai", model: "grok-4.3" },
-        isAvailable: (ref) => !cooled.has(`${ref.provider}/${ref.model}`),
-      }),
-    ).toStrictEqual({ provider: "openai", model: "gpt-5.3-codex-spark" });
-  });
-
-  it("returns undefined when already on the primary", () => {
-    expect(
-      resolveAutoFallbackRepromotionTarget({
-        chain,
-        current: { provider: "openai", model: "gpt-5.5" },
-        isAvailable: () => true,
-      }),
-    ).toBeUndefined();
-  });
-
-  it("trims surrounding whitespace on the current selection when matching the chain", () => {
-    expect(
-      resolveAutoFallbackRepromotionTarget({
-        chain,
-        current: { provider: " openai ", model: " gpt-5.3-codex-spark " },
-        isAvailable: (ref) => ref.model !== "gpt-5.5",
-      }),
-    ).toStrictEqual({ provider: "claude-cli", model: "claude-sonnet-5" });
   });
 });
