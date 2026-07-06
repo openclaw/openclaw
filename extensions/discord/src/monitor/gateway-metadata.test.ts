@@ -1,6 +1,6 @@
 // Discord tests cover gateway metadata plugin behavior.
 import { createServer, type Server } from "node:http";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   fetchDiscordGatewayInfo,
   fetchDiscordGatewayMetadataGuarded,
@@ -39,11 +39,13 @@ async function closeServer(server: Server): Promise<void> {
   });
 }
 
-function stubGuardedFetch(response: Response): void {
+function stubGuardedFetch(response: Response) {
+  const release = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
   mockFetchWithSsrFGuard.mockResolvedValue({
     response,
-    release: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    release,
   });
+  return release;
 }
 
 describe("Discord gateway metadata", () => {
@@ -100,12 +102,7 @@ describe("fetchDiscordGatewayMetadataGuarded bounded reads", () => {
     mockFetchWithSsrFGuard.mockReset();
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
-
-  it("returns under-cap response body from a real loopback HTTP server", async () => {
+  it("returns under-cap response bodies and releases the guarded fetch", async () => {
     const payload = JSON.stringify({
       url: "wss://gateway.discord.gg/",
       shards: 1,
@@ -117,35 +114,23 @@ describe("fetchDiscordGatewayMetadataGuarded bounded reads", () => {
       },
     });
 
-    const server = createServer((req, res) => {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.write(payload.slice(0, 32));
-      res.end(payload.slice(32));
-    });
-    const port = await listenLoopbackServer(server);
+    const release = stubGuardedFetch(
+      new Response(payload, { headers: { "content-type": "application/json" } }),
+    );
 
-    try {
-      const rawResponse = await fetch(`http://127.0.0.1:${port}`);
-      stubGuardedFetch(rawResponse);
+    const response = await fetchDiscordGatewayMetadataGuarded(
+      "https://discord.com/api/v10/gateway/bot",
+    );
 
-      const response = await fetchDiscordGatewayMetadataGuarded(
-        "https://discord.com/api/v10/gateway/bot",
-      );
-      const text = await response.text();
-      expect(JSON.parse(text)).toEqual(JSON.parse(payload));
-      console.log(
-        `[discord gateway metadata loopback proof] normal path: returned valid gateway metadata`,
-      );
-    } finally {
-      await closeServer(server);
-    }
+    await expect(response.json()).resolves.toEqual(JSON.parse(payload));
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("rejects oversized response body from a real loopback HTTP server", async () => {
     const oversizedPayloadBytes = DISCORD_GATEWAY_METADATA_MAX_BYTES + 256 * 1024;
     let streamedBytes = 0;
 
-    const server = createServer((req, res) => {
+    const server = createServer((_request, res) => {
       const chunk = Buffer.alloc(64 * 1024, 0x78);
       res.writeHead(200, { "content-type": "application/json" });
 
@@ -169,21 +154,16 @@ describe("fetchDiscordGatewayMetadataGuarded bounded reads", () => {
 
     try {
       const rawResponse = await fetch(`http://127.0.0.1:${port}`);
-      stubGuardedFetch(rawResponse);
+      const release = stubGuardedFetch(rawResponse);
 
-      let error: unknown;
-      try {
-        await fetchDiscordGatewayMetadataGuarded("https://discord.com/api/v10/gateway/bot");
-      } catch (err) {
-        error = err;
-      }
-
-      expect(error).toBeInstanceOf(Error);
-      expect(String(error)).toContain("Discord gateway metadata response body too large");
-      expect(String(error)).toContain(`limit: ${DISCORD_GATEWAY_METADATA_MAX_BYTES} bytes`);
-      console.log(
-        `[discord gateway metadata loopback proof] oversized path: cap=${DISCORD_GATEWAY_METADATA_MAX_BYTES} streamed>=${streamedBytes} rejected=${String(error)}`,
+      await expect(
+        fetchDiscordGatewayMetadataGuarded("https://discord.com/api/v10/gateway/bot"),
+      ).rejects.toThrow(
+        new RegExp(
+          `Discord gateway metadata response body too large: \\d+ bytes \\(limit: ${DISCORD_GATEWAY_METADATA_MAX_BYTES} bytes\\)`,
+        ),
       );
+      expect(release).toHaveBeenCalledOnce();
     } finally {
       await closeServer(server);
     }
