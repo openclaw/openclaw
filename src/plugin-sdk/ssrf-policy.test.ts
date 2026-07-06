@@ -458,4 +458,30 @@ describe("ssrfPolicyFromHttpBaseUrlAllowedOrigin — SDK boundary safety", () =>
       }),
     ).rejects.toThrow(SsrFBlockedError);
   });
+
+  it("rebinding a trusted private origin to a loopback IP is rejected", async () => {
+    const baseUrl = "http://lan-llm.corp.internal:11434/v1";
+    const policy = ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl);
+    const policyForUrl = resolveSsrFPolicyForUrl(new URL(baseUrl), policy);
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("lan-llm.corp.internal", {
+        policy: policyForUrl,
+        lookupFn: createLookupFn([{ address: "127.0.0.1", family: 4 }]),
+      }),
+    ).rejects.toThrow(SsrFBlockedError);
+  });
+
+  it("rebinding a trusted private origin to IPv6 loopback is rejected", async () => {
+    const baseUrl = "http://lan-llm.corp.internal:11434/v1";
+    const policy = ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl);
+    const policyForUrl = resolveSsrFPolicyForUrl(new URL(baseUrl), policy);
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("lan-llm.corp.internal", {
+        policy: policyForUrl,
+        lookupFn: createLookupFn([{ address: "::1", family: 6 }]),
+      }),
+    ).rejects.toThrow(SsrFBlockedError);
+  });
 });

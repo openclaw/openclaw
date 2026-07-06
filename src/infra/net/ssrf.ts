@@ -9,6 +9,7 @@ import {
   isBlockedSpecialUseIpv6Address,
   isCanonicalDottedDecimalIPv4,
   isLinkLocalIpAddress,
+  isLoopbackIpAddress,
   type Ipv4SpecialUseBlockOptions,
   type Ipv6SpecialUseBlockOptions,
   isIpv4Address,
@@ -414,7 +415,11 @@ function assertAllowedTrustedHostnameResolvedAddressesOrThrow(
   results: readonly LookupAddress[],
 ): void {
   for (const entry of results) {
-    if (isLinkLocalIpAddress(entry.address) || isCloudMetadataIpAddress(entry.address)) {
+    if (
+      isLoopbackIpAddress(entry.address) ||
+      isLinkLocalIpAddress(entry.address) ||
+      isCloudMetadataIpAddress(entry.address)
+    ) {
       throw new SsrFBlockedError(BLOCKED_RESOLVED_IP_MESSAGE);
     }
   }
