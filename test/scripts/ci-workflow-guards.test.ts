@@ -623,6 +623,22 @@ describe("ci workflow guards", () => {
     expect(preflightGuards).toContain("pnpm deps:patches:check");
   });
 
+  it("runs mobile protocol coverage for Node and native-only changes", () => {
+    const workflow = readCiWorkflow();
+    const coverageStep = workflow.jobs.preflight.steps.find(
+      (step) => step.name === "Check mobile protocol event coverage",
+    );
+    const checkShardRun = workflow.jobs["check-shard"].steps.find(
+      (step) => step.name === "Run check shard",
+    ).run;
+
+    expect(coverageStep.run).toBe("node scripts/check-protocol-event-coverage.mjs");
+    expect(coverageStep.if).toContain("steps.manifest.outputs.run_node == 'true'");
+    expect(coverageStep.if).toContain("steps.manifest.outputs.run_ios_build == 'true'");
+    expect(coverageStep.if).toContain("steps.manifest.outputs.run_android_job == 'true'");
+    expect(checkShardRun).not.toContain("check:protocol-coverage");
+  });
+
   it("does not rebuild Control UI after build:ci-artifacts", () => {
     const workflow = readCiWorkflow();
     const buildArtifactSteps = workflow.jobs["build-artifacts"].steps;
@@ -942,10 +958,6 @@ describe("ci workflow guards", () => {
     const runStep = fastCoreJob.steps.find(
       (step) => step.name === "Run ${{ matrix.task }} (${{ matrix.runtime }})",
     );
-    const uploadStep = fastCoreJob.steps.find(
-      (step) => step.name === "Upload QA smoke profile evidence",
-    );
-
     const ciWorkflowText = readFileSync(".github/workflows/ci.yml", "utf8");
 
     expect(preflightStep.run).not.toContain("qa-smoke-profile");
@@ -955,30 +967,13 @@ describe("ci workflow guards", () => {
       expect(ciWorkflowText).not.toContain(`"${categoryId}"`);
     }
     expect(runStep.run).toContain("bundled-protocol)");
-    expect(runStep.run).toContain("qa-smoke-ci)");
+    expect(runStep.run).not.toContain("qa-smoke-ci)");
     expect(runStep.run).toContain("contracts-plugins-ci-routing)");
     expect(runStep.run).toContain("ci-routing)");
-    expect(ciWorkflowText).toContain('runner: "blacksmith-16vcpu-ubuntu-2404"');
     expect(fastCoreJob["runs-on"]).toContain("matrix.runner");
-    expect(runStep.run).toContain("--qa-profile smoke-ci");
-    expect(runStep.run).toContain("--concurrency 8");
-    expect(runStep.run).not.toContain("--category");
-    expect(runStep.run).not.toContain("--allow-failures");
-    expect(runStep.run).toContain("qa_exit_code=0");
-    expect(runStep.run).toContain('exit "$qa_exit_code"');
-    expect(runStep.run).toContain("scripts/package-openclaw-for-docker.mjs");
-    expect(runStep.run).toContain("OPENCLAW_CURRENT_PACKAGE_TGZ");
-    expect(runStep.run).toContain("--max-old-space-size=16384");
-    expect(runStep.run).not.toContain("scripts/build-all.mjs qaRuntime");
-    expect(runStep.run).not.toContain("OPENAI_API_KEY");
-    expect(runStep.run).toMatch(
-      /bundled-protocol\)\s+pnpm test:bundled\s+pnpm protocol:check\s+;;\s+qa-smoke-ci\)/,
-    );
-    expect(uploadStep.if).toBe("always() && matrix.task == 'qa-smoke-ci'");
-    expect(uploadStep.with).toMatchObject({
-      path: ".artifacts/qa-e2e/smoke-ci-profile/",
-      "if-no-files-found": "warn",
-    });
+    expect(ciWorkflowText).not.toContain('check_name: "QA Smoke CI"');
+    expect(ciWorkflowText).not.toContain("--qa-profile smoke-ci");
+    expect(ciWorkflowText).not.toContain("Upload QA smoke profile evidence");
     expect(runStep.run.match(/test\/scripts\/ci-workflow-guards\.test\.ts/g)?.length).toBe(2);
   });
 

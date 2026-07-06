@@ -568,7 +568,9 @@ async function runExecResolver(params: {
       clearTimers();
       reject(error);
     });
+    child.stdout?.on("error", () => {});
     child.stdout?.on("data", (chunk) => append(chunk, "stdout"));
+    child.stderr?.on("error", () => {});
     child.stderr?.on("data", (chunk) => append(chunk, "stderr"));
     child.on("close", (code, signal) => {
       if (settled) {

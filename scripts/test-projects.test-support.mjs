@@ -44,6 +44,7 @@ import {
 import { fullSuiteVitestShards } from "../test/vitest/vitest.test-shards.mjs";
 import {
   getUnitFastTestFiles,
+  getUnitFastTimerTestFiles,
   resolveUnitFastTestIncludePattern,
   resolveUnitFastTimerTestIncludePattern,
 } from "../test/vitest/vitest.unit-fast-paths.mjs";
@@ -289,6 +290,8 @@ const BROAD_TOOLING_SCRIPT_TEST_PATTERNS = new Set([
   "test/scripts/*.test.ts",
 ]);
 const BROAD_TOOLING_SCRIPT_TEST_TARGET_CHUNK_SIZE = 60;
+const FULL_SUITE_TOOLING_TEST_TARGET_CHUNK_SIZE = 2;
+const FULL_SUITE_UNIT_FAST_TEST_TARGET_CHUNK_SIZE = 70;
 const TUI_VITEST_CONFIG = "test/vitest/vitest.tui.config.ts";
 const TUI_PTY_VITEST_CONFIG = "test/vitest/vitest.tui-pty.config.ts";
 const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
@@ -668,6 +671,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/tsconfig.json", ["test/scripts/oxlint-config.test.ts"]],
   ["scripts/build-all.mjs", ["test/scripts/build-all.test.ts"]],
   ["scripts/build-stamp.mjs", ["src/infra/build-stamp.test.ts"]],
+  ["scripts/crabbox-wrapper-providers.mjs", ["test/scripts/crabbox-wrapper.test.ts"]],
   ["scripts/crabbox-wrapper.mjs", ["test/scripts/crabbox-wrapper.test.ts"]],
   ["scripts/github/barnacle-auto-response.mjs", ["test/scripts/barnacle-auto-response.test.ts"]],
   ["scripts/changed-lanes.mjs", ["test/scripts/changed-lanes.test.ts"]],
@@ -2073,6 +2077,14 @@ const SOURCE_TEST_TARGETS = new Map([
     "test/e2e/qa-lab/runtime/qa-otel-smoke-runtime.ts",
     ["test/e2e/qa-lab/runtime/qa-otel-smoke.e2e.test.ts"],
   ],
+  [
+    "test/e2e/qa-lab/runtime/heartbeat-active-hours-runtime.ts",
+    ["test/e2e/qa-lab/runtime/heartbeat-active-hours-runtime.test.ts"],
+  ],
+  [
+    "test/e2e/qa-lab/runtime/telegram-bot-token-runtime.ts",
+    ["test/e2e/qa-lab/runtime/telegram-bot-token-runtime.test.ts"],
+  ],
   ["src/plugins/runtime-sidecar-paths-baseline.ts", RUNTIME_SIDECAR_BASELINE_OWNER_TEST_TARGETS],
   ["src/plugins/runtime-sidecar-paths.ts", RUNTIME_SIDECAR_PATH_CONSUMER_TEST_TARGETS],
   ["ui/config/control-ui-chunking.ts", ["ui/src/app/control-ui-chunking.test.ts"]],
@@ -2337,20 +2349,53 @@ function splitTargetChunks(targets, chunkCount) {
   return chunks;
 }
 
+let cachedBroadScriptTestTargets = null;
+let cachedBroadScriptTestTargetsCwd = null;
+
 function listBroadScriptTestTargets(pattern, cwd) {
   const root = path.join(cwd, "test/scripts");
-  if (!fs.existsSync(root)) {
-    return [];
+  if (cachedBroadScriptTestTargetsCwd !== cwd) {
+    // Broad-target expansion can ask for the same process-stable checkout twice.
+    // Keep one inventory so planning does not repeat the directory walk.
+    cachedBroadScriptTestTargets = fs.existsSync(root)
+      ? listRepoFilesRecursive(root, cwd)
+          .filter((file) => file.endsWith(".test.ts"))
+          .toSorted((left, right) => left.localeCompare(right))
+      : [];
+    cachedBroadScriptTestTargetsCwd = cwd;
   }
-  return listRepoFilesRecursive(root, cwd)
-    .filter((file) => file.endsWith(".test.ts") && path.matchesGlob(file, pattern))
-    .toSorted((left, right) => left.localeCompare(right));
+  return cachedBroadScriptTestTargets.filter((file) => path.matchesGlob(file, pattern));
 }
 
 function listBroadToolingScriptTestTargets(pattern, cwd) {
   return listBroadScriptTestTargets(pattern, cwd).filter(
     (file) => classifyTarget(file, cwd) === "tooling",
   );
+}
+
+let cachedToolingFullSuiteTestTargets = null;
+let cachedToolingFullSuiteTestTargetsCwd = null;
+
+function listToolingFullSuiteTestTargets(cwd) {
+  if (cachedToolingFullSuiteTestTargets && cachedToolingFullSuiteTestTargetsCwd === cwd) {
+    return cachedToolingFullSuiteTestTargets;
+  }
+  // The CLI plans against one process-stable checkout. Reuse its inventory when
+  // callers compare full-suite modes instead of walking the tree for every mode.
+  cachedToolingFullSuiteTestTargets = uniqueOrdered(
+    [path.join(cwd, "test"), path.join(cwd, "src", "scripts")].flatMap((root) =>
+      fs.existsSync(root) ? listRepoFilesRecursive(root, cwd) : [],
+    ),
+  )
+    .filter((file) => file.endsWith(".test.ts") && classifyTarget(file, cwd) === "tooling")
+    .toSorted((left, right) => left.localeCompare(right));
+  cachedToolingFullSuiteTestTargetsCwd = cwd;
+  return cachedToolingFullSuiteTestTargets;
+}
+
+function listUnitFastFullSuiteTestTargets() {
+  const timerTargets = new Set(getUnitFastTimerTestFiles());
+  return getUnitFastTestFiles().filter((file) => !timerTargets.has(file));
 }
 
 function createBroadToolingScriptPlans({ config, forwardedArgs, includePatterns, watchMode, cwd }) {
@@ -3711,6 +3756,13 @@ function createVitestArgs(params) {
   ];
 }
 
+export function createVitestPreflightPnpmArgs(config) {
+  if (config !== UI_E2E_VITEST_CONFIG) {
+    return null;
+  }
+  return ["exec", "node", "scripts/ensure-playwright-chromium.mjs"];
+}
+
 export function parseTestProjectsArgs(args, cwd = process.cwd()) {
   const forwardedArgs = [];
   const targetArgs = [];
@@ -4018,11 +4070,26 @@ export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
     const expandShard = expandToProjectConfigs;
     const configs = expandShard ? shard.projects : [shard.config];
     return configs.flatMap((config) => {
-      if (expandShard && targetArgs.length === 0 && config === GATEWAY_SERVER_VITEST_CONFIG) {
-        const chunks = splitTargetChunks(
-          resolveGatewayServerFullSuiteTargets(cwd),
-          GATEWAY_SERVER_FULL_SUITE_TARGET_CHUNK_COUNT,
-        );
+      if (expandShard && targetArgs.length === 0) {
+        let chunks = [];
+        if (config === UNIT_FAST_VITEST_CONFIG) {
+          const targets = listUnitFastFullSuiteTestTargets();
+          const chunkCount = Math.ceil(
+            targets.length / FULL_SUITE_UNIT_FAST_TEST_TARGET_CHUNK_SIZE,
+          );
+          chunks = splitTargetChunks(targets, chunkCount);
+        } else if (config === TOOLING_VITEST_CONFIG) {
+          // Tooling tests spawn package managers and native helpers. Keep native
+          // process lifetime short enough that unrelated files cannot crash together.
+          const targets = listToolingFullSuiteTestTargets(cwd);
+          const chunkCount = Math.ceil(targets.length / FULL_SUITE_TOOLING_TEST_TARGET_CHUNK_SIZE);
+          chunks = splitTargetChunks(targets, chunkCount);
+        } else if (config === GATEWAY_SERVER_VITEST_CONFIG) {
+          chunks = splitTargetChunks(
+            resolveGatewayServerFullSuiteTargets(cwd),
+            GATEWAY_SERVER_FULL_SUITE_TARGET_CHUNK_COUNT,
+          );
+        }
         if (chunks.length > 0) {
           return chunks.map((targets) => ({
             config,
@@ -4221,6 +4288,7 @@ export function createVitestRunSpecs(args, params = {}) {
       includeFilePath,
       includePatterns: plan.includePatterns,
       pnpmArgs: createVitestArgs(plan),
+      preflightPnpmArgs: createVitestPreflightPnpmArgs(plan.config),
       watchMode: plan.watchMode,
     };
   });

@@ -18,7 +18,10 @@ import type {
 import { getActivePluginRegistry } from "./runtime.js";
 
 type TrustedPolicyRegistration = PluginTrustedToolPolicyRegistryRegistration;
-type TrustedToolPolicyRegistry = Pick<PluginRegistry, "trustedToolPolicies"> | null | undefined;
+type TrustedToolPolicyRegistry =
+  | { trustedToolPolicies?: PluginRegistry["trustedToolPolicies"] }
+  | null
+  | undefined;
 
 /** Diagnostic entry for an installed trusted tool policy. */
 export type TrustedToolPolicyDiagnosticEntry = {

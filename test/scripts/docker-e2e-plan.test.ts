@@ -97,6 +97,42 @@ function bundledPluginSweepLane(index: number): ReturnType<typeof summarizeLane>
 }
 
 describe("scripts/lib/docker-e2e-plan", () => {
+  it("plans package-backed Compose and package artifact proofs", () => {
+    const plan = planFor({
+      selectedLaneNames: ["compose-setup", "docker-package-install"],
+    });
+
+    expect(plan.lanes.map(summarizeLane)).toEqual([
+      {
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:compose-setup",
+        imageKind: "functional",
+        live: false,
+        name: "compose-setup",
+        resources: ["docker", "service"],
+        stateScenario: "empty",
+        timeoutMs: 1_200_000,
+        weight: 3,
+      },
+      {
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:package-install",
+        imageKind: "bare",
+        live: false,
+        name: "docker-package-install",
+        resources: ["docker", "npm"],
+        stateScenario: "empty",
+        timeoutMs: 1_200_000,
+        weight: 3,
+      },
+    ]);
+    expect(plan.needs).toEqual({
+      bareImage: true,
+      e2eImage: true,
+      functionalImage: true,
+      liveImage: false,
+      package: true,
+    });
+  });
+
   it("plans the full release path against package-backed e2e images", () => {
     const plan = planFor({
       includeOpenWebUI: false,

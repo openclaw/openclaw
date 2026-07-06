@@ -74,8 +74,17 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
     }
 
     public var websocketURL: URL? {
-        let scheme = self.tls ? "wss" : "ws"
-        return URL(string: "\(scheme)://\(self.host):\(self.port)")
+        guard (1...65535).contains(self.port) else { return nil }
+        var components = URLComponents()
+        components.scheme = self.tls ? "wss" : "ws"
+        components.host = self.host
+        components.port = self.port
+        return components.url
+    }
+
+    public var isValidEndpoint: Bool {
+        guard (1...65535).contains(self.port), self.websocketURL?.host != nil else { return false }
+        return self.tls || LoopbackHost.isLocalNetworkHost(self.host)
     }
 
     public var connectionEndpoints: [GatewayConnectEndpoint] {
@@ -196,7 +205,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
         if !tls, !LoopbackHost.isLocalNetworkHost(host) {
             return nil
         }
-        return GatewayConnectDeepLink(
+        return GatewayConnectDeepLink.validated(
             host: host,
             port: payload.port ?? defaultGatewayPort(tls: tls),
             tls: tls,
@@ -223,13 +232,31 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
         if !tls, !LoopbackHost.isLocalNetworkHost(hostname) {
             return nil
         }
-        return GatewayConnectDeepLink(
+        return GatewayConnectDeepLink.validated(
             host: hostname,
             port: parsed.port ?? defaultGatewayPort(tls: tls),
             tls: tls,
             bootstrapToken: bootstrapToken,
             token: token,
             password: password)
+    }
+
+    fileprivate static func validated(
+        host: String,
+        port: Int,
+        tls: Bool,
+        bootstrapToken: String?,
+        token: String?,
+        password: String?) -> GatewayConnectDeepLink?
+    {
+        let link = GatewayConnectDeepLink(
+            host: host,
+            port: port,
+            tls: tls,
+            bootstrapToken: bootstrapToken,
+            token: token,
+            password: password)
+        return link.isValidEndpoint ? link : nil
     }
 
     private static func decodeBase64Url(_ input: String) -> Data? {
@@ -342,18 +369,27 @@ public enum DeepLinkParser {
                 return nil
             }
             let tls = (query["tls"] as NSString?)?.boolValue ?? false
-            let port = query["port"].flatMap { Int($0) } ?? defaultGatewayPort(tls: tls)
+            let port: Int
+            if let rawPort = query["port"] {
+                guard let parsedPort = Int(rawPort) else { return nil }
+                port = parsedPort
+            } else {
+                port = defaultGatewayPort(tls: tls)
+            }
             if !tls, !LoopbackHost.isLocalNetworkHost(hostParam) {
                 return nil
             }
-            return .gateway(
-                .init(
-                    host: hostParam,
-                    port: port,
-                    tls: tls,
-                    bootstrapToken: nil,
-                    token: query["token"],
-                    password: query["password"]))
+            guard let link = GatewayConnectDeepLink.validated(
+                host: hostParam,
+                port: port,
+                tls: tls,
+                bootstrapToken: nil,
+                token: query["token"],
+                password: query["password"])
+            else {
+                return nil
+            }
+            return .gateway(link)
 
         case "dashboard":
             return .dashboard

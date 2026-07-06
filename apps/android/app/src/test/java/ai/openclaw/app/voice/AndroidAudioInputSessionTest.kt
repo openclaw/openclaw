@@ -4,10 +4,12 @@ import android.Manifest
 import android.content.Context
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import android.media.AudioRecord
 import android.os.Looper
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -105,6 +107,22 @@ class AndroidAudioInputSessionTest {
     assertEquals(AudioDeviceInfo.TYPE_BLE_HEADSET, audioManager.communicationDevice?.type)
     newSession.close()
     assertNull(audioManager.communicationDevice)
+  }
+
+  @Test
+  fun audioRecordErrorsFailTheSharedCaptureSession() {
+    assertEquals(0, checkAudioRecordReadResult(0))
+    assertEquals(32, checkAudioRecordReadResult(32))
+
+    val deadObject =
+      runCatching { checkAudioRecordReadResult(AudioRecord.ERROR_DEAD_OBJECT) }
+        .exceptionOrNull()
+    assertTrue(deadObject is IllegalStateException)
+    assertEquals("microphone read failed: ERROR_DEAD_OBJECT", deadObject?.message)
+
+    val unknown = runCatching { checkAudioRecordReadResult(-99) }.exceptionOrNull()
+    assertTrue(unknown is IllegalStateException)
+    assertEquals("microphone read failed: code=-99", unknown?.message)
   }
 
   private fun audioDevice(type: Int): AudioDeviceInfo {

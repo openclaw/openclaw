@@ -16,10 +16,12 @@ const targets = {
     entry: "extensions/diffs/src/viewer-client.ts",
     output: "extensions/diffs/assets/viewer-runtime.js",
     shikiAlias: "scripts/diffs-shiki-curated.ts",
+    languagePackAvailable: false,
   },
   full: {
     entry: "extensions/diffs/src/viewer-client.ts",
     output: "extensions/diffs-language-pack/assets/viewer-runtime.js",
+    languagePackAvailable: true,
   },
 };
 
@@ -81,6 +83,7 @@ export async function buildDiffsViewerRuntime(targetName) {
     format: "esm",
     minify: true,
     define: {
+      __OPENCLAW_DIFFS_LANGUAGE_PACK__: String(target.languagePackAvailable),
       NaN: "Number.NaN",
     },
     legalComments: "none",

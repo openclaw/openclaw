@@ -2,6 +2,11 @@ import Foundation
 import OpenClawKit
 
 enum WatchMessagingPayloadCodec {
+    private static let durableSnapshotTypes = [
+        OpenClawWatchPayloadType.appSnapshot.rawValue,
+        OpenClawWatchPayloadType.execApprovalSnapshot.rawValue,
+    ]
+
     static let completedChatReplyTextLimit = 4000
 
     static func nowMs() -> Int {
@@ -15,7 +20,8 @@ enum WatchMessagingPayloadCodec {
 
     static func encodeNotificationPayload(
         id: String,
-        params: OpenClawWatchNotifyParams) -> [String: Any]
+        params: OpenClawWatchNotifyParams,
+        gatewayStableID: String?) -> [String: Any]
     {
         var payload: [String: Any] = [
             "type": OpenClawWatchPayloadType.notify.rawValue,
@@ -30,6 +36,9 @@ enum WatchMessagingPayloadCodec {
         }
         if let sessionKey = nonEmpty(params.sessionKey) {
             payload["sessionKey"] = sessionKey
+        }
+        if let gatewayStableID = nonEmpty(gatewayStableID) {
+            payload["gatewayStableID"] = gatewayStableID
         }
         if let kind = nonEmpty(params.kind) {
             payload["kind"] = kind
@@ -64,6 +73,9 @@ enum WatchMessagingPayloadCodec {
             "commandText": item.commandText,
             "allowedDecisions": item.allowedDecisions.map(\.rawValue),
         ]
+        if let gatewayStableID = nonEmpty(item.gatewayStableID) {
+            payload["gatewayStableID"] = gatewayStableID
+        }
         if let commandPreview = nonEmpty(item.commandPreview) {
             payload["commandPreview"] = commandPreview
         }
@@ -111,6 +123,9 @@ enum WatchMessagingPayloadCodec {
             "type": OpenClawWatchPayloadType.execApprovalResolved.rawValue,
             "approvalId": message.approvalId,
         ]
+        if let gatewayStableID = nonEmpty(message.gatewayStableID) {
+            payload["gatewayStableID"] = gatewayStableID
+        }
         if let decision = message.decision {
             payload["decision"] = decision.rawValue
         }
@@ -131,6 +146,9 @@ enum WatchMessagingPayloadCodec {
             "approvalId": message.approvalId,
             "reason": message.reason.rawValue,
         ]
+        if let gatewayStableID = nonEmpty(message.gatewayStableID) {
+            payload["gatewayStableID"] = gatewayStableID
+        }
         if let expiredAtMs = message.expiredAtMs {
             payload["expiredAtMs"] = expiredAtMs
         }
@@ -144,6 +162,9 @@ enum WatchMessagingPayloadCodec {
             "type": OpenClawWatchPayloadType.execApprovalSnapshot.rawValue,
             "approvals": message.approvals.map(self.encodeExecApprovalItem),
         ]
+        if let gatewayStableID = nonEmpty(message.gatewayStableID) {
+            payload["gatewayStableID"] = gatewayStableID
+        }
         if let sentAtMs = message.sentAtMs {
             payload["sentAtMs"] = sentAtMs
         }
@@ -202,6 +223,31 @@ enum WatchMessagingPayloadCodec {
         return payload
     }
 
+    static func encodeSnapshotApplicationContext(
+        _ payload: [String: Any],
+        merging existingContext: [String: Any]) -> [String: Any]
+    {
+        guard let payloadType = payload["type"] as? String,
+              self.durableSnapshotTypes.contains(payloadType)
+        else {
+            return payload
+        }
+
+        // updateApplicationContext retains one dictionary. Nest both logical snapshots while
+        // keeping the newest one at the top level for older Watch app versions.
+        var context = payload
+        for snapshotType in self.durableSnapshotTypes {
+            if snapshotType == payloadType {
+                context[snapshotType] = payload
+            } else if let previous = existingContext[snapshotType] as? [String: Any] {
+                context[snapshotType] = previous
+            } else if existingContext["type"] as? String == snapshotType {
+                context[snapshotType] = existingContext
+            }
+        }
+        return context
+    }
+
     static func encodeChatCompletionPayload(
         _ message: OpenClawWatchChatCompletionMessage) -> [String: Any]
     {
@@ -232,6 +278,7 @@ enum WatchMessagingPayloadCodec {
         let replyId = self.nonEmpty(payload["replyId"] as? String) ?? UUID().uuidString
         let actionLabel = self.nonEmpty(payload["actionLabel"] as? String)
         let sessionKey = self.nonEmpty(payload["sessionKey"] as? String)
+        let gatewayStableID = self.nonEmpty(payload["gatewayStableID"] as? String)
         let note = self.nonEmpty(payload["note"] as? String)
         let sentAtMs = (payload["sentAtMs"] as? Int) ?? (payload["sentAtMs"] as? NSNumber)?.intValue
 
@@ -241,6 +288,7 @@ enum WatchMessagingPayloadCodec {
             actionId: actionId,
             actionLabel: actionLabel,
             sessionKey: sessionKey,
+            gatewayStableID: gatewayStableID,
             note: note,
             sentAtMs: sentAtMs,
             transport: transport)
@@ -260,10 +308,12 @@ enum WatchMessagingPayloadCodec {
             return nil
         }
         let replyId = self.nonEmpty(payload["replyId"] as? String) ?? UUID().uuidString
+        let gatewayStableID = self.nonEmpty(payload["gatewayStableID"] as? String)
         let sentAtMs = (payload["sentAtMs"] as? Int) ?? (payload["sentAtMs"] as? NSNumber)?.intValue
         return WatchExecApprovalResolveEvent(
             replyId: replyId,
             approvalId: approvalId,
+            gatewayStableID: gatewayStableID,
             decision: decision,
             sentAtMs: sentAtMs,
             transport: transport)

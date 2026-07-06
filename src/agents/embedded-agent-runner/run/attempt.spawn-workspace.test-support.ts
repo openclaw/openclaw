@@ -301,6 +301,15 @@ vi.mock("../../../plugins/plugin-metadata-snapshot.js", () => ({
   resolvePluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
 }));
 
+vi.mock("../../../plugins/provider-hook-runtime.js", () => ({
+  ensureProviderRuntimePluginHandle: (params: Record<string, unknown>) =>
+    params.runtimeHandle ?? params,
+  prepareProviderExtraParams: () => undefined,
+  resolveProviderExtraParamsForTransport: () => undefined,
+  resolveProviderRuntimePluginHandle: (params: Record<string, unknown>) => params,
+  wrapProviderStreamFn: () => undefined,
+}));
+
 vi.mock("../../../trajectory/metadata.js", () => ({
   buildTrajectoryArtifacts: (params: Record<string, unknown>) => params,
   buildTrajectoryRunMetadata: () => ({ source: "test" }),

@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
@@ -103,6 +104,8 @@ const {
   CONTROL_UI_OPERATOR_SCOPES,
   GatewayBrowserClient,
   GatewayRequestError,
+  isNonRecoverableConnectError,
+  resolveGatewayErrorDetailCode,
   shouldRetryWithDeviceToken,
 } = await import("./gateway.ts");
 
@@ -388,6 +391,8 @@ describe("GatewayBrowserClient", () => {
     });
 
     expect(error.message).toBe(`protocol mismatch: Control UI v${PROTOCOL_VERSION}`);
+    expect(resolveGatewayErrorDetailCode(error)).toBe(ConnectErrorDetailCodes.PROTOCOL_MISMATCH);
+    expect(isNonRecoverableConnectError(error)).toBe(true);
   });
 
   it("reuses cached device token scopes when connecting from bootstrap handoff", async () => {
@@ -446,6 +451,7 @@ describe("GatewayBrowserClient", () => {
     );
     expect(closeErrorDetails.code).toBe("BROWSER_WEBSOCKET_SECURITY_ERROR");
     expect(closeErrorDetails.browserErrorName).toBe("SecurityError");
+    expect(close.willRetry).toBe(false);
     expect(wsInstances).toHaveLength(0);
 
     await vi.advanceTimersByTimeAsync(30_000);
@@ -483,6 +489,7 @@ describe("GatewayBrowserClient", () => {
     expect(closeErrorDetails.code).toBe("BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR");
     expect(closeErrorDetails.browserErrorName).toBe("TypeError");
     expect(closeErrorDetails.browserMessage).toBe("constructor failed");
+    expect(close.willRetry).toBe(false);
     expect(wsInstances).toHaveLength(0);
 
     await vi.advanceTimersByTimeAsync(30_000);
@@ -742,6 +749,7 @@ describe("GatewayBrowserClient", () => {
         code: 1006,
         reason: "socket lost",
         error: undefined,
+        willRetry: true,
       });
       expect(consoleError).toHaveBeenCalledWith(
         "[gateway] close handler error:",
@@ -1005,6 +1013,7 @@ describe("GatewayBrowserClient", () => {
           retryable: false,
           retryAfterMs: undefined,
         },
+        willRetry: false,
       });
     } finally {
       client.stop();
@@ -1047,6 +1056,41 @@ describe("GatewayBrowserClient", () => {
       expect(wsInstances).toHaveLength(1);
       await vi.advanceTimersByTimeAsync(1);
       expect(wsInstances).toHaveLength(2);
+    } finally {
+      client.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves structured connect errors for pending requests", async () => {
+    useNodeFakeTimers();
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+    });
+
+    try {
+      const { ws, connectFrame } = await startConnect(client);
+      const pendingRequest = client.request("cron.list", { quiet: true });
+
+      ws.emitMessage({
+        type: "res",
+        id: connectFrame.id,
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message: "unauthorized",
+          details: { code: "PAIRING_REQUIRED" },
+        },
+      });
+      await expectSocketClosed(ws);
+      ws.emitClose(4008, "connect failed");
+
+      await expect(pendingRequest).rejects.toMatchObject({
+        name: "GatewayRequestError",
+        gatewayCode: "INVALID_REQUEST",
+        details: { code: "PAIRING_REQUIRED" },
+      });
     } finally {
       client.stop();
       vi.useRealTimers();
@@ -1102,6 +1146,7 @@ describe("GatewayBrowserClient", () => {
         retryable: false,
         retryAfterMs: undefined,
       },
+      willRetry: false,
     });
 
     client.stop();
@@ -1227,6 +1272,35 @@ describe("GatewayBrowserClient", () => {
     vi.useRealTimers();
   });
 
+  it("does not auto-reconnect on PROTOCOL_MISMATCH", async () => {
+    useNodeFakeTimers();
+
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+    });
+
+    const { ws: ws1, connectFrame: connect } = await startConnect(client);
+
+    ws1.emitMessage({
+      type: "res",
+      id: connect.id,
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "protocol mismatch",
+        details: { code: "PROTOCOL_MISMATCH" },
+      },
+    });
+    await expectSocketClosed(ws1);
+    ws1.emitClose(4008, "connect failed");
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(wsInstances).toHaveLength(1);
+
+    vi.useRealTimers();
+  });
+
   it("keeps reconnecting on PAIRING_REQUIRED when retry hints keep reconnect active", async () => {
     useNodeFakeTimers();
     localStorage.clear();
@@ -1321,6 +1395,38 @@ describe("GatewayBrowserClient", () => {
     expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator" })?.token).toBe(
       "stored-device-token",
     );
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(wsInstances).toHaveLength(1);
+
+    vi.useRealTimers();
+  });
+
+  it("reports willRetry=false on credential rejections so the UI can fall back to the login gate", async () => {
+    useNodeFakeTimers();
+    const onClose = vi.fn();
+
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      password: "wrong-password",
+      onClose,
+    });
+
+    const { ws, connectFrame } = await startConnect(client);
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "unauthorized",
+        details: { code: "AUTH_PASSWORD_MISMATCH" },
+      },
+    });
+    await expectSocketClosed(ws);
+    ws.emitClose(4008, "connect failed");
+
+    const close = requireFirstMockArg(onClose, "close");
+    expect(close.willRetry).toBe(false);
     await vi.advanceTimersByTimeAsync(30_000);
     expect(wsInstances).toHaveLength(1);
 

@@ -4,7 +4,11 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { until } from "lit/directives/until.js";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
-import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "../../../components/markdown.ts";
+import {
+  toSanitizedMarkdownHtml,
+  toStreamingMarkdownHtml,
+  type MarkdownRenderOptions,
+} from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import type { AssistantIdentity } from "../../../lib/assistant-identity.ts";
 import type {
@@ -76,7 +80,7 @@ const ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS = 5_000;
 const ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS = 30_000;
 let assistantAttachmentAvailabilityRenderVersion = 0;
 
-export type ChatTimestampDisplay = {
+type ChatTimestampDisplay = {
   label: string;
   title: string;
   dateTime: string;
@@ -117,13 +121,53 @@ export function formatChatTimestampForDisplay(timestamp: number): ChatTimestampD
   };
 }
 
-function renderChatTimestamp(timestamp: number) {
+function renderChatTimestamp(timestamp: number, interactive = false) {
   const display = formatChatTimestampForDisplay(timestamp);
   return html`
-    <time class="chat-group-timestamp" datetime=${display.dateTime} title=${display.title}>
+    <time
+      class="chat-group-timestamp"
+      datetime=${display.dateTime}
+      title=${interactive ? nothing : display.title}
+    >
       ${display.label}
     </time>
   `;
+}
+
+function resolveMessageMetaDetails(target: EventTarget | null): HTMLDetailsElement | null {
+  if (target instanceof HTMLDetailsElement) {
+    return target;
+  }
+  return target instanceof HTMLElement
+    ? target.closest<HTMLDetailsElement>("details.msg-meta")
+    : null;
+}
+
+function previewMessageMeta(event: PointerEvent | FocusEvent) {
+  const details = resolveMessageMetaDetails(event.currentTarget);
+  if (!details || details.open || ("pointerType" in event && event.pointerType === "touch")) {
+    return;
+  }
+  details.dataset.preview = "true";
+  details.open = true;
+}
+
+function closeMessageMetaPreview(event: PointerEvent | FocusEvent) {
+  const details = resolveMessageMetaDetails(event.currentTarget);
+  if (!details || details.dataset.preview !== "true" || details.matches(":hover, :focus-within")) {
+    return;
+  }
+  delete details.dataset.preview;
+  details.open = false;
+}
+
+function pinMessageMetaPreview(event: MouseEvent) {
+  const details = resolveMessageMetaDetails(event.currentTarget);
+  if (details?.dataset.preview !== "true") {
+    return;
+  }
+  event.preventDefault();
+  delete details.dataset.preview;
 }
 
 export function resetAssistantAttachmentAvailabilityCacheForTest() {
@@ -246,7 +290,8 @@ function isAudioTranscriptMediaPath(path: string, mediaType: unknown): boolean {
   }
   const ext = getFileExtension(path);
   return (
-    ext !== undefined && ["aac", "flac", "m4a", "mp3", "oga", "ogg", "opus", "wav"].includes(ext)
+    ext !== undefined &&
+    ["aac", "flac", "m2a", "m4a", "mp3", "oga", "ogg", "opus", "wav"].includes(ext)
   );
 }
 
@@ -316,6 +361,15 @@ function extractImages(message: unknown): ImageBlock[] {
             url: buildBase64ImageUrl({
               data: source.data,
               mediaType: typeof source.media_type === "string" ? source.media_type : undefined,
+            }),
+            ...imageMeta,
+          });
+        } else if (typeof b.data === "string") {
+          // Direct tool-result image block from imageResult() / read tool.
+          appendImageBlock(images, {
+            url: buildBase64ImageUrl({
+              data: b.data,
+              mediaType: typeof b.mimeType === "string" ? b.mimeType : undefined,
             }),
             ...imageMeta,
           });
@@ -499,7 +553,7 @@ function extractTranscriptAttachments(message: unknown): AttachmentItem[] {
 }
 
 /** A contiguous run of in-flight streaming items rendered under one assistant group. */
-export type StreamGroupPart = Extract<ChatItem, { kind: "stream" } | { kind: "reading-indicator" }>;
+type StreamGroupPart = Extract<ChatItem, { kind: "stream" } | { kind: "reading-indicator" }>;
 
 type StreamGroupOptions = {
   onOpenSidebar?: (content: SidebarContent) => void;
@@ -749,7 +803,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
         )}
         <div class="chat-group-footer">
           <span class="chat-sender-name">${who}</span>
-          ${renderChatTimestamp(group.timestamp)} ${renderMessageMeta(meta)}
+          ${renderMessageMeta(group.timestamp, meta)}
           ${opts.onDelete
             ? renderDeleteButton(opts.onDelete, normalizedRole === "user" ? "left" : "right")
             : nothing}
@@ -820,9 +874,9 @@ function extractGroupMeta(group: MessageGroup, contextWindow: number | null): Gr
   return { input, output, cacheRead, cacheWrite, cost, model, contextPercent };
 }
 
-function renderMessageMeta(meta: GroupMeta | null) {
+function renderMessageMeta(timestamp: number, meta: GroupMeta | null) {
   if (!meta) {
-    return nothing;
+    return renderChatTimestamp(timestamp);
   }
 
   const parts: Array<ReturnType<typeof html>> = [];
@@ -874,14 +928,25 @@ function renderMessageMeta(meta: GroupMeta | null) {
   }
 
   if (parts.length === 0) {
-    return nothing;
+    return renderChatTimestamp(timestamp);
   }
 
+  const display = formatChatTimestampForDisplay(timestamp);
+
   return html`
-    <details class="msg-meta">
-      <summary class="msg-meta__summary">
-        <span class="msg-meta__summary-icon" aria-hidden="true">${icons.chevronRight}</span>
-        <span>Context</span>
+    <details
+      class="msg-meta"
+      @pointerenter=${previewMessageMeta}
+      @pointerleave=${closeMessageMetaPreview}
+      @focusin=${previewMessageMeta}
+      @focusout=${closeMessageMetaPreview}
+    >
+      <summary
+        class="msg-meta__summary"
+        aria-label=${`Message context for ${display.title}`}
+        @click=${pinMessageMetaPreview}
+      >
+        ${renderChatTimestamp(timestamp, true)}
       </summary>
       <span class="msg-meta__details">${parts}</span>
     </details>
@@ -1168,6 +1233,7 @@ function isLocalAssistantAttachmentSource(source: string): boolean {
     return false;
   }
   return (
+    isCanonicalInboundMediaSource(trimmed) ||
     trimmed.startsWith("file://") ||
     trimmed.startsWith("~") ||
     trimmed.startsWith("/") ||
@@ -1175,9 +1241,28 @@ function isLocalAssistantAttachmentSource(source: string): boolean {
   );
 }
 
+function isCanonicalInboundMediaSource(source: string): boolean {
+  // Match the raw one-segment form first; URL parsing would erase dot segments.
+  const match = /^media:\/\/inbound\/([^/?#]+)$/i.exec(source.trim());
+  if (!match?.[1]) {
+    return false;
+  }
+  try {
+    const id = decodeURIComponent(match[1]);
+    return (
+      id !== "." && id !== ".." && !id.includes("/") && !id.includes("\\") && !id.includes("\0")
+    );
+  } catch {
+    return false;
+  }
+}
+
 function normalizeLocalAttachmentPath(source: string): string | null {
   const trimmed = source.trim();
   if (!isLocalAssistantAttachmentSource(trimmed)) {
+    return null;
+  }
+  if (isCanonicalInboundMediaSource(trimmed)) {
     return null;
   }
   if (trimmed.startsWith("file://")) {
@@ -1230,6 +1315,9 @@ function isLocalAttachmentPreviewAllowed(
   source: string,
   localMediaPreviewRoots: readonly string[],
 ): boolean {
+  if (isCanonicalInboundMediaSource(source)) {
+    return true;
+  }
   const normalizedSource = normalizeLocalAttachmentPath(source);
   const comparableSources = normalizedSource
     ? [canonicalizeLocalPathForComparison(normalizedSource)]
@@ -1845,7 +1933,10 @@ function renderGroupedMessage(
   const markdownBase = extractedText?.trim() ? extractedText : null;
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
   const markdown = markdownBase;
-  const markdownRenderOptions = role === "user" ? { codeBlockChrome: "none" as const } : undefined;
+  const markdownRenderOptions: MarkdownRenderOptions = {
+    codeBlockChrome: role === "user" ? "none" : "copy",
+    fileLinks: true,
+  };
   const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim());
   const canExpand = role === "assistant" && Boolean(onOpenSidebar && markdown?.trim());
   const hasActions = canCopyMarkdown || canExpand;
@@ -1917,20 +2008,20 @@ function renderGroupedMessage(
         ? toolNames.join(", ")
         : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`
     : singleToolDisplayDetail
-      ? singleToolCard?.outputText?.trim()
-        ? "output"
-        : undefined
+      ? !markdown && !hasImages
+        ? singleToolDisplayDetail
+        : singleToolCard?.outputText?.trim()
+          ? "output"
+          : undefined
       : toolNames.length <= 3
         ? toolNames.join(", ")
         : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`;
   const toolPreview = markdown ? (formatCollapsedToolPreviewText(markdown) ?? "") : "";
   const toolMessageLabelRaw = toolMessageHasError
     ? "Tool error"
-    : singleToolDisplayDetail && !markdown && !hasImages
-      ? singleToolDisplayDetail
-      : singleToolDisplay && !markdown && !hasImages
-        ? singleToolDisplay.label
-        : "Tool output";
+    : singleToolDisplay && !markdown && !hasImages
+      ? singleToolDisplay.label
+      : "Tool output";
   const toolMessageLabel =
     formatCollapsedToolSummaryText(toolMessageLabelRaw) ?? toolMessageLabelRaw;
   const toolSummaryLabel = formatDistinctCollapsedToolSummaryText(
@@ -2120,7 +2211,7 @@ function renderGroupedMessage(
 function renderMarkdownText(
   markdown: string,
   isStreaming: boolean,
-  markdownRenderOptions?: { codeBlockChrome: "copy" | "none" },
+  markdownRenderOptions?: MarkdownRenderOptions,
 ) {
   if (isStreaming) {
     return html`

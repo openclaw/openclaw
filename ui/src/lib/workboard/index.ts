@@ -154,7 +154,7 @@ export type WorkboardStaleState = {
   reason: string;
 };
 
-export type WorkboardClaim = {
+type WorkboardClaim = {
   ownerId: string;
   token?: string;
   claimedAt: number;
@@ -279,7 +279,7 @@ export type WorkboardCard = {
   metadata?: WorkboardMetadata;
 };
 
-export type WorkboardLifecycleState =
+type WorkboardLifecycleState =
   | "unlinked"
   | "missing"
   | "idle"

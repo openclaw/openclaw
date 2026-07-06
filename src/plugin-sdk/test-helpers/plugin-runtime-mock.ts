@@ -807,6 +807,11 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       getSession: vi.fn(),
       deleteSession: vi.fn(),
     },
+    worktrees: {
+      create: vi.fn(),
+      release: vi.fn(),
+      removeIfLossless: vi.fn(),
+    },
     llm: {
       complete: vi.fn(),
     },

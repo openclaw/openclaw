@@ -326,7 +326,7 @@ describe("discordPlugin outbound", () => {
     expect(sendOptions.mediaUrl).toBe("/tmp/image.png");
     expect(sendOptions.mediaLocalRoots).toEqual(["/tmp/agent-root"]);
     expect(sendOptions.mediaReadFile).toBe(mediaReadFile);
-    expect(sendOptions.replyTo).toBe("reply-123");
+    expect(sendOptions.reply).toEqual({ messageId: "reply-123", scope: "all" });
     expect(result.channel).toBe("discord");
     expect(result.messageId).toBe("m1");
   });
@@ -353,7 +353,10 @@ describe("discordPlugin outbound", () => {
     expect(sendMessageDiscord).toHaveBeenCalledTimes(2);
     expect(argAt(sendMessageDiscord, 0, 0)).toBe("channel:thread-123");
     expect(argAt(sendMessageDiscord, 0, 1)).toBe("done - tiny cyber-lobster clip incoming");
-    expect(objectArgAt(sendMessageDiscord, 0, 2).replyTo).toBe("reply-123");
+    expect(objectArgAt(sendMessageDiscord, 0, 2).reply).toEqual({
+      messageId: "reply-123",
+      scope: "all",
+    });
     expect(argAt(sendMessageDiscord, 1, 0)).toBe("channel:thread-123");
     expect(argAt(sendMessageDiscord, 1, 1)).toBe("");
     expect(objectArgAt(sendMessageDiscord, 1, 2).mediaUrl).toBe("/tmp/molty.mp4");
