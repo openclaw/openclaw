@@ -11,11 +11,15 @@ export async function sniffMimeFromBase64(base64: string): Promise<string | unde
     return undefined;
   }
 
+  const take = Math.min(BASE64_SNIFF_PREFIX_CHARS, canonical.length);
+  const sliceLength = take - (take % 4);
+  // Keep the existing minimum so short magic-byte prefixes are not treated as complete media.
+  if (sliceLength < 8) {
+    return undefined;
+  }
+
   try {
-    const canonicalPrefix = canonical.slice(
-      0,
-      BASE64_SNIFF_PREFIX_CHARS - (BASE64_SNIFF_PREFIX_CHARS % 4),
-    );
+    const canonicalPrefix = canonical.slice(0, sliceLength);
     const head = Buffer.from(canonicalPrefix, "base64");
     return await detectMime({ buffer: head });
   } catch {
