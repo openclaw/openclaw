@@ -486,7 +486,9 @@ export function resolveBrowserConfig(
 
   const headless = cfg?.headless === true;
   const headlessSource = typeof cfg?.headless === "boolean" ? "config" : "default";
-  const extensionRelayToken = resolveExtensionRelayToken(rootConfig) ?? undefined;
+  // Host-local relay secret (created lazily by relay startup / pairing). Null
+  // here just means the extension driver has not been used on this host yet.
+  const extensionRelayToken = resolveExtensionRelayToken() ?? undefined;
   const noSandbox = cfg?.noSandbox === true;
   const attachOnly = cfg?.attachOnly === true;
   const executablePath = normalizeExecutablePath(cfg?.executablePath);

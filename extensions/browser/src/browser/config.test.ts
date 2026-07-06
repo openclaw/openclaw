@@ -1,8 +1,9 @@
 // Browser tests cover config plugin behavior.
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { BrowserConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
 import {
@@ -13,6 +14,30 @@ import {
   resolveProfile,
 } from "./config.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
+
+// Isolate the extension relay secret (read from stateDir/credentials) so the
+// extension-token assertions do not pick up a developer's real secret file.
+let isolatedStateDir = "";
+const prevStateDir = process.env.OPENCLAW_STATE_DIR;
+beforeEach(() => {
+  isolatedStateDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cfg-")));
+  process.env.OPENCLAW_STATE_DIR = isolatedStateDir;
+});
+afterEach(() => {
+  if (prevStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = prevStateDir;
+  }
+  fs.rmSync(isolatedStateDir, { recursive: true, force: true });
+});
+
+/** Write a relay secret into the isolated state dir's credentials directory. */
+function writeRelaySecret(token: string): void {
+  const dir = path.join(isolatedStateDir, "credentials");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "browser-extension-relay.secret"), `${token}\n`);
+}
 
 function withEnv<T>(env: Record<string, string | undefined>, fn: () => T): T {
   const snapshot = new Map<string, string | undefined>();
@@ -84,8 +109,8 @@ describe("browser config", () => {
     // Relay port sits just below the CDP allocation range (controlPort + 8).
     expect(chrome?.cdpPort).toBe(resolved.extensionRelayDefaultPort);
     expect(resolved.extensionRelayDefaultPort).toBe(resolved.controlPort + 8);
-    // Without gateway auth material there is no derived token yet, so the relay
-    // cdpUrl carries no Basic credentials.
+    // No host-local relay secret exists yet (isolated state dir), so the relay
+    // cdpUrl carries no Basic credentials until pairing/startup creates one.
     expect(chrome?.cdpUrl).toBe(`http://127.0.0.1:${resolved.extensionRelayDefaultPort}`);
     expect(chrome?.cdpIsLoopback).toBe(true);
   });
@@ -117,14 +142,14 @@ describe("browser config", () => {
     expect(resolveProfile(resolved, "work")?.cdpPort).toBe(20123);
   });
 
-  it("embeds the derived relay token as Basic auth in the extension cdpUrl", () => {
-    const resolved = resolveBrowserConfig(undefined, {
-      gateway: { auth: { mode: "token", token: "gw-secret" } },
-    });
-    expect(resolved.extensionRelayToken).toBeTruthy();
+  it("embeds the host-local relay secret as Basic auth in the extension cdpUrl", () => {
+    const token = "a".repeat(64);
+    writeRelaySecret(token);
+    const resolved = resolveBrowserConfig(undefined);
+    expect(resolved.extensionRelayToken).toBe(token);
     const chrome = resolveProfile(resolved, "chrome");
     expect(chrome?.cdpUrl).toBe(
-      `http://openclaw:${resolved.extensionRelayToken}@127.0.0.1:${resolved.extensionRelayDefaultPort}`,
+      `http://openclaw:${token}@127.0.0.1:${resolved.extensionRelayDefaultPort}`,
     );
   });
 

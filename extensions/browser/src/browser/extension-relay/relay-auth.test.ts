@@ -1,39 +1,70 @@
-// Extension relay token derivation.
-import { describe, expect, it } from "vitest";
+// Extension relay host-local token secret.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  deriveExtensionRelayToken,
+  ensureExtensionRelayToken,
   extensionRelayTokenMatches,
+  readExtensionRelayToken,
   resolveExtensionRelayToken,
 } from "./relay-auth.js";
 
-describe("extension relay auth", () => {
-  it("derives a stable token from gateway auth material", () => {
-    const a = deriveExtensionRelayToken("secret-token");
-    const b = deriveExtensionRelayToken("secret-token");
-    expect(a).toBe(b);
-    expect(a).toHaveLength(64); // sha256 hex
-    expect(a).not.toBe("secret-token");
+let stateDir = "";
+const prevStateDir = process.env.OPENCLAW_STATE_DIR;
+
+beforeEach(() => {
+  stateDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-relay-auth-")));
+  process.env.OPENCLAW_STATE_DIR = stateDir;
+});
+afterEach(() => {
+  if (prevStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = prevStateDir;
+  }
+  fs.rmSync(stateDir, { recursive: true, force: true });
+});
+
+describe("extension relay host-local secret", () => {
+  it("returns null before the secret is created", () => {
+    expect(readExtensionRelayToken()).toBeNull();
+    expect(resolveExtensionRelayToken()).toBeNull();
   });
 
-  it("produces distinct tokens for distinct material", () => {
-    expect(deriveExtensionRelayToken("one")).not.toBe(deriveExtensionRelayToken("two"));
+  it("creates a 64-hex secret on ensure and persists it privately", () => {
+    const token = ensureExtensionRelayToken();
+    expect(token).toMatch(/^[0-9a-f]{64}$/);
+    const secretPath = path.join(stateDir, "credentials", "browser-extension-relay.secret");
+    expect(fs.existsSync(secretPath)).toBe(true);
+    if (process.platform !== "win32") {
+      expect(fs.statSync(secretPath).mode & 0o777).toBe(0o600);
+    }
+  });
+
+  it("is stable across calls (does not rotate on read)", () => {
+    const first = ensureExtensionRelayToken();
+    expect(ensureExtensionRelayToken()).toBe(first);
+    expect(readExtensionRelayToken()).toBe(first);
+  });
+
+  it("gives different hosts (state dirs) different secrets", () => {
+    const a = ensureExtensionRelayToken();
+    const otherDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-relay-auth-2-")),
+    );
+    try {
+      const b = ensureExtensionRelayToken({ ...process.env, OPENCLAW_STATE_DIR: otherDir });
+      expect(b).not.toBe(a);
+    } finally {
+      fs.rmSync(otherDir, { recursive: true, force: true });
+    }
   });
 
   it("matches tokens in constant time and rejects mismatches", () => {
-    const token = deriveExtensionRelayToken("material");
+    const token = ensureExtensionRelayToken();
     expect(extensionRelayTokenMatches(token, token)).toBe(true);
     expect(extensionRelayTokenMatches(token, `${token}x`)).toBe(false);
     expect(extensionRelayTokenMatches(token, "short")).toBe(false);
-  });
-
-  it("resolves from token auth config and returns null without material", () => {
-    const withToken = resolveExtensionRelayToken(
-      { gateway: { auth: { mode: "token", token: "gw-token" } } },
-      {},
-    );
-    expect(withToken).toBe(deriveExtensionRelayToken("gw-token"));
-
-    const withoutAuth = resolveExtensionRelayToken({ gateway: { auth: { mode: "none" } } }, {});
-    expect(withoutAuth).toBeNull();
   });
 });

@@ -31,8 +31,8 @@ Three parts:
   tool calls.
 - **Extension relay** (loopback WebSocket): a small server the control service
   starts on `127.0.0.1`. It presents a Chrome DevTools Protocol endpoint to
-  OpenClaw and speaks to the extension. Both sides are authenticated with a
-  token derived from your Gateway auth.
+  OpenClaw and speaks to the extension. Both sides authenticate with a
+  host-local token (see below).
 - **OpenClaw Chrome extension** (MV3): attaches to tabs with `chrome.debugger`,
   forwards CDP traffic, and manages the **OpenClaw tab group**.
 
@@ -60,9 +60,11 @@ the toolbar button) to revoke access instantly.
 4. Click the OpenClaw toolbar icon and paste the pairing string into the popup.
    The badge turns **ON** when the extension connects to the relay.
 
-The pairing token is derived (HMAC-SHA256) from your Gateway auth material, so
-the raw Gateway credential never reaches Chrome. Rotating Gateway auth rotates
-the pairing token.
+The pairing token is a **host-local secret** created on first use and stored
+under `credentials/` in the state directory (mode `0600`). Each machine that
+runs a browser — the Gateway host and every browser node host — owns its own
+token, so no credential has to travel between machines. To rotate it, delete the
+`browser-extension-relay.secret` file and pair again.
 
 ## Use it
 
@@ -88,6 +90,21 @@ openclaw config set browser.defaultProfile chrome
 - The agent can also open new tabs; those land in the group automatically.
 - Revoke: click the button again, drag the tab out of the group, or dismiss
   Chrome's debugging banner. The agent loses access to that tab immediately.
+
+## Remote browser nodes
+
+The extension works whether Chrome runs on the Gateway host or on a separate
+[browser node host](/tools/browser#local-vs-remote-control). The relay is always
+loopback-only and runs **on the machine with the browser**:
+
+- **Same host** (Gateway + Chrome on one machine): pair on that machine.
+- **Remote node** (Chrome on a node, Gateway elsewhere): run
+  `openclaw browser extension path` / `pair` **on the node**, load and pair the
+  extension there. The Gateway proxies browser actions to the node over its
+  existing authenticated node link; the node's local relay drives the extension.
+  No new inbound port is opened on the node.
+
+The pairing token is per host, so each node prints its own string.
 
 ## Diagnostics
 

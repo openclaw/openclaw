@@ -1,43 +1,58 @@
 /**
  * Extension relay auth material.
  *
- * The relay token is derived (HMAC-SHA256) from the gateway auth material so
- * pairing never hands the raw gateway credential to Chrome and no new secret
- * needs persisting. Rotating gateway auth rotates the relay token.
- *
- * Imports resolveGatewayAuth directly (not control-auth.ts) because config.ts
- * consumes this module and control-auth pulls config-mutations back in — a cycle.
+ * The relay authenticates the loopback link between OpenClaw and the paired
+ * Chrome extension with a host-local secret. It is persisted per machine in the
+ * credentials dir, so the gateway host and every browser node host each own an
+ * independent token — the extension pairs with whichever machine runs its
+ * Chrome, and no gateway credential ever has to travel to a node.
  */
 import crypto from "node:crypto";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { OpenClawConfig } from "../../config/config.js";
-import { resolveGatewayAuth } from "../../gateway/auth.js";
+import fs from "node:fs";
+import path from "node:path";
+import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
 
-const RELAY_TOKEN_CONTEXT = "openclaw-extension-relay-v2";
+const RELAY_SECRET_FILE = "browser-extension-relay.secret";
 
-/** Derive the extension relay bearer token from gateway auth material. */
-export function deriveExtensionRelayToken(material: string): string {
-  return crypto.createHmac("sha256", material).update(RELAY_TOKEN_CONTEXT).digest("hex");
+// resolveOAuthDir returns `${stateDir}/credentials`, the shared credentials dir.
+function resolveExtensionRelaySecretPath(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(resolveOAuthDir(env), RELAY_SECRET_FILE);
+}
+
+function normalizeToken(raw: string): string | null {
+  const value = raw.trim();
+  return /^[0-9a-f]{64}$/.test(value) ? value : null;
+}
+
+/** Read the host-local relay token, or null when it has not been created yet. */
+export function readExtensionRelayToken(env: NodeJS.ProcessEnv = process.env): string | null {
+  try {
+    return normalizeToken(fs.readFileSync(resolveExtensionRelaySecretPath(env), "utf8"));
+  } catch {
+    return null;
+  }
 }
 
 /**
- * Resolve the relay token for this install, or null when no gateway auth
- * material exists yet (gateway startup auto-generates it on first run).
+ * Read the host-local relay token, creating it on first use. Called from relay
+ * startup and `openclaw browser extension pair` — both run on the machine that
+ * hosts the browser, so they resolve the same per-host secret.
  */
-export function resolveExtensionRelayToken(
-  cfg?: OpenClawConfig,
-  env: NodeJS.ProcessEnv = process.env,
-): string | null {
-  const auth = resolveGatewayAuth({
-    authConfig: cfg?.gateway?.auth,
-    env,
-    tailscaleMode: cfg?.gateway?.tailscale?.mode,
-  });
-  const material = normalizeOptionalString(auth.token) ?? normalizeOptionalString(auth.password);
-  if (!material) {
-    return null;
+export function ensureExtensionRelayToken(env: NodeJS.ProcessEnv = process.env): string {
+  const secretPath = resolveExtensionRelaySecretPath(env);
+  const existing = readExtensionRelayToken(env);
+  if (existing) {
+    return existing;
   }
-  return deriveExtensionRelayToken(material);
+  const token = crypto.randomBytes(32).toString("hex");
+  fs.mkdirSync(path.dirname(secretPath), { recursive: true });
+  fs.writeFileSync(secretPath, `${token}\n`, { mode: 0o600 });
+  return token;
+}
+
+/** Resolve the relay token for config (read-only; null until first ensured). */
+export function resolveExtensionRelayToken(env: NodeJS.ProcessEnv = process.env): string | null {
+  return readExtensionRelayToken(env);
 }
 
 /** Constant-time token comparison. */

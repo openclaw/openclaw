@@ -39,13 +39,22 @@ export async function startBrowserControlServiceFromConfig(): Promise<BrowserSer
     const ensured = await ensureBrowserControlAuth({ cfg });
     if (ensured.generatedToken) {
       logService.info("No browser auth configured; generated gateway.auth.token automatically.");
-      // The extension relay token derives from gateway auth, which did not
-      // exist when the config was first resolved above — resolve again.
-      const refreshed = loadBrowserConfigForRuntimeRefresh();
-      resolved = resolveBrowserConfig(refreshed.browser, refreshed);
     }
   } catch (err) {
     logService.warn(`failed to auto-configure browser auth: ${String(err)}`);
+  }
+
+  // Ensure the host-local relay secret exists before profiles are consumed so
+  // the extension cdpUrl carries auth. Works identically on the gateway host
+  // and on a browser node host — each owns its own secret.
+  const hasExtensionProfiles = Object.values(resolved.profiles).some(
+    (profile) => profile.driver === "extension",
+  );
+  if (hasExtensionProfiles) {
+    const { ensureExtensionRelayToken } = await import("./browser/extension-relay/relay-auth.js");
+    ensureExtensionRelayToken();
+    const refreshed = loadBrowserConfigForRuntimeRefresh();
+    resolved = resolveBrowserConfig(refreshed.browser, refreshed);
   }
 
   const state = await ensureBrowserControlRuntime({
@@ -58,9 +67,6 @@ export async function startBrowserControlServiceFromConfig(): Promise<BrowserSer
 
   // Extension relays listen from service start so the Chrome extension can
   // (re)connect before the first agent browser request arrives.
-  const hasExtensionProfiles = Object.values(resolved.profiles).some(
-    (profile) => profile.driver === "extension",
-  );
   if (hasExtensionProfiles) {
     const { startConfiguredExtensionRelays } = await getExtensionRelayModule();
     await startConfiguredExtensionRelays(

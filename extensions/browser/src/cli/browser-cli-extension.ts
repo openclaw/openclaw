@@ -5,6 +5,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Command } from "commander";
+import { ensureExtensionRelayToken } from "../browser/extension-relay/relay-auth.js";
 import type { BrowserParentOpts } from "./browser-cli-shared.js";
 import {
   danger,
@@ -34,16 +35,13 @@ function firstExtensionProfile(): { name: string; relayPort: number } | null {
   return null;
 }
 
-function buildPairingString(): { pairing: string; relayPort: number } | { error: string } {
+function buildPairingString(): { pairing: string; relayPort: number } {
   const cfg = getRuntimeConfig();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
-  const token = resolved.extensionRelayToken;
-  if (!token) {
-    return {
-      error:
-        "No gateway auth configured yet. Start the gateway once (it generates gateway.auth.token) and retry.",
-    };
-  }
+  // Create the host-local relay secret if this host has not used the extension
+  // driver yet, so pairing works on a fresh gateway or node host before the
+  // relay has started. Pairing must run on the machine that hosts the browser.
+  const token = ensureExtensionRelayToken();
   const profile = firstExtensionProfile();
   const relayPort = profile?.relayPort ?? resolved.extensionRelayDefaultPort;
   return {
@@ -77,11 +75,6 @@ export function registerBrowserExtensionCommands(
         defaultRuntime,
         async () => {
           const result = buildPairingString();
-          if ("error" in result) {
-            defaultRuntime.error(danger(result.error));
-            defaultRuntime.exit(1);
-            return;
-          }
           if (opts.json === true) {
             defaultRuntime.log(
               JSON.stringify({ pairingString: result.pairing, relayPort: result.relayPort }),
@@ -90,13 +83,16 @@ export function registerBrowserExtensionCommands(
           }
           defaultRuntime.log(
             [
+              info(
+                "Run this on the machine that hosts the browser (gateway host or browser node).",
+              ),
               info("1. Load the extension: chrome://extensions → Developer mode → Load unpacked →"),
               `   ${resolveChromeExtensionDir()}`,
               info("2. Open the OpenClaw popup and paste this pairing string:"),
               "",
               theme.heading(result.pairing),
               "",
-              info("The token is derived from gateway auth; keep it private."),
+              info("The token is a host-local secret; keep it private."),
             ].join("\n"),
           );
         },

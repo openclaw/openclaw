@@ -4,7 +4,6 @@
  */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ResolvedBrowserProfile } from "../config.js";
-import { BrowserProfileUnavailableError } from "../errors.js";
 import type { BrowserServerState } from "../server-context.types.js";
 import { type ExtensionRelayHandle, startExtensionRelayServer } from "./relay-server.js";
 
@@ -34,13 +33,10 @@ export async function ensureExtensionRelayForProfile(
   profile: ResolvedBrowserProfile,
 ): Promise<ExtensionRelayHandle> {
   const map = relays(state);
-  const token = state.resolved.extensionRelayToken;
-  if (!token) {
-    throw new BrowserProfileUnavailableError(
-      `Browser profile "${profile.name}" needs gateway auth before the extension relay can start. ` +
-        "Start the gateway once (it generates gateway.auth.token) and retry.",
-    );
-  }
+  // The host-local relay secret is created at browser-service startup and when
+  // pairing; ensure it here too so a relay started on demand always has a token.
+  const { ensureExtensionRelayToken } = await import("./relay-auth.js");
+  const token = state.resolved.extensionRelayToken ?? ensureExtensionRelayToken();
   const existing = map.get(profile.name);
   if (existing) {
     if (existing.port === profile.cdpPort && existing.token === token) {
