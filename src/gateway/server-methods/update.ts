@@ -47,7 +47,7 @@ import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-const SYSTEMD_HANDOFF_RESTART_GRACE_MS = 2000;
+const MANAGED_HANDOFF_RESTART_DELAY_MS = 2000;
 
 function formatUpdateRunErrorMessage(err: unknown): string {
   if (err instanceof Error) {
@@ -82,16 +82,14 @@ async function readPreUpdateConfigForPostCoreFinalize(): Promise<
 function resolveManagedServiceHandoffRestartDelayMs(
   restartDelayMs: number | undefined,
   supervisor: ReturnType<typeof detectRespawnSupervisor>,
-): number | undefined {
+): number {
+  const resolvedDelayMs = restartDelayMs ?? MANAGED_HANDOFF_RESTART_DELAY_MS;
   if (supervisor !== "systemd") {
-    return restartDelayMs;
+    return resolvedDelayMs;
   }
   // systemd needs a short grace period after the handoff process starts before
   // the gateway exits, otherwise the service can restart before handoff state is durable.
-  return Math.max(
-    restartDelayMs ?? SYSTEMD_HANDOFF_RESTART_GRACE_MS,
-    SYSTEMD_HANDOFF_RESTART_GRACE_MS,
-  );
+  return Math.max(resolvedDelayMs, MANAGED_HANDOFF_RESTART_DELAY_MS);
 }
 
 function hasManagedServiceHandoffContext(

@@ -453,6 +453,7 @@ describe("update.run restart scheduling", () => {
       expect.objectContaining({
         root: "/tmp/openclaw",
         restartDrainTimeoutMs: 60_000,
+        restartDelayMs: 2000,
         handoffId: expect.any(String),
         supervisor: "launchd",
         meta: expect.objectContaining({
