@@ -19,17 +19,9 @@ import {
 import { MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX } from "./update-managed-service-handoff-cleanup.js";
 import type { UpdateRestartSentinelMeta } from "./update-restart-sentinel-payload.js";
 
-// Minimum parent-exit grace used when no explicit update timeout is provided.
-// Matches a typical restart drain budget so default managed handoffs survive
-// normal active-task window drain periods (#99666).
-const DEFAULT_PARENT_EXIT_GRACE_MS = 300_000;
-
-// Shutdown/scheduling reserve added on top of the drain budget so the helper
-// does not report managed-service-handoff-parent-timeout before the parent
-// finishes shutting down after a full active-task drain window. The Gateway
-// restart path allows restartDrainTimeoutMs + SHUTDOWN_TIMEOUT_MS (25 s) for
-// force-exit; this reserve covers that shutdown window plus scheduling jitter.
-const SHUTDOWN_RESERVE_MS = 30_000;
+// The Gateway may spend its full restart-drain budget before entering the
+// bounded shutdown phase. Keep the helper alive through both phases. (#99666)
+const PARENT_EXIT_SHUTDOWN_RESERVE_MS = 30_000;
 const SYSTEMD_RUN_CANDIDATE_PATHS = ["/usr/bin/systemd-run", "/bin/systemd-run"] as const;
 const SERVICE_IDENTITY_ENV_VARS = new Set<string>([
   "OPENCLAW_LAUNCHD_LABEL",
@@ -381,11 +373,14 @@ function startGatewayServiceBestEffort() {
 }
 
 (async () => {
-  const deadline = Date.now() + params.parentExitTimeoutMs;
-  while (isPidAlive(params.parentPid) && Date.now() < deadline) {
+  const deadline =
+    typeof params.parentExitTimeoutMs === "number"
+      ? Date.now() + params.parentExitTimeoutMs
+      : null;
+  while (isPidAlive(params.parentPid) && (deadline === null || Date.now() < deadline)) {
     await sleep(250);
   }
-  if (isPidAlive(params.parentPid)) {
+  if (deadline !== null && isPidAlive(params.parentPid)) {
     appendLog("gateway parent pid " + params.parentPid + " did not exit before handoff timeout");
     markUpdateSentinelFailureIfPending("managed-service-handoff-parent-timeout");
     cleanupSensitiveFiles();
@@ -665,6 +660,7 @@ async function resolveHandoffSpawn(params: {
 export async function startManagedServiceUpdateHandoff(params: {
   root: string;
   timeoutMs?: number;
+  restartDrainTimeoutMs: number | undefined;
   channel?: UpdateChannel;
   restartDelayMs?: number;
   meta: UpdateRestartSentinelMeta;
@@ -697,13 +693,13 @@ export async function startManagedServiceUpdateHandoff(params: {
   };
   const helperParams = {
     parentPid: params.parentPid ?? process.pid,
-    // Use the overall update timeout as a floor for the parent-exit wait so
-    // active task drain under the old process does not cause a spurious
-    // managed-service-handoff-parent-timeout (#99666).
+    // An undefined drain timeout is the configured indefinite-wait contract.
     parentExitTimeoutMs:
-      Math.max(0, params.restartDelayMs ?? 0) +
-      Math.max(DEFAULT_PARENT_EXIT_GRACE_MS, params.timeoutMs ?? 0) +
-      SHUTDOWN_RESERVE_MS,
+      params.restartDrainTimeoutMs === undefined
+        ? null
+        : Math.max(0, params.restartDelayMs ?? 0) +
+          Math.max(0, params.restartDrainTimeoutMs) +
+          PARENT_EXIT_SHUTDOWN_RESERVE_MS,
     cwd: handoffCwd,
     commandArgv,
     commandLabel,

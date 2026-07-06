@@ -44,6 +44,12 @@ vi.mock("./openclaw-root.js", async () => {
 });
 
 vi.mock("./restart.js", () => ({
+  resolveGatewayRestartDeferralTimeoutMs: (timeoutMs: unknown) => {
+    if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
+      return 300_000;
+    }
+    return timeoutMs <= 0 ? undefined : Math.floor(timeoutMs);
+  },
   scheduleGatewaySigusr1Restart: scheduleGatewaySigusr1RestartMock,
 }));
 
@@ -545,6 +551,7 @@ describe("update-startup", () => {
     expect(runAutoUpdate).toHaveBeenCalledWith({
       channel: "stable",
       timeoutMs: 45 * 60 * 1000,
+      restartDrainTimeoutMs: 300_000,
       root: "/opt/openclaw",
     });
   });
@@ -562,6 +569,7 @@ describe("update-startup", () => {
     expect(runAutoUpdate).toHaveBeenCalledWith({
       channel: "beta",
       timeoutMs: 45 * 60 * 1000,
+      restartDrainTimeoutMs: 300_000,
       root: "/opt/openclaw",
     });
   });
@@ -669,6 +677,7 @@ describe("update-startup", () => {
       expect.objectContaining({
         root: "/opt/openclaw",
         timeoutMs: 45 * 60 * 1000,
+        restartDrainTimeoutMs: 300_000,
         channel: "beta",
         restartDelayMs: 0,
         supervisor: "launchd",
