@@ -58,18 +58,18 @@ describe("one-shot CLI exit", () => {
     expect(exit).toHaveBeenCalledWith(0);
   });
 
-  it("drains stdout and stderr before forcing default runtime exit", async () => {
+  it("waits for stream callbacks even when writableLength is zero", async () => {
     const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined);
-    vi.spyOn(process.stdout, "writableLength", "get").mockReturnValue(4);
-    vi.spyOn(process.stderr, "writableLength", "get").mockReturnValue(4);
+    vi.spyOn(process.stdout, "writableLength", "get").mockReturnValue(0);
+    vi.spyOn(process.stderr, "writableLength", "get").mockReturnValue(0);
 
     let flushStdout: (() => void) | undefined;
     let flushStderr: (() => void) | undefined;
-    vi.spyOn(process.stdout, "write").mockImplementation(((...args: unknown[]) => {
+    const stdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation(((...args: unknown[]) => {
       flushStdout = args.find((arg): arg is () => void => typeof arg === "function");
       return true;
     }) as typeof process.stdout.write);
-    vi.spyOn(process.stderr, "write").mockImplementation(((...args: unknown[]) => {
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(((...args: unknown[]) => {
       flushStderr = args.find((arg): arg is () => void => typeof arg === "function");
       return true;
     }) as typeof process.stderr.write);
@@ -77,6 +77,8 @@ describe("one-shot CLI exit", () => {
     requestExitAfterOneShotOutput(defaultRuntime);
     flushExitAfterOneShotOutput(defaultRuntime, {} as NodeJS.ProcessEnv, {});
 
+    expect(stdoutWrite).toHaveBeenCalledOnce();
+    expect(stderrWrite).toHaveBeenCalledOnce();
     expect(exit).not.toHaveBeenCalled();
     flushStdout?.();
     expect(exit).not.toHaveBeenCalled();

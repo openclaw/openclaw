@@ -54,13 +54,9 @@ export function flushExitAfterOneShotOutput(
   }
 
   const exit = () => runtime.exit(exitCode);
-  let pendingStreams = 0;
+  let pendingStreams = 2;
 
-  const maybeDrain = (stream: NodeJS.WriteStream) => {
-    if (stream.writableLength <= 0) {
-      return;
-    }
-    pendingStreams += 1;
+  const drain = (stream: NodeJS.WriteStream) => {
     stream.write("", () => {
       pendingStreams -= 1;
       if (pendingStreams === 0) {
@@ -69,11 +65,6 @@ export function flushExitAfterOneShotOutput(
     });
   };
 
-  maybeDrain(process.stdout);
-  maybeDrain(process.stderr);
-
-  if (pendingStreams > 0) {
-    return;
-  }
-  setImmediate(exit);
+  drain(process.stdout);
+  drain(process.stderr);
 }
