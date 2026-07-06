@@ -11,30 +11,24 @@ const OSC8_START_RE = new RegExp(`^${OSC8_PATTERN}`);
  *  fully captured instead of truncated at the first `)`. */
 const URL_PATH_WITH_PARENS = /https?:\/\/[^()\s<>]+(?:\([^()\s<>]*\)[^()\s<>]*)*/g;
 
-/** Strip trailing `)` characters that don't have a matching `(` in the URL.
+/** Strip the suffix starting at a `)` without a matching `(` in the URL.
  *  Bare URLs in prose can pick up a trailing `)` that belongs to surrounding
  *  punctuation, e.g. `(see https://example.com/path)` — the `)` after `path`
- *  is sentence punctuation, not part of the URL. */
+ *  and anything after it are sentence punctuation, not part of the URL. */
 function trimUnbalancedTrailingParens(url: string): string {
   let open = 0;
-  for (const ch of url) {
+  for (let index = 0; index < url.length; index++) {
+    const ch = url[index];
     if (ch === "(") {
       open++;
     } else if (ch === ")") {
+      if (open === 0) {
+        return url.slice(0, index);
+      }
       open--;
     }
   }
-  // If close parens outnumber open parens, the trailing ones are not
-  // part of the URL — strip them.
-  if (open >= 0) {
-    return url;
-  }
-  let trimmed = url;
-  while (trimmed.endsWith(")") && open < 0) {
-    trimmed = trimmed.slice(0, -1);
-    open++;
-  }
-  return trimmed;
+  return url;
 }
 
 /**

@@ -62,6 +62,11 @@ describe("extractUrls", () => {
     expect(urls).toEqual(["https://example.com/path"]);
   });
 
+  it("drops punctuation after an unmatched closing paren", () => {
+    const urls = extractUrls("(see https://example.com/path).");
+    expect(urls).toEqual(["https://example.com/path"]);
+  });
+
   it("handles markdown link with angle brackets and parenthetical URL", () => {
     const url = "https://en.wikipedia.org/wiki/Special_(film)";
     expect(extractUrls(`[link](<${url}>)`)).toEqual([url]);
