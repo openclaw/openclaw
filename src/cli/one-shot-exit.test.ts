@@ -17,10 +17,7 @@ describe("one-shot CLI exit", () => {
 
     expect(exit).not.toHaveBeenCalled();
     flushExitAfterOneShotOutput(defaultRuntime, {} as NodeJS.ProcessEnv, {});
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(exit).toHaveBeenCalledWith(2);
+    await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(2));
   });
 
   it("does not request exits for embedded custom runtimes", async () => {
@@ -52,10 +49,7 @@ describe("one-shot CLI exit", () => {
 
     requestExitAfterOneShotOutput(defaultRuntime);
     flushExitAfterOneShotOutput(defaultRuntime, inheritedTestEnv, {});
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(exit).toHaveBeenCalledWith(0);
+    await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(0));
   });
 
   it("waits for stream callbacks even when writableLength is zero", async () => {
