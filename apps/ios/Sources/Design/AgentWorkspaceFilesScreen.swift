@@ -9,11 +9,6 @@ struct AgentWorkspaceFilesScreen: View {
     let agentId: String
     let headerLeadingAction: OpenClawSidebarHeaderAction?
 
-    enum Route: Hashable {
-        case directory(String)
-        case file(String)
-    }
-
     var body: some View {
         ZStack {
             OpenClawProBackground()
@@ -36,25 +31,6 @@ struct AgentWorkspaceFilesScreen: View {
         }
         .navigationTitle("Files")
         .navigationBarTitleDisplayMode(.inline)
-        // Registered once at the section root; pushed directory levels resolve
-        // through this single destination table. Direct sidebar routes hide the
-        // nav bar for the custom header, so pushed levels restore it explicitly
-        // to keep Back and the share toolbar reachable.
-        .navigationDestination(for: Route.self) { route in
-            switch route {
-            case let .directory(path):
-                ZStack {
-                    OpenClawProBackground()
-                    AgentWorkspaceDirectoryList(agentId: self.agentId, path: path)
-                }
-                .navigationTitle(Self.displayName(forPath: path))
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar(.visible, for: .navigationBar)
-            case let .file(path):
-                AgentWorkspaceFilePreview(agentId: self.agentId, path: path)
-                    .toolbar(.visible, for: .navigationBar)
-            }
-        }
     }
 
     static func displayName(forPath path: String) -> String {
@@ -115,11 +91,20 @@ struct AgentWorkspaceDirectoryList: View {
 
     private func entryRow(_ entry: AgentsWorkspaceEntry) -> some View {
         let isDirectory = self.isDirectory(entry)
-        return NavigationLink(
-            value: isDirectory
-                ? AgentWorkspaceFilesScreen.Route.directory(entry.path)
-                : AgentWorkspaceFilesScreen.Route.file(entry.path))
-        {
+        return NavigationLink {
+            if isDirectory {
+                ZStack {
+                    OpenClawProBackground()
+                    AgentWorkspaceDirectoryList(agentId: self.agentId, path: entry.path)
+                }
+                .navigationTitle(AgentWorkspaceFilesScreen.displayName(forPath: entry.path))
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar(.visible, for: .navigationBar)
+            } else {
+                AgentWorkspaceFilePreview(agentId: self.agentId, path: entry.path)
+                    .toolbar(.visible, for: .navigationBar)
+            }
+        } label: {
             HStack(spacing: 12) {
                 Image(systemName: isDirectory ? "folder" : "doc.text")
                     .font(OpenClawType.subhead)
@@ -340,6 +325,7 @@ struct AgentWorkspaceFilePreview: View {
     @MainActor
     private func load() async {
         self.loading = true
+        self.file = nil
         self.errorText = nil
         defer { self.loading = false }
         do {
