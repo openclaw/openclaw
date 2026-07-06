@@ -17,6 +17,7 @@ const legacyReaderNames = new Set([
   "readSessionEntries",
   "readSessionEntry",
   "readSessionStoreReadOnly",
+  "readSessionStoreSnapshot",
   "resolveSessionStoreEntry",
 ]);
 const legacyWholeStoreAccessNames = new Set([
@@ -26,7 +27,9 @@ const legacyWholeStoreAccessNames = new Set([
 ]);
 const legacyWriterNames = new Set([
   "applySessionStoreEntryPatch",
+  "recordSessionMetaFromInbound",
   "saveSessionStore",
+  "updateLastRoute",
   "updateSessionStore",
   "updateSessionStoreEntry",
 ]);
@@ -101,6 +104,8 @@ export const migratedSessionAccessorFiles = new Set([
   "src/commands/status.summary.ts",
   "src/commands/tasks.ts",
   "src/config/sessions/combined-store-gateway.ts",
+  "src/config/sessions/delivery-info.ts",
+  "src/config/sessions/goals.ts",
   "src/cron/isolated-agent/delivery-target.ts",
   "src/cron/service/timer.ts",
   "src/gateway/session-compaction-checkpoints.ts",
@@ -156,6 +161,7 @@ export const migratedSessionAccessorWriteFiles = new Set([
   "src/agents/command/attempt-execution.shared.ts",
   "src/agents/command/session-store.ts",
   "src/agents/embedded-agent-runner/run.ts",
+  "src/agents/embedded-agent-subscribe.handlers.compaction.runtime.ts",
   "src/agents/embedded-agent-runner/run/attempt.ts",
   "src/agents/live-model-switch.ts",
   "src/agents/main-session-restart-recovery.ts",
@@ -185,11 +191,14 @@ export const migratedSessionAccessorWriteFiles = new Set([
   "src/auto-reply/reply/session-usage.ts",
   "src/commands/tasks.ts",
   "src/config/sessions/cleanup-service.ts",
+  "src/config/sessions/goals.ts",
   "src/gateway/boot.ts",
   "src/gateway/server-node-events.ts",
   "src/gateway/session-compaction-checkpoints.ts",
+  "src/infra/outbound/outbound-session.ts",
   "src/plugins/host-hook-cleanup.ts",
   "src/plugins/host-hook-state.ts",
+  "src/plugins/runtime/runtime-channel.ts",
   "src/tui/embedded-backend.ts",
 ]);
 
@@ -563,6 +572,7 @@ const writeSourceRootPaths = [
   "src/commands",
   "src/config/sessions",
   "src/gateway",
+  "src/infra",
   "src/plugins",
   "src/tui",
 ];
