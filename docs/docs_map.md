@@ -312,6 +312,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Account config keys
   - H2: Multiple bots
   - H2: Reply modes
+  - H2: Agent activity rows
   - H2: Targets
   - H2: Permissions
   - H2: Troubleshooting
@@ -2338,7 +2339,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Currently documented flags
   - H2: Local model lean mode
-  - H3: Why these three tools
+  - H3: Why these tools
   - H3: When to turn it on
   - H3: When to leave it off
   - H3: Enable
@@ -4820,6 +4821,12 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /platforms/android
 - Headings:
   - H2: Support snapshot
+  - H2: Mirror and control Android from a remote Mac
+  - H3: Before you begin
+  - H3: Enable ADB over TCP
+  - H3: Allow only the controller Mac
+  - H3: Connect and start mirroring
+  - H3: Troubleshooting
   - H2: Connection runbook
   - H3: Prerequisites
   - H3: 1. Start the Gateway
@@ -5488,6 +5495,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Quick start
   - H2: Hook catalog
+  - H3: Channel pairing requests
   - H2: Debug runtime hooks
   - H2: Tool call policy
   - H3: Exec environment hook
@@ -5515,6 +5523,25 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Configuration
   - H2: Native Runtime
   - H2: Troubleshooting
+
+## plugins/logbook.md
+
+- Route: /plugins/logbook
+- Headings:
+  - H2: Before you begin
+  - H2: Quickstart
+  - H2: How it works
+  - H2: Model and data flow
+  - H2: Configuration
+  - H3: Vision model selection
+  - H2: Dashboard tab
+  - H2: Gateway methods
+  - H2: Privacy notes
+  - H2: Troubleshooting
+  - H3: The Logbook tab is missing
+  - H3: Capture reports an error
+  - H3: Captures succeed but no cards appear
+  - H2: Related
 
 ## plugins/manage-plugins.md
 
@@ -9178,6 +9205,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Statuses
   - H2: Token budgets
   - H2: Model tools
+  - H2: Goal context on every turn
   - H2: TUI
   - H2: Channel behavior
   - H2: Troubleshooting
@@ -9448,6 +9476,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: How it works
   - H2: Lifecycle
   - H2: Chat
+  - H3: Learn from recent work
   - H2: CLI
   - H2: Proposal content
   - H2: Support files
@@ -9752,13 +9781,16 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Pair a mobile device
   - H2: Personal identity (browser-local)
   - H2: Runtime config endpoint
+  - H2: Gateway host status
   - H2: Language support
   - H2: Appearance themes
+  - H2: Sidebar navigation
   - H2: What it can do (today)
   - H2: MCP page
   - H2: Activity tab
   - H2: Operator terminal
   - H2: Chat behavior
+  - H2: Connection loss and reconnect
   - H2: PWA install and web push
   - H2: Hosted embeds
   - H2: Chat message width

@@ -117,6 +117,7 @@ function buildPreparedCliRunContext(params: {
   skillsSnapshot?: PreparedCliRunContext["params"]["skillsSnapshot"];
   thinkLevel?: PreparedCliRunContext["params"]["thinkLevel"];
   executionMode?: PreparedCliRunContext["params"]["executionMode"];
+  emitCommentaryText?: boolean;
   workspaceDir?: string;
   timeoutMs?: number;
 }): PreparedCliRunContext {
@@ -187,6 +188,7 @@ function buildPreparedCliRunContext(params: {
       model: params.model,
       thinkLevel: params.thinkLevel,
       executionMode: params.executionMode,
+      emitCommentaryText: params.emitCommentaryText,
       timeoutMs: params.timeoutMs ?? 1_000,
       runId: params.runId,
       skillsSnapshot: params.skillsSnapshot,
@@ -1255,6 +1257,91 @@ describe("runCliAgent spawn path", () => {
       expect(turnLogs.join("\n")).not.toContain("two");
     } finally {
       logInfoSpy.mockRestore();
+      stop();
+    }
+  });
+
+  it("keeps pre-tool commentary out of an empty-result Claude live reply", async () => {
+    const agentEvents: Array<{ stream: string; data: unknown }> = [];
+    const stop = onAgentEvent((event) => {
+      agentEvents.push({ stream: event.stream, data: event.data });
+    });
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const stdin = {
+      write: vi.fn((_data: string, callback?: (error?: Error | null) => void) => {
+        stdoutListener?.(
+          [
+            JSON.stringify({ type: "system", subtype: "init", session_id: "live-empty-result" }),
+            JSON.stringify({
+              type: "stream_event",
+              event: {
+                type: "content_block_delta",
+                delta: { type: "text_delta", text: "Let me check." },
+              },
+            }),
+            JSON.stringify({
+              type: "stream_event",
+              event: {
+                type: "content_block_start",
+                index: 1,
+                content_block: { type: "tool_use", id: "tool-1", name: "Read", input: {} },
+              },
+            }),
+            JSON.stringify({
+              type: "stream_event",
+              event: {
+                type: "content_block_delta",
+                delta: { type: "text_delta", text: "Final answer." },
+              },
+            }),
+            JSON.stringify({
+              type: "result",
+              session_id: "live-empty-result",
+              result: "",
+            }),
+          ].join("\n") + "\n",
+        );
+        callback?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-empty-result-run",
+        pid: 2345,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+
+    try {
+      const result = await executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "sonnet",
+          runId: "run-live-empty-result",
+          emitCommentaryText: true,
+          backend: { liveSession: "claude-stdio" },
+        }),
+      );
+
+      expect(result.text).toBe("Final answer.");
+      expect(agentEvents).toContainEqual({
+        stream: "item",
+        data: expect.objectContaining({
+          kind: "preamble",
+          progressText: "Let me check.",
+        }),
+      });
+      expect(agentEvents).toContainEqual({
+        stream: "assistant",
+        data: { text: "Final answer.", delta: "Final answer." },
+      });
+    } finally {
       stop();
     }
   });

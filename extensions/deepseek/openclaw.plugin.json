@@ -7,6 +7,9 @@
   "enabledByDefault": true,
   "providerCatalogEntry": "./provider-discovery.ts",
   "providers": ["deepseek"],
+  "contracts": {
+    "usageProviders": ["deepseek"]
+  },
   "providerEndpoints": [
     {
       "endpointClass": "deepseek-native",

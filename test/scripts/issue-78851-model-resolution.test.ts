@@ -1,5 +1,4 @@
 // Issue 78851 profiler CLI tests cover argument handling before work starts.
-import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import {
   issue78851ModelResolutionHelpRequested,
@@ -37,20 +36,9 @@ describe("issue 78851 model resolution profiler CLI", () => {
   });
 
   it("rejects invalid arguments even when help is also requested", () => {
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        "tsx",
-        "scripts/perf/issue-78851-model-resolution.ts",
-        "--wat",
-        "--help",
-      ],
-      { encoding: "utf8" },
+    expect(() => parseIssue78851ModelResolutionOptions(["--wat", "--help"])).toThrow(
+      "Unknown argument: --wat",
     );
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Unknown argument: --wat");
   });
 
   it("rejects duplicate value flags before starting the profiler", () => {

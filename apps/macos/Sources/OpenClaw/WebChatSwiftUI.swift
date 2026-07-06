@@ -263,6 +263,15 @@ final class WebChatSwiftUIWindowController {
             onThinkingLevelChanged: { level in
                 UserDefaults.standard.set(level, forKey: webChatThinkingLevelDefaultsKey)
             })
+        Task { @MainActor [weak vm] in
+            let pushes = await GatewayConnection.shared.subscribe()
+            for await push in pushes {
+                guard let vm else { return }
+                guard case .snapshot = push else { continue }
+                let activeAgentId = await GatewayConnection.shared.cachedDefaultAgentId()
+                vm.syncActiveAgentId(activeAgentId)
+            }
+        }
         let accent = Self.color(fromHex: AppStateStore.shared.seamColorHex)
         self.hosting = NSHostingController(rootView: OpenClawChatView(
             viewModel: vm,

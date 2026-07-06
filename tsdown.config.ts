@@ -1,7 +1,7 @@
 // tsdown config defines package build entrypoints and output options.
 import fs from "node:fs";
 import path from "node:path";
-import { defineConfig, type UserConfig } from "tsdown";
+import type { UserConfig } from "tsdown";
 import {
   collectBundledPluginBuildEntries,
   NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
@@ -664,7 +664,7 @@ function buildUnifiedDistEntries(): Record<string, string> {
   };
 }
 
-export default defineConfig([
+const configs = [
   nodeBuildConfig({
     clean: true,
     dts: TSDOWN_DECLARATIONS,
@@ -792,4 +792,6 @@ export default defineConfig([
       dts: { neverBundle: shouldNeverBundleDependency },
     },
   }),
-]);
+] satisfies UserConfig[];
+
+export default configs;

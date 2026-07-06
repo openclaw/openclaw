@@ -309,6 +309,66 @@
 }
 
 /* ===========================================
+   Connection Banner (gateway offline / reconnecting)
+   =========================================== */
+
+.connection-banner {
+  position: sticky;
+  top: 0;
+  z-index: 11;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0 calc(-1 * var(--shell-pad)) 0;
+  border-radius: 0;
+  border-left: none;
+  border-right: none;
+  font-weight: 500;
+  padding: 10px 16px;
+}
+
+.connection-banner__spinner {
+  display: inline-flex;
+  align-items: center;
+}
+
+.connection-banner__spinner svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  animation: connection-banner-spin 1s linear infinite;
+}
+
+@keyframes connection-banner-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.connection-banner__hint {
+  margin-left: 6px;
+  font-weight: 400;
+  opacity: 0.75;
+}
+
+.connection-banner .connection-banner__retry {
+  border-color: currentColor;
+  color: currentColor;
+  font-size: 12px;
+  padding: 4px 12px;
+}
+
+.connection-banner .connection-banner__retry:hover:not(:disabled) {
+  border-color: currentColor;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+}
+
+/* ===========================================
    Cards - Refined with depth
    =========================================== */
 
@@ -890,6 +950,226 @@
   transform: translateX(0);
 }
 
+.github-link-hovercard {
+  position: fixed;
+  z-index: 1990;
+  width: min(440px, calc(100vw - 24px));
+  min-height: 112px;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 88%, transparent);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--card) 96%, var(--bg) 4%);
+  box-shadow:
+    0 22px 54px rgba(0, 0, 0, 0.34),
+    0 0 0 1px rgba(255, 255, 255, 0.035);
+  color: var(--text);
+  font-family: var(--font-body);
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-5px) scale(0.99);
+  transform-origin: bottom left;
+  transition:
+    opacity var(--duration-normal) var(--ease-out),
+    transform var(--duration-normal) var(--ease-out);
+}
+
+.github-link-hovercard[data-side="bottom"] {
+  transform: translateY(5px) scale(0.99);
+  transform-origin: top left;
+}
+
+.github-link-hovercard[data-open="true"] {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.github-link-hovercard__header,
+.github-link-hovercard__footer {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.github-link-hovercard__header {
+  gap: 9px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.github-link-hovercard__state {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  font-weight: 600;
+}
+
+.github-link-hovercard__state[data-tone="open"] {
+  color: var(--ok);
+}
+
+.github-link-hovercard__state[data-tone="danger"] {
+  color: var(--danger);
+}
+
+.github-link-hovercard__state[data-tone="purple"] {
+  color: #a78bfa;
+}
+
+:root[data-theme-mode="light"] .github-link-hovercard__state[data-tone="purple"] {
+  color: #7c3aed;
+}
+
+.github-link-hovercard__state-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 14%, transparent);
+}
+
+.github-link-hovercard__repo {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.github-link-hovercard__time {
+  flex: 0 0 auto;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.github-link-hovercard__title {
+  margin: 15px 0 17px;
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-lg);
+  font-weight: 650;
+  letter-spacing: -0.012em;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.github-link-hovercard__footer {
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.github-link-hovercard__author,
+.github-link-hovercard__metrics {
+  display: inline-flex;
+  align-items: center;
+}
+
+.github-link-hovercard__author {
+  min-width: 0;
+  gap: 8px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-md);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.github-link-hovercard__avatar {
+  width: 25px;
+  height: 25px;
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 82%, transparent);
+  border-radius: 50%;
+  background: var(--bg-muted);
+  object-fit: cover;
+}
+
+.github-link-hovercard__metrics {
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.github-link-hovercard__metric {
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-muted) 82%, transparent);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.github-link-hovercard__metric--additions {
+  color: var(--ok);
+}
+
+.github-link-hovercard__metric--deletions {
+  color: var(--danger);
+}
+
+.github-link-hovercard__loading,
+.github-link-hovercard__unavailable {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 80px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.github-link-hovercard__loading::before {
+  width: 18px;
+  height: 18px;
+  margin-right: 9px;
+  border: 2px solid color-mix(in srgb, var(--muted) 25%, transparent);
+  border-top-color: var(--muted);
+  border-radius: 50%;
+  content: "";
+  animation: github-hovercard-spin 0.8s linear infinite;
+}
+
+@keyframes github-hovercard-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 520px) {
+  .github-link-hovercard {
+    padding: 14px;
+  }
+
+  .github-link-hovercard__header {
+    flex-wrap: wrap;
+  }
+
+  .github-link-hovercard__time {
+    margin-left: 0;
+  }
+
+  .github-link-hovercard__title {
+    margin: 13px 0 15px;
+  }
+
+  .github-link-hovercard__footer {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .github-link-hovercard {
+    transition: none;
+  }
+
+  .github-link-hovercard__loading::before {
+    animation: none;
+  }
+}
+
 .btn--ghost {
   border-color: transparent;
   background: transparent;
@@ -938,6 +1218,11 @@
   transition:
     border-color var(--duration-fast) ease,
     box-shadow var(--duration-fast) ease;
+}
+
+.field input:not([type="checkbox"]):not([type="radio"]),
+.field select {
+  height: 38px;
 }
 
 @media (hover: none) and (pointer: coarse) {
@@ -1793,6 +2078,16 @@
     color-mix(in srgb, var(--danger) 8%, var(--bg-elevated)) 100%
   );
   color: color-mix(in srgb, var(--danger) 82%, var(--text-strong));
+}
+
+.callout.warn {
+  border-color: color-mix(in srgb, var(--warn) 34%, var(--border));
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--warn) 14%, var(--bg-elevated)) 0%,
+    color-mix(in srgb, var(--warn) 8%, var(--bg-elevated)) 100%
+  );
+  color: color-mix(in srgb, var(--warn) 82%, var(--text-strong));
 }
 
 .callout.info {
@@ -2913,6 +3208,68 @@
   align-items: flex-start;
   min-width: 0;
   gap: 6px;
+}
+
+.session-groupby {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.session-groupby__label {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.session-groupby__select {
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.session-group-row td {
+  padding: 6px 12px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+}
+
+.session-group-row__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+
+.session-group-row__icon {
+  display: inline-flex;
+  align-items: center;
+}
+
+.session-group-row__icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.session-group-row__count {
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.sessions-table tr[draggable="true"] {
+  cursor: grab;
+}
+
+.session-drop-target--active td {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
 .session-status-badge {
@@ -6685,4 +7042,55 @@ details[open] > .ov-expandable-toggle::after {
     animation: none;
     border-color: var(--accent);
   }
+}
+
+/* ===========================================
+   Hover Marquee
+   =========================================== */
+
+/* Truncated single-line labels that slide on hover to reveal the clipped
+   tail. lib/hover-marquee.ts measures the overflow and sets the custom
+   properties; without it the label stays a plain ellipsized span. Animates
+   text-indent so the resting ellipsis keeps rendering (text-overflow shows
+   no "…" for atomic inline children, ruling out a transformed wrapper). */
+.hover-marquee {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: text-indent 180ms ease-out;
+}
+
+.hover-marquee--scrolling {
+  text-overflow: clip;
+  text-indent: var(--hover-marquee-shift, 0);
+  transition-duration: var(--hover-marquee-duration, 600ms);
+  transition-timing-function: linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hover-marquee {
+    transition: none;
+  }
+
+  .hover-marquee--scrolling {
+    text-overflow: ellipsis;
+    text-indent: 0;
+  }
+}
+
+/* ---- Plugin tab embeds (plugin-served panels) ---- */
+
+.plugin-tab-embed {
+  display: flex;
+  min-height: 0;
+  height: 100%;
+}
+
+.plugin-tab-embed__frame {
+  flex: 1;
+  min-height: 480px;
+  width: 100%;
+  border: none;
+  border-radius: 10px;
+  background: var(--card);
 }

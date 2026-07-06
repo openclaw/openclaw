@@ -236,6 +236,13 @@ const resolveDateInterpretation = (params: {
   return { mode: "utc" };
 };
 
+const resolveDayBucketUtcOffsetMinutes = (interpretation: DateInterpretation) =>
+  interpretation.mode === "gateway"
+    ? undefined
+    : interpretation.mode === "specific"
+      ? interpretation.utcOffsetMinutes
+      : 0;
+
 /**
  * Parse a date string (YYYY-MM-DD) to start-of-day timestamp based on interpretation mode.
  * Returns undefined if invalid.
@@ -742,11 +749,13 @@ function mergeDailyModelRows(
 async function loadCostUsageSummaryCached(params: {
   startMs: number;
   endMs: number;
+  dailyUtcOffsetMinutes?: number;
   config: OpenClawConfig;
   agentId?: string;
   agentScope?: "all";
 }): Promise<CostUsageSummary> {
-  const cacheKey = `${params.agentScope === "all" ? "all" : `agent:${params.agentId ?? "__default__"}`}:${params.startMs}-${params.endMs}`;
+  const dailyOffsetKey = params.dailyUtcOffsetMinutes ?? "gateway";
+  const cacheKey = `${params.agentScope === "all" ? "all" : `agent:${params.agentId ?? "__default__"}`}:${params.startMs}-${params.endMs}:${dailyOffsetKey}`;
   const now = Date.now();
   const cached = costUsageCache.get(cacheKey);
   if (
@@ -771,11 +780,13 @@ async function loadCostUsageSummaryCached(params: {
       ? loadAllAgentCostUsageSummary({
           startMs: params.startMs,
           endMs: params.endMs,
+          dailyUtcOffsetMinutes: params.dailyUtcOffsetMinutes,
           config: params.config,
         })
       : loadCostUsageSummaryFromCache({
           startMs: params.startMs,
           endMs: params.endMs,
+          dailyUtcOffsetMinutes: params.dailyUtcOffsetMinutes,
           config: params.config,
           agentId: params.agentId,
           requestRefresh: true,
@@ -816,6 +827,7 @@ async function loadCostUsageSummaryCached(params: {
 async function loadAllAgentCostUsageSummary(params: {
   startMs: number;
   endMs: number;
+  dailyUtcOffsetMinutes?: number;
   config: OpenClawConfig;
 }): Promise<CostUsageSummary> {
   const agentIds = listAgentsForGateway(params.config).agents.map((agent) =>
@@ -826,6 +838,7 @@ async function loadAllAgentCostUsageSummary(params: {
       loadCostUsageSummaryFromCache({
         startMs: params.startMs,
         endMs: params.endMs,
+        dailyUtcOffsetMinutes: params.dailyUtcOffsetMinutes,
         config: params.config,
         agentId,
         requestRefresh: true,
@@ -908,6 +921,10 @@ export const usageHandlers: GatewayRequestHandlers = {
     respond(true, summary, undefined);
   },
   "usage.cost": async ({ respond, params, context }) => {
+    const dateInterpretation = resolveDateInterpretation({
+      mode: params?.mode,
+      utcOffset: params?.utcOffset,
+    });
     const dateRange = resolveDateRange({
       startDate: params?.startDate,
       endDate: params?.endDate,
@@ -927,6 +944,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     const summary = await loadCostUsageSummaryCached({
       startMs,
       endMs,
+      dailyUtcOffsetMinutes: resolveDayBucketUtcOffsetMinutes(dateInterpretation),
       config,
       agentId,
       agentScope,
@@ -960,6 +978,9 @@ export const usageHandlers: GatewayRequestHandlers = {
     }
     const config = context.getRuntimeConfig();
     const { startMs, endMs } = dateRange.value;
+    const dailyUtcOffsetMinutes = resolveDayBucketUtcOffsetMinutes(
+      resolveDateInterpretation({ mode: p.mode, utcOffset: p.utcOffset }),
+    );
     const limit = typeof p.limit === "number" && Number.isFinite(p.limit) ? p.limit : 50;
     const includeContextWeight = p.includeContextWeight ?? false;
     const specificKey = normalizeOptionalString(p.key) ?? null;
@@ -1227,6 +1248,7 @@ export const usageHandlers: GatewayRequestHandlers = {
           agentId,
           startMs,
           endMs,
+          dailyUtcOffsetMinutes,
         }),
       })),
       limit: SESSIONS_USAGE_AGENT_LOAD_CONCURRENCY,

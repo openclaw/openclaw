@@ -26,6 +26,7 @@ import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSessionStoreEntry } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveSilentReplySettings } from "../../config/silent-reply.js";
@@ -86,6 +87,7 @@ import { hasInboundAudio, hasInboundMedia } from "./inbound-media.js";
 import {
   buildInboundMetaSystemPrompt,
   buildInboundUserContextPrefix,
+  formatActiveGoalContext,
   resolveInboundUserContextPromptJoiner,
 } from "./inbound-meta.js";
 import type { createModelSelectionState } from "./model-selection.js";
@@ -754,17 +756,38 @@ export async function runPreparedReply(
     ? (bareResetPromptState?.prompt ?? "")
     : stripPromptThinkingDirectives(baseBody);
   const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
-  const inboundUserContext = buildInboundUserContextPrefix(
-    isNewSession
-      ? {
-          ...sessionCtx,
-          ...(normalizeOptionalString(sessionCtx.ThreadHistoryBody)
-            ? { InboundHistory: undefined, ThreadStarterBody: undefined }
-            : {}),
-        }
-      : { ...sessionCtx, ThreadStarterBody: undefined },
+  const inboundUserContextSessionCtx = isNewSession
+    ? {
+        ...sessionCtx,
+        ...(normalizeOptionalString(sessionCtx.ThreadHistoryBody)
+          ? { InboundHistory: undefined, ThreadStarterBody: undefined }
+          : {}),
+      }
+    : { ...sessionCtx, ThreadStarterBody: undefined };
+  let goalContextSessionEntry = isHeartbeat
+    ? undefined
+    : (sessionStore?.[sessionKey] ?? sessionEntryHandle?.getCurrent() ?? sessionEntry);
+  let activeGoalContext = formatActiveGoalContext(goalContextSessionEntry);
+  let inboundUserContext = buildInboundUserContextPrefix(
+    inboundUserContextSessionCtx,
     envelopeOptions,
+    goalContextSessionEntry,
   );
+  const refreshGoalContextAfterAdmissionWait = () => {
+    if (isHeartbeat) {
+      return;
+    }
+    goalContextSessionEntry =
+      storePath && sessionKey
+        ? loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" })
+        : (sessionEntryHandle?.getCurrent() ?? sessionStore?.[sessionKey] ?? sessionEntry);
+    activeGoalContext = formatActiveGoalContext(goalContextSessionEntry);
+    inboundUserContext = buildInboundUserContextPrefix(
+      inboundUserContextSessionCtx,
+      envelopeOptions,
+      goalContextSessionEntry,
+    );
+  };
   const inboundUserContextPromptJoiner = resolveInboundUserContextPromptJoiner(sessionCtx);
   const hasUserBody =
     baseBodyFinal.trim().length > 0 ||
@@ -791,6 +814,7 @@ export async function runPreparedReply(
     baseBody: baseBodyFinal,
     hasUserBody,
     inboundUserContext,
+    activeGoalContext,
     inboundUserContextPromptJoiner,
     isBareSessionReset,
     startupAction,
@@ -873,6 +897,7 @@ export async function runPreparedReply(
       prefixedBody: prefixedBodyCore,
       hasUserBody,
       inboundUserContext,
+      activeGoalContext,
       inboundUserContextPromptJoiner,
       isBareSessionReset,
       startupAction,
@@ -1223,6 +1248,8 @@ export async function runPreparedReply(
         preparedSessionState = resolvePreparedSessionState();
         ({ authProfileId, authProfileIdSource } = await resolveRuntimeAuthProfile());
         preparedSessionState = resolvePreparedSessionState();
+        // The interrupted run may have stopped or started a goal while admission waited.
+        refreshGoalContextAfterAdmissionWait();
         ({
           prefixedCommandBody,
           queuedBody,

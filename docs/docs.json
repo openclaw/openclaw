@@ -1273,6 +1273,7 @@
                   "plugins/codex-harness",
                   "plugins/codex-native-plugins",
                   "plugins/codex-computer-use",
+                  "plugins/logbook",
                   "plugins/google-meet",
                   "plugins/workboard",
                   "plugins/webhooks",

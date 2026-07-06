@@ -2316,6 +2316,7 @@ export async function runHeartbeatOnce(opts: {
 
 export function startHeartbeatRunner(opts: {
   cfg?: OpenClawConfig;
+  readCurrentConfig?: () => OpenClawConfig;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   runOnce?: typeof runHeartbeatOnce;
@@ -2331,6 +2332,7 @@ export function startHeartbeatRunner(opts: {
     timer: null as NodeJS.Timeout | null,
     stopped: false,
   };
+  const readCurrentConfig = opts.readCurrentConfig ?? (() => state.cfg);
   let initialized = false;
   let heartbeatTimeoutOverflowWarned = false;
 
@@ -2570,6 +2572,7 @@ export function startHeartbeatRunner(opts: {
     const isInterval = reason === "interval";
     const startedAt = Date.now();
     const now = startedAt;
+    const wakeConfig = readCurrentConfig();
     let ran = false;
     // Track retryable busy skips so we can skip re-arm in finally — the wake
     // layer handles retry for this case (DEFAULT_RETRY_MS = 1 s).
@@ -2589,10 +2592,10 @@ export function startHeartbeatRunner(opts: {
         }
         try {
           const res = await runOnce({
-            cfg: state.cfg,
+            cfg: wakeConfig,
             agentId: targetAgent.agentId,
             heartbeat: resolveHeartbeatForWake({
-              cfg: state.cfg,
+              cfg: wakeConfig,
               agentId: targetAgent.agentId,
               configuredHeartbeat: targetAgent.heartbeat,
               requestedHeartbeat,
@@ -2654,7 +2657,7 @@ export function startHeartbeatRunner(opts: {
         let res: HeartbeatRunResult;
         try {
           res = await runOnce({
-            cfg: state.cfg,
+            cfg: wakeConfig,
             agentId: agent.agentId,
             heartbeat: agent.heartbeat,
             source: params.source,
@@ -2687,13 +2690,13 @@ export function startHeartbeatRunner(opts: {
         let agentRan = res.status === "ran";
 
         const defaultSessionKey = resolveHeartbeatSession(
-          state.cfg,
+          wakeConfig,
           agent.agentId,
           agent.heartbeat,
         ).sessionKey;
         const dueSessionKeys = canHeartbeatDeliverCommitments(agent.heartbeat)
           ? await listDueCommitmentSessionKeys({
-              cfg: state.cfg,
+              cfg: wakeConfig,
               agentId: agent.agentId,
               nowMs: now,
               limit: 10,
@@ -2706,7 +2709,7 @@ export function startHeartbeatRunner(opts: {
           let commitmentRes: HeartbeatRunResult;
           try {
             commitmentRes = await runOnce({
-              cfg: state.cfg,
+              cfg: wakeConfig,
               agentId: agent.agentId,
               heartbeat: agent.heartbeat,
               runScope: "commitment-only",

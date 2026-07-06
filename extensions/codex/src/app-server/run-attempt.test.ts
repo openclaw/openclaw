@@ -2443,8 +2443,12 @@ describe("runCodexAppServerAttempt", () => {
     const sessionManager = SessionManager.open(sessionFile);
     const codexMirrorUserMessage = {
       ...userMessage("codex mirrored user echo", bindingUpdatedAt + 1_000),
-      idempotencyKey: "codex-app-server:user-1",
-    } as ReturnType<typeof userMessage> & { idempotencyKey: string };
+      idempotencyKey: "client-run:user",
+      __openclaw: { mirrorIdentity: "turn-1:prompt", mirrorOrigin: "codex-app-server" },
+    } as ReturnType<typeof userMessage> & {
+      idempotencyKey: string;
+      __openclaw: { mirrorIdentity: string; mirrorOrigin: string };
+    };
     sessionManager.appendMessage(codexMirrorUserMessage);
     const codexMirrorAssistantMessage = {
       ...assistantMessage("codex mirrored assistant echo", bindingUpdatedAt + 2_000),

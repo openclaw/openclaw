@@ -124,7 +124,11 @@ import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { chatHandlers } from "./chat.js";
 import { loadOptionalServerMethodModelCatalog } from "./optional-model-catalog.js";
-import { hasTrackedActiveSessionRun, hasVisibleActiveSessionRun } from "./session-active-runs.js";
+import {
+  hasTrackedActiveSessionRun,
+  hasVisibleActiveSessionRun,
+  resolveVisibleActiveSessionRunState,
+} from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type {
   GatewayClient,
@@ -815,18 +819,22 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         const sessions = measureDiagnosticsTimelineSpanSync(
           "gateway.sessions.list.active_run_flags",
           () => {
-            return result.sessions.map((session) =>
-              Object.assign({}, session, {
-                hasActiveRun: hasVisibleActiveSessionRun({
-                  context,
-                  requestedKey: session.key,
-                  canonicalKey: session.key,
-                  sessionId: session.sessionId,
-                  ...(session.key === "global" && p.agentId ? { agentId: p.agentId } : {}),
-                  defaultAgentId: resolveDefaultAgentId(cfg),
-                }),
-              }),
-            );
+            return result.sessions.map((session) => {
+              const activeRunState = resolveVisibleActiveSessionRunState({
+                context,
+                requestedKey: session.key,
+                canonicalKey: session.key,
+                sessionId: session.sessionId,
+                ...(session.key === "global" && p.agentId ? { agentId: p.agentId } : {}),
+                defaultAgentId: resolveDefaultAgentId(cfg),
+              });
+              return Object.assign({}, session, {
+                hasActiveRun: activeRunState.active,
+                ...(activeRunState.runIds.length > 0
+                  ? { activeRunIds: activeRunState.runIds }
+                  : {}),
+              });
+            });
           },
           {
             config: cfg,

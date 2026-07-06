@@ -243,7 +243,8 @@
     }
   ],
   "contracts": {
-    "mediaUnderstandingProviders": ["anthropic"]
+    "mediaUnderstandingProviders": ["anthropic"],
+    "usageProviders": ["anthropic"]
   },
   "mediaUnderstandingProviderMetadata": {
     "anthropic": {

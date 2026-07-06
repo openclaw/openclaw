@@ -7,6 +7,7 @@ export function buildGatewaySessionEventFields(params: {
   displayName?: string;
   parentSessionKey?: string;
   hasActiveRun?: boolean;
+  activeRunIds?: string[];
 }): Record<string, unknown> {
   const { sessionRow } = params;
   const omitUnscopedGlobalGoal = sessionRow.key === "global" && !params.agentId;
@@ -32,6 +33,8 @@ export function buildGatewaySessionEventFields(params: {
     subagentRole: sessionRow.subagentRole,
     subagentControlScope: sessionRow.subagentControlScope,
     label: params.label ?? sessionRow.label ?? null,
+    // Explicit null so subscribed clients drop a cleared category during merge-reconcile.
+    category: sessionRow.category ?? null,
     displayName: params.displayName ?? sessionRow.displayName ?? null,
     deliveryContext: sessionRow.deliveryContext,
     parentSessionKey: params.parentSessionKey ?? sessionRow.parentSessionKey,
@@ -61,6 +64,7 @@ export function buildGatewaySessionEventFields(params: {
     model: sessionRow.model,
     status: sessionRow.status,
     ...(params.hasActiveRun === undefined ? {} : { hasActiveRun: params.hasActiveRun }),
+    ...(params.activeRunIds === undefined ? {} : { activeRunIds: params.activeRunIds }),
     startedAt: sessionRow.startedAt,
     endedAt: sessionRow.endedAt,
     runtimeMs: sessionRow.runtimeMs,

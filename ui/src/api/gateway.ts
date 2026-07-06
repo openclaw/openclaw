@@ -173,6 +173,17 @@ function isTrustedRetryEndpoint(url: string): boolean {
   }
 }
 
+export type GatewayControlUiPluginTab = {
+  pluginId: string;
+  id: string;
+  label: string;
+  description?: string;
+  icon?: string;
+  path?: string;
+  group?: "control" | "agent";
+  order?: number;
+};
+
 export type GatewayHelloOk = {
   type: "hello-ok";
   protocol: number;
@@ -188,6 +199,7 @@ export type GatewayHelloOk = {
     scopes: string[];
     issuedAtMs?: number;
   };
+  controlUiTabs?: GatewayControlUiPluginTab[];
   pluginSurfaceUrls?: Record<string, string>;
   policy?: { tickIntervalMs?: number };
 };
@@ -286,7 +298,12 @@ export type GatewayBrowserClientOptions = {
   instanceId?: string;
   onHello?: (hello: GatewayHelloOk) => void;
   onEvent?: (evt: GatewayEventFrame) => void;
-  onClose?: (info: { code: number; reason: string; error?: GatewayErrorInfo }) => void;
+  onClose?: (info: {
+    code: number;
+    reason: string;
+    error?: GatewayErrorInfo;
+    willRetry: boolean;
+  }) => void;
   onGap?: (info: { expected: number; received: number }) => void;
   onRequestTiming?: (timing: GatewayRequestTiming) => void;
   onConnectTiming?: (timing: GatewayConnectTiming) => void;
@@ -537,6 +554,9 @@ export class GatewayBrowserClient {
             ? "security error"
             : "websocket error",
         error,
+        // Constructor failures (bad URL, mixed content) never resolve on
+        // their own; no reconnect is scheduled for them.
+        willRetry: false,
       });
       return;
     }
@@ -567,15 +587,16 @@ export class GatewayBrowserClient {
         return;
       }
       this.flushPending(new Error(`gateway closed (${ev.code}): ${reason}`));
-      this.notifyClose({ code: ev.code, reason, error: connectError });
       const connectErrorCode = resolveGatewayErrorDetailCode(connectError);
-      if (connectErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH) {
-        if (this.pendingDeviceTokenRetry) {
-          this.scheduleReconnect();
-        }
-        return;
-      }
-      if (!isNonRecoverableAuthError(connectError)) {
+      // willRetry drives both the reconnect scheduling below and the app
+      // layer's "still reconnecting vs gave up" rendering; keep them in sync.
+      const willRetry =
+        !this.closed &&
+        (connectErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH
+          ? this.pendingDeviceTokenRetry
+          : !isNonRecoverableAuthError(connectError));
+      this.notifyClose({ code: ev.code, reason, error: connectError, willRetry });
+      if (willRetry) {
         this.scheduleReconnect();
       }
     });
@@ -973,7 +994,12 @@ export class GatewayBrowserClient {
     }
   }
 
-  private notifyClose(info: { code: number; reason: string; error?: GatewayErrorInfo }): void {
+  private notifyClose(info: {
+    code: number;
+    reason: string;
+    error?: GatewayErrorInfo;
+    willRetry: boolean;
+  }): void {
     try {
       this.opts.onClose?.(info);
     } catch (err) {

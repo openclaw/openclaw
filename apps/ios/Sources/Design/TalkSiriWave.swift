@@ -85,9 +85,13 @@ struct TalkSiriWaveView: View {
         // across the line instead of scrolling off-screen.
         let lobes: [(A: Double, k: Double, t: Double)] = (0..<3).map { index in
             let f = Double(index)
-            let amp = 0.30 + 0.70 * (0.5 + 0.5 * sin(time * (0.9 + 0.23 * f) + seed * 2.4 + f * 2.1))
+            let ampFrequency = 0.9 + 0.23 * f
+            let ampPhase = time * ampFrequency + seed * 2.4 + f * 2.1
+            let amp = 0.30 + 0.70 * (0.5 + 0.5 * sin(ampPhase))
             let k = 0.62 + 0.11 * f
-            let t = 2.8 * sin(time * (0.45 + 0.17 * f) + seed + f * 1.9)
+            let driftFrequency = 0.45 + 0.17 * f
+            let driftPhase = time * driftFrequency + seed + f * 1.9
+            let t = 2.8 * sin(driftPhase)
             return (A: amp, k: k, t: t)
         }
 

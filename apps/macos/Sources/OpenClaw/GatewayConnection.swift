@@ -352,6 +352,12 @@ actor GatewayConnection {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    func cachedDefaultAgentId() -> String? {
+        guard let snapshot = self.lastSnapshot else { return nil }
+        let trimmed = self.sessionDefaultString(snapshot.snapshot.sessiondefaults, key: "defaultAgentId")
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     func cachedGatewayVersion() -> String? {
         guard let snapshot = self.lastSnapshot else { return nil }
         let raw = snapshot.server["version"]?.value as? String

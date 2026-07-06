@@ -376,10 +376,15 @@ describe("openclaw state database", () => {
       },
       failureAlert: { mode: "announce", channel: "discord", to: "ops", after: 2 },
     });
+    const projectedJobJson = JSON.stringify({ delivery: { threadId: 1008013 } });
     db.exec(`
       CREATE TABLE cron_jobs (
         store_key TEXT NOT NULL,
         job_id TEXT NOT NULL,
+        name TEXT NOT NULL DEFAULT '',
+        schedule_kind TEXT NOT NULL DEFAULT 'manual',
+        payload_kind TEXT NOT NULL DEFAULT 'message',
+        delivery_thread_id TEXT,
         job_json TEXT NOT NULL,
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (store_key, job_id)
@@ -389,6 +394,20 @@ describe("openclaw state database", () => {
       `INSERT INTO cron_jobs (store_key, job_id, job_json, updated_at)
          VALUES (?, ?, ?, ?)`,
     ).run(path.join(stateDir, "cron", "jobs.json"), "legacy-job", jobJson, 456);
+    db.prepare(
+      `INSERT INTO cron_jobs (
+         store_key, job_id, name, schedule_kind, payload_kind, delivery_thread_id, job_json, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      path.join(stateDir, "cron", "jobs.json"),
+      "already-projected-job",
+      "Already projected",
+      "every",
+      "agentTurn",
+      null,
+      projectedJobJson,
+      456,
+    );
     db.close();
 
     const database = openOpenClawStateDatabase({
@@ -438,6 +457,15 @@ describe("openclaw state database", () => {
       failure_delivery_mode: null,
       failure_delivery_to: "https://example.invalid/hook",
     });
+    expect(
+      database.db
+        .prepare(
+          `SELECT delivery_thread_id, delivery_thread_id_type
+             FROM cron_jobs
+            WHERE job_id = ?`,
+        )
+        .get("already-projected-job"),
+    ).toEqual({ delivery_thread_id: "1008013", delivery_thread_id_type: "number" });
   });
 
   it("opens databases with early cron run-log tables before creating cron indexes", () => {

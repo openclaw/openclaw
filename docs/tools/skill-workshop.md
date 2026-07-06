@@ -50,6 +50,25 @@ Only a `pending` proposal can be revised, applied, rejected, or quarantined.
 Ask the agent for the skill you want; it calls `skill_workshop` and returns a
 proposal id.
 
+### Learn from recent work
+
+Use `/learn` to turn the current conversation or named sources into one
+standards-guided skill proposal:
+
+```text
+/learn
+/learn docs/runbook.md and https://example.com/guide; focus on recovery
+```
+
+With no request, `/learn` asks the agent to distill the reusable workflow from
+the current conversation. With a request, the agent treats paths, URLs, pasted
+notes, and conversation references as sources while honoring focus, scope, and
+naming requirements. It gathers the sources with its existing tools, then calls
+`skill_workshop` with `action: "create"`.
+
+The resulting proposal stays `pending`; `/learn` never applies it. Review and
+apply it through the normal approval flow or with `openclaw skills workshop`.
+
 Create:
 
 ```text
@@ -73,6 +92,14 @@ Apply the morning-catchup proposal.
 Agent-initiated `apply`, `reject`, and `quarantine` show an approval prompt by
 default. Set `skills.workshop.approvalPolicy` to `"auto"` to skip it in
 trusted environments.
+
+The prompt identifies the proposal id and target skill, and shows the proposal
+description, support-file count, and body size. Approval requests are bounded
+to finish before the agent tool watchdog. If no decision arrives before the
+prompt expires, the lifecycle action does not run: the proposal stays pending
+and unchanged. Decide later in the Skill Workshop UI or run
+`openclaw skills workshop apply|reject|quarantine <proposal-id>`. Agents should
+not retry an expired lifecycle action in a loop.
 
 ## CLI
 

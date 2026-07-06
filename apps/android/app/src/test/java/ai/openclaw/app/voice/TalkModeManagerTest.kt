@@ -18,6 +18,7 @@ import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -83,6 +84,20 @@ class TalkModeManagerTest {
     }
 
   @Test
+  fun stopAllCaptureClearsPttWhenContinuousModeIsDisabled() {
+    val manager = createManager()
+    setPrivateField(manager, "activePttCaptureId", "capture-1")
+    setMutableStateFlow(manager, "_isListening", true)
+
+    manager.stopAllCapture()
+
+    assertNull(readPrivateField(manager, "activePttCaptureId"))
+    assertFalse(manager.isEnabled.value)
+    assertFalse(manager.isListening.value)
+    assertEquals("Off", manager.statusText.value)
+  }
+
+  @Test
   fun duplicateFinalForPendingTalkRunDoesNotStartAllResponseTts() {
     val manager = createManager()
     val final = CompletableDeferred<Boolean>()
@@ -133,6 +148,20 @@ class TalkModeManagerTest {
 
     assertEquals(0L, playbackGeneration(manager).get())
     assertTrue(realtimeToolRuns(manager).isEmpty())
+  }
+
+  @Test
+  fun realtimeToolFinalBeforeRunMetadataIsHeldForToolCompletion() {
+    val manager = createManager()
+
+    manager.ttsOnAllResponses = true
+    setPrivateField(manager, "realtimeSessionId", "relay-1")
+    pendingRealtimeToolCalls(manager).add("call-1")
+
+    manager.handleGatewayEvent("chat", chatFinalPayload(runId = "run-tool", text = "tool result"))
+
+    assertEquals(0L, playbackGeneration(manager).get())
+    assertTrue(pendingRealtimeToolCompletions(manager).containsKey("run-tool"))
   }
 
   @Test
@@ -545,6 +574,12 @@ class TalkModeManagerTest {
 
   @Suppress("UNCHECKED_CAST")
   private fun realtimeToolRuns(manager: TalkModeManager) = readPrivateField(manager, "realtimeToolRuns") as MutableMap<String, RealtimeToolRun>
+
+  @Suppress("UNCHECKED_CAST")
+  private fun pendingRealtimeToolCalls(manager: TalkModeManager) = readPrivateField(manager, "pendingRealtimeToolCalls") as MutableSet<String>
+
+  @Suppress("UNCHECKED_CAST")
+  private fun pendingRealtimeToolCompletions(manager: TalkModeManager) = readPrivateField(manager, "pendingRealtimeToolCompletions") as MutableMap<String, Any>
 
   private fun setPrivateField(
     target: Any,

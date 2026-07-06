@@ -434,6 +434,13 @@
                   ],
                   "description": "Agent id, or null to keep it unset"
                 },
+                "declarationKey": {
+                  "description": "Idempotent declaration identity key",
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "type": "string"
+                },
                 "deleteAfterRun": {
                   "description": "Delete after first run",
                   "type": "boolean"
@@ -509,6 +516,11 @@
                   "description": "Human description",
                   "type": "string"
                 },
+                "displayName": {
+                  "description": "Human-readable declarative job label",
+                  "maxLength": 200,
+                  "type": "string"
+                },
                 "enabled": {
                   "type": "boolean"
                 },
@@ -551,6 +563,18 @@
                 "name": {
                   "description": "Job name",
                   "type": "string"
+                },
+                "owner": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agentId": {
+                      "type": "string"
+                    },
+                    "sessionKey": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
                 },
                 "payload": {
                   "additionalProperties": true,
@@ -813,6 +837,18 @@
                 },
                 "description": {
                   "type": "string"
+                },
+                "displayName": {
+                  "anyOf": [
+                    {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Human-readable label; null clears it"
                 },
                 "enabled": {
                   "type": "boolean"
