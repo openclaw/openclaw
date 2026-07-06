@@ -22,13 +22,17 @@ afterEach(() => {
 type MockChild = ChildProcessWithoutNullStreams & { stdout: PassThrough; stderr: PassThrough };
 
 function createChild(): MockChild {
-  return Object.assign(new EventEmitter(), {
+  const child = Object.assign(new EventEmitter(), {
     stdin: new PassThrough(),
     stdout: new PassThrough(),
     stderr: new PassThrough(),
     killed: false,
-    kill: vi.fn(() => true),
   }) as unknown as MockChild;
+  child.kill = vi.fn(() => {
+    child.killed = true;
+    return true;
+  });
+  return child;
 }
 
 describe("grep tool stream errors", () => {
