@@ -828,10 +828,13 @@ async function bootstrapCliProxyCaptureAndDispatcher(
   ] = await startupTrace.measure("proxy-imports", () =>
     Promise.all([import("../proxy-capture/runtime.js"), import("../proxy-capture/coverage.js")]),
   );
-  initializeDebugProxyCapture("cli");
+  // Register finalize before initialize opens the state DB: exit listeners run
+  // in registration order, so endSession writes on the still-open handle and
+  // the state DB cache's own exit hook then closes/truncates it afterwards.
   process.once("exit", () => {
     finalizeDebugProxyCapture();
   });
+  initializeDebugProxyCapture("cli");
   if (options.ensureDispatcher !== false) {
     await startupTrace.measure("proxy-dispatcher", () => ensureCliEnvProxyDispatcher());
   }
