@@ -22,6 +22,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - **Small-context compaction:** cap the effective reserve against the known model context window so small local models do not enter compaction from the first token. (#100621) Thanks @vincentkoc.
+- **Exec output Unicode safety:** preserve complete Unicode scalar values across bounded exec output, background completion notifications, polls, and node/gateway approval follow-ups. (#98721) Thanks @ZengWen-DT.
 - **Plugin install diagnostics:** suppress the misleading hook-pack fallback after plugin install failures only when the hook manifest is absent, while preserving actionable malformed hook-pack errors. (#100554) Thanks @vincentkoc.
 - **Config validation diagnostics:** emit each unchanged sanitized validation-warning payload once per config path, reset deduplication after a clean validation, and preserve the warning fingerprint across transient invalid reads and failed refreshes. (#100569, #25574) Thanks @vincentkoc.
 - **Config size-drop guard:** compare writes against canonical bytes for parseable object configs instead of raw BOM and indentation overhead, while preserving raw audit telemetry and the conservative malformed-input fallback. (#100591, #71865) Thanks @vincentkoc.
