@@ -40,6 +40,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     modelRuntimeId?: string;
     model?: string;
     target?: "telegram" | "last";
+    showOk?: boolean;
   }): OpenClawConfig {
     return {
       agents: {
@@ -67,7 +68,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
         telegram: {
           token: "test-token",
           allowFrom: ["*"],
-          heartbeat: { showOk: false },
+          heartbeat: { showOk: params.showOk ?? false },
         },
       },
       session: { store: params.storePath },
@@ -157,9 +158,9 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     });
   }
 
-  async function runPlainFallbackReply(text: string) {
+  async function runPlainFallbackReply(text: string, options: { showOk?: boolean } = {}) {
     return await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg = createConfig({ tmpDir, storePath });
+      const cfg = createConfig({ tmpDir, storePath, showOk: options.showOk });
       await seedMainSessionStore(storePath, cfg, {
         lastChannel: "telegram",
         lastProvider: "telegram",
@@ -281,7 +282,9 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
   );
 
   it("suppresses marker-only notify=false fallback replies", async () => {
-    const { result, sendTelegram } = await runPlainFallbackReply("notify=false\r\n");
+    const { result, sendTelegram } = await runPlainFallbackReply("notify=false\r\n", {
+      showOk: true,
+    });
 
     expect(result.status).toBe("ran");
     expect(sendTelegram).not.toHaveBeenCalled();

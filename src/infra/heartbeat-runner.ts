@@ -2105,7 +2105,7 @@ export async function runHeartbeatOnce(opts: {
         updatedAt: previousUpdatedAt,
       });
 
-      const okSent = await maybeSendHeartbeatOk();
+      const okSent = normalized.silent ? false : await maybeSendHeartbeatOk();
       emitHeartbeatEvent({
         status: "ok-token",
         reason: opts.reason,
