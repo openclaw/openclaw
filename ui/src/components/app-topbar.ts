@@ -14,6 +14,8 @@ export class AppTopbar extends LitElement {
   }
 
   @property({ attribute: false }) routeId?: NavigationRouteId;
+  /** Overrides the generic route title in the breadcrumb (e.g. plugin tab label, #6). */
+  @property({ attribute: false }) currentLabel = "";
   @property({ attribute: false }) basePath = "";
   @property({ attribute: false }) agentLabel = "";
   @property({ attribute: false }) navDrawerOpen = false;
@@ -65,6 +67,7 @@ export class AppTopbar extends LitElement {
           <div class="topnav-shell__content">
             <dashboard-header
               .routeId=${this.routeId}
+              .currentLabel=${this.currentLabel}
               .basePath=${this.basePath}
               .agentLabel=${this.agentLabel}
               .overviewHref=${this.overviewHref}

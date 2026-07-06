@@ -9,6 +9,8 @@ export class DashboardHeader extends LitElement {
   }
 
   @property() routeId?: NavigationRouteId;
+  /** Explicit crumb label overriding the generic route title (e.g. plugin tab label, #6). */
+  @property() currentLabel = "";
   @property() basePath = "";
   @property() agentLabel = "";
   @property() overviewHref = "";
@@ -31,7 +33,9 @@ export class DashboardHeader extends LitElement {
   };
 
   override render() {
-    const label = this.routeId ? titleForRoute(this.routeId) : "";
+    // #6: prefer an explicit crumb label (the plugin tab's own advertised name)
+    // over the generic route title so "Plugin" reads "Workspaces" / "Logbook".
+    const label = this.currentLabel.trim() || (this.routeId ? titleForRoute(this.routeId) : "");
     const rawAgentLabel = this.agentLabel.trim();
     // Skip the agent crumb when it repeats the brand crumb ("OpenClaw › OpenClaw › …").
     const agentLabel = rawAgentLabel.toLowerCase() === "openclaw" ? "" : rawAgentLabel;

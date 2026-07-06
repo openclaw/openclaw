@@ -45,7 +45,21 @@ export default definePluginEntry({
       optional: true,
     });
 
-    // The Workspaces Control UI tab and the custom-widget HTTP route are wired in
-    // follow-up PRs; every caller shares this one store so mutations stay validated.
+    // Declares the Workspaces tab; the Control UI renders its bundled view
+    // (BUNDLED_TAB_VIEWS "dashboard/workspaces") only while this plugin is
+    // active, so no core code references the plugin id.
+    api.session.controls.registerControlUiDescriptor({
+      surface: "tab",
+      id: "workspaces",
+      label: "Workspaces",
+      description: "Composable dashboards you and your agents build together.",
+      icon: "puzzle",
+      group: "control",
+      order: -10,
+      requiredScopes: ["operator.read"],
+    });
+
+    // The custom-widget HTTP route (sandboxed iframe host) is wired in a
+    // follow-up PR; every caller shares this one store so mutations stay validated.
   },
 });

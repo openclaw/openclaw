@@ -1,0 +1,458 @@
+import { describe, expect, it, vi } from "vitest";
+import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gateway.ts";
+import {
+  applyPointer,
+  cancelActiveDrag,
+  clearActiveDrag,
+  DASHBOARD_POLL_INTERVAL_MS,
+  getDashboardState,
+  hiddenTabs,
+  loadWorkspace,
+  moveWidget,
+  normalizeWorkspace,
+  orderedTabs,
+  registerActiveDrag,
+  resolveActiveSlug,
+  resolveBinding,
+  setWidgetCollapsed,
+  startBindingPolling,
+  stopBindingPolling,
+  stopDashboard,
+  subscribeToDashboardEvents,
+  visibleTabs,
+} from "./index.ts";
+
+type MockClient = Pick<GatewayBrowserClient, "request" | "addEventListener">;
+
+function mockClient(overrides: Partial<MockClient> = {}): GatewayBrowserClient {
+  return {
+    request: vi.fn(async () => ({})),
+    addEventListener: vi.fn(() => () => {}),
+    ...overrides,
+  } as unknown as GatewayBrowserClient;
+}
+
+const sampleDoc = {
+  schemaVersion: 1,
+  workspaceVersion: 3,
+  tabs: [
+    {
+      slug: "main",
+      title: "Main",
+      hidden: false,
+      widgets: [
+        {
+          id: "w1",
+          kind: "builtin:stat-card",
+          title: "Revenue",
+          grid: { x: 0, y: 0, w: 4, h: 2 },
+          collapsed: false,
+          createdBy: "agent:finance",
+        },
+      ],
+    },
+    { slug: "archive", title: "Archive", hidden: true, widgets: [] },
+  ],
+  prefs: { tabOrder: ["archive", "main"] },
+};
+
+describe("normalizeWorkspace", () => {
+  it("normalizes tabs, widgets, and prefs defensively", () => {
+    const ws = normalizeWorkspace(sampleDoc);
+    expect(ws.workspaceVersion).toBe(3);
+    expect(ws.tabs).toHaveLength(2);
+    expect(ws.tabs[0].widgets[0].grid).toEqual({ x: 0, y: 0, w: 4, h: 2 });
+    expect(ws.prefs.tabOrder).toEqual(["archive", "main"]);
+  });
+
+  it("drops malformed tabs and widgets", () => {
+    const ws = normalizeWorkspace({
+      tabs: [{ title: "no slug" }, { slug: "ok", widgets: [{ kind: "x" }, { id: "y" }] }],
+    });
+    expect(ws.tabs).toHaveLength(1);
+    expect(ws.tabs[0].slug).toBe("ok");
+    expect(ws.tabs[0].widgets).toHaveLength(0);
+  });
+
+  it("clamps out-of-range grid coordinates", () => {
+    const ws = normalizeWorkspace({
+      tabs: [
+        {
+          slug: "t",
+          widgets: [{ id: "w", kind: "k", grid: { x: 20, y: -5, w: 99, h: 0 } }],
+        },
+      ],
+    });
+    expect(ws.tabs[0].widgets[0].grid).toEqual({ x: 0, y: 0, w: 12, h: 1 });
+  });
+});
+
+describe("tab ordering + resolution", () => {
+  it("honors prefs.tabOrder then appends unordered tabs", () => {
+    const ws = normalizeWorkspace({
+      ...sampleDoc,
+      prefs: { tabOrder: ["main"] },
+    });
+    expect(orderedTabs(ws).map((t) => t.slug)).toEqual(["main", "archive"]);
+  });
+
+  it("splits visible and hidden tabs", () => {
+    const ws = normalizeWorkspace(sampleDoc);
+    expect(visibleTabs(ws).map((t) => t.slug)).toEqual(["main"]);
+    expect(hiddenTabs(ws).map((t) => t.slug)).toEqual(["archive"]);
+  });
+
+  it("resolves requested slug, falling back to first visible tab", () => {
+    const ws = normalizeWorkspace(sampleDoc);
+    expect(resolveActiveSlug(ws, "main")).toBe("main");
+    expect(resolveActiveSlug(ws, "archive")).toBe("archive");
+    expect(resolveActiveSlug(ws, "missing")).toBe("main");
+    expect(resolveActiveSlug(ws, null)).toBe("main");
+  });
+});
+
+describe("loadWorkspace", () => {
+  it("fetches and stores the workspace, seeding the active slug", async () => {
+    const host = {};
+    const state = getDashboardState(host);
+    const client = mockClient({
+      request: vi.fn(async () => ({ workspace: sampleDoc })) as never,
+    });
+    await loadWorkspace(state, client, { requestedSlug: "archive" });
+    expect(state.loaded).toBe(true);
+    expect(state.workspace?.workspaceVersion).toBe(3);
+    expect(state.activeSlug).toBe("archive");
+  });
+
+  it("records an error on failure", async () => {
+    const host = {};
+    const state = getDashboardState(host);
+    const client = mockClient({
+      request: vi.fn(async () => {
+        throw new Error("boom");
+      }) as never,
+    });
+    await loadWorkspace(state, client);
+    expect(state.error).toBe("boom");
+    expect(state.loaded).toBe(false);
+  });
+});
+
+describe("optimistic mutations", () => {
+  it("applies collapse optimistically and persists it", async () => {
+    const host = {};
+    const state = getDashboardState(host);
+    state.workspace = normalizeWorkspace(sampleDoc);
+    const request = vi.fn(async () => ({}));
+    const client = mockClient({ request: request as never });
+    await setWidgetCollapsed(state, client, { slug: "main", widgetId: "w1", collapsed: true });
+    expect(state.workspace?.tabs[0].widgets[0].collapsed).toBe(true);
+    expect(request).toHaveBeenCalledWith("dashboard.widget.update", {
+      slug: "main",
+      widgetId: "w1",
+      collapsed: true,
+    });
+  });
+
+  it("reverts and surfaces an error when the RPC rejects", async () => {
+    const host = {};
+    const state = getDashboardState(host);
+    state.workspace = normalizeWorkspace(sampleDoc);
+    const client = mockClient({
+      request: vi.fn(async () => {
+        throw new Error("rejected");
+      }) as never,
+    });
+    await moveWidget(state, client, {
+      slug: "main",
+      widgetId: "w1",
+      grid: { x: 8, y: 0, w: 4, h: 2 },
+    });
+    // Reverted to original grid; error surfaced for the toast.
+    expect(state.workspace?.tabs[0].widgets[0].grid).toEqual({ x: 0, y: 0, w: 4, h: 2 });
+    expect(state.actionError).toBe("rejected");
+    expect(state.pendingWidgetIds.has("w1")).toBe(false);
+  });
+
+  it("does not stomp a fresher concurrent load when the mutation later rejects", async () => {
+    const host = {};
+    const state = getDashboardState(host);
+    state.workspace = normalizeWorkspace(sampleDoc); // version 3
+
+    // The mutation RPC hangs until we reject it, letting a concurrent refetch land.
+    let rejectMutation!: (err: Error) => void;
+    const client = mockClient({
+      request: vi.fn(
+        (method: string) =>
+          new Promise((_resolve, reject) => {
+            if (method === "dashboard.widget.move") {
+              rejectMutation = reject;
+            }
+          }),
+      ) as never,
+    });
+
+    const mutation = moveWidget(state, client, {
+      slug: "main",
+      widgetId: "w1",
+      grid: { x: 8, y: 0, w: 4, h: 2 },
+    });
+
+    // A concurrent broadcast refetch lands a FRESHER doc (version 4) mid-flight.
+    const fresher = normalizeWorkspace({ ...sampleDoc, workspaceVersion: 4 });
+    fresher.tabs[0].widgets[0].title = "Revenue (v4)";
+    state.workspace = fresher;
+
+    // Now the in-flight mutation fails.
+    rejectMutation(new Error("rejected"));
+    await mutation;
+
+    // The fresher doc must survive — no revert to the stale pre-mutation snapshot.
+    expect(state.workspace).toBe(fresher);
+    expect(state.workspace?.workspaceVersion).toBe(4);
+    expect(state.workspace?.tabs[0].widgets[0].title).toBe("Revenue (v4)");
+    expect(state.actionError).toBe("rejected");
+  });
+});
+
+describe("live-update subscription", () => {
+  it("refetches only on a strictly newer workspaceVersion", async () => {
+    const host = {};
+    const state = getDashboardState(host);
+    state.workspace = normalizeWorkspace(sampleDoc); // version 3
+    let listener: GatewayEventListener | null = null;
+    const request = vi.fn(async () => ({ workspace: { ...sampleDoc, workspaceVersion: 4 } }));
+    const client = mockClient({
+      request: request as never,
+      addEventListener: vi.fn((cb: GatewayEventListener) => {
+        listener = cb;
+        return () => {};
+      }) as never,
+    });
+    subscribeToDashboardEvents(host, state, client);
+    expect(listener).not.toBeNull();
+
+    // Stale / own-echo version: no refetch.
+    listener!({
+      type: "event",
+      event: "plugin.dashboard.changed",
+      payload: { workspaceVersion: 3 },
+    });
+    expect(request).not.toHaveBeenCalled();
+
+    // Unrelated event: ignored.
+    listener!({ type: "event", event: "plugin.other", payload: { workspaceVersion: 9 } });
+    expect(request).not.toHaveBeenCalled();
+
+    // Newer version: refetch.
+    listener!({
+      type: "event",
+      event: "plugin.dashboard.changed",
+      payload: { workspaceVersion: 4 },
+    });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    stopDashboard(host);
+  });
+
+  it("tears down the listener on stop", () => {
+    const host = {};
+    const state = getDashboardState(host);
+    const unsubscribe = vi.fn();
+    const client = mockClient({
+      addEventListener: vi.fn(() => unsubscribe) as never,
+    });
+    subscribeToDashboardEvents(host, state, client);
+    stopDashboard(host);
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("binding resolution", () => {
+  it("resolves static bindings from the literal value", async () => {
+    const result = await resolveBinding(null, { source: "static", value: 42 });
+    expect(result).toEqual({ value: 42 });
+  });
+
+  it("resolves rpc bindings on the client and applies the pointer", async () => {
+    const client = mockClient({
+      request: vi.fn(async () => ({ revenue: 1000 })) as never,
+    });
+    const result = await resolveBinding(client, {
+      source: "rpc",
+      method: "dashboard.stats",
+      pointer: "/revenue",
+    });
+    expect(result).toEqual({ value: 1000 });
+  });
+
+  it("resolves file bindings through dashboard.data.read", async () => {
+    const request = vi.fn(async () => ({ data: { q3: { total: 7 } } }));
+    const client = mockClient({ request: request as never });
+    const result = await resolveBinding(client, {
+      source: "file",
+      path: "q3.json",
+      pointer: "/q3/total",
+    });
+    expect(request).toHaveBeenCalledWith("dashboard.data.read", {
+      path: "q3.json",
+      pointer: "/q3/total",
+    });
+    expect(result).toEqual({ value: 7 });
+  });
+
+  it("returns an error result when resolution throws", async () => {
+    const client = mockClient({
+      request: vi.fn(async () => {
+        throw new Error("no data");
+      }) as never,
+    });
+    const result = await resolveBinding(client, { source: "rpc", method: "x" });
+    expect(result).toEqual({ error: "no data" });
+  });
+});
+
+describe("applyPointer", () => {
+  it("walks objects and arrays, returning undefined for misses", () => {
+    const doc = { a: { b: [10, 20] } };
+    expect(applyPointer(doc, "/a/b/1")).toBe(20);
+    expect(applyPointer(doc, "/a/missing")).toBeUndefined();
+    expect(applyPointer(doc, undefined)).toBe(doc);
+  });
+
+  it("decodes escaped pointer segments", () => {
+    expect(applyPointer({ "a/b": 5 }, "/a~1b")).toBe(5);
+    expect(applyPointer({ "a~b": 6 }, "/a~0b")).toBe(6);
+  });
+});
+
+describe("active drag cancellation", () => {
+  it("cancels a registered drag from stopDashboard", () => {
+    const host = {};
+    const cancel = vi.fn();
+    registerActiveDrag(host, cancel);
+    stopDashboard(host);
+    expect(cancel).toHaveBeenCalledTimes(1);
+    // Idempotent: a second stop does not re-invoke the (already cleared) teardown.
+    stopDashboard(host);
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels the prior drag when a new one registers on the same host", () => {
+    const host = {};
+    const first = vi.fn();
+    const second = vi.fn();
+    registerActiveDrag(host, first);
+    registerActiveDrag(host, second);
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).not.toHaveBeenCalled();
+    cancelActiveDrag(host);
+    expect(second).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not cancel a drag that already settled and cleared itself", () => {
+    const host = {};
+    const cancel = vi.fn();
+    registerActiveDrag(host, cancel);
+    clearActiveDrag(host); // normal pointerup path clears without cancelling
+    stopDashboard(host);
+    expect(cancel).not.toHaveBeenCalled();
+  });
+});
+
+describe("data-refresh polling", () => {
+  it("ticks on the interval while the document is visible", () => {
+    vi.useFakeTimers();
+    try {
+      const host = {};
+      const onTick = vi.fn();
+      startBindingPolling(host, mockClient(), onTick, 10_000);
+      vi.advanceTimersByTime(30_000);
+      expect(onTick).toHaveBeenCalledTimes(3);
+      stopBindingPolling(host);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops ticking after stopDashboard — no orphan timer", () => {
+    vi.useFakeTimers();
+    try {
+      const host = {};
+      const onTick = vi.fn();
+      startBindingPolling(host, mockClient(), onTick, 10_000);
+      vi.advanceTimersByTime(10_000);
+      expect(onTick).toHaveBeenCalledTimes(1);
+      stopDashboard(host); // tab-leave / disconnect
+      vi.advanceTimersByTime(60_000);
+      expect(onTick).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("is idempotent — a re-render does not stack timers", () => {
+    vi.useFakeTimers();
+    try {
+      const host = {};
+      const onTick = vi.fn();
+      startBindingPolling(host, mockClient(), onTick, 10_000);
+      startBindingPolling(host, mockClient(), onTick, 10_000);
+      vi.advanceTimersByTime(10_000);
+      expect(onTick).toHaveBeenCalledTimes(1);
+      stopBindingPolling(host);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("skips the tick when the document is hidden", () => {
+    vi.useFakeTimers();
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    try {
+      const host = {};
+      const onTick = vi.fn();
+      startBindingPolling(host, mockClient(), onTick, 10_000);
+      vi.advanceTimersByTime(30_000);
+      expect(onTick).not.toHaveBeenCalled();
+      stopBindingPolling(host);
+    } finally {
+      visibility.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("a null client stops any running timer", () => {
+    vi.useFakeTimers();
+    try {
+      const host = {};
+      const onTick = vi.fn();
+      startBindingPolling(host, mockClient(), onTick, 10_000);
+      startBindingPolling(host, null, onTick, 10_000); // disconnect
+      vi.advanceTimersByTime(30_000);
+      expect(onTick).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clamps sub-10s intervals up to the 10s floor", () => {
+    vi.useFakeTimers();
+    try {
+      const host = {};
+      const onTick = vi.fn();
+      startBindingPolling(host, mockClient(), onTick, 1_000);
+      vi.advanceTimersByTime(9_000);
+      expect(onTick).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1_000);
+      expect(onTick).toHaveBeenCalledTimes(1);
+      stopBindingPolling(host);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("exposes a sane default interval within the spec window", () => {
+    expect(DASHBOARD_POLL_INTERVAL_MS).toBeGreaterThanOrEqual(30_000);
+    expect(DASHBOARD_POLL_INTERVAL_MS).toBeLessThanOrEqual(60_000);
+  });
+});

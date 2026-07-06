@@ -638,10 +638,19 @@ class OpenClawShell extends LitElement {
     }
     const activeRoute = this.routeState.routeId ?? "chat";
     // Plugin tabs share one route; the search picks the active item.
-    const activePluginTabId =
+    const pluginTabRef =
       activeRoute === "plugin"
-        ? pluginTabKey(pluginTabRefFromSearch(this.routeState.location?.search ?? ""))
-        : "";
+        ? pluginTabRefFromSearch(this.routeState.location?.search ?? "")
+        : null;
+    const activePluginTabId = pluginTabRef ? pluginTabKey(pluginTabRef) : "";
+    // #6: the generic "Plugin" breadcrumb crumb reads the active plugin tab's own
+    // advertised label instead (Workspaces, Logbook, …); done for ALL plugin tabs.
+    const activePluginTabLabel = pluginTabRef
+      ? (context.gateway.snapshot.hello?.controlUiTabs?.find(
+          (candidate) =>
+            candidate.pluginId === pluginTabRef.pluginId && candidate.id === pluginTabRef.id,
+        )?.label ?? "")
+      : "";
     const navDrawerOpen = this.navDrawerOpen && !this.onboarding;
     // Drawer navigation always opens expanded; the desktop collapse preference
     // stays persisted for when the viewport returns to the desktop layout.
@@ -672,6 +681,7 @@ class OpenClawShell extends LitElement {
         ></button>
         <openclaw-app-topbar
           .routeId=${activeRoute}
+          .currentLabel=${activePluginTabLabel}
           .basePath=${context.basePath}
           .agentLabel=${this.agentLabel}
           .overviewHref=${pathForRoute("overview", context.basePath)}
