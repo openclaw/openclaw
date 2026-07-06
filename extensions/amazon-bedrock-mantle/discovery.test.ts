@@ -520,7 +520,18 @@ describe("bedrock mantle discovery", () => {
     expect(provider?.api).toBe("openai-completions");
     expect(provider?.auth).toBe("api-key");
     expect(provider?.apiKey).toBe("env:AWS_BEARER_TOKEN_BEDROCK");
-    expect(provider?.models).toHaveLength(3);
+    expect(provider?.models).toHaveLength(4);
+    const sonnet = provider?.models?.find((model) => model.id === "anthropic.claude-sonnet-5");
+    expect(sonnet).toMatchObject({
+      api: "anthropic-messages",
+      reasoning: true,
+      params: { canonicalModelId: "claude-sonnet-5" },
+      input: ["text", "image"],
+      cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
+    });
     const opus = provider?.models?.find((model) => model.id === "anthropic.claude-opus-4-7");
     expect(opus?.api).toBe("anthropic-messages");
     expect(opus?.reasoning).toBe(false);
@@ -535,6 +546,31 @@ describe("bedrock mantle discovery", () => {
       contextWindow: 1_000_000,
       maxTokens: 128_000,
     });
+  });
+
+  it("rolls Claude Sonnet 5 to standard pricing on September 1, 2026", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.UTC(2026, 8, 1));
+    try {
+      const mockFetch = vi.fn().mockResolvedValue(
+        modelDiscoveryResponse({
+          data: [{ id: "anthropic.claude-sonnet-5", object: "model" }],
+        }),
+      );
+      const provider = await resolveImplicitMantleProvider({
+        env: {
+          AWS_BEARER_TOKEN_BEDROCK: "my-token", // pragma: allowlist secret
+          AWS_REGION: "us-east-1",
+        } as NodeJS.ProcessEnv,
+        fetchFn: mockFetch as unknown as typeof fetch,
+      });
+
+      expect(
+        provider?.models?.find((model) => model.id === "anthropic.claude-sonnet-5")?.cost,
+      ).toEqual({ input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("returns null when no auth is available", async () => {

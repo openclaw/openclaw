@@ -552,7 +552,7 @@ export function buildGoogleSimpleThinking<T extends GoogleApiType>(
     useFlashLiteBudgets?: boolean;
   },
 ): GoogleThinkingOptions {
-  if (!options?.reasoning) {
+  if (!options?.reasoning || options.reasoning === "off") {
     return { enabled: false };
   }
 

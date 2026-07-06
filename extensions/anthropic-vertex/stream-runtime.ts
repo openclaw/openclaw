@@ -14,6 +14,7 @@ import {
 import {
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
+  resolveClaudeSonnet5ModelIdentity,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
@@ -52,6 +53,10 @@ function isClaudeOpus47OrNewerModel(modelId: string): boolean {
 
 function isClaudeFable5Model(modelId: string): boolean {
   return resolveClaudeFable5ModelIdentity({ id: modelId }) !== undefined;
+}
+
+function isClaudeSonnet5Model(modelId: string): boolean {
+  return resolveClaudeSonnet5ModelIdentity({ id: modelId }) !== undefined;
 }
 
 function isClaudeMythos5Model(modelId: string): boolean {
@@ -149,12 +154,18 @@ export function createAnthropicVertexStreamFn(
     });
     const contractModelId = resolveClaudeModelIdentity(model);
     const fable5 = isClaudeFable5Model(contractModelId);
+    const sonnet5 = isClaudeSonnet5Model(contractModelId);
     const mandatoryAdaptiveThinking = fable5 || isClaudeMythos5Model(contractModelId);
+    const requestedReasoning = options?.reasoning;
     const reasoning =
-      (options?.reasoning as ModelThinkingLevel | undefined) ??
-      (mandatoryAdaptiveThinking ? "high" : undefined);
+      requestedReasoning === "off" && mandatoryAdaptiveThinking
+        ? fable5
+          ? "low"
+          : "high"
+        : (requestedReasoning ?? (mandatoryAdaptiveThinking || sonnet5 ? "high" : undefined));
     const adaptiveThinking =
-      mandatoryAdaptiveThinking || Boolean(reasoning && supportsAdaptiveThinking(contractModelId));
+      mandatoryAdaptiveThinking ||
+      Boolean(reasoning && reasoning !== "off" && supportsAdaptiveThinking(contractModelId));
     const temperature =
       adaptiveThinking ||
       isClaudeOpus47OrNewerModel(contractModelId) ||
@@ -177,7 +188,9 @@ export function createAnthropicVertexStreamFn(
       metadata: options?.metadata,
     };
 
-    if (reasoning) {
+    if (reasoning === "off") {
+      opts.thinkingEnabled = false;
+    } else if (reasoning) {
       if (supportsAdaptiveThinking(contractModelId)) {
         opts.thinkingEnabled = true;
         opts.effort = mapAnthropicAdaptiveEffort(

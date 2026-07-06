@@ -1,10 +1,16 @@
 // Model-bound thinking cannot be exposed or replayed after a model switch.
-import { resolveClaudeFable5ModelIdentity, resolveClaudeModelIdentity } from "@openclaw/llm-core";
+import {
+  resolveClaudeFable5ModelIdentity,
+  resolveClaudeModelIdentity,
+  resolveClaudeSonnet5ModelIdentity,
+} from "@openclaw/llm-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { Context, Model } from "../types.js";
 export {
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
   resolveClaudeNativeThinkingLevelMap,
+  resolveClaudeSonnet5ModelIdentity,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
@@ -49,6 +55,21 @@ export function usesClaudeFable5MessagesContract(model: {
   );
 }
 
+/** Return whether streamed output must wait for the terminal refusal decision. */
+export function usesClaudeStreamingRefusalContract(model: {
+  id?: string;
+  params?: Record<string, unknown>;
+  api?: string;
+}): boolean {
+  if (normalizeApi(model.api) !== "anthropic-messages") {
+    return false;
+  }
+  return (
+    resolveClaudeFable5ModelIdentity(model) !== undefined ||
+    resolveClaudeSonnet5ModelIdentity(model) !== undefined
+  );
+}
+
 export function requiresClaudeAdaptiveThinking(model: {
   id?: string;
   params?: Record<string, unknown>;
@@ -62,6 +83,41 @@ export function requiresClaudeAdaptiveThinking(model: {
     resolveClaudeFable5ModelIdentity(model) !== undefined ||
     /(?:^|-)claude-mythos-preview(?=$|[^a-z0-9])/.test(modelId)
   );
+}
+
+/** Return whether omitted thinking should default to adaptive/high. */
+export function defaultsClaudeAdaptiveThinking(model: {
+  id?: string;
+  params?: Record<string, unknown>;
+  api?: string;
+}): boolean {
+  return (
+    requiresClaudeAdaptiveThinking(model) ||
+    (normalizeApi(model.api) === "anthropic-messages" &&
+      resolveClaudeSonnet5ModelIdentity(model) !== undefined)
+  );
+}
+
+/** Remove Sonnet 5 assistant prefills while preserving completed tool-use turns. */
+export function prepareClaudeSonnet5RequestContext(model: Model, context: Context): Context {
+  if (!resolveClaudeSonnet5ModelIdentity(model)) {
+    return context;
+  }
+
+  let end = context.messages.length;
+  while (end > 0) {
+    const message = context.messages[end - 1];
+    if (
+      message?.role !== "assistant" ||
+      (Array.isArray(message.content) && message.content.some((block) => block.type === "toolCall"))
+    ) {
+      break;
+    }
+    end -= 1;
+  }
+  return end === context.messages.length
+    ? context
+    : { ...context, messages: context.messages.slice(0, end) };
 }
 
 function resolveReplayFableIdentity(ref: ReplayModelRef): string | undefined {

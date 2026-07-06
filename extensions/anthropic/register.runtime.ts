@@ -30,6 +30,7 @@ import {
   type ProviderPlugin,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
+  resolveClaudeSonnet5ModelIdentity,
   resolveClaudeThinkingProfile,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
@@ -62,8 +63,22 @@ const ANTHROPIC_OPUS_48_DOT_MODEL_ID = "claude-opus-4.8";
 const ANTHROPIC_OPUS_47_MODEL_ID = "claude-opus-4-7";
 const ANTHROPIC_OPUS_47_DOT_MODEL_ID = "claude-opus-4.7";
 const ANTHROPIC_GA_1M_CONTEXT_TOKENS = 1_048_576;
-const ANTHROPIC_FABLE_CONTEXT_TOKENS = 1_000_000;
+const ANTHROPIC_EXACT_1M_CONTEXT_TOKENS = 1_000_000;
 const ANTHROPIC_MODERN_MAX_OUTPUT_TOKENS = 128_000;
+// Anthropic's introductory rate expires at the documented UTC month boundary.
+const ANTHROPIC_SONNET_5_STANDARD_PRICING_START_MS = Date.UTC(2026, 8, 1);
+const ANTHROPIC_SONNET_5_PROMOTIONAL_COST = {
+  input: 2,
+  output: 10,
+  cacheRead: 0.2,
+  cacheWrite: 2.5,
+};
+const ANTHROPIC_SONNET_5_STANDARD_COST = {
+  input: 3,
+  output: 15,
+  cacheRead: 0.3,
+  cacheWrite: 3.75,
+};
 const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
 const ANTHROPIC_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
 const ANTHROPIC_OPUS_47_TEMPLATE_MODEL_IDS = [
@@ -78,6 +93,12 @@ const ANTHROPIC_SETUP_TOKEN_NOTE_LINES = [
   "Anthropic staff told us this OpenClaw path is allowed again.",
   `If you want a direct API billing path instead, use ${formatCliCommand("openclaw models auth login --provider anthropic --method api-key --set-default")} or ${formatCliCommand("openclaw models auth login --provider anthropic --method cli --set-default")}.`,
 ] as const;
+
+function resolveAnthropicSonnet5Cost(nowMs: number = Date.now()) {
+  return nowMs >= ANTHROPIC_SONNET_5_STANDARD_PRICING_START_MS
+    ? ANTHROPIC_SONNET_5_STANDARD_COST
+    : ANTHROPIC_SONNET_5_PROMOTIONAL_COST;
+}
 
 const CLAUDE_CLI_CANONICAL_ALLOWLIST_REFS = CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS.map((ref) =>
   ref.startsWith(`${CLAUDE_CLI_BACKEND_ID}/`)
@@ -286,7 +307,9 @@ function buildAnthropicForwardCompatModel(
     input: ["text", "image"],
     cost: isAnthropicFable5Model(trimmedModelId)
       ? { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 }
-      : { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      : isAnthropicSonnet5Model(trimmedModelId) && provider === PROVIDER_ID
+        ? resolveAnthropicSonnet5Cost()
+        : { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: resolveAnthropicFixedContextWindow(trimmedModelId) ?? 200_000,
     maxTokens: isAnthropic128kOutputModel(trimmedModelId)
       ? ANTHROPIC_MODERN_MAX_OUTPUT_TOKENS
@@ -347,22 +370,26 @@ function isAnthropicFable5Model(modelId: string): boolean {
   return resolveClaudeFable5ModelIdentity({ id: modelId }) !== undefined;
 }
 
+function isAnthropicSonnet5Model(modelId: string): boolean {
+  return resolveClaudeSonnet5ModelIdentity({ id: modelId }) !== undefined;
+}
+
 function resolveAnthropicFixedContextWindow(modelId: string): number | undefined {
-  if (isAnthropicFable5Model(modelId)) {
-    return ANTHROPIC_FABLE_CONTEXT_TOKENS;
+  if (isAnthropicFable5Model(modelId) || isAnthropicSonnet5Model(modelId)) {
+    return ANTHROPIC_EXACT_1M_CONTEXT_TOKENS;
   }
   return isAnthropicGa1MModel(modelId) ? ANTHROPIC_GA_1M_CONTEXT_TOKENS : undefined;
 }
 
 function isAnthropic128kOutputModel(modelId: string): boolean {
-  if (isAnthropicFable5Model(modelId)) {
+  if (isAnthropicFable5Model(modelId) || isAnthropicSonnet5Model(modelId)) {
     return true;
   }
   return /^claude-opus-4-8(?=$|[^a-z0-9])/.test(resolveClaudeModelIdentity({ id: modelId }));
 }
 
-function isAnthropicOpus47OrNewerModel(modelId: string): boolean {
-  return supportsClaudeNativeXhighEffort({ id: modelId }) && !isAnthropicFable5Model(modelId);
+function isAnthropicLargeImageModel(modelId: string): boolean {
+  return supportsClaudeNativeXhighEffort({ id: modelId });
 }
 
 function isAnthropicMythosPreviewModel(modelId: string): boolean {
@@ -425,7 +452,9 @@ function applyAnthropicFixedContextWindow(params: {
   if (hasConfiguredModelContextOverride(params.config, params.provider, params.modelId)) {
     return undefined;
   }
-  const exactContextWindow = isAnthropicFable5Model(params.contractModelId);
+  const exactContextWindow =
+    isAnthropicFable5Model(params.contractModelId) ||
+    isAnthropicSonnet5Model(params.contractModelId);
   const nextContextWindow = exactContextWindow
     ? fixedContextWindow
     : Math.max(params.model.contextWindow ?? 0, fixedContextWindow);
@@ -468,7 +497,7 @@ function applyAnthropicThinkingLevelMap(params: {
   model: ProviderRuntimeModel;
 }): ProviderRuntimeModel | undefined {
   const fable5 = isAnthropicFable5Model(params.modelId);
-  const nativeXhigh = fable5 || isAnthropicOpus47OrNewerModel(params.modelId);
+  const nativeXhigh = fable5 || supportsClaudeNativeXhighEffort({ id: params.modelId });
   if (!supportsAnthropicNativeMaxEffort(params.modelId)) {
     return undefined;
   }
@@ -512,9 +541,7 @@ function resolveAnthropicImageMediaInput(modelId: string, modelName?: string) {
     return undefined;
   }
   const refs = [modelId, modelName].filter((value): value is string => typeof value === "string");
-  const largeImageModel = refs.some(
-    (ref) => isAnthropicFable5Model(ref) || isAnthropicOpus47OrNewerModel(ref),
-  );
+  const largeImageModel = refs.some((ref) => isAnthropicLargeImageModel(ref));
   return {
     image: {
       maxSidePx: largeImageModel ? 2576 : 1568,
@@ -540,6 +567,25 @@ function applyAnthropicImageInputCapability(params: {
   };
 }
 
+function applyAnthropicSonnet5Cost(params: {
+  modelId: string;
+  model: ProviderRuntimeModel;
+}): ProviderRuntimeModel | undefined {
+  if (!isAnthropicSonnet5Model(params.modelId)) {
+    return undefined;
+  }
+  const cost = resolveAnthropicSonnet5Cost();
+  if (
+    params.model.cost.input === cost.input &&
+    params.model.cost.output === cost.output &&
+    params.model.cost.cacheRead === cost.cacheRead &&
+    params.model.cost.cacheWrite === cost.cacheWrite
+  ) {
+    return undefined;
+  }
+  return { ...params.model, cost };
+}
+
 function normalizeAnthropicResolvedModel(
   ctx: ProviderNormalizeResolvedModelContext,
 ): ProviderRuntimeModel | undefined {
@@ -554,7 +600,8 @@ function normalizeAnthropicResolvedModel(
     return undefined;
   }
   const contractModel =
-    isAnthropicFable5Model(contractModelId) && !ctx.model.reasoning
+    (isAnthropicFable5Model(contractModelId) || isAnthropicSonnet5Model(contractModelId)) &&
+    !ctx.model.reasoning
       ? { ...ctx.model, reasoning: true }
       : ctx.model;
   const imageCapableModel =
@@ -594,7 +641,14 @@ function normalizeAnthropicResolvedModel(
       contractModelId,
       model: thinkingLevelModel,
     }) ?? thinkingLevelModel;
-  return contextWindowModel === ctx.model ? undefined : contextWindowModel;
+  const pricingModel =
+    normalizeLowercaseStringOrEmpty(ctx.provider) === PROVIDER_ID
+      ? (applyAnthropicSonnet5Cost({
+          modelId: contractModelId,
+          model: contextWindowModel,
+        }) ?? contextWindowModel)
+      : contextWindowModel;
+  return pricingModel === ctx.model ? undefined : pricingModel;
 }
 
 function buildAnthropicAuthDoctorHint(params: {

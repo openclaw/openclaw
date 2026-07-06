@@ -9,6 +9,7 @@ import {
   OPENAI_COMPATIBLE_REPLAY_HOOKS,
   PASSTHROUGH_GEMINI_REPLAY_HOOKS,
   resolveClaudeFable5ModelIdentity,
+  resolveClaudeSonnet5ModelIdentity,
   resolveClaudeThinkingProfile,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
@@ -45,6 +46,9 @@ describe("Claude model contracts", () => {
     );
     expect(supportsClaudeAdaptiveThinking({ id: "claude-sonnet-4-6@20260301" })).toBe(true);
     expect(supportsClaudeNativeXhighEffort({ id: "claude-opus-4-8@20260401" })).toBe(true);
+    expect(resolveClaudeSonnet5ModelIdentity({ id: "claude-sonnet-5@20260701" })).toBe(
+      "claude-sonnet-5@20260701",
+    );
   });
 
   it("does not classify later numeric model versions as supported aliases", () => {
@@ -308,6 +312,12 @@ describe("buildProviderReplayFamilyHooks", () => {
 });
 
 describe("resolveClaudeThinkingProfile", () => {
+  it("defaults Sonnet 5 to high adaptive thinking with native effort levels", () => {
+    const profile = resolveClaudeThinkingProfile("claude-sonnet-5");
+    expectFields(profile, { defaultLevel: "high" });
+    expectLevelIdsInclude(profile, ["off", "xhigh", "adaptive", "max"]);
+  });
+
   it("exposes Fable 5's always-adaptive profile to Claude providers", () => {
     const profile = resolveClaudeThinkingProfile("claude-fable-5");
     expectFields(profile, {
