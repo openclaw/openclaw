@@ -73,12 +73,12 @@ export type ChannelAccountSnapshot = {
   application?: unknown;
 };
 
-export type WhatsAppSelf = {
+type WhatsAppSelf = {
   e164?: string | null;
   jid?: string | null;
 };
 
-export type WhatsAppDisconnect = {
+type WhatsAppDisconnect = {
   at: number;
   status?: number | null;
   error?: string | null;
@@ -105,7 +105,7 @@ export type TelegramBot = {
   username?: string | null;
 };
 
-export type TelegramWebhook = {
+type TelegramWebhook = {
   url?: string | null;
   hasCustomCert?: boolean | null;
 };
@@ -131,7 +131,7 @@ export type TelegramStatus = {
   lastProbeAt?: number | null;
 };
 
-export type DiscordBot = {
+type DiscordBot = {
   id?: string | null;
   username?: string | null;
 };
@@ -155,7 +155,7 @@ export type DiscordStatus = {
   lastProbeAt?: number | null;
 };
 
-export type GoogleChatProbe = {
+type GoogleChatProbe = {
   ok: boolean;
   status?: number | null;
   error?: string | null;

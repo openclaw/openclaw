@@ -192,7 +192,7 @@ export function normalizeTasksCancelResult(value: unknown): TasksCancelResult | 
   };
 }
 
-export function normalizeTaskEventPayload(value: unknown): TaskEventPayload | null {
+function normalizeTaskEventPayload(value: unknown): TaskEventPayload | null {
   if (!isRecord(value)) {
     return null;
   }
