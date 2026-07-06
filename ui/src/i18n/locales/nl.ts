@@ -1585,7 +1585,7 @@ export const nl: TranslationMap = {
     gatewayStatus: "Gateway-status: {status}",
     commandPaletteTitle: "Zoeken of springen naar… (⌘K)",
     openCommandPalette: "Opdrachtenpalet openen",
-    docsOpensInNewTab: "{label} (opent in nieuw tabblad)",
+    docsTooltip: "Documentation ↗",
     updateAvailable: "Update beschikbaar:",
     runningVersion: "actieve versie v{version}",
     updating: "Bijwerken…",

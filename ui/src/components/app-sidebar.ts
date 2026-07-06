@@ -70,6 +70,7 @@ type SidebarRecentSession = {
   meta: string;
   href: string;
   active: boolean;
+  visuallyActive: boolean;
   hasActiveRun: boolean;
   kind?: string;
   pinned: boolean;
@@ -113,6 +114,14 @@ const SIDEBAR_SESSION_SORT_OPTIONS = [
   labelKey: "chat.sidebar.sortCreated" | "chat.sidebar.sortUpdated";
 }>;
 
+function formatSidebarTimestamp(timestampMs: number | null | undefined): string {
+  const value = formatRelativeTimestamp(timestampMs, { fallback: "" });
+  if (value === "just now") {
+    return "now";
+  }
+  return value.endsWith(" ago") ? value.slice(0, -" ago".length) : value;
+}
+
 function shouldHandleNavigationClick(event: MouseEvent): boolean {
   return (
     !event.defaultPrevented &&
@@ -142,6 +151,7 @@ class AppSidebar extends LitElement {
   @property({ attribute: false }) sidebarMoreExpanded = false;
   @property({ attribute: false }) themeMode: ThemeMode = "system";
   @property({ attribute: false }) onOpenPalette?: () => void;
+  @property({ attribute: false }) onToggleSidebar?: () => void;
   @property({ attribute: false }) onToggleMore?: () => void;
   @property({ attribute: false }) onUpdatePinnedRoutes?: (routes: SidebarNavRoute[]) => void;
   @property({ attribute: false }) onPairMobile?: () => void;
@@ -278,6 +288,37 @@ class AppSidebar extends LitElement {
     this.gatewayClient = client;
   }
 
+  private renderBrand() {
+    const collapseLabel = this.collapsed ? t("nav.expand") : t("nav.collapse");
+    const collapseTooltip = `${collapseLabel} (⌘B)`;
+    return html`
+      <div class="sidebar-brand">
+        <div class="sidebar-brand__identity">
+          <img
+            class="sidebar-brand__logo"
+            src=${controlUiPublicAssetPath("apple-touch-icon.png", this.basePath)}
+            alt=""
+            aria-hidden="true"
+          />
+          ${this.collapsed ? nothing : html`<span class="sidebar-brand__title">OpenClaw</span>`}
+        </div>
+        <div class="sidebar-brand__actions">
+          <openclaw-tooltip .content=${collapseTooltip}>
+            <button
+              class="sidebar-brand__icon"
+              type="button"
+              @click=${() => this.onToggleSidebar?.()}
+              aria-label=${collapseLabel}
+              aria-expanded=${String(!this.collapsed)}
+            >
+              ${this.collapsed ? icons.panelLeftOpen : icons.panelLeftClose}
+            </button>
+          </openclaw-tooltip>
+        </div>
+      </div>
+    `;
+  }
+
   private getRouteSessionKey(): string {
     return this.sessionKey.trim() || this.context?.gateway.snapshot.sessionKey.trim() || "";
   }
@@ -321,12 +362,14 @@ class AppSidebar extends LitElement {
       hello: context?.gateway.snapshot.hello,
       compareSessions: this.compareSidebarSessionRows,
     });
+    const highlightCurrentSession = this.activeRouteId === "chat";
     const toSidebarSession = (row: SessionsListResult["sessions"][number]) => ({
       key: row.key,
       label: resolveSessionDisplayName(row.key, row),
-      meta: row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "",
+      meta: formatSidebarTimestamp(row.updatedAt),
       href: `${pathForRoute("chat", context?.basePath ?? "")}${searchForSession(row.key)}`,
       active: row.key === navigation.activeRowKey,
+      visuallyActive: highlightCurrentSession && row.key === navigation.currentSessionKey,
       hasActiveRun: Boolean(row.hasActiveRun),
       kind: row.kind,
       pinned: row.pinned === true,
@@ -1211,7 +1254,7 @@ class AppSidebar extends LitElement {
     const rowClass = [
       "sidebar-recent-session",
       "session-row-host",
-      session.active ? "sidebar-recent-session--active" : "",
+      session.visuallyActive ? "sidebar-recent-session--active" : "",
       session.pinned ? "session-row-host--pinned" : "",
       session.hasActiveRun ? "session-row-host--running" : "",
       this.draggingSessionKey === session.key ? "sidebar-recent-session--dragging" : "",
@@ -1454,7 +1497,7 @@ class AppSidebar extends LitElement {
                           @click=${(event: MouseEvent) => {
                             const trigger = event.currentTarget as HTMLElement;
                             const rect = trigger.getBoundingClientRect();
-                            this.openSessionSortMenu(rect.right - 180, rect.bottom + 4, trigger);
+                            this.openSessionSortMenu(rect.right, rect.bottom + 4, trigger);
                           }}
                         >
                           ${icons.listFilter}
@@ -1621,6 +1664,7 @@ class AppSidebar extends LitElement {
           alt="OpenClaw"
         />
         <div class="sidebar-shell">
+          ${this.renderBrand()}
           <div class="sidebar-shell__body">
             ${this.renderSearch()}
             <nav class="sidebar-nav" @contextmenu=${this.openCustomizeMenuFromContext}>
@@ -1667,9 +1711,7 @@ class AppSidebar extends LitElement {
                   ${icons.settings}
                 </a>
               </openclaw-tooltip>
-              <openclaw-tooltip
-                .content=${t("chat.docsOpensInNewTab", { label: t("common.docs") })}
-              >
+              <openclaw-tooltip .content=${t("chat.docsTooltip")}>
                 <a
                   class="sidebar-footer-icon"
                   href="https://docs.openclaw.ai"

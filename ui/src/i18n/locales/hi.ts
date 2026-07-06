@@ -1563,7 +1563,7 @@ export const hi: TranslationMap = {
     gatewayStatus: "Gateway स्थिति: {status}",
     commandPaletteTitle: "खोजें या यहां जाएं… (⌘K)",
     openCommandPalette: "कमांड पैलेट खोलें",
-    docsOpensInNewTab: "{label} (नए टैब में खुलता है)",
+    docsTooltip: "Documentation ↗",
     updateAvailable: "अपडेट उपलब्ध है:",
     runningVersion: "v{version} चल रहा है",
     updating: "अपडेट हो रहा है…",

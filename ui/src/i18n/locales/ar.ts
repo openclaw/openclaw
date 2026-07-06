@@ -1561,7 +1561,7 @@ export const ar: TranslationMap = {
     gatewayStatus: "حالة Gateway: {status}",
     commandPaletteTitle: "ابحث أو انتقل إلى… (⌘K)",
     openCommandPalette: "فتح لوحة الأوامر",
-    docsOpensInNewTab: "{label} (يفتح في علامة تبويب جديدة)",
+    docsTooltip: "Documentation ↗",
     updateAvailable: "يتوفر تحديث:",
     runningVersion: "الإصدار قيد التشغيل v{version}",
     updating: "جارٍ التحديث…",

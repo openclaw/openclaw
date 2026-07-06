@@ -15,7 +15,7 @@ import "../components/terminal/terminal-panel.ts";
 import "../components/tooltip.ts";
 import "../components/update-banner.ts";
 import type { SidebarNavRoute } from "../app-navigation.ts";
-import { APP_ROUTE_IDS, isRouteId, pathForRoute, type RouteId } from "../app-routes.ts";
+import { APP_ROUTE_IDS, isRouteId, type RouteId } from "../app-routes.ts";
 import {
   COMMAND_PALETTE_TARGET_EVENT,
   type CommandPalette,
@@ -27,8 +27,6 @@ import { copyToClipboard } from "../lib/clipboard.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
-import { resolveAgentIdFromSessionKey } from "../lib/sessions/session-key.ts";
-import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../lib/string-coerce.ts";
 import { renderDevicePairSetup } from "../pages/nodes/view-pairing.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
@@ -67,18 +65,6 @@ function equalShellRouteState(previous: ShellRouteState, next: ShellRouteState):
     previous.location?.pathname === next.location?.pathname &&
     previous.location?.search === next.location?.search &&
     previous.location?.hash === next.location?.hash
-  );
-}
-
-function resolveAgentLabel(sessionKey: string, agentsList: AgentsListResult | null): string {
-  const agentId = resolveAgentIdFromSessionKey(sessionKey);
-  const agent = agentsList?.agents.find(
-    (entry) => normalizeLowercaseStringOrEmpty(entry.id) === agentId,
-  );
-  return (
-    normalizeOptionalString(agent?.identity?.name) ??
-    normalizeOptionalString(agent?.name) ??
-    agentId
   );
 }
 
@@ -123,8 +109,12 @@ function isTerminalAvailable(
   }
   return (
     hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
-    isGatewayMethodAdvertised(snapshot, "terminal.open") === true
+    isGatewayMethodAdvertised(snapshot, "terminal.open")
   );
+}
+
+function isMobileNavLayout(): boolean {
+  return globalThis.matchMedia?.("(max-width: 1100px)").matches ?? false;
 }
 
 class OpenClawApp extends LitElement {
@@ -376,7 +366,6 @@ class OpenClawShell extends LitElement {
   @state() private terminalAvailable = false;
   @state() private terminalClient: GatewayBrowserClient | null = null;
   @state() private activeSessionKey = "";
-  @state() private agentLabel = "";
   @state() private routeState: ShellRouteState = {};
   @state() private overlaySnapshot: ApplicationOverlaySnapshot = {
     updateAvailable: null,
@@ -396,7 +385,6 @@ class OpenClawShell extends LitElement {
   private navDrawerTrigger: HTMLElement | null = null;
   private agentsListClient: GatewayBrowserClient | null = null;
   private sessionKeyClient: GatewayBrowserClient | null = null;
-  private stopAgentsSubscription: (() => void) | undefined;
   private stopConfigSubscription: (() => void) | undefined;
   private stopGatewaySubscription: (() => void) | undefined;
   private stopNavigationSubscription: (() => void) | undefined;
@@ -413,6 +401,7 @@ class OpenClawShell extends LitElement {
     super.connectedCallback();
     this.startSubscriptions();
     this.addEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
+    document.addEventListener("keydown", this.handleDocumentKeydown);
   }
 
   override updated() {
@@ -425,7 +414,6 @@ class OpenClawShell extends LitElement {
     if (
       !runtime ||
       !context ||
-      this.stopAgentsSubscription ||
       this.stopConfigSubscription ||
       this.stopGatewaySubscription ||
       this.stopNavigationSubscription ||
@@ -443,13 +431,11 @@ class OpenClawShell extends LitElement {
     this.updateGatewaySessionKey(context.gateway.snapshot);
     this.updateGatewayStatus(context.gateway.snapshot);
     this.updateTerminalSurface(context.gateway.snapshot);
-    this.updateAgentLabel();
     this.ensureRuntimeConfig(context.gateway.snapshot);
     this.stopGatewaySubscription = context.gateway.subscribe((snapshot) => {
       this.updateGatewaySessionKey(snapshot);
       this.updateGatewayStatus(snapshot);
       this.updateTerminalSurface(snapshot);
-      this.updateAgentLabel();
       this.ensureAgentsList(snapshot);
       this.ensureRuntimeConfig(snapshot);
     });
@@ -457,9 +443,6 @@ class OpenClawShell extends LitElement {
       this.updateTerminalSurface(context.gateway.snapshot);
     });
     this.stopThemeSubscription = context.theme.subscribe(() => this.requestUpdate());
-    this.stopAgentsSubscription = context.agents.subscribe(() => {
-      this.updateAgentLabel();
-    });
     this.updateRouteState(selectShellRouteState(runtime.router.getState()));
     this.stopRouteSubscription = runtime.router.subscribeSelector(
       selectShellRouteState,
@@ -480,8 +463,7 @@ class OpenClawShell extends LitElement {
 
   override disconnectedCallback() {
     this.removeEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
-    this.stopAgentsSubscription?.();
-    this.stopAgentsSubscription = undefined;
+    document.removeEventListener("keydown", this.handleDocumentKeydown);
     this.stopConfigSubscription?.();
     this.stopConfigSubscription = undefined;
     this.stopGatewaySubscription?.();
@@ -533,13 +515,23 @@ class OpenClawShell extends LitElement {
     this.context?.replace("chat", this.chatNavigationOptions());
   }
 
-  private toggleNavDrawer(trigger: HTMLElement) {
-    if (this.navDrawerOpen) {
-      this.closeNavDrawer({ restoreFocus: true });
+  private toggleNavigationSurface(trigger?: HTMLElement) {
+    const context = this.context;
+    if (!context || this.onboarding) {
       return;
     }
-    this.navDrawerTrigger = trigger;
-    this.navDrawerOpen = true;
+    if (isMobileNavLayout()) {
+      if (this.navDrawerOpen) {
+        this.closeNavDrawer({ restoreFocus: Boolean(trigger) });
+        return;
+      }
+      this.navDrawerTrigger = trigger ?? null;
+      this.navDrawerOpen = true;
+      return;
+    }
+    context.navigation.update({
+      navCollapsed: !this.navCollapsed,
+    });
   }
 
   private closeNavDrawer(options: { restoreFocus?: boolean } = {}) {
@@ -562,6 +554,21 @@ class OpenClawShell extends LitElement {
     }
     event.preventDefault();
     this.closeNavDrawer({ restoreFocus: true });
+  };
+
+  private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
+    if (
+      event.defaultPrevented ||
+      event.altKey ||
+      event.shiftKey ||
+      !event.metaKey ||
+      event.ctrlKey ||
+      event.key.toLowerCase() !== "b"
+    ) {
+      return;
+    }
+    event.preventDefault();
+    this.toggleNavigationSurface();
   };
 
   private readonly openPalette = () => {
@@ -676,19 +683,7 @@ class OpenClawShell extends LitElement {
     const sessionKey = new URLSearchParams(routeState.location?.search).get("session")?.trim();
     if (sessionKey) {
       this.activeSessionKey = sessionKey;
-      this.updateAgentLabel();
     }
-  }
-
-  private updateAgentLabel() {
-    const context = this.context;
-    if (!context) {
-      return;
-    }
-    this.agentLabel = resolveAgentLabel(
-      this.activeSessionKey || context.gateway.snapshot.sessionKey,
-      context.agents.state.agentsList,
-    );
   }
 
   private readonly updateNavigationPreferences = (
@@ -740,23 +735,12 @@ class OpenClawShell extends LitElement {
           @click=${() => this.closeNavDrawer({ restoreFocus: true })}
         ></button>
         <openclaw-app-topbar
-          .routeId=${activeRoute}
           .basePath=${context.basePath}
-          .agentLabel=${this.agentLabel}
-          .overviewHref=${pathForRoute("overview", context.basePath)}
+          .searchDisabled=${false}
           .navDrawerOpen=${navDrawerOpen}
-          .navCollapsed=${navCollapsed}
           .onboarding=${this.onboarding}
-          .terminalAvailable=${this.terminalAvailable}
-          .onToggleTerminal=${() =>
-            window.dispatchEvent(new CustomEvent("openclaw:terminal-toggle"))}
-          .onToggleDrawer=${(trigger: HTMLElement) => this.toggleNavDrawer(trigger)}
-          .onToggleCollapse=${() =>
-            context.navigation.update({
-              navCollapsed: !navCollapsed,
-            })}
-          .onNavigate=${(routeId: string, options?: ApplicationNavigationOptions) =>
-            this.navigate(routeId, options)}
+          .onOpenPalette=${this.openPalette}
+          .onToggleDrawer=${(trigger: HTMLElement) => this.toggleNavigationSurface(trigger)}
         ></openclaw-app-topbar>
         <div class="shell-nav">
           <openclaw-app-sidebar
@@ -773,6 +757,7 @@ class OpenClawShell extends LitElement {
             .sidebarMoreExpanded=${this.sidebarMoreExpanded}
             .themeMode=${context.theme.mode}
             .onOpenPalette=${this.openPalette}
+            .onToggleSidebar=${() => this.toggleNavigationSurface()}
             .onToggleMore=${() =>
               context.navigation.update({
                 sidebarMoreExpanded: !context.navigation.snapshot.sidebarMoreExpanded,

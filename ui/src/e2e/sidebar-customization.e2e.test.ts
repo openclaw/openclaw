@@ -70,7 +70,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       const sidebar = page.locator("openclaw-app-sidebar");
       const pinnedItems = sidebar.locator(".sidebar-nav > .nav-section__items > .nav-item");
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Overview"]);
-      await expect.poll(() => sidebar.locator(".sidebar-brand").count()).toBe(0);
+      await expect.poll(() => sidebar.locator(".sidebar-brand").count()).toBe(1);
       const settingsLink = sidebar.getByRole("link", { name: "Settings" });
       await expect.poll(() => settingsLink.isVisible()).toBe(true);
       await settingsLink.click();
@@ -101,9 +101,9 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
         )
         .not.toContain("Workboard");
 
-      const customizeButton = sidebar.getByRole("button", { name: "Customize sidebar" });
+      const customizeButton = sidebar.getByRole("button", { name: "Edit pinned items" });
       await customizeButton.click();
-      const menu = sidebar.getByRole("menu", { name: "Customize sidebar" });
+      const menu = sidebar.getByRole("menu", { name: "Edit pinned items" });
       await expect
         .poll(() => trimmedTextContents(menu.getByRole("menuitemcheckbox")))
         .not.toContain("Workboard");
@@ -133,7 +133,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await captureUiProof(page, "03-persisted-customization.png");
 
       await customizeButton.click();
-      await menu.getByRole("menuitem", { name: "Reset to defaults" }).click();
+      await menu.getByRole("menuitem", { name: "Reset pinned items" }).click();
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Overview"]);
 
       // The sidebar search field is the command palette entry point.
@@ -144,10 +144,12 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await page.keyboard.press("Escape");
       await expect.poll(() => paletteInput.isVisible()).toBe(false);
 
-      // The sidebar toggle lives in the topbar, macOS style.
+      // The sidebar toggle lives in the sidebar brand row on desktop.
       const collapseButton = page.getByRole("button", { name: "Collapse sidebar" });
       await expect
-        .poll(() => collapseButton.evaluate((element) => Boolean(element.closest(".topbar"))))
+        .poll(() =>
+          collapseButton.evaluate((element) => Boolean(element.closest(".sidebar-brand"))),
+        )
         .toBe(true);
       await collapseButton.click();
       await expect

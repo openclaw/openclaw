@@ -1570,7 +1570,7 @@ export const vi: TranslationMap = {
     gatewayStatus: "Trạng thái Gateway: {status}",
     commandPaletteTitle: "Tìm kiếm hoặc chuyển đến… (⌘K)",
     openCommandPalette: "Mở bảng lệnh",
-    docsOpensInNewTab: "{label} (mở trong tab mới)",
+    docsTooltip: "Documentation ↗",
     updateAvailable: "Có bản cập nhật:",
     runningVersion: "đang chạy v{version}",
     updating: "Đang cập nhật…",

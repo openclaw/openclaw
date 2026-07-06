@@ -1579,7 +1579,7 @@ export const fa: TranslationMap = {
     gatewayStatus: "وضعیت Gateway: {status}",
     commandPaletteTitle: "جست‌وجو یا رفتن به… (⌘K)",
     openCommandPalette: "باز کردن پالت فرمان",
-    docsOpensInNewTab: "{label} (در زبانهٔ جدید باز می‌شود)",
+    docsTooltip: "Documentation ↗",
     updateAvailable: "به‌روزرسانی در دسترس است:",
     runningVersion: "در حال اجرای v{version}",
     updating: "در حال به‌روزرسانی…",

@@ -1542,7 +1542,7 @@ export const zh_TW: TranslationMap = {
     gatewayStatus: "Gateway 狀態：{status}",
     commandPaletteTitle: "搜尋或跳至… (⌘K)",
     openCommandPalette: "開啟命令面板",
-    docsOpensInNewTab: "{label}（在新分頁開啟）",
+    docsTooltip: "Documentation ↗",
     updateAvailable: "有可用更新：",
     runningVersion: "執行中版本 v{version}",
     updating: "正在更新…",
