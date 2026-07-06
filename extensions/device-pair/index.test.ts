@@ -1039,7 +1039,7 @@ describe("device-pair /pair default setup code", () => {
     expect(requireText(result)).toContain("prefer gateway.tailscale.mode=serve");
   });
 
-  it.each(["ws://[2001:db8::1]:18789", "ws://[fec0::1]:18789"])(
+  it.each(["ws://[2001:db8::1]:18789", "ws://[fe7f::1]:18789", "ws://[fec0::1]:18789"])(
     "rejects non-LAN IPv6 cleartext setup url %s before issuing setup codes",
     async (publicUrl) => {
       const command = registerPairCommand({
