@@ -3,6 +3,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import type { PluginHookReplyDispatchResult } from "../../plugins/hooks.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
+import { setReplyPayloadMetadata, type ReplyPayload } from "../types.js";
 import {
   acpManagerRuntimeMocks,
   acpMocks,
@@ -348,6 +349,58 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     } finally {
       queuedOperation?.complete();
     }
+  });
+
+  it("dedupes byte-identical non-streaming final payload entries for one turn", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    const dispatcher = createDispatcher();
+    const replyPayload = {
+      text: "repeat once",
+      mediaUrls: ["file:///tmp/repeat.png"],
+      channelData: { telegram: { parseMode: "MarkdownV2" } },
+    } satisfies ReplyPayload;
+
+    const result = await dispatchReplyFromConfig({
+      ctx: createHookCtx(),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => [replyPayload, { ...replyPayload }],
+    });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(replyPayload);
+  });
+
+  it("preserves same-content final payloads with distinct route metadata", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    const dispatcher = createDispatcher();
+    const firstReply = setReplyPayloadMetadata(
+      { text: "same visible reply" } satisfies ReplyPayload,
+      {
+        replyDelivery: { chatType: "channel", replyToMode: "off" },
+        replyDeliverySource: { channel: "slack", accountId: "primary" },
+      },
+    );
+    const secondReply = setReplyPayloadMetadata(
+      { text: "same visible reply" } satisfies ReplyPayload,
+      {
+        replyDelivery: { chatType: "channel", replyToMode: "off" },
+        replyDeliverySource: { channel: "slack", accountId: "secondary" },
+      },
+    );
+
+    const result = await dispatchReplyFromConfig({
+      ctx: createHookCtx(),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => [firstReply, secondReply],
+    });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(2);
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(1, firstReply);
+    expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(2, secondReply);
   });
 
   it("clears the reply lane but defers follow-up admission until final delivery settles", async () => {
