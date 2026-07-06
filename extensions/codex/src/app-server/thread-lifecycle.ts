@@ -1729,7 +1729,10 @@ export function buildDeveloperInstructions(
     "You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.",
     buildDeferredDynamicToolManifest(options.dynamicTools),
     buildSkillWorkshopInstruction(options.dynamicTools),
-    "Use Codex native `spawn_agent` for Codex subagents. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation.",
+    // Codex defers native collab tools behind tool_search on search-capable
+    // models (codex-rs spec_plan add_collaboration_tools). Without this hint
+    // models cannot see spawn_agent and grab the always-direct sessions_spawn.
+    "Use Codex native `spawn_agent` for Codex subagents. `spawn_agent` and the other native collaboration tools may be deferred: when `spawn_agent` is not directly listed, load it with `tool_search` before spawning. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.",
     buildVisibleReplyInstruction(params, options.dynamicTools),
     nativeCommandGuidance,
     params.extraSystemPrompt,
