@@ -316,6 +316,47 @@ describe("plugin tools MCP server", () => {
     expect(failed.content).toEqual([{ type: "text", text: "Tool error: boom" }]);
   });
 
+  it("forwards isError from tool execution results that signal errors without throwing", async () => {
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "validation failed: missing field" }],
+      isError: true,
+    });
+    const tool = {
+      name: "memory_validate",
+      description: "Validate memory",
+      parameters: { type: "object", properties: {} },
+      execute,
+    } as unknown as AnyAgentTool;
+
+    const handlers = createPluginToolsMcpHandlers([tool]);
+    const result = await handlers.callTool({
+      name: "memory_validate",
+      arguments: {},
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual([{ type: "text", text: "validation failed: missing field" }]);
+  });
+
+  it("does not set isError when tool execution results succeed without isError flag", async () => {
+    const execute = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "success" }],
+    });
+    const tool = {
+      name: "memory_check",
+      description: "Check memory",
+      parameters: { type: "object", properties: {} },
+      execute,
+    } as unknown as AnyAgentTool;
+
+    const handlers = createPluginToolsMcpHandlers([tool]);
+    const result = await handlers.callTool({
+      name: "memory_check",
+      arguments: {},
+    });
+    expect(result.isError).toBeUndefined();
+    expect(result.content).toEqual([{ type: "text", text: "success" }]);
+  });
+
   it("reports approval requirements without opening plugin approvals on the MCP bridge", async () => {
     let hookCalls = 0;
     const onResolution = vi.fn();

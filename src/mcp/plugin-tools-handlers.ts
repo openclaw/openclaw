@@ -87,10 +87,15 @@ export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {
           result && typeof result === "object" && "content" in result
             ? (result as { content?: unknown }).content
             : result;
+        const isError =
+          result && typeof result === "object" && "isError" in result
+            ? (result as { isError?: boolean }).isError === true
+            : false;
         return {
           content: Array.isArray(rawContent)
             ? rawContent.map(toMcpContentBlock)
             : [{ type: "text", text: coerceChatContentText(rawContent) }],
+          ...(isError ? { isError: true } : {}),
         };
       } catch (err) {
         return {
