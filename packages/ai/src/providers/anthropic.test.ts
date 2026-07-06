@@ -1979,24 +1979,47 @@ describe("Anthropic provider", () => {
             provider: "anthropic",
             api: "anthropic-messages",
             model: "claude-sonnet-4-6",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
             content: [
               {
                 type: "thinking",
                 thinking: "internal thought block",
                 thinkingSignature: "sig_tool",
               },
-              { type: "toolCall", name: "some_tool", id: "call_1", args: {} },
+              { type: "toolCall", name: "some_tool", id: "call_1", arguments: {} },
             ],
             timestamp: 1,
           },
           {
-            role: "tool",
+            role: "toolResult",
             toolCallId: "call_1",
+            toolName: "some_tool",
+            isError: false,
             content: [{ type: "text", text: "tool output" }],
             timestamp: 2,
           },
           {
             role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "stop",
             content: [{ type: "text", text: "final answer" }],
             timestamp: 3,
           },
@@ -2005,7 +2028,6 @@ describe("Anthropic provider", () => {
       },
       {
         apiKey: "sk-ant-provider",
-        reasoning: "off",
         onPayload: (payload) => {
           capturedPayload = payload;
           throw new Error("stop before network");
