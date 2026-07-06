@@ -5,7 +5,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
-import { assertBrowserNavigationAllowed } from "./navigation-guard.js";
 import type { BrowserRouteContext, BrowserServerState } from "./server-context.js";
 import { movePathToTrash } from "./trash.js";
 
@@ -203,24 +202,13 @@ describe("BrowserProfilesService", () => {
     expect(profiles.work?.cdpPort).toBe(18801);
   });
 
-  it("accepts an operator-selected CDP host without widening navigation policy", async () => {
+  it("accepts per-profile cdpUrl for remote Chrome", async () => {
     const resolved = resolveBrowserConfig({
-      ssrfPolicy: {
-        dangerouslyAllowPrivateNetwork: true,
-        hostnameAllowlist: ["browserless.example.com"],
-      },
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
     });
     const { ctx } = createCtx(resolved);
 
-    vi.mocked(getRuntimeConfig).mockReturnValue({
-      browser: {
-        ssrfPolicy: {
-          dangerouslyAllowPrivateNetwork: true,
-          hostnameAllowlist: ["browserless.example.com"],
-        },
-        profiles: {},
-      },
-    });
+    vi.mocked(getRuntimeConfig).mockReturnValue({ browser: { profiles: {} } });
 
     const service = createBrowserProfilesService(ctx);
     const result = await service.createProfile({
@@ -233,16 +221,6 @@ describe("BrowserProfilesService", () => {
     expect(result.isRemote).toBe(true);
     const profiles = writtenBrowserConfig().profiles as Record<string, { cdpUrl?: string }>;
     expect(profiles.remote?.cdpUrl).toBe("http://10.0.0.42:9222");
-    expect(resolved.ssrfPolicy).toEqual({
-      dangerouslyAllowPrivateNetwork: true,
-      hostnameAllowlist: ["browserless.example.com"],
-    });
-    await expect(
-      assertBrowserNavigationAllowed({
-        url: "http://10.0.0.42:9222",
-        ssrfPolicy: resolved.ssrfPolicy,
-      }),
-    ).rejects.toThrow(/not in allowlist/i);
   });
 
   it("rejects private-network cdpUrl when strict SSRF mode is enabled", async () => {

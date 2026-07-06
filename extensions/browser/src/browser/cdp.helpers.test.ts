@@ -356,21 +356,6 @@ describe("CDP reachability policy", () => {
     ).rejects.toThrow(/not in allowlist/i);
   });
 
-  it("preserves a restrictive hostname allowlist when private networking is enabled", () => {
-    const profile = createProfile({});
-
-    expect(
-      resolveCdpReachabilityPolicy(profile, {
-        dangerouslyAllowPrivateNetwork: true,
-        hostnameAllowlist: ["browserless.example.com"],
-      }),
-    ).toEqual({
-      dangerouslyAllowPrivateNetwork: true,
-      hostnameAllowlist: ["browserless.example.com", "172.29.128.1"],
-      allowedHostnames: ["172.29.128.1"],
-    });
-  });
-
   it("keeps local managed loopback CDP control outside browser SSRF policy", () => {
     const profile = createProfile({
       cdpUrl: "http://127.0.0.1:18800",

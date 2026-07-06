@@ -8,7 +8,6 @@ import { mutateConfigFile } from "../config/config.js";
 import type { BrowserProfileConfig } from "../config/config.js";
 import { deriveDefaultBrowserCdpPortRange } from "../config/port-defaults.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { resolveCdpProfileCreationPolicy } from "./cdp-reachability-policy.js";
 import { assertCdpEndpointAllowed } from "./cdp.helpers.js";
 import { resolveBrowserConfig, type ResolvedBrowserConfig } from "./config.js";
 import {
@@ -114,10 +113,7 @@ export async function createBrowserProfileConfig(params: {
       let nextProfileConfig: BrowserProfileConfig;
       if (params.parsedCdpUrl) {
         try {
-          await assertCdpEndpointAllowed(
-            params.parsedCdpUrl,
-            resolveCdpProfileCreationPolicy(params.parsedCdpUrl, latestResolved.ssrfPolicy),
-          );
+          await assertCdpEndpointAllowed(params.parsedCdpUrl, latestResolved.ssrfPolicy);
         } catch (err) {
           throw new BrowserValidationError(formatErrorMessage(err));
         }

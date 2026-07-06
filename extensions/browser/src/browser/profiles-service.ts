@@ -10,7 +10,6 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { getRuntimeConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveCdpProfileCreationPolicy } from "./cdp-reachability-policy.js";
 import { assertCdpEndpointAllowed } from "./cdp.helpers.js";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
 import { createBrowserProfileConfig, deleteBrowserProfileConfig } from "./config-mutations.js";
@@ -105,10 +104,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       let parsed: ReturnType<typeof parseHttpUrl>;
       try {
         parsed = parseHttpUrl(rawCdpUrl, "browser.profiles.cdpUrl");
-        await assertCdpEndpointAllowed(
-          parsed.normalized,
-          resolveCdpProfileCreationPolicy(parsed.normalized, state.resolved.ssrfPolicy),
-        );
+        await assertCdpEndpointAllowed(parsed.normalized, state.resolved.ssrfPolicy);
       } catch (err) {
         throw new BrowserValidationError(formatErrorMessage(err));
       }

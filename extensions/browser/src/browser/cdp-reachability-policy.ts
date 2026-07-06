@@ -10,27 +10,16 @@ import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import { withAllowedHostname } from "./ssrf-policy-helpers.js";
 
 function withCdpHostnameAllowed(
-  hostname: string | undefined,
+  profile: ResolvedBrowserProfile,
   ssrfPolicy?: SsrFPolicy,
 ): SsrFPolicy | undefined {
-  if (!ssrfPolicy || !hostname) {
+  if (!ssrfPolicy || !profile.cdpHost) {
     return ssrfPolicy;
   }
-  if (isPrivateNetworkAllowedByPolicy(ssrfPolicy) && !ssrfPolicy.hostnameAllowlist?.length) {
+  if (isPrivateNetworkAllowedByPolicy(ssrfPolicy)) {
     return ssrfPolicy;
   }
-  return withAllowedHostname(ssrfPolicy, hostname);
-}
-
-/** Keep a selected CDP URL reachable when private control traffic is already enabled. */
-export function resolveCdpProfileCreationPolicy(
-  cdpUrl: string,
-  ssrfPolicy?: SsrFPolicy,
-): SsrFPolicy | undefined {
-  if (!isPrivateNetworkAllowedByPolicy(ssrfPolicy)) {
-    return ssrfPolicy;
-  }
-  return withCdpHostnameAllowed(new URL(cdpUrl).hostname, ssrfPolicy);
+  return withAllowedHostname(ssrfPolicy, profile.cdpHost);
 }
 
 export function resolveCdpReachabilityPolicy(
@@ -44,7 +33,7 @@ export function resolveCdpReachabilityPolicy(
   if (!capabilities.isRemote && profile.cdpIsLoopback && profile.driver === "openclaw") {
     return undefined;
   }
-  return withCdpHostnameAllowed(profile.cdpHost, ssrfPolicy);
+  return withCdpHostnameAllowed(profile, ssrfPolicy);
 }
 
 /** Alias used by callers that treat reachability and control as one CDP policy. */
