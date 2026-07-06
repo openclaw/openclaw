@@ -551,12 +551,8 @@ actor PortGuardian {
         guard URL(fileURLWithPath: tokens[0]).lastPathComponent.lowercased() == "node" else {
             return false
         }
-        guard let entrypointIndex = tokens.firstIndex(where: self.isOpenClawDistEntrypointToken),
-              entrypointIndex + 1 < tokens.count
-        else {
-            return false
-        }
-        return tokens[entrypointIndex + 1].lowercased() == "gateway"
+        return self.isOpenClawDistEntrypointToken(tokens[1])
+            && tokens[2].lowercased() == "gateway"
     }
 
     private static func isOpenClawDistEntrypointToken(_ token: String) -> Bool {
@@ -564,11 +560,7 @@ actor PortGuardian {
         guard normalized.hasSuffix("/dist/index.js") else { return false }
         return normalized
             .split(separator: "/", omittingEmptySubsequences: true)
-            .contains { component in
-                component == "openclaw"
-                    || component.hasPrefix("openclaw-")
-                    || component.hasSuffix("-openclaw")
-            }
+            .contains("openclaw")
     }
 
     private static func unquoteCommandToken(_ token: String) -> String {
