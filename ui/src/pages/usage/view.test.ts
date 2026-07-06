@@ -219,6 +219,16 @@ describe("renderUsage", () => {
                       outputTokens: 250,
                       totalTokens: 1_250,
                     },
+                    {
+                      date: "2026-01-01",
+                      amount: 0,
+                      requests: 1,
+                      inputTokens: 50,
+                      cacheReadTokens: 0,
+                      cacheWriteTokens: 0,
+                      outputTokens: 10,
+                      totalTokens: 60,
+                    },
                   ],
                   models: [
                     {
@@ -243,10 +253,13 @@ describe("renderUsage", () => {
 
     const card = container.querySelector(".provider-usage-card");
     expect(card?.textContent).toContain("$12.50");
-    expect(card?.textContent).toContain("42 requests");
+    expect(card?.textContent).toContain("43 requests");
     expect(card?.textContent).toContain("gpt-5.5");
     expect(card?.textContent).toContain("Responses");
-    expect(card?.querySelectorAll(".provider-cost-chart span")).toHaveLength(1);
+    const bars = card?.querySelectorAll<HTMLElement>(".provider-cost-chart span");
+    expect(bars).toHaveLength(2);
+    expect(bars?.[0]?.style.height).toBe("100%");
+    expect(bars?.[1]?.style.height).toBe("0%");
   });
 
   it("filters visible sessions when an agent scope is selected", () => {
