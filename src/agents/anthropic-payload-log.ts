@@ -190,13 +190,25 @@ export function createAnthropicPayloadLogger(params: {
       usage: redactAgentDiagnosticPayload(usage),
       error: errorMessage,
     });
-    log.info("anthropic usage", {
-      runId: params.runId,
-      sessionId: params.sessionId,
-      usage,
-    });
+    log.info(
+      "anthropic usage",
+      {
+        runId: params.runId,
+        sessionId: params.sessionId,
+        usage,
+      },
+      { event: "agent.anthropic.payload.anthropic.usage", outcome: "success", reason: "completed" },
+    );
   };
 
-  log.info("anthropic payload logger enabled", { filePath: writer.filePath });
+  log.info(
+    "anthropic payload logger enabled",
+    { filePath: writer.filePath },
+    {
+      event: "agent.anthropic.payload.logger",
+      outcome: "success",
+      reason: "enabled",
+    },
+  );
   return { enabled: true, wrapStreamFn, recordUsage };
 }

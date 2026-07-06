@@ -281,43 +281,51 @@ export function logModelFallbackDecision(
           AUTH_DECISION_LOG_COALESCE_WINDOW_MS / 1000
         }s)`
       : "";
-  decisionLog.warn("model fallback decision", {
-    event: "model_fallback_decision",
-    tags: ["error_handling", "model_fallback", params.decision],
-    runId: params.runId,
-    sessionId: params.sessionId,
-    lane: params.lane,
-    decision: params.decision,
-    requestedProvider: params.requestedProvider,
-    requestedModel: params.requestedModel,
-    candidateProvider: params.candidate.provider,
-    candidateModel: params.candidate.model,
-    attempt: params.attempt,
-    total: params.total,
-    reason: params.reason,
-    status: params.status,
-    code: params.code,
-    ...observedError,
-    ...fallbackStepFields,
-    nextCandidateProvider: params.nextCandidate?.provider,
-    nextCandidateModel: params.nextCandidate?.model,
-    isPrimary: params.isPrimary,
-    requestedModelMatched: params.requestedModelMatched,
-    fallbackConfigured: params.fallbackConfigured,
-    allowTransientCooldownProbe: params.allowTransientCooldownProbe,
-    profileCount: params.profileCount,
-    ...(suppressedDuplicateCount > 0 ? { suppressedDuplicateCount } : {}),
-    previousAttempts: params.previousAttempts?.map((attempt) => ({
-      provider: attempt.provider,
-      model: attempt.model,
-      reason: attempt.reason,
-      status: attempt.status,
-      code: attempt.code,
-      ...buildErrorObservationFields(attempt.error),
-    })),
-    consoleMessage:
-      `model fallback decision: decision=${params.decision} requested=${sanitizeForLog(params.requestedProvider)}/${sanitizeForLog(params.requestedModel)} ` +
-      `candidate=${sanitizeForLog(params.candidate.provider)}/${sanitizeForLog(params.candidate.model)} reason=${reasonText}${providerErrorTypeSuffix} next=${nextText}${detailSuffix}${suppressedSuffix}`,
-  });
+  decisionLog.warn(
+    "model fallback decision",
+    {
+      event: "model_decision",
+      tags: ["error_handling", "model_fallback", params.decision],
+      runId: params.runId,
+      sessionId: params.sessionId,
+      lane: params.lane,
+      decision: params.decision,
+      requestedProvider: params.requestedProvider,
+      requestedModel: params.requestedModel,
+      candidateProvider: params.candidate.provider,
+      candidateModel: params.candidate.model,
+      attempt: params.attempt,
+      total: params.total,
+      reason: params.reason,
+      status: params.status,
+      code: params.code,
+      ...observedError,
+      ...fallbackStepFields,
+      nextCandidateProvider: params.nextCandidate?.provider,
+      nextCandidateModel: params.nextCandidate?.model,
+      isPrimary: params.isPrimary,
+      requestedModelMatched: params.requestedModelMatched,
+      fallbackConfigured: params.fallbackConfigured,
+      allowTransientCooldownProbe: params.allowTransientCooldownProbe,
+      profileCount: params.profileCount,
+      ...(suppressedDuplicateCount > 0 ? { suppressedDuplicateCount } : {}),
+      previousAttempts: params.previousAttempts?.map((attempt) => ({
+        provider: attempt.provider,
+        model: attempt.model,
+        reason: attempt.reason,
+        status: attempt.status,
+        code: attempt.code,
+        ...buildErrorObservationFields(attempt.error),
+      })),
+      consoleMessage:
+        `model fallback decision: decision=${params.decision} requested=${sanitizeForLog(params.requestedProvider)}/${sanitizeForLog(params.requestedModel)} ` +
+        `candidate=${sanitizeForLog(params.candidate.provider)}/${sanitizeForLog(params.candidate.model)} reason=${reasonText}${providerErrorTypeSuffix} next=${nextText}${detailSuffix}${suppressedSuffix}`,
+    },
+    {
+      event: "model.decision",
+      outcome: "warning",
+      reason: params.reason ?? params.decision,
+    },
+  );
   return fallbackStepFields;
 }

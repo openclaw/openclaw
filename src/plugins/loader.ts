@@ -2423,6 +2423,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       if (!validatedConfig.ok) {
         logger.error(
           `[plugins] ${record.id} invalid config: ${validatedConfig.errors?.join(", ")}`,
+          undefined,
+          {
+            event: "plugins.loader.config",
+            category: "plugins.loader",
+            outcome: "failure",
+            reason: "config_invalid",
+          },
         );
         pushPluginLoadError(`invalid config: ${validatedConfig.errors?.join(", ")}`);
         continue;
@@ -2469,7 +2476,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         // code may have already executed even if evaluation later throws.
         recordImportedPluginId(record.id);
         pluginLoadAttemptCount++;
-        logger.debug?.(`[plugins] loading ${record.id} from ${safeSource}`);
+        logger.debug?.(`[plugins] loading ${record.id} from ${safeSource}`, undefined, {
+          event: "plugins.loader.module_loading",
+          category: "plugins.loader",
+          outcome: "success",
+          reason: "module_loading",
+        });
         mod = withProfile(
           { pluginId: record.id, source: safeSource },
           registrationMode,
@@ -2828,10 +2840,22 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         if (bundledChannelWrongLoaderError) {
           logger.error(
             `[plugins] ${record.id} ${bundledChannelWrongLoaderError}; ensure plugin is loaded via bundled channel discovery, not legacy plugin loader`,
+            undefined,
+            {
+              event: "plugins.loader.wrong_loader",
+              category: "plugins.loader",
+              outcome: "failure",
+              reason: "wrong_loader",
+            },
           );
           pushPluginLoadError(bundledChannelWrongLoaderError);
         } else {
-          logger.error(`[plugins] ${record.id} missing register/activate export`);
+          logger.error(`[plugins] ${record.id} missing register/activate export`, undefined, {
+            event: "plugins.loader.export",
+            category: "plugins.loader",
+            outcome: "failure",
+            reason: "missing_export",
+          });
           pushPluginLoadError(formatMissingPluginRegisterError(mod, env));
         }
         continue;
@@ -2916,6 +2940,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     if (pluginLoadAttemptCount > 0) {
       logger.debug?.(
         `[plugins] loaded ${registry.plugins.length} plugin(s) (${pluginLoadAttemptCount} attempted) in ${pluginLoadElapsedMs.toFixed(1)}ms`,
+        undefined,
+        {
+          event: "plugins.loader",
+          category: "plugins.loader",
+          outcome: "success",
+          reason: "completed",
+        },
       );
     }
 
@@ -2946,6 +2977,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           `[plugins] ${failedPlugins.length} plugin(s) failed to initialize (${formatPluginFailureSummary(
             failedPlugins,
           )}). Run 'openclaw plugins inspect <id> --runtime --json' for runtime diagnostics, 'openclaw plugins list' for registry state, and restart the Gateway after plugin code or load-path changes.`,
+          undefined,
+          {
+            event: "plugins.loader.initialization",
+            category: "plugins.loader",
+            outcome: "failure",
+            reason: "initialization_failed",
+          },
         );
       }
     }
@@ -3213,7 +3251,16 @@ export async function loadOpenClawPluginCliRegistry(
       value: entry?.config,
     });
     if (!validatedConfig.ok) {
-      logger.error(`[plugins] ${record.id} invalid config: ${validatedConfig.errors?.join(", ")}`);
+      logger.error(
+        `[plugins] ${record.id} invalid config: ${validatedConfig.errors?.join(", ")}`,
+        undefined,
+        {
+          event: "plugins.loader.config",
+          category: "plugins.loader",
+          outcome: "failure",
+          reason: "config_invalid",
+        },
+      );
       pushPluginLoadError(`invalid config: ${validatedConfig.errors?.join(", ")}`);
       continue;
     }
@@ -3326,10 +3373,22 @@ export async function loadOpenClawPluginCliRegistry(
       if (bundledChannelWrongLoaderError) {
         logger.error(
           `[plugins] ${record.id} ${bundledChannelWrongLoaderError}; ensure plugin is loaded via bundled channel discovery, not legacy plugin loader`,
+          undefined,
+          {
+            event: "plugins.loader.wrong_loader",
+            category: "plugins.loader",
+            outcome: "failure",
+            reason: "wrong_loader",
+          },
         );
         pushPluginLoadError(bundledChannelWrongLoaderError);
       } else {
-        logger.error(`[plugins] ${record.id} missing register/activate export`);
+        logger.error(`[plugins] ${record.id} missing register/activate export`, undefined, {
+          event: "plugins.loader.export",
+          category: "plugins.loader",
+          outcome: "failure",
+          reason: "missing_export",
+        });
         pushPluginLoadError(formatMissingPluginRegisterError(mod, env));
       }
       continue;

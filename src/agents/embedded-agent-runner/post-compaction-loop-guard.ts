@@ -68,7 +68,11 @@ export function createPostCompactionLoopGuard(
     state.remainingAttempts = state.windowSize;
     state.history = [];
     if (state.enabled) {
-      log.info(`post-compaction guard armed for ${state.windowSize} attempts`);
+      log.info(`post-compaction guard armed for ${state.windowSize} attempts`, undefined, {
+        event: "agents.post.compaction.guard.armed.attempts",
+        outcome: "success",
+        reason: "completed",
+      });
     }
   };
 
@@ -95,6 +99,12 @@ export function createPostCompactionLoopGuard(
     if (matches.length >= state.windowSize) {
       log.error(
         `post-compaction loop persisted: tool=${call.toolName} repeated ${matches.length} times with identical args+result post-compaction`,
+        undefined,
+        {
+          event: "agents.post.compaction.tool.repetition",
+          outcome: "failure",
+          reason: "failed",
+        },
       );
       return {
         shouldAbort: true,

@@ -196,7 +196,12 @@ async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
     },
   });
   if (forkDecisionWarning) {
-    params.logger.warn(`[talk] ${forkDecisionWarning}`);
+    params.logger.warn(`[talk] ${forkDecisionWarning}`, undefined, {
+      event: "talk.agent_consult.fork",
+      category: "talk.agent_consult",
+      outcome: "warning",
+      reason: "fork_skipped",
+    });
   }
   if (patched?.sessionId?.trim()) {
     return patched;
@@ -317,7 +322,12 @@ export async function consultRealtimeVoiceAgent(params: {
   const text = collectRealtimeVoiceAgentConsultVisibleText(result.payloads ?? []);
   if (!text) {
     const reason = result.meta?.aborted ? "agent run aborted" : "agent returned no speakable text";
-    params.logger.warn(`[talk] agent consult produced no answer: ${reason}`);
+    params.logger.warn(`[talk] agent consult produced no answer: ${reason}`, undefined, {
+      event: "talk.agent_consult.no_answer",
+      category: "talk.agent_consult",
+      outcome: "warning",
+      reason: result.meta?.aborted ? "aborted" : "empty_answer",
+    });
     return { text: params.fallbackText ?? "I need a moment to verify that before answering." };
   }
   return { text };

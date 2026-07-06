@@ -82,7 +82,14 @@ export function createLocalGatewayRequestContext(
     getHealthCache: () => null,
     refreshHealthSnapshot: async () =>
       ({}) as Awaited<ReturnType<GatewayRequestContext["refreshHealthSnapshot"]>>,
-    logHealth: { error: (message) => logGateway.error(message) },
+    logHealth: {
+      error: (message) =>
+        logGateway.error(message, undefined, {
+          event: "gateway.local",
+          outcome: "failure",
+          reason: "failed",
+        }),
+    },
     logGateway,
     incrementPresenceVersion: () => 0,
     getHealthVersion: () => 0,

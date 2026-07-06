@@ -89,7 +89,11 @@ async function shutdownStep(
     return true;
   } catch (err: unknown) {
     const detail = err instanceof Error ? err.message : String(err);
-    shutdownLog.warn(`${name}: ${detail}`);
+    shutdownLog.warn(`${name}: ${detail}`, undefined, {
+      event: "gateway.shutdown.shutdownstep",
+      outcome: "warning",
+      reason: "warning",
+    });
     recordShutdownWarning(warnings, name);
     return false;
   }
@@ -324,6 +328,12 @@ async function settleTerminalSessionPersistenceForRestart(
   if (!results) {
     shutdownLog.warn(
       `terminal session persistence did not settle within ${RESTART_TERMINAL_PERSISTENCE_WAIT_TIMEOUT_MS}ms; preserving restart recovery`,
+      undefined,
+      {
+        event: "gateway.shutdown.session_persistence",
+        outcome: "warning",
+        reason: "timeout",
+      },
     );
     return;
   }
@@ -384,6 +394,12 @@ async function markActiveRunsForRestartRecovery(
     if (firstOutcome === "timeout") {
       shutdownLog.warn(
         `restart session marker did not settle within ${RESTART_MARKER_SLOW_WARNING_MS}ms; waiting before shutdown`,
+        undefined,
+        {
+          event: "gateway.shutdown.restart.session.marker.slow",
+          outcome: "warning",
+          reason: "warning",
+        },
       );
       recordShutdownWarning(params.warnings, "restart-main-session-marker");
       const delayedOutcome = await markerOutcome;
@@ -397,7 +413,15 @@ async function markActiveRunsForRestartRecovery(
       params.restartRecoveryCandidates?.delete(run.runId);
     }
   } catch (err) {
-    shutdownLog.warn(`failed to mark active main session(s) for restart recovery: ${String(err)}`);
+    shutdownLog.warn(
+      `failed to mark active main session(s) for restart recovery: ${String(err)}`,
+      undefined,
+      {
+        event: "gateway.shutdown.restart.session.marker",
+        outcome: "warning",
+        reason: "failed",
+      },
+    );
     recordShutdownWarning(params.warnings, "restart-main-session-marker");
   }
 }
@@ -457,6 +481,12 @@ async function drainRestartPendingRepliesForShutdown(
   if (timeoutMs > 0) {
     shutdownLog.info(
       `waiting for ${formatRestartReplyDrainDetails(initialCounts)} before restart shutdown (timeout ${timeoutMs}ms)`,
+      undefined,
+      {
+        event: "gateway.shutdown.restart_wait",
+        outcome: "warning",
+        reason: "timeout",
+      },
     );
   }
 
@@ -471,12 +501,22 @@ async function drainRestartPendingRepliesForShutdown(
       reason: "gateway restart shutdown",
     });
     abortActiveRunsForRestart(params);
-    shutdownLog.info(`restart reply drain completed after ${drainResult.elapsedMs}ms`);
+    shutdownLog.info(`restart reply drain completed after ${drainResult.elapsedMs}ms`, undefined, {
+      event: "gateway.shutdown.restart.reply.drain",
+      outcome: "success",
+      reason: "completed",
+    });
     return;
   }
 
   shutdownLog.warn(
     `restart reply drain timed out after ${drainResult.elapsedMs}ms with ${formatRestartReplyDrainDetails(drainResult.counts)} still active; continuing shutdown`,
+    undefined,
+    {
+      event: "gateway.shutdown.restart.reply.drain",
+      outcome: "warning",
+      reason: "timeout",
+    },
   );
   recordShutdownWarning(params.warnings, "restart-reply-drain");
 
@@ -497,7 +537,11 @@ async function drainRestartPendingRepliesForShutdown(
     return;
   }
 
-  shutdownLog.warn(`aborted ${abortedRuns} active run(s) during restart shutdown`);
+  shutdownLog.warn(`aborted ${abortedRuns} active run(s) during restart shutdown`, undefined, {
+    event: "gateway.shutdown.run_abort",
+    outcome: "warning",
+    reason: "restart_shutdown",
+  });
   const postAbortDrain = await waitForRestartReplyDrain({
     getPendingReplyCount: params.getPendingReplyCount,
     chatAbortControllers: params.chatAbortControllers,
@@ -505,7 +549,11 @@ async function drainRestartPendingRepliesForShutdown(
     pollMs: RESTART_REPLY_POST_ABORT_DRAIN_POLL_MS,
   });
   if (postAbortDrain.drained) {
-    shutdownLog.info("restart reply drain completed after abort cleanup");
+    shutdownLog.info("restart reply drain completed after abort cleanup", undefined, {
+      event: "gateway.shutdown.restart.reply.drain.abort.cleanup",
+      outcome: "success",
+      reason: "completed",
+    });
   }
 }
 
@@ -528,6 +576,12 @@ async function triggerGatewayLifecycleHookWithTimeout(params: {
     if (result === "timeout") {
       shutdownLog.warn(
         `${params.hookName} hook timed out after ${params.timeoutMs}ms; continuing shutdown`,
+        undefined,
+        {
+          event: "gateway.shutdown.hook",
+          outcome: "warning",
+          reason: "timeout",
+        },
       );
     }
     return result;
@@ -547,12 +601,26 @@ async function disposeRuntimeWithShutdownGrace(params: {
   const disposePromise = Promise.resolve()
     .then(params.dispose)
     .catch((err: unknown) => {
-      shutdownLog.warn(`${params.label} runtime disposal failed during shutdown: ${String(err)}`);
+      shutdownLog.warn(
+        `${params.label} runtime disposal failed during shutdown: ${String(err)}`,
+        undefined,
+        {
+          event: "gateway.shutdown.runtime.disposal.shutdown",
+          outcome: "warning",
+          reason: "failed",
+        },
+      );
       recordShutdownWarning(params.warnings, params.label);
     });
   const disposeTimeout = createTimeoutRace(params.graceMs, () => {
     shutdownLog.warn(
       `${params.label} runtime disposal exceeded ${params.graceMs}ms; continuing shutdown`,
+      undefined,
+      {
+        event: "gateway.shutdown.runtime_disposal",
+        outcome: "warning",
+        reason: "timeout",
+      },
     );
     recordShutdownWarning(params.warnings, params.label);
   });
@@ -621,7 +689,11 @@ async function waitForHttpClose(params: {
       timeout.promise,
     ]).catch((err: unknown) => {
       const detail = err instanceof Error ? err.message : String(err);
-      shutdownLog.warn(`${params.label}: ${detail}`);
+      shutdownLog.warn(`${params.label}: ${detail}`, undefined, {
+        event: "gateway.shutdown.waitforhttpclose",
+        outcome: "warning",
+        reason: "warning",
+      });
       recordShutdownWarning(params.warnings, params.label);
       return true;
     });
@@ -682,7 +754,11 @@ export function createGatewayCloseHandler(
     const measureCloseStep = <T>(name: string, run: () => Promise<T> | T) =>
       measureGatewayRestartTrace(`restart.close.${name}`, run, [["reason", reason]]);
     try {
-      shutdownLog.info(`shutdown started: ${reason}`);
+      shutdownLog.info(`shutdown started: ${reason}`, undefined, {
+        event: "gateway.shutdown",
+        outcome: "success",
+        reason: "started",
+      });
 
       await measureCloseStep("gateway-shutdown-hook", () =>
         shutdownStep(
@@ -777,6 +853,12 @@ export function createGatewayCloseHandler(
               if (result.timedOut) {
                 shutdownLog.warn(
                   `session-end-drain timed out after ${ACTIVE_SESSIONS_SHUTDOWN_DRAIN_TIMEOUT_MS}ms after ${result.emittedSessionIds.length} sessions; continuing shutdown`,
+                  undefined,
+                  {
+                    event: "gateway.shutdown.session_end.drain",
+                    outcome: "warning",
+                    reason: "timeout",
+                  },
                 );
                 recordShutdownWarning(warnings, "session-end-drain");
               }
@@ -877,7 +959,11 @@ export function createGatewayCloseHandler(
         }
       }
       if (clientCloseFailures > 0) {
-        shutdownLog.warn(`failed to close ${clientCloseFailures} WebSocket client(s)`);
+        shutdownLog.warn(`failed to close ${clientCloseFailures} WebSocket client(s)`, undefined, {
+          event: "gateway.shutdown.close.websocket.client",
+          outcome: "warning",
+          reason: "failed",
+        });
         recordShutdownWarning(warnings, "ws-clients");
       }
       params.clients.clear();
@@ -898,6 +984,12 @@ export function createGatewayCloseHandler(
         if (!closedWithinGrace) {
           shutdownLog.warn(
             `websocket server close exceeded ${WEBSOCKET_CLOSE_GRACE_MS}ms; forcing shutdown continuation with ${wsClients.size} tracked client(s)`,
+            undefined,
+            {
+              event: "gateway.shutdown.websocket",
+              outcome: "warning",
+              reason: "force_close_timeout",
+            },
           );
           recordShutdownWarning(warnings, "websocket-server");
           for (const client of wsClients) {
@@ -910,6 +1002,12 @@ export function createGatewayCloseHandler(
           const websocketForceTimeout = createTimeoutRace(WEBSOCKET_CLOSE_FORCE_CONTINUE_MS, () => {
             shutdownLog.warn(
               `websocket server close still pending after ${WEBSOCKET_CLOSE_FORCE_CONTINUE_MS}ms force window; continuing shutdown`,
+              undefined,
+              {
+                event: "gateway.shutdown.websocket",
+                outcome: "warning",
+                reason: "force_close_still_pending",
+              },
             );
           });
           await Promise.race([closePromise, websocketForceTimeout.promise]);
@@ -949,6 +1047,12 @@ export function createGatewayCloseHandler(
           if (!closedWithinGrace) {
             shutdownLog.warn(
               `${label} close exceeded ${HTTP_CLOSE_GRACE_MS}ms; forcing connection shutdown and waiting for close`,
+              undefined,
+              {
+                event: "gateway.shutdown.close.connection.shutdown.waiting",
+                outcome: "warning",
+                reason: "warning",
+              },
             );
             recordShutdownWarning(warnings, label);
             httpServer.closeAllConnections?.();
@@ -978,9 +1082,19 @@ export function createGatewayCloseHandler(
     if (warnings.length > 0) {
       shutdownLog.warn(
         `shutdown completed in ${durationMs}ms with warnings: ${warnings.join(", ")}`,
+        undefined,
+        {
+          event: "gateway.shutdown",
+          outcome: "warning",
+          reason: "completed_with_warnings",
+        },
       );
     } else {
-      shutdownLog.info(`shutdown completed cleanly in ${durationMs}ms`);
+      shutdownLog.info(`shutdown completed cleanly in ${durationMs}ms`, undefined, {
+        event: "gateway.shutdown",
+        outcome: "success",
+        reason: "completed",
+      });
     }
 
     recordGatewayRestartTrace("restart.close.total", durationMs, [

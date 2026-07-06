@@ -8,6 +8,7 @@ import type {
   TextToSpeechStream,
   TextToSpeechTelephony,
 } from "../../plugin-sdk/tts-runtime.types.js";
+import type { PluginLogSemantics } from "../logging-types.js";
 import type { PluginRuntimeTaskFlows, PluginRuntimeTaskRuns } from "./runtime-tasks.types.js";
 
 export type { HeartbeatRunResult };
@@ -112,10 +113,10 @@ export type PluginRuntimeThinkingPolicy = {
 
 /** Structured logger surface injected into runtime-backed plugin helpers. */
 export type RuntimeLogger = {
-  debug?: (message: string, meta?: Record<string, unknown>) => void;
-  info: (message: string, meta?: Record<string, unknown>) => void;
-  warn: (message: string, meta?: Record<string, unknown>) => void;
-  error: (message: string, meta?: Record<string, unknown>) => void;
+  debug?: (message: string, meta?: Record<string, unknown>, semantics?: PluginLogSemantics) => void;
+  info: (message: string, meta?: Record<string, unknown>, semantics?: PluginLogSemantics) => void;
+  warn: (message: string, meta?: Record<string, unknown>, semantics?: PluginLogSemantics) => void;
+  error: (message: string, meta?: Record<string, unknown>, semantics?: PluginLogSemantics) => void;
 };
 
 export type RunHeartbeatOnceOptions = {

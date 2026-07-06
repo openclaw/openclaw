@@ -44,6 +44,8 @@ export type OpenClawPluginServiceContext =
   import("../plugins/types.js").OpenClawPluginServiceContext;
 export type OpenClawPluginToolContext = import("../plugins/types.js").OpenClawPluginToolContext;
 export type OpenClawPluginToolFactory = import("../plugins/types.js").OpenClawPluginToolFactory;
+export type PluginLogOutcome = import("../plugins/types.js").PluginLogOutcome;
+export type PluginLogSemantics = import("../plugins/types.js").PluginLogSemantics;
 export type PluginLogger = import("../plugins/types.js").PluginLogger;
 export type ProviderAugmentModelCatalogContext =
   import("../plugins/types.js").ProviderAugmentModelCatalogContext;

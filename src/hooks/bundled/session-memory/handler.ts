@@ -137,7 +137,15 @@ export async function flushSessionMemoryWritesForTest(): Promise<void> {
 
 async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<void> {
   try {
-    log.debug("Hook triggered for reset/new command", { action: event.action });
+    log.debug(
+      "Hook triggered for reset/new command",
+      { action: event.action },
+      {
+        event: "hooks.session.memory.hook.triggered.reset.new.command",
+        outcome: "success",
+        reason: "completed",
+      },
+    );
 
     const context = event.context || {};
     const cfg = context.cfg as OpenClawConfig | undefined;
@@ -191,16 +199,32 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
           continue;
         }
         currentSessionFile = recoveredSessionFile;
-        log.debug("Found previous session file", { file: currentSessionFile });
+        log.debug(
+          "Found previous session file",
+          { file: currentSessionFile },
+          {
+            event: "hooks.session.memory.found.previous.session.file",
+            outcome: "success",
+            reason: "completed",
+          },
+        );
         break;
       }
     }
 
-    log.debug("Session context resolved", {
-      sessionId: currentSessionId,
-      sessionFile: currentSessionFile,
-      hasCfg: Boolean(cfg),
-    });
+    log.debug(
+      "Session context resolved",
+      {
+        sessionId: currentSessionId,
+        sessionFile: currentSessionFile,
+        hasCfg: Boolean(cfg),
+      },
+      {
+        event: "hooks.session.memory.session.context.resolved",
+        outcome: "success",
+        reason: "resolved",
+      },
+    );
 
     const sessionFile = currentSessionFile || undefined;
 
@@ -217,10 +241,18 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
     if (sessionFile) {
       // Get recent conversation content, with fallback to rotated reset transcript.
       sessionContent = await getRecentSessionContentWithResetFallback(sessionFile, messageCount);
-      log.debug("Session content loaded", {
-        length: sessionContent?.length ?? 0,
-        messageCount,
-      });
+      log.debug(
+        "Session content loaded",
+        {
+          length: sessionContent?.length ?? 0,
+          messageCount,
+        },
+        {
+          event: "hooks.session.memory.session.content.loaded",
+          outcome: "success",
+          reason: "loaded",
+        },
+      );
 
       // Avoid calling the model provider in unit tests; keep hooks fast and deterministic.
       const isTestEnv =
@@ -231,26 +263,54 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
       const allowLlmSlug = !isTestEnv && hookConfig?.llmSlug === true;
 
       if (sessionContent && cfg && allowLlmSlug) {
-        log.debug("Calling generateSlugViaLLM...");
+        log.debug("Calling generateSlugViaLLM...", undefined, {
+          event: "hooks.session.memory.slug_generation",
+          outcome: "success",
+          reason: "started",
+        });
         // Use LLM to generate a descriptive slug
         slug = await generateSlugViaLLM({ sessionContent, cfg });
-        log.debug("Generated slug", { slug });
+        log.debug(
+          "Generated slug",
+          { slug },
+          {
+            event: "hooks.session.memory.slug_generation",
+            outcome: "success",
+            reason: "completed",
+          },
+        );
       }
     }
 
     // If no slug, use timestamp
     if (!slug) {
       slug = localTimestamp.timeSlug;
-      log.debug("Using fallback timestamp slug", { slug });
+      log.debug(
+        "Using fallback timestamp slug",
+        { slug },
+        {
+          event: "hooks.session.memory.slug_generation",
+          outcome: "warning",
+          reason: "fallback",
+        },
+      );
     }
 
     // Create filename with date and slug
     const filename = await resolveAvailableMemoryFilename({ memoryDir, dateStr, slug });
     const memoryFilePath = path.join(memoryDir, filename);
-    log.debug("Memory file path resolved", {
-      filename,
-      path: memoryFilePath.replace(os.homedir(), "~"),
-    });
+    log.debug(
+      "Memory file path resolved",
+      {
+        filename,
+        path: memoryFilePath.replace(os.homedir(), "~"),
+      },
+      {
+        event: "hooks.session.memory.file.path.resolved",
+        outcome: "success",
+        reason: "resolved",
+      },
+    );
 
     const timeStr = localTimestamp.time;
     const timeZoneSuffix = localTimestamp.timeZoneName ? ` ${localTimestamp.timeZoneName}` : "";
@@ -279,20 +339,44 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
     // Write under memory root with alias-safe file validation.
     const memoryRoot = await root(memoryDir);
     await memoryRoot.write(filename, entry, { encoding: "utf-8" });
-    log.debug("Memory file written successfully");
+    log.debug("Memory file written successfully", undefined, {
+      event: "hooks.session.memory.file.written",
+      outcome: "success",
+      reason: "success",
+    });
 
     // Log completion (but don't send user-visible confirmation - it's internal housekeeping)
     const relPath = memoryFilePath.replace(os.homedir(), "~");
-    log.info(`Session context saved to ${relPath}`);
+    log.info(`Session context saved to ${relPath}`, undefined, {
+      event: "hooks.session.memory.session.context.saved",
+      outcome: "success",
+      reason: "saved",
+    });
   } catch (err) {
     if (err instanceof Error) {
-      log.error("Failed to save session memory", {
-        errorName: err.name,
-        errorMessage: err.message,
-        stack: err.stack,
-      });
+      log.error(
+        "Failed to save session memory",
+        {
+          errorName: err.name,
+          errorMessage: err.message,
+          stack: err.stack,
+        },
+        {
+          event: "hooks.session.memory.save",
+          outcome: "failure",
+          reason: "failed",
+        },
+      );
     } else {
-      log.error("Failed to save session memory", { error: String(err) });
+      log.error(
+        "Failed to save session memory",
+        { error: String(err) },
+        {
+          event: "hooks.session.memory.save",
+          outcome: "failure",
+          reason: "failed",
+        },
+      );
     }
   }
 }

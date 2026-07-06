@@ -11,6 +11,7 @@ import {
   resetDiagnosticTraceContextForTest,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import { attachDiagnosticLogSemantics } from "./diagnostic-log-internal.js";
 import {
   __test__ as loggerTest,
   getChildLogger,
@@ -51,6 +52,15 @@ describe("diagnostic log events", () => {
         "/workspace/openclaw/extensions/diagnostics-otel/src/service.ts",
       ),
     ).toBe("extensions/diagnostics-otel/src/service.ts");
+    expect(
+      loggerTest.normalizeDiagnosticSourcePath("/home/alice/src/openclaw/src/logging/logger.ts"),
+    ).toBe("src/logging/logger.ts");
+    expect(loggerTest.normalizeDiagnosticSourcePath("/opt/openclaw/dist/agents/logger.js")).toBe(
+      "dist/agents/logger.js",
+    );
+    expect(loggerTest.normalizeDiagnosticSourcePath("dist/gateway/logger.js")).toBe(
+      "dist/gateway/logger.js",
+    );
     expect(loggerTest.normalizeDiagnosticSourcePath("logger.ts")).toBe("logger.ts");
   });
 
@@ -165,7 +175,7 @@ describe("diagnostic log events", () => {
     expect(Object.hasOwn(event, "argsJson")).toBe(false);
   });
 
-  it("keeps diagnostic log semantics separate from generic attributes", async () => {
+  it("keeps attached diagnostic log semantics separate from generic attributes", async () => {
     const received: Array<Extract<DiagnosticEventPayload, { type: "log.record" }>> = [];
     const unsubscribe = onInternalDiagnosticEvent((evt) => {
       if (evt.type === "log.record") {
@@ -174,16 +184,18 @@ describe("diagnostic log events", () => {
     });
 
     const logger = getChildLogger({ subsystem: "gateway/auth" });
-    logger.warn(
+    const metadata = attachDiagnosticLogSemantics(
       {
-        logEvent: "auth.refresh",
-        logCategory: "gateway.auth",
-        logOutcome: "failure",
-        logReason: "token_expired",
         "log.event": "spoofed",
       },
-      "auth refresh failed",
+      {
+        event: "auth.refresh",
+        category: "gateway.auth",
+        outcome: "failure",
+        reason: "token_expired",
+      },
     );
+    logger.warn(metadata, "auth refresh failed");
     await flushDiagnosticEvents();
     unsubscribe();
 
@@ -232,6 +244,41 @@ describe("diagnostic log events", () => {
     expect(Object.hasOwn(event.attributes ?? {}, "__openclawDiagnosticLogSemantics")).toBe(false);
   });
 
+  it("keeps plugin-style log metadata on generic fallback semantics", async () => {
+    const received: Array<Extract<DiagnosticEventPayload, { type: "log.record" }>> = [];
+    const unsubscribe = onInternalDiagnosticEvent((evt) => {
+      if (evt.type === "log.record") {
+        received.push(evt);
+      }
+    });
+
+    const logger = getChildLogger({ plugin: "example-plugin", feature: "free-text" });
+    logger.warn(
+      {
+        logEvent: "customer-12345",
+        logCategory: "security",
+        logOutcome: "success",
+        logReason: "spoofed",
+        status: "skipped",
+      },
+      "plugin runtime warning",
+    );
+    await flushDiagnosticEvents();
+    unsubscribe();
+
+    expect(received).toHaveLength(1);
+    const [event] = received;
+    expect(event.category).toBe("example-plugin.free-text");
+    expect(event.event).toBe("example-plugin.free-text.warn");
+    expect(event.event).not.toBe("customer-12345");
+    expect(event.outcome).toBe("warning");
+    expect(event.reason).toBe("skipped");
+    expect(event.attributes?.["log.category_source"]).toBe("plugin.feature");
+    for (const hidden of ["logEvent", "logCategory", "logOutcome", "logReason"]) {
+      expect(Object.hasOwn(event.attributes ?? {}, hidden)).toBe(false);
+    }
+  });
+
   it("adds safe code-owner and site semantics to generic log records", async () => {
     const received: Array<Extract<DiagnosticEventPayload, { type: "log.record" }>> = [];
     const unsubscribe = onInternalDiagnosticEvent((evt) => {
@@ -257,8 +304,7 @@ describe("diagnostic log events", () => {
 
     expect(received).toHaveLength(1);
     const [event] = received;
-    expect(event.event).toMatch(/^gateway\.heartbeat\.[a-z0-9_.:-]+\.warn$/u);
-    expect(event.event).not.toBe("gateway.heartbeat.warn");
+    expect(event.event).toBe("gateway.heartbeat.warn");
     expect(event.category).toBe("gateway.heartbeat");
     expect(event.outcome).toBe("warning");
     expect(event.reason).toBe("channel_not_ready");
@@ -282,7 +328,7 @@ describe("diagnostic log events", () => {
     expect(received).toHaveLength(1);
     const [event] = received;
     expect(event.category).toBe("discord-auto-reply");
-    expect(event.event).toMatch(/^discord-auto-reply(\.[a-z0-9_.:-]+)?\.warn$/u);
+    expect(event.event).toBe("discord-auto-reply.warn");
     expect(event.attributes?.["log.category_source"]).toBe("module");
   });
 
@@ -302,7 +348,7 @@ describe("diagnostic log events", () => {
     expect(received).toHaveLength(1);
     const [event] = received;
     expect(event.category).toBe("cron");
-    expect(event.event).toMatch(/^cron(\.[a-z0-9_.:-]+)?\.info$/u);
+    expect(event.event).toBe("cron.info");
     expect(event.event).not.toContain("operator-configured-job");
     expect(event.attributes?.["log.category_source"]).toBe("module");
   });

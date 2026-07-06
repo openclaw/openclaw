@@ -313,6 +313,12 @@ export async function patchPluginSessionExtension(params: {
   if (normalizedSlotKey?.ok === false) {
     log.warn(
       `plugin session extension slot promotion skipped for ${pluginId}/${namespace}: ${normalizedSlotKey.error}`,
+      undefined,
+      {
+        event: "plugins.host.state.session.extension.slot.promotion",
+        outcome: "warning",
+        reason: "skipped",
+      },
     );
   }
   const slotKey = normalizedSlotKey?.ok === true ? normalizedSlotKey.key : undefined;
@@ -501,6 +507,12 @@ function projectSessionExtensionValue(params: {
   } catch (error) {
     log.warn(
       `plugin session extension projection failed: plugin=${params.pluginId} namespace=${params.namespace} error=${String(error)}`,
+      undefined,
+      {
+        event: "plugins.host.state.projection",
+        outcome: "warning",
+        reason: "failed",
+      },
     );
     return PROJECTION_FAILED;
   }

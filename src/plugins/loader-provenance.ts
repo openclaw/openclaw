@@ -266,6 +266,13 @@ export function warnWhenAllowlistIsOpen(params: {
   if (!hasConfiguredAllowlist) {
     params.logger.warn(
       `[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: ${preview}${extra}. ${remediation}`,
+      undefined,
+      {
+        event: "plugins.provenance.allowlist_empty",
+        category: "plugins.provenance",
+        outcome: "warning",
+        reason: "allowlist_empty",
+      },
     );
     return;
   }
@@ -278,6 +285,13 @@ export function warnWhenAllowlistIsOpen(params: {
     unmatchedEntries.length > 6 ? ` (+${unmatchedEntries.length - 6} more)` : "";
   params.logger.warn(
     `[plugins] plugins.allow entries ${unmatchedPreview}${unmatchedExtra} do not match any discovered plugin ids; discovered non-bundled plugins: ${preview}${extra}. Use the plugin id (not a channel id or npm package name).`,
+    undefined,
+    {
+      event: "plugins.provenance.allowlist_unmatched",
+      category: "plugins.provenance",
+      outcome: "warning",
+      reason: "allowlist_unmatched",
+    },
   );
 }
 
@@ -316,7 +330,12 @@ export function warnAboutUntrackedLoadedPlugins(params: {
       message,
     });
     if (params.emitWarning) {
-      params.logger.warn(`[plugins] ${plugin.id}: ${message} (${plugin.source})`);
+      params.logger.warn(`[plugins] ${plugin.id}: ${message} (${plugin.source})`, undefined, {
+        event: "plugins.provenance.untracked_loaded",
+        category: "plugins.provenance",
+        outcome: "warning",
+        reason: "untracked_loaded",
+      });
     }
   }
 }

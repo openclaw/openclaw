@@ -348,7 +348,11 @@ export function resolveOpenAIServiceTier(
   const normalized = normalizeOpenAIServiceTier(raw);
   if (raw !== undefined && normalized === undefined) {
     const rawSummary = typeof raw === "string" ? raw : typeof raw;
-    log.warn(`ignoring invalid OpenAI service tier param: ${rawSummary}`);
+    log.warn(`ignoring invalid OpenAI service tier param: ${rawSummary}`, undefined, {
+      event: "llm.openai.service_tier",
+      outcome: "warning",
+      reason: "invalid",
+    });
   }
   return normalized;
 }
@@ -405,7 +409,11 @@ export function resolveOpenAIFastMode(
     normalizeFastMode(raw) !== "auto"
   ) {
     const rawSummary = typeof raw === "string" ? raw : typeof raw;
-    log.warn(`ignoring invalid OpenAI fast mode param: ${rawSummary}`);
+    log.warn(`ignoring invalid OpenAI fast mode param: ${rawSummary}`, undefined, {
+      event: "llm.providers.stream.fast.mode.param",
+      outcome: "warning",
+      reason: "invalid",
+    });
   }
   return normalized;
 }
@@ -718,6 +726,12 @@ export function createCodexNativeWebSearchWrapper(
         `skipping Codex native web search (tool_policy_denied) for ${
           model.provider ?? "unknown"
         }/${model.id ?? "unknown"}`,
+        undefined,
+        {
+          event: "llm.providers.stream.search.tool_policy",
+          outcome: "warning",
+          reason: "denied",
+        },
       );
       return underlying(model, context, options);
     }
@@ -749,6 +763,12 @@ export function createCodexNativeWebSearchWrapper(
           `skipping Codex native web search (${activation.inactiveReason ?? "inactive"}) for ${
             model.provider ?? "unknown"
           }/${model.id ?? "unknown"}`,
+          undefined,
+          {
+            event: "llm.openai.web_search.activation",
+            outcome: "warning",
+            reason: "inactive",
+          },
         );
       }
       return underlying(model, context, options);
@@ -758,6 +778,12 @@ export function createCodexNativeWebSearchWrapper(
       `activating Codex native web search (${activation.codexMode}) for ${
         model.provider ?? "unknown"
       }/${model.id ?? "unknown"}`,
+      undefined,
+      {
+        event: "llm.openai.web_search.activated",
+        outcome: "success",
+        reason: "completed",
+      },
     );
 
     const originalOnPayload = options?.onPayload;
@@ -771,11 +797,25 @@ export function createCodexNativeWebSearchWrapper(
         if (result.status === "payload_not_object") {
           log.debug(
             "Skipping Codex native web search injection because provider payload is not an object",
+            undefined,
+            {
+              event: "llm.providers.stream.search.injection",
+              outcome: "warning",
+              reason: "payload_not_object",
+            },
           );
         } else if (result.status === "native_tool_already_present") {
-          log.debug("Codex native web search tool already present in provider payload");
+          log.debug("Codex native web search tool already present in provider payload", undefined, {
+            event: "llm.providers.stream.tool",
+            outcome: "success",
+            reason: "already_present",
+          });
         } else if (result.status === "injected") {
-          log.debug("Injected Codex native web search tool into provider payload");
+          log.debug("Injected Codex native web search tool into provider payload", undefined, {
+            event: "llm.providers.stream.search.tool.into",
+            outcome: "success",
+            reason: "completed",
+          });
         }
         return originalOnPayload?.(payload, model);
       },

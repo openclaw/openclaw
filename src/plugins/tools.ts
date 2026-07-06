@@ -83,6 +83,37 @@ const PLUGIN_TOOL_FACTORY_WARN_TOTAL_MS = 5_000;
 const PLUGIN_TOOL_FACTORY_WARN_FACTORY_MS = 1_000;
 const PLUGIN_TOOL_FACTORY_SUMMARY_LIMIT = 20;
 
+function logPluginToolDiagnostic(
+  level: "debug" | "error" | "warn",
+  message: string,
+  semantics: { event: string; outcome: "failure" | "success" | "warning"; reason: string },
+): void {
+  if (level === "debug") {
+    log.debug(message, undefined, {
+      event: semantics.event,
+      category: "plugins.tools",
+      outcome: semantics.outcome,
+      reason: semantics.reason,
+    });
+    return;
+  }
+  if (level === "warn") {
+    log.warn(message, undefined, {
+      event: semantics.event,
+      category: "plugins.tools",
+      outcome: semantics.outcome,
+      reason: semantics.reason,
+    });
+    return;
+  }
+  log.error(message, undefined, {
+    event: semantics.event,
+    category: "plugins.tools",
+    outcome: semantics.outcome,
+    reason: semantics.reason,
+  });
+}
+
 const pluginToolMeta = new WeakMap<AnyAgentTool, PluginToolMeta>();
 const scopedPluginTools = new WeakMap<AnyAgentTool, Map<string, AnyAgentTool>>();
 
@@ -1149,10 +1180,16 @@ export function resolvePluginTools(params: {
         loadOptions,
       });
     } catch (error) {
-      context.logger.error(
+      logPluginToolDiagnostic(
+        "error",
         `failed to cold-load plugin tool registry for plugin ids [${runtimePluginIds.join(", ")}]: ${
           error instanceof Error ? error.message : String(error)
         }`,
+        {
+          event: "plugins.tools.registry_cold_load",
+          outcome: "failure",
+          reason: "cold_load_failed",
+        },
       );
       throw error;
     }
@@ -1161,10 +1198,16 @@ export function resolvePluginTools(params: {
       onlyPluginIds: runtimePluginIds,
     });
     if (!registry) {
-      context.logger.warn(
+      logPluginToolDiagnostic(
+        "warn",
         `plugin tool registry still unavailable after cold load for plugin ids [${runtimePluginIds.join(
           ", ",
         )}]`,
+        {
+          event: "plugins.tools.registry",
+          outcome: "warning",
+          reason: "registry_unavailable",
+        },
       );
       return tools;
     }
@@ -1203,7 +1246,11 @@ export function resolvePluginTools(params: {
     if (existingNormalized.has(pluginIdKey)) {
       const message = `plugin id conflicts with core tool name (${entry.pluginId})`;
       if (!params.suppressNameConflicts) {
-        context.logger.error(message);
+        logPluginToolDiagnostic("error", message, {
+          event: "plugins.tools.name_conflict",
+          outcome: "failure",
+          reason: "plugin_id_conflict",
+        });
         registry.diagnostics.push({
           level: "error",
           pluginId: entry.pluginId,
@@ -1252,7 +1299,12 @@ export function resolvePluginTools(params: {
       ctx: params.context,
       declaredNames,
       factoryTimingStartedAt,
-      logError: (message) => context.logger.error(message),
+      logError: (message) =>
+        logPluginToolDiagnostic("error", message, {
+          event: "plugins.tools.factory",
+          outcome: "failure",
+          reason: "factory_failed",
+        }),
     });
     factoryTimings.push(factoryResult.timing);
     if (factoryResult.failed) {
@@ -1261,8 +1313,14 @@ export function resolvePluginTools(params: {
     const { resolved } = factoryResult;
     if (!resolved) {
       if (declaredNames.length > 0) {
-        context.logger.debug?.(
+        logPluginToolDiagnostic(
+          "debug",
           `plugin tool factory returned null (${entry.pluginId}): [${declaredNames.join(", ")}]`,
+          {
+            event: "plugins.tools.factory_empty",
+            outcome: "warning",
+            reason: "factory_returned_null",
+          },
         );
       }
       continue;
@@ -1333,7 +1391,11 @@ export function resolvePluginTools(params: {
       const malformedReason = describeMalformedPluginTool(toolRaw);
       if (malformedReason) {
         const message = `plugin tool is malformed (${entry.pluginId}): ${malformedReason}`;
-        context.logger.error(message);
+        logPluginToolDiagnostic("error", message, {
+          event: "plugins.tools.malformed",
+          outcome: "failure",
+          reason: "malformed_tool",
+        });
         registry.diagnostics.push({
           level: "error",
           pluginId: entry.pluginId,
@@ -1351,7 +1413,11 @@ export function resolvePluginTools(params: {
         : [];
       if (undeclared.length > 0) {
         const message = `plugin tool is undeclared (${entry.pluginId}): ${undeclared.join(", ")}`;
-        context.logger.error(message);
+        logPluginToolDiagnostic("error", message, {
+          event: "plugins.tools.undeclared",
+          outcome: "failure",
+          reason: "undeclared_tool",
+        });
         registry.diagnostics.push({
           level: "error",
           pluginId: entry.pluginId,
@@ -1364,7 +1430,11 @@ export function resolvePluginTools(params: {
       if (normalizedNameSet.has(normalizedToolName) || existingNormalized.has(normalizedToolName)) {
         const message = `plugin tool name conflict (${entry.pluginId}): ${tool.name}`;
         if (!params.suppressNameConflicts) {
-          context.logger.error(message);
+          logPluginToolDiagnostic("error", message, {
+            event: "plugins.tools.name_conflict",
+            outcome: "failure",
+            reason: "tool_name_conflict",
+          });
           registry.diagnostics.push({
             level: "error",
             pluginId: entry.pluginId,
@@ -1450,9 +1520,17 @@ export function resolvePluginTools(params: {
       factoryTimings.at(-1)?.elapsedMs ?? toElapsedMs(Date.now() - factoryTimingStartedAt);
     const timingSummary = { totalMs, timings: factoryTimings };
     if (shouldWarnPluginToolFactoryTimings(timingSummary)) {
-      log.warn(formatPluginToolFactoryTimingSummary(timingSummary));
+      log.warn(formatPluginToolFactoryTimingSummary(timingSummary), undefined, {
+        event: "plugins.tools.resolve",
+        outcome: "warning",
+        reason: "warning",
+      });
     } else if (log.isEnabled("trace")) {
-      log.trace(formatPluginToolFactoryTimingSummary(timingSummary));
+      log.trace(formatPluginToolFactoryTimingSummary(timingSummary), undefined, {
+        event: "plugins.tools.resolve",
+        outcome: "success",
+        reason: "completed",
+      });
     }
   }
 

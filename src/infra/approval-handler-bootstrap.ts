@@ -118,7 +118,12 @@ export async function startChannelApprovalHandlerBootstrap(params: {
 
   const spawn = (label: string, promise: Promise<void>) => {
     void promise.catch((error: unknown) => {
-      logger.error(`${label}: ${String(error)}`);
+      logger.error(`${label}: ${String(error)}`, undefined, {
+        event: "approval.bootstrap.spawn",
+        category: "approval.bootstrap",
+        outcome: "failure",
+        reason: "spawn_failed",
+      });
     });
   };
   const scheduleRetryForContext = (context: unknown, generation: number) => {
@@ -144,17 +149,34 @@ export async function startChannelApprovalHandlerBootstrap(params: {
     } catch (error) {
       if (generation === activeGeneration) {
         if (isExecApprovalChannelRuntimeTerminalStartError(error)) {
-          logger.error(`native approval handler disabled: ${String(error)}`);
+          logger.error(`native approval handler disabled: ${String(error)}`, undefined, {
+            event: "approval.bootstrap",
+            category: "approval.bootstrap",
+            outcome: "failure",
+            reason: "terminal_start_error",
+          });
           return;
         }
         if (isRetryableApprovalBootstrapStartError(error)) {
           logger.warn(
             `native approval handler deferred until gateway readiness recovers: ${formatRetryableApprovalBootstrapStartError(error)}`,
+            undefined,
+            {
+              event: "approval.bootstrap.deferred",
+              category: "approval.bootstrap",
+              outcome: "warning",
+              reason: "gateway_not_ready",
+            },
           );
           scheduleRetryForContext(context, generation);
           return;
         }
-        logger.error(`failed to start native approval handler: ${String(error)}`);
+        logger.error(`failed to start native approval handler: ${String(error)}`, undefined, {
+          event: "approval.bootstrap.start",
+          category: "approval.bootstrap",
+          outcome: "failure",
+          reason: "start_failed",
+        });
         scheduleRetryForContext(context, generation);
       }
     }

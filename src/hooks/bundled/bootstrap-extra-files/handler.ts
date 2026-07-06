@@ -47,13 +47,21 @@ const bootstrapExtraFilesHook: HookHandler = async (event) => {
       patterns,
     );
     if (diagnostics.length > 0) {
-      log.debug("skipped extra bootstrap candidates", {
-        skipped: diagnostics.length,
-        reasons: diagnostics.reduce<Record<string, number>>((counts, item) => {
-          counts[item.reason] = (counts[item.reason] ?? 0) + 1;
-          return counts;
-        }, {}),
-      });
+      log.debug(
+        "skipped extra bootstrap candidates",
+        {
+          skipped: diagnostics.length,
+          reasons: diagnostics.reduce<Record<string, number>>((counts, item) => {
+            counts[item.reason] = (counts[item.reason] ?? 0) + 1;
+            return counts;
+          }, {}),
+        },
+        {
+          event: "bootstrap.extra.files.extra_candidates",
+          outcome: "warning",
+          reason: "skipped",
+        },
+      );
     }
     if (extras.length === 0) {
       return;
@@ -65,7 +73,11 @@ const bootstrapExtraFilesHook: HookHandler = async (event) => {
       context.sessionKey,
     );
   } catch (err) {
-    log.warn(`failed: ${String(err)}`);
+    log.warn(`failed: ${String(err)}`, undefined, {
+      event: "bootstrap.extra.files",
+      outcome: "warning",
+      reason: "failed",
+    });
   }
 };
 

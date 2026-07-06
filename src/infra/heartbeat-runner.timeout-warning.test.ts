@@ -43,9 +43,14 @@ describe("startHeartbeatRunner timeout overflow warnings", () => {
       };
     });
 
-    const [{ startHeartbeatRunner }, { resetHeartbeatWakeStateForTests }] = await Promise.all([
+    const [
+      { startHeartbeatRunner },
+      { resetHeartbeatWakeStateForTests },
+      { hasDiagnosticLogSemantics },
+    ] = await Promise.all([
       import("./heartbeat-runner.js"),
       import("./heartbeat-wake.js"),
+      import("../logging/diagnostic-log-internal.js"),
     ]);
 
     vi.useFakeTimers();
@@ -66,11 +71,15 @@ describe("startHeartbeatRunner timeout overflow warnings", () => {
     expect(warn).toHaveBeenCalledWith(
       "heartbeat: scheduled delay exceeds Node setTimeout cap; clamping to ~24.85d",
       expect.objectContaining({
-        logEvent: "heartbeat.schedule.delay_clamped",
-        logOutcome: "warning",
-        logReason: "timeout_cap",
+        clampedMs: expect.any(Number),
+        rawDelayMs: expect.any(Number),
       }),
     );
+    const [, metadata] = warn.mock.calls[0] ?? [];
+    expect(hasDiagnosticLogSemantics(metadata as Record<string, unknown>)).toBe(true);
+    expect(metadata).not.toHaveProperty("logEvent");
+    expect(metadata).not.toHaveProperty("logOutcome");
+    expect(metadata).not.toHaveProperty("logReason");
 
     runnerA.stop();
     runnerB.stop();

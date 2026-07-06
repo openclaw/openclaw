@@ -260,6 +260,11 @@ async function resizeImageBase64IfNeeded(params: {
             outputMaxSide: side,
             byteReductionPct,
           },
+          {
+            event: "agents.tool.images.image.resized.fit.limits",
+            outcome: "success",
+            reason: "completed",
+          },
         );
         return {
           base64: out.toString("base64"),
@@ -299,6 +304,11 @@ async function resizeImageBase64IfNeeded(params: {
       smallestCandidateBytes: best.byteLength,
       triggerOverBytes: overBytes,
       triggerOverDimensions: overDimensions,
+    },
+    {
+      event: "agents.tool.images.image.resize.fit.limits.best.limit",
+      outcome: "warning",
+      reason: "failed",
     },
   );
   throw new Error(`Image could not be reduced below ${maxMb}MB (got ${gotMb}MB)`);

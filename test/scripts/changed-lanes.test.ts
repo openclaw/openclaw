@@ -25,6 +25,7 @@ import {
   shouldRunCanvasA2uiNativeResourceCheck,
   shouldRunPromptSnapshotCheck,
   shouldRunPromptSnapshotOwnerTest,
+  shouldRunPluginSdkApiCheck,
   shouldRunRuntimeSidecarBaselineCheck,
   shouldRunShrinkwrapGuard,
   shouldRunTestTempCreationReport,
@@ -949,6 +950,7 @@ describe("scripts/changed-lanes", () => {
     const plan = createChangedCheckPlan(result);
 
     expect(result.extensionImpactFromCore).toBe(true);
+    expect(shouldRunPluginSdkApiCheck(result.paths)).toBe(true);
     expectLanes(result.lanes, {
       core: true,
       coreTests: true,
@@ -957,6 +959,47 @@ describe("scripts/changed-lanes", () => {
     });
     expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:core");
     expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:extensions:test");
+    expect(plan.commands.map((command) => command.args[0])).toContain("plugin-sdk:api:check");
+  });
+
+  it("runs the plugin SDK API baseline check for generated baseline changes", () => {
+    const result = detectChangedLanes([
+      "docs/.generated/plugin-sdk-api-baseline.sha256",
+      "docs/plugins/sdk-overview.md",
+    ]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.docsOnly).toBe(false);
+    expect(result.extensionImpactFromCore).toBe(true);
+    expect(shouldRunPluginSdkApiCheck(result.paths)).toBe(true);
+    expectLanes(result.lanes, {
+      core: true,
+      coreTests: true,
+      docs: true,
+      extensions: true,
+      extensionTests: true,
+    });
+    expect(plan.commands.map((command) => command.args[0])).toContain("plugin-sdk:api:check");
+  });
+
+  it.each([
+    "src/plugins/logging-types.ts",
+    "src/plugins/types.ts",
+    "src/plugins/runtime/types.ts",
+    "src/plugins/runtime/types-core.ts",
+  ])("treats exported plugin type file %s as a public plugin SDK contract", (changedPath) => {
+    const result = detectChangedLanes([changedPath]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.extensionImpactFromCore).toBe(true);
+    expect(shouldRunPluginSdkApiCheck(result.paths)).toBe(true);
+    expectLanes(result.lanes, {
+      core: true,
+      coreTests: true,
+      extensions: true,
+      extensionTests: true,
+    });
+    expect(plan.commands.map((command) => command.args[0])).toContain("plugin-sdk:api:check");
   });
 
   it("fails safe for root config changes", () => {

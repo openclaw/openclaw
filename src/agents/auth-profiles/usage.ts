@@ -13,8 +13,8 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { resolveProviderRequestHeaders } from "../provider-request-config.js";
 import { readProviderJsonResponse } from "../provider-http-errors.js";
+import { resolveProviderRequestHeaders } from "../provider-request-config.js";
 import { notifyAuthProfileFailureHook, setAuthProfileFailureHook } from "./failure-hook.js";
 import { logAuthProfileFailureStateChange } from "./state-observation.js";
 
@@ -776,11 +776,19 @@ export async function markAuthProfileFailure(params: {
       notifyAuthProfileFailureHook();
     } catch (err) {
       // Hook errors must not break failure recording; log and continue.
-      authProfileUsageLog.warn("auth profile failure hook threw", {
-        event: "auth_profile_failure_hook_error",
-        tags: ["error_handling", "auth_profiles"],
-        error: err instanceof Error ? err.message : String(err),
-      });
+      authProfileUsageLog.warn(
+        "auth profile failure hook threw",
+        {
+          event: "auth_profile_hook",
+          tags: ["error_handling", "auth_profiles"],
+          error: err instanceof Error ? err.message : String(err),
+        },
+        {
+          event: "agent.embedded.auth.profile.hook",
+          outcome: "warning",
+          reason: "threw",
+        },
+      );
     }
     return;
   }
@@ -827,11 +835,19 @@ export async function markAuthProfileFailure(params: {
     notifyAuthProfileFailureHook();
   } catch (err) {
     // Hook errors must not break failure recording; log and continue.
-    authProfileUsageLog.warn("auth profile failure hook threw", {
-      event: "auth_profile_failure_hook_error",
-      tags: ["error_handling", "auth_profiles"],
-      error: err instanceof Error ? err.message : String(err),
-    });
+    authProfileUsageLog.warn(
+      "auth profile failure hook threw",
+      {
+        event: "auth_profile_hook",
+        tags: ["error_handling", "auth_profiles"],
+        error: err instanceof Error ? err.message : String(err),
+      },
+      {
+        event: "agent.embedded.auth.profile.hook",
+        outcome: "warning",
+        reason: "threw",
+      },
+    );
   }
 }
 

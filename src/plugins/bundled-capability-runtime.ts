@@ -193,7 +193,11 @@ function recordCapabilityLoadError(
     source: record.source,
     message: `failed to load plugin: ${message}`,
   });
-  log.error(`[plugins] ${record.id} failed to load from ${record.source}: ${message}`);
+  log.error(`[plugins] ${record.id} failed to load from ${record.source}: ${message}`, undefined, {
+    event: "plugins.load",
+    outcome: "failure",
+    reason: "failed",
+  });
 }
 
 export function loadBundledCapabilityRuntimeRegistry(params: {

@@ -51,6 +51,12 @@ function warnMultipleDefaultAgents(): void {
     .then(({ createSubsystemLogger }) => {
       createSubsystemLogger("agent-scope").warn(
         "Multiple agents marked default=true; using the first entry as default.",
+        undefined,
+        {
+          event: "agent_scope.default.multiple_configured",
+          outcome: "warning",
+          reason: "multiple_defaults",
+        },
       );
     })
     .catch(() => undefined);

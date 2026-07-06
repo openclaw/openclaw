@@ -1288,7 +1288,11 @@ export async function resolveApiKeyForProvider(params: {
         return result;
       }
     } catch (err) {
-      log.debug?.(`auth profile "${candidate}" failed for provider "${provider}": ${String(err)}`);
+      log.debug?.(
+        `auth profile "${candidate}" failed for provider "${provider}": ${String(err)}`,
+        undefined,
+        { event: "model.auth.profile.provider", outcome: "warning", reason: "failed" },
+      );
     }
   }
 
@@ -1511,7 +1515,11 @@ export async function hasAvailableAuthForProvider(params: {
         return true;
       }
     } catch (err) {
-      log.debug?.(`auth profile "${candidate}" failed for provider "${provider}": ${String(err)}`);
+      log.debug?.(
+        `auth profile "${candidate}" failed for provider "${provider}": ${String(err)}`,
+        undefined,
+        { event: "model.auth.profile.provider", outcome: "warning", reason: "failed" },
+      );
     }
   }
   return false;

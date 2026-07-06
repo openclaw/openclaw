@@ -325,6 +325,12 @@ export async function withDurableMessageSendContext<T>(
       } catch (cleanupError: unknown) {
         log.warn(
           `message send failure cleanup failed; preserving original send error: ${formatErrorMessage(cleanupError)}`,
+          undefined,
+          {
+            event: "channels.message.send.cleanup.original",
+            outcome: "warning",
+            reason: "failed",
+          },
         );
       }
     },

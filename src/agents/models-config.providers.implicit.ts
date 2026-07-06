@@ -518,7 +518,11 @@ async function runProviderCatalogWithTimeout(
   } catch (error) {
     const message = formatErrorMessage(error);
     if (message.includes("provider catalog timed out after")) {
-      log.warn(`${message}; skipping provider discovery`);
+      log.warn(`${message}; skipping provider discovery`, undefined, {
+        event: "agents.model.providers.skipping.provider.discovery",
+        outcome: "warning",
+        reason: "skipped",
+      });
       return undefined;
     }
     throw error;

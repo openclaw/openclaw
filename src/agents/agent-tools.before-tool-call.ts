@@ -263,6 +263,12 @@ export function resolveToolTerminalPresentation(params: {
   } catch (err) {
     log.warn(
       `terminal tool presentation failed: tool=${params.tool.name || "tool"} error=${String(err)}`,
+      undefined,
+      {
+        event: "agents.tools.terminal.tool.presentation",
+        outcome: "warning",
+        reason: "failed",
+      },
     );
     return undefined;
   }
@@ -636,10 +642,18 @@ function notifyPluginApprovalResolution(
   }
   try {
     void Promise.resolve(onResolution(resolution)).catch((err: unknown) => {
-      log.warn(`plugin onResolution callback failed: ${String(err)}`);
+      log.warn(`plugin onResolution callback failed: ${String(err)}`, undefined, {
+        event: "agents.tools.plugin.resolution.callback",
+        outcome: "warning",
+        reason: "failed",
+      });
     });
   } catch (err) {
-    log.warn(`plugin onResolution callback failed: ${String(err)}`);
+    log.warn(`plugin onResolution callback failed: ${String(err)}`, undefined, {
+      event: "agents.tools.plugin.resolution.callback",
+      outcome: "warning",
+      reason: "failed",
+    });
   }
 }
 
@@ -795,7 +809,11 @@ async function requestPluginToolApproval(params: {
         (err instanceof Error &&
           (err.name === "AbortError" || ("cause" in err && err.cause === signal.reason))));
     if (abortCancelled) {
-      log.warn(`plugin approval wait cancelled by run abort: ${String(err)}`);
+      log.warn(`plugin approval wait cancelled by run abort: ${String(err)}`, undefined, {
+        event: "agents.tools.plugin.approval.wait.run.abort",
+        outcome: "warning",
+        reason: "run_abort",
+      });
       return {
         blocked: true,
         kind: "failure",
@@ -804,7 +822,15 @@ async function requestPluginToolApproval(params: {
         params: params.baseParams,
       };
     }
-    log.warn(`plugin approval gateway request failed; blocking tool call: ${String(err)}`);
+    log.warn(
+      `plugin approval gateway request failed; blocking tool call: ${String(err)}`,
+      undefined,
+      {
+        event: "agents.tools.approval.gateway.request.blocking.tool",
+        outcome: "warning",
+        reason: "failed",
+      },
+    );
     return {
       blocked: true,
       kind: "failure",
@@ -1032,7 +1058,15 @@ async function recordLoopOutcome(args: {
       };
     }
   } catch (err) {
-    log.warn(`tool loop outcome tracking failed: tool=${args.toolName} error=${String(err)}`);
+    log.warn(
+      `tool loop outcome tracking failed: tool=${args.toolName} error=${String(err)}`,
+      undefined,
+      {
+        event: "agents.tools.tool.loop.outcome.tracking",
+        outcome: "warning",
+        reason: "failed",
+      },
+    );
   }
   if (recordedOutcome) {
     args.ctx.onToolOutcome?.(recordedOutcome);
@@ -1072,7 +1106,11 @@ export async function runBeforeToolCallHook(args: {
 
     if (loopResult.stuck) {
       if (loopResult.level === "critical") {
-        log.error(`Blocking ${toolName} due to critical loop: ${loopResult.message}`);
+        log.error(`Blocking ${toolName} due to critical loop: ${loopResult.message}`, undefined, {
+          event: "agents.tools.blocking.due.critical.loop",
+          outcome: "failure",
+          reason: "failed",
+        });
         logToolLoopAction({
           sessionKey: args.ctx.sessionKey,
           sessionId: args.ctx.sessionId,
@@ -1095,7 +1133,11 @@ export async function runBeforeToolCallHook(args: {
       const baseWarningKey = loopResult.warningKey ?? `${loopResult.detector}:${toolName}`;
       const warningKey = args.ctx.runId ? `${args.ctx.runId}:${baseWarningKey}` : baseWarningKey;
       if (shouldEmitLoopWarning(sessionState, warningKey, loopResult.count)) {
-        log.warn(`Loop warning for ${toolName}: ${loopResult.message}`);
+        log.warn(`Loop warning for ${toolName}: ${loopResult.message}`, undefined, {
+          event: "agents.tools.loop",
+          outcome: "warning",
+          reason: "warning",
+        });
         logToolLoopAction({
           sessionKey: args.ctx.sessionKey,
           sessionId: args.ctx.sessionId,
@@ -1345,7 +1387,15 @@ export async function runBeforeToolCallHook(args: {
   } catch (err) {
     const toolCallId = args.toolCallId ? ` toolCallId=${args.toolCallId}` : "";
     const cause = unwrapErrorCause(err);
-    log.error(`before_tool_call hook failed: tool=${toolName}${toolCallId} error=${String(cause)}`);
+    log.error(
+      `before_tool_call hook failed: tool=${toolName}${toolCallId} error=${String(cause)}`,
+      undefined,
+      {
+        event: "agents.tools.tool.call.hook",
+        outcome: "failure",
+        reason: "failed",
+      },
+    );
     return {
       blocked: true,
       kind: "failure",

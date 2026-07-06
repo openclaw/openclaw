@@ -2086,7 +2086,11 @@ async function runQueuedUsageCostRefresh(
       }
     }
   } catch (error) {
-    logger.warn(`background refresh failed: ${formatErrorMessage(error)}`, { error });
+    logger.warn(
+      `background refresh failed: ${formatErrorMessage(error)}`,
+      { error },
+      { event: "usage.cost.cache.background.refresh", outcome: "warning", reason: "failed" },
+    );
   } finally {
     state.running = false;
     if (state.fullRefreshRequested || state.pendingSessionFiles.size > 0) {

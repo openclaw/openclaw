@@ -42,7 +42,11 @@ export function readDotEnvFile(params: {
       const code =
         error && typeof error === "object" && "code" in error ? String(error.code) : undefined;
       if (code !== "ENOENT") {
-        logger.warn(`Failed to read ${params.filePath}: ${String(error)}`, { error });
+        logger.warn(
+          `Failed to read ${params.filePath}: ${String(error)}`,
+          { error },
+          { event: "infra.dotenv.read", outcome: "warning", reason: "failed" },
+        );
       }
     }
     return null;
@@ -53,7 +57,11 @@ export function readDotEnvFile(params: {
     parsed = dotenv.parse(content);
   } catch (error) {
     if (!params.quiet) {
-      logger.warn(`Failed to parse ${params.filePath}: ${String(error)}`, { error });
+      logger.warn(
+        `Failed to parse ${params.filePath}: ${String(error)}`,
+        { error },
+        { event: "infra.dotenv.parse", outcome: "warning", reason: "failed" },
+      );
     }
     return null;
   }
@@ -118,6 +126,7 @@ function loadParsedDotEnvFiles(files: LoadedDotEnvFile[]): Map<string, string[]>
     logger.warn(
       `Conflicting values in ${conflict.keptPath} and ${conflict.ignoredPath} for ${keys.join(", ")}; keeping ${conflict.keptPath}.`,
       { keptPath: conflict.keptPath, ignoredPath: conflict.ignoredPath, keys },
+      { event: "infra.dotenv.conflicting.values", outcome: "warning", reason: "warning" },
     );
   }
   return appliedKeysByFile;

@@ -38,9 +38,10 @@ export function initializeGlobalHookRunner(registry: GlobalHookRunnerRegistry): 
   if (!state.hookRunner) {
     state.hookRunner = createHookRunner(createComposedHookRegistryFacade(state), {
       logger: {
-        debug: (msg) => log.debug(msg),
-        warn: (msg) => log.warn(msg),
-        error: (msg) => log.error(msg),
+        supportsDiagnosticLogSemantics: true,
+        debug: (msg, meta, semantics) => log.debug(msg, meta, semantics),
+        warn: (msg, meta, semantics) => log.warn(msg, meta, semantics),
+        error: (msg, meta, semantics) => log.error(msg, meta, semantics),
       },
       catchErrors: true,
       failurePolicyByHook: {

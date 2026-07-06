@@ -1,5 +1,6 @@
 // Talk logging helpers write voice session logs and diagnostic entries.
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { attachDiagnosticLogSemantics } from "../logging/diagnostic-log-internal.js";
 import { getChildLogger } from "../logging/logger.js";
 import { firstFiniteTalkEventNumber } from "./event-metrics.js";
 import type { TalkEvent, TalkEventType } from "./talk-events.js";
@@ -18,6 +19,20 @@ type TalkLogRecord = {
   attributes: Record<string, string | number | boolean>;
 };
 
+function talkLogSemantics(eventType: TalkEventType): {
+  event: string;
+  outcome: "failure" | "success" | "warning";
+  reason: string;
+} {
+  const [scope = "event", state = "observed"] = eventType.split(".");
+  const outcome = state === "error" ? "failure" : state === "cancelled" ? "warning" : "success";
+  return {
+    event: `talk.${scope}`,
+    outcome,
+    reason: eventType.replace(/\./gu, "_"),
+  };
+}
+
 // Delta events can arrive at audio/text chunk cadence; omitting them keeps logs useful
 // without hiding lifecycle, error, usage, and latency events.
 const OMITTED_TALK_LOG_EVENT_TYPES = new Set<TalkEventType>([
@@ -27,8 +42,6 @@ const OMITTED_TALK_LOG_EVENT_TYPES = new Set<TalkEventType>([
   "transcript.delta",
   "tool.progress",
 ]);
-
-const TALK_LOGGER_BINDINGS = Object.freeze({ subsystem: "talk" });
 
 /**
  * Converts high-level Talk events into compact structured log records, skipping noisy deltas.
@@ -63,8 +76,9 @@ export function createTalkLogRecord(event: TalkEvent): TalkLogRecord | undefined
     attributes.talkByteLength = byteLength;
   }
 
+  const semantics = talkLogSemantics(event.type);
   return {
-    level: event.type === "session.error" || event.type === "tool.error" ? "warn" : "info",
+    level: semantics.outcome === "success" ? "info" : "warn",
     message: `talk event ${event.type}`,
     attributes,
   };
@@ -80,12 +94,27 @@ export function recordTalkLogEvent(event: TalkEvent): void {
   }
 
   try {
-    const logger = getChildLogger(TALK_LOGGER_BINDINGS);
+    const logger = getChildLogger({ subsystem: "talk" });
+    const semantics = talkLogSemantics(event.type);
     if (record.level === "warn") {
-      logger.warn(record.attributes, record.message);
+      logger.warn(
+        attachDiagnosticLogSemantics(record.attributes, {
+          event: semantics.event,
+          outcome: semantics.outcome,
+          reason: semantics.reason,
+        }),
+        record.message,
+      );
       return;
     }
-    logger.info(record.attributes, record.message);
+    logger.info(
+      attachDiagnosticLogSemantics(record.attributes, {
+        event: semantics.event,
+        outcome: semantics.outcome,
+        reason: semantics.reason,
+      }),
+      record.message,
+    );
   } catch {
     // logging must never block the realtime Talk path
   }

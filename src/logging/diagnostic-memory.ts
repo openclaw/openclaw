@@ -257,7 +257,11 @@ function logMemoryPressure(params: {
       ? ` memoryPressureSnapshot=${params.writeCriticalBundle ? "enabled" : "disabled"}`
       : "") +
     ` ${formatPressureNextStep(pressure)}`;
-  log.warn(message);
+  log.warn(message, undefined, {
+    event: "diagnostic.memory.pressure",
+    outcome: "warning",
+    reason: pressure.reason,
+  });
 }
 
 export function emitDiagnosticMemorySample(options?: {
@@ -308,13 +312,29 @@ export function emitDiagnosticMemorySample(options?: {
       if (result.status === "written") {
         log.warn(
           `critical memory pressure bundle written: path=${result.path} reason=${pressure.reason} level=${pressure.level}`,
+          undefined,
+          {
+            event: "diagnostic.memory.pressure_bundle_written",
+            outcome: "warning",
+            reason: pressure.reason,
+          },
         );
       } else if (result.status === "failed") {
-        log.warn(`critical memory pressure bundle failed: ${String(result.error)}`);
+        log.warn(`critical memory pressure bundle failed: ${String(result.error)}`, undefined, {
+          event: "diagnostic.memory.pressure_bundle",
+          outcome: "warning",
+          reason: "bundle_write_failed",
+        });
       }
     } else if (pressure.level === "critical") {
       log.warn(
         "critical memory pressure snapshot disabled: diagnostics.memoryPressureSnapshot=false",
+        undefined,
+        {
+          event: "diagnostic.memory.pressure_snapshot",
+          outcome: "warning",
+          reason: "disabled",
+        },
       );
     }
   }

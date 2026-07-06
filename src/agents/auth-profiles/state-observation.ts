@@ -39,26 +39,34 @@ export function logAuthProfileFailureStateChange(params: {
   const safeRunId = sanitizeForConsole(params.runId) ?? "-";
   const safeProvider = sanitizeForConsole(params.provider) ?? "-";
 
-  observationLog.warn("auth profile failure state updated", {
-    event: "auth_profile_failure_state_updated",
-    tags: ["error_handling", "auth_profiles", windowType],
-    runId: params.runId,
-    profileId: safeProfileId,
-    provider: params.provider,
-    reason: params.reason,
-    windowType,
-    windowReused,
-    previousErrorCount: params.previous?.errorCount,
-    errorCount: params.next.errorCount,
-    previousCooldownUntil,
-    cooldownUntil: params.next.cooldownUntil,
-    previousDisabledUntil,
-    disabledUntil: params.next.disabledUntil,
-    previousDisabledReason: params.previous?.disabledReason,
-    disabledReason: params.next.disabledReason,
-    failureCounts: params.next.failureCounts,
-    consoleMessage:
-      `auth profile failure state updated: runId=${safeRunId} profile=${safeProfileId} provider=${safeProvider} ` +
-      `reason=${params.reason} window=${windowType} reused=${String(windowReused)}`,
-  });
+  observationLog.warn(
+    "auth profile failure state updated",
+    {
+      event: "auth_profile_state_updated",
+      tags: ["error_handling", "auth_profiles", windowType],
+      runId: params.runId,
+      profileId: safeProfileId,
+      provider: params.provider,
+      reason: params.reason,
+      windowType,
+      windowReused,
+      previousErrorCount: params.previous?.errorCount,
+      errorCount: params.next.errorCount,
+      previousCooldownUntil,
+      cooldownUntil: params.next.cooldownUntil,
+      previousDisabledUntil,
+      disabledUntil: params.next.disabledUntil,
+      previousDisabledReason: params.previous?.disabledReason,
+      disabledReason: params.next.disabledReason,
+      failureCounts: params.next.failureCounts,
+      consoleMessage:
+        `auth profile failure state updated: runId=${safeRunId} profile=${safeProfileId} provider=${safeProvider} ` +
+        `reason=${params.reason} window=${windowType} reused=${String(windowReused)}`,
+    },
+    {
+      event: "agent.embedded.auth.profile.state.updated",
+      outcome: "warning",
+      reason: "failed",
+    },
+  );
 }

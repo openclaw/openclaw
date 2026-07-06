@@ -47,12 +47,24 @@ function maybeWarnTrustedHookSource(source: string): void {
   if (source === "openclaw-workspace") {
     log.warn(
       "Loading workspace hook code into the gateway process. Workspace hooks are trusted local code.",
+      undefined,
+      {
+        event: "hooks.loader.workspace_hook.loading",
+        outcome: "warning",
+        reason: "warning",
+      },
     );
     return;
   }
   if (source === "openclaw-managed") {
     log.warn(
       "Loading managed hook code into the gateway process. Managed hooks are trusted local code.",
+      undefined,
+      {
+        event: "hooks.loader.managed_code",
+        outcome: "warning",
+        reason: "trusted_local_code",
+      },
     );
   }
 }
@@ -125,6 +137,12 @@ export async function loadInternalHooks(
         if (!hookBaseDir) {
           log.error(
             `Hook '${safeLogValue(entry.hook.name)}' base directory is no longer readable: ${safeLogValue(entry.hook.baseDir)}`,
+            undefined,
+            {
+              event: "hooks.loader.hook",
+              outcome: "failure",
+              reason: "base_directory_unreadable",
+            },
           );
           continue;
         }
@@ -136,6 +154,12 @@ export async function loadInternalHooks(
         if (!opened.ok) {
           log.error(
             `Hook '${safeLogValue(entry.hook.name)}' handler path fails boundary checks: ${safeLogValue(entry.hook.handlerPath)}`,
+            undefined,
+            {
+              event: "hooks.loader.hook",
+              outcome: "failure",
+              reason: "boundary_check_failed",
+            },
           );
           continue;
         }
@@ -157,6 +181,8 @@ export async function loadInternalHooks(
         if (!handler) {
           log.error(
             `Handler '${safeLogValue(exportName)}' from ${safeLogValue(entry.hook.name)} is not a function`,
+            undefined,
+            { event: "hooks.loader.handler", outcome: "failure", reason: "not_function" },
           );
           continue;
         }
@@ -164,7 +190,15 @@ export async function loadInternalHooks(
         // Register for all events listed in metadata
         const events = entry.metadata?.events ?? [];
         if (events.length === 0) {
-          log.warn(`Hook '${safeLogValue(entry.hook.name)}' has no events defined in metadata`);
+          log.warn(
+            `Hook '${safeLogValue(entry.hook.name)}' has no events defined in metadata`,
+            undefined,
+            {
+              event: "hooks.loader.hook",
+              outcome: "warning",
+              reason: "no_events",
+            },
+          );
           continue;
         }
 
@@ -175,16 +209,28 @@ export async function loadInternalHooks(
 
         log.debug(
           `Registered hook: ${safeLogValue(entry.hook.name)} -> ${events.map((event) => safeLogValue(event)).join(", ")}${exportName !== "default" ? ` (export: ${safeLogValue(exportName)})` : ""}`,
+          undefined,
+          { event: "hooks.loader.hook", outcome: "success", reason: "registered" },
         );
         loadedCount++;
       } catch (err) {
         log.error(
           `Failed to load hook ${safeLogValue(entry.hook.name)}: ${safeLogValue(formatErrorMessage(err))}`,
+          undefined,
+          { event: "hooks.loader.load.hook", outcome: "failure", reason: "failed" },
         );
       }
     }
   } catch (err) {
-    log.error(`Failed to load directory-based hooks: ${safeLogValue(formatErrorMessage(err))}`);
+    log.error(
+      `Failed to load directory-based hooks: ${safeLogValue(formatErrorMessage(err))}`,
+      undefined,
+      {
+        event: "hooks.loader.directory",
+        outcome: "failure",
+        reason: "failed",
+      },
+    );
   }
 
   // 2. Load legacy config handlers (backwards compatibility)
@@ -194,12 +240,22 @@ export async function loadInternalHooks(
       // Legacy handler paths: keep them workspace-relative.
       const rawModule = handlerConfig.module.trim();
       if (!rawModule) {
-        log.error("Handler module path is empty");
+        log.error("Handler module path is empty", undefined, {
+          event: "hooks.loader.handler_module_path",
+          outcome: "failure",
+          reason: "empty",
+        });
         continue;
       }
       if (path.isAbsolute(rawModule)) {
         log.error(
           `Handler module path must be workspace-relative (got absolute path): ${safeLogValue(rawModule)}`,
+          undefined,
+          {
+            event: "hooks.loader.handler_module_path",
+            outcome: "failure",
+            reason: "absolute_path",
+          },
         );
         continue;
       }
@@ -209,6 +265,12 @@ export async function loadInternalHooks(
       if (!baseDirReal) {
         log.error(
           `Workspace directory is no longer readable while loading hooks: ${safeLogValue(baseDir)}`,
+          undefined,
+          {
+            event: "hooks.loader.workspace",
+            outcome: "failure",
+            reason: "unreadable",
+          },
         );
         continue;
       }
@@ -216,12 +278,26 @@ export async function loadInternalHooks(
       if (!modulePathSafe) {
         log.error(
           `Handler module path could not be resolved with realpath: ${safeLogValue(rawModule)}`,
+          undefined,
+          {
+            event: "hooks.loader.handler_module_path",
+            outcome: "failure",
+            reason: "realpath_failed",
+          },
         );
         continue;
       }
       const rel = path.relative(baseDirReal, modulePathSafe);
       if (!isNonEmptyRelativePathInsideRoot(rel)) {
-        log.error(`Handler module path must stay within workspaceDir: ${safeLogValue(rawModule)}`);
+        log.error(
+          `Handler module path must stay within workspaceDir: ${safeLogValue(rawModule)}`,
+          undefined,
+          {
+            event: "hooks.loader.handler_module_path",
+            outcome: "failure",
+            reason: "outside_workspace",
+          },
+        );
         continue;
       }
       const opened = await openRootFile({
@@ -232,6 +308,12 @@ export async function loadInternalHooks(
       if (!opened.ok) {
         log.error(
           `Handler module path fails boundary checks under workspaceDir: ${safeLogValue(rawModule)}`,
+          undefined,
+          {
+            event: "hooks.loader.handler_module_path",
+            outcome: "failure",
+            reason: "boundary_check_failed",
+          },
         );
         continue;
       }
@@ -239,6 +321,12 @@ export async function loadInternalHooks(
       fs.closeSync(opened.fd);
       log.warn(
         `Loading legacy internal hook module from workspace path ${safeLogValue(rawModule)}. Legacy hook modules are trusted local code.`,
+        undefined,
+        {
+          event: "hooks.loader.legacy_module.loading",
+          outcome: "warning",
+          reason: "trusted_local_code",
+        },
       );
 
       // Legacy handlers are always workspace-relative, so use mtime-based cache busting
@@ -255,6 +343,8 @@ export async function loadInternalHooks(
       if (!handler) {
         log.error(
           `Handler '${safeLogValue(exportName)}' from ${safeLogValue(modulePath)} is not a function`,
+          undefined,
+          { event: "hooks.loader.handler", outcome: "failure", reason: "not_function" },
         );
         continue;
       }
@@ -263,11 +353,15 @@ export async function loadInternalHooks(
       loadedHookRegistrations.push({ event: handlerConfig.event, handler });
       log.debug(
         `Registered hook (legacy): ${safeLogValue(handlerConfig.event)} -> ${safeLogValue(modulePath)}${exportName !== "default" ? `#${safeLogValue(exportName)}` : ""}`,
+        undefined,
+        { event: "hooks.loader.legacy_hook", outcome: "success", reason: "registered" },
       );
       loadedCount++;
     } catch (err) {
       log.error(
         `Failed to load hook handler from ${safeLogValue(handlerConfig.module)}: ${safeLogValue(formatErrorMessage(err))}`,
+        undefined,
+        { event: "hooks.loader.load.hook.handler", outcome: "failure", reason: "failed" },
       );
     }
   }

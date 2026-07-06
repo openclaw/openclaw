@@ -542,7 +542,15 @@ function resolveCanonicalSessionSyncFilePath(
 }
 
 async function logSessionFileReadFailure(absPath: string, err: unknown): Promise<void> {
-  createSubsystemLogger("memory").debug(`Failed reading session file ${absPath}: ${String(err)}`);
+  createSubsystemLogger("memory").debug(
+    `Failed reading session file ${absPath}: ${String(err)}`,
+    undefined,
+    {
+      event: "memory.session_file.read",
+      outcome: "failure",
+      reason: "read_failed",
+    },
+  );
 }
 
 function normalizeSessionText(value: string): string {

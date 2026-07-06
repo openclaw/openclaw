@@ -67,7 +67,11 @@ const logCommand: HookHandler = async (event) => {
     });
   } catch (err) {
     const message = formatErrorMessage(err);
-    log.error(`Failed to log command: ${message}`);
+    log.error(`Failed to log command: ${message}`, undefined, {
+      event: "command.logger.log.command",
+      outcome: "failure",
+      reason: "failed",
+    });
   }
 };
 

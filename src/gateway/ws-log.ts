@@ -91,7 +91,11 @@ function logWsInfoLine(params: {
     ...params.restMeta,
     ...params.trailing,
   ].filter((t): t is string => Boolean(t));
-  wsLog.info(tokens.join(" "));
+  wsLog.info(tokens.join(" "), undefined, {
+    event: "gateway.ws.info_line",
+    outcome: "success",
+    reason: "completed",
+  });
 }
 
 /** Returns true when gateway WebSocket logging is enabled for the current console. */
@@ -376,6 +380,8 @@ function logWsOptimized(direction: "in" | "out", kind: string, meta?: Record<str
       ]
         .filter((t): t is string => Boolean(t))
         .join(" "),
+      undefined,
+      { event: "gateway.ws.optimized", outcome: "warning", reason: "warning" },
     );
     return;
   }

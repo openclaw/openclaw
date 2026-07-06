@@ -9,12 +9,11 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getActiveMemorySearchManager } from "../plugins/memory-runtime.js";
+import type { RuntimeLogger } from "../plugins/runtime/types-core.js";
 import type { RealtimeVoiceAgentConsultResult } from "./agent-consult-runtime.js";
 import { parseRealtimeVoiceAgentConsultArgs } from "./agent-consult-tool.js";
 
-type Logger = {
-  debug?: (message: string) => void;
-};
+type Logger = Pick<RuntimeLogger, "debug">;
 
 type MemorySearchHit = {
   path: string;
@@ -189,7 +188,12 @@ export async function resolveRealtimeVoiceFastContextConsult(params: {
       params.config.timeoutMs,
     );
     if (lookup.status === "unavailable") {
-      params.logger.debug?.(`[talk] fast context unavailable: ${lookup.error}`);
+      params.logger.debug?.(`[talk] fast context unavailable: ${lookup.error}`, undefined, {
+        event: "talk.fast_context",
+        category: "talk.fast_context",
+        outcome: "warning",
+        reason: "unavailable",
+      });
       // In fallback mode, let the normal agent consult decide. Otherwise produce
       // a bounded "no context handy" result immediately for the voice call.
       return params.config.fallbackToConsult
@@ -210,7 +214,12 @@ export async function resolveRealtimeVoiceFastContextConsult(params: {
     };
   } catch (error) {
     const message = formatErrorMessage(error);
-    params.logger.debug?.(`[talk] fast context lookup failed: ${message}`);
+    params.logger.debug?.(`[talk] fast context lookup failed: ${message}`, undefined, {
+      event: "talk.fast_context.lookup",
+      category: "talk.fast_context",
+      outcome: "failure",
+      reason: "lookup_failed",
+    });
     // Timeouts and lookup failures are non-fatal because this is an optional
     // acceleration path ahead of the normal consult runtime.
     return params.config.fallbackToConsult

@@ -215,11 +215,19 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     });
     if (!normalized) {
       if (kind === "final" && originalWasExactSilent) {
-        silentReplyLogger.debug("exact NO_REPLY final payload was skipped before delivery", {
-          hasSessionKey: Boolean(options.silentReplyContext?.sessionKey),
-          surface: options.silentReplyContext?.surface,
-          conversationType: options.silentReplyContext?.conversationType,
-        });
+        silentReplyLogger.debug(
+          "exact NO_REPLY final payload was skipped before delivery",
+          {
+            hasSessionKey: Boolean(options.silentReplyContext?.sessionKey),
+            surface: options.silentReplyContext?.surface,
+            conversationType: options.silentReplyContext?.conversationType,
+          },
+          {
+            event: "silent.reply.dispatcher.final_payload",
+            outcome: "warning",
+            reason: "skipped",
+          },
+        );
       }
       return false;
     }

@@ -205,7 +205,15 @@ async function tryProviderSummarize(
     if (typeof result === "string" && result.trim()) {
       return result;
     }
-    log.warn(`Compaction provider "${provider.id}" returned empty result, falling back to LLM.`);
+    log.warn(
+      `Compaction provider "${provider.id}" returned empty result, falling back to LLM.`,
+      undefined,
+      {
+        event: "compaction.safeguard.provider.summarize",
+        outcome: "warning",
+        reason: "provider_empty",
+      },
+    );
     return undefined;
   } catch (err) {
     // Propagate only when the caller explicitly cancelled. Provider-side
@@ -219,6 +227,12 @@ async function tryProviderSummarize(
     }
     log.warn(
       `Compaction provider "${provider.id}" failed, falling back to LLM: ${err instanceof Error ? err.message : String(err)}`,
+      undefined,
+      {
+        event: "compaction.safeguard.provider.summarize",
+        outcome: "warning",
+        reason: "failed",
+      },
     );
     return undefined;
   }
@@ -330,6 +344,12 @@ async function resolveModelAuth(
     const error = formatErrorMessage(err);
     log.warn(
       `Compaction safeguard: request credentials unavailable; cancelling compaction. ${error}`,
+      undefined,
+      {
+        event: "compaction.safeguard.credential",
+        outcome: "warning",
+        reason: "unavailable",
+      },
     );
     return {
       ok: false,
@@ -339,6 +359,12 @@ async function resolveModelAuth(
   if (!requestAuth.ok) {
     log.warn(
       `Compaction safeguard: request credential resolution failed for ${model.provider}/${model.id}: ${requestAuth.error}`,
+      undefined,
+      {
+        event: "compaction.safeguard.credential.resolve",
+        outcome: "warning",
+        reason: "failed",
+      },
     );
     return {
       ok: false,
@@ -348,6 +374,12 @@ async function resolveModelAuth(
   if (!requestAuth.apiKey && !requestAuth.headers) {
     log.warn(
       "Compaction safeguard: no request credentials available; cancelling compaction to preserve history.",
+      undefined,
+      {
+        event: "compaction.safeguard.credential",
+        outcome: "warning",
+        reason: "warning",
+      },
     );
     return {
       ok: false,
@@ -911,6 +943,12 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       if (containsRealConversation(branchMessages)) {
         log.info(
           "Compaction safeguard: using session branch messages after compaction preparation omitted real conversation content.",
+          undefined,
+          {
+            event: "compaction.safeguard.session.branch.messages",
+            outcome: "success",
+            reason: "selected",
+          },
         );
         baseMessagesToSummarize = branchMessages;
         baseTurnPrefixMessages = [];
@@ -934,6 +972,12 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       // loop.
       log.info(
         "Compaction safeguard: no real conversation messages to summarize; writing compaction boundary to suppress re-trigger loop.",
+        undefined,
+        {
+          event: "compaction.safeguard.conversation.empty",
+          outcome: "success",
+          reason: "completed",
+        },
       );
       const fallbackSummary = buildStructuredFallbackSummary(preparation.previousSummary);
       return {
@@ -1024,7 +1068,15 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             };
           }
           // Provider returned empty — fall through to LLM path.
-          log.info("Compaction provider did not produce a result; falling back to LLM path.");
+          log.info(
+            "Compaction provider did not produce a result; falling back to LLM path.",
+            undefined,
+            {
+              event: "compaction.safeguard.provider.summarize",
+              outcome: "warning",
+              reason: "provider_empty",
+            },
+          );
         } catch (err) {
           // tryProviderSummarize rethrows on caller cancellation; reaching here
           // means an unexpected error in the assembly step. Fall through to LLM.
@@ -1036,11 +1088,23 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           }
           log.warn(
             `Compaction provider path failed unexpectedly: ${err instanceof Error ? err.message : String(err)}`,
+            undefined,
+            {
+              event: "compaction.safeguard.provider.path",
+              outcome: "warning",
+              reason: "failed",
+            },
           );
         }
       } else {
         log.warn(
           `Compaction provider "${providerId}" is configured but not registered. Falling back to LLM.`,
+          undefined,
+          {
+            event: "compaction.safeguard.provider.resolve",
+            outcome: "warning",
+            reason: "missing",
+          },
         );
       }
     }
@@ -1056,6 +1120,12 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           "[compaction-safeguard] Both ctx.model and runtime.model are undefined. " +
             "Compaction summarization will not run. This indicates extensionRunner.initialize() " +
             "was not called and model was not passed through runtime registry.",
+          undefined,
+          {
+            event: "compaction.safeguard.model",
+            outcome: "warning",
+            reason: "warning",
+          },
         );
       }
       setCompactionSafeguardCancelReason(
@@ -1114,6 +1184,12 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                 1,
               )}% of context; dropped ${pruned.droppedChunks} older chunk(s) ` +
                 `(${pruned.droppedMessages} messages) to fit history budget.`,
+              undefined,
+              {
+                event: "compaction.safeguard.history.pruned",
+                outcome: "warning",
+                reason: "warning",
+              },
             );
             messagesToSummarize = pruned.messages;
 
@@ -1151,6 +1227,12 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   `Compaction safeguard: failed to summarize dropped messages, continuing without: ${formatErrorMessage(
                     droppedError,
                   )}`,
+                  undefined,
+                  {
+                    event: "compaction.safeguard.dropped.messages.summarize",
+                    outcome: "warning",
+                    reason: "failed",
+                  },
                 );
               }
             }
@@ -1256,6 +1338,12 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             log.warn(
               `Compaction safeguard: quality retry failed on attempt ${attempt + 1}; ` +
                 `keeping last successful summary: ${formatErrorMessage(attemptError)}`,
+              undefined,
+              {
+                event: "compaction.safeguard.quality",
+                outcome: "warning",
+                reason: "warning",
+              },
             );
             summary = lastSuccessfulSummary;
             break;
@@ -1325,6 +1413,12 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       const message = formatErrorMessage(error);
       log.warn(
         `Compaction summarization failed; cancelling compaction to preserve history: ${message}`,
+        undefined,
+        {
+          event: "compaction.safeguard.summarization",
+          outcome: "warning",
+          reason: "failed",
+        },
       );
       setCompactionSafeguardCancelReason(
         ctx.sessionManager,

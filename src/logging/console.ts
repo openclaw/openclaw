@@ -4,6 +4,7 @@ import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { isVerbose } from "../global-state.js";
 import { readLoggingConfig, shouldSkipMutatingLoggingConfigRead } from "./config.js";
+import { attachDiagnosticLogSemantics } from "./diagnostic-log-internal.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, normalizeLogLevel } from "./levels.js";
 import { getLogger } from "./logger.js";
@@ -178,6 +179,23 @@ function hasTimestampPrefix(value: string): boolean {
   );
 }
 
+function consoleForwardLogMeta(level: LogLevel): Record<string, unknown> {
+  return attachDiagnosticLogSemantics(
+    {},
+    {
+      event: "console.forwarded",
+      category: "console",
+      outcome:
+        level === "warn"
+          ? "warning"
+          : level === "error" || level === "fatal"
+            ? "failure"
+            : "success",
+      reason: level,
+    },
+  );
+}
+
 /**
  * Route console.* calls through file logging while still emitting to stdout/stderr.
  * This keeps user-facing output unchanged but guarantees every console call is captured in log files.
@@ -251,17 +269,17 @@ export function enableConsoleCapture(): void {
         const resolvedLogger = getLoggerLazy();
         // Map console levels to file logger
         if (level === "trace") {
-          resolvedLogger.trace(formatted);
+          resolvedLogger.trace(consoleForwardLogMeta(level), formatted);
         } else if (level === "debug") {
-          resolvedLogger.debug(formatted);
+          resolvedLogger.debug(consoleForwardLogMeta(level), formatted);
         } else if (level === "info") {
-          resolvedLogger.info(formatted);
+          resolvedLogger.info(consoleForwardLogMeta(level), formatted);
         } else if (level === "warn") {
-          resolvedLogger.warn(formatted);
+          resolvedLogger.warn(consoleForwardLogMeta(level), formatted);
         } else if (level === "error" || level === "fatal") {
-          resolvedLogger.error(formatted);
+          resolvedLogger.error(consoleForwardLogMeta(level), formatted);
         } else {
-          resolvedLogger.info(formatted);
+          resolvedLogger.info(consoleForwardLogMeta("info"), formatted);
         }
       } catch {
         // never block console output on logging failures

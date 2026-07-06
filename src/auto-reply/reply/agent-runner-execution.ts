@@ -286,6 +286,11 @@ function createAgentTurnTimingTracker(options: { profilerEnabled?: boolean } = {
           totalMs: summary.totalMs,
           spans: summary.spans,
         },
+        {
+          event: "auto.reply.turn.timing",
+          outcome: "warning",
+          reason: "warning",
+        },
       );
     },
     logMilestoneIfSlow(params) {
@@ -309,6 +314,11 @@ function createAgentTurnTimingTracker(options: { profilerEnabled?: boolean } = {
           milestone: params.milestone,
           totalMs: summary.totalMs,
           spans: summary.spans,
+        },
+        {
+          event: "auto.reply.turn.milestone",
+          outcome: "warning",
+          reason: "warning",
         },
       );
     },
@@ -2837,7 +2847,7 @@ export async function runAgentTurnWithFallback(params: {
                               agentCompactionLog.info(
                                 "codex app-server auto-compaction succeeded",
                                 {
-                                  event: "codex_app_server_compaction_succeeded",
+                                  compactionEvent: "codex_app_server_compaction_completed",
                                   backend,
                                   provider,
                                   model,
@@ -2848,6 +2858,11 @@ export async function runAgentTurnWithFallback(params: {
                                   itemId: readStringValue(evt.data.itemId),
                                   compactionCount: attemptCompactionCount,
                                   consoleMessage,
+                                },
+                                {
+                                  event: "auto.reply.compaction",
+                                  outcome: "success",
+                                  reason: "completed",
                                 },
                               );
                             }

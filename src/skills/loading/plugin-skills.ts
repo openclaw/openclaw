@@ -93,11 +93,19 @@ export function resolvePluginSkillDirs(params: {
       }
       const candidate = path.resolve(record.rootDir, trimmed);
       if (!fs.existsSync(candidate)) {
-        log.warn(`plugin skill path not found (${record.id}): ${candidate}`);
+        log.warn(`plugin skill path not found (${record.id}): ${candidate}`, undefined, {
+          event: "skills.plugin.skill.path.not.found",
+          outcome: "warning",
+          reason: "warning",
+        });
         continue;
       }
       if (!isPathInsideWithRealpath(record.rootDir, candidate, { requireRealpath: true })) {
-        log.warn(`plugin skill path escapes plugin root (${record.id}): ${candidate}`);
+        log.warn(`plugin skill path escapes plugin root (${record.id}): ${candidate}`, undefined, {
+          event: "skills.plugin.skill.path.escapes.plugin.root",
+          outcome: "warning",
+          reason: "warning",
+        });
         continue;
       }
       if (seen.has(candidate)) {
@@ -138,6 +146,8 @@ function collectSkillTargets(dir: string, targets: Map<string, string>): void {
       log.warn(
         `plugin skill name collision: "${basename}" resolves to both ${existing} and ${dir}; ` +
           `only the first will be published`,
+        undefined,
+        { event: "skills.plugin.discovery", outcome: "warning", reason: "name_collision" },
       );
       return;
     }
@@ -161,6 +171,8 @@ function collectSkillTargets(dir: string, targets: Map<string, string>): void {
       log.warn(
         `plugin skill name collision: "${basename}" resolves to both ${existing} and ${childPath}; ` +
           `only the first will be published`,
+        undefined,
+        { event: "skills.plugin.discovery", outcome: "warning", reason: "name_collision" },
       );
       continue;
     }
@@ -177,11 +189,19 @@ function hasPublishableSkillFile(params: { skillDir: string; rootDir: string }):
     return false;
   }
   if (!skillMdStat.isFile() || skillMdStat.isSymbolicLink()) {
-    log.warn(`plugin skill SKILL.md is not a regular file: ${skillMd}`);
+    log.warn(`plugin skill SKILL.md is not a regular file: ${skillMd}`, undefined, {
+      event: "skills.plugin.skill.md.not.regular.file",
+      outcome: "warning",
+      reason: "warning",
+    });
     return false;
   }
   if (!isPathInsideWithRealpath(params.rootDir, skillMd, { requireRealpath: true })) {
-    log.warn(`plugin skill SKILL.md escapes declared skill root: ${skillMd}`);
+    log.warn(`plugin skill SKILL.md escapes declared skill root: ${skillMd}`, undefined, {
+      event: "skills.plugin.skill.md.escapes.declared.skill",
+      outcome: "warning",
+      reason: "warning",
+    });
     return false;
   }
   return true;
@@ -227,19 +247,39 @@ function publishPluginSkills(skillDirs: string[], opts?: { pluginSkillsDir?: str
       } else if (isGeneratedPluginSkillEntry(existingEntry)) {
         removeGeneratedPluginSkillEntry(linkPath);
       } else {
-        log.warn(`plugin skill entry is not a generated symlink: ${linkPath}`);
+        log.warn(`plugin skill entry is not a generated symlink: ${linkPath}`, undefined, {
+          event: "skills.plugin.skill.entry.not.generated.symlink",
+          outcome: "warning",
+          reason: "warning",
+        });
         continue;
       }
     } catch (err) {
       if (!isNotFoundError(err)) {
-        log.warn(`failed to inspect plugin skill symlink "${linkPath}": ${String(err)}`);
+        log.warn(
+          `failed to inspect plugin skill symlink "${linkPath}": ${String(err)}`,
+          undefined,
+          {
+            event: "skills.inspect.plugin.skill.symlink",
+            outcome: "warning",
+            reason: "failed",
+          },
+        );
         continue;
       }
     }
     try {
       fs.symlinkSync(target, linkPath, resolvePluginSkillLinkType());
     } catch (err) {
-      log.warn(`failed to create plugin skill symlink "${linkPath}" → "${target}": ${String(err)}`);
+      log.warn(
+        `failed to create plugin skill symlink "${linkPath}" → "${target}": ${String(err)}`,
+        undefined,
+        {
+          event: "skills.create.plugin.skill.symlink",
+          outcome: "warning",
+          reason: "failed",
+        },
+      );
     }
   }
 

@@ -534,7 +534,12 @@ type VideoGenerateSandboxConfig = {
 
 const defaultScheduleVideoGenerateBackgroundWork = createDefaultMediaGenerateBackgroundScheduler({
   toolName: "video_generate",
-  onCrash: (message, meta) => log.error(message, meta),
+  onCrash: (message, meta) =>
+    log.error(message, meta, {
+      event: "agents.tools.video.generate.background.scheduler",
+      outcome: "failure",
+      reason: "crash",
+    }),
 });
 
 async function loadReferenceAssets(params: {
@@ -1202,7 +1207,12 @@ export function createVideoGenerateTool(options?: {
           progressSummary: "Generating video",
           config: effectiveCfg,
           toolName: "Video generation",
-          onWakeFailure: (message, meta) => log.warn(message, meta),
+          onWakeFailure: (message, meta) =>
+            log.warn(message, meta, {
+              event: "agents.tools.video.generate.background.wake",
+              outcome: "warning",
+              reason: "failed",
+            }),
           run: () =>
             executeVideoGenerationJob({
               effectiveCfg,
@@ -1231,7 +1241,12 @@ export function createVideoGenerateTool(options?: {
           message: "Video generation started; wait for the generated video completion event.",
           toolName: "video_generate",
           handle: taskHandle,
-          onFailure: (message, meta) => log.warn(message, meta),
+          onFailure: (message, meta) =>
+            log.warn(message, meta, {
+              event: "agents.tools.video.generate.async_notification",
+              outcome: "warning",
+              reason: "failed",
+            }),
         });
 
         return buildMediaGenerationStartedToolResult({

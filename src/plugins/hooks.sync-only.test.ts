@@ -55,6 +55,44 @@ describe("sync-only plugin hooks", () => {
     expect(logger.error).not.toHaveBeenCalled();
   });
 
+  it("passes hook semantics only to diagnostic-log capable hook loggers", () => {
+    const logger = {
+      supportsDiagnosticLogSemantics: true as const,
+      warn: vi.fn(),
+      error: vi.fn(),
+    } satisfies HookRunnerLogger;
+    const originalMessage = createToolResultMessage("original");
+    const replacementMessage = createToolResultMessage("replacement");
+    const runner = createHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "tool_result_persist",
+          pluginId: "async-tool-result",
+          handler: async () => ({ message: replacementMessage }),
+        },
+      ]),
+      { logger },
+    );
+
+    const result = runner.runToolResultPersist(
+      { message: originalMessage },
+      { agentId: "agent-1", sessionKey: "session-1" },
+    );
+
+    expect(result).toEqual({ message: originalMessage });
+    expect(logger.warn).toHaveBeenCalledExactlyOnceWith(
+      "[hooks] tool_result_persist handler from async-tool-result returned a Promise; this hook is synchronous and the result was ignored.",
+      undefined,
+      {
+        event: "plugins.hooks.sync_contract_violation",
+        category: "plugins.hooks",
+        outcome: "warning",
+        reason: "promise_returned",
+      },
+    );
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
   it("warns and ignores accidental async before_message_write handlers", () => {
     const logger = createLogger();
     const originalMessage = createToolResultMessage("original");

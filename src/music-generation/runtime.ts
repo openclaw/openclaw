@@ -144,7 +144,16 @@ export async function generateMusic(
         model: candidate.model,
         error: err,
       });
-      logger.debug(`music-generation candidate failed: ${candidate.provider}/${candidate.model}`);
+      logger.debug(
+        `music-generation candidate failed: ${candidate.provider}/${candidate.model}`,
+        undefined,
+        {
+          event: "music_generation.candidate",
+          category: "music_generation",
+          outcome: "failure",
+          reason: "generation_failed",
+        },
+      );
     }
   }
 

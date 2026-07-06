@@ -166,11 +166,13 @@ export type {
   PluginHookResolveExecEnvContext,
   PluginHookResolveExecEnvEvent,
 };
+import type { PluginLogSemantics } from "./logging-types.js";
 
 export type HookRunnerLogger = {
-  debug?: (message: string) => void;
-  warn: (message: string) => void;
-  error: (message: string) => void;
+  supportsDiagnosticLogSemantics?: true;
+  debug?: (message: string, meta?: Record<string, unknown>, semantics?: PluginLogSemantics) => void;
+  warn: (message: string, meta?: Record<string, unknown>, semantics?: PluginLogSemantics) => void;
+  error: (message: string, meta?: Record<string, unknown>, semantics?: PluginLogSemantics) => void;
 };
 
 export type HookFailurePolicy = "fail-open" | "fail-closed";
@@ -313,6 +315,37 @@ export function createHookRunner(
 
   const shouldCatchHookErrors = (hookName: PluginHookName): boolean =>
     catchErrors && (failurePolicyByHook[hookName] ?? "fail-open") === "fail-open";
+  const hookLogSemantics = (
+    event: string,
+    outcome: "failure" | "success" | "warning",
+    reason: string,
+  ): PluginLogSemantics => ({
+    event,
+    category: "plugins.hooks",
+    outcome,
+    reason,
+  });
+  const logHookDebug = (message: string, event: string, reason: string): void => {
+    if (logger?.supportsDiagnosticLogSemantics) {
+      logger.debug?.(message, undefined, hookLogSemantics(event, "success", reason));
+      return;
+    }
+    logger?.debug?.(message);
+  };
+  const logHookWarn = (message: string, event: string, reason: string): void => {
+    if (logger?.supportsDiagnosticLogSemantics) {
+      logger.warn(message, undefined, hookLogSemantics(event, "warning", reason));
+      return;
+    }
+    logger?.warn(message);
+  };
+  const logHookError = (message: string, event: string, reason: string): void => {
+    if (logger?.supportsDiagnosticLogSemantics) {
+      logger.error(message, undefined, hookLogSemantics(event, "failure", reason));
+      return;
+    }
+    logger?.error(message);
+  };
 
   const firstDefined = <T>(prev: T | undefined, next: T | undefined): T | undefined => prev ?? next;
   const lastDefined = <T>(prev: T | undefined, next: T | undefined): T | undefined => next ?? prev;
@@ -521,7 +554,7 @@ export function createHookRunner(
   }): never | void => {
     const msg = `[hooks] ${params.hookName} handler from ${params.pluginId} failed: ${formatHookErrorForLog(params.error)}`;
     if (shouldCatchHookErrors(params.hookName)) {
-      logger?.error(msg);
+      logHookError(msg, "plugins.hooks.handler", "handler_failed");
       return;
     }
     throw new Error(msg, { cause: params.error });
@@ -613,7 +646,11 @@ export function createHookRunner(
       return;
     }
 
-    logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers)`);
+    logHookDebug(
+      `[hooks] running ${hookName} (${hooks.length} handlers)`,
+      "plugins.hooks.run",
+      "void_hook",
+    );
 
     const promises = hooks.map(async (hook) => {
       try {
@@ -649,7 +686,11 @@ export function createHookRunner(
       return undefined;
     }
 
-    logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers, sequential)`);
+    logHookDebug(
+      `[hooks] running ${hookName} (${hooks.length} handlers, sequential)`,
+      "plugins.hooks.run",
+      "modifying_hook",
+    );
 
     let result: TResult | undefined;
 
@@ -671,8 +712,10 @@ export function createHookRunner(
           if (result && policy.shouldStop?.(result)) {
             const terminalLabel = policy.terminalLabel ? ` ${policy.terminalLabel}` : "";
             const priority = hook.priority ?? 0;
-            logger?.debug?.(
+            logHookDebug(
               `[hooks] ${hookName}${terminalLabel} decided by ${hook.pluginId} (priority=${priority}); skipping remaining handlers`,
+              "plugins.hooks.terminal_decision",
+              "terminal_decision",
             );
             policy.onTerminal?.({ hookName, pluginId: hook.pluginId, result });
             break;
@@ -699,7 +742,11 @@ export function createHookRunner(
       return undefined;
     }
 
-    logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers, first-claim wins)`);
+    logHookDebug(
+      `[hooks] running ${hookName} (${hooks.length} handlers, first-claim wins)`,
+      "plugins.hooks.run",
+      "claiming_hook",
+    );
 
     return await runClaimingHooksList(hooks, hookName, event, ctx);
   }
@@ -718,8 +765,10 @@ export function createHookRunner(
       return undefined;
     }
 
-    logger?.debug?.(
+    logHookDebug(
       `[hooks] running ${hookName} for ${pluginId} (${hooks.length} handlers, targeted)`,
+      "plugins.hooks.run",
+      "targeted_hook",
     );
 
     return await runClaimingHooksList(hooks, hookName, event, ctx);
@@ -780,8 +829,10 @@ export function createHookRunner(
       return { status: "no_handler" };
     }
 
-    logger?.debug?.(
+    logHookDebug(
       `[hooks] running ${hookName} for ${pluginId} (${hooks.length} handlers, targeted outcome)`,
+      "plugins.hooks.run",
+      "targeted_outcome_hook",
     );
 
     let firstError: string | null = null;
@@ -1110,7 +1161,11 @@ export function createHookRunner(
       return undefined;
     }
 
-    logger?.debug?.(`[hooks] running reply_payload_sending (${hooks.length} handlers, sequential)`);
+    logHookDebug(
+      `[hooks] running reply_payload_sending (${hooks.length} handlers, sequential)`,
+      "plugins.hooks.run",
+      "reply_payload_sending",
+    );
 
     let currentPayload: ReplyPayload = event.payload;
     let result: PluginHookReplyPayloadSendingResult | undefined;
@@ -1143,8 +1198,10 @@ export function createHookRunner(
 
         if (result.cancel === true) {
           const priority = hook.priority ?? 0;
-          logger?.debug?.(
+          logHookWarn(
             `[hooks] reply_payload_sending cancel=true decided by ${hook.pluginId} (priority=${priority}); skipping remaining handlers`,
+            "plugins.hooks.terminal_decision",
+            "reply_payload_cancelled",
           );
           break;
         }
@@ -1334,7 +1391,7 @@ export function createHookRunner(
             `[hooks] tool_result_persist handler from ${hook.pluginId} returned a Promise; ` +
             `this hook is synchronous and the result was ignored.`;
           if (shouldCatchHookErrors("tool_result_persist")) {
-            logger?.warn?.(msg);
+            logHookWarn(msg, "plugins.hooks.sync_contract", "promise_returned");
             continue;
           }
           throw new Error(msg);
@@ -1347,7 +1404,7 @@ export function createHookRunner(
       } catch (err) {
         const msg = `[hooks] tool_result_persist handler from ${hook.pluginId} failed: ${String(err)}`;
         if (shouldCatchHookErrors("tool_result_persist")) {
-          logger?.error(msg);
+          logHookError(msg, "plugins.hooks.handler", "handler_failed");
         } else {
           throw new Error(msg, { cause: err });
         }
@@ -1394,7 +1451,7 @@ export function createHookRunner(
             `[hooks] before_message_write handler from ${hook.pluginId} returned a Promise; ` +
             `this hook is synchronous and the result was ignored.`;
           if (shouldCatchHookErrors("before_message_write")) {
-            logger?.warn?.(msg);
+            logHookWarn(msg, "plugins.hooks.sync_contract", "promise_returned");
             continue;
           }
           throw new Error(msg);
@@ -1414,7 +1471,7 @@ export function createHookRunner(
       } catch (err) {
         const msg = `[hooks] before_message_write handler from ${hook.pluginId} failed: ${String(err)}`;
         if (shouldCatchHookErrors("before_message_write")) {
-          logger?.error(msg);
+          logHookError(msg, "plugins.hooks.handler", "handler_failed");
         } else {
           throw new Error(msg, { cause: err });
         }

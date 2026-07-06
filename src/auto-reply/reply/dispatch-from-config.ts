@@ -1080,6 +1080,11 @@ function createReplyHotPathTimingTracker(options: { profilerEnabled?: boolean } 
           totalMs: summary.totalMs,
           spans: summary.spans,
         },
+        {
+          event: "auto.reply.timing.reply.hot.path.timings.channel",
+          outcome: "warning",
+          reason: "warning",
+        },
       );
     },
   };

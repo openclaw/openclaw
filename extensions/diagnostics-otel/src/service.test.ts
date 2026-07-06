@@ -908,6 +908,13 @@ describe("diagnostics-otel service", () => {
     expect(handler?.(new Error("other exporter error"))).toBe(false);
     expect(ctx.logger.warn).toHaveBeenCalledWith(
       "diagnostics-otel: suppressed OTLP exporter unhandled rejection (code=410)",
+      undefined,
+      {
+        event: "diagnostics_otel.unhandled_rejection",
+        category: "diagnostics_otel",
+        outcome: "warning",
+        reason: "otlp_exporter_rejection",
+      },
     );
 
     await service.stop?.(ctx);
@@ -938,6 +945,13 @@ describe("diagnostics-otel service", () => {
     expect(traceExporterCtor).not.toHaveBeenCalled();
     expect(ctx.logger.info).toHaveBeenCalledWith(
       "diagnostics-otel: using preloaded OpenTelemetry SDK",
+      undefined,
+      {
+        event: "diagnostics_otel.sdk",
+        category: "diagnostics_otel",
+        outcome: "success",
+        reason: "preloaded",
+      },
     );
 
     emitDiagnosticEvent({
@@ -1095,6 +1109,72 @@ describe("diagnostics-otel service", () => {
     expect(Object.hasOwn(emitCall.attributes ?? {}, "openclaw.security.attribute.__proto__")).toBe(
       false,
     );
+    expect(JSON.stringify(emitCall)).not.toContain("sk-test-secret");
+
+    await service.stop?.(ctx);
+  });
+
+  test("keeps trusted security event identity under attribute pressure", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { logs: true });
+    const cappedAttributes = Object.fromEntries(
+      Array.from({ length: 80 }, (_, index) => [`field_${index}`, `value_${index}`]),
+    );
+
+    await service.start(ctx);
+    emitTrustedSecurityEvent({
+      eventId: "security-event-pressure",
+      category: "tool",
+      action: "tool.execution.blocked",
+      outcome: "denied",
+      severity: "medium",
+      reason: "tools.deny",
+      attributes: {
+        "otel.event.name": "openclaw.security.spoofed",
+        "signal.type": "log.record",
+        "log.event": "spoofed.event",
+        constructor: "pollute",
+        secretish: "token sk-test-secret",
+        ...cappedAttributes,
+      },
+    });
+    await flushDiagnosticEvents();
+
+    const emitCall = mockCallArg(logEmit, 0) as {
+      attributes?: Record<string, unknown>;
+      body?: string;
+      eventName?: string;
+      severityText?: string;
+    };
+    expect(emitCall.body).toBe("openclaw.security.event");
+    expect(emitCall.eventName).toBe("openclaw.security.tool.execution.blocked");
+    expect(emitCall.severityText).toBe("WARN");
+    expect(Object.keys(emitCall.attributes ?? {})).toHaveLength(64);
+    expect(emitCall.attributes).toMatchObject({
+      "otel.event.name": "openclaw.security.tool.execution.blocked",
+      "openclaw.signal.type": "security.event",
+      "openclaw.security.event_id": "security-event-pressure",
+      "openclaw.security.category": "tool",
+      "openclaw.security.action": "tool.execution.blocked",
+      "openclaw.security.outcome": "denied",
+      "openclaw.security.severity": "medium",
+      "openclaw.security.reason": "tools.deny",
+      "openclaw.security.attribute.secretish": "unknown",
+    });
+    expect(emitCall.attributes?.["otel.event.name"]).not.toBe("openclaw.security.spoofed");
+    expect(emitCall.attributes?.["openclaw.signal.type"]).not.toBe("log.record");
+    expect(
+      Object.hasOwn(emitCall.attributes ?? {}, "openclaw.security.attribute.otel.event.name"),
+    ).toBe(false);
+    expect(
+      Object.hasOwn(emitCall.attributes ?? {}, "openclaw.security.attribute.signal.type"),
+    ).toBe(false);
+    expect(Object.hasOwn(emitCall.attributes ?? {}, "openclaw.security.attribute.log.event")).toBe(
+      false,
+    );
+    expect(
+      Object.hasOwn(emitCall.attributes ?? {}, "openclaw.security.attribute.constructor"),
+    ).toBe(false);
     expect(JSON.stringify(emitCall)).not.toContain("sk-test-secret");
 
     await service.stop?.(ctx);
@@ -1759,6 +1839,18 @@ describe("diagnostics-otel service", () => {
       outcome: "success",
       reason: "configured",
       attributes: {
+        body: "model replied OTEL-QA-OK",
+        content: "model replied OTEL-QA-OK",
+        error: "model replied OTEL-QA-OK",
+        "error.message": "model replied OTEL-QA-OK",
+        "error.stack": "model replied OTEL-QA-OK",
+        failureFieldsPreview: "model replied OTEL-QA-OK",
+        message: "model replied OTEL-QA-OK",
+        requestPayload: "model replied OTEL-QA-OK",
+        responsePreview: "model replied OTEL-QA-OK",
+        responseStatus: "failed",
+        stack: "model replied OTEL-QA-OK",
+        text: "model replied OTEL-QA-OK",
         "otel.event.name": "openclaw.spoofed",
         "signal.type": "security.event",
         "log.event": "spoofed.event",
@@ -1766,6 +1858,8 @@ describe("diagnostics-otel service", () => {
         "log.outcome": "failure",
         "log.reason": "spoofed",
         "log.site_id": "spoofed",
+        "log.level": "ERROR",
+        "openclaw.log.level": "ERROR",
         "log.body_redacted": false,
         "log.category_source": "module",
         ...cappedAttributes,
@@ -1786,6 +1880,7 @@ describe("diagnostics-otel service", () => {
       "openclaw.log.site_id": "0123456789abcdef",
       "openclaw.signal.type": "log.record",
       "openclaw.log.category_source": "module",
+      "openclaw.responseStatus": "failed",
     });
     expect(emitCall?.attributes?.["openclaw.log.body_redacted"]).toBe(true);
     expect(Object.hasOwn(emitCall?.attributes ?? {}, "openclaw.signal.type")).toBe(true);
@@ -1798,6 +1893,22 @@ describe("diagnostics-otel service", () => {
     expect(emitCall?.attributes?.["openclaw.signal.type"]).not.toBe("security.event");
     expect(emitCall?.attributes?.["openclaw.log.event"]).not.toBe("spoofed.event");
     expect(emitCall?.attributes?.["openclaw.log.site_id"]).not.toBe("spoofed");
+    expect(emitCall?.attributes?.["openclaw.log.level"]).toBe("INFO");
+    for (const key of [
+      "openclaw.body",
+      "openclaw.content",
+      "openclaw.error",
+      "openclaw.error.message",
+      "openclaw.error.stack",
+      "openclaw.failureFieldsPreview",
+      "openclaw.message",
+      "openclaw.requestPayload",
+      "openclaw.responsePreview",
+      "openclaw.stack",
+      "openclaw.text",
+    ]) {
+      expect(Object.hasOwn(emitCall?.attributes ?? {}, key)).toBe(false);
+    }
   });
 
   test("keeps granular content capture from enabling OTLP log bodies", async () => {
@@ -1967,6 +2078,38 @@ describe("diagnostics-otel service", () => {
     expect(Object.hasOwn(emitCall.attributes, "openclaw.bad key")).toBe(false);
     expect(Object.hasOwn(emitCall.attributes, "code.filepath")).toBe(false);
     expect(Object.hasOwn(emitCall.attributes, "openclaw.code.location")).toBe(false);
+    await service.stop?.(ctx);
+  });
+
+  test("keeps diagnostic code identity under log attribute pressure", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { logs: true });
+    await service.start(ctx);
+
+    const cappedAttributes = Object.fromEntries(
+      Array.from({ length: 80 }, (_, index) => [`field_${index}`, `value_${index}`]),
+    );
+
+    emitDiagnosticEvent({
+      type: "log.record",
+      level: "WARN",
+      message: "attribute pressure",
+      attributes: cappedAttributes,
+      code: {
+        line: 42,
+        functionName: "handler",
+        siteId: "fedcba9876543210",
+      },
+    });
+    await flushDiagnosticEvents();
+
+    const emitCall = mockCallArg(logEmit, 0) as {
+      attributes: Record<string, unknown>;
+    };
+    expect(Object.keys(emitCall.attributes)).toHaveLength(64);
+    expect(emitCall.attributes["code.lineno"]).toBe(42);
+    expect(emitCall.attributes["code.function"]).toBe("handler");
+    expect(emitCall.attributes["openclaw.log.site_id"]).toBe("fedcba9876543210");
     await service.stop?.(ctx);
   });
 

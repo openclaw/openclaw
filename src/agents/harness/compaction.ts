@@ -1,3 +1,4 @@
+import type { Model } from "openclaw/plugin-sdk/llm";
 /**
  * Routes compaction through selected native agent harnesses when supported.
  */
@@ -5,7 +6,6 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
-import type { Model } from "openclaw/plugin-sdk/llm";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import type { CompactEmbeddedAgentSessionParams } from "../embedded-agent-runner/compact.types.js";
@@ -100,9 +100,17 @@ async function resolveHarnessCompactApiKey(params: {
       runtimeModel: model,
     };
   } catch (err) {
-    log.debug("agent harness compaction credential lookup failed", {
-      error: formatErrorMessage(err),
-    });
+    log.debug(
+      "agent harness compaction credential lookup failed",
+      {
+        error: formatErrorMessage(err),
+      },
+      {
+        event: "agents.harness.compaction.credential",
+        outcome: "warning",
+        reason: "failed",
+      },
+    );
     return { runtimeModel: model };
   }
 }
@@ -187,9 +195,17 @@ export async function maybeCompactAgentHarnessSession(
     resolvedApiKey = resolved.apiKey;
     runtimeModel = resolved.runtimeModel;
   } catch (err) {
-    log.debug("agent harness compaction credential lookup failed", {
-      error: formatErrorMessage(err),
-    });
+    log.debug(
+      "agent harness compaction credential lookup failed",
+      {
+        error: formatErrorMessage(err),
+      },
+      {
+        event: "agents.harness.compaction.credential",
+        outcome: "warning",
+        reason: "failed",
+      },
+    );
   }
   const resolvedCompactParams =
     resolvedApiKey || runtimeModel

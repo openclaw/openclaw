@@ -212,11 +212,19 @@ async function summarizeChunks(params: {
       // retry first and only fall back to the partial summary if that
       // also fails.
       const completedChunks = chunks.indexOf(chunk);
-      log.warn("chunk summarization failed after retries; partial summary available", {
-        err,
-        completedChunks,
-        totalChunks: chunks.length,
-      });
+      log.warn(
+        "chunk summarization failed after retries; partial summary available",
+        {
+          err,
+          completedChunks,
+          totalChunks: chunks.length,
+        },
+        {
+          event: "compaction.chunk.partial_summary",
+          outcome: "warning",
+          reason: "failed",
+        },
+      );
       const partial = new Error("partial summarization failure");
       (partial as PartialSummaryError).partialSummary =
         `${summary!}\n\n[Partial summary: chunks 1-${completedChunks} of ${chunks.length} were summarized. Chunks ${completedChunks + 1}-${chunks.length} could not be processed.]`;
@@ -291,7 +299,11 @@ export async function summarizeWithFallback(params: {
     if (params.signal.aborted) {
       throw fullError;
     }
-    log.warn(`Full summarization failed: ${formatErrorMessage(fullError)}`);
+    log.warn(`Full summarization failed: ${formatErrorMessage(fullError)}`, undefined, {
+      event: "compaction.full.summarization",
+      outcome: "warning",
+      reason: "failed",
+    });
     partialSummaryFallback = (fullError as PartialSummaryError).partialSummary;
   }
 
@@ -316,7 +328,15 @@ export async function summarizeWithFallback(params: {
       if (params.signal.aborted) {
         throw partialError;
       }
-      log.warn(`Partial summarization also failed: ${formatErrorMessage(partialError)}`);
+      log.warn(
+        `Partial summarization also failed: ${formatErrorMessage(partialError)}`,
+        undefined,
+        {
+          event: "compaction.partial.summarization.also",
+          outcome: "warning",
+          reason: "failed",
+        },
+      );
       // Prefer the oversized retry's partial summary over the full attempt's,
       // since it covers the non-oversized transcript. Append oversized notes
       // so the model knows large content was filtered.

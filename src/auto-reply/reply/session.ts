@@ -72,13 +72,13 @@ import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import { replyRunRegistry } from "./reply-run-registry.js";
 import { isResetAuthorizedForContext } from "./reset-authorization.js";
 import {
   maybeRetireLegacyMainDeliveryRoute,
   resolveLastChannelRaw,
   resolveLastToRaw,
 } from "./session-delivery.js";
-import { replyRunRegistry } from "./reply-run-registry.js";
 import {
   createReplySessionEntryHandle,
   type ReplySessionEntryHandle,
@@ -460,6 +460,12 @@ async function initSessionStateAttemptLocked(
     log.info(
       `session-init store-load agent=${agentId} session=${sessionCtxForState.SessionKey ?? "(no-session)"} ` +
         `elapsedMs=${Date.now() - sessionStoreLoadStartMs} path=${storePath}`,
+      undefined,
+      {
+        event: "session.init.store_load",
+        outcome: "success",
+        reason: "completed",
+      },
     );
   }
   const retiredLegacyMainDelivery = maybeRetireLegacyMainDeliveryRoute({
@@ -903,6 +909,11 @@ async function initSessionStateAttemptLocked(
       log.warn(
         `failed to archive previous session transcript ${sourcePath} for session ${previousSessionEntry?.sessionId}`,
         { error: String(error) },
+        {
+          event: "session.init.archive_previous",
+          outcome: "warning",
+          reason: "failed",
+        },
       );
     },
     onMaintenanceWarning: (warning) =>
@@ -921,7 +932,12 @@ async function initSessionStateAttemptLocked(
         sessionEntry: entryToCommit,
         sessionKey,
         storePath,
-        warn: (message) => log.warn(message),
+        warn: (message) =>
+          log.warn(message, undefined, {
+            event: "session.init.commit",
+            outcome: "warning",
+            reason: "warning",
+          }),
       }),
     previousEntry: previousSessionEntry,
     retiredEntry: retiredLegacyMainDelivery,
@@ -950,9 +966,17 @@ async function initSessionStateAttemptLocked(
       sessionId: previousSessionEntry.sessionId,
       reason: "reply-session-rollover",
       onError: (error, sessionIdLocal) => {
-        log.warn(`failed to dispose bundle MCP runtime for session ${sessionIdLocal}`, {
-          error: String(error),
-        });
+        log.warn(
+          `failed to dispose bundle MCP runtime for session ${sessionIdLocal}`,
+          {
+            error: String(error),
+          },
+          {
+            event: "session.init.dispose.bundle.mcp.runtime.session",
+            outcome: "warning",
+            reason: "failed",
+          },
+        );
       },
     });
     await resetRegisteredAgentHarnessSessions({
@@ -964,8 +988,18 @@ async function initSessionStateAttemptLocked(
     void cleanupBrowserSessionsForLifecycleEnd({
       cfg,
       sessionKeys: [previousSessionEntry.sessionId, sessionKey],
-      onWarn: (message) => log.warn(message),
-      onError: (error) => log.warn(`browser tab cleanup failed: ${String(error)}`),
+      onWarn: (message) =>
+        log.warn(message, undefined, {
+          event: "session.init.browser_tab.cleanup",
+          outcome: "warning",
+          reason: "warning",
+        }),
+      onError: (error) =>
+        log.warn(`browser tab cleanup failed: ${String(error)}`, undefined, {
+          event: "session.init.browser.tab.cleanup",
+          outcome: "warning",
+          reason: "failed",
+        }),
     });
   }
 

@@ -716,11 +716,19 @@ async function cleanupTerminalAcpSession(task: TaskRecord): Promise<void> {
       reason: "terminal-task-cleanup",
     });
   } catch (error) {
-    log.warn("Failed to close terminal ACP session during task maintenance", {
-      sessionKey,
-      taskId: task.taskId,
-      error,
-    });
+    log.warn(
+      "Failed to close terminal ACP session during task maintenance",
+      {
+        sessionKey,
+        taskId: task.taskId,
+        error,
+      },
+      {
+        event: "tasks.maintenance.close.terminal.acp.session.task",
+        outcome: "warning",
+        reason: "failed",
+      },
+    );
     return;
   }
   try {
@@ -729,11 +737,19 @@ async function cleanupTerminalAcpSession(task: TaskRecord): Promise<void> {
       reason: "terminal-task-cleanup",
     });
   } catch (error) {
-    log.warn("Failed to unbind terminal ACP session during task maintenance", {
-      sessionKey,
-      taskId: task.taskId,
-      error,
-    });
+    log.warn(
+      "Failed to unbind terminal ACP session during task maintenance",
+      {
+        sessionKey,
+        taskId: task.taskId,
+        error,
+      },
+      {
+        event: "tasks.maintenance.unbind.terminal.acp.session.task",
+        outcome: "warning",
+        reason: "failed",
+      },
+    );
   }
 }
 
@@ -742,7 +758,15 @@ async function cleanupOrphanedParentOwnedAcpSessions(): Promise<void> {
   try {
     acpSessions = await taskRegistryMaintenanceRuntime.listAcpSessionEntries({ clone: false });
   } catch (error) {
-    log.warn("Failed to list ACP sessions during task maintenance", { error });
+    log.warn(
+      "Failed to list ACP sessions during task maintenance",
+      { error },
+      {
+        event: "tasks.maintenance.list.acp.sessions.task.maintenance",
+        outcome: "warning",
+        reason: "failed",
+      },
+    );
     return;
   }
   const seenSessionKeys = new Set<string>();
@@ -766,10 +790,18 @@ async function cleanupOrphanedParentOwnedAcpSessions(): Promise<void> {
         reason: "orphaned-parent-task-cleanup",
       });
     } catch (error) {
-      log.warn("Failed to close orphaned parent-owned ACP session during task maintenance", {
-        sessionKey,
-        error,
-      });
+      log.warn(
+        "Failed to close orphaned parent-owned ACP session during task maintenance",
+        {
+          sessionKey,
+          error,
+        },
+        {
+          event: "tasks.maintenance.close_orphan_acp",
+          outcome: "warning",
+          reason: "failed",
+        },
+      );
       continue;
     }
     try {
@@ -778,10 +810,18 @@ async function cleanupOrphanedParentOwnedAcpSessions(): Promise<void> {
         reason: "orphaned-parent-task-cleanup",
       });
     } catch (error) {
-      log.warn("Failed to unbind orphaned parent-owned ACP session during task maintenance", {
-        sessionKey,
-        error,
-      });
+      log.warn(
+        "Failed to unbind orphaned parent-owned ACP session during task maintenance",
+        {
+          sessionKey,
+          error,
+        },
+        {
+          event: "tasks.maintenance.unbind.parent.owned.acp.session",
+          outcome: "warning",
+          reason: "failed",
+        },
+      );
     }
   }
 }
@@ -1209,7 +1249,15 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
     try {
       sweepExpiredPluginStateEntries();
     } catch (error) {
-      log.warn("Failed to sweep expired plugin state entries", { error });
+      log.warn(
+        "Failed to sweep expired plugin state entries",
+        { error },
+        {
+          event: "tasks.maintenance.sweep.expired.plugin.state.entries",
+          outcome: "warning",
+          reason: "failed",
+        },
+      );
     }
   }
   return { reconciled, recovered, cleanupStamped, pruned };

@@ -183,7 +183,16 @@ describe("realtime voice agent talkback queue", () => {
     queue.enqueue("question");
     await vi.advanceTimersByTimeAsync(1);
 
-    expect(logger.warn).toHaveBeenCalledExactlyOnceWith("[test] consult failed: elapsedMs=0 boom");
+    expect(logger.warn).toHaveBeenCalledExactlyOnceWith(
+      "[test] consult failed: elapsedMs=0 boom",
+      undefined,
+      {
+        event: "talk.agent_talkback.consult",
+        category: "talk.agent_talkback",
+        outcome: "failure",
+        reason: "consult_failed",
+      },
+    );
     expect(deliver).toHaveBeenCalledWith("fallback");
   });
 

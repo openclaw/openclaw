@@ -592,6 +592,12 @@ export function detectToolCallLoop(
   if (noProgressStreak >= resolvedConfig.globalCircuitBreakerThreshold) {
     log.error(
       `Global circuit breaker triggered: ${toolName} repeated ${noProgressStreak} times with no progress`,
+      undefined,
+      {
+        event: "agents.loop.detection.no_progress",
+        outcome: "failure",
+        reason: "failed",
+      },
     );
     return {
       stuck: true,
@@ -608,7 +614,15 @@ export function detectToolCallLoop(
     resolvedConfig.detectors.knownPollNoProgress &&
     noProgressStreak >= resolvedConfig.criticalThreshold
   ) {
-    log.error(`Critical polling loop detected: ${toolName} repeated ${noProgressStreak} times`);
+    log.error(
+      `Critical polling loop detected: ${toolName} repeated ${noProgressStreak} times`,
+      undefined,
+      {
+        event: "agents.loop.detection.detected",
+        outcome: "failure",
+        reason: "failed",
+      },
+    );
     return {
       stuck: true,
       level: "critical",
@@ -624,7 +638,11 @@ export function detectToolCallLoop(
     resolvedConfig.detectors.knownPollNoProgress &&
     noProgressStreak >= resolvedConfig.warningThreshold
   ) {
-    log.warn(`Polling loop warning: ${toolName} repeated ${noProgressStreak} times`);
+    log.warn(`Polling loop warning: ${toolName} repeated ${noProgressStreak} times`, undefined, {
+      event: "agents.loop.detection.polling_loop",
+      outcome: "warning",
+      reason: "warning",
+    });
     return {
       stuck: true,
       level: "warning",
@@ -646,6 +664,12 @@ export function detectToolCallLoop(
   ) {
     log.error(
       `Critical ping-pong loop detected: alternating calls count=${pingPong.count} currentTool=${toolName}`,
+      undefined,
+      {
+        event: "agents.loop.detection.detected.alternating.calls",
+        outcome: "failure",
+        reason: "failed",
+      },
     );
     return {
       stuck: true,
@@ -661,6 +685,12 @@ export function detectToolCallLoop(
   if (resolvedConfig.detectors.pingPong && pingPong.count >= resolvedConfig.warningThreshold) {
     log.warn(
       `Ping-pong loop warning: alternating calls count=${pingPong.count} currentTool=${toolName}`,
+      undefined,
+      {
+        event: "agents.loop.detection.alternating.calls.count",
+        outcome: "warning",
+        reason: "warning",
+      },
     );
     return {
       stuck: true,
@@ -684,7 +714,15 @@ export function detectToolCallLoop(
     resolvedConfig.detectors.genericRepeat &&
     noProgressStreak >= resolvedConfig.criticalThreshold
   ) {
-    log.error(`Critical generic loop detected: ${toolName} repeated ${noProgressStreak} times`);
+    log.error(
+      `Critical generic loop detected: ${toolName} repeated ${noProgressStreak} times`,
+      undefined,
+      {
+        event: "agents.loop.detection.detected",
+        outcome: "failure",
+        reason: "failed",
+      },
+    );
     return {
       stuck: true,
       level: "critical",
@@ -700,7 +738,15 @@ export function detectToolCallLoop(
     resolvedConfig.detectors.genericRepeat &&
     recentCount >= resolvedConfig.warningThreshold
   ) {
-    log.warn(`Loop warning: ${toolName} called ${recentCount} times with identical arguments`);
+    log.warn(
+      `Loop warning: ${toolName} called ${recentCount} times with identical arguments`,
+      undefined,
+      {
+        event: "agents.loop.detection.identical_arguments",
+        outcome: "warning",
+        reason: "warning",
+      },
+    );
     return {
       stuck: true,
       level: "warning",

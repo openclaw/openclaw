@@ -10,30 +10,46 @@ import {
   getConsoleSettings,
   shouldLogSubsystemToConsole,
 } from "./console.js";
+import * as diagnosticLog from "./diagnostic-log-internal.js";
 import { type LogLevel, levelToMinLevel } from "./levels.js";
-import {
-  attachDiagnosticLogSource,
-  attachDiagnosticLogSemantics,
-  getChildLogger,
-  hasDiagnosticLogSemantics,
-  isFileLogLevelEnabled,
-  splitDiagnosticLogSemanticFields,
-  type DiagnosticLogSource,
-} from "./logger.js";
+import { getChildLogger, isFileLogLevelEnabled } from "./logger.js";
 import { redactSensitiveText } from "./redact.js";
 import { loggingState } from "./state.js";
-
 type LogObj = { date?: Date } & Record<string, unknown>;
 
 export type SubsystemLogger = {
   subsystem: string;
   isEnabled: (level: LogLevel, target?: "any" | "console" | "file") => boolean;
-  trace: (message: string, meta?: Record<string, unknown>) => void;
-  debug: (message: string, meta?: Record<string, unknown>) => void;
-  info: (message: string, meta?: Record<string, unknown>) => void;
-  warn: (message: string, meta?: Record<string, unknown>) => void;
-  error: (message: string, meta?: Record<string, unknown>) => void;
-  fatal: (message: string, meta?: Record<string, unknown>) => void;
+  trace: (
+    message: string,
+    meta?: Record<string, unknown>,
+    semantics?: diagnosticLog.DiagnosticLogSemantics,
+  ) => void;
+  debug: (
+    message: string,
+    meta?: Record<string, unknown>,
+    semantics?: diagnosticLog.DiagnosticLogSemantics,
+  ) => void;
+  info: (
+    message: string,
+    meta?: Record<string, unknown>,
+    semantics?: diagnosticLog.DiagnosticLogSemantics,
+  ) => void;
+  warn: (
+    message: string,
+    meta?: Record<string, unknown>,
+    semantics?: diagnosticLog.DiagnosticLogSemantics,
+  ) => void;
+  error: (
+    message: string,
+    meta?: Record<string, unknown>,
+    semantics?: diagnosticLog.DiagnosticLogSemantics,
+  ) => void;
+  fatal: (
+    message: string,
+    meta?: Record<string, unknown>,
+    semantics?: diagnosticLog.DiagnosticLogSemantics,
+  ) => void;
   raw: (message: string) => void;
   child: (name: string) => SubsystemLogger;
 };
@@ -347,72 +363,6 @@ function shouldSuppressProbeConsoleLine(params: {
   return /(sessionId|runId)=probe-/.test(message);
 }
 
-function normalizeStackFilePath(value: string): string {
-  if (value.startsWith("file://")) {
-    try {
-      return decodeURIComponent(new URL(value).pathname);
-    } catch {
-      return value;
-    }
-  }
-  return value;
-}
-
-function parseDiagnosticStackFrame(rawLine: string): DiagnosticLogSource | undefined {
-  const line = rawLine.trim().replace(/^at\s+/u, "");
-  const match = /^(?:(?<method>.*?)\s+\()?(?<filePath>.+):(?<line>\d+):(?<column>\d+)\)?$/u.exec(
-    line,
-  );
-  const filePath = match?.groups?.filePath;
-  const lineNumber = Number(match?.groups?.line);
-  if (!filePath || !Number.isFinite(lineNumber)) {
-    return undefined;
-  }
-  const normalizedPath = normalizeStackFilePath(filePath);
-  const rawMethod = match?.groups?.method?.trim();
-  const method = rawMethod?.replace(/^Object\./u, "");
-  if (
-    normalizedPath.startsWith("node:") ||
-    normalizedPath.includes("/node:") ||
-    normalizedPath.endsWith("src/logging/subsystem.ts") ||
-    normalizedPath.endsWith("dist/logging/subsystem.js") ||
-    method === "captureDiagnosticLogSource" ||
-    method === "parseDiagnosticStackFrame" ||
-    method === "emitLog" ||
-    method === "logToFile" ||
-    method === "trace" ||
-    method === "debug" ||
-    method === "info" ||
-    method === "warn" ||
-    method === "error" ||
-    method === "fatal" ||
-    method === "raw"
-  ) {
-    return undefined;
-  }
-  const functionName =
-    method && !method.startsWith("file://") && method !== "async" ? method : undefined;
-  return {
-    filePath: normalizedPath,
-    line: lineNumber,
-    ...(functionName ? { functionName } : {}),
-  };
-}
-
-function captureDiagnosticLogSource(): DiagnosticLogSource | undefined {
-  const stack = new Error().stack;
-  if (!stack) {
-    return undefined;
-  }
-  for (const line of stack.split("\n").slice(1)) {
-    const source = parseDiagnosticStackFrame(line);
-    if (source) {
-      return source;
-    }
-  }
-  return undefined;
-}
-
 function logToFile(
   fileLogger: TsLogger<LogObj>,
   level: LogLevel,
@@ -429,7 +379,7 @@ function logToFile(
   if (typeof method !== "function") {
     return;
   }
-  if (meta && (Object.keys(meta).length > 0 || hasDiagnosticLogSemantics(meta))) {
+  if (meta && (Object.keys(meta).length > 0 || diagnosticLog.hasDiagnosticLogSemantics(meta))) {
     method.call(fileLogger, meta, message);
   } else {
     method.call(fileLogger, message);
@@ -439,7 +389,12 @@ function logToFile(
 export function createSubsystemLogger(subsystem: string): SubsystemLogger {
   const resolvedSubsystem = normalizeSubsystemLabel(subsystem);
 
-  const emitLog = (level: LogLevel, message: string, meta?: Record<string, unknown>) => {
+  const emitLog = (
+    level: LogLevel,
+    message: string,
+    meta?: Record<string, unknown>,
+    callsiteSemantics?: diagnosticLog.DiagnosticLogSemantics,
+  ) => {
     const consoleSettings = getConsoleSettings();
     const consoleEnabled =
       shouldLogToConsole(level, { level: consoleSettings.level }) &&
@@ -458,16 +413,32 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
       if (typeof consoleMessage === "string") {
         consoleMessageOverride = consoleMessage;
       }
-      const { attributes, semantics } = splitDiagnosticLogSemanticFields(rest);
+      const { attributes, semantics } = diagnosticLog.splitDiagnosticLogSemanticFields(rest);
       consoleMeta = attributes;
-      fileMeta = semantics
-        ? attachDiagnosticLogSemantics({ ...(attributes ?? {}) }, semantics)
+      const diagnosticSemantics = semantics ?? callsiteSemantics;
+      fileMeta = diagnosticSemantics
+        ? diagnosticLog.attachDiagnosticLogSemantics({ ...attributes }, diagnosticSemantics)
         : attributes;
+    } else if (callsiteSemantics) {
+      fileMeta = diagnosticLog.attachDiagnosticLogSemantics({}, callsiteSemantics);
     }
     if (fileEnabled) {
-      const diagnosticSource = captureDiagnosticLogSource();
+      const diagnosticSource = diagnosticLog.captureDiagnosticLogSource({
+        ignoredMethods: [
+          "emitLog",
+          "logToFile",
+          "trace",
+          "debug",
+          "info",
+          "warn",
+          "error",
+          "fatal",
+          "raw",
+        ],
+        ignoredPathSuffixes: ["src/logging/subsystem.ts", "dist/logging/subsystem.js"],
+      });
       if (diagnosticSource) {
-        fileMeta = attachDiagnosticLogSource({ ...(fileMeta ?? {}) }, diagnosticSource);
+        fileMeta = diagnosticLog.attachDiagnosticLogSource({ ...fileMeta }, diagnosticSource);
       }
       logToFile(getChildLogger({ subsystem: resolvedSubsystem }), level, message, fileMeta);
     }
@@ -513,23 +484,23 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
       }
       return isConsoleEnabled || isFileEnabled;
     },
-    trace(message, meta) {
-      emitLog("trace", message, meta);
+    trace(message, meta, semantics) {
+      emitLog("trace", message, meta, semantics);
     },
-    debug(message, meta) {
-      emitLog("debug", message, meta);
+    debug(message, meta, semantics) {
+      emitLog("debug", message, meta, semantics);
     },
-    info(message, meta) {
-      emitLog("info", message, meta);
+    info(message, meta, semantics) {
+      emitLog("info", message, meta, semantics);
     },
-    warn(message, meta) {
-      emitLog("warn", message, meta);
+    warn(message, meta, semantics) {
+      emitLog("warn", message, meta, semantics);
     },
-    error(message, meta) {
-      emitLog("error", message, meta);
+    error(message, meta, semantics) {
+      emitLog("error", message, meta, semantics);
     },
-    fatal(message, meta) {
-      emitLog("fatal", message, meta);
+    fatal(message, meta, semantics) {
+      emitLog("fatal", message, meta, semantics);
     },
     raw(message) {
       if (isFileLogLevelEnabled("info")) {
@@ -569,6 +540,8 @@ export function runtimeForLogger(
           .map((arg) => formatRuntimeArg(arg))
           .join(" ")
           .trim(),
+        undefined,
+        { event: "runtime.output", category: "runtime", outcome: "success", reason: "log" },
       );
     },
     error(...args) {
@@ -577,13 +550,25 @@ export function runtimeForLogger(
           .map((arg) => formatRuntimeArg(arg))
           .join(" ")
           .trim(),
+        undefined,
+        { event: "runtime.output", category: "runtime", outcome: "failure", reason: "error" },
       );
     },
     writeStdout(value) {
-      logger.info(value);
+      logger.info(value, undefined, {
+        event: "runtime.stdout",
+        category: "runtime",
+        outcome: "success",
+        reason: "write_stdout",
+      });
     },
     writeJson(value: unknown, space = 2) {
-      logger.info(JSON.stringify(value, null, space > 0 ? space : undefined));
+      logger.info(JSON.stringify(value, null, space > 0 ? space : undefined), undefined, {
+        event: "runtime.json",
+        category: "runtime",
+        outcome: "success",
+        reason: "write_json",
+      });
     },
     exit,
   };

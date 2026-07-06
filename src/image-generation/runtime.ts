@@ -94,6 +94,13 @@ export async function generateImage(
       lastError = new Error(error);
       logger.warn(
         `image-generation candidate failed: ${candidate.provider}/${candidate.model}: ${error}`,
+        undefined,
+        {
+          event: "image_generation.candidate",
+          category: "image_generation",
+          outcome: "failure",
+          reason: "provider_missing",
+        },
       );
       continue;
     }
@@ -168,6 +175,13 @@ export async function generateImage(
         `image-generation candidate failed: ${candidate.provider}/${candidate.model}: ${
           described?.message ?? formatErrorMessage(err)
         }`,
+        undefined,
+        {
+          event: "image_generation.candidate",
+          category: "image_generation",
+          outcome: "failure",
+          reason: "generation_failed",
+        },
       );
     }
   }

@@ -245,12 +245,30 @@ export type ProviderAuthOptionBag = {
   [key: string]: unknown;
 };
 
+export type { PluginLogOutcome, PluginLogSemantics } from "./logging-types.js";
+
 /** Logger passed into plugin registration, services, and CLI surfaces. */
 export type PluginLogger = {
-  debug?: (message: string) => void;
-  info: (message: string) => void;
-  warn: (message: string) => void;
-  error: (message: string) => void;
+  debug?: (
+    message: string,
+    meta?: Record<string, unknown>,
+    semantics?: import("./logging-types.js").PluginLogSemantics,
+  ) => void;
+  info: (
+    message: string,
+    meta?: Record<string, unknown>,
+    semantics?: import("./logging-types.js").PluginLogSemantics,
+  ) => void;
+  warn: (
+    message: string,
+    meta?: Record<string, unknown>,
+    semantics?: import("./logging-types.js").PluginLogSemantics,
+  ) => void;
+  error: (
+    message: string,
+    meta?: Record<string, unknown>,
+    semantics?: import("./logging-types.js").PluginLogSemantics,
+  ) => void;
 };
 
 export type { PluginKind } from "./plugin-kind.types.js";
@@ -2024,7 +2042,10 @@ export type PluginCommandContext = {
 /**
  * Result returned by a plugin command handler.
  */
-export type PluginCommandResult = ReplyPayload & { continueAgent?: boolean };
+export type PluginCommandResult = ReplyPayload & {
+  /** Allows the agent session to continue processing after the command. */
+  continueAgent?: boolean;
+};
 
 /**
  * Handler function for plugin commands.

@@ -99,7 +99,11 @@ function loadHookFromDir(params: {
     }
 
     if (!handlerPath) {
-      log.warn(`Hook "${name}" has HOOK.md but no handler file in ${params.hookDir}`);
+      log.warn(`Hook "${name}" has HOOK.md but no handler file in ${params.hookDir}`, undefined, {
+        event: "hooks.workspace.hook.has.hook.md.but.no.handler",
+        outcome: "warning",
+        reason: "warning",
+      });
       return null;
     }
 
@@ -124,7 +128,11 @@ function loadHookFromDir(params: {
     };
   } catch (err) {
     const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
-    log.warn(`Failed to load hook from ${params.hookDir}: ${message}`);
+    log.warn(`Failed to load hook from ${params.hookDir}: ${message}`, undefined, {
+      event: "hooks.workspace.load.hook",
+      outcome: "warning",
+      reason: "failed",
+    });
     return null;
   }
 }
@@ -166,6 +174,12 @@ function loadHooksFromDir(params: {
         if (!resolvedHookDir) {
           log.warn(
             `Ignoring out-of-package hook path "${hookPath}" in ${hookDir} (must be within package directory)`,
+            undefined,
+            {
+              event: "hooks.workspace.package_hook",
+              outcome: "warning",
+              reason: "outside_package",
+            },
           );
           continue;
         }
@@ -284,6 +298,12 @@ export function loadWorkspaceHookEntries(
     onCollisionIgnored: ({ name, kept, ignored }) => {
       log.warn(
         `Ignoring ${ignored.hook.source} hook "${name}" because it cannot override ${kept.hook.source} hook code`,
+        undefined,
+        {
+          event: "hooks.workspace.hook_collision",
+          outcome: "warning",
+          reason: "override_denied",
+        },
       );
     },
   });

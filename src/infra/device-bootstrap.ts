@@ -134,13 +134,21 @@ function warnIfIssuedBootstrapScopesWereStripped(params: {
   if (strippedScopes.length === 0) {
     return;
   }
-  log.warn("bootstrap_token_scopes_stripped", {
-    roles: requestedProfile.roles,
-    requestedScopes,
-    retainedScopes: params.profile.scopes,
-    strippedScopes,
-    consoleMessage: "bootstrap token scopes stripped to bootstrap handoff allowlist",
-  });
+  log.warn(
+    "bootstrap_token_scopes_stripped",
+    {
+      roles: requestedProfile.roles,
+      requestedScopes,
+      retainedScopes: params.profile.scopes,
+      strippedScopes,
+      consoleMessage: "bootstrap token scopes stripped to bootstrap handoff allowlist",
+    },
+    {
+      event: "device.bootstrap.token.scopes.stripped",
+      outcome: "warning",
+      reason: "warning",
+    },
+  );
 }
 
 function bootstrapProfileAllowsRequest(params: {

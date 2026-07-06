@@ -255,6 +255,13 @@ describe("realtime voice agent consult runtime", () => {
     expect(result).toEqual({ text: "Let me verify that first." });
     expect(warn).toHaveBeenCalledWith(
       "[talk] agent consult produced no answer: agent returned no speakable text",
+      undefined,
+      {
+        event: "talk.agent_consult.no_answer",
+        category: "talk.agent_consult",
+        outcome: "warning",
+        reason: "empty_answer",
+      },
     );
   });
 
@@ -413,6 +420,13 @@ describe("realtime voice agent consult runtime", () => {
 
     expect(warn).toHaveBeenCalledWith(
       "[talk] Parent context is too large to fork (150000/100000 tokens); starting with isolated context instead.",
+      undefined,
+      {
+        event: "talk.agent_consult.fork",
+        category: "talk.agent_consult",
+        outcome: "warning",
+        reason: "fork_skipped",
+      },
     );
     expect(runtime.session.patchSessionEntry).toHaveBeenCalled();
     const call = requireEmbeddedAgentCall(runEmbeddedAgent);

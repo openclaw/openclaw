@@ -542,7 +542,11 @@ function restoreOriginalValueOrThrow(params: {
     return params.original[params.key];
   }
   if (!suppressRestoreWarnings) {
-    log.warn(`Cannot un-redact config key ${params.path} as it doesn't have any value`);
+    log.warn(`Cannot un-redact config key ${params.path} as it doesn't have any value`, undefined, {
+      event: "config.redaction.restore",
+      outcome: "warning",
+      reason: "missing_original_value",
+    });
   }
   throw new RedactionError(params.path);
 }
@@ -624,7 +628,11 @@ function mapRedactedArray(params: {
 }): unknown[] {
   const originalArray = Array.isArray(params.original) ? params.original : [];
   if (params.incoming.length < originalArray.length) {
-    log.warn(`Redacted config array key ${params.path} has been truncated`);
+    log.warn(`Redacted config array key ${params.path} has been truncated`, undefined, {
+      event: "config.redaction.array",
+      outcome: "warning",
+      reason: "truncated",
+    });
   }
   return params.incoming.map((item, index) => params.mapItem(item, index, originalArray));
 }

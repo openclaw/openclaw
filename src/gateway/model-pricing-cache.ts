@@ -1,7 +1,7 @@
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 // Gateway model-pricing refresh and normalization.
 // Fetches, normalizes, and schedules cached pricing for model usage estimates.
 import type { ModelCatalogCost } from "@openclaw/model-catalog-core/model-catalog-types";
-import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import {
   normalizeOptionalString,
   resolvePrimaryStringValue,
@@ -1185,7 +1185,11 @@ function scheduleRefresh(
     }
     void refreshGatewayModelPricingCache(params).catch((error: unknown) => {
       const message = `pricing refresh failed: ${String(error)}`;
-      log.warn(message);
+      log.warn(message, undefined, {
+        event: "gateway.model_pricing.refresh",
+        outcome: "warning",
+        reason: "refresh_failed",
+      });
       if (!params.signal?.aborted) {
         recordGatewayModelPricingSourceFailure("refresh", message);
       }
@@ -1299,7 +1303,11 @@ export async function refreshGatewayModelPricingCache(
         })
         .catch((error: unknown) => {
           const message = formatPricingFetchFailure("OpenRouter", error);
-          log.warn(message);
+          log.warn(message, undefined, {
+            event: "gateway.model_pricing.openrouter_fetch",
+            outcome: "warning",
+            reason: "source_fetch_failed",
+          });
           openRouterFailed = true;
           if (!params.signal?.aborted) {
             recordGatewayModelPricingSourceFailure("openrouter", message);
@@ -1313,7 +1321,11 @@ export async function refreshGatewayModelPricingCache(
         })
         .catch((error: unknown) => {
           const message = formatPricingFetchFailure("LiteLLM", error);
-          log.warn(message);
+          log.warn(message, undefined, {
+            event: "gateway.model_pricing.litellm_fetch",
+            outcome: "warning",
+            reason: "source_fetch_failed",
+          });
           litellmFailed = true;
           if (!params.signal?.aborted) {
             recordGatewayModelPricingSourceFailure("litellm", message);
@@ -1380,7 +1392,11 @@ export async function refreshGatewayModelPricingCache(
       const existingMeta = getGatewayModelPricingCacheMetaState();
       if (nextPricing.size === 0 && existingMeta.size > 0) {
         // Both sources failed — retain the entire existing cache.
-        log.warn("Both pricing sources returned empty data — retaining existing cache");
+        log.warn("Both pricing sources returned empty data — retaining existing cache", undefined, {
+          event: "gateway.model_pricing.cache_retained",
+          outcome: "warning",
+          reason: "all_sources_empty",
+        });
         scheduleRefresh({ ...params, fetchImpl });
         return;
       }
@@ -1432,7 +1448,11 @@ export function startGatewayModelPricingRefresh(
     void refreshGatewayModelPricingCache({ ...params, signal: abortController.signal }).catch(
       (error: unknown) => {
         const message = `pricing bootstrap failed: ${String(error)}`;
-        log.warn(message);
+        log.warn(message, undefined, {
+          event: "gateway.model_pricing.bootstrap",
+          outcome: "warning",
+          reason: "bootstrap_failed",
+        });
         if (!abortController.signal.aborted) {
           recordGatewayModelPricingSourceFailure("bootstrap", message);
         }

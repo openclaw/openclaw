@@ -87,7 +87,11 @@ export function runAgentHarnessLlmInputHook(params: {
   void hookRunner
     .runLlmInput(params.event, buildAgentHookContext(params.ctx))
     .catch((error: unknown) => {
-      log.warn(`llm_input hook failed: ${String(error)}`);
+      log.warn(`llm_input hook failed: ${String(error)}`, undefined, {
+        event: "agents.harness.llm.input.hook",
+        outcome: "warning",
+        reason: "failed",
+      });
     });
 }
 
@@ -104,7 +108,11 @@ export function runAgentHarnessLlmOutputHook(params: {
   void hookRunner
     .runLlmOutput(params.event, buildAgentHookContext(params.ctx))
     .catch((error: unknown) => {
-      log.warn(`llm_output hook failed: ${String(error)}`);
+      log.warn(`llm_output hook failed: ${String(error)}`, undefined, {
+        event: "agents.harness.llm.output.hook",
+        outcome: "warning",
+        reason: "failed",
+      });
     });
 }
 
@@ -122,7 +130,11 @@ async function executeAgentHarnessAgentEndHook(params: {
     const options: VoidHookRunOptions = { unrefTimeout: params.unrefTimeout ?? false };
     await hookRunner.runAgentEnd(params.event, buildAgentHookContext(params.ctx), options);
   } catch (error) {
-    log.warn(`agent_end hook failed: ${String(error)}`);
+    log.warn(`agent_end hook failed: ${String(error)}`, undefined, {
+      event: "agents.harness.agent.end.hook",
+      outcome: "warning",
+      reason: "failed",
+    });
   }
 }
 
@@ -176,7 +188,11 @@ export async function runAgentHarnessBeforeAgentFinalizeHook(params: {
       eventForNormalization,
     );
   } catch (error) {
-    log.warn(`before_agent_finalize hook failed: ${String(error)}`);
+    log.warn(`before_agent_finalize hook failed: ${String(error)}`, undefined, {
+      event: "agents.harness.agent.finalize.hook",
+      outcome: "warning",
+      reason: "failed",
+    });
     return { action: "continue" };
   }
 }

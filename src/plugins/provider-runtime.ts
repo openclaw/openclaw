@@ -969,6 +969,12 @@ export function resolveExternalAuthProfilesWithPlugins(params: {
       warnedExternalAuthFallbackPluginIds.add(pluginId);
       log.warn(
         `Provider plugin "${sanitizeForLog(pluginId)}" uses external auth hooks without declaring contracts.externalAuthProviders. This compatibility fallback is deprecated and will be removed in a future release.`,
+        undefined,
+        {
+          event: "plugins.provider.external.auth.hooks",
+          outcome: "warning",
+          reason: "fallback",
+        },
       );
     }
     matches.push(...profiles);

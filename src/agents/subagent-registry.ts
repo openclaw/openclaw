@@ -370,12 +370,20 @@ async function completeSubagentRunWithRecovery(params: CompleteSubagentRunParams
     return;
   } catch (error) {
     const current = subagentRuns.get(params.runId);
-    log.warn("failed to complete subagent run; retrying completion", {
-      source,
-      runId: params.runId,
-      childSessionKey: current?.childSessionKey,
-      error,
-    });
+    log.warn(
+      "failed to complete subagent run; retrying completion",
+      {
+        source,
+        runId: params.runId,
+        childSessionKey: current?.childSessionKey,
+        error,
+      },
+      {
+        event: "agents.subagent.completion",
+        outcome: "warning",
+        reason: "failed",
+      },
+    );
   }
 
   const current = subagentRuns.get(params.runId);
@@ -392,12 +400,20 @@ async function completeSubagentRunWithRecovery(params: CompleteSubagentRunParams
     await completeSubagentRun(params);
     return;
   } catch (retryError) {
-    log.warn("failed to complete subagent run after retry; retrying ended cleanup", {
-      source,
-      runId: params.runId,
-      childSessionKey: current.childSessionKey,
-      error: retryError,
-    });
+    log.warn(
+      "failed to complete subagent run after retry; retrying ended cleanup",
+      {
+        source,
+        runId: params.runId,
+        childSessionKey: current.childSessionKey,
+        error: retryError,
+      },
+      {
+        event: "agents.subagent.complete.subagent.run",
+        outcome: "warning",
+        reason: "failed",
+      },
+    );
   }
 
   const latest = subagentRuns.get(params.runId);
@@ -527,7 +543,15 @@ async function notifyContextEngineSubagentEnded(params: {
     }
     await engine.onSubagentEnded(params);
   } catch (err) {
-    log.warn("context-engine onSubagentEnded failed (best-effort)", { err });
+    log.warn(
+      "context-engine onSubagentEnded failed (best-effort)",
+      { err },
+      {
+        event: "agents.subagent.engine.subagent_end",
+        outcome: "warning",
+        reason: "failed",
+      },
+    );
   }
 }
 
@@ -600,7 +624,12 @@ const subagentLifecycleController = createSubagentRegistryLifecycleController({
   cleanupBrowserSessionsForLifecycleEnd: (args) =>
     subagentRegistryDeps.cleanupBrowserSessionsForLifecycleEnd(args),
   runSubagentAnnounceFlow: (params) => subagentRegistryDeps.runSubagentAnnounceFlow(params),
-  warn: (message, meta) => log.warn(message, meta),
+  warn: (message, meta) =>
+    log.warn(message, meta, {
+      event: "agents.subagent.registry.lifecycle",
+      outcome: "warning",
+      reason: "warning",
+    }),
 });
 
 const {
@@ -747,6 +776,12 @@ function restoreSubagentRunsOnce() {
   } catch (err) {
     log.warn(
       `failed to restore subagent runs from disk: ${err instanceof Error ? err.message : String(err)}`,
+      undefined,
+      {
+        event: "agents.subagent.registry.restore.subagent.runs.disk",
+        outcome: "warning",
+        reason: "failed",
+      },
     );
   }
 }
@@ -829,12 +864,20 @@ async function discardSuspendedPendingFinalDelivery(
   resumedRuns.delete(runId);
   clearPendingLifecycleError(runId);
   clearPendingLifecycleTimeout(runId);
-  log.warn("subagent suspended delivery discarded", {
-    reason,
-    runId: entry.runId,
-    childSessionKey: entry.childSessionKey,
-    requesterSessionKey: entry.requesterSessionKey,
-  });
+  log.warn(
+    "subagent suspended delivery discarded",
+    {
+      reason,
+      runId: entry.runId,
+      childSessionKey: entry.childSessionKey,
+      requesterSessionKey: entry.requesterSessionKey,
+    },
+    {
+      event: "agents.subagent.suspended_delivery",
+      outcome: "warning",
+      reason: "discarded",
+    },
+  );
   const shouldDeleteAttachments = entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
   if (shouldDeleteAttachments) {
     await safeRemoveAttachmentsDir(entry);
@@ -885,13 +928,21 @@ async function sweepSubagentRuns() {
         .slice(0, pressureCount)) {
         pressureDiscardRunIds.add(runId);
       }
-      log.warn("subagent suspended delivery backlog exceeded pressure cap", {
-        suspendedCount: suspendedEntries.length,
-        softCap: SUSPENDED_DELIVERY_SOFT_CAP,
-        hardCap: SUSPENDED_DELIVERY_HARD_CAP,
-        pressureTarget: SUSPENDED_DELIVERY_PRESSURE_TARGET,
-        pressureDiscardCount: pressureDiscardRunIds.size,
-      });
+      log.warn(
+        "subagent suspended delivery backlog exceeded pressure cap",
+        {
+          suspendedCount: suspendedEntries.length,
+          softCap: SUSPENDED_DELIVERY_SOFT_CAP,
+          hardCap: SUSPENDED_DELIVERY_HARD_CAP,
+          pressureTarget: SUSPENDED_DELIVERY_PRESSURE_TARGET,
+          pressureDiscardCount: pressureDiscardRunIds.size,
+        },
+        {
+          event: "agents.subagent.suspended.backlog",
+          outcome: "warning",
+          reason: "cap_exceeded",
+        },
+      );
     }
     for (const [runId, entry] of subagentRuns.entries()) {
       if (isSuspendedPendingFinalDelivery(entry)) {
@@ -1017,11 +1068,19 @@ async function sweepSubagentRuns() {
           timeoutMs: 10_000,
         });
       } catch (err) {
-        log.warn("sessions.delete failed during subagent sweep; keeping run for retry", {
-          runId,
-          childSessionKey: entry.childSessionKey,
-          err,
-        });
+        log.warn(
+          "sessions.delete failed during subagent sweep; keeping run for retry",
+          {
+            runId,
+            childSessionKey: entry.childSessionKey,
+            err,
+          },
+          {
+            event: "agents.subagent.sweep.delete_sessions",
+            outcome: "warning",
+            reason: "failed",
+          },
+        );
         continue;
       }
       subagentRuns.delete(runId);
@@ -1188,7 +1247,15 @@ function ensureListener() {
       };
       await completeSubagentRunWithRecovery(completionParams, "lifecycle-ok-event");
     })().catch((err: unknown) => {
-      log.warn("lifecycle event handler failed", { err, runId: evt.runId });
+      log.warn(
+        "lifecycle event handler failed",
+        { err, runId: evt.runId },
+        {
+          event: "agents.subagent.registry.lifecycle.event.handler",
+          outcome: "warning",
+          reason: "failed",
+        },
+      );
     });
   });
 }

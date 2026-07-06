@@ -4,6 +4,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { theme } from "../packages/terminal-core/src/theme.js";
 import { isVerbose, isYes, logVerbose, setVerbose, setYes } from "./globals.js";
+import {
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticEventPayload,
+} from "./infra/diagnostic-events.js";
 import { logDebug, logError, logInfo, logSuccess, logWarn } from "./logger.js";
 import {
   resetLogger,
@@ -11,10 +16,11 @@ import {
   stripRedundantSubsystemPrefixForConsole,
 } from "./logging.js";
 import type { RuntimeEnv } from "./runtime.js";
-import { withTempDirSync } from "./test-helpers/temp-dir.js";
+import { withTempDir, withTempDirSync } from "./test-helpers/temp-dir.js";
 
 describe("logger helpers", () => {
   afterEach(() => {
+    resetDiagnosticEventsForTest();
     resetLogger();
     setLoggerOverride(null);
     setVerbose(false);
@@ -33,6 +39,99 @@ describe("logger helpers", () => {
 
     expect(log).toHaveBeenCalledTimes(3);
     expect(error).toHaveBeenCalledTimes(1);
+  });
+
+  it("emits root helper semantics only to diagnostic log records", async () => {
+    await withTempDir({ prefix: "openclaw-log-test-" }, async (dir) => {
+      const logPath = path.join(dir, "openclaw.log");
+      const received: Array<Extract<DiagnosticEventPayload, { type: "log.record" }>> = [];
+      const unsubscribe = onInternalDiagnosticEvent((event) => {
+        if (event.type === "log.record") {
+          received.push(event);
+        }
+      });
+      const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+      try {
+        setLoggerOverride({ level: "debug", file: logPath });
+        logInfo("root info", runtime);
+        logWarn("root warn", runtime);
+        logSuccess("root success", runtime);
+        logError("root error", runtime);
+        logDebug("root debug");
+        await flushDiagnosticEvents();
+      } finally {
+        unsubscribe();
+      }
+
+      expect(received.map((event) => event.event)).toEqual([
+        "cli.output.info",
+        "cli.output",
+        "cli.output",
+        "cli.output",
+        "cli.debug",
+      ]);
+      expect(received.map((event) => event.category)).toEqual([
+        "cli.output",
+        "cli.output",
+        "cli.output",
+        "cli.output",
+        "cli",
+      ]);
+      expect(received.map((event) => event.outcome)).toEqual([
+        "success",
+        "warning",
+        "success",
+        "failure",
+        "success",
+      ]);
+      expect(received.map((event) => event.reason)).toEqual([
+        "operator_output",
+        "operator_output",
+        "operator_output",
+        "operator_output",
+        "debug",
+      ]);
+
+      const content = fs.readFileSync(logPath, "utf-8");
+      expect(content).toContain("root info");
+      expect(content).toContain("root debug");
+      expect(content).not.toContain("__openclawDiagnosticLogSemantics");
+      expect(content).not.toContain("operator_output");
+      expect(content).not.toContain("cli.output.info");
+    });
+  });
+
+  it("preserves root helper semantics when subsystem prefixes route through subsystem logs", async () => {
+    await withTempDir({ prefix: "openclaw-log-test-" }, async (dir) => {
+      const logPath = path.join(dir, "openclaw.log");
+      const received: Array<Extract<DiagnosticEventPayload, { type: "log.record" }>> = [];
+      const unsubscribe = onInternalDiagnosticEvent((event) => {
+        if (event.type === "log.record") {
+          received.push(event);
+        }
+      });
+
+      try {
+        setLoggerOverride({ level: "debug", file: logPath });
+        logInfo("exec: command output");
+        await flushDiagnosticEvents();
+      } finally {
+        unsubscribe();
+      }
+
+      expect(received).toHaveLength(1);
+      expect(received[0]).toMatchObject({
+        event: "cli.output.info",
+        category: "cli.output",
+        outcome: "success",
+        reason: "operator_output",
+      });
+      const content = fs.readFileSync(logPath, "utf-8");
+      expect(content).toContain("command output");
+      expect(content).not.toContain("__openclawDiagnosticLogSemantics");
+      expect(content).not.toContain("operator_output");
+    });
   });
 
   it("only logs debug when verbose is enabled", () => {
@@ -145,4 +244,10 @@ function localDateString(date: Date) {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
+}
+
+function flushDiagnosticEvents() {
+  return new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }

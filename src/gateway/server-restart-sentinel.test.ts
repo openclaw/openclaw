@@ -506,6 +506,11 @@ describe("scheduleRestartSentinelWake", () => {
           attempt: 1,
           maxAttempts: 45,
         },
+        {
+          event: "gateway.restart.sentinel.outbound.delivery",
+          outcome: "warning",
+          reason: "failed",
+        },
       ],
     ]);
   });
@@ -775,12 +780,20 @@ describe("scheduleRestartSentinelWake", () => {
       reason: "wake",
       sessionKey: "agent:main:main",
     });
-    expect(mocks.logWarn).toHaveBeenCalledWith("restart continuation skipped: session changed", {
-      sessionKey: "agent:main:main",
-      queueId: "session-delivery-1",
-      expectedSessionId: "old-session-id",
-      actualSessionId: "new-session-id",
-    });
+    expect(mocks.logWarn).toHaveBeenCalledWith(
+      "restart continuation skipped: session changed",
+      {
+        sessionKey: "agent:main:main",
+        queueId: "session-delivery-1",
+        expectedSessionId: "old-session-id",
+        actualSessionId: "new-session-id",
+      },
+      {
+        event: "gateway.sentinel.continuation",
+        outcome: "warning",
+        reason: "session_changed",
+      },
+    );
   });
 
   it("still delivers systemEvent continuations for completed run entries", async () => {
@@ -1179,6 +1192,11 @@ describe("scheduleRestartSentinelWake", () => {
         {
           sessionKey: "agent:main:main",
         },
+        {
+          event: "gateway.sentinel.continuation",
+          outcome: "warning",
+          reason: "dispatch_failed",
+        },
       ],
       ["restart continuation: retry failed for entry session-delivery-1: Error: route failed"],
     ]);
@@ -1434,6 +1452,11 @@ describe("scheduleRestartSentinelWake", () => {
         {
           sessionKey: "agent:main:main",
           continuationKind: "agentTurn",
+        },
+        {
+          event: "gateway.sentinel.continuation",
+          outcome: "warning",
+          reason: "session_unavailable",
         },
       ],
     ]);

@@ -97,9 +97,7 @@ const ACP_TRANSCRIPT_USAGE = {
 const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
 const GOOGLE_PROVIDER_ID = "google";
 
-function shouldSuppressEmbeddedLiveStreamOutput(params: {
-  opts: AgentCommandOpts;
-}): boolean {
+function shouldSuppressEmbeddedLiveStreamOutput(params: { opts: AgentCommandOpts }): boolean {
   return params.opts.sessionEffects === "internal" && params.opts.deliver !== true;
 }
 
@@ -647,6 +645,12 @@ export function runAgentAttempt(params: {
 
       log.warn(
         `cli session reset: provider=${sanitizeForLog(cliExecutionProvider)} reason=transcript-missing sessionKey=${params.sessionKey ?? params.sessionId}`,
+        undefined,
+        {
+          event: "agents.command.cli.session.reset",
+          outcome: "warning",
+          reason: "transcript_missing",
+        },
       );
 
       if (mutableCliSessionStore) {
@@ -722,6 +726,12 @@ export function runAgentAttempt(params: {
 
                 log.warn(
                   `CLI session failed, clearing before fresh retry: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${mutableCliSessionStore.sessionKey} reason=${sanitizeForLog(retry.reason)}`,
+                  undefined,
+                  {
+                    event: "agents.command.cli.session.clear",
+                    outcome: "warning",
+                    reason: "failed",
+                  },
                 );
 
                 params.sessionEntry =
@@ -746,6 +756,12 @@ export function runAgentAttempt(params: {
         ) {
           log.warn(
             `CLI session cleared after failed reused turn: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${mutableCliSessionStore.sessionKey} reason=${sanitizeForLog(resolveClearedCliSessionReason(err))}`,
+            undefined,
+            {
+              event: "agents.command.cli.session.reused.clear",
+              outcome: "warning",
+              reason: "failed",
+            },
           );
 
           params.sessionEntry =

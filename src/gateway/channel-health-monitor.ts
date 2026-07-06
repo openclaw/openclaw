@@ -161,13 +161,27 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           if (!continuingPendingRestart && record.restartsThisHour.length >= maxRestartsPerHour) {
             log.warn?.(
               `[${channelId}:${accountId}] health-monitor: hit ${maxRestartsPerHour} restarts/hour limit, skipping`,
+              undefined,
+              {
+                event: "gateway.health.monitor.restart",
+                outcome: "warning",
+                reason: "limit",
+              },
             );
             continue;
           }
 
           const reason = resolveChannelRestartReason(status, health);
 
-          log.info?.(`[${channelId}:${accountId}] health-monitor: restarting (reason: ${reason})`);
+          log.info?.(
+            `[${channelId}:${accountId}] health-monitor: restarting (reason: ${reason})`,
+            undefined,
+            {
+              event: "gateway.health.monitor.restarting",
+              outcome: "success",
+              reason: "started",
+            },
+          );
 
           if (!continuingPendingRestart) {
             record.lastRestartAt = now;
@@ -186,12 +200,22 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           } catch (err) {
             log.error?.(
               `[${channelId}:${accountId}] health-monitor: restart failed: ${String(err)}`,
+              undefined,
+              {
+                event: "gateway.health.monitor.restart",
+                outcome: "failure",
+                reason: "failed",
+              },
             );
           }
         }
       }
     } catch (err) {
-      log.error?.(`health-monitor: check failed: ${String(err)}`);
+      log.error?.(`health-monitor: check failed: ${String(err)}`, undefined, {
+        event: "gateway.health.monitor.check",
+        outcome: "failure",
+        reason: "failed",
+      });
     } finally {
       checkInFlight = false;
     }
@@ -216,6 +240,12 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
     }
     log.info?.(
       `started (interval: ${Math.round(checkIntervalMs / 1000)}s, startup-grace: ${Math.round(timing.monitorStartupGraceMs / 1000)}s, channel-connect-grace: ${Math.round(timing.channelConnectGraceMs / 1000)}s)`,
+      undefined,
+      {
+        event: "gateway.health.monitor",
+        outcome: "success",
+        reason: "started",
+      },
     );
   }
 

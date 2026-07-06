@@ -136,6 +136,12 @@ function waitForTerminalEventHandlers(params: { runId: string }): Promise<void> 
       getPluginHostRuntimeState().pendingAgentEventHandlersByRunId.delete(runId);
       log.warn(
         `plugin terminal agent event subscriptions still running after ${PLUGIN_TERMINAL_EVENT_CLEANUP_WAIT_MS}ms; clearing run context without waiting for them to settle`,
+        undefined,
+        {
+          event: "plugins.host.agent_event_cleanup",
+          outcome: "warning",
+          reason: "timeout",
+        },
       );
       resolve("timeout");
     }, PLUGIN_TERMINAL_EVENT_CLEANUP_WAIT_MS);
@@ -291,6 +297,12 @@ function logAgentEventSubscriptionFailure(params: {
 }): void {
   log.warn(
     `plugin agent event subscription failed: plugin=${params.pluginId} subscription=${params.subscriptionId} error=${String(params.error)}`,
+    undefined,
+    {
+      event: "plugins.hooks.subscription",
+      outcome: "warning",
+      reason: "failed",
+    },
   );
 }
 

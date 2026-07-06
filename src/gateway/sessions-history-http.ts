@@ -270,7 +270,15 @@ export async function handleSessionHistoryHttpRequest(
         // Surface the underlying error so operators can distinguish transient
         // infrastructure failures (for example a `getRuntimeConfig()` read error
         // inside the reauth path) from deliberate revocation, then fail closed.
-        log.warn("session history SSE stream work failed; closing stream", { error });
+        log.warn(
+          "session history SSE stream work failed; closing stream",
+          { error },
+          {
+            event: "gateway.sessions.history.work.closing",
+            outcome: "warning",
+            reason: "failed",
+          },
+        );
         closeStream();
       });
   };

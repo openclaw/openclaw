@@ -84,6 +84,8 @@ export function createRateLimitRetryRunner(params: {
             const maxRetries = Math.max(1, info.maxAttempts - 1);
             log.warn(
               `${params.logLabel} ${labelText} rate limited, retry ${info.attempt}/${maxRetries} in ${info.delayMs}ms`,
+              undefined,
+              { event: "policy.rate.limited", outcome: "warning", reason: "retry" },
             );
           }
         : undefined,
@@ -121,6 +123,8 @@ export function createChannelApiRetryRunner(params: {
             const maxRetries = Math.max(1, info.maxAttempts - 1);
             log.warn(
               `channel send retry ${info.attempt}/${maxRetries} for ${info.label ?? label ?? "request"} in ${info.delayMs}ms: ${formatErrorMessage(info.err)}`,
+              undefined,
+              { event: "policy.channel.send", outcome: "warning", reason: "retry" },
             );
           }
         : undefined,

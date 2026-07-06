@@ -15,10 +15,46 @@ import type { OpenClawPluginServiceContext, PluginLogger } from "./types.js";
 const log = createSubsystemLogger("plugins");
 function createPluginLogger(): PluginLogger {
   return {
-    info: (msg) => log.info(msg),
-    warn: (msg) => log.warn(msg),
-    error: (msg) => log.error(msg),
-    debug: (msg) => log.debug(msg),
+    info: (msg, meta, semantics) =>
+      log.info(
+        msg,
+        meta,
+        semantics ?? {
+          event: "plugins.service.log",
+          outcome: "success",
+          reason: "completed",
+        },
+      ),
+    warn: (msg, meta, semantics) =>
+      log.warn(
+        msg,
+        meta,
+        semantics ?? {
+          event: "plugins.service.log",
+          outcome: "warning",
+          reason: "warning",
+        },
+      ),
+    error: (msg, meta, semantics) =>
+      log.error(
+        msg,
+        meta,
+        semantics ?? {
+          event: "plugins.service.log",
+          outcome: "failure",
+          reason: "failed",
+        },
+      ),
+    debug: (msg, meta, semantics) =>
+      log.debug(
+        msg,
+        meta,
+        semantics ?? {
+          event: "plugins.service.log",
+          outcome: "success",
+          reason: "completed",
+        },
+      ),
   };
 }
 
@@ -129,6 +165,12 @@ export async function startPluginServices(params: {
       const error = err as Error;
       log.error(
         `plugin service failed (${service.id}, plugin=${entry.pluginId}, root=${entry.rootDir ?? "unknown"}): ${error?.message ?? String(err)}`,
+        undefined,
+        {
+          event: "plugins.plugin.service.plugin.root",
+          outcome: "failure",
+          reason: "failed",
+        },
       );
     }
   }
@@ -147,7 +189,11 @@ export async function startPluginServices(params: {
         try {
           await withPluginHttpRouteRegistry(params.registry, () => entry.stop?.());
         } catch (err) {
-          log.warn(`plugin service stop failed (${entry.id}): ${String(err)}`);
+          log.warn(`plugin service stop failed (${entry.id}): ${String(err)}`, undefined, {
+            event: "plugins.plugin.service.stop",
+            outcome: "warning",
+            reason: "failed",
+          });
         }
       }
     },

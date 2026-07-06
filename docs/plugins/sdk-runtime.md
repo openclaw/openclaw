@@ -673,7 +673,9 @@ Beyond `api.runtime`, the API object also provides:
   Plugin-specific config from `plugins.entries.<id>.config`.
 </ParamField>
 <ParamField path="api.logger" type="PluginLogger">
-  Scoped logger (`debug`, `info`, `warn`, `error`).
+  Scoped logger (`debug`, `info`, `warn`, `error`). Each method accepts
+  `(message, meta?, semantics?)`; keep semantics low-cardinality so exported
+  diagnostics can be queried without exposing free-text log bodies.
 </ParamField>
 <ParamField path="api.registrationMode" type="PluginRegistrationMode">
   Current load mode; `"setup-runtime"` is the lightweight pre-full-entry startup/setup window.
@@ -681,6 +683,19 @@ Beyond `api.runtime`, the API object also provides:
 <ParamField path="api.resolvePath(input)" type="(string) => string">
   Resolve a path relative to the plugin root.
 </ParamField>
+
+```ts
+api.logger.info(
+  "provider catalog refreshed",
+  { provider: "acme" },
+  {
+    event: "plugin.provider_catalog.refresh",
+    category: "plugin.provider_catalog",
+    outcome: "success",
+    reason: "completed",
+  },
+);
+```
 
 ## Related
 

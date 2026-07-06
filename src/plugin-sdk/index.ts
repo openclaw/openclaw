@@ -46,6 +46,8 @@ export type {
   MediaUnderstandingProviderPlugin,
   OpenClawPluginApi,
   OpenClawPluginConfigSchema,
+  PluginLogOutcome,
+  PluginLogSemantics,
   PluginLogger,
   ProviderAuthContext,
   ProviderAuthResult,

@@ -82,11 +82,19 @@ function ensureSingleTaskFlow(params: {
     }
     return linked;
   } catch (error) {
-    log.warn("Failed to create one-task flow for detached run", {
-      taskId: params.task.taskId,
-      runId: params.task.runId,
-      error,
-    });
+    log.warn(
+      "Failed to create one-task flow for detached run",
+      {
+        taskId: params.task.taskId,
+        runId: params.task.runId,
+        error,
+      },
+      {
+        event: "tasks.executor.task_flow.detached_run",
+        outcome: "warning",
+        reason: "failed",
+      },
+    );
     return params.task;
   }
 }

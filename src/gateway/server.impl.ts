@@ -325,6 +325,8 @@ function createGatewayStartupTrace() {
     if (logEnabled) {
       log.info(
         `startup trace: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms ${metrics.map(([key, value]) => formatMetric(key, value)).join(" ")}`,
+        undefined,
+        { event: "gateway.startup.trace.total", outcome: "success", reason: "completed" },
       );
     }
   };
@@ -359,6 +361,8 @@ function createGatewayStartupTrace() {
       if (logEnabled) {
         log.info(
           `startup trace: ${name} ${metrics.map(([key, value]) => formatMetric(key, value)).join(" ")}`,
+          undefined,
+          { event: "gateway.startup.trace", outcome: "success", reason: "completed" },
         );
       }
       emitDiagnosticsTimelineEvent(
@@ -562,13 +566,29 @@ export async function startGatewayServer(
         record.installPath ? [record.installPath] : [],
       ),
       onError: (error, projectRoot) =>
-        log.warn(`failed to clean retained npm generation ${projectRoot}: ${String(error)}`),
+        log.warn(
+          `failed to clean retained npm generation ${projectRoot}: ${String(error)}`,
+          undefined,
+          {
+            event: "gateway.clean.retained.npm.generation",
+            outcome: "warning",
+            reason: "failed",
+          },
+        ),
     });
     if (removedGenerations > 0) {
-      log.info(`cleaned ${removedGenerations} retained npm plugin generation(s)`);
+      log.info(`cleaned ${removedGenerations} retained npm plugin generation(s)`, undefined, {
+        event: "gateway.cleaned.retained.npm.plugin.generation",
+        outcome: "success",
+        reason: "cleaned",
+      });
     }
   } catch (error) {
-    log.warn(`retained npm generation cleanup unavailable: ${String(error)}`);
+    log.warn(`retained npm generation cleanup unavailable: ${String(error)}`, undefined, {
+      event: "gateway.retained.npm.generation.cleanup",
+      outcome: "warning",
+      reason: "unavailable",
+    });
   }
   const { bootstrapGatewayNetworkRuntime } = await import("./server-network-runtime.js");
   bootstrapGatewayNetworkRuntime();
@@ -658,7 +678,11 @@ export async function startGatewayServer(
   cfgAtStart = authBootstrap.cfg;
   startupTrace.setConfig(cfgAtStart);
   if (authBootstrap.generatedToken) {
-    log.warn(formatRuntimeGatewayAuthTokenWarning());
+    log.warn(formatRuntimeGatewayAuthTokenWarning(), undefined, {
+      event: "gateway.startgatewayserver",
+      outcome: "warning",
+      reason: "warning",
+    });
   }
   const diagnosticsEnabled = isDiagnosticsEnabled(cfgAtStart);
   setDiagnosticsEnabledForProcess(diagnosticsEnabled);
@@ -901,7 +925,11 @@ export async function startGatewayServer(
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS),
   });
-  log.info("starting HTTP server...");
+  log.info("starting HTTP server...", undefined, {
+    event: "gateway.starting.http.server",
+    outcome: "success",
+    reason: "started",
+  });
   let currentPluginRegistryGatewayContext: GatewayRequestContext | undefined;
   const {
     releasePluginRouteRegistry,
@@ -1299,6 +1327,12 @@ export async function startGatewayServer(
           } catch (err) {
             logDiscovery.warn(
               `gateway discovery stop failed before plugin refresh: ${String(err)}`,
+              undefined,
+              {
+                event: "gateway.discovery.stop",
+                outcome: "warning",
+                reason: "failed",
+              },
             );
           }
         }
@@ -1314,7 +1348,15 @@ export async function startGatewayServer(
           pluginRegistry: nextPluginRegistry,
         });
       } catch (err) {
-        logDiscovery.warn(`gateway discovery refresh failed after plugin load: ${String(err)}`);
+        logDiscovery.warn(
+          `gateway discovery refresh failed after plugin load: ${String(err)}`,
+          undefined,
+          {
+            event: "gateway.discovery.refresh",
+            outcome: "warning",
+            reason: "failed",
+          },
+        );
       }
     };
     const listAttachedChannelConfigTargets = () =>
@@ -1390,7 +1432,11 @@ export async function startGatewayServer(
       runtimeState.pluginServices = null;
       if (previousPluginServices) {
         await previousPluginServices.stop().catch((err: unknown) => {
-          log.warn(`plugin services stop failed during reload: ${String(err)}`);
+          log.warn(`plugin services stop failed during reload: ${String(err)}`, undefined, {
+            event: "gateway.plugin.services.stop.reload",
+            outcome: "warning",
+            reason: "failed",
+          });
         });
       }
       replaceAttachedPluginRuntime(loaded);
@@ -1402,7 +1448,11 @@ export async function startGatewayServer(
           workspaceDir: defaultWorkspaceDir,
         });
       } catch (err) {
-        log.warn(`plugin services failed to start after reload: ${String(err)}`);
+        log.warn(`plugin services failed to start after reload: ${String(err)}`, undefined, {
+          event: "gateway.plugin.services.start.reload",
+          outcome: "warning",
+          reason: "failed",
+        });
       }
       const afterChannelTargets = listAttachedChannelConfigTargets();
       const afterChannelIds = new Set(afterChannelTargets.keys());
@@ -1715,7 +1765,11 @@ export async function startGatewayServer(
     startupTrace.detail("memory.ready", collectGatewayProcessMemoryUsageMb());
     startupTrace.mark("ready");
     if (deferStartupSidecars) {
-      log.info("gateway ready");
+      log.info("gateway ready", undefined, {
+        event: "gateway.lifecycle",
+        outcome: "success",
+        reason: "ready",
+      });
     }
     finishGatewayRestartTrace("restart.ready", collectGatewayProcessMemoryUsageMb());
     postAttachRuntimeReturned = true;
@@ -1770,7 +1824,15 @@ export async function startGatewayServer(
       clients,
     });
     await promoteConfigSnapshotToLastKnownGood(startupLastGoodSnapshot).catch((err: unknown) => {
-      log.warn(`gateway: failed to promote config last-known-good backup: ${String(err)}`);
+      log.warn(
+        `gateway: failed to promote config last-known-good backup: ${String(err)}`,
+        undefined,
+        {
+          event: "gateway.promote.config.last.known.good",
+          outcome: "warning",
+          reason: "failed",
+        },
+      );
     });
     if (!minimalTestGateway) {
       const gatewayRuntimeServices = await loadScheduledServicesModule();
@@ -1833,7 +1895,12 @@ export async function startGatewayServer(
         await runGlobalGatewayStopSafely({
           event: { reason: optsLocal?.reason ?? "gateway stopping" },
           ctx: { port },
-          onError: (err) => log.warn(`gateway_stop hook failed: ${String(err)}`),
+          onError: (err) =>
+            log.warn(`gateway_stop hook failed: ${String(err)}`, undefined, {
+              event: "gateway.stop.hook",
+              outcome: "warning",
+              reason: "failed",
+            }),
         });
         await runClosePrelude();
         await close(optsLocal);

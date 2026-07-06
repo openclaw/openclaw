@@ -38,11 +38,19 @@ export async function runOutboundDeliveryCommitHooks(
       } catch (err) {
         // Commit hooks are side effects after successful send; failures are
         // logged but must not turn the already-committed delivery into failure.
-        log.warn("Plugin message adapter after-commit hook failed.", {
-          channel: result.channel,
-          messageId: result.messageId,
-          error: formatErrorMessage(err),
-        });
+        log.warn(
+          "Plugin message adapter after-commit hook failed.",
+          {
+            channel: result.channel,
+            messageId: result.messageId,
+            error: formatErrorMessage(err),
+          },
+          {
+            event: "outbound.deliver.plugin.message.adapter.commit.hook",
+            outcome: "warning",
+            reason: "failed",
+          },
+        );
       }
     }
   }

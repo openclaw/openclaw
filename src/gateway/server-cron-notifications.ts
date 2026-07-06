@@ -20,10 +20,16 @@ import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import {
+  attachDiagnosticLogSemantics,
+  stripAttachedDiagnosticLogFields,
+  type DiagnosticLogSemantics,
+} from "../logging/diagnostic-log-internal.js";
 
 const CRON_WEBHOOK_TIMEOUT_MS = 10_000;
 
 type CronLogger = {
+  settings?: unknown;
   warn: (obj: unknown, msg?: string) => void;
 };
 
@@ -36,6 +42,36 @@ type CronWebhookTarget = {
   url: string;
   source: "delivery" | "completionDestination";
 };
+
+function cronNotificationLogMeta<T extends Record<string, unknown>>(
+  attributes: T,
+  semantics: DiagnosticLogSemantics,
+): T {
+  return attachDiagnosticLogSemantics(attributes, {
+    category: "cron.notification",
+    ...semantics,
+  });
+}
+
+function isOpenClawCronLogger(logger: CronLogger): boolean {
+  return Boolean(logger.settings);
+}
+
+function warnCronNotification(
+  target: CronLogger,
+  attributes: Record<string, unknown>,
+  semantics: DiagnosticLogSemantics,
+  message: string,
+): void {
+  if (isOpenClawCronLogger(target)) {
+    target.warn(cronNotificationLogMeta(attributes, semantics), message);
+    return;
+  }
+  target.warn(
+    stripAttachedDiagnosticLogFields(cronNotificationLogMeta(attributes, semantics)),
+    message,
+  );
+}
 
 function redactWebhookUrl(url: string): string {
   try {
@@ -153,20 +189,32 @@ async function postCronWebhook(params: {
     await result.release();
   } catch (err) {
     if (err instanceof SsrFBlockedError) {
-      params.logger.warn(
+      warnCronNotification(
+        params.logger,
         {
           ...params.logContext,
           reason: formatErrorMessage(err),
           webhookUrl: redactWebhookUrl(params.webhookUrl),
         },
+        {
+          event: "cron.notification.webhook",
+          outcome: "warning",
+          reason: "ssrf_blocked",
+        },
         params.blockedLog,
       );
     } else {
-      params.logger.warn(
+      warnCronNotification(
+        params.logger,
         {
           ...params.logContext,
           err: formatErrorMessage(err),
           webhookUrl: redactWebhookUrl(params.webhookUrl),
+        },
+        {
+          event: "cron.notification.webhook",
+          outcome: "failure",
+          reason: "request_failed",
         },
         params.failedLog,
       );
@@ -193,8 +241,14 @@ export async function sendGatewayCronFailureAlert(params: {
   const webhookToken = normalizeOptionalString(params.webhookToken);
 
   if (params.mode === "webhook" && !params.to) {
-    params.logger.warn(
+    warnCronNotification(
+      params.logger,
       { jobId: params.job.id },
+      {
+        event: "cron.notification.alert",
+        outcome: "warning",
+        reason: "webhook_url_missing",
+      },
       "cron: failure alert webhook mode requires URL, skipping",
     );
     return;
@@ -217,10 +271,16 @@ export async function sendGatewayCronFailureAlert(params: {
         logger: params.logger,
       });
     } else {
-      params.logger.warn(
+      warnCronNotification(
+        params.logger,
         {
           jobId: params.job.id,
           webhookUrl: redactWebhookUrl(params.to),
+        },
+        {
+          event: "cron.notification.alert",
+          outcome: "warning",
+          reason: "webhook_url_invalid",
         },
         "cron: failure alert webhook URL is invalid, skipping",
       );
@@ -271,10 +331,16 @@ export function dispatchGatewayCronFinishedNotifications(params: {
     params.job?.delivery?.completionDestination?.mode === "webhook" &&
     !normalizeHttpWebhookUrl(params.job.delivery.completionDestination.to)
   ) {
-    params.logger.warn(
+    warnCronNotification(
+      params.logger,
       {
         jobId: params.evt.jobId,
         deliveryTo: redactOptionalWebhookUrl(params.job.delivery.completionDestination.to),
+      },
+      {
+        event: "cron.notification.completion",
+        outcome: "warning",
+        reason: "webhook_url_invalid",
       },
       "cron: skipped completion webhook delivery, delivery.completionDestination.to must be a valid http(s) URL",
     );
@@ -284,10 +350,16 @@ export function dispatchGatewayCronFinishedNotifications(params: {
     !webhookTargets.some((target) => target.source === "delivery") &&
     params.job?.delivery?.mode === "webhook"
   ) {
-    params.logger.warn(
+    warnCronNotification(
+      params.logger,
       {
         jobId: params.evt.jobId,
         deliveryTo: redactOptionalWebhookUrl(params.job.delivery.to),
+      },
+      {
+        event: "cron.notification.webhook",
+        outcome: "warning",
+        reason: "webhook_url_invalid",
       },
       "cron: skipped webhook delivery, delivery.to must be a valid http(s) URL",
     );
@@ -358,10 +430,16 @@ function dispatchCronFailureDestinationNotifications(params: {
           });
         })();
       } else {
-        params.logger.warn(
+        warnCronNotification(
+          params.logger,
           {
             jobId: params.evt.jobId,
             webhookUrl: redactWebhookUrl(failureDest.to),
+          },
+          {
+            event: "cron.notification.destination",
+            outcome: "warning",
+            reason: "webhook_url_invalid",
           },
           "cron: failure destination webhook URL is invalid, skipping",
         );

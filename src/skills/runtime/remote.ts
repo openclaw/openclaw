@@ -102,22 +102,42 @@ function logRemoteBinProbeFailure(
       `remote bin probe skipped: node connectivity unavailable (${label}; ${details}): ${
         message ?? "unknown"
       }`,
+      undefined,
+      {
+        event: "gateway.skills.remote.node.connectivity",
+        outcome: "warning",
+        reason: "unavailable",
+      },
     );
     return;
   }
   // Node unavailable errors (not connected or disconnected mid-operation) are expected
   // when nodes have transient connections - log at info level instead of warn
   if (message?.includes("node not connected") || message?.includes("node disconnected")) {
-    log.info(`remote bin probe skipped: node unavailable (${label}; ${details})`);
+    log.info(`remote bin probe skipped: node unavailable (${label}; ${details})`, undefined, {
+      event: "gateway.skills.remote.bin.probe.node",
+      outcome: "warning",
+      reason: "unavailable",
+    });
     return;
   }
   if (message?.includes("invoke timed out") || message?.includes("timeout")) {
     log.warn(
       `remote bin probe timed out (${label}; ${details}); check node connectivity for ${label}`,
+      undefined,
+      {
+        event: "gateway.skills.remote.bin.probe",
+        outcome: "warning",
+        reason: "timeout",
+      },
     );
     return;
   }
-  log.warn(`remote bin probe error (${label}; ${details}): ${message ?? "unknown"}`);
+  log.warn(`remote bin probe error (${label}; ${details}): ${message ?? "unknown"}`, undefined, {
+    event: "gateway.skills.remote.bin.probe",
+    outcome: "warning",
+    reason: "warning",
+  });
 }
 
 function isMacPlatform(platform?: string, deviceFamily?: string): boolean {
@@ -208,7 +228,11 @@ export async function primeRemoteSkillsCache() {
       bumpSkillsSnapshotVersion({ reason: "remote-node" });
     }
   } catch (err) {
-    log.warn(`failed to prime remote skills cache: ${String(err)}`);
+    log.warn(`failed to prime remote skills cache: ${String(err)}`, undefined, {
+      event: "gateway.skills.remote.prime.remote.skills.cache",
+      outcome: "warning",
+      reason: "failed",
+    });
   }
 }
 

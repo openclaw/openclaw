@@ -512,6 +512,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         const detail = error instanceof Error ? error.message : String(error);
         registryParams.logger.warn(
           `[plugins] codex app-server extension factory failed for ${record.id}: ${detail}`,
+          undefined,
+          {
+            event: "plugins.registry.codex_extension",
+            category: "plugins.registry",
+            outcome: "failure",
+            reason: "codex_extension_failed",
+          },
         );
       }
     };
@@ -584,6 +591,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       } catch (error) {
         registryParams.logger.warn(
           `[plugins] agent tool result middleware failed for ${record.id}`,
+          undefined,
+          {
+            event: "plugins.registry.tool_result_middleware",
+            category: "plugins.registry",
+            outcome: "failure",
+            reason: "middleware_failed",
+          },
         );
         throw error;
       }

@@ -64,6 +64,13 @@ export async function registerPluginCliCommandGroups(
         `plugin CLI register skipped (${entry.pluginId}): parent command missing (${parentPath.join(
           " ",
         )})`,
+        undefined,
+        {
+          event: "plugins.cli.register",
+          category: "plugins.cli",
+          outcome: "warning",
+          reason: "parent_missing",
+        },
       );
       continue;
     }
@@ -91,6 +98,13 @@ export async function registerPluginCliCommandGroups(
         `plugin CLI register skipped (${entry.pluginId}): command already registered (${overlaps.join(
           ", ",
         )})`,
+        undefined,
+        {
+          event: "plugins.cli.register",
+          category: "plugins.cli",
+          outcome: "warning",
+          reason: "command_exists",
+        },
       );
       continue;
     }
@@ -106,11 +120,27 @@ export async function registerPluginCliCommandGroups(
       if (params.mode === "lazy" && entry.placeholders.length > 0) {
         params.logger.debug?.(
           `plugin CLI lazy register fallback to eager (${entry.pluginId}): descriptors do not cover all command roots`,
+          undefined,
+          {
+            event: "plugins.cli.lazy_register",
+            category: "plugins.cli",
+            outcome: "warning",
+            reason: "descriptor_incomplete",
+          },
         );
       }
       await registerEntry();
     } catch (error) {
-      params.logger.warn(`plugin CLI register failed (${entry.pluginId}): ${String(error)}`);
+      params.logger.warn(
+        `plugin CLI register failed (${entry.pluginId}): ${String(error)}`,
+        undefined,
+        {
+          event: "plugins.cli.register",
+          category: "plugins.cli",
+          outcome: "failure",
+          reason: "register_failed",
+        },
+      );
     }
   }
 }

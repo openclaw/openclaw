@@ -393,7 +393,15 @@ async function deliverToTargets(params: {
         throw send.error;
       }
     } catch (err) {
-      log.error(`exec approvals: failed to deliver to ${channel}:${target.to}: ${String(err)}`);
+      log.error(
+        `exec approvals: failed to deliver to ${channel}:${target.to}: ${String(err)}`,
+        undefined,
+        {
+          event: "gateway.exec.approvals.deliver",
+          outcome: "failure",
+          reason: "failed",
+        },
+      );
     }
   });
   await Promise.allSettled(deliveries);
@@ -588,6 +596,12 @@ function createApprovalHandlers<
       })().catch((err: unknown) => {
         log.error(
           `${params.strategy.kind} approvals: failed to deliver expiry notification for ${requestId}: ${String(err)}`,
+          undefined,
+          {
+            event: "gateway.exec.approvals.deliver.expiry.notification",
+            outcome: "failure",
+            reason: "failed",
+          },
         );
       });
     }, expiresInMs);
@@ -635,6 +649,12 @@ function createApprovalHandlers<
     }).catch((err: unknown) => {
       log.error(
         `${params.strategy.kind} approvals: failed to deliver request ${requestId}: ${String(err)}`,
+        undefined,
+        {
+          event: "gateway.exec.approvals.deliver.request",
+          outcome: "failure",
+          reason: "failed",
+        },
       );
     });
     return true;

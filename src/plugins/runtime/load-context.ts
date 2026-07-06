@@ -61,10 +61,46 @@ export type PluginRuntimeLoadContextOptions = {
 /** Creates the default plugin runtime loader logger. */
 export function createPluginRuntimeLoaderLogger(): PluginLogger {
   return {
-    info: (message) => log.info(message),
-    warn: (message) => log.warn(message),
-    error: (message) => log.error(message),
-    debug: (message) => log.debug(message),
+    info: (message, meta, semantics) =>
+      log.info(
+        message,
+        meta,
+        semantics ?? {
+          event: "plugins.runtime.loader.log",
+          outcome: "success",
+          reason: "completed",
+        },
+      ),
+    warn: (message, meta, semantics) =>
+      log.warn(
+        message,
+        meta,
+        semantics ?? {
+          event: "plugins.runtime.loader.log",
+          outcome: "warning",
+          reason: "warning",
+        },
+      ),
+    error: (message, meta, semantics) =>
+      log.error(
+        message,
+        meta,
+        semantics ?? {
+          event: "plugins.runtime.loader.log",
+          outcome: "failure",
+          reason: "failed",
+        },
+      ),
+    debug: (message, meta, semantics) =>
+      log.debug(
+        message,
+        meta,
+        semantics ?? {
+          event: "plugins.runtime.loader.log",
+          outcome: "success",
+          reason: "completed",
+        },
+      ),
   };
 }
 

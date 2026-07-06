@@ -95,6 +95,12 @@ export function createChannelRuntimeContextRegistry(): ChannelRuntimeContextRegi
             `channel=${event.key.channelId} capability=${event.key.capability}` +
             (event.key.accountId ? ` account=${event.key.accountId}` : "") +
             `: ${message}`,
+          undefined,
+          {
+            event: "plugins.runtime.context.event.emit",
+            outcome: "failure",
+            reason: "failed",
+          },
         );
       }
     }

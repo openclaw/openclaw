@@ -63,12 +63,20 @@ async function deliverAnnounceReply(params: {
       timeoutMs: 10_000,
     });
   } catch (err) {
-    log.warn("sessions_send announce delivery failed", {
-      runId: params.runContextId,
-      channel: params.announceTarget.channel,
-      to: params.announceTarget.to,
-      error: formatErrorMessage(err),
-    });
+    log.warn(
+      "sessions_send announce delivery failed",
+      {
+        runId: params.runContextId,
+        channel: params.announceTarget.channel,
+        to: params.announceTarget.to,
+        error: formatErrorMessage(err),
+      },
+      {
+        event: "agents.sessions.send.announce_delivery",
+        outcome: "warning",
+        reason: "failed",
+      },
+    );
   }
 }
 
@@ -218,10 +226,18 @@ export async function runSessionsSendA2AFlow(params: {
       });
     }
   } catch (err) {
-    log.warn("sessions_send announce flow failed", {
-      runId: runContextId,
-      error: formatErrorMessage(err),
-    });
+    log.warn(
+      "sessions_send announce flow failed",
+      {
+        runId: runContextId,
+        error: formatErrorMessage(err),
+      },
+      {
+        event: "agents.sessions.send.announce_flow",
+        outcome: "warning",
+        reason: "failed",
+      },
+    );
   }
 }
 

@@ -85,7 +85,22 @@ const OPENCLAW_LOG_CATEGORY_ATTRIBUTE = "openclaw.log.category";
 const OPENCLAW_LOG_OUTCOME_ATTRIBUTE = "openclaw.log.outcome";
 const OPENCLAW_LOG_REASON_ATTRIBUTE = "openclaw.log.reason";
 const OPENCLAW_LOG_SITE_ID_ATTRIBUTE = "openclaw.log.site_id";
+const OPENCLAW_LOG_LEVEL_ATTRIBUTE = "openclaw.log.level";
 const BLOCKED_OTEL_LOG_ATTRIBUTE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+const REDACTED_OTEL_LOG_BODY_ATTRIBUTE_KEYS = new Set([
+  "body",
+  "content",
+  "detail",
+  "details",
+  "error",
+  "errormessage",
+  "errorstack",
+  "message",
+  "msg",
+  "stack",
+  "text",
+]);
+const REDACTED_OTEL_LOG_BODY_ATTRIBUTE_KEY_FRAGMENTS = ["payload", "preview"];
 const RESERVED_OTEL_LOG_ATTRIBUTE_KEYS = new Set([
   OTEL_EVENT_NAME_ATTRIBUTE,
   OPENCLAW_SIGNAL_TYPE_ATTRIBUTE,
@@ -94,6 +109,7 @@ const RESERVED_OTEL_LOG_ATTRIBUTE_KEYS = new Set([
   OPENCLAW_LOG_OUTCOME_ATTRIBUTE,
   OPENCLAW_LOG_REASON_ATTRIBUTE,
   OPENCLAW_LOG_SITE_ID_ATTRIBUTE,
+  OPENCLAW_LOG_LEVEL_ATTRIBUTE,
 ]);
 const RESERVED_OTEL_LOG_RAW_ATTRIBUTE_KEYS = new Set([
   "eventName",
@@ -105,6 +121,9 @@ const RESERVED_OTEL_LOG_RAW_ATTRIBUTE_KEYS = new Set([
   "log.reason",
   "log.site_id",
   "log.siteId",
+  "log.level",
+  "logLevel",
+  OPENCLAW_LOG_LEVEL_ATTRIBUTE,
 ]);
 const PRELOADED_OTEL_SDK_ENV = "OPENCLAW_OTEL_PRELOADED";
 const OTEL_EXPORTER_OTLP_ENDPOINT_ENV = "OTEL_EXPORTER_OTLP_ENDPOINT";
@@ -1181,6 +1200,7 @@ function normalizeTraceContext(value: unknown): DiagnosticTraceContext | undefin
 function assignOtelLogEventAttributes(
   attributes: Record<string, string | number | boolean>,
   eventAttributes: Record<string, string | number | boolean> | undefined,
+  options: { captureLogBody: boolean },
 ): void {
   if (!eventAttributes) {
     return;
@@ -1194,6 +1214,9 @@ function assignOtelLogEventAttributes(
     }
     const key = rawKey.trim();
     if (BLOCKED_OTEL_LOG_ATTRIBUTE_KEYS.has(key)) {
+      continue;
+    }
+    if (!options.captureLogBody && isRedactedOtelLogBodyAttributeKey(key)) {
       continue;
     }
     if (redactSensitiveText(key) !== key) {
@@ -1212,6 +1235,16 @@ function assignOtelLogEventAttributes(
     }
     assignOtelLogAttribute(attributes, attributeKey, eventAttributes[rawKey]);
   }
+}
+
+function isRedactedOtelLogBodyAttributeKey(key: string): boolean {
+  const normalizedKey = key.toLowerCase().replace(/[^a-z0-9]/gu, "");
+  return (
+    REDACTED_OTEL_LOG_BODY_ATTRIBUTE_KEYS.has(normalizedKey) ||
+    REDACTED_OTEL_LOG_BODY_ATTRIBUTE_KEY_FRAGMENTS.some((fragment) =>
+      normalizedKey.includes(fragment),
+    )
+  );
 }
 
 function assignOtelSecurityEventAttributes(
@@ -1236,6 +1269,9 @@ function assignOtelSecurityEventAttributes(
       continue;
     }
     if (!OTEL_LOG_RAW_ATTRIBUTE_KEY_RE.test(key)) {
+      continue;
+    }
+    if (RESERVED_OTEL_LOG_RAW_ATTRIBUTE_KEYS.has(key)) {
       continue;
     }
     const value = eventAttributes[rawKey];
@@ -1518,7 +1554,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           status: "failure",
           reason: "unsupported_protocol",
         });
-        ctx.logger.warn(`diagnostics-otel: unsupported protocol ${protocol}`);
+        ctx.logger.warn(`diagnostics-otel: unsupported protocol ${protocol}`, undefined, {
+          event: "diagnostics_otel.protocol",
+          category: "diagnostics_otel",
+          outcome: "failure",
+          reason: "unsupported_protocol",
+        });
         return;
       }
 
@@ -1615,11 +1656,25 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             },
           );
           await stopStarted();
-          ctx.logger.error(`diagnostics-otel: failed to start SDK: ${formatError(err)}`);
+          ctx.logger.error(
+            `diagnostics-otel: failed to start SDK: ${formatError(err)}`,
+            undefined,
+            {
+              event: "diagnostics_otel.sdk_start",
+              category: "diagnostics_otel",
+              outcome: "failure",
+              reason: "start_failed",
+            },
+          );
           throw err;
         }
       } else if (sdkPreloaded && (tracesEnabled || metricsEnabled)) {
-        ctx.logger.info("diagnostics-otel: using preloaded OpenTelemetry SDK");
+        ctx.logger.info("diagnostics-otel: using preloaded OpenTelemetry SDK", undefined, {
+          event: "diagnostics_otel.sdk",
+          category: "diagnostics_otel",
+          outcome: "success",
+          reason: "preloaded",
+        });
       }
 
       const logSeverityMap: Record<string, SeverityNumber> = {
@@ -2008,7 +2063,16 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             LOG_RECORD_EXPORT_FAILURE_REPORT_INTERVAL_MS
           ) {
             logRecordExportFailureLastReportedAt = now;
-            ctx.logger.error(`diagnostics-otel: ${label} export failed: ${formatError(err)}`);
+            ctx.logger.error(
+              `diagnostics-otel: ${label} export failed: ${formatError(err)}`,
+              undefined,
+              {
+                event: "diagnostics_otel.log_export",
+                category: "diagnostics_otel",
+                outcome: "failure",
+                reason: "export_failed",
+              },
+            );
           }
         };
 
@@ -2063,7 +2127,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             );
           }
           assignReservedOtelLogAttribute(attributes, OPENCLAW_SIGNAL_TYPE_ATTRIBUTE, "log.record");
-          assignOtelLogAttribute(attributes, "openclaw.log.level", logLevelName);
+          assignOtelLogAttribute(attributes, OPENCLAW_LOG_LEVEL_ATTRIBUTE, logLevelName);
           if (!captureLogBody) {
             attributes[OTEL_LOG_BODY_REDACTED_ATTRIBUTE] = true;
           }
@@ -2077,13 +2141,13 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               evt.loggerParents.join("."),
             );
           }
-          assignOtelLogEventAttributes(attributes, evt.attributes);
           if (evt.code?.line) {
             assignOtelLogAttribute(attributes, "code.lineno", evt.code.line);
           }
           if (evt.code?.functionName) {
             assignOtelLogAttribute(attributes, "code.function", evt.code.functionName);
           }
+          assignOtelLogEventAttributes(attributes, evt.attributes, { captureLogBody });
           const traceContext = normalizedTrustedTraceContext(evt, metadata);
           addTraceAttributes(attributes, traceContext);
 
@@ -3807,7 +3871,16 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
 
       const subscribe = ctx.internalDiagnostics?.onEvent;
       if (!subscribe) {
-        ctx.logger.error("diagnostics-otel: internal diagnostics capability unavailable");
+        ctx.logger.error(
+          "diagnostics-otel: internal diagnostics capability unavailable",
+          undefined,
+          {
+            event: "diagnostics_otel.internal_diagnostics",
+            category: "diagnostics_otel",
+            outcome: "failure",
+            reason: "internal_diagnostics_unavailable",
+          },
+        );
         return;
       }
 
@@ -3966,6 +4039,13 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         } catch (err) {
           ctx.logger.error(
             `diagnostics-otel: event handler failed (${evt.type}): ${formatError(err)}`,
+            undefined,
+            {
+              event: "diagnostics_otel.event_handler",
+              category: "diagnostics_otel",
+              outcome: "failure",
+              reason: "handler_failed",
+            },
           );
         }
       });
@@ -3978,6 +4058,13 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         const code = readErrorCode(otlpError) ?? "unknown";
         ctx.logger.warn(
           `diagnostics-otel: suppressed OTLP exporter unhandled rejection (code=${String(code)})`,
+          undefined,
+          {
+            event: "diagnostics_otel.unhandled_rejection",
+            category: "diagnostics_otel",
+            outcome: "warning",
+            reason: "otlp_exporter_rejection",
+          },
         );
         return true;
       });
@@ -3995,7 +4082,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             : logsExporter === "stdout"
               ? "stdout JSONL"
               : "OTLP/Protobuf";
-        ctx.logger.info(`diagnostics-otel: logs exporter enabled (${label})`);
+        ctx.logger.info(`diagnostics-otel: logs exporter enabled (${label})`, undefined, {
+          event: "diagnostics_otel.logs_exporter",
+          category: "diagnostics_otel",
+          outcome: "success",
+          reason: "logs_enabled",
+        });
       }
     },
     async stop() {

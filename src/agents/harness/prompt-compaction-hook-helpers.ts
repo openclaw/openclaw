@@ -74,7 +74,11 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
             hookCtx,
           )
           .catch((error: unknown) => {
-            log.warn(`heartbeat_prompt_contribution hook failed: ${String(error)}`);
+            log.warn(`heartbeat_prompt_contribution hook failed: ${String(error)}`, undefined, {
+              event: "agents.harness.heartbeat.prompt.contribution.hook",
+              outcome: "warning",
+              reason: "failed",
+            });
             return undefined;
           })
       : undefined;
@@ -83,7 +87,11 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   // before_agent_start hook during the prompt-build migration window.
   const promptBuildResult = hookRunner?.hasHooks("before_prompt_build")
     ? await hookRunner.runBeforePromptBuild(promptEvent, hookCtx).catch((error: unknown) => {
-        log.warn(`before_prompt_build hook failed: ${String(error)}`);
+        log.warn(`before_prompt_build hook failed: ${String(error)}`, undefined, {
+          event: "agents.harness.prompt.build.hook",
+          outcome: "warning",
+          reason: "failed",
+        });
         return undefined;
       })
     : undefined;
@@ -95,6 +103,12 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
       ? await hookRunner.runBeforeAgentStart(promptEvent, hookCtx).catch((error: unknown) => {
           log.warn(
             `deprecated before_agent_start hook failed during prompt build: ${String(error)}`,
+            undefined,
+            {
+              event: "agents.harness.deprecated.agent.start.hook",
+              outcome: "warning",
+              reason: "failed",
+            },
           );
           return undefined;
         })
@@ -174,7 +188,11 @@ export async function runAgentHarnessBeforeCompactionHook(params: {
       buildAgentHookContext(params.ctx),
     );
   } catch (error) {
-    log.warn(`before_compaction hook failed: ${String(error)}`);
+    log.warn(`before_compaction hook failed: ${String(error)}`, undefined, {
+      event: "agents.harness.compaction.hook",
+      outcome: "warning",
+      reason: "failed",
+    });
   }
 }
 
@@ -199,6 +217,10 @@ export async function runAgentHarnessAfterCompactionHook(params: {
       buildAgentHookContext(params.ctx),
     );
   } catch (error) {
-    log.warn(`after_compaction hook failed: ${String(error)}`);
+    log.warn(`after_compaction hook failed: ${String(error)}`, undefined, {
+      event: "agents.harness.compaction.hook",
+      outcome: "warning",
+      reason: "failed",
+    });
   }
 }

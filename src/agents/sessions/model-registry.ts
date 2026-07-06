@@ -372,7 +372,11 @@ export class ModelRegistry {
 
     if (error) {
       this.loadError = error;
-      log.warn(`model catalog load issue: ${error}`);
+      log.warn(`model catalog load issue: ${error}`, undefined, {
+        event: "agents.model.registry.model.catalog.load.issue",
+        outcome: "warning",
+        reason: "warning",
+      });
       // Plugin catalog failures can return salvaged models; root failures return empty.
     }
 

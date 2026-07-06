@@ -295,6 +295,12 @@ async function runProviderCatalogForList(params: {
     } catch (error) {
       log.warn(
         `provider runtime catalog failed for ${params.provider.id}: ${formatErrorMessage(error)}`,
+        undefined,
+        {
+          event: "models.list.provider.catalog.provider.runtime.catalog",
+          outcome: "warning",
+          reason: "failed",
+        },
       );
     }
   }
@@ -411,7 +417,15 @@ export async function loadProviderCatalogModelsForList(params: {
           staticOnly: params.staticOnly,
         });
       } catch (error) {
-        log.warn(`provider catalog failed for ${provider.id}: ${formatErrorMessage(error)}`);
+        log.warn(
+          `provider catalog failed for ${provider.id}: ${formatErrorMessage(error)}`,
+          undefined,
+          {
+            event: "models.list.provider_catalog",
+            outcome: "warning",
+            reason: "failed",
+          },
+        );
         result = null;
       }
       const normalized = normalizePluginDiscoveryResult({ provider, result });

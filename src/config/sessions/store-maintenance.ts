@@ -260,7 +260,15 @@ export function pruneStaleEntries(
     }
   }
   if (pruned > 0 && opts.log !== false) {
-    log.info("pruned stale session entries", { pruned, maxAgeMs });
+    log.info(
+      "pruned stale session entries",
+      { pruned, maxAgeMs },
+      {
+        event: "sessions.store.pruned.stale.session.entries",
+        outcome: "success",
+        reason: "completed",
+      },
+    );
   }
   return pruned;
 }
@@ -298,10 +306,18 @@ export function pruneStaleModelRunEntries(
     }
   }
   if (pruned > 0 && opts.log !== false) {
-    log.info("pruned stale gateway model-run session entries", {
-      pruned,
-      maxAgeMs: overrideMaxAgeMs,
-    });
+    log.info(
+      "pruned stale gateway model-run session entries",
+      {
+        pruned,
+        maxAgeMs: overrideMaxAgeMs,
+      },
+      {
+        event: "sessions.store.stale_model_runs.pruned",
+        outcome: "success",
+        reason: "completed",
+      },
+    );
   }
   return pruned;
 }
@@ -554,7 +570,15 @@ export function capEntryCount(
     delete store[key];
   }
   if (opts.log !== false) {
-    log.info("capped session entry count", { removed: toRemove.length, maxEntries });
+    log.info(
+      "capped session entry count",
+      { removed: toRemove.length, maxEntries },
+      {
+        event: "sessions.store.capped.session.entry.count",
+        outcome: "success",
+        reason: "completed",
+      },
+    );
   }
   return toRemove.length;
 }

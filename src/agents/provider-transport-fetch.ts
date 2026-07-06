@@ -879,6 +879,12 @@ export function buildGuardedModelFetch(
       log.warn(
         `[model-fetch] error provider=${model.provider} api=${model.api} model=${model.id} ` +
           `elapsedMs=${Date.now() - fetchStartedAt} ${summarizeError(error)}`,
+        undefined,
+        {
+          event: "provider.transport.guarded_fetch",
+          outcome: "warning",
+          reason: "failed",
+        },
       );
       localServiceLease?.release();
       throw error;

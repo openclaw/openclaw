@@ -319,6 +319,12 @@ async function compactCliTranscript(params: {
   } catch (error) {
     log.warn(
       `CLI transcript compaction failed for ${params.provider}/${params.model}: ${error instanceof Error ? error.message : String(error)}`,
+      undefined,
+      {
+        event: "agents.cli.compaction.cli.transcript.compaction",
+        outcome: "warning",
+        reason: "failed",
+      },
     );
     return {
       compacted: false,
@@ -331,11 +337,23 @@ async function compactCliTranscript(params: {
     if (isBelowCompactionTargetReason(reason)) {
       log.info(
         `CLI transcript compaction skipped for ${params.provider}/${params.model}: ${reason}`,
+        undefined,
+        {
+          event: "agents.cli.compaction.transcript",
+          outcome: "warning",
+          reason: "below_target",
+        },
       );
       return { compacted: false };
     }
     log.warn(
       `CLI transcript compaction did not reduce context for ${params.provider}/${params.model}: ${reason}`,
+      undefined,
+      {
+        event: "agents.cli.compaction.transcript",
+        outcome: "warning",
+        reason: "no_reduction",
+      },
     );
     return {
       compacted: false,
@@ -361,6 +379,12 @@ async function compactCliTranscript(params: {
     }
     log.warn(
       `CLI transcript compaction maintenance failed after fallback for ${params.provider}/${params.model}: ${error instanceof Error ? error.message : String(error)}`,
+      undefined,
+      {
+        event: "agents.cli.compaction.maintenance",
+        outcome: "warning",
+        reason: "failed",
+      },
     );
   }
   return { compacted: true };
@@ -457,6 +481,12 @@ async function compactNativeHarnessCliTranscript(params: {
   } catch (error) {
     log.warn(
       `CLI native harness compaction failed for ${params.provider}/${params.model}: ${error instanceof Error ? error.message : String(error)}`,
+      undefined,
+      {
+        event: "agents.cli.compaction.cli.native.harness.compaction",
+        outcome: "warning",
+        reason: "failed",
+      },
     );
     return {
       compacted: false,
@@ -469,6 +499,12 @@ async function compactNativeHarnessCliTranscript(params: {
     if (isBelowCompactionTargetReason(reason)) {
       log.info(
         `CLI native harness compaction skipped for ${params.provider}/${params.model}: ${reason}`,
+        undefined,
+        {
+          event: "agents.cli.compaction.native_harness",
+          outcome: "warning",
+          reason: "below_target",
+        },
       );
       return { compacted: false };
     }
@@ -486,6 +522,12 @@ async function compactNativeHarnessCliTranscript(params: {
     // session binding and falling back to the context engine for this turn.
     log.warn(
       `CLI native harness compaction did not reduce context for ${params.provider}/${params.model}: ${reason}`,
+      undefined,
+      {
+        event: "agents.cli.compaction.native",
+        outcome: "warning",
+        reason: "no_reduction",
+      },
     );
     return {
       compacted: false,
@@ -561,7 +603,15 @@ export async function runCliTurnCompactionLifecycle(params: {
     resolvedBackend?.ownsNativeCompaction &&
     !isNativeHarnessCompactionSession(params.sessionEntry, params.provider)
   ) {
-    log.info(`CLI backend "${params.provider}" owns native compaction — deferring to backend`);
+    log.info(
+      `CLI backend "${params.provider}" owns native compaction — deferring to backend`,
+      undefined,
+      {
+        event: "agents.cli.compaction.cli.native.compaction.deferred",
+        outcome: "success",
+        reason: "completed",
+      },
+    );
     return params.sessionEntry;
   }
 

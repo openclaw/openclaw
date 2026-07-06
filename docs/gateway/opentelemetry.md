@@ -147,7 +147,8 @@ diagnostic log still carries `eventName`, `otel.event.name`,
 `openclaw.signal.type=log.record`, `openclaw.log.event`,
 `openclaw.log.category`, `openclaw.log.outcome`, and `openclaw.log.reason` so
 logs remain queryable without message content. OpenClaw-owned log calls may set
-an explicit low-cardinality event such as `heartbeat.runner.started`; generic
+an explicit low-cardinality event such as `heartbeat.runner` with
+`openclaw.log.reason=started`; generic
 diagnostic logs fall back to safe category + code-owner + severity semantics and
 carry `openclaw.log.site_id` so repeated call sites can be grouped without
 exporting local file paths. Logs categorized from module, plugin/feature, name,

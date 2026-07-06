@@ -53,7 +53,15 @@ export function createCodexAppServerToolResultExtensionRunner(
           // Extensions are advisory; one failing handler must not discard the
           // current tool result or block later handlers.
           const detail = error instanceof Error ? error.message : String(error);
-          log.warn(`[codex] tool_result extension failed for ${event.toolName}: ${detail}`);
+          log.warn(
+            `[codex] tool_result extension failed for ${event.toolName}: ${detail}`,
+            undefined,
+            {
+              event: "agents.harness.codex.tool.result.extension",
+              outcome: "warning",
+              reason: "failed",
+            },
+          );
         }
       }
       return current;

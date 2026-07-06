@@ -4,6 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { attachDiagnosticLogSemantics } from "../../logging/diagnostic-log-internal.js";
 import { getLogger } from "../../logging/logger.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -795,6 +796,17 @@ export async function purgeAgentSessionStoreEntries(
       storePath,
     });
   } catch (err) {
-    getLogger().debug("session store purge skipped during agent delete", err);
+    getLogger().debug(
+      attachDiagnosticLogSemantics(
+        { error: String(err) },
+        {
+          event: "session.cleanup.purge",
+          category: "sessions.cleanup",
+          outcome: "warning",
+          reason: "purge_failed",
+        },
+      ),
+      "session store purge skipped during agent delete",
+    );
   }
 }

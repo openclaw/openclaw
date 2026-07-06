@@ -21,7 +21,16 @@ const sessionAccessorMocks = vi.hoisted(() => ({
   })),
 }));
 
+const loggerMocks = vi.hoisted(() => {
+  const logger = { debug: vi.fn() };
+  return {
+    getLogger: vi.fn(() => logger),
+    logger,
+  };
+});
+
 vi.mock("./session-accessor.js", () => sessionAccessorMocks);
+vi.mock("../../logging/logger.js", () => loggerMocks);
 
 describe("purgeAgentSessionStoreEntries", () => {
   beforeEach(() => {
@@ -48,5 +57,21 @@ describe("purgeAgentSessionStoreEntries", () => {
       storePath: "/tmp/openclaw-agent-purge-sessions.json",
     });
     expect(sessionAccessorMocks.applySessionEntryLifecycleMutation).not.toHaveBeenCalled();
+  });
+
+  it("keeps purge failure diagnostics as metadata plus a final message", async () => {
+    sessionAccessorMocks.purgeDeletedAgentSessionEntries.mockRejectedValueOnce(new Error("boom"));
+    const cfg = {
+      session: { store: "/tmp/openclaw-agent-purge-sessions.json" },
+      agents: { list: [{ id: "ops", workspace: "/workspace/ops" }] },
+    } satisfies OpenClawConfig;
+
+    await purgeAgentSessionStoreEntries(cfg, "ops");
+
+    expect(loggerMocks.logger.debug).toHaveBeenCalledOnce();
+    expect(loggerMocks.logger.debug).toHaveBeenCalledWith(
+      expect.objectContaining({ error: "Error: boom" }),
+      "session store purge skipped during agent delete",
+    );
   });
 });

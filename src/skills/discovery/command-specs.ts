@@ -26,24 +26,40 @@ function debugSkillCommandOnce(
   messageKey: string,
   message: string,
   meta?: Record<string, unknown>,
+  semantics: { event: string; reason: string } = {
+    event: "skills.command.diagnostic",
+    reason: "completed",
+  },
 ) {
   if (skillCommandDebugOnce.has(messageKey)) {
     return;
   }
   skillCommandDebugOnce.add(messageKey);
-  skillsLogger.debug(message, meta);
+  skillsLogger.debug(message, meta, {
+    event: semantics.event,
+    outcome: "warning",
+    reason: semantics.reason,
+  });
 }
 
 function traceSkillCommandOnce(
   messageKey: string,
   message: string,
   meta?: Record<string, unknown>,
+  semantics: { event: string; reason: string } = {
+    event: "skills.command.diagnostic",
+    reason: "completed",
+  },
 ) {
   if (skillCommandDebugOnce.has(messageKey)) {
     return;
   }
   skillCommandDebugOnce.add(messageKey);
-  skillsLogger.trace(message, meta);
+  skillsLogger.trace(message, meta, {
+    event: semantics.event,
+    outcome: "warning",
+    reason: semantics.reason,
+  });
 }
 
 function sanitizeSkillCommandName(raw: string): string {
@@ -117,6 +133,7 @@ export function buildWorkspaceSkillCommandSpecs(
         `sanitize:${rawName}:${base}`,
         `Sanitized skill command name "${rawName}" to "/${base}".`,
         { rawName, sanitized: `/${base}` },
+        { event: "skills.command.name.normalize", reason: "sanitized" },
       );
     }
     const unique = resolveUniqueSkillCommandName(base, used);
@@ -125,6 +142,7 @@ export function buildWorkspaceSkillCommandSpecs(
         `dedupe:${rawName}:${unique}`,
         `De-duplicated skill command name for "${rawName}" to "/${unique}".`,
         { rawName, deduped: `/${unique}` },
+        { event: "skills.command.name.normalize", reason: "deduplicated" },
       );
     }
     used.add(normalizeLowercaseStringOrEmpty(unique));
@@ -151,6 +169,7 @@ export function buildWorkspaceSkillCommandSpecs(
           `dispatch:missingTool:${rawName}`,
           `Skill command "/${unique}" requested tool dispatch but did not provide command-tool. Ignoring dispatch.`,
           { skillName: rawName, command: unique },
+          { event: "skills.command.dispatch.resolve", reason: "missing_tool" },
         );
         return undefined;
       }
@@ -164,6 +183,7 @@ export function buildWorkspaceSkillCommandSpecs(
           `dispatch:badArgMode:${rawName}:${argModeRaw}`,
           `Skill command "/${unique}" requested tool dispatch but has unknown command-arg-mode. Falling back to raw.`,
           { skillName: rawName, command: unique, argMode: argModeRaw },
+          { event: "skills.command.dispatch.resolve", reason: "invalid_arg_mode" },
         );
       }
 
@@ -190,6 +210,7 @@ export function buildWorkspaceSkillCommandSpecs(
         `bundle-sanitize:${entry.rawName}:${base}`,
         `Sanitized bundle command name "${entry.rawName}" to "/${base}".`,
         { rawName: entry.rawName, sanitized: `/${base}` },
+        { event: "skills.command.name.normalize", reason: "sanitized" },
       );
     }
     const unique = resolveUniqueSkillCommandName(base, used);
@@ -198,6 +219,7 @@ export function buildWorkspaceSkillCommandSpecs(
         `bundle-dedupe:${entry.rawName}:${unique}`,
         `De-duplicated bundle command name for "${entry.rawName}" to "/${unique}".`,
         { rawName: entry.rawName, deduped: `/${unique}` },
+        { event: "skills.command.name.normalize", reason: "deduplicated" },
       );
     }
     used.add(normalizeLowercaseStringOrEmpty(unique));

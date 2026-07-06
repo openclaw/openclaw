@@ -333,7 +333,7 @@ describe("runHeartbeatOnce commitments", () => {
       },
     );
 
-    expect(result.status).toBe("ran");
+    expect(result).toMatchObject({ status: "ran" });
     expect(sendTelegram).not.toHaveBeenCalled();
     expectCommitmentFields(store.commitments[0], {
       id: "cm_interview",
@@ -630,6 +630,89 @@ tasks:
           cfg,
           agentId: "main",
           sessionKey,
+          deps: {
+            getReplyFromConfig: replySpy,
+            telegram: sendTelegramLocal,
+            getQueueSize: () => 0,
+            nowMs: () => nowMs,
+          },
+        });
+
+        return {
+          result: resultLocal,
+          sendTelegram: sendTelegramLocal,
+          store: await loadCommitmentStore(),
+        };
+      },
+    );
+
+    expect(result.status).toBe("ran");
+    expect(sendTelegram).toHaveBeenCalled();
+    expect(store.commitments[0]).toMatchObject({
+      id: "cm_interview",
+      status: "sent",
+      attempts: 1,
+      sentAtMs: nowMs,
+    });
+  });
+
+  it("keeps HEARTBEAT.md directives on commitment-only external session prompts", async () => {
+    const { result, sendTelegram, store } = await withTempHeartbeatSandbox(
+      async ({ tmpDir, storePath, replySpy }) => {
+        setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
+        const sessionKey = "agent:main:telegram:user-155462274";
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              workspace: tmpDir,
+              heartbeat: {
+                every: "5m",
+                target: "last",
+              },
+            },
+          },
+          channels: { telegram: { allowFrom: ["*"] } },
+          session: { store: storePath },
+          commitments: { enabled: true },
+        };
+        await fs.writeFile(
+          path.join(tmpDir, "HEARTBEAT.md"),
+          `Keep follow-ups concise and kind.
+
+tasks:
+  - name: check-deployment
+    interval: 5m
+    prompt: Check deployment status
+`,
+          "utf-8",
+        );
+        await seedSessionStore(storePath, sessionKey, {
+          lastChannel: "telegram",
+          lastProvider: "telegram",
+          lastTo: "155462274",
+        });
+        await saveCommitmentStore(undefined, {
+          version: 1,
+          commitments: [buildCommitment({ id: "cm_interview", sessionKey, to: "155462274" })],
+        });
+
+        const sendTelegramLocal = vi.fn().mockResolvedValue({
+          messageId: "m1",
+          chatId: "155462274",
+        });
+        replySpy.mockImplementation(async (ctx: { Body?: string }) => {
+          expect(ctx.Body).toContain("Due inferred follow-up commitments");
+          expect(ctx.Body).toContain("How did the interview go?");
+          expect(ctx.Body).toContain("Keep follow-ups concise and kind.");
+          expect(ctx.Body).not.toContain("Check deployment status");
+          return { text: "How did the interview go?" };
+        });
+
+        const resultLocal = await runHeartbeatOnce({
+          cfg,
+          agentId: "main",
+          sessionKey,
+          runScope: "commitment-only",
           deps: {
             getReplyFromConfig: replySpy,
             telegram: sendTelegramLocal,

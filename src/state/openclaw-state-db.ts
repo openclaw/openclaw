@@ -83,7 +83,11 @@ function bestEffortChmodSync(target: string, mode: number): void {
     return;
   }
   chmodWarnedTargets.add(target);
-  stateDbLog.warn(`skipped permission hardening for ${target}: ${String(result.error)}`);
+  stateDbLog.warn(
+    `skipped permission hardening for ${target}: ${String(result.error)}`,
+    undefined,
+    { event: "state.db.permission.hardening", outcome: "warning", reason: "skipped" },
+  );
 }
 
 function ensureOpenClawStatePermissions(pathname: string, env: NodeJS.ProcessEnv): void {

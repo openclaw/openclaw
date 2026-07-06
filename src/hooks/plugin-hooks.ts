@@ -83,13 +83,21 @@ export function resolvePluginHookDirs(params: {
       }
       const candidate = path.resolve(record.rootDir, trimmed);
       if (!fs.existsSync(candidate)) {
-        log.warn(`plugin hook path not found (${record.id}): ${candidate}`);
+        log.warn(`plugin hook path not found (${record.id}): ${candidate}`, undefined, {
+          event: "hooks.plugin.hook.path.not.found",
+          outcome: "warning",
+          reason: "warning",
+        });
         continue;
       }
       // Manifest hook paths are plugin-owned code. Require realpath containment
       // so symlinks cannot register hook handlers outside the plugin root.
       if (!isPathInsideWithRealpath(record.rootDir, candidate, { requireRealpath: true })) {
-        log.warn(`plugin hook path escapes plugin root (${record.id}): ${candidate}`);
+        log.warn(`plugin hook path escapes plugin root (${record.id}): ${candidate}`, undefined, {
+          event: "hooks.plugin.hook.path.escapes.plugin.root",
+          outcome: "warning",
+          reason: "warning",
+        });
         continue;
       }
       if (seen.has(candidate)) {

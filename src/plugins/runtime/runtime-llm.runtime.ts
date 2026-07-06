@@ -8,9 +8,11 @@ import { normalizeUsage } from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Api, Message } from "../../llm/types.js";
 import { getChildLogger } from "../../logging.js";
+import { attachDiagnosticLogSemantics } from "../../logging/diagnostic-log-internal.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import { normalizePluginsConfig } from "../config-state.js";
+import type { PluginLogSemantics } from "../logging-types.js";
 import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
 import type {
   LlmCompleteCaller,
@@ -52,12 +54,33 @@ type RuntimeLlmOverridePolicy = {
 
 const defaultLogger = getChildLogger({ capability: "runtime.llm" });
 
+function runtimeLlmLogMeta(
+  meta: Record<string, unknown> | undefined,
+  semantics: PluginLogSemantics | undefined,
+  level: "debug" | "error" | "info" | "warn",
+): Record<string, unknown> {
+  const outcome = level === "warn" ? "warning" : level === "error" ? "failure" : "success";
+  return attachDiagnosticLogSemantics(
+    meta ? { ...meta } : {},
+    semantics ?? {
+      event: "plugins.runtime_llm.log",
+      category: "plugins.runtime_llm",
+      outcome,
+      reason: level,
+    },
+  );
+}
+
 function toRuntimeLogger(logger: typeof defaultLogger): RuntimeLogger {
   return {
-    debug: (message, meta) => logger.debug?.(meta, message),
-    info: (message, meta) => logger.info(meta, message),
-    warn: (message, meta) => logger.warn(meta, message),
-    error: (message, meta) => logger.error(meta, message),
+    debug: (message, meta, semantics) =>
+      logger.debug?.(runtimeLlmLogMeta(meta, semantics, "debug"), message),
+    info: (message, meta, semantics) =>
+      logger.info(runtimeLlmLogMeta(meta, semantics, "info"), message),
+    warn: (message, meta, semantics) =>
+      logger.warn(runtimeLlmLogMeta(meta, semantics, "warn"), message),
+    error: (message, meta, semantics) =>
+      logger.error(runtimeLlmLogMeta(meta, semantics, "error"), message),
   };
 }
 
@@ -363,11 +386,20 @@ export function createRuntimeLlm(options: CreateRuntimeLlmOptions = {}): PluginR
       const caller = resolveTrustedCaller(options.authority);
       if (options.authority?.allowComplete === false) {
         const reason = options.authority.denyReason ?? "capability denied";
-        logger.warn("plugin llm completion denied", {
-          caller,
-          purpose: params.purpose,
-          reason,
-        });
+        logger.warn(
+          "plugin llm completion denied",
+          {
+            caller,
+            purpose: params.purpose,
+            reason,
+          },
+          {
+            event: "plugins.llm.completion",
+            category: "plugins.llm",
+            outcome: "warning",
+            reason: "capability_denied",
+          },
+        );
         throw new Error(`Plugin LLM completion denied: ${reason}`);
       }
 
@@ -466,15 +498,24 @@ export function createRuntimeLlm(options: CreateRuntimeLlmOptions = {}): PluginR
         model: prepared.selection.modelId,
       });
 
-      logger.info("plugin llm completion", {
-        caller,
-        purpose: params.purpose,
-        sessionKey: options.authority?.sessionKey,
-        agentId,
-        provider: prepared.selection.provider,
-        model: prepared.selection.modelId,
-        usage,
-      });
+      logger.info(
+        "plugin llm completion",
+        {
+          caller,
+          purpose: params.purpose,
+          sessionKey: options.authority?.sessionKey,
+          agentId,
+          provider: prepared.selection.provider,
+          model: prepared.selection.modelId,
+          usage,
+        },
+        {
+          event: "plugins.llm.completion",
+          category: "plugins.llm",
+          outcome: "success",
+          reason: "completed",
+        },
+      );
 
       return {
         text,

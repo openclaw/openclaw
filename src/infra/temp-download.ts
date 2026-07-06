@@ -96,7 +96,15 @@ export async function createTempDownloadTarget(params: {
     try {
       await workspace.cleanup();
     } catch (err) {
-      logger.warn(`temp-path cleanup failed: ${String(err)}`, { error: err });
+      logger.warn(
+        `temp-path cleanup failed: ${String(err)}`,
+        { error: err },
+        {
+          event: "infra.temp.download.temp.path.cleanup",
+          outcome: "warning",
+          reason: "failed",
+        },
+      );
     }
   };
   return {

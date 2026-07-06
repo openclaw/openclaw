@@ -275,11 +275,19 @@ function normalizeMusicGenerationTimeoutMs(timeoutMs: number | undefined): {
     minimum: MIN_MUSIC_GENERATION_TIMEOUT_MS,
   };
   const message = `Timeout normalized: requested ${timeoutMs}ms; used ${MIN_MUSIC_GENERATION_TIMEOUT_MS}ms.`;
-  log.warn("music_generate timeoutMs is below provider minimum; using minimum", {
-    requestedTimeoutMs: timeoutMs,
-    appliedTimeoutMs: MIN_MUSIC_GENERATION_TIMEOUT_MS,
-    minimumTimeoutMs: MIN_MUSIC_GENERATION_TIMEOUT_MS,
-  });
+  log.warn(
+    "music_generate timeoutMs is below provider minimum; using minimum",
+    {
+      requestedTimeoutMs: timeoutMs,
+      appliedTimeoutMs: MIN_MUSIC_GENERATION_TIMEOUT_MS,
+      minimumTimeoutMs: MIN_MUSIC_GENERATION_TIMEOUT_MS,
+    },
+    {
+      event: "agents.tools.music.config",
+      outcome: "warning",
+      reason: "provider_minimum",
+    },
+  );
   return {
     timeoutMs: MIN_MUSIC_GENERATION_TIMEOUT_MS,
     normalization,
@@ -289,7 +297,12 @@ function normalizeMusicGenerationTimeoutMs(timeoutMs: number | undefined): {
 
 const defaultScheduleMusicGenerateBackgroundWork = createDefaultMediaGenerateBackgroundScheduler({
   toolName: "music_generate",
-  onCrash: (message, meta) => log.error(message, meta),
+  onCrash: (message, meta) =>
+    log.error(message, meta, {
+      event: "agents.tools.music.generate.background.scheduler",
+      outcome: "failure",
+      reason: "crash",
+    }),
 });
 
 async function loadReferenceImages(params: {
@@ -754,7 +767,12 @@ export function createMusicGenerateTool(options?: {
           progressSummary: "Generating music",
           config: effectiveCfg,
           toolName: "Music generation",
-          onWakeFailure: (message, meta) => log.warn(message, meta),
+          onWakeFailure: (message, meta) =>
+            log.warn(message, meta, {
+              event: "agents.tools.music.generate.background.wake",
+              outcome: "warning",
+              reason: "failed",
+            }),
           run: () =>
             executeMusicGenerationJob({
               effectiveCfg,
@@ -779,7 +797,12 @@ export function createMusicGenerateTool(options?: {
           message: "Music generation started; wait for the generated music completion event.",
           toolName: "music_generate",
           handle: taskHandle,
-          onFailure: (message, meta) => log.warn(message, meta),
+          onFailure: (message, meta) =>
+            log.warn(message, meta, {
+              event: "agents.tools.music.generate.async_notification",
+              outcome: "warning",
+              reason: "failed",
+            }),
         });
 
         return buildMediaGenerationStartedToolResult({

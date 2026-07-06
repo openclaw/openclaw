@@ -24,7 +24,11 @@ async function runCoreAgentEndSideEffects(params: AgentEndSideEffectsParams): Pr
     });
   } catch (error) {
     // Side effects are observational; failures must not change the completed run result.
-    log.warn(`skill research auto-capture failed: ${String(error)}`);
+    log.warn(`skill research auto-capture failed: ${String(error)}`, undefined, {
+      event: "agents.harness.skill.research.auto.capture",
+      outcome: "warning",
+      reason: "failed",
+    });
   }
 }
 

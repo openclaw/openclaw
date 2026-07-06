@@ -2,6 +2,7 @@
 export { isVerbose, isYes, setVerbose, setYes } from "./global-state.js";
 import { theme } from "../packages/terminal-core/src/theme.js";
 import { isVerbose } from "./global-state.js";
+import { attachDiagnosticLogSemantics } from "./logging/diagnostic-log-internal.js";
 import { getLogger, isFileLogLevelEnabled } from "./logging/logger.js";
 
 export function shouldLogVerbose() {
@@ -13,7 +14,18 @@ export function logVerbose(message: string) {
     return;
   }
   try {
-    getLogger().debug({ message }, "verbose");
+    getLogger().debug(
+      attachDiagnosticLogSemantics(
+        { message },
+        {
+          event: "cli.verbose",
+          category: "cli",
+          outcome: "success",
+          reason: "verbose",
+        },
+      ),
+      "verbose",
+    );
   } catch {
     // ignore logger failures to avoid breaking verbose printing
   }

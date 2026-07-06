@@ -17,6 +17,7 @@ import {
   listChangedPathsFromGit,
   listStagedChangedPaths,
   normalizeChangedPath,
+  PUBLIC_EXTENSION_CONTRACT_RE,
 } from "./changed-lanes.mjs";
 import { shrinkwrapPackageDirsForChangedPaths } from "./generate-npm-shrinkwrap.mjs";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
@@ -222,6 +223,10 @@ export function shouldRunTestTempCreationReport(paths) {
   return paths.some((changedPath) => isChangedLaneTestPath(changedPath));
 }
 
+export function shouldRunPluginSdkApiCheck(paths) {
+  return paths.some((changedPath) => PUBLIC_EXTENSION_CONTRACT_RE.test(changedPath));
+}
+
 export function createShrinkwrapGuardCommand(paths) {
   if (!shouldRunShrinkwrapGuard(paths)) {
     return null;
@@ -336,6 +341,9 @@ export function createChangedCheckPlan(result, options = {}) {
       ["test:serial", "test/appcast.test.ts", "test/scripts/make-appcast.test.ts"],
       baseEnv,
     );
+  }
+  if (shouldRunPluginSdkApiCheck(result.paths)) {
+    add("plugin SDK API baseline", ["plugin-sdk:api:check"], baseEnv);
   }
   add("package patch guard", ["deps:patches:check"]);
 

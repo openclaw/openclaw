@@ -60,6 +60,11 @@ export function warnPrivateMessageToolFinal(params: {
       channel: params.channel,
       chars: params.finalTextLength,
     },
+    {
+      event: "source.reply.private.final",
+      outcome: "warning",
+      reason: "delivery_tool_missing",
+    },
   );
 }
 

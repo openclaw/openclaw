@@ -259,7 +259,15 @@ function ensureFlowRegistryReady() {
   } catch (error) {
     flows.clear();
     restoreFailureMessage = formatErrorMessage(error);
-    log.warn("Failed to restore task-flow registry", { error });
+    log.warn(
+      "Failed to restore task-flow registry",
+      { error },
+      {
+        event: "tasks.flow.registry.restore",
+        outcome: "warning",
+        reason: "failed",
+      },
+    );
     return;
   }
   emitFlowRegistryObserverEvent(() => ({
@@ -291,7 +299,15 @@ function persistFlowRegistry(): boolean {
     });
     return true;
   } catch (error) {
-    log.warn("Failed to persist task-flow registry snapshot", { error });
+    log.warn(
+      "Failed to persist task-flow registry snapshot",
+      { error },
+      {
+        event: "tasks.flow.registry.snapshot.persist",
+        outcome: "warning",
+        reason: "failed",
+      },
+    );
     return false;
   }
 }
@@ -312,11 +328,19 @@ function tryPersistFlowUpsert(flow: TaskFlowRecord, operation: string): boolean 
     persistFlowUpsert(flow);
     return true;
   } catch (error) {
-    log.warn("Failed to persist task-flow registry upsert", {
-      operation,
-      flowId: flow.flowId,
-      error,
-    });
+    log.warn(
+      "Failed to persist task-flow registry upsert",
+      {
+        operation,
+        flowId: flow.flowId,
+        error,
+      },
+      {
+        event: "tasks.flow.registry.persist",
+        outcome: "warning",
+        reason: "upsert_failed",
+      },
+    );
     return false;
   }
 }
@@ -337,10 +361,18 @@ function tryPersistFlowDelete(flowId: string): boolean {
     persistFlowDelete(flowId);
     return true;
   } catch (error) {
-    log.warn("Failed to persist task-flow registry delete", {
-      flowId,
-      error,
-    });
+    log.warn(
+      "Failed to persist task-flow registry delete",
+      {
+        flowId,
+        error,
+      },
+      {
+        event: "tasks.flow.registry.persist",
+        outcome: "warning",
+        reason: "delete_failed",
+      },
+    );
     return false;
   }
 }

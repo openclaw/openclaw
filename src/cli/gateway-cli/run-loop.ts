@@ -149,7 +149,11 @@ export async function runGatewayLoop(params: {
       await loadGatewayLifecycleRuntimeModule();
     const result = writeDiagnosticStabilityBundleForFailureSync(reason, error);
     if ("message" in result) {
-      gatewayLog.warn(result.message);
+      gatewayLog.warn(result.message, undefined, {
+        event: "gateway.stability_bundle.write",
+        outcome: "warning",
+        reason: "bundle_written",
+      });
     }
   };
   const releaseLockIfHeld = async (): Promise<boolean> => {
@@ -166,7 +170,15 @@ export async function runGatewayLoop(params: {
       lock = await acquireGatewayLock({ port: params.lockPort });
       return true;
     } catch (err) {
-      gatewayLog.error(`failed to reacquire gateway lock for in-process restart: ${String(err)}`);
+      gatewayLog.error(
+        `failed to reacquire gateway lock for in-process restart: ${String(err)}`,
+        undefined,
+        {
+          event: "gateway.reacquire.gateway.lock.process.restart",
+          outcome: "failure",
+          reason: "failed",
+        },
+      );
       exitProcess(1);
       return false;
     }
@@ -196,12 +208,24 @@ export async function runGatewayLoop(params: {
         if (healthy) {
           gatewayLog.info(
             `restart mode: update process respawn (spawned pid ${respawn.pid ?? "unknown"})`,
+            undefined,
+            {
+              event: "gateway.restart.respawn",
+              outcome: "success",
+              reason: "completed",
+            },
           );
           exitProcess(0);
           return;
         }
         gatewayLog.warn(
           `update respawn child did not become healthy (${respawn.pid ?? "unknown"}); falling back to in-process restart`,
+          undefined,
+          {
+            event: "gateway.restart.respawn",
+            outcome: "warning",
+            reason: "unhealthy_child",
+          },
         );
         try {
           respawn.child?.kill();
@@ -209,7 +233,15 @@ export async function runGatewayLoop(params: {
           // Best-effort; parent fallback keeps the gateway reachable for recovery.
         }
         await markUpdateRestartSentinelFailure("restart-unhealthy").catch((err: unknown) => {
-          gatewayLog.warn(`failed to mark update restart sentinel unhealthy: ${String(err)}`);
+          gatewayLog.warn(
+            `failed to mark update restart sentinel unhealthy: ${String(err)}`,
+            undefined,
+            {
+              event: "gateway.mark.update.restart.sentinel.unhealthy",
+              outcome: "warning",
+              reason: "failed",
+            },
+          );
         });
         if (hadLock && !(await reacquireLockForInProcessRestart())) {
           return;
@@ -232,7 +264,11 @@ export async function runGatewayLoop(params: {
           supervisorMode: supervisorMode ?? "external",
           restartTrace: captureGatewayRestartTraceHandoff(),
         });
-        gatewayLog.info("restart mode: update process respawn (supervisor restart)");
+        gatewayLog.info("restart mode: update process respawn (supervisor restart)", undefined, {
+          event: "gateway.restart.supervisor_respawn.update",
+          outcome: "success",
+          reason: "completed",
+        });
         if (supervisorMode === "launchd") {
           await new Promise((resolve) => {
             setTimeout(resolve, LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS);
@@ -244,13 +280,33 @@ export async function runGatewayLoop(params: {
       if (respawn.mode === "failed") {
         gatewayLog.warn(
           `update respawn failed (${respawn.detail ?? "unknown error"}); falling back to in-process restart`,
+          undefined,
+          {
+            event: "gateway.restart.respawn",
+            outcome: "warning",
+            reason: "failed",
+          },
         );
         await markUpdateRestartSentinelFailure("restart-unhealthy").catch((err: unknown) => {
-          gatewayLog.warn(`failed to mark update restart sentinel unhealthy: ${String(err)}`);
+          gatewayLog.warn(
+            `failed to mark update restart sentinel unhealthy: ${String(err)}`,
+            undefined,
+            {
+              event: "gateway.mark.update.restart.sentinel.unhealthy",
+              outcome: "warning",
+              reason: "failed",
+            },
+          );
         });
       } else {
         gatewayLog.info(
           `restart mode: in-process restart (${respawn.detail ?? "OPENCLAW_NO_RESPAWN"})`,
+          undefined,
+          {
+            event: "gateway.restart.mode.process.restart",
+            outcome: "success",
+            reason: "completed",
+          },
         );
       }
       if (!(await reacquireLockForInProcessRestart())) {
@@ -290,7 +346,11 @@ export async function runGatewayLoop(params: {
           restartTrace: captureGatewayRestartTraceHandoff(),
         });
       }
-      gatewayLog.info(`restart mode: full process restart (${modeLabel})`);
+      gatewayLog.info(`restart mode: full process restart (${modeLabel})`, undefined, {
+        event: "gateway.restart.mode.full.process.restart",
+        outcome: "success",
+        reason: "completed",
+      });
       if (supervisorMode === "launchd") {
         // A short clean-exit pause keeps rapid SIGUSR1/config restarts from
         // tripping launchd crash-loop throttling before KeepAlive relaunches.
@@ -305,10 +365,18 @@ export async function runGatewayLoop(params: {
       await writeStabilityBundle("gateway.restart_respawn_failed");
       gatewayLog.warn(
         `full process restart failed (${respawn.detail ?? "unknown error"}); falling back to in-process restart`,
+        undefined,
+        {
+          event: "gateway.restart.respawn",
+          outcome: "warning",
+          reason: "failed",
+        },
       );
     } else {
       gatewayLog.info(
         `restart mode: in-process restart (${respawn.detail ?? "OPENCLAW_NO_RESPAWN"})`,
+        undefined,
+        { event: "gateway.restart.mode.process.restart", outcome: "success", reason: "completed" },
       );
     }
     if (!(await reacquireLockForInProcessRestart())) {
@@ -339,6 +407,12 @@ export async function runGatewayLoop(params: {
       pendingStartupForceExitTimer = null;
       gatewayLog.error(
         "startup restart request timed out before gateway returned a close handle; exiting for supervisor recovery",
+        undefined,
+        {
+          event: "gateway.startup.restart.request",
+          outcome: "failure",
+          reason: "timeout",
+        },
       );
       void (async () => {
         try {
@@ -393,7 +467,11 @@ export async function runGatewayLoop(params: {
         return;
       }
       forceExitTimer = setTimeout(() => {
-        gatewayLog.error("shutdown timed out; exiting without full cleanup");
+        gatewayLog.error("shutdown timed out; exiting without full cleanup", undefined, {
+          event: "gateway.shutdown.cleanup",
+          outcome: "failure",
+          reason: "timeout",
+        });
         void (async () => {
           try {
             await writeStabilityBundle(
@@ -502,6 +580,12 @@ export async function runGatewayLoop(params: {
                 } catch (err) {
                   gatewayLog.warn(
                     `failed to mark interrupted main sessions for restart recovery: ${String(err)}`,
+                    undefined,
+                    {
+                      event: "gateway.restart.recovery.mark",
+                      outcome: "warning",
+                      reason: "failed",
+                    },
                   );
                 }
               };
@@ -531,6 +615,12 @@ export async function runGatewayLoop(params: {
                 setInterval(() => {
                   gatewayLog.warn(
                     `still draining ${getActiveTaskCount()} active task(s) and ${getActiveEmbeddedRunCount()} active embedded run(s) before restart`,
+                    undefined,
+                    {
+                      event: "gateway.restart.drain",
+                      outcome: "warning",
+                      reason: "active_work_pending",
+                    },
                   );
                 }, RESTART_DRAIN_STILL_PENDING_WARN_MS);
 
@@ -555,14 +645,34 @@ export async function runGatewayLoop(params: {
                 const taskBlockers = formatTaskBlockers();
                 gatewayLog.info(
                   `draining ${activeTasks} active task(s) and ${activeRuns} active embedded run(s) before restart ${formatRestartDrainBudget()}`,
+                  undefined,
+                  {
+                    event: "gateway.restart.drain",
+                    outcome: "success",
+                    reason: "active_work_found",
+                  },
                 );
                 if (taskBlockers) {
                   gatewayLog.warn(
                     `restart blocked by active background task run(s): ${taskBlockers}`,
+                    undefined,
+                    {
+                      event: "gateway.restart.drain",
+                      outcome: "warning",
+                      reason: "active_task_run_blocked",
+                    },
                   );
                 }
                 if (restartIntent?.force) {
-                  gatewayLog.warn("forced restart requested; skipping active work drain");
+                  gatewayLog.warn(
+                    "forced restart requested; skipping active work drain",
+                    undefined,
+                    {
+                      event: "gateway.restart.drain",
+                      outcome: "warning",
+                      reason: "forced",
+                    },
+                  );
                   await markActiveMainSessionsForRestart(
                     restartIntent.reason ?? "forced gateway restart",
                   );
@@ -584,6 +694,12 @@ export async function runGatewayLoop(params: {
                     if (!runsDrain.drained && activeRuns > 0) {
                       gatewayLog.warn(
                         "active embedded run drain timeout reached; aborting active run(s) before restart",
+                        undefined,
+                        {
+                          event: "gateway.restart.drain",
+                          outcome: "warning",
+                          reason: "timeout",
+                        },
                       );
                       abortEmbeddedAgentRun(undefined, { mode: "all", reason: "restart" });
                       abortedAfterRunTimeout = true;
@@ -593,10 +709,18 @@ export async function runGatewayLoop(params: {
                     clearInterval(stillPendingDrainLogger);
                   }
                   if (tasksDrain.drained && runsDrain.drained) {
-                    gatewayLog.info("all active work drained");
+                    gatewayLog.info("all active work drained", undefined, {
+                      event: "gateway.restart.drain",
+                      outcome: "success",
+                      reason: "completed",
+                    });
                   } else {
                     drainTimedOut = true;
-                    gatewayLog.warn("drain timeout reached; proceeding with restart");
+                    gatewayLog.warn("drain timeout reached; proceeding with restart", undefined, {
+                      event: "gateway.restart.drain",
+                      outcome: "warning",
+                      reason: "timeout",
+                    });
                     await markActiveMainSessionsForRestart("gateway restart drain timeout");
                     // Final best-effort abort to avoid carrying active runs into the
                     // next lifecycle when drain time budget is exhausted.
@@ -624,7 +748,11 @@ export async function runGatewayLoop(params: {
           ...(closeDrainTimeoutMs !== null ? { drainTimeoutMs: closeDrainTimeoutMs } : {}),
         });
       } catch (err) {
-        gatewayLog.error(`shutdown error: ${String(err)}`);
+        gatewayLog.error(`shutdown error: ${String(err)}`, undefined, {
+          event: "gateway.shutdown",
+          outcome: "failure",
+          reason: "failed",
+        });
       } finally {
         clearForceExitTimer();
         server = null;
@@ -658,19 +786,39 @@ export async function runGatewayLoop(params: {
     const acceptedRequest = { action, signal, restartReason, restartIntent };
     if (shuttingDown) {
       if (action === "stop" && pendingStartupRequest && !server) {
-        gatewayLog.info(`received ${signal}; overriding pending startup restart with shutdown`);
+        gatewayLog.info(
+          `received ${signal}; overriding pending startup restart with shutdown`,
+          undefined,
+          {
+            event: "gateway.shutdown",
+            outcome: "success",
+            reason: "overrode_startup_restart",
+          },
+        );
         pendingStartupRequest = null;
         clearPendingStartupForceExitTimer();
         startupFailedWithoutServerHandle = false;
         runAcceptedRequest(acceptedRequest);
         return;
       }
-      gatewayLog.info(`received ${signal} during shutdown; ignoring`);
+      gatewayLog.info(`received ${signal} during shutdown; ignoring`, undefined, {
+        event: "gateway.shutdown.signal",
+        outcome: "warning",
+        reason: "shutdown_in_progress",
+      });
       return;
     }
     shuttingDown = true;
     const isRestart = action === "restart";
-    gatewayLog.info(`received ${signal}; ${isRestart ? "restarting" : "shutting down"}`);
+    gatewayLog.info(
+      `received ${signal}; ${isRestart ? "restarting" : "shutting down"}`,
+      undefined,
+      {
+        event: "gateway.shutdown.signal",
+        outcome: "success",
+        reason: isRestart ? "restart_requested" : "stop_requested",
+      },
+    );
     if (isRestart) {
       startGatewayRestartTrace("restart.signal.received", [
         ["signal", signal],
@@ -691,7 +839,15 @@ export async function runGatewayLoop(params: {
     if (!server || !restartResolver) {
       pendingStartupRequest = acceptedRequest;
       void markRestartDraining().catch((err: unknown) => {
-        gatewayLog.warn(`failed to mark gateway draining for startup restart: ${String(err)}`);
+        gatewayLog.warn(
+          `failed to mark gateway draining for startup restart: ${String(err)}`,
+          undefined,
+          {
+            event: "gateway.mark.gateway.draining.startup.restart",
+            outcome: "warning",
+            reason: "failed",
+          },
+        );
       });
       armPendingStartupForceExitTimer();
       return;
@@ -700,7 +856,11 @@ export async function runGatewayLoop(params: {
   };
 
   const onSigterm = () => {
-    gatewayLog.info("signal SIGTERM received");
+    gatewayLog.info("signal SIGTERM received", undefined, {
+      event: "gateway.signal.received",
+      outcome: "success",
+      reason: "sigterm",
+    });
     void (async () => {
       const { consumeGatewayRestartIntentPayloadSync } = await loadGatewayLifecycleRuntimeModule();
       const restartIntent = consumeGatewayRestartIntentPayloadSync();
@@ -711,16 +871,28 @@ export async function runGatewayLoop(params: {
         restartIntent ?? undefined,
       );
     })().catch((err: unknown) => {
-      gatewayLog.error(`failed to handle SIGTERM: ${String(err)}`);
+      gatewayLog.error(`failed to handle SIGTERM: ${String(err)}`, undefined, {
+        event: "gateway.handle.sigterm",
+        outcome: "failure",
+        reason: "failed",
+      });
       request("stop", "SIGTERM");
     });
   };
   const onSigint = () => {
-    gatewayLog.info("signal SIGINT received");
+    gatewayLog.info("signal SIGINT received", undefined, {
+      event: "gateway.signal.received",
+      outcome: "success",
+      reason: "sigint",
+    });
     request("stop", "SIGINT");
   };
   const onSigusr1 = () => {
-    gatewayLog.info("signal SIGUSR1 received");
+    gatewayLog.info("signal SIGUSR1 received", undefined, {
+      event: "gateway.signal.received",
+      outcome: "success",
+      reason: "sigusr1",
+    });
     void (async () => {
       const {
         consumeGatewayRestartIntentPayloadSync,
@@ -745,16 +917,28 @@ export async function runGatewayLoop(params: {
         if (!isGatewaySigusr1RestartExternallyAllowed()) {
           gatewayLog.warn(
             "SIGUSR1 restart ignored (not authorized; commands.restart=false or use gateway tool).",
+            undefined,
+            {
+              event: "gateway.restart.signal",
+              outcome: "warning",
+              reason: "unauthorized",
+            },
           );
           gatewayLog.warn(
             "An unauthorized SIGUSR1 restart signal was received and ignored. " +
               "If a pending gateway restart needs to be applied, run `openclaw gateway restart` " +
               "or restart the gateway through your service manager.",
+            undefined,
+            { event: "gateway.restart.signal", outcome: "warning", reason: "sigusr1" },
           );
           return;
         }
         if (shuttingDown) {
-          gatewayLog.info("received SIGUSR1 during shutdown; ignoring");
+          gatewayLog.info("received SIGUSR1 during shutdown; ignoring", undefined, {
+            event: "gateway.shutdown.signal",
+            outcome: "warning",
+            reason: "shutdown_in_progress",
+          });
           return;
         }
         // External SIGUSR1 requests should still reuse the in-process restart
@@ -778,7 +962,11 @@ export async function runGatewayLoop(params: {
       // token here, every subsequent scheduleGatewaySigusr1Restart() would
       // silently coalesce into the dead in-flight signal and the gateway
       // would never restart again until manually kickstarted.
-      gatewayLog.error(`SIGUSR1 handler failed: ${formatErrorMessage(err)}`);
+      gatewayLog.error(`SIGUSR1 handler failed: ${formatErrorMessage(err)}`, undefined, {
+        event: "gateway.sigusr1.handler",
+        outcome: "failure",
+        reason: "failed",
+      });
       try {
         eagerLifecycleRuntime.markGatewaySigusr1RestartHandled();
       } catch {
@@ -820,6 +1008,12 @@ export async function runGatewayLoop(params: {
       if (!cronTaskDrain.drained || !cronDrain.drained) {
         gatewayLog.warn(
           `cron run drain timed out during restart lifecycle reset after retiring old cron admission; ${cronTaskDrain.active} task handle(s) and ${cronDrain.active} active marker(s) remain after aborting old cron runs`,
+          undefined,
+          {
+            event: "gateway.cron.run.drain",
+            outcome: "warning",
+            reason: "timeout",
+          },
         );
       }
       retireActiveCronTaskRunTracking();
@@ -866,6 +1060,8 @@ export async function runGatewayLoop(params: {
         gatewayLog.error(
           `gateway startup failed: ${errMsg}. ` +
             `Process will stay alive; fix the issue and restart.${errStack}`,
+          undefined,
+          { event: "gateway.loop.startup", outcome: "failure", reason: "failed" },
         );
       }
       await new Promise<void>((resolve) => {

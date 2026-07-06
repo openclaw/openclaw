@@ -83,11 +83,19 @@ function loadBundleSettingsFile(params: {
   if (!result.ok && result.reason === "open") {
     // Settings files are plugin-owned input. Unsafe path/hardlink results should
     // skip the bundle rather than weaken the plugin root boundary.
-    log.warn(`skipping unsafe bundle settings file: ${absolutePath}`);
+    log.warn(`skipping unsafe bundle settings file: ${absolutePath}`, undefined, {
+      event: "embedded.agent.settings.bundle_settings.read",
+      outcome: "warning",
+      reason: "unsafe_path",
+    });
     return null;
   }
   if (!result.ok) {
-    log.warn(`${result.error}: ${absolutePath}`);
+    log.warn(`${result.error}: ${absolutePath}`, undefined, {
+      event: "embedded.agent.settings.bundle_settings.read",
+      outcome: "warning",
+      reason: "read_failed",
+    });
     return null;
   }
   return sanitizeAgentSettingsSnapshot(result.value as AgentSettingsSnapshot);
@@ -177,7 +185,11 @@ export function loadEnabledBundleAgentSettingsSnapshot(params: {
     manifestRegistry: metadataSnapshot.manifestRegistry,
   });
   for (const diagnostic of embeddedAgentMcp.diagnostics) {
-    log.warn(`bundle MCP skipped for ${diagnostic.pluginId}: ${diagnostic.message}`);
+    log.warn(`bundle MCP skipped for ${diagnostic.pluginId}: ${diagnostic.message}`, undefined, {
+      event: "embedded.agent.settings.bundle.mcp",
+      outcome: "warning",
+      reason: "skipped",
+    });
   }
   if (Object.keys(embeddedAgentMcp.mcpServers).length > 0) {
     snapshot = applyMergePatch(snapshot, {

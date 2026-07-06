@@ -967,7 +967,11 @@ async function saveSessionStoreUnlocked(
         }
         // Final attempt failed - skip this save. The writer queue ensures
         // the next save will retry with fresh data. Log for diagnostics.
-        log.warn(`atomic write failed after 5 attempts: ${storePath}`);
+        log.warn(`atomic write failed after 5 attempts: ${storePath}`, undefined, {
+          event: "sessions.store.atomic.write.attempts",
+          outcome: "warning",
+          reason: "failed",
+        });
       }
     }
     if (opts?.requireWriteSuccess) {

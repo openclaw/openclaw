@@ -110,6 +110,12 @@ async function removeScheduledSessionTurn(params: {
   } catch (error) {
     log.warn(
       `plugin session turn cleanup failed (${formatScheduleLogContext(params)}): ${formatErrorMessage(error)}`,
+      undefined,
+      {
+        event: "plugins.scheduled.turn.cleanup",
+        outcome: "warning",
+        reason: "failed",
+      },
     );
     return false;
   }
@@ -229,6 +235,12 @@ export async function schedulePluginSessionTurn(params: {
         sessionKey,
         ...(scheduleName ? { name: scheduleName } : {}),
       })}): unsupported deliveryMode`,
+      undefined,
+      {
+        event: "plugins.host.scheduled.deliverymode",
+        outcome: "warning",
+        reason: "failed",
+      },
     );
     return undefined;
   }
@@ -239,6 +251,12 @@ export async function schedulePluginSessionTurn(params: {
         sessionKey,
         ...(scheduleName ? { name: scheduleName } : {}),
       })}): deleteAfterRun requires a one-shot schedule`,
+      undefined,
+      {
+        event: "plugins.host.scheduled.deleteafterrun.requires",
+        outcome: "warning",
+        reason: "failed",
+      },
     );
     return undefined;
   }
@@ -250,6 +268,12 @@ export async function schedulePluginSessionTurn(params: {
         sessionKey,
         ...(scheduleName ? { name: scheduleName } : {}),
       })}): tag contains reserved delimiter ":"`,
+      undefined,
+      {
+        event: "plugins.scheduled.turn.tag",
+        outcome: "warning",
+        reason: "failed",
+      },
     );
     return undefined;
   }
@@ -264,6 +288,12 @@ export async function schedulePluginSessionTurn(params: {
         sessionKey,
         ...(scheduleName ? { name: scheduleName } : {}),
       })}): cron service unavailable`,
+      undefined,
+      {
+        event: "plugins.scheduled.turn.cron",
+        outcome: "warning",
+        reason: "failed",
+      },
     );
     return undefined;
   }
@@ -301,6 +331,12 @@ export async function schedulePluginSessionTurn(params: {
         sessionKey,
         name: cronJobName,
       })}): ${formatErrorMessage(error)}`,
+      undefined,
+      {
+        event: "plugins.host.scheduled.turns.session.turn.scheduling",
+        outcome: "warning",
+        reason: "failed",
+      },
     );
     return undefined;
   }
@@ -324,6 +360,12 @@ export async function schedulePluginSessionTurn(params: {
           name: cronJobName,
           jobId,
         })}): failed to remove stale scheduled session turn`,
+        undefined,
+        {
+          event: "plugins.host.scheduled.turns.turn.scheduling.rollback",
+          outcome: "warning",
+          reason: "failed",
+        },
       );
     }
     return undefined;
@@ -368,7 +410,11 @@ export async function unschedulePluginSessionTurnsByTag(params: {
     return { removed: 0, failed: 0 };
   }
   if (!params.cron) {
-    log.warn("plugin session turn untag-list failed: cron service unavailable");
+    log.warn("plugin session turn untag-list failed: cron service unavailable", undefined, {
+      event: "plugins.scheduled.turn.untag.list",
+      outcome: "warning",
+      reason: "failed",
+    });
     return { removed: 0, failed: 1 };
   }
   const cron = params.cron;
@@ -381,7 +427,11 @@ export async function unschedulePluginSessionTurnsByTag(params: {
   try {
     jobs = await listAllCronJobsForPluginTagCleanup(cron, namePrefix);
   } catch (error) {
-    log.warn(`plugin session turn untag-list failed: ${formatErrorMessage(error)}`);
+    log.warn(`plugin session turn untag-list failed: ${formatErrorMessage(error)}`, undefined, {
+      event: "plugins.host.scheduled.turns.session.turn.untag.list",
+      outcome: "warning",
+      reason: "failed",
+    });
     return { removed: 0, failed: 1 };
   }
   const candidates = jobs.filter((job) => {
@@ -409,6 +459,12 @@ export async function unschedulePluginSessionTurnsByTag(params: {
     } catch (error) {
       log.warn(
         `plugin session turn untag-remove failed: id=${id} error=${formatErrorMessage(error)}`,
+        undefined,
+        {
+          event: "plugins.scheduled.turn.untag.remove",
+          outcome: "warning",
+          reason: "failed",
+        },
       );
       failed += 1;
     }

@@ -3,14 +3,13 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/ag
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   resolveConfiguredChannelPluginIds,
   resolveDiscoverableScopedChannelPluginIds,
 } from "../../plugins/channel-plugin-ids.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
-import { createPluginLoaderLogger } from "../../plugins/logger.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
+import { createPluginRuntimeLoaderLogger } from "../../plugins/runtime/load-context.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import {
@@ -90,14 +89,13 @@ function loadChannelSetupPluginRegistry(params: {
       workspaceDir,
       env: process.env,
     });
-  const log = createSubsystemLogger("plugins");
   return loadOpenClawPlugins({
     config: resolvedConfig,
     activationSourceConfig: params.cfg,
     autoEnabledReasons: autoEnabled.autoEnabledReasons,
     workspaceDir,
     cache: false,
-    logger: createPluginLoaderLogger(log),
+    logger: createPluginRuntimeLoaderLogger(),
     onlyPluginIds,
     includeSetupOnlyChannelPlugins: true,
     forceSetupOnlyChannelPlugins: params.forceSetupOnlyChannelPlugins,

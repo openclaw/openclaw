@@ -23,8 +23,8 @@ const LIVE_DOCKER_TOOLING_PATH_RE =
 const LIVE_DOCKER_PACKAGE_SCRIPT_RE = /^test:docker:live-[\w:-]+$/u;
 const TEST_PATH_RE =
   /(?:^|\/)(?:test|__tests__)\/|(?:\.|\/)(?:test|spec|e2e|browser\.test)\.[cm]?[jt]sx?$/u;
-const PUBLIC_EXTENSION_CONTRACT_RE =
-  /^(?:src\/plugin-sdk\/|src\/plugins\/contracts\/|src\/channels\/plugins\/|scripts\/lib\/plugin-sdk-entrypoints\.json$|scripts\/sync-plugin-sdk-exports\.mjs$|scripts\/generate-plugin-sdk-api-baseline\.ts$)/u;
+export const PUBLIC_EXTENSION_CONTRACT_RE =
+  /^(?:src\/plugin-sdk\/|src\/plugins\/contracts\/|src\/plugins\/logging-types\.ts$|src\/plugins\/types\.ts$|src\/plugins\/runtime\/types(?:-core)?\.ts$|src\/channels\/plugins\/|docs\/\.generated\/plugin-sdk-api-baseline\.sha256$|scripts\/lib\/plugin-sdk-entrypoints\.json$|scripts\/sync-plugin-sdk-exports\.mjs$|scripts\/generate-plugin-sdk-api-baseline\.ts$)/u;
 /**
  * Files whose changes are treated as release metadata only.
  */
@@ -129,6 +129,17 @@ export function detectChangedLanes(changedPaths, options = {}) {
   }
 
   for (const changedPath of paths) {
+    if (PUBLIC_EXTENSION_CONTRACT_RE.test(changedPath)) {
+      hasNonDocs = true;
+      lanes.core = true;
+      lanes.coreTests = true;
+      lanes.extensions = true;
+      lanes.extensionTests = true;
+      extensionImpactFromCore = true;
+      reasons.push(`${changedPath}: public core/plugin contract affects extensions`);
+      continue;
+    }
+
     if (DOCS_PATH_RE.test(changedPath)) {
       lanes.docs = true;
       continue;
@@ -158,16 +169,6 @@ export function detectChangedLanes(changedPaths, options = {}) {
       lanes.all = true;
       extensionImpactFromCore = true;
       reasons.push(`${changedPath}: root config/package surface`);
-      continue;
-    }
-
-    if (PUBLIC_EXTENSION_CONTRACT_RE.test(changedPath)) {
-      lanes.core = true;
-      lanes.coreTests = true;
-      lanes.extensions = true;
-      lanes.extensionTests = true;
-      extensionImpactFromCore = true;
-      reasons.push(`${changedPath}: public core/plugin contract affects extensions`);
       continue;
     }
 

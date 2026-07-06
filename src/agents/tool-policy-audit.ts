@@ -203,9 +203,17 @@ export function auditToolPolicyFilter(params: {
       removedToolsTruncated: truncated,
     };
     if (params.logLevel === "debug") {
-      toolPolicyAuditLogger.debug(message, metadata);
+      toolPolicyAuditLogger.debug(message, metadata, {
+        event: "agents.tool.policy.filter",
+        outcome: "success",
+        reason: "completed",
+      });
     } else {
-      toolPolicyAuditLogger.info(message, metadata);
+      toolPolicyAuditLogger.info(message, metadata, {
+        event: "agents.tool.policy.filter",
+        outcome: "success",
+        reason: "completed",
+      });
     }
   }
 }
@@ -244,6 +252,11 @@ export function auditSandboxToolPolicyBlock(params: {
       configKey,
       ...(sanitizedMatchedRule ? { matchedRule: sanitizedMatchedRule } : {}),
       sandboxMode: params.mode,
+    },
+    {
+      event: "agents.tool.policy.sandbox.decision",
+      outcome: "warning",
+      reason: "blocked",
     },
   );
 }

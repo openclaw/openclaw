@@ -540,7 +540,11 @@ function loadSetupChannelPluginFromManifestRecord(params: {
     return { plugin: cloneChannelPluginForChannelId(registration.plugin, params.channelId) };
   } catch (error) {
     const detail = formatErrorMessage(error);
-    log.warn(`[channels] failed to load channel setup ${params.record.id}: ${detail}`);
+    log.warn(`[channels] failed to load channel setup ${params.record.id}: ${detail}`, undefined, {
+      event: "channels.load.channel.setup",
+      outcome: "warning",
+      reason: "failed",
+    });
     return {
       failure: {
         channelId: params.channelId,

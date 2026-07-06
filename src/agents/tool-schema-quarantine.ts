@@ -120,5 +120,11 @@ export function logRuntimeToolSchemaQuarantine(params: {
     .join("; ");
   log.warn(
     `[tools] quarantined ${params.diagnostics.length} unsupported tool schema${params.diagnostics.length === 1 ? "" : "s"} before model runtime projection: ${summary}. Run openclaw doctor for details.`,
+    undefined,
+    {
+      event: "agents.tools.quarantined.tool.schema.model",
+      outcome: "warning",
+      reason: "warning",
+    },
   );
 }

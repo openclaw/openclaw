@@ -200,7 +200,11 @@ export async function discoverOpenAICompatibleLocalModels(params: {
     try {
       if (!response.ok) {
         await cancelUnreadResponseBody(response);
-        log.warn(`Failed to discover ${params.label} models: ${response.status}`);
+        log.warn(`Failed to discover ${params.label} models: ${response.status}`, undefined, {
+          event: "plugins.self.hosted.provider.setup.discover.models",
+          outcome: "warning",
+          reason: "failed",
+        });
         return [];
       }
       const data = (await readSelfHostedDiscoveryJson(
@@ -209,7 +213,11 @@ export async function discoverOpenAICompatibleLocalModels(params: {
       )) as OpenAICompatModelsResponse;
       const models = data.data ?? [];
       if (models.length === 0) {
-        log.warn(`No ${params.label} models found on local instance`);
+        log.warn(`No ${params.label} models found on local instance`, undefined, {
+          event: "plugins.self_hosted.model.discovery",
+          outcome: "warning",
+          reason: "no_models",
+        });
         return [];
       }
 
@@ -266,7 +274,11 @@ export async function discoverOpenAICompatibleLocalModels(params: {
       await release();
     }
   } catch (error) {
-    log.warn(`Failed to discover ${params.label} models: ${String(error)}`);
+    log.warn(`Failed to discover ${params.label} models: ${String(error)}`, undefined, {
+      event: "plugins.self.hosted.provider.setup.discover.models",
+      outcome: "warning",
+      reason: "failed",
+    });
     return [];
   }
 }

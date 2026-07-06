@@ -81,6 +81,8 @@ export type {
   PluginSessionExtensionProjection,
   PluginToolMetadataRegistration,
   PluginTrustedToolPolicyRegistration,
+  PluginLogOutcome,
+  PluginLogSemantics,
   PluginLogger,
   ProviderAuthContext,
   ProviderAuthDoctorHintContext,

@@ -475,15 +475,23 @@ export function loadSessionStore(
     const afterCount = Object.keys(store).length;
     if (modelRunPruned > 0 || pruned > 0 || capped > 0) {
       serializedFromDisk = undefined;
-      log.info("applied load-time maintenance to session store", {
-        storePath,
-        before: beforeCount,
-        after: afterCount,
-        modelRunPruned,
-        pruned,
-        capped,
-        maxEntries: maintenance.maxEntries,
-      });
+      log.info(
+        "applied load-time maintenance to session store",
+        {
+          storePath,
+          before: beforeCount,
+          after: afterCount,
+          modelRunPruned,
+          pruned,
+          capped,
+          maxEntries: maintenance.maxEntries,
+        },
+        {
+          event: "sessions.store.maintenance",
+          outcome: "success",
+          reason: "completed",
+        },
+      );
     }
   }
 

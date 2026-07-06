@@ -8,6 +8,10 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { setConsoleSubsystemFilter, shouldLogSubsystemToConsole } from "./console.js";
+import {
+  attachDiagnosticLogSemantics,
+  hasDiagnosticLogSemantics,
+} from "./diagnostic-log-internal.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import { resetLogger, setLoggerOverride } from "./logger.js";
 import { loggingState } from "./state.js";
@@ -330,13 +334,20 @@ describe("createSubsystemLogger().isEnabled", () => {
     });
     const log = createSubsystemLogger("gateway/auth");
 
-    log.warn("auth refresh failed", {
-      logEvent: "auth.refresh",
-      logCategory: "gateway.auth",
-      logOutcome: "failure",
-      logReason: "token_expired",
-      provider: "openai",
-    });
+    log.warn(
+      "auth refresh failed",
+      attachDiagnosticLogSemantics(
+        {
+          provider: "openai",
+        },
+        {
+          event: "auth.refresh",
+          category: "gateway.auth",
+          outcome: "failure",
+          reason: "token_expired",
+        },
+      ),
+    );
     await flushDiagnosticEvents();
     unsubscribe();
 
@@ -358,6 +369,94 @@ describe("createSubsystemLogger().isEnabled", () => {
     for (const hidden of ["logEvent", "logCategory", "logOutcome", "logReason", "token_expired"]) {
       expect(consoleLine).not.toContain(hidden);
       expect(fileContent).not.toContain(hidden);
+    }
+  });
+
+  it("uses third-argument diagnostic semantics without changing console and file output", async () => {
+    const logPath = logPathTracker.nextPath();
+    setLoggerOverride({
+      level: "info",
+      consoleLevel: "warn",
+      consoleStyle: "json",
+      file: logPath,
+    });
+    const warn = installConsoleMethodSpy("warn");
+    const received: Array<Extract<DiagnosticEventPayload, { type: "log.record" }>> = [];
+    const unsubscribe = onInternalDiagnosticEvent((evt) => {
+      if (evt.type === "log.record") {
+        received.push(evt);
+      }
+    });
+    const log = createSubsystemLogger("gateway/auth");
+
+    log.warn(
+      "auth refresh failed",
+      { provider: "openai" },
+      {
+        event: "auth.refresh",
+        outcome: "failure",
+        reason: "token_expired",
+      },
+    );
+    await flushDiagnosticEvents();
+    unsubscribe();
+
+    expect(received).toHaveLength(1);
+    expect(received[0]).toMatchObject({
+      event: "auth.refresh",
+      category: "gateway.auth",
+      outcome: "failure",
+      reason: "token_expired",
+      attributes: {
+        subsystem: "gateway/auth",
+        provider: "openai",
+      },
+    });
+    const consoleLine = firstMockArgAsString(warn);
+    const fileContent = fs.readFileSync(logPath, "utf8");
+    expect(consoleLine).toContain("auth refresh failed");
+    expect(fileContent).toContain("auth refresh failed");
+    expect(consoleLine).not.toContain("token_expired");
+    expect(fileContent).not.toContain("token_expired");
+  });
+
+  it("preserves public logEvent-style metadata without using it as diagnostic semantics", async () => {
+    const logPath = logPathTracker.nextPath();
+    setLoggerOverride({
+      level: "info",
+      consoleLevel: "warn",
+      consoleStyle: "json",
+      file: logPath,
+    });
+    const warn = installConsoleMethodSpy("warn");
+    const received: Array<Extract<DiagnosticEventPayload, { type: "log.record" }>> = [];
+    const unsubscribe = onInternalDiagnosticEvent((evt) => {
+      if (evt.type === "log.record") {
+        received.push(evt);
+      }
+    });
+    const log = createSubsystemLogger("plugin/example");
+
+    const metadata = {
+      logEvent: "plugin.free_text",
+      logOutcome: "success",
+      logReason: "caller_value",
+      provider: "example",
+    };
+    expect(hasDiagnosticLogSemantics(metadata)).toBe(false);
+    log.warn("plugin metadata warning", metadata);
+    await flushDiagnosticEvents();
+    unsubscribe();
+
+    expect(received).toHaveLength(1);
+    expect(received[0]?.event).not.toBe("plugin.free_text");
+    expect(received[0]?.outcome).toBe("warning");
+    expect(received[0]?.reason).toBe("warning");
+    const consoleLine = firstMockArgAsString(warn);
+    const fileContent = fs.readFileSync(logPath, "utf8");
+    for (const visible of ["logEvent", "plugin.free_text", "logOutcome", "caller_value"]) {
+      expect(consoleLine).toContain(visible);
+      expect(fileContent).toContain(visible);
     }
   });
 
@@ -383,11 +482,42 @@ describe("createSubsystemLogger().isEnabled", () => {
     expect(received[1]?.code?.functionName).toBe("emitSecondSubsystemSourceLog");
     expect(received[0]?.code?.functionName).not.toBe("logToFile");
     expect(received[1]?.code?.functionName).not.toBe("logToFile");
-    expect(received[0]?.event).toBe("gateway.heartbeat.emitfirstsubsystemsourcelog.warn");
-    expect(received[1]?.event).toBe("gateway.heartbeat.emitsecondsubsystemsourcelog.warn");
+    expect(received[0]?.event).toBe("gateway.heartbeat.warn");
+    expect(received[1]?.event).toBe("gateway.heartbeat.warn");
     expect(received[0]?.code?.siteId).toMatch(/^[0-9a-f]{16}$/u);
     expect(received[1]?.code?.siteId).toMatch(/^[0-9a-f]{16}$/u);
     expect(received[0]?.code?.siteId).not.toBe(received[1]?.code?.siteId);
+  });
+
+  it("keeps file logging working when Error stacks are structured", async () => {
+    const logPath = logPathTracker.nextPath();
+    setLoggerOverride({ level: "info", consoleLevel: "silent", file: logPath });
+    const originalPrepareStackTrace: typeof Error.prepareStackTrace = Reflect.get(
+      Error,
+      "prepareStackTrace",
+    );
+    const received: Array<Extract<DiagnosticEventPayload, { type: "log.record" }>> = [];
+    const unsubscribe = onInternalDiagnosticEvent((evt) => {
+      if (evt.type === "log.record") {
+        received.push(evt);
+      }
+    });
+
+    try {
+      Error.prepareStackTrace = () => [];
+      const log = createSubsystemLogger("gateway/heartbeat");
+
+      expect(() => log.info("structured stack subsystem log")).not.toThrow();
+      await flushDiagnosticEvents();
+    } finally {
+      Error.prepareStackTrace = originalPrepareStackTrace;
+      unsubscribe();
+    }
+
+    expect(received).toHaveLength(1);
+    expect(received[0]?.category).toBe("gateway.heartbeat");
+    expect(received[0]?.code?.functionName).not.toBe("logToFile");
+    expect(fs.readFileSync(logPath, "utf8")).toContain("structured stack subsystem log");
   });
 
   it("does not change plain subsystem file output while adding diagnostic source identity", async () => {

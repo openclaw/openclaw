@@ -1,5 +1,6 @@
 // Level filter tests cover logger filtering by configured log level.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { readAttachedDiagnosticLogSemantics } from "./diagnostic-log-internal.js";
 
 const { readLoggingConfigMock, shouldSkipMutatingLoggingConfigReadMock } = vi.hoisted(() => ({
   readLoggingConfigMock: vi.fn(() => undefined),
@@ -139,5 +140,26 @@ describe("getChildLogger minLevel inheritance", () => {
 
     expect(getSubLoggerSpy).toHaveBeenCalledOnce();
     expect(firstMockArg(getSubLoggerSpy).minLevel).toBe(logging.levelToMinLevel("error"));
+  });
+
+  it("pino forwarding preserves Error arguments while adding diagnostic semantics", () => {
+    logging.setLoggerOverride({ level: "info" });
+    const base = logging.getLogger();
+    const errorSpy = vi.spyOn(base, "error").mockImplementation(() => undefined);
+    const error = new Error("baileys failed");
+
+    logging.toPinoLikeLogger(base, "info").error(error);
+
+    expect(errorSpy).toHaveBeenCalledOnce();
+    const [meta, forwardedError] = errorSpy.mock.calls[0] ?? [];
+    expect(readAttachedDiagnosticLogSemantics(meta as Record<string, unknown> | undefined)).toEqual(
+      {
+        event: "pino.forwarded",
+        category: "pino",
+        outcome: "failure",
+        reason: "error",
+      },
+    );
+    expect(forwardedError).toBe(error);
   });
 });

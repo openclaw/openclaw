@@ -372,7 +372,15 @@ function findGatewayPidsOnPortWithProtectedPidSync(
         : res.error instanceof Error
           ? res.error.message
           : "unknown error";
-    restartLog.warn(`lsof failed during initial stale-pid scan for port ${port}: ${detail}`);
+    restartLog.warn(
+      `lsof failed during initial stale-pid scan for port ${port}: ${detail}`,
+      undefined,
+      {
+        event: "restart.lsof.initial.stale.pid.scan",
+        outcome: "warning",
+        reason: "failed",
+      },
+    );
     return [];
   }
   if (res.status === 1) {
@@ -381,6 +389,12 @@ function findGatewayPidsOnPortWithProtectedPidSync(
   if (res.status !== 0) {
     restartLog.warn(
       `lsof exited with status ${res.status} during initial stale-pid scan for port ${port}; skipping stale pid check`,
+      undefined,
+      {
+        event: "restart.lsof.exited.status.initial.stale.pid",
+        outcome: "warning",
+        reason: "skipped",
+      },
     );
     return [];
   }
@@ -602,7 +616,15 @@ function waitForPortFreeSync(port: number): void {
     // result.free === null && !permanent: transient lsof error — keep polling.
     sleepSync(PORT_FREE_POLL_INTERVAL_MS);
   }
-  restartLog.warn(`port ${port} still in use after ${PORT_FREE_TIMEOUT_MS}ms; proceeding anyway`);
+  restartLog.warn(
+    `port ${port} still in use after ${PORT_FREE_TIMEOUT_MS}ms; proceeding anyway`,
+    undefined,
+    {
+      event: "restart.port.still.anyway",
+      outcome: "warning",
+      reason: "warning",
+    },
+  );
 }
 
 /**
@@ -643,6 +665,12 @@ export function cleanStaleGatewayProcessesSync(
     }
     restartLog.warn(
       `killing ${stalePids.length} stale gateway process(es) before restart: ${stalePids.join(", ")}`,
+      undefined,
+      {
+        event: "restart.killing.stale.gateway.process.es.restart",
+        outcome: "warning",
+        reason: "warning",
+      },
     );
     const killed = terminateStaleProcessesSync(stalePids);
     // Wait for the port to be released before returning — called unconditionally

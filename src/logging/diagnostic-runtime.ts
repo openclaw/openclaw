@@ -32,7 +32,11 @@ export function logLaneEnqueue(lane: string, queueSize: number): void {
   if (!areDiagnosticsEnabledForProcess()) {
     return;
   }
-  diag.debug(`lane enqueue: lane=${lane} queueSize=${queueSize}`);
+  diag.debug(`lane enqueue: lane=${lane} queueSize=${queueSize}`, undefined, {
+    event: "diagnostic.lane.enqueue",
+    outcome: "success",
+    reason: "completed",
+  });
   emitDiagnosticEvent({
     type: "queue.lane.enqueue",
     lane,
@@ -46,7 +50,11 @@ export function logLaneDequeue(lane: string, waitMs: number, queueSize: number):
   if (!areDiagnosticsEnabledForProcess()) {
     return;
   }
-  diag.debug(`lane dequeue: lane=${lane} waitMs=${waitMs} queueSize=${queueSize}`);
+  diag.debug(`lane dequeue: lane=${lane} waitMs=${waitMs} queueSize=${queueSize}`, undefined, {
+    event: "diagnostic.lane.dequeue",
+    outcome: "success",
+    reason: "completed",
+  });
   emitDiagnosticEvent({
     type: "queue.lane.dequeue",
     lane,

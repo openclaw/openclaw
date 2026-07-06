@@ -682,7 +682,12 @@ type ExecutedImageGeneration = {
 
 const defaultScheduleImageGenerateBackgroundWork = createDefaultMediaGenerateBackgroundScheduler({
   toolName: "image_generate",
-  onCrash: (message, meta) => log.error(message, meta),
+  onCrash: (message, meta) =>
+    log.error(message, meta, {
+      event: "agents.tools.image.generate.background.scheduler",
+      outcome: "failure",
+      reason: "crash",
+    }),
 });
 
 async function executeImageGenerationJob(params: {
@@ -1053,7 +1058,12 @@ export function createImageGenerateTool(options?: {
           progressSummary: "Generating image",
           config: effectiveCfg,
           toolName: "Image generation",
-          onWakeFailure: (message, meta) => log.warn(message, meta),
+          onWakeFailure: (message, meta) =>
+            log.warn(message, meta, {
+              event: "agents.tools.image.generate.background.wake",
+              outcome: "warning",
+              reason: "failed",
+            }),
           run: () =>
             executeImageGenerationJob({
               effectiveCfg,
@@ -1083,7 +1093,12 @@ export function createImageGenerateTool(options?: {
           message: "Image generation started; wait for the generated image completion event.",
           toolName: "image_generate",
           handle: taskHandle,
-          onFailure: (message, meta) => log.warn(message, meta),
+          onFailure: (message, meta) =>
+            log.warn(message, meta, {
+              event: "agents.tools.image.generate.async_notification",
+              outcome: "warning",
+              reason: "failed",
+            }),
         });
 
         return buildMediaGenerationStartedToolResult({

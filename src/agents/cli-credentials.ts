@@ -317,10 +317,18 @@ function readCodexKeychainCredentials(options?: {
     const accountId = typeof tokens?.account_id === "string" ? tokens.account_id : undefined;
     const idToken = typeof tokens?.id_token === "string" ? tokens.id_token : undefined;
 
-    log.info("read codex credentials from keychain", {
-      source: "keychain",
-      expires: timestampMsToIsoString(expires),
-    });
+    log.info(
+      "read codex credentials from keychain",
+      {
+        source: "keychain",
+        expires: timestampMsToIsoString(expires),
+      },
+      {
+        event: "agents.auth.profiles.read.codex.credentials.keychain",
+        outcome: "success",
+        reason: "completed",
+      },
+    );
 
     return {
       type: "oauth",
@@ -443,9 +451,17 @@ export function readClaudeCliCredentials(options?: {
   if (platform === "darwin" && options?.allowKeychainPrompt !== false) {
     const keychainCreds = readClaudeCliKeychainCredentials(options?.execSync);
     if (keychainCreds) {
-      log.info("read anthropic credentials from claude cli keychain", {
-        type: keychainCreds.type,
-      });
+      log.info(
+        "read anthropic credentials from claude cli keychain",
+        {
+          type: keychainCreds.type,
+        },
+        {
+          event: "agents.auth.profiles.claude.cli.keychain",
+          outcome: "success",
+          reason: "completed",
+        },
+      );
       return keychainCreds;
     }
   }

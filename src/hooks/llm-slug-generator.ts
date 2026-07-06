@@ -140,7 +140,11 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
     return null;
   } catch (err) {
     const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
-    log.error(`Failed to generate slug: ${message}`);
+    log.error(`Failed to generate slug: ${message}`, undefined, {
+      event: "llm.slug.generator.generate.slug",
+      outcome: "failure",
+      reason: "failed",
+    });
     return null;
   } finally {
     // Clean up temporary session file

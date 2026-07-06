@@ -127,7 +127,16 @@ export function installQaParentWatchdog(
       kill(parentPid, 0);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ESRCH") {
-        logger.warn(`QA gateway parent pid ${parentPid} exited; shutting down orphaned QA gateway`);
+        logger.warn(
+          `QA gateway parent pid ${parentPid} exited; shutting down orphaned QA gateway`,
+          undefined,
+          {
+            event: "gateway.qa_parent.exited",
+            category: "gateway.qa_parent_watchdog",
+            outcome: "warning",
+            reason: "parent_exited",
+          },
+        );
         exiting = true;
         stop();
         void (async () => {
@@ -144,6 +153,13 @@ export function installQaParentWatchdog(
                 `QA gateway parent pid ${parentPid} exited; failed to leave runtime root ${activeCwdRoot}: ${
                   chdirError instanceof Error ? chdirError.message : String(chdirError)
                 }`,
+                undefined,
+                {
+                  event: "gateway.qa_parent.cleanup",
+                  category: "gateway.qa_parent_watchdog",
+                  outcome: "warning",
+                  reason: "chdir_failed",
+                },
               );
             }
           }
@@ -153,6 +169,13 @@ export function installQaParentWatchdog(
                 `QA gateway parent pid ${parentPid} exited; failed to clean runtime root ${cleanupRoot}: ${
                   cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
                 }`,
+                undefined,
+                {
+                  event: "gateway.qa_parent.cleanup",
+                  category: "gateway.qa_parent_watchdog",
+                  outcome: "warning",
+                  reason: "rm_failed",
+                },
               );
             });
           }

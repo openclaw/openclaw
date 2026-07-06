@@ -2,11 +2,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveContextEngineCapabilities } from "../../agents/embedded-agent-runner/context-engine-capabilities.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readAttachedDiagnosticLogSemantics } from "../../logging/diagnostic-log-internal.js";
 import { withPluginRuntimePluginIdScope } from "./gateway-request-scope.js";
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
 import type { RuntimeLogger } from "./types-core.js";
 
 const hoisted = vi.hoisted(() => ({
+  childLogger: {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  },
   prepareSimpleCompletionModelForAgent: vi.fn(),
   completeWithPreparedSimpleCompletionModel: vi.fn(),
   resolveSimpleCompletionSelectionForAgent: vi.fn(),
@@ -16,6 +23,10 @@ vi.mock("../../agents/simple-completion-runtime.js", () => ({
   prepareSimpleCompletionModelForAgent: hoisted.prepareSimpleCompletionModelForAgent,
   completeWithPreparedSimpleCompletionModel: hoisted.completeWithPreparedSimpleCompletionModel,
   resolveSimpleCompletionSelectionForAgent: hoisted.resolveSimpleCompletionSelectionForAgent,
+}));
+
+vi.mock("../../logging.js", () => ({
+  getChildLogger: vi.fn(() => hoisted.childLogger),
 }));
 
 const cfg = {
@@ -145,6 +156,10 @@ describe("runtime.llm.complete", () => {
     hoisted.prepareSimpleCompletionModelForAgent.mockReset();
     hoisted.completeWithPreparedSimpleCompletionModel.mockReset();
     hoisted.resolveSimpleCompletionSelectionForAgent.mockReset();
+    hoisted.childLogger.debug.mockReset();
+    hoisted.childLogger.info.mockReset();
+    hoisted.childLogger.warn.mockReset();
+    hoisted.childLogger.error.mockReset();
     primeCompletionMocks();
   });
 
@@ -613,6 +628,30 @@ describe("runtime.llm.complete", () => {
       },
     );
     expectFields(requireRecord(logPayload.usage, "log usage"), { costUsd: 0.0042 });
+  });
+
+  it("uses stable diagnostic semantics for default runtime LLM completion logs", async () => {
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: {
+        caller: { kind: "host", id: "runtime-test" },
+        allowComplete: true,
+      },
+    });
+
+    await llm.complete({
+      messages: [{ role: "user", content: "Ping" }],
+    });
+
+    expect(hoisted.childLogger.info).toHaveBeenCalledTimes(1);
+    const [meta, message] = hoisted.childLogger.info.mock.calls[0] ?? [];
+    expect(message).toBe("plugin llm completion");
+    expect(readAttachedDiagnosticLogSemantics(requireRecord(meta, "log meta"))).toEqual({
+      event: "plugins.llm.completion",
+      category: "plugins.llm",
+      outcome: "success",
+      reason: "completed",
+    });
   });
 
   it("uses scoped plugin identity and ignores caller-shaped spoofing input", async () => {

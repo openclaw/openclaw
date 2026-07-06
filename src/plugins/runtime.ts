@@ -111,7 +111,11 @@ function cleanupRetiredPluginHostRegistry(previousRegistry: PluginRegistry): voi
   void cleanupPreviousPluginHostRegistry({
     previousRegistry,
   }).catch((error: unknown) => {
-    log.warn(`plugin host registry cleanup failed: ${String(error)}`);
+    log.warn(`plugin host registry cleanup failed: ${String(error)}`, undefined, {
+      event: "plugins.runtime.plugin.host.registry.cleanup",
+      outcome: "warning",
+      reason: "failed",
+    });
   });
 }
 

@@ -88,7 +88,11 @@ function scheduleDrainSoon(debounceMs: number): void {
   timer = setTimer(() => {
     timer = null;
     void drainCommitmentExtractionQueue().catch((err: unknown) => {
-      log.warn("commitment extraction failed", { error: String(err) });
+      log.warn(
+        "commitment extraction failed",
+        { error: String(err) },
+        { event: "commitments.commitment.extraction", outcome: "warning", reason: "failed" },
+      );
     });
   }, debounceMs);
 }
@@ -141,10 +145,18 @@ export function enqueueCommitmentExtraction(input: CommitmentExtractionEnqueueIn
   }
   if (queue.length >= resolved.extraction.queueMaxItems) {
     if (!queueOverflowWarned) {
-      log.warn("commitment extraction queue full; dropping hidden extraction request", {
-        queued: queue.length,
-        max: resolved.extraction.queueMaxItems,
-      });
+      log.warn(
+        "commitment extraction queue full; dropping hidden extraction request",
+        {
+          queued: queue.length,
+          max: resolved.extraction.queueMaxItems,
+        },
+        {
+          event: "commitments.extraction.queue",
+          outcome: "warning",
+          reason: "full",
+        },
+      );
       queueOverflowWarned = true;
     }
     // The queue can be full because a non-terminal failure restored its batch
@@ -205,11 +217,19 @@ function openTerminalFailureCooldown(
   // Terminal auth/model failures will keep failing for queued turns from the
   // same agent. Drop them and cool down to avoid noisy background retries.
   queue = queue.filter((item) => item.agentId !== agentId);
-  log.warn("commitment extraction disabled temporarily after terminal model/auth failure", {
-    agentId,
-    cooldownMs: TERMINAL_EXTRACTION_FAILURE_COOLDOWN_MS,
-    error: String(error),
-  });
+  log.warn(
+    "commitment extraction disabled temporarily after terminal model/auth failure",
+    {
+      agentId,
+      cooldownMs: TERMINAL_EXTRACTION_FAILURE_COOLDOWN_MS,
+      error: String(error),
+    },
+    {
+      event: "commitments.extraction.cooldown",
+      outcome: "warning",
+      reason: "terminal_failure",
+    },
+  );
 }
 
 function resolveExtractionSessionFile(agentId: string, runId: string): string {

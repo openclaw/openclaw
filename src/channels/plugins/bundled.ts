@@ -338,6 +338,12 @@ function loadGeneratedBundledChannelEntry(params: {
     if (!entry) {
       log.warn(
         `[channels] bundled channel entry ${params.metadata.manifest.id} missing bundled-channel-entry contract; skipping`,
+        undefined,
+        {
+          event: "channels.bundled.entry",
+          outcome: "warning",
+          reason: "missing",
+        },
       );
       return null;
     }
@@ -347,7 +353,15 @@ function loadGeneratedBundledChannelEntry(params: {
     };
   } catch (error) {
     const detail = describeBundledChannelLoadError(error, params.metadata.manifest.id);
-    log.warn(`[channels] failed to load bundled channel ${params.metadata.manifest.id}: ${detail}`);
+    log.warn(
+      `[channels] failed to load bundled channel ${params.metadata.manifest.id}: ${detail}`,
+      undefined,
+      {
+        event: "channels.load.bundled.channel",
+        outcome: "warning",
+        reason: "failed",
+      },
+    );
     return null;
   }
 }
@@ -370,6 +384,12 @@ function loadGeneratedBundledChannelSetupEntry(params: {
     if (!setupEntry) {
       log.warn(
         `[channels] bundled channel setup entry ${params.metadata.manifest.id} missing bundled-channel-setup-entry contract; skipping`,
+        undefined,
+        {
+          event: "channels.bundled.channel.setup.entry.bundled",
+          outcome: "warning",
+          reason: "missing",
+        },
       );
       return null;
     }
@@ -378,6 +398,12 @@ function loadGeneratedBundledChannelSetupEntry(params: {
     const detail = describeBundledChannelLoadError(error, params.metadata.manifest.id);
     log.warn(
       `[channels] failed to load bundled channel setup entry ${params.metadata.manifest.id}: ${detail}`,
+      undefined,
+      {
+        event: "channels.load.bundled.channel.setup.entry",
+        outcome: "warning",
+        reason: "failed",
+      },
     );
     return null;
   }
@@ -678,7 +704,11 @@ function getBundledChannelPluginForRoot(
     return normalizedPlugin;
   } catch (error) {
     const detail = describeBundledChannelLoadError(error, id);
-    log.warn(`[channels] failed to load bundled channel ${id}: ${detail}`);
+    log.warn(`[channels] failed to load bundled channel ${id}: ${detail}`, undefined, {
+      event: "channels.load.bundled.channel",
+      outcome: "warning",
+      reason: "failed",
+    });
     loadContext.lazyPluginsById.set(id, null);
     return undefined;
   } finally {
@@ -706,7 +736,11 @@ function getBundledChannelSecretsForRoot(
     return secrets;
   } catch (error) {
     const detail = describeBundledChannelLoadError(error, id);
-    log.warn(`[channels] failed to load bundled channel secrets ${id}: ${detail}`);
+    log.warn(`[channels] failed to load bundled channel secrets ${id}: ${detail}`, undefined, {
+      event: "channels.load.bundled.channel.secrets",
+      outcome: "warning",
+      reason: "failed",
+    });
     loadContext.lazySecretsById.set(id, null);
     return undefined;
   }
@@ -731,7 +765,15 @@ function getBundledChannelAccountInspectorForRoot(
     return inspector;
   } catch (error) {
     const detail = describeBundledChannelLoadError(error, id);
-    log.warn(`[channels] failed to load bundled channel account inspector ${id}: ${detail}`);
+    log.warn(
+      `[channels] failed to load bundled channel account inspector ${id}: ${detail}`,
+      undefined,
+      {
+        event: "channels.load.bundled.channel.account.inspector",
+        outcome: "warning",
+        reason: "failed",
+      },
+    );
     loadContext.lazyAccountInspectorsById.set(id, null);
     return undefined;
   }
@@ -759,7 +801,11 @@ function getBundledChannelSetupPluginForRoot(
     return plugin;
   } catch (error) {
     const detail = describeBundledChannelLoadError(error, id);
-    log.warn(`[channels] failed to load bundled channel setup ${id}: ${detail}`);
+    log.warn(`[channels] failed to load bundled channel setup ${id}: ${detail}`, undefined, {
+      event: "channels.load.bundled.channel.setup",
+      outcome: "warning",
+      reason: "failed",
+    });
     loadContext.lazySetupPluginsById.set(id, null);
     return undefined;
   } finally {
@@ -787,7 +833,15 @@ function getBundledChannelSetupSecretsForRoot(
     return secrets;
   } catch (error) {
     const detail = describeBundledChannelLoadError(error, id);
-    log.warn(`[channels] failed to load bundled channel setup secrets ${id}: ${detail}`);
+    log.warn(
+      `[channels] failed to load bundled channel setup secrets ${id}: ${detail}`,
+      undefined,
+      {
+        event: "channels.load.bundled.channel.setup.secrets",
+        outcome: "warning",
+        reason: "failed",
+      },
+    );
     loadContext.lazySetupSecretsById.set(id, null);
     return undefined;
   }

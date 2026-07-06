@@ -201,7 +201,15 @@ export async function loadAgentToolResultMiddlewaresForRuntime(params: {
     return [...activeHandlers, ...missingHandlers];
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    log.warn(`[${params.runtime}] failed to load tool result middleware plugins: ${detail}`);
+    log.warn(
+      `[${params.runtime}] failed to load tool result middleware plugins: ${detail}`,
+      undefined,
+      {
+        event: "plugins.tool.result.middleware.load",
+        outcome: "warning",
+        reason: "failed",
+      },
+    );
     return listAgentToolResultMiddlewares(params.runtime);
   }
 }

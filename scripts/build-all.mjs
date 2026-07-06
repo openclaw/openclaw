@@ -31,6 +31,8 @@ const PLUGIN_SDK_DTS_CACHE_INPUTS = [
   "tsconfig.json",
   "tsconfig.plugin-sdk.dts.json",
   "src/plugin-sdk",
+  "src/plugins/logging-types.ts",
+  "src/plugins/types.ts",
   "packages/llm-core/src",
   "packages/markdown-core/src",
   "packages/media-core/src",

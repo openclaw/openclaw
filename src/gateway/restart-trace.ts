@@ -93,6 +93,8 @@ function emitRestartTrace(
 ) {
   restartTraceLog.info(
     `restart trace: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms${formatMetrics(metrics)}`,
+    undefined,
+    { event: "gateway.restart.trace.total", outcome: "success", reason: "completed" },
   );
 }
 
@@ -101,7 +103,11 @@ function emitRestartTraceDetail(name: string, metrics: RestartTraceMetrics): voi
   if (!formatted) {
     return;
   }
-  restartTraceLog.info(`restart trace: ${name} ${formatted}`);
+  restartTraceLog.info(`restart trace: ${name} ${formatted}`, undefined, {
+    event: "gateway.restart.trace",
+    outcome: "success",
+    reason: "completed",
+  });
 }
 
 /** Starts a restart trace sequence when OPENCLAW_GATEWAY_RESTART_TRACE is enabled. */

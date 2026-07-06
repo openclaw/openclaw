@@ -144,28 +144,52 @@ export async function tryRecoverTaskBeforeMarkLost(
     const result = await hook(params);
     const elapsedMs = Date.now() - startedAt;
     if (elapsedMs >= DETACHED_TASK_RECOVERY_WARN_MS) {
-      log.warn("Detached task recovery hook was slow", {
-        taskId: params.taskId,
-        runtime: params.runtime,
-        elapsedMs,
-      });
+      log.warn(
+        "Detached task recovery hook was slow",
+        {
+          taskId: params.taskId,
+          runtime: params.runtime,
+          elapsedMs,
+        },
+        {
+          event: "tasks.detached.recovery_hook",
+          outcome: "warning",
+          reason: "slow",
+        },
+      );
     }
     if (result && typeof result.recovered === "boolean") {
       return result;
     }
-    log.warn("Detached task recovery hook returned invalid result, proceeding with markTaskLost", {
-      taskId: params.taskId,
-      runtime: params.runtime,
-      result,
-    });
+    log.warn(
+      "Detached task recovery hook returned invalid result, proceeding with markTaskLost",
+      {
+        taskId: params.taskId,
+        runtime: params.runtime,
+        result,
+      },
+      {
+        event: "tasks.detached.recovery.hook.result",
+        outcome: "warning",
+        reason: "invalid",
+      },
+    );
     return { recovered: false };
   } catch (err) {
-    log.warn("Detached task recovery hook threw, proceeding with markTaskLost", {
-      taskId: params.taskId,
-      runtime: params.runtime,
-      elapsedMs: Date.now() - startedAt,
-      error: err,
-    });
+    log.warn(
+      "Detached task recovery hook threw, proceeding with markTaskLost",
+      {
+        taskId: params.taskId,
+        runtime: params.runtime,
+        elapsedMs: Date.now() - startedAt,
+        error: err,
+      },
+      {
+        event: "tasks.detached.recovery_hook",
+        outcome: "warning",
+        reason: "threw",
+      },
+    );
     return { recovered: false };
   }
 }

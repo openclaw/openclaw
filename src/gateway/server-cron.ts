@@ -37,6 +37,7 @@ import {
   enqueueSystemEventEntry,
 } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
+import { attachDiagnosticLogSemantics } from "../logging/diagnostic-log-internal.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type {
   PluginHookCronChangedEvent,
@@ -133,6 +134,10 @@ export function buildGatewayCronService(params: {
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
 }): GatewayCronState {
   const cronLogger = getChildLogger({ module: "cron" });
+  const cronLogMeta = <T extends Record<string, unknown>>(
+    attributes: T,
+    semantics: import("../logging/diagnostic-log-internal.js").DiagnosticLogSemantics,
+  ): T => attachDiagnosticLogSemantics(attributes, semantics);
   const storePath = resolveCronJobsStorePath(params.cfg.cron?.store);
   const cronEnabled = process.env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
 
@@ -308,7 +313,14 @@ export function buildGatewayCronService(params: {
     };
     void hookRunner.runCronChanged(evt, hookCtx).catch((err: unknown) => {
       cronLogger.warn(
-        { err: formatErrorMessage(err), jobId: evt.jobId },
+        cronLogMeta(
+          { err: formatErrorMessage(err), jobId: evt.jobId },
+          {
+            event: "cron.hook.changed",
+            outcome: "warning",
+            reason: "hook_failed",
+          },
+        ),
         "cron_changed hook failed",
       );
     });
@@ -409,7 +421,18 @@ export function buildGatewayCronService(params: {
       } finally {
         await cleanupBrowserSessionsForLifecycleEnd({
           sessionKeys: [sessionKey],
-          onWarn: (msg) => cronLogger.warn({ jobId: job.id }, msg),
+          onWarn: (msg) =>
+            cronLogger.warn(
+              cronLogMeta(
+                { jobId: job.id },
+                {
+                  event: "cron.browser.cleanup",
+                  outcome: "warning",
+                  reason: "cleanup_failed",
+                },
+              ),
+              msg,
+            ),
         });
       }
     },
@@ -489,7 +512,17 @@ export function buildGatewayCronService(params: {
         };
       } catch (err) {
         const error = formatErrorMessage(err);
-        cronLogger.warn({ jobId: job.id, err: error }, "cron: command delivery failed");
+        cronLogger.warn(
+          cronLogMeta(
+            { jobId: job.id, err: error },
+            {
+              event: "cron.command.delivery",
+              outcome: "warning",
+              reason: "delivery_failed",
+            },
+          ),
+          "cron: command delivery failed",
+        );
         return {
           ...result,
           status: job.delivery?.bestEffort ? result.status : "error",
@@ -524,14 +557,21 @@ export function buildGatewayCronService(params: {
         reason: "cron_timeout",
       });
       cronLogger.warn(
-        {
-          jobId: job.id,
-          sessionId: execution.sessionId,
-          sessionKey: execution.sessionKey,
-          aborted: result.aborted,
-          drained: result.drained,
-          forceCleared: result.forceCleared,
-        },
+        cronLogMeta(
+          {
+            jobId: job.id,
+            sessionId: execution.sessionId,
+            sessionKey: execution.sessionKey,
+            aborted: result.aborted,
+            drained: result.drained,
+            forceCleared: result.forceCleared,
+          },
+          {
+            event: "cron.agent_run.cleanup",
+            outcome: "warning",
+            reason: "timeout_cleanup",
+          },
+        ),
         "cron: cleaned up timed-out agent run",
       );
       await retireSessionMcpRuntime({
@@ -539,7 +579,14 @@ export function buildGatewayCronService(params: {
         reason: "cron-timeout-cleanup",
         onError: (error, sid) => {
           cronLogger.warn(
-            { jobId: job.id, sessionId: sid },
+            cronLogMeta(
+              { jobId: job.id, sessionId: sid },
+              {
+                event: "cron.mcp_runtime.retire",
+                outcome: "warning",
+                reason: "retire_failed",
+              },
+            ),
             `cron: failed to retire MCP runtime for timed-out session: ${String(error)}`,
           );
         },
@@ -547,12 +594,19 @@ export function buildGatewayCronService(params: {
     },
     onIsolatedAgentSetupTimeout: ({ job, error, timeoutMs }) => {
       cronLogger.warn(
-        {
-          jobId: job.id,
-          jobName: job.name,
-          timeoutMs,
-          error,
-        },
+        cronLogMeta(
+          {
+            jobId: job.id,
+            jobName: job.name,
+            timeoutMs,
+            error,
+          },
+          {
+            event: "cron.agent_setup",
+            outcome: "warning",
+            reason: "timeout",
+          },
+        ),
         "cron: isolated agent setup timed out before runner start; backing off job without gateway restart",
       );
     },
@@ -647,7 +701,14 @@ export function buildGatewayCronService(params: {
           opts: { keepLines: runLogPrune.keepLines },
         }).catch((err: unknown) => {
           cronLogger.warn(
-            { err: String(err), storePath, jobId: evt.jobId },
+            cronLogMeta(
+              { err: String(err), storePath, jobId: evt.jobId },
+              {
+                event: "cron.run_log.append",
+                outcome: "warning",
+                reason: "append_failed",
+              },
+            ),
             "cron: run log append failed",
           );
         });

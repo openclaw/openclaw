@@ -6,5 +6,9 @@ const log = createSubsystemLogger("process/supervisor");
 
 /** Report spawn failures without importing the full logging subsystem in tests. */
 export function warnProcessSupervisorSpawnFailure(message: string) {
-  log.warn(message);
+  log.warn(message, undefined, {
+    event: "process.supervisor.spawn",
+    outcome: "warning",
+    reason: "failed",
+  });
 }

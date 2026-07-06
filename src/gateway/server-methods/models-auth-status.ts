@@ -122,7 +122,15 @@ async function refreshModelAuthStatusRuntimeState(): Promise<void> {
       return;
     }
   } catch (err) {
-    log.warn(`runtime auth snapshot refresh before auth status failed: ${formatForLog(err)}`);
+    log.warn(
+      `runtime auth snapshot refresh before auth status failed: ${formatForLog(err)}`,
+      undefined,
+      {
+        event: "models.auth.status.snapshot",
+        outcome: "warning",
+        reason: "failed",
+      },
+    );
     return;
   }
   // Explicit status refresh follows CLI/doctor repairs. If no secrets runtime is
@@ -434,7 +442,15 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       clearCurrentProviderAuthState();
       void warmCurrentProviderAuthStateOffMainThread(context.getRuntimeConfig()).catch(
         (err: unknown) => {
-          log.warn(`provider auth state rewarm after logout failed: ${formatForLog(err)}`);
+          log.warn(
+            `provider auth state rewarm after logout failed: ${formatForLog(err)}`,
+            undefined,
+            {
+              event: "models.auth.status.provider.auth.state.rewarm.logout",
+              outcome: "warning",
+              reason: "failed",
+            },
+          );
         },
       );
       const { runIds: abortedRunIds } = abortChatRunsForProvider(
@@ -520,6 +536,12 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
           // diagnosable in gateway logs.
           log.debug(
             `usage enrichment failed (auth status still returned): providers=${usageProviderIds.join(",")} error=${formatForLog(err)}`,
+            undefined,
+            {
+              event: "models.auth.status.usage_enrichment",
+              outcome: "warning",
+              reason: "failed",
+            },
           );
         }
       }

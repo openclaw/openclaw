@@ -154,13 +154,21 @@ async function deliverRestartSentinelNotice(params: {
     } catch (err) {
       const retrying = attempt < OUTBOUND_MAX_ATTEMPTS;
       const suffix = retrying ? `; retrying in ${OUTBOUND_RETRY_DELAY_MS}ms` : "";
-      log.warn(`${params.summary}: outbound delivery failed${suffix}: ${String(err)}`, {
-        channel: params.channel,
-        to: params.to,
-        sessionKey: params.sessionKey,
-        attempt,
-        maxAttempts: OUTBOUND_MAX_ATTEMPTS,
-      });
+      log.warn(
+        `${params.summary}: outbound delivery failed${suffix}: ${String(err)}`,
+        {
+          channel: params.channel,
+          to: params.to,
+          sessionKey: params.sessionKey,
+          attempt,
+          maxAttempts: OUTBOUND_MAX_ATTEMPTS,
+        },
+        {
+          event: "gateway.restart.sentinel.outbound.delivery",
+          outcome: "warning",
+          reason: "failed",
+        },
+      );
       if (!retrying) {
         if (queueId) {
           await failDelivery(queueId, formatErrorMessage(err)).catch(() => undefined);
@@ -253,12 +261,20 @@ async function deliverQueuedSessionDelivery(params: {
     params.entry.expectedSessionId &&
     (!entry?.sessionId || entry.sessionId !== params.entry.expectedSessionId)
   ) {
-    log.warn("restart continuation skipped: session changed", {
-      sessionKey: canonicalKey,
-      queueId: params.entry.id,
-      expectedSessionId: params.entry.expectedSessionId,
-      actualSessionId: entry?.sessionId ?? null,
-    });
+    log.warn(
+      "restart continuation skipped: session changed",
+      {
+        sessionKey: canonicalKey,
+        queueId: params.entry.id,
+        expectedSessionId: params.entry.expectedSessionId,
+        actualSessionId: entry?.sessionId ?? null,
+      },
+      {
+        event: "gateway.sentinel.continuation",
+        outcome: "warning",
+        reason: "session_changed",
+      },
+    );
     enqueueRestartSentinelWake(params.entry.message, canonicalKey, queuedDeliveryContext);
     return;
   }
@@ -338,16 +354,32 @@ async function deliverQueuedSessionDelivery(params: {
       deliver: async () => ({ visibleReplySent: false }),
       onError: (err, info) => {
         dispatchError ??= err;
-        log.warn(`restart continuation dispatch failed during ${info.kind}: ${String(err)}`, {
-          sessionKey: canonicalKey,
-        });
+        log.warn(
+          `restart continuation dispatch failed during ${info.kind}: ${String(err)}`,
+          {
+            sessionKey: canonicalKey,
+          },
+          {
+            event: "gateway.sentinel.continuation",
+            outcome: "warning",
+            reason: "dispatch_failed",
+          },
+        );
       },
     },
     record: {
       onRecordError: (err) => {
-        log.warn(`restart continuation failed to record inbound session metadata: ${String(err)}`, {
-          sessionKey: canonicalKey,
-        });
+        log.warn(
+          `restart continuation failed to record inbound session metadata: ${String(err)}`,
+          {
+            sessionKey: canonicalKey,
+          },
+          {
+            event: "gateway.sentinel.continuation",
+            outcome: "warning",
+            reason: "metadata_record_failed",
+          },
+        );
       },
     },
   });
@@ -471,26 +503,50 @@ async function loadRestartSentinelStartupTask(params: {
             deps: params.deps,
             attempt: attempt + 1,
           }).catch((err: unknown) => {
-            log.warn(`restart sentinel pending update retry failed: ${formatErrorMessage(err)}`);
+            log.warn(
+              `restart sentinel pending update retry failed: ${formatErrorMessage(err)}`,
+              undefined,
+              {
+                event: "gateway.sentinel.update",
+                outcome: "warning",
+                reason: "retry_failed",
+              },
+            );
           });
         }, CONTROL_PLANE_UPDATE_PENDING_RETRY_DELAY_MS);
         timer.unref?.();
         return { status: "skipped" as const, reason: "update-restart-pending" };
       }
-      log.warn(`${summary}: update restart sentinel remained pending after retry window`, {
-        sessionKey,
-        reason: payload.stats?.reason ?? null,
-      });
+      log.warn(
+        `${summary}: update restart sentinel remained pending after retry window`,
+        {
+          sessionKey,
+          reason: payload.stats?.reason ?? null,
+        },
+        {
+          event: "gateway.sentinel.update",
+          outcome: "warning",
+          reason: "pending",
+        },
+      );
     }
 
     if (!sessionKey) {
       const mainSessionKey = resolveMainSessionKeyFromConfig();
       enqueueSystemEvent(message, { sessionKey: mainSessionKey });
       if (payload.continuation) {
-        log.warn(`${summary}: continuation skipped: restart sentinel sessionKey unavailable`, {
-          sessionKey: mainSessionKey,
-          continuationKind: payload.continuation.kind,
-        });
+        log.warn(
+          `${summary}: continuation skipped: restart sentinel sessionKey unavailable`,
+          {
+            sessionKey: mainSessionKey,
+            continuationKind: payload.continuation.kind,
+          },
+          {
+            event: "gateway.sentinel.continuation",
+            outcome: "warning",
+            reason: "session_unavailable",
+          },
+        );
       }
       await clearRestartSentinel();
       return { status: "ran" as const };

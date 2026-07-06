@@ -55,6 +55,7 @@ function listPackageDtsOutputsFromExports({ packageDir, outputPrefix }) {
 const PLUGIN_SDK_TYPE_INPUTS = [
   "tsconfig.json",
   "src/plugin-sdk",
+  "src/plugins/logging-types.ts",
   "src/plugins/types.ts",
   "src/auto-reply",
   "packages/llm-core/src",

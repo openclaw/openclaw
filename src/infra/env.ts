@@ -52,6 +52,13 @@ export function logAcceptedEnvOption(option: AcceptedEnvOption): void {
     .then((logger) => {
       logger.info(
         `env: ${option.key}=${formatEnvValue(rawValue, option.redact)} (${option.description})`,
+        undefined,
+        {
+          event: "env.option.accepted",
+          category: "env",
+          outcome: "success",
+          reason: "accepted",
+        },
       );
     })
     .catch(() => {

@@ -64,8 +64,8 @@ function resolveNativeUserHomeDir(): string | undefined {
 }
 
 function resolveCompactHomePrefixes(): string[] {
-  const homes = [resolveUserHomeDir(), resolveNativeUserHomeDir()].filter(
-    (home): home is string => Boolean(home),
+  const homes = [resolveUserHomeDir(), resolveNativeUserHomeDir()].filter((home): home is string =>
+    Boolean(home),
   );
   const resolvedHomes = homes.map((home) => path.resolve(home));
   const realHomes = resolvedHomes
@@ -111,15 +111,15 @@ function resolvePromptTildeRoots(): string[] {
     return [];
   }
   const realNativeHome = tryRealpath(resolvedNativeHome);
-  return uniqueStrings([
-    resolvedNativeHome,
-    ...(realNativeHome ? [realNativeHome] : []),
-  ]);
+  return uniqueStrings([resolvedNativeHome, ...(realNativeHome ? [realNativeHome] : [])]);
 }
 
 function isContainerStateHomeWherePromptTildeEscapes(home: string): boolean {
   const configDir = path.resolve(resolveConfigDir());
-  return home === "/data" && (configDir === "/data/.openclaw" || isPathInside("/data/.openclaw", configDir));
+  return (
+    home === "/data" &&
+    (configDir === "/data/.openclaw" || isPathInside("/data/.openclaw", configDir))
+  );
 }
 
 function shouldPreservePromptSkillPath(
@@ -180,7 +180,11 @@ function filterSkillEntries(
   if (skillFilter !== undefined) {
     const normalized = normalizeSkillFilter(skillFilter) ?? [];
     const label = normalized.length > 0 ? normalized.join(", ") : "(none)";
-    skillsLogger.debug(`Applying skill filter: ${label}`);
+    skillsLogger.debug(`Applying skill filter: ${label}`, undefined, {
+      event: "skills.applying.skill.filter",
+      outcome: "success",
+      reason: "completed",
+    });
     if (normalized.length > 0) {
       const allowed = new Set(normalized);
       filtered = filtered.filter((entry) => allowed.has(entry.skill.name));
@@ -189,6 +193,8 @@ function filterSkillEntries(
     }
     skillsLogger.debug(
       `After skill filter: ${filtered.map((entry) => entry.skill.name).join(", ") || "(none)"}`,
+      undefined,
+      { event: "skills.filter", outcome: "success", reason: "completed" },
     );
   }
   return filtered;
@@ -484,19 +490,27 @@ function warnEscapedSkillPath(params: {
     source: params.source,
     candidatePath: params.candidatePath,
   });
-  skillsLogger.warn("Skipping escaped skill path outside its configured root.", {
-    source: params.source,
-    rootDir: params.rootDir,
-    rootRealPath: params.rootRealPath,
-    path: params.candidatePath,
-    realPath: params.candidateRealPath,
-    reason: escapeReason.reason,
-    consoleMessage:
-      `Skipping escaped skill path outside its configured root: ` +
-      `source=${params.source} root=${compactRootDir}${rootResolved} ` +
-      `${escapeReason.consoleHint} requested=${compactCandidatePath} ` +
-      `resolved=${compactCandidateRealPath}`,
-  });
+  skillsLogger.warn(
+    "Skipping escaped skill path outside its configured root.",
+    {
+      source: params.source,
+      rootDir: params.rootDir,
+      rootRealPath: params.rootRealPath,
+      path: params.candidatePath,
+      realPath: params.candidateRealPath,
+      reason: escapeReason.reason,
+      consoleMessage:
+        `Skipping escaped skill path outside its configured root: ` +
+        `source=${params.source} root=${compactRootDir}${rootResolved} ` +
+        `${escapeReason.consoleHint} requested=${compactCandidatePath} ` +
+        `resolved=${compactCandidateRealPath}`,
+    },
+    {
+      event: "skills.workspace.discovery",
+      outcome: "warning",
+      reason: "escaped_path",
+    },
+  );
 }
 
 function resolveContainedSkillPath(params: {
@@ -839,12 +853,20 @@ function loadGeneratedPluginSkillRecords(params: {
       continue;
     }
     if (skillMdStat.size > params.limits.maxSkillFileBytes) {
-      skillsLogger.warn("Skipping skill due to oversized SKILL.md.", {
-        skill: name,
-        filePath: skillMd,
-        size: skillMdStat.size,
-        maxSkillFileBytes: params.limits.maxSkillFileBytes,
-      });
+      skillsLogger.warn(
+        "Skipping skill due to oversized SKILL.md.",
+        {
+          skill: name,
+          filePath: skillMd,
+          size: skillMdStat.size,
+          maxSkillFileBytes: params.limits.maxSkillFileBytes,
+        },
+        {
+          event: "skills.workspace.discovery",
+          outcome: "warning",
+          reason: "oversized_skill",
+        },
+      );
       continue;
     }
 
@@ -929,12 +951,20 @@ function loadSkillEntries(
       try {
         const size = fs.statSync(rootSkillRealPath).size;
         if (size > limits.maxSkillFileBytes) {
-          skillsLogger.warn("Skipping skills root due to oversized SKILL.md.", {
-            dir: baseDir,
-            filePath: rootSkillMd,
-            size,
-            maxSkillFileBytes: limits.maxSkillFileBytes,
-          });
+          skillsLogger.warn(
+            "Skipping skills root due to oversized SKILL.md.",
+            {
+              dir: baseDir,
+              filePath: rootSkillMd,
+              size,
+              maxSkillFileBytes: limits.maxSkillFileBytes,
+            },
+            {
+              event: "skills.workspace.discovery",
+              outcome: "warning",
+              reason: "oversized_root_skill",
+            },
+          );
           return [];
         }
       } catch {
@@ -972,23 +1002,39 @@ function loadSkillEntries(
     }
 
     if (suspicious) {
-      skillsLogger.warn("Skills root looks suspiciously large, truncating discovery.", {
-        dir: params.dir,
-        baseDir,
-        childDirCount: childDirs.length,
-        scannedEntryCount: childDirScan.scannedEntryCount,
-        maxEntriesToScan: resolveRawEntryScanLimit(maxCandidatesPerRoot),
-        maxCandidatesPerRoot: limits.maxCandidatesPerRoot,
-        maxSkillsLoadedPerSource: limits.maxSkillsLoadedPerSource,
-      });
+      skillsLogger.warn(
+        "Skills root looks suspiciously large, truncating discovery.",
+        {
+          dir: params.dir,
+          baseDir,
+          childDirCount: childDirs.length,
+          scannedEntryCount: childDirScan.scannedEntryCount,
+          maxEntriesToScan: resolveRawEntryScanLimit(maxCandidatesPerRoot),
+          maxCandidatesPerRoot: limits.maxCandidatesPerRoot,
+          maxSkillsLoadedPerSource: limits.maxSkillsLoadedPerSource,
+        },
+        {
+          event: "skills.workspace.discovery",
+          outcome: "warning",
+          reason: "large_root",
+        },
+      );
     } else if (childDirs.length > maxCandidatesPerRoot) {
-      skillsLogger.warn("Skills root has many entries, truncating discovery.", {
-        dir: params.dir,
-        baseDir,
-        childDirCount: childDirs.length,
-        maxCandidatesPerRoot: limits.maxCandidatesPerRoot,
-        maxSkillsLoadedPerSource: limits.maxSkillsLoadedPerSource,
-      });
+      skillsLogger.warn(
+        "Skills root has many entries, truncating discovery.",
+        {
+          dir: params.dir,
+          baseDir,
+          childDirCount: childDirs.length,
+          maxCandidatesPerRoot: limits.maxCandidatesPerRoot,
+          maxSkillsLoadedPerSource: limits.maxSkillsLoadedPerSource,
+        },
+        {
+          event: "skills.workspace.discovery",
+          outcome: "warning",
+          reason: "entry_limit",
+        },
+      );
     }
 
     const loadedSkills: LoadedSkillRecord[] = [];
@@ -1001,12 +1047,20 @@ function loadSkillEntries(
       try {
         const size = fs.statSync(skillMdRealPath).size;
         if (size > limits.maxSkillFileBytes) {
-          skillsLogger.warn("Skipping skill due to oversized SKILL.md.", {
-            skill: name,
-            filePath: path.join(skillDir, "SKILL.md"),
-            size,
-            maxSkillFileBytes: limits.maxSkillFileBytes,
-          });
+          skillsLogger.warn(
+            "Skipping skill due to oversized SKILL.md.",
+            {
+              skill: name,
+              filePath: path.join(skillDir, "SKILL.md"),
+              size,
+              maxSkillFileBytes: limits.maxSkillFileBytes,
+            },
+            {
+              event: "skills.workspace.discovery",
+              outcome: "warning",
+              reason: "oversized_skill",
+            },
+          );
           return;
         }
       } catch {
@@ -1098,17 +1152,30 @@ function loadSkillEntries(
             maxSkillsLoadedPerSource: limits.maxSkillsLoadedPerSource,
             maxGroupedSkillScanDepth: MAX_GROUPED_SKILL_SCAN_DEPTH,
           },
+          {
+            event: "skills.workspace.discovery",
+            outcome: "warning",
+            reason: "nested_large_root",
+          },
         );
       } else if (nestedChildren.length > maxCandidatesPerRoot) {
-        skillsLogger.warn("Nested skills directory has many entries, truncating discovery.", {
-          dir: params.dir,
-          baseDir,
-          nestedDir: candidate.skillDir,
-          nestedChildDirCount: nestedChildren.length,
-          maxCandidatesPerRoot: limits.maxCandidatesPerRoot,
-          maxSkillsLoadedPerSource: limits.maxSkillsLoadedPerSource,
-          maxGroupedSkillScanDepth: MAX_GROUPED_SKILL_SCAN_DEPTH,
-        });
+        skillsLogger.warn(
+          "Nested skills directory has many entries, truncating discovery.",
+          {
+            dir: params.dir,
+            baseDir,
+            nestedDir: candidate.skillDir,
+            nestedChildDirCount: nestedChildren.length,
+            maxCandidatesPerRoot: limits.maxCandidatesPerRoot,
+            maxSkillsLoadedPerSource: limits.maxSkillsLoadedPerSource,
+            maxGroupedSkillScanDepth: MAX_GROUPED_SKILL_SCAN_DEPTH,
+          },
+          {
+            event: "skills.workspace.discovery",
+            outcome: "warning",
+            reason: "nested_entry_limit",
+          },
+        );
       }
 
       for (const nestedName of nestedChildren.toSorted().slice(0, maxCandidatesPerRoot)) {
@@ -1128,13 +1195,21 @@ function loadSkillEntries(
     }
 
     if (discoveryBudget.truncated) {
-      skillsLogger.warn("Skills root hit recursive discovery budget, truncating discovery.", {
-        dir: params.dir,
-        baseDir,
-        maxCandidatesPerRoot: limits.maxCandidatesPerRoot,
-        maxSkillsLoadedPerSource: limits.maxSkillsLoadedPerSource,
-        maxGroupedSkillScanDepth: MAX_GROUPED_SKILL_SCAN_DEPTH,
-      });
+      skillsLogger.warn(
+        "Skills root hit recursive discovery budget, truncating discovery.",
+        {
+          dir: params.dir,
+          baseDir,
+          maxCandidatesPerRoot: limits.maxCandidatesPerRoot,
+          maxSkillsLoadedPerSource: limits.maxSkillsLoadedPerSource,
+          maxGroupedSkillScanDepth: MAX_GROUPED_SKILL_SCAN_DEPTH,
+        },
+        {
+          event: "skills.workspace.discovery",
+          outcome: "warning",
+          reason: "recursive_budget",
+        },
+      );
     }
 
     if (loadedSkills.length > maxSkillsLoadedPerSource) {
@@ -1668,12 +1743,22 @@ export async function syncSkillsToWorkspace(params: {
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : JSON.stringify(error);
-        skillsLogger.warn(`Failed to resolve safe destination for ${entry.skill.name}: ${message}`);
+        skillsLogger.warn(
+          `Failed to resolve safe destination for ${entry.skill.name}: ${message}`,
+          undefined,
+          { event: "skills.resolve.safe.destination", outcome: "warning", reason: "failed" },
+        );
         continue;
       }
       if (!dest) {
         skillsLogger.warn(
           `Failed to resolve safe destination for ${entry.skill.name}: invalid source directory name`,
+          undefined,
+          {
+            event: "skills.safe_destination",
+            outcome: "warning",
+            reason: "failed",
+          },
         );
         continue;
       }
@@ -1688,7 +1773,11 @@ export async function syncSkillsToWorkspace(params: {
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : JSON.stringify(error);
-        skillsLogger.warn(`Failed to copy ${entry.skill.name} to sandbox: ${message}`);
+        skillsLogger.warn(`Failed to copy ${entry.skill.name} to sandbox: ${message}`, undefined, {
+          event: "skills.copy.sandbox",
+          outcome: "warning",
+          reason: "failed",
+        });
       }
     }
   });

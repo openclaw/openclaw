@@ -20,4 +20,24 @@ describe("plugins/logger", () => {
     logger[method]?.(value);
     expect(methods[method]).toHaveBeenCalledWith(value);
   });
+
+  it("forwards metadata and semantics when provided", () => {
+    const methods = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    };
+    const logger = createPluginLoaderLogger(methods);
+    const meta = { phase: "startup" };
+    const semantics = {
+      event: "plugins.loader.startup.warning",
+      outcome: "warning" as const,
+      reason: "degraded",
+    };
+
+    logger.warn("plugin warning", meta, semantics);
+
+    expect(methods.warn).toHaveBeenCalledWith("plugin warning", meta, semantics);
+  });
 });

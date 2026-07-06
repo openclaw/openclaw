@@ -90,6 +90,13 @@ export function createRealtimeVoiceAgentTalkbackQueue(
         consultStartedAt = Date.now();
         params.logger.info(
           `${params.logPrefix} consult: chars=${currentQuestion.question.length} queued=${pendingQuestions.length}`,
+          undefined,
+          {
+            event: "talk.agent_talkback.consult",
+            category: "talk.agent_talkback",
+            outcome: "success",
+            reason: "started",
+          },
         );
         activeAbortController = new AbortController();
         const result = await params.consult({
@@ -102,6 +109,13 @@ export function createRealtimeVoiceAgentTalkbackQueue(
         const text = result.text.trim();
         params.logger.info(
           `${params.logPrefix} consult done: elapsedMs=${Date.now() - consultStartedAt} answerChars=${text.length} queued=${pendingQuestions.length}`,
+          undefined,
+          {
+            event: "talk.agent_talkback.consult",
+            category: "talk.agent_talkback",
+            outcome: "success",
+            reason: "completed",
+          },
         );
         if (!params.isStopped() && text) {
           params.deliver(text);
@@ -116,7 +130,16 @@ export function createRealtimeVoiceAgentTalkbackQueue(
       const message = error instanceof Error ? error.message : String(error);
       const elapsedDetail =
         consultStartedAt === undefined ? "" : ` elapsedMs=${Date.now() - consultStartedAt}`;
-      params.logger.warn(`${params.logPrefix} consult failed:${elapsedDetail} ${message}`);
+      params.logger.warn(
+        `${params.logPrefix} consult failed:${elapsedDetail} ${message}`,
+        undefined,
+        {
+          event: "talk.agent_talkback.consult",
+          category: "talk.agent_talkback",
+          outcome: "failure",
+          reason: "consult_failed",
+        },
+      );
       params.deliver(params.fallbackText);
     } finally {
       active = false;
@@ -144,6 +167,13 @@ export function createRealtimeVoiceAgentTalkbackQueue(
         appendPendingQuestion(pendingQuestions, { question: trimmed, metadata });
         params.logger.info(
           `${params.logPrefix} consult queued: chars=${trimmed.length} queued=${pendingQuestions.length}`,
+          undefined,
+          {
+            event: "talk.agent_talkback.consult_queued",
+            category: "talk.agent_talkback",
+            outcome: "success",
+            reason: "queued",
+          },
         );
         clearDebounceTimer();
         return;

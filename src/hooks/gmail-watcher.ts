@@ -52,13 +52,25 @@ async function startGmailWatch(
     });
     if (result.code !== 0) {
       const message = result.stderr || result.stdout || "gog watch start failed";
-      log.error(`watch start failed: ${message}`);
+      log.error(`watch start failed: ${message}`, undefined, {
+        event: "gmail.watcher.watch.start",
+        outcome: "failure",
+        reason: "failed",
+      });
       return false;
     }
-    log.info(`watch started for ${cfg.account}`);
+    log.info(`watch started for ${cfg.account}`, undefined, {
+      event: "gmail.watcher.watch",
+      outcome: "success",
+      reason: "started",
+    });
     return true;
   } catch (err) {
-    log.error(`watch start error: ${String(err)}`);
+    log.error(`watch start error: ${String(err)}`, undefined, {
+      event: "gmail.watcher.watch.start",
+      outcome: "failure",
+      reason: "failed",
+    });
     return false;
   }
 }
@@ -68,7 +80,11 @@ async function startGmailWatch(
  */
 function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
   const args = buildGogWatchServeArgs(cfg);
-  log.info(`starting gog ${buildGogWatchServeLogArgs(cfg).join(" ")}`);
+  log.info(`starting gog ${buildGogWatchServeLogArgs(cfg).join(" ")}`, undefined, {
+    event: "gmail.watcher.starting.gog",
+    outcome: "success",
+    reason: "started",
+  });
   let addressInUse = false;
   const invocation = resolveGogServeInvocation(args);
 
@@ -82,7 +98,11 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
   child.stdout?.on("data", (data: Buffer) => {
     const line = data.toString().trim();
     if (line) {
-      log.info(`[gog] ${line}`);
+      log.info(`[gog] ${line}`, undefined, {
+        event: "gmail.watcher.gog",
+        outcome: "success",
+        reason: "completed",
+      });
     }
   });
 
@@ -94,11 +114,19 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
     if (isAddressInUseError(line)) {
       addressInUse = true;
     }
-    log.warn(`[gog] ${line}`);
+    log.warn(`[gog] ${line}`, undefined, {
+      event: "gmail.watcher.gog",
+      outcome: "warning",
+      reason: "warning",
+    });
   });
 
   child.on("error", (err) => {
-    log.error(`gog process error: ${String(err)}`);
+    log.error(`gog process error: ${String(err)}`, undefined, {
+      event: "gmail.watcher.gog.process",
+      outcome: "failure",
+      reason: "failed",
+    });
   });
 
   child.on("exit", (code, signal) => {
@@ -113,11 +141,17 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
       log.warn(
         "gog serve failed to bind (address already in use); stopping restarts. " +
           "Another watcher is likely running. Set OPENCLAW_SKIP_GMAIL_WATCHER=1 or stop the other process.",
+        undefined,
+        { event: "gmail.watcher.gog.serve", outcome: "warning", reason: "address_in_use" },
       );
       watcherProcess = null;
       return;
     }
-    log.warn(`gog exited (code=${code}, signal=${signal}); restarting in 5s`);
+    log.warn(`gog exited (code=${code}, signal=${signal}); restarting in 5s`, undefined, {
+      event: "gmail.watcher.gog.process",
+      outcome: "warning",
+      reason: "restart_scheduled",
+    });
     watcherProcess = null;
     respawnTimeout = setTimeout(() => {
       respawnTimeout = null;
@@ -164,7 +198,11 @@ function settleProcess(proc: ChildProcess): Promise<void> {
 
     const finalTimeout: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
       if (!settled) {
-        log.warn("gog process did not exit after SIGKILL; giving up");
+        log.warn("gog process did not exit after SIGKILL; giving up", undefined, {
+          event: "gmail.watcher.gog.process",
+          outcome: "warning",
+          reason: "sigkill_timeout",
+        });
         settle();
       }
     }, 8_000);
@@ -320,6 +358,12 @@ export async function startGmailWatcher(
       });
       log.info(
         `tailscale ${runtimeConfig.tailscale.mode} configured for port ${runtimeConfig.serve.port}`,
+        undefined,
+        {
+          event: "gmail.watcher.tailscale.configured.port",
+          outcome: "success",
+          reason: "completed",
+        },
       );
       if (cancellation.isCancelled()) {
         return cancelledGmailWatcherStart(runtimeConfig);
@@ -328,7 +372,11 @@ export async function startGmailWatcher(
       if (cancellation.isCancelled()) {
         return cancelledGmailWatcherStart(runtimeConfig);
       }
-      log.error(`tailscale setup failed: ${String(err)}`);
+      log.error(`tailscale setup failed: ${String(err)}`, undefined, {
+        event: "gmail.watcher.tailscale.setup",
+        outcome: "failure",
+        reason: "failed",
+      });
       return {
         started: false,
         reason: `tailscale setup failed: ${String(err)}`,
@@ -346,7 +394,11 @@ export async function startGmailWatcher(
     return cancelledGmailWatcherStart(runtimeConfig);
   }
   if (!watchStarted) {
-    log.warn("gmail watch start failed, but continuing with serve");
+    log.warn("gmail watch start failed, but continuing with serve", undefined, {
+      event: "gmail.watcher.gmail.watch.start.but.serve",
+      outcome: "warning",
+      reason: "failed",
+    });
   }
 
   // Spawn the gog serve process
@@ -365,6 +417,12 @@ export async function startGmailWatcher(
 
   log.info(
     `gmail watcher started for ${runtimeConfig.account} (renew every ${runtimeConfig.renewEveryMinutes}m)`,
+    undefined,
+    {
+      event: "gmail.watcher.renewal",
+      outcome: "success",
+      reason: "started",
+    },
   );
 
   return { started: true };
@@ -386,12 +444,20 @@ export async function stopGmailWatcher(): Promise<void> {
   }
 
   if (watcherProcess) {
-    log.info("stopping gmail watcher");
+    log.info("stopping gmail watcher", undefined, {
+      event: "gmail.watcher.lifecycle",
+      outcome: "success",
+      reason: "completed",
+    });
     const proc = watcherProcess;
     watcherProcess = null;
     await settleProcess(proc);
   }
 
   currentConfig = null;
-  log.info("gmail watcher stopped");
+  log.info("gmail watcher stopped", undefined, {
+    event: "gmail.watcher.lifecycle",
+    outcome: "success",
+    reason: "stopped",
+  });
 }

@@ -8,6 +8,10 @@ import { resolveAgentOutboundIdentity } from "../infra/outbound/identity.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { getChildLogger } from "../logging.js";
 import {
+  attachDiagnosticLogSemantics,
+  type DiagnosticLogSemantics,
+} from "../logging/diagnostic-log-internal.js";
+import {
   resolveFailureDestination,
   type CronFailureDeliveryPlan,
   type CronFailureDestinationInput,
@@ -31,6 +35,13 @@ export {
 
 const FAILURE_NOTIFICATION_TIMEOUT_MS = 30_000;
 const cronDeliveryLogger = getChildLogger({ subsystem: "cron-delivery" });
+
+function cronDeliveryLogMeta<T extends Record<string, unknown>>(
+  attributes: T,
+  semantics: DiagnosticLogSemantics,
+): T {
+  return attachDiagnosticLogSemantics(attributes, semantics);
+}
 
 /** Channel target metadata used for cron announcements and failure notifications. */
 export type CronAnnounceTarget = {
@@ -163,7 +174,14 @@ export async function sendFailureNotificationAnnounce(
   if (!delivery.ok) {
     // Failure alerts must not mask the original cron run failure.
     cronDeliveryLogger.warn(
-      { error: delivery.error.message },
+      cronDeliveryLogMeta(
+        { error: delivery.error.message },
+        {
+          event: "cron.delivery.destination.resolve",
+          outcome: "warning",
+          reason: "target_resolution_failed",
+        },
+      ),
       "cron: failed to resolve failure destination target",
     );
     return;
@@ -186,11 +204,18 @@ export async function sendFailureNotificationAnnounce(
     });
   } catch (err) {
     cronDeliveryLogger.warn(
-      {
-        err: formatErrorMessage(err),
-        channel: delivery.resolvedTarget.channel,
-        to: delivery.resolvedTarget.to,
-      },
+      cronDeliveryLogMeta(
+        {
+          err: formatErrorMessage(err),
+          channel: delivery.resolvedTarget.channel,
+          to: delivery.resolvedTarget.to,
+        },
+        {
+          event: "cron.delivery.destination.announce",
+          outcome: "warning",
+          reason: "announce_failed",
+        },
+      ),
       "cron: failure destination announce failed",
     );
   } finally {

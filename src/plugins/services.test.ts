@@ -5,10 +5,10 @@ import { createEmptyPluginRegistry } from "./registry.js";
 import type { OpenClawPluginService, OpenClawPluginServiceContext } from "./types.js";
 
 const mockedLogger = vi.hoisted(() => ({
-  info: vi.fn<(msg: string) => void>(),
-  warn: vi.fn<(msg: string) => void>(),
-  error: vi.fn<(msg: string) => void>(),
-  debug: vi.fn<(msg: string) => void>(),
+  info: vi.fn<(...args: unknown[]) => void>(),
+  warn: vi.fn<(...args: unknown[]) => void>(),
+  error: vi.fn<(...args: unknown[]) => void>(),
+  debug: vi.fn<(...args: unknown[]) => void>(),
   child: vi.fn(() => mockedLogger),
 }));
 
@@ -90,7 +90,11 @@ function requireLoggerErrorMessage(index = 0): string {
   if (!call) {
     throw new Error(`expected logger error call ${index}`);
   }
-  return call[0];
+  const [message] = call;
+  if (typeof message !== "string") {
+    throw new Error(`expected logger error call ${index} message`);
+  }
+  return message;
 }
 
 async function startTrackingServices(params: {
@@ -219,14 +223,66 @@ describe("startPluginServices", () => {
     expect(mockedLogger.error.mock.calls).toEqual([
       [
         "plugin service failed (service-start-fail, plugin=plugin:test, root=/plugins/test-plugin): start failed",
+        undefined,
+        {
+          event: "plugins.plugin.service.plugin.root",
+          outcome: "failure",
+          reason: "failed",
+        },
       ],
     ]);
     expect(requireLoggerErrorMessage()).not.toContain("\n");
     expect(mockedLogger.warn.mock.calls).toEqual([
-      ["plugin service stop failed (service-stop-fail): Error: stop failed"],
+      [
+        "plugin service stop failed (service-stop-fail): Error: stop failed",
+        undefined,
+        {
+          event: "plugins.plugin.service.stop",
+          outcome: "warning",
+          reason: "failed",
+        },
+      ],
     ]);
     expect(stopOk).toHaveBeenCalledOnce();
     expect(stopThrows).toHaveBeenCalledOnce();
+  });
+
+  it("forwards explicit service logger semantics to the subsystem logger", async () => {
+    await startPluginServices({
+      registry: createRegistry([
+        {
+          id: "service-a",
+          start: (ctx) => {
+            ctx.logger.warn(
+              "service degraded",
+              {
+                phase: "startup",
+              },
+              {
+                event: "plugins.service.health.degraded",
+                category: "plugins.service.health",
+                outcome: "warning",
+                reason: "probe_failed",
+              },
+            );
+          },
+        },
+      ]),
+      config: createServiceConfig(),
+    });
+
+    expect(mockedLogger.warn).toHaveBeenCalledWith(
+      "service degraded",
+      {
+        phase: "startup",
+      },
+      {
+        event: "plugins.service.health.degraded",
+        category: "plugins.service.health",
+        outcome: "warning",
+        reason: "probe_failed",
+      },
+    );
   });
 
   it("emits per-service startup trace spans and summary", async () => {

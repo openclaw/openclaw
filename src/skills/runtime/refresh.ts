@@ -77,7 +77,11 @@ const workspaceWatchLastEnsuredAt = new Map<string, number>();
 const SKILLS_WORKSPACE_WATCH_IDLE_TTL_MS = 60 * 60_000;
 
 setSkillsChangeListenerErrorHandler((err) => {
-  log.warn(`skills change listener failed: ${String(err)}`);
+  log.warn(`skills change listener failed: ${String(err)}`, undefined, {
+    event: "gateway.skills.change.listener",
+    outcome: "warning",
+    reason: "failed",
+  });
 });
 
 export const DEFAULT_SKILLS_WATCH_IGNORED: RegExp[] = [
@@ -555,7 +559,15 @@ function createSkillsPathWatcher(target: WatchTarget, debounceMs: number): Skill
   const scheduleRawSkillFile = (changedPath: string) => {
     void waitForStableSkillFile(changedPath, debounceMs)
       .catch((err: unknown) => {
-        log.warn(`skills watcher stability check failed (${changedPath}): ${String(err)}`);
+        log.warn(
+          `skills watcher stability check failed (${changedPath}): ${String(err)}`,
+          undefined,
+          {
+            event: "gateway.skills.watcher.stability.check",
+            outcome: "warning",
+            reason: "failed",
+          },
+        );
       })
       .then(() => schedule(changedPath));
   };
@@ -583,7 +595,11 @@ function createSkillsPathWatcher(target: WatchTarget, debounceMs: number): Skill
     }
   });
   watcher.on("error", (err) => {
-    log.warn(`skills watcher error (${target.path}): ${String(err)}`);
+    log.warn(`skills watcher error (${target.path}): ${String(err)}`, undefined, {
+      event: "gateway.skills.watcher",
+      outcome: "warning",
+      reason: "warning",
+    });
   });
 
   return state;

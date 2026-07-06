@@ -734,9 +734,17 @@ export async function persistSessionCompactionCheckpoint(
   const postSessionFile = params.postSessionFile?.trim();
   const postSourceLeafId = params.postEntryId?.trim() || params.postLeafId?.trim();
   if (!snapshotSessionFile && (!postSessionFile || !postSourceLeafId)) {
-    log.warn("skipping compaction checkpoint persist: missing stable fork source", {
-      sessionKey: params.sessionKey,
-    });
+    log.warn(
+      "skipping compaction checkpoint persist: missing stable fork source",
+      {
+        sessionKey: params.sessionKey,
+      },
+      {
+        event: "gateway.compaction.checkpoints.stable.fork",
+        outcome: "warning",
+        reason: "missing",
+      },
+    );
     return null;
   }
 
@@ -802,9 +810,17 @@ export async function persistSessionCompactionCheckpoint(
   );
 
   if (!updatedEntry || !stored) {
-    log.warn("skipping compaction checkpoint persist: session not found", {
-      sessionKey: params.sessionKey,
-    });
+    log.warn(
+      "skipping compaction checkpoint persist: session not found",
+      {
+        sessionKey: params.sessionKey,
+      },
+      {
+        event: "gateway.compaction.checkpoints.persist.not.found",
+        outcome: "warning",
+        reason: "skipped",
+      },
+    );
     return null;
   }
   const checkpointArtifactFile = snapshotSessionFile || postSessionFile || "";

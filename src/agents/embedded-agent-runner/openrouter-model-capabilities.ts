@@ -114,7 +114,11 @@ function writeSqliteCache(map: Map<string, OpenRouterModelCapabilities>): void {
     }
   } catch (err: unknown) {
     const message = formatErrorMessage(err);
-    log.debug(`Failed to write OpenRouter SQLite cache: ${message}`);
+    log.debug(`Failed to write OpenRouter SQLite cache: ${message}`, undefined, {
+      event: "openrouter.capabilities.write.openrouter.sqlite.cache",
+      outcome: "warning",
+      reason: "failed",
+    });
   }
 }
 
@@ -133,7 +137,11 @@ function readSqliteCache(): Map<string, OpenRouterModelCapabilities> | undefined
     return map.size > 0 ? map : undefined;
   } catch (err: unknown) {
     const message = formatErrorMessage(err);
-    log.debug(`Failed to read OpenRouter SQLite cache: ${message}`);
+    log.debug(`Failed to read OpenRouter SQLite cache: ${message}`, undefined, {
+      event: "openrouter.capabilities.read.openrouter.sqlite.cache",
+      outcome: "warning",
+      reason: "failed",
+    });
     return undefined;
   }
 }
@@ -199,7 +207,11 @@ async function doFetch(): Promise<void> {
     });
 
     if (!response.ok) {
-      log.warn(`OpenRouter models API returned ${response.status}`);
+      log.warn(`OpenRouter models API returned ${response.status}`, undefined, {
+        event: "openrouter.model.capabilities.openrouter.models.api",
+        outcome: "warning",
+        reason: "warning",
+      });
       return;
     }
 
@@ -219,10 +231,18 @@ async function doFetch(): Promise<void> {
 
     cache = map;
     writeSqliteCache(map);
-    log.debug(`Cached ${map.size} OpenRouter models from API`);
+    log.debug(`Cached ${map.size} OpenRouter models from API`, undefined, {
+      event: "openrouter.model.capabilities.cache",
+      outcome: "success",
+      reason: "completed",
+    });
   } catch (err: unknown) {
     const message = formatErrorMessage(err);
-    log.warn(`Failed to fetch OpenRouter models: ${message}`);
+    log.warn(`Failed to fetch OpenRouter models: ${message}`, undefined, {
+      event: "openrouter.model.capabilities.fetch",
+      outcome: "warning",
+      reason: "failed",
+    });
   } finally {
     clearTimeout(timeout);
     await cancelUnreadResponseBody(response);
@@ -255,7 +275,11 @@ function ensureOpenRouterModelCache(): void {
   const stored = readSqliteCache();
   if (stored) {
     cache = stored;
-    log.debug(`Loaded ${stored.size} OpenRouter models from SQLite cache`);
+    log.debug(`Loaded ${stored.size} OpenRouter models from SQLite cache`, undefined, {
+      event: "openrouter.capabilities.cache.loaded",
+      outcome: "success",
+      reason: "loaded",
+    });
     return;
   }
 

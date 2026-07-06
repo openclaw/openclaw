@@ -237,6 +237,8 @@ function resolveChannelPackageStateChecker(params: {
     const detail = formatErrorMessage(loadError);
     log.warn(
       `[channels] failed to load ${params.metadataKey} checker for ${params.entry.pluginId}: ${detail}`,
+      undefined,
+      { event: "channels.load.checker", outcome: "warning", reason: "failed" },
     );
   }
   return null;

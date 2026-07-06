@@ -1124,6 +1124,12 @@ async function agentCommandInternal(
       } catch (error) {
         log.warn(
           `ACP transcript persistence failed for ${sessionKey}: ${formatErrorMessage(error)}`,
+          undefined,
+          {
+            event: "agents.command.acp.transcript.persistence",
+            outcome: "warning",
+            reason: "failed",
+          },
         );
       }
       const restartAbortReason = opts.abortSignal?.reason;
@@ -2042,6 +2048,12 @@ async function agentCommandInternal(
           if (liveSwitchRetries > MAX_LIVE_SWITCH_RETRIES) {
             log.error(
               `Live session model switch in subagent run ${runId}: exceeded maximum retries (${MAX_LIVE_SWITCH_RETRIES})`,
+              undefined,
+              {
+                event: "agents.command.model.switch",
+                outcome: "failure",
+                reason: "limit_exceeded",
+              },
             );
             if (!attemptLifecycleState.lifecycleEnded) {
               emitAgentEvent({
@@ -2073,6 +2085,12 @@ async function agentCommandInternal(
             log.info(
               `Live session model switch in subagent run ${runId}: ` +
                 `rejected ${sanitizeForLog(err.provider)}/${sanitizeForLog(err.model)} (not in allowlist)`,
+              undefined,
+              {
+                event: "agents.command.model.switch",
+                outcome: "warning",
+                reason: "not_allowed",
+              },
             );
             if (!attemptLifecycleState.lifecycleEnded) {
               emitAgentEvent({
@@ -2122,6 +2140,12 @@ async function agentCommandInternal(
           attemptLifecycleState.lifecycleEnded = false;
           log.info(
             `Live session model switch in subagent run ${runId}: switching to ${sanitizeForLog(err.provider)}/${sanitizeForLog(err.model)}`,
+            undefined,
+            {
+              event: "agents.command.model.switch",
+              outcome: "success",
+              reason: "completed",
+            },
           );
           continue;
         }
@@ -2226,6 +2250,12 @@ async function agentCommandInternal(
         } catch (error) {
           log.warn(
             `Turn transcript persistence failed for ${sessionKey ?? sessionId}: ${error instanceof Error ? error.message : String(error)}`,
+            undefined,
+            {
+              event: "agents.command.turn.transcript.persistence",
+              outcome: "warning",
+              reason: "failed",
+            },
           );
         }
         if (persistedCliTurnTranscript && !suppressVisibleSessionEffects) {
@@ -2404,6 +2434,12 @@ async function agentCommandInternal(
           `failed to clear restart recovery delivery context for ${sessionKey}: ${
             error instanceof Error ? error.message : String(error)
           }`,
+          undefined,
+          {
+            event: "agents.command.restart_context.clear",
+            outcome: "warning",
+            reason: "failed",
+          },
         );
       }
     }

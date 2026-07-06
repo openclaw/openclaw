@@ -95,11 +95,19 @@ function scheduleLaneAutoResume(laneId: string, delayMs: number, resumeConcurren
   const timer = setTimeout(() => {
     laneResumeTimers.delete(laneId);
     setCommandLaneConcurrency(laneId, resumeConcurrency);
-    log.info("auto-resumed lane after suspension TTL", {
-      laneId,
-      delayMs,
-      resumeConcurrency,
-    });
+    log.info(
+      "auto-resumed lane after suspension TTL",
+      {
+        laneId,
+        delayMs,
+        resumeConcurrency,
+      },
+      {
+        event: "session.suspension.auto.resumed.lane.suspension.ttl",
+        outcome: "success",
+        reason: "completed",
+      },
+    );
   }, delayMs);
   if (typeof timer.unref === "function") {
     timer.unref();
@@ -147,11 +155,19 @@ export async function suspendSession(params: SessionSuspensionParams) {
       },
     });
   } catch (err) {
-    log.warn("failed to persist quota suspension; not throttling lane", {
-      sessionId: params.sessionId,
-      laneId: params.laneId,
-      error: err instanceof Error ? err.message : String(err),
-    });
+    log.warn(
+      "failed to persist quota suspension; not throttling lane",
+      {
+        sessionId: params.sessionId,
+        laneId: params.laneId,
+        error: err instanceof Error ? err.message : String(err),
+      },
+      {
+        event: "session.suspension.not.throttling.lane",
+        outcome: "warning",
+        reason: "failed",
+      },
+    );
     return;
   }
 

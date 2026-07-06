@@ -79,10 +79,18 @@ export async function resetRegisteredAgentHarnessSessions(
       try {
         await entry.harness.reset(params);
       } catch (error) {
-        log.warn(`${entry.harness.label} session reset hook failed`, {
-          harnessId: entry.harness.id,
-          error,
-        });
+        log.warn(
+          `${entry.harness.label} session reset hook failed`,
+          {
+            harnessId: entry.harness.id,
+            error,
+          },
+          {
+            event: "agents.harness.session.reset.hook",
+            outcome: "warning",
+            reason: "failed",
+          },
+        );
       }
     }),
   );
@@ -98,10 +106,14 @@ export async function disposeRegisteredAgentHarnesses(): Promise<void> {
       try {
         await entry.harness.dispose();
       } catch (error) {
-        log.warn(`${entry.harness.label} dispose hook failed`, {
-          harnessId: entry.harness.id,
-          error,
-        });
+        log.warn(
+          `${entry.harness.label} dispose hook failed`,
+          {
+            harnessId: entry.harness.id,
+            error,
+          },
+          { event: "agents.harness.dispose.hook", outcome: "warning", reason: "failed" },
+        );
       }
     }),
   );

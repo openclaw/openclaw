@@ -145,7 +145,12 @@ export async function generateVideo(
     // passed over without flooding logs on long fallback chains.
     if (!skipWarnEmitted) {
       skipWarnEmitted = true;
-      logger.warn(`video-generation candidate skipped: ${reason}`);
+      logger.warn(`video-generation candidate skipped: ${reason}`, undefined, {
+        event: "video_generation.candidate",
+        category: "video_generation",
+        outcome: "warning",
+        reason: "candidate_skipped",
+      });
     }
   };
 
@@ -200,6 +205,13 @@ export async function generateVideo(
       warnOnFirstSkip(referenceInputMismatch);
       logger.debug(
         `video-generation candidate skipped (reference input capability): ${candidate.provider}/${candidate.model}`,
+        undefined,
+        {
+          event: "video_generation.candidate",
+          category: "video_generation",
+          outcome: "warning",
+          reason: "reference_input_capability",
+        },
       );
       continue;
     }
@@ -236,6 +248,13 @@ export async function generateVideo(
         warnOnFirstSkip(mismatch);
         logger.debug(
           `video-generation candidate skipped (providerOptions): ${candidate.provider}/${candidate.model}`,
+          undefined,
+          {
+            event: "video_generation.candidate",
+            category: "video_generation",
+            outcome: "warning",
+            reason: "provider_options",
+          },
         );
         continue;
       }
@@ -275,6 +294,13 @@ export async function generateVideo(
         warnOnFirstSkip(error);
         logger.debug(
           `video-generation candidate skipped (duration capability): ${candidate.provider}/${candidate.model}`,
+          undefined,
+          {
+            event: "video_generation.candidate",
+            category: "video_generation",
+            outcome: "warning",
+            reason: "duration_capability",
+          },
         );
         continue;
       }
@@ -352,7 +378,16 @@ export async function generateVideo(
         model: candidate.model,
         error: err,
       });
-      logger.debug(`video-generation candidate failed: ${candidate.provider}/${candidate.model}`);
+      logger.debug(
+        `video-generation candidate failed: ${candidate.provider}/${candidate.model}`,
+        undefined,
+        {
+          event: "video_generation.candidate",
+          category: "video_generation",
+          outcome: "failure",
+          reason: "generation_failed",
+        },
+      );
     }
   }
 

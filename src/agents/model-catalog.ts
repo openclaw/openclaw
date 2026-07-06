@@ -523,7 +523,11 @@ function loadReadOnlyStaticModelCatalog(params?: {
   } catch (error) {
     if (!hasLoggedReadOnlyStaticCatalogError) {
       hasLoggedReadOnlyStaticCatalogError = true;
-      log.warn(`Failed to load read-only manifest model catalog: ${String(error)}`);
+      log.warn(`Failed to load read-only manifest model catalog: ${String(error)}`, undefined, {
+        event: "model.catalog.static_manifest",
+        outcome: "warning",
+        reason: "failed",
+      });
     }
   }
 
@@ -585,7 +589,15 @@ export async function loadModelCatalog(params?: {
         return;
       }
       const suffix = extra ? ` ${extra}` : "";
-      log.info(`model-catalog stage=${stage} elapsedMs=${Date.now() - startMs}${suffix}`);
+      log.info(
+        `model-catalog stage=${stage} elapsedMs=${Date.now() - startMs}${suffix}`,
+        undefined,
+        {
+          event: "model.catalog.stage",
+          outcome: "success",
+          reason: "completed",
+        },
+      );
     };
     const sortModels = sortModelCatalogEntries;
     try {
@@ -807,7 +819,11 @@ export async function loadModelCatalog(params?: {
     } catch (error) {
       if (!hasLoggedModelCatalogError) {
         hasLoggedModelCatalogError = true;
-        log.warn(`Failed to load model catalog: ${String(error)}`);
+        log.warn(`Failed to load model catalog: ${String(error)}`, undefined, {
+          event: "model.catalog.load",
+          outcome: "warning",
+          reason: "failed",
+        });
       }
       // Don't poison the cache on transient dependency/filesystem issues.
       if (useSharedCache) {

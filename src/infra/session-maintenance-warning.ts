@@ -150,7 +150,11 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
       throw send.error;
     }
   } catch (err) {
-    log.warn(`Failed to deliver session maintenance warning: ${String(err)}`);
+    log.warn(`Failed to deliver session maintenance warning: ${String(err)}`, undefined, {
+      event: "session.maintenance.deliver",
+      outcome: "warning",
+      reason: "failed",
+    });
     enqueueSystemEvent(text, { sessionKey: params.sessionKey });
   }
 }

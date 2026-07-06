@@ -130,7 +130,12 @@ export function recordPluginError(params: {
       : null;
   // Rewrite the common removed-API failure into an actionable migration hint while preserving detail.
   const displayError = deprecatedApiHint ? `${deprecatedApiHint} (${errorText})` : errorText;
-  params.logger.error(`${params.logPrefix}${displayError}`);
+  params.logger.error(`${params.logPrefix}${displayError}`, undefined, {
+    event: "plugins.loader.record",
+    category: "plugins.loader",
+    outcome: "failure",
+    reason: params.phase === "register" ? "register_failed" : "load_failed",
+  });
   params.record.status = "error";
   params.record.error = displayError;
   params.record.failedAt = new Date();

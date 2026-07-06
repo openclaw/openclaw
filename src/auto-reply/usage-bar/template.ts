@@ -89,11 +89,19 @@ function warnInvalidUsageTemplate(source: "inline" | "file", reason: string, pat
     return;
   }
   warnedTemplateOverrides.add(key);
-  usageTemplateLog.warn("configured usage template could not be used; using built-in footer", {
-    source,
-    reason,
-    ...(path ? { path } : {}),
-  });
+  usageTemplateLog.warn(
+    "configured usage template could not be used; using built-in footer",
+    {
+      source,
+      reason,
+      ...(path ? { path } : {}),
+    },
+    {
+      event: "usage.template.configured",
+      outcome: "warning",
+      reason: "selected",
+    },
+  );
 }
 
 function parseTemplate(value: unknown): TemplateReadResult {

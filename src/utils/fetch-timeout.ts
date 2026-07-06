@@ -85,14 +85,22 @@ function abortDueToTimeout(
   ]
     .filter((part): part is string => Boolean(part))
     .join(" ");
-  log.warn("fetch timeout reached; aborting operation", {
-    timeoutMs,
-    elapsedMs,
-    ...(eventLoopDelayHint ? { timerDelayMs: delayMs, eventLoopDelayHint } : {}),
-    consoleMessage,
-    ...(operation ? { operation } : {}),
-    ...(sanitizedUrl ? { url: sanitizedUrl } : {}),
-  });
+  log.warn(
+    "fetch timeout reached; aborting operation",
+    {
+      timeoutMs,
+      elapsedMs,
+      ...(eventLoopDelayHint ? { timerDelayMs: delayMs, eventLoopDelayHint } : {}),
+      consoleMessage,
+      ...(operation ? { operation } : {}),
+      ...(sanitizedUrl ? { url: sanitizedUrl } : {}),
+    },
+    {
+      event: "fetch.request",
+      outcome: "warning",
+      reason: "timeout",
+    },
+  );
   const error = new Error("request timed out");
   error.name = "TimeoutError";
   controller.abort(error);

@@ -260,11 +260,27 @@ async function persistApprovedCliUserTurnTranscript(params: RunCliAgentParams): 
       const notification = params.onUserMessagePersisted?.(persisted.message);
       if (notification) {
         void Promise.resolve(notification).catch((error: unknown) => {
-          log.warn(`CLI user turn persistence notification failed: ${formatErrorMessage(error)}`);
+          log.warn(
+            `CLI user turn persistence notification failed: ${formatErrorMessage(error)}`,
+            undefined,
+            {
+              event: "agents.cli.user_turn.persist_notice",
+              outcome: "warning",
+              reason: "failed",
+            },
+          );
         });
       }
     } catch (error) {
-      log.warn(`CLI user turn persistence notification failed: ${formatErrorMessage(error)}`);
+      log.warn(
+        `CLI user turn persistence notification failed: ${formatErrorMessage(error)}`,
+        undefined,
+        {
+          event: "agents.cli.user_turn.persist_notice",
+          outcome: "warning",
+          reason: "failed",
+        },
+      );
     }
   }
 }
@@ -315,12 +331,24 @@ async function persistCliAssistantTranscript(params: {
       }),
     });
     if (!result.ok) {
-      log.warn(`CLI assistant transcript persistence skipped: ${result.reason}`);
+      log.warn(`CLI assistant transcript persistence skipped: ${result.reason}`, undefined, {
+        event: "agents.cli.assistant_transcript.persist",
+        outcome: "warning",
+        reason: "skipped",
+      });
       return result.code === "blocked" || result.code === "session-rebound";
     }
     return true;
   } catch (error) {
-    log.warn(`CLI assistant transcript persistence failed: ${formatErrorMessage(error)}`);
+    log.warn(
+      `CLI assistant transcript persistence failed: ${formatErrorMessage(error)}`,
+      undefined,
+      {
+        event: "agents.cli.assistant_transcript.persist",
+        outcome: "warning",
+        reason: "failed",
+      },
+    );
     return false;
   }
 }
@@ -381,7 +409,12 @@ async function finalizeCliContextEngineTurn(params: {
           deferredTurnMaintenance = promise;
         },
       }),
-    warn: (message) => log.warn(message),
+    warn: (message) =>
+      log.warn(message, undefined, {
+        event: "agents.cli.context_engine.finalize",
+        outcome: "warning",
+        reason: "warning",
+      }),
   });
   if (result.postTurnFinalizationSucceeded && deferredTurnMaintenance) {
     context.contextEngineDeferredTurnMaintenance = deferredTurnMaintenance;
@@ -492,7 +525,15 @@ async function runCliAgentInternal(params: RunCliAgentParams): Promise<EmbeddedA
   }
   if (cleanupError) {
     if (runError || result?.didSendViaMessagingTool === true) {
-      log.warn(`cli run cleanup failed after completion: ${formatErrorMessage(cleanupError)}`);
+      log.warn(
+        `cli run cleanup failed after completion: ${formatErrorMessage(cleanupError)}`,
+        undefined,
+        {
+          event: "agents.cli.runner.cli.run.cleanup.completion",
+          outcome: "warning",
+          reason: "failed",
+        },
+      );
     } else {
       runError =
         cleanupError instanceof Error ? cleanupError : new Error(formatErrorMessage(cleanupError));
@@ -769,6 +810,12 @@ export async function runPreparedCliAgent(
         `before_agent_run block: failed to persist redacted CLI user message: ${formatErrorMessage(
           err,
         )}`,
+        undefined,
+        {
+          event: "agents.cli.runner.agent.run.block.persist.redacted",
+          outcome: "warning",
+          reason: "failed",
+        },
       );
     }
   };
@@ -1020,7 +1067,12 @@ export async function runPreparedCliAgent(
       }),
       providerId: params.provider,
       modelId: context.modelId,
-      warn: (message) => log.warn(message),
+      warn: (message) =>
+        log.warn(message, undefined, {
+          event: "agents.cli.context_engine.load",
+          outcome: "warning",
+          reason: "warning",
+        }),
     });
     const contextEngineHistoryMessages = context.contextEngine
       ? await loadCliSessionContextEngineMessages({

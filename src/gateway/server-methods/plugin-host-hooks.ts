@@ -79,9 +79,17 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
     });
     const result = { ok: true, descriptors };
     if (!validatePluginsUiDescriptorsResult(result)) {
-      log.warn("invalid plugins.uiDescriptors result", {
-        errors: validatePluginsUiDescriptorsResult.errors,
-      });
+      log.warn(
+        "invalid plugins.uiDescriptors result",
+        {
+          errors: validatePluginsUiDescriptorsResult.errors,
+        },
+        {
+          event: "gateway.plugin.ui_descriptors",
+          outcome: "warning",
+          reason: "invalid",
+        },
+      );
       respond(
         false,
         undefined,
@@ -272,6 +280,12 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
     } catch (error) {
       log.warn(
         `plugin session action failed plugin=${pluginId} action=${actionId}: ${formatErrorMessage(error)}`,
+        undefined,
+        {
+          event: "gateway.host_hooks.action",
+          outcome: "warning",
+          reason: "failed",
+        },
       );
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "plugin session action failed"));
     }

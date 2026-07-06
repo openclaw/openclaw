@@ -202,7 +202,11 @@ export function writeGatewayRestartIntentSync(opts: {
     );
     return true;
   } catch (err) {
-    restartLog.warn(`failed to write gateway restart intent: ${String(err)}`);
+    restartLog.warn(`failed to write gateway restart intent: ${String(err)}`, undefined, {
+      event: "restart.write.gateway.restart.intent",
+      outcome: "warning",
+      reason: "failed",
+    });
     return false;
   }
 }
@@ -378,7 +382,11 @@ export function emitGatewayRestart(
       if (!result.ok) {
         // Roll back the cycle marker so future restart requests can still proceed.
         rollBackGatewayRestartEmission();
-        restartLog.warn("Windows scheduled task restart failed, token rolled back");
+        restartLog.warn("Windows scheduled task restart failed, token rolled back", undefined, {
+          event: "restart.windows.scheduled.task.restart.token.rolled",
+          outcome: "warning",
+          reason: "failed",
+        });
         return false;
       }
       consumeGatewaySigusr1RestartAuthorization();
@@ -551,6 +559,12 @@ async function emitPreparedGatewayRestart(
     } catch (err) {
       restartLog.warn(
         `restart preparation failed; restart will continue without it: ${String(err)}`,
+        undefined,
+        {
+          event: "restart.preparation.restart.will.continue",
+          outcome: "warning",
+          reason: "failed",
+        },
       );
     }
     if (hooks) {
@@ -850,6 +864,12 @@ export function scheduleGatewaySigusr1Restart(opts?: {
     }
     restartLog.warn(
       `restart request coalesced (already in-flight) reason=${reason ?? "unspecified"} ${formatRestartAudit(opts?.audit)}`,
+      undefined,
+      {
+        event: "restart.request.coalesced",
+        outcome: "warning",
+        reason: "in_flight",
+      },
     );
     return {
       ok: true,
@@ -870,6 +890,12 @@ export function scheduleGatewaySigusr1Restart(opts?: {
     if (pendingRestartPreparing && skipDeferral && activeDeferralPolls.size > 0) {
       restartLog.warn(
         `restart request bypassed active deferral reason=${reason ?? "unspecified"} pendingReason=${pendingRestartReason ?? "unspecified"} ${formatRestartAudit(opts?.audit)}`,
+        undefined,
+        {
+          event: "restart.request.deferral",
+          outcome: "warning",
+          reason: "bypassed_active_deferral",
+        },
       );
       clearActiveDeferralPolls();
       pendingRestartReason = reason;
@@ -911,6 +937,12 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       ) {
         restartLog.warn(
           `restart continuation dropped: another session owns the pending restart (callerSessionKey=${opts?.sessionKey ?? "unspecified"} pendingSessionKey=${pendingRestartSessionKey ?? "unspecified"})`,
+          undefined,
+          {
+            event: "restart.continuation",
+            outcome: "warning",
+            reason: "owned_by_another_session",
+          },
         );
         if (pendingRestartTimer) {
           clearTimeout(pendingRestartTimer);
@@ -936,6 +968,12 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       const preservedSessionKey = preservePendingHooks ? pendingRestartSessionKey : undefined;
       restartLog.warn(
         `restart request rescheduled earlier reason=${reason ?? "unspecified"} pendingReason=${pendingRestartReason ?? "unspecified"} oldDelayMs=${remainingMs} newDelayMs=${Math.max(0, requestedDueAt - nowMs)} ${formatRestartAudit(opts?.audit)}`,
+        undefined,
+        {
+          event: "restart.request.rescheduled.earlier",
+          outcome: "warning",
+          reason: "warning",
+        },
       );
       clearPendingScheduledRestart();
       if (preservePendingHooks) {
@@ -949,11 +987,23 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       pendingRestartSkipDeferral = pendingRestartSkipDeferral || skipDeferral;
       restartLog.warn(
         `restart request coalesced (already scheduled) reason=${reason ?? "unspecified"} pendingReason=${pendingRestartReason ?? "unspecified"} delayMs=${remainingMs} ${formatRestartAudit(opts?.audit)}`,
+        undefined,
+        {
+          event: "restart.request.coalesced",
+          outcome: "warning",
+          reason: "scheduled",
+        },
       );
       const emitHooksQueued = updatePendingRestartEmitHooks(opts?.emitHooks, opts?.sessionKey);
       if (opts?.emitHooks && !emitHooksQueued) {
         restartLog.warn(
           `restart continuation dropped: another session owns the pending restart (callerSessionKey=${opts.sessionKey ?? "unspecified"} pendingSessionKey=${pendingRestartSessionKey ?? "unspecified"})`,
+          undefined,
+          {
+            event: "restart.continuation",
+            outcome: "warning",
+            reason: "owned_by_another_session",
+          },
         );
       }
       return {

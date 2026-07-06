@@ -23,6 +23,12 @@ export function resolveBundledSkillsContext(
       hasWarnedMissingBundledDir = true;
       skillsLogger.warn(
         "Bundled skills directory could not be resolved; built-in skills may be missing.",
+        undefined,
+        {
+          event: "skills.bundled.skills.directory.resolve",
+          outcome: "warning",
+          reason: "missing",
+        },
       );
     }
     return { dir, names };

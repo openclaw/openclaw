@@ -1564,7 +1564,11 @@ export function formatAssistantErrorText(
 
   // Never return raw unhandled errors - log for debugging but return safe message
   if (raw.length > 600) {
-    log.warn(`Long error truncated: ${raw.slice(0, 200)}`);
+    log.warn(`Long error truncated: ${raw.slice(0, 200)}`, undefined, {
+      event: "errors.long.truncated",
+      outcome: "warning",
+      reason: "warning",
+    });
   }
   return raw.length > 600 ? `${truncateUtf16Safe(raw, 600)}…` : raw;
 }

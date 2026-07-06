@@ -116,6 +116,8 @@ function createGatewayCliStartupTrace() {
     if (enabled) {
       gatewayLog.info(
         `startup trace: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms`,
+        undefined,
+        { event: "gateway.startup.trace.total", outcome: "success", reason: "completed" },
       );
     }
   };
@@ -212,6 +214,12 @@ async function maybeLogPendingControlUiBuild(cfg: OpenClawConfig): Promise<void>
   }
   gatewayLog.info(
     "Control UI assets are missing; first startup may spend a few seconds building them before the gateway binds. `pnpm gateway:watch` does not rebuild Control UI assets, so rerun `pnpm ui:build` after UI changes or use `pnpm ui:dev` while developing the Control UI. For a full local dist, run `pnpm build && pnpm ui:build`.",
+    undefined,
+    {
+      event: "gateway.control_ui.assets",
+      outcome: "warning",
+      reason: "missing",
+    },
   );
 }
 
@@ -557,7 +565,11 @@ async function maybeWriteGatewayStartupFailureBundle(err: unknown): Promise<void
     await import("../../logging/diagnostic-stability-bundle.js");
   const result = writeDiagnosticStabilityBundleForFailureSync("gateway.startup_failed", err);
   if ("message" in result) {
-    gatewayLog.warn(result.message);
+    gatewayLog.warn(result.message, undefined, {
+      event: "gateway.startup.diagnostic_bundle.write",
+      outcome: "warning",
+      reason: "failed",
+    });
   }
 }
 
@@ -639,7 +651,11 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
     }
   }
 
-  gatewayLog.info("loading configuration…");
+  gatewayLog.info("loading configuration…", undefined, {
+    event: "gateway.loading.configuration",
+    outcome: "success",
+    reason: "completed",
+  });
   const { cfg, lowerPrecedenceEnv, snapshot, startupConfigSnapshotRead } =
     await readGatewayStartupConfigWithShellEnv({
       opts,
@@ -693,7 +709,11 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
   }
   await hooks.refreshManagedProxy?.(cfg.proxy);
   void maybeLogPendingControlUiBuild(cfg).catch((err: unknown) => {
-    gatewayLog.warn(`Control UI asset check failed: ${String(err)}`);
+    gatewayLog.warn(`Control UI asset check failed: ${String(err)}`, undefined, {
+      event: "gateway.control.ui.asset.check",
+      outcome: "warning",
+      reason: "failed",
+    });
   });
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
@@ -728,6 +748,12 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
     if (stale.length > 0) {
       gatewayLog.info(
         `service-mode: cleared ${stale.length} stale gateway pid(s) before bind on port ${port}`,
+        undefined,
+        {
+          event: "gateway.service.mode.cleared.stale.gateway.pid",
+          outcome: "success",
+          reason: "completed",
+        },
       );
     }
   }
@@ -740,18 +766,32 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
         sigtermTimeoutMs: 700,
       });
       if (killed.length === 0) {
-        gatewayLog.info(`force: no listeners on port ${port}`);
+        gatewayLog.info(`force: no listeners on port ${port}`, undefined, {
+          event: "gateway.force.no.listeners.port",
+          outcome: "success",
+          reason: "completed",
+        });
       } else {
         for (const proc of killed) {
           gatewayLog.info(
             `force: killed pid ${proc.pid}${proc.command ? ` (${proc.command})` : ""} on port ${port}`,
+            undefined,
+            { event: "gateway.force.killed.pid.port", outcome: "success", reason: "completed" },
           );
         }
         if (escalatedToSigkill) {
-          gatewayLog.info(`force: escalated to SIGKILL while freeing port ${port}`);
+          gatewayLog.info(`force: escalated to SIGKILL while freeing port ${port}`, undefined, {
+            event: "gateway.force.escalated.sigkill.freeing.port",
+            outcome: "success",
+            reason: "completed",
+          });
         }
         if (waitedMs > 0) {
-          gatewayLog.info(`force: waited ${waitedMs}ms for port ${port} to free`);
+          gatewayLog.info(`force: waited ${waitedMs}ms for port ${port} to free`, undefined, {
+            event: "gateway.force.port_wait",
+            outcome: "success",
+            reason: "free",
+          });
         }
       }
       // After killing, verify the port is actually bindable (handles TIME_WAIT).
@@ -769,7 +809,15 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
         host: bindProbeHost,
       });
       if (bindWaitMs > 0) {
-        gatewayLog.info(`force: waited ${bindWaitMs}ms for port ${port} to become bindable`);
+        gatewayLog.info(
+          `force: waited ${bindWaitMs}ms for port ${port} to become bindable`,
+          undefined,
+          {
+            event: "gateway.force.port_wait",
+            outcome: "success",
+            reason: "bindable",
+          },
+        );
       }
     } catch (err) {
       defaultRuntime.error(
@@ -823,7 +871,11 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
   }
   const tokenRaw = toOptionString(opts.token);
 
-  gatewayLog.info("resolving authentication…");
+  gatewayLog.info("resolving authentication…", undefined, {
+    event: "gateway.resolving.authentication",
+    outcome: "success",
+    reason: "completed",
+  });
   const configExists = snapshot?.exists ?? fs.existsSync(CONFIG_PATH);
   const configAuditPath = path.join(resolveStateDir(process.env), "logs", "config-audit.jsonl");
   const effectiveCfg = snapshot?.valid ? snapshot.config : cfg;
@@ -904,6 +956,12 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
   if (resolvedAuthMode === "none") {
     gatewayLog.warn(
       "Gateway auth mode=none explicitly configured; all gateway connections are unauthenticated.",
+      undefined,
+      {
+        event: "gateway.auth.mode.none.explicitly.configured.all",
+        outcome: "warning",
+        reason: "warning",
+      },
     );
   }
   const healthHost = await resolveGatewayBindHost(bind, cfg.gateway?.customBindHost);
@@ -941,7 +999,11 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
         }
       : undefined;
 
-  gatewayLog.info("starting...");
+  gatewayLog.info("starting...", undefined, {
+    event: "gateway.starting",
+    outcome: "success",
+    reason: "started",
+  });
   startupTrace.mark("cli.gateway-loop");
   let startupConfigSnapshotReadForNextStart = startupConfigSnapshotRead;
   const deferStartupSidecars =
