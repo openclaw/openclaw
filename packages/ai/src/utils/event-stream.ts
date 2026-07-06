@@ -4,7 +4,7 @@ import type { Model } from "../types.js";
 
 export * from "@openclaw/llm-core/event-stream";
 
-export function createMissingApiKeyStream(model: Model<any>): AssistantMessageEventStream {
+export function createMissingApiKeyStream(model: Model): AssistantMessageEventStream {
   const stream = new AssistantMessageEventStream();
   const output = {
     role: "assistant" as const,
