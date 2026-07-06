@@ -436,6 +436,110 @@ describe("handleToolExecutionEnd cron mutation tracking", () => {
     expect(ctx.state.itemActiveIds.size).toBe(0);
   });
 
+  it.each([
+    ["exec", "openclaw cron add --at 2026-07-06T17:00:00Z 'ping Markus'"],
+    ["bash", "pnpm openclaw cron add --at 2026-07-06T17:00:00Z 'ping Markus'"],
+    ["exec", "npx openclaw cron add --at=2026-07-06T17:00:00Z 'ping Markus'"],
+  ] as const)(
+    "increments successfulCronAdds when %s successfully runs openclaw cron add --at",
+    async (toolName, command) => {
+      const { ctx } = createTestContext();
+      const toolCallId = `tool-${toolName}-cron-add-at`;
+      await handleToolExecutionStart(
+        ctx as never,
+        {
+          type: "tool_execution_start",
+          toolName,
+          toolCallId,
+          args: { command },
+        } as never,
+      );
+
+      await handleToolExecutionEnd(
+        ctx as never,
+        {
+          type: "tool_execution_end",
+          toolName,
+          toolCallId,
+          isError: false,
+          result: {
+            details: {
+              status: "completed",
+              exitCode: 0,
+              durationMs: 12,
+              aggregated: "created cron job reminder-1",
+            },
+          },
+        } as never,
+      );
+
+      expect(ctx.state.successfulCronAdds).toBe(1);
+    },
+  );
+
+  it.each([
+    {
+      name: "failed shell cron add",
+      command: "openclaw cron add --at 2026-07-06T17:00:00Z 'ping Markus'",
+      result: {
+        details: {
+          status: "failed",
+          exitCode: 1,
+          durationMs: 12,
+          aggregated: "created cron job reminder-1",
+        },
+      },
+    },
+    {
+      name: "successful unrelated cron command",
+      command: "openclaw cron list",
+      result: {
+        details: {
+          status: "completed",
+          exitCode: 0,
+          durationMs: 12,
+          aggregated: "created cron job reminder-1",
+        },
+      },
+    },
+    {
+      name: "successful cron add without --at",
+      command: "openclaw cron add '0 17 * * *' 'ping Markus'",
+      result: {
+        details: {
+          status: "completed",
+          exitCode: 0,
+          durationMs: 12,
+          aggregated: "created cron job reminder-1",
+        },
+      },
+    },
+  ])("does not count $name as a successful reminder cron add", async ({ command, result }) => {
+    const { ctx } = createTestContext();
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-not-reminder-cron-add",
+        args: { command },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-not-reminder-cron-add",
+        isError: false,
+        result,
+      } as never,
+    );
+
+    expect(ctx.state.successfulCronAdds).toBe(0);
+  });
+
   it("keeps pre-execution cron failures replay-safe", async () => {
     const { ctx } = createTestContext();
     await handleToolExecutionStart(

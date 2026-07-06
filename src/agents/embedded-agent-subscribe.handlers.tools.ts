@@ -33,6 +33,7 @@ import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { truncateUtf16Safe } from "../utils.js";
+import { splitShellArgs } from "../utils/shell-argv.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
 import {
   consumeAdjustedParamsForToolCall,
@@ -233,6 +234,46 @@ function isCronAddAction(args: unknown): boolean {
   }
   const action = (args as Record<string, unknown>).action;
   return normalizeOptionalLowercaseString(action) === "add";
+}
+
+function readShellCommandArg(args: unknown): string | undefined {
+  if (!args || typeof args !== "object") {
+    return undefined;
+  }
+  const record = args as Record<string, unknown>;
+  return readStringValue(record.command) ?? readStringValue(record.cmd);
+}
+
+function isOpenClawCronAddAtShellCommand(args: unknown): boolean {
+  const command = readShellCommandArg(args);
+  if (!command) {
+    return false;
+  }
+  const tokens = splitShellArgs(command);
+  if (!tokens) {
+    return false;
+  }
+  const executable = normalizeOptionalLowercaseString(tokens[0]);
+  const openclawIndex =
+    executable === "openclaw"
+      ? 0
+      : (executable === "pnpm" || executable === "npx" || executable === "bunx") &&
+          normalizeOptionalLowercaseString(tokens[1]) === "openclaw"
+        ? 1
+        : -1;
+  if (openclawIndex < 0) {
+    return false;
+  }
+  return (
+    normalizeOptionalLowercaseString(tokens[openclawIndex + 1]) === "cron" &&
+    normalizeOptionalLowercaseString(tokens[openclawIndex + 2]) === "add" &&
+    tokens.slice(openclawIndex + 3).some((token) => token === "--at" || token.startsWith("--at="))
+  );
+}
+
+function isSuccessfulExecResult(result: unknown): boolean {
+  const execDetails = readExecToolDetails(result);
+  return execDetails?.status === "completed" && execDetails.exitCode === 0;
 }
 
 function buildToolCallSummary(
@@ -1304,7 +1345,13 @@ export async function handleToolExecutionEnd(
   }
 
   // Track committed reminders only when cron.add completed successfully.
-  if (!isToolError && toolName === "cron" && isCronAddAction(startArgs)) {
+  if (
+    !isToolError &&
+    ((toolName === "cron" && isCronAddAction(startArgs)) ||
+      (isExecToolName(toolName) &&
+        isOpenClawCronAddAtShellCommand(startArgs) &&
+        isSuccessfulExecResult(sanitizedResult)))
+  ) {
     ctx.state.successfulCronAdds += 1;
   }
   if (!isToolError && toolName === HEARTBEAT_RESPONSE_TOOL_NAME) {
