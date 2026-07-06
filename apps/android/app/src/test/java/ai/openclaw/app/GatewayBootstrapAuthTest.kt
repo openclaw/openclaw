@@ -17,10 +17,12 @@ import ai.openclaw.app.gateway.GatewayTlsProbeResult
 import ai.openclaw.app.node.ConnectionManager
 import ai.openclaw.app.node.InvokeDispatcher
 import ai.openclaw.app.protocol.OpenClawTalkCommand
+import ai.openclaw.app.voice.MicCaptureManager
 import ai.openclaw.app.voice.TalkModeManager
 import android.Manifest
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.async
@@ -28,6 +30,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -978,6 +981,71 @@ class GatewayBootstrapAuthTest {
       assertNull(cancel.error)
       assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
     }
+
+  @Test
+  fun pttStartQueuedAfterCancelIsInvalidatedBeforePreparation() =
+    runBlocking {
+      val app = RuntimeEnvironment.getApplication()
+      shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+      val runtime = NodeRuntime(app)
+      val dispatcher = readField<InvokeDispatcher>(runtime, "invokeDispatcher")
+      val preparationMutex = readField<Mutex>(runtime, "voiceCapturePreparationMutex")
+      preparationMutex.lock()
+
+      val cancel =
+        async(start = CoroutineStart.UNDISPATCHED) {
+          dispatcher.handleInvoke(OpenClawTalkCommand.PttCancel.rawValue, null)
+        }
+      val start =
+        async(start = CoroutineStart.UNDISPATCHED) {
+          dispatcher.handleInvoke(OpenClawTalkCommand.PttStart.rawValue, null)
+        }
+      preparationMutex.unlock()
+
+      assertEquals("NODE_BACKGROUND_UNAVAILABLE", start.await().error?.code)
+      assertNull(cancel.await().error)
+      val talkMode = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
+      assertNull(talkMode.activePushToTalkCaptureId)
+      assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
+    }
+
+  @Test
+  fun sameManualMicModeReassertsCaptureAndInvalidatesPendingPtt() {
+    val app = RuntimeEnvironment.getApplication()
+    shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+    val runtime = NodeRuntime(app)
+    runtime.setMicEnabled(true)
+    val commandEpoch = readField<AtomicLong>(runtime, "talkPttCommandEpoch")
+    val epochBeforeReassertion = commandEpoch.get()
+    val micCapture = readField<Lazy<MicCaptureManager>>(runtime, "micCapture\$delegate").value
+    val talkMode = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
+    micCapture.setMicEnabled(false)
+    writeField(talkMode, "activePttCaptureId", "capture-stale")
+
+    runtime.setMicEnabled(true)
+
+    assertTrue(runtime.micEnabled.value)
+    assertNull(talkMode.activePushToTalkCaptureId)
+    assertTrue(commandEpoch.get() > epochBeforeReassertion)
+    assertEquals(VoiceCaptureMode.ManualMic, runtime.voiceCaptureMode.value)
+  }
+
+  @Test
+  fun sameTalkModeReassertionStopsManualMicCapture() {
+    val app = RuntimeEnvironment.getApplication()
+    shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+    val runtime = NodeRuntime(app)
+    runtime.setTalkModeEnabled(true)
+    val micCapture = readField<Lazy<MicCaptureManager>>(runtime, "micCapture\$delegate").value
+    micCapture.setMicEnabled(true)
+
+    runtime.setTalkModeEnabled(true)
+
+    assertFalse(runtime.micEnabled.value)
+    assertEquals(VoiceCaptureMode.TalkMode, runtime.voiceCaptureMode.value)
+    val talkMode = readField<Lazy<TalkModeManager>>(runtime, "talkMode\$delegate").value
+    assertTrue(talkMode.isEnabled.value)
+  }
 
   @Test
   fun backgroundingStopsTalkModeCapture() {
