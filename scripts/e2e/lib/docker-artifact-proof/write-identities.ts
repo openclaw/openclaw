@@ -135,7 +135,7 @@ const containers = options.containers.map(({ name, role }) => {
     details: options.details.get(role) ?? {},
     id: container.Id,
     imageId: container.Image,
-    name: String(container.Name ?? name).replace(/^\//u, ""),
+    name: (container.Name ?? name).replace(/^\//u, ""),
     role,
     state: container.State?.Status,
   };
@@ -153,5 +153,5 @@ const identity = {
 fs.mkdirSync(path.dirname(options.output), { recursive: true });
 fs.writeFileSync(options.output, `${JSON.stringify(identity, null, 2)}\n`);
 console.log(
-  `artifact identities: package=${identity.package.name}@${identity.package.version} sha256=${identity.package.sha256} image=${identity.image.id} containers=${containers.map((container) => `${String(container.role)}:${String(container.id)}`).join(",")}`,
+  `artifact identities: package=${identity.package.name}@${identity.package.version} sha256=${identity.package.sha256} image=${identity.image.id} containers=${containers.map((container) => `${container.role}:${container.id}`).join(",")}`,
 );
