@@ -1642,10 +1642,6 @@ describe("callGateway error details", () => {
   });
 
   it("does not over-claim a gateway crash on a 1006 abnormal close", async () => {
-    // Regression for #100941 ask 3: 1006 is an abnormal closure with no close
-    // frame, most often a connection dropped under load — not a crash. The
-    // human-readable message must lead with the actionable cause and not assert
-    // that the gateway crashed as a co-equal possibility.
     startMode = "close";
     closeCode = 1006;
     closeReason = "";
@@ -1657,7 +1653,9 @@ describe("callGateway error details", () => {
     });
 
     const message = (err as { message: string }).message;
-    expect(message).toMatch(/connection dropped.*retry/i);
+    expect(message).toContain(
+      "Connection dropped without a close frame (retry; check network and gateway load)",
+    );
     expect(message).not.toContain("crashed or was terminated unexpectedly");
     expect(message).toContain("Run `openclaw doctor`");
   });
