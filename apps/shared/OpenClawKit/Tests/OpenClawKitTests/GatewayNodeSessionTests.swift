@@ -351,6 +351,10 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, @unchecked
         self.lock.withLock { self.requests.last }
     }
 
+    func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
+        self.makeWebSocketTask(request: URLRequest(url: url))
+    }
+
     func makeWebSocketTask(request: URLRequest) -> WebSocketTaskBox {
         self.lock.withLock {
             self.makeCount += 1
@@ -368,17 +372,25 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, @unchecked
 private final class MutableHeaderValue: @unchecked Sendable {
     private let lock = NSLock()
     private var value: String
+    private var reads = 0
 
     init(value: String) {
         self.value = value
     }
 
     func get() -> String {
-        self.lock.withLock { self.value }
+        self.lock.withLock {
+            self.reads += 1
+            return self.value
+        }
     }
 
     func set(_ value: String) {
         self.lock.withLock { self.value = value }
+    }
+
+    func readCount() -> Int {
+        self.lock.withLock { self.reads }
     }
 }
 
@@ -492,7 +504,7 @@ struct GatewayNodeSessionTests {
             clientMode: "node",
             clientDisplayName: "iOS Test",
             includeDeviceIdentity: false)
-        let url = try #require(URL(string: "ws://gateway.example.invalid"))
+        let url = try #require(URL(string: "wss://gateway.example.invalid"))
         let provider: @Sendable () -> [String: String] = {
             [
                 "CF-Access-Client-Id": "client-id",
@@ -530,6 +542,42 @@ struct GatewayNodeSessionTests {
         let reconnectRequest = try #require(session.latestRequest())
         #expect(reconnectRequest.value(forHTTPHeaderField: "CF-Access-Client-Secret") == "second-secret")
 
+        await gateway.disconnect()
+    }
+
+    @Test
+    func `cleartext upgrade never reads or attaches custom headers`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let secret = MutableHeaderValue(value: "must-not-be-read")
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-ios-test",
+            clientMode: "node",
+            clientDisplayName: "iOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://gateway.example.invalid")),
+            token: nil,
+            bootstrapToken: nil,
+            password: nil,
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            extraHeadersProvider: { [secret] in ["Authorization": secret.get()] },
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { req in
+                BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil)
+            })
+
+        let request = try #require(session.latestRequest())
+        #expect(secret.readCount() == 0)
+        #expect(request.value(forHTTPHeaderField: "Authorization") == nil)
         await gateway.disconnect()
     }
 

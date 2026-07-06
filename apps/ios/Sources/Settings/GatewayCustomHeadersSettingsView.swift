@@ -34,7 +34,8 @@ struct GatewayCustomHeadersSettingsView: View {
                     Text("Headers")
                         .font(OpenClawType.captionSemiBold)
                 } footer: {
-                    Text("Sent with every connection to this gateway. Changes apply on the next reconnect.")
+                    Text("Sent with foreground app connections to this gateway. "
+                        + "Changes apply on the next reconnect; Share extension delivery is not yet supported.")
                         .font(OpenClawType.caption)
                 }
             }
@@ -103,8 +104,8 @@ struct GatewayCustomHeadersSettingsView: View {
         if self.newNameIsDuplicate {
             return "A header with this name already exists."
         }
-        return "For gateways behind an authenticating proxy, for example Cloudflare Access "
-            + "service token headers. Values are stored securely and sent only to this gateway."
+        return "For secure gateways behind an authenticating proxy, for example Cloudflare Access "
+            + "service token headers. Values are stored securely and sent only over TLS to this gateway."
     }
 
     private func headerValueField(_ placeholder: String, text: Binding<String>) -> some View {

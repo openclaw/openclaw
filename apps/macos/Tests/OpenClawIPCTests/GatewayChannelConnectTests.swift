@@ -50,6 +50,10 @@ struct GatewayChannelConnectTests {
             self.failure = failure
         }
 
+        func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
+            self.makeWebSocketTask(request: URLRequest(url: url))
+        }
+
         func makeWebSocketTask(request: URLRequest) -> WebSocketTaskBox {
             _ = request
             let task = GatewayTestWebSocketTask(receiveHook: { _, receiveIndex in

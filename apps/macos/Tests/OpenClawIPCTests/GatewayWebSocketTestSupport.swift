@@ -266,6 +266,10 @@ final class GatewayTestWebSocketSession: WebSocketSessioning, @unchecked Sendabl
         self.lock.withLock { self.tasks.last }
     }
 
+    func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
+        self.makeWebSocketTask(request: URLRequest(url: url))
+    }
+
     func makeWebSocketTask(request: URLRequest) -> WebSocketTaskBox {
         _ = request
         let task = self.taskFactory()

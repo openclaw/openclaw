@@ -77,10 +77,24 @@ public struct WebSocketTaskBox: @unchecked Sendable {
 }
 
 public protocol WebSocketSessioning: AnyObject {
+    func makeWebSocketTask(url: URL) -> WebSocketTaskBox
     func makeWebSocketTask(request: URLRequest) -> WebSocketTaskBox
 }
 
+extension WebSocketSessioning {
+    /// Compatibility path for existing session conformers. URLSession and pinning sessions
+    /// override this requirement so operator headers remain attached to the upgrade request.
+    public func makeWebSocketTask(request: URLRequest) -> WebSocketTaskBox {
+        guard let url = request.url else { preconditionFailure("WebSocket request URL is required") }
+        return self.makeWebSocketTask(url: url)
+    }
+}
+
 extension URLSession: WebSocketSessioning {
+    public func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
+        self.makeWebSocketTask(request: URLRequest(url: url))
+    }
+
     public func makeWebSocketTask(request: URLRequest) -> WebSocketTaskBox {
         let task = self.webSocketTask(with: request)
         // Avoid "Message too long" receive errors for large snapshots / history payloads.
@@ -375,6 +389,9 @@ public actor GatewayChannelActor {
     /// without re-pairing. Values are credentials: never log them.
     private func makeUpgradeRequest() -> URLRequest {
         var request = URLRequest(url: self.url)
+        // Custom headers can contain service tokens or Authorization values. Do not even read
+        // the provider for cleartext routes, where credentials would be exposed in transit.
+        guard self.url.scheme?.lowercased() == "wss" else { return request }
         guard let headers = self.extraHeadersProvider?(), !headers.isEmpty else { return request }
         for (name, value) in GatewayCustomHeaders.sanitized(headers) {
             request.setValue(value, forHTTPHeaderField: name)
