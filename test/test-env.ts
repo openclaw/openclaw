@@ -31,15 +31,14 @@ const LIVE_EXTERNAL_AUTH_FILES = [
   ".codex/auth.json",
   ".codex/config.toml",
 ] as const;
-const LIVE_EXTERNAL_AUTH_EXCLUDED_DIRS = new Set([
+// Keep Gemini credentials and user configuration; only generated browser data can be dropped.
+const LIVE_GEMINI_EXCLUDED_PATHS = [
   "antigravity-browser-profile",
-  "browser_recordings",
-  "Cache",
-  "Cache_Data",
-  "Code Cache",
+  "antigravity/browser_recordings",
+  "cli-browser-profile",
   "GPUCache",
-  "CacheStorage",
-]);
+  "Service Worker/CacheStorage",
+] as const;
 const requireFromHere = createRequire(import.meta.url);
 
 type LegacyConfigCompatApi = typeof import("../src/commands/doctor/shared/legacy-config-compat.js");
@@ -273,14 +272,16 @@ function ensureParentDir(targetPath: string): void {
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
 }
 
-function shouldStageLiveExternalAuthPath(sourceRoot: string, sourcePath: string): boolean {
+function shouldStageLiveGeminiPath(sourceRoot: string, sourcePath: string): boolean {
   const relativePath = path.relative(sourceRoot, sourcePath);
   if (!relativePath || relativePath.startsWith("..")) {
     return true;
   }
-  return relativePath
-    .split(path.sep)
-    .every((segment) => !LIVE_EXTERNAL_AUTH_EXCLUDED_DIRS.has(segment));
+  const normalizedPath = relativePath.split(path.sep).join("/");
+  return !LIVE_GEMINI_EXCLUDED_PATHS.some(
+    (excludedPath) =>
+      normalizedPath === excludedPath || normalizedPath.startsWith(`${excludedPath}/`),
+  );
 }
 
 function copyDirIfExists(
@@ -448,9 +449,11 @@ function stageLiveTestState(params: {
 
   for (const authDir of LIVE_EXTERNAL_AUTH_DIRS) {
     const sourcePath = path.join(params.realHome, authDir);
-    copyDirIfExists(sourcePath, path.join(params.tempHome, authDir), {
-      filter: (entryPath) => shouldStageLiveExternalAuthPath(sourcePath, entryPath),
-    });
+    const filter =
+      authDir === ".gemini"
+        ? (entryPath: string) => shouldStageLiveGeminiPath(sourcePath, entryPath)
+        : undefined;
+    copyDirIfExists(sourcePath, path.join(params.tempHome, authDir), { filter });
   }
   for (const authFile of LIVE_EXTERNAL_AUTH_FILES) {
     copyFileIfExists(path.join(params.realHome, authFile), path.join(params.tempHome, authFile));
