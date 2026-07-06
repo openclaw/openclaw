@@ -329,6 +329,34 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     expect(sendMessageCall()?.accountId).toBe("main");
   });
 
+  it("sends wrapped interactive card text as a native Feishu card", async () => {
+    const text = JSON.stringify({
+      type: "interactive",
+      card: {
+        body: {
+          elements: [{ tag: "markdown", content: "Wrapped body" }],
+        },
+      },
+    });
+
+    const result = await sendText({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text,
+      accountId: "main",
+      replyToId: "om_reply_1",
+    });
+
+    expect(sendCardCall()?.to).toBe("chat_1");
+    expect(sendCardCall()?.accountId).toBe("main");
+    expect(sendCardCall()?.replyToMessageId).toBe("om_reply_1");
+    expect(sendCardCall()?.card?.body?.elements).toEqual([
+      { tag: "markdown", content: "Wrapped body" },
+    ]);
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expectFeishuResult(result, "native_card_msg");
+  });
+
   it("falls back to plain text if local-image media send fails", async () => {
     const { dir, file } = await createTmpImage();
     sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
@@ -816,6 +844,33 @@ describe("feishuOutbound.sendPayload native cards", () => {
       template: "green",
     });
     expect(card.body.elements).toEqual([{ tag: "markdown", content: "Card body" }]);
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expectFeishuResult(result, "native_card_msg");
+  });
+
+  it("sends legacy top-level elements payload text card JSON as a native Feishu card", async () => {
+    const text = JSON.stringify({
+      header: {
+        title: { tag: "plain_text", content: "Legacy JSON card" },
+        template: "green",
+      },
+      elements: [{ tag: "markdown", content: "Legacy body" }],
+    });
+
+    const result = await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text,
+      accountId: "main",
+      payload: { text },
+    });
+
+    const card = sendCardCall()?.card;
+    expect(card.header).toEqual({
+      title: { tag: "plain_text", content: "Legacy JSON card" },
+      template: "green",
+    });
+    expect(card.body.elements).toEqual([{ tag: "markdown", content: "Legacy body" }]);
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expectFeishuResult(result, "native_card_msg");
   });

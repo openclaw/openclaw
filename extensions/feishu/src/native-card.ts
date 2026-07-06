@@ -143,8 +143,13 @@ function sanitizeNativeFeishuCardElements(element: unknown): Record<string, unkn
 export function sanitizeNativeFeishuCard(
   card: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
-  const body = isRecord(card.body) ? card.body : undefined;
-  const rawElements = Array.isArray(body?.elements) ? body.elements : [];
+  const normalizedCard = card.type === "interactive" && isRecord(card.card) ? card.card : card;
+  const body = isRecord(normalizedCard.body) ? normalizedCard.body : undefined;
+  const rawElements = Array.isArray(body?.elements)
+    ? body.elements
+    : Array.isArray(normalizedCard.elements)
+      ? normalizedCard.elements
+      : [];
   const elements = rawElements
     .flatMap((element) => sanitizeNativeFeishuCardElements(element))
     .filter((element): element is Record<string, unknown> => Boolean(element));
@@ -152,7 +157,7 @@ export function sanitizeNativeFeishuCard(
     return undefined;
   }
 
-  const header = isRecord(card.header) ? card.header : undefined;
+  const header = isRecord(normalizedCard.header) ? normalizedCard.header : undefined;
   const title =
     isRecord(header?.title) && typeof header.title.content === "string"
       ? header.title.content
