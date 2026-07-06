@@ -28,6 +28,7 @@ import {
   type WorkspaceBootstrapFile,
 } from "../../workspace.js";
 import { log } from "../logger.js";
+import { measureBootstrapSubstage } from "./attempt-stage-timing.js";
 import { remapInjectedContextFilesToWorkspace } from "./attempt.bootstrap-context.js";
 import { resolveAttemptBootstrapContext } from "./attempt.context-engine-helpers.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
@@ -66,10 +67,9 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
       durationMs: Math.max(0, durationMs),
     });
   };
-  const resolveBootstrapRouting = (bootstrapFiles?: readonly WorkspaceBootstrapFile[]) => {
-    const startedAt = performance.now();
-    try {
-      return resolveWorkspaceBootstrapRouting({
+  const resolveBootstrapRouting = (bootstrapFiles?: readonly WorkspaceBootstrapFile[]) =>
+    measureBootstrapSubstage(recordBootstrapContextSubstage, "bootstrap-routing", () =>
+      resolveWorkspaceBootstrapRouting({
         isWorkspaceBootstrapPending,
         bootstrapFiles,
         bootstrapContextRunKind: attempt.bootstrapContextRunKind,
@@ -80,24 +80,16 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
         effectiveWorkspace: params.effectiveWorkspace,
         resolvedWorkspace: params.resolvedWorkspace,
         hasBootstrapFileAccess: params.hasReadTool,
-      });
-    } finally {
-      recordBootstrapContextSubstage("bootstrap-routing", performance.now() - startedAt);
-    }
-  };
+      }),
+    );
   const shouldProbeContinuation =
     !suppressAmbientContext &&
     contextInjectionMode === "continuation-skip" &&
     !isHeartbeatLifecycleRunKind(attempt.bootstrapContextRunKind);
   const shouldProbeContinuationSkip = shouldProbeContinuation
-    ? await (async () => {
-        const startedAt = performance.now();
-        try {
-          return await hasCompletedBootstrapTurnForAttempt(attempt.sessionFile);
-        } finally {
-          recordBootstrapContextSubstage("continuation-scan", performance.now() - startedAt);
-        }
-      })()
+    ? await measureBootstrapSubstage(recordBootstrapContextSubstage, "continuation-scan", () =>
+        hasCompletedBootstrapTurnForAttempt(attempt.sessionFile),
+      )
     : false;
   let preloadedBootstrapFiles: WorkspaceBootstrapFile[] | undefined;
   let bootstrapRouting =
