@@ -29,8 +29,10 @@ import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snaps
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import {
+  buildPersistedUserTurnMessage,
   preparePersistedUserTurnMessageForTranscriptWrite,
   type PersistedUserTurnMessage,
+  type UserTurnInput,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
 import { buildWorkspaceSkillSnapshot } from "../../skills/loading/workspace.js";
@@ -308,11 +310,6 @@ async function persistTextTurnTranscript(
 ): Promise<PersistTextTurnTranscriptResult> {
   const promptText = params.transcriptBody ?? params.body;
   const replyText = params.finalText;
-  if (!promptText && !replyText) {
-    return { kind: "persisted", sessionEntry: params.sessionEntry };
-  }
-
-  const messages = [];
   const userMessage =
     params.userMessage ??
     (promptText
@@ -322,6 +319,11 @@ async function persistTextTurnTranscript(
           timestamp: Date.now(),
         } as PersistedUserTurnMessage)
       : undefined);
+  if (!userMessage && !replyText) {
+    return { kind: "persisted", sessionEntry: params.sessionEntry };
+  }
+
+  const messages = [];
   if (userMessage) {
     messages.push({
       message: userMessage,
@@ -405,6 +407,7 @@ function isClaudeCliProvider(provider: string): boolean {
 export async function persistAcpTurnTranscript(params: {
   body: string;
   transcriptBody?: string;
+  userInput?: UserTurnInput;
   finalText: string;
   sessionId: string;
   sessionKey: string;
@@ -418,6 +421,7 @@ export async function persistAcpTurnTranscript(params: {
 }): Promise<PersistTextTurnTranscriptResult> {
   return await persistTextTurnTranscript({
     ...params,
+    ...(params.userInput ? { userMessage: buildPersistedUserTurnMessage(params.userInput) } : {}),
     assistant: {
       api: "openai-responses",
       provider: "openclaw",

@@ -90,6 +90,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.key.onPreInterceptKeyBeforeSoftKeyboard
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -1100,6 +1101,15 @@ private fun ChatComposer(
     remember(value, commands) {
       matchingSlashCommands(input = value, commands = commands)
     }
+  val sendEnabled =
+    voiceNoteState !is VoiceNoteRecorderState.Recording &&
+      voiceNoteState !is VoiceNoteRecorderState.Preparing &&
+      pendingRunCount == 0 &&
+      if (healthOk) {
+        value.trim().isNotEmpty() || attachments.isNotEmpty()
+      } else {
+        value.trim().isNotEmpty() && attachments.isEmpty()
+      }
 
   Column(modifier = Modifier.fillMaxWidth().imePadding(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
     if (attachments.isNotEmpty()) {
@@ -1150,20 +1160,14 @@ private fun ChatComposer(
           onStartVoiceNote = onStartVoiceNote,
           recordVoiceNoteEnabled = recordVoiceNoteEnabled,
           onVoice = onVoice,
+          sendEnabled = sendEnabled,
+          onSend = onSend,
           modifier = Modifier.weight(1f),
         )
       }
       SendButton(
         // Offline, only text sends are enabled: they queue durably (text-only v1).
-        enabled =
-          voiceNoteState !is VoiceNoteRecorderState.Recording &&
-            voiceNoteState !is VoiceNoteRecorderState.Preparing &&
-            pendingRunCount == 0 &&
-            if (healthOk) {
-              value.trim().isNotEmpty() || attachments.isNotEmpty()
-            } else {
-              value.trim().isNotEmpty() && attachments.isEmpty()
-            },
+        enabled = sendEnabled,
         onClick = onSend,
       )
     }
@@ -1484,8 +1488,12 @@ private fun ChatInputPill(
   onStartVoiceNote: () -> Unit,
   recordVoiceNoteEnabled: Boolean,
   onVoice: () -> Unit,
+  sendEnabled: Boolean,
+  onSend: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
+  val hardwareEnterHandler = remember { PhysicalChatSendKeyHandler() }
+
   Surface(
     modifier = modifier.heightIn(min = ClawTheme.spacing.touchTarget),
     shape = RoundedCornerShape(ClawTheme.radii.control),
@@ -1508,23 +1516,40 @@ private fun ChatInputPill(
         onClick = onStartVoiceNote,
       )
       Box(modifier = Modifier.weight(1f)) {
-        BasicTextField(
+        ChatTextFieldValueAdapter(
           value = value,
           onValueChange = onValueChange,
-          textStyle = ClawTheme.type.body.copy(color = ClawTheme.colors.text),
-          cursorBrush = SolidColor(ClawTheme.colors.primary),
-          minLines = 1,
-          maxLines = 4,
-          modifier = Modifier.fillMaxWidth(),
-          decorationBox = { innerTextField ->
-            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
-              if (value.isEmpty()) {
-                Text(text = "Message OpenClaw", style = ClawTheme.type.body, color = ClawTheme.colors.textSubtle)
+          keyHandler = hardwareEnterHandler,
+        ) { textFieldValue, updateTextFieldValue ->
+          BasicTextField(
+            value = textFieldValue,
+            onValueChange = updateTextFieldValue,
+            textStyle = ClawTheme.type.body.copy(color = ClawTheme.colors.text),
+            cursorBrush = SolidColor(ClawTheme.colors.primary),
+            minLines = 1,
+            maxLines = 4,
+            modifier =
+              Modifier
+                .fillMaxWidth()
+                .onPreInterceptKeyBeforeSoftKeyboard { event ->
+                  hardwareEnterHandler.handle(
+                    event = event,
+                    sendEnabled = sendEnabled,
+                    textEmpty = textFieldValue.text.isEmpty(),
+                    compositionActive = textFieldValue.composition != null,
+                    onSend = onSend,
+                  )
+                },
+            decorationBox = { innerTextField ->
+              Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
+                if (value.isEmpty()) {
+                  Text(text = "Message OpenClaw", style = ClawTheme.type.body, color = ClawTheme.colors.textSubtle)
+                }
+                innerTextField()
               }
-              innerTextField()
-            }
-          },
-        )
+            },
+          )
+        }
       }
       Surface(
         onClick = onVoice,

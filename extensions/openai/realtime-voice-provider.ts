@@ -86,7 +86,7 @@ type OpenAIRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
   azureApiVersion?: string;
 };
 
-const OPENAI_REALTIME_DEFAULT_MODEL = "gpt-realtime-2";
+const OPENAI_REALTIME_DEFAULT_MODEL = "gpt-realtime-2.1";
 const OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
 const OPENAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX =
   "Conversation already has an active response in progress:";

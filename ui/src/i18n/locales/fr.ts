@@ -63,6 +63,7 @@ export const fr: TranslationMap = {
     docs: "Documentation",
     theme: "Thème",
     colorMode: "Mode de couleur",
+    colorModeOption: "Mode de couleur : {mode}",
     resources: "Ressources",
     search: "Rechercher",
     save: "Enregistrer",

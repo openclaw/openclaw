@@ -1916,6 +1916,29 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       run: runGatewayServicesHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:default-account-routing",
+      label: "Default account routing",
+      healthChecks: {
+        id: "core/doctor/default-account-routing",
+        description: "Multi-account channels have explicit default routing or complete bindings.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const {
+            collectMissingDefaultAccountBindingWarnings,
+            collectMissingExplicitDefaultAccountWarnings,
+          } = await import("../commands/doctor/shared/default-account-warnings.js");
+          return [
+            ...collectMissingDefaultAccountBindingWarnings(ctx.cfg),
+            ...collectMissingExplicitDefaultAccountWarnings(ctx.cfg),
+          ].map((message) => ({
+            checkId: "core/doctor/default-account-routing",
+            severity: "warning" as const,
+            message: message.replace(/^- /, "").trim(),
+          }));
+        },
+      },
+    }),
+    createDoctorHealthContribution({
       id: "doctor:startup-channel-maintenance",
       label: "Startup channel maintenance",
       healthCheckIds: [
