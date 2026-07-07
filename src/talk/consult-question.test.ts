@@ -6,6 +6,22 @@ import {
   readSpeakableRealtimeVoiceToolResult,
 } from "./consult-question.js";
 
+function hasLoneSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next < 0xdc00 || next > 0xdfff) {
+        return true;
+      }
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
 describe("realtime voice consult question helpers", () => {
   it("reads common provider question fields", () => {
     expect(readRealtimeVoiceConsultQuestion({ question: " check status " })).toBe("check status");
@@ -39,5 +55,16 @@ describe("realtime voice consult question helpers", () => {
         { maxChars: 24 },
       ),
     ).toBe("abcdefgh [truncated]");
+  });
+
+  it("does not split a boundary emoji in truncated speakable text", () => {
+    const result = readSpeakableRealtimeVoiceToolResult(
+      { text: `${"a".repeat(7)}😀${"b".repeat(20)}` },
+      { maxChars: 23 },
+    );
+
+    expect(result).toBe(`${"a".repeat(7)} [truncated]`);
+    expect(result).toContain("[truncated]");
+    expect(hasLoneSurrogate(result ?? "")).toBe(false);
   });
 });
