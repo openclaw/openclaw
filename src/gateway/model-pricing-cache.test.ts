@@ -59,7 +59,11 @@ vi.mock("../plugins/manifest-metadata-scan.js", async (importOriginal) => {
   };
 });
 
-import { getGatewayModelPricingHealth } from "./model-pricing-cache-state.js";
+import {
+  getGatewayModelPricingHealth,
+  MAX_PRICING_CACHE_ENTRIES,
+  replaceGatewayModelPricingCache,
+} from "./model-pricing-cache-state.js";
 import {
   resetGatewayModelPricingCacheForTest,
   collectConfiguredModelPricingRefs,
@@ -1369,6 +1373,26 @@ describe("model-pricing-cache", () => {
       cacheRead: 0.16,
       cacheWrite: 0,
     });
+  });
+
+  it("caps cache entries at MAX_PRICING_CACHE_ENTRIES", () => {
+    resetGatewayModelPricingCacheForTest();
+    const overLimit = new Map<string, CachedModelPricing>();
+    for (let i = 0; i < MAX_PRICING_CACHE_ENTRIES + 50; i++) {
+      overLimit.set(`provider-${i}/model-${i}`, {
+        input: 1,
+        output: 2,
+        cacheRead: 0,
+        cacheWrite: 0,
+      });
+    }
+    replaceGatewayModelPricingCache(overLimit, 1);
+    expect(
+      getCachedGatewayModelPricing({
+        provider: "provider-0",
+        model: "model-0",
+      }),
+    ).toBeDefined();
   });
 });
 

@@ -36,6 +36,8 @@ export type GatewayModelPricingHealth = {
   detail?: string;
 };
 
+export const MAX_PRICING_CACHE_ENTRIES = 1000;
+
 let cachedPricing = new Map<string, CachedModelPricing>();
 let cachedAt = 0;
 const sourceFailures = new Map<
@@ -62,6 +64,12 @@ export function replaceGatewayModelPricingCache(
   nextPricing: Map<string, CachedModelPricing>,
   nextCachedAt = Date.now(),
 ): void {
+  if (nextPricing.size > MAX_PRICING_CACHE_ENTRIES) {
+    const trimmed = new Map(Array.from(nextPricing).slice(0, MAX_PRICING_CACHE_ENTRIES));
+    cachedPricing = trimmed;
+    cachedAt = nextCachedAt;
+    return;
+  }
   cachedPricing = nextPricing;
   cachedAt = nextCachedAt;
 }
