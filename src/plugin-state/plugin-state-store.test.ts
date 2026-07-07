@@ -221,12 +221,15 @@ describe("plugin state keyed store", () => {
 
   it("rejects new durable rows at capacity without evicting or blocking updates", async () => {
     await withPluginStateTestState(async () => {
+      vi.useFakeTimers();
       const store = createPluginStateKeyedStore<number>("codex", {
         namespace: "durable-bindings",
         maxEntries: 2,
         overflowPolicy: "reject-new",
       });
+      vi.setSystemTime(1000);
       await store.register("first", 1);
+      vi.setSystemTime(2000);
       await store.register("second", 2);
 
       await expect(store.register("third", 3)).rejects.toMatchObject({
@@ -236,6 +239,7 @@ describe("plugin state keyed store", () => {
       if (!store.update) {
         throw new Error("plugin state update unavailable");
       }
+      vi.setSystemTime(3000);
       await expect(store.update("first", () => 10)).resolves.toBe(true);
       await expect(store.update("third", () => 3)).rejects.toMatchObject({
         code: "PLUGIN_STATE_LIMIT_EXCEEDED",
