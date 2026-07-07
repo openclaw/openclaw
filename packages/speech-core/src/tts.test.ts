@@ -115,6 +115,8 @@ const {
   getTtsProvider,
   maybeApplyTtsToPayload,
   resolveTtsConfig,
+  setSummarizationEnabled,
+  setTtsMaxLength,
   synthesizeSpeech,
   textToSpeechTelephony,
 } = await import("./tts.js");
@@ -172,6 +174,24 @@ function requireFirstCallParam(calls: ReadonlyArray<readonly unknown[]>, label: 
 
 function requireFirstSynthesisRequest(label: string): Record<string, unknown> {
   return requireRecord(requireFirstCallParam(synthesizeMock.mock.calls, label), label);
+}
+
+function hasLoneSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        return true;
+      }
+      index += 1;
+      continue;
+    }
+    if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function requireAttempt(attempts: unknown[] | undefined, index: number) {
@@ -932,6 +952,36 @@ describe("speech-core native voice-note routing", () => {
       expect(result.ttsSupplement).toBeUndefined();
       mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
     } finally {
+      if (mediaDir) {
+        rmSync(mediaDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("truncates long TTS text on a UTF-16 boundary", async () => {
+    const prefsName = "openclaw-speech-core-utf16-truncate-test";
+    const prefsPath = `/tmp/${prefsName}.json`;
+    const cfg = createTtsConfig(prefsName);
+    setTtsMaxLength(prefsPath, 11);
+    setSummarizationEnabled(prefsPath, false);
+    let mediaDir: string | undefined;
+    try {
+      const result = await maybeApplyTtsToPayload({
+        payload: { text: `${"a".repeat(7)}😀tail long enough for TTS` },
+        cfg,
+        channel: "telegram",
+        kind: "final",
+      });
+
+      expect(synthesizeMock).toHaveBeenCalled();
+      const request = requireFirstSynthesisRequest("utf16 truncated TTS request");
+      const spokenText = String(request.text);
+      expect(hasLoneSurrogate(spokenText)).toBe(false);
+      expect(spokenText).toBe(`${"a".repeat(7)}...`);
+      expect(result.spokenText).toBe(spokenText);
+      mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
+    } finally {
+      rmSync(prefsPath, { force: true });
       if (mediaDir) {
         rmSync(mediaDir, { recursive: true, force: true });
       }
