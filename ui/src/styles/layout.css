@@ -226,8 +226,20 @@
   display: flex;
   min-height: 100%;
   overflow: visible;
-  border-right: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
   transition: width var(--shell-focus-duration) var(--shell-focus-ease);
+}
+
+/* Paint outside the grid track so the oversized divider does not narrow the
+   collapsed rail or shift its centered controls. */
+.shell-nav::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 100%;
+  width: 8px;
+  background: var(--accent);
+  pointer-events: none;
 }
 
 .shell-nav-backdrop {

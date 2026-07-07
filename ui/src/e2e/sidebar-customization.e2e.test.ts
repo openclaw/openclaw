@@ -37,6 +37,26 @@ async function captureUiProof(page: Page, fileName: string) {
   await page.screenshot({ fullPage: true, path: path.join(artifactDir, fileName) });
 }
 
+async function expectLobsterDivider(page: Page) {
+  await expect
+    .poll(() =>
+      page.locator(".shell-nav").evaluate((element) => {
+        const dividerStyle = getComputedStyle(element, "::after");
+        const colorProbe = document.createElement("span");
+        colorProbe.style.color = "var(--accent)";
+        document.body.append(colorProbe);
+        const lobster = getComputedStyle(colorProbe).color;
+        colorProbe.remove();
+        return {
+          colorMatches: dividerStyle.backgroundColor === lobster,
+          display: dividerStyle.display,
+          width: dividerStyle.width,
+        };
+      }),
+    )
+    .toEqual({ colorMatches: true, display: "block", width: "8px" });
+}
+
 describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () => {
   beforeAll(async () => {
     if (!chromiumAvailable) {
@@ -68,6 +88,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await page.goto(`${server.baseUrl}overview`);
 
       const sidebar = page.locator("openclaw-app-sidebar");
+      await expectLobsterDivider(page);
       const pinnedItems = sidebar.locator(".sidebar-nav > .nav-section__items > .nav-item");
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Overview"]);
       await expect.poll(() => sidebar.locator(".sidebar-brand").count()).toBe(0);
@@ -153,6 +174,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
         .toContain("shell--nav-collapsed");
+      await expectLobsterDivider(page);
       // Rail mode keeps the palette entry reachable as an icon-only control.
       await expect.poll(() => searchButton.isVisible()).toBe(true);
       await page.reload();
