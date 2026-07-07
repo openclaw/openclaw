@@ -1,6 +1,7 @@
 // Install Ps1 tests cover install ps1 script behavior.
-import { spawnSync } from "node:child_process";
-import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { createScriptTestHarness } from "./test-helpers";
@@ -66,11 +67,34 @@ describe("install.ps1 failure handling", () => {
   const source = readFileSync(SCRIPT_PATH, "utf8");
   const powershell = findPowerShell();
   const runIfPowerShell = powershell ? it : it.skip;
+  const runConcurrentIfPowerShell = powershell ? it.concurrent : it.skip;
   const runPowerShell = (args: string[]) => {
     if (!powershell) {
       throw new Error("PowerShell is not available");
     }
     return spawnSync(powershell, args, { encoding: "utf8" });
+  };
+  const runPowerShellAsync = (args: string[]) => {
+    if (!powershell) {
+      throw new Error("PowerShell is not available");
+    }
+    return new Promise<{ status: number | null; stderr: string; stdout: string }>(
+      (resolve, reject) => {
+        const child = spawn(powershell, args, { stdio: ["ignore", "pipe", "pipe"] });
+        let stdout = "";
+        let stderr = "";
+        child.stdout.setEncoding("utf8");
+        child.stderr.setEncoding("utf8");
+        child.stdout.on("data", (chunk: string) => {
+          stdout += chunk;
+        });
+        child.stderr.on("data", (chunk: string) => {
+          stderr += chunk;
+        });
+        child.once("error", reject);
+        child.once("close", (status) => resolve({ status, stderr, stdout }));
+      },
+    );
   };
   const batchedPowerShellResults = new Map<string, { error: string; ok: boolean }>();
 
@@ -640,68 +664,79 @@ describe("install.ps1 failure handling", () => {
     expect(mainBody).toContain("Invoke-InteractiveOpenClawCommand onboard");
   });
 
-  runIfPowerShell("fails install when interactive onboarding exits non-zero", () => {
-    const tempDir = harness.createTempDir("openclaw-install-ps1-");
+  runConcurrentIfPowerShell(
+    "fails install when interactive onboarding exits non-zero",
+    async () => {
+      const tempDir = mkdtempSync(join(tmpdir(), "openclaw-install-ps1-"));
+      const scriptPath = join(tempDir, "install.ps1");
+      try {
+        const scriptWithoutEntryPoint = source.replace(ENTRYPOINT_RE, "");
+        writeFileSync(
+          scriptPath,
+          [
+            scriptWithoutEntryPoint,
+            "",
+            "function Write-Banner { }",
+            "function Ensure-ExecutionPolicy { return $true }",
+            "function Check-Node { return $true }",
+            "function Check-ExistingOpenClaw { return $false }",
+            "function Get-NpmCommandPath { return 'npm.cmd' }",
+            "function Install-OpenClaw { return $true }",
+            "function Ensure-OpenClawOnPath { return $true }",
+            "function Add-ToUserPath { param([string]$Path) }",
+            "function Get-OpenClawCommandPath { return 'cmd.exe' }",
+            "function Start-Process {",
+            "  param([string]$FilePath, [string[]]$ArgumentList, [switch]$NoNewWindow, [switch]$Wait, [switch]$PassThru)",
+            "  [pscustomobject]@{ ExitCode = 17 }",
+            "}",
+            "$InstallMethod = 'npm'",
+            "$NoOnboard = $false",
+            "",
+            ...ENTRYPOINT_LINES,
+            "",
+          ].join("\n"),
+        );
+        chmodSync(scriptPath, 0o755);
+
+        const result = await runPowerShellAsync([
+          "-NoLogo",
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          scriptPath,
+        ]);
+
+        expect(result.status).toBe(1);
+        expect(`${result.stdout}\n${result.stderr}`).toContain(
+          "openclaw onboard failed with exit code 17",
+        );
+      } finally {
+        rmSync(tempDir, { force: true, recursive: true });
+      }
+    },
+  );
+
+  runConcurrentIfPowerShell("exits non-zero when run as a script file", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "openclaw-install-ps1-"));
     const scriptPath = join(tempDir, "install.ps1");
-    const scriptWithoutEntryPoint = source.replace(ENTRYPOINT_RE, "");
-    writeFileSync(
-      scriptPath,
-      [
-        scriptWithoutEntryPoint,
-        "",
-        "function Write-Banner { }",
-        "function Ensure-ExecutionPolicy { return $true }",
-        "function Check-Node { return $true }",
-        "function Check-ExistingOpenClaw { return $false }",
-        "function Get-NpmCommandPath { return 'npm.cmd' }",
-        "function Install-OpenClaw { return $true }",
-        "function Ensure-OpenClawOnPath { return $true }",
-        "function Add-ToUserPath { param([string]$Path) }",
-        "function Get-OpenClawCommandPath { return 'cmd.exe' }",
-        "function Start-Process {",
-        "  param([string]$FilePath, [string[]]$ArgumentList, [switch]$NoNewWindow, [switch]$Wait, [switch]$PassThru)",
-        "  [pscustomobject]@{ ExitCode = 17 }",
-        "}",
-        "$InstallMethod = 'npm'",
-        "$NoOnboard = $false",
-        "",
-        ...ENTRYPOINT_LINES,
-        "",
-      ].join("\n"),
-    );
-    chmodSync(scriptPath, 0o755);
+    try {
+      writeFileSync(scriptPath, createFailingNodeFixture(source));
+      chmodSync(scriptPath, 0o755);
 
-    const result = runPowerShell([
-      "-NoLogo",
-      "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-File",
-      scriptPath,
-    ]);
+      const result = await runPowerShellAsync([
+        "-NoLogo",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        scriptPath,
+      ]);
 
-    expect(result.status).toBe(1);
-    expect(`${result.stdout}\n${result.stderr}`).toContain(
-      "openclaw onboard failed with exit code 17",
-    );
-  });
-
-  runIfPowerShell("exits non-zero when run as a script file", () => {
-    const tempDir = harness.createTempDir("openclaw-install-ps1-");
-    const scriptPath = join(tempDir, "install.ps1");
-    writeFileSync(scriptPath, createFailingNodeFixture(source));
-    chmodSync(scriptPath, 0o755);
-
-    const result = runPowerShell([
-      "-NoLogo",
-      "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-File",
-      scriptPath,
-    ]);
-
-    expect(result.status).toBe(1);
+      expect(result.status).toBe(1);
+    } finally {
+      rmSync(tempDir, { force: true, recursive: true });
+    }
   });
 
   runIfPowerShell("throws without killing the caller when run as a scriptblock", () => {
