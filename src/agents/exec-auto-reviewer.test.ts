@@ -1,6 +1,7 @@
 // Exec auto-reviewer tests cover model response parsing, low-risk allow gates,
 // reviewer prompt isolation, and timeout resolution.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { describe, expect, it, vi } from "vitest";
 import {
   createModelExecAutoReviewer,
@@ -389,5 +390,24 @@ describe("createModelExecAutoReviewer", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("normalizeRationale truncation", () => {
+  it("does not cut rationale text with an emoji straddling the 500-char boundary", () => {
+    // "🚀" is a surrogate pair (2 UTF-16 code units). A rationale with 499
+    // 'x' + the emoji has 501 code units. Raw slice(0,500) splits the pair
+    // leaving a lone high surrogate (U+FFFD). truncateUtf16Safe backs out.
+    const text = "x".repeat(499) + "🚀";
+    // slice splits the surrogate pair
+    const sliced = text.slice(0, 500);
+    expect(sliced.charCodeAt(499)).toBe(0xd83d); // lone high surrogate
+    // truncateUtf16Safe drops the incomplete pair
+    expect(truncateUtf16Safe(text, 500)).toBe("x".repeat(499));
+  });
+
+  it("preserves rationale text shorter than the limit unchanged", () => {
+    expect(truncateUtf16Safe("safe read-only command", 500)).toBe("safe read-only command");
+    expect(truncateUtf16Safe("", 500)).toBe("");
   });
 });
