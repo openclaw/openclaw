@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveNextcloudTalkRoomKind, testing } from "./room-info.js";
+import { ROOM_CACHE_MAX_ENTRIES, resolveNextcloudTalkRoomKind, testing } from "./room-info.js";
 
 const fetchWithSsrFGuard = vi.hoisted(() => vi.fn());
 const tempDirs: string[] = [];
@@ -77,6 +77,46 @@ describe("nextcloud talk room info", () => {
     );
     expect(fetchParams.auditContext).toBe("nextcloud-talk.room-info");
     expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("caps cached room info entries", async () => {
+    fetchWithSsrFGuard.mockImplementation(async () => ({
+      response: jsonResponse({
+        ocs: {
+          data: {
+            type: 1,
+          },
+        },
+      }),
+      release: vi.fn(async () => {}),
+    }));
+    const account = {
+      accountId: "acct-cache-cap",
+      baseUrl: "https://nc.example.com",
+      config: {
+        apiUser: "bot",
+        apiPassword: "secret",
+      },
+    } as never;
+
+    for (let index = 0; index <= ROOM_CACHE_MAX_ENTRIES; index += 1) {
+      await resolveNextcloudTalkRoomKind({
+        account,
+        roomToken: `room-${index}`,
+      });
+    }
+    await resolveNextcloudTalkRoomKind({ account, roomToken: "room-0" });
+    const callsAfterOldestRetry = fetchWithSsrFGuard.mock.calls.length;
+    await resolveNextcloudTalkRoomKind({
+      account,
+      roomToken: `room-${ROOM_CACHE_MAX_ENTRIES}`,
+    });
+
+    expect(callsAfterOldestRetry).toBe(ROOM_CACHE_MAX_ENTRIES + 2);
+    expect(fetchWithSsrFGuard.mock.calls).toHaveLength(callsAfterOldestRetry);
+    expect(fetchWithSsrFGuard.mock.calls.at(-1)?.[0]).toMatchObject({
+      url: "https://nc.example.com/ocs/v2.php/apps/spreed/api/v4/room/room-0",
+    });
   });
 
   it("normalizes signed decimal room type strings through the shared parser", async () => {
