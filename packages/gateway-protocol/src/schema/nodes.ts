@@ -145,6 +145,7 @@ export const NodeInvokeResultParamsSchema = Type.Object(
         {
           code: Type.Optional(NonEmptyString),
           message: Type.Optional(NonEmptyString),
+          cause: Type.Optional(NonEmptyString),
         },
         { additionalProperties: false },
       ),
