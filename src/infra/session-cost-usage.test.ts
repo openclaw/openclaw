@@ -2721,6 +2721,47 @@ describe("session cost usage", () => {
     });
   });
 
+  it("does not split surrogate pairs when truncating the first user message during discovery", async () => {
+    const root = await makeSessionCostRoot("discover-utf16-first-msg");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    // "a" (1 code unit) + 50 🦞 (100 code units) = 101 code units > 100
+    // .slice(0, 100) would cut between the surrogates of the last emoji
+    const content = "a" + "🦞".repeat(50);
+    const sessionFile = path.join(sessionsDir, "sess-emoji.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-21T17:47:00.000Z",
+        message: { role: "user", content },
+      }),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const sessions = await discoverAllSessions();
+      expect(sessions).toHaveLength(1);
+      const msg = sessions[0]?.firstUserMessage;
+      expect(msg).toBeDefined();
+
+      // Must not include a dangling high surrogate
+      for (let i = 0; i < msg!.length; i++) {
+        const cp = msg!.charCodeAt(i);
+        if (cp >= 0xd800 && cp <= 0xdbff) {
+          // High surrogate must be followed by a low surrogate
+          expect(msg!.charCodeAt(i + 1)).toBeGreaterThanOrEqual(0xdc00);
+          expect(msg!.charCodeAt(i + 1)).toBeLessThanOrEqual(0xdfff);
+        }
+      }
+
+      // After safe truncation, the last code unit should not be a lone surrogate
+      const lastCode = msg!.charCodeAt(msg!.length - 1);
+      expect(lastCode < 0xd800 || lastCode > 0xdbff).toBe(true);
+    });
+  });
+
   it("falls back to archived reset transcripts for per-session detail queries", async () => {
     const root = await makeSessionCostRoot("session-archive-fallback");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
