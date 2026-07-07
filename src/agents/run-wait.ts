@@ -15,6 +15,10 @@ import { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeBlockedLivenessWaitStatus } from "../shared/agent-liveness.js";
 import {
+  isOpenClawMessageToolMirrorAssistantMessage,
+  isTranscriptOnlyOpenClawAssistantMessage,
+} from "../shared/transcript-only-openclaw-assistant.js";
+import {
   buildAgentRunTerminalOutcomeFromWaitResult,
   type AgentRunTerminalOutcome,
 } from "./agent-run-terminal-outcome.js";
@@ -160,13 +164,43 @@ function normalizePendingRunIds(runIds: Iterable<string>): string[] {
   return [...seen];
 }
 
-function resolveLatestAssistantReplySnapshot(messages: unknown[]): AssistantReplySnapshot {
+function isWaitedReplyTranscriptArtifact(message: unknown): boolean {
+  return (
+    isTranscriptOnlyOpenClawAssistantMessage(message) ||
+    isOpenClawMessageToolMirrorAssistantMessage(message) ||
+    isInterSessionInputMessage(message)
+  );
+}
+
+function isInterSessionInputMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return false;
+  }
+  const provenance = (message as { provenance?: unknown }).provenance;
+  return (
+    Boolean(provenance) &&
+    typeof provenance === "object" &&
+    !Array.isArray(provenance) &&
+    (provenance as { kind?: unknown }).kind === "inter_session"
+  );
+}
+
+function resolveLatestAssistantReplySnapshot(
+  messages: unknown[],
+  opts?: { stopAtTranscriptArtifact?: boolean },
+): AssistantReplySnapshot {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const candidate = messages[i];
     if (!candidate || typeof candidate !== "object") {
       continue;
     }
     if ((candidate as { role?: unknown }).role !== "assistant") {
+      continue;
+    }
+    if (isWaitedReplyTranscriptArtifact(candidate)) {
+      if (opts?.stopAtTranscriptArtifact === true) {
+        return {};
+      }
       continue;
     }
     const text = extractAssistantText(candidate);
@@ -184,10 +218,32 @@ function resolveLatestAssistantReplySnapshot(messages: unknown[]): AssistantRepl
   return {};
 }
 
+export function hasUpdatedAssistantReplySnapshot(
+  latestReply: AssistantReplySnapshot,
+  baseline: AssistantReplySnapshot | undefined,
+): boolean {
+  if (!latestReply.text) {
+    return false;
+  }
+  if (!baseline) {
+    return true;
+  }
+  if (baseline.fingerprint !== undefined) {
+    return latestReply.fingerprint !== baseline.fingerprint;
+  }
+  if (baseline.text !== undefined) {
+    return latestReply.text !== baseline.text;
+  }
+  return true;
+}
+
 /** Read the latest non-tool assistant message for a session. */
 export async function readLatestAssistantReplySnapshot(params: {
   sessionKey: string;
   limit?: number;
+  // Waited reply paths stop at transcript artifacts so they do not resurrect
+  // an older assistant message as a fresh post-run reply.
+  stopAtTranscriptArtifact?: boolean;
   callGateway?: GatewayCaller;
 }): Promise<AssistantReplySnapshot> {
   const history = await (params.callGateway ?? runWaitDeps.callGateway)<{
@@ -198,6 +254,7 @@ export async function readLatestAssistantReplySnapshot(params: {
   });
   return resolveLatestAssistantReplySnapshot(
     stripToolMessages(Array.isArray(history?.messages) ? history.messages : []),
+    { stopAtTranscriptArtifact: params.stopAtTranscriptArtifact },
   );
 }
 
@@ -272,15 +329,14 @@ export async function waitForAgentRunAndReadUpdatedAssistantReply(params: {
   const latestReply = await readLatestAssistantReplySnapshot({
     sessionKey: params.sessionKey,
     limit: params.limit,
+    stopAtTranscriptArtifact: true,
     callGateway: params.callGateway,
   });
-  const baselineFingerprint = params.baseline?.fingerprint;
-  const replyText =
-    latestReply.text && (!baselineFingerprint || latestReply.fingerprint !== baselineFingerprint)
-      ? latestReply.text
-      : undefined;
+  const replyText = hasUpdatedAssistantReplySnapshot(latestReply, params.baseline)
+    ? latestReply.text
+    : undefined;
   return {
-    status: "ok",
+    ...wait,
     replyText,
   };
 }

@@ -30,6 +30,14 @@ export function isTranscriptOnlyOpenClawAssistantMessage(message: unknown): bool
   );
 }
 
+export function isOpenClawMessageToolMirrorAssistantMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return false;
+  }
+  const entry = message as { role?: unknown; openclawMessageToolMirror?: unknown };
+  return entry.role === "assistant" && entry.openclawMessageToolMirror !== undefined;
+}
+
 export function isOpenClawDeliveryMirrorAssistantMessage(message: unknown): boolean {
   if (!message || typeof message !== "object" || Array.isArray(message)) {
     return false;
