@@ -34,7 +34,7 @@ describe("check-boundary-safety", () => {
     expect(findBoundarySafetyViolations(source, "src/channels/example.ts")).toStrictEqual([]);
   });
 
-  it("does not flag protocol, byte-offset, or collection slices", () => {
+  it("does not flag protocol, byte-offset, suffix-removal, or collection slices", () => {
     const source = `
       const packet = frame.slice(offset, offset + length);
       const hashPrefix = digest.slice(0, 8);
@@ -42,6 +42,13 @@ describe("check-boundary-safety", () => {
       const latestMessages = messages.slice(0, -1);
       const firstLabels = labels.slice(0, 13);
       const scoredSnippets = snippets.filter(Boolean).map(scoreSnippet).slice(0, 12);
+      const errorLines = ["header", ...issues.slice(0, CONFIG_SET_POLICY_ERROR_MAX_ISSUES).map(formatIssue), "... more"];
+      const cachedEntries = [{ key, value }, ...entries.filter((entry) => entry.key !== key)].slice(0, MAX_CACHE_ENTRIES);
+      const sortedResults = sortMemorySearchToolResults([...memoryResults, ...supplementResults]).slice(0, params.maxResults);
+      const stem = fileName.slice(0, -suffix.length);
+      const promptPrefix = promptText.slice(0, range.start);
+      const body = frame.body as Uint8Array;
+      const header = body.slice(0, maxBytes);
     `;
 
     expect(findBoundarySafetyViolations(source, "src/protocol/frame.ts")).toStrictEqual([]);
@@ -57,6 +64,22 @@ describe("check-boundary-safety", () => {
         line: 2,
         ruleId: "boundary/text-utf16-truncation",
         match: 'texts.map((text) => text.trim()).join("\\n").slice(0, maxChars)',
+        guidance:
+          "Use truncateUtf16Safe(...) for head truncation or sliceUtf16Safe(...) for non-head slicing.",
+      },
+    ]);
+  });
+
+  it("flags display truncation from generic string values", () => {
+    const source = `
+      const preview = normalized.length > maxLen ? normalized.slice(0, maxLen - 1) + "…" : normalized;
+    `;
+
+    expect(findBoundarySafetyViolations(source, "src/channels/example.ts")).toEqual([
+      {
+        line: 2,
+        ruleId: "boundary/text-utf16-truncation",
+        match: "normalized.slice(0, maxLen - 1)",
         guidance:
           "Use truncateUtf16Safe(...) for head truncation or sliceUtf16Safe(...) for non-head slicing.",
       },
@@ -100,6 +123,85 @@ describe("check-boundary-safety", () => {
     ]);
   });
 
+  it("flags returned and deferred response body reads", () => {
+    const source = `
+      export async function readProvider(response: Response) {
+        return response.json();
+      }
+      export const readText = (res: Response) => res.text().catch(() => "");
+    `;
+
+    expect(findBoundarySafetyViolations(source, "src/agents/provider-client.ts")).toEqual([
+      {
+        line: 3,
+        ruleId: "boundary/response-body-limit",
+        match: "response.json()",
+        guidance:
+          "Use readResponseWithLimit(...), readProviderJsonResponse(...), readResponseTextSnippet(...), or openclaw/plugin-sdk/response-limit-runtime from plugin code.",
+      },
+      {
+        line: 5,
+        ruleId: "boundary/response-body-limit",
+        match: "res.text()",
+        guidance:
+          "Use readResponseWithLimit(...), readProviderJsonResponse(...), readResponseTextSnippet(...), or openclaw/plugin-sdk/response-limit-runtime from plugin code.",
+      },
+    ]);
+  });
+
+  it("flags cloned response body reads", () => {
+    const source = `
+      export async function readProvider(response: Response) {
+        await response.clone().text();
+        const clone = response.clone();
+        return await clone.arrayBuffer();
+      }
+    `;
+
+    expect(findBoundarySafetyViolations(source, "src/agents/provider-client.ts")).toEqual([
+      {
+        line: 3,
+        ruleId: "boundary/response-body-limit",
+        match: "response.clone().text()",
+        guidance:
+          "Use readResponseWithLimit(...), readProviderJsonResponse(...), readResponseTextSnippet(...), or openclaw/plugin-sdk/response-limit-runtime from plugin code.",
+      },
+      {
+        line: 5,
+        ruleId: "boundary/response-body-limit",
+        match: "clone.arrayBuffer()",
+        guidance:
+          "Use readResponseWithLimit(...), readProviderJsonResponse(...), readResponseTextSnippet(...), or openclaw/plugin-sdk/response-limit-runtime from plugin code.",
+      },
+    ]);
+  });
+
+  it("flags all full-buffer response readers", () => {
+    const source = `
+      export async function readProvider(response: Response) {
+        await response.blob();
+        return await response.formData();
+      }
+    `;
+
+    expect(findBoundarySafetyViolations(source, "src/agents/provider-client.ts")).toEqual([
+      {
+        line: 3,
+        ruleId: "boundary/response-body-limit",
+        match: "response.blob()",
+        guidance:
+          "Use readResponseWithLimit(...), readProviderJsonResponse(...), readResponseTextSnippet(...), or openclaw/plugin-sdk/response-limit-runtime from plugin code.",
+      },
+      {
+        line: 4,
+        ruleId: "boundary/response-body-limit",
+        match: "response.formData()",
+        guidance:
+          "Use readResponseWithLimit(...), readProviderJsonResponse(...), readResponseTextSnippet(...), or openclaw/plugin-sdk/response-limit-runtime from plugin code.",
+      },
+    ]);
+  });
+
   it("does not flag Express response writers", () => {
     const source = `
       app.get("/health", (_req, res) => {
@@ -122,6 +224,25 @@ describe("check-boundary-safety", () => {
     `;
 
     expect(findBoundarySafetyViolations(source, "src/infra/http-body.ts")).toStrictEqual([]);
+  });
+
+  it("does not treat ordinary string literals as boundary-safety ignores", () => {
+    const source = `
+      export async function readFallback(response: Response) {
+        const body = logger.debug("boundary-safety-ignore boundary/response-body-limit: no stream exists") || await response.text();
+        return body;
+      }
+    `;
+
+    expect(findBoundarySafetyViolations(source, "src/agents/provider-client.ts")).toEqual([
+      {
+        line: 3,
+        ruleId: "boundary/response-body-limit",
+        match: "response.text()",
+        guidance:
+          "Use readResponseWithLimit(...), readProviderJsonResponse(...), readResponseTextSnippet(...), or openclaw/plugin-sdk/response-limit-runtime from plugin code.",
+      },
+    ]);
   });
 
   it("keeps tests, fixtures, generated files, and scripts out of production candidates", () => {

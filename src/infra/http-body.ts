@@ -187,6 +187,24 @@ function validateMaxBytes(maxBytes: number): void {
   }
 }
 
+function parseResponseContentLengthHeader(response: Response): number | undefined {
+  const raw = response.headers.get("content-length");
+  if (raw === null) {
+    return undefined;
+  }
+  return parseStrictNonNegativeInteger(raw);
+}
+
+function appendEllipsisWithinLimit(text: string, maxChars: number): string {
+  if (maxChars <= 0) {
+    return "";
+  }
+  if (maxChars === 1) {
+    return "…";
+  }
+  return `${truncateUtf16Safe(text, maxChars - 1)}…`;
+}
+
 async function readBufferedResponsePrefix(
   res: Response,
   maxBytes: number,
@@ -220,6 +238,7 @@ async function readResponsePrefix(
   }
 
   const reader = body.getReader();
+  const contentLength = parseResponseContentLengthHeader(response);
   const chunks: Uint8Array[] = [];
   let total = 0;
   let size = 0;
@@ -237,13 +256,26 @@ async function readResponsePrefix(
         continue;
       }
       const nextTotal = total + value.length;
-      if (nextTotal > maxBytes || (options?.cancelAtMaxBytes && nextTotal >= maxBytes)) {
+      if (nextTotal > maxBytes) {
         const remaining = maxBytes - total;
         if (remaining > 0) {
           chunks.push(value.subarray(0, remaining));
           total += Math.min(value.length, remaining);
         }
         size = nextTotal;
+        truncated = true;
+        try {
+          await reader.cancel();
+        } catch {}
+        break;
+      }
+      if (options?.cancelAtMaxBytes && nextTotal >= maxBytes) {
+        chunks.push(value);
+        total = nextTotal;
+        size = total;
+        if (contentLength === nextTotal) {
+          break;
+        }
         truncated = true;
         try {
           await reader.cancel();
@@ -315,7 +347,7 @@ export async function readResponseTextSnippet(
     return undefined;
   }
 
-  const text = new TextDecoder().decode(prefix.buffer);
+  const text = new TextDecoder().decode(prefix.buffer, { stream: prefix.truncated });
   if (!text) {
     return undefined;
   }
@@ -325,9 +357,9 @@ export async function readResponseTextSnippet(
     return undefined;
   }
   if (collapsed.length > maxChars) {
-    return `${truncateUtf16Safe(collapsed, maxChars)}…`;
+    return appendEllipsisWithinLimit(collapsed, maxChars);
   }
-  return prefix.truncated ? `${collapsed}…` : collapsed;
+  return prefix.truncated ? appendEllipsisWithinLimit(collapsed, maxChars) : collapsed;
 }
 
 export async function readRequestBodyWithLimit(

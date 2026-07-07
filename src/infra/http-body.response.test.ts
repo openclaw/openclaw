@@ -263,6 +263,38 @@ describe("readResponseTextSnippet", () => {
     await expectReadResponseTextSnippetCase({ response, options, expected });
   });
 
+  it("does not mark a content-length-bounded snippet as truncated when it exactly fills maxBytes", async () => {
+    const response = new Response(makeStream([new TextEncoder().encode("1234")]), {
+      headers: { "content-length": "4" },
+    });
+
+    await expectReadResponseTextSnippetCase({
+      response,
+      options: { maxBytes: 4, maxChars: 50 },
+      expected: "1234",
+    });
+  });
+
+  it("drops incomplete UTF-8 characters from byte-truncated snippets", async () => {
+    const response = new Response(makeStream([new TextEncoder().encode("ab🙂tail")]));
+
+    await expectReadResponseTextSnippetCase({
+      response,
+      options: { maxBytes: 5, maxChars: 50 },
+      expected: "ab…",
+    });
+  });
+
+  it("counts the ellipsis inside the snippet character budget", async () => {
+    const response = new Response(makeStream([new TextEncoder().encode("abcdef")]));
+
+    await expectReadResponseTextSnippetCase({
+      response,
+      options: { maxBytes: 64, maxChars: 3 },
+      expected: "ab…",
+    });
+  });
+
   it("rejects invalid maxBytes before reading text snippets", async () => {
     await expect(
       readResponseTextSnippet(new Response(makeStream([new TextEncoder().encode("hello")])), {

@@ -18,7 +18,7 @@ const repoRoot = resolveRepoRoot(import.meta.url);
 const baselinePath = path.join(repoRoot, "test", "fixtures", "boundary-safety-inventory.json");
 const sourceRoots = resolveSourceRoots(repoRoot, ["src", "extensions", "packages"]);
 
-const responseReadMethods = new Set(["json", "text", "arrayBuffer"]);
+const responseReadMethods = new Set(["json", "text", "arrayBuffer", "blob", "formData"]);
 const responseReceiverNames = new Set([
   "res",
   "resp",
@@ -120,13 +120,9 @@ function isZeroLiteral(node) {
   return ts.isNumericLiteral(expression) && expression.text === "0";
 }
 
-function isNegativeLiteral(node) {
+function isNegativeExpression(node) {
   const expression = unwrapExpression(node);
-  return (
-    ts.isPrefixUnaryExpression(expression) &&
-    expression.operator === ts.SyntaxKind.MinusToken &&
-    ts.isNumericLiteral(expression.operand)
-  );
+  return ts.isPrefixUnaryExpression(expression) && expression.operator === ts.SyntaxKind.MinusToken;
 }
 
 function finalAccessName(node) {
@@ -140,11 +136,31 @@ function finalAccessName(node) {
   return null;
 }
 
+function isLikelyCollectionReceiverName(name) {
+  return Boolean(
+    name &&
+    (collectionReceiverNames.has(name) ||
+      /(?:aliases|attachments|blockers|candidates|chars|children|commands|diagnostics|entries|errors|failures|findings|issues|items|labels|lines|lookups|memos|messages|notices|outputs|pages|parts|payloads|results|snippets|summaries|threads|tokens|tools|urls|values|warnings)$/i.test(
+        name,
+      )),
+  );
+}
+
+function isCollectionReturningCall(sourceFile, node) {
+  const expression = unwrapExpression(node);
+  if (!ts.isCallExpression(expression)) {
+    return false;
+  }
+  return /(?:entries|results|candidates|references|attachments|urls|files|items|messages|labels|commands|issues|notices|tools|memos)\b/i.test(
+    nodeText(sourceFile, unwrapExpression(expression.expression)),
+  );
+}
+
 function isStringProducingExpression(sourceFile, node) {
   const expression = unwrapExpression(node);
   if (ts.isIdentifier(expression) || ts.isPropertyAccessExpression(expression)) {
     const name = finalAccessName(expression);
-    return Boolean(name && textReceiverRe.test(name) && !collectionReceiverNames.has(name));
+    return Boolean(name && textReceiverRe.test(name) && !isLikelyCollectionReceiverName(name));
   }
   if (ts.isCallExpression(expression)) {
     const access = readPropertyAccessCall(expression);
@@ -162,6 +178,53 @@ function isStringProducingExpression(sourceFile, node) {
     );
   }
   return false;
+}
+
+function isCollectionProducingExpression(sourceFile, node) {
+  const expression = unwrapExpression(node);
+  if (ts.isArrayLiteralExpression(expression)) {
+    return true;
+  }
+  if (ts.isIdentifier(expression) || ts.isPropertyAccessExpression(expression)) {
+    const name = finalAccessName(expression);
+    return Boolean(name && isLikelyCollectionReceiverName(name));
+  }
+  if (ts.isCallExpression(expression)) {
+    if (isCollectionReturningCall(sourceFile, expression)) {
+      return true;
+    }
+    const access = readPropertyAccessCall(expression);
+    if (!access) {
+      return false;
+    }
+    if (arrayProducingChainMethods.has(access.name)) {
+      return true;
+    }
+    if (stringProducingChainMethods.has(access.name)) {
+      return false;
+    }
+    return isCollectionProducingExpression(sourceFile, access.receiver);
+  }
+  return false;
+}
+
+function isRangeBoundaryExpression(text) {
+  return /(?:^|[A-Z_.-])(?:start|end|offset|index|position|pos)$/i.test(text);
+}
+
+function isByteSliceExpression(sourceFile, receiver, limitText) {
+  const receiverName = finalAccessName(receiver);
+  return receiverName === "body" && /bytes?/i.test(limitText);
+}
+
+function isIdentifierPrefixSliceName(name) {
+  return Boolean(
+    name && /(?:id|ids|key|keys|hash|hashes|digest|token|tokens|signature|checksum)$/i.test(name),
+  );
+}
+
+function hasExplicitTruncationMarker(text) {
+  return /(?:…|\.\.\.|ellipsis)/i.test(text);
 }
 
 function nearestBoundaryContextText(sourceFile, node) {
@@ -195,24 +258,49 @@ function isLikelyTextBoundarySlice(sourceFile, call) {
   if (
     call.arguments.length < 2 ||
     !isZeroLiteral(call.arguments[0]) ||
-    isNegativeLiteral(call.arguments[1])
+    isNegativeExpression(call.arguments[1])
   ) {
     return false;
   }
 
   const limitText = nodeText(sourceFile, call.arguments[1]);
   const contextText = nearestBoundaryContextText(sourceFile, call);
+  const receiverName = finalAccessName(access.receiver);
+  const hasLimit = textLimitRe.test(limitText);
+  const hasMarker = hasExplicitTruncationMarker(contextText);
 
-  if (!isStringProducingExpression(sourceFile, access.receiver)) {
+  if (
+    isCollectionProducingExpression(sourceFile, access.receiver) ||
+    isRangeBoundaryExpression(limitText) ||
+    isByteSliceExpression(sourceFile, access.receiver, limitText) ||
+    isIdentifierPrefixSliceName(receiverName)
+  ) {
     return false;
   }
-  return textLimitRe.test(limitText) || textTruncationContextRe.test(contextText);
+
+  if (!isStringProducingExpression(sourceFile, access.receiver)) {
+    return hasLimit && hasMarker;
+  }
+  return hasLimit || hasMarker || textTruncationContextRe.test(receiverName ?? "");
 }
 
-function isResponseReceiver(sourceFile, node) {
+function isResponseCloneCall(sourceFile, node, responseAliases) {
+  const expression = unwrapExpression(node);
+  if (!ts.isCallExpression(expression)) {
+    return false;
+  }
+  const access = readPropertyAccessCall(expression);
+  return Boolean(
+    access &&
+    access.name === "clone" &&
+    isResponseReceiver(sourceFile, access.receiver, responseAliases),
+  );
+}
+
+function isResponseReceiver(sourceFile, node, responseAliases = responseReceiverNames) {
   const expression = unwrapExpression(node);
   if (ts.isIdentifier(expression)) {
-    return responseReceiverNames.has(expression.text) || expression.text.endsWith("Response");
+    return responseAliases.has(expression.text) || expression.text.endsWith("Response");
   }
   if (ts.isPropertyAccessExpression(expression)) {
     const text = nodeText(sourceFile, expression);
@@ -220,37 +308,20 @@ function isResponseReceiver(sourceFile, node) {
       text,
     );
   }
-  return false;
+  return isResponseCloneCall(sourceFile, expression, responseAliases);
 }
 
-function isAwaitedRead(call) {
-  let current = call;
-  while (current.parent) {
-    const parent = current.parent;
-    if (ts.isAwaitExpression(parent)) {
-      return true;
-    }
-    if (
-      ts.isExpressionStatement(parent) ||
-      ts.isVariableDeclaration(parent) ||
-      ts.isReturnStatement(parent)
-    ) {
-      return false;
-    }
-    current = parent;
-  }
-  return false;
+function isResponseAliasInitializer(sourceFile, node, responseAliases) {
+  const expression = unwrapExpression(node);
+  return isResponseReceiver(sourceFile, expression, responseAliases);
 }
 
-function isLikelyResponseBodyRead(sourceFile, call) {
+function isLikelyResponseBodyRead(sourceFile, call, responseAliases) {
   const access = readPropertyAccessCall(call);
-  if (!access || !responseReadMethods.has(access.name)) {
+  if (!access || !responseReadMethods.has(access.name) || call.arguments.length > 0) {
     return false;
   }
-  if (!isResponseReceiver(sourceFile, access.receiver)) {
-    return false;
-  }
-  return isAwaitedRead(call);
+  return isResponseReceiver(sourceFile, access.receiver, responseAliases);
 }
 
 function hasBoundarySafetyIgnore(sourceFile, node, ruleId) {
@@ -267,14 +338,25 @@ function hasBoundarySafetyIgnore(sourceFile, node, ruleId) {
     current = current.parent;
   }
   const statementPrefix = sourceText.slice(current.getFullStart(), node.getStart(sourceFile));
-  return hasIgnoreText(statementPrefix);
+  const inlineComments = statementPrefix.match(/\/\*[\s\S]*?\*\/|\/\/[^\n\r]*/g) ?? [];
+  return inlineComments.some(hasIgnoreText);
 }
 
 export function findBoundarySafetyViolations(content, fileName = "source.ts") {
   const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
   const violations = [];
+  const responseAliases = new Set(responseReceiverNames);
 
   const visit = (node) => {
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer &&
+      isResponseAliasInitializer(sourceFile, node.initializer, responseAliases)
+    ) {
+      responseAliases.add(node.name.text);
+    }
+
     if (ts.isCallExpression(node)) {
       if (isLikelyTextBoundarySlice(sourceFile, node)) {
         const ruleId = "boundary/text-utf16-truncation";
@@ -289,7 +371,7 @@ export function findBoundarySafetyViolations(content, fileName = "source.ts") {
         }
       }
 
-      if (isLikelyResponseBodyRead(sourceFile, node)) {
+      if (isLikelyResponseBodyRead(sourceFile, node, responseAliases)) {
         const ruleId = "boundary/response-body-limit";
         if (!hasBoundarySafetyIgnore(sourceFile, node, ruleId)) {
           violations.push({
