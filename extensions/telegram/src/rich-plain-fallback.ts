@@ -11,10 +11,7 @@ const RICH_ENTITY_INVALID_RE =
 const RICH_CONTENT_REQUIRED_RE = /RICH_MESSAGE_CONTENT_REQUIRED/i;
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 
-export type TelegramPlainFallbackTrigger =
-  | "rich-entity-invalid"
-  | "html-parse"
-  | "rich-content-required";
+type TelegramPlainFallbackTrigger = "rich-entity-invalid" | "html-parse" | "rich-content-required";
 
 type TelegramPlainFallbackPlan = {
   plainText: string;
