@@ -734,6 +734,7 @@ export async function startManagedServiceUpdateHandoff(params: {
     detached: true,
     stdio: "ignore",
   });
+  child.on("error", () => {});
   child.unref();
 
   return {

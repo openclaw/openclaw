@@ -26,6 +26,7 @@ import {
 const { spawnMock } = vi.hoisted(() => ({
   spawnMock: vi.fn(() => ({
     pid: 24680,
+    on: vi.fn(),
     unref: vi.fn(),
   })),
 }));
