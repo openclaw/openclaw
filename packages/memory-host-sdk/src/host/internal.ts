@@ -25,6 +25,7 @@ import {
   detectMime,
   estimateStringChars,
   runTasksWithConcurrency,
+  truncateUtf16Safe,
 } from "./openclaw-runtime-io.js";
 import {
   resolveCanonicalRootMemoryFile,
@@ -455,22 +456,22 @@ export function chunkMarkdown(
       // (happens for CJK-heavy text where 1 char ≈ 1 token), re-split it at
       // chunking.tokens so the chunk stays within the token budget.
       for (let start = 0; start < line.length; ) {
-        const coarseEnd = includeTrailingLowSurrogate(
-          line,
-          Math.min(start + maxChars, line.length),
-        );
-        const coarse = line.slice(start, coarseEnd);
+        const coarse = truncateUtf16Safe(line.slice(start), maxChars);
         if (estimateStringChars(coarse) > maxChars) {
           const fineStep = Math.max(1, chunking.tokens);
           for (let j = 0; j < coarse.length; ) {
-            const end = includeTrailingLowSurrogate(coarse, Math.min(j + fineStep, coarse.length));
+            let end = Math.min(j + fineStep, coarse.length);
+            const lastCodeUnit = coarse.charCodeAt(end - 1);
+            if (lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff && end < coarse.length) {
+              end += 1;
+            }
             segments.push(coarse.slice(j, end));
-            j = end; // advance cursor to the adjusted boundary
+            j = end;
           }
         } else {
           segments.push(coarse);
         }
-        start = coarseEnd;
+        start += coarse.length;
       }
     }
     for (const segment of segments) {
@@ -485,16 +486,6 @@ export function chunkMarkdown(
   }
   flush();
   return chunks;
-}
-
-// A high surrogate at the cut belongs with the following low surrogate; advancing
-// together keeps both the current and next chunk valid UTF-16.
-function includeTrailingLowSurrogate(value: string, end: number): number {
-  if (end >= value.length) {
-    return value.length;
-  }
-  const lastCodeUnit = value.charCodeAt(end - 1);
-  return lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff ? end + 1 : end;
 }
 
 /**
