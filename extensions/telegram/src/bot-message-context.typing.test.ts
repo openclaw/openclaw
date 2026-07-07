@@ -189,7 +189,6 @@ describe("buildTelegramMessageContext typing", () => {
     const replyFenceKey = resolveTelegramReplyFenceKey({
       ctxPayload: {
         SessionKey: "agent:openclaw:telegram:group:-100123:topic:99",
-        ChatType: "group",
       },
       chatId: -100123,
       threadSpec: { scope: "forum", id: 99 },
