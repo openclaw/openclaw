@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Chat-owned message thread presentation and thread-local interaction state.
 import { html, nothing, type TemplateResult } from "lit";
 import { guard } from "lit/directives/guard.js";
@@ -431,7 +432,7 @@ export function renderChatPinnedMessages(
                       >${role === "user" ? userRoleLabel : "Assistant"}</span
                     >
                     <span class="agent-chat__pinned-text"
-                      >${text.slice(0, 100)}${text.length > 100 ? "..." : ""}</span
+                      >${truncateUtf16Safe(text, 100)}${text.length > 100 ? "..." : ""}</span
                     >
                     <openclaw-tooltip content="Unpin">
                       <button
@@ -531,7 +532,7 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   }
   const senderEl = group.querySelector(".chat-sender-name");
   const senderLabel = senderEl?.textContent?.trim() ?? undefined;
-  const text = (bubble as HTMLElement).dataset.messageText?.trim().slice(0, 500) ?? "";
+  const text = truncateUtf16Safe((bubble as HTMLElement).dataset.messageText?.trim() ?? "", 500);
   if (!text) {
     return;
   }

@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getRuntimeConfig } from "../config/config.js";
 import {
   resolveGatewayLaunchAgentLabel,
@@ -279,7 +280,7 @@ function readGatewayRestartIntentPayloadSync(
 
 function normalizeRestartIntentReason(reason: string | undefined): string | undefined {
   const normalized = reason?.trim();
-  return normalized ? normalized.slice(0, 200) : undefined;
+  return normalized ? truncateUtf16Safe(normalized, 200) : undefined;
 }
 
 export function consumeGatewayRestartIntentPayloadSync(
@@ -844,7 +845,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   const delayMs = Math.min(Math.max(delayMsRaw, 0), 60_000);
   const reason =
     typeof opts?.reason === "string" && opts.reason.trim()
-      ? opts.reason.trim().slice(0, 200)
+      ? truncateUtf16Safe(opts.reason.trim(), 200)
       : undefined;
   const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
   const mode = hasSigusr1Listener ? "emit" : process.platform === "win32" ? "supervisor" : "signal";
