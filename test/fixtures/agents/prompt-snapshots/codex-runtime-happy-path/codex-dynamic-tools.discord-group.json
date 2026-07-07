@@ -140,6 +140,11 @@
         "agentId": {
           "type": "string"
         },
+        "announceTarget": {
+          "description": "Native completion routing. \"channel\" preserves direct channel announce; \"parent\" wakes the requester session with no direct channel announce.",
+          "enum": ["channel", "parent"],
+          "type": "string"
+        },
         "attachAs": {
           "properties": {
             "mountPath": {
