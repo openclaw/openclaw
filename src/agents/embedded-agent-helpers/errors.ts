@@ -594,6 +594,17 @@ function isSchemaErrorMessage(raw: string): boolean {
   if (!raw || isReplayInvalidErrorMessage(raw) || isContextOverflowError(raw)) {
     return false;
   }
+  const apiErrorInfo = parseApiErrorInfo(raw);
+  // Exclude structured API error JSON bodies (e.g. Anthropic-style invalid_request_error)
+  // which are explicitly classified as "format" in classifyFailoverClassificationFromMessage.
+  // Without this exclusion, isSchemaErrorMessage would match via classifyFailoverReason(raw) === "format"
+  // and classifyProviderRuntimeFailureKind would incorrectly return "schema" instead of "format".
+  if (apiErrorInfo) {
+    const apiErrorType = normalizeOptionalLowercaseString(apiErrorInfo.type);
+    if (apiErrorType?.includes("invalid_request")) {
+      return false;
+    }
+  }
   return classifyFailoverReason(raw) === "format" || matchesFormatErrorPattern(raw);
 }
 
@@ -1081,6 +1092,15 @@ function classifyFailoverClassificationFromMessage(
   }
   if (isTimeoutErrorMessage(raw)) {
     return toReasonClassification("timeout");
+  }
+  // Structured API error JSON bodies (e.g. Anthropic-style invalid_request_error)
+  // without a leading HTTP status prefix classify as "format" so the configured
+  // model fallback chain is consulted instead of returning null.
+  {
+    const apiErrorType = normalizeOptionalLowercaseString(parseApiErrorInfo(raw)?.type);
+    if (apiErrorType?.includes("invalid_request")) {
+      return toReasonClassification("format");
+    }
   }
   // Provider-specific patterns as a final catch (Bedrock, Groq, Together AI, etc.)
   const providerSpecific = classifyProviderSpecificError(

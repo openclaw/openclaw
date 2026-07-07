@@ -1929,6 +1929,62 @@ describe("runWithModelFallback", () => {
     });
   });
 
+  it("continues fallback after embedded structured invalid_request_error payloads (#99174)", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/primary-model",
+            fallbacks: ["openai/gpt-5.5"],
+          },
+        },
+      },
+    });
+    // Unprefixed Anthropic-shaped 400 body: no leading HTTP status, structured
+    // invalid_request_error. Before #99174 this classified as null → same-model
+    // empty-error replay instead of advancing to the configured fallback.
+    const rawError =
+      '{"type":"error","error":{"type":"invalid_request_error","message":"messages.27.content.1: `thinking` or `redacted_thinking` blocks in the latest assistant message cannot be modified."}}';
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce({
+        payloads: [{ text: rawError, isError: true }],
+        meta: { durationMs: 1 },
+      } satisfies EmbeddedAgentRunResult)
+      .mockResolvedValueOnce({
+        payloads: [{ text: "fallback ok" }],
+        meta: { durationMs: 1 },
+      } satisfies EmbeddedAgentRunResult);
+
+    const result = await runWithModelFallback<EmbeddedAgentRunResult>({
+      cfg,
+      provider: "anthropic",
+      model: "primary-model",
+      run,
+      classifyResult: ({ provider, model, result: resultLocal }) =>
+        classifyEmbeddedAgentRunResultForModelFallback({
+          provider,
+          model,
+          result: resultLocal,
+        }),
+    });
+
+    expect(result.result.payloads).toEqual([{ text: "fallback ok" }]);
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(requireMockCall(run, 1, "fallback run")).toEqual([
+      "openai",
+      "gpt-5.5",
+      { isFinalFallbackAttempt: true },
+    ]);
+    expect(result.attempts[0]).toMatchObject({
+      provider: "anthropic",
+      model: "primary-model",
+      reason: "format",
+      code: "embedded_error_payload",
+      error: rawError,
+    });
+  });
+
   it("surfaces classified terminal results when no fallback remains", async () => {
     const cfg = makeCfg({
       agents: {

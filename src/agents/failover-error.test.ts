@@ -758,6 +758,31 @@ describe("failover-error", () => {
     ).toBe("billing");
   });
 
+  it("classifies Anthropic invalid_request_error JSON body as format", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 400,
+        message:
+          '{"type":"error","error":{"type":"invalid_request_error","message":"anthropic: messages: request validation failed: model must not be empty"}}',
+      }),
+    ).toBe("format");
+    // Same payload without HTTP 400 prefix (Anthropic raw error shape)
+    expect(
+      resolveFailoverReasonFromError({
+        message:
+          '{"type":"error","error":{"type":"invalid_request_error","message":"anthropic: messages: request validation failed: model must not be empty"}}',
+      }),
+    ).toBe("format");
+    // Non-invalid_request_error is NOT misclassified as format
+    expect(
+      resolveFailoverReasonFromError({
+        status: 400,
+        message:
+          '{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}',
+      }),
+    ).toBe("auth");
+  });
+
   it("classifies OpenRouter 'requires more credits' text as billing", () => {
     expect(
       resolveFailoverReasonFromError({

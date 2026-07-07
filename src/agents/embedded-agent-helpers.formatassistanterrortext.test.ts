@@ -596,6 +596,28 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
+  it("keeps internal detail and user-facing redaction in sync for #99174 fallback bodies", () => {
+    // Structured invalid_request bodies now classify as "format" so the fallback
+    // chain advances (#99174). Two independent call sites decide error copy —
+    // isSchemaErrorMessage (internal formatter) and the invalid_request re-check in
+    // formatUserFacingAssistantErrorText — and must stay in sync: internal keeps
+    // provider detail for logs, user-facing collapses to the generic schema copy.
+    const msg = makeAssistantError(
+      '{"type":"error","error":{"type":"invalid_request_error","message":"messages.27.content.1: `thinking` blocks cannot be modified"}}',
+    );
+    const internal = formatAssistantErrorText(msg);
+    // Internal formatter keeps the provider detail (via either the "LLM request
+    // rejected:" or "LLM error ..." path depending on key order), never the
+    // generic schema copy.
+    expect(internal).toContain("messages.27.content.1: `thinking` blocks cannot be modified");
+    expect(internal).not.toBe(
+      "LLM request failed: provider rejected the request schema or tool payload.",
+    );
+    expect(formatUserFacingAssistantErrorText(msg)).toBe(
+      "LLM request failed: provider rejected the request schema or tool payload.",
+    );
+  });
+
   it("uses structured error body detail for model-not-found copy", () => {
     const msg = makeAssistantMessageFixture({
       errorMessage: "400 Param Incorrect",

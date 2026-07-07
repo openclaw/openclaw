@@ -232,3 +232,30 @@ describe("HTTP 429 overload wording (#98101)", () => {
     ).toBe("⚠️ rate limit: service overloaded, try again in 30 seconds");
   });
 });
+
+describe("Anthropic invalid_request_error classification without leading HTTP status (#99174)", () => {
+  it("classifies Anthropic thinking-block 400 JSON body as 'format'", () => {
+    const body =
+      '{"type":"error","error":{"type":"invalid_request_error","message":"messages.27.content.1: `thinking` or `redacted_thinking` blocks in the latest assistant message cannot be modified."}}';
+    expect(classifyFailoverReason(body)).toBe("format");
+  });
+
+  it("classifies Anthropic request-validation 400 JSON body as 'format'", () => {
+    const body =
+      '{"type":"error","error":{"type":"invalid_request_error","message":"Expected value in JSON at position 12 for messages.0.content"}}';
+    expect(classifyFailoverReason(body)).toBe("format");
+  });
+
+  it("does not misclassify non-invalid_request_error JSON as 'format'", () => {
+    const body =
+      '{"type":"error","error":{"type":"authentication_error","message":"invalid api key"}}';
+    expect(classifyFailoverReason(body)).toBe("auth");
+  });
+
+  it("does not override auth error with 'format' (auth takes precedence)", () => {
+    // "invalid api key" is caught by isAuthErrorMessage before invalid_request_error is checked
+    const body =
+      '{"type":"error","error":{"type":"invalid_request_error","message":"invalid api key"}}';
+    expect(classifyFailoverReason(body)).toBe("auth");
+  });
+});
