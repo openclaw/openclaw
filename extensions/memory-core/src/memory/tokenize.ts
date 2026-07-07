@@ -18,6 +18,10 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
  */
 const CJK_RE = /[\u3040-\u309f\u30a0-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\u1100-\u11ff]/;
 
+function foldDiacritics(token: string): string {
+  return token.normalize("NFKD").replace(/\p{M}+/gu, "");
+}
+
 /**
  * Tokenize text for Jaccard similarity computation.
  * Extracts alphanumeric tokens, CJK-family characters (unigrams),
@@ -30,6 +34,7 @@ const CJK_RE = /[\u3040-\u309f\u30a0-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7
 export function tokenize(text: string): Set<string> {
   const lower = normalizeLowercaseStringOrEmpty(text);
   const words = (lower.match(/[\p{L}\p{N}_]+/gu) ?? []).filter((token) => !CJK_RE.test(token));
+  const foldedWords = words.map(foldDiacritics).filter((token, index) => token !== words[index]);
 
   // Track CJK characters with their original positions
   const chars = Array.from(lower);
@@ -49,7 +54,7 @@ export function tokenize(text: string): Set<string> {
   }
 
   const unigrams = cjkData.map((d) => d.char);
-  return new Set([...words, ...bigrams, ...unigrams]);
+  return new Set([...words, ...foldedWords, ...bigrams, ...unigrams]);
 }
 
 /**

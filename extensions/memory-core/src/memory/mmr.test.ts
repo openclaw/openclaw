@@ -29,7 +29,7 @@ describe("tokenize", () => {
       {
         name: "unicode words",
         input: "Malmö café Привет مرحبا",
-        expected: ["malmö", "café", "привет", "مرحبا"],
+        expected: ["malmö", "café", "привет", "مرحبا", "malmo", "cafe"],
       },
       {
         name: "dedupe repeated tokens",
