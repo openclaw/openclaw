@@ -53,6 +53,9 @@ function spawnDetachedGatewayProcess(opts: GatewayRespawnOptions = {}): {
     detached: true,
     stdio: "inherit",
   });
+  // Detached spawn failures can arrive asynchronously after spawn() returns.
+  // Keep this listener before unref() so the parent does not crash during handoff.
+  child.on("error", () => {});
   child.unref();
   return { child, pid: child.pid ?? undefined };
 }

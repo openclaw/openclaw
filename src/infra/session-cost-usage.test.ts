@@ -2993,6 +2993,25 @@ example
     expect(logs?.[0]?.content).toBe("hello there");
   });
 
+  it("does not split surrogate pairs when truncating session log content", async () => {
+    const root = await makeSessionCostRoot("logs-utf16");
+    const sessionFile = path.join(root, "session.jsonl");
+    const content = "x".repeat(1999) + "🚀tail";
+    await fs.writeFile(
+      sessionFile,
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-21T17:47:00.000Z",
+        message: { role: "assistant", content },
+      }),
+      "utf-8",
+    );
+
+    const logs = await loadSessionLogs({ sessionFile });
+
+    expect(logs?.[0]?.content).toBe(`${"x".repeat(1999)}…`);
+  });
+
   it("normalizes malformed log timestamps with the transcript timestamp rules", async () => {
     const root = await makeSessionCostRoot("logs-malformed-timestamp");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
