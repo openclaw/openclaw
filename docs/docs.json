@@ -1913,8 +1913,13 @@
                 "group": "Project",
                 "pages": [
                   "reference/application-modernization-plan",
-                  "reference/pull-request-review-flow",
                   "reference/credits"
+                ]
+              },
+              {
+                "group": "Contributing",
+                "pages": [
+                  "reference/pull-request-review-flow"
                 ]
               },
               {
