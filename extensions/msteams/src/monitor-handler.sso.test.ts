@@ -156,6 +156,27 @@ describe("handleSigninTokenExchangeInvoke", () => {
     }
     expect(calls).toHaveLength(0);
   });
+
+  it("returns error when User Token service returns malformed JSON", async () => {
+    const fetchImpl: MSTeamsSsoFetch = async () => {
+      return new Response("not-valid-json", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    const { sso } = createSsoDeps({ fetchImpl });
+
+    const result = await handleSigninTokenExchangeInvoke({
+      value: { id: "flow-1", connectionName: "GraphConnection", token: "exchangeable-token" },
+      user: { userId: "aad-user-guid", channelId: "msteams" },
+      deps: sso,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toContain("invalid JSON from User Token service");
+    }
+  });
 });
 
 describe("handleSigninVerifyStateInvoke", () => {
