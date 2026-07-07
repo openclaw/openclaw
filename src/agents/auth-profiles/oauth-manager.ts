@@ -53,7 +53,7 @@ export type OAuthManagerAdapter = {
   isRefreshTokenReusedError: (error: unknown) => boolean;
 };
 
-export type ResolvedOAuthAccess = {
+type ResolvedOAuthAccess = {
   apiKey: string;
   credential: OAuthCredential;
 };
