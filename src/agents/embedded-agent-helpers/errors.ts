@@ -34,6 +34,7 @@ import {
   isOverloadedErrorMessage,
   isPeriodicUsageLimitErrorMessage,
   isRateLimitErrorMessage,
+  isRefusalErrorMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
   matchesFormatErrorPattern,
@@ -70,6 +71,7 @@ export {
   isBillingErrorMessage,
   isOverloadedErrorMessage,
   isRateLimitErrorMessage,
+  isRefusalErrorMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
 } from "./failover-matches.js";
@@ -1769,13 +1771,8 @@ export function isImageSizeError(errorMessage?: string): boolean {
   return Boolean(parseImageSizeError(errorMessage));
 }
 
-function isProviderRefusalErrorMessage(raw: string): boolean {
-  if (!raw) {
-    return false;
-  }
-  return (
-    raw.startsWith("Anthropic refusal") || raw.startsWith("Provider finish_reason: content_filter")
-  );
+export function isProviderRefusalErrorMessage(raw: string): boolean {
+  return isRefusalErrorMessage(raw);
 }
 
 export function isCloudCodeAssistFormatError(raw: string): boolean {

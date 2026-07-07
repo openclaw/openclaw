@@ -627,7 +627,6 @@ function mapStopReason(reason: string | undefined): string {
     case "pause_turn":
       return "stop";
     case "refusal":
-    case "sensitive":
       return "error";
     case "stop_sequence":
       return "stop";
@@ -1746,7 +1745,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               | undefined;
             const usage = event.usage as Record<string, unknown> | undefined;
             if (delta?.stop_reason) {
-              if (delta.stop_reason === "refusal") {
+              if (delta.stop_reason === "refusal" || delta.stop_reason === "sensitive") {
                 applyAnthropicRefusal(output, delta.stop_details, model.provider);
               } else {
                 output.stopReason = mapStopReason(delta.stop_reason);

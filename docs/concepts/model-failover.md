@@ -68,6 +68,40 @@ When enabled, OpenClaw records an in-memory, session-scoped skip marker for a no
 
 The value is a TTL in milliseconds. `0` or unset disables the cache. Positive values are clamped between 1 second and 10 minutes.
 
+## Provider refusals
+
+Some providers decline to generate content instead of failing with an auth or rate-limit error. Anthropic returns a `refusal` (or `sensitive`) stop reason, and OpenAI may finish with `content_filter`. OpenClaw classifies both as the `refusal` failover reason (`errorCode: "provider_refusal"`) and treats them differently from profile-scoped failures:
+
+- **No auth-profile rotation or cooldown.** A refusal is about the request content, not the API key or OAuth profile, so OpenClaw never rotates auth profiles or puts the current profile in cooldown for this reason.
+- **No same-model retry.** OpenClaw does not retry the refused turn on the same model; it moves straight to the next model candidate.
+- **Preserve the probe budget.** Refusals do not consume the transient cooldown probe slot, so the normal fallback probe cadence for other failure types stays intact.
+- **Fallback only when opted in.** By default, provider refusals surface as terminal errors. Enable `agents.defaults.refusalFallback` in your `openclaw.json` to route refusals through the configured model fallback chain:
+
+  ```json
+  {
+    "agents": {
+      "defaults": {
+        "refusalFallback": true
+      }
+    }
+  }
+  ```
+
+  When opted in and a fallback is configured, OpenClaw tries the next model candidate. When opted out (default) or no fallback is configured, the refusal surfaces as an error.
+
+- **Chain exhaustion preserves the first refusal message.** If every candidate refuses (and `refusalFallback` is opted in), the surfaced error preserves the primary model's refusal message, so the reported reason matches what triggered the fallback.
+- **User-facing copy.** When a refusal is surfaced, OpenClaw shows stable guidance instead of the generic assistant-error text:
+
+  ```text
+  The model declined to generate this response. Try rephrasing your request, or switch to a different model.
+  ```
+
+This keeps content-policy blocks from being mis-bucketed as timeouts or rate limits and prevents them from incorrectly rotating healthy auth profiles.
+
+<Note>
+The `refusal` classification is on by default for the core Anthropic and OpenAI transports. Plugin-provided transports that implement their own response parsing instead of the shared transport helpers are only classified as `refusal` if they produce error text matching the Anthropic-refusal or `content_filter` message patterns, or set `errorCode: "provider_refusal"` themselves. Otherwise the refusal surfaces as a generic unclassified error.
+</Note>
+
 ## User-visible fallback notices
 
 When a session moves onto an auto-selected fallback, OpenClaw sends a status notice in the same reply surface:
