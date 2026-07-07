@@ -262,9 +262,11 @@ describe("Anthropic invalid_request_error classification without leading HTTP st
   it("handles OpenAI-compatible error format (no outer type wrapper)", () => {
     // Some providers return {"error":{"type":"invalid_request_error",...}} without
     // the outer {"type":"error",...} wrapper that Anthropic uses.
+    // When the message contains model-not-found semantics, isModelNotFoundErrorMessage
+    // takes precedence over isStructuredInvalidRequestError (#101414 review).
     const body =
       '{"error":{"type":"invalid_request_error","message":"model not found for inference"}}';
-    expect(classifyFailoverReason(body)).toBe("format");
+    expect(classifyFailoverReason(body)).toBe("model_not_found");
   });
 
   it("is case-insensitive for error type matching", () => {

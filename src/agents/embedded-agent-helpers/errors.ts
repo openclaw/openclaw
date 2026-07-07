@@ -1104,11 +1104,11 @@ function classifyFailoverClassificationFromMessage(
   if (isTimeoutErrorMessage(raw)) {
     return toReasonClassification("timeout");
   }
-  if (isStructuredInvalidRequestError(raw)) {
-    return toReasonClassification("format");
-  }
   if (isModelNotFoundErrorMessage(raw)) {
     return toReasonClassification("model_not_found");
+  }
+  if (isStructuredInvalidRequestError(raw)) {
+    return toReasonClassification("format");
   }
   // Provider-specific patterns as a final catch (Bedrock, Groq, Together AI, etc.)
   const providerSpecific = classifyProviderSpecificError(
