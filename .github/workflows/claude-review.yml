@@ -194,12 +194,35 @@ jobs:
             - One or more P1/P2 findings: request changes —
               `gh pr review ${{ env.PR_NUMBER }} --repo ${{ github.repository }} --request-changes --body "Has P1/P2 findings, changes requested: <summary>"`
 
+      - name: Check primary review actually succeeded
+        # The action can report GH Actions outcome=success while the
+        # underlying SDK call itself errored (e.g. instant quota-exhaustion
+        # failure) — outcome alone silently skips the fallback path below.
+        # Read the raw execution output the action always writes to confirm
+        # the run really finished cleanly.
+        id: review-check
+        if: always()
+        run: |
+          OUT="$RUNNER_TEMP/claude-execution-output.json"
+          is_error="false"
+          if [ -f "$OUT" ]; then
+            is_error=$(jq -r '
+              if type != "array" then "false"
+              else ([.[] | select(.type == "result")] | if length > 0 then (.[-1].is_error // false | tostring) else "false" end)
+              end' "$OUT" 2>/dev/null || echo "false")
+          fi
+          if [ "${{ steps.review.outcome }}" = "failure" ] || [ "$is_error" = "true" ]; then
+            echo "failed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "failed=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Reset git state before fallback
-        if: steps.review.outcome == 'failure' && steps.token-check.outputs.has_fallback == 'true'
+        if: steps.review-check.outputs.failed == 'true' && steps.token-check.outputs.has_fallback == 'true'
         run: git checkout . && git clean -fd
 
       - name: Claude PR Review (fallback token)
-        if: steps.review.outcome == 'failure' && steps.token-check.outputs.has_fallback == 'true'
+        if: steps.review-check.outputs.failed == 'true' && steps.token-check.outputs.has_fallback == 'true'
         uses: anthropics/claude-code-action@51ea8ea73a139f2a74ff649e3092c25a904aed7e # v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_2 }}
