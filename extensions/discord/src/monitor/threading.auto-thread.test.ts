@@ -219,11 +219,16 @@ describe("maybeCreateDiscordAutoThread autoArchiveDuration", () => {
 
   it("defaults to 60 for unsupported autoArchiveDuration values", async () => {
     for (const autoArchiveDuration of ["0", "abc", 999] as const) {
+      const channelConfig = {
+        allowed: true,
+        autoThread: true,
+        autoArchiveDuration,
+      } as unknown as Parameters<MaybeCreateDiscordAutoThreadFn>[0]["channelConfig"];
       postMock.mockResolvedValueOnce({ id: "thread1" });
       getMock.mockResolvedValueOnce({});
       await maybeCreateDiscordAutoThread(
         createBaseParams({
-          channelConfig: { allowed: true, autoThread: true, autoArchiveDuration },
+          channelConfig,
         }),
       );
       expectRestBodyField(postMock, "auto_archive_duration", 60);
