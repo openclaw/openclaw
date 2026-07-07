@@ -275,3 +275,32 @@ describe("agent steering queue", () => {
     ).toBe("steering\n\nCurrent parent turn:\n\ncurrent request");
   });
 });
+
+  it("preserves emoji when steering metadata label truncates at UTF-16 boundary", () => {
+    // promptLiteral caps at MAX_METADATA_CHARS (500). Place an emoji whose
+    // surrogate pair straddles the boundary so raw .slice(0,500) would
+    // split it into lone surrogates.
+    const emojiLabel = "x".repeat(499) + "🧠" + "extra";
+    const run = makeRun({
+      runId: "emoji-run",
+      task: emojiLabel,
+      delivery: {
+        status: "pending",
+        createdAt: 100,
+        payload: payload("emoji-run", {
+          label: emojiLabel,
+          task: emojiLabel,
+          frozenResultText: "done",
+        }),
+      },
+    });
+
+    const prompt = buildMergedAgentSteeringPrompt([
+      { runId: "emoji-run", entry: run, payload: run.delivery!.payload! },
+    ]);
+
+    expect(prompt).toBeTruthy();
+    // Must never contain a lone surrogate half.
+    expect(prompt).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    expect(prompt).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+  });
