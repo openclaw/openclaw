@@ -606,9 +606,16 @@ async function loadMarketplace(params: {
         maxBytes: MAX_MARKETPLACE_MANIFEST_BYTES,
       });
       raw = buffer.toString("utf-8");
-    } catch {
+    } catch (err) {
       await paramsLocal.cleanup?.();
-      return { ok: false, error: "Marketplace manifest too large" };
+      const message = err instanceof Error ? err.message : String(err);
+      // readRegularFile rejects symlinks/non-files and caps file size. Only the
+      // size cap should be reported as an oversize manifest; other read failures
+      // need their own diagnostic so users don't chase the wrong problem.
+      if (message.startsWith("File exceeds")) {
+        return { ok: false, error: "Marketplace manifest too large" };
+      }
+      return { ok: false, error: `Marketplace manifest unreadable: ${message}` };
     }
     const parsed = parseMarketplaceManifest(raw, paramsLocal.manifestPath);
     if (!parsed.ok) {

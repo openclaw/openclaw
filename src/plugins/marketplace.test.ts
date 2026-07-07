@@ -320,6 +320,28 @@ describe("marketplace plugins", () => {
     });
   });
 
+  it("reports a distinct error when the marketplace manifest is not a regular file", async () => {
+    if (process.platform === "win32") {
+      // Symlink support in unit tests is not guaranteed on Windows CI runners.
+      return;
+    }
+    await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
+      const manifestPath = path.join(rootDir, ".claude-plugin", "marketplace.json");
+      await fs.mkdir(path.dirname(manifestPath), { recursive: true });
+      const targetPath = path.join(rootDir, "real-manifest.json");
+      await fs.writeFile(targetPath, "{}", "utf-8");
+      await fs.symlink(targetPath, manifestPath);
+
+      const result = await listMarketplacePlugins({ marketplace: rootDir });
+
+      expect(result.ok).toBe(false);
+      expect(result).toHaveProperty("error");
+      const error = (result as { ok: false; error: string }).error;
+      expect(error).toContain("Marketplace manifest unreadable");
+      expect(error).not.toContain("too large");
+    });
+  });
+
   it("resolves relative plugin paths against the marketplace root", async () => {
     await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
       const pluginDir = path.join(rootDir, "plugins", "frontend-design");
