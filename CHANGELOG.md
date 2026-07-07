@@ -22,7 +22,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Model auth live refresh:** refresh the running Gateway's auth snapshot after successful CLI provider login and token/API-key writes so newly authenticated models become available without a manual reload or restart. (#101254) Thanks @fuller-stack-dev.
 - **Codex yielded native subagents:** keep the parent app-server subscription and shared client alive until yielded native subagent completion delivery settles, preventing lost wakeups and leaked one-shot cleanup.
 - **Discord streamed finals:** send completion replies as fresh messages so inactive channels become unread, while preserving targeted mentions without escalating `@everyone` or `@here`. (#99711, #99662) Thanks @davelutztx.
 - **OpenAI-compatible SSE parsing:** recognize event streams mislabeled as JSON without prepending a second `data:` prefix, preserving valid streamed responses from non-conforming providers. (#96503) Thanks @ZengWen-DT.
