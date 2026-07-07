@@ -527,9 +527,14 @@ export async function runCommandWithTimeout(
         if (process.platform === "win32") {
           const taskkillPath = getWindowsSystem32ExePath("taskkill.exe");
           try {
-            spawn(taskkillPath, ["/PID", String(child.pid), "/T"], {
+            const gracefulKiller = spawn(taskkillPath, ["/PID", String(child.pid), "/T"], {
               stdio: "ignore",
               windowsHide: true,
+            });
+            // taskkill spawn errors are asynchronous — try/catch won't see them.
+            // Fall back to direct child kill so the process tree is never leaked.
+            gracefulKiller.on("error", () => {
+              child.kill("SIGKILL");
             });
             if (!processTreeForceKillTimer) {
               processTreeForceKillTimer = setTimeout(() => {
@@ -543,9 +548,12 @@ export async function runCommandWithTimeout(
                   return;
                 }
                 try {
-                  spawn(taskkillPath, ["/PID", String(child.pid), "/T", "/F"], {
+                  const forceKiller = spawn(taskkillPath, ["/PID", String(child.pid), "/T", "/F"], {
                     stdio: "ignore",
                     windowsHide: true,
+                  });
+                  forceKiller.on("error", () => {
+                    child.kill("SIGKILL");
                   });
                 } catch {
                   child.kill("SIGKILL");
@@ -563,7 +571,7 @@ export async function runCommandWithTimeout(
       }
       if (process.platform === "win32" && typeof child.pid === "number" && child.pid > 0) {
         try {
-          spawn(
+          const directKiller = spawn(
             getWindowsSystem32ExePath("taskkill.exe"),
             ["/PID", String(child.pid), "/T", "/F"],
             {
@@ -571,6 +579,9 @@ export async function runCommandWithTimeout(
               windowsHide: true,
             },
           );
+          directKiller.on("error", () => {
+            child.kill("SIGKILL");
+          });
           return;
         } catch {
           // Fall through to Node's direct child kill as a last resort.
