@@ -2430,6 +2430,7 @@ async function runAgentTurnWithFallbackInternal(
                   onAgentRunStart: notifyAgentRunStart,
                   suppressAssistantBridge: params.followupRun.run.silentExpected,
                   onAssistantText: async (text) => {
+                    params.replyOperation?.recordActivity();
                     const textForTyping = await handlePartialForTyping({ text } as ReplyPayload);
                     if (textForTyping === undefined || !params.opts?.onPartialReply) {
                       return;
@@ -2438,9 +2439,11 @@ async function runAgentTurnWithFallbackInternal(
                   },
                   onReasoningText: createCliReasoningStreamBridge(params.opts?.onReasoningStream),
                   onReasoningProgress: async (payload) => {
+                    params.replyOperation?.recordActivity();
                     await params.opts?.onReasoningProgress?.(payload);
                   },
                   onToolEvent: async (payload) => {
+                    params.replyOperation?.recordActivity();
                     await cliToolSummaryTracker.noteToolEvent(payload);
                     if (payload.phase === "result") {
                       return;
@@ -2459,6 +2462,7 @@ async function runAgentTurnWithFallbackInternal(
                   onCommentaryText:
                     params.opts?.commentaryProgressEnabled === true && params.opts.onItemEvent
                       ? async (payload) => {
+                          params.replyOperation?.recordActivity();
                           await params.opts?.onItemEvent?.({
                             itemId: payload.itemId,
                             kind: "preamble",
@@ -2467,6 +2471,7 @@ async function runAgentTurnWithFallbackInternal(
                         }
                       : undefined,
                   onFastModeAutoProgress: async (payload) => {
+                    params.replyOperation?.recordActivity();
                     await params.opts?.onToolResult?.(payload);
                   },
                   onErrorBeforeLifecycle: async () => {
@@ -2754,6 +2759,7 @@ async function runAgentTurnWithFallbackInternal(
                       const commentaryTextByItem = new Map<string, string>();
                       const lastEmittedCommentaryByItem = new Map<string, string>();
                       return async (evt) => {
+                        params.replyOperation?.recordActivity();
                         lifecycleBackstop.note(evt);
                         // Signal run start only after the embedded agent emits real activity.
                         const hasLifecyclePhase =
@@ -3052,6 +3058,7 @@ async function runAgentTurnWithFallbackInternal(
                           return (payload: ReplyPayload) => {
                             toolResultChain = toolResultChain
                               .then(async () => {
+                                params.replyOperation?.recordActivity();
                                 const { text, skip } = normalizeStreamingText(payload);
                                 if (skip) {
                                   return;
