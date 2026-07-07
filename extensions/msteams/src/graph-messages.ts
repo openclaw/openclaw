@@ -312,7 +312,7 @@ export const TEAMS_REACTION_TYPES = [
   "sad",
   "angry",
 ] as const;
-export type TeamsReactionType = (typeof TEAMS_REACTION_TYPES)[number];
+type TeamsReactionType = (typeof TEAMS_REACTION_TYPES)[number];
 
 type GraphReaction = {
   reactionType?: string;
