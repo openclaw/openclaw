@@ -1,6 +1,5 @@
 // Runs heartbeat checks and emits status updates for configured agents.
 import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import {
@@ -165,6 +164,7 @@ import {
   resolveHeartbeatDeliveryTargetWithSessionRoute,
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
+import { readRegularFile } from "./regular-file.js";
 import {
   consumeSelectedSystemEventEntries,
   peekSystemEventEntries,
@@ -1081,9 +1081,12 @@ async function resolveHeartbeatPreflight(params: {
 
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
   const heartbeatFilePath = path.join(workspaceDir, DEFAULT_HEARTBEAT_FILENAME);
+  const MAX_HEARTBEAT_FILE_BYTES = 16 * 1024 * 1024;
   let heartbeatFileContent: string | undefined;
   try {
-    heartbeatFileContent = await fs.readFile(heartbeatFilePath, "utf-8");
+    heartbeatFileContent = (
+      await readRegularFile({ filePath: heartbeatFilePath, maxBytes: MAX_HEARTBEAT_FILE_BYTES })
+    ).buffer.toString("utf-8");
     const tasks = parseHeartbeatTasks(heartbeatFileContent);
     if (
       isHeartbeatContentEffectivelyEmpty(heartbeatFileContent) &&
