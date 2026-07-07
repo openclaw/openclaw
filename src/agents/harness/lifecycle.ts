@@ -8,7 +8,10 @@ import {
   assertContextEngineHostSupport,
   type ContextEngineHostSupport,
 } from "../../context-engine/host-compat.js";
-import { diagnosticErrorCategory } from "../../infra/diagnostic-error-metadata.js";
+import {
+  diagnosticErrorCategory,
+  diagnosticErrorMessage,
+} from "../../infra/diagnostic-error-metadata.js";
 import {
   emitTrustedDiagnosticEvent,
   type DiagnosticHarnessRunErrorEvent,
@@ -167,11 +170,16 @@ function emitAgentHarnessRunCompleted(params: {
   trace?: DiagnosticTraceContext;
 }): void {
   const { harness, attemptParams, result, startedAt, trace } = params;
+  const outcome = agentHarnessRunOutcome(result);
+  // A classified (non-thrown) failure carries its error on result.promptError;
+  // forward the message so the error span shows more than a bare category.
+  const errorMessage = outcome === "error" ? diagnosticErrorMessage(result.promptError) : undefined;
   emitTrustedDiagnosticEvent({
     type: "harness.run.completed",
     ...agentHarnessDiagnosticBase(harness, attemptParams, trace ?? result.diagnosticTrace),
     durationMs: Date.now() - startedAt,
-    outcome: agentHarnessRunOutcome(result),
+    outcome,
+    ...(errorMessage ? { error: errorMessage } : {}),
     ...(result.agentHarnessResultClassification
       ? { resultClassification: result.agentHarnessResultClassification }
       : {}),
@@ -189,12 +197,14 @@ function emitAgentHarnessRunError(params: {
   trace?: DiagnosticTraceContext;
 }): void {
   const { harness, attemptParams, startedAt, phase, error, trace } = params;
+  const errorMessage = diagnosticErrorMessage(error);
   emitTrustedDiagnosticEvent({
     type: "harness.run.error",
     ...agentHarnessDiagnosticBase(harness, attemptParams, trace),
     durationMs: Date.now() - startedAt,
     phase,
     errorCategory: diagnosticErrorCategory(error),
+    ...(errorMessage ? { error: errorMessage } : {}),
   });
 }
 
@@ -215,15 +225,16 @@ export async function runAgentHarnessLifecycleAttempt(
       return;
     }
     agentRunCompleted = true;
+    const failed = completion.outcome === "error" && Boolean(completion.error);
+    const errorMessage = failed ? diagnosticErrorMessage(completion.error) : undefined;
     emitTrustedDiagnosticEvent({
       type: "run.completed",
       ...agentRunDiagnosticBase(params, agentRunTrace),
       durationMs: Date.now() - agentRunStartedAt,
       outcome: completion.outcome,
       ...(completion.blockedBy ? { blockedBy: completion.blockedBy } : {}),
-      ...(completion.error && completion.outcome === "error"
-        ? { errorCategory: diagnosticErrorCategory(completion.error) }
-        : {}),
+      ...(failed ? { errorCategory: diagnosticErrorCategory(completion.error) } : {}),
+      ...(errorMessage ? { error: errorMessage } : {}),
     });
   };
 

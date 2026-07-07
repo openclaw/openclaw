@@ -3092,6 +3092,11 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         if (evt.errorCategory) {
           spanAttrs["openclaw.errorCategory"] = lowCardinalityAttr(evt.errorCategory, "other");
         }
+        // Redacted message goes on the span only, never the low-cardinality metric attrs.
+        const redactedError = evt.error ? redactSensitiveText(evt.error) : undefined;
+        if (redactedError) {
+          spanAttrs["openclaw.error"] = redactedError;
+        }
         const trustedTrace = trustedTraceContext(evt, metadata);
         const trackedSpan = trustedTrace?.spanId
           ? activeTrustedSpans.get(trustedTrace.spanId)
@@ -3104,9 +3109,11 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           });
         setSpanAttrs(span, spanAttrs);
         if (evt.outcome === "error") {
+          const message =
+            redactedError ?? (evt.errorCategory ? redactSensitiveText(evt.errorCategory) : undefined);
           span.setStatus({
             code: SpanStatusCode.ERROR,
-            ...(evt.errorCategory ? { message: redactSensitiveText(evt.errorCategory) } : {}),
+            ...(message ? { message } : {}),
           });
         }
         if (trackedSpan && trustedTrace?.spanId) {
@@ -3170,6 +3177,11 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           spanAttrs["openclaw.harness.items.completed"] = evt.itemLifecycle.completedCount;
           spanAttrs["openclaw.harness.items.active"] = evt.itemLifecycle.activeCount;
         }
+        // Redacted message goes on the span only, never the low-cardinality metric attrs.
+        const redactedError = evt.error ? redactSensitiveText(evt.error) : undefined;
+        if (redactedError) {
+          spanAttrs["openclaw.error"] = redactedError;
+        }
         const trustedTrace = trustedTraceContext(evt, metadata);
         const trackedSpan = trustedTrace?.spanId
           ? activeTrustedSpans.get(trustedTrace.spanId)
@@ -3184,7 +3196,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         if (evt.outcome === "error") {
           span.setStatus({
             code: SpanStatusCode.ERROR,
-            message: "error",
+            message: redactedError ?? "error",
           });
         }
         if (trackedSpan && trustedTrace?.spanId) {
@@ -3208,9 +3220,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         if (!tracesEnabled) {
           return;
         }
+        // Redacted message goes on the span only; attrs above feed the metric.
+        const redactedError = evt.error ? redactSensitiveText(evt.error) : undefined;
         const spanAttrs: Record<string, string | number | boolean> = {
           ...attrs,
           "error.type": errorType,
+          ...(redactedError ? { "openclaw.error": redactedError } : {}),
           ...(evt.cleanupFailed ? { "openclaw.harness.cleanup_failed": true } : {}),
         };
         const span =
@@ -3222,7 +3237,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         setSpanAttrs(span, spanAttrs);
         span.setStatus({
           code: SpanStatusCode.ERROR,
-          message: errorType,
+          message: redactedError ?? errorType,
         });
         span.end(evt.ts);
       };

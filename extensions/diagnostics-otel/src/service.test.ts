@@ -1455,6 +1455,98 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("run.completed error span carries the redacted message off the metric attrs", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "run.completed",
+      runId: "run-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      outcome: "error",
+      errorCategory: "Error",
+      error: "upstream model stream stalled then aborted",
+      durationMs: 100,
+    });
+    await flushDiagnosticEvents();
+
+    expect(startedSpanOptions("openclaw.run")?.attributes?.["openclaw.error"]).toBe(
+      "upstream model stream stalled then aborted",
+    );
+    expect(spanByName("openclaw.run").setStatus).toHaveBeenCalledWith({
+      code: 2,
+      message: "upstream model stream stalled then aborted",
+    });
+    // The raw message must never widen metric cardinality.
+    const runDuration = lastHistogramRecord("openclaw.run.duration_ms");
+    expect(runDuration?.[1]?.["openclaw.outcome"]).toBe("error");
+    expect(Object.hasOwn(runDuration?.[1] ?? {}, "openclaw.error")).toBe(false);
+
+    await service.stop?.(ctx);
+  });
+
+  test("harness.run.completed error span carries the redacted message", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "harness.run.completed",
+      runId: "run-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      harnessId: "openclaw",
+      outcome: "error",
+      error: "model run failed during resolve phase",
+      durationMs: 90,
+      itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+    });
+    await flushDiagnosticEvents();
+
+    expect(startedSpanOptions("openclaw.harness.run")?.attributes?.["openclaw.error"]).toBe(
+      "model run failed during resolve phase",
+    );
+    expect(spanByName("openclaw.harness.run").setStatus).toHaveBeenCalledWith({
+      code: 2,
+      message: "model run failed during resolve phase",
+    });
+    const harnessDuration = lastHistogramRecord("openclaw.harness.duration_ms");
+    expect(Object.hasOwn(harnessDuration?.[1] ?? {}, "openclaw.error")).toBe(false);
+
+    await service.stop?.(ctx);
+  });
+
+  test("harness.run.error span prefers the redacted message over the category", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "harness.run.error",
+      runId: "run-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      harnessId: "openclaw",
+      phase: "resolve",
+      errorCategory: "Error",
+      error: "harness cleanup threw",
+      durationMs: 90,
+    });
+    await flushDiagnosticEvents();
+
+    expect(startedSpanOptions("openclaw.harness.run")?.attributes?.["openclaw.error"]).toBe(
+      "harness cleanup threw",
+    );
+    expect(spanByName("openclaw.harness.run").setStatus).toHaveBeenCalledWith({
+      code: 2,
+      message: "harness cleanup threw",
+    });
+
+    await service.stop?.(ctx);
+  });
+
   test("honors disabled traces when an OpenTelemetry SDK is preloaded", async () => {
     process.env.OPENCLAW_OTEL_PRELOADED = "1";
     const service = createDiagnosticsOtelService();
