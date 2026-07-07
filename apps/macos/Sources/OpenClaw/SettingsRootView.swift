@@ -45,6 +45,7 @@ struct SettingsRootView: View {
                 }
             }
             .listStyle(.sidebar)
+            .accentColor(Self.lobsterColor)
             .tint(Self.lobsterColor)
             .navigationSplitViewColumnWidth(SettingsLayout.sidebarWidth)
         } detail: {
