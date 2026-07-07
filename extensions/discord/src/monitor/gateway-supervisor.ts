@@ -41,6 +41,26 @@ export type DiscordGatewaySupervisor = {
 
 type GatewaySupervisorPhase = "active" | "buffering" | "disposed" | "teardown";
 
+const discordGatewayLateErrorGuards = new WeakMap<EventEmitter, (err: unknown) => void>();
+
+function removeDiscordGatewayLateErrorGuard(emitter: EventEmitter): void {
+  const guard = discordGatewayLateErrorGuards.get(emitter);
+  if (!guard) {
+    return;
+  }
+  emitter.off("error", guard);
+  discordGatewayLateErrorGuards.delete(emitter);
+}
+
+function ensureDiscordGatewayLateErrorGuard(emitter: EventEmitter): void {
+  if (emitter.listenerCount("error") > 0) {
+    return;
+  }
+  const guard = () => undefined;
+  discordGatewayLateErrorGuards.set(emitter, guard);
+  emitter.on("error", guard);
+}
+
 function readFirstStackFrame(err: Error): string | undefined {
   const stack = err.stack;
   if (!stack) {
@@ -169,6 +189,7 @@ export function createDiscordGatewaySupervisor(params: {
         pending.push(event);
     }
   };
+  removeDiscordGatewayLateErrorGuard(emitter);
   emitter.on("error", onGatewayError);
 
   return {
@@ -199,6 +220,7 @@ export function createDiscordGatewaySupervisor(params: {
         return;
       }
       emitter.off("error", onGatewayError);
+      ensureDiscordGatewayLateErrorGuard(emitter);
       lifecycleHandler = undefined;
       phase = "disposed";
       pending.length = 0;

@@ -115,20 +115,22 @@ describe("createDiscordGatewaySupervisor", () => {
     supervisor.dispose();
   });
 
-  it("removes the gateway error listener on dispose", () => {
+  it("keeps a single late error guard after repeated dispose", () => {
     const emitter = new EventEmitter();
-    const supervisor = createDiscordGatewaySupervisor({
-      gateway: { emitter },
-      isDisallowedIntentsError: () => false,
-      runtime: { error: vi.fn() } as never,
-    });
+
+    for (let index = 0; index < 3; index += 1) {
+      const supervisor = createDiscordGatewaySupervisor({
+        gateway: { emitter },
+        isDisallowedIntentsError: () => false,
+        runtime: { error: vi.fn() } as never,
+      });
+
+      expect(emitter.listenerCount("error")).toBe(1);
+      supervisor.dispose();
+      expect(emitter.listenerCount("error")).toBe(1);
+      expect(() => emitter.emit("error", new Error(`late gateway error ${index}`))).not.toThrow();
+    }
 
     expect(emitter.listenerCount("error")).toBe(1);
-
-    supervisor.dispose();
-    expect(emitter.listenerCount("error")).toBe(0);
-
-    supervisor.dispose();
-    expect(emitter.listenerCount("error")).toBe(0);
   });
 });
