@@ -48,7 +48,26 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
     names: ["python", "python2", "python3", "pypy", "pypy3"],
     exactFlags: new Set(["-c"]),
     shortClusterFlags: [
-      { label: "-c", flag: "c", prefixChars: new Set(["B", "E", "I", "O", "S"]) },
+      {
+        label: "-c",
+        flag: "c",
+        prefixChars: new Set([
+          "B",
+          "E",
+          "I",
+          "O",
+          "P",
+          "R",
+          "S",
+          "b",
+          "d",
+          "i",
+          "q",
+          "s",
+          "u",
+          "v",
+        ]),
+      },
     ],
   },
   {
@@ -63,14 +82,24 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
   {
     names: ["ruby"],
     exactFlags: new Set(["-e"]),
-    shortClusterFlags: [{ label: "-e", flag: "e", prefixChars: new Set(["d", "w"]) }],
+    shortClusterFlags: [
+      { label: "-e", flag: "e", prefixChars: new Set(["U", "a", "d", "l", "n", "p", "s", "w"]) },
+    ],
   },
   {
     names: ["perl"],
     exactFlags: new Set(["-e", "-E"]),
     shortClusterFlags: [
-      { label: "-e", flag: "e", prefixChars: new Set(["T", "w"]) },
-      { label: "-e", flag: "E", prefixChars: new Set(["T", "w"]) },
+      {
+        label: "-e",
+        flag: "e",
+        prefixChars: new Set(["T", "a", "l", "n", "p", "s", "t", "u", "w"]),
+      },
+      {
+        label: "-e",
+        flag: "E",
+        prefixChars: new Set(["T", "a", "l", "n", "p", "s", "t", "u", "w"]),
+      },
     ],
   },
   {
