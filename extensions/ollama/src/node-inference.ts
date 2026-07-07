@@ -25,10 +25,10 @@ import {
   resolveOllamaApiBase,
 } from "./provider-models.js";
 
-export const OLLAMA_NODE_INFERENCE_CAPABILITY = "local-inference";
+const OLLAMA_NODE_INFERENCE_CAPABILITY = "local-inference";
 export const OLLAMA_MODELS_COMMAND = "ollama.models";
 export const OLLAMA_CHAT_COMMAND = "ollama.chat";
-export const OLLAMA_NODE_INFERENCE_COMMANDS = [OLLAMA_MODELS_COMMAND, OLLAMA_CHAT_COMMAND] as const;
+const OLLAMA_NODE_INFERENCE_COMMANDS = [OLLAMA_MODELS_COMMAND, OLLAMA_CHAT_COMMAND] as const;
 
 const DEFAULT_INFERENCE_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_TOKENS = 512;
@@ -420,7 +420,7 @@ async function invokeNode(
   return parseInvokePayload(raw);
 }
 
-export const ollamaNodeInferenceToolDefinition = {
+const ollamaNodeInferenceToolDefinition = {
   name: "node_inference",
   label: "Node Inference",
   description:
