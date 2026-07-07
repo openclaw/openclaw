@@ -559,6 +559,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         const created = createClient(
           model,
           apiKey,
+          options?.thinkingEnabled === true,
           options?.interleavedThinking ?? true,
           shouldUseFineGrainedToolStreamingBeta(model, requestContext),
           options?.headers,
@@ -1101,6 +1102,7 @@ function supportsAnthropicServerSideFallback(model: Model<"anthropic-messages">)
 function createClient(
   model: Model<"anthropic-messages">,
   apiKey: string,
+  thinkingEnabled: boolean,
   interleavedThinking: boolean,
   useFineGrainedToolStreamingBeta: boolean,
   optionsHeaders?: Record<string, string>,
@@ -1117,6 +1119,11 @@ function createClient(
   if (needsInterleavedBeta) {
     betaFeatures.push(INTERLEAVED_THINKING_BETA);
   }
+  const fetchOptions =
+    /^kimi(?:-|$)/.test(model.provider) && thinkingEnabled
+      ? { sanitizeSse: false as const }
+      : undefined;
+  const fetch = getAiTransportHost().buildModelFetch(model, undefined, fetchOptions);
 
   if (model.provider === "cloudflare-ai-gateway") {
     const client = new Anthropic({
@@ -1134,7 +1141,7 @@ function createClient(
         model.headers,
         optionsHeaders,
       ),
-      fetch: getAiTransportHost().buildModelFetch(model),
+      fetch,
     });
 
     return { client, isOAuthToken: false, serverSideFallback: false };
@@ -1157,6 +1164,7 @@ function createClient(
         dynamicHeaders,
         optionsHeaders,
       ),
+      fetch,
     });
 
     return { client, isOAuthToken: false, serverSideFallback: false };
@@ -1178,6 +1186,7 @@ function createClient(
         dynamicHeaders,
         optionsHeaders,
       ),
+      fetch,
     });
 
     return { client, isOAuthToken: false, serverSideFallback: false };
@@ -1201,6 +1210,7 @@ function createClient(
         model.headers,
         optionsHeaders,
       ),
+      fetch,
     });
 
     return { client, isOAuthToken: true, serverSideFallback: false };
@@ -1230,6 +1240,7 @@ function createClient(
       model.headers,
       optionsHeaders,
     ),
+    fetch,
   });
 
   return { client, isOAuthToken: false, serverSideFallback };
