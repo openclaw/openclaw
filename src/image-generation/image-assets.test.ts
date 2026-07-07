@@ -95,6 +95,25 @@ describe("image asset helpers", () => {
     ]);
   });
 
+  it("reads media_type as a MIME type fallback for OpenRouter-style responses", () => {
+    const images = parseOpenAiCompatibleImageResponse({
+      data: [
+        {
+          b64_json: Buffer.from("webp-bytes").toString("base64"),
+          media_type: "image/webp",
+        },
+      ],
+    });
+
+    expect(images).toEqual([
+      {
+        buffer: Buffer.from("webp-bytes"),
+        mimeType: "image/webp",
+        fileName: "image-1.webp",
+      },
+    ]);
+  });
+
   it("skips malformed OpenAI-compatible base64 image responses", () => {
     expect(
       parseOpenAiCompatibleImageResponse(

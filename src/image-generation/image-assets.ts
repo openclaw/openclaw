@@ -23,6 +23,8 @@ export type ImageMimeTypeDetection = {
 export type OpenAiCompatibleImageResponseEntry = {
   b64_json?: unknown;
   mime_type?: unknown;
+  // OpenRouter's /api/v1/images responses report the MIME type as media_type.
+  media_type?: unknown;
   revised_prompt?: unknown;
 };
 
@@ -198,7 +200,7 @@ export function generatedImageAssetFromOpenAiCompatibleEntry(
   return generatedImageAssetFromBase64({
     base64: normalizeOptionalString(entry.b64_json),
     index,
-    mimeType: normalizeOptionalString(entry.mime_type),
+    mimeType: normalizeOptionalString(entry.mime_type) ?? normalizeOptionalString(entry.media_type),
     revisedPrompt: normalizeOptionalString(entry.revised_prompt),
     defaultMimeType: options.defaultMimeType,
     fileNamePrefix: options.fileNamePrefix,
