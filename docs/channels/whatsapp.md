@@ -718,9 +718,11 @@ Precedence is:
 
 1. specific account conversation entry
 2. account wildcard entry
-3. specific root conversation entry
-4. root wildcard entry
-5. existing WhatsApp channel debounce default
+3. existing WhatsApp channel debounce default
+
+Account-scoped `direct` and `groups` maps replace the matching root maps for
+that account. Root-specific and root-wildcard entries are only used when no
+account map replaces that conversation kind.
 
 | Area             | Fields                                                                                                         |
 | ---------------- | -------------------------------------------------------------------------------------------------------------- |
