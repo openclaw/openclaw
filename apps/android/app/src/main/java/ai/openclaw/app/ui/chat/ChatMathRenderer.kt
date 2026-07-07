@@ -1,12 +1,12 @@
 package ai.openclaw.app.ui.chat
 
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.Application
 import android.content.Context
 import android.content.ContextWrapper
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -42,6 +42,8 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.sp
+import androidx.core.graphics.createBitmap
+import androidx.core.net.toUri
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.lang.ref.WeakReference
@@ -287,6 +289,10 @@ private val ChatMathRenderRequest.renderStyle: RenderStyle
 /** Process-singleton entry point. Its sole WebView and all queue state stay on the main thread. */
 internal object ChatMathRenderer {
   private val handler = Handler(Looper.getMainLooper())
+
+  // This is intentionally process-owned: its WebView uses the Application context, and the
+  // activity host is weak, detached on destruction, then replaced on the next render.
+  @SuppressLint("StaticFieldLeak")
   private var backend: ChatMathWebViewBackend? = null
   private var coordinator: ChatMathRenderCoordinator<Bitmap>? = null
 
@@ -303,7 +309,7 @@ internal object ChatMathRenderer {
     }
     val renderBackend =
       backend
-        ?: ChatMathWebViewBackend(context.applicationContext, host).also { created -> backend = created }
+        ?: ChatMathWebViewBackend(context.applicationContext as Application, host).also { created -> backend = created }
     renderBackend.updateHost(host)
     val renderer =
       coordinator
@@ -322,7 +328,7 @@ internal object ChatMathRenderer {
 }
 
 private class ChatMathWebViewBackend(
-  private val context: Context,
+  private val application: Application,
   host: ViewGroup,
 ) : ChatMathRenderBackend<Bitmap> {
   private val mainHandler = Handler(Looper.getMainLooper())
@@ -330,7 +336,7 @@ private class ChatMathWebViewBackend(
   private var nextRenderId = 0L
   private var active: ActiveRender? = null
   private var host = WeakReference(host)
-  private var webView = createWebView(context)
+  private var webView = createWebView(application)
   private val activityCallbacks =
     object : Application.ActivityLifecycleCallbacks {
       override fun onActivityDestroyed(activity: Activity) {
@@ -357,7 +363,7 @@ private class ChatMathWebViewBackend(
     }
 
   init {
-    (context as Application).registerActivityLifecycleCallbacks(activityCallbacks)
+    application.registerActivityLifecycleCallbacks(activityCallbacks)
     attachWebView(webView)
   }
 
@@ -379,6 +385,9 @@ private class ChatMathWebViewBackend(
     if (ready) evaluateActiveRender()
   }
 
+  // JavaScript is required only for the bundled KaTeX shell. The client blocks network loads,
+  // rejects every URL outside the asset root, and receives LaTeX as a JSON value rather than HTML.
+  @SuppressLint("SetJavaScriptEnabled")
   @Suppress("DEPRECATION")
   private fun createWebView(context: Context): WebView =
     WebView(context).apply {
@@ -438,7 +447,7 @@ private class ChatMathWebViewBackend(
             (view.parent as? ViewGroup)?.removeView(view)
             view.destroy()
             mainHandler.post {
-              webView = createWebView(context)
+              webView = createWebView(application)
               attachWebView(webView)
               interrupted?.completion?.invoke(ChatMathRenderResult.TransientFailure)
             }
@@ -538,7 +547,7 @@ private class ChatMathWebViewBackend(
                     View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY),
                   )
                   webView.layout(0, 0, width, height)
-                  Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also { target ->
+                  createBitmap(width, height, Bitmap.Config.ARGB_8888).also { target ->
                     target.eraseColor(AndroidColor.TRANSPARENT)
                     webView.draw(Canvas(target))
                   }
@@ -571,7 +580,7 @@ private tailrec fun Context.findActivity(): Activity? =
 
 private fun isAllowedAssetUrl(url: String): Boolean =
   runCatching {
-    val uri = Uri.parse(url)
+    val uri = url.toUri()
     uri.scheme == "file" &&
       uri.host.isNullOrEmpty() &&
       uri.path.orEmpty().startsWith("/android_asset/katex/") &&

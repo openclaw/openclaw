@@ -12,7 +12,7 @@ window.renderMath = async (job) => {
       maxExpand: 1000,
       maxSize: 10,
       strict: "ignore",
-      throwOnError: false,
+      throwOnError: true,
       trust: false,
     });
     await document.fonts.ready;
