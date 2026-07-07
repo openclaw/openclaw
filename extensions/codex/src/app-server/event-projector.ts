@@ -684,6 +684,11 @@ export class CodexAppServerEventProjector {
       if (!this.isHookNotificationForCurrentThread(params)) {
         return;
       }
+    } else if (notification.method === "guardianWarning") {
+      // Codex guardian warnings are thread-scoped and carry no turn id.
+      if (readCodexNotificationThreadId(params) !== this.threadId) {
+        return;
+      }
     } else if (!this.isNotificationForTurn(params)) {
       return;
     }
@@ -718,6 +723,9 @@ export class CodexAppServerEventProjector {
       case "item/autoApprovalReview/started":
       case "item/autoApprovalReview/completed":
         this.handleGuardianReviewNotification(notification.method, params);
+        break;
+      case "guardianWarning":
+        this.handleGuardianWarning(params);
         break;
       case "hook/started":
       case "hook/completed":
@@ -1253,6 +1261,16 @@ export class CodexAppServerEventProjector {
         userAuthorization: review ? readString(review, "userAuthorization") : undefined,
         rationale: review ? readNullableString(review, "rationale") : undefined,
         actionType: action ? readString(action, "type") : undefined,
+      },
+    });
+  }
+
+  private handleGuardianWarning(params: JsonObject): void {
+    this.emitAgentEvent({
+      stream: "codex_app_server.guardian",
+      data: {
+        phase: "warning",
+        message: readString(params, "message"),
       },
     });
   }

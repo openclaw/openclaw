@@ -1557,6 +1557,8 @@ export const th: TranslationMap = {
       splitDown: "แบ่งลงด้านล่าง",
       closePane: "ปิดบานหน้าต่าง",
       sessionSelect: "เซสชันของบานหน้าต่าง",
+      dropSplit: "แยก",
+      dropOpenHere: "เปิดที่นี่",
     },
     sidebar: {
       allSessions: "เซสชันทั้งหมด",
