@@ -318,13 +318,16 @@ extension OpenClawChatViewModel {
             sessionKey: sessionKey,
             agentID: command.agentID)
         let messageKey = Self.outboxUserIdempotencyKey(command.id)
+        let canonicalMessage = Self.adoptingCanonicalMessage(
+            message,
+            over: Self.outboxUserMessage(for: command))
         let previous = self.pendingCacheWriteTask
         let task = Task.detached {
             await previous?.value
             await transcriptCache.mergeCanonicalTranscriptMessage(
                 sessionKey: sessionKey,
                 agentID: cacheAgentID,
-                message: message,
+                message: canonicalMessage,
                 canonicalMessageIdempotencyKey: messageKey)
         }
         self.pendingCacheWriteTask = task

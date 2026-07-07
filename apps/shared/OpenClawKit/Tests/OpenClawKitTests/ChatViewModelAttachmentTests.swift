@@ -671,7 +671,7 @@ final class ChatViewModelAttachmentTests: XCTestCase {
         XCTAssertTrue(restored.2)
     }
 
-    func testCanonicalVoiceNoteConfirmationDeletesDurableBytes() async throws {
+    func testCanonicalVoiceNoteConfirmationPreservesDurationAndDeletesDurableBytes() async throws {
         let outbox = makeAttachmentOutbox()
         let viewModel = await MainActor.run {
             let viewModel = makeDurableAttachmentViewModel(
@@ -695,16 +695,23 @@ final class ChatViewModelAttachmentTests: XCTestCase {
         }
         let awaitingCommands = await outbox.loadCommands()
         let command = try XCTUnwrap(awaitingCommands.first)
-        await viewModel.confirmOutboxCommandsNow(in: [
-            OpenClawChatMessage(
-                role: "user",
-                content: [],
-                timestamp: 1,
-                idempotencyKey: "\(command.id):user"),
-        ])
+        let canonical = try JSONDecoder().decode(
+            OpenClawChatMessage.self,
+            from: Data(
+                """
+                {"role":"user","content":"See attached.","__openclaw":{"idempotencyKey":"\(command
+                    .id):user"},"MediaPaths":["media/inbound/media-1.m4a"],"MediaTypes":["audio/mp4"]}
+                """.utf8))
+        await viewModel.confirmOutboxCommandsNow(in: [canonical])
 
         let remainingCommands = await outbox.loadCommands()
         XCTAssertTrue(remainingCommands.isEmpty)
+        let cached = await outbox.loadTranscript(sessionKey: "main", agentID: nil)
+        let cachedMessage = try XCTUnwrap(cached.first)
+        let cachedAudio = try XCTUnwrap(cachedMessage.content.first { $0.mimeType == "audio/mp4" })
+        XCTAssertEqual(cachedAudio.fileName, "media-1.m4a")
+        XCTAssertNil(cachedAudio.content)
+        XCTAssertEqual(cachedAudio.durationSeconds, 7)
     }
 
     @MainActor
