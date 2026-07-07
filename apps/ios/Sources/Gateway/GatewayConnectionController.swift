@@ -1261,7 +1261,8 @@ final class GatewayConnectionController {
             "TLS fingerprint verification timed out for \(host):\(port). "
                 + "Secure endpoint was reached, but TLS did not finish in time."
         case .tlsUnavailable:
-            "No TLS endpoint detected at \(host):\(port). Remote gateways must use HTTPS/WSS."
+            "No secure gateway endpoint was detected at \(host):\(port). "
+                + "Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected."
         case .certificateUnavailable:
             "Could not read the TLS certificate from \(host):\(port)."
         }
@@ -1494,6 +1495,13 @@ private struct GatewayPendingTrustConnect {
     let gatewayGeneration: UInt64?
 }
 
+struct GatewayManualTransportPresentation: Equatable {
+    let requiresTLS: Bool
+    let effectiveTLS: Bool
+    let endpoint: String?
+    let helperText: String
+}
+
 extension GatewayConnectionController {
     private func buildGatewayURL(host: String, port: Int, useTLS: Bool) -> URL? {
         let scheme = useTLS ? "wss" : "ws"
@@ -1505,11 +1513,40 @@ extension GatewayConnectionController {
     }
 
     private func resolveManualUseTLS(host: String, useTLS: Bool) -> Bool {
-        useTLS || self.shouldRequireTLS(host: host)
+        Self.manualTransportPresentation(
+            host: host,
+            port: 0,
+            requestedTLS: useTLS).effectiveTLS
     }
 
-    private func shouldRequireTLS(host: String) -> Bool {
-        !LoopbackHost.isLocalNetworkHost(host)
+    static func manualTransportPresentation(
+        host: String,
+        port: Int,
+        requestedTLS: Bool) -> GatewayManualTransportPresentation
+    {
+        let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        let requiresTLS = !trimmedHost.isEmpty && !LoopbackHost.isLocalNetworkHost(trimmedHost)
+        let effectiveTLS = requestedTLS || requiresTLS
+        let endpoint: String? = {
+            guard !trimmedHost.isEmpty, (1...65535).contains(port) else { return nil }
+            var components = URLComponents()
+            components.scheme = effectiveTLS ? "wss" : "ws"
+            components.host = trimmedHost
+            components.port = port
+            return components.url?.absoluteString
+        }()
+        let helperText = if requiresTLS {
+            "Secure connection is required for this host."
+        } else if effectiveTLS {
+            "Secure connection is enabled."
+        } else {
+            "Use only on a trusted private network."
+        }
+        return GatewayManualTransportPresentation(
+            requiresTLS: requiresTLS,
+            effectiveTLS: effectiveTLS,
+            endpoint: endpoint,
+            helperText: helperText)
     }
 
     private func manualStableID(host: String, port: Int) -> String {

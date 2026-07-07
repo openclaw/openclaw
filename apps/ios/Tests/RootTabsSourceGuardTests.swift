@@ -930,7 +930,7 @@ struct RootTabsSourceGuardTests {
         #expect(rootSource.contains("resetTitle: \"Reset onboarding\""))
         #expect(rootSource.contains("GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: instanceId)"))
         #expect(rootSource.contains("self.gatewayController.trustRotatedGatewayCertificate(from: problem)"))
-        #expect(rootSource.contains("GatewayProblemPrimaryAction.openProtocolMismatchHelpIfNeeded(problem)"))
+        #expect(rootSource.contains("GatewayProblemPrimaryAction.handleProtocolMismatchIfNeeded(problem)"))
         #expect(rootSource.contains("await self.gatewayController.connectActiveGateway()"))
 
         #expect(rootSource.contains("GatewayProblemDetailsSheet("))

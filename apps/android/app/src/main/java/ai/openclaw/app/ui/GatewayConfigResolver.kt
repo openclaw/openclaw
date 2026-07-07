@@ -18,6 +18,14 @@ internal data class GatewayEndpointConfig(
   val displayUrl: String,
 )
 
+/** Effective transport shown by manual gateway forms before they connect. */
+internal data class GatewayManualTransportPresentation(
+  val requiresTls: Boolean,
+  val effectiveTls: Boolean,
+  val endpoint: String?,
+  val helperText: String,
+)
+
 /** Decoded setup-code payload; only one credential family is expected to be populated. */
 internal data class GatewaySetupCode(
   val url: String,
@@ -373,6 +381,71 @@ internal fun composeGatewayManualUrl(
   if (port !in 1..65535) return null
   val scheme = if (tls) "https" else "http"
   return "$scheme://${ai.openclaw.app.gateway.formatGatewayAuthority(bareHost, port)}"
+}
+
+/** Keeps manual transport controls aligned with the runtime's remote-host TLS policy. */
+internal fun gatewayManualTransportPresentation(
+  hostInput: String,
+  portInput: String,
+  requestedTls: Boolean,
+): GatewayManualTransportPresentation {
+  val host = hostInput.trim()
+  if (host.isEmpty()) {
+    return gatewayManualTransportPresentation(
+      requiresTls = false,
+      effectiveTls = requestedTls,
+      endpoint = null,
+    )
+  }
+
+  if (host.contains("://")) {
+    val config = parseGatewayEndpointResult(host).config
+    if (config != null) {
+      return gatewayManualTransportPresentation(
+        requiresTls = !isLocalCleartextGatewayHost(config.host),
+        effectiveTls = config.tls,
+        endpoint = config.webSocketDisplayUrl(),
+      )
+    }
+  }
+
+  val normalizedHost = host.trimEnd('/')
+  val requiresTls = !isLocalCleartextGatewayHost(normalizedHost)
+  val effectiveTls = requestedTls || requiresTls
+  val endpoint =
+    composeGatewayManualUrl(normalizedHost, portInput, effectiveTls)
+      ?.let(::parseGatewayEndpoint)
+      ?.webSocketDisplayUrl()
+  return gatewayManualTransportPresentation(
+    requiresTls = requiresTls,
+    effectiveTls = effectiveTls,
+    endpoint = endpoint,
+  )
+}
+
+private fun gatewayManualTransportPresentation(
+  requiresTls: Boolean,
+  effectiveTls: Boolean,
+  endpoint: String?,
+): GatewayManualTransportPresentation =
+  GatewayManualTransportPresentation(
+    requiresTls = requiresTls,
+    effectiveTls = effectiveTls,
+    endpoint = endpoint,
+    helperText =
+      when {
+        requiresTls -> "Secure connection is required for this host."
+        effectiveTls -> "Secure connection is enabled."
+        else -> "Use only on a trusted private network."
+      },
+  )
+
+private fun GatewayEndpointConfig.webSocketDisplayUrl(): String {
+  val scheme = if (tls) "wss" else "ws"
+  val authority =
+    ai.openclaw.app.gateway
+      .formatGatewayAuthority(host, port)
+  return "$scheme://$authority"
 }
 
 private fun parseJsonObject(input: String): JsonObject? = runCatching { gatewaySetupJson.parseToJsonElement(input).jsonObject }.getOrNull()

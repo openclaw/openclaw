@@ -687,7 +687,7 @@ struct OnboardingWizardView: View {
             self.onboardingTextField("Host", text: self.manualHostBinding, focusedField: .manualHost)
             self.onboardingTextField("Port", text: self.manualPortTextBinding, focusedField: .manualPort)
                 .keyboardType(.numberPad)
-            self.onboardingButtonToggle("Use TLS", isOn: self.$manualTLS)
+            self.manualConnectionSecurityRows
             self.manualConnectButton
         } header: {
             Text("Developer Local")
@@ -866,7 +866,7 @@ extension OnboardingWizardView {
             self.onboardingTextField("Host", text: self.manualHostBinding, focusedField: .manualHost)
             self.onboardingTextField("Port", text: self.manualPortTextBinding, focusedField: .manualPort)
                 .keyboardType(.numberPad)
-            self.onboardingButtonToggle("Use TLS", isOn: self.$manualTLS)
+            self.manualConnectionSecurityRows
             self.onboardingTextField(
                 "Discovery Domain (optional)",
                 text: self.$discoveryDomain,
@@ -885,6 +885,45 @@ extension OnboardingWizardView {
         } header: {
             Text(title)
                 .font(OpenClawType.footnoteSemiBold)
+        }
+    }
+
+    private var manualTransport: GatewayManualTransportPresentation {
+        GatewayConnectionController.manualTransportPresentation(
+            host: self.manualHost,
+            port: self.manualPort,
+            requestedTLS: self.manualTLS)
+    }
+
+    private var manualTLSBinding: Binding<Bool> {
+        Binding(
+            get: { self.manualTransport.effectiveTLS },
+            set: { enabled in
+                guard !self.manualTransport.requiresTLS else { return }
+                self.manualTLS = enabled
+            })
+    }
+
+    @ViewBuilder
+    private var manualConnectionSecurityRows: some View {
+        Picker("Connection security", selection: self.manualTLSBinding) {
+            Text("Unencrypted").tag(false)
+            Text("Secure (TLS)").tag(true)
+        }
+        .pickerStyle(.segmented)
+        .disabled(self.manualTransport.requiresTLS)
+
+        Text(self.manualTransport.helperText)
+            .font(OpenClawType.footnote)
+            .foregroundStyle(.secondary)
+
+        if let endpoint = self.manualTransport.endpoint {
+            LabeledContent("Endpoint") {
+                Text(verbatim: endpoint)
+                    .font(OpenClawType.mono)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
         }
     }
 
@@ -1650,7 +1689,7 @@ extension OnboardingWizardView {
             _ = await self.gatewayController.trustRotatedGatewayCertificate(from: problem)
             return
         }
-        if GatewayProblemPrimaryAction.openProtocolMismatchHelpIfNeeded(problem) {
+        if GatewayProblemPrimaryAction.handleProtocolMismatchIfNeeded(problem) {
             return
         }
         guard problem.retryable else { return }

@@ -965,7 +965,23 @@ extension SettingsProTab {
             TextField("Port", text: self.manualPortBinding)
                 .font(OpenClawType.body)
                 .keyboardType(.numberPad)
-            self.settingsToggle("Use TLS", isOn: self.$manualGatewayTLS)
+            Picker("Connection security", selection: self.manualGatewayTLSBinding) {
+                Text("Unencrypted").tag(false)
+                Text("Secure (TLS)").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .disabled(self.manualGatewayTransport.requiresTLS)
+            Text(self.manualGatewayTransport.helperText)
+                .font(OpenClawType.footnote)
+                .foregroundStyle(.secondary)
+            if let endpoint = self.manualGatewayTransport.endpoint {
+                LabeledContent("Endpoint") {
+                    Text(verbatim: endpoint)
+                        .font(OpenClawType.mono)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+            }
             self.gatewayActionButton(
                 title: "Connect Manual",
                 icon: "network",
@@ -978,6 +994,22 @@ extension SettingsProTab {
             }
         }
         .disabled(self.setupAttemptID != nil)
+    }
+
+    private var manualGatewayTransport: GatewayManualTransportPresentation {
+        GatewayConnectionController.manualTransportPresentation(
+            host: self.manualGatewayHost,
+            port: self.manualGatewayPort,
+            requestedTLS: self.manualGatewayTLS)
+    }
+
+    private var manualGatewayTLSBinding: Binding<Bool> {
+        Binding(
+            get: { self.manualGatewayTransport.effectiveTLS },
+            set: { enabled in
+                guard !self.manualGatewayTransport.requiresTLS else { return }
+                self.manualGatewayTLS = enabled
+            })
     }
 
     var gatewayAdvancedCard: some View {

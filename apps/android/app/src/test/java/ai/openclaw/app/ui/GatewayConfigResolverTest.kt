@@ -10,6 +10,36 @@ import java.util.Base64
 @RunWith(RobolectricTestRunner::class)
 class GatewayConfigResolverTest {
   @Test
+  fun manualTransportForcesSecureConnectionForRemoteHosts() {
+    val presentation =
+      gatewayManualTransportPresentation(
+        hostInput = "gateway.example.com",
+        portInput = "18789",
+        requestedTls = false,
+      )
+
+    assertEquals(true, presentation.requiresTls)
+    assertEquals(true, presentation.effectiveTls)
+    assertEquals("wss://gateway.example.com:18789", presentation.endpoint)
+    assertEquals("Secure connection is required for this host.", presentation.helperText)
+  }
+
+  @Test
+  fun manualTransportAllowsUnencryptedPrivateLanConnections() {
+    val presentation =
+      gatewayManualTransportPresentation(
+        hostInput = "192.168.1.20",
+        portInput = "18789",
+        requestedTls = false,
+      )
+
+    assertEquals(false, presentation.requiresTls)
+    assertEquals(false, presentation.effectiveTls)
+    assertEquals("ws://192.168.1.20:18789", presentation.endpoint)
+    assertEquals("Use only on a trusted private network.", presentation.helperText)
+  }
+
+  @Test
   fun parseGatewayEndpointUsesDefaultTlsPortForBareWssUrls() {
     val parsed = parseGatewayEndpoint("wss://gateway.example")
 

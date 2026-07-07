@@ -1247,7 +1247,7 @@ extension RootTabs {
             }
         } else if problem.canTrustRotatedCertificate {
             Task { await self.gatewayController.trustRotatedGatewayCertificate(from: problem) }
-        } else if GatewayProblemPrimaryAction.openProtocolMismatchHelpIfNeeded(problem) {
+        } else if GatewayProblemPrimaryAction.handleProtocolMismatchIfNeeded(problem) {
             return
         } else if problem.retryable {
             Task { await self.gatewayController.connectActiveGateway() }

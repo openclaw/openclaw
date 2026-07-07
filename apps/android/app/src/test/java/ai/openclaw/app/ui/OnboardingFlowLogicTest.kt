@@ -945,6 +945,23 @@ class OnboardingFlowLogicTest {
         ),
       ),
     )
+    assertEquals(
+      "openclaw update",
+      recoveryGatewayProtocolMismatchCommand(
+        GatewayConnectionProblem(
+          code = "PROTOCOL_MISMATCH",
+          message = "protocol mismatch",
+          reason = null,
+          requestId = null,
+          recommendedNextStep = null,
+          pauseReconnect = true,
+          retryable = false,
+          clientMinProtocol = 6,
+          clientMaxProtocol = 6,
+          expectedProtocol = 5,
+        ),
+      ),
+    )
   }
 
   @Test

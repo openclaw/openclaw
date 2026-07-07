@@ -120,6 +120,30 @@ import Testing
         #expect(controller._test_resolveManualUseTLS(host: "0.0.0.0", useTLS: false) == false)
     }
 
+    @Test @MainActor func `manual transport presentation shows effective remote security`() {
+        let presentation = GatewayConnectionController.manualTransportPresentation(
+            host: "gateway.example.com",
+            port: 18789,
+            requestedTLS: false)
+
+        #expect(presentation.requiresTLS)
+        #expect(presentation.effectiveTLS)
+        #expect(presentation.endpoint == "wss://gateway.example.com:18789")
+        #expect(presentation.helperText == "Secure connection is required for this host.")
+    }
+
+    @Test @MainActor func `manual transport presentation allows unencrypted private LAN`() {
+        let presentation = GatewayConnectionController.manualTransportPresentation(
+            host: "192.168.1.20",
+            port: 18789,
+            requestedTLS: false)
+
+        #expect(!presentation.requiresTLS)
+        #expect(!presentation.effectiveTLS)
+        #expect(presentation.endpoint == "ws://192.168.1.20:18789")
+        #expect(presentation.helperText == "Use only on a trusted private network.")
+    }
+
     @Test @MainActor func `manual connections allow private lan plaintext`() {
         let controller = self.makeController()
 
