@@ -36,16 +36,23 @@ describe("exec inline eval detection", () => {
     { argv: ["ruby", "-p00e", "puts 1"], expected: "ruby -e" },
     { argv: ["ruby", "-pe", "puts 1"], expected: "ruby -e" },
     { argv: ["ruby", "-Se", "puts 1"], expected: "ruby -e" },
+    { argv: ["ruby", "-We", "puts 1"], expected: "ruby -e" },
+    { argv: ["ruby", "-W2e", "puts 1"], expected: "ruby -e" },
     { argv: ["ruby", "-ve", "puts 1"], expected: "ruby -e" },
     { argv: ["ruby", "-we", "puts 1"], expected: "ruby -e" },
     { argv: ["perl", "-E", "say 1"], expected: "perl -e" },
     { argv: ["perl", "-Esay 1"], expected: "perl -e" },
     { argv: ["perl", "-ce", "say 1"], expected: "perl -e" },
+    { argv: ["perl", "-de", "say 1"], expected: "perl -e" },
     { argv: ["perl", "-fe", "say 1"], expected: "perl -e" },
+    { argv: ["perl", "-l0e", "say 1"], expected: "perl -e" },
     { argv: ["perl", "-ne", "say 1"], expected: "perl -e" },
     { argv: ["perl", "-0777pe", "say 1"], expected: "perl -e" },
     { argv: ["perl", "-p0777e", "say 1"], expected: "perl -e" },
     { argv: ["perl", "-Se", "say 1"], expected: "perl -e" },
+    { argv: ["perl", "-Te", "say 1"], expected: "perl -e" },
+    { argv: ["perl", "-UE", "say 1"], expected: "perl -e" },
+    { argv: ["perl", "-Ve", "say 1"], expected: "perl -e" },
     { argv: ["perl", "-We", "say 1"], expected: "perl -e" },
     { argv: ["perl", "-we", "say 1"], expected: "perl -e" },
     { argv: ["perl", "-Xe", "say 1"], expected: "perl -e" },
@@ -104,7 +111,12 @@ describe("exec inline eval detection", () => {
     expect(detectInterpreterInlineEvalArgv(["find", ".", "-execute", "id"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["ruby", "-EUTF-8", "script.rb"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["ruby", "-Itest", "script.rb"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["ruby", "-W:deprecatede", "puts 1"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["ruby", "-7pe", "puts 1"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["perl", "-C0e", "say 1"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["perl", "-D0e", "say 1"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["perl", "-me", "say 1"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["perl", "-Me", "say 1"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["perl", "-7pe", "say 1"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["perl", "-0xFFpe", "say 1"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["php", "-F", "filter.php"])).toBeNull();

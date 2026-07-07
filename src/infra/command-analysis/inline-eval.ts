@@ -30,6 +30,7 @@ type ShortClusterFlagSpec = {
   flag: string;
   prefixChars: ReadonlySet<string>;
   allowNumericRecordSeparator?: boolean;
+  numericValuePrefixChars?: ReadonlySet<string>;
 };
 
 type PositionalInterpreterSpec = {
@@ -88,8 +89,9 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
       {
         label: "-e",
         flag: "e",
-        prefixChars: new Set(["S", "U", "a", "c", "d", "l", "n", "p", "s", "v", "w"]),
+        prefixChars: new Set(["S", "U", "W", "a", "c", "d", "l", "n", "p", "s", "v", "w"]),
         allowNumericRecordSeparator: true,
+        numericValuePrefixChars: new Set(["W"]),
       },
     ],
   },
@@ -105,8 +107,11 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
           "T",
           "W",
           "X",
+          "U",
+          "V",
           "a",
           "c",
+          "d",
           "f",
           "l",
           "n",
@@ -117,6 +122,7 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
           "w",
         ]),
         allowNumericRecordSeparator: true,
+        numericValuePrefixChars: new Set(["l"]),
       },
       {
         label: "-e",
@@ -126,8 +132,11 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
           "T",
           "W",
           "X",
+          "U",
+          "V",
           "a",
           "c",
+          "d",
           "f",
           "l",
           "n",
@@ -138,6 +147,7 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
           "w",
         ]),
         allowNumericRecordSeparator: true,
+        numericValuePrefixChars: new Set(["l"]),
       },
     ],
   },
@@ -358,6 +368,11 @@ function isShortClusterPrefixAllowed(clusterFlag: ShortClusterFlagSpec, prefix: 
   for (let index = 0; index < prefix.length; index += 1) {
     const char = prefix[index] ?? "";
     if (clusterFlag.prefixChars.has(char)) {
+      if (clusterFlag.numericValuePrefixChars?.has(char) === true) {
+        while (/^[0-9]$/.test(prefix[index + 1] ?? "")) {
+          index += 1;
+        }
+      }
       continue;
     }
     if (clusterFlag.allowNumericRecordSeparator === true && char === "0") {
