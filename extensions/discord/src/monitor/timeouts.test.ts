@@ -23,6 +23,34 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+async function withNativeAbortSignalAnyDisabled<T>(run: () => Promise<T>): Promise<T> {
+  const descriptor = Object.getOwnPropertyDescriptor(AbortSignal, "any");
+  Object.defineProperty(AbortSignal, "any", { configurable: true, value: undefined });
+  try {
+    return await run();
+  } finally {
+    if (descriptor) {
+      Object.defineProperty(AbortSignal, "any", descriptor);
+    } else {
+      delete (AbortSignal as typeof AbortSignal & { any?: typeof AbortSignal.any }).any;
+    }
+  }
+}
+
+function findRegisteredAbortListener(addListenerSpy: {
+  mock: {
+    calls: ReadonlyArray<
+      readonly [string, EventListenerOrEventListenerObject | null, ...unknown[]]
+    >;
+  };
+}) {
+  const listener = addListenerSpy.mock.calls.find(([type]) => type === "abort")?.[1];
+  if (typeof listener !== "function") {
+    throw new Error("Expected fallback abort listener to be registered");
+  }
+  return listener;
+}
+
 describe("discord monitor timeouts", () => {
   it("keeps deprecated timeout helpers on the runtime api compatibility surface", () => {
     expect(runtimeApiIsAbortError).toBe(isAbortError);
@@ -79,6 +107,76 @@ describe("discord monitor timeouts", () => {
     expect(receivedSignal?.aborted).toBe(true);
     expect(onTimeout).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
     expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+  });
+
+  it("disposes fallback merged abort listeners after completed timeout races settle", async () => {
+    await withNativeAbortSignalAnyDisabled(async () => {
+      const parentAbortController = new AbortController();
+      const addListenerSpy = vi.spyOn(parentAbortController.signal, "addEventListener");
+      const removeListenerSpy = vi.spyOn(parentAbortController.signal, "removeEventListener");
+      const mergedAbortSpy = vi.fn();
+      const onTimeout = vi.fn();
+      let receivedSignal: AbortSignal | undefined;
+
+      await expect(
+        runDiscordTaskWithTimeout({
+          timeoutMs: 1_000,
+          abortSignals: [parentAbortController.signal],
+          onTimeout,
+          run: async (signal) => {
+            receivedSignal = signal;
+            signal?.addEventListener("abort", mergedAbortSpy);
+          },
+        }),
+      ).resolves.toBe(false);
+
+      const fallbackAbortListener = findRegisteredAbortListener(addListenerSpy);
+      expect(removeListenerSpy.mock.calls).toContainEqual(["abort", fallbackAbortListener]);
+
+      parentAbortController.abort();
+
+      expect(onTimeout).not.toHaveBeenCalled();
+      expect(receivedSignal?.aborted).toBe(false);
+      expect(mergedAbortSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  it("does not refire fallback merged abort listeners after timeout races settle", async () => {
+    await withNativeAbortSignalAnyDisabled(async () => {
+      vi.useFakeTimers();
+      const parentAbortController = new AbortController();
+      const addListenerSpy = vi.spyOn(parentAbortController.signal, "addEventListener");
+      const removeListenerSpy = vi.spyOn(parentAbortController.signal, "removeEventListener");
+      const mergedAbortSpy = vi.fn();
+      const onTimeout = vi.fn();
+      let receivedSignal: AbortSignal | undefined;
+
+      const task = runDiscordTaskWithTimeout({
+        timeoutMs: 10,
+        abortSignals: [parentAbortController.signal],
+        onTimeout,
+        run: async (signal) => {
+          receivedSignal = signal;
+          signal?.addEventListener("abort", mergedAbortSpy);
+          await new Promise<void>((resolve) => {
+            signal?.addEventListener("abort", () => resolve(), { once: true });
+          });
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(10);
+
+      await expect(task).resolves.toBe(true);
+      const fallbackAbortListener = findRegisteredAbortListener(addListenerSpy);
+      expect(removeListenerSpy.mock.calls).toContainEqual(["abort", fallbackAbortListener]);
+      expect(receivedSignal?.aborted).toBe(true);
+      expect(mergedAbortSpy).toHaveBeenCalledTimes(1);
+
+      parentAbortController.abort();
+
+      expect(onTimeout).toHaveBeenCalledTimes(1);
+      expect(mergedAbortSpy).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("caps raceWithTimeout timers before arming the watchdog", async () => {

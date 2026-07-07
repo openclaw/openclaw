@@ -41,25 +41,42 @@ export function isAbortError(error: unknown): boolean {
 export function mergeAbortSignals(
   signals: Array<AbortSignal | undefined>,
 ): AbortSignal | undefined {
+  return createDisposableMergedAbortSignal(signals).signal;
+}
+
+function createDisposableMergedAbortSignal(signals: Array<AbortSignal | undefined>): {
+  signal: AbortSignal | undefined;
+  dispose: () => void;
+} {
   const activeSignals = signals.filter((signal): signal is AbortSignal => Boolean(signal));
+  const dispose = () => undefined;
   if (activeSignals.length === 0) {
-    return undefined;
+    return { signal: undefined, dispose };
   }
   if (activeSignals.length === 1) {
-    return activeSignals[0];
+    return { signal: activeSignals[0], dispose };
   }
   if (typeof AbortSignal.any === "function") {
-    return AbortSignal.any(activeSignals);
+    return { signal: AbortSignal.any(activeSignals), dispose };
   }
   const fallbackController = new AbortController();
   for (const signal of activeSignals) {
     if (signal.aborted) {
       fallbackController.abort();
-      return fallbackController.signal;
+      return { signal: fallbackController.signal, dispose };
     }
   }
+  let disposed = false;
+  let disposeFallbackListeners = () => undefined;
   const abortFallback = () => {
     fallbackController.abort();
+    disposeFallbackListeners();
+  };
+  disposeFallbackListeners = () => {
+    if (disposed) {
+      return;
+    }
+    disposed = true;
     for (const signal of activeSignals) {
       signal.removeEventListener("abort", abortFallback);
     }
@@ -67,7 +84,7 @@ export function mergeAbortSignals(
   for (const signal of activeSignals) {
     signal.addEventListener("abort", abortFallback, { once: true });
   }
-  return fallbackController.signal;
+  return { signal: fallbackController.signal, dispose: disposeFallbackListeners };
 }
 
 /** @deprecated Discord no longer uses this for channel-owned message run timeouts. */
@@ -82,24 +99,25 @@ export async function runDiscordTaskWithTimeout(params: {
   const timeoutMs =
     params.timeoutMs === undefined ? undefined : resolveTimerTimeoutMs(params.timeoutMs, 0, 0);
   const timeoutAbortController = timeoutMs ? new AbortController() : undefined;
-  const mergedAbortSignal = mergeAbortSignals([
+  const mergedAbortSignal = createDisposableMergedAbortSignal([
     ...(params.abortSignals ?? []),
     timeoutAbortController?.signal,
   ]);
   let timedOut = false;
   let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
-  const runPromise = params.run(mergedAbortSignal).catch((error: unknown) => {
-    if (!timedOut) {
-      throw error;
-    }
-    if (timeoutAbortController?.signal.aborted && isAbortError(error)) {
-      params.onAbortAfterTimeout?.();
-      return;
-    }
-    params.onErrorAfterTimeout?.(error);
-  });
 
   try {
+    const runPromise = params.run(mergedAbortSignal.signal).catch((error: unknown) => {
+      if (!timedOut) {
+        throw error;
+      }
+      if (timeoutAbortController?.signal.aborted && isAbortError(error)) {
+        params.onAbortAfterTimeout?.();
+        return;
+      }
+      params.onErrorAfterTimeout?.(error);
+    });
+
     if (!timeoutMs) {
       await runPromise;
       return false;
@@ -123,6 +141,7 @@ export async function runDiscordTaskWithTimeout(params: {
     if (timeoutHandle) {
       clearTimeout(timeoutHandle);
     }
+    mergedAbortSignal.dispose();
   }
 }
 
