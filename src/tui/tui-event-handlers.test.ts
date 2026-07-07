@@ -7,6 +7,7 @@ import type {
   BtwEvent,
   ChatEvent,
   SessionChangedEvent,
+  TuiHistoryLoadResult,
   TuiStateAccess,
 } from "./tui-types.js";
 
@@ -100,7 +101,10 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     const btw = createMockBtwPresenter();
     const tui = { requestRender: vi.fn() } as unknown as MockTui & HandlerTui;
     const setActivityStatus = vi.fn();
-    const loadHistory = vi.fn();
+    const loadHistory = vi.fn<() => Promise<TuiHistoryLoadResult>>(async () => ({
+      loaded: true,
+      inFlightRunId: null,
+    }));
     const localRunIds = new Set<string>();
     const localBtwRunIds = new Set<string>();
     const noteLocalRunId = (runId: string) => {
@@ -1526,9 +1530,10 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       });
 
     noteLocalRunId("run-local-empty");
-    loadHistory.mockImplementation(() => {
+    loadHistory.mockImplementation(async () => {
       expect(state.activeChatRunId).toBeNull();
       expect(state.activityStatus).toBe("idle");
+      return { loaded: true, inFlightRunId: null };
     });
 
     handleChatEvent({
@@ -1860,6 +1865,347 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     expect(loadHistory).toHaveBeenCalledTimes(1);
+  });
+
+  describe("sessions.changed history reload", () => {
+    const startRun = (
+      state: TuiStateAccess,
+      handleChatEvent: ReturnType<typeof createHandlersHarness>["handleChatEvent"],
+      runId: string,
+    ) => {
+      handleChatEvent({
+        runId,
+        sessionKey: state.currentSessionKey,
+        state: "delta",
+        message: { content: [{ type: "text", text: "typing" }] },
+      });
+    };
+
+    const changeSession = (
+      state: TuiStateAccess,
+      handleSessionsChangedEvent: ReturnType<
+        typeof createHandlersHarness
+      >["handleSessionsChangedEvent"],
+      sessionId = state.currentSessionId,
+    ) => {
+      handleSessionsChangedEvent({
+        sessionKey: state.currentSessionKey,
+        reason: "new",
+        sessionId: sessionId ?? undefined,
+        updatedAt: 200,
+      } satisfies SessionChangedEvent);
+    };
+
+    const finishPersistence = (
+      state: TuiStateAccess,
+      handleSessionsChangedEvent: ReturnType<
+        typeof createHandlersHarness
+      >["handleSessionsChangedEvent"],
+      runId: string,
+    ) => {
+      handleSessionsChangedEvent({
+        sessionKey: state.currentSessionKey,
+        phase: "end",
+        runId,
+      } satisfies SessionChangedEvent);
+    };
+
+    const deferNextHistoryLoad = (loadHistory: MockFn) => {
+      let resolveHistory: (result: TuiHistoryLoadResult) => void = () => {};
+      const result = new Promise<TuiHistoryLoadResult>((resolve) => {
+        resolveHistory = resolve;
+      });
+      loadHistory.mockReturnValueOnce(result);
+      return (loaded: boolean, inFlightRunId: string | null = null) =>
+        resolveHistory(loaded ? { loaded: true, inFlightRunId } : { loaded: false });
+    };
+
+    it("waits for terminal persistence before rebuilding an active external run", async () => {
+      const { state, chatLog, loadHistory, handleChatEvent, handleSessionsChangedEvent } =
+        createHandlersHarness({ state: { activeChatRunId: "run-active" } });
+      startRun(state, handleChatEvent, "run-active");
+      chatLog.finalizeAssistant.mockClear();
+      loadHistory.mockClear();
+
+      changeSession(state, handleSessionsChangedEvent);
+      expect(loadHistory).not.toHaveBeenCalled();
+
+      handleChatEvent({
+        runId: "run-active",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        message: { content: [{ type: "text", text: "reply" }] },
+      });
+      expect(chatLog.finalizeAssistant).toHaveBeenCalledTimes(1);
+
+      finishPersistence(state, handleSessionsChangedEvent, "run-active");
+      await vi.waitFor(() => expect(loadHistory).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(state.activeChatRunId).toBeNull());
+      expect(state.activityStatus).toBe("idle");
+
+      handleChatEvent({
+        runId: "run-active",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        message: { content: [{ type: "text", text: "reply" }] },
+      });
+      expect(chatLog.finalizeAssistant).toHaveBeenCalledTimes(1);
+    });
+
+    it("suppresses a final that arrives while persisted history is rebuilding", async () => {
+      const { state, chatLog, loadHistory, handleChatEvent, handleSessionsChangedEvent } =
+        createHandlersHarness({ state: { activeChatRunId: "run-active" } });
+      const resolveHistory = deferNextHistoryLoad(loadHistory);
+      startRun(state, handleChatEvent, "run-active");
+      chatLog.finalizeAssistant.mockClear();
+      changeSession(state, handleSessionsChangedEvent);
+      finishPersistence(state, handleSessionsChangedEvent, "run-active");
+
+      handleChatEvent({
+        runId: "run-active",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        message: { content: [{ type: "text", text: "history-owned" }] },
+      });
+      expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
+
+      resolveHistory(true);
+      await Promise.resolve();
+      expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
+    });
+
+    it("replays a deferred final when the history rebuild fails", async () => {
+      const { state, chatLog, loadHistory, handleChatEvent, handleSessionsChangedEvent } =
+        createHandlersHarness({ state: { activeChatRunId: "run-active" } });
+      const resolveHistory = deferNextHistoryLoad(loadHistory);
+      startRun(state, handleChatEvent, "run-active");
+      chatLog.finalizeAssistant.mockClear();
+      changeSession(state, handleSessionsChangedEvent);
+      finishPersistence(state, handleSessionsChangedEvent, "run-active");
+      handleChatEvent({
+        runId: "run-active",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        message: { content: [{ type: "text", text: "fallback reply" }] },
+      });
+
+      resolveHistory(false);
+      await vi.waitFor(() =>
+        expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("fallback reply", "run-active"),
+      );
+    });
+
+    it("terminates a persisted run when history fails before its final arrives", async () => {
+      const {
+        state,
+        chatLog,
+        loadHistory,
+        setActivityStatus,
+        handleChatEvent,
+        handleSessionsChangedEvent,
+      } = createHandlersHarness({ state: { activeChatRunId: "run-active" } });
+      const resolveHistory = deferNextHistoryLoad(loadHistory);
+      startRun(state, handleChatEvent, "run-active");
+      chatLog.finalizeAssistant.mockClear();
+      changeSession(state, handleSessionsChangedEvent);
+      finishPersistence(state, handleSessionsChangedEvent, "run-active");
+
+      resolveHistory(false);
+      await vi.waitFor(() => expect(state.activeChatRunId).toBeNull());
+      expect(setActivityStatus).toHaveBeenCalledWith("idle");
+
+      handleChatEvent({
+        runId: "run-active",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        message: { content: [{ type: "text", text: "late fallback" }] },
+      });
+      expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("late fallback", "run-active");
+    });
+
+    it("uses an already-observed persistence barrier for a recently finalized run", async () => {
+      const { state, chatLog, loadHistory, handleChatEvent, handleSessionsChangedEvent } =
+        createHandlersHarness({ state: { activeChatRunId: "run-done" } });
+      handleChatEvent({
+        runId: "run-done",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        message: { content: [{ type: "text", text: "done" }] },
+      });
+      finishPersistence(state, handleSessionsChangedEvent, "run-done");
+      loadHistory.mockClear();
+
+      changeSession(state, handleSessionsChangedEvent);
+      await vi.waitFor(() => expect(loadHistory).toHaveBeenCalledTimes(1));
+      expect(chatLog.finalizeAssistant).toHaveBeenCalledTimes(1);
+    });
+
+    it("preserves finalized-run dedupe across a delayed session reload", async () => {
+      const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      const { state, chatLog, loadHistory, handleChatEvent, handleSessionsChangedEvent } =
+        createHandlersHarness({ state: { activeChatRunId: "run-done" } });
+      handleChatEvent({
+        runId: "run-done",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        message: { content: [{ type: "text", text: "done" }] },
+      });
+      finishPersistence(state, handleSessionsChangedEvent, "run-done");
+      loadHistory.mockClear();
+      now.mockReturnValue(12_000);
+
+      changeSession(state, handleSessionsChangedEvent);
+      await vi.waitFor(() => expect(loadHistory).toHaveBeenCalledTimes(1));
+      handleChatEvent({
+        runId: "run-done",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        message: { content: [{ type: "text", text: "done" }] },
+      });
+
+      expect(chatLog.finalizeAssistant).toHaveBeenCalledTimes(1);
+      now.mockRestore();
+    });
+
+    it("keeps a later terminal reload queued behind the current rebuild", async () => {
+      const { state, loadHistory, handleChatEvent, handleSessionsChangedEvent } =
+        createHandlersHarness({ state: { activeChatRunId: "run-a" } });
+      const resolveFirstHistory = deferNextHistoryLoad(loadHistory);
+      startRun(state, handleChatEvent, "run-a");
+      startRun(state, handleChatEvent, "run-b");
+      changeSession(state, handleSessionsChangedEvent);
+
+      finishPersistence(state, handleSessionsChangedEvent, "run-a");
+      finishPersistence(state, handleSessionsChangedEvent, "run-b");
+      expect(loadHistory).toHaveBeenCalledTimes(1);
+
+      resolveFirstHistory(true);
+      await vi.waitFor(() => expect(loadHistory).toHaveBeenCalledTimes(2), { timeout: 3_000 });
+    });
+
+    it("preserves immediate reload behavior when new replaces a known session", () => {
+      const { state, loadHistory, setActivityStatus, handleChatEvent, handleSessionsChangedEvent } =
+        createHandlersHarness({
+          state: {
+            activeChatRunId: "run-old",
+            currentSessionId: "session-old",
+            activityStatus: "streaming",
+          },
+        });
+      startRun(state, handleChatEvent, "run-old");
+      loadHistory.mockClear();
+
+      changeSession(state, handleSessionsChangedEvent, "session-new");
+
+      expect(loadHistory).toHaveBeenCalledTimes(1);
+      expect(state.currentSessionId).toBe("session-new");
+      expect(state.activeChatRunId).toBeNull();
+      expect(setActivityStatus).toHaveBeenCalledWith("idle");
+    });
+
+    it("preserves an in-flight run adopted by reset history", async () => {
+      const { state, loadHistory, handleChatEvent, handleSessionsChangedEvent } =
+        createHandlersHarness({
+          state: { activeChatRunId: "run-reset", activityStatus: "streaming" },
+        });
+      startRun(state, handleChatEvent, "run-reset");
+      loadHistory.mockImplementationOnce(async () => {
+        state.activeChatRunId = "run-reset";
+        state.activityStatus = "streaming";
+        return { loaded: true as const, inFlightRunId: "run-reset" };
+      });
+
+      handleSessionsChangedEvent({
+        sessionKey: state.currentSessionKey,
+        reason: "reset",
+        sessionId: state.currentSessionId ?? undefined,
+      } satisfies SessionChangedEvent);
+
+      await vi.waitFor(() => expect(loadHistory).toHaveBeenCalledTimes(1));
+      expect(state.activeChatRunId).toBe("run-reset");
+      expect(state.activityStatus).toBe("streaming");
+    });
+
+    it("preserves finalized-run dedupe after reset history reload", async () => {
+      const { state, chatLog, loadHistory, handleChatEvent, handleSessionsChangedEvent } =
+        createHandlersHarness({ state: { activeChatRunId: "run-reset" } });
+      handleChatEvent({
+        runId: "run-reset",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        message: { content: [{ type: "text", text: "done" }] },
+      });
+      chatLog.finalizeAssistant.mockClear();
+      loadHistory.mockClear();
+
+      handleSessionsChangedEvent({
+        sessionKey: state.currentSessionKey,
+        reason: "reset",
+        sessionId: state.currentSessionId ?? undefined,
+      } satisfies SessionChangedEvent);
+      await vi.waitFor(() => expect(loadHistory).toHaveBeenCalledTimes(1));
+      handleChatEvent({
+        runId: "run-reset",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        message: { content: [{ type: "text", text: "done" }] },
+      });
+
+      expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
+    });
+
+    it("preserves displayed-run dedupe when reset history fails", async () => {
+      const { state, chatLog, loadHistory, handleChatEvent, handleSessionsChangedEvent } =
+        createHandlersHarness({ state: { activeChatRunId: "run-reset" } });
+      const resolveHistory = deferNextHistoryLoad(loadHistory);
+      handleChatEvent({
+        runId: "run-reset",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        message: { content: [{ type: "text", text: "done" }] },
+      });
+      chatLog.finalizeAssistant.mockClear();
+
+      handleSessionsChangedEvent({
+        sessionKey: state.currentSessionKey,
+        reason: "reset",
+        sessionId: state.currentSessionId ?? undefined,
+      } satisfies SessionChangedEvent);
+      resolveHistory(false);
+      await Promise.resolve();
+      handleChatEvent({
+        runId: "run-reset",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        message: { content: [{ type: "text", text: "done" }] },
+      });
+
+      expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
+    });
+
+    it("gates late run events while reset history is rebuilding", async () => {
+      const { state, chatLog, loadHistory, handleChatEvent, handleSessionsChangedEvent } =
+        createHandlersHarness({ state: { activeChatRunId: "run-reset" } });
+      startRun(state, handleChatEvent, "run-reset");
+      chatLog.finalizeAssistant.mockClear();
+      loadHistory.mockClear();
+
+      handleSessionsChangedEvent({
+        sessionKey: state.currentSessionKey,
+        reason: "reset",
+        sessionId: state.currentSessionId ?? undefined,
+      } satisfies SessionChangedEvent);
+      handleChatEvent({
+        runId: "run-reset",
+        sessionKey: state.currentSessionKey,
+        state: "final",
+        message: { content: [{ type: "text", text: "stale after reset" }] },
+      });
+
+      await vi.waitFor(() => expect(loadHistory).toHaveBeenCalledTimes(1));
+      expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
+      expect(state.activeChatRunId).toBeNull();
+    });
   });
 });
 

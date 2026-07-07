@@ -634,7 +634,7 @@ directive warnings.
 - `speakerVoice` / `speakerVoiceId` (legacy aliases: `voice`, `voiceName`, `voice_name`, `google_voice`, `voiceId`)
 - `model` / `google_model`
 - `stability`, `similarityBoost`, `style`, `speed`, `useSpeakerBoost`
-- `vol` / `volume` (MiniMax volume, 0–10)
+- `vol` / `volume` (MiniMax volume, `(0, 10]`)
 - `pitch` (MiniMax integer pitch, −12 to 12; fractional values are truncated)
 - `emotion` (Volcengine emotion tag)
 - `applyTextNormalization` (`auto|on|off`)

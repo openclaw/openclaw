@@ -30,6 +30,7 @@ import {
   type OpenAIToolProjection,
 } from "@openclaw/ai/internal/openai";
 import {
+  applyProviderReportedUsageCost,
   calculateCost,
   createFirstStreamEventAbortController,
   createReasoningTagTextPartitioner,
@@ -62,7 +63,7 @@ import type {
 } from "openai/resources/responses/responses.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import { sha256Hex, sha256HexPrefix } from "../infra/crypto-digest.js";
-import type { Api, Context, Model } from "../llm/types.js";
+import type { Api, Context, Model, Usage } from "../llm/types.js";
 import "../llm/ai-transport-host.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
@@ -252,7 +253,7 @@ type MutableAssistantOutput = {
     cacheWrite: number;
     reasoningTokens?: number;
     totalTokens: number;
-    cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+    cost: Usage["cost"];
   };
   stopReason: string;
   timestamp: number;
@@ -4469,15 +4470,15 @@ export function buildOpenAICompletionsParams(
 }
 
 export function parseTransportChunkUsage(
-  rawUsage: NonNullable<ChatCompletionChunk["usage"]>,
+  rawUsage: NonNullable<ChatCompletionChunk["usage"]> & { cost?: unknown },
   model: Model,
-) {
+): MutableAssistantOutput["usage"] {
   const cachedTokens = rawUsage.prompt_tokens_details?.cached_tokens || 0;
   const promptTokens = rawUsage.prompt_tokens || 0;
   const input = Math.max(0, promptTokens - cachedTokens);
   const outputTokens = rawUsage.completion_tokens || 0;
   const reasoningTokens = rawUsage.completion_tokens_details?.reasoning_tokens;
-  const usage = {
+  const usage: MutableAssistantOutput["usage"] = {
     input,
     output: outputTokens,
     cacheRead: cachedTokens,
@@ -4489,6 +4490,7 @@ export function parseTransportChunkUsage(
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
   calculateCost(model as never, usage as never);
+  applyProviderReportedUsageCost(usage, rawUsage.cost);
   return usage;
 }
 

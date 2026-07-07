@@ -5,7 +5,7 @@
 import type { ModelThinkingLevel, StreamOptions, ThinkingBudgets } from "openclaw/plugin-sdk/llm";
 
 /** How Bedrock thinking output should be displayed to users. */
-export type BedrockThinkingDisplay = "summarized" | "omitted";
+type BedrockThinkingDisplay = "summarized" | "omitted";
 
 /** Extra Bedrock-specific stream options accepted by the provider runtime. */
 export interface BedrockOptions extends StreamOptions {

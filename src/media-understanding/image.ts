@@ -235,6 +235,15 @@ async function prepareResolvedImageRuntime(
     preferredProfile: params.preferredProfile,
     store: params.authStore,
   });
+  // Bedrock's runtime client owns AWS credential-chain resolution. Keep the
+  // empty sentinel out of auth storage and pass it through to the stream.
+  if (
+    !apiKeyInfo.apiKey?.trim() &&
+    apiKeyInfo.mode === "aws-sdk" &&
+    model.api === "bedrock-converse-stream"
+  ) {
+    return { apiKey: "", model };
+  }
   let apiKey = requireApiKey(apiKeyInfo, model.provider);
   // Image tool bypasses prepareRuntimeAuth — exchange OAuth token for
   // a short-lived Copilot API token so the integrator scope (vscode-chat)
