@@ -256,6 +256,10 @@ function run(command, args, options = {}) {
     timeout?.unref?.();
     ACTIVE_CHILD_KILLERS.add(killChild);
     let settled = false;
+    /**
+     * @param {Error} error
+     * @param {{ keepKillTimer?: boolean }} rejectOptions
+     */
     const rejectRun = (error, rejectOptions = {}) => {
       if (settled) {
         return;
