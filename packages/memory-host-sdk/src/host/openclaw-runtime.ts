@@ -42,8 +42,6 @@ export { parseDurationMs } from "../../../../src/cli/parse-duration.js";
 export { withProgress, withProgressTotals } from "../../../../src/cli/progress.js";
 export { parseNonNegativeByteSize } from "../../../../src/config/byte-size.js";
 export {
-  clearConfigCache,
-  clearRuntimeConfigSnapshot,
   getRuntimeConfig,
   /** @deprecated Use getRuntimeConfig(), or pass the already loaded config through the call path. */
   loadConfig,
@@ -88,9 +86,6 @@ export { fetchWithSsrFGuard } from "../../../../src/infra/net/fetch-guard.js";
 export { shouldUseEnvHttpProxyForUrl } from "../../../../src/infra/net/proxy-env.js";
 export { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "../../../../src/infra/net/ssrf.js";
 export {
-  DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES,
-  DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS,
-  DEFAULT_SQLITE_WAL_TRUNCATE_INTERVAL_MS,
   configureSqliteConnectionPragmas,
   configureSqliteWalMaintenance,
 } from "../../../../src/infra/sqlite-wal.js";
