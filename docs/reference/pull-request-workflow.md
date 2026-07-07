@@ -63,8 +63,8 @@ feedback:
 
 - push the code change or update the PR description;
 - add evidence when it asks for proof;
-- reply to resolved conversations, but also update the PR body;
-- reply and leave a conversation open when you need maintainer judgment;
+- resolve addressed review conversations;
+- reply and leave a conversation open only when you need maintainer judgment;
 - ask for another re-review only after the PR is current.
 
 If a human contributor or maintainer has taken over the PR and is actively
@@ -89,8 +89,8 @@ whether the author was asked for proof or other work.
    between the author, maintainer, and ClawSweeper are normal.
 8. If the PR has a `P0`, `P1`, or `P2` label and is ready for merge, ask in
    `#clawtributors` on Discord. Check the pinned messages for the requested
-   form. Use `/github <PR number>` targeting Hermit to get a summary card for
-   the PR.
+   form, and include the PR link, current status, and any remaining evidence or
+   maintainer decision needed.
 9. A maintainer reviews the PR, CI, bot feedback, and evidence, and can
    eventually merge the PR.
 
