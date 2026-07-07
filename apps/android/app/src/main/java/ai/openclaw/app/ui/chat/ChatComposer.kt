@@ -32,6 +32,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ArrowDropDown
@@ -187,6 +193,22 @@ internal fun ChatComposer(
   val recordingVoiceNote = voiceNoteState is VoiceNoteRecorderState.Recording
   val preparingVoiceNote = voiceNoteState is VoiceNoteRecorderState.Preparing
 
+  fun submitInput() {
+    val message = input.trim()
+    val action = resolveSheetComposerSendAction(input = message)
+    if (action.sendMessage || attachments.isNotEmpty()) {
+      input = ""
+      sendScope.launch {
+        val accepted = onSend(message)
+        // Refused sends (offline queue full, enqueue failure) must not eat the draft;
+        // restore it unless the user already started typing something new.
+        if (!accepted && input.isEmpty()) {
+          input = message
+        }
+      }
+    }
+  }
+
   Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
     if (attachments.isNotEmpty()) {
       AttachmentsStrip(attachments = attachments, onRemoveAttachment = onRemoveAttachment)
@@ -214,7 +236,20 @@ internal fun ChatComposer(
       OutlinedTextField(
         value = input,
         onValueChange = { input = it },
-        modifier = Modifier.fillMaxWidth(),
+        modifier =
+          Modifier
+            .fillMaxWidth()
+            .onKeyEvent { event ->
+              // Physical keyboards on Android should send on Enter and insert a newline on Shift+Enter.
+              if (event.type == KeyEventType.KeyDown && event.key == Key.Enter) {
+                if (!event.isShiftPressed && canSend && !recordingVoiceNote && !preparingVoiceNote) {
+                  submitInput()
+                }
+                true
+              } else {
+                false
+              }
+            },
         placeholder = { Text("Type a message…", style = mobileBodyStyle(), color = mobileTextTertiary) },
         minLines = 2,
         maxLines = 5,
@@ -314,21 +349,7 @@ internal fun ChatComposer(
       Spacer(modifier = Modifier.weight(1f))
 
       Button(
-        onClick = {
-          val message = input.trim()
-          val action = resolveSheetComposerSendAction(input = message)
-          if (action.sendMessage || attachments.isNotEmpty()) {
-            input = ""
-            sendScope.launch {
-              val accepted = onSend(message)
-              // Refused sends (offline queue full, enqueue failure) must not eat the draft;
-              // restore it unless the user already started typing something new.
-              if (!accepted && input.isEmpty()) {
-                input = message
-              }
-            }
-          }
-        },
+        onClick = { submitInput() },
         enabled = canSend && !recordingVoiceNote && !preparingVoiceNote,
         modifier = Modifier.height(44.dp),
         shape = RoundedCornerShape(14.dp),
