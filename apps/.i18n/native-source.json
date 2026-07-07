@@ -1147,7 +1147,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 307,
+      "line": 306,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayConfigResolver.kt",
       "source": "Setup code points to an insecure remote gateway. $remoteGatewaySecurityRule $remoteGatewaySecurityFix",
       "surface": "android",
@@ -1155,7 +1155,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 309,
+      "line": 308,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayConfigResolver.kt",
       "source": "QR code points to an insecure remote gateway. $remoteGatewaySecurityRule $remoteGatewaySecurityFix",
       "surface": "android",
@@ -1163,7 +1163,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 311,
+      "line": 310,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayConfigResolver.kt",
       "source": "$remoteGatewaySecurityRule $remoteGatewaySecurityFix",
       "surface": "android",
@@ -1171,7 +1171,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 316,
+      "line": 315,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayConfigResolver.kt",
       "source": "Setup code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.",
       "surface": "android",
@@ -1179,7 +1179,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 318,
+      "line": 317,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayConfigResolver.kt",
       "source": "QR code uses an IPv6 zone ID. Use an unscoped IPv6 address or a LAN hostname.",
       "surface": "android",
@@ -1187,7 +1187,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 320,
+      "line": 319,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayConfigResolver.kt",
       "source": "IPv6 zone IDs are not supported. Use an unscoped IPv6 address or a LAN hostname.",
       "surface": "android",
@@ -1195,7 +1195,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 325,
+      "line": 324,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayConfigResolver.kt",
       "source": "Setup code has invalid gateway URL.",
       "surface": "android",
@@ -1203,7 +1203,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 326,
+      "line": 325,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayConfigResolver.kt",
       "source": "QR code did not contain a valid setup code.",
       "surface": "android",
@@ -1211,7 +1211,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 327,
+      "line": 326,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/GatewayConfigResolver.kt",
       "source": "Enter a valid manual endpoint to connect.",
       "surface": "android",
@@ -1667,7 +1667,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 699,
+      "line": 698,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Trust",
       "surface": "android",
@@ -1675,7 +1675,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 704,
+      "line": 703,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Cancel",
       "surface": "android",
@@ -1683,7 +1683,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 895,
+      "line": 894,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Welcome to OpenClaw",
       "surface": "android",
@@ -1691,7 +1691,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 896,
+      "line": 895,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Turn this device into a secure OpenClaw node for chat, voice, camera, and device tools.",
       "surface": "android",
@@ -1699,7 +1699,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 921,
+      "line": 920,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "OpenClaw logo",
       "surface": "android",
@@ -1707,7 +1707,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 977,
+      "line": 976,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Connect to your Gateway",
       "surface": "android",
@@ -1715,7 +1715,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 978,
+      "line": 977,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Choose device permissions",
       "surface": "android",
@@ -1723,7 +1723,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 979,
+      "line": 978,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Use OpenClaw from your phone",
       "surface": "android",
@@ -1731,7 +1731,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1001,
+      "line": 1000,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Security notice",
       "surface": "android",
@@ -1739,7 +1739,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1003,
+      "line": 1002,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "The connected OpenClaw agent can use device capabilities you enable. Continue only if you trust the Gateway and agent you connect to.",
       "surface": "android",
@@ -1747,7 +1747,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1044,
+      "line": 1043,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Connect Gateway",
       "surface": "android",
@@ -1755,7 +1755,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1045,
+      "line": 1044,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Scan a QR code or use the setup code from your OpenClaw Gateway.",
       "surface": "android",
@@ -1763,7 +1763,7 @@
     },
     {
       "kind": "ui-toast",
-      "line": 1054,
+      "line": 1053,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Could not open setup guide.",
       "surface": "android",
@@ -1771,7 +1771,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1062,
+      "line": 1061,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Scan QR or setup code",
       "surface": "android",
@@ -1779,7 +1779,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1068,
+      "line": 1067,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Set up manually",
       "surface": "android",
@@ -1787,7 +1787,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1090,
+      "line": 1089,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Before you start",
       "surface": "android",
@@ -1795,7 +1795,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1096,
+      "line": 1095,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Access to the Gateway device",
       "surface": "android",
@@ -1803,7 +1803,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1097,
+      "line": 1096,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Have a terminal open on the device running OpenClaw.",
       "surface": "android",
@@ -1811,7 +1811,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1100,
+      "line": 1099,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Phone can reach the Gateway",
       "surface": "android",
@@ -1819,7 +1819,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1101,
+      "line": 1100,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Use the same network, or a secure remote Gateway URL.",
       "surface": "android",
@@ -1827,7 +1827,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1107,
+      "line": 1106,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Android setup guide",
       "surface": "android",
@@ -1835,7 +1835,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1150,
+      "line": 1149,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Setup Gateway",
       "surface": "android",
@@ -1843,7 +1843,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1156,
+      "line": 1155,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Start your Gateway.",
       "surface": "android",
@@ -1851,7 +1851,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1157,
+      "line": 1156,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "openclaw gateway",
       "surface": "android",
@@ -1859,7 +1859,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1162,
+      "line": 1161,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Generate a QR code.",
       "surface": "android",
@@ -1867,7 +1867,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1163,
+      "line": 1162,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "openclaw qr",
       "surface": "android",
@@ -1875,7 +1875,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1183,
+      "line": 1182,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Choose from gallery",
       "surface": "android",
@@ -1883,7 +1883,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1237,
+      "line": 1236,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "QR code not accepted",
       "surface": "android",
@@ -1891,7 +1891,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1252,
+      "line": 1251,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Choose another image",
       "surface": "android",
@@ -1899,7 +1899,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1305,
+      "line": 1304,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Scan QR code",
       "surface": "android",
@@ -1907,7 +1907,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1307,
+      "line": 1306,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Open the camera and frame the code from openclaw qr.",
       "surface": "android",
@@ -1915,7 +1915,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1341,
+      "line": 1340,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Align the QR code inside the square.",
       "surface": "android",
@@ -1923,7 +1923,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1359,
+      "line": 1358,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Camera access is needed to scan the setup QR.",
       "surface": "android",
@@ -1931,7 +1931,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1364,
+      "line": 1363,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Allow camera",
       "surface": "android",
@@ -1939,7 +1939,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1385,
+      "line": 1384,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Close scanner",
       "surface": "android",
@@ -1947,7 +1947,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1547,
+      "line": 1546,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Enter setup code",
       "surface": "android",
@@ -1955,7 +1955,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1548,
+      "line": 1547,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Setup code",
       "surface": "android",
@@ -1963,7 +1963,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1552,
+      "line": 1551,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Paste setup code",
       "surface": "android",
@@ -1971,7 +1971,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1556,
+      "line": 1555,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Setup code was not accepted",
       "surface": "android",
@@ -1979,7 +1979,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1560,
+      "line": 1559,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Use setup code",
       "surface": "android",
@@ -1987,7 +1987,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1599,
+      "line": 1597,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Manual setup",
       "surface": "android",
@@ -1995,7 +1995,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1602,
+      "line": 1600,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Gateway URL",
       "surface": "android",
@@ -2003,7 +2003,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1604,
+      "line": 1602,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Host",
       "surface": "android",
@@ -2011,7 +2011,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1605,
+      "line": 1603,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Port",
       "surface": "android",
@@ -2019,7 +2019,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1608,
+      "line": 1606,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Use the Gateway computer's LAN address or secure remote hostname.",
       "surface": "android",
@@ -2027,7 +2027,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1615,
+      "line": 1613,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Token",
       "surface": "android",
@@ -2035,7 +2035,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1616,
+      "line": 1614,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Paste token",
       "surface": "android",
@@ -2043,7 +2043,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1618,
+      "line": 1616,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Paste a shared Gateway token or operator-issued token.",
       "surface": "android",
@@ -2051,7 +2051,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1625,
+      "line": 1623,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Password",
       "surface": "android",
@@ -2059,7 +2059,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1626,
+      "line": 1624,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Password optional",
       "surface": "android",
@@ -2067,7 +2067,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1630,
+      "line": 1628,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Connection security",
       "surface": "android",
@@ -2075,7 +2075,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1633,
+      "line": 1631,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Unencrypted",
       "surface": "android",
@@ -2083,7 +2083,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1639,
+      "line": 1637,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Secure (TLS)",
       "surface": "android",
@@ -2091,7 +2091,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1660,
+      "line": 1651,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Could not test connection",
       "surface": "android",
@@ -2099,7 +2099,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1665,
+      "line": 1656,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Test connection",
       "surface": "android",
@@ -2107,7 +2107,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1854,
+      "line": 1845,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "View details",
       "surface": "android",
@@ -2115,7 +2115,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1887,
+      "line": 1878,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Connection details",
       "surface": "android",
@@ -2123,7 +2123,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1899,
+      "line": 1890,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Copy",
       "surface": "android",
@@ -2131,7 +2131,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1904,
+      "line": 1895,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Close",
       "surface": "android",
@@ -2139,7 +2139,7 @@
     },
     {
       "kind": "ui-toast",
-      "line": 1916,
+      "line": 1907,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Details copied",
       "surface": "android",
@@ -2147,7 +2147,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 2001,
+      "line": 1992,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Approve node access",
       "surface": "android",
@@ -2155,7 +2155,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 2008,
+      "line": 1999,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Gateway pairing is complete. Approve this phone as a node so OpenClaw can use the device capabilities you enable.",
       "surface": "android",
@@ -2163,7 +2163,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 2016,
+      "line": 2007,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "On the Gateway computer, run:",
       "surface": "android",
@@ -2171,7 +2171,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 2025,
+      "line": 2016,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Use the requestId from the pending command in the approve command.",
       "surface": "android",
@@ -2179,7 +2179,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 2036,
+      "line": 2027,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "I have approved",
       "surface": "android",
@@ -2187,7 +2187,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 2037,
+      "line": 2028,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Checking approval…",
       "surface": "android",
@@ -2195,7 +2195,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 2049,
+      "line": 2040,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Still waiting for approval",
       "surface": "android",
@@ -2203,7 +2203,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 2052,
+      "line": 2043,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Run the approve command on the Gateway computer, then check again.",
       "surface": "android",
@@ -2211,7 +2211,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 2059,
+      "line": 2050,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "OK",
       "surface": "android",
@@ -2219,7 +2219,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 2209,
+      "line": 2200,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Copy approval command",
       "surface": "android",
@@ -2227,7 +2227,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 2235,
+      "line": 2226,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Only enable access you are comfortable letting OpenClaw use while this phone is connected. You can change these later in Android Settings.",
       "surface": "android",
@@ -2235,7 +2235,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 2247,
+      "line": 2238,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Continue",
       "surface": "android",
@@ -2243,7 +2243,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 2274,
+      "line": 2265,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Back",
       "surface": "android",
@@ -2251,7 +2251,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 2323,
+      "line": 2314,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Permissions",
       "surface": "android",
@@ -2259,7 +2259,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2648,
+      "line": 2639,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "The code may have expired or been generated for another Gateway.",
       "surface": "android",
@@ -2267,7 +2267,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2652,
+      "line": 2643,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Gateway password is required. Enter it again or edit this connection.",
       "surface": "android",
@@ -2275,7 +2275,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2653,
+      "line": 2644,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Gateway password is invalid. Re-enter it or reset this gateway connection.",
       "surface": "android",
@@ -2283,7 +2283,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2654,
+      "line": 2645,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Gateway token is required. Enter it again or edit this connection.",
       "surface": "android",
@@ -2291,7 +2291,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2656,
+      "line": 2647,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Gateway requires this device identity. Re-authenticate or reset this gateway connection.",
       "surface": "android",
@@ -2299,7 +2299,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2660,
+      "line": 2651,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Saved authentication is invalid. Re-authenticate or reset this gateway connection.",
       "surface": "android",
@@ -2307,7 +2307,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2661,
+      "line": 2652,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Gateway authentication is not configured. Edit this connection and try again.",
       "surface": "android",
@@ -2315,7 +2315,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2662,
+      "line": 2653,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Gateway authentication needs review. Check gateway settings, then retry.",
       "surface": "android",
@@ -2323,7 +2323,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2679,
+      "line": 2670,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "$summary $it",
       "surface": "android",
@@ -2331,7 +2331,7 @@
     },
     {
       "kind": "ui-toast",
-      "line": 2810,
+      "line": 2801,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Approval command copied",
       "surface": "android",
@@ -2339,7 +2339,7 @@
     },
     {
       "kind": "ui-toast",
-      "line": 2819,
+      "line": 2810,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Command copied",
       "surface": "android",
@@ -2347,7 +2347,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2881,
+      "line": 2872,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Granted",
       "surface": "android",
@@ -2355,7 +2355,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2881,
+      "line": 2872,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Not granted",
       "surface": "android",
@@ -3443,7 +3443,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1176,
+      "line": 1175,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Replace gateway setup?",
       "surface": "android",
@@ -3451,7 +3451,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1191,
+      "line": 1190,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Replace setup",
       "surface": "android",
@@ -3459,7 +3459,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1207,
+      "line": 1206,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Forget gateway?",
       "surface": "android",
@@ -3467,7 +3467,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1220,
+      "line": 1219,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Cancel",
       "surface": "android",
@@ -3475,7 +3475,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1226,
+      "line": 1225,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Connection between this phone and OpenClaw.",
       "surface": "android",
@@ -3483,7 +3483,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1230,
+      "line": 1229,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Connected",
       "surface": "android",
@@ -3491,7 +3491,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1230,
+      "line": 1229,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Offline",
       "surface": "android",
@@ -3499,7 +3499,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1231,
+      "line": 1230,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Not paired",
       "surface": "android",
@@ -3507,7 +3507,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1231,
+      "line": 1230,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Online",
       "surface": "android",
@@ -3515,7 +3515,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1241,
+      "line": 1240,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Reconnect",
       "surface": "android",
@@ -3523,7 +3523,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1242,
+      "line": 1241,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Disconnect",
       "surface": "android",
@@ -3531,7 +3531,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1246,
+      "line": 1245,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Gateways",
       "surface": "android",
@@ -3539,7 +3539,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1248,
+      "line": 1247,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "No paired gateways.",
       "surface": "android",
@@ -3547,7 +3547,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1268,
+      "line": 1267,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Forget",
       "surface": "android",
@@ -3555,7 +3555,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1290,
+      "line": 1289,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Gateway setup",
       "surface": "android",
@@ -3563,7 +3563,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1292,
+      "line": 1291,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Scan or paste a setup code to add another gateway.",
       "surface": "android",
@@ -3571,7 +3571,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1299,
+      "line": 1298,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Add gateway",
       "surface": "android",
@@ -3579,7 +3579,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1300,
+      "line": 1299,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Setup Code",
       "surface": "android",
@@ -3587,7 +3587,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1304,
+      "line": 1303,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Android can scan or paste an existing setup code, but this gateway does not expose setup-code generation to the app yet. Generate the QR/code on the gateway host with openclaw qr, then scan it here or paste the setup code below.",
       "surface": "android",
@@ -3595,7 +3595,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1313,
+      "line": 1312,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Connection Setup",
       "surface": "android",
@@ -3603,7 +3603,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1314,
+      "line": 1313,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Setup code",
       "surface": "android",
@@ -3611,7 +3611,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1316,
+      "line": 1315,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Host",
       "surface": "android",
@@ -3619,7 +3619,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1317,
+      "line": 1316,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Port",
       "surface": "android",
@@ -3627,7 +3627,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1319,
+      "line": 1318,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Connection security",
       "surface": "android",
@@ -3635,7 +3635,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1323,
+      "line": 1322,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Secure (TLS)",
       "surface": "android",
@@ -3643,7 +3643,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1323,
+      "line": 1322,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Unencrypted",
       "surface": "android",
@@ -3651,7 +3651,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1345,
+      "line": 1337,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Token",
       "surface": "android",
@@ -3659,7 +3659,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1346,
+      "line": 1338,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Bootstrap",
       "surface": "android",
@@ -3667,7 +3667,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1348,
+      "line": 1340,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Password",
       "surface": "android",
@@ -3675,7 +3675,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1353,
+      "line": 1345,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Save & Connect",
       "surface": "android",
@@ -3683,7 +3683,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1370,
+      "line": 1362,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Enter a valid setup code or gateway address.",
       "surface": "android",
@@ -3691,7 +3691,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1393,
+      "line": 1385,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "A calm, high-contrast OpenClaw interface.",
       "surface": "android",
@@ -3699,7 +3699,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1393,
+      "line": 1385,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Appearance",
       "surface": "android",
@@ -3707,7 +3707,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1404,
+      "line": 1396,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Theme",
       "surface": "android",
@@ -3715,7 +3715,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1449,
+      "line": 1441,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Ready",
       "surface": "android",
@@ -3723,7 +3723,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1478,
+      "line": 1470,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "About",
       "surface": "android",
@@ -3731,7 +3731,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1478,
+      "line": 1470,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "OpenClaw for Android.",
       "surface": "android",
@@ -3739,7 +3739,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1491,
+      "line": 1483,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Gateway",
       "surface": "android",
@@ -3747,7 +3747,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1493,
+      "line": 1485,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Runtime",
       "surface": "android",
@@ -3755,7 +3755,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1496,
+      "line": 1488,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Update",
       "surface": "android",
@@ -3763,7 +3763,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1507,
+      "line": 1499,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "© 2026 OpenClaw Foundation — MIT License.",
       "surface": "android",
@@ -3771,7 +3771,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1524,
+      "line": 1516,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "OpenClaw logo",
       "surface": "android",
@@ -3779,7 +3779,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1526,
+      "line": 1518,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "OpenClaw",
       "surface": "android",
@@ -3787,7 +3787,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1527,
+      "line": 1519,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Personal AI on your devices",
       "surface": "android",
@@ -3795,7 +3795,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1586,
+      "line": 1578,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Licenses",
       "surface": "android",
@@ -3803,7 +3803,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1587,
+      "line": 1579,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "OpenClaw appreciates its partners in the open-source community.",
       "surface": "android",
@@ -3811,7 +3811,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1596,
+      "line": 1588,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "No license notices are packaged in this build.",
       "surface": "android",
@@ -3819,7 +3819,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1622,
+      "line": 1614,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Open ${license.title}",
       "surface": "android",
@@ -3827,7 +3827,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1657,
+      "line": 1649,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Check",
       "surface": "android",
@@ -3835,7 +3835,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1690,
+      "line": 1682,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Back",
       "surface": "android",
@@ -3843,7 +3843,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1764,
+      "line": 1756,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Sending",
       "surface": "android",
@@ -3851,7 +3851,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1773,
+      "line": 1765,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Allow Once",
       "surface": "android",
@@ -3859,7 +3859,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1773,
+      "line": 1765,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Allowing",
       "surface": "android",
@@ -3867,7 +3867,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1781,
+      "line": 1773,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Always",
       "surface": "android",
@@ -3875,7 +3875,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1781,
+      "line": 1773,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Saving",
       "surface": "android",
@@ -3883,7 +3883,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1789,
+      "line": 1781,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Deny",
       "surface": "android",
@@ -3891,7 +3891,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1789,
+      "line": 1781,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Denying",
       "surface": "android",
@@ -3899,7 +3899,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1814,
+      "line": 1806,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Review",
       "surface": "android",
@@ -3907,7 +3907,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1842,
+      "line": 1834,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Issue",
       "surface": "android",
@@ -3915,7 +3915,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1872,
+      "line": 1864,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Enabled",
       "surface": "android",
@@ -3923,7 +3923,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1886,
+      "line": 1878,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "No",
       "surface": "android",
@@ -3931,7 +3931,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1886,
+      "line": 1878,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Yes",
       "surface": "android",
@@ -3939,7 +3939,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1904,
+      "line": 1896,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Last Error",
       "surface": "android",
@@ -3947,7 +3947,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1907,
+      "line": 1899,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Delivery Error",
       "surface": "android",
@@ -3955,7 +3955,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1946,
+      "line": 1938,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Tap to copy",
       "surface": "android",
@@ -3963,7 +3963,7 @@
     },
     {
       "kind": "ui-toast",
-      "line": 1961,
+      "line": 1953,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "$title copied",
       "surface": "android",
@@ -3971,7 +3971,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1999,
+      "line": 1991,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Default assistant",
       "surface": "android",
@@ -3979,7 +3979,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2001,
+      "line": 1993,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Default",
       "surface": "android",
@@ -3987,7 +3987,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2057,
+      "line": 2049,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Needs attention",
       "surface": "android",
@@ -3995,7 +3995,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2060,
+      "line": 2052,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Waiting ${minutes}m",
       "surface": "android",
@@ -4003,7 +4003,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2060,
+      "line": 2052,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Waiting for review",
       "surface": "android",
@@ -4011,7 +4011,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2088,
+      "line": 2080,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "${job.scheduleLabel} · ${formatCronWake(job.nextRunAtMs)} · ${job.promptPreview}",
       "surface": "android",
@@ -4019,7 +4019,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2095,
+      "line": 2087,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "No limits reported",
       "surface": "android",
@@ -4027,7 +4027,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2126,
+      "line": 2118,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Off",
       "surface": "android",
@@ -4035,7 +4035,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2147,
+      "line": 2139,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "System Event Text",
       "surface": "android",
@@ -4043,7 +4043,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2148,
+      "line": 2140,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Agent Prompt",
       "surface": "android",
@@ -4051,7 +4051,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2149,
+      "line": 2141,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Command",
       "surface": "android",
@@ -4059,7 +4059,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2150,
+      "line": 2142,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
       "source": "Payload Text",
       "surface": "android",
@@ -11018,16 +11018,8 @@
       "id": "native.apple.8eca91d435b2aec0"
     },
     {
-      "kind": "ui-call",
-      "line": 982,
-      "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
-      "source": "Endpoint",
-      "surface": "apple",
-      "id": "native.apple.231c1db384aae808"
-    },
-    {
       "kind": "ui-named-argument",
-      "line": 990,
+      "line": 982,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Connect Manual",
       "surface": "apple",
@@ -11035,7 +11027,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1021,
+      "line": 1012,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Auto-connect on launch",
       "surface": "apple",
@@ -11043,7 +11035,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1022,
+      "line": 1013,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Gateway Auth Token",
       "surface": "apple",
@@ -11051,7 +11043,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1023,
+      "line": 1014,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Gateway Password",
       "surface": "apple",
@@ -11059,7 +11051,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1028,
+      "line": 1019,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Custom Headers",
       "surface": "apple",
@@ -11067,7 +11059,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1035,
+      "line": 1026,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Reset Onboarding",
       "surface": "apple",
@@ -11075,7 +11067,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1062,
+      "line": 1053,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Voice Wake",
       "surface": "apple",
@@ -11083,7 +11075,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1065,
+      "line": 1056,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Talk Mode",
       "surface": "apple",
@@ -11091,7 +11083,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1073,
+      "line": 1064,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Speech Language",
       "surface": "apple",
@@ -11099,7 +11091,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1080,
+      "line": 1071,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Speakerphone",
       "surface": "apple",
@@ -11107,7 +11099,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1084,
+      "line": 1075,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Wake Words",
       "surface": "apple",
@@ -11115,7 +11107,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1105,
+      "line": 1096,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Voice",
       "surface": "apple",
@@ -11123,7 +11115,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1106,
+      "line": 1097,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Provider",
       "surface": "apple",
@@ -11131,7 +11123,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1113,
+      "line": 1104,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Realtime Voice",
       "surface": "apple",
@@ -11139,7 +11131,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1114,
+      "line": 1105,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Gateway Default",
       "surface": "apple",
@@ -11147,7 +11139,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1121,
+      "line": 1112,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Voice Mode",
       "surface": "apple",
@@ -11155,7 +11147,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1122,
+      "line": 1113,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Active Voice",
       "surface": "apple",
@@ -11163,7 +11155,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1124,
+      "line": 1115,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Last Voice Issue",
       "surface": "apple",
@@ -11171,7 +11163,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1126,
+      "line": 1117,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Transport",
       "surface": "apple",
@@ -11179,7 +11171,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1127,
+      "line": 1118,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "API Key",
       "surface": "apple",
@@ -11187,7 +11179,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1134,
+      "line": 1125,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Show Talk Control",
       "surface": "apple",
@@ -11195,7 +11187,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1135,
+      "line": 1126,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Default Share Instruction",
       "surface": "apple",
@@ -11203,7 +11195,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1142,
+      "line": 1133,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Run Share Self-Test",
       "surface": "apple",
@@ -11211,7 +11203,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1159,
+      "line": 1150,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Discovery Debug Logs",
       "surface": "apple",
@@ -11219,7 +11211,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1162,
+      "line": 1153,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Debug Screen Status",
       "surface": "apple",
@@ -11227,7 +11219,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1166,
+      "line": 1157,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Discovery Logs",
       "surface": "apple",
@@ -11235,7 +11227,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1172,
+      "line": 1163,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Device",
       "surface": "apple",
@@ -11243,7 +11235,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1173,
+      "line": 1164,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Device Name",
       "surface": "apple",
@@ -11251,7 +11243,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1175,
+      "line": 1166,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Instance ID",
       "surface": "apple",
@@ -11259,7 +11251,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1198,
+      "line": 1189,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "On",
       "surface": "apple",
@@ -13219,7 +13211,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 909,
+      "line": 908,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Connection security",
       "surface": "apple",
@@ -13227,7 +13219,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 910,
+      "line": 909,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Unencrypted",
       "surface": "apple",
@@ -13235,7 +13227,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 913,
+      "line": 912,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Secure (TLS)",
       "surface": "apple",
@@ -13243,15 +13235,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 925,
-      "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
-      "source": "Endpoint",
-      "surface": "apple",
-      "id": "native.apple.6a34c822afd9e0aa"
-    },
-    {
-      "kind": "ui-call",
-      "line": 991,
+      "line": 981,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Connecting…",
       "surface": "apple",
@@ -13259,7 +13243,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 995,
+      "line": 985,
       "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
       "source": "Connect",
       "surface": "apple",
