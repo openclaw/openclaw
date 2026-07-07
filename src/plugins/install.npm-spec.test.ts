@@ -216,6 +216,7 @@ function writeInstalledNpmPlugin(params: {
   extraDistFiles?: Record<string, string>;
   dependency?: { name: string; version: string };
   hoistedDependency?: { name: string; version: string };
+  declaredMissingDependency?: { name: string; version: string };
   peerDependencies?: Record<string, string>;
   openclaw?: Record<string, unknown>;
   replaceExisting?: boolean;
@@ -231,8 +232,22 @@ function writeInstalledNpmPlugin(params: {
       name: params.packageName,
       version: params.version,
       openclaw: params.openclaw ?? { extensions: ["./dist/index.js"] },
-      ...(params.dependency
-        ? { dependencies: { [params.dependency.name]: params.dependency.version } }
+      ...(params.dependency || params.declaredMissingDependency
+        ? {
+            dependencies: {
+              ...(params.dependency
+                ? { [params.dependency.name]: params.dependency.version }
+                : {}),
+              // Declared in package.json but never materialized on disk:
+              // simulates npm exiting 0 while leaving a hollow dependency tree.
+              ...(params.declaredMissingDependency
+                ? {
+                    [params.declaredMissingDependency.name]:
+                      params.declaredMissingDependency.version,
+                  }
+                : {}),
+            },
+          }
         : {}),
       ...(params.peerDependencies ? { peerDependencies: params.peerDependencies } : {}),
     }),
@@ -296,6 +311,7 @@ type MockNpmPackage = {
   extraDistFiles?: Record<string, string>;
   dependency?: { name: string; version: string };
   hoistedDependency?: { name: string; version: string };
+  declaredMissingDependency?: { name: string; version: string };
   peerDependencies?: Record<string, string>;
   openclaw?: Record<string, unknown>;
   expectedDependencySpec?: string;
@@ -906,6 +922,30 @@ describe("installPluginFromNpmSpec", () => {
       npmRoot,
       packageName: "@openclaw/voice-call",
     });
+  });
+
+  it("rejects npm installs whose required dependencies did not materialize on disk", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const packageName = "@openclaw/hollow-deps";
+    mockNpmViewAndInstall({
+      spec: `${packageName}@1.0.0`,
+      packageName,
+      version: "1.0.0",
+      pluginId: "hollow-deps",
+      npmRoot,
+      declaredMissingDependency: { name: "@example/required-runtime", version: "1.0.0" },
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: `${packageName}@1.0.0`,
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    if (result.ok) {
+      throw new Error("expected hollow dependency tree install to fail");
+    }
+    expect(result.error).toContain("@example/required-runtime");
   });
 
   it("keeps lazy imports from a loaded old npm generation available across updates", async () => {
