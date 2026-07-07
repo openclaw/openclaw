@@ -25,7 +25,7 @@ type LoginFailureKind =
   | "protocol-mismatch"
   | "network";
 
-export type LoginFailureFeedback = {
+type LoginFailureFeedback = {
   kind: LoginFailureKind;
   title: string;
   summary: string;
@@ -35,7 +35,7 @@ export type LoginFailureFeedback = {
   rawError: string;
 };
 
-export type LoginGateProps = {
+type LoginGateProps = {
   basePath: string;
   connected: boolean;
   lastError: string | null;

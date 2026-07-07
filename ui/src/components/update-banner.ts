@@ -58,7 +58,7 @@ function dismiss(updateAvailable: UpdateAvailable) {
   }
 }
 
-export type UpdateBannerProps = {
+type UpdateBannerProps = {
   statusBanner: { tone: "danger" | "warn" | "info"; text: string } | null;
   updateAvailable: UpdateAvailable | null;
   updateRunning: boolean;

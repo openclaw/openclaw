@@ -4,7 +4,7 @@ import { property } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
 import "./modal-dialog.ts";
 
-export type GatewayUrlConfirmationProps = {
+type GatewayUrlConfirmationProps = {
   pendingGatewayUrl: string | null;
   onConfirm: () => void;
   onCancel: () => void;
