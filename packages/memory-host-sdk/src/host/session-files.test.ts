@@ -779,98 +779,61 @@ describe("buildSessionEntry", () => {
     expect(checkpointEntry.lineMap).toStrictEqual([]);
   });
 
-  it("does not wipe an archive when a user message starts with [cron: (#98241)", async () => {
-    // A cron-shaped prefix alone is user-controlled and cannot classify the archive.
-    const archivePath = path.join(tmpDir, "ordinary.jsonl.deleted.2026-02-16T22-27-33.000Z");
-    const jsonlLines = [
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "user",
-          content: "Remember before: project codename is Atlas.",
-        },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: { role: "assistant", content: "Saved project codename Atlas." },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "user",
-          content: "[cron:daily-digest] why did my digest job fail last night?",
-        },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "assistant",
-          content: "The digest job failed because the API token expired.",
-        },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "user",
-          content: "Please remember: my preferred vendor is Acme Robotics and budget is 5000 USD.",
-        },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: { role: "assistant", content: "Noted. Acme Robotics, budget 5000 USD." },
-      }),
-    ];
-    fsSync.writeFileSync(archivePath, jsonlLines.join("\n"));
-
-    const entry = requireSessionEntry(await buildSessionEntry(archivePath));
-
-    // The cron-shaped prompt is dropped per message; earlier and later content remains indexed.
-    expect(entry.generatedByCronRun).toBeFalsy();
-    expect(entry.content).toBe(
+  it.each([
+    [
+      "as the first message",
+      [],
+      [
+        "Assistant: The digest job failed because the API token expired.",
+        "User: Please remember: my preferred vendor is Acme Robotics and budget is 5000 USD.",
+        "Assistant: Noted. Acme Robotics, budget 5000 USD.",
+      ],
+      [2, 3, 4],
+    ],
+    [
+      "after ordinary messages",
+      [
+        { role: "user", content: "Remember before: project codename is Atlas." },
+        { role: "assistant", content: "Saved project codename Atlas." },
+      ],
       [
         "User: Remember before: project codename is Atlas.",
         "Assistant: Saved project codename Atlas.",
         "Assistant: The digest job failed because the API token expired.",
         "User: Please remember: my preferred vendor is Acme Robotics and budget is 5000 USD.",
         "Assistant: Noted. Acme Robotics, budget 5000 USD.",
-      ].join("\n"),
-    );
-    expect(entry.lineMap).toStrictEqual([1, 2, 4, 5, 6]);
-  });
-
-  it.each([
-    [
-      "current clock format",
-      "Current time: Wednesday, July 1st, 2026 - 8:30 PM (America/New_York)\nReference UTC: 2026-07-02 00:30 UTC",
+      ],
+      [1, 2, 4, 5, 6],
     ],
-    [
-      "legacy clock format",
-      "Current time: Sunday, May 3rd, 2026 - 8:30 PM (America/New_York) / 2026-05-04 00:30 UTC",
-    ],
-  ])("keeps orphaned cron-run archives opaque with the %s", async (_label, clockBlock) => {
-    const archivePath = path.join(tmpDir, "cron-run.jsonl.deleted.2026-02-16T22-27-33.000Z");
-    const jsonlLines = [
-      JSON.stringify({ type: "session", id: "cron-run" }),
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "user",
-          content: `[cron:job-1 Codex Sessions Sync] Run internal sync.\n${clockBlock}`,
+  ])(
+    "does not wipe an archive when a user message starts with [cron: %s (#98241)",
+    async (_position, precedingMessages, expectedContent, expectedLineMap) => {
+      // A cron-shaped prefix alone is user-controlled and cannot classify the archive.
+      const archivePath = path.join(tmpDir, "ordinary.jsonl.deleted.2026-02-16T22-27-33.000Z");
+      const messages = [
+        ...precedingMessages,
+        { role: "user", content: "[cron:daily-digest] why did my digest job fail last night?" },
+        {
+          role: "assistant",
+          content: "The digest job failed because the API token expired.",
         },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: { role: "assistant", content: "Internal cron output that must stay out." },
-      }),
-    ];
-    fsSync.writeFileSync(archivePath, jsonlLines.join("\n"));
+        {
+          role: "user",
+          content: "Please remember: my preferred vendor is Acme Robotics and budget is 5000 USD.",
+        },
+        { role: "assistant", content: "Noted. Acme Robotics, budget 5000 USD." },
+      ];
+      const jsonlLines = messages.map((message) => JSON.stringify({ type: "message", message }));
+      fsSync.writeFileSync(archivePath, jsonlLines.join("\n"));
 
-    const entry = requireSessionEntry(await buildSessionEntry(archivePath));
+      const entry = requireSessionEntry(await buildSessionEntry(archivePath));
 
-    expect(entry.content).toBe("");
-    expect(entry.lineMap).toStrictEqual([]);
-    expect(entry.generatedByCronRun).toBe(true);
-  });
+      // The cron-shaped prompt is dropped per message; earlier and later content remains indexed.
+      expect(entry.generatedByCronRun).toBeFalsy();
+      expect(entry.content).toBe(expectedContent.join("\n"));
+      expect(entry.lineMap).toStrictEqual(expectedLineMap);
+    },
+  );
 
   it("keeps cron-run reset archives opaque when session metadata preserves the cron key", async () => {
     const archivePath = path.join(tmpDir, "cron-run.jsonl.reset.2026-02-16T22-26-33.000Z");

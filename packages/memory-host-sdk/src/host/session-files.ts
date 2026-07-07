@@ -46,8 +46,6 @@ const SESSION_EXPORT_CONTENT_WRAP_CHARS = 800;
 const SESSION_ENTRY_PARSE_YIELD_LINES = 250;
 const MAX_DATE_TIMESTAMP_MS = 8_640_000_000_000_000;
 const DIRECT_CRON_PROMPT_RE = /^\[cron:[^\]]+\]\s*/;
-const GENERATED_CRON_CURRENT_TIME_RE =
-  /(?:^|\n)Current time: .+ \([^)]+\)(?:\nReference UTC: \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC| \/ \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC)(?:\n|$)/;
 
 export type SessionFileEntry = {
   path: string;
@@ -644,15 +642,6 @@ function isGeneratedCronPromptMessage(text: string, role: "user" | "assistant"):
   return DIRECT_CRON_PROMPT_RE.test(text);
 }
 
-function isGeneratedCronArchivePromptMessage(
-  text: string,
-  role: "user" | "assistant",
-): boolean {
-  return (
-    isGeneratedCronPromptMessage(text, role) && GENERATED_CRON_CURRENT_TIME_RE.test(text)
-  );
-}
-
 function isGeneratedHeartbeatPromptMessage(text: string, role: "user" | "assistant"): boolean {
   return role === "user" && isHeartbeatUserMessage({ role, content: text }, HEARTBEAT_PROMPT);
 }
@@ -773,8 +762,8 @@ export async function buildSessionEntry(
       false;
     let generatedByCronRun =
       opts.generatedByCronRun ?? sessionStoreClassification?.generatedByCronRun ?? false;
-    const isUsageCountedArchive = isUsageCountedSessionArchiveTranscriptPath(absPath);
-    let sawConversationMessage = false;
+    const allowArchiveRecordCronClassification =
+      isUsageCountedSessionArchiveTranscriptPath(absPath);
     for (let jsonlIdx = 0, lineStart = 0; lineStart <= raw.length; jsonlIdx++) {
       await yieldSessionEntryParseIfNeeded(jsonlIdx, parseYieldEveryLines);
       const newlineIndex = raw.indexOf("\n", lineStart);
@@ -795,7 +784,7 @@ export async function buildSessionEntry(
       }
       if (
         !generatedByCronRun &&
-        isUsageCountedArchive &&
+        allowArchiveRecordCronClassification &&
         isCronRunGeneratedRecord(record)
       ) {
         generatedByCronRun = true;
@@ -826,21 +815,8 @@ export async function buildSessionEntry(
       if (rawText === null) {
         continue;
       }
-      const isFirstConversationMessage = !sawConversationMessage;
-      sawConversationMessage = true;
-      if (
-        !generatedByCronRun &&
-        isUsageCountedArchive &&
-        isFirstConversationMessage &&
-        isGeneratedCronArchivePromptMessage(rawText.trim(), message.role)
-      ) {
-        // Shipped archives can outlive sessions.json and lack session-key records.
-        // Accept only the first prompt with OpenClaw's injected clock signature.
-        generatedByCronRun = true;
-        collected.length = 0;
-        lineMap.length = 0;
-        messageTimestampsMs.length = 0;
-      }
+      // User text is not trusted archive-wide provenance. Per-message sanitization
+      // drops cron prompts without clearing unrelated content from the archive.
       const text = sanitizeSessionText(rawText, message.role);
       if (!text) {
         // Assistant-side machinery (silent replies, system wrappers) is already
