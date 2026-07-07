@@ -20,12 +20,21 @@ const files = [
   },
 ];
 
-async function renderPreview(query = "") {
+type RenderPreviewOptions = {
+  query?: string;
+  activePath?: string;
+  previewFiles?: typeof files;
+};
+
+async function renderPreview(options: RenderPreviewOptions = {}) {
+  const query = options.query ?? "";
+  const activePath = options.activePath ?? "templates/digest.md";
+  const previewFiles = options.previewFiles ?? files;
   render(
     html`
       <openclaw-file-preview-modal
-        .files=${files}
-        .activePath=${"templates/digest.md"}
+        .files=${previewFiles}
+        .activePath=${activePath}
         .query=${query}
         .contextLabel=${"in morning-catchup"}
       ></openclaw-file-preview-modal>
@@ -38,6 +47,7 @@ async function renderPreview(query = "") {
   if (!modal) {
     throw new Error("expected file preview modal");
   }
+  await modal.updateComplete;
   await modal.updateComplete;
   return modal;
 }
@@ -59,7 +69,7 @@ describe("openclaw-file-preview-modal", () => {
   });
 
   it("filters files by path or contents", async () => {
-    const modal = await renderPreview("sender");
+    const modal = await renderPreview({ query: "sender" });
 
     expect(shadowText(modal)).toContain("1/2 files");
     expect(shadowText(modal)).toContain("filters/auto-senders.txt");
@@ -130,7 +140,7 @@ describe("openclaw-file-preview-modal", () => {
   });
 
   it("blocks background arrow-key scrolling even when no files match", async () => {
-    const modal = await renderPreview("missing");
+    const modal = await renderPreview({ query: "missing" });
     const onDocumentKeydown = vi.fn();
     document.addEventListener("keydown", onDocumentKeydown);
 
@@ -145,5 +155,92 @@ describe("openclaw-file-preview-modal", () => {
 
     expect(arrowDown.defaultPrevented).toBe(true);
     expect(onDocumentKeydown).not.toHaveBeenCalled();
+  });
+
+  it("keeps large-file rendering bounded and resets the real scroller on file changes", async () => {
+    let frameCallback: FrameRequestCallback | undefined;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frameCallback = callback;
+      return 1;
+    });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+
+    const firstContents = Array.from({ length: 500 }, (_, index) => `first-${index}`).join("\n");
+    const secondContents = Array.from({ length: 500 }, (_, index) => `second-${index}`).join("\n");
+    const previewFiles = [
+      { path: "first.ts", size: "5 KB", contents: firstContents },
+      { path: "second.ts", size: "5 KB", contents: secondContents },
+    ];
+    const modal = await renderPreview({ activePath: "first.ts", previewFiles });
+    const body = modal.shadowRoot?.querySelector<HTMLElement>(".detail-body");
+    expect(body).toBeInstanceOf(HTMLElement);
+    Object.defineProperty(body, "clientHeight", { configurable: true, value: 220 });
+
+    body!.scrollTop = 2200;
+    body!.dispatchEvent(new Event("scroll"));
+    frameCallback?.(0);
+    await modal.updateComplete;
+
+    const scrolledLines = modal.shadowRoot?.querySelectorAll<HTMLElement>(".code-line") ?? [];
+    expect(scrolledLines.length).toBeLessThanOrEqual(70);
+    expect(scrolledLines[0]?.dataset.line).toBe("70");
+    expect(scrolledLines[0]?.textContent).toBe("first-70");
+
+    const updatedModal = await renderPreview({ activePath: "second.ts", previewFiles });
+    const updatedBody = updatedModal.shadowRoot?.querySelector<HTMLElement>(".detail-body");
+    const updatedLines = updatedModal.shadowRoot?.querySelectorAll<HTMLElement>(".code-line") ?? [];
+
+    expect(updatedBody?.scrollTop).toBe(0);
+    expect(updatedLines[0]?.dataset.line).toBe("0");
+    expect(updatedLines[0]?.textContent).toBe("second-0");
+  });
+
+  it("observes the current scroller after an empty filter replaces it", async () => {
+    const observedTargets: Element[] = [];
+    const disconnect = vi.fn();
+    class TestResizeObserver {
+      observe(target: Element) {
+        observedTargets.push(target);
+      }
+      unobserve() {}
+      disconnect = disconnect;
+      takeRecords(): ResizeObserverEntry[] {
+        return [];
+      }
+    }
+    vi.stubGlobal("ResizeObserver", TestResizeObserver);
+
+    const modal = await renderPreview();
+    const initialBody = modal.shadowRoot?.querySelector<HTMLElement>(".detail-body");
+    expect(initialBody).toBeInstanceOf(HTMLElement);
+    expect(observedTargets).toContain(initialBody);
+
+    await renderPreview({ query: "missing" });
+    expect(modal.shadowRoot?.querySelector(".detail-body")).toBeNull();
+    expect(disconnect).toHaveBeenCalled();
+
+    const restoredModal = await renderPreview();
+    const restoredBody = restoredModal.shadowRoot?.querySelector<HTMLElement>(".detail-body");
+    expect(restoredBody).toBeInstanceOf(HTMLElement);
+    expect(restoredBody).not.toBe(initialBody);
+    expect(observedTargets).toContain(restoredBody);
+  });
+
+  it("copies the complete active file while only a virtual window is rendered", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } } as unknown as Navigator);
+    const contents = Array.from({ length: 500 }, (_, index) => `line-${index}`).join("\n");
+    const previewFiles = [{ path: "large.ts", size: "5 KB", contents }];
+    const modal = await renderPreview({ activePath: "large.ts", previewFiles });
+    const copyButton = modal.shadowRoot?.querySelector<HTMLButtonElement>(".chat-copy-btn");
+
+    expect(copyButton).toBeInstanceOf(HTMLButtonElement);
+    expect(modal.shadowRoot?.querySelectorAll(".code-line").length).toBeLessThan(500);
+    copyButton!.click();
+
+    await vi.waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(contents);
+      expect(copyButton?.dataset.copied).toBe("1");
+    });
   });
 });
