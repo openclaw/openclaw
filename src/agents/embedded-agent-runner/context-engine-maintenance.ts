@@ -31,6 +31,10 @@ import {
   updateTaskNotifyPolicyForOwner,
 } from "../../tasks/task-owner-access.js";
 import { findActiveSessionTask } from "../session-async-task-status.js";
+import {
+  maintainContextEngineWithSafetyTimeout,
+  resolveCompactionTimeoutMs,
+} from "./compaction-safety-timeout.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import { log } from "./logger.js";
 import {
@@ -314,6 +318,13 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
   config?: OpenClawConfig;
   purpose?: string;
   contextEnginePluginId?: string;
+  /**
+   * Aborts once the host has stopped waiting for this maintenance run (safety
+   * timeout or shutdown). A slow/non-cooperating engine that keeps running past
+   * that point must not rewrite the transcript, or a stale rewrite could land
+   * under the next same-session turn that the released wait already let start.
+   */
+  rewriteReleaseSignal?: AbortSignal;
 }): ContextEngineRuntimeContext {
   return {
     ...params.runtimeContext,
@@ -327,6 +338,16 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
     }),
     ...(params.allowDeferredCompactionExecution ? { allowDeferredCompactionExecution: true } : {}),
     rewriteTranscriptEntries: async (request) => {
+      if (params.rewriteReleaseSignal?.aborted) {
+        // Maintenance was already abandoned (timeout/shutdown); refuse the late
+        // rewrite so it cannot race the next turn's transcript.
+        return {
+          changed: false,
+          bytesFreed: 0,
+          rewrittenEntries: 0,
+          reason: "maintenance-released",
+        };
+      }
       if (params.sessionManager) {
         const sessionManager = params.sessionManager;
         const rewriteSessionManagerEntries = () =>
@@ -348,6 +369,7 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
           },
           request,
           config: params.config,
+          ...(params.rewriteReleaseSignal ? { abortSignal: params.rewriteReleaseSignal } : {}),
         });
       return await rewriteRuntimeTranscriptEntries();
     },
@@ -367,30 +389,48 @@ async function executeContextEngineMaintenance(params: {
   agentId?: string;
   executionMode: "foreground" | "background";
   config?: OpenClawConfig;
+  abortSignal?: AbortSignal;
 }): Promise<ContextEngineMaintenanceResult | undefined> {
-  if (typeof params.contextEngine.maintain !== "function") {
+  const engine = params.contextEngine;
+  if (typeof engine.maintain !== "function") {
     return undefined;
   }
-  const result = await params.contextEngine.maintain({
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    sessionFile: params.sessionFile,
-    runtimeSettings: params.runtimeSettings,
-    runtimeContext: buildContextEngineMaintenanceRuntimeContext({
+  // Aborts the moment the host stops waiting for maintenance (safety timeout or
+  // shutdown, via the wrapper's onCancel) so an abandoned engine cannot rewrite
+  // the transcript after the released wait let the next same-session turn start.
+  // On normal completion it stays unaborted; the engine is done and nothing more
+  // calls the rewrite helper.
+  const releaseController = new AbortController();
+  // Bound the plugin-owned maintain() with the same finite safety timeout that
+  // protects compact(): ContextEngine is a public SDK seam and this call gates
+  // the session's next turn, so a hung engine must surface a timeout (handled by
+  // callers) instead of freezing the session indefinitely.
+  const result = await maintainContextEngineWithSafetyTimeout(
+    { maintain: engine.maintain.bind(engine) },
+    {
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       sessionFile: params.sessionFile,
-      sessionManager: params.executionMode === "background" ? undefined : params.sessionManager,
-      withSessionManagerRewriteLock:
-        params.executionMode === "background" ? undefined : params.withSessionManagerRewriteLock,
-      runtimeContext: params.runtimeContext,
-      agentId: params.agentId,
-      allowDeferredCompactionExecution: params.executionMode === "background",
-      config: params.config,
-      purpose: `context-engine.${params.reason}.maintenance`,
-      contextEnginePluginId: resolveContextEngineOwnerPluginId(params.contextEngine),
-    }),
-  });
+      runtimeSettings: params.runtimeSettings,
+      runtimeContext: buildContextEngineMaintenanceRuntimeContext({
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        sessionFile: params.sessionFile,
+        sessionManager: params.executionMode === "background" ? undefined : params.sessionManager,
+        withSessionManagerRewriteLock:
+          params.executionMode === "background" ? undefined : params.withSessionManagerRewriteLock,
+        runtimeContext: params.runtimeContext,
+        agentId: params.agentId,
+        allowDeferredCompactionExecution: params.executionMode === "background",
+        config: params.config,
+        purpose: `context-engine.${params.reason}.maintenance`,
+        contextEnginePluginId: resolveContextEngineOwnerPluginId(engine),
+        rewriteReleaseSignal: releaseController.signal,
+      }),
+    },
+    resolveCompactionTimeoutMs(params.config),
+    { abortSignal: params.abortSignal, onCancel: () => releaseController.abort() },
+  );
   if (result.changed) {
     log.info(
       `[context-engine] maintenance(${params.reason}) changed transcript ` +
@@ -468,6 +508,7 @@ async function runDeferredTurnMaintenanceWorker(params: {
       agentId: params.agentId,
       config: params.config,
       executionMode: "background",
+      abortSignal: shutdownAbort.abortSignal,
     });
     if (longRunningTimer) {
       clearTimeout(longRunningTimer);

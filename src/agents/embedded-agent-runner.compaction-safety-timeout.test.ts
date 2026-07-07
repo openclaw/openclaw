@@ -1,9 +1,14 @@
 // Covers safety timeouts around embedded-agent compaction calls.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CompactResult, ContextEngine } from "../context-engine/types.js";
+import type {
+  CompactResult,
+  ContextEngine,
+  ContextEngineMaintenanceResult,
+} from "../context-engine/types.js";
 import {
   compactContextEngineWithSafetyTimeout,
   compactWithSafetyTimeout,
+  maintainContextEngineWithSafetyTimeout,
   resolveCompactionTimeoutMs,
 } from "./embedded-agent-runner/compaction-safety-timeout.js";
 
@@ -303,6 +308,91 @@ describe("compactContextEngineWithSafetyTimeout", () => {
     });
 
     await expect(compactContextEngineWithSafetyTimeout({ compact }, baseParams, 30)).rejects.toBe(
+      error,
+    );
+  });
+});
+
+describe("maintainContextEngineWithSafetyTimeout", () => {
+  type MaintainFn = NonNullable<ContextEngine["maintain"]>;
+  const baseParams: Parameters<MaintainFn>[0] = {
+    sessionId: "session-1",
+    sessionFile: "/tmp/session-1.jsonl",
+  };
+  const settledResult: ContextEngineMaintenanceResult = {
+    changed: false,
+    bytesFreed: 0,
+    rewrittenEntries: 0,
+  };
+
+  beforeEach(() => {
+    vi.useRealTimers();
+    vi.clearAllTimers();
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  it("bounds a hung plugin maintain() and rejects with a timeout error", async () => {
+    vi.useFakeTimers();
+    const maintain = vi.fn<MaintainFn>(() => new Promise<ContextEngineMaintenanceResult>(() => {}));
+
+    const pending = maintainContextEngineWithSafetyTimeout({ maintain }, baseParams, 30);
+    const assertion = expect(pending).rejects.toThrow("Maintenance timed out");
+
+    await vi.advanceTimersByTimeAsync(30);
+    await assertion;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("returns the plugin maintain() result when it settles in time", async () => {
+    const maintain = vi.fn<MaintainFn>(async () => settledResult);
+
+    await expect(
+      maintainContextEngineWithSafetyTimeout({ maintain }, baseParams, 30),
+    ).resolves.toBe(settledResult);
+  });
+
+  it("rejects promptly when the caller abort signal (e.g. shutdown) fires before the timeout", async () => {
+    // The wait is bounded by a caller abort (gateway shutdown) as well as the
+    // timeout, so the worker unblocks immediately instead of waiting the full
+    // budget. The signal is intentionally not forwarded into maintain()'s params.
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const reason = new Error("shutdown");
+    const maintain = vi.fn<MaintainFn>(
+      (params) => new Promise<ContextEngineMaintenanceResult>(() => void params),
+    );
+
+    const onCancel = vi.fn();
+    const pending = maintainContextEngineWithSafetyTimeout(
+      { maintain },
+      baseParams,
+      EMBEDDED_COMPACTION_TIMEOUT_MS,
+      { abortSignal: controller.signal, onCancel },
+    );
+    const assertion = expect(pending).rejects.toBe(reason);
+
+    expect(maintain).toHaveBeenCalledTimes(1);
+    // maintain() receives only its declared params, never an injected abortSignal.
+    expect(maintain.mock.calls[0]?.[0]).not.toHaveProperty("abortSignal");
+
+    controller.abort(reason);
+    await assertion;
+    // onCancel fires on release so the host can close the rewrite gate.
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("preserves a thrown plugin maintain() error", async () => {
+    const error = new Error("engine maintenance failed");
+    const maintain = vi.fn<MaintainFn>(async () => {
+      throw error;
+    });
+
+    await expect(maintainContextEngineWithSafetyTimeout({ maintain }, baseParams, 30)).rejects.toBe(
       error,
     );
   });

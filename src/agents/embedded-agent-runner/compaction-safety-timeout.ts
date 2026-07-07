@@ -3,7 +3,11 @@
  */
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { CompactResult, ContextEngine } from "../../context-engine/types.js";
+import type {
+  CompactResult,
+  ContextEngine,
+  ContextEngineMaintenanceResult,
+} from "../../context-engine/types.js";
 import { createAbortError, mergeAbortSignals } from "../../infra/abort-signal.js";
 import { withTimeout } from "../../node-host/with-timeout.js";
 
@@ -31,6 +35,8 @@ export async function compactWithSafetyTimeout<T>(
   opts?: {
     abortSignal?: AbortSignal;
     onCancel?: () => void;
+    /** Timeout-error label; the reject message is `${label} timed out`. */
+    label?: string;
   },
 ): Promise<T> {
   let canceled = false;
@@ -93,7 +99,7 @@ export async function compactWithSafetyTimeout<T>(
       }
     },
     timeoutMs,
-    "Compaction",
+    opts?.label ?? "Compaction",
   );
 }
 
@@ -134,4 +140,38 @@ export function compactContextEngineWithSafetyTimeout(
     timeoutMs,
     abortSignal ? { abortSignal } : undefined,
   );
+}
+
+/** Parameters for a single {@link ContextEngine.maintain} invocation. */
+type ContextEngineMaintainParams = Parameters<NonNullable<ContextEngine["maintain"]>>[0];
+
+/**
+ * Invoke a plugin-owned {@link ContextEngine.maintain} bounded by the same
+ * finite safety timeout that protects {@link ContextEngine.compact}.
+ *
+ * Deferred turn maintenance previously awaited `maintain()` with no timeout.
+ * Because `ContextEngine` is a public plugin SDK seam (`registerContextEngine`)
+ * and this call gates the session's next turn via
+ * `waitForDeferredTurnMaintenanceForSession`, a slow or hung plugin `maintain()`
+ * would freeze that session's future turns indefinitely. This wrapper bounds the
+ * call by `timeoutMs`; on timeout it rejects with a "Maintenance timed out" error
+ * so the caller's existing failure handling runs instead of hanging, and a
+ * caller `abortSignal` (e.g. gateway shutdown) rejects the wait promptly. Unlike
+ * `compact()`, the signal is not threaded into `maintain()`'s params: `maintain`
+ * has no `abortSignal` contract, and adding a host field would risk strict
+ * engines that reject unknown params. Bounding the wait is enough to release the
+ * session; a cooperating engine's in-flight work simply completes in the
+ * background.
+ */
+export function maintainContextEngineWithSafetyTimeout(
+  contextEngine: Pick<Required<ContextEngine>, "maintain">,
+  params: ContextEngineMaintainParams,
+  timeoutMs: number = EMBEDDED_COMPACTION_TIMEOUT_MS,
+  opts?: { abortSignal?: AbortSignal; onCancel?: () => void },
+): Promise<ContextEngineMaintenanceResult> {
+  return compactWithSafetyTimeout(() => contextEngine.maintain(params), timeoutMs, {
+    label: "Maintenance",
+    ...(opts?.abortSignal ? { abortSignal: opts.abortSignal } : {}),
+    ...(opts?.onCancel ? { onCancel: opts.onCancel } : {}),
+  });
 }

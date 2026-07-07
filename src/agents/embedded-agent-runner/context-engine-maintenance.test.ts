@@ -172,6 +172,33 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
     });
   });
 
+  it("refuses transcript rewrites once the release signal has aborted", async () => {
+    // A maintenance run abandoned by the safety timeout must not rewrite the
+    // transcript afterward, or a stale rewrite could race the next turn.
+    const controller = new AbortController();
+    controller.abort();
+    const runtimeContext = buildContextEngineMaintenanceRuntimeContext({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      rewriteReleaseSignal: controller.signal,
+    });
+
+    const result = await runtimeContext.rewriteTranscriptEntries?.({
+      replacements: [
+        { entryId: "entry-1", message: { role: "user", content: "hi", timestamp: 1 } },
+      ],
+    });
+
+    expect(result).toEqual({
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+      reason: "maintenance-released",
+    });
+    expect(rewriteTranscriptEntriesInRuntimeTranscriptMock).not.toHaveBeenCalled();
+  });
+
   it("reuses the active session manager when one is provided", async () => {
     const sessionManager = { appendMessage: vi.fn() } as unknown as Parameters<
       typeof buildContextEngineMaintenanceRuntimeContext
@@ -482,6 +509,7 @@ describe("runContextEngineMaintenance", () => {
         ],
       },
       config: { session: { writeLock: { acquireTimeoutMs: 75_000 } } },
+      abortSignal: expect.any(AbortSignal),
     });
   });
 
@@ -639,6 +667,7 @@ describe("runContextEngineMaintenance", () => {
               ],
             },
             config: { session: { writeLock: { acquireTimeoutMs: 91_000 } } },
+            abortSignal: expect.any(AbortSignal),
           }),
         );
 
@@ -1609,6 +1638,68 @@ describe("runContextEngineMaintenance", () => {
             "Background task failed: Context engine turn maintenance",
           ),
         );
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  it("bounds a hung plugin maintain() so it fails and unblocks the next turn", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-", async () => {
+      vi.useFakeTimers();
+      try {
+        resetCommandQueueStateForTest();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+        resetSystemEventsForTest();
+
+        const sessionKey = "agent:main:session-hang";
+        // A plugin maintain() that never settles on its own; only the host
+        // safety timeout can end it.
+        const maintain = vi.fn(
+          async () =>
+            await new Promise<{
+              changed: boolean;
+              bytesFreed: number;
+              rewrittenEntries: number;
+            }>(() => {}),
+        );
+        const backgroundEngine = {
+          info: {
+            id: "test",
+            name: "Test Engine",
+            turnMaintenanceMode: "background" as const,
+          },
+          ingest: async () => ({ ingested: true }),
+          assemble: async ({ messages }: { messages: unknown[] }) => ({
+            messages,
+            estimatedTokens: 0,
+          }),
+          compact: async () => ({ ok: true, compacted: false }),
+          maintain,
+        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+
+        await runContextEngineMaintenance({
+          contextEngine: backgroundEngine,
+          sessionId: "session-hang",
+          sessionKey,
+          sessionFile: "/tmp/session-hang.jsonl",
+          reason: "turn",
+        });
+        await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
+
+        // Without the safety timeout the worker (and any awaiter of the
+        // deferred run) would hang here forever. Advancing past the budget (the
+        // default EMBEDDED_COMPACTION_TIMEOUT_MS) must surface a failure and let
+        // the wait resolve.
+        await vi.advanceTimersByTimeAsync(180_000);
+        await waitForAssertion(() =>
+          expectSystemEventContaining(
+            sessionKey,
+            "Background task failed: Context engine turn maintenance",
+          ),
+        );
+        await expect(waitForDeferredTurnMaintenanceForSession(sessionKey)).resolves.toBeUndefined();
       } finally {
         vi.useRealTimers();
       }

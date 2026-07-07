@@ -415,4 +415,73 @@ describe("rewriteTranscriptEntriesInRuntimeTranscript", () => {
       cleanup();
     }
   });
+
+  it("abandons the rewrite before persisting when the release signal is aborted", async () => {
+    // A deferred maintenance rewrite that was already waiting on the write lock
+    // when the safety timeout fired must not commit its mutation afterward.
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-rewrite-runtime-"));
+    const storePath = path.join(dir, "sessions.json");
+    const sessionManager = SessionManager.create(dir, dir);
+    const entryIds = appendSessionMessages(sessionManager, [
+      asAppendMessage({ role: "user", content: "run tool", timestamp: 1 }),
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "exec",
+        content: createTextContent("before rewrite"),
+        isError: false,
+        timestamp: 2,
+      }),
+      asAppendMessage({
+        role: "assistant",
+        content: createTextContent("summarized"),
+        timestamp: 3,
+      }),
+    ]);
+    const sessionFile = requireString(sessionManager.getSessionFile(), "persisted session file");
+    const sessionId = path.basename(sessionFile, ".jsonl");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({ "agent:main:test": { sessionFile, sessionId, updatedAt: 10 } }),
+      "utf8",
+    );
+    const toolResultEntryId = entryIds[1];
+    const listener = vi.fn();
+    const cleanup = onSessionTranscriptUpdate(listener);
+    const controller = new AbortController();
+    controller.abort();
+
+    try {
+      const result = await rewriteTranscriptEntriesInRuntimeTranscript({
+        scope: { agentId: "main", sessionId, sessionKey: "agent:main:test", storePath },
+        request: {
+          replacements: [
+            {
+              entryId: toolResultEntryId,
+              message: createToolResultReplacement("exec", "[runtime rewrite]", 2),
+            },
+          ],
+        },
+        abortSignal: controller.signal,
+      });
+
+      expect(result).toEqual({
+        changed: false,
+        bytesFreed: 0,
+        rewrittenEntries: 0,
+        reason: "maintenance-released",
+      });
+      // The lock is acquired and released, but nothing is persisted or emitted.
+      expect(acquireSessionWriteLockMock).toHaveBeenCalled();
+      expect(acquireSessionWriteLockReleaseMock).toHaveBeenCalled();
+      expect(listener).not.toHaveBeenCalled();
+      const session = SessionManager.open(sessionFile);
+      const branchMessages = getBranchMessages(session);
+      expect((branchMessages[1] as Extract<AgentMessage, { role: "toolResult" }>).content).toEqual([
+        { type: "text", text: "before rewrite" },
+      ]);
+    } finally {
+      cleanup();
+    }
+  });
 });

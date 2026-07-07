@@ -437,6 +437,13 @@ export async function rewriteTranscriptEntriesInRuntimeTranscript(params: {
   scope: RuntimeTranscriptScope;
   request: TranscriptRewriteRequest;
   config?: SessionWriteLockAcquireTimeoutConfig;
+  /**
+   * Abandons the rewrite before it persists when aborted. Deferred maintenance
+   * passes its release signal so a rewrite that was already waiting on the write
+   * lock when the maintenance safety timeout fired cannot commit a stale mutation
+   * after the released wait let the next same-session turn start.
+   */
+  abortSignal?: AbortSignal;
 }): Promise<TranscriptRewriteResult> {
   let sessionLock: Awaited<ReturnType<typeof acquireSessionWriteLock>> | undefined;
   try {
@@ -446,6 +453,11 @@ export async function rewriteTranscriptEntriesInRuntimeTranscript(params: {
       ...resolveSessionWriteLockOptions(params.config),
     });
     const state = await readTranscriptFileState(target.sessionFile);
+    if (params.abortSignal?.aborted) {
+      // Released (timeout/shutdown) while waiting on the lock — abandon before
+      // persisting so a stale rewrite cannot land after the next turn started.
+      return { changed: false, bytesFreed: 0, rewrittenEntries: 0, reason: "maintenance-released" };
+    }
     const result = rewriteTranscriptEntriesInState({
       state,
       replacements: params.request.replacements,
