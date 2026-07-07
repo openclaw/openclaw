@@ -181,8 +181,10 @@ and troubleshooting see the main [FAQ](/help/faq).
 
   <Accordion title="It is stuck on wake up my friend / onboarding will not hatch. What now?">
     That screen depends on the Gateway being reachable and authenticated. The TUI also sends
-    "Wake up, my friend!" automatically on first hatch. If you see that line with **no reply**
-    and tokens stay at 0, the agent never ran.
+    "Wake up, my friend!" automatically on first hatch when a model provider is configured. If
+    you skipped model/auth setup, onboarding shows a "Model auth missing" note and opens the
+    TUI without sending anything — add a provider with `openclaw configure --section model`.
+    If you see the wake-up line with **no reply** and tokens stay at 0, the agent never ran.
 
     1. Restart the Gateway:
 

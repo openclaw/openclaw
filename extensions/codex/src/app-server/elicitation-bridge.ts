@@ -13,6 +13,7 @@ import {
   waitForPluginApprovalDecision,
 } from "./plugin-approval-roundtrip.js";
 import type {
+  CodexAppPolicyContextEntry,
   PluginAppPolicyContext,
   PluginAppPolicyContextEntry,
 } from "./plugin-thread-config.js";
@@ -35,7 +36,7 @@ type BridgeableApprovalElicitation = {
 
 type PluginElicitationResolution =
   | { kind: "not_plugin" }
-  | { kind: "matched"; entry: PluginAppPolicyContextEntry }
+  | { kind: "matched"; entry: CodexAppPolicyContextEntry }
   | { kind: "decline"; reason: string };
 
 const MCP_TOOL_APPROVAL_KIND = "mcp_tool_call";
@@ -167,6 +168,7 @@ function resolvePluginElicitation(params: {
   const meta = isJsonObject(requestParams["_meta"]) ? requestParams["_meta"] : {};
   const context = params.pluginAppPolicyContext;
   const entries = context ? Object.values(context.apps) : [];
+  const pluginEntries = entries.filter(isPluginAppPolicyContextEntry);
 
   const appId =
     readFirstString(meta, PLUGIN_APP_ID_META_KEYS) ??
@@ -181,6 +183,9 @@ function resolvePluginElicitation(params: {
       return { kind: "decline", reason: "missing_policy_context" };
     }
     const entry = context.apps[appId];
+    if (entry?.source === "account" && !isCodexConnectorApproval) {
+      return { kind: "decline", reason: "account_app_source_mismatch" };
+    }
     return uniquePluginMatch(entry ? [entry] : [], "app_id");
   }
   if (isCodexConnectorApproval && connectorId) {
@@ -202,7 +207,7 @@ function resolvePluginElicitation(params: {
   const metadataResolution = resolvePluginStableMetadataMatch({
     meta,
     requestParams,
-    entries,
+    entries: pluginEntries,
     context,
   });
   if (metadataResolution.kind !== "not_plugin") {
@@ -261,7 +266,7 @@ function resolvePluginStableMetadataMatch(params: {
 }
 
 function uniquePluginMatch(
-  matches: PluginAppPolicyContextEntry[],
+  matches: CodexAppPolicyContextEntry[],
   source: string,
 ): PluginElicitationResolution {
   if (matches.length === 1 && matches[0]) {
@@ -275,7 +280,7 @@ function uniquePluginMatch(
 
 function hasDisplayNameOnlyPluginMatch(
   meta: JsonObject,
-  entries: PluginAppPolicyContextEntry[],
+  entries: CodexAppPolicyContextEntry[],
 ): boolean {
   const connectorName = readString(meta, MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY);
   if (!connectorName) {
@@ -284,9 +289,20 @@ function hasDisplayNameOnlyPluginMatch(
   const normalized = normalizePluginIdentityText(connectorName);
   return entries.some(
     (entry) =>
-      normalizePluginIdentityText(entry.pluginName) === normalized ||
-      normalizePluginIdentityText(entry.configKey) === normalized,
+      normalizePluginIdentityText(appPolicyDisplayName(entry)) === normalized ||
+      (isPluginAppPolicyContextEntry(entry) &&
+        normalizePluginIdentityText(entry.configKey) === normalized),
   );
+}
+
+function isPluginAppPolicyContextEntry(
+  entry: CodexAppPolicyContextEntry,
+): entry is PluginAppPolicyContextEntry {
+  return entry.source !== "account";
+}
+
+function appPolicyDisplayName(entry: CodexAppPolicyContextEntry): string {
+  return isPluginAppPolicyContextEntry(entry) ? entry.pluginName : entry.appName;
 }
 
 function normalizePluginIdentityText(value: string): string {
@@ -294,7 +310,7 @@ function normalizePluginIdentityText(value: string): string {
 }
 
 async function buildPluginPolicyElicitationResponse(params: {
-  entry: PluginAppPolicyContextEntry;
+  entry: CodexAppPolicyContextEntry;
   requestParams: JsonObject;
   paramsForRun: EmbeddedRunAttemptParams;
   signal?: AbortSignal;
@@ -331,7 +347,7 @@ async function buildPluginPolicyElicitationResponse(params: {
 }
 
 function resolvePluginDestructiveApprovalMode(
-  entry: PluginAppPolicyContextEntry,
+  entry: CodexAppPolicyContextEntry,
 ): "allow" | "deny" | "auto" | "ask" {
   return entry.destructiveApprovalMode ?? (entry.allowDestructiveActions ? "allow" : "deny");
 }
@@ -355,7 +371,7 @@ function oneShotPluginPolicyApprovalOutcome(
 }
 
 function readPluginApprovalElicitation(
-  entry: PluginAppPolicyContextEntry,
+  entry: CodexAppPolicyContextEntry,
   requestParams: JsonObject,
 ): BridgeableApprovalElicitation | undefined {
   if (
@@ -377,7 +393,7 @@ function readPluginApprovalElicitation(
     sanitizeDisplayText(readString(requestParams, "message") ?? "") || "Codex plugin approval";
   const descriptionMeta: JsonObject = { ...meta };
   if (!readString(descriptionMeta, MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY)) {
-    descriptionMeta[MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY] = entry.pluginName;
+    descriptionMeta[MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY] = appPolicyDisplayName(entry);
   }
   return {
     title,

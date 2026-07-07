@@ -29,6 +29,7 @@ import {
   type ChatAttachment,
   DEFAULT_CHAT_ATTACHMENT_MAX_MB,
   parseMessageWithAttachments,
+  persistInboundImagesForTranscript,
   resolveChatAttachmentMaxBytes,
   UnsupportedAttachmentError,
 } from "./chat-attachments.js";
@@ -132,6 +133,48 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe("persistInboundImagesForTranscript", () => {
+  it("preserves mixed image order and appends non-image offloads", async () => {
+    saveMediaBufferMock.mockResolvedValueOnce({
+      id: "inline",
+      path: "/media/inbound/inline.jpg",
+      size: 5,
+      contentType: "image/jpeg",
+    });
+
+    const saved = await persistInboundImagesForTranscript({
+      images: [{ type: "image", data: "aGVsbG8=", mimeType: "image/jpeg" }],
+      imageOrder: ["offloaded", "inline"],
+      offloadedRefs: [
+        {
+          mediaRef: "media://inbound/offloaded",
+          id: "offloaded",
+          path: "/media/inbound/offloaded.png",
+          mimeType: "image/png",
+          label: "offloaded.png",
+          sizeBytes: 2_100_000,
+        },
+        {
+          mediaRef: "media://inbound/report",
+          id: "report",
+          path: "/media/inbound/report.pdf",
+          mimeType: "application/pdf",
+          label: "report.pdf",
+          sizeBytes: 100,
+        },
+      ],
+      log: { warn: vi.fn() },
+      logContext: "test",
+    });
+
+    expect(saved.map((entry) => entry.path)).toEqual([
+      "/media/inbound/offloaded.png",
+      "/media/inbound/inline.jpg",
+      "/media/inbound/report.pdf",
+    ]);
+  });
 });
 
 describe("parseMessageWithAttachments", () => {

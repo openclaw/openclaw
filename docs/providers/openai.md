@@ -25,6 +25,19 @@ compatibility route for agent turns.
 OpenAI explicitly supports subscription OAuth usage in external tools and
 workflows like OpenClaw.
 
+## Usage and cost tracking
+
+OpenClaw keeps subscription quota and Platform API billing distinct:
+
+- ChatGPT/Codex OAuth shows the subscription plan, quota windows, and credit balance.
+- `OPENAI_ADMIN_KEY` shows 30 days of provider-reported organization cost and completions usage in Control UI **Usage**, including daily spend, request/token totals, top models, and cost categories.
+- `OPENAI_PROJECT_ID` optionally scopes Admin API history to one project.
+- OpenClaw never sends `OPENAI_API_KEY` or an `openai` inference profile to organization APIs; those credentials may belong to custom, Azure, or agent-local endpoints.
+
+An explicit Admin key takes precedence over OAuth. Provider-reported history is not merged with OpenClaw's session-derived estimated cost; it can include API activity from other clients and provider-side billing adjustments.
+
+OpenAI's [API Usage Dashboard](https://help.openai.com/en/articles/10478918) documentation describes the organization-owner and explicit Usage Dashboard permission requirements for usage data.
+
 Provider, model, runtime, and channel are separate layers. If those labels are
 getting mixed together, read [Agent runtimes](/concepts/agent-runtimes) before
 changing config.
@@ -770,7 +783,7 @@ compatibility fallback when the shared
 
     | Setting                               | Config path                                                              | Default             |
     | --------------------------------------- | ---------------------------------------------------------------------------- | ---------------------- |
-    | Model                                  | `plugins.entries.voice-call.config.realtime.providers.openai.model`     | `gpt-realtime-2`    |
+    | Model                                  | `plugins.entries.voice-call.config.realtime.providers.openai.model`     | `gpt-realtime-2.1`  |
     | Voice                                  | `...openai.voice`                                                       | `alloy`             |
     | Temperature (Azure deployment bridge)  | `...openai.temperature`                                                 | `0.8`               |
     | VAD threshold                          | `...openai.vadThreshold`                                                | `0.5`                |
@@ -779,11 +792,13 @@ compatibility fallback when the shared
     | Reasoning effort                       | `...openai.reasoningEffort`                                             | (unset)              |
     | Auth                                   | `openai` API-key/OAuth profile, external Codex login, `...openai.apiKey`, or `OPENAI_API_KEY` | API-key sources first; Codex OAuth fallback |
 
-    Available built-in Realtime voices for `gpt-realtime-2`: `alloy`, `ash`,
+    Available built-in Realtime voices for `gpt-realtime-2.1`: `alloy`, `ash`,
     `ballad`, `coral`, `echo`, `sage`, `shimmer`, `verse`, `marin`, `cedar`.
     OpenAI recommends `marin` and `cedar` for the best Realtime quality. This
     is a separate set from the Text-to-speech voices above; a TTS-only voice
     such as `fable`, `nova`, or `onyx` is not valid for Realtime sessions.
+    Set the model explicitly to `gpt-realtime-2.1-mini` when you prefer the
+    smaller, lower-cost Realtime 2.1 variant.
 
     <Note>
     Backend OpenAI realtime bridges use the GA Realtime WebSocket session
@@ -812,6 +827,7 @@ compatibility fallback when the shared
     `OPENAI_API_KEY=... GEMINI_API_KEY=... node --import tsx scripts/dev/realtime-talk-live-smoke.ts`;
     the OpenAI legs verify both the backend WebSocket bridge and the browser
     WebRTC SDP exchange without logging secrets.
+    Pass `--openai-only` to run those two legs without Google credentials.
     </Note>
 
   </Accordion>

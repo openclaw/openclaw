@@ -48,7 +48,7 @@ type ServiceOptions = {
   now?: () => number;
 };
 
-export type ManagedWorktreeGcParams = {
+type ManagedWorktreeGcParams = {
   isOwnerActive?: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean;
 };
 

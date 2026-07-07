@@ -167,6 +167,31 @@ describe("Bedrock profile endpoint resolution", () => {
 });
 
 describe("Bedrock thinking effort mapping", () => {
+  it.each([
+    { reasoning: undefined, expected: "high" },
+    { reasoning: "off" as const, expected: "low" },
+  ])("keeps Sonnet 5 adaptive for reasoning=$reasoning", ({ reasoning, expected }) => {
+    const model = bedrockModel({
+      id: "us.anthropic.claude-sonnet-5",
+      name: "Claude Sonnet 5",
+      reasoning: true,
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
+    });
+    const options = testing.resolveSimpleBedrockOptions(model, { reasoning });
+
+    expect(options).toMatchObject({ maxTokens: 128_000, reasoning: expected });
+    expect(testing.buildAdditionalModelRequestFields(model, options)).toEqual({
+      thinking: { type: "adaptive", display: "summarized" },
+      output_config: { effort: expected },
+    });
+    expect(testing.buildAdditionalModelRequestFields(model, { reasoning })).toEqual({
+      thinking: { type: "adaptive", display: "summarized" },
+      output_config: { effort: expected },
+    });
+  });
+
   it("does not force adaptive thinking for optional Claude models when callers omit reasoning", () => {
     const model = bedrockModel({
       id: "anthropic.claude-sonnet-4-6-v1:0",
@@ -178,6 +203,24 @@ describe("Bedrock thinking effort mapping", () => {
     expect(options.reasoning).toBeUndefined();
     expect(testing.buildAdditionalModelRequestFields(model, options)).toBeUndefined();
   });
+
+  it.each([
+    { reasoning: "minimal" as const, maxTokens: 1024 },
+    { reasoning: "low" as const, maxTokens: 1500 },
+  ])(
+    "disables legacy thinking when $reasoning exceeds the $maxTokens token cap",
+    ({ reasoning, maxTokens }) => {
+      const model = bedrockModel({
+        id: "anthropic.claude-haiku-4-5-v1:0",
+        name: "Claude Haiku 4.5",
+        maxTokens,
+      });
+      const options = testing.resolveSimpleBedrockOptions(model, { reasoning });
+
+      expect(options).toMatchObject({ maxTokens, reasoning: "off" });
+      expect(testing.buildAdditionalModelRequestFields(model, options)).toBeUndefined();
+    },
+  );
 
   it("uses the model maxTokens cap for adaptive Claude thinking requests", () => {
     const model = bedrockModel({
@@ -229,23 +272,47 @@ describe("Bedrock thinking effort mapping", () => {
     expect(options.maxTokens).toBe(32_000);
   });
 
-  it("forces adaptive thinking for Bedrock Mythos Preview when callers omit reasoning", () => {
-    const model = bedrockModel({
-      id: "us.anthropic.claude-mythos-preview",
-      name: "US Claude Mythos Preview",
-      reasoning: true,
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
-    });
-    const options = testing.resolveSimpleBedrockOptions(model, {});
+  it.each(["claude-mythos-preview", "claude-mythos-5"])(
+    "forces adaptive thinking for Bedrock %s when callers omit reasoning",
+    (modelId) => {
+      const model = bedrockModel({
+        id: `us.anthropic.${modelId}`,
+        name: modelId,
+        reasoning: true,
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+      });
+      const options = testing.resolveSimpleBedrockOptions(model, {});
 
-    expect(options.reasoning).toBe("high");
-    expect(options.maxTokens).toBe(128_000);
-    expect(testing.buildAdditionalModelRequestFields(model, options)).toEqual({
-      thinking: { type: "adaptive", display: "summarized" },
-      output_config: { effort: "high" },
-    });
-  });
+      expect(options.reasoning).toBe("high");
+      expect(options.maxTokens).toBe(128_000);
+      expect(testing.buildAdditionalModelRequestFields(model, options)).toEqual({
+        thinking: { type: "adaptive", display: "summarized" },
+        output_config: { effort: "high" },
+      });
+    },
+  );
+
+  it.each(["claude-mythos-preview", "claude-mythos-5"])(
+    "maps explicit off to low effort for Bedrock %s",
+    (modelId) => {
+      const model = bedrockModel({
+        id: `us.anthropic.${modelId}`,
+        name: modelId,
+        reasoning: true,
+        contextWindow: 1_000_000,
+        maxTokens: 128_000,
+      });
+      const options = testing.resolveSimpleBedrockOptions(model, { reasoning: "off" });
+
+      expect(options.reasoning).toBe("low");
+      expect(options.maxTokens).toBe(128_000);
+      expect(testing.buildAdditionalModelRequestFields(model, options)).toEqual({
+        thinking: { type: "adaptive", display: "summarized" },
+        output_config: { effort: "low" },
+      });
+    },
+  );
 
   it("clamps max effort for Claude models without native max support", () => {
     expect(
@@ -277,6 +344,18 @@ describe("Bedrock thinking effort mapping", () => {
         bedrockModel({
           id: "anthropic.claude-opus-4.8-v1:0",
           name: "Claude Opus 4.8",
+        }),
+        "max",
+      ),
+    ).toBe("max");
+  });
+
+  it("preserves max effort for Claude Mythos 5", () => {
+    expect(
+      testing.mapThinkingLevelToEffort(
+        bedrockModel({
+          id: "anthropic.claude-mythos-5",
+          name: "Claude Mythos 5",
         }),
         "max",
       ),
@@ -397,7 +476,20 @@ describe("Bedrock Fable contract", () => {
     expect(command.input?.toolConfig).toBeUndefined();
   });
 
-  it("quarantines partial output when Fable returns a terminal refusal", async () => {
+  it.each([
+    ["Fable", () => fableModel()],
+    [
+      "Mythos 5",
+      () =>
+        bedrockModel({
+          id: "production-mythos",
+          name: "Production deployment",
+          params: { canonicalModelId: "claude-mythos-5" },
+          contextWindow: 1_000_000,
+          maxTokens: 128_000,
+        }),
+    ],
+  ])("quarantines partial output when %s returns a terminal refusal", async (_name, model) => {
     vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
       $metadata: { httpStatusCode: 200 },
       stream: streamEvents([
@@ -421,7 +513,7 @@ describe("Bedrock Fable contract", () => {
       ]),
     } as never);
 
-    const stream = streamSimpleBedrock(fableModel(), context());
+    const stream = streamSimpleBedrock(model(), context());
     const eventTypes: string[] = [];
     for await (const event of stream) {
       eventTypes.push(event.type);

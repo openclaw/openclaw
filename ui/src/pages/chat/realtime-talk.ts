@@ -34,6 +34,10 @@ export type RealtimeTalkLaunchOptions = {
   reasoningEffort?: string;
 };
 
+type RealtimeTalkLocalOptions = {
+  inputDeviceId?: string;
+};
+
 type RealtimeTalkLaunchTransport = NonNullable<RealtimeTalkLaunchOptions["transport"]>;
 
 type RealtimeTalkConfigResult = {
@@ -108,6 +112,7 @@ export class RealtimeTalkSession {
     private readonly sessionKey: string,
     private readonly callbacks: RealtimeTalkCallbacks = {},
     private readonly options: RealtimeTalkLaunchOptions = {},
+    private readonly localOptions: RealtimeTalkLocalOptions = {},
   ) {}
 
   async start(): Promise<void> {
@@ -121,6 +126,7 @@ export class RealtimeTalkSession {
       client: this.client,
       sessionKey: this.sessionKey,
       callbacks: this.callbacks,
+      inputDeviceId: this.localOptions.inputDeviceId,
       consultThinkingLevel: session.consultThinkingLevel,
       consultFastMode: session.consultFastMode,
     });

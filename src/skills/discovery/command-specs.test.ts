@@ -61,6 +61,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     });
 
     expect(specs[0]?.description).toBe(entry.skill.description);
+    expect(specs[0]?.skillFile).toBe(entry.skill.filePath);
   });
 
   it("preserves bundle command descriptions for provider-specific limits", () => {

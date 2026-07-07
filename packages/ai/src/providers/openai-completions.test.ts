@@ -12,8 +12,12 @@ type OpenAICompatibleDelta = DeepPartial<ChatCompletionChunk["choices"][number][
 type OpenAICompatibleChoice = Omit<DeepPartial<ChatCompletionChunk["choices"][number]>, "delta"> & {
   delta?: OpenAICompatibleDelta;
 };
-type OpenAICompatibleChatCompletionChunk = Omit<DeepPartial<ChatCompletionChunk>, "choices"> & {
+type OpenAICompatibleChatCompletionChunk = Omit<
+  DeepPartial<ChatCompletionChunk>,
+  "choices" | "usage"
+> & {
   choices?: OpenAICompatibleChoice[];
+  usage?: DeepPartial<ChatCompletionChunk["usage"]> & { cost?: unknown };
 };
 type FirstEventSimpleStreamOptions = SimpleStreamOptions & {
   firstEventTimeoutMs?: number;
@@ -24,8 +28,9 @@ const mockChunksRef: {
   chunks: OpenAICompatibleChatCompletionChunk[];
   stream?: AsyncIterable<OpenAICompatibleChatCompletionChunk>;
 } = { chunks: [] };
-const mockOpenAIOptionsRef: { options: unknown[]; requests: unknown[] } = {
+const mockOpenAIOptionsRef: { options: unknown[]; payloads: unknown[]; requests: unknown[] } = {
   options: [],
+  payloads: [],
   requests: [],
 };
 
@@ -37,7 +42,8 @@ vi.mock("openai", () => {
 
     chat = {
       completions: {
-        create: (_params: unknown, requestOptions: unknown) => {
+        create: (params: unknown, requestOptions: unknown) => {
+          mockOpenAIOptionsRef.payloads.push(params);
           mockOpenAIOptionsRef.requests.push(requestOptions);
           return {
             withResponse: async () => {
@@ -70,6 +76,7 @@ import { streamOpenAICompletions, streamSimpleOpenAICompletions } from "./openai
 beforeEach(() => {
   mockChunksRef.chunks = [];
   mockChunksRef.stream = undefined;
+  mockOpenAIOptionsRef.payloads = [];
   mockOpenAIOptionsRef.requests = [];
 });
 
@@ -139,7 +146,12 @@ function makeToolCallChunk(
 
 function makeFinishChunk(
   finishReason: string,
-  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number },
+  usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+    cost?: unknown;
+  },
 ): OpenAICompatibleChatCompletionChunk {
   return {
     id: "chatcmpl-test",
@@ -161,6 +173,30 @@ function createNeverYieldingStream(): AsyncIterable<OpenAICompatibleChatCompleti
 }
 
 describe("OpenAI-compatible completions params", () => {
+  it("omits reasoning_effort when deepseek-format compatibility disables it", async () => {
+    mockChunksRef.chunks = [makeTextChunk("ok"), makeFinishChunk("stop")];
+    const compatibleModel = {
+      ...reasoningModel,
+      provider: "longcat",
+      baseUrl: "https://api.longcat.chat/openai",
+      compat: {
+        thinkingFormat: "deepseek" as const,
+        supportsReasoningEffort: false,
+      },
+    } satisfies Model<"openai-completions">;
+
+    const stream = streamOpenAICompletions(compatibleModel, context, {
+      apiKey: "sk-test",
+      reasoningEffort: "high",
+    });
+    await stream.result();
+
+    expect(mockOpenAIOptionsRef.payloads[0]).toMatchObject({
+      thinking: { type: "enabled" },
+    });
+    expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("reasoning_effort");
+  });
+
   it("configures the OpenAI SDK client with the host-built model fetch", async () => {
     mockOpenAIOptionsRef.options = [];
     mockChunksRef.chunks = [makeTextChunk("ok"), makeFinishChunk("stop")];
@@ -183,6 +219,52 @@ describe("OpenAI-compatible completions params", () => {
     } finally {
       configureAiTransportHost({});
     }
+  });
+
+  it("preserves a valid provider-reported usage cost", async () => {
+    mockChunksRef.chunks = [
+      makeTextChunk("ok"),
+      makeFinishChunk("stop", {
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        total_tokens: 15,
+        cost: 0,
+      }),
+    ];
+    const pricedModel = {
+      ...model,
+      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+    } satisfies Model<"openai-completions">;
+
+    const result = await streamOpenAICompletions(pricedModel, context, {
+      apiKey: "sk-test",
+    }).result();
+
+    expect(result.usage.cost.total).toBe(0);
+    expect(result.usage.cost.totalOrigin).toBe("provider-billed");
+  });
+
+  it("keeps the catalog estimate for an invalid provider-reported usage cost", async () => {
+    mockChunksRef.chunks = [
+      makeTextChunk("ok"),
+      makeFinishChunk("stop", {
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        total_tokens: 15,
+        cost: -1,
+      }),
+    ];
+    const pricedModel = {
+      ...model,
+      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+    } satisfies Model<"openai-completions">;
+
+    const result = await streamOpenAICompletions(pricedModel, context, {
+      apiKey: "sk-test",
+    }).result();
+
+    expect(result.usage.cost.total).toBeCloseTo(0.00002);
+    expect(result.usage.cost.totalOrigin).toBeUndefined();
   });
 
   it("fails when streaming headers arrive but no first SSE event follows", async () => {
@@ -689,6 +771,49 @@ describe("OpenAI-compatible completions params", () => {
         },
       ],
     });
+  });
+
+  it("anchors the OpenRouter Anthropic cache marker on the last stable user turn, skipping a trailing runtime-context carrier", async () => {
+    let capturedMessages: unknown;
+    const stream = streamOpenAICompletions(
+      {
+        ...createModel(32_000),
+        id: "anthropic/claude-sonnet-4.6",
+        provider: "openrouter",
+        baseUrl: "https://openrouter.ai/api/v1",
+      },
+      {
+        systemPrompt: "system",
+        messages: [
+          { role: "user", content: "stable question", timestamp: 1 },
+          {
+            role: "user",
+            content: "volatile current-turn metadata",
+            timestamp: 2,
+            runtimeContextCarrier: true,
+          },
+        ],
+      },
+      {
+        apiKey: "sk-test",
+        onPayload(payload) {
+          capturedMessages = (payload as { messages?: unknown }).messages;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    const messages = capturedMessages as Array<{ role: string; content: unknown }>;
+    const stableMsg = messages.find((m) => JSON.stringify(m.content).includes("stable question"));
+    const carrierMsg = messages.find((m) =>
+      JSON.stringify(m.content).includes("volatile current-turn metadata"),
+    );
+    // The stable user turn carries the cache breakpoint; the trailing carrier does not.
+    expect(JSON.stringify(stableMsg)).toContain("cache_control");
+    expect(JSON.stringify(carrierMsg)).not.toContain("cache_control");
   });
 
   it("adds reasoning_content replay fields for Xiaomi MiMo assistant tool history", async () => {

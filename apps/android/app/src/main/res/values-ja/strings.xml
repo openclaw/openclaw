@@ -6,6 +6,7 @@
     <string name="trust_this_gateway">このゲートウェイを信頼しますか？</string>
     <string name="trust_and_continue">信頼して続行</string>
     <string name="cancel">キャンセル</string>
+    <string name="new_chat_in_worktree">worktree で新規チャット</string>
     <string name="endpoint">エンドポイント</string>
     <string name="status">ステータス</string>
     <string name="connected_gateway_ready">ゲートウェイはアクティブで準備完了です。</string>
@@ -20,8 +21,17 @@
     <string name="use_tls">TLS を使用</string>
     <string name="token_optional">トークン（任意）</string>
     <string name="password">パスワード</string>
+    <string name="custom_headers_optional">カスタムヘッダー（任意）</string>
+    <string name="custom_headers_explainer">このゲートウェイへのすべての接続で送信されます。たとえば、Cloudflare Access サービス トークン ヘッダーなどです。暗号化して保存され、次回の再接続時に適用されます。</string>
+    <string name="custom_header_value">ヘッダー値</string>
+    <string name="custom_header_reserved">このヘッダーは接続によって管理されており、上書きできません。</string>
+    <string name="add_custom_header">ヘッダーを追加</string>
+    <string name="remove_custom_header">%1$s を削除</string>
     <string name="run_onboarding_again">オンボーディングを再実行</string>
     <string name="resolved_endpoint">解決済みエンドポイント</string>
     <string name="gateway_trust_first_seen">このゲートウェイを信頼する前に、証明書のフィンガープリントを確認してください。\n\n%1$s</string>
     <string name="gateway_trust_changed">ゲートウェイの証明書が変更されました。想定した変更である場合のみ続行してください。\n\n以前の SHA-256:\n%1$s\n\n新しい SHA-256:\n%2$s</string>
+    <string name="switch_gateway">Gatewayを切り替え</string>
+    <string name="select_gateway">Gatewayを選択</string>
+    <string name="active_gateway">アクティブなGateway</string>
 </resources>

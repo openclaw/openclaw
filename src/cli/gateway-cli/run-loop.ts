@@ -179,7 +179,6 @@ export async function runGatewayLoop(params: {
   };
   const reacquireLockForInProcessRestart = async (): Promise<boolean> => {
     try {
-      startupStartedAt = Date.now();
       lock = await acquireGatewayLock({ port: params.lockPort });
       return true;
     } catch (err) {

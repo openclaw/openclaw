@@ -1,6 +1,7 @@
 // Agent job tracking caches terminal run snapshots so `agent.wait` can observe
 // recent run outcomes even after the live event stream has moved on.
 import {
+  AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
   buildAgentRunTerminalOutcome,
   mergeAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
@@ -11,20 +12,6 @@ import type { AgentWaitTerminalSnapshot } from "./agent-wait-dedupe.js";
 
 const AGENT_RUN_CACHE_TTL_MS = 10 * 60_000;
 const AGENT_RUN_CACHE_MAX_ENTRIES = 5_000;
-/**
- * Embedded runs can emit transient lifecycle `error` events while auth/model
- * failover is still in progress. Give errors a short grace window so a
- * subsequent `start` event can cancel premature terminal snapshots.
- */
-const AGENT_RUN_ERROR_RETRY_GRACE_MS = 15_000;
-/**
- * Some embedded runtimes emit an intermediate lifecycle `end` with
- * `aborted=true` immediately before retrying the same run. Hold timeout
- * snapshots briefly so `agent.wait` does not resolve to a stale timeout when a
- * final success is about to arrive.
- */
-const AGENT_RUN_TIMEOUT_RETRY_GRACE_MS = 15_000;
-
 const agentRunCache = new Map<string, AgentRunSnapshot>();
 const agentRunStarts = new Map<string, number>();
 const pendingAgentRunErrors = new Map<string, PendingAgentRunTerminal>();
@@ -140,7 +127,7 @@ function schedulePendingAgentRunError(snapshot: AgentRunSnapshot) {
   }
   clearPendingAgentRunTimeout(snapshot.runId);
   clearPendingAgentRunError(snapshot.runId);
-  const dueAt = Date.now() + AGENT_RUN_ERROR_RETRY_GRACE_MS;
+  const dueAt = Date.now() + AGENT_RUN_TERMINAL_RETRY_GRACE_MS;
   const timer = setTimeout(() => {
     const pending = pendingAgentRunErrors.get(snapshot.runId);
     if (!pending) {
@@ -148,7 +135,7 @@ function schedulePendingAgentRunError(snapshot: AgentRunSnapshot) {
     }
     pendingAgentRunErrors.delete(snapshot.runId);
     recordAgentRunSnapshot(pending.snapshot);
-  }, AGENT_RUN_ERROR_RETRY_GRACE_MS);
+  }, AGENT_RUN_TERMINAL_RETRY_GRACE_MS);
   timer.unref?.();
   pendingAgentRunErrors.set(snapshot.runId, { snapshot, dueAt, timer });
 }
@@ -162,7 +149,7 @@ function schedulePendingAgentRunTimeout(snapshot: AgentRunSnapshot) {
   }
   clearPendingAgentRunError(snapshot.runId);
   clearPendingAgentRunTimeout(snapshot.runId);
-  const dueAt = Date.now() + AGENT_RUN_TIMEOUT_RETRY_GRACE_MS;
+  const dueAt = Date.now() + AGENT_RUN_TERMINAL_RETRY_GRACE_MS;
   const timer = setTimeout(() => {
     const pending = pendingAgentRunTimeouts.get(snapshot.runId);
     if (!pending) {
@@ -170,7 +157,7 @@ function schedulePendingAgentRunTimeout(snapshot: AgentRunSnapshot) {
     }
     pendingAgentRunTimeouts.delete(snapshot.runId);
     recordAgentRunSnapshot(pending.snapshot);
-  }, AGENT_RUN_TIMEOUT_RETRY_GRACE_MS);
+  }, AGENT_RUN_TERMINAL_RETRY_GRACE_MS);
   timer.unref?.();
   pendingAgentRunTimeouts.set(snapshot.runId, { snapshot, dueAt, timer });
 }
@@ -344,6 +331,7 @@ export async function waitForAgentJob(params: {
   return await new Promise((resolve) => {
     let settled = false;
     let pendingErrorTimer: NodeJS.Timeout | undefined;
+    let pendingErrorSnapshot: AgentRunSnapshot | undefined;
     let pendingTimeoutTimer: NodeJS.Timeout | undefined;
     let pendingTimeoutSnapshot: AgentRunSnapshot | undefined;
     let removeWaiter = () => {};
@@ -354,6 +342,7 @@ export async function waitForAgentJob(params: {
       }
       clearTimeout(pendingErrorTimer);
       pendingErrorTimer = undefined;
+      pendingErrorSnapshot = undefined;
     };
 
     const clearPendingTimeoutTimer = () => {
@@ -408,6 +397,7 @@ export async function waitForAgentJob(params: {
       timerRef.unref?.();
       if (kind === "error") {
         pendingErrorTimer = timerRef;
+        pendingErrorSnapshot = snapshot;
       } else {
         pendingTimeoutTimer = timerRef;
         pendingTimeoutSnapshot = snapshot;
@@ -416,14 +406,14 @@ export async function waitForAgentJob(params: {
 
     const scheduleErrorFinish = (
       snapshot: AgentRunSnapshot,
-      delayMs = AGENT_RUN_ERROR_RETRY_GRACE_MS,
+      delayMs = AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
     ) => {
       scheduleTerminalFinish("error", snapshot, delayMs);
     };
 
     const scheduleTimeoutFinish = (
       snapshot: AgentRunSnapshot,
-      delayMs = AGENT_RUN_TIMEOUT_RETRY_GRACE_MS,
+      delayMs = AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
     ) => {
       scheduleTerminalFinish("timeout", snapshot, delayMs);
     };
@@ -491,8 +481,30 @@ export async function waitForAgentJob(params: {
     removeWaiter = addAgentRunWaiter(runId);
 
     const timer = setSafeTimeout(() => {
-      const pendingError = getPendingAgentRunError(runId);
-      finish(pendingError ? createPendingErrorTimeoutSnapshot(pendingError.snapshot) : null);
+      // Fresh waits can only consume terminal state observed by this waiter;
+      // the shared maps may still hold a previous attempt inside retry grace.
+      const pendingErrorCandidate = ignoreCachedSnapshot
+        ? pendingErrorSnapshot
+        : getPendingAgentRunError(runId)?.snapshot;
+      if (pendingErrorCandidate) {
+        finish(createPendingErrorTimeoutSnapshot(pendingErrorCandidate));
+        return;
+      }
+      const pendingTimeoutCandidate = ignoreCachedSnapshot
+        ? pendingTimeoutSnapshot
+        : getPendingAgentRunTimeout(runId)?.snapshot;
+      // Forward only canonical hard timeouts. Reuse the shared terminal-outcome
+      // classifier (which excludes restart-cancelled and soft queue/draining
+      // snapshots) instead of rederiving the hard/soft gate here, so those stay
+      // correctable via retry grace.
+      if (
+        pendingTimeoutCandidate &&
+        terminalOutcomeFromSnapshot(pendingTimeoutCandidate)?.reason === "hard_timeout"
+      ) {
+        finish(pendingTimeoutCandidate);
+        return;
+      }
+      finish(null);
     }, timeoutMs);
     const onAbort: (() => void) | undefined = () => finish(null);
     signal?.addEventListener("abort", onAbort, { once: true });

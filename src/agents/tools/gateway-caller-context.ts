@@ -6,7 +6,7 @@ import { copyChannelAgentToolMeta } from "../channel-tools.js";
 import { copyToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import type { AnyAgentTool } from "./common.js";
 
-export type GatewayToolCallerIdentity = {
+type GatewayToolCallerIdentity = {
   agentId: string;
   sessionKey: string;
 };

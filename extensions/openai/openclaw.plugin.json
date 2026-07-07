@@ -5,6 +5,9 @@
   },
   "enabledByDefault": true,
   "providers": ["openai"],
+  "providerUsageAuthEnvVars": {
+    "openai": ["OPENAI_ADMIN_KEY"]
+  },
   "modelSupport": {
     "modelPrefixes": ["gpt-", "o1", "o3", "o4"]
   },
@@ -306,6 +309,7 @@
       "provider": "openai",
       "method": "api-key",
       "choiceId": "openai-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "OpenAI API Key",
       "choiceHint": "Use your OpenAI API key directly",
       "assistantPriority": 5,

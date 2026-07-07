@@ -458,4 +458,47 @@ describe("ssrfPolicyFromHttpBaseUrlAllowedOrigin — SDK boundary safety", () =>
       }),
     ).rejects.toThrow(SsrFBlockedError);
   });
+
+  it.each([
+    ["IPv4 loopback", "127.0.0.1", 4],
+    ["IPv6 loopback", "::1", 6],
+    ["IPv4-mapped IPv6 loopback", "::ffff:127.0.0.1", 6],
+    ["NAT64-embedded IPv4 loopback", "64:ff9b::127.0.0.1", 6],
+    ["ISATAP-embedded IPv4 loopback", "2001:4860:1::5efe:7f00:1", 6],
+  ] as const)("rejects a trusted private origin rebound to %s", async (_name, address, family) => {
+    const baseUrl = "http://lan-llm.corp.internal:11434/v1";
+    const policy = ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl);
+    const policyForUrl = resolveSsrFPolicyForUrl(new URL(baseUrl), policy);
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("lan-llm.corp.internal", {
+        policy: policyForUrl,
+        lookupFn: createLookupFn([{ address, family }]),
+      }),
+    ).rejects.toThrow(SsrFBlockedError);
+  });
+
+  it.each([
+    ["localhost", "127.0.0.1", 4],
+    ["localhost.localdomain", "127.0.0.1", 4],
+    ["api.localhost", "::1", 6],
+    ["127.0.0.1", "127.0.0.1", 4],
+    ["[::1]", "::1", 6],
+    ["[64:ff9b::127.0.0.1]", "64:ff9b::127.0.0.1", 6],
+  ] as const)(
+    "allows an explicit %s origin to resolve to loopback",
+    async (host, address, family) => {
+      const baseUrl = `http://${host}:11434/v1`;
+      const policy = ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl);
+      const policyForUrl = resolveSsrFPolicyForUrl(new URL(baseUrl), policy);
+      const hostname = new URL(baseUrl).hostname.replace(/^\[|\]$/g, "");
+
+      await expect(
+        resolvePinnedHostnameWithPolicy(hostname, {
+          policy: policyForUrl,
+          lookupFn: createLookupFn([{ address, family }]),
+        }),
+      ).resolves.toBeDefined();
+    },
+  );
 });

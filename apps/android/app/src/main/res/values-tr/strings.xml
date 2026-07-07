@@ -6,6 +6,7 @@
     <string name="trust_this_gateway">Bu ağ geçidine güvenilsin mi?</string>
     <string name="trust_and_continue">Güven ve devam et</string>
     <string name="cancel">İptal</string>
+    <string name="new_chat_in_worktree">Worktree\'de yeni sohbet</string>
     <string name="endpoint">Uç nokta</string>
     <string name="status">Durum</string>
     <string name="connected_gateway_ready">Ağ geçidiniz etkin ve hazır.</string>
@@ -20,8 +21,17 @@
     <string name="use_tls">TLS kullan</string>
     <string name="token_optional">Token (isteğe bağlı)</string>
     <string name="password">Parola</string>
+    <string name="custom_headers_optional">Özel üst bilgiler (isteğe bağlı)</string>
+    <string name="custom_headers_explainer">Bu gateway\'e yapılan her bağlantıyla birlikte gönderilir; örneğin Cloudflare Access hizmet belirteci üst bilgileri. Şifrelenmiş olarak saklanır ve bir sonraki yeniden bağlantıda uygulanır.</string>
+    <string name="custom_header_value">Üst bilgi değeri</string>
+    <string name="custom_header_reserved">Bu üst bilgi bağlantı tarafından yönetilir ve geçersiz kılınamaz.</string>
+    <string name="add_custom_header">Üst bilgi ekle</string>
+    <string name="remove_custom_header">%1$s kaldır</string>
     <string name="run_onboarding_again">Başlangıç sürecini tekrar çalıştır</string>
     <string name="resolved_endpoint">Çözümlenen uç nokta</string>
     <string name="gateway_trust_first_seen">Bu ağ geçidine güvenmeden önce sertifika parmak izini doğrulayın.\n\n%1$s</string>
     <string name="gateway_trust_changed">Ağ geçidi sertifikası değişti. Yalnızca bu değişikliği bekliyorsanız devam edin.\n\nEski SHA-256:\n%1$s\n\nYeni SHA-256:\n%2$s</string>
+    <string name="switch_gateway">Gateway değiştir</string>
+    <string name="select_gateway">Gateway seç</string>
+    <string name="active_gateway">Etkin Gateway</string>
 </resources>

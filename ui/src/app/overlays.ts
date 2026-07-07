@@ -26,7 +26,7 @@ import {
 } from "./exec-approval.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 
-export type ApplicationStatusBanner = {
+type ApplicationStatusBanner = {
   tone: "danger" | "warn" | "info";
   text: string;
 };

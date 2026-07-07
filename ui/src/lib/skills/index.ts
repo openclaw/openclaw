@@ -110,7 +110,7 @@ export type SkillsState = {
   skillCardErrors: Record<string, string>;
 };
 
-export type SkillMessage = {
+type SkillMessage = {
   kind: "success" | "error";
   message: string;
 };
@@ -176,7 +176,7 @@ function currentSkillCardCacheKey(state: SkillsState, skillKey: string): string 
   return skill ? skillCardCacheKey(skill) : undefined;
 }
 
-export function skillsAgentParams(agentId: string | null | undefined): { agentId?: string } {
+function skillsAgentParams(agentId: string | null | undefined): { agentId?: string } {
   const normalized = agentId?.trim();
   return normalized ? { agentId: normalized } : {};
 }

@@ -24,6 +24,7 @@ export type GatewayServerMutableState = {
   dedupeCleanup: ReturnType<typeof setInterval>;
   mediaCleanup: ReturnType<typeof setInterval> | null;
   worktreeCleanup: ReturnType<typeof setInterval> | null;
+  skillCuratorCleanup: () => void;
   heartbeatRunner: HeartbeatRunner;
   stopGatewayUpdateCheck: () => void;
   tailscaleCleanup: (() => Promise<void>) | null;
@@ -36,10 +37,11 @@ export type GatewayServerMutableState = {
   stopModelPricingRefresh: () => void;
   mcpServer: { port: number; close: () => Promise<void> } | undefined;
   configReloader: GatewayConfigReloaderHandle;
-  agentUnsub: (() => void) | null;
+  agentUnsub: (() => Promise<void> | void) | null;
   heartbeatUnsub: (() => void) | null;
   transcriptUnsub: (() => void) | null;
   lifecycleUnsub: (() => void) | null;
+  taskUnsub: (() => void) | null;
 };
 
 /** Creates gateway mutable state with inert handles that are safe to stop before startup finishes. */
@@ -58,6 +60,7 @@ export function createGatewayServerMutableState(): GatewayServerMutableState {
     dedupeCleanup: noopInterval(),
     mediaCleanup: null as ReturnType<typeof setInterval> | null,
     worktreeCleanup: null as ReturnType<typeof setInterval> | null,
+    skillCuratorCleanup: () => {},
     heartbeatRunner: {
       stop: () => {},
       updateConfig: (_cfg: OpenClawConfig) => {},
@@ -73,9 +76,10 @@ export function createGatewayServerMutableState(): GatewayServerMutableState {
     stopModelPricingRefresh: () => {},
     mcpServer: undefined as { port: number; close: () => Promise<void> } | undefined,
     configReloader: { stop: async () => {} } satisfies GatewayConfigReloaderHandle,
-    agentUnsub: null as (() => void) | null,
+    agentUnsub: null as (() => Promise<void> | void) | null,
     heartbeatUnsub: null as (() => void) | null,
     transcriptUnsub: null as (() => void) | null,
     lifecycleUnsub: null as (() => void) | null,
+    taskUnsub: null as (() => void) | null,
   };
 }

@@ -97,6 +97,7 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "tools.catalog", scope: "operator.read" },
   { name: "tools.effective", scope: "operator.read", startup: true },
   { name: "tools.invoke", scope: "operator.write" },
+  { name: "audit.list", scope: "operator.read" },
   { name: "tasks.list", scope: "operator.read" },
   { name: "tasks.get", scope: "operator.read" },
   { name: "tasks.cancel", scope: "operator.write" },
@@ -130,6 +131,10 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "skills.upload.commit", scope: "operator.admin" },
   { name: "skills.install", scope: "operator.admin" },
   { name: "skills.update", scope: "operator.admin" },
+  { name: "skills.curator.status", scope: "operator.read" },
+  { name: "skills.curator.pin", scope: "operator.admin" },
+  { name: "skills.curator.unpin", scope: "operator.admin" },
+  { name: "skills.curator.restore", scope: "operator.admin" },
   { name: "skills.proposals.list", scope: "operator.read" },
   { name: "skills.proposals.inspect", scope: "operator.read" },
   { name: "skills.proposals.create", scope: "operator.admin" },
@@ -161,11 +166,17 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "sessions.create", scope: "operator.write", startup: true },
   { name: "sessions.send", scope: "operator.write", startup: true },
   { name: "sessions.abort", scope: "operator.write", startup: true },
-  { name: "sessions.patch", scope: "operator.admin" },
+  // Params-aware: write scope may mutate chat-organization fields
+  // (label/category/pinned/archived/unread); every other patch field stays
+  // admin-only. Policy lives in method-scopes.ts.
+  { name: "sessions.patch", scope: "dynamic" },
   { name: "sessions.pluginPatch", scope: "operator.admin" },
   { name: "sessions.cleanup", scope: "operator.admin" },
   { name: "sessions.reset", scope: "operator.admin" },
-  { name: "sessions.delete", scope: "operator.admin" },
+  // State-aware: write scope may delete already-archived sessions
+  // (archive-then-delete); the handler enforces the archived requirement and
+  // admin keeps unrestricted delete. Policy in method-scopes.ts + handler.
+  { name: "sessions.delete", scope: "dynamic" },
   { name: "sessions.compact", scope: "operator.admin" },
   { name: "last-heartbeat", scope: "operator.read" },
   { name: "set-heartbeats", scope: "operator.admin" },
@@ -253,6 +264,11 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "controlUi.githubPreview", scope: "operator.read" },
   // Additive discovery methods append here so older clients keep stable indices.
   { name: "system.info", scope: "operator.read" },
+  // Workspace contents stay in the documented trusted operator domain, like session and log
+  // reads. Strong user/tenant isolation requires separate Gateways; see operator-scopes.md.
+  { name: "agents.workspace.list", scope: "operator.read" },
+  { name: "agents.workspace.get", scope: "operator.read" },
+  { name: "tts.speak", scope: "operator.write" },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

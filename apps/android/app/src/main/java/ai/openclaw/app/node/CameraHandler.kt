@@ -4,9 +4,9 @@ import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.CameraHudKind
 import ai.openclaw.app.gateway.GatewaySession
 import android.content.Context
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -28,7 +28,6 @@ class CameraHandler(
   private val camera: CameraCaptureManager,
   private val externalAudioCaptureActive: MutableStateFlow<Boolean>,
   private val showCameraHud: (message: String, kind: CameraHudKind, autoHideMs: Long?) -> Unit,
-  private val triggerCameraFlash: () -> Unit,
   private val invokeErrorFromThrowable: (err: Throwable) -> Pair<String, String>,
 ) {
   /** Handles camera.list by exposing CameraX devices through gateway metadata. */
@@ -76,8 +75,6 @@ class CameraHandler(
       camLog("starting, params=$paramsJson")
       camLog("calling showCameraHud")
       showCameraHud("Taking photo…", CameraHudKind.Photo, null)
-      camLog("calling triggerCameraFlash")
-      triggerCameraFlash()
       val res =
         try {
           camLog("calling camera.snap()")
@@ -176,6 +173,5 @@ class CameraHandler(
     }
   }
 
-  private fun parseIncludeAudio(paramsJson: String?): Boolean? =
-    parseJsonBooleanFlag(parseJsonParamsObject(paramsJson), "includeAudio")
+  private fun parseIncludeAudio(paramsJson: String?): Boolean? = parseJsonBooleanFlag(parseJsonParamsObject(paramsJson), "includeAudio")
 }

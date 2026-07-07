@@ -1,5 +1,5 @@
 // Control UI chat module implements realtime talk conversation behavior.
-export type RealtimeTalkConversationRole = "user" | "assistant";
+type RealtimeTalkConversationRole = "user" | "assistant";
 
 export type RealtimeTalkConversationEntry = {
   id: string;
@@ -17,7 +17,7 @@ export type RealtimeTalkConversationState = {
   assistantEntryId: string | null;
 };
 
-export type RealtimeTalkTranscriptUpdate = {
+type RealtimeTalkTranscriptUpdate = {
   role: RealtimeTalkConversationRole;
   text: string;
   final: boolean;
@@ -201,11 +201,7 @@ function shouldStartNewRealtimeUserEntry(
   return true;
 }
 
-export function mergeRealtimeTranscriptText(
-  existing: string,
-  incoming: string,
-  isFinal: boolean,
-): string {
+function mergeRealtimeTranscriptText(existing: string, incoming: string, isFinal: boolean): string {
   if (existing.trim() === "") {
     return incoming.trimStart();
   }

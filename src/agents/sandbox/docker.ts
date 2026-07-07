@@ -99,20 +99,20 @@ export function execDockerRaw(
       }
     }
 
-    const handleOutputStreamError = (error: Error) => {
+    const handleStreamError = (error: Error) => {
       if (outputStreamError) {
         return;
       }
-      // A stream error means captured output is incomplete, so the command
-      // cannot report success even if Docker later exits with code 0.
+      // Broken stdio means the command exchange is incomplete, so it cannot
+      // report success even if Docker later exits with code 0.
       outputStreamError = error;
       child.kill("SIGTERM");
     };
-    child.stdout?.on("error", handleOutputStreamError);
+    child.stdout?.on("error", handleStreamError);
     child.stdout?.on("data", (chunk) => {
       stdoutChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     });
-    child.stderr?.on("error", handleOutputStreamError);
+    child.stderr?.on("error", handleStreamError);
     child.stderr?.on("data", (chunk) => {
       stderrChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     });
@@ -172,6 +172,7 @@ export function execDockerRaw(
 
     const stdin = child.stdin;
     if (stdin) {
+      stdin.on("error", handleStreamError);
       if (opts?.input !== undefined) {
         stdin.end(opts.input);
       } else {
@@ -206,7 +207,7 @@ const log = createSubsystemLogger("docker");
 
 const HOT_CONTAINER_WINDOW_MS = 5 * 60 * 1000;
 
-export type ExecDockerOptions = ExecDockerRawOptions;
+type ExecDockerOptions = ExecDockerRawOptions;
 
 function envRecordsEqual(left: Record<string, string>, right: Record<string, string>): boolean {
   const leftEntries = Object.entries(left).toSorted(([leftKey], [rightKey]) =>

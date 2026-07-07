@@ -17,6 +17,7 @@ import {
   buildGatewaySessionRow,
   capArrayByJsonBytes,
   classifySessionKey,
+  deriveSessionUnread,
   deriveSessionTitle,
   getSessionDefaults,
   listAgentsForGateway,
@@ -127,6 +128,32 @@ describe("gateway session utils", () => {
   test("capArrayByJsonBytes trims from the front", () => {
     const res = capArrayByJsonBytes(["a", "b", "c"], 10);
     expect(res.items).toEqual(["b", "c"]);
+  });
+
+  test.each([
+    { name: "never read", entry: {}, expected: false },
+    {
+      name: "interaction after read",
+      entry: { lastReadAt: 10, lastInteractionAt: 11 },
+      expected: true,
+    },
+    {
+      name: "read after interaction",
+      entry: { lastReadAt: 11, lastInteractionAt: 10 },
+      expected: false,
+    },
+    {
+      name: "activity after read",
+      entry: { lastReadAt: 10, lastActivityAt: 11 },
+      expected: true,
+    },
+    {
+      name: "explicitly marked unread",
+      entry: { lastReadAt: 20, lastInteractionAt: 10, lastActivityAt: 10, markedUnreadAt: 1 },
+      expected: true,
+    },
+  ])("derives unread state for $name", ({ entry, expected }) => {
+    expect(deriveSessionUnread(entry)).toBe(expected);
   });
 
   test("session lists apply a bounded default and expose truncation metadata", async () => {

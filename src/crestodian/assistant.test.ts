@@ -25,6 +25,7 @@ function overview(overrides: Partial<CrestodianOverview["tools"]> = {}): Crestod
     tools: {
       codex: { command: "codex", found: false },
       claude: { command: "claude", found: false },
+      gemini: { command: "gemini", found: false },
       apiKeys: { openai: false, anthropic: false },
       ...overrides,
     },
@@ -172,6 +173,17 @@ describe("Crestodian assistant", () => {
         }),
       ).map((backend) => backend.kind),
     ).toEqual(["claude-cli", "codex-app-server"]);
+
+    // Setup-ladder order: Claude Code, Codex, Gemini.
+    expect(
+      selectCrestodianLocalPlannerBackends(
+        overview({
+          claude: { command: "claude", found: true },
+          codex: { command: "codex", found: true },
+          gemini: { command: "gemini", found: true },
+        }),
+      ).map((backend) => backend.kind),
+    ).toEqual(["claude-cli", "codex-app-server", "gemini-cli"]);
 
     const [codexAppServer] = selectCrestodianLocalPlannerBackends(
       overview({

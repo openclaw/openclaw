@@ -86,7 +86,7 @@ type OpenAIRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
   azureApiVersion?: string;
 };
 
-const OPENAI_REALTIME_DEFAULT_MODEL = "gpt-realtime-2";
+const OPENAI_REALTIME_DEFAULT_MODEL = "gpt-realtime-2.1";
 const OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
 const OPENAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX =
   "Conversation already has an active response in progress:";
@@ -1283,13 +1283,13 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         },
         `reason=barge-in audioEndMs=${audioEndMs}`,
       );
-      this.config.onClearAudio();
+      this.config.onClearAudio("barge-in");
       this.markQueue = [];
       this.lastAssistantItemId = null;
       this.responseStartTimestamp = null;
       return;
     }
-    this.config.onClearAudio();
+    this.config.onClearAudio("barge-in");
   }
 
   private emitToolCallOnce(fields: {
@@ -1542,6 +1542,7 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
       ],
       supportsBrowserSession: true,
       supportsBargeIn: true,
+      handlesInputAudioBargeIn: true,
       supportsToolCalls: true,
     },
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),

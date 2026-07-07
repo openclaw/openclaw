@@ -539,6 +539,56 @@
       }
     },
     {
+      "name": "@openclaw/featherless-provider",
+      "description": "OpenClaw Featherless AI provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "featherless",
+          "label": "Featherless AI"
+        },
+        "providers": [
+          {
+            "id": "featherless",
+            "name": "Featherless AI",
+            "docs": "/providers/featherless",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "FEATHERLESS_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "featherless-api-key",
+                "choiceLabel": "Featherless AI API key",
+                "choiceHint": "OpenAI-compatible access to open models",
+                "groupId": "featherless",
+                "groupLabel": "Featherless AI",
+                "groupHint": "OpenAI-compatible access to open models",
+                "optionKey": "featherlessApiKey",
+                "cliFlag": "--featherless-api-key",
+                "cliOption": "--featherless-api-key <key>",
+                "cliDescription": "Featherless AI API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/featherless-provider",
+          "npmSpec": "@openclaw/featherless-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.11"
+        }
+      }
+    },
+    {
       "name": "@openclaw/gmi-provider",
       "description": "OpenClaw GMI Cloud provider plugin",
       "source": "official",
@@ -584,6 +634,49 @@
         "install": {
           "clawhubSpec": "clawhub:@openclaw/gmi-provider",
           "npmSpec": "@openclaw/gmi-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.8"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/longcat-provider",
+      "description": "OpenClaw LongCat provider plugin",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "longcat",
+          "label": "LongCat"
+        },
+        "providers": [
+          {
+            "id": "longcat",
+            "aliases": ["meituan-longcat"],
+            "name": "LongCat",
+            "docs": "/providers/longcat",
+            "categories": ["cloud", "llm"],
+            "envVars": ["LONGCAT_API_KEY"],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "longcat-api-key",
+                "choiceLabel": "LongCat API key",
+                "groupId": "longcat",
+                "groupLabel": "LongCat",
+                "groupHint": "OpenAI-compatible LongCat API",
+                "optionKey": "longcatApiKey",
+                "cliFlag": "--longcat-api-key",
+                "cliOption": "--longcat-api-key <key>",
+                "cliDescription": "LongCat API key",
+                "onboardingScopes": ["text-inference"]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/longcat-provider",
+          "npmSpec": "@openclaw/longcat-provider",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.6.8"
         }

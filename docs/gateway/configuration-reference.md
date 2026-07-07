@@ -286,7 +286,8 @@ conversation bindings, or any non-Codex harness.
         config: {
           codexPlugins: {
             enabled: true,
-            allow_destructive_actions: true,
+            allow_all_plugins: true,
+            allow_destructive_actions: "auto",
             plugins: {
               "google-calendar": {
                 enabled: true,
@@ -305,6 +306,9 @@ conversation bindings, or any non-Codex harness.
 
 - `plugins.entries.codex.config.codexPlugins.enabled`: enables native Codex
   plugin/app support for the Codex harness. Default: `false`.
+- `plugins.entries.codex.config.codexPlugins.allow_all_plugins`: exposes every
+  currently accessible app connected to the authenticated Codex account in
+  each new native Codex thread. Default: `false`.
 - `plugins.entries.codex.config.codexPlugins.allow_destructive_actions`:
   default destructive-action policy for migrated plugin app elicitations.
   Use `true` to accept safe Codex approval schemas without prompting, `false`
@@ -340,6 +344,13 @@ host-specific.
 asynchronously when stale. Codex thread app config is computed at Codex harness
 session establishment, not on every turn; use `/new`, `/reset`, or a gateway
 restart after changing native plugin config.
+
+`codexPlugins.allow_all_plugins` snapshots every currently accessible account
+app into each new native Codex thread. It does not install plugins or apps, and
+inaccessible apps stay excluded. Account apps use the global
+`codexPlugins.allow_destructive_actions` policy. Explicit plugin entries take
+precedence when the same app is present in both paths. If `app/list` cannot be
+read, account-wide exposure fails closed.
 
 - `plugins.entries.firecrawl.config.webFetch`: Firecrawl web-fetch provider settings.
   - `apiKey`: Optional Firecrawl API key for higher limits (accepts SecretRef). Falls back to `plugins.entries.firecrawl.config.webSearch.apiKey`, legacy `tools.web.fetch.firecrawl.apiKey`, or `FIRECRAWL_API_KEY` env var.
@@ -629,7 +640,7 @@ See [Inferred commitments](/concepts/commitments).
 - `trustedProxies`: reverse proxy IPs that terminate TLS or inject forwarded-client headers. Only list proxies you control. Loopback entries are still valid for same-host proxy/local-detection setups (for example Tailscale Serve or a local reverse proxy), but they do **not** make loopback requests eligible for `gateway.auth.mode: "trusted-proxy"`.
 - `allowRealIpFallback`: when `true`, the gateway accepts `X-Real-IP` if `X-Forwarded-For` is missing. Default `false` for fail-closed behavior.
 - `gateway.nodes.pairing.autoApproveCidrs`: optional CIDR/IP allowlist for auto-approving first-time node device pairing with no requested scopes. It is disabled when unset. This does not auto-approve operator/browser/Control UI/WebChat pairing, and it does not auto-approve role, scope, metadata, or public-key upgrades.
-- `gateway.nodes.allowCommands` / `gateway.nodes.denyCommands`: global allow/deny shaping for declared node commands after pairing and platform allowlist evaluation. Use `allowCommands` to opt into dangerous node commands such as `camera.snap`, `camera.clip`, and `screen.record`; `denyCommands` removes a command even if a platform default or explicit allow would otherwise include it. After a node changes its declared command list, reject and re-approve that device pairing so the gateway stores the updated command snapshot.
+- `gateway.nodes.allowCommands` / `gateway.nodes.denyCommands`: global allow/deny shaping for declared node commands after pairing and platform allowlist evaluation. Use `allowCommands` to opt into dangerous node commands such as `camera.snap`, `camera.clip`, `screen.record`, `sms.search`, and `sms.send`; `denyCommands` removes a command even if a platform default or explicit allow would otherwise include it. Android SMS permission and Gateway command authorization are independent. After a node changes its declared command list, reject and re-approve that device pairing so the gateway stores the updated command snapshot.
 - `gateway.tools.deny`: extra tool names blocked for HTTP `POST /tools/invoke` (extends default deny list).
 - `gateway.tools.allow`: remove tool names from the default HTTP deny list for
   owner/admin callers. This does not upgrade identity-bearing `operator.write`
@@ -1062,6 +1073,31 @@ Notes:
 
 ---
 
+## Audit
+
+```json5
+{
+  audit: {
+    enabled: true,
+  },
+}
+```
+
+The Gateway records **metadata-only** audit events for agent runs and tool
+actions into the shared state database: identity, timing, tool names, and
+terminal outcomes — never prompts, messages, tool arguments, results, or raw
+error text. Records expire after 30 days and the ledger is capped at 100,000
+rows. Query them with [`openclaw audit`](/cli/audit) or the
+[`audit.list`](/gateway/protocol#audit-ledger-rpc) Gateway RPC.
+
+- `enabled`: record new audit events (default: `true`). The ledger is on by
+  default because an audit trail enabled only after an incident cannot explain
+  the incident. Setting `false` stops new writes immediately; existing records
+  stay readable until they expire. Turning it back on resumes recording from
+  that point — the gap is not backfilled.
+
+---
+
 ## Logging
 
 ```json5
@@ -1176,12 +1212,12 @@ Notes:
 }
 ```
 
-- `channel`: release channel - `"stable"`, `"extended-stable"`, `"beta"`, or `"dev"`. Extended-stable is a package-only, foreground/on-demand channel; it is skipped by startup checks and background auto-update.
-- `checkOnStart`: check for npm updates when the gateway starts (default: `true`).
-- `auto.enabled`: enable background auto-update for package installs (default: `false`).
+- `channel`: release channel - `"stable"`, `"extended-stable"`, `"beta"`, or `"dev"`. Extended-stable is package-only: foreground commands own installation, while the Gateway may emit read-only update hints.
+- `checkOnStart`: check for npm updates when the gateway starts (default: `true`). Stored extended-stable selections use the same read-only hint and 24-hour hint schedule.
+- `auto.enabled`: enable background auto-update for stable and beta package installs (default: `false`). Extended-stable never applies automatically.
 - `auto.stableDelayHours`: minimum delay in hours before stable-channel auto-apply (default: `6`; max: `168`).
 - `auto.stableJitterHours`: extra stable-channel rollout spread window in hours (default: `12`; max: `168`).
-- `auto.betaCheckIntervalHours`: how often beta-channel checks run in hours (default: `1`; max: `24`).
+- `auto.betaCheckIntervalHours`: how often beta-channel checks run in hours (default: `1`; max: `24`). Stable delay/jitter and beta polling settings do not apply to extended-stable.
 
 ---
 

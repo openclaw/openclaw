@@ -318,6 +318,19 @@ describe("containerRestRequest", () => {
     ).rejects.toThrow("Signal REST 500: Server error details");
   });
 
+  it("bounds REST error response bodies before reporting failures", async () => {
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 500,
+      statusText: "Internal Server Error",
+      ...bodyStream("x".repeat(20_000)),
+    });
+
+    await expect(
+      containerRestRequest("/v2/send", { baseUrl: "http://localhost:8080" }, "POST"),
+    ).rejects.toThrow(`Signal REST 500: ${"x".repeat(16 * 1024)}`);
+  });
+
   it("handles empty response body", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
@@ -397,6 +410,29 @@ describe("containerSendMessage", () => {
         recipients: ["+15550001111"],
       }),
     );
+  });
+
+  it("passes quote metadata through v2 send using container field names", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      ...bodyStream(JSON.stringify({ timestamp: "1700000000000" })),
+    });
+
+    await containerSendMessage({
+      baseUrl: "http://localhost:8080",
+      account: "+14259798283",
+      recipients: ["+15550001111"],
+      message: "Hello world",
+      quoteTimestamp: 1699999999999,
+      quoteAuthor: "+15550002222",
+      quoteMessage: "original",
+    });
+
+    const body = parseFetchBody();
+    expect(body.quote_timestamp).toBe(1699999999999);
+    expect(body.quote_author).toBe("+15550002222");
+    expect(body.quote_message).toBe("original");
   });
 
   it("normalizes invalid send timestamps before returning", async () => {
@@ -533,6 +569,92 @@ describe("containerSendMessage", () => {
     // Cleanup
     await fs.rm(tmpDir, { recursive: true });
   });
+
+  it("rejects outbound attachments that exceed the size cap", async () => {
+    const fs = await import("node:fs/promises");
+    const os = await import("node:os");
+    const path = await import("node:path");
+
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "signal-test-"));
+    const tmpFile = path.join(tmpDir, "huge.bin");
+    await fs.writeFile(tmpFile, Buffer.alloc(8 * 1024 * 1024 + 1));
+
+    await expect(
+      containerSendMessage({
+        baseUrl: "http://localhost:8080",
+        account: "+14259798283",
+        recipients: ["+15550001111"],
+        message: "Photo",
+        attachments: [tmpFile],
+      }),
+    ).rejects.toThrow("exceeds");
+
+    await fs.rm(tmpDir, { recursive: true });
+  });
+
+  it("honors a configured attachment cap above the default", async () => {
+    const fs = await import("node:fs/promises");
+    const os = await import("node:os");
+    const path = await import("node:path");
+
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "signal-test-"));
+    const tmpFile = path.join(tmpDir, "configured-large.bin");
+    const fileBytes = 8 * 1024 * 1024 + 1;
+    try {
+      await fs.writeFile(tmpFile, Buffer.alloc(fileBytes));
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        ...bodyStream(JSON.stringify({})),
+      });
+
+      await containerSendMessage({
+        baseUrl: "http://localhost:8080",
+        account: "+14259798283",
+        recipients: ["+15550001111"],
+        message: "Configured large attachment",
+        attachments: [tmpFile],
+        maxAttachmentBytes: fileBytes,
+      });
+
+      const body = parseFetchBody();
+      expect(body.base64_attachments).toEqual([
+        expect.stringMatching(
+          /^data:application\/octet-stream;filename=configured-large\.bin;base64,/,
+        ),
+      ]);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true });
+    }
+  });
+
+  it("applies the attachment cap to the whole container request", async () => {
+    const fs = await import("node:fs/promises");
+    const os = await import("node:os");
+    const path = await import("node:path");
+
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "signal-test-"));
+    const firstFile = path.join(tmpDir, "first.bin");
+    const secondFile = path.join(tmpDir, "second.bin");
+    try {
+      await fs.writeFile(firstFile, Buffer.alloc(6));
+      await fs.writeFile(secondFile, Buffer.alloc(6));
+
+      await expect(
+        containerSendMessage({
+          baseUrl: "http://localhost:8080",
+          account: "+14259798283",
+          recipients: ["+15550001111"],
+          message: "Two attachments",
+          attachments: [firstFile, secondFile],
+          maxAttachmentBytes: 10,
+        }),
+      ).rejects.toThrow("exceeds 4 bytes");
+      expect(mockFetch).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(tmpDir, { recursive: true });
+    }
+  });
 });
 
 describe("containerSendTyping", () => {
@@ -599,6 +721,88 @@ describe("containerRpcRequest typing", () => {
 
     const body = parseFetchBody();
     expect(body.recipient).toBe("group.Z3JvdXAtMTIz");
+  });
+});
+
+describe("containerRpcRequest send", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("translates native quote params to container send fields", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      ...bodyStream(JSON.stringify({ timestamp: "1700000000000" })),
+    });
+
+    await containerRpcRequest(
+      "send",
+      {
+        account: "+14259798283",
+        recipient: ["+15550001111"],
+        message: "Hello world",
+        quoteTimestamp: 1699999999999,
+        quoteAuthor: "+15550002222",
+        quoteMessage: "original",
+      },
+      { baseUrl: "http://localhost:8080" },
+    );
+
+    const body = parseFetchBody();
+    expect(body.quote_timestamp).toBe(1699999999999);
+    expect(body.quote_author).toBe("+15550002222");
+    expect(body.quote_message).toBe("original");
+  });
+
+  it("strips uuid prefixes from native quote authors", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      ...bodyStream(JSON.stringify({ timestamp: "1700000000000" })),
+    });
+
+    await containerRpcRequest(
+      "send",
+      {
+        account: "+14259798283",
+        recipient: ["+15550001111"],
+        message: "Hello world",
+        quoteTimestamp: 1699999999999,
+        quoteAuthor: "uuid:author-uuid",
+        quoteMessage: "original",
+      },
+      { baseUrl: "http://localhost:8080" },
+    );
+
+    const body = parseFetchBody();
+    expect(body.quote_author).toBe("author-uuid");
+  });
+
+  it("ignores malformed native quote params at the container boundary", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      ...bodyStream(JSON.stringify({ timestamp: "1700000000000" })),
+    });
+
+    await containerRpcRequest(
+      "send",
+      {
+        account: "+14259798283",
+        recipient: ["+15550001111"],
+        message: "Hello world",
+        quoteTimestamp: "not-a-timestamp",
+        quoteAuthor: ["+15550002222"],
+        quoteMessage: { text: "original" },
+      },
+      { baseUrl: "http://localhost:8080" },
+    );
+
+    const body = parseFetchBody();
+    expect(body).not.toHaveProperty("quote_timestamp");
+    expect(body).not.toHaveProperty("quote_author");
+    expect(body).not.toHaveProperty("quote_message");
   });
 });
 

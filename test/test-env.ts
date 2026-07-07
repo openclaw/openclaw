@@ -31,6 +31,14 @@ const LIVE_EXTERNAL_AUTH_FILES = [
   ".codex/auth.json",
   ".codex/config.toml",
 ] as const;
+// Keep Gemini credentials and user configuration; only generated browser data can be dropped.
+const LIVE_GEMINI_EXCLUDED_PATHS = [
+  "antigravity-browser-profile",
+  "antigravity/browser_recordings",
+  "cli-browser-profile",
+  "GPUCache",
+  "Service Worker/CacheStorage",
+] as const;
 const requireFromHere = createRequire(import.meta.url);
 
 type LegacyConfigCompatApi = typeof import("../src/commands/doctor/shared/legacy-config-compat.js");
@@ -264,7 +272,23 @@ function ensureParentDir(targetPath: string): void {
   fs.mkdirSync(path.dirname(targetPath), { recursive: true });
 }
 
-function copyDirIfExists(sourcePath: string, targetPath: string): void {
+function shouldStageLiveGeminiPath(sourceRoot: string, sourcePath: string): boolean {
+  const relativePath = path.relative(sourceRoot, sourcePath);
+  if (!relativePath || relativePath.startsWith("..")) {
+    return true;
+  }
+  const normalizedPath = relativePath.split(path.sep).join("/");
+  return !LIVE_GEMINI_EXCLUDED_PATHS.some(
+    (excludedPath) =>
+      normalizedPath === excludedPath || normalizedPath.startsWith(`${excludedPath}/`),
+  );
+}
+
+function copyDirIfExists(
+  sourcePath: string,
+  targetPath: string,
+  options?: { filter?: (sourcePath: string) => boolean },
+): void {
   if (!fs.existsSync(sourcePath)) {
     return;
   }
@@ -272,6 +296,7 @@ function copyDirIfExists(sourcePath: string, targetPath: string): void {
   fs.cpSync(sourcePath, targetPath, {
     recursive: true,
     force: true,
+    filter: options?.filter,
   });
 }
 
@@ -423,7 +448,12 @@ function stageLiveTestState(params: {
   copyLiveAuthProfiles(realStateDir, tempStateDir);
 
   for (const authDir of LIVE_EXTERNAL_AUTH_DIRS) {
-    copyDirIfExists(path.join(params.realHome, authDir), path.join(params.tempHome, authDir));
+    const sourcePath = path.join(params.realHome, authDir);
+    const filter =
+      authDir === ".gemini"
+        ? (entryPath: string) => shouldStageLiveGeminiPath(sourcePath, entryPath)
+        : undefined;
+    copyDirIfExists(sourcePath, path.join(params.tempHome, authDir), { filter });
   }
   for (const authFile of LIVE_EXTERNAL_AUTH_FILES) {
     copyFileIfExists(path.join(params.realHome, authFile), path.join(params.tempHome, authFile));

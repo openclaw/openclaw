@@ -54,7 +54,6 @@ import {
 import { clearPendingQueueItemsForRun, removeQueuedMessage } from "./chat-queue.ts";
 import {
   attachChatRealtimeActions,
-  createDefaultRealtimeTalkOptions,
   createInitialChatRealtimeState,
   resetChatRealtimeConversation,
   type ChatRealtimeState,
@@ -170,6 +169,7 @@ export type ChatPageHost = ChatHost &
     chatRunStatus: ChatProps["runStatus"];
     chatNewMessagesBelow: boolean;
     chatManualRefreshInFlight: boolean;
+    chatMetadataRequestVersion: number;
     chatModelsLoading: boolean;
     chatMobileControlsOpen: boolean;
     chatMobileControlsTrigger: HTMLElement | null;
@@ -184,6 +184,7 @@ export type ChatPageHost = ChatHost &
     chatScrollFrame: number | null;
     chatScrollTimeout: number | null;
     chatLastScrollTop: number;
+    chatLastScrollHeight: number;
     chatHasAutoScrolled: boolean;
     chatUserNearBottom: boolean;
     chatFollowLocked: boolean;
@@ -346,9 +347,7 @@ export function resetChatStateForRouteSession(state: ChatPageHost, sessionKey: s
   state.chatAvatarSource = null;
   state.chatAvatarStatus = null;
   state.chatAvatarReason = null;
-  state.realtimeTalkTranscript = null;
   resetChatRealtimeConversation(state);
-  state.realtimeTalkOptions = createDefaultRealtimeTalkOptions();
   state.chatQueue = restoreChatQueueForSession(state, sessionKey);
   restoreChatComposerState(state);
   state.resetChatInputHistoryNavigation();
@@ -361,7 +360,9 @@ export function resetChatStateForRouteSession(state: ChatPageHost, sessionKey: s
     clearRunStatus: true,
   });
   state.resetChatScroll();
-  saveRouteSessionSettings(state, sessionKey);
+  // Deliberately no saveRouteSessionSettings here: this runs for every split
+  // pane, and only the active pane may write the global sessionKey /
+  // lastActiveSessionKey settings (chat-pane applyActiveSessionBindings).
 }
 
 export async function refreshRouteSessionOptions(state: ChatPageHost) {
@@ -445,20 +446,6 @@ function scheduleChatMetadataRefresh(callback: () => void) {
   globalThis.setTimeout(callback, 50);
 }
 
-async function refreshChatModels(host: ChatPageHost) {
-  if (!host.client || !host.connected) {
-    host.chatModelsLoading = false;
-    host.chatModelCatalog = [];
-    return;
-  }
-  host.chatModelsLoading = true;
-  try {
-    host.chatModelCatalog = await loadModels(host.client);
-  } finally {
-    host.chatModelsLoading = false;
-  }
-}
-
 export async function refreshChatCommands(host: ChatPageHost) {
   await refreshSlashCommands({
     client: host.client,
@@ -484,45 +471,118 @@ function applyChatMetadataResult(
   return { commands: commandsApplied, models: Boolean(models) };
 }
 
-async function refreshChatMetadata(host: ChatPageHost) {
+function ownsChatMetadataRequest(
+  host: ChatPageHost,
+  client: GatewayBrowserClient,
+  agentId: string | null | undefined,
+  requestVersion: number,
+): boolean {
+  return (
+    host.client === client &&
+    host.connected &&
+    host.chatMetadataRequestVersion === requestVersion &&
+    resolveChatAgentId(host) === agentId
+  );
+}
+
+async function refreshCompatibilityModelCatalog(
+  host: ChatPageHost,
+  client: GatewayBrowserClient,
+  agentId: string | null | undefined,
+  requestVersion: number,
+) {
+  const models = await loadModels(client);
+  if (ownsChatMetadataRequest(host, client, agentId, requestVersion)) {
+    host.chatModelCatalog = models;
+  }
+}
+
+async function refreshCompatibilityCommands(
+  host: ChatPageHost,
+  client: GatewayBrowserClient,
+  agentId: string | null | undefined,
+  requestVersion: number,
+) {
+  await refreshSlashCommands({
+    client,
+    agentId,
+    shouldApply: () => ownsChatMetadataRequest(host, client, agentId, requestVersion),
+  });
+}
+
+function canUseCompatibilityModelCatalog(
+  host: ChatPageHost,
+  agentId: string | null | undefined,
+): boolean {
+  return agentId === resolveUiDefaultAgentId(host);
+}
+
+export async function refreshChatMetadata(
+  host: ChatPageHost,
+  opts?: { preserveModelCatalogOnFallback?: boolean },
+) {
+  const requestVersion = ++host.chatMetadataRequestVersion;
   if (!host.client || !host.connected) {
     host.chatModelsLoading = false;
     host.chatModelCatalog = [];
     return;
   }
   const client = host.client;
-  const sessionKey = host.sessionKey;
   const agentId = resolveChatAgentId(host);
-  if (isGatewayMethodAdvertised(host as unknown as ChatState, "chat.metadata") === false) {
-    await Promise.allSettled([refreshChatModels(host), refreshChatCommands(host)]);
-    return;
-  }
-
+  const shouldRefreshCompatibilityModels =
+    !opts?.preserveModelCatalogOnFallback && canUseCompatibilityModelCatalog(host, agentId);
+  const shouldClearUnresolvedModels =
+    !opts?.preserveModelCatalogOnFallback && !shouldRefreshCompatibilityModels;
   host.chatModelsLoading = true;
   try {
+    if (isGatewayMethodAdvertised(host as unknown as ChatState, "chat.metadata") === false) {
+      if (shouldClearUnresolvedModels) {
+        host.chatModelCatalog = [];
+      }
+      await Promise.allSettled([
+        ...(shouldRefreshCompatibilityModels
+          ? [refreshCompatibilityModelCatalog(host, client, agentId, requestVersion)]
+          : []),
+        refreshCompatibilityCommands(host, client, agentId, requestVersion),
+      ]);
+      return;
+    }
+
     const result = await client.request<ChatMetadataResult>(
       "chat.metadata",
       agentId ? { agentId } : {},
     );
-    if (
-      host.client !== client ||
-      !host.connected ||
-      host.sessionKey !== sessionKey ||
-      resolveChatAgentId(host) !== agentId
-    ) {
+    if (!ownsChatMetadataRequest(host, client, agentId, requestVersion)) {
       return;
     }
     const metadataApplied = applyChatMetadataResult(host, client, agentId, result);
+    if (!metadataApplied.models && shouldClearUnresolvedModels) {
+      host.chatModelCatalog = [];
+    }
     if (!metadataApplied.models || !metadataApplied.commands) {
       await Promise.allSettled([
-        ...(metadataApplied.models ? [] : [refreshChatModels(host)]),
-        ...(metadataApplied.commands ? [] : [refreshChatCommands(host)]),
+        ...(!metadataApplied.models && shouldRefreshCompatibilityModels
+          ? [refreshCompatibilityModelCatalog(host, client, agentId, requestVersion)]
+          : []),
+        ...(metadataApplied.commands
+          ? []
+          : [refreshCompatibilityCommands(host, client, agentId, requestVersion)]),
       ]);
     }
   } catch {
-    await Promise.allSettled([refreshChatModels(host), refreshChatCommands(host)]);
+    if (ownsChatMetadataRequest(host, client, agentId, requestVersion)) {
+      if (shouldClearUnresolvedModels) {
+        host.chatModelCatalog = [];
+      }
+      await Promise.allSettled([
+        ...(shouldRefreshCompatibilityModels
+          ? [refreshCompatibilityModelCatalog(host, client, agentId, requestVersion)]
+          : []),
+        refreshCompatibilityCommands(host, client, agentId, requestVersion),
+      ]);
+    }
   } finally {
-    if (host.client === client) {
+    if (ownsChatMetadataRequest(host, client, agentId, requestVersion)) {
       host.chatModelsLoading = false;
     }
   }
@@ -640,38 +700,57 @@ export async function refreshChat(
 
 export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
   let resolveStartupMetadata: (result: ChatMetadataApplyResult) => void = () => {};
-  const startupMetadataApplied =
-    opts?.startup && host.client && host.connected
-      ? new Promise<ChatMetadataApplyResult>((resolve) => {
-          resolveStartupMetadata = resolve;
-        })
-      : Promise.resolve({ commands: false, models: false });
+  const ownsStartupMetadata = Boolean(opts?.startup && host.client && host.connected);
+  const startupMetadataRequestVersion = ownsStartupMetadata
+    ? ++host.chatMetadataRequestVersion
+    : null;
+  const startupMetadataApplied = ownsStartupMetadata
+    ? new Promise<ChatMetadataApplyResult>((resolve) => {
+        resolveStartupMetadata = resolve;
+      })
+    : Promise.resolve({ commands: false, models: false });
 
   const refresh = refreshChat(host, {
     ...opts,
     onStartupMetadata: ({ client, agentId, metadata }) => {
-      const applied = metadata
-        ? applyChatMetadataResult(host, client, agentId, metadata)
-        : { commands: false, models: false };
+      const ownsMetadata =
+        startupMetadataRequestVersion !== null &&
+        host.chatMetadataRequestVersion === startupMetadataRequestVersion &&
+        host.client === client &&
+        host.connected &&
+        resolveChatAgentId(host) === agentId;
+      const applied =
+        metadata && ownsMetadata
+          ? applyChatMetadataResult(host, client, agentId, metadata)
+          : { commands: false, models: false };
       resolveStartupMetadata(applied);
     },
   });
 
   const refreshedSessionKey = host.sessionKey;
+  const ownsScheduledMetadataRefresh = () =>
+    host.sessionKey === refreshedSessionKey &&
+    host.connected &&
+    (startupMetadataRequestVersion === null ||
+      host.chatMetadataRequestVersion === startupMetadataRequestVersion);
   scheduleChatMetadataRefresh(() => {
-    if (host.sessionKey !== refreshedSessionKey || !host.connected) {
+    if (!ownsScheduledMetadataRefresh()) {
       return;
     }
     void startupMetadataApplied
       .catch(() => ({ commands: false, models: false }))
-      .then((metadataApplied) => {
-        const metadataRefresh =
-          opts?.startup && (metadataApplied.commands || metadataApplied.models)
-            ? metadataApplied.models
-              ? Promise.allSettled([])
-              : Promise.allSettled([refreshChatModels(host)])
-            : Promise.allSettled([refreshChatMetadata(host)]);
-        return Promise.allSettled([refreshChatAvatar(host), metadataRefresh]);
+      .then(async (metadataApplied) => {
+        // Startup metadata can settle after a session switch. Recheck ownership
+        // so stale startup work cannot supersede the new pane's catalog refresh.
+        if (!ownsScheduledMetadataRefresh()) {
+          return;
+        }
+        await Promise.allSettled([
+          refreshChatAvatar(host),
+          refreshChatMetadata(host, {
+            preserveModelCatalogOnFallback: opts?.startup === true && metadataApplied.models,
+          }),
+        ]);
       })
       .finally(() => host.requestUpdate?.());
   });
@@ -928,6 +1007,7 @@ export function createPageState(
     chatAvatarReason: null,
     chatModelSwitchPromises: {} as Record<string, Promise<boolean>>,
     chatModelsLoading: false,
+    chatMetadataRequestVersion: 0,
     chatModelCatalog: [] as ModelCatalogEntry[],
     modelAuthStatusResult: null,
     modelAuthStatusError: null,
@@ -965,6 +1045,7 @@ export function createPageState(
     chatScrollFrame: null,
     chatScrollTimeout: null,
     chatLastScrollTop: 0,
+    chatLastScrollHeight: 0,
     chatHasAutoScrolled: false,
     chatUserNearBottom: true,
     chatFollowLocked: false,
@@ -977,7 +1058,7 @@ export function createPageState(
     toolStreamById: new Map<string, ToolStreamEntry>(),
     toolStreamOrder: [] as string[],
     toolStreamSyncTimer: null,
-    ...createInitialChatRealtimeState(),
+    ...createInitialChatRealtimeState(settings.realtimeTalkInputDeviceId),
     requestUpdate,
     sessionWorkspaceState: undefined,
     sessionWorkspaceOpenRequest: undefined,
@@ -1006,6 +1087,7 @@ export function createPageState(
       chatShowToolCalls: next.chatShowToolCalls,
       chatPersistCommentary: next.chatPersistCommentary,
       chatAutoScroll: next.chatAutoScroll,
+      chatSendShortcut: next.chatSendShortcut,
       splitRatio: next.splitRatio,
     });
     state.splitRatio = state.settings.splitRatio;
@@ -1123,7 +1205,15 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   private previousChatStream: string | null = null;
   private previousRealtimeConversation: ChatPageHost["realtimeTalkConversation"] = [];
   private scrollAfterUpdate = false;
+  private scrollContentChangedAfterUpdate = false;
   private forceScrollAfterUpdate = false;
+  private chatThreadResizeObserver: ResizeObserver | null = null;
+  private chatThreadResizeTargets:
+    | {
+        thread: Element;
+        content: Element;
+      }
+    | undefined;
   private pendingCreatedSessionComposer: PendingCreatedSessionComposer | null = null;
   private readonly cleanups: Array<() => void> = [];
 
@@ -1193,21 +1283,63 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       return;
     }
     this.scrollAfterUpdate = true;
+    this.scrollContentChangedAfterUpdate ||= messagesChanged || streamChanged;
     this.forceScrollAfterUpdate ||= loadFinished || streamStarted || !state.chatHasAutoScrolled;
   }
 
+  private syncChatThreadResizeObserver(state: TState) {
+    if (typeof ResizeObserver !== "function") {
+      return;
+    }
+    const thread = state.querySelector(".chat-thread");
+    const content = state.querySelector(".chat-thread-inner");
+    if (
+      thread &&
+      content &&
+      this.chatThreadResizeTargets?.thread === thread &&
+      this.chatThreadResizeTargets.content === content
+    ) {
+      return;
+    }
+
+    this.chatThreadResizeObserver?.disconnect();
+    this.chatThreadResizeObserver = null;
+    this.chatThreadResizeTargets = undefined;
+    if (!thread || !content) {
+      return;
+    }
+
+    // Streamed markdown and mobile composer controls can finish sizing after
+    // Lit's update. Follow the rendered geometry so the viewport stays pinned.
+    this.chatThreadResizeObserver = new ResizeObserver(() => {
+      const currentState = this.stateValue;
+      if (!currentState || currentState.chatManualRefreshInFlight) {
+        return;
+      }
+      scheduleChatScroll(currentState, false, false, { source: "resize" });
+    });
+    this.chatThreadResizeObserver.observe(thread);
+    this.chatThreadResizeObserver.observe(content);
+    this.chatThreadResizeTargets = { thread, content };
+  }
+
   hostUpdated() {
+    const state = this.stateValue;
+    if (state) {
+      this.syncChatThreadResizeObserver(state);
+    }
     if (!this.scrollAfterUpdate) {
       return;
     }
-    const state = this.stateValue;
     const force = this.forceScrollAfterUpdate;
+    const contentChanged = this.scrollContentChangedAfterUpdate;
     this.scrollAfterUpdate = false;
+    this.scrollContentChangedAfterUpdate = false;
     this.forceScrollAfterUpdate = false;
     if (!state || state.chatManualRefreshInFlight) {
       return;
     }
-    scheduleChatScroll(state, force);
+    scheduleChatScroll(state, force, false, { contentChanged });
   }
 
   restoreComposer(options: { preserveCurrent?: boolean } = {}) {
@@ -1244,6 +1376,9 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   }
 
   private stopChatEffects() {
+    this.chatThreadResizeObserver?.disconnect();
+    this.chatThreadResizeObserver = null;
+    this.chatThreadResizeTargets = undefined;
     while (this.cleanups.length > 0) {
       this.cleanups.pop()?.();
     }
@@ -1262,6 +1397,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     this.stopChatEffects();
     this.stateValue = undefined;
     this.scrollAfterUpdate = false;
+    this.scrollContentChangedAfterUpdate = false;
     this.forceScrollAfterUpdate = false;
     this.pendingCreatedSessionComposer = null;
   }

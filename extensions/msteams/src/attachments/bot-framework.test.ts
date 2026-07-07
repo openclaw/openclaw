@@ -514,6 +514,61 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
         { status: 500 },
       ]);
     });
+
+    it("bounds an unbounded attachmentInfo JSON body and cancels the stream", async () => {
+      const state = { canceled: false, enqueued: 0 };
+      const chunkBytes = 1024 * 1024;
+      const stream = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (state.enqueued >= 64) {
+            controller.close();
+            return;
+          }
+          state.enqueued += 1;
+          controller.enqueue(new Uint8Array(chunkBytes).fill(0x61));
+        },
+        cancel() {
+          state.canceled = true;
+        },
+      });
+      const jsonSpy = vi.spyOn(Response.prototype, "json").mockImplementation(async () => {
+        throw new Error("raw response.json() should not be used");
+      });
+      const fetchFn: typeof fetch = vi.fn(async () => {
+        return new Response(stream, {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      });
+
+      try {
+        const warn = vi.fn();
+        const media = await downloadMSTeamsBotFrameworkAttachment({
+          serviceUrl: "https://smba.trafficmanager.net/amer",
+          attachmentId: "att-1",
+          tokenProvider: buildTokenProvider(),
+          maxBytes: 10_000_000,
+          fetchFn,
+          fetchFnSupportsDispatcher: true,
+          resolveFn: resolvePublicHost,
+          logger: { warn },
+        });
+
+        expect(media).toBeUndefined();
+        expect(jsonSpy).not.toHaveBeenCalled();
+        // Enforced well before the 64 MiB test ceiling; an unbounded reader would keep pulling.
+        expect(state.enqueued).toBeLessThan(32);
+        expect(state.canceled).toBe(true);
+        expect(warn).toHaveBeenCalledWith(
+          "msteams botFramework attachmentInfo parse failed",
+          expect.objectContaining({
+            error: expect.stringMatching(/JSON response exceeds 16777216 bytes/),
+          }),
+        );
+      } finally {
+        jsonSpy.mockRestore();
+      }
+    });
   });
 });
 
