@@ -46,7 +46,6 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
-import { readRecentCodexRateLimits, rememberCodexRateLimits } from "./rate-limit-cache.js";
 import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 import {
@@ -73,6 +72,7 @@ export type CodexAppServerToolTelemetry = {
 export type CodexAppServerEventProjectorOptions = {
   nativePostToolUseRelayEnabled?: boolean;
   onNativeToolResultRecorded?: () => void | Promise<void>;
+  readRecentRateLimits?: () => JsonValue | undefined;
   runAbortSignal?: AbortSignal;
   trajectoryRecorder?: CodexTrajectoryRecorder | null;
 };
@@ -552,7 +552,6 @@ export class CodexAppServerEventProjector {
   private tokenUsage: ReturnType<typeof normalizeUsage>;
   private guardianReviewCount = 0;
   private completedCompactionCount = 0;
-  private latestRateLimits: JsonValue | undefined;
 
   constructor(
     private readonly params: EmbeddedRunAttemptParams,
@@ -659,11 +658,6 @@ export class CodexAppServerEventProjector {
     if (!params) {
       return;
     }
-    if (notification.method === "account/rateLimits/updated") {
-      this.latestRateLimits = params;
-      rememberCodexRateLimits(params);
-      return;
-    }
     if (isHookNotificationMethod(notification.method)) {
       if (!this.isHookNotificationForCurrentThread(params)) {
         return;
@@ -722,7 +716,7 @@ export class CodexAppServerEventProjector {
         await this.handleRawResponseItemCompleted(params);
         break;
       case "error":
-        if (readBoolean(params, "willRetry") === true) {
+        if (params.willRetry === true) {
           break;
         }
         this.promptError = this.formatCodexErrorMessage(params) ?? "codex app-server error";
@@ -1292,7 +1286,7 @@ export class CodexAppServerEventProjector {
         formatCodexUsageLimitErrorMessage({
           message: turn.error?.message,
           codexErrorInfo: turn.error?.codexErrorInfo as JsonValue | null | undefined,
-          rateLimits: this.latestRateLimits ?? readRecentCodexRateLimits(),
+          rateLimits: this.options.readRecentRateLimits?.(),
         }) ??
         turn.error?.message ??
         "codex app-server turn failed";
@@ -2237,7 +2231,7 @@ export class CodexAppServerEventProjector {
       formatCodexUsageLimitErrorMessage({
         message: error ? readString(error, "message") : undefined,
         codexErrorInfo: error?.codexErrorInfo,
-        rateLimits: this.latestRateLimits ?? readRecentCodexRateLimits(),
+        rateLimits: this.options.readRecentRateLimits?.(),
       }) ?? readCodexErrorNotificationMessage(params)
     );
   }
@@ -2544,10 +2538,6 @@ function readNonNegativeInteger(record: JsonObject, key: string): number | undef
   return value !== undefined && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
-function readBoolean(record: JsonObject, key: string): boolean | undefined {
-  const value = record[key];
-  return typeof value === "boolean" ? value : undefined;
-}
 
 function readCodexErrorNotificationMessage(record: JsonObject): string | undefined {
   const error = record.error;
