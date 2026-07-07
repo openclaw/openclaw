@@ -91,10 +91,13 @@ async function loadBootFile(
     if (anyErr.code === "ENOENT") {
       return { status: "missing" };
     }
-    // readRegularFile rejects oversized files, symlinks, directories, and other
-    // non-regular paths. Treat all of them as an empty/missing BOOT.md so the
-    // gateway boot step is skipped safely instead of failing startup.
-    return { status: "empty" };
+    // Only an explicit size overflow should skip the boot check; symlinks,
+    // directories, permission errors, and path races keep the current failed
+    // startup behavior so operators notice misconfigured BOOT.md paths.
+    if (anyErr.message?.startsWith("File exceeds")) {
+      return { status: "empty" };
+    }
+    throw err;
   }
 }
 
