@@ -186,7 +186,7 @@ function validateMaxBytes(maxBytes: number): void {
   }
 }
 
-async function readResponsePrefix(
+export async function readResponsePrefix(
   response: Response,
   maxBytes: number,
   options?: {
@@ -197,15 +197,13 @@ async function readResponsePrefix(
   validateMaxBytes(maxBytes);
   const body = response.body;
   if (!body || typeof body.getReader !== "function") {
-    const fallback = Buffer.from(await response.arrayBuffer());
-    if (fallback.length > maxBytes) {
-      return {
-        buffer: fallback.subarray(0, maxBytes),
-        size: fallback.length,
-        truncated: true,
-      };
+    // When body is null, there is nothing to read — return immediately.
+    if (!body) {
+      return { buffer: Buffer.alloc(0), size: 0, truncated: false };
     }
-    return { buffer: fallback, size: fallback.length, truncated: false };
+    // No ReadableStream reader available — fail closed to avoid materializing
+    // the entire response body via arrayBuffer()/text().
+    return { buffer: Buffer.alloc(0), size: 0, truncated: true };
   }
 
   const reader = body.getReader();
