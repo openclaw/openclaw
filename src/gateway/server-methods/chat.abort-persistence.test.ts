@@ -1257,29 +1257,17 @@ describe("chat abort transcript persistence", () => {
   });
 });
 
-describe("chat.abort sessionId matching regression (#101162)", () => {
+describe("chat.abort session identity matching", () => {
   it("matches an active run by stored sessionId when sessionKey differs", async () => {
-    // Simulate: an embedded agent run registered under one sessionKey
-    // but the stored session entry maps to a different sessionId.
-    // chat.abort must pass entry?.sessionId so the resolver can find
-    // the run by sessionId even when sessionKey doesn't match.
     const storedSessionId = "sess-stored-abc";
-    sessionEntryState.sessionId = storedSessionId;
-    sessionEntryState.hasEntry = true;
-    sessionEntryState.canonicalKey = "main";
-
+    setMockSessionEntry("", storedSessionId);
     const runId = "embedded-run-1";
-    const runSessionKey = "agent:main:embedded-key";
+    const active = createActiveRun("agent:main:embedded-key", { sessionId: storedSessionId });
     const context = createChatAbortContext({
-      chatAbortControllers: new Map([
-        [runId, createActiveRun(runSessionKey, { sessionId: storedSessionId })],
-      ]),
+      chatAbortControllers: new Map([[runId, active]]),
     });
-
-    // Call chat.abort with a different sessionKey than the run's.
-    // Without sessionId, the resolver would miss this run (sessionKeys
-    // won't contain "agent:main:embedded-key").
     const respond = vi.fn();
+
     await invokeChatAbortHandler({
       handler: chatHandlers["chat.abort"],
       context,
@@ -1289,24 +1277,20 @@ describe("chat.abort sessionId matching regression (#101162)", () => {
 
     const [ok, payload] = requireLastRespondCall(respond);
     expect(ok).toBe(true);
-    expect(payload).toEqual({ ok: true, aborted: true, runIds: [runId] });
+    expectAbortPayload(payload, { runIds: [runId] });
+    expect(active.controller.signal.aborted).toBe(true);
+    expect(sessionEntryState.loadCalls).toContainEqual({ sessionKey: "main", opts: undefined });
   });
 
   it("does not match a run whose sessionId differs from the stored entry", async () => {
-    // The run has a different sessionId than the stored entry.
-    // chat.abort should NOT find it via sessionId matching.
-    sessionEntryState.sessionId = "sess-stored-xyz";
-    sessionEntryState.hasEntry = true;
-    sessionEntryState.canonicalKey = "main";
-
+    setMockSessionEntry("", "sess-stored-xyz");
     const runId = "embedded-run-2";
+    const active = createActiveRun("agent:main:other-key", { sessionId: "sess-different" });
     const context = createChatAbortContext({
-      chatAbortControllers: new Map([
-        [runId, createActiveRun("agent:main:other-key", { sessionId: "sess-different" })],
-      ]),
+      chatAbortControllers: new Map([[runId, active]]),
     });
-
     const respond = vi.fn();
+
     await invokeChatAbortHandler({
       handler: chatHandlers["chat.abort"],
       context,
@@ -1316,7 +1300,7 @@ describe("chat.abort sessionId matching regression (#101162)", () => {
 
     const [ok, payload] = requireLastRespondCall(respond);
     expect(ok).toBe(true);
-    // Run not matched: sessionKey differs AND sessionId differs
     expect(payload).toEqual({ ok: true, aborted: false, runIds: [] });
+    expect(active.controller.signal.aborted).toBe(false);
   });
 });

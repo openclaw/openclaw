@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { buildQaTarget } from "openclaw/plugin-sdk/qa-channel";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { createMatrixQaClient, provisionMatrixQaRoom } from "./substrate/client.js";
 import { buildMatrixQaConfig } from "./substrate/config.js";
@@ -25,6 +26,13 @@ const MATRIX_SHARED_FLOW_TOPOLOGY = {
       requireMention: true,
     },
     {
+      key: "secondary",
+      kind: "group",
+      members: ["driver", "observer", "sut"],
+      name: "OpenClaw Matrix QA Secondary Room",
+      requireMention: true,
+    },
+    {
       key: "driver-dm",
       kind: "dm",
       members: ["driver", "sut"],
@@ -39,19 +47,19 @@ const MATRIX_SHARED_FLOW_TOPOLOGY = {
   ],
 } satisfies MatrixQaTopologySpec;
 
-function resolveMatrixQaAdapterRoom(topology: MatrixQaProvisionedTopology, conversationId: string) {
+function resolveMatrixQaAdapterRoom(
+  topology: MatrixQaProvisionedTopology,
+  conversation: { id: string; kind: "channel" | "direct" | "group" },
+) {
   return (
-    topology.rooms.find((room) => room.key === conversationId || room.roomId === conversationId) ??
+    topology.rooms.find(
+      (room) => room.key === conversation.id || room.roomId === conversation.id,
+    ) ??
+    (conversation.kind === "direct"
+      ? topology.rooms.find((room) => room.kind === "dm")
+      : undefined) ??
     topology.rooms.find((room) => room.roomId === topology.defaultRoomId)!
   );
-}
-
-function buildMatrixQaBusTarget(conversation: {
-  id: string;
-  kind: "channel" | "direct" | "group";
-}) {
-  const prefix = conversation.kind === "direct" ? "dm" : conversation.kind;
-  return `${prefix}:${conversation.id}`;
 }
 
 async function waitForMatrixChannelReady(
@@ -193,7 +201,10 @@ export async function createMatrixQaTransportAdapter(
         }
         const outbound = await context.messages.addOutboundMessage({
           accountId,
-          to: buildMatrixQaBusTarget(logicalConversation),
+          to: buildQaTarget({
+            chatType: logicalConversation.kind,
+            conversationId: logicalConversation.id,
+          }),
           senderId: event.sender,
           text,
           timestamp: event.originServerTs,
@@ -226,7 +237,7 @@ export async function createMatrixQaTransportAdapter(
       }
     },
     async sendInbound(input) {
-      const room = resolveMatrixQaAdapterRoom(provisioning.topology, input.conversation.id);
+      const room = resolveMatrixQaAdapterRoom(provisioning.topology, input.conversation);
       logicalConversationByRoomId.set(room.roomId, {
         id: input.conversation.id,
         kind: input.conversation.kind,
