@@ -53,6 +53,10 @@ function spawnDetachedGatewayProcess(opts: GatewayRespawnOptions = {}): {
     detached: true,
     stdio: "inherit",
   });
+  child.on("error", () => {
+    // Detached update handoff cannot be awaited by the caller, but the child
+    // still needs an error listener so async spawn failures do not crash here.
+  });
   child.unref();
   return { child, pid: child.pid ?? undefined };
 }

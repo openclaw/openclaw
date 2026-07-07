@@ -54,6 +54,17 @@ function clearSupervisorHints() {
   }
 }
 
+function mockDetachedChild(pid: number) {
+  const child = {
+    pid,
+    kill: vi.fn(),
+    on: vi.fn(),
+    unref: vi.fn(),
+  };
+  child.on.mockReturnValue(child);
+  return child;
+}
+
 function expectLaunchdSupervisedWithoutKickstart(params?: { launchJobLabel?: string }) {
   setPlatform("darwin");
   if (params?.launchJobLabel) {
@@ -170,7 +181,7 @@ describe("restartGatewayProcessWithFreshPid", () => {
     setPlatform("linux");
     process.execArgv = ["--import", "tsx"];
     process.argv = ["/usr/local/bin/node", "/repo/dist/index.js", "gateway", "run"];
-    spawnMock.mockReturnValue({ pid: 4242, unref: vi.fn() });
+    spawnMock.mockReturnValue(mockDetachedChild(4242));
 
     const result = restartGatewayProcessWithFreshPid();
 
@@ -302,7 +313,7 @@ describe("respawnGatewayProcessForUpdate", () => {
       "gateway",
       "run",
     ];
-    spawnMock.mockReturnValue({ pid: 5151, unref: vi.fn(), kill: vi.fn() });
+    spawnMock.mockReturnValue(mockDetachedChild(5151));
 
     const result = respawnGatewayProcessForUpdate();
 
@@ -329,7 +340,7 @@ describe("respawnGatewayProcessForUpdate", () => {
       "gateway",
       "run",
     ];
-    spawnMock.mockReturnValue({ pid: 7171, unref: vi.fn(), kill: vi.fn() });
+    spawnMock.mockReturnValue(mockDetachedChild(7171));
 
     const result = respawnGatewayProcessForUpdate();
 
@@ -352,7 +363,7 @@ describe("respawnGatewayProcessForUpdate", () => {
     const entry =
       "/app/node_modules/.pnpm/@anthropic+sdk@1.0.0/node_modules/@anthropic/sdk/dist/index.js";
     process.argv = ["/usr/local/bin/node", entry, "gateway", "run"];
-    spawnMock.mockReturnValue({ pid: 8181, unref: vi.fn(), kill: vi.fn() });
+    spawnMock.mockReturnValue(mockDetachedChild(8181));
 
     respawnGatewayProcessForUpdate();
 
@@ -369,7 +380,7 @@ describe("respawnGatewayProcessForUpdate", () => {
     process.env.XPC_SERVICE_NAME = "ai.openclaw.mac";
     process.execArgv = [];
     process.argv = ["/usr/local/bin/node", "/repo/dist/index.js", "gateway", "run"];
-    spawnMock.mockReturnValue({ pid: 6161, unref: vi.fn(), kill: vi.fn() });
+    spawnMock.mockReturnValue(mockDetachedChild(6161));
 
     const result = respawnGatewayProcessForUpdate();
 
@@ -412,5 +423,24 @@ describe("respawnGatewayProcessForUpdate", () => {
 
     expect(result.mode).toBe("failed");
     expect(result.detail).toContain("spawn failed");
+  });
+
+  it("registers an error listener before unref on detached update children", () => {
+    clearSupervisorHints();
+    setPlatform("linux");
+    process.execArgv = [];
+    process.argv = ["/usr/local/bin/node", "/repo/dist/index.js", "gateway", "run"];
+    const child = mockDetachedChild(9191);
+    spawnMock.mockReturnValue(child);
+
+    const result = respawnGatewayProcessForUpdate();
+
+    expect(result.mode).toBe("spawned");
+    expect(child.on).toHaveBeenCalledWith("error", expect.any(Function));
+    expect(child.on.mock.invocationCallOrder[0]).toBeLessThan(
+      child.unref.mock.invocationCallOrder[0],
+    );
+    const errorHandler = child.on.mock.calls.find(([event]) => event === "error")?.[1];
+    expect(() => errorHandler?.(new Error("async spawn failure"))).not.toThrow();
   });
 });
