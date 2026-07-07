@@ -177,6 +177,23 @@ describe("createAnthropicVertexStreamFn", () => {
     });
   });
 
+  it("restores the canonical API before calling the shared Anthropic transport", () => {
+    const { deps, streamAnthropicMock } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+    const model = {
+      ...makeModel({ id: "claude-fable-5", maxTokens: 128000 }),
+      api: "openclaw-anthropic-vertex-simple:default",
+    };
+
+    void streamFn(model as never, { messages: [] }, {});
+
+    expect(streamAnthropicCall(streamAnthropicMock)[0]).toMatchObject({
+      api: "anthropic-messages",
+      provider: "anthropic-vertex",
+      id: "claude-fable-5",
+    });
+  });
+
   it("defaults maxTokens to the model limit instead of the old 32000 cap", () => {
     const { deps, streamAnthropicMock } = createStreamDeps();
     const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
@@ -235,6 +252,29 @@ describe("createAnthropicVertexStreamFn", () => {
     });
     expect(streamTransportOptions(streamAnthropicMock)).not.toHaveProperty("temperature");
   });
+
+  it.each([
+    { reasoning: undefined, thinkingEnabled: true, effort: "high" },
+    { reasoning: "off" as const, thinkingEnabled: false, effort: undefined },
+  ])(
+    "supports Sonnet 5 reasoning=$reasoning on Vertex",
+    ({ reasoning, thinkingEnabled, effort }) => {
+      const { deps, streamAnthropicMock } = createStreamDeps();
+      const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+      const model = makeModel({ id: "claude-sonnet-5", maxTokens: 128_000 });
+
+      void streamFn(model, { messages: [] }, { reasoning, temperature: 0.7 });
+
+      const options = streamTransportOptions(streamAnthropicMock);
+      expect(options).toMatchObject({ thinkingEnabled, maxTokens: 128_000 });
+      expect(options).not.toHaveProperty("temperature");
+      if (effort) {
+        expect(options.effort).toBe(effort);
+      } else {
+        expect(options).not.toHaveProperty("effort");
+      }
+    },
+  );
 
   it("uses Mythos 5's mandatory adaptive Vertex contract by default", () => {
     const { deps, streamAnthropicMock } = createStreamDeps();
@@ -329,6 +369,25 @@ describe("createAnthropicVertexStreamFn", () => {
     const transportOptions = streamTransportOptions(streamAnthropicMock);
     expect(transportOptions.thinkingEnabled).toBe(true);
     expect(transportOptions.effort).toBe("max");
+  });
+
+  it("disables manual thinking when the configured budget is below 1024", () => {
+    const { deps, streamAnthropicMock } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+    const model = makeModel({ id: "claude-haiku-4-5", maxTokens: 8192 });
+
+    void streamFn(
+      model,
+      { messages: [] },
+      {
+        reasoning: "low",
+        thinkingBudgets: { low: 512 },
+      },
+    );
+
+    const transportOptions = streamTransportOptions(streamAnthropicMock);
+    expect(transportOptions.thinkingEnabled).toBe(false);
+    expect(transportOptions).not.toHaveProperty("thinkingBudgetTokens");
   });
 
   it("preserves native max reasoning for Sonnet 4.6", () => {

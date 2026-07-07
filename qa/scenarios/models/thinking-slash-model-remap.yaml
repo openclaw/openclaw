@@ -70,15 +70,14 @@ flow:
         - set: cursor
           value:
             expr: state.getSnapshot().messages.length
-        - call: state.addInboundMessage
-          args:
-            - conversation:
-                id:
-                  expr: config.conversationId
-                kind: direct
-              senderId: qa-operator
-              senderName: QA Operator
-              text: /think
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: direct
+            senderId: qa-operator
+            senderName: QA Operator
+            text: /think
         - call: waitForCondition
           saveAs: anthropicThinkStatus
           args:
@@ -99,15 +98,14 @@ flow:
         - set: cursor
           value:
             expr: state.getSnapshot().messages.length
-        - call: state.addInboundMessage
-          args:
-            - conversation:
-                id:
-                  expr: config.conversationId
-                kind: direct
-              senderId: qa-operator
-              senderName: QA Operator
-              text: /think adaptive
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: direct
+            senderId: qa-operator
+            senderName: QA Operator
+            text: /think adaptive
         - call: waitForCondition
           saveAs: adaptiveAck
           args:
@@ -124,15 +122,14 @@ flow:
         - set: cursor
           value:
             expr: state.getSnapshot().messages.length
-        - call: state.addInboundMessage
-          args:
-            - conversation:
-                id:
-                  expr: config.conversationId
-                kind: direct
-              senderId: qa-operator
-              senderName: QA Operator
-              text: /think
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: direct
+            senderId: qa-operator
+            senderName: QA Operator
+            text: /think
         - call: waitForCondition
           saveAs: openAiThinkStatus
           args:
@@ -149,15 +146,14 @@ flow:
         - set: cursor
           value:
             expr: state.getSnapshot().messages.length
-        - call: state.addInboundMessage
-          args:
-            - conversation:
-                id:
-                  expr: config.conversationId
-                kind: direct
-              senderId: qa-operator
-              senderName: QA Operator
-              text: /think xhigh
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: direct
+            senderId: qa-operator
+            senderName: QA Operator
+            text: /think xhigh
         - call: waitForCondition
           saveAs: xhighAck
           args:
@@ -174,15 +170,14 @@ flow:
         - set: cursor
           value:
             expr: state.getSnapshot().messages.length
-        - call: state.addInboundMessage
-          args:
-            - conversation:
-                id:
-                  expr: config.conversationId
-                kind: direct
-              senderId: qa-operator
-              senderName: QA Operator
-              text: /think
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: direct
+            senderId: qa-operator
+            senderName: QA Operator
+            text: /think
         - call: waitForCondition
           saveAs: noXhighThinkStatus
           args:

@@ -57,7 +57,7 @@ export type MemoryChunk = {
   embeddingInput?: EmbeddingInput;
 };
 
-export type MultimodalMemoryChunk = {
+type MultimodalMemoryChunk = {
   chunk: MemoryChunk;
   structuredInputBytes: number;
 };
@@ -73,7 +73,7 @@ export function ensureDir(dir: string): string {
   return dir;
 }
 
-export function normalizeRelPath(value: string): string {
+function normalizeRelPath(value: string): string {
   const trimmed = value.trim().replace(/^[./]+/, "");
   return trimmed.replace(/\\/g, "/");
 }

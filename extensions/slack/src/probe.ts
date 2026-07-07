@@ -3,15 +3,21 @@ import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { createSlackWebClient } from "./client.js";
 import { formatSlackError } from "./errors.js";
+import { formatSlackBotTokenIdentityWarning } from "./token.js";
 
 export type SlackProbe = BaseProbeResult & {
   status?: number | null;
   elapsedMs?: number | null;
   bot?: { id?: string; name?: string };
   team?: { id?: string; name?: string };
+  warning?: string;
 };
 
-export async function probeSlack(token: string, timeoutMs = 2500): Promise<SlackProbe> {
+export async function probeSlack(
+  token: string,
+  timeoutMs = 2500,
+  opts?: { accountId?: string | null },
+): Promise<SlackProbe> {
   const client = createSlackWebClient(token);
   const start = Date.now();
   try {
@@ -24,12 +30,17 @@ export async function probeSlack(token: string, timeoutMs = 2500): Promise<Slack
         elapsedMs: Date.now() - start,
       };
     }
+    const warning = formatSlackBotTokenIdentityWarning({
+      auth: result,
+      accountId: opts?.accountId,
+    });
     return {
       ok: true,
       status: 200,
       elapsedMs: Date.now() - start,
       bot: { id: result.user_id, name: result.user },
       team: { id: result.team_id, name: result.team },
+      ...(warning ? { warning } : {}),
     };
   } catch (err) {
     const message = formatSlackError(err);

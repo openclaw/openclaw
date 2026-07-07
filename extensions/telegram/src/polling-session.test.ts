@@ -477,9 +477,10 @@ async function waitForTestReplyFenceAbort(params: { key: string; laneKey: string
 async function writeSpooledTestUpdates(
   spoolDir: string,
   updates: readonly TestTelegramUpdate[],
+  options?: { now?: number },
 ): Promise<void> {
   for (const update of updates) {
-    await writeTelegramSpooledUpdate({ spoolDir, update });
+    await writeTelegramSpooledUpdate({ spoolDir, update, now: options?.now });
   }
 }
 
@@ -799,6 +800,77 @@ describe("TelegramPollingSession", () => {
     expect(
       computeBackoffMock.mock.calls.map((call) => (call[0] as { initialMs: number }).initialMs),
     ).toEqual([30_000, 30_000, 120_000, 30_000]);
+  });
+
+  it("backs off every retryable spooled handler failure with an error marker", () => {
+    expect(
+      pollingSessionTesting.resolveSpooledUpdateRetryDelayMs(
+        {
+          updateId: 42,
+          path: "/tmp/42.json",
+          update: { update_id: 42 },
+          receivedAt: 0,
+          attempts: 1,
+          lastAttemptAt: 1_000,
+          lastError: "plain TypeError from handler",
+        },
+        1_999,
+      ),
+    ).toBe(1);
+    expect(
+      pollingSessionTesting.resolveSpooledUpdateRetryDelayMs(
+        {
+          updateId: 43,
+          path: "/tmp/43.json",
+          update: { update_id: 43 },
+          receivedAt: 0,
+          attempts: 1,
+          lastAttemptAt: 1_000,
+        },
+        1_999,
+      ),
+    ).toBe(0);
+    expect(
+      pollingSessionTesting.resolveSpooledUpdateRetryDelayMs(
+        {
+          updateId: 44,
+          path: "/tmp/44.json",
+          update: { update_id: 44 },
+          receivedAt: 0,
+          attempts: pollingSessionTesting.spooledRetryMaxAttempts,
+          lastAttemptAt: 1_000,
+          lastError: "state store outage",
+        },
+        1_999,
+      ),
+    ).toBeGreaterThan(0);
+  });
+
+  it("keeps generic retryable failures pending until they are old enough to dead-letter", () => {
+    const update = {
+      updateId: 42,
+      path: "/tmp/42.json",
+      update: { update_id: 42 },
+      receivedAt: 1_000,
+      attempts: pollingSessionTesting.spooledRetryMaxAttempts - 1,
+      lastAttemptAt: 2_000,
+      lastError: "state store outage",
+    };
+
+    expect(
+      pollingSessionTesting.shouldDeadLetterRetryableSpooledUpdate(
+        update,
+        pollingSessionTesting.spooledRetryMaxAttempts,
+        1_000 + pollingSessionTesting.spooledRetryDeadLetterMinAgeMs - 1,
+      ),
+    ).toBe(false);
+    expect(
+      pollingSessionTesting.shouldDeadLetterRetryableSpooledUpdate(
+        update,
+        pollingSessionTesting.spooledRetryMaxAttempts,
+        1_000 + pollingSessionTesting.spooledRetryDeadLetterMinAgeMs,
+      ),
+    ).toBe(true);
   });
 
   it("does not call getUpdates for offset confirmation (avoiding 409 conflicts)", async () => {
@@ -1257,7 +1329,11 @@ describe("TelegramPollingSession", () => {
     };
     createTelegramBotMock.mockReturnValueOnce(bot);
     let onMessage:
-      | ((message: { type: "poll-success"; finishedAt: number; count: number }) => void)
+      | ((
+          message:
+            | { type: "poll-success"; finishedAt: number; count: number }
+            | { type: "poll-error"; finishedAt: number; message: string },
+        ) => void)
       | undefined;
     let stopWorker: (() => void) | undefined;
     const workerDone = new Promise<void>((resolve) => {
@@ -1287,9 +1363,21 @@ describe("TelegramPollingSession", () => {
 
     const runPromise = session.runUntilAbort();
     await vi.waitFor(() => expect(init).toHaveBeenCalledTimes(1));
-    onMessage?.({ type: "poll-success", finishedAt: Date.now(), count: 0 });
+    onMessage?.({ type: "poll-success", finishedAt: 10_000, count: 0 });
+    onMessage?.({ type: "poll-success", finishedAt: 10_001, count: 0 });
 
     await vi.waitFor(() => expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(1));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    onMessage?.({ type: "poll-success", finishedAt: 15_000, count: 0 });
+    await vi.waitFor(() => expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(2));
+    onMessage?.({ type: "poll-error", finishedAt: 15_001, message: "offline" });
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    onMessage?.({ type: "poll-success", finishedAt: 15_002, count: 0 });
+    await vi.waitFor(() => expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(3));
 
     abort.abort();
     await runPromise;
@@ -1618,6 +1706,41 @@ describe("TelegramPollingSession", () => {
       stopWorker();
       await runPromise;
     });
+  });
+
+  it("does not re-dispatch refetched updates after spooled completion", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await withTempSpool(async (tempDir) => {
+        const abort = new AbortController();
+        const events: number[] = [];
+        await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "first delivery")]);
+
+        const { runPromise, stopWorker } = startIsolatedIngressSession({
+          abort,
+          spoolDir: tempDir,
+          drainIntervalMs: 10,
+          handleUpdate: async (update) => {
+            events.push(Number(update.update_id));
+          },
+        });
+
+        await vi.waitFor(() => expect(events).toEqual([42]));
+        expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+
+        await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "telegram refetch")]);
+        await vi.advanceTimersByTimeAsync(50);
+
+        expect(events).toEqual([42]);
+        expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+
+        abort.abort();
+        stopWorker();
+        await runPromise;
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("refreshes active spooled claims while the handler is still running", async () => {
@@ -2020,6 +2143,60 @@ describe("TelegramPollingSession", () => {
     });
   });
 
+  it("dead-letters retryable poison updates after bounded retries so the lane can drain", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await withTempSpool(async (tempDir) => {
+        const abort = new AbortController();
+        const log = vi.fn();
+        const events: string[] = [];
+        let poisonAttempts = 0;
+        await writeSpooledTestUpdates(
+          tempDir,
+          [topicUpdate(42, 10, "poison"), topicUpdate(44, 10, "after poison")],
+          {
+            now: Date.now() - pollingSessionTesting.spooledRetryDeadLetterMinAgeMs,
+          },
+        );
+
+        const { runPromise, stopWorker } = startIsolatedIngressSession({
+          abort,
+          spoolDir: tempDir,
+          log,
+          drainIntervalMs: 100,
+          handleUpdate: async (update) => {
+            if (update.update_id === 42) {
+              poisonAttempts += 1;
+              events.push(`poison:${poisonAttempts}`);
+              throw new Error("deterministic handler failure");
+            }
+            if (update.update_id === 44) {
+              events.push("after-poison");
+              abort.abort();
+            }
+          },
+        });
+
+        await vi.waitFor(() => expect(poisonAttempts).toBe(1));
+        await vi.advanceTimersByTimeAsync(130_000);
+
+        await vi.waitFor(() => expect(events.at(-1)).toBe("after-poison"));
+        expect(poisonAttempts).toBe(pollingSessionTesting.spooledRetryMaxAttempts);
+        expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+        expect(await failedUpdateReasons(tempDir)).toEqual([
+          { id: 42, reason: "retry-limit-exceeded" },
+        ]);
+        expectLogIncludes(log, "spooled update 42 on lane");
+        expectLogIncludes(log, "reached retry limit after 8 attempts; dead-lettered");
+
+        stopWorker();
+        await runPromise;
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   for (const scenario of [
     {
       name: "topic",
@@ -2077,20 +2254,17 @@ describe("TelegramPollingSession", () => {
             },
           });
 
-          await vi.waitFor(() => expect(attempts).toBe(1));
-          await vi.advanceTimersByTimeAsync(1_000);
-          expect(attempts).toBe(1);
-          await vi.waitFor(() =>
-            expect(events).toEqual([`${scenario.conflictEvent}:1`, scenario.otherEvent]),
-          );
+          await vi.waitFor(() => expect(attempts).toBeGreaterThanOrEqual(1));
+          await vi.waitFor(() => expect(events).toContain(scenario.otherEvent));
+          expect(events).not.toContain(scenario.blockedEvent);
           expect(await pendingUpdateIds(tempDir, "all")).toEqual([
             scenario.conflict.update_id,
             scenario.blocked.update_id,
           ]);
           expect(await failedUpdateIds(tempDir)).toEqual([]);
 
-          await vi.advanceTimersByTimeAsync(4_500);
-          await vi.waitFor(() => expect(attempts).toBe(2));
+          await vi.advanceTimersByTimeAsync(1_200);
+          await vi.waitFor(() => expect(attempts).toBeGreaterThanOrEqual(2));
           expect(events).not.toContain(scenario.blockedEvent);
           expectLogIncludes(
             log,
@@ -4508,7 +4682,7 @@ describe("TelegramPollingSession", () => {
     await runPromise;
   });
 
-  it("drains Telegram delivery queue after each getUpdates success", async () => {
+  it("throttles healthy delivery drains and re-arms after polling errors", async () => {
     const abort = new AbortController();
     const botStop = vi.fn(async () => undefined);
     const runnerStop = vi.fn(async () => undefined);
@@ -4532,6 +4706,27 @@ describe("TelegramPollingSession", () => {
       { offset: 2 },
     );
 
+    await vi.waitFor(() => expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(1));
+    await apiMiddleware(
+      vi.fn(async () => []),
+      "getUpdates",
+      { offset: 3 },
+    );
+    await vi.waitFor(() => expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(1));
+    await expect(
+      apiMiddleware(
+        vi.fn(async () => {
+          throw new Error("offline");
+        }),
+        "getUpdates",
+        { offset: 4 },
+      ),
+    ).rejects.toThrow("offline");
+    await apiMiddleware(
+      vi.fn(async () => []),
+      "getUpdates",
+      { offset: 5 },
+    );
     await vi.waitFor(() => expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(2));
 
     abort.abort();

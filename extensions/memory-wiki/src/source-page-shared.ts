@@ -13,12 +13,23 @@ import { writeGuardedVaultPage } from "./vault-page-write.js";
 type ImportedSourceState = Parameters<typeof shouldSkipImportedSourceWrite>[0]["state"];
 type VaultRoot = Awaited<ReturnType<typeof fsRoot>>;
 
+function isUnreadableImportedSourcePage(error: unknown): boolean {
+  return error instanceof FsSafeError && (error.code === "not-file" || error.code === "hardlink");
+}
+
 async function readExistingImportedSourcePage(vault: VaultRoot, pagePath: string): Promise<string> {
-  try {
-    return await vault.readText(pagePath);
-  } catch {
-    return await vault.readText(pagePath);
+  let readError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await vault.readText(pagePath);
+    } catch (error) {
+      readError = error;
+    }
   }
+  if (isUnreadableImportedSourcePage(readError)) {
+    return "";
+  }
+  throw readError;
 }
 
 export async function writeImportedSourcePage(params: {

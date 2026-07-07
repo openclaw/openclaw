@@ -2,8 +2,15 @@ package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
+import ai.openclaw.app.chat.ChatOutboxItem
+import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.chat.MessageSpeechPhase
+import ai.openclaw.app.chat.MessageSpeechState
+import ai.openclaw.app.chat.normalizeVisibleChatMessageRole
 import ai.openclaw.app.tools.ToolDisplayRegistry
+import ai.openclaw.app.ui.MobileColorsAccessor
+import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.mobileAccent
 import ai.openclaw.app.ui.mobileAccentSoft
 import ai.openclaw.app.ui.mobileBorder
@@ -15,6 +22,7 @@ import ai.openclaw.app.ui.mobileCardSurface
 import ai.openclaw.app.ui.mobileCodeBg
 import ai.openclaw.app.ui.mobileCodeBorder
 import ai.openclaw.app.ui.mobileCodeText
+import ai.openclaw.app.ui.mobileDanger
 import ai.openclaw.app.ui.mobileText
 import ai.openclaw.app.ui.mobileTextSecondary
 import ai.openclaw.app.ui.mobileWarning
@@ -25,22 +33,39 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.HourglassEmpty
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.util.Locale
@@ -54,8 +79,13 @@ private data class ChatBubbleStyle(
 
 /** Renders one persisted chat message as text and image parts. */
 @Composable
-fun ChatMessageBubble(message: ChatMessage) {
-  val role = message.role.trim().lowercase(Locale.US)
+internal fun ChatMessageBubble(
+  message: ChatMessage,
+  onReplyMessage: (String) -> Unit = {},
+  speechState: MessageSpeechState? = null,
+  onToggleListen: ((String, String) -> Unit)? = null,
+) {
+  val role = normalizeVisibleChatMessageRole(message.role) ?: return
   val style = bubbleStyle(role)
 
   // Filter to only displayable content parts (text with content, or base64 images).
@@ -64,14 +94,73 @@ fun ChatMessageBubble(message: ChatMessage) {
       when (part.type) {
         "text" -> !part.text.isNullOrBlank()
         "image" -> !part.base64.isNullOrBlank()
-        else -> false
+        else -> part.isAudioAttachment()
       }
     }
 
   if (displayableContent.isEmpty()) return
 
-  ChatBubbleContainer(style = style, roleLabel = roleLabel(role)) {
-    ChatMessageBody(content = displayableContent, textColor = mobileText)
+  val messageText = chatMessagePlainText(displayableContent)
+  val messageSpeech = speechState?.takeIf { it.messageId == message.id }
+  val canListen = role == "assistant" && messageText.isNotBlank() && onToggleListen != null
+  val toggleListen: (() -> Unit)? =
+    if (canListen) {
+      { checkNotNull(onToggleListen).invoke(message.id, messageText) }
+    } else {
+      null
+    }
+  ChatMessageActionHost(
+    text = messageText,
+    onReply = onReplyMessage,
+    listenActive = messageSpeech != null,
+    onToggleListen = toggleListen,
+    modifier = Modifier.fillMaxWidth(),
+  ) {
+    ChatBubbleContainer(style = style, roleLabel = roleLabel(role)) {
+      ChatMessageBody(content = displayableContent, textColor = mobileText)
+      ChatMessageLinkPreview(messageId = message.id, role = role, content = displayableContent)
+      messageSpeech?.let { speech ->
+        MessageSpeechIndicator(
+          phase = speech.phase,
+          onStop = { checkNotNull(onToggleListen).invoke(message.id, messageText) },
+        )
+      }
+    }
+  }
+}
+
+@Composable
+private fun MessageSpeechIndicator(
+  phase: MessageSpeechPhase,
+  onStop: () -> Unit,
+) {
+  Surface(
+    onClick = onStop,
+    shape = RoundedCornerShape(999.dp),
+    color = mobileAccentSoft,
+  ) {
+    Row(
+      modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+      horizontalArrangement = Arrangement.spacedBy(6.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Icon(
+        imageVector =
+          if (phase == MessageSpeechPhase.Preparing) {
+            Icons.Default.HourglassEmpty
+          } else {
+            Icons.AutoMirrored.Filled.VolumeUp
+          },
+        contentDescription = null,
+        modifier = Modifier.size(14.dp),
+        tint = mobileTextSecondary,
+      )
+      Text(
+        text = if (phase == MessageSpeechPhase.Preparing) "Preparing audio…" else "Speaking…",
+        style = mobileCaption1,
+        color = mobileTextSecondary,
+      )
+    }
   }
 }
 
@@ -116,11 +205,12 @@ private fun ChatMessageBody(
 ) {
   Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
     for (part in content) {
-      when (part.type) {
-        "text" -> {
+      when {
+        part.type == "text" -> {
           val text = part.text ?: continue
           ChatMarkdown(text = text, textColor = textColor)
         }
+        part.isAudioAttachment() -> VoiceNoteMessageRow(durationMs = part.durationMs)
         else -> {
           val b64 = part.base64 ?: continue
           ChatBase64Image(base64 = b64, mimeType = part.mimeType)
@@ -129,6 +219,136 @@ private fun ChatMessageBody(
     }
   }
 }
+
+@Composable
+internal fun ChatMessageLinkPreview(
+  messageId: String,
+  role: String,
+  content: List<ChatMessageContent>,
+) {
+  val normalizedRole = normalizeVisibleChatMessageRole(role) ?: return
+  if (normalizedRole != "user" && normalizedRole != "assistant") return
+  val previewUrl =
+    remember(messageId, normalizedRole, content) {
+      content
+        .asSequence()
+        .filter { it.type == "text" }
+        .mapNotNull { it.text?.let(::extractFirstBareUrl) }
+        .firstOrNull()
+    }
+  if (previewUrl != null) {
+    ChatLinkPreview(messageId = messageId, url = previewUrl)
+  }
+}
+
+@Composable
+private fun ChatLinkPreview(
+  messageId: String,
+  url: String,
+) {
+  var expanded by rememberSaveable(messageId, url) { mutableStateOf(false) }
+  var result by remember(messageId, url) { mutableStateOf<LinkPreviewResult?>(null) }
+  val domain = remember(url) { linkPreviewDomain(url) }
+
+  if (!expanded) {
+    Surface(
+      onClick = { expanded = true },
+      shape = RoundedCornerShape(8.dp),
+      color = mobileCardSurface,
+      border = BorderStroke(1.dp, mobileBorder),
+    ) {
+      Row(
+        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Text(
+          text = "Preview · $domain",
+          style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
+          color = mobileTextSecondary,
+          modifier = Modifier.weight(1f),
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+        androidx.compose.material3.Icon(
+          imageVector = Icons.Default.ExpandMore,
+          contentDescription = "Expand link preview",
+          tint = mobileTextSecondary,
+        )
+      }
+    }
+    return
+  }
+
+  LaunchedEffect(messageId, url) {
+    result = chatLinkPreviewStore.get(url)
+  }
+  val imageUrl = (result as? LinkPreviewResult.Loaded)?.metadata?.imageUrl
+  var previewImage by remember(messageId, url, imageUrl) { mutableStateOf<ImageBitmap?>(null) }
+  LaunchedEffect(imageUrl) {
+    previewImage =
+      when (val image = imageUrl?.let { chatLinkPreviewImageStore.get(it) }) {
+        is LinkPreviewImageResult.Loaded -> image.bitmap.asImageBitmap()
+        LinkPreviewImageResult.Failed, null -> null
+      }
+  }
+  val uriHandler = LocalUriHandler.current
+  val cardShape = RoundedCornerShape(ClawTheme.radii.sheet)
+  Surface(
+    onClick = { uriHandler.openUri(url) },
+    shape = cardShape,
+    color = mobileCardSurface,
+    border = BorderStroke(1.dp, mobileBorder),
+  ) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+      previewImage?.let { image ->
+        Image(
+          bitmap = image,
+          contentDescription = null,
+          contentScale = ContentScale.Crop,
+          modifier = Modifier.fillMaxWidth().heightIn(max = 120.dp).clip(cardShape),
+        )
+      }
+      Column(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+      ) {
+        Text(domain, style = mobileCaption2, color = mobileTextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        when (val preview = result) {
+          null -> Text("Loading preview…", style = mobileCaption1, color = mobileTextSecondary)
+          LinkPreviewResult.Failed -> Text("No preview available", style = mobileCallout, color = mobileTextSecondary)
+          is LinkPreviewResult.Loaded -> {
+            preview.metadata.title?.let { title ->
+              Text(
+                text = title,
+                style = mobileCallout.copy(fontWeight = FontWeight.SemiBold),
+                color = mobileText,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+              )
+            }
+            preview.metadata.description?.let { description ->
+              Text(
+                text = description,
+                style = mobileCaption1,
+                color = mobileTextSecondary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+private fun linkPreviewDomain(url: String): String =
+  runCatching { java.net.URI(url).host }
+    .getOrNull()
+    ?.removePrefix("www.")
+    ?.takeIf(String::isNotBlank)
+    ?: url
 
 /** Assistant placeholder shown while a run is active but no text has streamed yet. */
 @Composable
@@ -191,6 +411,72 @@ fun ChatPendingToolsBubble(toolCalls: List<ChatPendingToolCall>) {
   }
 }
 
+/** Queued/failed offline command with inline retry/delete controls; rendered as a user bubble. */
+@Composable
+fun ChatOutboxBubble(
+  item: ChatOutboxItem,
+  onRetry: () -> Unit,
+  onDelete: () -> Unit,
+) {
+  val failed = item.status == ChatOutboxStatus.Failed
+  val statusColor = if (failed) mobileDanger else mobileWarning
+  val statusLabel =
+    when (item.status) {
+      ChatOutboxStatus.Queued -> "Queued — sends when reconnected"
+      ChatOutboxStatus.Sending -> "Sending…"
+      ChatOutboxStatus.Failed ->
+        item.lastError
+          ?.trim()
+          ?.takeIf { it.isNotEmpty() }
+          ?.let { "Failed — $it" } ?: "Failed"
+    }
+
+  ChatBubbleContainer(
+    style = bubbleStyle("user").copy(borderColor = statusColor.copy(alpha = 0.6f)),
+    roleLabel = "You",
+  ) {
+    ChatMarkdown(text = item.text, textColor = mobileText)
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      Text(
+        text = statusLabel,
+        style = mobileCaption1,
+        color = statusColor,
+        modifier = Modifier.weight(1f),
+      )
+      if (failed) {
+        ChatOutboxAction(label = "Retry", color = mobileAccent, onClick = onRetry)
+      }
+      if (item.status != ChatOutboxStatus.Sending) {
+        ChatOutboxAction(label = "Delete", color = mobileTextSecondary, onClick = onDelete)
+      }
+    }
+  }
+}
+
+@Composable
+private fun ChatOutboxAction(
+  label: String,
+  color: Color,
+  onClick: () -> Unit,
+) {
+  Surface(
+    onClick = onClick,
+    shape = RoundedCornerShape(8.dp),
+    color = Color.Transparent,
+    contentColor = color,
+    border = BorderStroke(1.dp, color.copy(alpha = 0.5f)),
+  ) {
+    Text(
+      text = label,
+      style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
+      modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+    )
+  }
+}
+
 /** Live assistant stream bubble shown before the final message is committed. */
 @Composable
 fun ChatStreamingAssistantBubble(text: String) {
@@ -198,7 +484,7 @@ fun ChatStreamingAssistantBubble(text: String) {
     style = bubbleStyle("assistant").copy(borderColor = mobileAccent),
     roleLabel = "OpenClaw · Live",
   ) {
-    ChatMarkdown(text = text, textColor = mobileText)
+    ChatMarkdown(text = text, textColor = mobileText, isStreaming = true)
   }
 }
 
@@ -290,7 +576,24 @@ private fun PulseDot(
 fun ChatCodeBlock(
   code: String,
   language: String?,
+  isComplete: Boolean = true,
 ) {
+  val display = code.trimEnd()
+  // Token colors come from the theme's code palette so light/dark both keep readable contrast.
+  val palette = MobileColorsAccessor.current
+  val tokenColors =
+    CodeTokenColors(
+      keyword = palette.codeKeyword,
+      string = palette.codeString,
+      comment = palette.codeComment,
+      number = palette.codeNumber,
+    )
+  // Keyed on content: streaming re-renders of unchanged blocks reuse the tokenized result,
+  // and still-open fences stay plain until the closing fence arrives.
+  val highlighted =
+    remember(display, language, isComplete, tokenColors) {
+      if (isComplete) buildHighlightedCode(display, language, tokenColors) else AnnotatedString(display)
+    }
   Surface(
     shape = RoundedCornerShape(8.dp),
     color = mobileCodeBg,
@@ -306,7 +609,7 @@ fun ChatCodeBlock(
         )
       }
       Text(
-        text = code.trimEnd(),
+        text = highlighted,
         fontFamily = FontFamily.Monospace,
         style = mobileCallout,
         color = mobileCodeText,

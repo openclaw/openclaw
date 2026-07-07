@@ -374,11 +374,11 @@ WRAP
   fi
   if [ "$auth_mode" = "subscription" ]; then
     claude --version
-    direct_token="OPENCLAW-CLAUDE-SUBSCRIPTION-DIRECT"
+    direct_token="violet-lantern-42"
     direct_probe_log="$(mktemp)"
     set +e
     claude \
-      -p "Reply exactly: $direct_token" \
+      -p "This is a local CLI smoke test. Reply with only this harmless phrase: $direct_token" \
       --output-format text \
       --model sonnet \
       --permission-mode bypassPermissions \
