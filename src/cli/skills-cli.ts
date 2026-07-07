@@ -49,6 +49,7 @@ import {
   readSkillProposalDraftDirectory,
   readSkillProposalDraftFile,
   rejectSkillProposal,
+  restoreSkillProposal,
   reviseSkillProposal,
 } from "../skills/workshop/service.js";
 import type {
@@ -1021,6 +1022,32 @@ export function registerSkillsCli(program: Command) {
             return;
           }
           defaultRuntime.writeStdout(`Rejected ${record.id}\n`);
+        } catch (err) {
+          defaultRuntime.error(String(err));
+          defaultRuntime.exit(1);
+        }
+      },
+    );
+
+  workshop
+    .command("restore")
+    .description("Restore a rejected skill proposal back to pending")
+    .argument("<proposal-id>", "Skill proposal id")
+    .option("--json", "Output as JSON", false)
+    .action(
+      async (proposalId: string, opts: { json?: boolean; agent?: string }, command: Command) => {
+        try {
+          const { config, workspaceDir } = resolveSkillsWorkspaceForCommand(command.parent, opts);
+          const record = await restoreSkillProposal({
+            workspaceDir,
+            config,
+            proposalId,
+          });
+          if (opts.json) {
+            defaultRuntime.writeJson(record);
+            return;
+          }
+          defaultRuntime.writeStdout(`Restored ${record.id} to pending\n`);
         } catch (err) {
           defaultRuntime.error(String(err));
           defaultRuntime.exit(1);

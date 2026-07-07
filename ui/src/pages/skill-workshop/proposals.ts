@@ -518,7 +518,7 @@ async function refreshAfterMutation(
 export async function runSkillWorkshopLifecycleAction(
   state: SkillWorkshopState,
   context: SkillWorkshopContext,
-  action: Extract<SkillWorkshopAction, "apply" | "reject">,
+  action: Extract<SkillWorkshopAction, "apply" | "reject" | "restore">,
   proposalId: string,
 ): Promise<void> {
   const snapshot = context.gateway.snapshot;
@@ -531,12 +531,21 @@ export async function runSkillWorkshopLifecycleAction(
   state.skillWorkshopActionNotice = null;
   state.skillWorkshopError = null;
   try {
-    const method = action === "apply" ? "skills.proposals.apply" : "skills.proposals.reject";
+    const method =
+      action === "apply"
+        ? "skills.proposals.apply"
+        : action === "restore"
+          ? "skills.proposals.restore"
+          : "skills.proposals.reject";
     const requestParams = { ...loadedSkillWorkshopAgentParams(state, context), proposalId };
     await client.request(method, requestParams);
     await refreshAfterMutation(state, context, proposalId);
     const updated = state.skillWorkshopProposals.find((proposal) => proposal.key === proposalId);
-    showActionNotice(state, updated ?? previous, action === "apply" ? "Applied" : "Rejected");
+    showActionNotice(
+      state,
+      updated ?? previous,
+      action === "apply" ? "Applied" : action === "restore" ? "Restored" : "Rejected",
+    );
   } catch (err) {
     state.skillWorkshopError = getErrorMessage(err);
   } finally {

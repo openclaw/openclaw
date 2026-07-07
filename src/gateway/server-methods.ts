@@ -641,6 +641,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "skills.proposals.apply",
       "skills.proposals.reject",
       "skills.proposals.quarantine",
+      "skills.proposals.restore",
     ],
     loadHandlers: loadSkillsHandlers,
   }),

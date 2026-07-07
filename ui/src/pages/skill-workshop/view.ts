@@ -48,6 +48,7 @@ type SkillWorkshopProps = {
   onApply: (key: string) => void;
   onRevise: (key: string) => void;
   onReject: (key: string) => void;
+  onRestore: (key: string) => void;
   onRevisionDraftChange: (draft: string) => void;
   onRevisionCancel: () => void;
   onRevisionSubmit: (key: string) => void;
@@ -435,6 +436,7 @@ function renderDetail(props: SkillWorkshopProps, proposal: SkillWorkshopProposal
 
       ${props.actionNotice?.key === proposal.key ? renderActionNotice(props.actionNotice) : nothing}
       ${proposal.status === "pending" ? renderPendingActions(props, proposal) : nothing}
+      ${proposal.status === "rejected" ? renderRejectedActions(props, proposal) : nothing}
     </div>
   `;
 }
@@ -478,6 +480,22 @@ function renderPendingActions(props: SkillWorkshopProps, proposal: SkillWorkshop
         ${busy === "reject"
           ? t("skillWorkshop.actions.rejecting")
           : t("skillWorkshop.actions.reject")}
+      </button>
+    </div>
+  `;
+}
+
+function renderRejectedActions(props: SkillWorkshopProps, proposal: SkillWorkshopProposal) {
+  const busy = props.actionBusy?.key === proposal.key ? props.actionBusy.action : null;
+  const disabled = Boolean(props.actionBusy);
+  return html`
+    <div class="sw-action-bar" aria-busy=${busy ? "true" : "false"}>
+      <button
+        class="sw-btn ${busy === "restore" ? "is-busy" : ""}"
+        ?disabled=${disabled}
+        @click=${() => props.onRestore(proposal.key)}
+      >
+        ${busy === "restore" ? "Restoring…" : "Restore to pending"}
       </button>
     </div>
   `;

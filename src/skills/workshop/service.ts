@@ -518,6 +518,32 @@ export async function rejectSkillProposal(
   return await markProposal(input, "rejected");
 }
 
+export async function restoreSkillProposal(
+  input: SkillProposalActionInput,
+): Promise<SkillProposalRecord> {
+  const initial = await readRequiredProposal(input.proposalId, input.workspaceDir);
+  const config = resolveSkillWorkshopConfig(input.config);
+  return await withSkillProposalTargetLock(initial.record, async () => {
+    const read = await readRequiredProposal(input.proposalId, input.workspaceDir);
+    if (read.record.status !== "rejected") {
+      throw new Error(
+        `Only rejected proposals can be restored. Current status: ${read.record.status}.`,
+      );
+    }
+    await assertCanCreatePendingProposal(input.workspaceDir, config);
+    const now = new Date().toISOString();
+    const record: SkillProposalRecord = {
+      ...read.record,
+      status: "pending",
+      updatedAt: now,
+      rejectedAt: undefined,
+      statusReason: undefined,
+    };
+    await updateSkillProposalRecord({ record });
+    return record;
+  });
+}
+
 export async function quarantineSkillProposal(
   input: SkillProposalActionInput,
 ): Promise<SkillProposalRecord> {

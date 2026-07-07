@@ -2,7 +2,7 @@
 summary: "Create and update workspace skills through Skill Workshop review"
 read_when:
   - You want the agent to create or update a skill from chat
-  - You need to review, apply, reject, or quarantine a generated skill draft
+  - You need to review, apply, reject, quarantine, or restore a generated skill draft
   - You are configuring Skill Workshop approval, autonomy, storage, or limits
 title: "Skill Workshop"
 sidebarTitle: "Skill Workshop"
@@ -37,6 +37,7 @@ plugin, ClawHub, extra-root, managed, personal-agent, or system skills.
 ```text
 create/update -> pending
 revise        -> pending
+restore       -> pending
 apply         -> applied
 reject        -> rejected
 quarantine    -> quarantined
@@ -44,6 +45,8 @@ target change -> stale
 ```
 
 Only a `pending` proposal can be revised, applied, rejected, or quarantined.
+A `rejected` proposal can be restored back to `pending`, which clears the
+rejection timestamp and reason.
 
 ## Lifecycle curation
 
@@ -124,7 +127,7 @@ description, support-file count, and body size. Approval requests are bounded
 to finish before the agent tool watchdog. If no decision arrives before the
 prompt expires, the lifecycle action does not run: the proposal stays pending
 and unchanged. Decide later in the Skill Workshop UI or run
-`openclaw skills workshop apply|reject|quarantine <proposal-id>`. Agents should
+`openclaw skills workshop apply|reject|quarantine|restore <proposal-id>`. Agents should
 not retry an expired lifecycle action in a loop.
 
 ## CLI
@@ -150,6 +153,9 @@ openclaw skills workshop revise <proposal-id> --proposal ./PROPOSAL.md
 openclaw skills workshop apply <proposal-id>
 openclaw skills workshop reject <proposal-id> --reason "Duplicate"
 openclaw skills workshop quarantine <proposal-id> --reason "Needs security review"
+
+# Restore a rejected proposal back to pending
+openclaw skills workshop restore <proposal-id>
 ```
 
 Every subcommand takes `--agent <id>` (target workspace; defaults to
@@ -199,20 +205,20 @@ and paths outside the standard support folders.
 ## Agent tool
 
 The model uses `skill_workshop` with one required `action`:
-`create | update | revise | list | inspect | apply | reject | quarantine`.
+`create | update | revise | list | inspect | apply | reject | quarantine | restore`.
 Other parameters apply depending on the action:
 
-| Parameter                  | Used by                                              | Notes                                                                |
-| -------------------------- | ---------------------------------------------------- | -------------------------------------------------------------------- |
-| `name`                     | `create`, `inspect`, `revise`                        | Required for `create`; resolves a pending proposal by name otherwise |
-| `description`              | `create`, `update`, `revise`                         | Max 160 bytes                                                        |
-| `skill_name`               | `update`                                             | Existing skill name or key                                           |
-| `proposal_content`         | `create`, `update`, `revise`                         | Stored as `PROPOSAL.md`; capped by `skills.workshop.maxSkillBytes`   |
-| `support_files`            | `create`, `update`, `revise`                         | Array of `{ path, content }`                                         |
-| `goal`, `evidence`         | `create`, `update`, `revise`                         | Free-text context                                                    |
-| `proposal_id`              | `inspect`, `revise`, `apply`, `reject`, `quarantine` | Target proposal                                                      |
-| `reason`                   | `apply`, `reject`, `quarantine`                      | Optional                                                             |
-| `query`, `status`, `limit` | `list`                                               | Filter/paginate; `limit` max 50, default 20                          |
+| Parameter                  | Used by                                                         | Notes                                                                |
+| -------------------------- | --------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `name`                     | `create`, `inspect`, `revise`                                   | Required for `create`; resolves a pending proposal by name otherwise |
+| `description`              | `create`, `update`, `revise`                                    | Max 160 bytes                                                        |
+| `skill_name`               | `update`                                                        | Existing skill name or key                                           |
+| `proposal_content`         | `create`, `update`, `revise`                                    | Stored as `PROPOSAL.md`; capped by `skills.workshop.maxSkillBytes`   |
+| `support_files`            | `create`, `update`, `revise`                                    | Array of `{ path, content }`                                         |
+| `goal`, `evidence`         | `create`, `update`, `revise`                                    | Free-text context                                                    |
+| `proposal_id`              | `inspect`, `revise`, `apply`, `reject`, `quarantine`, `restore` | Target proposal                                                      |
+| `reason`                   | `apply`, `reject`, `quarantine`                                 | Optional                                                             |
+| `query`, `status`, `limit` | `list`                                                          | Filter/paginate; `limit` max 50, default 20                          |
 
 Agents must use `skill_workshop` for generated skill work. They must not
 create or change proposal files through `write`, `edit`, `exec`, shell
@@ -282,6 +288,7 @@ Proposal descriptions are always capped at 160 bytes, independent of
 | `skills.proposals.requestRevision` | `operator.admin` |
 | `skills.proposals.apply`           | `operator.admin` |
 | `skills.proposals.reject`          | `operator.admin` |
+| `skills.proposals.restore`         | `operator.admin` |
 | `skills.proposals.quarantine`      | `operator.admin` |
 | `skills.curator.status`            | `operator.read`  |
 | `skills.curator.pin`               | `operator.admin` |

@@ -34,7 +34,7 @@ export type SkillWorkshopProposal = {
 };
 
 export type SkillWorkshopStatusFilter = "all" | SkillWorkshopProposalStatus;
-export type SkillWorkshopAction = "apply" | "revise" | "reject";
+export type SkillWorkshopAction = "apply" | "revise" | "reject" | "restore";
 export type SkillWorkshopMode = "board" | "today";
 
 export type SkillWorkshopActionBusy = {

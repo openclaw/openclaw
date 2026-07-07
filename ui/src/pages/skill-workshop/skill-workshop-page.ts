@@ -362,6 +362,12 @@ function renderSkillWorkshopPage(
               );
               requestUpdate();
             },
+            onRestore: (key) => {
+              void runSkillWorkshopLifecycleAction(state, context, "restore", key).finally(
+                requestUpdate,
+              );
+              requestUpdate();
+            },
             onRevisionDraftChange: (draft) => {
               state.skillWorkshopRevisionDraft = draft;
               requestUpdate();

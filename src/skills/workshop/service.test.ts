@@ -24,6 +24,7 @@ import {
   readSkillProposalDraftDirectory,
   rejectSkillProposal,
   resolvePendingSkillProposal,
+  restoreSkillProposal,
   reviseSkillProposal,
 } from "./service.js";
 import { readSkillProposalManifest, updateSkillProposalRecord } from "./store.js";
@@ -823,6 +824,73 @@ describe("skill workshop proposals", () => {
         content: "x".repeat(1025),
       }),
     ).rejects.toThrow("proposal content is too large");
+  });
+
+  it("restores a rejected proposal back to pending", async () => {
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Restore Me",
+      description: "A proposal to restore",
+      content: "# Restore Me\n",
+    });
+    await rejectSkillProposal({ workspaceDir, proposalId: proposal.record.id });
+
+    const restored = await restoreSkillProposal({ workspaceDir, proposalId: proposal.record.id });
+    expect(restored.status).toBe("pending");
+    expect(restored.rejectedAt).toBeUndefined();
+    expect(restored.statusReason).toBeUndefined();
+
+    const manifest = await listSkillProposals({ workspaceDir });
+    expect(manifest.proposals.find((p) => p.id === proposal.record.id)?.status).toBe("pending");
+  });
+
+  it("rejects restoring a non-rejected proposal", async () => {
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Draft",
+      description: "A pending proposal",
+      content: "# Draft\n",
+    });
+    await expect(
+      restoreSkillProposal({ workspaceDir, proposalId: proposal.record.id }),
+    ).rejects.toThrow("Only rejected proposals can be restored");
+  });
+
+  it("enforces maxPending when restoring a rejected proposal", async () => {
+    const workspaceDir = await makeWorkspace();
+    const limitedConfig = { skills: { workshop: { maxPending: 1, maxSkillBytes: 2048 } } };
+
+    const first = await proposeCreateSkill({
+      workspaceDir,
+      config: limitedConfig,
+      name: "First",
+      description: "First proposal",
+      content: "# First\n",
+    });
+    await rejectSkillProposal({ workspaceDir, proposalId: first.record.id });
+
+    await proposeCreateSkill({
+      workspaceDir,
+      config: limitedConfig,
+      name: "Second",
+      description: "Second proposal",
+      content: "# Second\n",
+    });
+
+    // Restoring the rejected first proposal should fail because the cap is full.
+    await expect(
+      restoreSkillProposal({
+        workspaceDir,
+        config: limitedConfig,
+        proposalId: first.record.id,
+      }),
+    ).rejects.toThrow("pending proposal limit");
+
+    const manifest = await listSkillProposals({ workspaceDir });
+    expect(manifest.proposals.filter((p) => p.status === "pending")).toHaveLength(1);
+    expect(manifest.proposals.find((p) => p.id === first.record.id)?.status).toBe("rejected");
   });
 
   it("bounds proposal descriptions before writing proposal state", async () => {
