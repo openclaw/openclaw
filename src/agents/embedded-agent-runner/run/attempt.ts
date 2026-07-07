@@ -1389,6 +1389,13 @@ export async function runEmbeddedAttempt(
             currentThreadTs: params.currentThreadTs,
             currentMessageId: params.currentMessageId,
             currentInboundAudio: params.currentInboundAudio,
+            ...(params.replyOperation
+              ? {
+                  hasCurrentInboundAudio: () =>
+                    params.currentInboundAudio === true ||
+                    params.replyOperation?.acceptedSteeredInboundAudio === true,
+                }
+              : {}),
             includeCoreTools: toolConstructionPlan.includeCoreTools,
             includeToolSearchControls: toolSearchControlsEnabledForRun,
             toolSearchCatalogExecutor: (toolParams) => {
