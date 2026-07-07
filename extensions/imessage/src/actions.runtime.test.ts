@@ -41,6 +41,23 @@ function mockSpawnJsonResponse(payload: Record<string, unknown> = { success: tru
   });
 }
 
+function mockSpawnStreamError(stream: "stdout" | "stderr", message: string) {
+  spawnMock.mockImplementationOnce(() => {
+    const child = new EventEmitter() as EventEmitter & {
+      stdout: EventEmitter & { setEncoding: (encoding: string) => void };
+      stderr: EventEmitter & { setEncoding: (encoding: string) => void };
+      kill: (signal: string) => void;
+    };
+    child.stdout = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
+    child.stderr = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
+    child.kill = vi.fn();
+    queueMicrotask(() => {
+      child[stream].emit("error", new Error(message));
+    });
+    return child;
+  });
+}
+
 function mockRpcChatList(chats: Array<Record<string, unknown>>) {
   const request = vi.fn().mockResolvedValue({ chats });
   const stop = vi.fn().mockResolvedValue(undefined);
@@ -82,6 +99,26 @@ describe("imessage actions runtime", () => {
       { stdio: ["ignore", "pipe", "pipe"] },
     );
   });
+
+  it.each(["stdout", "stderr"] as const)(
+    "rejects cleanly when one-shot imsg %s stream errors",
+    async (stream) => {
+      mockSpawnStreamError(stream, `${stream} failed`);
+
+      await expect(
+        imessageActionsRuntime.sendReaction({
+          chatGuid: "iMessage;+;chat0000",
+          messageId: "message-guid",
+          reaction: "like",
+          options: {
+            cliPath: "imsg",
+            dbPath: "/tmp/messages.db",
+            chatGuid: "iMessage;+;chat0000",
+          },
+        }),
+      ).rejects.toThrow(`${stream} failed`);
+    },
+  );
 
   it("drops cached chats.list entries when the current clock is not a valid date timestamp", async () => {
     vi.spyOn(Date, "now").mockReturnValueOnce(1_700_000_000_000).mockReturnValueOnce(Number.NaN);

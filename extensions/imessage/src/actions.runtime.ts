@@ -246,6 +246,20 @@ async function runIMessageCliJson(
     child.stderr.on("data", (chunk) => {
       stderr = appendIMessageCliStderrTail(stderr, chunk);
     });
+    const failFromStreamError = (error: unknown): void => {
+      if (settled) {
+        clearTimers();
+        return;
+      }
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // The helper may already be gone.
+      }
+      fail(error instanceof Error ? error : new Error(String(error)));
+    };
+    child.stdout.on("error", failFromStreamError);
+    child.stderr.on("error", failFromStreamError);
     child.on("error", (error) => {
       if (settled) {
         clearTimers();
