@@ -7,6 +7,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../config/paths.js";
 import type { DeviceIdentity } from "./device-identity.js";
 import { formatErrorMessage, toErrorObject } from "./errors.js";
@@ -211,9 +212,9 @@ function parseReason(body: string): string | undefined {
     const parsed = JSON.parse(trimmed) as { reason?: unknown };
     return typeof parsed.reason === "string" && parsed.reason.trim().length > 0
       ? parsed.reason.trim()
-      : trimmed.slice(0, 200);
+      : truncateUtf16Safe(trimmed, 200);
   } catch {
-    return trimmed.slice(0, 200);
+    return truncateUtf16Safe(trimmed, 200);
   }
 }
 
@@ -291,7 +292,10 @@ function normalizeRelayOrigin(value: unknown): string | undefined {
 }
 
 function normalizeDirectRegistration(
-  record: Partial<DirectApnsRegistration> & { nodeId?: unknown; token?: unknown },
+  record: Partial<DirectApnsRegistration> & {
+    nodeId?: unknown;
+    token?: unknown;
+  },
 ): DirectApnsRegistration | null {
   if (typeof record.nodeId !== "string" || typeof record.token !== "string") {
     return null;
@@ -525,7 +529,10 @@ export async function loadApnsRegistrations(
   baseDir?: string,
 ): Promise<Array<{ nodeId: string; registration: ApnsRegistration }>> {
   const state = await loadRegistrationsState(baseDir);
-  const registrations: Array<{ nodeId: string; registration: ApnsRegistration }> = [];
+  const registrations: Array<{
+    nodeId: string;
+    registration: ApnsRegistration;
+  }> = [];
   for (const nodeId of nodeIds) {
     const normalizedNodeId = normalizeNodeId(nodeId);
     if (!normalizedNodeId) {
@@ -790,7 +797,12 @@ function toPushMetadata(params: {
   kind: "push.test" | "node.wake";
   nodeId: string;
   reason?: string;
-}): { kind: "push.test" | "node.wake"; nodeId: string; ts: number; reason?: string } {
+}): {
+  kind: "push.test" | "node.wake";
+  nodeId: string;
+  ts: number;
+  reason?: string;
+} {
   return {
     kind: params.kind,
     nodeId: params.nodeId,

@@ -345,7 +345,10 @@ describe("push APNs send semantics", () => {
     process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
     try {
-      proxyHandle = await startProxy({ enabled: true, proxyUrl: proxy.proxyUrl });
+      proxyHandle = await startProxy({
+        enabled: true,
+        proxyUrl: proxy.proxyUrl,
+      });
       const { registration, auth } = createDirectApnsSendFixture({
         nodeId: "ios-node-proxied-alert",
         environment: "sandbox",
@@ -402,7 +405,10 @@ describe("push APNs send semantics", () => {
     process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
     try {
-      proxyHandle = await startProxy({ enabled: true, proxyUrl: proxy.proxyUrl });
+      proxyHandle = await startProxy({
+        enabled: true,
+        proxyUrl: proxy.proxyUrl,
+      });
       const { registration, auth } = createDirectApnsSendFixture({
         nodeId: "ios-node-proxied-error-body",
         environment: "sandbox",
@@ -829,6 +835,32 @@ describe("push APNs send semantics", () => {
       status: 202,
       environment: "production",
       transport: "relay",
+    });
+
+    it("does not split surrogate pairs when truncating non-JSON error bodies", async () => {
+      const { send, registration, auth } = createDirectApnsSendFixture({
+        nodeId: "ios-node-surrogate-reason",
+        environment: "sandbox",
+        sendResult: {
+          status: 400,
+          apnsId: "apns-surrogate-reason-id",
+          body: "x".repeat(199) + "🚀tail",
+        },
+      });
+
+      const result = await sendApnsAlert({
+        registration,
+        nodeId: "ios-node-surrogate-reason",
+        title: "Wake",
+        body: "Ping",
+        auth,
+        requestSender: send,
+      });
+
+      const record = requireRecord(result, "APNs result");
+      expect(record.reason).not.toContain("�");
+      expect(record.ok).toBe(false);
+      expect(record.status).toBe(400);
     });
   });
 });
