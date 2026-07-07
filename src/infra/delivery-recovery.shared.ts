@@ -1,4 +1,80 @@
+import { sleep } from "../utils/sleep.js";
+import { collectErrorGraphCandidates, extractErrorCode } from "./errors.js";
+import { getRetryAttemptErrors } from "./retry-attempt-errors.js";
+
 const RECOVERY_BACKOFF_MS: readonly number[] = [5_000, 25_000, 120_000, 600_000];
+export const RECOVERY_REPLAY_SPACING_MS = 250;
+
+const PRE_CONNECT_ERROR_CODES = new Set([
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ENETDOWN",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+]);
+const TRANSPORT_ERROR_CODE_RE =
+  /^(?:E(?:AI_|CONN|NET|HOST|ADDR|PIPE|TIMEDOUT|SOCKET)|UND_ERR_|ERR_(?:NETWORK|HTTP2|QUIC|TLS|SSL))/;
+
+function isProvenPreConnectCandidate(candidate: unknown): boolean {
+  const code = extractErrorCode(candidate)?.trim().toUpperCase();
+  if (code === "UND_ERR_CONNECT_TIMEOUT" || code === "UND_ERR_DNS_RESOLVE_FAILED") {
+    return true;
+  }
+  if (!code || !PRE_CONNECT_ERROR_CODES.has(code) || !candidate || typeof candidate !== "object") {
+    return false;
+  }
+  const syscall = (candidate as { syscall?: unknown }).syscall;
+  return syscall === "connect" || syscall === "getaddrinfo";
+}
+
+function nestedErrorCandidates(current: Record<string, unknown>): unknown[] {
+  const retryAttempts = getRetryAttemptErrors(current);
+  if (isProvenPreConnectCandidate(current)) {
+    return retryAttempts ? [...retryAttempts] : [];
+  }
+  const nested = [current.cause, current.original, current.error, current.reason];
+  if (Array.isArray(current.errors)) {
+    nested.push(...current.errors);
+  }
+  const nestedObjects = nested.filter(
+    (candidate) => candidate !== null && typeof candidate === "object",
+  );
+  return retryAttempts ? [...retryAttempts, ...nestedObjects] : nestedObjects;
+}
+
+export function isPreConnectNetworkError(err: unknown): boolean {
+  let foundPreConnectProof = false;
+  for (const candidate of collectErrorGraphCandidates(err, nestedErrorCandidates)) {
+    const code = extractErrorCode(candidate)?.trim().toUpperCase();
+    if (isProvenPreConnectCandidate(candidate)) {
+      foundPreConnectProof = true;
+      continue;
+    }
+    const nested =
+      candidate && typeof candidate === "object"
+        ? nestedErrorCandidates(candidate as Record<string, unknown>)
+        : [];
+    const isPreConnectAggregateSummary =
+      candidate !== null &&
+      typeof candidate === "object" &&
+      Array.isArray((candidate as { errors?: unknown }).errors) &&
+      code !== undefined &&
+      PRE_CONNECT_ERROR_CODES.has(code);
+    // Wrapper nodes may carry neutral SDK codes. Every transport leaf must still
+    // prove pre-connect failure; Node AggregateError summary codes are accepted
+    // only after their children are traversed and independently prove the same.
+    if (
+      nested.length === 0 ||
+      (code &&
+        !isPreConnectAggregateSummary &&
+        (PRE_CONNECT_ERROR_CODES.has(code) || TRANSPORT_ERROR_CODE_RE.test(code)))
+    ) {
+      return false;
+    }
+  }
+  return foundPreConnectProof;
+}
 
 export function computeBackoffMs(retryCount: number): number {
   if (retryCount <= 0) {
@@ -27,4 +103,45 @@ export function claimRecoveryEntry(entriesInProgress: Set<string>, entryId: stri
 
 export function releaseRecoveryEntry(entriesInProgress: Set<string>, entryId: string): void {
   entriesInProgress.delete(entryId);
+}
+
+export function createRecoveryReplayPacer(): {
+  wait(deadlineMs?: number): Promise<"ready" | "deadline-exceeded">;
+} {
+  let lastReplayStartedAt = 0;
+  let waitQueue = Promise.resolve();
+
+  return {
+    async wait(deadlineMs) {
+      let releaseWaiter: () => void = () => {};
+      const previousWaiter = waitQueue;
+      waitQueue = new Promise<void>((resolve) => {
+        releaseWaiter = resolve;
+      });
+      await previousWaiter;
+
+      try {
+        const now = Date.now();
+        if (deadlineMs !== undefined && now >= deadlineMs) {
+          return "deadline-exceeded";
+        }
+        // Clock rollback starts a fresh pacing epoch. Otherwise concurrent startup
+        // and reconnect drains serialize here so neither can bypass the spacing floor.
+        const elapsedMs = now - lastReplayStartedAt;
+        const waitMs = elapsedMs < 0 ? 0 : Math.max(0, RECOVERY_REPLAY_SPACING_MS - elapsedMs);
+        if (waitMs > 0) {
+          const remainingBudgetMs =
+            deadlineMs === undefined ? waitMs : Math.max(0, deadlineMs - now);
+          await sleep(Math.min(waitMs, remainingBudgetMs));
+        }
+        if (deadlineMs !== undefined && Date.now() >= deadlineMs) {
+          return "deadline-exceeded";
+        }
+        lastReplayStartedAt = Date.now();
+        return "ready";
+      } finally {
+        releaseWaiter();
+      }
+    },
+  };
 }

@@ -1,15 +1,11 @@
 {
-  "fallbackKeys": [
-    "chat.selectors.renameSession",
-    "chat.selectors.renameSessionPrompt",
-    "chat.selectors.switchSession"
-  ],
-  "generatedAt": "2026-06-29T17:11:55.349Z",
+  "fallbackKeys": [],
+  "generatedAt": "2026-07-07T02:26:52.426Z",
   "locale": "it",
-  "model": "claude-opus-4-8",
-  "provider": "anthropic",
-  "sourceHash": "91cd15d7e1d9c036127e8b84c7e64dc4d2d0401969638a4c4696948729244b16",
-  "totalKeys": 1419,
-  "translatedKeys": 1416,
+  "model": "gpt-5.5",
+  "provider": "openai",
+  "sourceHash": "378b4e5380384a33d9e31a49a5483cdb991245705193e067d5fb8c5311bc20fb",
+  "totalKeys": 1668,
+  "translatedKeys": 1668,
   "workflow": 1
 }

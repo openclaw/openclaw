@@ -1,11 +1,11 @@
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 /**
  * Prompt template discovery and loading.
  *
  * Reads markdown prompt templates from user, project, and package sources with frontmatter metadata.
  */
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { expandTildePath } from "../../shared/tilde-path.js";
 export {
   parseCommandArgs,
   substituteArgs,
@@ -108,7 +108,7 @@ function loadTemplatesFromDir(
   return templates;
 }
 
-export interface LoadPromptTemplatesOptions {
+interface LoadPromptTemplatesOptions {
   /** Working directory for project-local templates. */
   cwd: string;
   /** Agent config directory for global templates. */
@@ -119,22 +119,8 @@ export interface LoadPromptTemplatesOptions {
   includeDefaults: boolean;
 }
 
-function normalizePath(input: string): string {
-  const trimmed = input.trim();
-  if (trimmed === "~") {
-    return homedir();
-  }
-  if (trimmed.startsWith("~/")) {
-    return join(homedir(), trimmed.slice(2));
-  }
-  if (trimmed.startsWith("~")) {
-    return join(homedir(), trimmed.slice(1));
-  }
-  return trimmed;
-}
-
 function resolvePromptPath(p: string, cwd: string): string {
-  const normalized = normalizePath(p);
+  const normalized = expandTildePath(p);
   return isAbsolute(normalized) ? normalized : resolve(cwd, normalized);
 }
 

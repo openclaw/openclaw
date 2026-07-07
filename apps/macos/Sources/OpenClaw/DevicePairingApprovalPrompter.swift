@@ -146,7 +146,11 @@ final class DevicePairingApprovalPrompter {
 
         switch response {
         case .alertFirstButtonReturn:
-            _ = await self.approve(requestId: request.requestId)
+            if await !(self.approve(requestId: request.requestId)) {
+                // Stale request (expired or superseded on the gateway): re-sync the
+                // queue with gateway truth so accumulated stale alerts collapse at once.
+                await self.loadPendingRequestsFromGateway()
+            }
         case .alertSecondButtonReturn:
             shouldRemove = false
             if let idx = self.queue.firstIndex(of: request) {
@@ -211,9 +215,29 @@ final class DevicePairingApprovalPrompter {
         }
     }
 
+    /// The gateway keeps at most one live pending request per device, so a new
+    /// requestId for the same device supersedes anything still queued for it.
+    /// Without this, missed/dropped resolve pushes pile up as alerts whose
+    /// approval can no longer succeed. Returns nil when the request is already queued.
+    static func coalescedQueue(_ queue: [PendingRequest], adding req: PendingRequest) -> [PendingRequest]? {
+        guard !queue.contains(where: { $0.requestId == req.requestId }) else { return nil }
+        return queue.filter { $0.deviceId != req.deviceId } + [req]
+    }
+
     private func enqueue(_ req: PendingRequest) {
-        guard !self.queue.contains(req) else { return }
-        self.queue.append(req)
+        guard let next = Self.coalescedQueue(self.queue, adding: req) else { return }
+        let supersededActiveId = self.alertState.activeRequestId.flatMap { activeId in
+            self.queue.contains(where: {
+                $0.requestId == activeId && $0.deviceId == req.deviceId
+            }) ? activeId : nil
+        }
+        self.queue = next
+        if let supersededActiveId {
+            // The visible alert is for a superseded requestId; close it so the
+            // fresh request presents instead of an approve that would no-op.
+            self.resolvedByRequestId.insert(supersededActiveId)
+            self.endActiveAlert()
+        }
         self.updatePendingCounts()
         self.presentNextIfNeeded()
     }

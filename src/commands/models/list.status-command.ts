@@ -45,6 +45,7 @@ import {
 } from "../../agents/openai-routing.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
+import { requestExitAfterOneShotOutput } from "../../cli/one-shot-exit.js";
 import { createConfigIO } from "../../config/config.js";
 import {
   resolveAgentModelFallbackValues,
@@ -240,6 +241,20 @@ function syntheticAuthCredential(
     refresh: "",
     expires: auth.expiresAt,
   };
+}
+
+function finishModelsStatusOutput(
+  runtime: RuntimeEnv,
+  check: boolean | undefined,
+  checkStatus: number,
+): void {
+  if (check) {
+    if (!requestExitAfterOneShotOutput(runtime, checkStatus)) {
+      runtime.exit(checkStatus);
+    }
+    return;
+  }
+  requestExitAfterOneShotOutput(runtime);
 }
 
 /** Prints model default, auth, provider, and optional probe status. */
@@ -1020,17 +1035,13 @@ export async function modelsStatusCommand(
           probes: probeSummary,
         },
       });
-      if (opts.check) {
-        runtime.exit(checkStatus);
-      }
+      finishModelsStatusOutput(runtime, opts.check, checkStatus);
       return;
     }
 
     if (opts.plain) {
       runtime.log(resolvedLabel);
-      if (opts.check) {
-        runtime.exit(checkStatus);
-      }
+      finishModelsStatusOutput(runtime, opts.check, checkStatus);
       return;
     }
 
@@ -1382,10 +1393,7 @@ export async function modelsStatusCommand(
         runtime.log(colorize(rich, theme.muted, describeProbeSummary(probeSummary)));
       }
     }
-
-    if (opts.check) {
-      runtime.exit(checkStatus);
-    }
+    finishModelsStatusOutput(runtime, opts.check, checkStatus);
   } finally {
     cleanupPluginMetadataSnapshot();
   }

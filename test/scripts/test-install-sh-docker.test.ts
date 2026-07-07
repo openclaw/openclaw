@@ -1,13 +1,6 @@
 // Test Install Sh Docker tests cover test install sh docker script behavior.
 import { spawn, spawnSync } from "node:child_process";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path, { join } from "node:path";
 import { runInNewContext } from "node:vm";
@@ -448,7 +441,12 @@ describe("test-install-sh-docker", () => {
     const dockerfile = readFileSync("Dockerfile", "utf8");
 
     expect(dockerfile).toContain(
-      "NODE_OPTIONS=--max-old-space-size=8192 pnpm_config_verify_deps_before_run=false pnpm build:docker",
+      'ARG OPENCLAW_DOCKER_BUILD_NODE_OPTIONS="--max-old-space-size=8192"',
+    );
+    expect(dockerfile).toContain('ARG OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB=""');
+    expect(dockerfile).toContain("ARG OPENCLAW_DOCKER_BUILD_SKIP_DTS=1");
+    expect(dockerfile).toContain(
+      'OPENCLAW_RUN_NODE_SKIP_DTS_BUILD="$OPENCLAW_DOCKER_BUILD_SKIP_DTS" OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB="$OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB" NODE_OPTIONS="$OPENCLAW_DOCKER_BUILD_NODE_OPTIONS" pnpm_config_verify_deps_before_run=false pnpm build:docker',
     );
   });
 
@@ -614,6 +612,7 @@ describe("test-install-sh-docker", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
 
     expect(script).toContain("read_pack_tarball_filename()");
+    expect(script).toContain('UPDATE_TGZ_FILE="$(basename "$package_tgz")"');
     expect(script).toContain('UPDATE_TGZ_FILE="$(read_pack_tarball_filename "$pack_json_file")"');
     expect(script).toContain(
       'BASELINE_TGZ_FILE="$(read_pack_tarball_filename "$baseline_pack_json_file")"',
@@ -646,13 +645,16 @@ describe("test-install-sh-docker", () => {
     }
   });
 
-  it("writes the package dist inventory before packing ignore-scripts tarballs", () => {
+  it("uses the package artifact helper for local update tarballs", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
 
-    expect(script).toContain("node --import tsx scripts/write-package-dist-inventory.ts");
-    expect(script).toContain('node scripts/check-package-dist-imports.mjs "$ROOT_DIR"');
-    expect(script).toContain("quiet_npm pack --ignore-scripts");
+    expect(script).toContain("node scripts/package-openclaw-for-docker.mjs");
+    expect(script).toContain('--pack-json "$pack_json_file"');
+    expect(script).toContain("--skip-build");
+    expect(script).not.toContain("node --import tsx scripts/write-package-dist-inventory.ts");
+    expect(script).not.toContain("quiet_npm pack --ignore-scripts --json");
     expect(script).toContain("node scripts/check-openclaw-package-tarball.mjs");
+    expect(script).toContain("--require-bundled-workspace-deps");
   });
 
   it("runs candidate tarballs through the installer script instead of direct npm", () => {

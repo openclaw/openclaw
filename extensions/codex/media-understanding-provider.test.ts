@@ -192,9 +192,7 @@ describe("codex media understanding provider", () => {
 
   it("runs image understanding through a bounded Codex app-server turn", async () => {
     const { client, requests } = createFakeClient();
-    const clientFactory = vi.fn(
-      async (_startOptions, _authProfileId, _agentDir, _config) => client,
-    );
+    const clientFactory = vi.fn(async () => client);
     const provider = buildCodexMediaUnderstandingProvider({
       clientFactory,
     });
@@ -224,13 +222,13 @@ describe("codex media understanding provider", () => {
       "thread/start",
       "turn/start",
     ]);
-    expect(clientFactory).toHaveBeenCalledWith(
-      expect.any(Object),
-      undefined,
-      "/tmp/openclaw-agent",
-      cfg,
-      { timeoutMs: 30_000 },
-    );
+    expect(clientFactory).toHaveBeenCalledWith({
+      startOptions: expect.any(Object),
+      authProfileId: undefined,
+      agentDir: "/tmp/openclaw-agent",
+      config: cfg,
+      timeoutMs: 30_000,
+    });
     expect(requests[1]?.params).toEqual({
       model: "gpt-5.4",
       modelProvider: "openai",
@@ -254,7 +252,6 @@ describe("codex media understanding provider", () => {
       dynamicTools: [],
       experimentalRawEvents: true,
       ephemeral: true,
-      persistExtendedHistory: false,
     });
     expect(requests[2]?.params).toEqual({
       threadId: "thread-1",
@@ -286,7 +283,11 @@ describe("codex media understanding provider", () => {
       agentDir: " ",
     });
 
-    expect(clientFactory).toHaveBeenCalledWith(expect.any(Object), undefined, undefined, cfg, {
+    expect(clientFactory).toHaveBeenCalledWith({
+      startOptions: expect.any(Object),
+      authProfileId: undefined,
+      agentDir: undefined,
+      config: cfg,
       timeoutMs: 30_000,
     });
     expect(requests[1]?.params).toEqual(expect.objectContaining({ cwd: process.cwd() }));
@@ -317,16 +318,16 @@ describe("codex media understanding provider", () => {
       agentDir: "/tmp/openclaw-agent",
     });
 
-    expect(clientFactory).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expect(clientFactory).toHaveBeenCalledWith({
+      startOptions: expect.objectContaining({
         transport: "websocket",
         url: "ws://127.0.0.1:4501",
       }),
-      undefined,
-      "/tmp/openclaw-agent",
-      {},
-      { timeoutMs: 30_000 },
-    );
+      authProfileId: undefined,
+      agentDir: "/tmp/openclaw-agent",
+      config: {},
+      timeoutMs: 30_000,
+    });
     expect(requests[1]?.params).toEqual(expect.objectContaining({ cwd: "/tmp/openclaw-agent" }));
     expect(requests[2]?.params).toEqual(expect.objectContaining({ cwd: "/tmp/openclaw-agent" }));
   });
@@ -546,7 +547,6 @@ describe("codex media understanding provider", () => {
       dynamicTools: [],
       experimentalRawEvents: true,
       ephemeral: true,
-      persistExtendedHistory: false,
     });
     const turnParams = requests[2]?.params as
       | {

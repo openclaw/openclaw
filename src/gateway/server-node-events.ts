@@ -5,6 +5,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { updatePairedDeviceMetadata } from "../infra/device-pairing.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -29,7 +30,7 @@ import {
   enqueueSystemEvent,
   formatForLog,
   getRuntimeConfig,
-  loadOrCreateDeviceIdentity,
+  loadOrCreateProcessDeviceIdentity,
   loadSessionEntry,
   normalizeChannelId,
   normalizeMainKey,
@@ -42,6 +43,7 @@ import {
   resolveOutboundTarget,
   resolveSessionAgentId,
   resolveSessionModelRef,
+  persistInboundImagesForTranscript,
   sanitizeInboundSystemTags,
   sendDurableMessageBatch,
   canonicalizeSessionEntryAliases,
@@ -236,7 +238,7 @@ function compactExecEventOutput(raw: string) {
     return normalized;
   }
   const safe = Math.max(1, MAX_EXEC_EVENT_OUTPUT_CHARS - 1);
-  return `${normalized.slice(0, safe)}…`;
+  return `${sliceUtf16Safe(normalized, 0, safe)}…`;
 }
 
 function compactNotificationEventText(raw: string) {
@@ -248,7 +250,7 @@ function compactNotificationEventText(raw: string) {
     return normalized;
   }
   const safe = Math.max(1, MAX_NOTIFICATION_EVENT_TEXT_CHARS - 1);
-  return `${normalized.slice(0, safe)}…`;
+  return `${sliceUtf16Safe(normalized, 0, safe)}…`;
 }
 
 type LoadedSessionEntry = ReturnType<typeof loadSessionEntry>;
@@ -477,11 +479,14 @@ export const handleNodeEvent = async (
       const { storePath, entry, canonicalKey, storeKeys } = loadSessionEntry(sessionKey);
 
       let message = (link?.message ?? "").trim();
+      const transcriptMessage = message;
       const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(
         link?.attachments ?? undefined,
       );
       let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
       let imageOrder: PromptImageOrderEntry[] = [];
+      let offloadedRefs: Awaited<ReturnType<typeof parseMessageWithAttachments>>["offloadedRefs"] =
+        [];
       if (!message && normalizedAttachments.length === 0) {
         return undefined;
       }
@@ -509,6 +514,7 @@ export const handleNodeEvent = async (
           message = parsed.message.trim();
           images = parsed.images;
           imageOrder = parsed.imageOrder;
+          offloadedRefs = parsed.offloadedRefs;
           if (message.length > 20_000) {
             ctx.logGateway.warn(
               `agent.request message exceeds limit after attachment parsing (length=${message.length})`,
@@ -595,11 +601,22 @@ export const handleNodeEvent = async (
         );
       }
 
+      const transcriptMedia = (
+        await persistInboundImagesForTranscript({
+          images,
+          imageOrder,
+          offloadedRefs,
+          log: ctx.logGateway,
+          logContext: "agent.request",
+        })
+      ).map((media) => ({ path: media.path, contentType: media.contentType }));
+
       dispatchNodeAgentCommand(ctx, nodeId, {
         runId: sessionId,
         message,
         images,
         imageOrder,
+        ...(transcriptMedia.length > 0 ? { transcriptMessage, transcriptMedia } : {}),
         sessionId,
         sessionKey: canonicalKey,
         thinking: link?.thinking ?? undefined,
@@ -818,7 +835,7 @@ export const handleNodeEvent = async (
       try {
         if (transport === "relay") {
           const gatewayDeviceId = normalizeOptionalString(obj.gatewayDeviceId) ?? "";
-          const currentGatewayDeviceId = loadOrCreateDeviceIdentity().deviceId;
+          const currentGatewayDeviceId = loadOrCreateProcessDeviceIdentity().deviceId;
           if (!gatewayDeviceId || gatewayDeviceId !== currentGatewayDeviceId) {
             ctx.logGateway.warn(
               `push relay register rejected node=${nodeId}: gateway identity mismatch`,

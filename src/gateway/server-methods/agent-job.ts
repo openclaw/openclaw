@@ -1,6 +1,7 @@
 // Agent job tracking caches terminal run snapshots so `agent.wait` can observe
 // recent run outcomes even after the live event stream has moved on.
 import {
+  AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
   buildAgentRunTerminalOutcome,
   mergeAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
@@ -10,23 +11,10 @@ import { setSafeTimeout } from "../../utils/timer-delay.js";
 import type { AgentWaitTerminalSnapshot } from "./agent-wait-dedupe.js";
 
 const AGENT_RUN_CACHE_TTL_MS = 10 * 60_000;
-/**
- * Embedded runs can emit transient lifecycle `error` events while auth/model
- * failover is still in progress. Give errors a short grace window so a
- * subsequent `start` event can cancel premature terminal snapshots.
- */
-const AGENT_RUN_ERROR_RETRY_GRACE_MS = 15_000;
-/**
- * Some embedded runtimes emit an intermediate lifecycle `end` with
- * `aborted=true` immediately before retrying the same run. Hold timeout
- * snapshots briefly so `agent.wait` does not resolve to a stale timeout when a
- * final success is about to arrive.
- */
-const AGENT_RUN_TIMEOUT_RETRY_GRACE_MS = 15_000;
-
+const AGENT_RUN_CACHE_MAX_ENTRIES = 5_000;
 const agentRunCache = new Map<string, AgentRunSnapshot>();
 const agentRunStarts = new Map<string, number>();
-const pendingAgentRunErrors = new Map<string, PendingAgentRunError>();
+const pendingAgentRunErrors = new Map<string, PendingAgentRunTerminal>();
 const pendingAgentRunTimeouts = new Map<string, PendingAgentRunTerminal>();
 const agentRunWaiterCounts = new Map<string, number>();
 let agentRunListenerStarted = false;
@@ -41,8 +29,6 @@ type PendingAgentRunTerminal = {
   dueAt: number;
   timer: NodeJS.Timeout;
 };
-
-type PendingAgentRunError = PendingAgentRunTerminal;
 
 function pruneAgentRunCache(now = Date.now()) {
   for (const [runId, entry] of agentRunCache) {
@@ -63,6 +49,28 @@ function recordAgentRunSnapshot(entry: AgentRunSnapshot) {
     return;
   }
   agentRunCache.set(entry.runId, entry);
+  // Time-based prune only fires on the TTL window; under high run fan-out a
+  // burst can add far more entries than the window reclaims. Cap with a FIFO
+  // drop so the cache cannot grow without bound between prunes.
+  enforceAgentRunCacheMaxEntries();
+}
+
+function enforceAgentRunCacheMaxEntries() {
+  if (agentRunCache.size <= AGENT_RUN_CACHE_MAX_ENTRIES) {
+    return;
+  }
+  const toRemove = agentRunCache.size - AGENT_RUN_CACHE_MAX_ENTRIES;
+  let removed = 0;
+  for (const runId of agentRunCache.keys()) {
+    if (removed >= toRemove) {
+      break;
+    }
+    if ((agentRunWaiterCounts.get(runId) ?? 0) > 0) {
+      continue;
+    }
+    agentRunCache.delete(runId);
+    removed += 1;
+  }
 }
 
 function shouldPreserveTerminalSnapshot(
@@ -119,7 +127,7 @@ function schedulePendingAgentRunError(snapshot: AgentRunSnapshot) {
   }
   clearPendingAgentRunTimeout(snapshot.runId);
   clearPendingAgentRunError(snapshot.runId);
-  const dueAt = Date.now() + AGENT_RUN_ERROR_RETRY_GRACE_MS;
+  const dueAt = Date.now() + AGENT_RUN_TERMINAL_RETRY_GRACE_MS;
   const timer = setTimeout(() => {
     const pending = pendingAgentRunErrors.get(snapshot.runId);
     if (!pending) {
@@ -127,7 +135,7 @@ function schedulePendingAgentRunError(snapshot: AgentRunSnapshot) {
     }
     pendingAgentRunErrors.delete(snapshot.runId);
     recordAgentRunSnapshot(pending.snapshot);
-  }, AGENT_RUN_ERROR_RETRY_GRACE_MS);
+  }, AGENT_RUN_TERMINAL_RETRY_GRACE_MS);
   timer.unref?.();
   pendingAgentRunErrors.set(snapshot.runId, { snapshot, dueAt, timer });
 }
@@ -141,7 +149,7 @@ function schedulePendingAgentRunTimeout(snapshot: AgentRunSnapshot) {
   }
   clearPendingAgentRunError(snapshot.runId);
   clearPendingAgentRunTimeout(snapshot.runId);
-  const dueAt = Date.now() + AGENT_RUN_TIMEOUT_RETRY_GRACE_MS;
+  const dueAt = Date.now() + AGENT_RUN_TERMINAL_RETRY_GRACE_MS;
   const timer = setTimeout(() => {
     const pending = pendingAgentRunTimeouts.get(snapshot.runId);
     if (!pending) {
@@ -149,7 +157,7 @@ function schedulePendingAgentRunTimeout(snapshot: AgentRunSnapshot) {
     }
     pendingAgentRunTimeouts.delete(snapshot.runId);
     recordAgentRunSnapshot(pending.snapshot);
-  }, AGENT_RUN_TIMEOUT_RETRY_GRACE_MS);
+  }, AGENT_RUN_TERMINAL_RETRY_GRACE_MS);
   timer.unref?.();
   pendingAgentRunTimeouts.set(snapshot.runId, { snapshot, dueAt, timer });
 }
@@ -395,14 +403,14 @@ export async function waitForAgentJob(params: {
 
     const scheduleErrorFinish = (
       snapshot: AgentRunSnapshot,
-      delayMs = AGENT_RUN_ERROR_RETRY_GRACE_MS,
+      delayMs = AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
     ) => {
       scheduleTerminalFinish("error", snapshot, delayMs);
     };
 
     const scheduleTimeoutFinish = (
       snapshot: AgentRunSnapshot,
-      delayMs = AGENT_RUN_TIMEOUT_RETRY_GRACE_MS,
+      delayMs = AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
     ) => {
       scheduleTerminalFinish("timeout", snapshot, delayMs);
     };
@@ -494,5 +502,12 @@ export const testing = {
   resetWaiters(): void {
     agentRunWaiterCounts.clear();
   },
+  getAgentRunCacheSize(): number {
+    return agentRunCache.size;
+  },
+  resetAgentRunCache(): void {
+    agentRunCache.clear();
+  },
+  agentRunCacheMaxEntries: AGENT_RUN_CACHE_MAX_ENTRIES,
 };
 export { testing as __testing };

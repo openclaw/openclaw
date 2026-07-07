@@ -7,6 +7,7 @@ import type {
   Usage,
 } from "openclaw/plugin-sdk/llm";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../shared/transcript-only-openclaw-assistant.js";
 import {
   expectOpenAIResponsesStrictSanitizeCall,
   loadSanitizeSessionHistoryWithCleanMocks,
@@ -187,6 +188,70 @@ describe("sanitizeSessionHistory", () => {
 
   const getAssistantContentTypes = (messages: AgentMessage[]) =>
     getAssistantMessage(messages).content.map((block: { type: string }) => block.type);
+
+  it("preserves a validated context snapshot while normalizing replay usage", async () => {
+    const assistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "done" }],
+      api: "anthropic-messages",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      usage: {
+        input: 12,
+        output: 15_104,
+        cacheRead: 819_661,
+        cacheWrite: 93_130,
+        contextUsage: {
+          state: "available",
+          promptTokens: 148_874,
+          totalTokens: 163_978,
+        },
+      },
+      stopReason: "stop",
+      timestamp: 0,
+    } as unknown as AgentMessage;
+
+    const out = await sanitizeAnthropicHistory({
+      messages: [{ role: "user", content: "hello", timestamp: 0 } as AgentMessage, assistant],
+    });
+
+    expect(getAssistantMessage(out).usage).toMatchObject({
+      contextUsage: {
+        state: "available",
+        promptTokens: 148_874,
+        totalTokens: 163_978,
+      },
+      totalTokens: 927_907,
+    });
+  });
+
+  it("preserves an unavailable context snapshot while normalizing replay usage", async () => {
+    const assistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "done" }],
+      api: "anthropic-messages",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      usage: {
+        input: 12,
+        output: 15_104,
+        cacheRead: 819_661,
+        cacheWrite: 93_130,
+        contextUsage: { state: "unavailable" },
+      },
+      stopReason: "stop",
+      timestamp: 0,
+    } as unknown as AgentMessage;
+
+    const out = await sanitizeAnthropicHistory({
+      messages: [{ role: "user", content: "hello", timestamp: 0 } as AgentMessage, assistant],
+    });
+
+    expect(getAssistantMessage(out).usage).toMatchObject({
+      contextUsage: { state: "unavailable" },
+      totalTokens: 927_907,
+    });
+  });
 
   const makeThinkingAndTextAssistantMessages = (thinkingSignature = "some_sig"): AgentMessage[] => {
     const user: UserMessage = {
@@ -594,6 +659,7 @@ describe("sanitizeSessionHistory", () => {
               cacheRead: 0.25,
               cacheWrite: 0,
               total: 4,
+              totalOrigin: "provider-billed",
             },
           },
         },
@@ -613,6 +679,7 @@ describe("sanitizeSessionHistory", () => {
         cacheRead: 0.25,
         cacheWrite: 0,
         total: 4,
+        totalOrigin: "provider-billed",
       },
     });
   });
@@ -887,7 +954,7 @@ describe("sanitizeSessionHistory", () => {
     });
   });
 
-  it("repairs a message-tool delivery-mirror poisoned OpenAI Responses replay", async () => {
+  it("repairs a message-tool delivery-mirror poisoned replay", async () => {
     const messages: AgentMessage[] = [
       makeUserMessage("start"),
       makeAssistantMessage(
@@ -905,7 +972,7 @@ describe("sanitizeSessionHistory", () => {
         role: "assistant",
         provider: "openclaw",
         model: "delivery-mirror",
-        api: "openai-responses",
+        api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
         content: [{ type: "text", text: "visible reply" }],
         stopReason: "stop",
       }),

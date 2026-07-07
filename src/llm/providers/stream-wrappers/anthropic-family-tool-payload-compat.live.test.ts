@@ -11,7 +11,7 @@ const LIVE = isLiveTestEnabled(["OPENAI_LIVE_TEST"]) && Boolean(OPENAI_KEY);
 const describeLive = LIVE ? describe : describe.skip;
 
 describeLive("OpenAI-compatible Anthropic tool payload wrapper live", () => {
-  it("sends a healthy pinned tool after quarantining an unreadable sibling", async () => {
+  it("projects and sends a custom pinned tool after quarantining an unreadable sibling", async () => {
     const liveModelId = process.env.OPENCLAW_LIVE_OPENAI_CHAT_TOOL_MODEL || "gpt-5.5";
     let projectedPayload: Record<string, unknown> | undefined;
     const baseStreamFn: StreamFn = (model, context, options) => {
@@ -36,16 +36,19 @@ describeLive("OpenAI-compatible Anthropic tool payload wrapper live", () => {
             },
           },
           {
-            name: "live_probe",
-            description: "Return the requested probe value.",
-            input_schema: {
-              type: "object",
-              properties: { value: { type: "string" } },
-              required: ["value"],
+            type: "custom",
+            custom: {
+              name: "live_probe",
+              description: "Return the requested probe value.",
+              input_schema: {
+                type: "object",
+                properties: { value: { type: "string" } },
+                required: ["value"],
+              },
             },
           },
         ],
-        tool_choice: { type: "tool", name: "live_probe" },
+        tool_choice: { type: "custom", custom: { name: "live_probe" } },
         max_completion_tokens: 128,
       };
       options?.onPayload?.(payload, model);

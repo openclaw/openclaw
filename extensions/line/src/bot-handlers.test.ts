@@ -1051,6 +1051,31 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("reports failed media materialization to the message-context owner", async () => {
+    downloadLineMediaMock.mockRejectedValueOnce(new Error("expired content"));
+    const processMessage = vi.fn();
+    const event = createTestMessageEvent({
+      message: {
+        id: "image-failed-1",
+        type: "image",
+        contentProvider: { type: "line" },
+        quoteToken: "q-image-failed",
+      },
+      source: { type: "user", userId: "user-image-failed" },
+      webhookEventId: "evt-image-failed",
+    });
+
+    await handleLineWebhookEvents(
+      [event],
+      createLineWebhookTestContext({ processMessage, dmPolicy: "open" }),
+    );
+
+    expect(buildLineMessageContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({ allMedia: [], mediaUnavailable: true }),
+    );
+    expect(processMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("allows non-text group messages through when requireMention is set (cannot detect mention)", async () => {
     // Image message -- LINE only carries mention metadata on text messages.
     const event = createTestMessageEvent({

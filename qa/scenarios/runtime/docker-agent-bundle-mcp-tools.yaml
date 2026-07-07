@@ -21,7 +21,7 @@ scenario:
     - test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts
   execution:
     kind: script
-    path: scripts/qa/docker-e2e-lane.ts
+    path: test/e2e/qa-lab/runtime/docker-e2e-lane.ts
     summary: Runs the existing agent-bundle-mcp-tools Docker E2E lane for Docker-backed agent tooling coverage.
     args:
       - --lane

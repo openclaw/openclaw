@@ -1,3 +1,4 @@
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 /**
  * Config parsing for Codex Supervisor endpoints and safety gates.
  */
@@ -59,10 +60,6 @@ function normalizeEndpointId(value: string, index: number): string {
     return trimmed.replace(/[^a-zA-Z0-9_.:-]/g, "-");
   }
   return `endpoint-${index + 1}`;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function parseEndpointRecord(value: unknown, index: number): CodexSupervisorEndpoint | undefined {

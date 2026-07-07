@@ -1,22 +1,13 @@
 // Context-engine delegates bridge custom engines to built-in compaction and memory prompt paths.
-import type { CompactEmbeddedAgentSessionDirect } from "../agents/embedded-agent-runner/compact.runtime.types.js";
-import { normalizeStructuredPromptSection } from "../agents/prompt-cache-stability.js";
+import { normalizeStructuredPromptSection } from "@openclaw/ai/internal/shared";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { buildMemoryPromptSection } from "../plugins/memory-state.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { ContextEngine, CompactResult, ContextEngineRuntimeContext } from "./types.js";
 
-type CompactRuntimeModule = {
-  compactEmbeddedAgentSessionDirect: CompactEmbeddedAgentSessionDirect;
-};
-
-let compactRuntimePromise: Promise<CompactRuntimeModule> | null = null;
-
-function loadCompactRuntime(): Promise<CompactRuntimeModule> {
-  // Use a literal specifier so the bundler rewrites the runtime chunk path
-  // instead of resolving a source-tree path at runtime.
-  compactRuntimePromise ??= import("../agents/embedded-agent-runner/compact.runtime.js");
-  return compactRuntimePromise;
-}
+const loadCompactRuntime = createLazyRuntimeModule(
+  () => import("../agents/embedded-agent-runner/compact.runtime.js"),
+);
 
 /**
  * Delegate a context-engine compaction request to OpenClaw's built-in runtime compaction path.
@@ -65,6 +56,13 @@ export async function delegateCompactionToRuntime(
       typeof runtimeContext.workspaceDir === "string" ? runtimeContext.workspaceDir : process.cwd(),
   });
 
+  // Post-compaction live session: the runtime reports rotation through the
+  // result sessionId/sessionFile pair; otherwise the input session stays live.
+  const successorSessionId = result.result?.sessionId ?? params.sessionId;
+  const successorSessionFile = result.result?.sessionFile ?? params.sessionFile;
+  const agentId = runtimeContext.sessionTarget?.agentId ?? runtimeContext.agentId;
+  const sessionKey = params.sessionKey ?? runtimeContext.sessionKey;
+
   return {
     ok: result.ok,
     compacted: result.compacted,
@@ -77,7 +75,16 @@ export async function delegateCompactionToRuntime(
           tokensAfter: result.result.tokensAfter,
           details: result.result.details,
           sessionId: result.result.sessionId,
+          // Deprecated raw path stays populated for shipped plugin-sdk readers
+          // of the delegate result; sessionTarget is the canonical successor.
           sessionFile: result.result.sessionFile,
+          sessionTarget: {
+            kind: "file",
+            ...(agentId ? { agentId } : {}),
+            sessionId: successorSessionId,
+            ...(sessionKey ? { sessionKey } : {}),
+            sessionFile: successorSessionFile,
+          },
         }
       : undefined,
   };

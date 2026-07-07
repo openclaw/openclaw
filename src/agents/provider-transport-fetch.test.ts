@@ -1193,6 +1193,58 @@ describe("buildGuardedModelFetch", () => {
     expect(items).toEqual([{ ok: true }]);
   });
 
+  it("does not re-prefix SSE bodies mislabeled as JSON by streaming gateways", async () => {
+    const source = openResponseStreamText(
+      'data: {"id":"a","choices":[{"index":0,"delta":{"content":"Hi","role":"assistant"}}]}\n\n' +
+        'data: {"id":"a","choices":[{"index":0,"delta":{"content":" there"}}]}\n\n' +
+        "data: [DONE]\n\n",
+    );
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        source.stream,
+        // Mislabeled: SSE body served with a JSON content-type.
+        { headers: { "content-type": "application/json; charset=utf-8" } },
+      ),
+      finalUrl: "https://gateway.example/v1/chat/completions",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "MiniMax-M3",
+      provider: "hetu",
+      api: "openai-completions",
+      baseUrl: "https://gateway.example/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const responsePromise = buildGuardedModelFetch(model)(
+      "https://gateway.example/v1/chat/completions",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "MiniMax-M3", stream: true }),
+      },
+    );
+    const timeout = Symbol("timeout");
+    const result = await Promise.race<Response | typeof timeout>([
+      responsePromise,
+      new Promise<typeof timeout>((resolve) => {
+        setTimeout(() => resolve(timeout), 100);
+      }),
+    ]);
+    source.close();
+
+    expect(result).not.toBe(timeout);
+    const response = result as Response;
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    const items = [];
+    for await (const item of Stream.fromSSEResponse(response, new AbortController())) {
+      items.push(item);
+    }
+    expect(items).toEqual([
+      { id: "a", choices: [{ index: 0, delta: { content: "Hi", role: "assistant" } }] },
+      { id: "a", choices: [{ index: 0, delta: { content: " there" } }] },
+    ]);
+  });
+
   it("does not clone Request bodies while checking for streaming JSON fallbacks", async () => {
     const cloneSpy = vi.spyOn(Request.prototype, "clone");
     fetchWithSsrFGuardMock.mockResolvedValue({
@@ -1369,8 +1421,44 @@ describe("buildGuardedModelFetch", () => {
     expect(refreshTimeout).toHaveBeenCalledTimes(2);
   });
 
+  it("handles a valid large SSE event split before its boundary", async () => {
+    const payload = { text: "x".repeat(70 * 1024) };
+    const encoder = new TextEncoder();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}`));
+            controller.enqueue(encoder.encode("\n\n"));
+            controller.close();
+          },
+        }),
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+      finalUrl: "https://openrouter.ai/api/v1/chat/completions",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "gpt-5.4",
+      provider: "openrouter",
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://openrouter.ai/api/v1/chat/completions",
+      { method: "POST" },
+    );
+    const items = [];
+    for await (const item of Stream.fromSSEResponse(response, new AbortController())) {
+      items.push(item);
+    }
+
+    expect(items).toEqual([payload]);
+  });
+
   it("errors on oversized SSE body without event boundary in sanitizer", async () => {
-    const oversized = "x".repeat(65 * 1024);
+    const oversized = "x".repeat(16 * 1024 * 1024 + 1024);
     const encoder = new TextEncoder();
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response(

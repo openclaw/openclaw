@@ -468,6 +468,39 @@ describe("exec notifyOnExit suppression", () => {
     expect(heartbeat.reason).toBe("exec-event");
     expect(heartbeat.sessionKey).toBe("agent:main:main");
   });
+
+  it("keeps background exec exit-notification snippets on a UTF-16 boundary", async () => {
+    // A backgrounded command whose tail output overflows the 180-char snippet
+    // cap with an emoji straddling the cut must not deliver a lone surrogate to
+    // the user's channel. The emoji's high surrogate lands at index 178, so a
+    // raw slice(0, 179) would keep the dangling half.
+    const head = "a".repeat(178);
+    const overflowingOutput = `${head}🎉${"b".repeat(30)}`;
+    await runBackgroundedExit({ reason: "manual-cancel", stdout: overflowingOutput });
+
+    const [message] = requireSystemEventCall();
+    const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
+    expect(message).not.toMatch(loneSurrogate);
+    // The snippet stays truncated (ellipsis) while keeping the readable head.
+    expect(message).toContain("…");
+    expect(message).toContain(head);
+  });
+
+  it("keeps the notify tail source on a UTF-16 boundary", async () => {
+    // The notify path first takes a 400-char tail, then compacts that tail to a
+    // 180-char snippet. If the 400-char tail starts inside an emoji, the final
+    // compacted snippet must not preserve the dangling low surrogate.
+    const prefix = "a".repeat(101);
+    const tailHead = "b".repeat(179);
+    const overflowingOutput = `${prefix}🎉${tailHead}${"c".repeat(220)}`;
+    await runBackgroundedExit({ reason: "manual-cancel", stdout: overflowingOutput });
+
+    const [message] = requireSystemEventCall();
+    const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
+    expect(message).not.toMatch(loneSurrogate);
+    expect(message).not.toContain("�");
+    expect(message).toContain(tailHead);
+  });
 });
 
 describe("formatExecFailureReason", () => {
