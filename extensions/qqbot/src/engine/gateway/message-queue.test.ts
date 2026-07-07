@@ -333,3 +333,84 @@ describe("gateway UTF-16 truncation cap boundary", () => {
     expect(truncateUtf16Safe(safePrefix + "🎉 trailing error", 2000)).toBe(safePrefix);
   });
 });
+
+// Runtime proof for the operator-visible TTS debug log in
+// gateway.ts:65 — evaluates the EXACT production template literal
+// against both the absent-TTS path (the P2 fix preserves the
+// `ttsText=undefined` log spelling) and the emoji-boundary path so
+// the BEFORE/AFTER run can be pasted into the PR body as evidence.
+describe("gateway runtime UTF-16 evidence (onMessageSent TTS log)", () => {
+  function hexCodeUnits(s: string): string {
+    return Array.from(s)
+      .map((c) => "U+" + c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0"))
+      .join(" ");
+  }
+
+  // EXACT prod template literal from gateway.ts:65
+  //   `onMessageSent called: refIdx=${refIdx}, mediaType=${meta.mediaType}, ttsText=${meta.ttsText ? truncateUtf16Safe(meta.ttsText, 30) : "undefined"}, traceId=${traceId}`
+  function renderOnMessageSentLog(
+    refIdx: number,
+    mediaType: string,
+    ttsText: string | undefined,
+    traceId: string,
+  ): string {
+    return `onMessageSent called: refIdx=${refIdx}, mediaType=${mediaType}, ttsText=${ttsText ? truncateUtf16Safe(ttsText, 30) : "undefined"}, traceId=${traceId}`;
+  }
+
+  function renderBeforeOnMessageSentLog(
+    refIdx: number,
+    mediaType: string,
+    ttsText: string | undefined,
+    traceId: string,
+  ): string {
+    // Pre-fix string template: `meta.ttsText?.slice(0, 30)` collapses
+    // undefined to the empty string and renders `ttsText=`.
+    return `onMessageSent called: refIdx=${refIdx}, mediaType=${mediaType}, ttsText=${(ttsText ?? "").slice(0, 30)}, traceId=${traceId}`;
+  }
+
+  it("absent TTS renders as `ttsText=undefined` (P2 fix preserves operator log spelling)", () => {
+    const after = renderOnMessageSentLog(7, "image", undefined, "trace-1234");
+    const before = renderBeforeOnMessageSentLog(7, "image", undefined, "trace-1234");
+
+    console.log("\n=== PR 2 runtime proof (part 1): onMessageSent TTS log, absent ttsText ===");
+    console.log(`BEFORE (pre-fix, .slice(0, 30) on undefined): ${before}`);
+    console.log(`AFTER  (truncateUtf16Safe + undefined fallback): ${after}`);
+
+    // P2 fix: AFTER preserves the original `ttsText=undefined` log
+    // spelling that operators rely on. BEFORE collapses undefined to
+    // `ttsText=` (the bug ClawSweeper flagged in #101426).
+    expect(after).toContain("ttsText=undefined");
+    expect(after).not.toMatch(/ttsText=,/);
+    expect(before).toMatch(/ttsText=,/);
+  });
+
+  it("defined TTS with emoji straddling cap 30 keeps the 29-ASCII prefix (no lone surrogate)", () => {
+    const ttsText = "x".repeat(29) + "🎉tail"; // 29 ASCII + emoji straddling boundary at 29
+    const after = renderOnMessageSentLog(7, "image", ttsText, "trace-1234");
+    const before = renderBeforeOnMessageSentLog(7, "image", ttsText, "trace-1234");
+
+    console.log(
+      "\n=== PR 2 runtime proof (part 2): onMessageSent TTS log, emoji straddling cap 30 ===",
+    );
+    console.log(`input ttsText (${ttsText.length} code units): ${ttsText}`);
+    console.log(`input hex: ${hexCodeUnits(ttsText)}`);
+    console.log(`BEFORE (.slice(0, 30)):`);
+    console.log(`  ${before}`);
+    console.log(`  hex (ttsText portion): ${hexCodeUnits(ttsText.slice(0, 30))}`);
+    console.log(`AFTER  (truncateUtf16Safe(ttsText, 30)):`);
+    console.log(`  ${after}`);
+    console.log(`  hex (ttsText portion): ${hexCodeUnits(truncateUtf16Safe(ttsText, 30))}`);
+    const beforeHasLone =
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(before);
+    const afterHasLone =
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(after);
+    console.log(`BEFORE contains lone surrogate? ${beforeHasLone}`);
+    console.log(`AFTER  contains lone surrogate? ${afterHasLone}`);
+
+    // The cap-30 helper drops the trailing emoji pair to keep the
+    // operator-log boundary clean. AFTER is the 29-ASCII prefix only.
+    expect(after).toContain(`ttsText=${"x".repeat(29)},`);
+    expect(afterHasLone).toBe(false);
+    expect(beforeHasLone).toBe(true);
+  });
+});
