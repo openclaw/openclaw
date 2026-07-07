@@ -40,6 +40,7 @@ export type ResolveOutboundSessionRouteParams = {
   resolvedTarget?: ResolvedMessagingTarget;
   replyToId?: string | null;
   threadId?: string | number | null;
+  requireExactPeerKind?: boolean;
 };
 
 function resolveOutboundChannelPlugin(channel: ChannelId) {
@@ -110,12 +111,28 @@ function inferPeerKindFromFallbackPrefixes(targets: readonly string[]): ChatType
   return undefined;
 }
 
+function inferPeerKindFromCapabilities(
+  plugin: ReturnType<typeof resolveOutboundChannelPlugin>,
+): ChatType | undefined {
+  const chatTypes: ChatType[] = [];
+  for (const chatType of plugin?.capabilities?.chatTypes ?? []) {
+    if (
+      (chatType === "direct" || chatType === "group" || chatType === "channel") &&
+      !chatTypes.includes(chatType)
+    ) {
+      chatTypes.push(chatType);
+    }
+  }
+  return chatTypes.length === 1 ? chatTypes[0] : undefined;
+}
+
 function inferPeerKind(params: {
   channel: ChannelId;
   plugin?: ChannelPlugin;
   target: string;
   resolvedTarget?: ResolvedMessagingTarget;
-}): ChatType {
+  requireExactPeerKind?: boolean;
+}): ChatType | undefined {
   const resolvedKind = params.resolvedTarget?.kind;
   if (resolvedKind === "user") {
     return "direct";
@@ -140,7 +157,8 @@ function inferPeerKind(params: {
     inferPeerKindFromPlugin({ plugin, targets }) ??
     inferPeerKindFromLegacyParser({ plugin, targets }) ??
     inferPeerKindFromFallbackPrefixes(targets) ??
-    "direct"
+    inferPeerKindFromCapabilities(plugin) ??
+    (params.requireExactPeerKind ? undefined : "direct")
   );
 }
 
@@ -156,7 +174,11 @@ function resolveFallbackSession(
     plugin: params.plugin,
     target: params.target,
     resolvedTarget: params.resolvedTarget,
+    requireExactPeerKind: params.requireExactPeerKind,
   });
+  if (!peerKind) {
+    return null;
+  }
   const peerId = stripKindPrefix(trimmed);
   if (!peerId) {
     return null;

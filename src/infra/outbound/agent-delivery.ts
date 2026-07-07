@@ -158,10 +158,8 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
     cfg: params.cfg,
     allowBootstrap: true,
   });
-  if (
-    !plugin?.messaging?.resolveOutboundSessionRoute &&
-    params.sessionRouteMode !== "allow-fallback"
-  ) {
+  const hasPluginSessionRoute = Boolean(plugin?.messaging?.resolveOutboundSessionRoute);
+  if (!hasPluginSessionRoute && params.sessionRouteMode !== "allow-fallback") {
     return plan;
   }
   const resolvedAccountId =
@@ -215,6 +213,9 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
         target: sessionRouteTarget,
         ...(resolvedSessionRouteTarget ? { resolvedTarget: resolvedSessionRouteTarget } : {}),
         currentSessionKey: params.currentSessionKey,
+        ...(!hasPluginSessionRoute && params.sessionRouteMode === "allow-fallback"
+          ? { requireExactPeerKind: true }
+          : {}),
         threadId:
           routedPlan.deliveryTargetMode === "explicit"
             ? explicitThreadId
@@ -240,7 +241,11 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
   return {
     ...routedPlan,
     resolvedSessionKey: route.sessionKey,
-    resolvedTo: route.to,
+    // Generic routes use portable user/channel prefixes. Delivery still needs the
+    // plugin-normalized target; only provider-owned route hooks may replace it.
+    resolvedTo: hasPluginSessionRoute
+      ? route.to
+      : (resolvedSessionRouteTarget?.to ?? sessionRouteTarget),
     resolvedThreadId:
       route.threadId ??
       (routedPlan.deliveryTargetMode === "explicit"

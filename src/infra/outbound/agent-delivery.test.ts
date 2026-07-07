@@ -98,7 +98,7 @@ vi.mock("./target-resolver.js", () => ({
 vi.mock("../../utils/message-channel.js", () => ({
   INTERNAL_MESSAGE_CHANNEL: "webchat",
   isDeliverableMessageChannel: (channel: string) =>
-    ["directchat", "workspace", "telegram", "whatsapp"].includes(channel),
+    ["directchat", "line", "workspace", "telegram", "whatsapp"].includes(channel),
   isGatewayMessageChannel: (channel: string) =>
     ["directchat", "workspace", "telegram", "whatsapp", "webchat"].includes(channel),
   normalizeMessageChannel: (value: string) => value.trim().toLowerCase(),
@@ -366,6 +366,48 @@ describe("agent delivery helpers", () => {
       threadId: "topic-42",
       error: undefined,
     });
+  });
+
+  it("keeps provider-normalized delivery targets when recipient sessions use fallback routing", async () => {
+    const plugin = {
+      capabilities: { chatTypes: ["direct", "group"] },
+      config: {
+        listAccountIds: () => [],
+      },
+      messaging: { inferTargetChatType: vi.fn(() => "direct") },
+    };
+    const lineUserId = `U${"a".repeat(32)}`;
+    mocks.resolveOutboundChannelPlugin.mockReturnValue(plugin);
+    mocks.resolveOutboundTarget.mockReturnValueOnce({ ok: true, to: lineUserId });
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
+      sessionKey: `agent:ops:line:direct:${lineUserId.toLowerCase()}`,
+      baseSessionKey: `agent:ops:line:direct:${lineUserId.toLowerCase()}`,
+      peer: { kind: "direct", id: lineUserId },
+      chatType: "direct",
+      from: `line:${lineUserId}`,
+      to: `user:${lineUserId}`,
+    });
+
+    const result = await resolveAgentExplicitRecipientSession({
+      cfg: {} as OpenClawConfig,
+      agentId: "ops",
+      channel: "line",
+      to: lineUserId,
+    });
+
+    expect(mocks.resolveOutboundSessionRoute).toHaveBeenCalledWith({
+      cfg: {},
+      channel: "line",
+      plugin,
+      agentId: "ops",
+      accountId: "default",
+      target: lineUserId,
+      currentSessionKey: undefined,
+      requireExactPeerKind: true,
+      threadId: undefined,
+    });
+    expect(result.sessionKey).toBe(`agent:ops:line:direct:${lineUserId.toLowerCase()}`);
+    expect(result.to).toBe(lineUserId);
   });
 
   it("uses the channel default account when recipient routing omits an account", async () => {

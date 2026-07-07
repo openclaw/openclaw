@@ -1,3 +1,5 @@
+import { buildChannelOutboundSessionRoute } from "openclaw/plugin-sdk/channel-core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Irc helper module supports normalize behavior.
 import {
   normalizeLowercaseStringOrEmpty,
@@ -35,6 +37,29 @@ export function normalizeIrcMessagingTarget(raw: string): string | undefined {
     return undefined;
   }
   return target;
+}
+
+export function resolveIrcOutboundSessionRoute(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  accountId?: string | null;
+  target: string;
+}) {
+  const target = normalizeIrcMessagingTarget(params.target);
+  if (!target) {
+    return null;
+  }
+  const chatType = isChannelTarget(target) ? "group" : "direct";
+  return buildChannelOutboundSessionRoute({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    channel: "irc",
+    accountId: params.accountId,
+    peer: { kind: chatType, id: target },
+    chatType,
+    from: `irc:${target}`,
+    to: target,
+  });
 }
 
 export function looksLikeIrcTargetId(raw: string): boolean {

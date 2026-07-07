@@ -844,6 +844,35 @@ describe("agentCommand", () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
       mockConfig(home, store);
+      installThinkingTestProviders([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "telegram",
+            outbound: createDirectOutboundTestAdapter({ channel: "telegram" }),
+            messaging: {
+              normalizeTarget: (target) => {
+                const chatId = target.trim().replace(/^telegram:/i, "");
+                return chatId ? `telegram:${chatId}` : undefined;
+              },
+              resolveOutboundSessionRoute: (params) => {
+                const chatId = params.target.replace(/^telegram:/i, "");
+                return buildChannelOutboundSessionRoute({
+                  cfg: params.cfg,
+                  agentId: params.agentId,
+                  channel: "telegram",
+                  accountId: params.accountId,
+                  peer: { kind: "direct", id: chatId },
+                  chatType: "direct",
+                  from: `telegram:${chatId}`,
+                  to: `telegram:${chatId}`,
+                });
+              },
+            },
+          }),
+        },
+      ]);
       const sendMessageTelegram = vi.fn(async () => undefined);
       const base = createDefaultAgentResult({ payloads: [{ text: "assistant-visible" }] });
       vi.mocked(runEmbeddedAgent).mockResolvedValueOnce({
@@ -869,7 +898,8 @@ describe("agentCommand", () => {
         { sendMessageTelegram },
       );
 
-      expect(sendMessageTelegram).toHaveBeenCalledWith("+1222", "assistant-visible", {
+      expect(sendMessageTelegram).toHaveBeenCalledWith("telegram:+1222", "assistant-visible", {
+        accountId: undefined,
         verbose: false,
       });
       expect(vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript)).toHaveBeenCalledTimes(1);

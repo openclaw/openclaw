@@ -93,6 +93,47 @@ describe("resolveOutboundSessionRoute", () => {
     expect(route?.chatType).toBe("direct");
   });
 
+  it("requires an exact peer kind for ambiguous fallback plugins", async () => {
+    const plugin = {
+      ...createChannelTestPluginBase({
+        id: "external-channel",
+        capabilities: { chatTypes: ["direct", "group"] },
+      }),
+    } satisfies ChannelPlugin;
+
+    const route = await resolveOutboundSessionRoute({
+      cfg: baseConfig,
+      channel: "external-channel",
+      plugin,
+      agentId: "main",
+      target: "opaque-target",
+      requireExactPeerKind: true,
+    });
+
+    expect(route).toBeNull();
+  });
+
+  it("uses a plugin's only peer kind for exact fallback routing", async () => {
+    const plugin = {
+      ...createChannelTestPluginBase({
+        id: "external-channel",
+        capabilities: { chatTypes: ["group"] },
+      }),
+    } satisfies ChannelPlugin;
+
+    const route = await resolveOutboundSessionRoute({
+      cfg: baseConfig,
+      channel: "external-channel",
+      plugin,
+      agentId: "main",
+      target: "ops-room",
+      requireExactPeerKind: true,
+    });
+
+    expect(route?.chatType).toBe("group");
+    expect(route?.sessionKey).toBe("agent:main:external-channel:group:ops-room");
+  });
+
   async function expectResolvedRoute(params: {
     cfg: OpenClawConfig;
     channel: string;

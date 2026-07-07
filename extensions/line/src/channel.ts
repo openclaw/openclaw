@@ -10,6 +10,7 @@ import type { ChannelPlugin, ResolvedLineAccount } from "./channel-api.js";
 import { lineChannelPluginCommon } from "./channel-shared.js";
 import { lineGatewayAdapter } from "./gateway.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
+import { inferLineTargetChatType, normalizeLineMessagingTarget } from "./messaging-target.js";
 import { lineMessageAdapter, lineOutboundAdapter } from "./outbound.js";
 import { hasLineDirectives, parseLineDirectives } from "./reply-payload-transform.js";
 import { getLineRuntime } from "./runtime.js";
@@ -44,13 +45,8 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
     },
     messaging: {
       targetPrefixes: ["line"],
-      normalizeTarget: (target) => {
-        const trimmed = target.trim();
-        if (!trimmed) {
-          return undefined;
-        }
-        return trimmed.replace(/^line:(group|room|user):/i, "").replace(/^line:/i, "");
-      },
+      normalizeTarget: normalizeLineMessagingTarget,
+      inferTargetChatType: ({ to }) => inferLineTargetChatType(to),
       resolveInboundConversation: lineBindingsAdapter.resolveInboundConversation,
       transformReplyPayload: ({ payload }) => {
         if (!payload.text || !hasLineDirectives(payload.text)) {
