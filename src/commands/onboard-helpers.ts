@@ -1,4 +1,3 @@
-/** Shared helpers for onboarding, reset, gateway checks, and wizard output. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { inspect } from "node:util";
@@ -6,6 +5,8 @@ import { cancel, isCancel } from "@clack/prompts";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+/** Shared helpers for onboarding, reset, gateway checks, and wizard output. */
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import {
   decorativeEmoji,
@@ -410,7 +411,7 @@ function summarizeError(err: unknown): string {
       .split("\n")
       .map((s) => s.trim())
       .find(Boolean) ?? raw;
-  return line.length > 120 ? `${line.slice(0, 119)}…` : line;
+  return line.length > 120 ? `${truncateUtf16Safe(line, 119)}…` : line;
 }
 
 /** Default workspace path shown by onboarding prompts. */

@@ -628,3 +628,14 @@ describe("validateGatewayPasswordInput", () => {
     expect(validateGatewayPasswordInput(" secret ")).toBeUndefined();
   });
 });
+
+describe("workspace path truncation", () => {
+  it("does not split surrogate pairs", async () => {
+    const { truncateUtf16Safe } = await import("@openclaw/normalization-core/utf16-slice");
+    const content = "x".repeat(118) + "🚀tail";
+    const bad = content.slice(0, 119);
+    expect(bad.endsWith("\uD83D")).toBe(true);
+    const good = truncateUtf16Safe(content, 119);
+    expect(good).toBe("x".repeat(118));
+  });
+});
