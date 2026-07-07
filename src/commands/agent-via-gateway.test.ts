@@ -414,6 +414,30 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("rejects message files that exceed the size cap", async () => {
+    await withTempStore(async ({ dir }) => {
+      const messageFile = path.join(dir, "huge.md");
+      fs.writeFileSync(messageFile, Buffer.alloc(5 * 1024 * 1024, "x"));
+
+      await expect(
+        agentCliCommand({ messageFile, sessionKey: "agent:main:incident-42" }, runtime),
+      ).rejects.toThrow(/File exceeds 4194304 bytes/);
+      expect(callGateway).not.toHaveBeenCalled();
+    });
+  });
+
+  it("reports a directory message file with the legacy EISDIR message", async () => {
+    await withTempStore(async ({ dir }) => {
+      const messageFile = path.join(dir, "not-a-file");
+      fs.mkdirSync(messageFile);
+
+      await expect(
+        agentCliCommand({ messageFile, sessionKey: "agent:main:incident-42" }, runtime),
+      ).rejects.toThrow("Message file is a directory:");
+      expect(callGateway).not.toHaveBeenCalled();
+    });
+  });
+
   it.each(["/new", "/RESET", "/reset check status"] as const)(
     "uses backend admin authority for %s gateway commands",
     async (message) => {

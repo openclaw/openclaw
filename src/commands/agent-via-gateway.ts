@@ -1,6 +1,6 @@
-// Gateway-first agent CLI implementation with embedded fallback for local/runtime failures.
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
+// Gateway-first agent CLI implementation with embedded fallback for local/runtime failures.
+import fs from "node:fs/promises";
 import { TextDecoder } from "node:util";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -29,6 +29,7 @@ import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
 import { createAbortError } from "../infra/abort-signal.js";
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
+import { readRegularFile } from "../infra/regular-file.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import {
   classifySessionKeyShape,
@@ -195,11 +196,35 @@ function formatMessageFileReadFailure(messageFile: string, err: unknown): string
   return `Unable to read message file ${messageFile}: ${message}`;
 }
 
+// Agent messages are prompt text; a 4 MiB cap gives generous headroom for
+// long system prompts while preventing a symlink/huge-file path from OOMing
+// the CLI before dispatch.
+const AGENT_MESSAGE_FILE_MAX_BYTES = 4 * 1024 * 1024;
+
 async function readAgentMessageFile(messageFile: string): Promise<string> {
   let buffer: Buffer;
   try {
-    buffer = await readFile(messageFile);
+    ({ buffer } = await readRegularFile({
+      filePath: messageFile,
+      maxBytes: AGENT_MESSAGE_FILE_MAX_BYTES,
+    }));
   } catch (err) {
+    // readRegularFile rejects non-regular targets with a generic message.
+    // Preserve the legacy directory-specific error so callers see the same
+    // UX they did with fs.readFile.
+    if (
+      err instanceof Error &&
+      (err.message.includes("not a regular file") ||
+        err.message.includes("must be a regular file")) &&
+      (await fs
+        .stat(messageFile)
+        .then((s) => s.isDirectory())
+        .catch(() => false))
+    ) {
+      throw Object.assign(new Error(`Message file is a directory: ${messageFile}`), {
+        code: "EISDIR",
+      });
+    }
     throw new Error(formatMessageFileReadFailure(messageFile, err), { cause: err });
   }
   try {
