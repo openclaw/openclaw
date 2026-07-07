@@ -1861,6 +1861,31 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
+  it("re-throws LiveSessionModelSwitchError when the switch target is not in the candidate chain and no fallbacks are configured (#101676)", async () => {
+    const cfg = makeCfg();
+    // Simulate a user-requested switch from claude-sonnet-5 to
+    // claude-sonnet-4-6. The target is not a configured fallback.
+    const switchError = new LiveSessionModelSwitchError({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+    });
+    const run = vi.fn().mockRejectedValue(switchError);
+
+    const err = await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "claude-sonnet-5",
+      run,
+      fallbacksOverride: [],
+    }).catch((e: unknown) => e);
+    // Must propagate as LiveSessionModelSwitchError so the outer retry
+    // loop catches it and re-runs the turn against the new model.
+    expect(err).toBeInstanceOf(LiveSessionModelSwitchError);
+    expect((err as LiveSessionModelSwitchError).provider).toBe("anthropic");
+    expect((err as LiveSessionModelSwitchError).model).toBe("claude-sonnet-4-6");
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it("continues fallback chain past LiveSessionModelSwitchError to next candidate (#58496 family)", async () => {
     const cfg = makeCfg();
     const switchError = new LiveSessionModelSwitchError({

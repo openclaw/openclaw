@@ -1748,6 +1748,19 @@ async function runWithModelFallbackInternal<T>(
           continue;
         }
 
+        // When the switch target is not in the candidate chain at all and
+        // there are no configured fallbacks, re-throw so the outer live-switch
+        // retry loop can handle the genuine user-requested model switch.
+        // Otherwise, a stale target already in the chain would loop the outer
+        // runner; wrap it as a FailoverError to prevent that (#58496 family).
+        const switchTargetKey = modelKey(err.provider, err.model);
+        const isSwitchTargetInChain = candidates.some(
+          (c) => modelKey(c.provider, c.model) === switchTargetKey,
+        );
+        if (!isSwitchTargetInChain && !hasFallbackCandidates) {
+          throw err;
+        }
+
         const switchMsg = err.message;
         const switchNormalized = new FailoverError(switchMsg, {
           reason: "unknown",
