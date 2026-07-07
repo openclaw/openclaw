@@ -2378,6 +2378,7 @@ describe("runCodexAppServerAttempt", () => {
       "";
     expect(inputText).toContain("queued context");
     expect(inputText).toContain("prior visible context");
+    expect(inputText).not.toContain("hook-side mutation");
   });
 
   it("does not replay mirrored history already covered by an existing Codex binding", async () => {
