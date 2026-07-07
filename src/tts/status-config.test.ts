@@ -7,6 +7,22 @@ import type { OpenClawConfig } from "../config/types.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveStatusTtsSnapshot } from "./status-config.js";
 
+function hasLoneSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next < 0xdc00 || next > 0xdfff) {
+        return true;
+      }
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
 let fixtureRoot = "";
 let fixtureId = 0;
 
@@ -195,6 +211,38 @@ describe("resolveStatusTtsSnapshot", () => {
         maxLength: 1500,
         summarize: true,
       });
+    });
+  });
+
+  it("keeps truncated status detail fields well-formed at UTF-16 boundaries", async () => {
+    await withStatusTempHome(async () => {
+      const displayName = `${"d".repeat(92)}😀tail`;
+      const model = `${"m".repeat(92)}😀tail`;
+      const voice = `${"v".repeat(92)}😀tail`;
+      const snapshot = resolveStatusTtsSnapshot({
+        cfg: {
+          messages: {
+            tts: {
+              auto: "always",
+              provider: "elevenlabs",
+              providers: {
+                elevenlabs: {
+                  displayName,
+                  model,
+                  voice,
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+      });
+
+      expect(snapshot?.displayName).toBe(`${"d".repeat(92)}...`);
+      expect(snapshot?.model).toBe(`${"m".repeat(92)}...`);
+      expect(snapshot?.voice).toBe(`${"v".repeat(92)}...`);
+      expect(hasLoneSurrogate(snapshot?.displayName ?? "")).toBe(false);
+      expect(hasLoneSurrogate(snapshot?.model ?? "")).toBe(false);
+      expect(hasLoneSurrogate(snapshot?.voice ?? "")).toBe(false);
     });
   });
 
