@@ -112,6 +112,55 @@ export function resolveAssistantEventPhase(data: unknown): AssistantPhase | unde
   );
 }
 
+/**
+ * Detects unphased `text` content blocks that are actually intermediate model
+ * monologue rather than user-visible answer text.
+ *
+ * When a message has interleaved `thinking` content blocks AND multiple
+ * unphased `text` blocks, providers like MiniMax-M3 via openai-completions
+ * emit internal monologue as plain `text` blocks before the final answer.
+ * The native-reasoning seal in the streaming partitioner closes a thought
+ * before each visible-text region, but it does not retroactively mark the
+ * earlier text region as commentary, so unphased extraction joined every
+ * text block and leaked monologue to channels (#96849).
+ *
+ * Heuristic: an unphased text block T at index i is intermediate monologue
+ * when there is a thinking block at j > i AND another text block at k > j.
+ * That pattern is the smoking gun: the model emitted text, then thought
+ * again, then emitted more text -- the earlier text was internal reasoning
+ * that the provider routed through `text` rather than `thinking`. Models
+ * that emit a trailing reflective `thinking` block after their final answer
+ * do not match this pattern and keep their final text.
+ *
+ * Callers must pre-compute `hasExplicitPhasedTextBlocks` and short-circuit
+ * when true (explicit phase metadata already partitions monologue).
+ */
+export function isIntermediateMonologueTextBlock(
+  content: unknown,
+  index: number,
+  hasExplicitPhasedTextBlocks: boolean,
+): boolean {
+  if (hasExplicitPhasedTextBlocks || !Array.isArray(content)) {
+    return false;
+  }
+  let sawThinkingAfter = false;
+  for (let j = index + 1; j < content.length; j += 1) {
+    const candidate = content[j];
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    const candidateType = (candidate as { type?: unknown }).type;
+    if (candidateType === "thinking" || candidateType === "redacted_thinking") {
+      sawThinkingAfter = true;
+      continue;
+    }
+    if (sawThinkingAfter && isAssistantTextContentBlockType(candidateType)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Extracts assistant text for a requested phase without mixing legacy and explicitly phased text. */
 export function extractAssistantTextForPhase(
   message: unknown,
@@ -179,42 +228,8 @@ export function extractAssistantTextForPhase(
     return undefined;
   }
 
-  // When a message has interleaved `thinking` content blocks AND multiple
-  // unphased `text` blocks, providers like MiniMax-M3 via openai-completions
-  // emit internal monologue as plain `text` blocks before the final answer.
-  // The native-reasoning seal in the streaming partitioner closes a thought
-  // before each visible-text region, but it does not retroactively mark the
-  // earlier text region as commentary, so unphased extraction joined every
-  // text block and leaked monologue to channels (#96849).
-  //
-  // Heuristic: an unphased text block T at index i is intermediate monologue
-  // when there is a thinking block at j > i AND another text block at k > j.
-  // That pattern is the smoking gun: the model emitted text, then thought
-  // again, then emitted more text -- the earlier text was internal reasoning
-  // that the provider routed through `text` rather than `thinking`. Models
-  // that emit a trailing reflective `thinking` block after their final answer
-  // do not match this pattern and keep their final text.
-  const isIntermediateMonologueTextIndex = (index: number): boolean => {
-    if (hasExplicitPhasedTextBlocks || !Array.isArray(entry.content)) {
-      return false;
-    }
-    let sawThinkingAfter = false;
-    for (let j = index + 1; j < entry.content.length; j += 1) {
-      const candidate = entry.content[j];
-      if (!candidate || typeof candidate !== "object") {
-        continue;
-      }
-      const candidateType = (candidate as { type?: unknown }).type;
-      if (candidateType === "thinking" || candidateType === "redacted_thinking") {
-        sawThinkingAfter = true;
-        continue;
-      }
-      if (sawThinkingAfter && isAssistantTextContentBlockType(candidateType)) {
-        return true;
-      }
-    }
-    return false;
-  };
+  const isIntermediateMonologueTextIndex = (index: number): boolean =>
+    isIntermediateMonologueTextBlock(entry.content, index, hasExplicitPhasedTextBlocks);
 
   const parts = entry.content
     .map((block, index) => {

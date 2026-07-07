@@ -863,6 +863,66 @@ describe("extractAssistantVisibleText", () => {
 
     expect(extractAssistantVisibleText(msg)).toBe("Done.");
   });
+
+  // Regression: openclaw/openclaw#96849 -- Discord main-session final delivery
+  // flows through embedded-agent-subscribe.handlers.messages, which calls this
+  // `extractAssistantVisibleText` helper (NOT the shared/chat-message-content
+  // one). Providers like MiniMax-M3 via openai-completions emit internal
+  // monologue as unphased `type: "text"` blocks interleaved with `thinking`
+  // blocks; the delivery-path extractor must drop those or the monologue leaks
+  // to Discord. This test uses the exact 6-block shape from the issue.
+  it("drops unphased text blocks emitted before a later thinking block (#96849 delivery path)", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "Gabe is asking me to confirm..." },
+        { type: "thinking", thinking: "Excellent! Key info..." },
+        {
+          type: "text",
+          text: "All done. Let me give Gabe a clean status update. Status: \u2705 patch applied, \u2705 memory committed. Let me give Gabe a tight summary. Also, this message is the verification test \u2014 if Gabe sees thinking in my reply, the patch failed.",
+        },
+        { type: "thinking", thinking: "Let me give Gabe a tight summary..." },
+        { type: "thinking", thinking: "Also, this message is the verification test..." },
+        {
+          type: "text",
+          text: "Done. Here's the final status: \u2705 patch applied, \u2705 memory committed.",
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantVisibleText(msg)).toBe(
+      "Done. Here's the final status: \u2705 patch applied, \u2705 memory committed.",
+    );
+  });
+
+  it("keeps unphased final text when only a trailing thinking block follows (#96849)", () => {
+    // text -> thinking (no later text) is post-answer reflection; do NOT drop.
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "Plan: write a clean answer." },
+        { type: "text", text: "Here's the answer." },
+        { type: "thinking", thinking: "Postmortem: that was concise." },
+      ],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantVisibleText(msg)).toBe("Here's the answer.");
+  });
+
+  it("keeps all unphased text when no thinking blocks are present (#96849)", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        { type: "text", text: "First sentence." },
+        { type: "text", text: "Second sentence." },
+      ],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantVisibleText(msg)).toBe("First sentence.\nSecond sentence.");
+  });
 });
 
 describe("promoteThinkingTagsToBlocks", () => {
