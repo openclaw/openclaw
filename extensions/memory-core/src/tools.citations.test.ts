@@ -630,6 +630,31 @@ describe("memory tools", () => {
     });
   });
 
+  it("returns the memory_get error when a corpus=all supplement fallback throws", async () => {
+    setMemoryReadFileImpl(async () => {
+      throw new Error("path required");
+    });
+    registerMemoryCorpusSupplement("memory-wiki", {
+      search: async () => [],
+      get: async () => {
+        throw new Error("wiki unavailable");
+      },
+    });
+
+    const tool = createMemoryGetToolOrThrow();
+    const result = await tool.execute("call_get_all_fallback_throws", {
+      path: "entities/alpha.md",
+      corpus: "all",
+    });
+
+    expect(result.details).toEqual({
+      path: "entities/alpha.md",
+      text: "",
+      disabled: true,
+      error: "path required",
+    });
+  });
+
   it("falls back to a wiki corpus supplement when memory_get corpus=all misses memory without throwing", async () => {
     setMemoryReadFileImpl(async (params: MemoryReadParams) => ({
       text: "",

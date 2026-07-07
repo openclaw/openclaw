@@ -348,13 +348,19 @@ async function resolveMemoryReadFailureResult(params: {
   agentSessionKey?: string;
 }) {
   if (params.requestedCorpus === "all") {
-    const supplement = await getSupplementMemoryReadResult({
-      relPath: params.relPath,
-      from: params.from,
-      lines: params.lines,
-      agentSessionKey: params.agentSessionKey,
-      corpus: params.requestedCorpus,
-    });
+    let supplement: Awaited<ReturnType<typeof getSupplementMemoryReadResult>> | null = null;
+    try {
+      supplement = await getSupplementMemoryReadResult({
+        relPath: params.relPath,
+        from: params.from,
+        lines: params.lines,
+        agentSessionKey: params.agentSessionKey,
+        corpus: params.requestedCorpus,
+      });
+    } catch {
+      // Supplement lookup is best-effort after the primary memory read failed.
+      // Preserve the original structured memory_get error instead of rejecting.
+    }
     if (supplement) {
       return jsonResult(supplement);
     }
