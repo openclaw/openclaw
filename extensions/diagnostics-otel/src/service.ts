@@ -188,12 +188,40 @@ function normalizeEndpoint(endpoint?: string): string | undefined {
   return trimmed ? trimmed.replace(/\/+$/, "") : undefined;
 }
 
-function resolveOtelUrl(endpoint: string | undefined, path: string): string | undefined {
+const SIGNAL_QUALIFIED_OTLP_PATH_PATTERN = /\/v1\/(?:traces|metrics|logs)$/i;
+
+/**
+ * Shared OTLP endpoints may already end in a signal-qualified path such as
+ * `.../v1/traces`. `resolveOtelUrl` resolves how such an endpoint is treated
+ * when it is reused to resolve a different signal:
+ * - `preserve`: return the endpoint verbatim. Used for explicit per-signal
+ *   overrides, which are honored literally.
+ * - `normalize`: rewrite the trailing signal segment to match the requested
+ *   signal so a shared `.../v1/traces` endpoint does not receive metrics and
+ *   logs (OTLP backends reject the wrong wire type).
+ */
+type OtelSignalQualifiedEndpointMode = "preserve" | "normalize";
+
+function resolveOtelUrl(
+  endpoint: string | undefined,
+  path: string,
+  signalQualifiedEndpointMode: OtelSignalQualifiedEndpointMode = "preserve",
+): string | undefined {
   if (!endpoint) {
     return undefined;
   }
   const endpointWithoutQueryOrFragment = endpoint.split(/[?#]/, 1)[0] ?? endpoint;
-  if (/\/v1\/(?:traces|metrics|logs)$/i.test(endpointWithoutQueryOrFragment)) {
+  if (SIGNAL_QUALIFIED_OTLP_PATH_PATTERN.test(endpointWithoutQueryOrFragment)) {
+    if (
+      signalQualifiedEndpointMode === "normalize" &&
+      !endpointWithoutQueryOrFragment.toLowerCase().endsWith(`/${path.toLowerCase()}`)
+    ) {
+      const rewritten = endpointWithoutQueryOrFragment.replace(
+        SIGNAL_QUALIFIED_OTLP_PATH_PATTERN,
+        `/${path}`,
+      );
+      return `${rewritten}${endpoint.slice(endpointWithoutQueryOrFragment.length)}`;
+    }
     return endpoint;
   }
   if (/[?#]/u.test(endpoint)) {
@@ -215,10 +243,14 @@ function resolveSignalOtelUrl(params: {
   endpoint?: string;
   path: string;
 }): string | undefined {
-  return resolveOtelUrl(
-    normalizeEndpoint(params.signalEndpoint ?? params.signalEnvEndpoint) ?? params.endpoint,
-    params.path,
-  );
+  const signalEndpoint = normalizeEndpoint(params.signalEndpoint ?? params.signalEnvEndpoint);
+  if (signalEndpoint) {
+    // Explicit per-signal endpoint (config or env) is honored verbatim.
+    return resolveOtelUrl(signalEndpoint, params.path);
+  }
+  // A shared endpoint may be signal-qualified; normalize the trailing signal
+  // segment so each enabled signal posts to its own OTLP path.
+  return resolveOtelUrl(params.endpoint, params.path, "normalize");
 }
 
 function readOtelEnvFile(params: {
