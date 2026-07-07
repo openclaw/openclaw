@@ -5,17 +5,12 @@ export type MarketplaceFeedVerificationConfig =
     }
   | {
       mode: "signed";
-      keys: readonly MarketplaceFeedTrustedPublicKeyConfig[];
+      keys: readonly {
+        keyId: string;
+        publicKey: string;
+      }[];
       threshold?: number;
     };
-
-export type MarketplaceFeedTrustedPublicKeyConfig = {
-  keyId: string;
-  publicKey: string;
-};
-
-/** @deprecated Use MarketplaceFeedTrustedPublicKeyConfig. */
-export type MarketplaceFeedSigningKeyConfig = MarketplaceFeedTrustedPublicKeyConfig;
 
 export type MarketplaceFeedProfileConfig = {
   url: string;
