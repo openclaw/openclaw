@@ -181,6 +181,15 @@ function resolveEntrypointFromCmdShim(wrapperPath: string): string | null {
 
   try {
     const content = readFileSync(wrapperPath, "utf8");
+    const normalizedContent = content.replaceAll("\r\n", "\n").toLowerCase();
+    const isNpmCmdShim =
+      normalizedContent.includes("\ngoto start\n") &&
+      normalizedContent.includes("\n:find_dp0\n") &&
+      normalizedContent.includes("set dp0=%~dp0") &&
+      normalizedContent.includes("call :find_dp0");
+    if (!isNpmCmdShim) {
+      return null;
+    }
     const candidates: string[] = [];
     for (const match of content.matchAll(/"([^"\r\n]*)"/g)) {
       const token = match[1] ?? "";
