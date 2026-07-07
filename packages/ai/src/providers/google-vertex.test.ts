@@ -84,4 +84,23 @@ describe("streamGoogleVertex", () => {
       vertexai: true,
     });
   });
+
+  it("prefers GCLOUD_PROJECT over GOOGLE_CLOUD_PROJECT_ID for ADC-backed Vertex clients", async () => {
+    vi.stubEnv("GOOGLE_CLOUD_API_KEY", "");
+    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "");
+    vi.stubEnv("GCLOUD_PROJECT", "gcloud-project");
+    vi.stubEnv("GOOGLE_CLOUD_PROJECT_ID", "vertex-project-id");
+    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "us-central1");
+
+    const stream = streamGoogleVertex(model, context, { apiKey: "gcp-vertex-credentials" });
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(googleGenAIOptions[0]).toMatchObject({
+      apiVersion: "v1",
+      location: "us-central1",
+      project: "gcloud-project",
+      vertexai: true,
+    });
+  });
 });

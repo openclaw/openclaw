@@ -159,8 +159,8 @@ function resolveProject(options?: GoogleVertexOptions): string {
   const project =
     options?.project ||
     process.env.GOOGLE_CLOUD_PROJECT ||
-    process.env.GOOGLE_CLOUD_PROJECT_ID ||
-    process.env.GCLOUD_PROJECT;
+    process.env.GCLOUD_PROJECT ||
+    process.env.GOOGLE_CLOUD_PROJECT_ID;
   if (!project) {
     throw new Error(
       "Vertex AI requires a project ID. Set GOOGLE_CLOUD_PROJECT/GOOGLE_CLOUD_PROJECT_ID/GCLOUD_PROJECT or pass project in options.",
