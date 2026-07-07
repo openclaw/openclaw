@@ -120,6 +120,7 @@ import {
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
+import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
 import { createReplyMediaContext } from "./reply-media-paths.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import {
@@ -2614,12 +2615,23 @@ export async function runReplyAgent(params: {
         // still fires unconditionally; only the retry enqueue is gated.
         const strandedReplyRecoveryEnabled = cfg.messages?.strandedReplyRecovery === true;
         if (!isRetryRun && strandedReplyRecoveryEnabled) {
+          // #85714: Strip reply directives before replaying the private final into
+          // the model. The message tool sanitizes runtime/inbound metadata but NOT
+          // reply directives, so quoting the raw final would let directive tokens
+          // ([[reply_to:...]], [[audio_as_voice]], MEDIA:, reactions) survive the
+          // retry and be re-sent unsanitized via message(action=send). Run the same
+          // normalization the normal final-delivery path applies (buildReplyPayloads).
+          const strandedReplyVisibleText =
+            normalizeReplyPayloadDirectives({
+              payload: { text: assistantFinalText },
+              parseMode: "always",
+            }).payload.text ?? "";
           // #85714: Enqueue a retry turn so the agent can deliver via message(action=send),
           // preserving the message_tool_only privacy contract instead of bypassing suppression.
           const retryPrompt =
             `[System] Your previous reply was not delivered to the conversation because ` +
             `you did not call message(action=send). Your reply text was:\n\n` +
-            `"${assistantFinalText}"\n\n` +
+            `"${strandedReplyVisibleText}"\n\n` +
             `Please deliver this reply now by calling message(action=send). ` +
             `Do not add any extra commentary — just deliver the original reply.`;
           const retryEnqueued = enqueueFollowupRun(

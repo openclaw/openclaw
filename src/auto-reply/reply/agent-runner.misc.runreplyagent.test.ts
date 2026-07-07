@@ -3579,6 +3579,45 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     expect(retryPrompt).toContain("Here is the answer");
   });
 
+  it("strips reply directives from the quoted final before replaying it (#85714)", async () => {
+    // A stranded final can embed reply directives ([[reply_to:...]], [[audio_as_voice]],
+    // MEDIA: lines). The message tool sanitizes runtime/inbound metadata but NOT reply
+    // directives, so quoting the raw final would let those tokens survive the retry and
+    // be re-sent unsanitized via message(action=send). The retry prompt must quote the
+    // normalized visible text, matching the normal final-delivery normalization.
+    await runPrivateFinalCase({
+      strandedReplyRecovery: true,
+      finalAssistantText:
+        "[[reply_to:123]] [[audio_as_voice]] Hello there — here is the substantive answer " +
+        "the user asked about. It is long enough to read like a real user-facing reply " +
+        "rather than a short private note, so recovery should trigger.\nMEDIA: /tmp/x.png",
+    });
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    const retryRun = vi.mocked(enqueueFollowupRun).mock.calls[0]?.[1];
+    const retryPrompt = retryRun?.prompt ?? "";
+    // The visible message survives; the directive tokens do not.
+    expect(retryPrompt).toContain("Hello there");
+    expect(retryPrompt).not.toContain("[[reply_to:");
+    expect(retryPrompt).not.toContain("[[audio_as_voice]]");
+    expect(retryPrompt).not.toContain("MEDIA:");
+    expect(retryPrompt).not.toContain("/tmp/x.png");
+    // The retry still enqueues with the recovery guard and individual drain.
+    expect(retryRun?.strandedReplyRetry).toBe(true);
+    expect(retryRun?.disableCollectBatching).toBe(true);
+  });
+
+  it("quotes a plain directive-free final unchanged (#85714)", async () => {
+    // No directives means nothing to strip: the normalization must leave the
+    // quoted final byte-for-byte so the agent redelivers the intended reply.
+    const plainFinal =
+      "Here is the substantive answer the user asked about. It is long enough to read like " +
+      "a real user-facing reply rather than a short private note, so recovery should trigger.";
+    await runPrivateFinalCase({ strandedReplyRecovery: true, finalAssistantText: plainFinal });
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    const retryPrompt = vi.mocked(enqueueFollowupRun).mock.calls[0]?.[1]?.prompt ?? "";
+    expect(retryPrompt).toContain(`"${plainFinal}"`);
+  });
+
   it("does not enqueue retry for short private final replies", async () => {
     await runPrivateFinalCase({
       strandedReplyRecovery: true,
