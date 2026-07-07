@@ -1,4 +1,5 @@
 // File Transfer tests cover dir fetch child-output failures.
+import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -49,9 +50,9 @@ describe("dir.fetch child output lifecycle", () => {
   it.runIf(process.platform !== "win32")(
     "returns READ_ERROR when real tar archive stdout fails",
     async () => {
-      const tmpRoot = await fs.realpath(
-        await fs.mkdtemp(path.join(os.tmpdir(), "dir-fetch-stream-error-")),
-      );
+      const tempPath = path.join(os.tmpdir(), `dir-fetch-stream-error-${crypto.randomUUID()}`);
+      await fs.mkdir(tempPath);
+      const tmpRoot = await fs.realpath(tempPath);
       await fs.writeFile(path.join(tmpRoot, "payload.bin"), Buffer.alloc(1024 * 1024, 1));
       vi.resetModules();
       vi.doMock("node:child_process", async (importOriginal) => {
