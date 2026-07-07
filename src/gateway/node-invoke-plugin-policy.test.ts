@@ -119,11 +119,13 @@ function createDemoPolicy(handle: NodeInvokePolicyHandler): NodeInvokePolicyRegi
 
 function createApprovalRequestPolicy(params?: {
   timeoutMs?: number;
+  title?: string;
+  description?: string;
 }): NodeInvokePolicyRegistration {
   return createDemoPolicy(async (ctx: OpenClawPluginNodeInvokePolicyContext) => {
     const approval = await ctx.approvals?.request({
-      title: "Sensitive action",
-      description: "Needs approval",
+      title: params?.title ?? "Sensitive action",
+      description: params?.description ?? "Needs approval",
       ...(params?.timeoutMs === undefined ? {} : { timeoutMs: params.timeoutMs }),
     });
     return { ok: true, payload: approval ?? null };
@@ -324,5 +326,32 @@ describe("applyPluginNodeInvokePolicy", () => {
     });
 
     expect(result).toBeNull();
+  });
+
+  it("keeps approval payload fields on UTF-16 boundaries", async () => {
+    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
+    setDangerousDemoCommandRegistry([
+      createApprovalRequestPolicy({
+        title: `${"a".repeat(79)}🚀tail`,
+        description: `${"b".repeat(255)}🚀tail`,
+      }),
+    ]);
+    const { context } = createContext({
+      pluginApprovalManager: manager,
+      getApprovalClientConnIds: createApprovalClientLookup([
+        createApprovalClient({
+          connId: "conn-owner-approval",
+          clientId: "client-owner",
+          deviceId: "device-owner",
+        }),
+      ]),
+    });
+    const resultPromise = invokeDemoPolicy(context, createOperatorClient());
+
+    const record = await expectSinglePendingApproval(manager);
+    expect(record.request.title).toBe("a".repeat(79));
+    expect(record.request.description).toBe("b".repeat(255));
+
+    await expectApprovalResolution(resultPromise, manager, record);
   });
 });
