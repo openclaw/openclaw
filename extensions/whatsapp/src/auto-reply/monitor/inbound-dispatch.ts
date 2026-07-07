@@ -676,7 +676,9 @@ export async function dispatchWhatsAppBufferedReply(params: {
   });
 
   if (statusReactionController) {
-    void statusReactionController.setThinking();
+    void statusReactionController.setThinking().catch(() => {
+      // best-effort: status reaction lifecycle is non-critical
+    });
   }
 
   const dispatchResult = await dispatchReplyWithBufferedBlockDispatcher({
@@ -840,6 +842,8 @@ export async function dispatchWhatsAppBufferedReply(params: {
         hasFinalResponse: false,
         removeAckAfterReply,
         timing: statusReactionTiming,
+      }).catch(() => {
+        // best-effort: status reaction lifecycle is non-critical
       });
     }
     if (params.shouldClearGroupHistory) {
@@ -856,6 +860,8 @@ export async function dispatchWhatsAppBufferedReply(params: {
       hasFinalResponse: didDeliverVisibleReply,
       removeAckAfterReply,
       timing: statusReactionTiming,
+    }).catch(() => {
+      // best-effort: status reaction lifecycle is non-critical
     });
   }
 

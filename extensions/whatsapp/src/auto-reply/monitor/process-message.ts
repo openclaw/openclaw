@@ -378,7 +378,9 @@ export async function processMessage(params: {
       : null);
 
   if (statusReactionController && !params.statusReactionController) {
-    void statusReactionController.setQueued();
+    void statusReactionController.setQueued().catch(() => {
+      // best-effort: status reaction lifecycle is non-critical
+    });
   }
 
   // Send ack reaction immediately upon message receipt (post-gating). Callers

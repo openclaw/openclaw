@@ -1627,4 +1627,42 @@ describe("whatsapp inbound dispatch", () => {
       }),
     ).toBe("+15550003333");
   });
+
+  it("handles statusReactionController methods rejection without unhandled rejection", async () => {
+    const rejectingController = {
+      setQueued: vi.fn(async () => {
+        throw new Error("simulated setQueued rejection");
+      }),
+      setThinking: vi.fn(async () => {
+        throw new Error("simulated setThinking rejection");
+      }),
+      setTool: vi.fn(async () => {
+        throw new Error("simulated setTool rejection");
+      }),
+      setCompacting: vi.fn(async () => {
+        throw new Error("simulated setCompacting rejection");
+      }),
+      cancelPending: vi.fn(() => {}),
+      setDone: vi.fn(async () => {
+        throw new Error("simulated setDone rejection");
+      }),
+      setError: vi.fn(async () => {
+        throw new Error("simulated setError rejection");
+      }),
+      clear: vi.fn(async () => {
+        throw new Error("simulated clear rejection");
+      }),
+      restoreInitial: vi.fn(async () => {
+        throw new Error("simulated restoreInitial rejection");
+      }),
+    };
+
+    // This triggers setThinking() (the void + .catch() pattern) and
+    // finalizeWhatsAppStatusReaction() (which calls setDone/setError/clear).
+    await expect(
+      dispatchBufferedReply({
+        statusReactionController: rejectingController as never,
+      }),
+    ).resolves.not.toThrow();
+  });
 });

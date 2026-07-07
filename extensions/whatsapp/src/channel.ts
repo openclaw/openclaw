@@ -328,9 +328,13 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         },
         resolveAccountState: ({ configured }) => (configured ? "linked" : "not linked"),
         logSelfId: ({ account, runtime, includeChannelPrefix }) => {
-          void loadWhatsAppChannelRuntime().then((runtimeExports) =>
-            runtimeExports.logWebSelfId(account.authDir, runtime, includeChannelPrefix),
-          );
+          void loadWhatsAppChannelRuntime()
+            .then((runtimeExports) =>
+              runtimeExports.logWebSelfId(account.authDir, runtime, includeChannelPrefix),
+            )
+            .catch(() => {
+              // non-critical: best-effort self-id status logging
+            });
         },
       }),
       gateway: {

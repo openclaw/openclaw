@@ -12,6 +12,7 @@ const {
   runMessageReceivedMock,
   shouldComputeCommandAuthorizedMock,
   trackBackgroundTaskMock,
+  createStatusReactionControllerMock,
 } = vi.hoisted(() => ({
   resolvePolicyMock: vi.fn(),
   buildContextMock: vi.fn(),
@@ -23,6 +24,7 @@ const {
   runMessageReceivedMock: vi.fn(async () => undefined),
   shouldComputeCommandAuthorizedMock: vi.fn(() => false),
   trackBackgroundTaskMock: vi.fn(),
+  createStatusReactionControllerMock: vi.fn(async () => null),
 }));
 
 vi.mock("../../inbound-policy.js", async (importOriginal) => {
@@ -139,6 +141,10 @@ vi.mock("./runtime-api.js", async (importOriginal) => {
     shouldLogVerbose: () => false,
   };
 });
+
+vi.mock("./status-reaction.js", () => ({
+  createWhatsAppStatusReactionController: createStatusReactionControllerMock,
+}));
 
 import { clearInternalHooks, registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
 import { processMessage } from "./process-message.js";
@@ -587,5 +593,39 @@ describe("processMessage group system prompt wiring", () => {
     expect(trackBackgroundTaskMock).not.toHaveBeenCalled();
     expect(dispatchBufferedReplyMock).not.toHaveBeenCalled();
     expect(runMessageReceivedMock).not.toHaveBeenCalled();
+  });
+
+  it("handles statusReactionController setQueued rejection without unhandled rejection", async () => {
+    const rejectingSetQueued = vi.fn(async () => {
+      throw new Error("simulated setQueued rejection");
+    });
+    createStatusReactionControllerMock.mockResolvedValueOnce({
+      setQueued: rejectingSetQueued,
+      setThinking: vi.fn(async () => {}),
+      setTool: vi.fn(async () => {}),
+      setCompacting: vi.fn(async () => {}),
+      cancelPending: vi.fn(() => {}),
+      setDone: vi.fn(async () => {}),
+      setError: vi.fn(async () => {}),
+      clear: vi.fn(async () => {}),
+      restoreInitial: vi.fn(async () => {}),
+    });
+
+    resolvePolicyMock.mockReturnValueOnce({
+      account: {
+        accountId: "default",
+        name: "Default",
+        authDir: "/tmp/test-whatsapp",
+        isLegacyAuthDir: false,
+      },
+    });
+
+    const result = await callProcessMessage({
+      cfg: { messages: { statusReactions: { enabled: true } } },
+    });
+
+    // The .catch() absorbed the rejection without crashing.
+    expect(rejectingSetQueued).toHaveBeenCalled();
+    expect(result).not.toBeUndefined();
   });
 });
