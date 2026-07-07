@@ -185,4 +185,39 @@ describe("cleanupArchivedSessionTranscripts", () => {
       fs.rmSync(trajectoryDir, { recursive: true, force: true });
     }
   });
+
+  it("preserves transcript cleanup when OPENCLAW_TRAJECTORY_DIR overlaps a requested directory (#94593)", async () => {
+    const previous = process.env.OPENCLAW_TRAJECTORY_DIR;
+    const runtimeHeader = JSON.stringify({
+      traceSchema: "openclaw-trajectory",
+      schemaVersion: 1,
+      source: "runtime",
+      sessionId: "session",
+    });
+    try {
+      process.env.OPENCLAW_TRAJECTORY_DIR = dir;
+      const transcriptArchive = `session.jsonl.reset.${OLD_STAMP}`;
+      const trajectoryArchive = `session.trajectory.jsonl.reset.${OLD_STAMP}`;
+      const unrelated = `backup.jsonl.deleted.${OLD_STAMP}`;
+      await fsPromises.writeFile(path.join(dir, transcriptArchive), "transcript\n");
+      await fsPromises.writeFile(path.join(dir, trajectoryArchive), `${runtimeHeader}\n`);
+      await fsPromises.writeFile(path.join(dir, unrelated), "not a trajectory\n");
+
+      const result = await cleanupArchivedSessionTranscripts({
+        directories: [dir],
+        rules: [{ reason: "reset", olderThanMs: 30 * DAY_MS }],
+        nowMs: NOW_MS,
+      });
+
+      expect(result.removed).toBe(2);
+      expect(result.scanned).toBe(2);
+      expect(await remaining()).toEqual([unrelated]);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_TRAJECTORY_DIR;
+      } else {
+        process.env.OPENCLAW_TRAJECTORY_DIR = previous;
+      }
+    }
+  });
 });

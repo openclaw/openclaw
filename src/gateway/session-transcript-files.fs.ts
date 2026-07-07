@@ -7,6 +7,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   formatSessionArchiveTimestamp,
+  isArchivedTrajectorySessionArtifactName,
   parseSessionArchiveTimestamp,
   type SessionArchiveReason,
 } from "../config/sessions/artifacts.js";
@@ -681,6 +682,7 @@ export async function cleanupArchivedSessionTranscripts(opts: {
   const overrideDirResolved = trajectoryDirOverride
     ? path.resolve(resolveHomeRelativePath(trajectoryDirOverride))
     : undefined;
+  const originalDirs = new Set(opts.directories.map((dir) => path.resolve(dir)));
   const dirs = opts.directories.map((dir) => path.resolve(dir));
   if (overrideDirResolved) {
     dirs.push(overrideDirResolved);
@@ -693,6 +695,14 @@ export async function cleanupArchivedSessionTranscripts(opts: {
     const isOverrideDir =
       overrideDirResolved !== undefined &&
       canonicalizePathForComparison(dir) === canonicalizePathForComparison(overrideDirResolved);
+    const isOriginalDir = originalDirs.has(dir);
+    // The override directory is operator-configured and may contain unrelated
+    // archive-looking files. Only remove files that carry an OpenClaw trajectory
+    // runtime header when scanning the override-only directory. If the override
+    // directory is also an explicitly requested cleanup directory, normal
+    // transcript archive cleanup must continue to work there (#94593).
+    const requireTrajectoryHeader = (entry: string) =>
+      isOverrideDir && (!isOriginalDir || isArchivedTrajectorySessionArtifactName(entry));
     const entries = await fs.promises.readdir(dir).catch(() => []);
     for (const entry of entries) {
       for (const rule of rules) {
@@ -705,10 +715,7 @@ export async function cleanupArchivedSessionTranscripts(opts: {
           const fullPath = path.join(dir, entry);
           const stat = await fs.promises.stat(fullPath).catch(() => null);
           if (stat?.isFile()) {
-            // The override directory is operator-configured and may contain
-            // unrelated archive-looking files. Only remove files that carry an
-            // OpenClaw trajectory runtime header (#94593).
-            if (isOverrideDir && !isTrajectoryRuntimeFileHeader(fullPath)) {
+            if (requireTrajectoryHeader(entry) && !isTrajectoryRuntimeFileHeader(fullPath)) {
               continue;
             }
             await fs.promises.rm(fullPath).catch(() => undefined);
