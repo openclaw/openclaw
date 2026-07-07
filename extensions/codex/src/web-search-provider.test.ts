@@ -245,6 +245,14 @@ describe("codex web search provider", () => {
             "mcp_servers.external.command='unsafe'",
           ],
           clearEnv: ["CODEX_HOME", "KEEP_CLEARED"],
+          remoteWorkspaceRoot: "/home/codex/workspaces",
+          experimental: {
+            remoteExecution: {
+              registryUrl: "https://environment-registry.example.com/api",
+              environmentId: "devbox-example",
+              authToken: "registry-token",
+            },
+          },
         },
       }),
       clientFactory: async (options) => {
@@ -314,8 +322,15 @@ describe("codex web search provider", () => {
     expect(isolatedStartOptions?.args).toEqual(["app-server", "--listen", "stdio://"]);
     expect(isolatedStartOptions?.clearEnv).toEqual([
       "KEEP_CLEARED",
+      "CODEX_EXEC_SERVER_URL",
+      "CODEX_EXEC_SERVER_NOISE_REGISTRY_URL",
+      "CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID",
+      "CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN",
+      "CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID",
       "OPENCLAW_CODEX_APP_SERVER_ARGS",
     ]);
+    expect(isolatedStartOptions?.env).not.toHaveProperty("CODEX_EXEC_SERVER_URL");
+    expect(isolatedStartOptions?.env).not.toHaveProperty("CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN");
     expect(isolatedCodexHome).toEqual(expect.any(String));
     if (!threadStartCwd || !isolatedCodexHome) {
       throw new Error("expected isolated Codex home and workspace");

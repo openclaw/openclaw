@@ -694,6 +694,15 @@ export async function runCodexAppServerAttempt(
     env: process.env,
     agentDir,
   });
+  if (
+    appServer.remoteExecutionFingerprint &&
+    (beforeToolCallPolicy.hasBeforeToolCallHook ||
+      beforeToolCallPolicy.trustedToolPolicies.length > 0)
+  ) {
+    throw new Error(
+      "Codex remote execution cannot enforce OpenClaw before_tool_call or trusted-tool policy until Codex supports Gateway-local native hooks",
+    );
+  }
   pluginAppServer = appServer;
   nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
     configuredEvents: options.nativeHookRelay?.events,
@@ -1335,11 +1344,19 @@ export async function runCodexAppServerAttempt(
     return projected;
   };
   const applyNoContextEngineContinuityProjection = (
-    action: "started" | "resumed",
+    lifecycle: CodexAppServerThreadLifecycleBinding["lifecycle"],
     binding?: CodexAppServerThreadBinding,
   ) => {
+    const { action } = lifecycle;
     if (activeContextEngine || !historyMessages.some((message) => message.role === "user")) {
       return false;
+    }
+    if (lifecycle.forkedWithHistory && binding) {
+      // The fork reconstructed the source rollout. Only bridge visible messages
+      // newer than the source binding's coverage watermark.
+      return precomputedStaleBindingContinuityProjectionApplied
+        ? true
+        : applyResumeStaleBindingContinuityProjection(binding);
     }
     if (action === "resumed" && precomputedStaleBindingContinuityProjectionApplied) {
       return true;
@@ -1546,6 +1563,13 @@ export async function runCodexAppServerAttempt(
     decision: { action: "resume"; binding: CodexAppServerThreadBinding } | { action: "start" },
   ) => {
     nativeHookRelay?.unregister();
+    nativeHookRelay = undefined;
+    if (appServer.remoteExecutionFingerprint) {
+      return {
+        configPatch: buildCodexNativeHookRelayDisabledConfig(),
+        nativeHookRelayGeneration: undefined,
+      };
+    }
     nativeHookRelay = createCodexNativeHookRelay({
       options: options.nativeHookRelay,
       generation:
@@ -1698,7 +1722,7 @@ export async function runCodexAppServerAttempt(
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     throw error;
   }
-  if (applyNoContextEngineContinuityProjection(thread.lifecycle.action, thread)) {
+  if (applyNoContextEngineContinuityProjection(thread.lifecycle, thread)) {
     await rebuildCodexTurnPromptTextFromCurrentProjection();
   }
   trajectoryRecorder?.recordEvent("session.started", {
@@ -2745,6 +2769,7 @@ export async function runCodexAppServerAttempt(
       appServer: turnAppServer,
       promptText: codexTurnPromptText,
       sandboxPolicy: codexSandboxPolicy,
+      nativeCodeModeEnabled: nativeToolSurfaceEnabled,
       environmentSelection: codexEnvironmentSelection,
       model: thread.model,
       modelProvider: thread.modelProvider,

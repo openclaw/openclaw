@@ -1,6 +1,7 @@
 // Codex plugin module implements conversation control behavior.
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import {
+  applyCodexRemoteExecutionThreadConfig,
   isCodexFastServiceTier,
   resolveCodexModelBackedReviewerPolicyContext,
   resolveCodexAppServerRuntimeOptions,
@@ -8,6 +9,7 @@ import {
   type CodexAppServerSandboxMode,
 } from "./app-server/config.js";
 import type { CodexServiceTier, CodexThreadResumeResponse } from "./app-server/protocol.js";
+import { ensureCodexRemoteExecutionCompatibility } from "./app-server/remote-execution.js";
 import {
   bindingStoreKey,
   isCodexAppServerNativeAuthProfile,
@@ -184,6 +186,24 @@ export async function setCodexConversationModel(params: {
     authProfileId: binding.authProfileId,
     ...lookup,
   });
+  if (runtime.remoteExecutionFingerprint) {
+    const nextModelProvider = normalizeCodexAppServerBindingModelProvider({
+      authProfileId: binding.authProfileId,
+      modelProvider: modelSelection.modelProvider,
+      ...lookup,
+    });
+    const modelChanged =
+      modelSelection.model !== binding.model || nextModelProvider !== binding.modelProvider;
+    await patchThreadBinding(params.bindingStore, params.identity, binding.threadId, {
+      model: modelSelection.model,
+      modelProvider: nextModelProvider,
+      ...(modelChanged && binding.contextEngine?.projection
+        ? { contextEngine: { ...binding.contextEngine, projection: undefined } }
+        : {}),
+      serviceTier: binding.serviceTier ?? runtime.serviceTier ?? undefined,
+    });
+    return `Codex model set to ${formatCodexDisplayText(model)}.`;
+  }
   const response = await resumeThreadWithOverrides({
     runtime,
     threadId: binding.threadId,
@@ -333,6 +353,12 @@ async function resumeThreadWithOverrides(params: {
     ...buildBindingLookup(params),
   });
   try {
+    await ensureCodexRemoteExecutionCompatibility({
+      appServer: runtime,
+      client,
+      cwd: params.agentDir?.trim() || process.cwd(),
+    });
+    const config = applyCodexRemoteExecutionThreadConfig(undefined, runtime);
     return await client.request(
       CODEX_CONTROL_METHODS.resumeThread,
       {
@@ -343,6 +369,7 @@ async function resumeThreadWithOverrides(params: {
         sandbox: params.sandbox ?? runtime.sandbox,
         approvalsReviewer: runtime.approvalsReviewer,
         ...(params.serviceTier ? { serviceTier: params.serviceTier } : {}),
+        ...(config ? { config } : {}),
       },
       { timeoutMs: runtime.requestTimeoutMs },
     );

@@ -38,6 +38,7 @@ describe("native Codex thread tool", () => {
   function createTool(params?: {
     owner?: boolean;
     homeScope?: "agent" | "user";
+    pluginConfig?: unknown;
     request?: ReturnType<typeof vi.fn>;
     sessionId?: string | null;
   }) {
@@ -63,7 +64,8 @@ describe("native Codex thread tool", () => {
       bindingStore: testCodexAppServerBindingStore,
       context,
       runtime,
-      getPluginConfig: () => ({ appServer: { homeScope: params?.homeScope ?? "user" } }),
+      getPluginConfig: () =>
+        params?.pluginConfig ?? { appServer: { homeScope: params?.homeScope ?? "user" } },
       request: params?.request as never,
     });
   }
@@ -143,6 +145,43 @@ describe("native Codex thread tool", () => {
         action: "fork",
         sourceThreadId: "source-thread",
         attached: true,
+      });
+    }));
+
+  it("forks into the configured remote execution environment before attaching", () =>
+    withFixture(async () => {
+      const pluginConfig = {
+        appServer: {
+          homeScope: "user",
+          remoteWorkspaceRoot: "/remote/workspace",
+          experimental: {
+            remoteExecution: {
+              registryUrl: "https://environment-registry.example.com/api",
+              environmentId: "devbox-example",
+              authToken: "registry-token",
+            },
+          },
+        },
+      };
+      const request = vi.fn(async () => ({
+        thread: { id: "forked-remote", cwd: "/remote/workspace", status: { type: "idle" } },
+      }));
+
+      await createTool({ pluginConfig, request })?.execute("call-remote", {
+        action: "fork",
+        thread_id: "source-thread",
+      });
+
+      expect(request).toHaveBeenCalledWith(
+        pluginConfig,
+        CODEX_CONTROL_METHODS.forkThread,
+        { threadId: "source-thread", cwd: "/remote/workspace", threadSource: "user" },
+        expect.any(Object),
+      );
+      await expect(readCodexAppServerBinding("session-id")).resolves.toMatchObject({
+        threadId: "forked-remote",
+        cwd: "/remote/workspace",
+        remoteExecutionFingerprint: expect.any(String),
       });
     }));
 

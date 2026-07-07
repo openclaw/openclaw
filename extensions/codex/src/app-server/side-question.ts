@@ -25,6 +25,7 @@ import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import { ensureCodexAppServerClientRuntime } from "./client-runtime.js";
 import { isCodexAppServerApprovalRequest, type CodexAppServerClient } from "./client.js";
 import {
+  applyCodexRemoteExecutionThreadConfig,
   canUseCodexModelBackedApprovalsReviewerForModel,
   readCodexPluginConfig,
   resolveOpenClawExecPolicyForCodexAppServer,
@@ -65,6 +66,7 @@ import {
   readCodexNotificationThreadId,
   readCodexNotificationTurnId,
 } from "./notification-correlation.js";
+import { buildCodexAppServerRuntimeFingerprint } from "./plugin-app-cache-key.js";
 import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
   mergeCodexThreadConfigs,
@@ -86,6 +88,7 @@ import {
 import { resolveCodexProviderWebSearchSupportForClient } from "./provider-capabilities.js";
 import { readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
+import { ensureCodexRemoteExecutionCompatibility } from "./remote-execution.js";
 import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
 import {
   isCodexAppServerNativeAuthProfile,
@@ -103,6 +106,7 @@ import {
   resolveCodexAppServerModelProvider,
   resolveCodexBindingModelProviderFallback,
   resolveReasoningEffort,
+  shouldRotateCodexAppServerBindingForRuntime,
 } from "./thread-lifecycle.js";
 import { filterToolsForVisionInputs } from "./vision-tools.js";
 import {
@@ -317,6 +321,30 @@ export async function runCodexAppServerSideQuestion(
   let nativeHookRelay: NativeHookRelayRegistrationHandle | undefined;
 
   try {
+    if (
+      appServer.remoteExecutionFingerprint ||
+      binding.remoteExecutionFingerprint ||
+      binding.appServerRuntimeFingerprint
+    ) {
+      const currentRuntimeFingerprint = buildCodexAppServerRuntimeFingerprint({
+        appServer,
+        appServerVersion: client.getServerVersion(),
+        runtimeIdentity: client.getRuntimeIdentity(),
+      });
+      if (
+        shouldRotateCodexAppServerBindingForRuntime({
+          connectionClass: appServer.connectionClass,
+          current: currentRuntimeFingerprint,
+          binding: binding.appServerRuntimeFingerprint,
+          currentRemoteExecution: appServer.remoteExecutionFingerprint,
+          bindingRemoteExecution: binding.remoteExecutionFingerprint,
+        })
+      ) {
+        throw new Error(
+          "Codex /btw needs a thread from the current execution environment. Send a normal message first to refresh the thread, then try /btw again.",
+        );
+      }
+    }
     const modelScopedAppServer = resolveCodexAppServerForModelProvider({
       appServer,
       provider: reviewerPolicyContext.modelProvider,
@@ -324,6 +352,12 @@ export async function runCodexAppServerSideQuestion(
       config: params.cfg,
       env: process.env,
       agentDir: params.agentDir,
+    });
+    await ensureCodexRemoteExecutionCompatibility({
+      appServer: modelScopedAppServer,
+      client,
+      cwd: params.workspaceDir || process.cwd(),
+      signal: runAbortController.signal,
     });
     const useModelScopedPolicy = !canUseCodexModelBackedApprovalsReviewerForModel({
       modelProvider: reviewerPolicyContext.modelProvider,
@@ -460,51 +494,54 @@ export async function runCodexAppServerSideQuestion(
       configuredEvents: options.nativeHookRelay?.events,
       approvalPolicy,
     });
-    nativeHookRelay = options.nativeHookRelay
-      ? registerCodexSideNativeHookRelay({
-          options: options.nativeHookRelay,
-          events: nativeHookRelayEvents,
-          agentId: sessionAgentId,
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-          config: params.cfg,
-          runId: sideRunParams.runId,
-          channelId: buildAgentHookContextChannelFields({
+    nativeHookRelay =
+      options.nativeHookRelay && !modelScopedAppServer.remoteExecutionFingerprint
+        ? registerCodexSideNativeHookRelay({
+            options: options.nativeHookRelay,
+            events: nativeHookRelayEvents,
+            agentId: sessionAgentId,
+            sessionId: params.sessionId,
             sessionKey: params.sessionKey,
-            messageChannel: params.messageChannel,
-            messageProvider: params.messageProvider,
-            currentChannelId: params.currentChannelId,
-          }).channelId,
-          requestTimeoutMs: appServer.requestTimeoutMs,
-          completionTimeoutMs: Math.max(
-            appServer.turnCompletionIdleTimeoutMs,
-            SIDE_QUESTION_COMPLETION_TIMEOUT_MS,
-          ),
-          signal: runAbortController.signal,
-          onPreToolUseFailure: (failure) => {
-            if (nativePreToolUseFailureFallbackActive) {
-              emitNativePreToolUseFailure(failure);
-            } else if (nativeToolLifecycleProjector) {
-              nativeToolLifecycleProjector.recordPreToolUseFailure(
-                failure,
-                nativeToolRunWasAbortedBeforeCleanup,
-              );
-            } else {
-              pendingNativePreToolUseFailures.push(failure);
-            }
-          },
-        })
-      : undefined;
-    const nativeHookRelayConfig = nativeHookRelay
-      ? buildCodexNativeHookRelayConfig({
-          relay: nativeHookRelay,
-          events: nativeHookRelayEvents,
-          hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
-          clearOmittedEvents: true,
-        })
-      : options.nativeHookRelay?.enabled === false
-        ? buildCodexNativeHookRelayDisabledConfig()
+            config: params.cfg,
+            runId: sideRunParams.runId,
+            channelId: buildAgentHookContextChannelFields({
+              sessionKey: params.sessionKey,
+              messageChannel: params.messageChannel,
+              messageProvider: params.messageProvider,
+              currentChannelId: params.currentChannelId,
+            }).channelId,
+            requestTimeoutMs: appServer.requestTimeoutMs,
+            completionTimeoutMs: Math.max(
+              appServer.turnCompletionIdleTimeoutMs,
+              SIDE_QUESTION_COMPLETION_TIMEOUT_MS,
+            ),
+            signal: runAbortController.signal,
+            onPreToolUseFailure: (failure) => {
+              if (nativePreToolUseFailureFallbackActive) {
+                emitNativePreToolUseFailure(failure);
+              } else if (nativeToolLifecycleProjector) {
+                nativeToolLifecycleProjector.recordPreToolUseFailure(
+                  failure,
+                  nativeToolRunWasAbortedBeforeCleanup,
+                );
+              } else {
+                pendingNativePreToolUseFailures.push(failure);
+              }
+            },
+          })
         : undefined;
+    const nativeHookRelayConfig = modelScopedAppServer.remoteExecutionFingerprint
+      ? buildCodexNativeHookRelayDisabledConfig()
+      : nativeHookRelay
+        ? buildCodexNativeHookRelayConfig({
+            relay: nativeHookRelay,
+            events: nativeHookRelayEvents,
+            hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
+            clearOmittedEvents: true,
+          })
+        : options.nativeHookRelay?.enabled === false
+          ? buildCodexNativeHookRelayDisabledConfig()
+          : undefined;
     const runtimeThreadConfig = buildCodexRuntimeThreadConfig(webSearchPlan.threadConfig, {
       nativeCodeModeEnabled: nativeToolSurfaceEnabled,
       nativeCodeModeOnlyEnabled: appServer.codeModeOnly,
@@ -514,13 +551,16 @@ export async function runCodexAppServerSideQuestion(
     const pluginAppsConfigPatch = binding.pluginAppPolicyContext
       ? buildCodexPluginAppsConfigPatchFromPolicyContext(binding.pluginAppPolicyContext)
       : undefined;
-    const threadConfig =
+    const mergedThreadConfig =
       mergeCodexThreadConfigs(
         nativeHookRelayConfig,
         runtimeThreadConfig,
         pluginAppsConfigPatch,
         modelScopedAppServer.networkProxy?.configPatch,
       ) ?? runtimeThreadConfig;
+    const threadConfig =
+      applyCodexRemoteExecutionThreadConfig(mergedThreadConfig, modelScopedAppServer) ??
+      mergedThreadConfig;
     const forkResponse = assertCodexThreadForkResponse(
       await forkCodexSideThread(
         client,
@@ -528,7 +568,6 @@ export async function runCodexAppServerSideQuestion(
           threadId: binding.threadId,
           model: modelSelection.model,
           ...(modelSelection.modelProvider ? { modelProvider: modelSelection.modelProvider } : {}),
-          personality: CODEX_NATIVE_PERSONALITY_NONE,
           cwd,
           approvalPolicy,
           approvalsReviewer: modelScopedAppServer.approvalsReviewer,
@@ -569,6 +608,11 @@ export async function runCodexAppServerSideQuestion(
           personality: CODEX_NATIVE_PERSONALITY_NONE,
           ...(serviceTier ? { serviceTier } : {}),
           effort,
+          ...(nativeToolSurfaceEnabled === false
+            ? { environments: [] }
+            : modelScopedAppServer.remoteExecutionFingerprint
+              ? {}
+              : { environments: [{ environmentId: "local", cwd }] }),
           collaborationMode: {
             mode: "default",
             settings: {

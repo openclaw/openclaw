@@ -332,6 +332,59 @@ describe("codex media understanding provider", () => {
     expect(requests[2]?.params).toEqual(expect.objectContaining({ cwd: "/tmp/openclaw-agent" }));
   });
 
+  it("keeps bounded media turns local when native execution is remote", async () => {
+    const { client, requests } = createFakeClient();
+    const clientFactory = vi.fn(async () => client);
+    const provider = buildCodexMediaUnderstandingProvider({
+      pluginConfig: {
+        appServer: {
+          remoteWorkspaceRoot: "/remote/workspace",
+          experimental: {
+            remoteExecution: {
+              registryUrl: "https://environment-registry.example.com/api",
+              environmentId: "devbox-example",
+              authToken: "registry-token",
+            },
+          },
+        },
+      },
+      clientFactory,
+    });
+
+    await provider.describeImage?.({
+      buffer: Buffer.from("image-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      provider: "codex",
+      model: "gpt-5.4",
+      timeoutMs: 30_000,
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    const startOptions = clientFactory.mock.calls[0]?.[0]?.startOptions;
+    expect(startOptions).toMatchObject({
+      transport: "stdio",
+      args: ["app-server", "--listen", "stdio://"],
+      env: { CODEX_HOME: expect.any(String) },
+      clearEnv: expect.arrayContaining([
+        "CODEX_EXEC_SERVER_URL",
+        "CODEX_EXEC_SERVER_NOISE_REGISTRY_URL",
+        "CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID",
+        "CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN",
+        "CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID",
+      ]),
+    });
+    expect(startOptions?.env).not.toHaveProperty("CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN");
+    expect(requests[1]?.params).toMatchObject({
+      config: { "features.hooks": false, notify: [] },
+      environments: [],
+    });
+    expect((requests[1]?.params as { cwd?: string } | undefined)?.cwd).not.toBe(
+      "/tmp/openclaw-agent",
+    );
+  });
+
   it("passes the scoped auth store into isolated app-server startup", async () => {
     const { client } = createFakeClient();
     sharedClientMocks.createIsolatedCodexAppServerClient.mockResolvedValue(client);

@@ -411,6 +411,82 @@ describe("Codex app-server native code mode config", () => {
     expect(request.personality).toBe("none");
   });
 
+  it("opts into Codex's default environment only for configured remote execution", () => {
+    const localRequest = buildThreadStartParams(createAttemptParams({ provider: "codex" }), {
+      cwd: "/workspace",
+      dynamicTools: [],
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+      nativeCodeModeEnabled: true,
+    });
+    const remoteRequest = buildThreadStartParams(createAttemptParams({ provider: "codex" }), {
+      cwd: "/remote/workspace",
+      dynamicTools: [],
+      appServer: {
+        ...createAppServerOptions(),
+        remoteExecutionFingerprint: "sha256:remote",
+      } as never,
+      developerInstructions: "test instructions",
+      nativeCodeModeEnabled: true,
+    });
+
+    expect(localRequest.environments).toEqual([{ environmentId: "local", cwd: "/workspace" }]);
+    expect(remoteRequest).not.toHaveProperty("environments");
+  });
+
+  it("applies remote execution safety last on thread start and resume", () => {
+    const appServer = {
+      ...createAppServerOptions(),
+      remoteExecutionFingerprint: "sha256:remote",
+    } as never;
+    const unsafeConfig = {
+      features: { unified_exec: false, hooks: true, unrelated: true },
+      "features.unified_exec": false,
+      "features.shell_zsh_fork": true,
+      "features.unified_exec_zsh_fork": true,
+      "features.hooks": true,
+      "hooks.PreToolUse": [{ hooks: [{ type: "command", command: "unsafe" }] }],
+      notify: ["unsafe"],
+      shell_environment_policy: { inherit: "all", set: { CODEX_API_KEY: "unsafe" } },
+      "shell_environment_policy.ignore_default_excludes": true,
+      unrelated: "preserved",
+    } as const;
+
+    const started = buildThreadStartParams(createAttemptParams({ provider: "codex" }), {
+      cwd: "/remote/workspace",
+      dynamicTools: [],
+      appServer,
+      config: unsafeConfig as never,
+    });
+    const resumed = buildThreadResumeParams(createAttemptParams({ provider: "codex" }), {
+      threadId: "thread-1",
+      appServer,
+      config: unsafeConfig as never,
+    });
+
+    for (const config of [started.config, resumed.config]) {
+      expect(config).toMatchObject({
+        features: { unrelated: true },
+        "features.unified_exec": true,
+        "features.shell_zsh_fork": false,
+        "features.unified_exec_zsh_fork": false,
+        "features.hooks": false,
+        "hooks.PreToolUse": [],
+        "hooks.PostToolUse": [],
+        "hooks.PermissionRequest": [],
+        "hooks.Stop": [],
+        notify: [],
+        "shell_environment_policy.inherit": "core",
+        "shell_environment_policy.ignore_default_excludes": false,
+        "shell_environment_policy.exclude": ["CODEX_EXEC_SERVER_*"],
+        "shell_environment_policy.set": {},
+        unrelated: "preserved",
+      });
+      expect(config).not.toHaveProperty("hooks");
+      expect(config).not.toHaveProperty("shell_environment_policy");
+    }
+  });
+
   it("enables hosted Codex web search on thread/start by default", () => {
     const request = buildThreadStartParams(createAttemptParams({ provider: "codex" }), {
       cwd: "/repo",
@@ -573,6 +649,25 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(request.personality).toBe("none");
+  });
+
+  it("prevents local turns from selecting an ambient remote environment", () => {
+    const localRequest = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-local",
+      cwd: "/repo",
+      appServer: createAppServerOptions() as never,
+    });
+    const remoteRequest = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-remote",
+      cwd: "/remote/repo",
+      appServer: {
+        ...createAppServerOptions(),
+        remoteExecutionFingerprint: "sha256:remote",
+      } as never,
+    });
+
+    expect(localRequest.environments).toEqual([{ environmentId: "local", cwd: "/repo" }]);
+    expect(remoteRequest).not.toHaveProperty("environments");
   });
 
   it("honors an explicit top-level reviewer on thread start and resume", () => {

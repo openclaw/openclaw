@@ -1,6 +1,7 @@
 // Codex helper module supports config behavior.
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { isIP } from "node:net";
 import { homedir as readHomeDir, hostname as readHostName } from "node:os";
 import path from "node:path";
 import {
@@ -21,7 +22,13 @@ import {
 import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { detectWindowsSpawnCommandInlineArgs } from "openclaw/plugin-sdk/windows-spawn";
 import { z } from "zod";
-import type { CodexSandboxPolicy, CodexServiceTier, JsonObject, JsonValue } from "./protocol.js";
+import {
+  isJsonObject,
+  type CodexSandboxPolicy,
+  type CodexServiceTier,
+  type JsonObject,
+  type JsonValue,
+} from "./protocol.js";
 
 const START_OPTIONS_KEY_SECRET_SYMBOL = Symbol.for("openclaw.codexAppServerStartOptionsKeySecret");
 const START_OPTIONS_KEY_SECRET = getStartOptionsKeySecret();
@@ -29,6 +36,43 @@ const UNIX_CODEX_REQUIREMENTS_PATH = "/etc/codex/requirements.toml";
 const WINDOWS_CODEX_REQUIREMENTS_SUFFIX = "\\OpenAI\\Codex\\requirements.toml";
 const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
 const CODEX_CONFIG_TOML_FILENAME = "config.toml";
+const CODEX_EXEC_SERVER_URL_ENV_VAR = "CODEX_EXEC_SERVER_URL";
+const CODEX_EXEC_SERVER_NOISE_REGISTRY_URL_ENV_VAR = "CODEX_EXEC_SERVER_NOISE_REGISTRY_URL";
+const CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID_ENV_VAR = "CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID";
+const CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR = "CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN";
+const CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID_ENV_VAR =
+  "CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID";
+export const CODEX_REMOTE_EXECUTION_ENV_VARS = [
+  CODEX_EXEC_SERVER_URL_ENV_VAR,
+  CODEX_EXEC_SERVER_NOISE_REGISTRY_URL_ENV_VAR,
+  CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID_ENV_VAR,
+  CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR,
+  CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID_ENV_VAR,
+] as const;
+const CODEX_REMOTE_EXECUTION_ENV_VAR_SET = new Set<string>(CODEX_REMOTE_EXECUTION_ENV_VARS);
+const CODEX_REMOTE_EXECUTION_FEATURE_KEYS = [
+  "hooks",
+  "shell_zsh_fork",
+  "unified_exec",
+  "unified_exec_zsh_fork",
+] as const;
+const CODEX_REMOTE_EXECUTION_THREAD_CONFIG: JsonObject = {
+  "features.unified_exec": true,
+  "features.shell_zsh_fork": false,
+  "features.unified_exec_zsh_fork": false,
+  "features.hooks": false,
+  "hooks.PreToolUse": [],
+  "hooks.PostToolUse": [],
+  "hooks.PermissionRequest": [],
+  "hooks.Stop": [],
+  notify: [],
+  "shell_environment_policy.inherit": "core",
+  "shell_environment_policy.ignore_default_excludes": false,
+  "shell_environment_policy.exclude": ["CODEX_EXEC_SERVER_*"],
+  "shell_environment_policy.set": {},
+  "shell_environment_policy.include_only": [],
+  "shell_environment_policy.experimental_use_profile": false,
+};
 const PLAIN_DECIMAL_NUMBER_RE = /^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))$/;
 
 type CodexAppServerTransportMode = "stdio" | "websocket";
@@ -118,6 +162,14 @@ export type CodexPluginsConfig = {
 
 export type CodexAppServerExperimentalConfig = {
   sandboxExecServer?: boolean;
+  remoteExecution?: CodexAppServerRemoteExecutionConfig;
+};
+
+type CodexAppServerRemoteExecutionConfig = {
+  registryUrl: string;
+  environmentId: string;
+  authToken: SecretInput;
+  chatgptAccountId?: SecretInput;
 };
 
 export type CodexAppServerNetworkProxyDomainPermission = "allow" | "deny";
@@ -185,6 +237,7 @@ export type CodexAppServerRuntimeOptions = {
   connectionClass: CodexAppServerConnectionClass;
   remoteAppsSubstrate: CodexAppServerRemoteAppsSubstrate;
   remoteWorkspaceRoot?: string;
+  remoteExecutionFingerprint?: string;
   codeModeOnly: boolean;
   requestTimeoutMs: number;
   turnCompletionIdleTimeoutMs: number;
@@ -275,7 +328,17 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "experimental",
 ] as const;
 
-export const CODEX_APP_SERVER_EXPERIMENTAL_CONFIG_KEYS = ["sandboxExecServer"] as const;
+export const CODEX_APP_SERVER_EXPERIMENTAL_CONFIG_KEYS = [
+  "remoteExecution",
+  "sandboxExecServer",
+] as const;
+
+export const CODEX_APP_SERVER_REMOTE_EXECUTION_CONFIG_KEYS = [
+  "authToken",
+  "chatgptAccountId",
+  "environmentId",
+  "registryUrl",
+] as const;
 
 export const CODEX_COMPUTER_USE_CONFIG_KEYS = [
   "enabled",
@@ -334,6 +397,15 @@ const codexAppServerServiceTierSchema = z
 const codexAppServerExperimentalSchema = z
   .object({
     sandboxExecServer: z.boolean().optional(),
+    remoteExecution: z
+      .object({
+        registryUrl: z.string().trim().min(1),
+        environmentId: z.string().trim().min(1),
+        authToken: SecretInputSchema,
+        chatgptAccountId: SecretInputSchema.optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 const codexAppServerRemoteWorkspaceRootSchema = z.string().trim().min(1);
@@ -435,6 +507,11 @@ const codexPluginConfigSchema = z
 export function readCodexPluginConfig(value: unknown): CodexPluginConfig {
   const parsed = codexPluginConfigSchema.safeParse(value);
   if (!parsed.success) {
+    if (hasCodexRemoteExecutionConfig(value)) {
+      throw new Error(
+        "plugins.entries.codex.config is invalid while appServer.experimental.remoteExecution is configured; refusing to fall back to local execution",
+      );
+    }
     return {};
   }
   const { codexPlugins: rawCodexPlugins, ...config } = parsed.data;
@@ -443,6 +520,13 @@ export function readCodexPluginConfig(value: unknown): CodexPluginConfig {
     return config;
   }
   return { ...config, ...(plugins.data ? { codexPlugins: plugins.data } : {}) };
+}
+
+function hasCodexRemoteExecutionConfig(value: unknown): boolean {
+  const pluginConfig = readRecord(value);
+  const appServer = readRecord(pluginConfig?.appServer);
+  const experimental = readRecord(appServer?.experimental);
+  return Boolean(experimental && Object.hasOwn(experimental, "remoteExecution"));
 }
 
 export function isCodexSandboxExecServerEnabled(pluginConfig?: unknown): boolean {
@@ -565,6 +649,38 @@ export function resolveCodexAppServerRuntimeOptions(
   const connectionClass = inferCodexAppServerConnectionClass({ transport, url });
   const remoteAppsSubstrate: CodexAppServerRemoteAppsSubstrate = "preconfigured";
   const remoteWorkspaceRoot = normalizeRemoteWorkspaceRoot(config.remoteWorkspaceRoot);
+  if (config.experimental?.remoteExecution && config.experimental.sandboxExecServer) {
+    throw new Error(
+      "plugins.entries.codex.config.appServer.experimental.remoteExecution cannot be combined with appServer.experimental.sandboxExecServer",
+    );
+  }
+  if (config.experimental?.remoteExecution && config.networkProxy?.enabled === true) {
+    throw new Error(
+      "plugins.entries.codex.config.appServer.experimental.remoteExecution cannot be combined with appServer.networkProxy because its loopback proxy is not reachable from the remote executor",
+    );
+  }
+  if (config.experimental?.remoteExecution && params.openClawSandboxActive) {
+    throw new Error(
+      "plugins.entries.codex.config.appServer.experimental.remoteExecution cannot run inside an active OpenClaw sandbox because that policy disables Codex native execution",
+    );
+  }
+  if (config.experimental?.remoteExecution && (params.platform ?? process.platform) === "win32") {
+    throw new Error(
+      "plugins.entries.codex.config.appServer.experimental.remoteExecution requires a Linux or macOS app-server host until Codex unified exec supports Windows",
+    );
+  }
+  const remoteExecution = resolveCodexAppServerRemoteExecution({
+    config: config.experimental?.remoteExecution,
+    transport,
+    remoteWorkspaceRoot,
+    clearEnv,
+  });
+  const spawnClearEnv = resolveCodexAppServerClearEnv({
+    configured: clearEnv,
+    remoteExecutionEnabled: Boolean(remoteExecution),
+  });
+  // Keep an empty remote-execution list explicit: client startup merges defaults,
+  // whose local-runtime clears would otherwise delete the injected routing env.
   const execMode = resolveEffectiveOpenClawExecModeForCodexAppServer({
     execMode: params.execMode,
     execPolicy: params.execPolicy,
@@ -694,11 +810,13 @@ export function resolveCodexAppServerRuntimeOptions(
       ...(url ? { url } : {}),
       ...(authToken ? { authToken } : {}),
       headers,
-      ...(transport === "stdio" && clearEnv.length > 0 ? { clearEnv } : {}),
+      ...(remoteExecution ? { env: remoteExecution.env } : {}),
+      ...(transport === "stdio" ? { clearEnv: spawnClearEnv } : {}),
     },
     connectionClass,
     remoteAppsSubstrate,
     ...(remoteWorkspaceRoot ? { remoteWorkspaceRoot } : {}),
+    ...(remoteExecution ? { remoteExecutionFingerprint: remoteExecution.fingerprint } : {}),
     codeModeOnly: config.codeModeOnly === true,
     requestTimeoutMs: normalizePositiveNumber(config.requestTimeoutMs, 60_000),
     turnCompletionIdleTimeoutMs: normalizePositiveNumber(
@@ -1071,6 +1189,179 @@ function resolveTransport(value: unknown): CodexAppServerTransportMode {
 
 function normalizeRemoteWorkspaceRoot(value: string | undefined): string | undefined {
   return readNonEmptyString(value);
+}
+
+function resolveCodexAppServerClearEnv(params: {
+  configured: string[];
+  remoteExecutionEnabled: boolean;
+}): string[] {
+  if (params.remoteExecutionEnabled) {
+    return params.configured;
+  }
+  // Remote routing needs workspace projection, version, and topology checks.
+  // Clear inherited Codex routing so only the validated plugin surface can enable it.
+  const configured = new Set(params.configured);
+  return [
+    ...params.configured,
+    ...CODEX_REMOTE_EXECUTION_ENV_VARS.filter((key) => !configured.has(key)),
+  ];
+}
+
+/** Applies the non-overridable Codex thread policy for authenticated remote execution. */
+export function applyCodexRemoteExecutionThreadConfig(
+  config: JsonObject | undefined,
+  appServer: Pick<CodexAppServerRuntimeOptions, "remoteExecutionFingerprint">,
+): JsonObject | undefined {
+  if (!appServer.remoteExecutionFingerprint) {
+    return config;
+  }
+  const safeConfig: JsonObject = { ...config };
+  const features = isJsonObject(safeConfig.features) ? { ...safeConfig.features } : undefined;
+  for (const key of CODEX_REMOTE_EXECUTION_FEATURE_KEYS) {
+    delete safeConfig[`features.${key}`];
+    if (features) {
+      delete features[key];
+    }
+  }
+  if (features) {
+    if (Object.keys(features).length > 0) {
+      safeConfig.features = features;
+    } else {
+      delete safeConfig.features;
+    }
+  }
+  delete safeConfig.hooks;
+  delete safeConfig.shell_environment_policy;
+  for (const key of Object.keys(safeConfig)) {
+    if (key.startsWith("hooks.") || key.startsWith("shell_environment_policy.")) {
+      delete safeConfig[key];
+    }
+  }
+  return { ...safeConfig, ...CODEX_REMOTE_EXECUTION_THREAD_CONFIG };
+}
+
+function resolveCodexAppServerRemoteExecution(params: {
+  config: CodexAppServerRemoteExecutionConfig | undefined;
+  transport: CodexAppServerTransportMode;
+  remoteWorkspaceRoot: string | undefined;
+  clearEnv: string[];
+}): { env: Record<string, string>; fingerprint: string } | undefined {
+  if (!params.config) {
+    return undefined;
+  }
+  if (params.transport !== "stdio") {
+    throw new Error(
+      "plugins.entries.codex.config.appServer.experimental.remoteExecution requires appServer.transport=stdio",
+    );
+  }
+  if (!params.remoteWorkspaceRoot) {
+    throw new Error(
+      "plugins.entries.codex.config.appServer.experimental.remoteExecution requires appServer.remoteWorkspaceRoot",
+    );
+  }
+  if (
+    !path.posix.isAbsolute(params.remoteWorkspaceRoot) ||
+    params.remoteWorkspaceRoot.includes("\\")
+  ) {
+    throw new Error(
+      "plugins.entries.codex.config.appServer.remoteWorkspaceRoot must be an absolute POSIX path when appServer.experimental.remoteExecution is configured",
+    );
+  }
+  const clearedRemoteExecutionEnv = params.clearEnv.find((key) =>
+    CODEX_REMOTE_EXECUTION_ENV_VAR_SET.has(key.trim().toUpperCase()),
+  );
+  if (clearedRemoteExecutionEnv) {
+    throw new Error(
+      `plugins.entries.codex.config.appServer.clearEnv cannot clear ${clearedRemoteExecutionEnv.trim()} while appServer.experimental.remoteExecution is configured`,
+    );
+  }
+
+  const registryUrl = normalizeCodexRemoteExecutionRegistryUrl(params.config.registryUrl);
+  const environmentId = readNonEmptyString(params.config.environmentId);
+  if (!environmentId) {
+    throw new Error(
+      "plugins.entries.codex.config.appServer.experimental.remoteExecution.environmentId must be non-empty",
+    );
+  }
+  const authToken = normalizeCodexAppServerSecretInput({
+    value: params.config.authToken,
+    path: "plugins.entries.codex.config.appServer.experimental.remoteExecution.authToken",
+  });
+  if (!authToken) {
+    throw new Error(
+      "plugins.entries.codex.config.appServer.experimental.remoteExecution.authToken must be non-empty",
+    );
+  }
+  const chatgptAccountId = normalizeCodexAppServerSecretInput({
+    value: params.config.chatgptAccountId,
+    path: "plugins.entries.codex.config.appServer.experimental.remoteExecution.chatgptAccountId",
+  });
+
+  const fingerprint = createHash("sha256")
+    .update("openclaw:codex:remote-execution:v2")
+    .update("\0")
+    .update(registryUrl)
+    .update("\0")
+    .update(environmentId)
+    .update("\0")
+    .update(params.remoteWorkspaceRoot)
+    .update("\0")
+    // Without an explicit account id, the bearer token can select the registry
+    // tenant. Hash it into topology identity so account changes rotate threads.
+    .update(chatgptAccountId ?? authToken)
+    .digest("hex");
+  return {
+    env: {
+      // Noise rendezvous is the authenticated remote path. Disable any inherited
+      // raw exec-server URL so the child cannot fall back to an unauthenticated socket.
+      [CODEX_EXEC_SERVER_URL_ENV_VAR]: "none",
+      [CODEX_EXEC_SERVER_NOISE_REGISTRY_URL_ENV_VAR]: registryUrl,
+      [CODEX_EXEC_SERVER_NOISE_ENVIRONMENT_ID_ENV_VAR]: environmentId,
+      [CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN_ENV_VAR]: authToken,
+      // Override ambient identity too; Codex treats empty as unset.
+      [CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID_ENV_VAR]: chatgptAccountId ?? "",
+    },
+    fingerprint: `sha256:${fingerprint}`,
+  };
+}
+
+function normalizeCodexRemoteExecutionRegistryUrl(value: string): string {
+  const registryUrl = readNonEmptyString(value);
+  if (!registryUrl) {
+    throw new Error(
+      "plugins.entries.codex.config.appServer.experimental.remoteExecution.registryUrl must be non-empty",
+    );
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(registryUrl);
+  } catch {
+    throw new Error(
+      "plugins.entries.codex.config.appServer.experimental.remoteExecution.registryUrl must be a valid URL",
+    );
+  }
+  const host = parsed.hostname.toLowerCase();
+  const ipHost = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
+  const loopback =
+    host === "localhost" ||
+    ipHost === "::1" ||
+    (isIP(ipHost) === 4 && ipHost.split(".")[0] === "127");
+  if (parsed.username || parsed.password) {
+    throw new Error(
+      "plugins.entries.codex.config.appServer.experimental.remoteExecution.registryUrl cannot contain credentials; use authToken instead",
+    );
+  }
+  if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && loopback)) {
+    throw new Error(
+      "plugins.entries.codex.config.appServer.experimental.remoteExecution.registryUrl must use HTTPS unless it targets loopback",
+    );
+  }
+  if (parsed.search || parsed.hash) {
+    throw new Error(
+      "plugins.entries.codex.config.appServer.experimental.remoteExecution.registryUrl cannot contain a query or fragment",
+    );
+  }
+  return registryUrl.replace(/\/+$/u, "");
 }
 
 function inferCodexAppServerConnectionClass(params: {

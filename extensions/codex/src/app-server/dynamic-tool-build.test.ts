@@ -167,7 +167,7 @@ describe("Codex app-server dynamic tool build", () => {
     ).toBe("discord");
   });
 
-  it("maps local gateway workspace suffixes to the remote Codex app-server root", () => {
+  it("maps local gateway workspace suffixes to the remote Codex workspace root", () => {
     expect(
       mapCodexAppServerRemoteWorkspacePath({
         value: "/Users/kevinlin/code/openclaw/packages/example",
@@ -194,7 +194,7 @@ describe("Codex app-server dynamic tool build", () => {
     ).toThrow("outside OpenClaw workspace root");
   });
 
-  it("maps Windows child paths through remote Codex app-server workspaces", () => {
+  it("maps Windows child paths through remote Codex workspaces", () => {
     expect(
       mapCodexAppServerRemoteWorkspacePath({
         value: "C:\\Users\\kevinlin\\code\\openclaw\\packages\\example",

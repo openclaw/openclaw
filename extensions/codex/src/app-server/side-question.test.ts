@@ -14,6 +14,8 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { buildCodexAppServerRuntimeFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexServerNotification, JsonObject, JsonValue, RpcRequest } from "./protocol.js";
 import {
   createCodexTestBindingStore,
@@ -28,6 +30,23 @@ const createOpenClawCodingToolsMock = vi.fn();
 const toolExecuteMock = vi.fn();
 const handleCodexAppServerApprovalRequestMock = vi.fn();
 const resolveCodexProviderWebSearchSupportForClientMock = vi.fn();
+const codexRequirementsTomlMock = vi.hoisted(() => vi.fn<() => string | undefined>());
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    readFileSync(filePath: string | URL | number, options?: BufferEncoding | object | null) {
+      if (filePath === "/etc/codex/requirements.toml") {
+        const content = codexRequirementsTomlMock();
+        if (content !== undefined) {
+          return content;
+        }
+      }
+      return actual.readFileSync(filePath, options);
+    },
+  };
+});
 
 vi.mock("./session-binding.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-binding.js")>()),
@@ -91,6 +110,8 @@ type FakeClient = {
   addRequestHandler: ReturnType<typeof vi.fn>;
   notifications: Array<(notification: CodexServerNotification) => void>;
   requests: Array<(request: ServerRequest) => unknown>;
+  getRuntimeIdentity: ReturnType<typeof vi.fn>;
+  getServerVersion: ReturnType<typeof vi.fn>;
   emit: (notification: CodexServerNotification) => void;
   handleRequest: (request: ServerRequest) => Promise<unknown>;
 };
@@ -101,6 +122,8 @@ function createFakeClient(): FakeClient {
   const client: FakeClient = {
     notifications,
     requests,
+    getRuntimeIdentity: vi.fn(() => undefined),
+    getServerVersion: vi.fn(() => "0.142.5"),
     request: vi.fn<ClientRequest>(),
     addNotificationHandler: vi.fn((handler: (notification: CodexServerNotification) => void) => {
       notifications.push(handler);
@@ -136,6 +159,15 @@ function createFakeClient(): FakeClient {
     },
   };
   client.request.mockImplementation(async (method: string) => {
+    if (method === "configRequirements/read") {
+      return { requirements: null };
+    }
+    if (method === "config/read") {
+      return { config: {}, origins: {}, layers: [] };
+    }
+    if (method === "hooks/list") {
+      return { data: [{ cwd: "/tmp/workspace", hooks: [], errors: [] }] };
+    }
     if (method === "thread/fork") {
       return threadResult("side-thread");
     }
@@ -356,6 +388,28 @@ function sideParams(overrides: Partial<Parameters<typeof runCodexAppServerSideQu
   } satisfies Parameters<typeof runCodexAppServerSideQuestion>[0];
 }
 
+const REMOTE_EXECUTION_PLUGIN_CONFIG = {
+  appServer: {
+    remoteWorkspaceRoot: "/remote/workspaces",
+    experimental: {
+      remoteExecution: {
+        registryUrl: "https://environment-registry.example.com/api",
+        environmentId: "devbox-example",
+        authToken: "registry-token",
+      },
+    },
+  },
+};
+const REMOTE_EXECUTION_RUNTIME = resolveCodexAppServerRuntimeOptions({
+  env: {},
+  requirementsToml: null,
+  pluginConfig: REMOTE_EXECUTION_PLUGIN_CONFIG,
+});
+const REMOTE_EXECUTION_RUNTIME_FINGERPRINT = buildCodexAppServerRuntimeFingerprint({
+  appServer: REMOTE_EXECUTION_RUNTIME,
+  appServerVersion: "0.142.5",
+});
+
 async function runSideQuestionWithManagedWebSearchCall(
   params: Parameters<typeof runCodexAppServerSideQuestion>[0] = sideParams(),
   options: { preserveToolFactory?: boolean } = {},
@@ -413,6 +467,7 @@ async function runSideQuestionWithManagedWebSearchCall(
 
 describe("runCodexAppServerSideQuestion", () => {
   beforeEach(() => {
+    codexRequirementsTomlMock.mockReturnValue("");
     nativeHookRelayTesting.clearNativeHookRelaysForTests();
     readCodexAppServerBindingMock.mockReset();
     isCodexAppServerNativeAuthProfileMock.mockReset();
@@ -508,14 +563,12 @@ describe("runCodexAppServerSideQuestion", () => {
       "developerInstructions",
       "ephemeral",
       "model",
-      "personality",
       "sandbox",
       "threadId",
       "threadSource",
     ]);
     expect(forkParams?.threadId).toBe("parent-thread");
     expect(forkParams?.model).toBe("gpt-5.5");
-    expect(forkParams?.personality).toBe("none");
     expect(forkParams?.approvalPolicy).toBe("on-request");
     expect(forkParams?.sandbox).toBe("workspace-write");
     expect(forkParams?.ephemeral).toBe(true);
@@ -565,6 +618,7 @@ describe("runCodexAppServerSideQuestion", () => {
         model: "gpt-5.5",
         personality: "none",
         effort: null,
+        environments: [{ environmentId: "local", cwd: "/tmp/workspace" }],
         collaborationMode: {
           mode: "default",
           settings: {
@@ -612,6 +666,61 @@ describe("runCodexAppServerSideQuestion", () => {
       senderIsOwner: true,
     });
     expect(toolOptions).toHaveProperty("requireExplicitMessageTarget", true);
+  });
+
+  it("requires the main thread to rotate before forking into remote execution", async () => {
+    const client = createFakeClient();
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await expect(
+      runCodexAppServerSideQuestion(sideParams(), {
+        pluginConfig: REMOTE_EXECUTION_PLUGIN_CONFIG,
+      }),
+    ).rejects.toThrow(
+      "Codex /btw needs a thread from the current execution environment. Send a normal message first",
+    );
+    expect(client.request).not.toHaveBeenCalled();
+  });
+
+  it("forks a binding that already matches the remote execution environment", async () => {
+    const client = createFakeClient();
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+    readCodexAppServerBindingMock.mockResolvedValue({
+      schemaVersion: 2,
+      threadId: "parent-thread",
+      sessionFile: "/tmp/session-1.jsonl",
+      cwd: "/remote/workspaces",
+      authProfileId: "openai:work",
+      model: "gpt-5.5",
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+      appServerRuntimeFingerprint: REMOTE_EXECUTION_RUNTIME_FINGERPRINT,
+      remoteExecutionFingerprint: REMOTE_EXECUTION_RUNTIME.remoteExecutionFingerprint,
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    });
+
+    await expect(
+      runCodexAppServerSideQuestion(sideParams(), {
+        pluginConfig: REMOTE_EXECUTION_PLUGIN_CONFIG,
+        nativeHookRelay: { enabled: true },
+      }),
+    ).resolves.toEqual({ text: "Side answer." });
+    const forkCall = client.request.mock.calls.find(([method]) => method === "thread/fork");
+    const forkParams = forkCall?.[1] as
+      | { cwd?: unknown; config?: Record<string, unknown> }
+      | undefined;
+    expect(forkParams?.cwd).toBe("/remote/workspaces");
+    expect(forkParams?.config).toMatchObject({
+      "features.unified_exec": true,
+      "features.hooks": false,
+      "hooks.PreToolUse": [],
+      "hooks.PostToolUse": [],
+      "hooks.PermissionRequest": [],
+      "hooks.Stop": [],
+      notify: [],
+      "shell_environment_policy.ignore_default_excludes": false,
+    });
   });
 
   it("allocates one fallback run ID per side-question invocation", async () => {

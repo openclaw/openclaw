@@ -30,7 +30,11 @@ import {
   isCodexAppServerConnectionClosedError,
   type CodexAppServerClient,
 } from "./client.js";
-import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
+import {
+  applyCodexRemoteExecutionThreadConfig,
+  codexSandboxPolicyForTurn,
+  type CodexAppServerRuntimeOptions,
+} from "./config.js";
 import {
   resolveCodexContextEngineProjectionMaxChars,
   resolveCodexContextEngineProjectionReserveTokens,
@@ -47,13 +51,18 @@ import {
   type CodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
-import { assertCodexThreadStartResponse } from "./protocol-validators.js";
+import {
+  assertCodexThreadForkResponse,
+  assertCodexThreadStartResponse,
+} from "./protocol-validators.js";
 import {
   flattenCodexDynamicToolFunctions,
   isJsonObject,
   type CodexDynamicToolSpec,
   type CodexSandboxPolicy,
+  type CodexThreadForkParams,
   type CodexThreadResumeParams,
+  type CodexThreadStartResponse,
   type CodexThreadStartParams,
   type CodexTurnEnvironmentParams,
   type CodexTurnStartParams,
@@ -78,6 +87,8 @@ import { resolveCodexWebSearchPlan, type CodexNativeWebSearchSupport } from "./w
 
 export type CodexAppServerThreadLifecycle = {
   action: "started" | "resumed";
+  /** The new thread already owns the source rollout; do not replay mirrored history as fresh. */
+  forkedWithHistory?: boolean;
   rotatedContextEngineBinding?: boolean;
   activeTurnIds?: string[];
 };
@@ -410,6 +421,7 @@ export async function startOrResumeThread(params: {
         );
       }
     }
+    let remoteExecutionRotationSource: CodexAppServerThreadBinding | undefined;
     const clearCurrentBinding = async (operation: string) => {
       const current = binding;
       if (!current?.threadId) {
@@ -422,6 +434,7 @@ export async function startOrResumeThread(params: {
       if (!cleared) {
         throw new CodexThreadBindingConflictError(current.threadId, operation);
       }
+      remoteExecutionRotationSource = undefined;
       binding = undefined;
     };
     if (
@@ -430,14 +443,21 @@ export async function startOrResumeThread(params: {
         connectionClass: params.appServer.connectionClass,
         current: params.appServerRuntimeFingerprint,
         binding: binding.appServerRuntimeFingerprint,
+        currentRemoteExecution: params.appServer.remoteExecutionFingerprint,
+        bindingRemoteExecution: binding.remoteExecutionFingerprint,
       })
     ) {
       embeddedAgentLog.debug("codex app-server runtime identity changed; starting a new thread", {
         threadId: binding.threadId,
         connectionClass: params.appServer.connectionClass,
       });
-      await clearCurrentBinding("rotating a stale thread binding");
-      binding = undefined;
+      if (params.appServer.remoteExecutionFingerprint || binding.remoteExecutionFingerprint) {
+        // A fork moves persisted history onto the new executor without asking
+        // thread/resume to mutate a possibly loaded thread in place.
+        remoteExecutionRotationSource = binding;
+      } else {
+        await clearCurrentBinding("rotating a stale thread binding");
+      }
     }
     const startModelSelection = resolveCodexAppServerThreadModelSelection({
       provider: params.params.provider,
@@ -696,7 +716,7 @@ export async function startOrResumeThread(params: {
           );
           await clearCurrentBinding("rotating a stale thread binding");
         }
-      } else {
+      } else if (!remoteExecutionRotationSource) {
         const resumeBinding = binding;
         let resumeReservation: { release: () => void } | undefined;
         try {
@@ -781,6 +801,7 @@ export async function startOrResumeThread(params: {
             nativeHookRelayGeneration:
               finalConfigPatch.nativeHookRelayGeneration ?? resumeBinding.nativeHookRelayGeneration,
             appServerRuntimeFingerprint: params.appServerRuntimeFingerprint,
+            remoteExecutionFingerprint: params.appServer.remoteExecutionFingerprint,
             pluginAppsFingerprint: resumeBinding.pluginAppsFingerprint,
             pluginAppsInputFingerprint: resumeBinding.pluginAppsInputFingerprint,
             pluginAppPolicyContext: resumeBinding.pluginAppPolicyContext,
@@ -904,17 +925,55 @@ export async function startOrResumeThread(params: {
       typeof startParams.modelProvider === "string" && startParams.modelProvider.trim()
         ? startParams.modelProvider
         : undefined;
-    const threadStartResponse = await lifecycleTiming.measure("thread-start-request", async () => {
+    let response: CodexThreadStartResponse | undefined;
+    let forkedRemoteExecutionBinding = false;
+    const replacingRemoteExecutionBinding = Boolean(
+      remoteExecutionRotationSource && !preserveExistingBinding,
+    );
+    if (remoteExecutionRotationSource && !preserveExistingBinding) {
       try {
-        return await params.client.request("thread/start", startParams, { signal: params.signal });
+        const threadForkResponse = await lifecycleTiming.measure("thread-fork-request", () =>
+          params.client.request(
+            "thread/fork",
+            buildRemoteExecutionRotationForkParams(
+              remoteExecutionRotationSource.threadId,
+              startParams,
+            ),
+            { signal: params.signal },
+          ),
+        );
+        response = assertCodexThreadForkResponse(threadForkResponse);
+        forkedRemoteExecutionBinding = true;
       } catch (error) {
-        if (error instanceof CodexAppServerRpcError) {
-          throw new CodexThreadStartRequestError(error);
+        if (!isMissingCodexForkSourceError(error)) {
+          throw error;
         }
-        throw error;
+        // An unmaterialized or missing rollout has no history to preserve. Keep
+        // the old binding until its fresh replacement has started successfully.
+        embeddedAgentLog.warn(
+          "codex remote execution thread fork source missing; starting a new thread",
+          { error, threadId: remoteExecutionRotationSource.threadId },
+        );
       }
-    });
-    const response = assertCodexThreadStartResponse(threadStartResponse);
+    }
+    if (!response) {
+      const threadStartResponse = await lifecycleTiming.measure(
+        "thread-start-request",
+        async () => {
+          try {
+            return await params.client.request("thread/start", startParams, {
+              signal: params.signal,
+            });
+          } catch (error) {
+            if (error instanceof CodexAppServerRpcError) {
+              throw new CodexThreadStartRequestError(error);
+            }
+            throw error;
+          }
+        },
+      );
+      response = assertCodexThreadStartResponse(threadStartResponse);
+    }
     throwIfAborted();
     const modelProvider = resolveCodexAppServerModelProvider({
       provider: params.params.provider,
@@ -926,38 +985,49 @@ export async function startOrResumeThread(params: {
     const nextMcpServersFingerprint =
       params.mcpServersFingerprintEvaluated === true ? params.mcpServersFingerprint : undefined;
     if (!preserveExistingBinding) {
+      const nextBinding = {
+        threadId: response.thread.id,
+        cwd: params.cwd,
+        authProfileId: params.params.authProfileId,
+        model: response.model ?? startParams.model ?? params.params.modelId,
+        modelProvider: normalizeBindingModelProvider(
+          params.params.authProfileId,
+          response.modelProvider ?? requestModelProvider ?? startModelProvider ?? modelProvider,
+        ),
+        dynamicToolsFingerprint,
+        dynamicToolsContainDeferred,
+        webSearchThreadConfigFingerprint,
+        userMcpServersFingerprint,
+        mcpServersFingerprint: nextMcpServersFingerprint,
+        networkProxyProfileName: params.appServer.networkProxy?.profileName,
+        networkProxyConfigFingerprint,
+        nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
+        appServerRuntimeFingerprint: params.appServerRuntimeFingerprint,
+        remoteExecutionFingerprint: params.appServer.remoteExecutionFingerprint,
+        pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
+        pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
+        pluginAppPolicyContext: pluginThreadConfig?.policyContext,
+        contextEngine: contextEngineBinding,
+        environmentSelectionFingerprint,
+        ...(forkedRemoteExecutionBinding
+          ? { historyCoveredThrough: remoteExecutionRotationSource?.historyCoveredThrough }
+          : {}),
+      } satisfies CodexAppServerThreadBinding;
       const committed = await lifecycleTiming.measure("thread-start-write-binding", () =>
-        params.bindingStore.mutate(bindingIdentity, {
-          kind: "set",
-          if: { kind: "absent" },
-          binding: {
-            threadId: response.thread.id,
-            cwd: params.cwd,
-            authProfileId: params.params.authProfileId,
-            model: response.model ?? startParams.model ?? params.params.modelId,
-            modelProvider: normalizeBindingModelProvider(
-              params.params.authProfileId,
-              response.modelProvider ?? requestModelProvider ?? startModelProvider ?? modelProvider,
-            ),
-            dynamicToolsFingerprint,
-            dynamicToolsContainDeferred,
-            webSearchThreadConfigFingerprint,
-            userMcpServersFingerprint,
-            mcpServersFingerprint: nextMcpServersFingerprint,
-            networkProxyProfileName: params.appServer.networkProxy?.profileName,
-            networkProxyConfigFingerprint,
-            nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
-            appServerRuntimeFingerprint: params.appServerRuntimeFingerprint,
-            pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
-            pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
-            pluginAppPolicyContext: pluginThreadConfig?.policyContext,
-            contextEngine: contextEngineBinding,
-            environmentSelectionFingerprint,
-          },
-        }),
+        params.bindingStore.mutate(
+          bindingIdentity,
+          replacingRemoteExecutionBinding
+            ? { kind: "set", binding: nextBinding }
+            : { kind: "set", if: { kind: "absent" }, binding: nextBinding },
+        ),
       );
       if (!committed) {
-        throw new CodexThreadBindingConflictError(response.thread.id, "committing a fresh thread");
+        throw new CodexThreadBindingConflictError(
+          response.thread.id,
+          replacingRemoteExecutionBinding
+            ? "committing a remote execution thread rotation"
+            : "committing a fresh thread",
+        );
       }
       if (contextEngineBinding) {
         embeddedAgentLog.info("codex app-server wrote context-engine thread binding", {
@@ -967,7 +1037,8 @@ export async function startOrResumeThread(params: {
           engineId: contextEngineBinding.engineId,
           epoch: contextEngineBinding.projection?.epoch,
           fingerprint: contextEngineBinding.projection?.fingerprint,
-          action: rotatedContextEngineBinding ? "rotated" : "started",
+          action:
+            rotatedContextEngineBinding || replacingRemoteExecutionBinding ? "rotated" : "started",
         });
       }
     }
@@ -977,7 +1048,8 @@ export async function startOrResumeThread(params: {
       sessionId: params.params.sessionId,
       sessionKey: params.params.sessionKey,
       threadId: response.thread.id,
-      action: rotatedContextEngineBinding ? "rotated" : "started",
+      action:
+        rotatedContextEngineBinding || replacingRemoteExecutionBinding ? "rotated" : "started",
     });
     return {
       threadId: response.thread.id,
@@ -994,13 +1066,18 @@ export async function startOrResumeThread(params: {
       networkProxyConfigFingerprint,
       nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
       appServerRuntimeFingerprint: params.appServerRuntimeFingerprint,
+      remoteExecutionFingerprint: params.appServer.remoteExecutionFingerprint,
       pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
       pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
       pluginAppPolicyContext: pluginThreadConfig?.policyContext,
       contextEngine: contextEngineBinding,
       environmentSelectionFingerprint,
+      ...(forkedRemoteExecutionBinding
+        ? { historyCoveredThrough: remoteExecutionRotationSource?.historyCoveredThrough }
+        : {}),
       lifecycle: {
         action: "started",
+        ...(forkedRemoteExecutionBinding ? { forkedWithHistory: true } : {}),
         ...(rotatedContextEngineBinding ? { rotatedContextEngineBinding } : {}),
       },
     };
@@ -1011,7 +1088,12 @@ export function shouldRotateCodexAppServerBindingForRuntime(params: {
   connectionClass: CodexAppServerRuntimeOptions["connectionClass"];
   current?: string;
   binding?: string;
+  currentRemoteExecution?: string;
+  bindingRemoteExecution?: string;
 }): boolean {
+  if (params.bindingRemoteExecution !== params.currentRemoteExecution) {
+    return true;
+  }
   if (!params.current) {
     return false;
   }
@@ -1177,6 +1259,38 @@ function shouldRecheckRecoverablePluginBinding(params: {
   return Object.keys(policyContext.apps).length === 0 || expectedPluginConfigKeys.length > 0;
 }
 
+function buildRemoteExecutionRotationForkParams(
+  threadId: string,
+  start: CodexThreadStartParams,
+): CodexThreadForkParams {
+  return {
+    threadId,
+    ...(start.model !== undefined ? { model: start.model } : {}),
+    ...(start.modelProvider !== undefined ? { modelProvider: start.modelProvider } : {}),
+    ...(start.serviceTier !== undefined ? { serviceTier: start.serviceTier } : {}),
+    ...(start.cwd !== undefined ? { cwd: start.cwd } : {}),
+    ...(start.approvalPolicy !== undefined ? { approvalPolicy: start.approvalPolicy } : {}),
+    ...(start.approvalsReviewer !== undefined
+      ? { approvalsReviewer: start.approvalsReviewer }
+      : {}),
+    ...(start.sandbox !== undefined ? { sandbox: start.sandbox } : {}),
+    ...(start.permissions !== undefined ? { permissions: start.permissions } : {}),
+    ...(start.config !== undefined ? { config: start.config } : {}),
+    ...(start.developerInstructions !== undefined
+      ? { developerInstructions: start.developerInstructions }
+      : {}),
+  };
+}
+
+function isMissingCodexForkSourceError(error: unknown): boolean {
+  return (
+    error instanceof CodexAppServerRpcError &&
+    (/\bno rollout found for thread id\b/u.test(error.message) ||
+      /\bincludeTurns is unavailable before first user message\b/u.test(error.message) ||
+      /\bthread not found:\s*/iu.test(error.message))
+  );
+}
+
 export function buildThreadStartParams(
   params: EmbeddedRunAttemptParams,
   options: {
@@ -1209,6 +1323,14 @@ export function buildThreadStartParams(
     agentDir: params.agentDir,
     config: params.config,
   });
+  const config = buildCodexRuntimeThreadConfigForRun(params, options.config, {
+    nativeCodeModeEnabled: options.nativeCodeModeEnabled,
+    nativeProviderWebSearchSupport: options.nativeProviderWebSearchSupport,
+    nativeCodeModeOnlyEnabled: options.nativeCodeModeOnlyEnabled,
+    webSearchAllowed: options.webSearchAllowed,
+    appServer: options.appServer,
+  });
+  assertCodexRemoteExecutionMcpCompatibility(options.appServer, config);
   return {
     model: modelSelection.model,
     ...(modelSelection.modelProvider ? { modelProvider: modelSelection.modelProvider } : {}),
@@ -1221,13 +1343,7 @@ export function buildThreadStartParams(
       : {}),
     personality: CODEX_NATIVE_PERSONALITY_NONE,
     serviceName: "OpenClaw",
-    config: buildCodexRuntimeThreadConfigForRun(params, options.config, {
-      nativeCodeModeEnabled: options.nativeCodeModeEnabled,
-      nativeProviderWebSearchSupport: options.nativeProviderWebSearchSupport,
-      nativeCodeModeOnlyEnabled: options.nativeCodeModeOnlyEnabled,
-      webSearchAllowed: options.webSearchAllowed,
-      appServer: options.appServer,
-    }),
+    config,
     ...resolveCodexThreadEnvironmentSelection(options),
     developerInstructions:
       options.developerInstructions ??
@@ -1271,6 +1387,14 @@ export function buildThreadResumeParams(
     agentDir: params.agentDir,
     config: params.config,
   });
+  const config = buildCodexRuntimeThreadConfigForRun(params, options.config, {
+    nativeCodeModeEnabled: options.nativeCodeModeEnabled,
+    nativeProviderWebSearchSupport: options.nativeProviderWebSearchSupport,
+    nativeCodeModeOnlyEnabled: options.nativeCodeModeOnlyEnabled,
+    webSearchAllowed: options.webSearchAllowed,
+    appServer: options.appServer,
+  });
+  assertCodexRemoteExecutionMcpCompatibility(options.appServer, config);
   return {
     threadId: options.threadId,
     model: modelSelection.model,
@@ -1282,17 +1406,33 @@ export function buildThreadResumeParams(
       ? { serviceTier: options.appServer.serviceTier }
       : {}),
     personality: CODEX_NATIVE_PERSONALITY_NONE,
-    config: buildCodexRuntimeThreadConfigForRun(params, options.config, {
-      nativeCodeModeEnabled: options.nativeCodeModeEnabled,
-      nativeProviderWebSearchSupport: options.nativeProviderWebSearchSupport,
-      nativeCodeModeOnlyEnabled: options.nativeCodeModeOnlyEnabled,
-      webSearchAllowed: options.webSearchAllowed,
-      appServer: options.appServer,
-    }),
+    config,
     developerInstructions:
       options.developerInstructions ??
       buildDeveloperInstructions(params, { dynamicTools: options.dynamicTools }),
   };
+}
+
+function assertCodexRemoteExecutionMcpCompatibility(
+  appServer: Pick<CodexAppServerRuntimeOptions, "remoteExecutionFingerprint">,
+  config: JsonObject,
+): void {
+  if (!appServer.remoteExecutionFingerprint) {
+    return;
+  }
+  const mcpServers = isUnknownRecord(config.mcp_servers) ? config.mcp_servers : undefined;
+  for (const [name, server] of Object.entries(mcpServers ?? {})) {
+    if (
+      isUnknownRecord(server) &&
+      server.enabled !== false &&
+      typeof server.command === "string" &&
+      server.environment_id !== "remote"
+    ) {
+      throw new Error(
+        `Codex remote execution cannot use local stdio MCP server ${JSON.stringify(name)} because Codex 0.142.x removes its local execution environment; use HTTP or set environment_id="remote" intentionally`,
+      );
+    }
+  }
 }
 
 export function resolveCodexBindingModelProviderFallback(params: {
@@ -1440,7 +1580,7 @@ function buildCodexRuntimeThreadConfigForRun(
     nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
     nativeCodeModeOnlyEnabled?: boolean;
     webSearchAllowed?: boolean;
-    appServer?: Pick<CodexAppServerRuntimeOptions, "networkProxy">;
+    appServer?: Pick<CodexAppServerRuntimeOptions, "networkProxy" | "remoteExecutionFingerprint">;
   } = {},
 ): JsonObject {
   const webSearchConfig = resolveCodexWebSearchPlan({
@@ -1462,15 +1602,16 @@ function buildCodexRuntimeThreadConfigForRun(
         ? CODEX_TOOL_SEARCH_UNSUPPORTED_THREAD_CONFIG
         : undefined,
     ) ?? baseConfig;
-  if (params.bootstrapContextMode !== "lightweight") {
-    return runtimeConfig;
-  }
-  return (
-    mergeCodexThreadConfigs(runtimeConfig, CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG) ?? {
-      ...runtimeConfig,
-      ...CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG,
-    }
-  );
+  const contextConfig =
+    params.bootstrapContextMode === "lightweight"
+      ? (mergeCodexThreadConfigs(runtimeConfig, CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG) ?? {
+          ...runtimeConfig,
+          ...CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG,
+        })
+      : runtimeConfig;
+  return options.appServer
+    ? (applyCodexRemoteExecutionThreadConfig(contextConfig, options.appServer) ?? contextConfig)
+    : contextConfig;
 }
 
 export function buildTurnStartParams(
@@ -1481,6 +1622,7 @@ export function buildTurnStartParams(
     appServer: CodexAppServerRuntimeOptions;
     promptText?: string;
     sandboxPolicy?: CodexSandboxPolicy;
+    nativeCodeModeEnabled?: boolean;
     environmentSelection?: CodexTurnEnvironmentParams[];
     model?: string | null;
     modelProvider?: string | null;
@@ -1522,7 +1664,7 @@ export function buildTurnStartParams(
       modelSelection.model,
       readCodexSupportedReasoningEfforts(params.model?.compat),
     ),
-    ...(options.environmentSelection ? { environments: options.environmentSelection } : {}),
+    ...resolveCodexThreadEnvironmentSelection(options),
     collaborationMode: buildTurnCollaborationMode(params, {
       model: modelSelection.model,
       turnScopedDeveloperInstructions: options.turnScopedDeveloperInstructions,
@@ -1550,6 +1692,8 @@ function codexThreadSandboxOrPermissions(
 }
 
 function resolveCodexThreadEnvironmentSelection(options: {
+  appServer: Pick<CodexAppServerRuntimeOptions, "remoteExecutionFingerprint">;
+  cwd: string;
   nativeCodeModeEnabled?: boolean;
   environmentSelection?: CodexTurnEnvironmentParams[];
 }): Pick<CodexThreadStartParams, "environments"> {
@@ -1559,7 +1703,12 @@ function resolveCodexThreadEnvironmentSelection(options: {
   if (options.environmentSelection) {
     return { environments: options.environmentSelection };
   }
-  return {};
+  // Only this plugin surface may opt into the process-level remote default.
+  // Explicit local selection preserves native tools without inheriting an
+  // ambient CODEX_HOME/environments.toml remote default.
+  return options.appServer.remoteExecutionFingerprint
+    ? {}
+    : { environments: [{ environmentId: "local", cwd: options.cwd }] };
 }
 
 type CodexTurnCollaborationMode = NonNullable<CodexTurnStartParams["collaborationMode"]>;

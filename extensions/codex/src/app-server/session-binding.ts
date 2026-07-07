@@ -166,6 +166,7 @@ const threadBindingSchema = z.object({
   mcpServersFingerprint: optionalStringSchema,
   nativeHookRelayGeneration: optionalNonBlankStringSchema,
   appServerRuntimeFingerprint: optionalStringSchema,
+  remoteExecutionFingerprint: optionalStringSchema,
   pluginAppsFingerprint: optionalStringSchema,
   pluginAppsInputFingerprint: optionalStringSchema,
   pluginAppPolicyContext: pluginAppPolicyContextSchema.optional().catch(undefined),

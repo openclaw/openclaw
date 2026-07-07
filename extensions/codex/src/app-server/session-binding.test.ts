@@ -63,11 +63,20 @@ describe("Codex app-server binding store", () => {
 
     await store.mutate(identity, {
       kind: "set",
-      binding: { threadId: "thread-1", cwd: "/repo", model: "gpt-5.4-codex" },
+      binding: {
+        threadId: "thread-1",
+        cwd: "/repo",
+        model: "gpt-5.4-codex",
+        remoteExecutionFingerprint: "sha256:remote-environment",
+      },
     });
 
     const binding = await store.read(identity);
-    expect(binding).toMatchObject({ threadId: "thread-1", cwd: "/repo" });
+    expect(binding).toMatchObject({
+      threadId: "thread-1",
+      cwd: "/repo",
+      remoteExecutionFingerprint: "sha256:remote-environment",
+    });
     expect(binding).not.toHaveProperty("sessionFile");
     expect(binding).not.toHaveProperty("schemaVersion");
     expect(values.get("session:main:session-1")).toMatchObject({

@@ -68,13 +68,13 @@ import {
   turnStartResult,
   userMessage,
 } from "./run-attempt-test-harness.js";
-import { resetCodexTestBindingStore } from "./session-binding.test-helpers.js";
 import { testing } from "./run-attempt.js";
 import {
   ensureCodexSandboxExecServerEnvironment,
   releaseCodexSandboxExecServerEnvironment,
 } from "./sandbox-exec-server.js";
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
+import { resetCodexTestBindingStore } from "./session-binding.test-helpers.js";
 import {
   readCodexAppServerBinding,
   registerCodexTestSessionIdentity,
@@ -2549,6 +2549,71 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toContain("is the previous message trustworthy?");
   });
 
+  it("does not replay native-owned history after a remote execution fork", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir);
+    const binding = await readCodexAppServerBinding(sessionFile);
+    const bindingUpdatedAt = Date.parse(binding?.historyCoveredThrough ?? "");
+    if (!Number.isFinite(bindingUpdatedAt)) {
+      throw new Error("expected valid Codex binding timestamp");
+    }
+    const sessionManager = SessionManager.open(sessionFile);
+    sessionManager.appendMessage(
+      userMessage("native-owned history must not be replayed", bindingUpdatedAt - 2_000),
+    );
+    sessionManager.appendMessage(
+      userMessage("newer user continuity crosses the fork", bindingUpdatedAt + 1_000),
+    );
+    sessionManager.appendMessage(
+      assistantMessage("newer assistant continuity crosses the fork", bindingUpdatedAt + 2_000),
+    );
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "thread/fork") {
+        return threadStartResult("thread-remote");
+      }
+      return undefined;
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.config = {
+      tools: { web: { search: { enabled: false } } },
+    } as EmbeddedRunAttemptParams["config"];
+    params.prompt = "continue after moving execution remotely";
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: {
+        appServer: {
+          mode: "yolo",
+          remoteWorkspaceRoot: "/remote/workspace",
+          experimental: {
+            remoteExecution: {
+              registryUrl: "https://registry.example.com",
+              environmentId: "remote-test",
+              authToken: "remote-test-token",
+            },
+          },
+        },
+      },
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-remote", turnId: "turn-1" });
+    await run;
+
+    expect(harness.requests.map((request) => request.method)).toContain("thread/fork");
+    expect(harness.requests.map((request) => request.method)).not.toContain("thread/start");
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const inputText =
+      (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
+      "";
+
+    expect(inputText).toContain("OpenClaw assembled context for this turn:");
+    expect(inputText).not.toContain("native-owned history must not be replayed");
+    expect(inputText).toContain("newer user continuity crosses the fork");
+    expect(inputText).toContain("newer assistant continuity crosses the fork");
+    expect(inputText).toContain("Current user request:");
+    expect(inputText).toContain("continue after moving execution remotely");
+  });
+
   it("does not project Codex mirrored transcript echoes as stale binding continuity", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -3487,6 +3552,32 @@ describe("runCodexAppServerAttempt", () => {
         trustedToolPolicies: [],
       },
     );
+  });
+
+  it("rejects remote execution when before_tool_call policy needs native enforcement", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: vi.fn() }]),
+    );
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    createStartedThreadHarness();
+
+    await expect(
+      runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+        pluginConfig: {
+          appServer: {
+            remoteWorkspaceRoot: "/remote/workspace",
+            experimental: {
+              remoteExecution: {
+                registryUrl: "https://environment-registry.example.com/api",
+                environmentId: "worker-1",
+                authToken: "registry-token",
+              },
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow("remote execution cannot enforce OpenClaw before_tool_call");
   });
 
   it("keeps explicit Codex yolo mode unpromoted when OpenClaw tool policy exists", async () => {

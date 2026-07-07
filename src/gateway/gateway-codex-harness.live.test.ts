@@ -80,6 +80,7 @@ const CODEX_HARNESS_AGENT_TIMEOUT_SECONDS = Math.max(
 );
 const CODEX_HARNESS_AUTH_MODE =
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_AUTH === "api-key" ? "api-key" : "codex-auth";
+const CODEX_HARNESS_REMOTE_EXECUTION = resolveRemoteExecutionLiveConfig(process.env);
 const describeLive = LIVE && CODEX_HARNESS_LIVE ? describe : describe.skip;
 const describeDisabled = LIVE && !CODEX_HARNESS_LIVE ? describe : describe.skip;
 const CODEX_HARNESS_TIMEOUT_MS = 900_000;
@@ -93,6 +94,34 @@ type CapturedAgentEvent = {
 };
 
 type GuardianPluginApprovalDecision = "allow-once" | "deny";
+
+type RemoteExecutionLiveConfig = {
+  authToken: string;
+  environmentId: string;
+  probeToken: string;
+  registryUrl: string;
+  workspaceRoot: string;
+};
+
+function resolveRemoteExecutionLiveConfig(
+  env: NodeJS.ProcessEnv,
+): RemoteExecutionLiveConfig | undefined {
+  const values = {
+    authToken: env.OPENCLAW_LIVE_CODEX_REMOTE_AUTH_TOKEN?.trim(),
+    environmentId: env.OPENCLAW_LIVE_CODEX_REMOTE_ENVIRONMENT_ID?.trim(),
+    probeToken: env.OPENCLAW_LIVE_CODEX_REMOTE_PROBE_TOKEN?.trim(),
+    registryUrl: env.OPENCLAW_LIVE_CODEX_REMOTE_REGISTRY_URL?.trim(),
+    workspaceRoot: env.OPENCLAW_LIVE_CODEX_REMOTE_WORKSPACE_ROOT?.trim(),
+  };
+  const configuredCount = Object.values(values).filter(Boolean).length;
+  if (configuredCount === 0) {
+    return undefined;
+  }
+  if (configuredCount !== Object.keys(values).length) {
+    throw new Error("incomplete OPENCLAW_LIVE_CODEX_REMOTE_* configuration");
+  }
+  return values as RemoteExecutionLiveConfig;
+}
 
 function resolveLiveTimeoutMs(raw: string | undefined, fallback: number): number {
   const parsed = raw ? Number(raw) : Number.NaN;
@@ -208,6 +237,7 @@ async function writeLiveGatewayConfig(params: {
   configPath: string;
   modelKey: string;
   port: number;
+  remoteExecution?: RemoteExecutionLiveConfig;
   token: string;
   workspace: string;
 }): Promise<void> {
@@ -227,6 +257,18 @@ async function writeLiveGatewayConfig(params: {
             appServer: {
               mode: params.codexAppServerMode ?? "yolo",
               ...(params.codeModeOnly === true ? { codeModeOnly: true } : {}),
+              ...(params.remoteExecution
+                ? {
+                    remoteWorkspaceRoot: params.remoteExecution.workspaceRoot,
+                    experimental: {
+                      remoteExecution: {
+                        registryUrl: params.remoteExecution.registryUrl,
+                        environmentId: params.remoteExecution.environmentId,
+                        authToken: params.remoteExecution.authToken,
+                      },
+                    },
+                  }
+                : {}),
             },
           },
         },
@@ -1080,6 +1122,7 @@ describeLive("gateway live (Codex harness)", () => {
         configPath,
         modelKey,
         port,
+        remoteExecution: CODEX_HARNESS_REMOTE_EXECUTION,
         token,
         workspace,
         codexAppServerMode: CODEX_HARNESS_GUARDIAN_PROBE ? "guardian" : "yolo",
@@ -1180,6 +1223,29 @@ describeLive("gateway live (Codex harness)", () => {
               });
               expect(secondText).toContain(secondToken);
               logCodexLiveStep("second-turn", { secondText });
+
+              if (CODEX_HARNESS_REMOTE_EXECUTION) {
+                const gatewayDecoyPath = path.join(workspace, "gateway-only.txt");
+                const gatewayDecoy = `GATEWAY-ONLY-${randomUUID()}`;
+                await fs.writeFile(gatewayDecoyPath, gatewayDecoy);
+                await expect(
+                  fs.access(path.join(workspace, "openclaw-remote-exec-proof.sh")),
+                ).rejects.toThrow();
+                const remoteProbeText = await requestAgentText({
+                  client: activeClient,
+                  sessionKey,
+                  expectedToken: CODEX_HARNESS_REMOTE_EXECUTION.probeToken,
+                  message: [
+                    "Use exec_command to run this exact command in the current workspace:",
+                    "./openclaw-remote-exec-proof.sh",
+                    "Then reply with exactly the command's stdout and nothing else.",
+                  ].join("\n"),
+                });
+                expect(remoteProbeText).toContain(CODEX_HARNESS_REMOTE_EXECUTION.probeToken);
+                expect(await fs.readFile(gatewayDecoyPath, "utf8")).toBe(gatewayDecoy);
+                await expect(fs.access(path.join(workspace, "proof.json"))).rejects.toThrow();
+                logCodexLiveStep("remote-execution-probe", { remoteProbeText });
+              }
 
               if (CODEX_HARNESS_CODE_MODE_ONLY) {
                 logCodexLiveStep("code-mode-only-tool-probe:start", { sessionKey });

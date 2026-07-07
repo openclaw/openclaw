@@ -116,6 +116,7 @@ export type CodexThreadStartParams = JsonObject & {
 
 export type CodexThreadResumeParams = JsonObject & {
   threadId: string;
+  cwd?: string;
   model?: string;
   modelProvider?: string | null;
   personality?: string | null;
@@ -133,7 +134,15 @@ export type CodexThreadStartResponse = {
   modelProvider?: string | null;
 };
 
-export type CodexThreadForkParams = CodexThreadStartParams & {
+export type CodexThreadForkParams = Omit<
+  CodexThreadStartParams,
+  | "dynamicTools"
+  | "environments"
+  | "experimentalRawEvents"
+  | "input"
+  | "personality"
+  | "serviceName"
+> & {
   threadId: string;
   baseInstructions?: string;
   ephemeral?: boolean;

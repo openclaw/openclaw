@@ -221,6 +221,35 @@ describe("shared Codex app-server client", () => {
     expect(startSpy.mock.calls[1]?.[0]).not.toHaveProperty("managedFallbackCommandPaths");
   });
 
+  it("falls back to a managed app-server that supports remote execution", async () => {
+    const desktop = createClientHarness();
+    const pluginLocal = createClientHarness();
+    const startSpy = vi
+      .spyOn(CodexAppServerClient, "start")
+      .mockReturnValueOnce(desktop.client)
+      .mockReturnValueOnce(pluginLocal.client);
+    const clientPromise = getSharedCodexAppServerClient({
+      startOptions: {
+        transport: "stdio",
+        command: "/Applications/Codex.app/Contents/Resources/codex",
+        commandSource: "resolved-managed",
+        managedFallbackCommandPaths: ["/cache/openclaw/codex"],
+        args: ["app-server", "--listen", "stdio://"],
+        headers: {},
+        env: {
+          CODEX_EXEC_SERVER_NOISE_REGISTRY_URL: "https://environment-registry.example.com/api",
+        },
+      },
+    });
+    await sendInitializeResult(desktop, "openclaw/0.141.0 (macOS; test)");
+    await sendInitializeResult(pluginLocal, "openclaw/0.142.0 (macOS; test)");
+
+    await expect(clientPromise).resolves.toBe(pluginLocal.client);
+    expect(desktop.process.stdin.destroyed).toBe(true);
+    expect(pluginLocal.process.stdin.destroyed).toBe(false);
+    expect(startSpy).toHaveBeenCalledTimes(2);
+  });
+
   it("closes and clears a shared app-server when initialize times out", async () => {
     const first = createClientHarness();
     const second = createClientHarness();

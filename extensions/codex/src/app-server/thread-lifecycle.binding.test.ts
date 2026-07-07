@@ -296,6 +296,212 @@ describe("Codex app-server thread lifecycle bindings", () => {
         current: "local-runtime-v1",
       }),
     ).toBe(false);
+    expect(
+      shouldRotateCodexAppServerBindingForRuntime({
+        connectionClass: "local-loopback",
+        current: "remote-execution-v1",
+        currentRemoteExecution: "sha256:remote-environment",
+      }),
+    ).toBe(true);
+    expect(
+      shouldRotateCodexAppServerBindingForRuntime({
+        connectionClass: "local-loopback",
+        current: "remote-execution-v1",
+        currentRemoteExecution: "sha256:remote-environment",
+        bindingRemoteExecution: "sha256:remote-environment",
+      }),
+    ).toBe(false);
+  });
+
+  it("forks a legacy local binding into remote execution without dropping history", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const remoteWorkspaceDir = "/remote/workspace";
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-local",
+      cwd: workspaceDir,
+      model: "openai/gpt-oss-20b",
+      modelProvider: "lmstudio",
+      dynamicToolsFingerprint: "[]",
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+      historyCoveredThrough: "2026-07-07T00:00:00.000Z",
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.provider = "codex";
+    params.modelId = "openai/gpt-oss-20b";
+    const appServer = {
+      ...createThreadLifecycleAppServerOptions(),
+      remoteExecutionFingerprint: "sha256:remote-environment",
+    };
+    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
+      if (method === "thread/fork") {
+        const response = threadStartResult("thread-remote");
+        response.model = "openai/gpt-oss-20b";
+        response.modelProvider = "lmstudio";
+        response.thread.modelProvider = "lmstudio";
+        return response;
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const binding = await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: remoteWorkspaceDir,
+      dynamicTools: [],
+      appServer,
+      appServerRuntimeFingerprint: "remote-runtime-v1",
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/fork"]);
+    expect(request.mock.calls[0]?.[1]).toMatchObject({
+      threadId: "thread-local",
+      cwd: remoteWorkspaceDir,
+      config: {
+        "features.unified_exec": true,
+        "features.hooks": false,
+        "shell_environment_policy.exclude": ["CODEX_EXEC_SERVER_*"],
+      },
+    });
+    expect(request.mock.calls[0]?.[1]).not.toHaveProperty("environments");
+    expect(request.mock.calls[0]?.[1]).not.toHaveProperty("dynamicTools");
+    expect(binding.threadId).toBe("thread-remote");
+    expect(binding.appServerRuntimeFingerprint).toBe("remote-runtime-v1");
+    expect(binding.remoteExecutionFingerprint).toBe("sha256:remote-environment");
+    expect(binding.historyCoveredThrough).toBe("2026-07-07T00:00:00.000Z");
+    expect(binding.lifecycle).toMatchObject({
+      action: "started",
+      forkedWithHistory: true,
+    });
+    const saved = await readCodexAppServerBinding(sessionFile);
+    expect(saved?.threadId).toBe("thread-remote");
+    expect(saved?.appServerRuntimeFingerprint).toBe("remote-runtime-v1");
+    expect(saved?.remoteExecutionFingerprint).toBe("sha256:remote-environment");
+    expect(saved?.historyCoveredThrough).toBe("2026-07-07T00:00:00.000Z");
+  });
+
+  it("forks when the remote execution app-server identity changes", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-remote-old",
+      cwd: "/remote/workspace",
+      dynamicToolsFingerprint: "[]",
+      appServerRuntimeFingerprint: "remote-runtime-v0",
+      remoteExecutionFingerprint: "sha256:remote-environment",
+    });
+    const request = vi.fn(async (method: string, requestParams?: unknown) => {
+      if (method === "thread/fork") {
+        expect(requestParams).toMatchObject({ threadId: "thread-remote-old" });
+        return threadStartResult("thread-remote-new");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const binding = await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir),
+      cwd: "/remote/workspace",
+      dynamicTools: [],
+      appServer: {
+        ...createThreadLifecycleAppServerOptions(),
+        remoteExecutionFingerprint: "sha256:remote-environment",
+      },
+      appServerRuntimeFingerprint: "remote-runtime-v1",
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/fork"]);
+    expect(binding).toMatchObject({
+      threadId: "thread-remote-new",
+      appServerRuntimeFingerprint: "remote-runtime-v1",
+      remoteExecutionFingerprint: "sha256:remote-environment",
+    });
+  });
+
+  it("starts fresh only when the remote rotation fork source is confirmed missing", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-local",
+      cwd: workspaceDir,
+      dynamicToolsFingerprint: "[]",
+      historyCoveredThrough: "2026-07-07T00:00:00.000Z",
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/fork") {
+        throw new CodexAppServerRpcError(
+          { code: -32_602, message: "no rollout found for thread id thread-local" },
+          method,
+        );
+      }
+      if (method === "thread/start") {
+        await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+          threadId: "thread-local",
+        });
+        return threadStartResult("thread-remote-fresh");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const binding = await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir),
+      cwd: "/remote/workspace",
+      dynamicTools: [],
+      appServer: {
+        ...createThreadLifecycleAppServerOptions(),
+        remoteExecutionFingerprint: "sha256:remote-environment",
+      },
+      appServerRuntimeFingerprint: "remote-runtime-v1",
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/fork", "thread/start"]);
+    expect(binding.threadId).toBe("thread-remote-fresh");
+    expect(binding.historyCoveredThrough).toBeUndefined();
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-remote-fresh",
+      remoteExecutionFingerprint: "sha256:remote-environment",
+    });
+  });
+
+  it("keeps the old binding when a remote rotation fork fails", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-local",
+      cwd: workspaceDir,
+      dynamicToolsFingerprint: "[]",
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/fork") {
+        throw new CodexAppServerRpcError(
+          { code: -32_000, message: "remote executor unavailable" },
+          method,
+        );
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await expect(
+      startOrResumeThread({
+        client: { request } as never,
+        params: createParams(sessionFile, workspaceDir),
+        cwd: "/remote/workspace",
+        dynamicTools: [],
+        appServer: {
+          ...createThreadLifecycleAppServerOptions(),
+          remoteExecutionFingerprint: "sha256:remote-environment",
+        },
+        appServerRuntimeFingerprint: "remote-runtime-v1",
+      }),
+    ).rejects.toThrow("remote executor unavailable");
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/fork"]);
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-local",
+      cwd: workspaceDir,
+    });
   });
 
   it("does not write a binding when thread start resolves after abort", async () => {

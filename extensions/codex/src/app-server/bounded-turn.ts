@@ -6,7 +6,7 @@ import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { readCodexNotificationItem } from "./attempt-notifications.js";
 import type { CodexAppServerClient } from "./client.js";
-import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { CODEX_REMOTE_EXECUTION_ENV_VARS, resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { readModelListResult } from "./models.js";
 import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
 import {
@@ -31,6 +31,7 @@ import { buildCodexRuntimeThreadConfig } from "./thread-lifecycle.js";
 
 const CODEX_PRIVATE_STDIO_ARGS = ["app-server", "--listen", "stdio://"];
 const OPENCLAW_CODEX_APP_SERVER_ARGS_ENV_VAR = "OPENCLAW_CODEX_APP_SERVER_ARGS";
+const CODEX_REMOTE_EXECUTION_ENV_VAR_SET = new Set<string>(CODEX_REMOTE_EXECUTION_ENV_VARS);
 const CODEX_BOUNDED_THREAD_CONFIG: JsonObject = {
   "features.multi_agent": false,
   "features.apps": false,
@@ -80,7 +81,7 @@ export async function runBoundedCodexAppServerTurn(
   const appServer = resolveCodexAppServerRuntimeOptions({
     pluginConfig: params.options.pluginConfig,
   });
-  if (params.isolation === "configured-transport") {
+  if (params.isolation === "configured-transport" && !appServer.remoteExecutionFingerprint) {
     return await runBoundedCodexAppServerTurnInWorkspace(params, appServer, {
       cwd: params.agentDir?.trim() || process.cwd(),
     });
@@ -234,13 +235,21 @@ function buildPrivateCodexAppServerStartOptions(
   codexHome: string,
 ): ReturnType<typeof resolveCodexAppServerRuntimeOptions>["start"] {
   const privateEnv = Object.fromEntries(
-    Object.entries(start.env ?? {}).filter(
-      ([name]) => name.trim().toUpperCase() !== OPENCLAW_CODEX_APP_SERVER_ARGS_ENV_VAR,
-    ),
+    Object.entries(start.env ?? {}).filter(([name]) => {
+      const normalized = name.trim().toUpperCase();
+      return (
+        normalized !== OPENCLAW_CODEX_APP_SERVER_ARGS_ENV_VAR &&
+        !CODEX_REMOTE_EXECUTION_ENV_VAR_SET.has(normalized)
+      );
+    }),
   );
   const clearEnv = (start.clearEnv ?? []).filter((name) => {
     const normalized = name.trim().toUpperCase();
-    return normalized !== "CODEX_HOME" && normalized !== OPENCLAW_CODEX_APP_SERVER_ARGS_ENV_VAR;
+    return (
+      normalized !== "CODEX_HOME" &&
+      normalized !== OPENCLAW_CODEX_APP_SERVER_ARGS_ENV_VAR &&
+      !CODEX_REMOTE_EXECUTION_ENV_VAR_SET.has(normalized)
+    );
   });
   return {
     ...start,
@@ -249,7 +258,13 @@ function buildPrivateCodexAppServerStartOptions(
       ...privateEnv,
       CODEX_HOME: codexHome,
     },
-    clearEnv: [...clearEnv, OPENCLAW_CODEX_APP_SERVER_ARGS_ENV_VAR],
+    // Private review/search turns use a temporary local cwd. Clear inherited
+    // executor routing so they cannot escape that isolated workspace.
+    clearEnv: [
+      ...clearEnv,
+      ...CODEX_REMOTE_EXECUTION_ENV_VARS,
+      OPENCLAW_CODEX_APP_SERVER_ARGS_ENV_VAR,
+    ],
   };
 }
 

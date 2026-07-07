@@ -116,4 +116,27 @@ describe("resolveCodexPluginAppCacheEndpoint", () => {
     expect(first).not.toContain("secret-token");
     expect(second).not.toContain("secret-token");
   });
+
+  it("rotates thread fingerprints with the remote execution environment", () => {
+    const start = {
+      transport: "stdio" as const,
+      command: "codex",
+      args: ["app-server", "--listen", "stdio://"],
+      headers: {},
+    };
+    const firstAppServer = {
+      start,
+      connectionClass: "local-loopback" as const,
+      remoteWorkspaceRoot: "/home/codex/workspaces",
+      remoteExecutionFingerprint: "sha256:environment-first",
+    };
+    const secondAppServer = {
+      ...firstAppServer,
+      remoteExecutionFingerprint: "sha256:environment-second",
+    };
+
+    expect(buildCodexAppServerRuntimeFingerprint({ appServer: firstAppServer })).not.toEqual(
+      buildCodexAppServerRuntimeFingerprint({ appServer: secondAppServer }),
+    );
+  });
 });

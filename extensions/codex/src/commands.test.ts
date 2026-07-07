@@ -454,6 +454,57 @@ describe("codex command", () => {
     });
   });
 
+  it("attaches a resumed thread to the configured remote execution environment", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const pluginConfig = {
+      appServer: {
+        remoteWorkspaceRoot: "/remote/workspace",
+        experimental: {
+          remoteExecution: {
+            registryUrl: "https://environment-registry.example.com/api",
+            environmentId: "devbox-example",
+            authToken: "registry-token",
+          },
+        },
+      },
+    };
+    const codexControlRequest = vi.fn(async () =>
+      createThreadResumeResponse({ threadId: "thread-remote-fork", cwd: "/remote/workspace" }),
+    );
+
+    await expect(
+      handleCodexCommand(createContext("resume thread-remote", sessionFile), {
+        pluginConfig,
+        deps: createDeps({ codexControlRequest }),
+      }),
+    ).resolves.toEqual({
+      text: "Attached this OpenClaw session to Codex thread thread-remote-fork, forked from thread-remote for the remote execution environment.",
+    });
+
+    expect(codexControlRequest).toHaveBeenCalledWith(
+      pluginConfig,
+      CODEX_CONTROL_METHODS.forkThread,
+      {
+        threadId: "thread-remote",
+        cwd: "/remote/workspace",
+        excludeTurns: true,
+        threadSource: "user",
+      },
+      expect.any(Object),
+    );
+    await expect(
+      testCodexAppServerBindingStore.read({
+        kind: "session",
+        agentId: "main",
+        sessionId: "session-1",
+      }),
+    ).resolves.toMatchObject({
+      threadId: "thread-remote-fork",
+      cwd: "/remote/workspace",
+      remoteExecutionFingerprint: expect.any(String),
+    });
+  });
+
   it("serializes manual resume with other session binding owners", async () => {
     const identity = {
       kind: "session" as const,

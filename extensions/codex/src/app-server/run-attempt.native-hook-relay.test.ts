@@ -36,6 +36,19 @@ const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
   web_search: "disabled",
 });
 
+const REMOTE_EXECUTION_PLUGIN_CONFIG = {
+  appServer: {
+    remoteWorkspaceRoot: "/remote/workspace",
+    experimental: {
+      remoteExecution: {
+        registryUrl: "https://environment-registry.example.com/api",
+        environmentId: "worker-1",
+        authToken: "registry-token",
+      },
+    },
+  },
+} as const;
+
 function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppServerBinding>) {
   const [sessionFile, binding, lookup] = args;
   return writeRawCodexAppServerBinding(
@@ -49,6 +62,68 @@ function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppS
 }
 
 describe("runCodexAppServerAttempt native hook relay", () => {
+  it("disables native hooks instead of registering a Gateway relay for remote execution", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      pluginConfig: REMOTE_EXECUTION_PLUGIN_CONFIG,
+      nativeHookRelay: { enabled: true },
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const config = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
+      ?.config;
+    expect(config).toMatchObject({
+      "features.unified_exec": true,
+      "features.hooks": false,
+      "hooks.PreToolUse": [],
+      "hooks.PostToolUse": [],
+      "hooks.PermissionRequest": [],
+      "hooks.Stop": [],
+      notify: [],
+      "shell_environment_policy.ignore_default_excludes": false,
+    });
+  });
+
+  it("rejects managed command hooks before starting a remote thread", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness(async (method) =>
+      method === "hooks/list"
+        ? {
+            data: [
+              {
+                cwd: workspaceDir,
+                hooks: [
+                  {
+                    enabled: true,
+                    eventName: "preToolUse",
+                    handlerType: "command",
+                    isManaged: true,
+                    source: "cloudRequirements",
+                  },
+                ],
+                errors: [],
+              },
+            ],
+          }
+        : undefined,
+    );
+
+    await expect(
+      runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+        pluginConfig: REMOTE_EXECUTION_PLUGIN_CONFIG,
+        nativeHookRelay: { enabled: true },
+      }),
+    ).rejects.toThrow("managed command hooks (cloudRequirements:preToolUse)");
+    expect(harness.requests.some((request) => request.method === "thread/start")).toBe(false);
+  });
+
   it("registers native hook relay config for an enabled Codex turn and cleans it up", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

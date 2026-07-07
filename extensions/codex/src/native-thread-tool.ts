@@ -11,7 +11,7 @@ import {
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { Type } from "typebox";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
-import { readCodexPluginConfig } from "./app-server/config.js";
+import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
 import { CODEX_INTERACTIVE_THREAD_SOURCE_KINDS, isJsonObject } from "./app-server/protocol.js";
 import {
   sessionBindingIdentity,
@@ -171,6 +171,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
       options.context.config,
     sessionId: options.context.sessionId,
     sessionKey: options.context.sessionKey,
+    remoteExecutionHookCwd: options.context.workspaceDir,
   });
   const currentSession = () => resolveToolSession(options.context, options.runtime);
   const currentIdentity = (sessionId: string) => {
@@ -281,6 +282,15 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
         throw new Error(`unsupported codex_threads action: ${action}`);
       }
 
+      const hasRemoteExecution = Boolean(
+        readCodexPluginConfig(pluginConfig).appServer?.experimental?.remoteExecution,
+      );
+      const appServer = hasRemoteExecution
+        ? resolveCodexAppServerRuntimeOptions({ pluginConfig })
+        : undefined;
+      const remoteCwd = appServer?.remoteExecutionFingerprint
+        ? appServer.remoteWorkspaceRoot
+        : undefined;
       const attach = readBoolean(params.attach, true);
       if (attach && !session) {
         throw new Error("cannot attach a Codex fork without an active OpenClaw session");
@@ -299,7 +309,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
       const response = await request(
         pluginConfig,
         CODEX_CONTROL_METHODS.forkThread,
-        { threadId, threadSource: "user" },
+        { threadId, ...(remoteCwd ? { cwd: remoteCwd } : {}), threadSource: "user" },
         requestOptions(),
       );
       if (!isJsonObject(response) || !isJsonObject(response.thread)) {
@@ -312,18 +322,23 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
       if (!forkThreadId) {
         throw new Error("Codex app-server thread/fork response did not include a thread id");
       }
+      const forkCwd =
+        typeof response.thread.cwd === "string" && response.thread.cwd.trim()
+          ? response.thread.cwd
+          : undefined;
+      if (!forkCwd) {
+        throw new Error("Codex app-server thread/fork response did not include a cwd");
+      }
       if (attach && session) {
         const attached = await options.bindingStore.mutate(currentIdentity(session.sessionId), {
           kind: "set",
           binding: {
             threadId: forkThreadId,
-            cwd:
-              typeof response.thread.cwd === "string"
-                ? response.thread.cwd
-                : (options.context.workspaceDir ?? ""),
+            cwd: forkCwd,
             model: typeof response.model === "string" ? response.model : undefined,
             modelProvider:
               typeof response.modelProvider === "string" ? response.modelProvider : undefined,
+            remoteExecutionFingerprint: appServer?.remoteExecutionFingerprint,
             historyCoveredThrough: new Date().toISOString(),
           },
         });

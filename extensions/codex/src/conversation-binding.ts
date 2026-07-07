@@ -17,6 +17,7 @@ import { resolveCodexAppServerForModelProvider } from "./app-server/app-server-p
 import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-bridge.js";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import {
+  applyCodexRemoteExecutionThreadConfig,
   canUseCodexModelBackedApprovalsReviewerForModel,
   codexSandboxPolicyForTurn,
   resolveOpenClawExecPolicyForCodexAppServer,
@@ -25,15 +26,22 @@ import {
   type CodexAppServerSandboxMode,
   type OpenClawExecPolicyForCodexAppServer,
 } from "./app-server/config.js";
-import { assertCodexThreadStartResponse } from "./app-server/protocol-validators.js";
+import { mapCodexAppServerRemoteWorkspacePath } from "./app-server/dynamic-tool-build.js";
+import { buildCodexAppServerRuntimeFingerprint } from "./app-server/plugin-app-cache-key.js";
+import {
+  assertCodexThreadForkResponse,
+  assertCodexThreadStartResponse,
+} from "./app-server/protocol-validators.js";
 import type {
   CodexServiceTier,
+  CodexThreadForkResponse,
   CodexThreadResumeResponse,
   CodexThreadStartResponse,
   CodexTurnStartResponse,
   JsonObject,
   JsonValue,
 } from "./app-server/protocol.js";
+import { ensureCodexRemoteExecutionCompatibility } from "./app-server/remote-execution.js";
 import {
   resolveCodexNativeExecutionBlock,
   resolveCodexNativeSandboxBlock,
@@ -211,6 +219,7 @@ export async function startCodexConversationThread(
       config: params.config,
       sessionKey: params.sessionKey,
       agentId: params.agentId,
+      forkExistingThread: Boolean(existingBinding?.remoteExecutionFingerprint),
     });
   } else {
     await createThread({
@@ -370,6 +379,7 @@ type CodexThreadBindingParams = {
   config?: CodexAppServerAuthProfileLookup["config"];
   agentId?: string;
   sessionKey?: string;
+  forkExistingThread?: boolean;
 };
 
 type ConversationAppServerRuntime = Awaited<ReturnType<typeof resolveConversationAppServerRuntime>>;
@@ -377,6 +387,8 @@ type ConversationAppServerRuntime = Awaited<ReturnType<typeof resolveConversatio
 type CodexThreadBindingRuntime = ConversationAppServerRuntime & {
   agentLookup: ReturnType<typeof buildAgentLookup>;
   client: Awaited<ReturnType<typeof getLeasedSharedCodexAppServerClient>>;
+  executionCwd: string;
+  appServerRuntimeFingerprint?: string;
   model?: string;
   modelProvider?: string;
 };
@@ -439,14 +451,56 @@ async function resolveThreadBindingRuntime(
     authProfileId: params.authProfileId,
     ...agentLookup,
   });
+  try {
+    await ensureCodexRemoteExecutionCompatibility({
+      appServer: modelScopedRuntime,
+      client,
+      cwd: params.workspaceDir,
+    });
+  } catch (error) {
+    releaseLeasedSharedCodexAppServerClient(client);
+    throw error;
+  }
+  const executionCwd = resolveConversationExecutionCwd(params.workspaceDir, modelScopedRuntime);
+  const appServerRuntimeFingerprint = buildConversationRemoteRuntimeFingerprint(
+    modelScopedRuntime,
+    client,
+  );
   return {
     execPolicy,
     runtime: modelScopedRuntime,
     agentLookup,
+    executionCwd,
+    ...(appServerRuntimeFingerprint ? { appServerRuntimeFingerprint } : {}),
     model: modelSelection?.model,
     modelProvider: modelSelection?.modelProvider ?? modelProvider,
     client,
   };
+}
+
+function resolveConversationExecutionCwd(
+  workspaceDir: string,
+  runtime: Pick<ConversationAppServerRuntime["runtime"], "remoteWorkspaceRoot">,
+): string {
+  return mapCodexAppServerRemoteWorkspacePath({
+    value: workspaceDir,
+    localWorkspaceRoot: workspaceDir,
+    remoteWorkspaceRoot: runtime.remoteWorkspaceRoot,
+  });
+}
+
+function buildConversationRemoteRuntimeFingerprint(
+  runtime: ConversationAppServerRuntime["runtime"],
+  client: Awaited<ReturnType<typeof getLeasedSharedCodexAppServerClient>>,
+): string | undefined {
+  if (!runtime.remoteExecutionFingerprint) {
+    return undefined;
+  }
+  return buildCodexAppServerRuntimeFingerprint({
+    appServer: runtime,
+    appServerVersion: client.getServerVersion(),
+    runtimeIdentity: client.getRuntimeIdentity(),
+  });
 }
 
 function buildThreadRequestRuntimeOptions(
@@ -474,19 +528,20 @@ function buildThreadRequestRuntimeOptions(
 }
 
 function codexConversationSandboxOrPermissions(
-  runtime: Pick<ConversationAppServerRuntime["runtime"], "networkProxy">,
+  runtime: Pick<
+    ConversationAppServerRuntime["runtime"],
+    "networkProxy" | "remoteExecutionFingerprint"
+  >,
   sandbox: ConversationAppServerRuntime["runtime"]["sandbox"],
 ): {
   sandbox?: ConversationAppServerRuntime["runtime"]["sandbox"];
   config?: JsonObject;
 } {
-  const networkProxy = runtime.networkProxy;
-  if (networkProxy) {
-    return {
-      config: networkProxy.configPatch,
-    };
-  }
-  return { sandbox };
+  const config = applyCodexRemoteExecutionThreadConfig(runtime.networkProxy?.configPatch, runtime);
+  return {
+    ...(runtime.networkProxy ? {} : { sandbox }),
+    ...(config ? { config } : {}),
+  };
 }
 
 async function requestNewConversationBindingThread(
@@ -496,16 +551,45 @@ async function requestNewConversationBindingThread(
   return await resolved.client.request(
     "thread/start",
     {
-      cwd: params.workspaceDir,
+      cwd: resolved.executionCwd,
       ...(resolved.model ? { model: resolved.model } : {}),
       ...(resolved.modelProvider ? { modelProvider: resolved.modelProvider } : {}),
       personality: CODEX_NATIVE_PERSONALITY_NONE,
       ...buildThreadRequestRuntimeOptions(params, resolved),
+      ...(resolved.runtime.remoteExecutionFingerprint
+        ? {}
+        : { environments: [{ environmentId: "local", cwd: resolved.executionCwd }] }),
       developerInstructions: CODEX_CONVERSATION_THREAD_DEVELOPER_INSTRUCTIONS,
       experimentalRawEvents: true,
     },
     { timeoutMs: resolved.runtime.requestTimeoutMs },
   );
+}
+
+async function requestForkedConversationBindingThread(
+  params: CodexThreadBindingParams & { threadId: string },
+  resolved: CodexThreadBindingRuntime,
+): Promise<CodexThreadForkResponse> {
+  const response = assertCodexThreadForkResponse(
+    await resolved.client.request(
+      CODEX_CONTROL_METHODS.forkThread,
+      {
+        threadId: params.threadId,
+        cwd: resolved.executionCwd,
+        ...(resolved.model ? { model: resolved.model } : {}),
+        ...(resolved.modelProvider ? { modelProvider: resolved.modelProvider } : {}),
+        ...buildThreadRequestRuntimeOptions(params, resolved),
+        developerInstructions: CODEX_CONVERSATION_THREAD_DEVELOPER_INSTRUCTIONS,
+        threadSource: "user",
+        excludeTurns: true,
+      },
+      { timeoutMs: resolved.runtime.requestTimeoutMs },
+    ),
+  );
+  if (!response.thread.cwd?.trim()) {
+    throw new Error("Codex thread/fork returned no cwd for the replacement thread");
+  }
+  return response;
 }
 
 async function writeThreadBindingFromResponse(
@@ -521,7 +605,7 @@ async function writeThreadBindingFromResponse(
     kind: "set",
     binding: {
       threadId: response.thread.id,
-      cwd: response.thread.cwd ?? params.workspaceDir,
+      cwd: response.thread.cwd ?? resolved.executionCwd,
       authProfileId: params.authProfileId,
       model: response.model ?? resolved.model ?? params.model,
       modelProvider: normalizeCodexAppServerBindingModelProvider({
@@ -538,6 +622,8 @@ async function writeThreadBindingFromResponse(
       serviceTier: params.serviceTier ?? resolved.runtime.serviceTier ?? undefined,
       networkProxyProfileName: resolved.runtime.networkProxy?.profileName,
       networkProxyConfigFingerprint: resolved.runtime.networkProxy?.configFingerprint,
+      appServerRuntimeFingerprint: resolved.appServerRuntimeFingerprint,
+      remoteExecutionFingerprint: resolved.runtime.remoteExecutionFingerprint,
     },
   });
   if (!committed) {
@@ -552,22 +638,29 @@ async function attachExistingThread(
 ): Promise<void> {
   const resolved = await resolveThreadBindingRuntime(params);
   try {
-    // Codex applies network-proxy permission profiles at thread/start. Resuming
-    // an arbitrary existing thread cannot prove that profile is active.
-    const response: CodexThreadResumeResponse | CodexThreadStartResponse = resolved.runtime
-      .networkProxy
-      ? await requestNewConversationBindingThread(params, resolved)
-      : await resolved.client.request(
-          CODEX_CONTROL_METHODS.resumeThread,
-          {
-            threadId: params.threadId,
-            ...(resolved.model ? { model: resolved.model } : {}),
-            ...(resolved.modelProvider ? { modelProvider: resolved.modelProvider } : {}),
-            personality: CODEX_NATIVE_PERSONALITY_NONE,
-            ...buildThreadRequestRuntimeOptions(params, resolved),
-          },
-          { timeoutMs: resolved.runtime.requestTimeoutMs },
-        );
+    // Forking applies the new runtime deterministically while retaining the
+    // source rollout. A blank thread is only safe when Codex proves it is gone.
+    const response: CodexThreadResumeResponse | CodexThreadStartResponse =
+      params.forkExistingThread ||
+      resolved.runtime.networkProxy ||
+      resolved.runtime.remoteExecutionFingerprint
+        ? await requestForkedConversationBindingThread(params, resolved).catch(async (error) => {
+            if (!isCodexThreadNotFoundError(error)) {
+              throw error;
+            }
+            return await requestNewConversationBindingThread(params, resolved);
+          })
+        : await resolved.client.request(
+            CODEX_CONTROL_METHODS.resumeThread,
+            {
+              threadId: params.threadId,
+              ...(resolved.model ? { model: resolved.model } : {}),
+              ...(resolved.modelProvider ? { modelProvider: resolved.modelProvider } : {}),
+              personality: CODEX_NATIVE_PERSONALITY_NONE,
+              ...buildThreadRequestRuntimeOptions(params, resolved),
+            },
+            { timeoutMs: resolved.runtime.requestTimeoutMs },
+          );
     await writeThreadBindingFromResponse(params, resolved, response);
   } finally {
     releaseLeasedSharedCodexAppServerClient(resolved.client);
@@ -601,7 +694,7 @@ async function runBoundTurn(params: {
     throw new Error("bound Codex conversation has no thread binding");
   }
   let threadId = binding.threadId;
-  const workspaceDir = binding.cwd || params.data.workspaceDir;
+  const localWorkspaceDir = params.data.workspaceDir;
   const reviewerModelProvider = resolveModelBackedReviewerPolicyProvider({
     authProfileId: binding.authProfileId,
     modelProvider: binding.modelProvider,
@@ -612,7 +705,7 @@ async function runBoundTurn(params: {
     config: params.config,
     agentId: params.data.agentId,
     sessionKey: params.sessionKey,
-    workspaceDir,
+    workspaceDir: localWorkspaceDir,
     modelProvider: reviewerModelProvider,
     model: binding.model,
     agentDir: params.data.agentDir,
@@ -671,38 +764,87 @@ async function runBoundTurn(params: {
     authProfileId: binding.authProfileId,
     ...agentLookup,
   });
+  const appServerRuntimeFingerprint = buildConversationRemoteRuntimeFingerprint(
+    modelScopedRuntime,
+    client,
+  );
+  const remoteExecutionBindingChanged =
+    binding.remoteExecutionFingerprint !== modelScopedRuntime.remoteExecutionFingerprint;
+  const runtimeBindingChanged =
+    remoteExecutionBindingChanged ||
+    (modelScopedRuntime.remoteExecutionFingerprint
+      ? binding.appServerRuntimeFingerprint !== appServerRuntimeFingerprint
+      : Boolean(binding.appServerRuntimeFingerprint));
+  let executionCwd = runtimeBindingChanged
+    ? resolveConversationExecutionCwd(localWorkspaceDir, modelScopedRuntime)
+    : binding.cwd || resolveConversationExecutionCwd(localWorkspaceDir, modelScopedRuntime);
   let notificationCleanup: () => void = () => undefined;
   let requestCleanup: () => void = () => undefined;
+  const threadConfig = applyCodexRemoteExecutionThreadConfig(
+    modelScopedRuntime.networkProxy?.configPatch,
+    modelScopedRuntime,
+  );
   try {
-    if (networkProxyBindingChanged) {
-      const response = assertCodexThreadStartResponse(
-        await client.request(
-          "thread/start",
-          {
-            cwd: workspaceDir,
-            ...(modelSelection?.model ? { model: modelSelection.model } : {}),
-            ...(modelSelection?.modelProvider
-              ? { modelProvider: modelSelection.modelProvider }
-              : {}),
-            personality: CODEX_NATIVE_PERSONALITY_NONE,
-            approvalPolicy,
-            approvalsReviewer: modelScopedRuntime.approvalsReviewer,
-            ...(modelScopedRuntime.networkProxy
-              ? { config: modelScopedRuntime.networkProxy.configPatch }
-              : { sandbox }),
-            ...(serviceTier ? { serviceTier } : {}),
-            developerInstructions: CODEX_CONVERSATION_THREAD_DEVELOPER_INSTRUCTIONS,
-            experimentalRawEvents: true,
-          },
-          { timeoutMs: runtime.requestTimeoutMs },
-        ),
-      );
+    await ensureCodexRemoteExecutionCompatibility({
+      appServer: modelScopedRuntime,
+      client,
+      cwd: localWorkspaceDir,
+    });
+    if (networkProxyBindingChanged || runtimeBindingChanged) {
+      const replacementParams = {
+        cwd: executionCwd,
+        ...(modelSelection?.model ? { model: modelSelection.model } : {}),
+        ...(modelSelection?.modelProvider ? { modelProvider: modelSelection.modelProvider } : {}),
+        approvalPolicy,
+        approvalsReviewer: modelScopedRuntime.approvalsReviewer,
+        ...(modelScopedRuntime.networkProxy ? {} : { sandbox }),
+        ...(threadConfig ? { config: threadConfig } : {}),
+        ...(serviceTier ? { serviceTier } : {}),
+        developerInstructions: CODEX_CONVERSATION_THREAD_DEVELOPER_INSTRUCTIONS,
+      };
+      let response: CodexThreadStartResponse;
+      try {
+        response = assertCodexThreadForkResponse(
+          await client.request(
+            CODEX_CONTROL_METHODS.forkThread,
+            {
+              threadId,
+              ...replacementParams,
+              threadSource: "user",
+              excludeTurns: true,
+            },
+            { timeoutMs: runtime.requestTimeoutMs },
+          ),
+        );
+        if (!response.thread.cwd?.trim()) {
+          throw new Error("Codex thread/fork returned no cwd for the replacement thread");
+        }
+      } catch (error) {
+        if (!isCodexThreadNotFoundError(error)) {
+          throw error;
+        }
+        response = assertCodexThreadStartResponse(
+          await client.request(
+            "thread/start",
+            {
+              ...replacementParams,
+              personality: CODEX_NATIVE_PERSONALITY_NONE,
+              ...(modelScopedRuntime.remoteExecutionFingerprint
+                ? {}
+                : { environments: [{ environmentId: "local", cwd: executionCwd }] }),
+              experimentalRawEvents: true,
+            },
+            { timeoutMs: runtime.requestTimeoutMs },
+          ),
+        );
+      }
       threadId = response.thread.id;
+      executionCwd = response.thread.cwd ?? executionCwd;
       const committed = await params.bindingStore.mutate(identity, {
         kind: "set",
         binding: {
           threadId,
-          cwd: response.thread.cwd ?? workspaceDir,
+          cwd: executionCwd,
           authProfileId: binding.authProfileId,
           model: response.model ?? modelSelection?.model ?? binding.model,
           modelProvider: normalizeCodexAppServerBindingModelProvider({
@@ -716,6 +858,8 @@ async function runBoundTurn(params: {
           serviceTier: serviceTier ?? undefined,
           networkProxyProfileName: modelScopedRuntime.networkProxy?.profileName,
           networkProxyConfigFingerprint: modelScopedRuntime.networkProxy?.configFingerprint,
+          appServerRuntimeFingerprint,
+          remoteExecutionFingerprint: modelScopedRuntime.remoteExecutionFingerprint,
           conversationStartId: binding.conversationStartId,
           conversationSourceTransferComplete: binding.conversationSourceTransferComplete,
           historyCoveredThrough: binding.historyCoveredThrough,
@@ -772,15 +916,18 @@ async function runBoundTurn(params: {
           prompt: params.prompt,
           event: params.event,
         }),
-        cwd: workspaceDir,
+        cwd: executionCwd,
         approvalPolicy,
         approvalsReviewer: modelScopedRuntime.approvalsReviewer,
         ...(useStickyNetworkProfile
           ? {}
-          : { sandboxPolicy: codexSandboxPolicyForTurn(sandbox, workspaceDir) }),
+          : { sandboxPolicy: codexSandboxPolicyForTurn(sandbox, executionCwd) }),
         ...(modelSelection?.model ? { model: modelSelection.model } : {}),
         personality: CODEX_NATIVE_PERSONALITY_NONE,
         ...(serviceTier ? { serviceTier } : {}),
+        ...(modelScopedRuntime.remoteExecutionFingerprint
+          ? {}
+          : { environments: [{ environmentId: "local", cwd: executionCwd }] }),
       },
       { timeoutMs: runtime.requestTimeoutMs },
     );
@@ -884,13 +1031,18 @@ async function prepareConversationBinding(
       sessionKey: params.sessionKey,
     });
     const agentLookup = buildAgentLookup({ agentDir: params.data.agentDir, config: params.config });
+    // This marker ships with remote execution. The generic runtime fingerprint
+    // also exists on local sessions, so it cannot classify transferred cwd state.
+    // Remote bindings store an executor cwd. Recovery must start from the local
+    // workspace so thread creation can project it into the current environment.
+    const inheritedWorkspaceDir = inherited?.remoteExecutionFingerprint
+      ? params.data.workspaceDir
+      : (inherited?.cwd ?? params.data.workspaceDir);
     const bindingParams: CodexThreadBindingParams = {
       bindingStore: params.bindingStore,
       identity,
       pluginConfig: params.pluginConfig,
-      workspaceDir: requested
-        ? params.data.workspaceDir
-        : (inherited?.cwd ?? params.data.workspaceDir),
+      workspaceDir: requested ? params.data.workspaceDir : inheritedWorkspaceDir,
       ...agentLookup,
       model: requested?.model ?? inherited?.model,
       modelProvider: requested?.modelProvider ?? inherited?.modelProvider,
@@ -901,6 +1053,7 @@ async function prepareConversationBinding(
       config: params.config,
       sessionKey: params.sessionKey,
       agentId: params.data.agentId,
+      forkExistingThread: Boolean(inherited?.remoteExecutionFingerprint),
     };
     const threadId = requested?.threadId ?? (!current ? params.data.source?.threadId : undefined);
     if (threadId && !options.forceNew) {
@@ -1069,6 +1222,8 @@ function isCodexThreadNotFoundError(error: unknown): boolean {
   const message = formatErrorMessage(error);
   return (
     /\bthread not found:/iu.test(message) ||
+    /\bno rollout found for thread id\b/iu.test(message) ||
+    /\bincludeTurns is unavailable before first user message\b/u.test(message) ||
     /\bbound Codex conversation has no thread binding\b/u.test(message)
   );
 }

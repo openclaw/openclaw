@@ -151,6 +151,71 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     });
   });
 
+  it("rejects local stdio MCP servers in a remote execution environment", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const request = vi.fn();
+
+    await expect(
+      startOrResumeThread({
+        client: { request } as never,
+        params: createParams(sessionFile, workspaceDir, {
+          mcp: {
+            servers: {
+              outlook: {
+                transport: "stdio",
+                command: "node",
+                args: ["/opt/outlook-mcp/dist/index.js"],
+              },
+            },
+          },
+        } as unknown as EmbeddedRunAttemptParams["config"]),
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: {
+          ...createAppServerOptions(),
+          remoteExecutionFingerprint: "sha256:remote",
+        },
+      }),
+    ).rejects.toThrow('cannot use local stdio MCP server "outlook"');
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("allows disabled local stdio MCP servers in a remote execution environment", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult();
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir, {
+        mcp: {
+          servers: {
+            outlook: {
+              transport: "stdio",
+              command: "node",
+              args: ["/opt/outlook-mcp/dist/index.js"],
+              enabled: false,
+            },
+          },
+        },
+      } as unknown as EmbeddedRunAttemptParams["config"]),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: {
+        ...createAppServerOptions(),
+        remoteExecutionFingerprint: "sha256:remote",
+      },
+    });
+
+    expect(request).toHaveBeenCalledWith("thread/start", expect.any(Object), expect.any(Object));
+  });
+
   it("projects only Codex user MCP servers scoped to the current agent", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

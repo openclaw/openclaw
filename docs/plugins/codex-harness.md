@@ -358,10 +358,12 @@ app-server is too old, or the app-server cannot start.
 
 ## App-server policy
 
-By default, the plugin starts OpenClaw's managed Codex binary locally with
-stdio transport. Set `appServer.command` only to intentionally run a
-different executable. Use WebSocket transport only when an app-server is
-already running elsewhere:
+By default, the plugin starts OpenClaw's managed Codex binary beside the
+Gateway and owns it over stdio. Keep that control-plane topology in
+production. Codex upstream marks TCP WebSocket app-server transport
+[experimental and unsupported](https://github.com/openai/codex/blob/rust-v0.142.5/codex-rs/app-server/README.md#protocol),
+so use it only for development or diagnostics when an app-server is already
+running elsewhere:
 
 ```json5
 {
@@ -372,7 +374,7 @@ already running elsewhere:
         config: {
           appServer: {
             transport: "websocket",
-            url: "ws://gateway-host:39175",
+            url: "wss://codex.example.com/app-server",
             authToken: "${CODEX_APP_SERVER_TOKEN}",
           },
         },
@@ -381,6 +383,121 @@ already running elsewhere:
   },
 }
 ```
+
+### Remote execution environments
+
+When Codex must execute on another host, keep the managed app-server with the
+Gateway over stdio and move only filesystem and process execution:
+
+```text
+OpenClaw Gateway -> stdio -> codex app-server -> Noise registry -> codex exec-server
+```
+
+Start an authenticated executor with the environment id registered for this
+OpenClaw deployment:
+
+```bash
+codex exec-server \
+  --remote https://environment-registry.example.com/api \
+  --environment-id devbox-example
+```
+
+Then configure the Gateway-owned app-server:
+
+```json5
+{
+  plugins: {
+    entries: {
+      codex: {
+        enabled: true,
+        config: {
+          appServer: {
+            transport: "stdio",
+            mode: "guardian",
+            remoteWorkspaceRoot: "/home/codex/workspaces",
+            experimental: {
+              remoteExecution: {
+                registryUrl: "https://environment-registry.example.com/api",
+                environmentId: "devbox-example",
+                authToken: "${CODEX_EXEC_SERVER_NOISE_AUTH_TOKEN}",
+                chatgptAccountId: "${CODEX_EXEC_SERVER_NOISE_CHATGPT_ACCOUNT_ID}",
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+This preview requires Codex app-server `0.142.0` or newer, stdio transport,
+and an absolute POSIX `remoteWorkspaceRoot`. The registry URL must use HTTPS
+except for a true loopback URL. `authToken` and optional `chatgptAccountId`
+accept SecretInput values and authenticate the app-server side of the
+rendezvous; configure the exec-server's registry authentication separately.
+OpenClaw disables inherited raw exec-server URL routing so the app-server
+cannot fall back to an unauthenticated socket.
+
+Gateway-owned stdio app-servers clear inherited `CODEX_EXEC_SERVER_URL` and
+`CODEX_EXEC_SERVER_NOISE_*` routing variables. Configure remote execution only
+through this validated plugin surface.
+
+Codex auth, app inventory, thread state, and control-plane lifecycle remain
+with the Gateway-owned app-server. Normal Codex threads use the configured
+remote environment by default. Enabling this mode, or changing its registry,
+environment, account identity, credentials without an explicit account
+identity, or remote workspace root, forks the existing native Codex thread into
+the new topology so committed history is preserved.
+
+Current preview limits:
+
+- One app-server process supports exactly one authenticated remote target. The
+  configured `environmentId` is a registry rendezvous id, not a pool selector;
+  this preview does not provide failover, per-thread box selection, or dynamic
+  switching among multiple executors.
+- The Gateway/app-server host and remote executor must use Linux or macOS POSIX
+  path semantics. Windows is unsupported on either side in this preview.
+- OpenClaw forces Codex unified exec, disables zsh-fork fallbacks, legacy
+  notifications, and user/project native hooks, and clears all hook command
+  arrays. Codex-managed command hooks cannot be disabled by thread config, so
+  OpenClaw checks `hooks/list` and rejects remote execution when any are active.
+  It also rejects legacy managed config layers and managed feature requirements
+  that can override the forced execution policy.
+  An active OpenClaw `before_tool_call`/trusted-tool policy also fails closed
+  because Codex `0.142.x` cannot route those hooks back to the Gateway with a
+  Gateway-local cwd. The app-server approval bridge remains available.
+- Remote commands receive only Codex's core executor environment. OpenClaw
+  replaces shell-environment customization for remote threads, clears configured
+  `set` values, and excludes default `*KEY*`, `*SECRET*`, `*TOKEN*`, and explicit
+  `CODEX_EXEC_SERVER_*` names.
+- `appServer.networkProxy`, `appServer.experimental.sandboxExecServer`, and
+  Codex Computer Use cannot be combined with remote execution. An active
+  OpenClaw sandbox also rejects this mode. Enforce required executor egress at
+  the remote environment boundary.
+- Codex `0.142.x` removes its local execution environment when Noise remote
+  execution is active. OpenClaw therefore rejects local stdio MCP servers in
+  this mode. HTTP MCP remains app-server-local; a stdio MCP may run only when
+  its Codex config intentionally sets `environment_id = "remote"`.
+- OpenClaw bounded turns, including model-backed search, review, and media
+  understanding, intentionally clear remote routing and run in a temporary
+  local workspace.
+- After changing the remote execution topology, send a normal message before
+  `/btw` so the main thread can rotate into the current environment.
+- Codex requirements and approval policy are evaluated by the app-server.
+  Provision `/etc/codex/requirements.toml` on the Gateway/app-server host; a
+  copy on only the executor does not govern the app-server. Requirements that
+  pin incompatible execution features make this preview fail closed.
+- App-server initialization does not prove that the matching executor is
+  registered. Gate deployment readiness on registry/executor health and use a
+  harmless native operation as end-to-end proof.
+- Give the exec-server only narrowly scoped, rotatable credentials. OpenClaw's
+  enforced remote shell policy removes those variables from normal child
+  environments, reducing accidental disclosure; it is not an isolation
+  boundary against same-user code that can inspect the exec-server process.
+  Run the exec-server behind an OS, container, or VM boundary that prevents
+  workspace commands from reading its process environment, and never store
+  registry credentials inside the workspace.
 
 Local stdio app-server sessions default to the trusted local operator
 posture: `approvalPolicy: "never"`, `approvalsReviewer: "user"`, and
@@ -639,6 +756,7 @@ Supported `appServer` fields:
 | `serviceTier`                                 | unset                                                  | Optional Codex app-server service tier. `"priority"` enables fast-mode routing, `"flex"` requests flex processing, `null` clears the override, and legacy `"fast"` is accepted as `"priority"`.                                                                                                                                                                                                 |
 | `networkProxy`                                | disabled                                               | Opt into Codex permissions-profile networking for app-server commands. OpenClaw defines the selected `permissions.<profile>.network` config and selects it with `default_permissions` instead of sending `sandbox`.                                                                                                                                                                             |
 | `experimental.sandboxExecServer`              | `false`                                                | Preview opt-in that registers an OpenClaw sandbox-backed Codex environment with the supported Codex app-server so native Codex execution can run inside the active OpenClaw sandbox.                                                                                                                                                                                                            |
+| `experimental.remoteExecution`                | unset                                                  | Preview single-target authenticated remote execution. Keeps app-server local over stdio and routes native filesystem/process work through one registry-backed exec-server. Requires `remoteWorkspaceRoot`.                                                                                                                                                                                      |
 
 `appServer.networkProxy` is explicit because it changes the Codex sandbox
 contract. When enabled, OpenClaw also sets `features.network_proxy.enabled`
@@ -914,9 +1032,20 @@ headers are valid.
 `plugins.entries.codex.config.discovery.timeoutMs` or disable discovery.
 See [Codex harness reference](/plugins/codex-harness-reference#model-discovery).
 
-**WebSocket transport fails immediately:** check `appServer.url`,
+**Remote execution reaches the app-server but not the executor:** verify Codex
+app-server `0.142.0` or newer, stdio transport, an HTTPS registry URL, the exact
+environment id, resolved SecretInputs, and a registered healthy exec-server.
+`/codex status` proves only the app-server control plane; use a harmless native
+filesystem or command operation for end-to-end executor proof. A topology or
+environment identity change forks the prior thread and preserves its history.
+Remote execution forcibly disables native hook relay commands. An OpenClaw
+tool policy that requires the relay makes startup fail instead of silently
+running hooks on the Gateway with the executor cwd.
+
+**Experimental WebSocket transport fails immediately:** check `appServer.url`,
 `authToken`, headers, and that the remote app-server speaks the same Codex
-app-server protocol version.
+app-server protocol version. Do not use TCP WebSocket app-server transport as
+the production remote-execution topology.
 
 **Native shell or patch tools are blocked with `Native hook relay
 unavailable`:** the Codex thread is still trying to use a native hook relay

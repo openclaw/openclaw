@@ -5,13 +5,18 @@ import {
   describeControlFailure,
   type CodexControlMethod,
 } from "./app-server/capabilities.js";
-import { resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
+import {
+  applyCodexRemoteExecutionThreadConfig,
+  resolveCodexAppServerRuntimeOptions,
+} from "./app-server/config.js";
 import { listCodexAppServerModels } from "./app-server/models.js";
-import type {
-  CodexAppServerRequestMethod,
-  CodexAppServerRequestParams,
-  CodexAppServerRequestResult,
-  JsonValue,
+import {
+  isJsonObject,
+  type CodexAppServerRequestMethod,
+  type CodexAppServerRequestParams,
+  type CodexAppServerRequestResult,
+  type JsonObject,
+  type JsonValue,
 } from "./app-server/protocol.js";
 import { requestCodexAppServerJson } from "./app-server/request.js";
 
@@ -28,6 +33,7 @@ export type CodexControlRequestOptions = {
   sessionKey?: string;
   sessionId?: string;
   isolated?: boolean;
+  remoteExecutionHookCwd?: string;
 };
 
 export function requestOptions(
@@ -45,6 +51,11 @@ export function requestOptions(
 }
 
 type CodexControlRequestMethod = CodexControlMethod & CodexAppServerRequestMethod;
+
+const CODEX_THREAD_CONFIG_METHODS = new Set<CodexControlMethod>([
+  CODEX_CONTROL_METHODS.resumeThread,
+  CODEX_CONTROL_METHODS.forkThread,
+]);
 
 export function codexControlRequest<M extends CodexControlRequestMethod>(
   pluginConfig: unknown,
@@ -65,9 +76,14 @@ export async function codexControlRequest(
   options: CodexControlRequestOptions = {},
 ): Promise<unknown> {
   const runtime = resolveCodexAppServerRuntimeOptions({ pluginConfig });
-  return await requestCodexAppServerJson({
+  const effectiveRequestParams = applyRemoteExecutionControlRequestConfig(
     method,
     requestParams,
+    runtime,
+  );
+  return await requestCodexAppServerJson({
+    method,
+    requestParams: effectiveRequestParams,
     timeoutMs: runtime.requestTimeoutMs,
     startOptions: runtime.start,
     config: options.config,
@@ -76,7 +92,25 @@ export async function codexControlRequest(
     authProfileId: options.authProfileId,
     agentDir: options.agentDir,
     isolated: options.isolated,
+    remoteExecution: runtime,
+    remoteExecutionHookCwd: options.remoteExecutionHookCwd,
   });
+}
+
+function applyRemoteExecutionControlRequestConfig(
+  method: CodexControlMethod,
+  requestParams: unknown,
+  runtime: ReturnType<typeof resolveCodexAppServerRuntimeOptions>,
+): unknown {
+  if (!runtime.remoteExecutionFingerprint || !CODEX_THREAD_CONFIG_METHODS.has(method)) {
+    return requestParams;
+  }
+  const params = isJsonObject(requestParams) ? requestParams : {};
+  const config = isJsonObject(params.config) ? (params.config as JsonObject) : undefined;
+  return {
+    ...params,
+    config: applyCodexRemoteExecutionThreadConfig(config, runtime),
+  };
 }
 
 export function safeCodexControlRequest<M extends CodexControlRequestMethod>(

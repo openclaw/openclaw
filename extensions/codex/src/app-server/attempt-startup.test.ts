@@ -198,6 +198,28 @@ describe("startCodexAttemptThread", () => {
     expect(harness.process.stdin.destroyed).toBe(true);
   });
 
+  it("rejects local Computer Use setup with remote execution", async () => {
+    const { harness, run } = startThreadWithHarness(5_000, new AbortController().signal, {
+      pluginConfig: {
+        computerUse: { enabled: true },
+        appServer: {
+          command: "codex",
+          remoteWorkspaceRoot: "/remote/workspace",
+          experimental: {
+            remoteExecution: {
+              registryUrl: "https://environment-registry.example.com/api",
+              environmentId: "devbox-example",
+              authToken: "registry-token",
+            },
+          },
+        },
+      },
+    });
+
+    await expect(run).rejects.toThrow("removes the local execution environment");
+    expect(harness.writes).toEqual([]);
+  });
+
   it("retires a failed startup client after another active lease releases", async () => {
     const retained = createClientHarness();
     const replacement = createClientHarness();

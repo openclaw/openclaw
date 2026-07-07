@@ -497,6 +497,15 @@ export function createStartedThreadHarness(
     if (override !== undefined) {
       return override;
     }
+    if (method === "hooks/list") {
+      return { data: [{ cwd: "/tmp/workspace", hooks: [], errors: [] }] };
+    }
+    if (method === "configRequirements/read") {
+      return { requirements: null };
+    }
+    if (method === "config/read") {
+      return { config: {}, origins: {}, layers: [] };
+    }
     if (method === "thread/start") {
       return threadStartResult();
     }
@@ -509,6 +518,15 @@ export function createStartedThreadHarness(
 
 export function createResumeHarness() {
   return createAppServerHarness(async (method, params) => {
+    if (method === "hooks/list") {
+      return { data: [{ cwd: "/tmp/workspace", hooks: [], errors: [] }] };
+    }
+    if (method === "configRequirements/read") {
+      return { requirements: null };
+    }
+    if (method === "config/read") {
+      return { config: {}, origins: {}, layers: [] };
+    }
     if (method === "thread/resume") {
       // Resume must echo the requested thread; a different id is rejected as
       // an unsafe subscription.

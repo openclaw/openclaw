@@ -604,7 +604,7 @@ export function resolveCodexAppServerExecutionCwd(params: {
   });
 }
 
-/** Projects a local OpenClaw workspace cwd into the remote Codex app-server workspace root. */
+/** Projects a local OpenClaw workspace cwd into the remote Codex workspace root. */
 export function mapCodexAppServerRemoteWorkspacePath(params: {
   value: string;
   localWorkspaceRoot: string;
@@ -625,7 +625,7 @@ export function mapCodexAppServerRemoteWorkspacePath(params: {
   const prefix = `${localRoot}/`;
   if (!normalizedValue.startsWith(prefix)) {
     throw new Error(
-      `Codex remoteWorkspaceRoot is configured but cwd ${params.value} is outside OpenClaw workspace root ${params.localWorkspaceRoot}; refusing to send a gateway-local cwd to the remote Codex app-server.`,
+      `Codex remoteWorkspaceRoot is configured but cwd ${params.value} is outside OpenClaw workspace root ${params.localWorkspaceRoot}; refusing to send a gateway-local cwd to the remote Codex workspace.`,
     );
   }
   return joinRemoteWorkspacePath(remoteRoot, normalizedValue.slice(prefix.length));

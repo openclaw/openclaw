@@ -257,6 +257,17 @@
               "sandboxExecServer": {
                 "type": "boolean",
                 "default": false
+              },
+              "remoteExecution": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["registryUrl", "environmentId", "authToken"],
+                "properties": {
+                  "registryUrl": { "type": "string" },
+                  "environmentId": { "type": "string" },
+                  "authToken": { "type": ["string", "object"] },
+                  "chatgptAccountId": { "type": ["string", "object"] }
+                }
               }
             }
           }
@@ -268,7 +279,15 @@
     "secretInputs": {
       "paths": [
         { "path": "appServer.authToken", "expected": "string" },
-        { "path": "appServer.headers.*", "expected": "string" }
+        { "path": "appServer.headers.*", "expected": "string" },
+        {
+          "path": "appServer.experimental.remoteExecution.authToken",
+          "expected": "string"
+        },
+        {
+          "path": "appServer.experimental.remoteExecution.chatgptAccountId",
+          "expected": "string"
+        }
       ]
     }
   },
@@ -420,7 +439,7 @@
     },
     "appServer.remoteWorkspaceRoot": {
       "label": "Remote Workspace Root",
-      "help": "Remote Codex app-server workspace root used to project OpenClaw cwd suffixes before starting Codex threads.",
+      "help": "Remote Codex workspace root used to project OpenClaw cwd suffixes before starting Codex threads.",
       "advanced": true
     },
     "appServer.codeModeOnly": {
@@ -551,6 +570,33 @@
     "appServer.experimental.sandboxExecServer": {
       "label": "Sandbox Exec Server",
       "help": "Route native Codex execution through an OpenClaw sandbox-backed exec-server when OpenClaw sandboxing is active.",
+      "advanced": true
+    },
+    "appServer.experimental.remoteExecution": {
+      "label": "Single Remote Execution Target (Preview)",
+      "help": "Keep app-server local over stdio while routing Codex filesystem and process operations through one authenticated remote execution environment.",
+      "advanced": true
+    },
+    "appServer.experimental.remoteExecution.registryUrl": {
+      "label": "Environment Registry URL",
+      "help": "HTTPS base URL for the Codex execution environment registry.",
+      "advanced": true
+    },
+    "appServer.experimental.remoteExecution.environmentId": {
+      "label": "Registry Environment ID",
+      "help": "Single registry rendezvous identifier exposed by the remote Codex exec-server; this is not a pool selector.",
+      "advanced": true
+    },
+    "appServer.experimental.remoteExecution.authToken": {
+      "label": "Environment Registry Token",
+      "help": "Bearer token used for authenticated, encrypted exec-server rendezvous.",
+      "sensitive": true,
+      "advanced": true
+    },
+    "appServer.experimental.remoteExecution.chatgptAccountId": {
+      "label": "ChatGPT Account ID",
+      "help": "Optional account identifier sent to the execution environment registry.",
+      "sensitive": true,
       "advanced": true
     }
   }

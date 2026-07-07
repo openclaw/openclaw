@@ -12,9 +12,17 @@ import {
   readCodexComputerUseStatus,
   type CodexComputerUseSetupParams,
 } from "./app-server/computer-use.js";
-import { isCodexFastServiceTier, type CodexComputerUseConfig } from "./app-server/config.js";
+import {
+  isCodexFastServiceTier,
+  readCodexPluginConfig,
+  resolveCodexAppServerRuntimeOptions,
+  type CodexComputerUseConfig,
+} from "./app-server/config.js";
 import { listAllCodexAppServerModels } from "./app-server/models.js";
-import { assertCodexThreadResumeResponse } from "./app-server/protocol-validators.js";
+import {
+  assertCodexThreadForkResponse,
+  assertCodexThreadResumeResponse,
+} from "./app-server/protocol-validators.js";
 import { isJsonObject, type JsonValue } from "./app-server/protocol.js";
 import {
   resolveCodexNativeExecutionBlock,
@@ -888,32 +896,52 @@ async function resumeThread(
       agentDir: scope.agentDir,
       config: ctx.config,
     });
-    const response = assertCodexThreadResumeResponse(
-      await deps.codexControlRequest(
-        pluginConfig,
-        CODEX_CONTROL_METHODS.resumeThread,
-        {
-          threadId: normalizedThreadId,
-          excludeTurns: true,
-        },
-        {
-          config: ctx.config,
-          agentDir: scope.agentDir,
-          authProfileId,
-          sessionKey: ctx.sessionKey,
-          sessionId: ctx.sessionId,
-        },
-      ),
+    const hasRemoteExecution = Boolean(
+      readCodexPluginConfig(pluginConfig).appServer?.experimental?.remoteExecution,
     );
+    const appServer = hasRemoteExecution
+      ? resolveCodexAppServerRuntimeOptions({ pluginConfig })
+      : undefined;
+    const remoteCwd = appServer?.remoteWorkspaceRoot;
+    const attachMethod = appServer?.remoteExecutionFingerprint
+      ? CODEX_CONTROL_METHODS.forkThread
+      : CODEX_CONTROL_METHODS.resumeThread;
+    const rawResponse = await deps.codexControlRequest(
+      pluginConfig,
+      attachMethod,
+      {
+        threadId: normalizedThreadId,
+        ...(remoteCwd ? { cwd: remoteCwd } : {}),
+        excludeTurns: true,
+        ...(attachMethod === CODEX_CONTROL_METHODS.forkThread ? { threadSource: "user" } : {}),
+      },
+      {
+        config: ctx.config,
+        agentDir: scope.agentDir,
+        authProfileId,
+        sessionKey: ctx.sessionKey,
+        sessionId: ctx.sessionId,
+        remoteExecutionHookCwd: deps.resolveCodexDefaultWorkspaceDir(pluginConfig),
+      },
+    );
+    const response =
+      attachMethod === CODEX_CONTROL_METHODS.forkThread
+        ? assertCodexThreadForkResponse(rawResponse)
+        : assertCodexThreadResumeResponse(rawResponse);
     const effectiveThreadId = response.thread.id;
-    if (effectiveThreadId !== normalizedThreadId) {
+    if (
+      attachMethod === CODEX_CONTROL_METHODS.resumeThread &&
+      effectiveThreadId !== normalizedThreadId
+    ) {
       throw new Error(
         `Codex thread/resume returned ${effectiveThreadId} for ${normalizedThreadId}`,
       );
     }
     const resumedCwd = response.thread.cwd;
-    if (typeof resumedCwd !== "string") {
-      throw new Error(`Codex thread/resume returned no cwd for ${normalizedThreadId}`);
+    if (typeof resumedCwd !== "string" || !resumedCwd.trim()) {
+      throw new Error(
+        `Codex thread/${attachMethod === CODEX_CONTROL_METHODS.forkThread ? "fork" : "resume"} returned no cwd for ${normalizedThreadId}`,
+      );
     }
     const modelProvider = normalizeCodexAppServerBindingModelProvider({
       authProfileId,
@@ -929,15 +957,16 @@ async function resumeThread(
         authProfileId,
         model: response.model,
         modelProvider,
+        remoteExecutionFingerprint: appServer?.remoteExecutionFingerprint,
         historyCoveredThrough: new Date().toISOString(),
       },
     });
     if (!committed) {
       throw new Error("Codex thread binding changed while attaching the resumed thread.");
     }
-    return `Attached this OpenClaw session to Codex thread ${formatCodexDisplayText(
-      effectiveThreadId,
-    )}.`;
+    return appServer?.remoteExecutionFingerprint
+      ? `Attached this OpenClaw session to Codex thread ${formatCodexDisplayText(effectiveThreadId)}, forked from ${formatCodexDisplayText(normalizedThreadId)} for the remote execution environment.`
+      : `Attached this OpenClaw session to Codex thread ${formatCodexDisplayText(effectiveThreadId)}.`;
   });
 }
 
@@ -2109,6 +2138,10 @@ async function startThreadAction(
   if (!binding?.threadId) {
     return `No Codex thread is attached to this OpenClaw session yet.`;
   }
+  const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
+  if (binding.remoteExecutionFingerprint !== appServer.remoteExecutionFingerprint) {
+    return `Cannot start Codex ${label} until a normal message refreshes this thread for the current execution environment.`;
+  }
   await deps.codexControlRequest(
     pluginConfig,
     kind === "compact" ? CODEX_CONTROL_METHODS.compact : CODEX_CONTROL_METHODS.review,
@@ -2119,6 +2152,7 @@ async function startThreadAction(
       agentDir: target.agentDir,
       authProfileId: binding.authProfileId,
       config: ctx.config,
+      remoteExecutionHookCwd: deps.resolveCodexDefaultWorkspaceDir(pluginConfig),
     },
   );
   return `Started Codex ${label} for thread ${formatCodexDisplayText(binding.threadId)}.`;

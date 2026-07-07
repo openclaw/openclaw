@@ -27,10 +27,20 @@ DOCKER_TRUSTED_HARNESS_CONTAINER_DIR=""
 DOCKER_CACHE_CONTAINER_DIR="/tmp/openclaw-cache"
 DOCKER_CLI_TOOLS_CONTAINER_DIR="/tmp/openclaw-npm-global"
 DOCKER_EXTRA_ENV_FILES=()
+DOCKER_REMOTE_NETWORK_ARGS=()
 DOCKER_AUTH_PRESTAGED=0
 
 openclaw_live_codex_harness_is_ci() {
   openclaw_live_is_ci
+}
+
+openclaw_live_codex_harness_validate_env_file_value() {
+  local name="${1:?environment variable name required}"
+  local value="${2-}"
+  if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
+    echo "ERROR: $name cannot contain a newline when passed through a Docker env file." >&2
+    exit 1
+  fi
 }
 
 openclaw_live_codex_harness_append_build_extension() {
@@ -178,6 +188,9 @@ fi
 
 DOCKER_AUTH_ENV=()
 if [[ "$CODEX_HARNESS_AUTH_MODE" == "api-key" ]]; then
+  openclaw_live_codex_harness_validate_env_file_value OPENAI_API_KEY "$OPENAI_API_KEY"
+  openclaw_live_codex_harness_validate_env_file_value CODEX_API_KEY "${CODEX_API_KEY:-$OPENAI_API_KEY}"
+  openclaw_live_codex_harness_validate_env_file_value OPENAI_BASE_URL "${OPENAI_BASE_URL:-}"
   docker_env_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-codex-harness-env.XXXXXX")"
   TEMP_DIRS+=("$docker_env_dir")
   docker_env_file="$docker_env_dir/openai.env"
@@ -189,6 +202,41 @@ if [[ "$CODEX_HARNESS_AUTH_MODE" == "api-key" ]]; then
     fi
   } >"$docker_env_file"
   DOCKER_EXTRA_ENV_FILES+=(--env-file "$docker_env_file")
+fi
+
+REMOTE_EXECUTION_ENV_NAMES=(
+  OPENCLAW_LIVE_CODEX_REMOTE_AUTH_TOKEN
+  OPENCLAW_LIVE_CODEX_REMOTE_ENVIRONMENT_ID
+  OPENCLAW_LIVE_CODEX_REMOTE_PROBE_TOKEN
+  OPENCLAW_LIVE_CODEX_REMOTE_REGISTRY_URL
+  OPENCLAW_LIVE_CODEX_REMOTE_WORKSPACE_ROOT
+)
+REMOTE_EXECUTION_ENABLED=0
+for remote_env_name in "${REMOTE_EXECUTION_ENV_NAMES[@]}"; do
+  if [[ -n "${!remote_env_name:-}" ]]; then
+    REMOTE_EXECUTION_ENABLED=1
+    break
+  fi
+done
+if [[ "$REMOTE_EXECUTION_ENABLED" == "1" ]]; then
+  for remote_env_name in "${REMOTE_EXECUTION_ENV_NAMES[@]}"; do
+    if [[ -z "${!remote_env_name:-}" ]]; then
+      echo "ERROR: remote Codex live proof requires $remote_env_name." >&2
+      exit 1
+    fi
+  done
+  remote_env_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-codex-remote-env.XXXXXX")"
+  TEMP_DIRS+=("$remote_env_dir")
+  remote_env_file="$remote_env_dir/remote.env"
+  for remote_env_name in "${REMOTE_EXECUTION_ENV_NAMES[@]}"; do
+    openclaw_live_codex_harness_validate_env_file_value "$remote_env_name" "${!remote_env_name}"
+    printf '%s=%s\n' "$remote_env_name" "${!remote_env_name}" >>"$remote_env_file"
+  done
+  chmod 600 "$remote_env_file"
+  DOCKER_EXTRA_ENV_FILES+=(--env-file "$remote_env_file")
+  DOCKER_REMOTE_NETWORK_ARGS+=(
+    --network "${OPENCLAW_LIVE_CODEX_REMOTE_DOCKER_NETWORK:-host}"
+  )
 fi
 
 read -r -d '' LIVE_TEST_CMD <<'EOF' || true
@@ -338,6 +386,7 @@ echo "==> Profile file: $PROFILE_STATUS"
 echo "==> CI-safe Codex config: ${OPENCLAW_LIVE_CODEX_HARNESS_USE_CI_SAFE_CODEX_CONFIG:-1}"
 echo "==> Test files: ${OPENCLAW_LIVE_CODEX_TEST_FILES:-src/gateway/gateway-codex-harness.live.test.ts}"
 echo "==> Codex CLI package: $CODEX_CLI_PACKAGE_SPEC"
+echo "==> Remote execution probe: $REMOTE_EXECUTION_ENABLED"
 echo "==> Harness fallback: none"
 echo "==> Auth files: ${AUTH_FILES_CSV:-none}"
 DOCKER_RUN_ARGS=()
@@ -389,6 +438,7 @@ openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_AUTH_ENV
 openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_EXTRA_ENV_FILES
 openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_HOME_MOUNT
 openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_TRUSTED_HARNESS_MOUNT
+openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_REMOTE_NETWORK_ARGS
 DOCKER_RUN_ARGS+=(\
   -v "$ROOT_DIR":/src:ro \
   -v "$CONFIG_DIR":/home/node/.openclaw \
