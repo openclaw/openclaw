@@ -864,19 +864,25 @@ async function loadAllAgentCostUsageSummary(params: {
   const agentIds = listAgentsForGateway(params.config).agents.map((agent) =>
     normalizeAgentId(agent.id),
   );
-  const summaries = await Promise.all(
-    agentIds.map((agentId) =>
-      loadCostUsageSummaryFromCache({
-        startMs: params.startMs,
-        endMs: params.endMs,
-        dailyUtcOffsetMinutes: params.dailyUtcOffsetMinutes,
-        config: params.config,
-        agentId,
-        requestRefresh: true,
-        refreshMode: "background",
-      }),
+  // Cap concurrent usage queries so large multi-agent deployments don't
+  // saturate the SQLite connection pool when the usage dashboard loads.
+  const SUMMARIES_CONCURRENCY = 8;
+  const summariesResult = await runTasksWithConcurrency({
+    limit: SUMMARIES_CONCURRENCY,
+    tasks: agentIds.map(
+      (agentId) => () =>
+        loadCostUsageSummaryFromCache({
+          startMs: params.startMs,
+          endMs: params.endMs,
+          dailyUtcOffsetMinutes: params.dailyUtcOffsetMinutes,
+          config: params.config,
+          agentId,
+          requestRefresh: true,
+          refreshMode: "background",
+        }),
     ),
-  );
+  });
+  const summaries = summariesResult.results;
   const dailyByDate = new Map<string, CostUsageTotals & { date: string }>();
   const totals = createEmptyCostUsageTotals();
   let cacheStatus: UsageCacheStatus | undefined;
