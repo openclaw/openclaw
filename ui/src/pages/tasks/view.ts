@@ -6,7 +6,7 @@ import { formatMs, formatRelativeTimestamp } from "../../lib/format.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
 import { partitionTasks, taskTimestampMs, type TaskStatus, type TaskSummary } from "./data.ts";
 
-export type TasksProps = {
+type TasksProps = {
   basePath: string;
   connected: boolean;
   canCancel: boolean;

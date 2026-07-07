@@ -14,9 +14,8 @@ import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import { readCodexPluginConfig } from "./app-server/config.js";
 import { CODEX_INTERACTIVE_THREAD_SOURCE_KINDS, isJsonObject } from "./app-server/protocol.js";
 import {
-  clearCodexAppServerBinding,
-  readCodexAppServerBinding,
-  writeCodexAppServerBinding,
+  sessionBindingIdentity,
+  type CodexAppServerBindingStore,
 } from "./app-server/session-binding.js";
 import { codexControlRequest, type CodexControlRequestOptions } from "./command-rpc.js";
 
@@ -92,6 +91,7 @@ const CodexThreadsParamsSchema = Type.Union([
 ]);
 
 type CodexThreadsToolOptions = {
+  bindingStore: CodexAppServerBindingStore;
   context: OpenClawPluginToolContext;
   runtime: PluginRuntime;
   getPluginConfig: () => unknown;
@@ -114,10 +114,10 @@ function readLimit(value: unknown): number | undefined {
     : undefined;
 }
 
-function resolveSessionFile(
+function resolveToolSession(
   context: OpenClawPluginToolContext,
   runtime: PluginRuntime,
-): string | undefined {
+): { sessionId: string; sessionFile: string } | undefined {
   const sessionKey = context.sessionKey?.trim();
   if (!sessionKey) {
     return undefined;
@@ -134,10 +134,13 @@ function resolveSessionFile(
   const storePath = runtime.agent.session.resolveStorePath(undefined, {
     agentId: context.agentId,
   });
-  return runtime.agent.session.resolveSessionFilePath(sessionId, entry, {
-    agentId: context.agentId,
-    sessionsDir: path.dirname(storePath),
-  });
+  return {
+    sessionId,
+    sessionFile: runtime.agent.session.resolveSessionFilePath(sessionId, entry, {
+      agentId: context.agentId,
+      sessionsDir: path.dirname(storePath),
+    }),
+  };
 }
 
 function readThreadId(params: Record<string, unknown>): string {
@@ -169,14 +172,17 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
     sessionId: options.context.sessionId,
     sessionKey: options.context.sessionKey,
   });
-  const currentSessionFile = () => resolveSessionFile(options.context, options.runtime);
-  const currentBinding = async (sessionFile: string | undefined) =>
-    sessionFile
-      ? await readCodexAppServerBinding(sessionFile, {
-          agentDir: options.context.agentDir,
-          config: requestOptions().config,
-        })
-      : undefined;
+  const currentSession = () => resolveToolSession(options.context, options.runtime);
+  const currentIdentity = (sessionId: string) => {
+    return sessionBindingIdentity({
+      sessionId,
+      sessionKey: options.context.sessionKey,
+      agentId: options.context.agentId,
+      config: requestOptions().config,
+    });
+  };
+  const currentBinding = async (session: ReturnType<typeof currentSession>) =>
+    session ? await options.bindingStore.read(currentIdentity(session.sessionId)) : undefined;
 
   return {
     name: "codex_threads",
@@ -240,8 +246,8 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
         return jsonResult(response);
       }
 
-      const sessionFile = currentSessionFile();
-      const binding = await currentBinding(sessionFile);
+      const session = currentSession();
+      const binding = await currentBinding(session);
       if (action === "archive") {
         if (params.confirm !== true) {
           throw new Error("confirm=true is required to archive a native Codex thread");
@@ -263,8 +269,11 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           { threadId },
           requestOptions(),
         );
-        if (sessionFile && binding?.threadId === threadId) {
-          await clearCodexAppServerBinding(sessionFile);
+        if (session && binding?.threadId === threadId) {
+          await options.bindingStore.mutate(currentIdentity(session.sessionId), {
+            kind: "clear",
+            threadId,
+          });
         }
         return jsonResult({ action, threadId });
       }
@@ -273,7 +282,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
       }
 
       const attach = readBoolean(params.attach, true);
-      if (attach && !sessionFile) {
+      if (attach && !session) {
         throw new Error("cannot attach a Codex fork without an active OpenClaw session");
       }
       if (attach && binding?.threadId === threadId) {
@@ -303,17 +312,24 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
       if (!forkThreadId) {
         throw new Error("Codex app-server thread/fork response did not include a thread id");
       }
-      if (attach && sessionFile) {
-        await writeCodexAppServerBinding(sessionFile, {
-          threadId: forkThreadId,
-          cwd:
-            typeof response.thread.cwd === "string"
-              ? response.thread.cwd
-              : (options.context.workspaceDir ?? ""),
-          model: typeof response.model === "string" ? response.model : undefined,
-          modelProvider:
-            typeof response.modelProvider === "string" ? response.modelProvider : undefined,
+      if (attach && session) {
+        const attached = await options.bindingStore.mutate(currentIdentity(session.sessionId), {
+          kind: "set",
+          binding: {
+            threadId: forkThreadId,
+            cwd:
+              typeof response.thread.cwd === "string"
+                ? response.thread.cwd
+                : (options.context.workspaceDir ?? ""),
+            model: typeof response.model === "string" ? response.model : undefined,
+            modelProvider:
+              typeof response.modelProvider === "string" ? response.modelProvider : undefined,
+            historyCoveredThrough: new Date().toISOString(),
+          },
         });
+        if (!attached) {
+          throw new Error("Codex session binding changed before the fork could be attached");
+        }
       }
       return jsonResult({
         action,

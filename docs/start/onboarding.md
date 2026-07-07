@@ -73,12 +73,13 @@ Where does the **Gateway** run?
   the next option and shows why the previous one failed. If several options
   are found you can switch between them before continuing.
 
-If nothing is found (or nothing works), a manual step accepts an API key for
-Anthropic, OpenAI, or Google, verifies it the same way, and stores it as an
-auth profile. Next remains locked until one backend has passed its live test,
-so the first agent chat can never start without working inference. The
-Crestodian chat stays available from this page (and later under
-Settings → Crestodian) for help in plain language.
+If nothing is found (or nothing works), the manual key/token picker loads the
+Gateway's active text-inference provider plugins instead of using a fixed app
+list. The selected provider supplies its starter model and config; OpenClaw
+verifies the credential with the same live test before storing its auth profile. Next
+remains locked until one backend has passed, so the first agent chat cannot
+start without working inference. The Crestodian chat stays available from this
+page (and later under Settings → Crestodian) for help in plain language.
 
 Configure Later skips this step.
 </Step>

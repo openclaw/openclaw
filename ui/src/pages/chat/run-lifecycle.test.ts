@@ -77,6 +77,26 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
     expect(host.chatStream).toBe("final answer");
   });
 
+  it("honors an explicit inactive run when the status is stale", () => {
+    const host = makeHost({
+      chatRunId: "run-before-terminal-event",
+      chatStream: "final answer",
+    });
+
+    expect(
+      reconcileChatRunFromSessionRow(host, {
+        key: "s1",
+        kind: "direct",
+        updatedAt: 1,
+        hasActiveRun: false,
+        status: "running",
+      }),
+    ).toBe(true);
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatStream).toBeNull();
+    expect(rowActive(host)).toBe(false);
+  });
+
   it("suppresses a stale active row after a recent local completion", () => {
     const host = makeHost({
       lastLocalTerminalReconcile: {

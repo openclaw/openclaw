@@ -605,6 +605,58 @@
   stroke-linejoin: round;
 }
 
+/* Group header kebab: hidden until hover/focus like row actions, but always
+   reachable on touch pointers where hover does not exist. */
+.sidebar-session-group-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity var(--duration-fast) ease,
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.sidebar-recent-sessions__head:hover .sidebar-session-group-actions,
+.sidebar-recent-sessions__head:focus-within .sidebar-session-group-actions,
+.sidebar-session-group-actions[aria-expanded="true"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.sidebar-session-group-actions:hover,
+.sidebar-session-group-actions[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
+  color: var(--text);
+}
+
+.sidebar-session-group-actions svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .sidebar-session-group-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
 /* Agent scope chip: a borderless select in the Sessions group header, sized
    as metadata rather than a form control. */
 .sidebar-agent-scope {
@@ -715,6 +767,10 @@
   stroke-width: 1.5px;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.sidebar-recent-session--dragging {
+  opacity: 0.45;
 }
 
 .sidebar-recent-session {
@@ -1014,6 +1070,15 @@
   box-shadow: 0 18px 40px color-mix(in srgb, black 26%, transparent);
 }
 
+.sidebar-session-sort-menu__title {
+  padding: 4px 8px 2px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
 .sidebar-session-menu__item,
 .sidebar-session-sort-menu__item {
   display: flex;
@@ -1241,6 +1306,9 @@
   display: none;
 }
 
+/* Rail active state stays flat: it inherits the accent-subtle background from
+   .nav-item--active and only adds the accent bar. Gradients/drop shadows made
+   the rail look like a floating card, especially in light mode. */
 .sidebar--collapsed .nav-item--active::before,
 .sidebar--collapsed .nav-item.active::before {
   content: "";
@@ -1251,20 +1319,6 @@
   width: 3px;
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--accent) 86%, transparent);
-  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 34%, transparent);
-}
-
-.sidebar--collapsed .nav-item.active,
-.sidebar--collapsed .nav-item--active {
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--accent) 14%, var(--bg-elevated) 86%) 0%,
-    color-mix(in srgb, var(--accent) 8%, var(--bg) 92%) 100%
-  );
-  border-color: color-mix(in srgb, var(--accent) 18%, var(--border) 82%);
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, white 8%, transparent),
-    0 10px 20px color-mix(in srgb, black 18%, transparent);
 }
 
 /* Single compact icon row: status dot, then utility icons right-aligned.
@@ -1353,7 +1407,7 @@
 }
 
 .sidebar--collapsed .sidebar-shell__footer {
-  padding: 8px 0 2px;
+  padding: 8px 0 6px;
 }
 
 /* Rail mode stacks the footer icons vertically. */
@@ -1361,6 +1415,12 @@
   flex-direction: column-reverse;
   gap: 6px;
   padding: 0;
+}
+
+/* The online ring extends 4px past the dot, so extra margins keep it clear of
+   the icons above and the rail's bottom edge. */
+.sidebar--collapsed .sidebar-status__dot {
+  margin: 4px 0 6px;
 }
 
 .sidebar--collapsed .sidebar-footer-bar__spacer {

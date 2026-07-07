@@ -3,6 +3,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { RECOVERY_REPLAY_SPACING_MS } from "../delivery-recovery.shared.js";
 import {
   type DeliverFn,
   drainPendingDeliveries,
@@ -300,6 +301,62 @@ describe("drainPendingDeliveries for reconnect", () => {
 
     resolveDeliver!();
     await startupRecovery;
+  });
+
+  it("shares replay pacing between reconnect and startup drains", async () => {
+    vi.useFakeTimers();
+    const startedAt = new Date("2026-04-23T00:00:00.000Z");
+    vi.setSystemTime(startedAt);
+    try {
+      const log = createRecoveryLog();
+      const startupLog = createRecoveryLog();
+      let firstStarted!: () => void;
+      const firstStartedPromise = new Promise<void>((resolve) => {
+        firstStarted = resolve;
+      });
+      let releaseFirst!: () => void;
+      const firstBlocked = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      const deliveryTimes: number[] = [];
+      const deliver = vi.fn<DeliverFn>(async () => {
+        deliveryTimes.push(Date.now());
+        if (deliveryTimes.length === 1) {
+          firstStarted();
+          await firstBlocked;
+        }
+      });
+
+      for (const to of ["+1000", "+2000"]) {
+        await enqueueDelivery(
+          { channel: "directchat", to, payloads: [{ text: "hi" }], accountId: "acct1" },
+          tmpDir,
+        );
+      }
+
+      const reconnectDrain = drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
+      await firstStartedPromise;
+      const startupRecovery = recoverPendingDeliveries({
+        cfg: stubCfg,
+        deliver,
+        log: startupLog,
+        stateDir: tmpDir,
+      });
+      releaseFirst();
+
+      await vi.advanceTimersByTimeAsync(RECOVERY_REPLAY_SPACING_MS - 1);
+      expect(deliver).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await Promise.all([reconnectDrain, startupRecovery]);
+
+      expect(deliver).toHaveBeenCalledTimes(2);
+      expect(deliveryTimes).toEqual([
+        startedAt.getTime(),
+        startedAt.getTime() + RECOVERY_REPLAY_SPACING_MS,
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not re-deliver a stale startup snapshot after reconnect already acked it", async () => {

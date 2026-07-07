@@ -109,13 +109,6 @@ export const zh_TW = {
       serveHint: "面向你的 tailnet 裝置提供私有 HTTPS",
       warningTitle: "Tailscale 警告",
     },
-    hooks: {
-      configuredTitle: "Hooks 已設定",
-      enable: "啟用 hooks？",
-      introTitle: "Hooks",
-      noHooksMessage: "沒有找到可用 hook。你可以稍後在設定中設定 hooks。",
-      noHooksTitle: "沒有可用 Hooks",
-    },
     completion: {
       cacheFailed: "產生 completion 快取失敗。稍後執行 `{command}`。",
       enable: "為 {cli} 啟用 {shell} shell completion？",
@@ -238,6 +231,8 @@ export const zh_TW = {
       websocketUrl: "Gateway WebSocket URL",
     },
     setup: {
+      authChoiceFailedRetry: "請選擇其他提供商或認證方式，或選擇暫時跳過。",
+      authChoiceFailedTitle: "提供商設定失敗",
       authChoiceRequired: "必須選擇認證方式",
       channelsTitle: "頻道",
       configHandling: "設定處理",
@@ -884,6 +879,7 @@ export const zh_TW = {
     },
     search: {
       apiKeyRequired: "需要 API key",
+      credentialRequired: "需要 {label}",
       chooseProvider: "選擇一個提供方。有些提供方需要 API key，有些無需 key。",
       configured: "已設定",
       configureLaterHint: "稍後可用 openclaw configure --section web 設定",
@@ -950,6 +946,9 @@ export const zh_TW = {
       laterTitle: "稍後",
       managedWebSearchSkipped: "已略過託管 web search provider。",
       noBackgroundGatewayExpected: "本次設定未安裝 Gateway 服務，因此不會有背景 Gateway。",
+      noModelAuth: "提供商「{provider}」尚未設定憑證，聊天將失敗，直到新增認證。",
+      noModelAuthNext: "隨時可以透過 {command} 新增提供商。",
+      noModelAuthTitle: "缺少模型認證",
       nodeAndroid: "Android app（camera/canvas）",
       nodeIos: "iOS app（camera/canvas）",
       nodeMac: "macOS app（system + notifications）",

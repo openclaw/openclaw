@@ -253,6 +253,29 @@ describe("createAnthropicVertexStreamFn", () => {
     expect(streamTransportOptions(streamAnthropicMock)).not.toHaveProperty("temperature");
   });
 
+  it.each([
+    { reasoning: undefined, thinkingEnabled: true, effort: "high" },
+    { reasoning: "off" as const, thinkingEnabled: false, effort: undefined },
+  ])(
+    "supports Sonnet 5 reasoning=$reasoning on Vertex",
+    ({ reasoning, thinkingEnabled, effort }) => {
+      const { deps, streamAnthropicMock } = createStreamDeps();
+      const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+      const model = makeModel({ id: "claude-sonnet-5", maxTokens: 128_000 });
+
+      void streamFn(model, { messages: [] }, { reasoning, temperature: 0.7 });
+
+      const options = streamTransportOptions(streamAnthropicMock);
+      expect(options).toMatchObject({ thinkingEnabled, maxTokens: 128_000 });
+      expect(options).not.toHaveProperty("temperature");
+      if (effort) {
+        expect(options.effort).toBe(effort);
+      } else {
+        expect(options).not.toHaveProperty("effort");
+      }
+    },
+  );
+
   it("uses Mythos 5's mandatory adaptive Vertex contract by default", () => {
     const { deps, streamAnthropicMock } = createStreamDeps();
     const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);

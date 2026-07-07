@@ -11,19 +11,15 @@ type RenderableModule<TData> = {
   render: (data: TData | undefined) => unknown;
 };
 
-export type RouterOutletOptions<TLoadContext = unknown> = {
+type RouterOutletOptions<TLoadContext = unknown> = {
   retryContext?: TLoadContext;
 };
 
-export type RouterOutletBoundaryOptions = {
+type RouterOutletBoundaryOptions = {
   onNotFound?: () => void;
 };
 
-export type RouterOutletSelection<
-  TRouteId extends string = string,
-  TModule = unknown,
-  TData = unknown,
-> = {
+type RouterOutletSelection<TRouteId extends string = string, TModule = unknown, TData = unknown> = {
   status: RouterState<TRouteId, TModule, TData>["status"];
   active: RouteMatch<TRouteId, TModule, TData> | undefined;
   pending: RouteMatch<TRouteId, TModule, TData> | undefined;

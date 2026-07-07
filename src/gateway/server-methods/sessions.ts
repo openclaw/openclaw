@@ -55,7 +55,6 @@ import {
   listConfiguredSessionStoreAgentIds,
   deleteSessionEntryLifecycle,
   type SessionEntry,
-  updateSessionStore,
 } from "../../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import {
@@ -2552,15 +2551,33 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       agentId: requestedAgentId,
     });
     // Lock + read in a short critical section; transcript work happens outside.
-    const compactTarget = await updateSessionStore(storePath, (store) => {
-      const { entry, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
-        cfg,
-        key,
-        store,
-        agentId: requestedAgentId,
-      });
-      return { entry, primaryKey };
+    // The projection resolver re-runs gateway key migration on the writer
+    // snapshot so alias promotion/pruning persists through the accessor.
+    let compactPrimaryKey = target.canonicalKey;
+    const compactRead = await applySessionPatchProjection({
+      storePath,
+      resolveTarget: ({ entries }) => {
+        const snapshot = Object.fromEntries(
+          entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
+        );
+        const { target: migratedTarget, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+          cfg,
+          key,
+          store: snapshot,
+          agentId: requestedAgentId,
+        });
+        compactPrimaryKey = primaryKey;
+        return { primaryKey, candidateKeys: migratedTarget.storeKeys };
+      },
+      // Read-only projection: persist the resolved row unchanged so the alias
+      // migration above is saved even when compaction bails out below.
+      project: ({ existingEntry }) =>
+        existingEntry ? { ok: true, entry: existingEntry } : { ok: false },
     });
+    const compactTarget = {
+      entry: compactRead.ok ? compactRead.entry : undefined,
+      primaryKey: compactPrimaryKey,
+    };
     const entry = compactTarget.entry;
     const sessionId = entry?.sessionId;
     if (!sessionId) {
@@ -2829,42 +2846,50 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           if (result.ok && result.compacted) {
             let persisted: boolean;
             try {
-              persisted = await updateSessionStore(storePath, (store) => {
-                const entryToUpdate = store[compactTarget.primaryKey];
-                if (
-                  !entryToUpdate ||
-                  entryToUpdate.sessionId !== sessionId ||
-                  entryToUpdate.lifecycleRevision !== lifecycleRevision ||
-                  resolveSessionWorkStartError(target.canonicalKey, entryToUpdate)
-                ) {
-                  return false;
-                }
-                entryToUpdate.updatedAt = Date.now();
-                entryToUpdate.compactionCount = Math.max(0, entryToUpdate.compactionCount ?? 0) + 1;
-                if (
-                  result.result?.sessionId &&
-                  result.result.sessionId !== entryToUpdate.sessionId
-                ) {
-                  entryToUpdate.sessionId = result.result.sessionId;
-                }
-                if (result.result?.sessionFile) {
-                  entryToUpdate.sessionFile = result.result.sessionFile;
-                }
-                delete entryToUpdate.inputTokens;
-                delete entryToUpdate.outputTokens;
-                delete entryToUpdate.contextBudgetStatus;
-                if (
-                  typeof result.result?.tokensAfter === "number" &&
-                  Number.isFinite(result.result.tokensAfter)
-                ) {
-                  entryToUpdate.totalTokens = result.result.tokensAfter;
-                  entryToUpdate.totalTokensFresh = true;
-                } else {
-                  delete entryToUpdate.totalTokens;
-                  delete entryToUpdate.totalTokensFresh;
-                }
-                return true;
+              // Guarded terminal persist: skip when session ownership rotated
+              // while compaction ran (sessionId/lifecycleRevision/work-start).
+              const persistProjection = await applySessionPatchProjection({
+                storePath,
+                resolveTarget: () => ({ primaryKey: compactTarget.primaryKey }),
+                project: ({ existingEntry }) => {
+                  if (
+                    !existingEntry ||
+                    existingEntry.sessionId !== sessionId ||
+                    existingEntry.lifecycleRevision !== lifecycleRevision ||
+                    resolveSessionWorkStartError(target.canonicalKey, existingEntry)
+                  ) {
+                    return { ok: false };
+                  }
+                  const entryToUpdate = existingEntry;
+                  entryToUpdate.updatedAt = Date.now();
+                  entryToUpdate.compactionCount =
+                    Math.max(0, entryToUpdate.compactionCount ?? 0) + 1;
+                  if (
+                    result.result?.sessionId &&
+                    result.result.sessionId !== entryToUpdate.sessionId
+                  ) {
+                    entryToUpdate.sessionId = result.result.sessionId;
+                  }
+                  if (result.result?.sessionFile) {
+                    entryToUpdate.sessionFile = result.result.sessionFile;
+                  }
+                  delete entryToUpdate.inputTokens;
+                  delete entryToUpdate.outputTokens;
+                  delete entryToUpdate.contextBudgetStatus;
+                  if (
+                    typeof result.result?.tokensAfter === "number" &&
+                    Number.isFinite(result.result.tokensAfter)
+                  ) {
+                    entryToUpdate.totalTokens = result.result.tokensAfter;
+                    entryToUpdate.totalTokensFresh = true;
+                  } else {
+                    delete entryToUpdate.totalTokens;
+                    delete entryToUpdate.totalTokensFresh;
+                  }
+                  return { ok: true, entry: entryToUpdate };
+                },
               });
+              persisted = persistProjection.ok;
             } catch (err) {
               emitCompactionEnd(false, formatErrorMessage(err));
               throw err;

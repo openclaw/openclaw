@@ -369,8 +369,9 @@ export type AgentsFilesSetResult = {
   file: AgentFileEntry;
 };
 
-export type SessionWorkspaceFileEntry = {
+type SessionWorkspaceFileEntry = {
   path: string;
+  workspacePath?: string;
   name: string;
   kind: "modified" | "read";
   missing: boolean;
@@ -396,7 +397,7 @@ type SessionWorkspaceBrowserResult = {
   truncated?: boolean;
 };
 
-export type SessionWorkspaceArtifactEntry = {
+type SessionWorkspaceArtifactEntry = {
   id: string;
   type: string;
   title: string;
@@ -828,6 +829,7 @@ export type ModelCatalogEntry = {
   name: string;
   provider: string;
   alias?: string;
+  available?: boolean;
   contextWindow?: number;
   reasoning?: boolean;
   input?: Array<"text" | "image" | "document">;
