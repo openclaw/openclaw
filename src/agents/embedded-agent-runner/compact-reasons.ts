@@ -1,6 +1,7 @@
 /**
  * Normalizes and classifies compaction failure reasons for diagnostics.
  */
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 
@@ -86,5 +87,5 @@ export function formatUnknownCompactionReasonDetail(reason?: string): string | u
   if (!sanitized) {
     return undefined;
   }
-  return sanitized.slice(0, MAX_COMPACTION_REASON_DETAIL_CHARS);
+  return truncateUtf16Safe(sanitized, MAX_COMPACTION_REASON_DETAIL_CHARS);
 }
