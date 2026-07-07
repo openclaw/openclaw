@@ -15,19 +15,29 @@ import { clearPluginCommands } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
-import type { CodexAppServerClientFactory } from "./client-factory.js";
+import type { CodexAppServerClient } from "./client.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import type { CodexServerNotification } from "./protocol.js";
-import { resetCodexRateLimitCacheForTests } from "./rate-limit-cache.js";
 import {
   runCodexAppServerAttempt as runCodexAppServerAttemptImpl,
   testing,
 } from "./run-attempt.js";
 import { closeCodexSandboxExecServersForTests } from "./sandbox-exec-server.js";
-import { createCodexTestModel } from "./test-support.js";
+import {
+  registerCodexTestSessionIdentity,
+  resetCodexTestBindingStore,
+  testCodexAppServerBindingStore,
+} from "./session-binding.test-helpers.js";
+import type { CodexAppServerClientFactory } from "./shared-client.js";
+import {
+  adaptCodexTestClientFactory,
+  createCodexTestModel,
+  type CodexTestAppServerClientFactory,
+} from "./test-support.js";
 
 export let tempDir: string;
 let codexAppServerClientFactoryForTest: CodexAppServerClientFactory | undefined;
+const multiplexedTestClients = new WeakSet<CodexAppServerClient>();
 export const fastWait = { interval: 1, timeout: 5_000 } as const;
 const appServerHarnessWait = { interval: 1, timeout: 120_000 } as const;
 const activeAppServerAttemptsForTest = new Set<{
@@ -37,9 +47,12 @@ const activeAppServerAttemptsForTest = new Set<{
   sessionKey?: string;
 }>();
 
-type RunCodexAppServerAttemptOptions = NonNullable<
-  Parameters<typeof runCodexAppServerAttemptImpl>[1]
->;
+type RunCodexAppServerAttemptOptions = Omit<
+  NonNullable<Parameters<typeof runCodexAppServerAttemptImpl>[1]>,
+  "bindingStore"
+> & {
+  bindingStore?: NonNullable<Parameters<typeof runCodexAppServerAttemptImpl>[1]>["bindingStore"];
+};
 
 export function queueActiveRunMessageForTest(
   ...args: Parameters<typeof queueAgentHarnessMessage>
@@ -47,8 +60,57 @@ export function queueActiveRunMessageForTest(
   return queueAgentHarnessMessage(...args);
 }
 
-export function setCodexAppServerClientFactoryForTest(factory: CodexAppServerClientFactory): void {
-  codexAppServerClientFactoryForTest = factory;
+export function setCodexAppServerClientFactoryForTest(
+  factory: CodexTestAppServerClientFactory,
+): void {
+  codexAppServerClientFactoryForTest = adaptCodexTestClientFactory(async (...args) => {
+    const client = await factory(...args);
+    const testClient = client as unknown as {
+      addCloseHandler?: (handler: () => void) => () => void;
+    };
+    // Narrow test doubles still need the client lifecycle hook installed by
+    // the keyed router, even when the test never simulates transport closure.
+    testClient.addCloseHandler ??= () => () => undefined;
+    multiplexTestClientHandlers(client);
+    return client;
+  });
+}
+
+// The keyed router, client runtime, and subagent monitor each register their
+// own handlers; single-slot test doubles would silently drop all but the last.
+function multiplexTestClientHandlers(client: CodexAppServerClient): void {
+  if (multiplexedTestClients.has(client)) {
+    return;
+  }
+  multiplexedTestClients.add(client);
+  const notificationHandlers = new Set<
+    Parameters<CodexAppServerClient["addNotificationHandler"]>[0]
+  >();
+  const requestHandlers = new Set<Parameters<CodexAppServerClient["addRequestHandler"]>[0]>();
+  const addNotificationHandler = client.addNotificationHandler.bind(client);
+  const addRequestHandler = client.addRequestHandler.bind(client);
+  addNotificationHandler(async (notification) => {
+    await Promise.all(
+      [...notificationHandlers].map((handler) => Promise.resolve(handler(notification))),
+    );
+  });
+  addRequestHandler(async (request) => {
+    for (const handler of requestHandlers) {
+      const result = await handler(request);
+      if (result !== undefined) {
+        return result;
+      }
+    }
+    return undefined;
+  });
+  client.addNotificationHandler = (handler) => {
+    notificationHandlers.add(handler);
+    return () => notificationHandlers.delete(handler);
+  };
+  client.addRequestHandler = (handler) => {
+    requestHandlers.add(handler);
+    return () => requestHandlers.delete(handler);
+  };
 }
 
 function resetCodexAppServerClientFactoryForTest(): void {
@@ -59,6 +121,7 @@ export function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParams,
   options: RunCodexAppServerAttemptOptions = {},
 ) {
+  registerCodexTestSessionIdentity(params.sessionFile, params.sessionId, params.sessionKey);
   const clientFactory = options.clientFactory ?? codexAppServerClientFactoryForTest;
   const abortController = params.abortSignal ? undefined : new AbortController();
   const trackedParams = abortController
@@ -70,10 +133,11 @@ export function runCodexAppServerAttempt(
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
   };
-  const promise = runCodexAppServerAttemptImpl(
-    trackedParams,
-    clientFactory ? { ...options, clientFactory } : options,
-  ).finally(() => {
+  const promise = runCodexAppServerAttemptImpl(trackedParams, {
+    ...options,
+    bindingStore: options.bindingStore ?? testCodexAppServerBindingStore,
+    ...(clientFactory ? { clientFactory } : {}),
+  }).finally(() => {
     activeAppServerAttemptsForTest.delete(entry);
   });
   entry.promise = promise;
@@ -203,6 +267,21 @@ export function mockCall(mock: unknown, label: string, index = 0): unknown[] {
   return call;
 }
 
+export function getMockServerVersion() {
+  return "0.132.0";
+}
+
+export function getMockRuntimeIdentity() {
+  return { serverVersion: getMockServerVersion() };
+}
+
+export function mockClientRuntimeMethods() {
+  return {
+    getRuntimeIdentity: getMockRuntimeIdentity,
+    getServerVersion: getMockServerVersion,
+  };
+}
+
 export function threadStartResult(threadId = "thread-1") {
   return {
     thread: {
@@ -286,61 +365,77 @@ export function createAppServerHarness(
   } = {},
 ) {
   const requests: Array<{ method: string; params: unknown }> = [];
-  let notifyHandler: ((notification: CodexServerNotification) => Promise<void>) | undefined;
-  let handleServerRequest: AppServerRequestHandler | undefined;
+  const notificationHandlers = new Set<
+    (notification: CodexServerNotification) => Promise<void> | void
+  >();
+  const serverRequestHandlers = new Set<AppServerRequestHandler>();
   const closeHandlers = new Set<() => void>();
   const request = vi.fn(async (method: string, params?: unknown, requestOptions?: unknown) => {
     requests.push({ method, params });
     return requestImpl(method, params, requestOptions as { signal?: AbortSignal } | undefined);
   });
 
+  const client = {
+    ...mockClientRuntimeMethods(),
+    request,
+    addNotificationHandler: (
+      handler: (notification: CodexServerNotification) => Promise<void> | void,
+    ) => {
+      notificationHandlers.add(handler);
+      return () => notificationHandlers.delete(handler);
+    },
+    addRequestHandler: (handler: AppServerRequestHandler) => {
+      serverRequestHandlers.add(handler);
+      return () => serverRequestHandlers.delete(handler);
+    },
+    addCloseHandler: (handler: () => void) => {
+      closeHandlers.add(handler);
+      return () => closeHandlers.delete(handler);
+    },
+  } as unknown as CodexAppServerClient;
   setCodexAppServerClientFactoryForTest(async (_startOptions, authProfileId, agentDir) => {
     options.onStart?.(authProfileId, agentDir);
-    return {
-      getServerVersion: () => "0.132.0",
-      request,
-      addNotificationHandler: (
-        handler: (notification: CodexServerNotification) => Promise<void>,
-      ) => {
-        notifyHandler = handler;
-        return () => {
-          if (notifyHandler === handler) {
-            notifyHandler = undefined;
-          }
-        };
-      },
-      addRequestHandler: (handler: AppServerRequestHandler) => {
-        handleServerRequest = handler;
-        return () => undefined;
-      },
-      addCloseHandler: (handler: () => void) => {
-        closeHandlers.add(handler);
-        return () => closeHandlers.delete(handler);
-      },
-    } as never;
+    return client;
   });
 
   const waitForServerRequestHandler = async () => {
-    await vi.waitFor(() => expect(handleServerRequest).toBeTypeOf("function"), {
+    await vi.waitFor(() => expect(serverRequestHandlers.size).toBeGreaterThan(0), {
       interval: 1,
       timeout: appServerHarnessWait.timeout,
     });
-    return handleServerRequest!;
+    return async (requestLocal: Parameters<AppServerRequestHandler>[0]) => {
+      for (const handler of serverRequestHandlers) {
+        const result = await handler(requestLocal);
+        if (result !== undefined) {
+          return result;
+        }
+      }
+      return undefined;
+    };
   };
 
   const waitForNotificationHandler = async () => {
-    await vi.waitFor(() => expect(notifyHandler).toBeTypeOf("function"), {
+    await vi.waitFor(() => expect(notificationHandlers.size).toBeGreaterThan(0), {
       interval: 1,
       timeout: appServerHarnessWait.timeout,
     });
-    return notifyHandler!;
+  };
+  const dispatchNotification = async (notification: CodexServerNotification) => {
+    await Promise.all(
+      [...notificationHandlers].map((handler) => Promise.resolve(handler(notification))),
+    );
   };
   const sendNotification = async (notification: CodexServerNotification) => {
-    const handler = notifyHandler ?? (await waitForNotificationHandler());
-    await handler(notification);
+    // Dispatch synchronously when handlers exist so wire-order interactions
+    // (for example completeTurn immediately followed by close) stay faithful.
+    if (notificationHandlers.size === 0) {
+      await waitForNotificationHandler();
+    }
+    await dispatchNotification(notification);
   };
 
   return {
+    client,
     request,
     requests,
     waitForMethod: async (method: string, timeoutMs: number = appServerHarnessWait.timeout) => {
@@ -413,9 +508,11 @@ export function createStartedThreadHarness(
 }
 
 export function createResumeHarness() {
-  return createAppServerHarness(async (method) => {
+  return createAppServerHarness(async (method, params) => {
     if (method === "thread/resume") {
-      return threadStartResult("thread-existing");
+      // Resume must echo the requested thread; a different id is rejected as
+      // an unsafe subscription.
+      return threadStartResult((params as { threadId?: string })?.threadId ?? "thread-existing");
     }
     if (method === "turn/start") {
       return turnStartResult();
@@ -494,6 +591,7 @@ export function createRuntimeDynamicTool(name: string): RuntimeDynamicToolForTes
 
 export function setupRunAttemptTestHooks(): void {
   beforeEach(async () => {
+    resetCodexTestBindingStore();
     vi.useRealTimers();
     clearInternalHooks();
     clearMemoryPluginState();
@@ -512,7 +610,6 @@ export function setupRunAttemptTestHooks(): void {
     testing.resetOpenClawCodingToolsFactoryForTests();
     testing.resetEnsuredCodexWorkspaceDirsForTests();
     testing.clearPendingCodexNativeHookRelayUnregistersForTests();
-    resetCodexRateLimitCacheForTests();
     nativeHookRelayTesting.clearNativeHookRelaysForTests();
     clearMemoryPluginState();
     clearPluginCommands();
@@ -525,6 +622,6 @@ export function setupRunAttemptTestHooks(): void {
     vi.useRealTimers();
     vi.unstubAllEnvs();
     await closeCodexSandboxExecServersForTests();
-    await fs.rm(tempDir, { recursive: true, force: true });
+    await fs.rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 }

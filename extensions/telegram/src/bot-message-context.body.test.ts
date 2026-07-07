@@ -2,9 +2,19 @@
 import { describe, expect, it, vi } from "vitest";
 import { normalizeAllowFrom } from "./bot-access.js";
 
-const { transcribeFirstAudioMock, triggerInternalHookMock } = vi.hoisted(() => ({
+const {
+  resolveStickerVisionSupportRuntimeMock,
+  transcribeFirstAudioMock,
+  triggerInternalHookMock,
+} = vi.hoisted(() => ({
+  resolveStickerVisionSupportRuntimeMock: vi.fn(async (_params: unknown) => false),
   transcribeFirstAudioMock: vi.fn(),
   triggerInternalHookMock: vi.fn<(event: unknown) => Promise<void>>(async () => undefined),
+}));
+
+vi.mock("./sticker-vision.runtime.js", () => ({
+  resolveStickerVisionSupportRuntime: (params: unknown) =>
+    resolveStickerVisionSupportRuntimeMock(params),
 }));
 
 vi.mock("./media-understanding.runtime.js", () => ({
@@ -73,6 +83,261 @@ function transcribeCallContext(index = 0): Record<string, unknown> {
 }
 
 describe("resolveTelegramInboundBody", () => {
+  it("delivers rich-message-only updates as a sanitized placeholder", async () => {
+    const result = await resolveTelegramBody({
+      msg: {
+        message_id: 0,
+        date: 1_700_000_000,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        rich_message: { blocks: [{ type: "paragraph" }] },
+      } as never,
+    });
+
+    expect(result?.rawBody).toBe("[unsupported Telegram rich_message received]");
+    expect(result?.bodyText).toBe("[unsupported Telegram rich_message received]");
+  });
+
+  it("extracts text from rich-message-only updates", async () => {
+    const result = await resolveTelegramBody({
+      msg: {
+        message_id: 0,
+        date: 1_700_000_000,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        rich_message: {
+          blocks: [
+            {
+              type: "paragraph",
+              text: "Forwarded rich text",
+            },
+          ],
+        },
+      } as never,
+    });
+
+    expect(result?.rawBody).toBe("Forwarded rich text");
+    expect(result?.bodyText).toBe("Forwarded rich text");
+  });
+
+  it("preserves whitespace across rich-message inline text spans", async () => {
+    const result = await resolveTelegramBody({
+      msg: {
+        message_id: 0,
+        date: 1_700_000_000,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        rich_message: {
+          blocks: [
+            {
+              type: "paragraph",
+              text: ["Forwarded ", { type: "bold", text: "rich text" }],
+            },
+          ],
+        },
+      } as never,
+    });
+
+    expect(result?.rawBody).toBe("Forwarded rich text");
+  });
+
+  it("extracts markdown and html rich-message text", async () => {
+    const markdownResult = await resolveTelegramBody({
+      msg: {
+        message_id: 0,
+        date: 1_700_000_000,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        rich_message: { markdown: "Forwarded **markdown**" },
+      } as never,
+    });
+    const htmlResult = await resolveTelegramBody({
+      msg: {
+        message_id: 0,
+        date: 1_700_000_000,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        rich_message: { html: "<p>Forwarded html</p>" },
+      } as never,
+    });
+
+    expect(markdownResult?.rawBody).toBe("Forwarded **markdown**");
+    expect(htmlResult?.rawBody).toBe("Forwarded html");
+  });
+
+  it("extracts visible text from canonical rich-message block fields", async () => {
+    const result = await resolveTelegramBody({
+      msg: {
+        message_id: 0,
+        date: 1_700_000_000,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        rich_message: {
+          blocks: [
+            {
+              type: "details",
+              summary: "Run summary",
+              blocks: [
+                {
+                  type: "list",
+                  items: [
+                    {
+                      label: "1.",
+                      blocks: [
+                        {
+                          type: "paragraph",
+                          text: "CI clean",
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+            {
+              type: "mathematical_expression",
+              expression: "a^2+b^2=c^2",
+            },
+            {
+              type: "photo",
+              caption: {
+                text: "Chart",
+                credit: "OpenClaw",
+              },
+            },
+          ],
+        },
+      } as never,
+    });
+
+    expect(result?.rawBody).toBe("Run summary\n1.\nCI clean\na^2+b^2=c^2\nChart\nOpenClaw");
+    expect(result?.bodyText).toBe("Run summary\n1.\nCI clean\na^2+b^2=c^2\nChart\nOpenClaw");
+  });
+
+  it("keeps rich-message table caption spans inline", async () => {
+    const result = await resolveTelegramBody({
+      msg: {
+        message_id: 0,
+        date: 1_700_000_000,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        rich_message: {
+          blocks: [
+            {
+              type: "table",
+              caption: [
+                { type: "plain", text: "Total " },
+                { type: "bold", text: "Q1" },
+              ],
+            },
+          ],
+        },
+      } as never,
+    });
+
+    expect(result?.rawBody).toBe("Total Q1");
+    expect(result?.bodyText).toBe("Total Q1");
+  });
+
+  it("keeps rich-message placeholders quiet in requireMention groups", async () => {
+    const logger = { info: vi.fn() };
+    const result = await resolveTelegramBody({
+      cfg: {
+        channels: { telegram: {} },
+        messages: { groupChat: { mentionPatterns: ["\\btelegram\\b"] } },
+      } as never,
+      msg: {
+        message_id: 1,
+        date: 1_700_000_001,
+        chat: { id: -1001234567890, type: "supergroup", title: "Test Group" },
+        from: { id: 42, first_name: "Pat" },
+        rich_message: { blocks: [{ type: "paragraph" }] },
+      } as never,
+      isGroup: true,
+      chatId: -1001234567890,
+      senderId: "42",
+      groupConfig: { requireMention: true } as never,
+      requireMention: true,
+      logger,
+    });
+
+    expect(logger.info).toHaveBeenCalledWith(
+      { chatId: -1001234567890, reason: "no-mention" },
+      "skipping group message",
+    );
+    expect(result).toBeNull();
+  });
+
+  it("routes rich-message-only updates that match group mention patterns", async () => {
+    const logger = { info: vi.fn() };
+    const result = await resolveTelegramBody({
+      cfg: {
+        channels: { telegram: {} },
+        messages: { groupChat: { mentionPatterns: ["\\btelegram\\b"] } },
+      } as never,
+      msg: {
+        message_id: 1,
+        date: 1_700_000_001,
+        chat: { id: -1001234567890, type: "supergroup", title: "Test Group" },
+        from: { id: 42, first_name: "Pat" },
+        rich_message: {
+          blocks: [
+            {
+              type: "paragraph",
+              text: "telegram please read this",
+            },
+          ],
+        },
+      } as never,
+      isGroup: true,
+      chatId: -1001234567890,
+      senderId: "42",
+      groupConfig: { requireMention: true } as never,
+      requireMention: true,
+      logger,
+    });
+
+    expect(logger.info).not.toHaveBeenCalledWith(
+      { chatId: -1001234567890, reason: "no-mention" },
+      "skipping group message",
+    );
+    expect(result?.rawBody).toBe("telegram please read this");
+    expect(result?.effectiveWasMentioned).toBe(true);
+  });
+
+  it("routes rich-message-only updates that mention the bot username", async () => {
+    const logger = { info: vi.fn() };
+    const result = await resolveTelegramBody({
+      msg: {
+        message_id: 1,
+        date: 1_700_000_001,
+        chat: { id: -1001234567890, type: "supergroup", title: "Test Group" },
+        from: { id: 42, first_name: "Pat" },
+        rich_message: {
+          blocks: [
+            {
+              type: "paragraph",
+              text: "@bot please read this",
+            },
+          ],
+        },
+      } as never,
+      isGroup: true,
+      chatId: -1001234567890,
+      senderId: "42",
+      groupConfig: { requireMention: true } as never,
+      requireMention: true,
+      logger,
+    });
+
+    expect(logger.info).not.toHaveBeenCalledWith(
+      { chatId: -1001234567890, reason: "no-mention" },
+      "skipping group message",
+    );
+    expect(result?.rawBody).toBe("@bot please read this");
+    expect(result?.effectiveWasMentioned).toBe(true);
+  });
+
   it("renders Telegram text entities before building the agent body", async () => {
     const result = await resolveTelegramBody({
       msg: {
@@ -231,6 +496,38 @@ describe("resolveTelegramInboundBody", () => {
 
     expect(result?.bodyText).toBe("[Sticker] Cached description\nWhat is this?");
     expect(result?.stickerCacheHit).toBe(true);
+  });
+
+  it("keeps cached sticker media available when the active model supports vision", async () => {
+    resolveStickerVisionSupportRuntimeMock.mockResolvedValueOnce(true);
+
+    const result = await resolveTelegramBody({
+      msg: {
+        message_id: 8,
+        date: 1_700_000_008,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        sticker: {
+          file_id: "sticker-3",
+          file_unique_id: "sticker-u3",
+          type: "regular",
+          width: 256,
+          height: 256,
+          is_animated: false,
+          is_video: false,
+        },
+      } as never,
+      allMedia: [
+        {
+          path: "/tmp/sticker.webp",
+          contentType: "image/webp",
+          stickerMetadata: { cachedDescription: "Cached description" },
+        },
+      ],
+    });
+
+    expect(result?.bodyText).toBe("<media:image>");
+    expect(result?.stickerCacheHit).toBe(false);
   });
 
   it("lets catch-all mention patterns activate captionless group photos", async () => {

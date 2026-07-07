@@ -20,6 +20,8 @@ import { isSessionWriteLockAcquireError } from "./session-write-lock-error.js";
 
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 const MAX_FAILOVER_CAUSE_DEPTH = 25;
+const MISSING_TOOL_RESULT_REASON = "missing_tool_result";
+const MISSING_TOOL_RESULT_TEXT_RE = /native Codex tool\.call without a matching tool\.result/i;
 
 /** Structured error used to carry model fallback/failover metadata across layers. */
 export class FailoverError extends Error {
@@ -27,6 +29,7 @@ export class FailoverError extends Error {
   readonly provider?: string;
   readonly model?: string;
   readonly profileId?: string;
+  readonly authMode?: string;
   readonly status?: number;
   readonly code?: string;
   readonly rawError?: string;
@@ -46,6 +49,7 @@ export class FailoverError extends Error {
       provider?: string;
       model?: string;
       profileId?: string;
+      authMode?: string;
       status?: number;
       code?: string;
       rawError?: string;
@@ -62,6 +66,7 @@ export class FailoverError extends Error {
     this.provider = params.provider;
     this.model = params.model;
     this.profileId = params.profileId;
+    this.authMode = params.authMode;
     this.status = params.status;
     this.code = params.code;
     this.rawError = params.rawError;
@@ -102,6 +107,8 @@ export function resolveFailoverStatus(reason: FailoverReason): number | undefine
       return 403;
     case "timeout":
       return 408;
+    case "context_overflow":
+      return 413;
     case "format":
       return 400;
     case "model_not_found":
@@ -341,15 +348,65 @@ function hasEmbeddedAttemptSessionTakeover(err: unknown, seen: Set<object> = new
   );
 }
 
+function readField(value: unknown, key: string): unknown {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  return (value as Record<string, unknown>)[key];
+}
+
+function readStringField(value: unknown, key: string): string | undefined {
+  const field = readField(value, key);
+  return typeof field === "string" ? field : undefined;
+}
+
+function isMissingToolResultMessage(value: string): boolean {
+  return MISSING_TOOL_RESULT_TEXT_RE.test(value);
+}
+
+function isMissingToolResultMarker(value: string): boolean {
+  return value.trim() === MISSING_TOOL_RESULT_REASON;
+}
+
+function readMissingToolResultMarker(err: unknown): true | undefined {
+  const message = readDirectErrorMessage(err);
+  if (message && isMissingToolResultMessage(message)) {
+    return true;
+  }
+  for (const key of ["code", "reason", "status"] as const) {
+    const value = readStringField(err, key);
+    if (value && isMissingToolResultMarker(value)) {
+      return true;
+    }
+  }
+  const output = readStringField(err, "output");
+  if (output && isMissingToolResultMessage(output)) {
+    return true;
+  }
+  const resultReason = readStringField(readField(err, "result"), "reason");
+  const detailReason = readStringField(readField(err, "detail"), "reason");
+  if (resultReason === MISSING_TOOL_RESULT_REASON || detailReason === MISSING_TOOL_RESULT_REASON) {
+    return true;
+  }
+  return undefined;
+}
+
+function hasMissingToolResultFailure(err: unknown): boolean {
+  return findErrorProperty(err, readMissingToolResultMarker) === true;
+}
+
 /**
- * True when the error is a local runtime coordination error (session write-lock
- * timeout or embedded attempt session takeover) rather than a provider/model
- * failure. The model fallback chain must abort on these instead of consuming
- * candidate slots — retrying any model would hit the same local condition.
- * See #83510.
+ * True when the error is a local runtime coordination/tool-execution error
+ * rather than a provider/model failure. The model fallback chain must abort on
+ * these instead of consuming candidate slots — retrying any model would hit the
+ * same local condition. See #83510 and #95474.
  */
 export function isNonProviderRuntimeCoordinationError(err: unknown): boolean {
-  if (!hasSessionWriteLockContention(err) && !hasEmbeddedAttemptSessionTakeover(err)) {
+  if (
+    !hasSessionWriteLockContention(err) &&
+    !hasEmbeddedAttemptSessionTakeover(err) &&
+    !hasMissingToolResultFailure(err)
+  ) {
     return false;
   }
   if (isFailoverError(err)) {
@@ -406,7 +463,10 @@ export function isSignalTimeoutReason(reason: unknown): boolean {
 function failoverReasonFromClassification(
   classification: FailoverClassification | null,
 ): FailoverReason | null {
-  return classification?.kind === "reason" ? classification.reason : null;
+  if (!classification) {
+    return null;
+  }
+  return classification.kind === "reason" ? classification.reason : "context_overflow";
 }
 
 function normalizeErrorSignal(err: unknown, providerHint?: string): FailoverSignal {
@@ -641,6 +701,7 @@ export function describeFailoverError(err: unknown): {
   provider?: string;
   model?: string;
   profileId?: string;
+  authMode?: string;
   sessionId?: string;
   lane?: string;
 } {
@@ -654,6 +715,7 @@ export function describeFailoverError(err: unknown): {
       provider: err.provider,
       model: err.model,
       profileId: err.profileId,
+      authMode: err.authMode,
       sessionId: err.sessionId,
       lane: err.lane,
     };
@@ -676,11 +738,30 @@ export function coerceToFailoverError(
     provider?: string;
     model?: string;
     profileId?: string;
+    authMode?: string;
     sessionId?: string;
     lane?: string;
   },
 ): FailoverError | null {
   if (isFailoverError(err)) {
+    if (context?.authMode && !err.authMode) {
+      const message = typeof err.message === "string" ? err.message : String(err);
+      return new FailoverError(message, {
+        reason: err.reason,
+        provider: err.provider,
+        model: err.model,
+        profileId: err.profileId,
+        authMode: context.authMode,
+        status: err.status,
+        code: err.code,
+        rawError: err.rawError,
+        authProfileFailure: err.authProfileFailure,
+        sessionId: err.sessionId,
+        lane: err.lane,
+        cause: err.cause,
+        suspend: err.suspend,
+      });
+    }
     return err;
   }
   const reason = resolveFailoverReasonFromError(err, context?.provider);
@@ -702,6 +783,7 @@ export function coerceToFailoverError(
     provider: context?.provider ?? signal.provider,
     model: context?.model,
     profileId: context?.profileId,
+    authMode: context?.authMode,
     sessionId: context?.sessionId,
     lane: context?.lane,
     status,

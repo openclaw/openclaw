@@ -8,7 +8,7 @@ let hasWarnedMissingBundledDir = false;
 let cachedBundledContext: { dir: string; names: Set<string> } | null = null;
 
 /** Bundled skill path context resolved from runtime defaults. */
-export type BundledSkillsContext = {
+type BundledSkillsContext = {
   dir?: string;
   names: Set<string>;
 };

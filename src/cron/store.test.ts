@@ -7,11 +7,13 @@ import {
   archiveLegacyCronStoreForMigration,
   loadLegacyCronStoreForMigration,
 } from "../commands/doctor/cron/legacy-store-migration.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   loadCronJobsStoreWithConfigJobs,
+  loadCronJobsStoreSync,
   loadCronQuarantineFile,
   loadCronStore,
-  loadCronStoreSync,
   resolveCronQuarantinePath,
   resolveCronStorePath,
   saveCronQuarantineFile,
@@ -79,13 +81,15 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 }
 
 describe("resolveCronStorePath", () => {
+  const envSnapshot = captureEnv(["OPENCLAW_HOME", "HOME"]);
+
   afterEach(() => {
-    vi.unstubAllEnvs();
+    envSnapshot.restore();
   });
 
   it("uses OPENCLAW_HOME for tilde expansion", () => {
-    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
-    vi.stubEnv("HOME", "/home/other");
+    setTestEnvValue("OPENCLAW_HOME", "/srv/openclaw-home");
+    setTestEnvValue("HOME", "/home/other");
 
     const result = resolveCronStorePath("~/cron/jobs.json");
     expect(result).toBe(path.resolve("/srv/openclaw-home", "cron", "jobs.json"));
@@ -166,7 +170,7 @@ describe("cron store", () => {
     await fs.mkdir(path.dirname(store.storePath), { recursive: true });
     await fs.writeFile(store.storePath, JSON.stringify([job], null, 2), "utf-8");
 
-    const loaded = loadCronStoreSync(store.storePath);
+    const loaded = loadCronJobsStoreSync(store.storePath);
 
     expect(loaded.jobs).toHaveLength(0);
   });
@@ -266,7 +270,7 @@ describe("cron store", () => {
       "utf-8",
     );
 
-    const loaded = loadCronStoreSync(store.storePath);
+    const loaded = loadCronJobsStoreSync(store.storePath);
 
     expect(loaded.jobs.map((job) => job.id)).toEqual([]);
     expect(await fs.stat(store.storePath)).toBeTruthy();
@@ -316,7 +320,7 @@ describe("cron store", () => {
     const { storePath } = await makeStorePath();
     await saveCronStore(storePath, makeStore("job-sync", true));
 
-    const loaded = loadCronStoreSync(storePath);
+    const loaded = loadCronJobsStoreSync(storePath);
 
     expect(loaded.jobs).toHaveLength(1);
     expect(loaded.jobs[0]?.id).toBe("job-sync");
@@ -522,6 +526,48 @@ describe("cron store", () => {
     });
   });
 
+  it("round-trips the toolsAllow default-cap flag through SQLite", async () => {
+    // The flag must survive a gateway restart: without it, a CLI-resolved run
+    // would re-hit the prepare.ts toolsAllow rejection after reload (#91499).
+    const store = await makeStorePath();
+    const payload = makeStore("tools-allow-default-job", true);
+    payload.jobs[0].sessionTarget = "isolated";
+    payload.jobs[0].payload = {
+      kind: "agentTurn",
+      message: "scheduled continuation",
+      toolsAllow: ["read", "cron"],
+      toolsAllowIsDefault: true,
+    };
+
+    await saveCronStore(store.storePath, payload);
+
+    expect((await loadCronStore(store.storePath)).jobs[0]?.payload).toMatchObject({
+      kind: "agentTurn",
+      toolsAllow: ["read", "cron"],
+      toolsAllowIsDefault: true,
+    });
+  });
+
+  it("does not persist a default-cap flag for an explicit toolsAllow restriction", async () => {
+    // An explicit user restriction is fail-closed: it carries no flag, so a CLI
+    // run still surfaces the prepare.ts rejection rather than silently dropping
+    // the requested policy.
+    const store = await makeStorePath();
+    const payload = makeStore("tools-allow-explicit-job", true);
+    payload.jobs[0].sessionTarget = "isolated";
+    payload.jobs[0].payload = {
+      kind: "agentTurn",
+      message: "scheduled continuation",
+      toolsAllow: ["read"],
+    };
+
+    await saveCronStore(store.storePath, payload);
+
+    const reloaded = (await loadCronStore(store.storePath)).jobs[0]?.payload;
+    expect(reloaded).toMatchObject({ kind: "agentTurn", toolsAllow: ["read"] });
+    expect(reloaded && "toolsAllowIsDefault" in reloaded).toBe(false);
+  });
+
   it("round-trips command payloads through SQLite", async () => {
     const store = await makeStorePath();
     const payload = makeStore("command-job", true);
@@ -581,6 +627,102 @@ describe("cron store", () => {
         to: "https://example.invalid/legacy-completion",
       },
     });
+  });
+
+  it("round-trips a numeric delivery thread id through SQLite delivery columns", async () => {
+    const { storePath } = await makeStorePath();
+    const job = makeStore("sqlite-numeric-thread-id-job", true).jobs[0];
+    job.delivery = {
+      mode: "announce",
+      channel: "telegram",
+      to: "telegram:chat-1",
+      threadId: 1008013,
+    };
+
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+
+    const loadedThreadId = (await loadCronStore(storePath)).jobs[0]?.delivery?.threadId;
+    expect(loadedThreadId).toBe(1008013);
+    expect(typeof loadedThreadId).toBe("number");
+  });
+
+  it.each(["42", "1737500000.123456", "007"])(
+    "keeps a numeric-looking delivery thread id %s as a string through SQLite delivery columns",
+    async (threadId) => {
+      const { storePath } = await makeStorePath();
+      const job = makeStore(`sqlite-string-thread-id-job-${threadId}`, true).jobs[0];
+      job.delivery = {
+        mode: "announce",
+        channel: "telegram",
+        to: "telegram:chat-1",
+        threadId,
+      };
+
+      await saveCronStore(storePath, { version: 1, jobs: [job] });
+
+      const loadedThreadId = (await loadCronStore(storePath)).jobs[0]?.delivery?.threadId;
+      expect(loadedThreadId).toBe(threadId);
+      expect(typeof loadedThreadId).toBe("string");
+    },
+  );
+
+  it("does not resurrect a cleared thread id from the stored config copy", async () => {
+    const { storePath } = await makeStorePath();
+    const job = makeStore("sqlite-early-row-thread-id-job", true).jobs[0];
+    job.delivery = {
+      mode: "announce",
+      channel: "telegram",
+      to: "telegram:chat-1",
+      threadId: 1008013,
+    };
+
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+    openOpenClawStateDatabase()
+      .db.prepare("UPDATE cron_jobs SET delivery_thread_id = NULL WHERE job_id = ?")
+      .run(job.id);
+
+    const loadedThreadId = (await loadCronStore(storePath)).jobs[0]?.delivery?.threadId;
+    expect(loadedThreadId).toBeUndefined();
+  });
+
+  it("uses the normalized thread id when the stored config copy is stale", async () => {
+    const { storePath } = await makeStorePath();
+    const job = makeStore("sqlite-stale-thread-id-job", true).jobs[0];
+    job.delivery = {
+      mode: "announce",
+      channel: "telegram",
+      to: "telegram:chat-1",
+      threadId: 1008013,
+    };
+
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+    openOpenClawStateDatabase()
+      .db.prepare("UPDATE cron_jobs SET delivery_thread_id = ? WHERE job_id = ?")
+      .run("replacement", job.id);
+
+    const loadedThreadId = (await loadCronStore(storePath)).jobs[0]?.delivery?.threadId;
+    expect(loadedThreadId).toBe("replacement");
+  });
+
+  it("disambiguates identical thread id text using the normalized type marker", async () => {
+    const { storePath } = await makeStorePath();
+    const numberJob = makeStore("sqlite-thread-id-number", true).jobs[0];
+    numberJob.delivery = { mode: "announce", channel: "telegram", to: "telegram:a", threadId: 42 };
+    const stringJob = makeStore("sqlite-thread-id-string", true).jobs[0];
+    stringJob.delivery = {
+      mode: "announce",
+      channel: "telegram",
+      to: "telegram:b",
+      threadId: "42",
+    };
+
+    await saveCronStore(storePath, { version: 1, jobs: [numberJob, stringJob] });
+
+    const jobs = (await loadCronStore(storePath)).jobs;
+    expect(jobs[0]?.delivery?.threadId).toBe(42);
+    expect(typeof jobs[0]?.delivery?.threadId).toBe("number");
+    expect(jobs[1]?.delivery?.threadId).toBe("42");
+    expect(typeof jobs[1]?.delivery?.threadId).toBe("string");
   });
 
   it("round-trips explicit failure destination field clears through SQLite delivery columns", async () => {
@@ -682,7 +824,7 @@ describe("cron store", () => {
       "utf-8",
     );
 
-    const loaded = loadCronStoreSync(storePath);
+    const loaded = loadCronJobsStoreSync(storePath);
 
     expect(loaded.jobs).toEqual([]);
   });

@@ -50,7 +50,7 @@ function hasNonProgressFollowupSentence(value: string): boolean {
   return matchesProgressOnlyPrefix(firstSentence) && !isProgressOnlyCompletionText(rest);
 }
 
-export function isProgressOnlyCompletionText(value: string | null | undefined): boolean {
+function isProgressOnlyCompletionText(value: string | null | undefined): boolean {
   const normalized = normalizeCompletionText(value);
   if (!normalized) {
     return false;

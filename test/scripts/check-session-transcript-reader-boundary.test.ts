@@ -128,4 +128,22 @@ describe("session transcript reader boundary guard", () => {
       `),
     ).toEqual([]);
   });
+
+  it("flags storage-specific reader aliases in migrated files", () => {
+    expect(
+      findSessionTranscriptReaderBoundaryViolations(`
+        import { readSessionMessagesAsync as readSessionMessagesFromFileAsync } from "./session-transcript-readers.js";
+        await readSessionMessagesFromFileAsync(scope, opts);
+      `),
+    ).toEqual([
+      {
+        line: 2,
+        reason: 'uses storage-specific transcript reader alias "readSessionMessagesFromFileAsync"',
+      },
+      {
+        line: 3,
+        reason: 'uses storage-specific transcript reader alias "readSessionMessagesFromFileAsync"',
+      },
+    ]);
+  });
 });

@@ -215,10 +215,15 @@ vi.mock("./slash-commands.runtime.js", () => {
       if (params.command?.key === "reportexternal") {
         return {
           arg: { name: "period", description: "period" },
-          choices: Array.from({ length: 140 }, (_v, i) => ({
-            value: `period-${i + 1}`,
-            label: `Period ${i + 1}`,
-          })),
+          choices: [
+            ...Array.from({ length: 140 }, (_v, i) => ({
+              value: `period-${i + 1}`,
+              label: `Period ${i + 1}`,
+            })),
+            // Label whose emoji surrogate pair straddles the 75-char plain_text
+            // limit, to cover surrogate-safe truncation in served options.
+            { value: "emoji-overflow", label: `${"a".repeat(74)}😀 emojioverflow` },
+          ],
         };
       }
       if (params.command?.key === "unsafeconfirm") {
@@ -870,6 +875,37 @@ describe("Slack native command argument menus", () => {
     };
     const optionTexts = (optionsPayload.options ?? []).map((option) => option.text?.text ?? "");
     expect(optionTexts.join("\n")).toContain("Period 12");
+  });
+
+  it("truncates served option labels on a surrogate boundary", async () => {
+    const { blockId } = await runCommandAndResolveActionsBlock(reportExternalHandler);
+    expect(blockId).toContain("openclaw_cmdarg_ext:");
+
+    const ackOptions = vi.fn().mockResolvedValue(undefined);
+    await argMenuOptionsHandler({
+      ack: ackOptions,
+      body: {
+        user: { id: "U1" },
+        value: "emojioverflow",
+        actions: [{ block_id: blockId }],
+      },
+    });
+
+    const optionsPayload = firstCallPayload(ackOptions, "options ack") as {
+      options?: Array<{ text?: { text?: string }; value?: string }>;
+    };
+    // The "emojioverflow" query matches only the long emoji label, so exactly one
+    // option is served.
+    const served = optionsPayload.options ?? [];
+    expect(served).toHaveLength(1);
+    const text = served[0]?.text?.text ?? "";
+    // Plain_text option labels are capped at 75 chars and must not end on a lone
+    // surrogate half, which Slack rejects. The label was long enough to truncate.
+    expect(text.length).toBeGreaterThan(0);
+    expect(text.length).toBeLessThanOrEqual(75);
+    expect(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(text),
+    ).toBe(false);
   });
 
   it("tracks accepted external_select option requests", async () => {

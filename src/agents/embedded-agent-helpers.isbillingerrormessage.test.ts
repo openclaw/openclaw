@@ -611,6 +611,12 @@ describe("extractObservedOverflowTokenCount", () => {
   });
 });
 
+describe("classifyFailoverReason context overflow", () => {
+  it("maps prompt overflow to the closed failover reason", () => {
+    expect(classifyFailoverReason("Prompt is too long")).toBe("context_overflow");
+  });
+});
+
 describe("isTransientHttpError", () => {
   it("returns true for retryable 5xx status codes", () => {
     expect(isTransientHttpError("499 Client Closed Request")).toBe(true);
@@ -671,13 +677,13 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
     ).toBe("rate_limit");
   });
 
-  it("does not force HTTP 400 context-overflow payloads into format", () => {
+  it("classifies HTTP 400 context-overflow payloads without using format", () => {
     expect(
       classifyFailoverReasonFromHttpStatus(
         400,
         "INVALID_ARGUMENT: input exceeds the maximum number of tokens",
       ),
-    ).toBeNull();
+    ).toBe("context_overflow");
   });
 
   it("lets OpenRouter billing-classified HTTP 401 responses bypass generic auth", () => {
@@ -803,12 +809,12 @@ describe("classifyFailoverReason HTTP 410 handling", () => {
     expect(classifyFailoverReason("HTTP 404: insufficient credits")).toBe("billing");
   });
 
-  it("does not map HTTP 404 plus context-overflow text to model_not_found", () => {
+  it("maps HTTP 404 plus context-overflow text to context_overflow", () => {
     expect(
       classifyFailoverReason(
         "HTTP 404: INVALID_ARGUMENT: input exceeds the maximum number of tokens",
       ),
-    ).toBeNull();
+    ).toBe("context_overflow");
   });
 
   it("keeps raw HTTP 400 wrappers aligned with structured provider classification", () => {
@@ -819,7 +825,7 @@ describe("classifyFailoverReason HTTP 410 handling", () => {
       classifyFailoverReason(
         "HTTP 400: INVALID_ARGUMENT: input exceeds the maximum number of tokens",
       ),
-    ).toBeNull();
+    ).toBe("context_overflow");
   });
 
   it("classifies OpenAI Responses unknown-no-details message distinctly", () => {
@@ -1039,6 +1045,38 @@ describe("image dimension errors", () => {
 });
 
 describe("classifyAssistantFailoverReason", () => {
+  const opencodeGoStalledStreamError = {
+    role: "assistant" as const,
+    api: "openai-completions" as const,
+    provider: "opencode-go",
+    model: "deepseek-v4-flash",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "error" as const,
+    errorMessage: "opencode-go stream timed out after provider-owned SSE boundary stalled",
+    content: [],
+    timestamp: 0,
+  };
+
+  it("classifies opencode-go provider-owned stalled streams as timeout", () => {
+    expect(classifyAssistantFailoverReason(opencodeGoStalledStreamError)).toBe("timeout");
+  });
+
+  it("does not classify caller-aborted assistant messages as provider failover", () => {
+    expect(
+      classifyAssistantFailoverReason({
+        ...opencodeGoStalledStreamError,
+        stopReason: "aborted",
+      }),
+    ).toBeNull();
+  });
+
   it("uses structured assistant error bodies for model-not-found 400s", () => {
     expect(
       classifyAssistantFailoverReason({

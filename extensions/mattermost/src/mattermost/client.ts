@@ -1,5 +1,10 @@
 // Mattermost plugin module implements client behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import {
   fetchWithSsrFGuard,
@@ -10,6 +15,16 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
+
+const MATTERMOST_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+// Mattermost REST control-plane JSON (posts, users, channels, file-upload
+// results) stays well under a megabyte; cap successful JSON the same way the
+// shared provider path is capped so an untrusted/self-hosted homeserver cannot
+// stream an unbounded body into the runtime before parsing.
+// Non-JSON success bodies are a rare fallback (the API is JSON-first); keep a
+// generous text budget but still bound it instead of buffering the whole stream.
+const MATTERMOST_TEXT_RESPONSE_LIMIT_BYTES = 64 * 1024;
+const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
 
 export type MattermostFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
@@ -80,16 +95,79 @@ function buildMattermostApiUrl(baseUrl: string, path: string): string {
   return `${normalized}/api/v4${suffix}`;
 }
 
+async function readMattermostSuccessText(res: Response, path: string): Promise<string> {
+  const bytes = await readResponseWithLimit(res, MATTERMOST_TEXT_RESPONSE_LIMIT_BYTES, {
+    onOverflow: ({ maxBytes }) =>
+      new Error(`Mattermost API ${path}: text response exceeds ${maxBytes} bytes`),
+  });
+  return new TextDecoder().decode(bytes);
+}
+
 export async function readMattermostError(res: Response): Promise<string> {
   const contentType = res.headers.get("content-type") ?? "";
+  const text = await readResponseTextLimited(res, MATTERMOST_ERROR_BODY_LIMIT_BYTES);
   if (contentType.includes("application/json")) {
-    const data = (await res.json()) as { message?: string } | undefined;
-    if (data?.message) {
-      return data.message;
+    try {
+      const data = JSON.parse(text) as { message?: string } | undefined;
+      if (data?.message) {
+        return data.message;
+      }
+      return JSON.stringify(data);
+    } catch {
+      return text;
     }
-    return JSON.stringify(data);
   }
-  return await res.text();
+  return text;
+}
+
+function responseWithRelease(response: Response, release: () => Promise<void>): Response {
+  let released = false;
+  const releaseOnce = async () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    await release();
+  };
+
+  if (!response.body || NULL_BODY_STATUSES.has(response.status)) {
+    void releaseOnce();
+    return new Response(null, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  }
+
+  const reader = response.body.getReader();
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          await releaseOnce();
+          controller.close();
+          return;
+        }
+        if (value) {
+          controller.enqueue(value);
+        }
+      } catch (error) {
+        await releaseOnce();
+        throw error;
+      }
+    },
+    async cancel(reason) {
+      await reader.cancel(reason).catch(() => undefined);
+      await releaseOnce();
+    },
+  });
+
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
 }
 
 export function createMattermostClient(params: {
@@ -110,11 +188,6 @@ export function createMattermostClient(params: {
   // A custom fetchImpl is accepted for testing and special cases.
   const externalFetchImpl = params.fetchImpl;
 
-  // Guarded fetch adapter: calls fetchWithSsrFGuard and returns a plain Response.
-  // Body is buffered before releasing the dispatcher so callers get a complete Response.
-  // Null-body status codes per Fetch spec — Response constructor rejects a body for these.
-  const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
-
   const guardedFetchImpl: MattermostFetch = async (input, init) => {
     const url =
       typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -124,14 +197,7 @@ export function createMattermostClient(params: {
       auditContext: "mattermost-api",
       policy: ssrfPolicyFromPrivateNetworkOptIn(params.allowPrivateNetwork),
     });
-    try {
-      const bodyBytes = NULL_BODY_STATUSES.has(response.status)
-        ? null
-        : await response.arrayBuffer();
-      return new Response(bodyBytes, { status: response.status, headers: response.headers });
-    } finally {
-      await release();
-    }
+    return responseWithRelease(response, release);
   };
 
   const fetchImpl = externalFetchImpl ?? guardedFetchImpl;
@@ -157,9 +223,9 @@ export function createMattermostClient(params: {
 
     const contentType = res.headers.get("content-type") ?? "";
     if (contentType.includes("application/json")) {
-      return (await res.json()) as T;
+      return await readProviderJsonResponse<T>(res, `Mattermost API ${path}`);
     }
-    return (await res.text()) as T;
+    return (await readMattermostSuccessText(res, path)) as T;
   };
 
   return { baseUrl, apiBaseUrl, token, request, fetchImpl };
@@ -622,7 +688,10 @@ export async function uploadMattermostFile(
     const detail = await readMattermostError(res);
     throw new Error(`Mattermost API ${res.status} ${res.statusText}: ${detail || "unknown error"}`);
   }
-  const data = (await res.json()) as { file_infos?: MattermostFileInfo[] };
+  const data = await readProviderJsonResponse<{ file_infos?: MattermostFileInfo[] }>(
+    res,
+    "Mattermost API /files",
+  );
   const info = data.file_infos?.[0];
   if (!info?.id) {
     throw new Error("Mattermost file upload failed");

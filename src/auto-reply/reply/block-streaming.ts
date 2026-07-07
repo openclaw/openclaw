@@ -82,7 +82,7 @@ export type BlockStreamingCoalescing = {
   flushOnEnqueue?: boolean;
 };
 
-export type BlockStreamingChunking = {
+type BlockStreamingChunking = {
   minChars: number;
   maxChars: number;
   breakPreference: "paragraph" | "newline" | "sentence";

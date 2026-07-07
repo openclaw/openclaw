@@ -3,6 +3,10 @@
 import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Context, Model, SimpleStreamOptions } from "../../llm/types.js";
+import {
+  createUserTurnTranscriptRecorder,
+  takeRuntimeUserTurnTranscriptContext,
+} from "../../sessions/user-turn-transcript.js";
 
 const thinkingMocks = vi.hoisted(() => ({
   resolveThinkingDefaultForModel: vi.fn(() => "medium"),
@@ -109,6 +113,117 @@ async function createSessionAndStreamModel(model: Model): Promise<SimpleStreamOp
 
   return streamMocks.streamSimple.mock.lastCall?.[2] ?? {};
 }
+
+function appendPersistedAssistantMessage(params: {
+  sessionManager: SessionManager;
+  content: unknown;
+  stopReason?: "stop" | "aborted";
+}) {
+  params.sessionManager.appendMessage({
+    role: "assistant",
+    content: params.content,
+    api: "messages",
+    provider: "anthropic",
+    model: "sonnet-4.6",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: params.stopReason ?? "stop",
+    timestamp: Date.now(),
+  } as Parameters<SessionManager["appendMessage"]>[0]);
+}
+
+async function createSessionFromManager(sessionManager: SessionManager) {
+  const { session } = await createAgentSession({
+    model: testModel,
+    resourceLoader: createEmptyResourceLoader(),
+    sessionManager,
+    settingsManager: SettingsManager.inMemory(),
+    modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+  });
+  return session;
+}
+
+async function createSessionWithPersistedAssistantContent(content: unknown) {
+  const sessionManager = SessionManager.inMemory();
+  appendPersistedAssistantMessage({ sessionManager, content });
+  return await createSessionFromManager(sessionManager);
+}
+
+describe("AgentSession getLastAssistantText", () => {
+  it.each([
+    {
+      name: "legacy string content",
+      content: " legacy assistant text ",
+      expected: "legacy assistant text",
+    },
+    {
+      name: "normal text blocks",
+      content: [
+        { type: "thinking", thinking: "hidden" },
+        { type: "text", text: "visible " },
+        { type: "text", text: "answer" },
+      ],
+      expected: "visible answer",
+    },
+    { name: "null content", content: null, expected: undefined },
+    { name: "object content", content: { type: "text", text: "malformed" }, expected: undefined },
+  ])("reads $name without throwing", async ({ content, expected }) => {
+    const session = await createSessionWithPersistedAssistantContent(content);
+    expect(session.getLastAssistantText()).toBe(expected);
+  });
+
+  it("skips aborted malformed content and returns the preceding assistant text", async () => {
+    const sessionManager = SessionManager.inMemory();
+    appendPersistedAssistantMessage({ sessionManager, content: "previous answer" });
+    appendPersistedAssistantMessage({
+      sessionManager,
+      content: null,
+      stopReason: "aborted",
+    });
+    const session = await createSessionFromManager(sessionManager);
+
+    expect(session.getLastAssistantText()).toBe("previous answer");
+  });
+});
+
+describe("AgentSession queued user turns", () => {
+  it("carries prepared transcript context on the exact steered message", async () => {
+    const session = await createSessionFromManager(SessionManager.inMemory());
+    const recorder = createUserTurnTranscriptRecorder({
+      input: {
+        text: "visible group prompt",
+        sender: { id: "user-42", name: "Ada" },
+      },
+      target: { transcriptPath: "/tmp/unused-session.jsonl" },
+    });
+    const steer = vi.spyOn(session.agent, "steer").mockImplementation(() => undefined);
+
+    await session.steer("runtime group prompt", undefined, recorder);
+
+    const runtimeMessage = steer.mock.calls[0]?.[0];
+    expect(runtimeMessage).toMatchObject({
+      role: "user",
+      content: [{ type: "text", text: "runtime group prompt" }],
+    });
+    if (!runtimeMessage) {
+      throw new Error("expected queued runtime message");
+    }
+    expect(takeRuntimeUserTurnTranscriptContext(runtimeMessage)).toMatchObject({
+      message: {
+        role: "user",
+        content: "visible group prompt",
+        __openclaw: { senderId: "user-42", senderName: "Ada" },
+      },
+      recorder,
+    });
+  });
+});
 
 describe("createAgentSession attribution headers", () => {
   it("tolerates Bedrock models that do not expose baseUrl", async () => {
@@ -218,6 +333,37 @@ describe("createAgentSession tool defaults", () => {
     session.setActiveToolsByName(["bash", "custom_lookup"]);
 
     expect(session.getActiveToolNames()).toEqual(["custom_lookup"]);
+  });
+
+  it("preserves channel-progress visibility for custom tools", async () => {
+    const hiddenTool: ToolDefinition = {
+      name: "internal_wait",
+      label: "Internal Wait",
+      hideFromChannelProgress: true,
+      description: "Waits for internal work.",
+      parameters: Type.Object({}),
+      execute: async () => ({
+        content: [{ type: "text", text: "ok" }],
+        details: {},
+      }),
+    };
+
+    const { session } = await createAgentSession({
+      model: testModel,
+      noTools: "builtin",
+      customTools: [hiddenTool],
+      resourceLoader: createEmptyResourceLoader(),
+      sessionManager: SessionManager.inMemory(),
+      settingsManager: SettingsManager.inMemory(),
+      modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
+    });
+
+    expect(session.agent.state.tools).toEqual([
+      expect.objectContaining({
+        name: "internal_wait",
+        hideFromChannelProgress: true,
+      }),
+    ]);
   });
 
   it("preserves an exact base system prompt when active tools change", async () => {

@@ -7,6 +7,7 @@ import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Type } from "typebox";
+import { createAbortError } from "../infra/abort-signal.js";
 import { openRootFile, type RootFileOpenResult } from "../infra/boundary-file-read.js";
 import { root as fsRoot } from "../infra/fs-safe.js";
 import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../infra/path-alias-guards.js";
@@ -62,11 +63,20 @@ export type ApplyPatchSummary = {
 type ApplyPatchResult = {
   summary: ApplyPatchSummary;
   text: string;
+  noOp?: boolean;
 };
 
 type ApplyPatchToolDetails = {
   summary: ApplyPatchSummary;
 };
+
+function normalizeUpdateComparison(content: string): string {
+  const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  if (normalized.length === 0 || normalized.endsWith("\n")) {
+    return normalized;
+  }
+  return `${normalized}\n`;
+}
 
 type SandboxApplyPatchConfig = {
   root: string;
@@ -108,9 +118,7 @@ export function createApplyPatchTool(
         throw new Error("Provide a patch input.");
       }
       if (signal?.aborted) {
-        const err = new Error("Aborted");
-        err.name = "AbortError";
-        throw err;
+        throw createAbortError("Aborted");
       }
 
       const result = await applyPatch(input, {
@@ -123,6 +131,7 @@ export function createApplyPatchTool(
       return {
         content: [{ type: "text", text: result.text }],
         details: { summary: result.summary },
+        ...(result.noOp ? { terminate: true } : {}),
       };
     },
   };
@@ -148,13 +157,12 @@ export async function applyPatch(
     modified: new Set<string>(),
     deleted: new Set<string>(),
   };
+  const noOpPaths = new Set<string>();
   const fileOps = resolvePatchFileOps(options);
 
   for (const hunk of parsed.hunks) {
     if (options.signal?.aborted) {
-      const err = new Error("Aborted");
-      err.name = "AbortError";
-      throw err;
+      throw createAbortError("Aborted");
     }
 
     if (hunk.kind === "add") {
@@ -184,28 +192,47 @@ export async function applyPatch(
       await ensureDir(moveTarget.resolved, fileOps);
       const moveResolvesToSource =
         path.resolve(moveTarget.resolved) === path.resolve(target.resolved);
-      await fileOps.writeFile(
-        moveResolvesToSource ? target.resolved : moveTarget.resolved,
-        applied,
-      );
+      const destination = moveResolvesToSource ? target.resolved : moveTarget.resolved;
+      if (moveResolvesToSource) {
+        const existing = await fileOps.readFile(target.resolved);
+        if (normalizeUpdateComparison(existing) === normalizeUpdateComparison(applied)) {
+          noOpPaths.add(target.display);
+        } else {
+          noOpPaths.delete(target.display);
+          await fileOps.writeFile(destination, applied);
+        }
+      } else {
+        noOpPaths.delete(target.display);
+        await fileOps.writeFile(destination, applied);
+      }
       if (!moveResolvesToSource) {
         await fileOps.remove(target.resolved);
       }
-      recordSummary(
-        summary,
-        seen,
-        "modified",
-        moveResolvesToSource ? target.display : moveTarget.display,
-      );
+      if (!noOpPaths.has(target.display)) {
+        recordSummary(
+          summary,
+          seen,
+          "modified",
+          moveResolvesToSource ? target.display : moveTarget.display,
+        );
+      }
     } else {
-      await fileOps.writeFile(target.resolved, applied);
-      recordSummary(summary, seen, "modified", target.display);
+      const existing = await fileOps.readFile(target.resolved);
+      if (normalizeUpdateComparison(existing) === normalizeUpdateComparison(applied)) {
+        noOpPaths.add(target.display);
+      } else {
+        noOpPaths.delete(target.display);
+        await fileOps.writeFile(target.resolved, applied);
+        recordSummary(summary, seen, "modified", target.display);
+      }
     }
   }
 
+  const noOp = noOpPaths.size > 0 && Object.values(summary).every((paths) => paths.length === 0);
   return {
     summary,
-    text: formatSummary(summary),
+    text: noOp ? `No changes made to ${Array.from(noOpPaths).join(", ")}.` : formatSummary(summary),
+    ...(noOp ? { noOp: true } : {}),
   };
 }
 

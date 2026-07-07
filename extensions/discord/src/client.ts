@@ -11,6 +11,7 @@ import {
   type ResolvedDiscordAccount,
 } from "./accounts.js";
 import { RequestClient } from "./internal/discord.js";
+import { getGateway } from "./monitor/gateway-registry.js";
 import { resolveDiscordProxyFetchForAccount } from "./proxy-fetch.js";
 import { createDiscordRequestClient } from "./proxy-request-client.js";
 import { createDiscordRetryRunner } from "./retry.js";
@@ -23,6 +24,8 @@ export type DiscordClientOpts = {
   accountId?: string;
   rest?: RequestClient;
   retry?: RetryConfig;
+  signal?: AbortSignal;
+  timeoutMs?: number;
   verbose?: boolean;
 };
 
@@ -77,15 +80,18 @@ function resolveRest(
   cfg: OpenClawConfig,
   rest?: RequestClient,
   proxyFetch?: typeof fetch,
+  signal?: AbortSignal,
+  timeoutMs?: number,
 ) {
   if (rest) {
     return rest;
   }
   const resolvedProxyFetch = proxyFetch ?? resolveDiscordProxyFetchForAccount(account, cfg);
-  return createDiscordRequestClient(
-    token,
-    resolvedProxyFetch ? { fetch: resolvedProxyFetch } : undefined,
-  );
+  return createDiscordRequestClient(token, {
+    ...(resolvedProxyFetch ? { fetch: resolvedProxyFetch } : {}),
+    ...(signal ? { signal } : {}),
+    ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
+  });
 }
 
 function resolveAccountWithoutToken(params: {
@@ -121,7 +127,15 @@ export function createDiscordRestClient(opts: DiscordClientOpts) {
       accountId: account.accountId,
       fallbackToken: account.token,
     });
-  const rest = resolveRest(token, account, resolvedCfg, opts.rest, proxyContext.proxyFetch);
+  const rest = resolveRest(
+    token,
+    account,
+    resolvedCfg,
+    opts.rest,
+    proxyContext.proxyFetch,
+    opts.signal,
+    opts.timeoutMs,
+  );
   return { token, rest, account };
 }
 
@@ -135,6 +149,10 @@ export function createDiscordClient(opts: DiscordClientOpts): {
     retry: opts.retry,
     configRetry: account.config.retry,
     verbose: opts.verbose,
+    isGatewayDisconnected: () => {
+      const gateway = getGateway(account.accountId);
+      return gateway !== undefined && !gateway.isConnected;
+    },
   });
   return { token, rest, request };
 }

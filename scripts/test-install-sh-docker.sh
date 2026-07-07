@@ -151,6 +151,28 @@ console.log(
 ' "$baseline_pack_json_file" "$update_pack_json_file"
 }
 
+read_pack_tarball_filename() {
+  local pack_json_file="$1"
+  node -e '
+const fs = require("node:fs");
+const path = require("node:path");
+const raw = fs.readFileSync(process.argv[1], "utf8") || "[]";
+const parsed = JSON.parse(raw);
+const last = Array.isArray(parsed) ? parsed.at(-1) : null;
+const filename = typeof last?.filename === "string" ? last.filename.trim() : "";
+if (
+  !filename.endsWith(".tgz") ||
+  filename.includes("\0") ||
+  filename !== path.basename(filename) ||
+  filename !== path.win32.basename(filename)
+) {
+  console.error(`ERROR: npm pack reported unsafe tarball filename ${JSON.stringify(filename)}`);
+  process.exit(1);
+}
+process.stdout.write(filename);
+' "$pack_json_file"
+}
+
 SMOKE_IMAGE="${OPENCLAW_INSTALL_SMOKE_IMAGE:-openclaw-install-smoke:local}"
 NONROOT_IMAGE="${OPENCLAW_INSTALL_NONROOT_IMAGE:-openclaw-install-nonroot:local}"
 SMOKE_PLATFORM="$(resolve_default_smoke_platform)"
@@ -277,6 +299,8 @@ prepare_update_tarball() {
   local baseline_pack_json
   local pack_json_file
   local baseline_pack_json_file
+  local package_args
+  local package_tgz
   local packed_update_version
   pack_json_file="${UPDATE_DIR}/pack.json"
   baseline_pack_json_file="${UPDATE_DIR}/baseline-pack.json"
@@ -294,23 +318,20 @@ prepare_update_tarball() {
     UPDATE_EXPECT_VERSION="$(
       node -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).version'
     )"
-    node --import tsx scripts/write-package-dist-inventory.ts
-    node scripts/check-package-dist-imports.mjs "$ROOT_DIR"
-    quiet_npm pack --ignore-scripts --json --pack-destination "$UPDATE_DIR" >"$pack_json_file"
+    package_args=(
+      --output-dir "$UPDATE_DIR"
+      --pack-json "$pack_json_file"
+      --skip-build
+    )
+    package_tgz="$(node scripts/package-openclaw-for-docker.mjs "${package_args[@]}")"
+    UPDATE_TGZ_FILE="$(basename "$package_tgz")"
   fi
-  UPDATE_TGZ_FILE="$(
-    node -e '
-const raw = require("node:fs").readFileSync(process.argv[1], "utf8") || "[]";
-const parsed = JSON.parse(raw);
-const last = Array.isArray(parsed) ? parsed.at(-1) : null;
-if (!last || typeof last.filename !== "string" || last.filename.length === 0) {
-  process.exit(1);
-}
-process.stdout.write(last.filename);
-' "$pack_json_file"
-  )"
   if [[ -z "$UPDATE_PACKAGE_SPEC" ]]; then
-    node scripts/check-openclaw-package-tarball.mjs "${UPDATE_DIR}/${UPDATE_TGZ_FILE}"
+    node scripts/check-openclaw-package-tarball.mjs \
+      --require-bundled-workspace-deps \
+      "${UPDATE_DIR}/${UPDATE_TGZ_FILE}"
+  else
+    UPDATE_TGZ_FILE="$(read_pack_tarball_filename "$pack_json_file")"
   fi
   print_pack_audit "update" "$pack_json_file"
   assert_pack_unpacked_size_budget "update" "$pack_json_file"
@@ -334,17 +355,7 @@ process.stdout.write(last.version);
 
   echo "==> Pack baseline tgz: ${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}"
   quiet_npm pack "${PACKAGE_NAME}@${UPDATE_BASELINE_VERSION}" --json --pack-destination "$UPDATE_DIR" >"$baseline_pack_json_file"
-  BASELINE_TGZ_FILE="$(
-    node -e '
-const raw = require("node:fs").readFileSync(process.argv[1], "utf8") || "[]";
-const parsed = JSON.parse(raw);
-const last = Array.isArray(parsed) ? parsed.at(-1) : null;
-if (!last || typeof last.filename !== "string" || last.filename.length === 0) {
-  process.exit(1);
-}
-process.stdout.write(last.filename);
-' "$baseline_pack_json_file"
-  )"
+  BASELINE_TGZ_FILE="$(read_pack_tarball_filename "$baseline_pack_json_file")"
   UPDATE_BASELINE_VERSION="$(
     node -e '
 const raw = require("node:fs").readFileSync(process.argv[1], "utf8") || "[]";

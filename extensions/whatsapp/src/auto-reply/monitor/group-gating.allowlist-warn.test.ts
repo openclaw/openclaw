@@ -6,7 +6,7 @@ vi.mock("./group-activation.js", () => ({
 }));
 
 import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
-import type { WebInboundMessage } from "../../inbound/types.js";
+import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import type { MentionConfig } from "../mentions.js";
 import {
   resetGroupDropWarningsForTests,
@@ -17,7 +17,7 @@ import {
 function makeUnregisteredGroupMsg(
   conversationId: string,
   accountId = "default",
-): WebInboundMessage {
+): AdmittedWebInboundMessage {
   return createTestWebInboundMessage({
     event: {
       id: `msg-${conversationId}`,
@@ -31,10 +31,19 @@ function makeUnregisteredGroupMsg(
       recipientJid: "+15550000001",
       sender: { e164: "+15550000002", name: "Alice" },
     },
-    from: conversationId,
-    chatType: "group",
-    conversationId,
-    accountId,
+    admission: {
+      accountId,
+      conversation: {
+        kind: "group",
+        id: conversationId,
+      },
+      sender: {
+        id: "+15550000002",
+      },
+      senderAccess: {
+        reasonCode: "group_policy_allowed",
+      },
+    },
   });
 }
 
@@ -42,7 +51,7 @@ type WarnLogger = (obj: unknown, msg: string) => void;
 type ApplyGroupGatingParams = Parameters<typeof applyGroupGating>[0];
 
 function makeParams(
-  msg: WebInboundMessage,
+  msg: AdmittedWebInboundMessage,
   warn: WarnLogger,
   cfg: ApplyGroupGatingParams["cfg"] = {
     channels: {
@@ -68,13 +77,16 @@ function makeParams(
     },
   } as never,
 ) {
+  const admission = msg.admission;
+  if (!admission) {
+    throw new Error("Expected admitted WhatsApp test message");
+  }
   return {
     cfg,
     msg,
-    conversationId: msg.conversationId,
-    groupHistoryKey: `whatsapp:group:${msg.conversationId}`,
+    groupHistoryKey: `whatsapp:group:${admission.conversation.id}`,
     agentId: "main",
-    sessionKey: `agent:main:whatsapp:group:${msg.conversationId}`,
+    sessionKey: `agent:main:whatsapp:group:${admission.conversation.id}`,
     baseMentionConfig: { mentionRegexes: [/\bopenclaw\b/i] } satisfies MentionConfig,
     groupHistories: new Map<string, GroupHistoryEntry[]>(),
     groupHistoryLimit: 20,

@@ -1,4 +1,5 @@
 name: Plugin NPM Release
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('Plugin NPM Release [{0}] {1}', inputs.npm_dist_tag, inputs.ref) || format('Plugin NPM Release [default] {0}', github.sha) }}
 
 on:
   push:
@@ -8,6 +9,7 @@ on:
       - ".github/workflows/plugin-npm-release.yml"
       - "extensions/**"
       - "package.json"
+      - "scripts/lib/npm-publish-plan.mjs"
       - "scripts/lib/plugin-npm-package-manifest.mjs"
       - "scripts/lib/plugin-npm-release.ts"
       - "scripts/plugin-npm-publish.sh"
@@ -25,7 +27,7 @@ on:
           - selected
           - all-publishable
       ref:
-        description: Commit SHA on main, a release branch, or the matching Tideclaw alpha branch to publish from
+        description: Commit SHA on main, a release branch, the canonical extended-stable branch, or the matching Tideclaw alpha branch to publish from
         required: true
         type: string
       plugins:
@@ -36,10 +38,18 @@ on:
         description: Approved OpenClaw Release Publish workflow run id
         required: false
         type: string
+      npm_dist_tag:
+        description: Optional npm dist-tag override
+        required: true
+        default: default
+        type: choice
+        options:
+          - default
+          - extended-stable
 
 concurrency:
-  group: plugin-npm-release-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
-  cancel-in-progress: false
+  group: plugin-npm-release-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -55,9 +65,10 @@ jobs:
       has_candidates: ${{ steps.plan.outputs.has_candidates }}
       candidate_count: ${{ steps.plan.outputs.candidate_count }}
       matrix: ${{ steps.plan.outputs.matrix }}
+      all_matrix: ${{ steps.plan.outputs.all_matrix }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
@@ -75,9 +86,37 @@ jobs:
 
       - name: Validate ref is on a trusted publish branch
         env:
+          NPM_DIST_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.npm_dist_tag || 'default' }}
+          PUBLISH_SCOPE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_scope || '' }}
+          RELEASE_PLUGINS: ${{ github.event_name == 'workflow_dispatch' && inputs.plugins || '' }}
+          SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
           WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
+          if [[ "${NPM_DIST_TAG}" == "extended-stable" ]]; then
+            if [[ "${PUBLISH_SCOPE}" != "all-publishable" || -n "${RELEASE_PLUGINS// }" ]]; then
+              echo "Extended-stable plugin publication requires publish_scope=all-publishable without an explicit plugin list." >&2
+              exit 1
+            fi
+            if [[ ! "${SOURCE_REF}" =~ ^[0-9a-f]{40}$ ]] || [[ "$(git rev-parse HEAD)" != "$(git rev-parse "${SOURCE_REF}^{commit}")" ]]; then
+              echo "Extended-stable plugin publication requires ref to be the exact 40-character source SHA." >&2
+              exit 1
+            fi
+            package_version="$(node -p "require('./package.json').version")"
+            if [[ ! "${package_version}" =~ ^([0-9]{4})\.([1-9]|1[0-2])\.([1-9][0-9]*)$ ]] || (( 10#${BASH_REMATCH[3]:-0} < 33 )); then
+              echo "Extended-stable plugin publication requires a final YYYY.M.PATCH version with PATCH >= 33." >&2
+              exit 1
+            fi
+            release_year="${BASH_REMATCH[1]}"
+            release_month="${BASH_REMATCH[2]}"
+            extended_stable_branch="extended-stable/${release_year}.${release_month}.33"
+            git fetch --no-tags origin "+refs/heads/${extended_stable_branch}:refs/remotes/origin/${extended_stable_branch}"
+            if [[ "${WORKFLOW_REF}" == "refs/heads/${extended_stable_branch}" ]] && [[ "$(git rev-parse HEAD)" == "$(git rev-parse "refs/remotes/origin/${extended_stable_branch}")" ]]; then
+              exit 0
+            fi
+            echo "Extended-stable plugin npm publishes must run from ${extended_stable_branch} at its exact branch tip." >&2
+            exit 1
+          fi
           git fetch --no-tags origin \
             +refs/heads/main:refs/remotes/origin/main \
             '+refs/heads/release/*:refs/remotes/origin/release/*'
@@ -105,12 +144,16 @@ jobs:
           RELEASE_PLUGINS: ${{ github.event_name == 'workflow_dispatch' && inputs.plugins || '' }}
           BASE_REF: ${{ github.event_name != 'workflow_dispatch' && github.event.before || '' }}
           HEAD_REF: ${{ steps.ref.outputs.sha }}
+          NPM_DIST_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.npm_dist_tag || 'default' }}
         run: |
           set -euo pipefail
           if [[ -n "${PUBLISH_SCOPE}" ]]; then
             release_args=(--selection-mode "${PUBLISH_SCOPE}")
             if [[ -n "${RELEASE_PLUGINS}" ]]; then
               release_args+=(--plugins "${RELEASE_PLUGINS}")
+            fi
+            if [[ "${NPM_DIST_TAG}" == "extended-stable" ]]; then
+              release_args+=(--npm-dist-tag "${NPM_DIST_TAG}")
             fi
             pnpm release:plugins:npm:check -- "${release_args[@]}"
           elif [[ -n "${BASE_REF}" ]]; then
@@ -126,6 +169,7 @@ jobs:
           RELEASE_PLUGINS: ${{ github.event_name == 'workflow_dispatch' && inputs.plugins || '' }}
           BASE_REF: ${{ github.event_name != 'workflow_dispatch' && github.event.before || '' }}
           HEAD_REF: ${{ steps.ref.outputs.sha }}
+          NPM_DIST_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.npm_dist_tag || 'default' }}
         run: |
           set -euo pipefail
           mkdir -p .local
@@ -133,6 +177,9 @@ jobs:
             plan_args=(--selection-mode "${PUBLISH_SCOPE}")
             if [[ -n "${RELEASE_PLUGINS}" ]]; then
               plan_args+=(--plugins "${RELEASE_PLUGINS}")
+            fi
+            if [[ "${NPM_DIST_TAG}" == "extended-stable" ]]; then
+              plan_args+=(--npm-dist-tag "${NPM_DIST_TAG}")
             fi
             node --import tsx scripts/plugin-npm-release-plan.ts "${plan_args[@]}" > .local/plugin-npm-release-plan.json
           elif [[ -n "${BASE_REF}" ]]; then
@@ -149,11 +196,13 @@ jobs:
             has_candidates="true"
           fi
           matrix_json="$(jq -c '.candidates' .local/plugin-npm-release-plan.json)"
+          all_matrix_json="$(jq -c '.all' .local/plugin-npm-release-plan.json)"
 
           {
             echo "candidate_count=${candidate_count}"
             echo "has_candidates=${has_candidates}"
             echo "matrix=${matrix_json}"
+            echo "all_matrix=${all_matrix_json}"
           } >> "$GITHUB_OUTPUT"
 
           echo "Plugin release candidates:"
@@ -185,7 +234,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
 
@@ -224,7 +273,7 @@ jobs:
         plugin: ${{ fromJson(needs.preview_plugins_npm.outputs.matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
           ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
@@ -237,9 +286,13 @@ jobs:
           install-bun: "false"
 
       - name: Preview publish command
+        env:
+          OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag == 'extended-stable' && inputs.npm_dist_tag || '' }}
         run: bash scripts/plugin-npm-publish.sh --dry-run "${{ matrix.plugin.packageDir }}"
 
       - name: Preview npm pack contents
+        env:
+          OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag == 'extended-stable' && inputs.npm_dist_tag || '' }}
         run: bash scripts/plugin-npm-publish.sh --pack-dry-run "${{ matrix.plugin.packageDir }}"
 
   publish_plugins_npm:
@@ -257,7 +310,7 @@ jobs:
         plugin: ${{ fromJson(needs.preview_plugins_npm.outputs.matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
           ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
@@ -286,9 +339,10 @@ jobs:
       - name: Publish
         if: steps.npm_package_version.outputs.already_published != 'true'
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ inputs.npm_dist_tag != 'extended-stable' && secrets.NPM_TOKEN || '' }}
+          NPM_TOKEN: ${{ inputs.npm_dist_tag != 'extended-stable' && secrets.NPM_TOKEN || '' }}
           OPENCLAW_NPM_PUBLISH_AUTH_MODE: trusted-publisher
+          OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag == 'extended-stable' && inputs.npm_dist_tag || '' }}
         run: bash scripts/plugin-npm-publish.sh --publish "${{ matrix.plugin.packageDir }}"
 
       - name: Verify published runtime
@@ -296,3 +350,50 @@ jobs:
           PACKAGE_NAME: ${{ matrix.plugin.packageName }}
           PACKAGE_VERSION: ${{ matrix.plugin.version }}
         run: node scripts/verify-plugin-npm-published-runtime.mjs "${PACKAGE_NAME}@${PACKAGE_VERSION}"
+
+  verify_plugins_npm:
+    needs: [preview_plugins_npm, publish_plugins_npm]
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.npm_dist_tag == 'extended-stable' && needs.preview_plugins_npm.result == 'success' && (needs.publish_plugins_npm.result == 'success' || (needs.preview_plugins_npm.outputs.has_candidates == 'false' && needs.publish_plugins_npm.result == 'skipped')) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        plugin: ${{ fromJson(needs.preview_plugins_npm.outputs.all_matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+
+      - name: Verify complete plugin registry readback
+        env:
+          PACKAGE_NAME: ${{ matrix.plugin.packageName }}
+          PACKAGE_VERSION: ${{ matrix.plugin.version }}
+        run: |
+          set -euo pipefail
+          exact_version=missing
+          tagged_version=missing
+          for attempt in {1..12}; do
+            exact_version="$(npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version 2>/dev/null || true)"
+            tagged_version="$(npm view "${PACKAGE_NAME}@extended-stable" version 2>/dev/null || true)"
+            if [[ "${exact_version}" == "${PACKAGE_VERSION}" && "${tagged_version}" == "${PACKAGE_VERSION}" ]]; then
+              echo "Verified ${PACKAGE_NAME}@${PACKAGE_VERSION} and @extended-stable."
+              exit 0
+            fi
+            if [[ "${attempt}" != "12" ]]; then
+              sleep 10
+            fi
+          done
+          echo "npm registry did not converge for ${PACKAGE_NAME}@${PACKAGE_VERSION} (exact=${exact_version:-missing}, extended-stable=${tagged_version:-missing})." >&2
+          echo "This OIDC-only source workflow does not mutate tags on an already-published package; use credential-isolated release tooling for manual tag repair." >&2
+          exit 1

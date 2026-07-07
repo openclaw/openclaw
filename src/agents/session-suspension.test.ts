@@ -40,10 +40,10 @@ async function suspendLane(ttlMs: number, cfg: OpenClawConfig, laneId: CommandLa
 
 describe("session suspension", () => {
   afterEach(async () => {
-    const { cancelLaneAutoResume } = await import("./session-suspension.js");
-    cancelLaneAutoResume(CommandLane.Main);
-    cancelLaneAutoResume(CommandLane.Cron);
-    cancelLaneAutoResume(CommandLane.CronNested);
+    if (vi.isFakeTimers()) {
+      await vi.runOnlyPendingTimersAsync();
+      vi.clearAllTimers();
+    }
     vi.useRealTimers();
     sessionStoreMocks.applySessionStoreEntryPatch.mockClear();
     commandQueueMocks.setCommandLaneConcurrency.mockClear();
@@ -118,6 +118,32 @@ describe("session suspension", () => {
       quotaSuspension?: { expectedResumeBy?: number };
     };
     expect(patch.quotaSuspension?.expectedResumeBy).toBe(1_000 + MAX_TIMER_TIMEOUT_MS);
+  });
+
+  it("defers session suspension only for the outer fallback candidate run", async () => {
+    const { resolveSessionSuspensionTarget, runWithDeferredSessionSuspension } =
+      await import("./session-suspension.js");
+    const onDeferred = vi.fn();
+
+    expect(resolveSessionSuspensionTarget()).toEqual({ mode: "suspend" });
+    await runWithDeferredSessionSuspension(async () => {
+      const target = resolveSessionSuspensionTarget();
+      expect(target.mode).toBe("defer");
+      if (target.mode === "defer") {
+        target.defer({
+          cfg: {},
+          sessionId: "session-1",
+          laneId: CommandLane.Main,
+          reason: "quota_exhausted",
+          failedProvider: "openai",
+          failedModel: "gpt-5.5",
+        });
+      }
+      expect(resolveSessionSuspensionTarget()).toEqual({ mode: "suspend" });
+    }, onDeferred);
+    expect(onDeferred).toHaveBeenCalledOnce();
+    expect(onDeferred).toHaveBeenCalledWith(expect.objectContaining({ laneId: CommandLane.Main }));
+    expect(resolveSessionSuspensionTarget()).toEqual({ mode: "suspend" });
   });
 
   it("maps failover reasons to persisted suspension reasons", async () => {

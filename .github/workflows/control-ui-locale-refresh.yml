@@ -23,8 +23,8 @@ permissions:
   contents: write
 
 concurrency:
-  group: control-ui-locale-refresh
-  cancel-in-progress: false
+  group: control-ui-locale-refresh-${{ github.event_name == 'push' && github.ref || github.event_name == 'workflow_dispatch' && format('manual-{0}', github.run_id) || github.event_name == 'release' && format('release-{0}', github.event.release.tag_name) || format('{0}-{1}', github.event_name, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor != 'github-actions[bot]' }}
 
 jobs:
   plan:
@@ -35,7 +35,7 @@ jobs:
       locales_json: ${{ steps.plan.outputs.locales_json }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -112,7 +112,7 @@ jobs:
     name: Refresh ${{ matrix.locale }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: true
           submodules: false
@@ -124,51 +124,162 @@ jobs:
 
       - name: Ensure translation provider secrets exist
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+          OPENCLAW_DOCS_I18N_OPENAI_API_KEY: ${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           set -euo pipefail
-          if [ -z "${OPENAI_API_KEY:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+          if [ -z "${OPENCLAW_DOCS_I18N_OPENAI_API_KEY:-}" ] && [ -z "${OPENAI_API_KEY:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; then
             echo "Missing OPENCLAW_DOCS_I18N_OPENAI_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY secret."
             exit 1
           fi
 
       - name: Refresh control UI locale files
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+          OPENCLAW_DOCS_I18N_OPENAI_API_KEY: ${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENCLAW_CONTROL_UI_I18N_PROVIDER: ${{ secrets.ANTHROPIC_API_KEY != '' && 'anthropic' || 'openai' }}
-          OPENCLAW_CONTROL_UI_I18N_MODEL: ${{ secrets.ANTHROPIC_API_KEY != '' && 'claude-opus-4-8' || vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
+          ANTHROPIC_MODEL: claude-opus-4-8
+          OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE || 'gpt-5.5' }}
           OPENCLAW_CONTROL_UI_I18N_THINKING: low
-          OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL: "1"
+          OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL: "0"
           LOCALE: ${{ matrix.locale }}
-        run: node --import tsx scripts/control-ui-i18n.ts sync --locale "${LOCALE}" --write
+        run: |
+          set -euo pipefail
 
-      - name: Commit and push locale updates
+          run_refresh() {
+            local provider="$1"
+            local model="$2"
+            local openai_api_key="${3-}"
+            if [ "$provider" = "openai" ]; then
+              OPENAI_API_KEY="$openai_api_key" \
+                OPENCLAW_CONTROL_UI_I18N_PROVIDER="$provider" \
+                OPENCLAW_CONTROL_UI_I18N_MODEL="$model" \
+                node --import tsx scripts/control-ui-i18n.ts sync --locale "${LOCALE}" --write
+              return
+            fi
+            OPENCLAW_CONTROL_UI_I18N_PROVIDER="$provider" \
+              OPENCLAW_CONTROL_UI_I18N_MODEL="$model" \
+              node --import tsx scripts/control-ui-i18n.ts sync --locale "${LOCALE}" --write
+          }
+
+          run_openai_refresh() {
+            local status=1
+            if [ -n "${OPENCLAW_DOCS_I18N_OPENAI_API_KEY:-}" ]; then
+              set +e
+              run_refresh openai "${OPENAI_MODEL}" "${OPENCLAW_DOCS_I18N_OPENAI_API_KEY}"
+              status="$?"
+              set -e
+              if [ "$status" -eq 0 ]; then
+                return 0
+              fi
+              if [ -z "${OPENAI_API_KEY:-}" ] || [ "${OPENAI_API_KEY}" = "${OPENCLAW_DOCS_I18N_OPENAI_API_KEY}" ]; then
+                return "$status"
+              fi
+              echo "::warning::Docs OpenAI control UI locale refresh key failed for ${LOCALE}; retrying with repository OpenAI key."
+            fi
+            if [ -z "${OPENAI_API_KEY:-}" ]; then
+              return "$status"
+            fi
+            run_refresh openai "${OPENAI_MODEL}" "${OPENAI_API_KEY}"
+          }
+
+          if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+            set +e
+            run_refresh anthropic "${ANTHROPIC_MODEL}"
+            status="$?"
+            set -e
+            if [ "$status" -eq 0 ]; then
+              exit 0
+            fi
+            if [ -z "${OPENCLAW_DOCS_I18N_OPENAI_API_KEY:-}" ] && [ -z "${OPENAI_API_KEY:-}" ]; then
+              exit "$status"
+            fi
+            echo "::warning::Anthropic control UI locale refresh failed for ${LOCALE}; retrying with OpenAI."
+          fi
+
+          run_openai_refresh
+
+      - name: Prepare locale artifact
         env:
           LOCALE: ${{ matrix.locale }}
+        run: |
+          set -euo pipefail
+          artifact_dir="${RUNNER_TEMP}/control-ui-locale-${LOCALE}"
+          mkdir -p "${artifact_dir}"
+          git add -A ui/src/i18n
+          git diff --cached --binary --full-index -- ui/src/i18n > "${artifact_dir}/${LOCALE}.patch"
+
+      - name: Upload locale artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: control-ui-locale-${{ matrix.locale }}
+          path: ${{ runner.temp }}/control-ui-locale-${{ matrix.locale }}/${{ matrix.locale }}.patch
+          if-no-files-found: error
+          retention-days: 1
+
+  finalize:
+    name: Commit control UI locale refresh
+    needs: refresh
+    if: needs.refresh.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+          submodules: false
+
+      - name: Download locale artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: control-ui-locale-*
+          path: ${{ runner.temp }}/control-ui-locale-artifacts
+          merge-multiple: true
+
+      - name: Apply locale artifacts
+        run: |
+          set -euo pipefail
+          while IFS= read -r patch; do
+            if [ -s "${patch}" ]; then
+              git apply "${patch}"
+            fi
+          done < <(find "${RUNNER_TEMP}/control-ui-locale-artifacts" -type f -name '*.patch' | sort)
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Validate control UI locale refresh
+        run: node --import tsx scripts/control-ui-i18n.ts check
+
+      - name: Commit and push aggregate locale refresh
+        env:
           TARGET_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
-          if git diff --quiet -- ui/src/i18n; then
-            echo "No control UI locale changes for ${LOCALE}."
+          if ! git status --porcelain -- ui/src/i18n | grep -q .; then
+            echo "No control UI locale changes."
             exit 0
           fi
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A ui/src/i18n
-          git commit --no-verify -m "chore(ui): refresh ${LOCALE} control ui locale"
+          git commit --no-verify -m "chore(ui): refresh control ui locales"
 
           for attempt in 1 2 3 4 5; do
             git fetch origin "${TARGET_BRANCH}"
-            git rebase --autostash "origin/${TARGET_BRANCH}"
+            git rebase "origin/${TARGET_BRANCH}"
             if git push origin HEAD:"${TARGET_BRANCH}"; then
               exit 0
             fi
-            echo "Push attempt ${attempt} for ${LOCALE} failed; retrying."
+            git rebase --abort >/dev/null 2>&1 || true
+            echo "Aggregate push attempt ${attempt} failed; retrying."
             sleep $((attempt * 2))
           done
 
-          echo "Failed to push ${LOCALE} locale update after retries."
+          echo "Failed to push aggregate control UI locale update after retries."
           exit 1

@@ -1,19 +1,39 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.chat.ChatCacheDatabase
+import ai.openclaw.app.chat.ChatCacheScope
+import ai.openclaw.app.chat.ChatCommandEntry
+import ai.openclaw.app.chat.ChatCommandOutbox
 import ai.openclaw.app.chat.ChatController
 import ai.openclaw.app.chat.ChatMessage
+import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.ChatTranscriptCache
+import ai.openclaw.app.chat.MessageSpeechClient
+import ai.openclaw.app.chat.MessageSpeechController
+import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.OutgoingAttachment
+import ai.openclaw.app.chat.RoomChatCommandOutbox
+import ai.openclaw.app.chat.RoomChatTranscriptCache
+import ai.openclaw.app.chat.SystemSpeechSpeaker
+import ai.openclaw.app.gateway.DeviceAuthEntry
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewayDiscovery
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.gateway.GatewayRegistryEntry
+import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewayTlsProbeFailure
 import ai.openclaw.app.gateway.GatewayTlsProbeResult
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
+import ai.openclaw.app.gateway.NetworkMonitor
+import ai.openclaw.app.gateway.NodeEventSendOutcome
+import ai.openclaw.app.gateway.formatGatewayAuthority
+import ai.openclaw.app.gateway.normalizeGatewayApprovalRequestId
 import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprint
+import ai.openclaw.app.gateway.parseChatSendAck
 import ai.openclaw.app.gateway.probeGatewayTlsFingerprint
 import ai.openclaw.app.node.A2UIHandler
 import ai.openclaw.app.node.CalendarHandler
@@ -44,8 +64,12 @@ import ai.openclaw.app.node.asStringOrNull
 import ai.openclaw.app.node.invokeErrorFromThrowable
 import ai.openclaw.app.node.parseHexColorArgb
 import ai.openclaw.app.protocol.OpenClawCanvasA2UIAction
+import ai.openclaw.app.voice.GatewayTranscriptionSession
 import ai.openclaw.app.voice.MicCaptureManager
+import ai.openclaw.app.voice.TalkAudioPlayer
 import ai.openclaw.app.voice.TalkModeManager
+import ai.openclaw.app.voice.TalkPttOnceStart
+import ai.openclaw.app.voice.TalkPttStopPayload
 import ai.openclaw.app.voice.VoiceConversationEntry
 import ai.openclaw.app.voice.VoiceConversationRole
 import android.Manifest
@@ -55,9 +79,14 @@ import android.os.SystemClock
 import android.util.Base64
 import android.util.Log
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -65,15 +94,158 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import java.util.Collections
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
+
+private const val MAX_PENDING_NOTIFICATION_EVENTS = 128
+private const val NODE_APPROVAL_COMMAND_FRESH_MS = 30_000L
+
+internal data class PendingNotificationNodeEvent(
+  val event: String,
+  val payloadJson: String?,
+  val gatewayId: String? = null,
+)
+
+private data class QueuedNotificationNodeEvent(
+  val generation: Long,
+  val event: PendingNotificationNodeEvent,
+)
+
+internal class NotificationNodeEventOutbox(
+  private val capacity: Int = MAX_PENDING_NOTIFICATION_EVENTS,
+  private val isAuthorized: (PendingNotificationNodeEvent) -> Boolean = { true },
+  private val isConnected: () -> Boolean = { true },
+  private val deliveryIntervalMs: () -> Long = { 0L },
+  private val nowEpochMs: () -> Long = System::currentTimeMillis,
+  private val sleep: suspend (Long) -> Unit = { delay(it) },
+  private val invalidateConnection: () -> Unit = {},
+  private val send: suspend (PendingNotificationNodeEvent) -> NodeEventSendOutcome,
+) {
+  private val stateLock = Any()
+  private val generation = AtomicLong()
+  private val lastDeliveryAtMs = AtomicLong(-1L)
+  private val pending = ArrayDeque<QueuedNotificationNodeEvent>(capacity)
+  private val wakeDelivery = Channel<Unit>(Channel.CONFLATED)
+  private var inFlight: QueuedNotificationNodeEvent? = null
+
+  init {
+    require(capacity > 0) { "capacity must be positive" }
+  }
+
+  fun enqueue(event: PendingNotificationNodeEvent) {
+    synchronized(stateLock) {
+      if (pending.size == capacity) pending.removeFirst()
+      pending.addLast(QueuedNotificationNodeEvent(generation = generation.get(), event = event))
+    }
+    wakeDelivery.trySend(Unit)
+  }
+
+  fun clear() {
+    synchronized(stateLock) {
+      clearLocked()
+    }
+    wakeDelivery.trySend(Unit)
+  }
+
+  fun <T> updatePolicy(update: () -> T): T {
+    val result =
+      synchronized(stateLock) {
+        // Admission checks share this lock, so the new policy is visible before the next generation.
+        update().also { clearLocked() }
+      }
+    wakeDelivery.trySend(Unit)
+    return result
+  }
+
+  fun onConnected() {
+    wakeDelivery.trySend(Unit)
+  }
+
+  suspend fun deliver() {
+    while (true) {
+      wakeDelivery.receive()
+      while (true) {
+        val queued = synchronized(stateLock) { pending.firstOrNull() } ?: break
+        if (queued.generation != generation.get() || !isAuthorized(queued.event)) {
+          synchronized(stateLock) {
+            if (pending.firstOrNull() === queued) pending.removeFirst()
+          }
+          continue
+        }
+        if (!isConnected()) break
+        if (!awaitDeliverySlot(queued)) continue
+        val admitted =
+          synchronized(stateLock) {
+            if (
+              pending.firstOrNull() !== queued ||
+              queued.generation != generation.get() ||
+              !isAuthorized(queued.event) ||
+              !isConnected()
+            ) {
+              false
+            } else {
+              pending.removeFirst()
+              inFlight = queued
+              true
+            }
+          }
+        if (!admitted) continue
+
+        val outcome = send(queued.event)
+        synchronized(stateLock) {
+          if (inFlight === queued) inFlight = null
+          if (queued.generation == generation.get() && isAuthorized(queued.event)) {
+            when (outcome) {
+              NodeEventSendOutcome.COMPLETED -> lastDeliveryAtMs.set(nowEpochMs())
+              NodeEventSendOutcome.DISCONNECTED -> {
+                // This outcome is rejected before send, so it is safe to retain for reconnect.
+                if (pending.size == capacity) pending.removeLast()
+                pending.addFirst(queued)
+              }
+              // Ambiguous failures may have reached the gateway: do not retry, but charge their rate slot.
+              NodeEventSendOutcome.FAILED -> lastDeliveryAtMs.set(nowEpochMs())
+            }
+          }
+        }
+        if (outcome == NodeEventSendOutcome.DISCONNECTED) break
+      }
+    }
+  }
+
+  private suspend fun awaitDeliverySlot(queued: QueuedNotificationNodeEvent): Boolean {
+    while (queued.generation == generation.get() && isAuthorized(queued.event)) {
+      val lastDelivery = lastDeliveryAtMs.get()
+      if (lastDelivery < 0L) return true
+      val waitMs = lastDelivery + deliveryIntervalMs().coerceAtLeast(0L) - nowEpochMs()
+      if (waitMs <= 0L) return true
+      // Short slices make policy/gateway invalidation responsive without charging stale quota.
+      sleep(minOf(waitMs, 250L))
+    }
+    return false
+  }
+
+  private fun clearLocked() {
+    // Only an admitted RPC needs transport invalidation; queued payloads have no socket side effect.
+    if (inFlight?.generation == generation.get()) invalidateConnection()
+    generation.incrementAndGet()
+    lastDeliveryAtMs.set(-1L)
+    pending.clear()
+  }
+}
 
 /**
  * Process runtime that owns gateway sessions, node command handlers, capture managers, and UI-facing state.
@@ -86,8 +258,13 @@ data class GatewayConnectionProblem(
   val recommendedNextStep: String?,
   val pauseReconnect: Boolean,
   val retryable: Boolean,
+  val clientMinProtocol: Int? = null,
+  val clientMaxProtocol: Int? = null,
+  val expectedProtocol: Int? = null,
+  val minimumProbeProtocol: Int? = null,
 ) {
   val isPairingRequired: Boolean = code == "PAIRING_REQUIRED"
+  val isProtocolMismatch: Boolean = code == "PROTOCOL_MISMATCH"
   val canAutoRetry: Boolean =
     isPairingRequired &&
       (
@@ -97,17 +274,129 @@ data class GatewayConnectionProblem(
       )
 }
 
-class NodeRuntime(
+data class GatewayConnectionDisplay(
+  val isConnected: Boolean,
+  val statusText: String,
+  val problem: GatewayConnectionProblem?,
+)
+
+private fun gatewayProblemAfterDisconnect(
+  problem: GatewayConnectionProblem?,
+  statusText: String,
+): GatewayConnectionProblem? =
+  // Automatic bootstrap pairing retries need their approval guidance until success or a different failure.
+  problem?.takeIf { statusText == "Reconnecting…" && it.canAutoRetry }
+
+internal fun gatewayConnectionDisplay(
+  operatorConnected: Boolean,
+  nodeConnected: Boolean,
+  operatorStatusText: String,
+  nodeStatusText: String,
+  operatorProblem: GatewayConnectionProblem?,
+  nodeProblem: GatewayConnectionProblem?,
+): GatewayConnectionDisplay {
+  val operator = operatorStatusText.trim()
+  val node = nodeStatusText.trim()
+  return when {
+    operatorConnected && nodeConnected -> GatewayConnectionDisplay(true, "Connected", null)
+    operatorConnected -> GatewayConnectionDisplay(true, "Connected (node offline)", nodeProblem)
+    nodeConnected ->
+      GatewayConnectionDisplay(
+        isConnected = false,
+        statusText =
+          if (operator.isNotEmpty() && operator != "Offline") {
+            "Connected (operator: $operator)"
+          } else {
+            "Connected (operator offline)"
+          },
+        problem = operatorProblem,
+      )
+    operator.isNotBlank() && operator != "Offline" -> GatewayConnectionDisplay(false, operator, operatorProblem)
+    else -> GatewayConnectionDisplay(false, node, nodeProblem)
+  }
+}
+
+private data class AndroidChatStores(
+  val transcriptCache: ChatTranscriptCache,
+  val commandOutbox: ChatCommandOutbox,
+)
+
+private fun openAndroidChatStores(context: Context): AndroidChatStores {
+  val database = ChatCacheDatabase.open(context.applicationContext)
+  return AndroidChatStores(
+    transcriptCache = RoomChatTranscriptCache(database),
+    commandOutbox = RoomChatCommandOutbox(database),
+  )
+}
+
+class NodeRuntime private constructor(
   context: Context,
-  val prefs: SecurePrefs = SecurePrefs(context.applicationContext),
-  private val tlsFingerprintProbe: suspend (String, Int) -> GatewayTlsProbeResult = ::probeGatewayTlsFingerprint,
+  val prefs: SecurePrefs,
+  private val tlsFingerprintProbe: suspend (String, Int) -> GatewayTlsProbeResult,
+  chatStores: AndroidChatStores,
 ) {
+  private val chatTranscriptCache = chatStores.transcriptCache
+  private val chatCommandOutbox = chatStores.commandOutbox
+  private val gatewayAuthLifecycleLock = Any()
+  private var gatewayAuthResetInProgress = false
+  private var gatewayConnectOperationsInFlight = 0
+  private var gatewayConnectOperationsDrained = CompletableDeferred(Unit)
+
+  @Volatile private var connectingEndpointStableId: String? = null
+  private val gatewayDataScopeLock = Any()
+  private val gatewaySwitchMutex = Mutex()
+  private val gatewayLifecycleIntentLock = Any()
+  private val gatewayLifecycleIntentSeq = AtomicLong()
+  private var gatewayDataGeneration = 0L
+
+  private data class GatewayDataScope(
+    val stableId: String,
+    val generation: Long,
+  )
+
+  constructor(
+    context: Context,
+    prefs: SecurePrefs = SecurePrefs(context.applicationContext),
+    tlsFingerprintProbe: suspend (String, Int) -> GatewayTlsProbeResult = ::probeGatewayTlsFingerprint,
+  ) : this(
+    context = context,
+    prefs = prefs,
+    tlsFingerprintProbe = tlsFingerprintProbe,
+    chatStores = openAndroidChatStores(context),
+  )
+
+  internal constructor(
+    context: Context,
+    prefs: SecurePrefs,
+    chatTranscriptCache: ChatTranscriptCache,
+  ) : this(
+    context = context,
+    prefs = prefs,
+    tlsFingerprintProbe = ::probeGatewayTlsFingerprint,
+    chatStores =
+      AndroidChatStores(
+        transcriptCache = chatTranscriptCache,
+        commandOutbox = RoomChatCommandOutbox(ChatCacheDatabase.open(context.applicationContext)),
+      ),
+  )
+
   /**
    * Authentication material supplied by setup/manual connect flows before gateway session routing.
    */
   data class GatewayConnectAuth(
     val token: String?,
     val bootstrapToken: String?,
+    val password: String?,
+  )
+
+  /**
+   * HTTP(S) page origin of the connected gateway plus the shared credential a
+   * gateway-served page (e.g. the `?view=terminal` Control UI document) can
+   * authenticate with. Derived from the same endpoint/auth the WS sessions use.
+   */
+  data class GatewayControlPage(
+    val baseUrl: String,
+    val token: String?,
     val password: String?,
   )
 
@@ -138,7 +427,6 @@ class NodeRuntime(
       camera = camera,
       externalAudioCaptureActive = externalAudioCaptureActive,
       showCameraHud = ::showCameraHud,
-      triggerCameraFlash = ::triggerCameraFlash,
       invokeErrorFromThrowable = { invokeErrorFromThrowable(it) },
     )
 
@@ -154,6 +442,8 @@ class NodeRuntime(
       location = location,
       json = json,
       isForeground = { _isForeground.value },
+      locationMode = { locationMode.value },
+      backgroundLocationEnabled = { SensitiveFeatureConfig.backgroundLocationEnabled },
       locationPreciseEnabled = { locationPreciseEnabled.value },
     )
 
@@ -225,7 +515,11 @@ class NodeRuntime(
       photosAvailable = { SensitiveFeatureConfig.photosEnabled },
       hasRecordAudioPermission = { hasRecordAudioPermission() },
       installedAppsSharingEnabled = { installedAppsSharingEnabled.value },
-      manualTls = { manualTls.value },
+      manualTls = { endpoint ->
+        prefs.gatewayRegistry.entries.value
+          .firstOrNull { it.stableId == endpoint.stableId }
+          ?.tls ?: manualTls.value
+      },
     )
 
   private val invokeDispatcher: InvokeDispatcher =
@@ -299,9 +593,15 @@ class NodeRuntime(
 
   private val _isConnected = MutableStateFlow(false)
   val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
+  private val _gatewayControlPage = MutableStateFlow<GatewayControlPage?>(null)
+  val gatewayControlPage: StateFlow<GatewayControlPage?> = _gatewayControlPage.asStateFlow()
   private val _nodeConnected = MutableStateFlow(false)
   val nodeConnected: StateFlow<Boolean> = _nodeConnected.asStateFlow()
+  private val _nodeCapabilityApproval = MutableStateFlow<GatewayNodeCapabilityApproval>(GatewayNodeCapabilityApproval.Loading)
+  val nodeCapabilityApproval: StateFlow<GatewayNodeCapabilityApproval> = _nodeCapabilityApproval.asStateFlow()
 
+  private val _gatewayConnectionDisplay = MutableStateFlow(GatewayConnectionDisplay(false, "Offline", null))
+  val gatewayConnectionDisplay: StateFlow<GatewayConnectionDisplay> = _gatewayConnectionDisplay.asStateFlow()
   private val _statusText = MutableStateFlow("Offline")
   val statusText: StateFlow<String> = _statusText.asStateFlow()
   private val _gatewayConnectionProblem = MutableStateFlow<GatewayConnectionProblem?>(null)
@@ -325,9 +625,6 @@ class NodeRuntime(
   private val cameraHudSeq = AtomicLong(0)
   private val _cameraHud = MutableStateFlow<CameraHudState?>(null)
   val cameraHud: StateFlow<CameraHudState?> = _cameraHud.asStateFlow()
-
-  private val _cameraFlashToken = MutableStateFlow(0L)
-  val cameraFlashToken: StateFlow<Long> = _cameraFlashToken.asStateFlow()
 
   private val _canvasA2uiHydrated = MutableStateFlow(false)
   val canvasA2uiHydrated: StateFlow<Boolean> = _canvasA2uiHydrated.asStateFlow()
@@ -358,10 +655,16 @@ class NodeRuntime(
   val modelCatalogRefreshing: StateFlow<Boolean> = _modelCatalogRefreshing.asStateFlow()
   private val _modelCatalogErrorText = MutableStateFlow<String?>(null)
   val modelCatalogErrorText: StateFlow<String?> = _modelCatalogErrorText.asStateFlow()
+  private val _talkSetupReadiness = MutableStateFlow(GatewayTalkSetupReadiness.unverified())
+  val talkSetupReadiness: StateFlow<GatewayTalkSetupReadiness> = _talkSetupReadiness.asStateFlow()
   private val _gatewayDefaultAgentId = MutableStateFlow<String?>(null)
   val gatewayDefaultAgentId: StateFlow<String?> = _gatewayDefaultAgentId.asStateFlow()
   private val _gatewayAgents = MutableStateFlow<List<GatewayAgentSummary>>(emptyList())
   val gatewayAgents: StateFlow<List<GatewayAgentSummary>> = _gatewayAgents.asStateFlow()
+
+  // Preserve an explicit user choice across metadata refreshes. Gateway reconnects
+  // clear it so the newly connected gateway's canonical main agent wins again.
+  @Volatile private var selectedChatAgentId: String? = null
   private val _cronStatus = MutableStateFlow(GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null))
   val cronStatus: StateFlow<GatewayCronStatus> = _cronStatus.asStateFlow()
   private val _cronJobs = MutableStateFlow<List<GatewayCronJobSummary>>(emptyList())
@@ -370,6 +673,9 @@ class NodeRuntime(
   val cronRefreshing: StateFlow<Boolean> = _cronRefreshing.asStateFlow()
   private val _cronErrorText = MutableStateFlow<String?>(null)
   val cronErrorText: StateFlow<String?> = _cronErrorText.asStateFlow()
+  private val _cronJobDetailState = MutableStateFlow<GatewayCronJobDetailState>(GatewayCronJobDetailState.Idle)
+  val cronJobDetailState: StateFlow<GatewayCronJobDetailState> = _cronJobDetailState.asStateFlow()
+  private val cronJobDetailRequestGuard = CronJobDetailRequestGuard()
   private val _usageSummary = MutableStateFlow(GatewayUsageSummary(updatedAtMs = null, providers = emptyList()))
   val usageSummary: StateFlow<GatewayUsageSummary> = _usageSummary.asStateFlow()
   private val _usageRefreshing = MutableStateFlow(false)
@@ -395,6 +701,16 @@ class NodeRuntime(
   val nodesDevicesRefreshing: StateFlow<Boolean> = _nodesDevicesRefreshing.asStateFlow()
   private val _nodesDevicesErrorText = MutableStateFlow<String?>(null)
   val nodesDevicesErrorText: StateFlow<String?> = _nodesDevicesErrorText.asStateFlow()
+  private val nodeApprovalRefreshGuard = GatewayNodeApprovalRefreshGuard()
+  private val _execApprovals = MutableStateFlow<List<GatewayExecApprovalSummary>>(emptyList())
+  val execApprovals: StateFlow<List<GatewayExecApprovalSummary>> = _execApprovals.asStateFlow()
+  private val _execApprovalsRefreshing = MutableStateFlow(false)
+  val execApprovalsRefreshing: StateFlow<Boolean> = _execApprovalsRefreshing.asStateFlow()
+  private val _execApprovalsErrorText = MutableStateFlow<String?>(null)
+  val execApprovalsErrorText: StateFlow<String?> = _execApprovalsErrorText.asStateFlow()
+  private val execApprovalsRefreshSeq = AtomicLong(0)
+  private val execApprovalsStateLock = Any()
+  private val resolvedExecApprovalIds = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
   private val _channelsSummary = MutableStateFlow(GatewayChannelsSummary(channels = emptyList()))
   val channelsSummary: StateFlow<GatewayChannelsSummary> = _channelsSummary.asStateFlow()
   private val _channelsRefreshing = MutableStateFlow(false)
@@ -417,6 +733,22 @@ class NodeRuntime(
   private val _isForeground = MutableStateFlow(true)
   val isForeground: StateFlow<Boolean> = _isForeground.asStateFlow()
 
+  private data class TalkPttOwnership(
+    val captureId: String,
+    val epoch: Long,
+  )
+
+  private val voiceLifecycleEpoch = AtomicLong()
+  private val voiceCaptureOwnershipEpoch = AtomicLong()
+  private val talkPttCommandEpoch = AtomicLong()
+  private val talkPttOwnership = AtomicReference<TalkPttOwnership?>()
+
+  // Keep ownership epochs and their service/capture state transitions atomic.
+  // Otherwise stale PTT cleanup can pass its epoch check before a UI mode change.
+  private val voiceCaptureOwnershipLock = Any()
+  private var voiceNoteOwnsMic = false
+  private val voiceCapturePreparationMutex = Mutex()
+
   private var didAutoRequestCanvasRehydrate = false
   private val canvasRehydrateSeq = AtomicLong(0)
 
@@ -424,6 +756,9 @@ class NodeRuntime(
   private var operatorConnected = false
   private var operatorStatusText: String = "Offline"
   private var nodeStatusText: String = "Offline"
+  private var operatorConnectionProblem: GatewayConnectionProblem? = null
+  private var nodeConnectionProblem: GatewayConnectionProblem? = null
+  private val gatewayStatusLock = Any()
 
   private val operatorSession =
     GatewaySession(
@@ -431,19 +766,25 @@ class NodeRuntime(
       identityStore = identityStore,
       deviceAuthStore = deviceAuthStore,
       onConnected = { hello ->
-        _gatewayConnectionProblem.value = null
-        operatorConnected = true
-        operatorStatusText = "Connected"
+        recordConnectedGateway()
         _serverName.value = hello.serverName
         _remoteAddress.value = hello.remoteAddress
         _gatewayVersion.value = hello.serverVersion
         _gatewayUpdateAvailable.value = hello.updateAvailable
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
         syncMainSessionKey(resolveAgentIdFromMainSessionKey(hello.mainSessionKey))
-        updateStatus()
+        // Every successful connection refreshes history; reconnects preserve local run ownership.
+        chat.onGatewayConnected()
+        refreshGatewayControlPage()
+        updateStatus {
+          operatorConnectionProblem = null
+          operatorConnected = true
+          operatorStatusText = "Connected"
+        }
         micCapture.onGatewayConnectionChanged(true)
         scope.launch {
           subscribeOperatorSessionEvents()
+          refreshExecApprovalsFromGateway()
           refreshHomeCanvasOverviewIfConnected()
           if (voiceReplySpeakerLazy.isInitialized()) {
             voiceReplySpeaker.refreshConfig()
@@ -451,40 +792,74 @@ class NodeRuntime(
         }
       },
       onDisconnected = { message ->
-        operatorConnected = false
-        operatorStatusText = message
-        _serverName.value = null
-        _remoteAddress.value = null
-        _gatewayVersion.value = null
-        _gatewayUpdateAvailable.value = null
-        _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
-        _gatewayDefaultAgentId.value = null
-        _gatewayAgents.value = emptyList()
-        _modelCatalog.value = emptyList()
-        _modelAuthProviders.value = emptyList()
-        _cronStatus.value = GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null)
-        _cronJobs.value = emptyList()
-        _usageSummary.value = GatewayUsageSummary(updatedAtMs = null, providers = emptyList())
-        _skillsSummary.value = GatewaySkillsSummary(skills = emptyList())
-        _nodesDevicesSummary.value =
-          GatewayNodesDevicesSummary(
-            nodes = emptyList(),
-            pendingDevices = emptyList(),
-            pairedDevices = emptyList(),
-          )
-        _channelsSummary.value = GatewayChannelsSummary(channels = emptyList())
-        _dreamingSummary.value = GatewayDreamingSummary()
-        _healthLogsSummary.value = GatewayHealthLogsSummary()
+        clearOperatorGatewayState()
         chat.applyMainSessionKey(resolveMainSessionKey())
         chat.onDisconnected(message)
-        updateStatus()
+        updateStatus {
+          operatorConnected = false
+          operatorStatusText = message
+          operatorConnectionProblem = gatewayProblemAfterDisconnect(operatorConnectionProblem, message)
+        }
         micCapture.onGatewayConnectionChanged(false)
       },
-      onConnectFailure = ::handleGatewayConnectFailure,
+      onConnectFailure = { error, pauseReconnect ->
+        updateStatus {
+          operatorConnectionProblem = gatewayConnectionProblem(error, pauseReconnect)
+        }
+      },
       onEvent = { event, payloadJson ->
         handleGatewayEvent(event, payloadJson)
       },
+      customHeadersProvider = prefs::loadGatewayCustomHeaders,
     )
+
+  private fun clearOperatorGatewayState() {
+    invalidateNodeCapabilityApprovalState()
+    _serverName.value = null
+    _remoteAddress.value = null
+    _gatewayVersion.value = null
+    _gatewayUpdateAvailable.value = null
+    _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
+    _gatewayDefaultAgentId.value = null
+    _gatewayAgents.value = emptyList()
+    selectedChatAgentId = null
+    _modelCatalog.value = emptyList()
+    _modelAuthProviders.value = emptyList()
+    _modelCatalogRefreshing.value = false
+    _modelCatalogErrorText.value = null
+    _talkSetupReadiness.value = GatewayTalkSetupReadiness.unverified()
+    _cronStatus.value = GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null)
+    _cronJobs.value = emptyList()
+    _cronRefreshing.value = false
+    _cronErrorText.value = null
+    cronJobDetailRequestGuard.cancel { _cronJobDetailState.value = GatewayCronJobDetailState.Idle }
+    _usageSummary.value = GatewayUsageSummary(updatedAtMs = null, providers = emptyList())
+    _usageRefreshing.value = false
+    _usageErrorText.value = null
+    _skillsSummary.value = GatewaySkillsSummary(skills = emptyList())
+    _skillsRefreshing.value = false
+    _skillsErrorText.value = null
+    _nodesDevicesSummary.value =
+      GatewayNodesDevicesSummary(
+        nodes = emptyList(),
+        pendingDevices = emptyList(),
+        pairedDevices = emptyList(),
+      )
+    invalidateExecApprovalRefreshes()
+    resolvedExecApprovalIds.clear()
+    _execApprovals.value = emptyList()
+    _execApprovalsRefreshing.value = false
+    _execApprovalsErrorText.value = null
+    _channelsSummary.value = GatewayChannelsSummary(channels = emptyList())
+    _channelsRefreshing.value = false
+    _channelsErrorText.value = null
+    _dreamingSummary.value = GatewayDreamingSummary()
+    _dreamingRefreshing.value = false
+    _dreamingErrorText.value = null
+    _healthLogsSummary.value = GatewayHealthLogsSummary()
+    _healthLogsRefreshing.value = false
+    _healthLogsErrorText.value = null
+  }
 
   private suspend fun subscribeOperatorSessionEvents() {
     try {
@@ -500,33 +875,48 @@ class NodeRuntime(
       identityStore = identityStore,
       deviceAuthStore = deviceAuthStore,
       onConnected = {
-        _gatewayConnectionProblem.value = null
-        _nodeConnected.value = true
-        nodeStatusText = "Connected"
+        recordConnectedGateway()
         didAutoRequestCanvasRehydrate = false
         _canvasA2uiHydrated.value = false
         _canvasRehydratePending.value = false
         _canvasRehydrateErrorText.value = null
-        updateStatus()
+        updateStatus {
+          nodeConnectionProblem = null
+          _nodeConnected.value = true
+          nodeStatusText = "Connected"
+        }
+        notificationOutbox.onConnected()
         showLocalCanvasOnConnect()
         publishNodePresenceAliveBeacon(NodePresenceAliveBeacon.Trigger.Connect)
         val endpoint = connectedEndpoint
         val auth = activeGatewayAuth
-        if (endpoint != null && auth != null) {
+        if (operatorConnected) {
+          scope.launch { refreshNodesDevicesFromGateway() }
+        } else if (endpoint != null && auth != null) {
           maybeStartOperatorSessionAfterNodeConnect(endpoint, auth)
         }
       },
       onDisconnected = { message ->
-        _nodeConnected.value = false
-        nodeStatusText = message
+        invalidateNodeCapabilityApprovalState()
         didAutoRequestCanvasRehydrate = false
         _canvasA2uiHydrated.value = false
         _canvasRehydratePending.value = false
         _canvasRehydrateErrorText.value = null
-        updateStatus()
+        updateStatus {
+          _nodeConnected.value = false
+          nodeStatusText = message
+          nodeConnectionProblem = gatewayProblemAfterDisconnect(nodeConnectionProblem, message)
+        }
         showLocalCanvasOnDisconnect()
       },
-      onConnectFailure = ::handleGatewayConnectFailure,
+      onConnectFailure = { error, pauseReconnect ->
+        updateStatus {
+          nodeConnectionProblem = gatewayConnectionProblem(error, pauseReconnect)
+        }
+        if (operatorConnected && nodeConnectFailureNeedsApprovalRefresh(error)) {
+          scope.launch { refreshNodesDevicesFromGateway() }
+        }
+      },
       onEvent = { _, _ -> },
       onInvoke = { req ->
         invokeDispatcher.handleInvoke(req.command, req.paramsJson)
@@ -534,13 +924,75 @@ class NodeRuntime(
       onTlsFingerprint = { stableId, fingerprint ->
         prefs.saveGatewayTlsFingerprint(stableId, fingerprint)
       },
+      customHeadersProvider = prefs::loadGatewayCustomHeaders,
     )
 
+  /**
+   * Triggers an immediate gateway reconnect when Android reports a validated transport
+   * restore, instead of waiting for the time-based backoff slot in [GatewaySession].
+   * Each session keeps ownership of desired-connection and auth-pause decisions.
+   */
+  private val networkMonitor = NetworkMonitor(appContext, ::retryGatewaySessionsAfterNetworkRestore)
+
+  private fun retryGatewaySessionsAfterNetworkRestore() {
+    launchGatewayLifecycle {
+      operatorSession.retryAfterNetworkRestore()
+      nodeSession.retryAfterNetworkRestore()
+    }
+  }
+
+  private val notificationOutbox: NotificationNodeEventOutbox by lazy {
+    NotificationNodeEventOutbox(
+      isAuthorized = ::isNotificationEventStillAuthorized,
+      isConnected = nodeSession::isReady,
+      deliveryIntervalMs = ::notificationDeliveryIntervalMs,
+      invalidateConnection = nodeSession::reconnect,
+      send = { pending ->
+        nodeSession.sendNodeEventWithOutcomeForEndpoint(
+          expectedEndpointStableId = pending.gatewayId,
+          event = pending.event,
+          payloadJson = pending.payloadJson,
+        )
+      },
+    )
+  }
+
+  private fun notificationDeliveryIntervalMs(): Long {
+    val maxEvents =
+      prefs.notificationForwardingMaxEventsPerMinute.value
+        .coerceAtLeast(1)
+        .toLong()
+    return (60_000L + maxEvents - 1L) / maxEvents
+  }
+
+  private fun isNotificationEventStillAuthorized(event: PendingNotificationNodeEvent): Boolean {
+    if (event.event != "notifications.changed") return false
+    if (!DeviceNotificationListenerService.isAccessEnabled(appContext)) return false
+    val payload =
+      runCatching { event.payloadJson?.let(json::parseToJsonElement).asObjectOrNull() }
+        .getOrNull()
+        ?: return false
+    val packageName = payload["packageName"].asStringOrNull()?.trim().orEmpty()
+    if (packageName.isEmpty()) return false
+    val policy = prefs.getNotificationForwardingPolicy(appPackageName = appContext.packageName)
+    if (event.gatewayId != null && event.gatewayId != prefs.gatewayRegistry.activeStableId.value) return false
+    val eventSessionKey = payload["sessionKey"].asStringOrNull()?.trim()?.ifEmpty { null }
+    return policy.enabled &&
+      policy.sessionKey == eventSessionKey &&
+      policy.allowsPackage(packageName) &&
+      !policy.isWithinQuietHours(nowEpochMs = System.currentTimeMillis())
+  }
+
   init {
+    scope.launch { notificationOutbox.deliver() }
     DeviceNotificationListenerService.setNodeEventSink { event, payloadJson ->
-      scope.launch {
-        nodeSession.sendNodeEvent(event = event, payloadJson = payloadJson)
-      }
+      notificationOutbox.enqueue(
+        PendingNotificationNodeEvent(
+          event = event,
+          payloadJson = payloadJson,
+          gatewayId = prefs.gatewayRegistry.activeStableId.value,
+        ),
+      )
     }
   }
 
@@ -549,9 +1001,42 @@ class NodeRuntime(
       scope = scope,
       session = operatorSession,
       json = json,
+      transcriptCache = chatTranscriptCache,
+      cacheScope = ::chatCacheScope,
+      commandOutbox = chatCommandOutbox,
+      recordModelRecent = prefs::recordModelRecent,
     ).also {
       it.applyMainSessionKey(_mainSessionKey.value)
     }
+
+  private val messageSpeechControllerLazy =
+    lazy {
+      MessageSpeechController(
+        scope = scope,
+        synthesizer = MessageSpeechClient(session = operatorSession, json = json),
+        player = TalkAudioPlayer(appContext),
+        localSpeech = SystemSpeechSpeaker(appContext),
+      )
+    }
+  private val messageSpeechController: MessageSpeechController
+    get() = messageSpeechControllerLazy.value
+  internal val messageSpeechState: StateFlow<MessageSpeechState?>
+    get() = messageSpeechController.state
+
+  /**
+   * Stable per-gateway scope for the offline chat cache; resolved per call so cached transcripts
+   * never leak across gateways. Null (nothing paired/configured) disables cache reads and writes.
+   */
+  private fun chatCacheGatewayId(): String? {
+    connectedEndpoint?.stableId?.let { return it }
+    return prefs.gatewayRegistry.activeStableId.value
+  }
+
+  private fun chatCacheScope(): ChatCacheScope? =
+    chatCacheGatewayId()?.let { gatewayId ->
+      ChatCacheScope(gatewayId = gatewayId, connectionGeneration = connectAttemptSeq.get())
+    }
+
   private val voiceReplySpeakerLazy: Lazy<TalkModeManager> =
     lazy {
       // Reuse the existing TalkMode speech engine for native Android TTS playback
@@ -560,7 +1045,8 @@ class NodeRuntime(
         context = appContext,
         scope = scope,
         session = operatorSession,
-        isConnected = { _isConnected.value },
+        isConnected = { gatewayConnectionDisplay.value.isConnected },
+        gatewayStableId = { connectedEndpoint?.stableId },
         onBeforeSpeak = { micCapture.pauseForTts() },
         onAfterSpeak = { micCapture.resumeAfterTts() },
       ).also { speaker ->
@@ -575,6 +1061,7 @@ class NodeRuntime(
       context = appContext,
       scope = scope,
       createTranscriptionSession = {
+        val gatewayId = connectedEndpoint?.stableId ?: error("not connected")
         val params =
           buildJsonObject {
             put("mode", JsonPrimitive("transcription"))
@@ -582,35 +1069,42 @@ class NodeRuntime(
             put("brain", JsonPrimitive("none"))
           }
         val response =
-          operatorSession.request(
+          operatorSession.requestForEndpoint(
+            gatewayId,
             "talk.session.create",
             params.toString(),
             timeoutMs = 15_000,
           )
-        parseTalkSessionId(response)
+        GatewayTranscriptionSession(
+          id = parseTalkSessionId(response),
+          gatewayId = gatewayId,
+        )
       },
-      appendTranscriptionAudio = { sessionId, audio, onError ->
+      appendTranscriptionAudio = { session, audio, onError ->
         val params =
           buildJsonObject {
-            put("sessionId", JsonPrimitive(sessionId))
+            put("sessionId", JsonPrimitive(session.id))
             put("audioBase64", JsonPrimitive(Base64.encodeToString(audio, Base64.NO_WRAP)))
             put("timestamp", JsonPrimitive(SystemClock.elapsedRealtime()))
           }
-        operatorSession.sendRequestFrame(
+        operatorSession.sendRequestFrameForEndpoint(
+          session.gatewayId,
           "talk.session.appendAudio",
           params.toString(),
           timeoutMs = 8_000,
         ) { error -> onError(error.message) }
       },
-      closeTranscriptionSession = { sessionId ->
-        val params = buildJsonObject { put("sessionId", JsonPrimitive(sessionId)) }
-        operatorSession.request(
+      closeTranscriptionSession = { session ->
+        val params = buildJsonObject { put("sessionId", JsonPrimitive(session.id)) }
+        operatorSession.requestForEndpoint(
+          session.gatewayId,
           "talk.session.close",
           params.toString(),
           timeoutMs = 5_000,
         )
       },
       sendToGateway = { message, onRunIdKnown ->
+        val gatewayId = connectedEndpoint?.stableId ?: error("not connected")
         val idempotencyKey = UUID.randomUUID().toString()
         // Notify MicCaptureManager of the idempotency key *before* the network
         // call so pendingRunId is set before any chat events can arrive.
@@ -623,8 +1117,12 @@ class NodeRuntime(
             put("timeoutMs", JsonPrimitive(30_000))
             put("idempotencyKey", JsonPrimitive(idempotencyKey))
           }
-        val response = operatorSession.request("chat.send", params.toString())
-        parseChatSendRunId(response) ?: idempotencyKey
+        val response = operatorSession.requestForEndpoint(gatewayId, "chat.send", params.toString())
+        val ack = parseChatSendAck(json, response)
+        ack.copy(runId = ack.runId ?: idempotencyKey)
+      },
+      refreshAfterTerminalSuccess = {
+        chat.refresh()
       },
       speakAssistantReply = { text ->
         // Voice-tab replies should speak through the dedicated reply speaker.
@@ -667,7 +1165,8 @@ class NodeRuntime(
       context = appContext,
       scope = scope,
       session = operatorSession,
-      isConnected = { _isConnected.value },
+      isConnected = { gatewayConnectionDisplay.value.isConnected },
+      gatewayStableId = { connectedEndpoint?.stableId },
       onBeforeSpeak = { micCapture.pauseForTts() },
       onAfterSpeak = { micCapture.resumeAfterTts() },
       onStoppedByRelay = { finishTalkModeAfterRelayClose() },
@@ -701,41 +1200,56 @@ class NodeRuntime(
     updateHomeCanvasState()
   }
 
-  private fun updateStatus() {
-    _isConnected.value = operatorConnected
-    val operator = operatorStatusText.trim()
-    val node = nodeStatusText.trim()
-    _statusText.value =
-      when {
-        operatorConnected && _nodeConnected.value -> "Connected"
-        operatorConnected && !_nodeConnected.value -> "Connected (node offline)"
-        !operatorConnected && _nodeConnected.value ->
-          if (operator.isNotEmpty() && operator != "Offline") {
-            "Connected (operator: $operator)"
-          } else {
-            "Connected (operator offline)"
-          }
-        operator.isNotBlank() && operator != "Offline" -> operator
-        else -> node
-      }
+  private fun updateStatus(update: () -> Unit = {}) {
+    synchronized(gatewayStatusLock) {
+      update()
+      // Select and publish text plus diagnostics atomically; operator and node callbacks run concurrently.
+      val display =
+        gatewayConnectionDisplay(
+          operatorConnected = operatorConnected,
+          nodeConnected = _nodeConnected.value,
+          operatorStatusText = operatorStatusText,
+          nodeStatusText = nodeStatusText,
+          operatorProblem = operatorConnectionProblem,
+          nodeProblem = nodeConnectionProblem,
+        )
+      _gatewayConnectionDisplay.value = display
+      _isConnected.value = display.isConnected
+      _statusText.value = display.statusText
+      _gatewayConnectionProblem.value = display.problem
+    }
     updateHomeCanvasState()
   }
 
-  private fun handleGatewayConnectFailure(
+  private fun setStandaloneGatewayStatus(statusText: String) {
+    synchronized(gatewayStatusLock) {
+      val display = GatewayConnectionDisplay(operatorConnected, statusText, null)
+      _gatewayConnectionDisplay.value = display
+      _isConnected.value = display.isConnected
+      _statusText.value = display.statusText
+      _gatewayConnectionProblem.value = display.problem
+    }
+    updateHomeCanvasState()
+  }
+
+  private fun gatewayConnectionProblem(
     error: GatewaySession.ErrorShape,
     pauseReconnect: Boolean,
-  ) {
+  ): GatewayConnectionProblem {
     val details = error.details
-    _gatewayConnectionProblem.value =
-      GatewayConnectionProblem(
-        code = details?.code ?: error.code,
-        message = error.message,
-        reason = details?.reason,
-        requestId = details?.requestId,
-        recommendedNextStep = details?.recommendedNextStep,
-        pauseReconnect = pauseReconnect || details?.pauseReconnect == true,
-        retryable = details?.retryable == true,
-      )
+    return GatewayConnectionProblem(
+      code = details?.code ?: error.code,
+      message = error.message,
+      reason = details?.reason,
+      requestId = details?.requestId,
+      recommendedNextStep = details?.recommendedNextStep,
+      pauseReconnect = pauseReconnect || details?.pauseReconnect == true,
+      retryable = details?.retryable == true,
+      clientMinProtocol = details?.clientMinProtocol,
+      clientMaxProtocol = details?.clientMaxProtocol,
+      expectedProtocol = details?.expectedProtocol,
+      minimumProbeProtocol = details?.minimumProbeProtocol,
+    )
   }
 
   private fun resolveMainSessionKey(): String {
@@ -766,6 +1280,7 @@ class NodeRuntime(
       refreshBrandingFromGateway()
       refreshAgentsFromGateway()
       refreshModelCatalogFromGateway()
+      refreshTalkSetupReadinessFromGateway()
       refreshCronFromGateway()
       refreshUsageFromGateway()
       refreshSkillsFromGateway()
@@ -782,6 +1297,10 @@ class NodeRuntime(
     }
   }
 
+  fun refreshTalkSetupReadiness() {
+    scope.launch { refreshTalkSetupReadinessFromGateway() }
+  }
+
   fun refreshAgents() {
     scope.launch {
       refreshAgentsFromGateway()
@@ -791,6 +1310,20 @@ class NodeRuntime(
   fun refreshCronJobs() {
     scope.launch {
       refreshCronFromGateway()
+    }
+  }
+
+  fun loadCronJobDetail(id: String) {
+    val request = cronJobDetailRequestGuard.begin(id) ?: return
+    _cronJobDetailState.value = GatewayCronJobDetailState.Loading(request.id)
+    scope.launch {
+      loadCronJobDetailFromGateway(request)
+    }
+  }
+
+  fun clearCronJobDetail() {
+    cronJobDetailRequestGuard.cancel {
+      _cronJobDetailState.value = GatewayCronJobDetailState.Idle
     }
   }
 
@@ -809,6 +1342,24 @@ class NodeRuntime(
   fun refreshNodesDevices() {
     scope.launch {
       refreshNodesDevicesFromGateway()
+    }
+  }
+
+  fun refreshExecApprovals() {
+    scope.launch {
+      refreshExecApprovalsFromGateway()
+    }
+  }
+
+  fun resolveExecApproval(
+    id: String,
+    decision: String,
+  ) {
+    val normalizedId = id.trim()
+    val normalizedDecision = decision.trim()
+    if (normalizedId.isEmpty() || normalizedDecision.isEmpty()) return
+    scope.launch {
+      resolveExecApprovalOnGateway(id = normalizedId, decision = normalizedDecision)
     }
   }
 
@@ -834,8 +1385,9 @@ class NodeRuntime(
     source: String = "manual",
     force: Boolean = true,
   ) {
+    val gatewayId = connectedEndpoint?.stableId
     scope.launch {
-      if (!_nodeConnected.value) {
+      if (gatewayId == null || !_nodeConnected.value) {
         _canvasRehydratePending.value = false
         _canvasRehydrateErrorText.value = "Node offline. Reconnect and retry."
         return@launch
@@ -852,7 +1404,8 @@ class NodeRuntime(
           "If existing A2UI state exists, replay it immediately. " +
           "If not, create and render a compact mobile-friendly dashboard in Canvas."
       val sent =
-        nodeSession.sendNodeEvent(
+        nodeSession.sendNodeEventForEndpoint(
+          expectedEndpointStableId = gatewayId,
           event = "agent.request",
           payloadJson =
             buildJsonObject {
@@ -894,27 +1447,66 @@ class NodeRuntime(
   val manualHost: StateFlow<String> = prefs.manualHost
   val manualPort: StateFlow<Int> = prefs.manualPort
   val manualTls: StateFlow<Boolean> = prefs.manualTls
-  val gatewayToken: StateFlow<String> = prefs.gatewayToken
   val onboardingCompleted: StateFlow<Boolean> = prefs.onboardingCompleted
 
-  fun setGatewayToken(value: String) = prefs.setGatewayToken(value)
-
-  fun setGatewayBootstrapToken(value: String) = prefs.setGatewayBootstrapToken(value)
-
-  fun setGatewayPassword(value: String) = prefs.setGatewayPassword(value)
-
   /** Clears setup credentials plus paired device tokens for both Android gateway roles. */
-  fun resetGatewaySetupAuth() {
-    prefs.clearGatewaySetupAuth()
-    val deviceId = identityStore.loadOrCreate().deviceId
-    deviceAuthStore.clearToken(deviceId, "node")
-    deviceAuthStore.clearToken(deviceId, "operator")
+  suspend fun resetGatewaySetupAuth(stableId: String): Boolean =
+    gatewayLifecycleIntentSeq.incrementAndGet().let { intent ->
+      gatewaySwitchMutex.withLock {
+        if (intent != gatewayLifecycleIntentSeq.get()) false else resetGatewaySetupAuthLocked(stableId)
+      }
+    }
+
+  private suspend fun resetGatewaySetupAuthLocked(stableId: String): Boolean {
+    val connectOperationsDrained =
+      synchronized(gatewayAuthLifecycleLock) {
+        if (gatewayAuthResetInProgress) {
+          null
+        } else {
+          gatewayAuthResetInProgress = true
+          gatewayConnectOperationsDrained
+        }
+      }
+        ?: return false
+    return try {
+      connectOperationsDrained.await()
+      if (connectedEndpoint?.stableId == stableId) {
+        disconnectAndJoin()
+      }
+      if (connectingEndpointStableId == stableId) {
+        connectAttemptSeq.incrementAndGet()
+        connectingEndpointStableId = null
+        _pendingGatewayTrust.value = null
+        chat.onGatewayScopeChanging(retireRunState = true)
+      }
+      drainIdleGatewaySessionTails()
+      // A deliberate disconnect retains reconnect ownership. Authentication replacement does not.
+      chat.onGatewayScopeChanging(retireRunState = true)
+      // Replacing authentication retires the old identity even when the endpoint is unchanged.
+      // Purge only that gateway; ordinary switches retain every gateway's offline state.
+      val cacheCleared =
+        runCatching { chat.clearGatewayCache(stableId) }
+          .onFailure { err ->
+            Log.e("OpenClawRuntime", "Failed to purge gateway chat data before auth reset", err)
+            setStandaloneGatewayStatus("Failed: couldn't clear offline chat data. Retry sign out.")
+          }.isSuccess
+      if (!cacheCleared) return false
+      prefs.clearGatewayCredentials(stableId)
+      val deviceId = identityStore.loadOrCreate().deviceId
+      deviceAuthStore.clearToken(stableId, deviceId, "node")
+      deviceAuthStore.clearToken(stableId, deviceId, "operator")
+      true
+    } finally {
+      synchronized(gatewayAuthLifecycleLock) { gatewayAuthResetInProgress = false }
+    }
   }
 
   /** Persists onboarding state; callers decide whether runtime startup is needed first. */
   fun setOnboardingCompleted(value: Boolean) = prefs.setOnboardingCompleted(value)
 
   val lastDiscoveredStableId: StateFlow<String> = prefs.lastDiscoveredStableId
+  val pairedGateways: StateFlow<List<GatewayRegistryEntry>> = prefs.gatewayRegistry.entries
+  val activeGatewayStableId: StateFlow<String?> = prefs.gatewayRegistry.activeStableId
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
   val installedAppsSharingEnabled: StateFlow<Boolean> = prefs.installedAppsSharingEnabled
   val notificationForwardingEnabled: StateFlow<Boolean> = prefs.notificationForwardingEnabled
@@ -938,18 +1530,22 @@ class NodeRuntime(
   val chatError: StateFlow<String?> = chat.errorText
   val chatHealthOk: StateFlow<Boolean> = chat.healthOk
   val chatThinkingLevel: StateFlow<String> = chat.thinkingLevel
+  val chatSelectedModelRef: StateFlow<String?> = chat.selectedModelRef
+  val chatModelCatalog: StateFlow<List<GatewayModelSummary>> = chat.modelCatalog
   val chatStreamingAssistantText: StateFlow<String?> = chat.streamingAssistantText
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = chat.pendingToolCalls
   val chatSessions: StateFlow<List<ChatSessionEntry>> = chat.sessions
   val pendingRunCount: StateFlow<Int> = chat.pendingRunCount
+  val chatCommands: StateFlow<List<ChatCommandEntry>> = chat.commands
+  val chatOutboxItems: StateFlow<List<ChatOutboxItem>> = chat.outboxItems
+
+  fun retryChatOutboxCommand(id: String) = chat.retryOutboxCommand(id)
+
+  fun deleteChatOutboxCommand(id: String) = chat.deleteOutboxCommand(id)
 
   init {
     if (prefs.voiceWakeMode.value != VoiceWakeMode.Off) {
       prefs.setVoiceWakeMode(VoiceWakeMode.Off)
-    }
-
-    scope.launch {
-      prefs.loadGatewayToken()
     }
 
     if (prefs.voiceMicEnabled.value) {
@@ -985,10 +1581,17 @@ class NodeRuntime(
   /** Updates foreground state and triggers reconnect/presence behavior on app visibility changes. */
   fun setForeground(value: Boolean) {
     _isForeground.value = value
+    if (!value) {
+      voiceLifecycleEpoch.incrementAndGet()
+    }
     if (value) {
       reconnectPreferredGatewayOnForeground()
+      scope.launch {
+        refreshExecApprovalsFromGateway()
+      }
     } else {
-      stopManualVoiceSession()
+      stopMessageSpeech()
+      stopActiveVoiceSession()
       publishNodePresenceAliveBeacon(NodePresenceAliveBeacon.Trigger.Background, throttleRecentSuccess = true)
     }
   }
@@ -997,12 +1600,18 @@ class NodeRuntime(
     trigger: NodePresenceAliveBeacon.Trigger,
     throttleRecentSuccess: Boolean = false,
   ) {
+    val gatewayId = connectedEndpoint?.stableId ?: return
     scope.launch {
-      sendNodePresenceAliveBeacon(trigger = trigger, throttleRecentSuccess = throttleRecentSuccess)
+      sendNodePresenceAliveBeacon(
+        gatewayId = gatewayId,
+        trigger = trigger,
+        throttleRecentSuccess = throttleRecentSuccess,
+      )
     }
   }
 
   private suspend fun sendNodePresenceAliveBeacon(
+    gatewayId: String,
     trigger: NodePresenceAliveBeacon.Trigger,
     throttleRecentSuccess: Boolean,
   ) {
@@ -1030,7 +1639,8 @@ class NodeRuntime(
         modelIdentifier = client.modelIdentifier,
       )
     val result =
-      nodeSession.sendNodeEventDetailed(
+      nodeSession.sendNodeEventDetailedForEndpoint(
+        expectedEndpointStableId = gatewayId,
         event = NodePresenceAliveBeacon.EVENT_NAME,
         payloadJson = payloadJson,
       )
@@ -1053,24 +1663,81 @@ class NodeRuntime(
   }
 
   private fun resolvePreferredGatewayEndpoint(): GatewayEndpoint? {
-    if (manualEnabled.value) {
-      val host = manualHost.value.trim()
-      val port = manualPort.value
-      if (host.isEmpty() || port !in 1..65535) return null
-      return GatewayEndpoint.manual(host = host, port = port)
+    val entry = prefs.gatewayRegistry.activeEntry() ?: return null
+    return when (entry.kind) {
+      GatewayRegistryEntryKind.MANUAL -> {
+        val host = entry.host?.trim().orEmpty()
+        val port = entry.port ?: return null
+        if (host.isEmpty() || port !in 1..65535) return null
+        GatewayEndpoint.manual(host = host, port = port)
+      }
+      GatewayRegistryEntryKind.DISCOVERED -> {
+        val endpoint = gateways.value.firstOrNull { it.stableId == entry.stableId } ?: return null
+        val storedFingerprint = prefs.loadGatewayTlsFingerprint(endpoint.stableId)?.trim().orEmpty()
+        endpoint.takeIf { storedFingerprint.isNotEmpty() }
+      }
     }
+  }
 
-    val targetStableId = lastDiscoveredStableId.value.trim()
-    if (targetStableId.isEmpty()) return null
-    val endpoint = gateways.value.firstOrNull { it.stableId == targetStableId } ?: return null
-    val storedFingerprint = prefs.loadGatewayTlsFingerprint(endpoint.stableId)?.trim().orEmpty()
-    if (storedFingerprint.isEmpty()) return null
-    return endpoint
+  suspend fun switchToGateway(stableId: String): Boolean {
+    val entry =
+      prefs.gatewayRegistry.entries.value
+        .firstOrNull { it.stableId == stableId } ?: return false
+    val endpoint =
+      when (entry.kind) {
+        GatewayRegistryEntryKind.MANUAL -> {
+          val host = entry.host?.trim().orEmpty()
+          val port = entry.port ?: return false
+          if (host.isEmpty() || port !in 1..65535) return false
+          GatewayEndpoint.manual(host, port)
+        }
+        GatewayRegistryEntryKind.DISCOVERED ->
+          gateways.value.firstOrNull { it.stableId == stableId }
+            ?: run {
+              setStandaloneGatewayStatus("Gateway not currently discoverable")
+              return false
+            }
+      }
+    return connectSwitchingGateway(endpoint)
+  }
+
+  suspend fun connectSwitchingGateway(
+    endpoint: GatewayEndpoint,
+    explicitAuth: GatewayConnectAuth? = null,
+  ): Boolean {
+    val intent = gatewayLifecycleIntentSeq.incrementAndGet()
+    return gatewaySwitchMutex.withLock {
+      if (intent != gatewayLifecycleIntentSeq.get()) return@withLock false
+      val currentStableId =
+        connectedEndpoint?.stableId
+          ?: connectingEndpointStableId
+          ?: prefs.gatewayRegistry.activeStableId.value
+      if (currentStableId != null && currentStableId != endpoint.stableId) {
+        disconnectAndJoin()
+      }
+      if (prefs.gatewayRegistry.entries.value
+          .any { it.stableId == endpoint.stableId }
+      ) {
+        prefs.gatewayRegistry.setActive(endpoint.stableId)
+      }
+      val started =
+        synchronized(gatewayLifecycleIntentLock) {
+          if (intent != gatewayLifecycleIntentSeq.get()) {
+            false
+          } else {
+            beginConnect(endpoint, resolveGatewayConnectAuth(endpoint, explicitAuth))
+            true
+          }
+        }
+      if (!started) return@withLock false
+      chat.restoreSelectedGatewayOfflineState()
+      true
+    }
   }
 
   private fun autoConnectIfNeeded() {
     if (didAutoConnect) return
-    if (_isConnected.value) return
+    if (gatewayConnectionDisplay.value.isConnected) return
     val endpoint = resolvePreferredGatewayEndpoint() ?: return
     // Only attempt the stored preferred gateway once per runtime lifetime; users
     // can still reconnect explicitly from the UI after a failed auto attempt.
@@ -1079,7 +1746,7 @@ class NodeRuntime(
   }
 
   private fun reconnectPreferredGatewayOnForeground() {
-    if (_isConnected.value) return
+    if (gatewayConnectionDisplay.value.isConnected) return
     if (_pendingGatewayTrust.value != null) return
     if (connectedEndpoint != null) {
       refreshGatewayConnection()
@@ -1135,40 +1802,86 @@ class NodeRuntime(
   }
 
   fun setNotificationForwardingEnabled(value: Boolean) {
-    prefs.setNotificationForwardingEnabled(value)
+    if (prefs.notificationForwardingEnabled.value == value) return
+    notificationOutbox.updatePolicy { prefs.setNotificationForwardingEnabled(value) }
   }
 
   fun setNotificationForwardingMode(mode: NotificationPackageFilterMode) {
-    prefs.setNotificationForwardingMode(mode)
+    if (prefs.notificationForwardingMode.value == mode) return
+    notificationOutbox.updatePolicy { prefs.setNotificationForwardingMode(mode) }
   }
 
   fun setNotificationForwardingPackages(packages: List<String>) {
-    prefs.setNotificationForwardingPackages(packages)
+    val normalized = packages.map(String::trim).filter(String::isNotEmpty).toSet()
+    if (prefs.notificationForwardingPackages.value == normalized) return
+    notificationOutbox.updatePolicy { prefs.setNotificationForwardingPackages(normalized.toList()) }
   }
 
   fun setNotificationForwardingQuietHours(
     enabled: Boolean,
     start: String,
     end: String,
-  ): Boolean = prefs.setNotificationForwardingQuietHours(enabled = enabled, start = start, end = end)
+  ): Boolean {
+    if (!enabled) {
+      if (!prefs.notificationForwardingQuietHoursEnabled.value) return true
+      return notificationOutbox.updatePolicy {
+        prefs.setNotificationForwardingQuietHours(enabled = false, start = start, end = end)
+      }
+    }
+    val normalizedStart = normalizeLocalHourMinute(start) ?: return false
+    val normalizedEnd = normalizeLocalHourMinute(end) ?: return false
+    val unchanged =
+      prefs.notificationForwardingQuietHoursEnabled.value &&
+        prefs.notificationForwardingQuietStart.value == normalizedStart &&
+        prefs.notificationForwardingQuietEnd.value == normalizedEnd
+    if (unchanged) return true
+    return notificationOutbox.updatePolicy {
+      prefs.setNotificationForwardingQuietHours(
+        enabled = true,
+        start = normalizedStart,
+        end = normalizedEnd,
+      )
+    }
+  }
 
   fun setNotificationForwardingMaxEventsPerMinute(value: Int) {
-    prefs.setNotificationForwardingMaxEventsPerMinute(value)
+    val normalized = value.coerceAtLeast(1)
+    if (prefs.notificationForwardingMaxEventsPerMinute.value == normalized) return
+    notificationOutbox.updatePolicy {
+      prefs.setNotificationForwardingMaxEventsPerMinute(normalized)
+    }
   }
 
   fun setNotificationForwardingSessionKey(value: String?) {
-    prefs.setNotificationForwardingSessionKey(value)
+    val normalized = value?.trim()?.takeIf(String::isNotEmpty)
+    if (prefs.notificationForwardingSessionKey.value == normalized) return
+    notificationOutbox.updatePolicy { prefs.setNotificationForwardingSessionKey(normalized) }
   }
 
   fun setVoiceScreenActive(active: Boolean) {
     if (!active) {
       stopManualVoiceSession()
+    } else {
+      refreshTalkSetupReadiness()
     }
     // Don't re-enable on active=true; mic toggle drives that
   }
 
   fun setMicEnabled(value: Boolean) {
     setVoiceCaptureMode(if (value) VoiceCaptureMode.ManualMic else VoiceCaptureMode.Off)
+  }
+
+  internal fun tryAcquireVoiceNoteMic(): Boolean =
+    synchronized(voiceCaptureOwnershipLock) {
+      if (voiceNoteOwnsMic || !isVoiceCaptureModeActive(VoiceCaptureMode.Off)) return@synchronized false
+      voiceNoteOwnsMic = true
+      true
+    }
+
+  internal fun releaseVoiceNoteMic() {
+    synchronized(voiceCaptureOwnershipLock) {
+      voiceNoteOwnsMic = false
+    }
   }
 
   fun cancelMicCapture() {
@@ -1182,39 +1895,126 @@ class NodeRuntime(
   }
 
   private suspend fun handleTalkPttStart(): GatewaySession.InvokeResult =
-    runPreparedTalkPttCommand {
-      val payload = talkMode.beginPushToTalk()
+    runTalkPttCommand {
+      talkMode.finishingPushToTalkCaptureId?.let {
+        return@runTalkPttCommand GatewaySession.InvokeResult.error(
+          code = "PTT_BUSY",
+          message = "PTT_BUSY: previous push-to-talk turn is still finishing",
+        )
+      }
+      val lifecycleEpoch = voiceLifecycleEpoch.get()
+      val commandEpoch = talkPttCommandEpoch.get()
+      if (!_isForeground.value) {
+        val payload = talkMode.beginPushToTalk(allowNewCapture = false)
+        return@runTalkPttCommand GatewaySession.InvokeResult.ok(payload.toJson())
+      }
+      val payload =
+        withPreparedTalkPttCommand(lifecycleEpoch, commandEpoch) { ownershipEpoch ->
+          val started =
+            talkMode.beginPushToTalk(
+              allowNewCapture = true,
+              canStartCapture = {
+                _isForeground.value &&
+                  voiceLifecycleEpoch.get() == lifecycleEpoch &&
+                  talkPttCommandEpoch.get() == commandEpoch &&
+                  voiceCaptureOwnershipEpoch.get() == ownershipEpoch
+              },
+            )
+          recordTalkPttOwnership(captureId = started.captureId, ownershipEpoch = ownershipEpoch)
+          started
+        }
       GatewaySession.InvokeResult.ok(payload.toJson())
     }
 
   private suspend fun handleTalkPttStop(): GatewaySession.InvokeResult =
     runTalkPttCommand {
-      val payload = talkMode.endPushToTalk()
-      finishTalkCaptureIfIdle()
+      val payload = stopPreparedTalkPttCapture { talkMode.endPushToTalk() }
       GatewaySession.InvokeResult.ok(payload.toJson())
     }
 
   private suspend fun handleTalkPttCancel(): GatewaySession.InvokeResult =
     runTalkPttCommand {
-      val payload = talkMode.cancelPushToTalk()
-      finishTalkCaptureIfIdle()
+      val payload = stopPreparedTalkPttCapture { talkMode.cancelPushToTalk() }
       GatewaySession.InvokeResult.ok(payload.toJson())
     }
 
   private suspend fun handleTalkPttOnce(): GatewaySession.InvokeResult =
-    runPreparedTalkPttCommand {
-      val payload = talkMode.runPushToTalkOnce()
-      finishTalkCaptureIfIdle()
+    runTalkPttCommand {
+      currentTalkPttOnceBusy()?.let { busy ->
+        return@runTalkPttCommand GatewaySession.InvokeResult.ok(busy.payload.toJson())
+      }
+      val lifecycleEpoch = voiceLifecycleEpoch.get()
+      val commandEpoch = talkPttCommandEpoch.get()
+      val start =
+        withPreparedTalkPttCommand(
+          lifecycleEpoch = lifecycleEpoch,
+          commandEpoch = commandEpoch,
+          beforePrepare = ::currentTalkPttOnceBusy,
+        ) { ownershipEpoch ->
+          val started =
+            talkMode.beginPushToTalkOnce(
+              canStartCapture = {
+                _isForeground.value &&
+                  voiceLifecycleEpoch.get() == lifecycleEpoch &&
+                  talkPttCommandEpoch.get() == commandEpoch &&
+                  voiceCaptureOwnershipEpoch.get() == ownershipEpoch
+              },
+            )
+          when (started) {
+            is TalkPttOnceStart.Busy -> cleanupFailedTalkCapture(ownershipEpoch)
+            is TalkPttOnceStart.Started ->
+              recordTalkPttOwnership(captureId = started.captureId, ownershipEpoch = ownershipEpoch)
+          }
+          started
+        }
+      val payload =
+        try {
+          talkMode.awaitPushToTalkOnce(start)
+        } finally {
+          if (start is TalkPttOnceStart.Started) {
+            finishTalkCaptureIfIdleAfterPreparation(start.captureId)
+          }
+        }
       GatewaySession.InvokeResult.ok(payload.toJson())
     }
 
-  private suspend fun runPreparedTalkPttCommand(block: suspend () -> GatewaySession.InvokeResult): GatewaySession.InvokeResult =
-    runTalkPttCommand {
-      prepareTalkCapture()
+  private fun currentTalkPttOnceBusy(): TalkPttOnceStart.Busy? {
+    val captureId = talkMode.activePushToTalkCaptureId ?: talkMode.finishingPushToTalkCaptureId ?: return null
+    return TalkPttOnceStart.Busy(
+      TalkPttStopPayload(captureId = captureId, transcript = null, status = "busy"),
+    )
+  }
+
+  private suspend fun <T> withPreparedTalkPttCommand(
+    lifecycleEpoch: Long,
+    commandEpoch: Long,
+    beforePrepare: () -> T? = { null },
+    block: suspend (ownershipEpoch: Long) -> T,
+  ): T =
+    voiceCapturePreparationMutex.withLock {
+      // Preparation suspends while gateway config loads. Serialize ownership so
+      // a stale command cannot clean up a newer command before capture starts.
+      if (
+        !_isForeground.value ||
+        voiceLifecycleEpoch.get() != lifecycleEpoch ||
+        talkPttCommandEpoch.get() != commandEpoch
+      ) {
+        throw IllegalStateException("NODE_BACKGROUND_UNAVAILABLE: command requires foreground")
+      }
+      beforePrepare()?.let { return@withLock it }
+      val ownershipEpoch = prepareTalkCapture(lifecycleEpoch, commandEpoch)
       try {
-        block()
+        if (
+          !_isForeground.value ||
+          voiceLifecycleEpoch.get() != lifecycleEpoch ||
+          talkPttCommandEpoch.get() != commandEpoch ||
+          voiceCaptureOwnershipEpoch.get() != ownershipEpoch
+        ) {
+          throw IllegalStateException("NODE_BACKGROUND_UNAVAILABLE: command requires foreground")
+        }
+        block(ownershipEpoch)
       } catch (err: Throwable) {
-        cleanupFailedTalkCapture()
+        cleanupFailedTalkCapture(ownershipEpoch)
         throw err
       }
     }
@@ -1227,27 +2027,107 @@ class NodeRuntime(
       GatewaySession.InvokeResult.error(code = code, message = message)
     }
 
-  private suspend fun prepareTalkCapture() {
-    if (!hasRecordAudioPermission()) {
-      throw IllegalStateException("MIC_PERMISSION_REQUIRED: grant Microphone permission")
+  private suspend fun prepareTalkCapture(
+    lifecycleEpoch: Long,
+    commandEpoch: Long,
+  ): Long {
+    // Publish preparation on Main with lifecycle shutdown. After this block
+    // yields, preparation must not write capture state that backgrounding cleared.
+    val ownershipEpoch =
+      withContext(Dispatchers.Main) {
+        synchronized(voiceCaptureOwnershipLock) {
+          if (
+            !_isForeground.value ||
+            voiceLifecycleEpoch.get() != lifecycleEpoch ||
+            talkPttCommandEpoch.get() != commandEpoch
+          ) {
+            throw IllegalStateException("NODE_BACKGROUND_UNAVAILABLE: command requires foreground")
+          }
+          if (voiceNoteOwnsMic) {
+            throw IllegalStateException("MIC_BUSY: voice note recording is active")
+          }
+          if (!hasRecordAudioPermission()) {
+            throw IllegalStateException("MIC_PERMISSION_REQUIRED: grant Microphone permission")
+          }
+          val epoch = voiceCaptureOwnershipEpoch.incrementAndGet()
+          micCapture.setMicEnabled(false)
+          stopVoicePlayback()
+          NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.TalkMode)
+          talkMode.ttsOnAllResponses = true
+          talkMode.setPlaybackEnabled(speakerEnabled.value)
+          externalAudioCaptureActive.value = true
+          epoch
+        }
+      }
+    try {
+      talkMode.refreshConfig()
+      return ownershipEpoch
+    } catch (err: Throwable) {
+      cleanupFailedTalkCapture(ownershipEpoch)
+      throw err
     }
-    micCapture.setMicEnabled(false)
-    stopVoicePlayback()
-    NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.TalkMode)
-    talkMode.ttsOnAllResponses = true
-    talkMode.setPlaybackEnabled(speakerEnabled.value)
-    talkMode.refreshConfig()
-    externalAudioCaptureActive.value = true
   }
 
-  private suspend fun cleanupFailedTalkCapture() {
-    runCatching { talkMode.cancelPushToTalk() }
-    talkMode.ttsOnAllResponses = false
-    NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
-    externalAudioCaptureActive.value = false
+  private fun cleanupFailedTalkCapture(ownershipEpoch: Long) {
+    synchronized(voiceCaptureOwnershipLock) {
+      // TalkModeManager owns capture-scoped cancellation. A stale invoke must not
+      // tear down a newer capture after a background/foreground transition.
+      if (voiceCaptureOwnershipEpoch.get() == ownershipEpoch) {
+        talkMode.activePushToTalkCaptureId?.let { captureId ->
+          // An idempotent retry can fail while the original capture remains live.
+          // Transfer preparation ownership so its eventual stop still cleans up.
+          talkPttOwnership.set(TalkPttOwnership(captureId = captureId, epoch = ownershipEpoch))
+          return
+        }
+      }
+      finishTalkCaptureIfIdleUnderOwnershipLock(ownershipEpoch)
+    }
   }
 
-  private fun finishTalkCaptureIfIdle() {
+  private fun recordTalkPttOwnership(
+    captureId: String,
+    ownershipEpoch: Long,
+  ) {
+    synchronized(voiceCaptureOwnershipLock) {
+      if (voiceCaptureOwnershipEpoch.get() == ownershipEpoch) {
+        talkPttOwnership.set(TalkPttOwnership(captureId = captureId, epoch = ownershipEpoch))
+      }
+    }
+  }
+
+  private suspend fun finishTalkCaptureIfIdleAfterPreparation(captureId: String) {
+    withContext(NonCancellable) {
+      voiceCapturePreparationMutex.withLock {
+        finishTalkCaptureIfIdleLocked(captureId)
+      }
+    }
+  }
+
+  private suspend fun stopPreparedTalkPttCapture(
+    stopCapture: suspend () -> TalkPttStopPayload,
+  ): TalkPttStopPayload {
+    // Preparation can suspend on gateway config. Invalidate it before waiting,
+    // while later starts queue behind this stop with the new command epoch.
+    talkPttCommandEpoch.incrementAndGet()
+    return withContext(NonCancellable) {
+      voiceCapturePreparationMutex.withLock {
+        val payload = stopCapture()
+        finishTalkCaptureIfIdleLocked(payload.captureId)
+        payload
+      }
+    }
+  }
+
+  private fun finishTalkCaptureIfIdleLocked(captureId: String) {
+    synchronized(voiceCaptureOwnershipLock) {
+      val ownership = talkPttOwnership.get()
+      if (ownership?.captureId != captureId || !talkPttOwnership.compareAndSet(ownership, null)) return
+      finishTalkCaptureIfIdleUnderOwnershipLock(ownership.epoch)
+    }
+  }
+
+  private fun finishTalkCaptureIfIdleUnderOwnershipLock(ownershipEpoch: Long) {
+    if (ownershipEpoch == 0L || voiceCaptureOwnershipEpoch.get() != ownershipEpoch) return
     if (!talkMode.isEnabled.value && !talkMode.isListening.value && !talkMode.isSpeaking.value) {
       talkMode.ttsOnAllResponses = false
       NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
@@ -1256,11 +2136,15 @@ class NodeRuntime(
   }
 
   private fun finishTalkModeAfterRelayClose() {
-    if (_voiceCaptureMode.value != VoiceCaptureMode.TalkMode) return
-    _voiceCaptureMode.value = VoiceCaptureMode.Off
-    talkMode.ttsOnAllResponses = false
-    NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
-    externalAudioCaptureActive.value = false
+    synchronized(voiceCaptureOwnershipLock) {
+      if (_voiceCaptureMode.value != VoiceCaptureMode.TalkMode) return
+      talkPttCommandEpoch.incrementAndGet()
+      voiceCaptureOwnershipEpoch.incrementAndGet()
+      _voiceCaptureMode.value = VoiceCaptureMode.Off
+      talkMode.ttsOnAllResponses = false
+      NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
+      externalAudioCaptureActive.value = false
+    }
   }
 
   val speakerEnabled: StateFlow<Boolean>
@@ -1284,7 +2168,7 @@ class NodeRuntime(
     if (!BuildConfig.DEBUG) {
       throw IllegalStateException("voice e2e is debug-only")
     }
-    if (!_isConnected.value) {
+    if (!gatewayConnectionDisplay.value.isConnected) {
       throw IllegalStateException("gateway not connected")
     }
     if (!hasRecordAudioPermission()) {
@@ -1388,51 +2272,56 @@ class NodeRuntime(
     mode: VoiceCaptureMode,
     persistManualMic: Boolean = true,
   ) {
-    if (mode == VoiceCaptureMode.TalkMode && !hasRecordAudioPermission()) {
-      _voiceCaptureMode.value = VoiceCaptureMode.Off
-      externalAudioCaptureActive.value = false
-      return
-    }
-    if (_voiceCaptureMode.value == mode) return
-    _voiceCaptureMode.value = mode
-    when (mode) {
-      VoiceCaptureMode.Off -> {
-        talkMode.ttsOnAllResponses = false
-        talkMode.setEnabled(false)
-        stopVoicePlayback()
-        micCapture.setMicEnabled(false)
-        if (persistManualMic) {
-          prefs.setVoiceMicEnabled(false)
+    synchronized(voiceCaptureOwnershipLock) {
+      if (mode != VoiceCaptureMode.Off && voiceNoteOwnsMic) return
+      talkPttCommandEpoch.incrementAndGet()
+      voiceCaptureOwnershipEpoch.incrementAndGet()
+      val permissionDenied = mode.requiresMicrophonePermission && !hasRecordAudioPermission()
+      val captureMode = if (permissionDenied) VoiceCaptureMode.Off else mode
+      if (permissionDenied) prefs.setVoiceMicEnabled(false)
+      if (_voiceCaptureMode.value == captureMode && isVoiceCaptureModeActive(captureMode)) return
+      talkPttOwnership.set(null)
+      _voiceCaptureMode.value = captureMode
+      when (captureMode) {
+        VoiceCaptureMode.Off -> {
+          talkMode.ttsOnAllResponses = false
+          talkMode.stopAllCapture()
+          stopVoicePlayback()
+          micCapture.setMicEnabled(false)
+          if (persistManualMic) {
+            prefs.setVoiceMicEnabled(false)
+          }
+          NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
+          externalAudioCaptureActive.value = false
         }
-        NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
-        externalAudioCaptureActive.value = false
-      }
 
-      VoiceCaptureMode.ManualMic -> {
-        talkMode.ttsOnAllResponses = false
-        talkMode.setEnabled(false)
-        NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.ManualMic)
-        if (persistManualMic) {
-          prefs.setVoiceMicEnabled(true)
+        VoiceCaptureMode.ManualMic -> {
+          talkMode.ttsOnAllResponses = false
+          talkMode.stopAllCapture()
+          NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.ManualMic)
+          if (persistManualMic) {
+            prefs.setVoiceMicEnabled(true)
+          }
+          // Tapping mic on interrupts any active TTS (barge-in).
+          stopVoicePlayback()
+          scope.launch { talkMode.refreshConfig() }
+          micCapture.setMicEnabled(true)
+          externalAudioCaptureActive.value = true
         }
-        // Tapping mic on interrupts any active TTS (barge-in).
-        stopVoicePlayback()
-        scope.launch { talkMode.refreshConfig() }
-        micCapture.setMicEnabled(true)
-        externalAudioCaptureActive.value = true
-      }
 
-      VoiceCaptureMode.TalkMode -> {
-        if (persistManualMic) {
-          prefs.setVoiceMicEnabled(false)
+        VoiceCaptureMode.TalkMode -> {
+          if (persistManualMic) {
+            prefs.setVoiceMicEnabled(false)
+          }
+          micCapture.setMicEnabled(false)
+          NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.TalkMode)
+          talkMode.ttsOnAllResponses = true
+          talkMode.setPlaybackEnabled(speakerEnabled.value)
+          scope.launch { talkMode.refreshConfig() }
+          talkMode.stopAllCapture()
+          talkMode.setEnabled(true)
+          externalAudioCaptureActive.value = true
         }
-        micCapture.setMicEnabled(false)
-        NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.TalkMode)
-        talkMode.ttsOnAllResponses = true
-        talkMode.setPlaybackEnabled(speakerEnabled.value)
-        scope.launch { talkMode.refreshConfig() }
-        talkMode.setEnabled(true)
-        externalAudioCaptureActive.value = true
       }
     }
   }
@@ -1443,14 +2332,19 @@ class NodeRuntime(
   }
 
   private fun stopActiveVoiceSession() {
-    talkMode.ttsOnAllResponses = false
-    talkMode.setEnabled(false)
-    stopVoicePlayback()
-    micCapture.setMicEnabled(false)
-    prefs.setVoiceMicEnabled(false)
-    NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
-    _voiceCaptureMode.value = VoiceCaptureMode.Off
-    externalAudioCaptureActive.value = false
+    synchronized(voiceCaptureOwnershipLock) {
+      talkPttCommandEpoch.incrementAndGet()
+      voiceCaptureOwnershipEpoch.incrementAndGet()
+      talkPttOwnership.set(null)
+      talkMode.ttsOnAllResponses = false
+      talkMode.stopAllCapture()
+      stopVoicePlayback()
+      micCapture.setMicEnabled(false)
+      prefs.setVoiceMicEnabled(false)
+      NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
+      _voiceCaptureMode.value = VoiceCaptureMode.Off
+      externalAudioCaptureActive.value = false
+    }
   }
 
   private fun stopVoicePlayback() {
@@ -1460,65 +2354,159 @@ class NodeRuntime(
     }
   }
 
-  fun refreshGatewayConnection() {
-    val endpoint = connectedEndpoint
-    if (endpoint == null) {
-      resolvePreferredGatewayEndpoint()?.let(::connect)
-        ?: run {
-          _statusText.value = "Failed: no saved gateway endpoint"
-        }
-      return
+  private val VoiceCaptureMode.requiresMicrophonePermission: Boolean
+    get() = this == VoiceCaptureMode.ManualMic || this == VoiceCaptureMode.TalkMode
+
+  private fun isVoiceCaptureModeActive(mode: VoiceCaptureMode): Boolean =
+    when (mode) {
+      VoiceCaptureMode.Off ->
+        !externalAudioCaptureActive.value &&
+          !micCapture.micEnabled.value &&
+          !talkMode.isEnabled.value &&
+          talkMode.activePushToTalkCaptureId == null
+      VoiceCaptureMode.ManualMic ->
+        externalAudioCaptureActive.value &&
+          micCapture.micEnabled.value &&
+          !talkMode.isEnabled.value &&
+          talkMode.activePushToTalkCaptureId == null
+      VoiceCaptureMode.TalkMode ->
+        externalAudioCaptureActive.value &&
+          !micCapture.micEnabled.value &&
+          talkMode.isEnabled.value &&
+          talkMode.activePushToTalkCaptureId == null
     }
-    operatorStatusText = "Connecting…"
-    updateStatus()
-    connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(), reconnect = true)
+
+  fun refreshGatewayConnection() {
+    gatewayLifecycleIntentSeq.incrementAndGet()
+    launchGatewayLifecycle {
+      val endpoint = connectedEndpoint
+      if (endpoint == null) {
+        val preferred = resolvePreferredGatewayEndpoint()
+        if (preferred == null) {
+          setStandaloneGatewayStatus("Failed: no saved gateway endpoint")
+        } else {
+          prepareGatewayTarget(preferred)
+          beginConnect(preferred, resolveGatewayConnectAuth(preferred))
+        }
+        return@launchGatewayLifecycle
+      }
+      updateStatus {
+        operatorStatusText = "Connecting…"
+        operatorConnectionProblem = null
+      }
+      connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint), reconnect = true)
+    }
   }
 
   private fun refreshNodeSurfaceAfterSharingChange() {
-    val endpoint = connectedEndpoint ?: return
-    connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(), reconnect = true)
+    launchGatewayLifecycle {
+      val endpoint = connectedEndpoint ?: return@launchGatewayLifecycle
+      connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint), reconnect = true)
+    }
+  }
+
+  private fun launchGatewayLifecycle(block: () -> Unit) {
+    val intent = gatewayLifecycleIntentSeq.get()
+    val guardedBlock = {
+      synchronized(gatewayLifecycleIntentLock) {
+        if (intent == gatewayLifecycleIntentSeq.get()) block()
+      }
+    }
+    if (gatewaySwitchMutex.tryLock()) {
+      try {
+        guardedBlock()
+      } finally {
+        gatewaySwitchMutex.unlock()
+      }
+    } else {
+      scope.launch { gatewaySwitchMutex.withLock { guardedBlock() } }
+    }
   }
 
   private fun connectWithAuth(
     endpoint: GatewayEndpoint,
     auth: GatewayConnectAuth,
     reconnect: Boolean = false,
-  ) {
-    activeGatewayAuth = auth
-    val tls = connectionManager.resolveTlsParams(endpoint)
-    val operatorAuth =
-      resolveOperatorSessionConnectAuth(
-        auth = auth,
-        storedOperatorToken = loadStoredRoleDeviceToken("operator"),
-      )
-    if (operatorAuth == null) {
-      operatorConnected = false
-      operatorStatusText = "Offline"
-      operatorSession.disconnect()
-      updateStatus()
-    } else {
-      operatorSession.connect(
+    beforeConnect: () -> Unit = {},
+  ): Boolean =
+    runGatewayConnectOperation {
+      beforeConnect()
+      activeGatewayAuth = auth
+      val tls = connectionManager.resolveTlsParams(endpoint)
+      val storedOperatorEntry = loadStoredRoleDeviceAuthEntry(endpoint, "operator")
+      refreshGatewayControlPage(endpoint, auth, storedOperatorEntry?.token)
+      val usesStoredOperatorDeviceToken =
+        operatorSessionUsesStoredDeviceToken(auth, storedOperatorEntry?.token)
+      val operatorAuth =
+        resolveOperatorSessionConnectAuth(
+          auth = auth,
+          storedOperatorToken = storedOperatorEntry?.token,
+        )
+      if (operatorAuth == null) {
+        updateStatus {
+          operatorConnected = false
+          operatorStatusText = "Offline"
+          operatorConnectionProblem = null
+        }
+        operatorSession.disconnect()
+      } else {
+        operatorSession.connect(
+          endpoint,
+          operatorAuth.token,
+          operatorAuth.bootstrapToken,
+          operatorAuth.password,
+          connectionManager.buildOperatorConnectOptions(
+            scopes =
+              operatorConnectScopesForAuth(
+                usesStoredDeviceToken = usesStoredOperatorDeviceToken,
+                storedOperatorScopes = storedOperatorEntry?.scopes,
+              ),
+          ),
+          tls,
+        )
+      }
+      nodeSession.connect(
         endpoint,
-        operatorAuth.token,
-        operatorAuth.bootstrapToken,
-        operatorAuth.password,
-        connectionManager.buildOperatorConnectOptions(),
+        auth.token,
+        auth.bootstrapToken,
+        auth.password,
+        connectionManager.buildNodeConnectOptions(),
         tls,
       )
+      if (reconnect && operatorAuth != null) {
+        operatorSession.reconnect()
+      }
+      if (reconnect) {
+        nodeSession.reconnect()
+      }
     }
-    nodeSession.connect(
-      endpoint,
-      auth.token,
-      auth.bootstrapToken,
-      auth.password,
-      connectionManager.buildNodeConnectOptions(),
-      tls,
-    )
-    if (reconnect && operatorAuth != null) {
-      operatorSession.reconnect()
-    }
-    if (reconnect) {
-      nodeSession.reconnect()
+
+  // Auth reset waits for claimed connection starts before disconnecting. Session calls stay outside
+  // this monitor because GatewaySession invokes callbacks while holding its own lifecycle monitor.
+  private fun runGatewayConnectOperation(block: () -> Unit): Boolean {
+    val claimed =
+      synchronized(gatewayAuthLifecycleLock) {
+        if (gatewayAuthResetInProgress) {
+          false
+        } else {
+          if (gatewayConnectOperationsInFlight == 0) {
+            gatewayConnectOperationsDrained = CompletableDeferred()
+          }
+          gatewayConnectOperationsInFlight += 1
+          true
+        }
+      }
+    if (!claimed) return false
+    try {
+      block()
+      return true
+    } finally {
+      val drained =
+        synchronized(gatewayAuthLifecycleLock) {
+          gatewayConnectOperationsInFlight -= 1
+          gatewayConnectOperationsDrained.takeIf { gatewayConnectOperationsInFlight == 0 }
+        }
+      drained?.complete(Unit)
     }
   }
 
@@ -1526,7 +2514,15 @@ class NodeRuntime(
     endpoint: GatewayEndpoint,
     auth: GatewayConnectAuth,
   ) {
+    synchronized(gatewayAuthLifecycleLock) {
+      if (gatewayAuthResetInProgress) return
+    }
+    // A user-selected connect target must never inherit notification content from another gateway.
+    notificationOutbox.clear()
+    invalidateNodeCapabilityApprovalState()
     val connectAttemptId = connectAttemptSeq.incrementAndGet()
+    connectingEndpointStableId = endpoint.stableId
+    chat.onGatewayScopeChanging()
     _pendingGatewayTrust.value = null
     val tls = connectionManager.resolveTlsParams(endpoint)
     if (tls?.required == true) {
@@ -1534,14 +2530,15 @@ class NodeRuntime(
         tls.expectedFingerprint
           ?.let(::normalizeGatewayTlsFingerprint)
           ?.takeIf { it.isNotBlank() }
-      _statusText.value = "Verify gateway TLS fingerprint…"
+      setStandaloneGatewayStatus("Verify gateway TLS fingerprint…")
       scope.launch {
         val tlsProbe = tlsFingerprintProbe(endpoint.host, endpoint.port)
         if (!isCurrentConnectAttempt(connectAttemptId)) return@launch
         val fp =
           tlsProbe.fingerprintSha256 ?: run {
             if (expectedFingerprint == null) {
-              _statusText.value = gatewayTlsProbeFailureMessage(tlsProbe.failure)
+              connectingEndpointStableId = null
+              setStandaloneGatewayStatus(gatewayTlsProbeFailureMessage(tlsProbe.failure))
             } else {
               connectAfterTlsCheck(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
             }
@@ -1553,13 +2550,16 @@ class NodeRuntime(
             ?: fp
         val previousFingerprint = expectedFingerprint?.takeUnless { it == observedFingerprint }
         if (expectedFingerprint == null || previousFingerprint != null) {
-          _pendingGatewayTrust.value =
-            GatewayTrustPrompt(
-              endpoint = endpoint,
-              fingerprintSha256 = observedFingerprint,
-              auth = auth,
-              previousFingerprintSha256 = previousFingerprint,
-            )
+          publishGatewayTrustPromptIfCurrent(
+            connectAttemptId = connectAttemptId,
+            prompt =
+              GatewayTrustPrompt(
+                endpoint = endpoint,
+                fingerprintSha256 = observedFingerprint,
+                auth = auth,
+                previousFingerprintSha256 = previousFingerprint,
+              ),
+          )
           return@launch
         }
         connectAfterTlsCheck(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
@@ -1567,60 +2567,146 @@ class NodeRuntime(
       return
     }
 
-    connectAfterTlsCheck(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
+    connectAfterTlsCheckLocked(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
   }
 
   private fun isCurrentConnectAttempt(connectAttemptId: Long): Boolean = connectAttemptSeq.get() == connectAttemptId
+
+  private fun publishGatewayTrustPromptIfCurrent(
+    connectAttemptId: Long,
+    prompt: GatewayTrustPrompt,
+  ): Boolean =
+    synchronized(gatewayAuthLifecycleLock) {
+      if (gatewayAuthResetInProgress || !isCurrentConnectAttempt(connectAttemptId)) {
+        false
+      } else {
+        _pendingGatewayTrust.value = prompt
+        true
+      }
+    }
+
+  private fun refreshGatewayControlPage(
+    endpoint: GatewayEndpoint? = connectedEndpoint,
+    auth: GatewayConnectAuth? = activeGatewayAuth,
+    storedOperatorToken: String? = endpoint?.let { loadStoredRoleDeviceAuthEntry(it, "operator")?.token },
+  ) {
+    if (endpoint == null) {
+      _gatewayControlPage.value = null
+      return
+    }
+    val pageAuth = resolveGatewayControlPageAuth(auth ?: resolveGatewayConnectAuth(endpoint), storedOperatorToken)
+    _gatewayControlPage.value =
+      GatewayControlPage(
+        baseUrl = gatewayControlPageBaseUrl(endpoint),
+        token = pageAuth.token,
+        password = pageAuth.password,
+      )
+  }
 
   private fun connectAfterTlsCheck(
     endpoint: GatewayEndpoint,
     auth: GatewayConnectAuth,
     connectAttemptId: Long,
   ) {
+    launchGatewayLifecycle { connectAfterTlsCheckLocked(endpoint, auth, connectAttemptId) }
+  }
+
+  private fun connectAfterTlsCheckLocked(
+    endpoint: GatewayEndpoint,
+    auth: GatewayConnectAuth,
+    connectAttemptId: Long,
+  ) {
     if (!isCurrentConnectAttempt(connectAttemptId)) return
-    _gatewayConnectionProblem.value = null
-    connectedEndpoint = endpoint
-    operatorStatusText = "Connecting…"
-    nodeStatusText = "Connecting…"
-    updateStatus()
-    connectWithAuth(endpoint = endpoint, auth = auth)
+    connectWithAuth(endpoint = endpoint, auth = auth) {
+      connectedEndpoint = endpoint
+      connectingEndpointStableId = null
+      updateStatus {
+        operatorConnectionProblem = null
+        nodeConnectionProblem = null
+        operatorStatusText = "Connecting…"
+        nodeStatusText = "Connecting…"
+      }
+    }
   }
 
   fun connect(endpoint: GatewayEndpoint) {
-    beginConnect(endpoint = endpoint, auth = resolveGatewayConnectAuth())
+    gatewayLifecycleIntentSeq.incrementAndGet()
+    launchGatewayLifecycle {
+      prepareGatewayTarget(endpoint)
+      beginConnect(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint))
+    }
   }
 
   fun connect(
     endpoint: GatewayEndpoint,
     auth: GatewayConnectAuth,
   ) {
-    beginConnect(endpoint = endpoint, auth = resolveGatewayConnectAuth(auth))
+    gatewayLifecycleIntentSeq.incrementAndGet()
+    launchGatewayLifecycle {
+      prepareGatewayTarget(endpoint)
+      beginConnect(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint, auth))
+    }
   }
 
-  internal fun resolveGatewayConnectAuth(explicitAuth: GatewayConnectAuth? = null): GatewayConnectAuth =
+  private fun prepareGatewayTarget(endpoint: GatewayEndpoint) {
+    if (connectedEndpoint?.stableId?.let { it != endpoint.stableId } == true) {
+      // Closing both sockets is synchronous; cleanup callbacks may finish later, but no event can
+      // cross the active-pointer change on the old authenticated transport.
+      disconnect(retireRunState = true)
+    }
+    if (prefs.gatewayRegistry.entries.value
+        .any { it.stableId == endpoint.stableId }
+    ) {
+      prefs.gatewayRegistry.setActive(endpoint.stableId)
+    }
+  }
+
+  /** HTTP(S) origin serving the connected gateway's Control UI pages. */
+  private fun gatewayControlPageBaseUrl(endpoint: GatewayEndpoint): String {
+    val scheme = if (endpoint.tlsEnabled) "https" else "http"
+    return "$scheme://${formatGatewayAuthority(endpoint.host, endpoint.port)}"
+  }
+
+  internal fun resolveGatewayConnectAuth(
+    endpoint: GatewayEndpoint,
+    explicitAuth: GatewayConnectAuth? = null,
+  ): GatewayConnectAuth =
     explicitAuth
-      ?: GatewayConnectAuth(
-        token = prefs.loadGatewayToken(),
-        bootstrapToken = prefs.loadGatewayBootstrapToken(),
-        password = prefs.loadGatewayPassword(),
-      )
+      ?: prefs.loadGatewayCredentials(endpoint.stableId).let { credentials ->
+        GatewayConnectAuth(
+          token = credentials.token,
+          bootstrapToken = credentials.bootstrapToken,
+          password = credentials.password,
+        )
+      }
 
   fun acceptGatewayTrustPrompt() {
     val prompt = _pendingGatewayTrust.value ?: return
-    _pendingGatewayTrust.value = null
-    prefs.saveGatewayTlsFingerprint(prompt.endpoint.stableId, prompt.fingerprintSha256)
-    beginConnect(endpoint = prompt.endpoint, auth = prompt.auth)
+    gatewayLifecycleIntentSeq.incrementAndGet()
+    launchGatewayLifecycle {
+      if (_pendingGatewayTrust.value != prompt) return@launchGatewayLifecycle
+      _pendingGatewayTrust.value = null
+      prefs.saveGatewayTlsFingerprint(prompt.endpoint.stableId, prompt.fingerprintSha256)
+      registerGateway(prompt.endpoint, setActive = true)
+      beginConnect(endpoint = prompt.endpoint, auth = prompt.auth)
+    }
   }
 
   fun declineGatewayTrustPrompt() {
-    _pendingGatewayTrust.value = null
-    _statusText.value = "Offline"
+    gatewayLifecycleIntentSeq.incrementAndGet()
+    launchGatewayLifecycle {
+      _pendingGatewayTrust.value = null
+      connectingEndpointStableId = null
+      setStandaloneGatewayStatus("Offline")
+    }
   }
 
   private fun gatewayTlsProbeFailureMessage(failure: GatewayTlsProbeFailure?): String =
     when (failure) {
       GatewayTlsProbeFailure.TLS_UNAVAILABLE ->
         "Failed: this host requires wss:// or Tailscale Serve. No TLS endpoint detected."
+      GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT ->
+        "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry."
       GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE, null ->
         "Failed: couldn't reach the secure gateway endpoint for this host."
     }
@@ -1635,53 +2721,224 @@ class NodeRuntime(
     val host = manualHost.value.trim()
     val port = manualPort.value
     if (host.isEmpty() || port <= 0 || port > 65535) {
-      _statusText.value = "Failed: invalid manual host/port"
+      setStandaloneGatewayStatus("Failed: invalid manual host/port")
       return
     }
     connect(GatewayEndpoint.manual(host = host, port = port))
   }
 
-  private fun loadStoredRoleDeviceToken(role: String): String? {
+  private fun loadStoredRoleDeviceAuthEntry(
+    endpoint: GatewayEndpoint,
+    role: String,
+  ): DeviceAuthEntry? {
     val deviceId = identityStore.loadOrCreate().deviceId
-    return deviceAuthStore.loadToken(deviceId, role)
+    return deviceAuthStore.loadEntry(endpoint.stableId, deviceId, role)
   }
 
   private fun maybeStartOperatorSessionAfterNodeConnect(
     endpoint: GatewayEndpoint,
     auth: GatewayConnectAuth,
   ) {
-    if (operatorConnected) {
-      return
+    val selectedGatewayId = connectedEndpoint?.stableId ?: connectingEndpointStableId
+    if (selectedGatewayId != null && selectedGatewayId != endpoint.stableId) return
+    runGatewayConnectOperation {
+      if (operatorConnected) return@runGatewayConnectOperation
+      val storedOperatorEntry = loadStoredRoleDeviceAuthEntry(endpoint, "operator")
+      val usesStoredOperatorDeviceToken =
+        operatorSessionUsesStoredDeviceToken(auth, storedOperatorEntry?.token)
+      val operatorAuth =
+        resolveOperatorSessionConnectAuth(
+          auth = auth,
+          storedOperatorToken = storedOperatorEntry?.token,
+        ) ?: return@runGatewayConnectOperation
+      updateStatus {
+        operatorStatusText = "Connecting…"
+        operatorConnectionProblem = null
+      }
+      operatorSession.connect(
+        endpoint,
+        operatorAuth.token,
+        operatorAuth.bootstrapToken,
+        operatorAuth.password,
+        connectionManager.buildOperatorConnectOptions(
+          scopes =
+            operatorConnectScopesForAuth(
+              usesStoredDeviceToken = usesStoredOperatorDeviceToken,
+              storedOperatorScopes = storedOperatorEntry?.scopes,
+            ),
+        ),
+        connectionManager.resolveTlsParams(endpoint),
+      )
     }
-    val operatorAuth =
-      resolveOperatorSessionConnectAuth(
-        auth = auth,
-        storedOperatorToken = loadStoredRoleDeviceToken("operator"),
-      ) ?: return
-    operatorStatusText = "Connecting…"
-    updateStatus()
-    operatorSession.connect(
-      endpoint,
-      operatorAuth.token,
-      operatorAuth.bootstrapToken,
-      operatorAuth.password,
-      connectionManager.buildOperatorConnectOptions(),
-      connectionManager.resolveTlsParams(endpoint),
-    )
   }
 
   fun disconnect() {
-    connectAttemptSeq.incrementAndGet()
-    stopActiveVoiceSession()
-    connectedEndpoint = null
-    activeGatewayAuth = null
-    _gatewayConnectionProblem.value = null
-    _pendingGatewayTrust.value = null
+    synchronized(gatewayLifecycleIntentLock) {
+      gatewayLifecycleIntentSeq.incrementAndGet()
+      disconnect(retireRunState = false)
+    }
+  }
+
+  fun prepareForGatewaySetup() {
+    synchronized(gatewayLifecycleIntentLock) {
+      gatewayLifecycleIntentSeq.incrementAndGet()
+      disconnect(retireRunState = true)
+    }
+  }
+
+  private fun disconnect(retireRunState: Boolean) {
+    prepareDisconnect(retireRunState)
     operatorSession.disconnect()
     nodeSession.disconnect()
   }
 
+  suspend fun forgetGateway(stableId: String): Boolean =
+    gatewayLifecycleIntentSeq.incrementAndGet().let { intent ->
+      gatewaySwitchMutex.withLock {
+        if (intent != gatewayLifecycleIntentSeq.get()) false else forgetGatewayLocked(stableId)
+      }
+    }
+
+  private suspend fun forgetGatewayLocked(stableId: String): Boolean {
+    val normalized = stableId.trim()
+    if (normalized.isEmpty()) return false
+    val wasActive = prefs.gatewayRegistry.activeStableId.value == normalized
+    val connectOperationsDrained =
+      synchronized(gatewayAuthLifecycleLock) {
+        if (gatewayAuthResetInProgress) {
+          null
+        } else {
+          gatewayAuthResetInProgress = true
+          gatewayConnectOperationsDrained
+        }
+      }
+        ?: return false
+    return try {
+      connectOperationsDrained.await()
+      if (connectedEndpoint?.stableId == normalized) {
+        disconnectAndJoin()
+      } else if (connectingEndpointStableId == normalized) {
+        connectAttemptSeq.incrementAndGet()
+        connectingEndpointStableId = null
+        _pendingGatewayTrust.value = null
+        chat.onGatewayScopeChanging(retireRunState = true)
+      } else if (wasActive) {
+        prepareDisconnect(retireRunState = true)
+      }
+      drainIdleGatewaySessionTails()
+      val cacheCleared =
+        runCatching { chat.clearGatewayCache(normalized) }
+          .onFailure { err ->
+            Log.e("OpenClawRuntime", "Failed to purge forgotten gateway chat data", err)
+            setStandaloneGatewayStatus("Failed: couldn't clear offline gateway data. Retry forget.")
+          }.isSuccess
+      if (!cacheCleared) return false
+      val deviceId = identityStore.loadOrCreate().deviceId
+      deviceAuthStore.clearToken(normalized, deviceId, "node")
+      deviceAuthStore.clearToken(normalized, deviceId, "operator")
+      prefs.clearGatewayCredentials(normalized)
+      prefs.clearGatewayCustomHeaders(normalized)
+      prefs.clearGatewayTlsFingerprint(normalized)
+      prefs.clearNotificationForwardingSessionKey(normalized)
+      prefs.gatewayRegistry.remove(normalized)
+      true
+    } finally {
+      synchronized(gatewayAuthLifecycleLock) { gatewayAuthResetInProgress = false }
+    }
+  }
+
+  private fun recordConnectedGateway() {
+    val endpoint = connectedEndpoint ?: return
+    registerGateway(endpoint, setActive = true)
+    prefs.gatewayRegistry.markConnected(endpoint.stableId, System.currentTimeMillis())
+  }
+
+  private fun registerGateway(
+    endpoint: GatewayEndpoint,
+    setActive: Boolean,
+  ) {
+    val existing =
+      prefs.gatewayRegistry.entries.value
+        .firstOrNull { it.stableId == endpoint.stableId }
+    val entry =
+      if (endpoint.stableId.startsWith("manual|")) {
+        GatewayRegistryEntry(
+          stableId = endpoint.stableId,
+          kind = GatewayRegistryEntryKind.MANUAL,
+          name = endpoint.name,
+          host = endpoint.host,
+          port = endpoint.port,
+          tls = existing?.tls ?: manualTls.value,
+          lastConnectedAtMs = existing?.lastConnectedAtMs ?: 0L,
+        )
+      } else {
+        GatewayRegistryEntry(
+          stableId = endpoint.stableId,
+          kind = GatewayRegistryEntryKind.DISCOVERED,
+          name = endpoint.name,
+          tls = true,
+          lastConnectedAtMs = existing?.lastConnectedAtMs ?: 0L,
+        )
+      }
+    prefs.gatewayRegistry.upsert(entry)
+    if (setActive) prefs.gatewayRegistry.setActive(endpoint.stableId)
+  }
+
+  private suspend fun disconnectAndJoin() {
+    prepareDisconnect(retireRunState = true)
+    // Both sockets close before either reconnect loop is joined, so no authenticated role stays
+    // live while reset waits for the other role's terminal callback.
+    coroutineScope {
+      launch { operatorSession.disconnectAndJoin() }
+      launch { nodeSession.disconnectAndJoin() }
+    }
+  }
+
+  private suspend fun drainIdleGatewaySessionTails() {
+    if (connectedEndpoint != null || connectingEndpointStableId != null) return
+    coroutineScope {
+      launch { operatorSession.disconnectAndJoin() }
+      launch { nodeSession.disconnectAndJoin() }
+    }
+  }
+
+  private fun prepareDisconnect(retireRunState: Boolean) {
+    notificationOutbox.clear()
+    connectAttemptSeq.incrementAndGet()
+    synchronized(gatewayDataScopeLock) {
+      gatewayDataGeneration += 1
+      clearOperatorGatewayState()
+    }
+    chat.onGatewayScopeChanging(retireRunState)
+    stopMessageSpeech()
+    micCapture.onGatewayScopeChanging()
+    stopActiveVoiceSession()
+    talkMode.onGatewayScopeChanging()
+    if (voiceReplySpeakerLazy.isInitialized()) {
+      voiceReplySpeaker.onGatewayScopeChanging()
+    }
+    if (retireRunState) {
+      val defaultMainSessionKey = resolveNodeMainSessionKey()
+      _mainSessionKey.value = defaultMainSessionKey
+      talkMode.setMainSessionKey(defaultMainSessionKey)
+    }
+    connectedEndpoint = null
+    connectingEndpointStableId = null
+    _gatewayControlPage.value = null
+    activeGatewayAuth = null
+    updateStatus {
+      operatorConnected = false
+      _nodeConnected.value = false
+      operatorStatusText = "Offline"
+      nodeStatusText = "Offline"
+      operatorConnectionProblem = null
+      nodeConnectionProblem = null
+    }
+    _pendingGatewayTrust.value = null
+  }
+
   fun handleCanvasA2UIActionFromWebView(payloadJson: String) {
+    val gatewayId = connectedEndpoint?.stableId
     scope.launch {
       val trimmed = payloadJson.trim()
       if (trimmed.isEmpty()) return@launch
@@ -1730,9 +2987,10 @@ class NodeRuntime(
 
       val connected = _nodeConnected.value
       var error: String? = null
-      if (connected) {
+      if (connected && gatewayId != null) {
         val sent =
-          nodeSession.sendNodeEvent(
+          nodeSession.sendNodeEventForEndpoint(
+            expectedEndpointStableId = gatewayId,
             event = "agent.request",
             payloadJson =
               buildJsonObject {
@@ -1775,20 +3033,102 @@ class NodeRuntime(
     chat.refresh()
   }
 
-  fun refreshChatSessions(limit: Int? = null) {
-    chat.refreshSessions(limit = limit)
+  fun refreshChatSessions(
+    limit: Int? = null,
+    archived: Boolean = false,
+  ) {
+    chat.refreshSessions(limit = limit, archived = archived)
   }
+
+  suspend fun patchChatSession(
+    key: String,
+    label: String? = null,
+    clearLabel: Boolean = false,
+    category: String? = null,
+    clearCategory: Boolean = false,
+    pinned: Boolean? = null,
+    archived: Boolean? = null,
+    unread: Boolean? = null,
+  ) {
+    chat.patchSession(
+      key = key,
+      label = label,
+      clearLabel = clearLabel,
+      category = category,
+      clearCategory = clearCategory,
+      pinned = pinned,
+      archived = archived,
+      unread = unread,
+    )
+  }
+
+  suspend fun renameChatSessionGroup(
+    from: String,
+    to: String,
+  ) {
+    chat.renameSessionGroup(from = from, to = to)
+  }
+
+  suspend fun dissolveChatSessionGroup(group: String) {
+    chat.dissolveSessionGroup(group)
+  }
+
+  suspend fun deleteChatSession(key: String) {
+    chat.deleteSession(key)
+  }
+
+  suspend fun forkChatSession(parentKey: String): String? = chat.forkSession(parentKey)
 
   fun setChatThinkingLevel(level: String) {
     chat.setThinkingLevel(level)
   }
 
+  fun setChatSessionModel(
+    sessionKey: String,
+    modelRef: String?,
+  ) {
+    chat.setSessionModel(sessionKey = sessionKey, modelRef = modelRef)
+  }
+
   fun switchChatSession(sessionKey: String) {
+    stopMessageSpeech()
     chat.switchSession(sessionKey)
   }
 
+  fun selectChatAgent(agentId: String) {
+    val normalizedAgentId = agentId.trim()
+    if (normalizedAgentId.isEmpty()) return
+    stopMessageSpeech()
+    // Agent selection owns every main-session consumer; switching chat alone would
+    // leave Talk mode and the home canvas bound to the previous agent.
+    selectedChatAgentId = normalizedAgentId
+    syncMainSessionKey(normalizedAgentId)
+    chat.switchSession(_mainSessionKey.value)
+  }
+
+  suspend fun fetchChatSessionList(
+    search: String?,
+    archived: Boolean,
+  ): List<ChatSessionEntry> = chat.fetchSessionList(search = search, archived = archived)
+
   fun abortChat() {
     chat.abort()
+  }
+
+  fun startNewChat(worktree: Boolean = false) {
+    stopMessageSpeech()
+    chat.startNewChat(worktree = worktree)
+  }
+
+  fun toggleMessageSpeech(
+    messageId: String,
+    text: String,
+  ) {
+    messageSpeechController.toggle(messageId = messageId, text = text)
+  }
+
+  fun stopMessageSpeech() {
+    if (messageSpeechControllerLazy.isInitialized()) messageSpeechController.stop()
   }
 
   fun sendChat(
@@ -1805,6 +3145,10 @@ class NodeRuntime(
     attachments: List<OutgoingAttachment>,
   ): Boolean = chat.sendMessageAwaitAcceptance(message = message, thinkingLevel = thinking, attachments = attachments)
 
+  fun refreshChatCommands() {
+    chat.refreshCommands()
+  }
+
   private fun handleGatewayEvent(
     event: String,
     payloadJson: String?,
@@ -1812,10 +3156,46 @@ class NodeRuntime(
     if (event == "update.available") {
       _gatewayUpdateAvailable.value = parseGatewayUpdateAvailable(payloadJson)
     }
+    handleExecApprovalGatewayEvent(event = event, payloadJson = payloadJson)
     micCapture.handleGatewayEvent(event, payloadJson)
     talkMode.handleGatewayEvent(event, payloadJson)
     chat.handleGatewayEvent(event, payloadJson)
   }
+
+  private fun handleExecApprovalGatewayEvent(
+    event: String,
+    payloadJson: String?,
+  ) {
+    when (event) {
+      "exec.approval.requested" -> {
+        val approvalId = parseExecApprovalEventId(payloadJson)
+        approvalId?.let(resolvedExecApprovalIds::remove)
+        scope.launch {
+          if (approvalId == null) {
+            refreshExecApprovalsFromGateway()
+          } else {
+            refreshExecApprovalFromGateway(approvalId)
+          }
+        }
+      }
+      "exec.approval.resolved" -> {
+        val approvalId = parseExecApprovalEventId(payloadJson) ?: return
+        markExecApprovalResolved(approvalId)
+      }
+    }
+  }
+
+  private fun parseExecApprovalEventId(payloadJson: String?): String? =
+    try {
+      payloadJson
+        ?.let { json.parseToJsonElement(it).asObjectOrNull() }
+        ?.get("id")
+        .asStringOrNull()
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+    } catch (_: Throwable) {
+      null
+    }
 
   private fun parseGatewayUpdateAvailable(payloadJson: String?): GatewayUpdateAvailableSummary? {
     return try {
@@ -1826,15 +3206,6 @@ class NodeRuntime(
         latestVersion = update["latestVersion"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
         channel = update["channel"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
       )
-    } catch (_: Throwable) {
-      null
-    }
-  }
-
-  private fun parseChatSendRunId(response: String): String? {
-    return try {
-      val root = json.parseToJsonElement(response).asObjectOrNull() ?: return null
-      root["runId"].asStringOrNull()
     } catch (_: Throwable) {
       null
     }
@@ -1851,28 +3222,93 @@ class NodeRuntime(
     return sessionId
   }
 
+  private fun captureGatewayDataScope(): GatewayDataScope? =
+    synchronized(gatewayDataScopeLock) {
+      connectedEndpoint?.stableId?.let { GatewayDataScope(it, gatewayDataGeneration) }
+    }
+
+  private suspend fun requestGatewayData(
+    gatewayScope: GatewayDataScope,
+    method: String,
+    paramsJson: String?,
+  ): String {
+    val response = operatorSession.requestForEndpoint(gatewayScope.stableId, method, paramsJson)
+    if (!isGatewayDataScopeCurrent(gatewayScope)) throw CancellationException("gateway scope changed")
+    return response
+  }
+
+  private fun isGatewayDataScopeCurrent(gatewayScope: GatewayDataScope): Boolean =
+    synchronized(gatewayDataScopeLock) {
+      gatewayScope.generation == gatewayDataGeneration && connectedEndpoint?.stableId == gatewayScope.stableId
+    }
+
+  private inline fun publishGatewayData(
+    gatewayScope: GatewayDataScope,
+    publish: () -> Unit,
+  ): Boolean =
+    synchronized(gatewayDataScopeLock) {
+      if (gatewayScope.generation != gatewayDataGeneration || connectedEndpoint?.stableId != gatewayScope.stableId) {
+        false
+      } else {
+        publish()
+        true
+      }
+    }
+
   private suspend fun refreshBrandingFromGateway() {
-    if (!_isConnected.value) return
+    val gatewayScope = captureGatewayDataScope() ?: return
+    if (!gatewayConnectionDisplay.value.isConnected) return
     try {
-      val res = operatorSession.request("config.get", "{}")
+      val res = requestGatewayData(gatewayScope, "config.get", "{}")
       val root = json.parseToJsonElement(res).asObjectOrNull()
       val config = root?.get("config").asObjectOrNull()
       val ui = config?.get("ui").asObjectOrNull()
       val raw = ui?.get("seamColor").asStringOrNull()?.trim()
-      syncMainSessionKey(gatewayDefaultAgentId.value)
-
       val parsed = parseHexColorArgb(raw)
-      _seamColorArgb.value = parsed ?: DEFAULT_SEAM_COLOR_ARGB
-      updateHomeCanvasState()
+      publishGatewayData(gatewayScope) {
+        _seamColorArgb.value = parsed ?: DEFAULT_SEAM_COLOR_ARGB
+        updateHomeCanvasState()
+      }
     } catch (_: Throwable) {
       // ignore
     }
   }
 
+  /** Lists one directory of the active agent's workspace (read-only RPC). */
+  suspend fun listWorkspaceFiles(
+    path: String?,
+    offset: Int? = null,
+  ): GatewayWorkspaceListing {
+    val params =
+      buildJsonObject {
+        put("agentId", JsonPrimitive(workspaceAgentId()))
+        if (!path.isNullOrEmpty()) put("path", JsonPrimitive(path))
+        if (offset != null && offset > 0) put("offset", JsonPrimitive(offset))
+      }
+    val res = operatorSession.request("agents.workspace.list", params.toString())
+    return parseWorkspaceListing(json.parseToJsonElement(res))
+      ?: throw IllegalStateException("agents.workspace.list returned no listing")
+  }
+
+  /** Fetches one workspace file preview (UTF-8 text or base64 image). */
+  suspend fun fetchWorkspaceFile(path: String): GatewayWorkspaceFile {
+    val params =
+      buildJsonObject {
+        put("agentId", JsonPrimitive(workspaceAgentId()))
+        put("path", JsonPrimitive(path))
+      }
+    val res = operatorSession.request("agents.workspace.get", params.toString(), timeoutMs = 30_000)
+    return parseWorkspaceFile(json.parseToJsonElement(res))
+      ?: throw IllegalStateException("agents.workspace.get returned no file")
+  }
+
+  private fun workspaceAgentId(): String = resolveActiveAgentId().ifEmpty { "main" }
+
   private suspend fun refreshAgentsFromGateway() {
+    val gatewayScope = captureGatewayDataScope() ?: return
     if (!operatorConnected) return
     try {
-      val res = operatorSession.request("agents.list", "{}")
+      val res = requestGatewayData(gatewayScope, "agents.list", "{}")
       val root = json.parseToJsonElement(res).asObjectOrNull() ?: return
       val defaultAgentId = root["defaultId"].asStringOrNull()?.trim().orEmpty()
       val mainKey = normalizeMainKey(root["mainKey"].asStringOrNull())
@@ -1892,21 +3328,29 @@ class NodeRuntime(
             id = id,
             name = name?.takeIf { it.isNotEmpty() },
             emoji = emoji?.takeIf { it.isNotEmpty() },
+            workspaceGit = (obj["workspaceGit"] as? JsonPrimitive)?.content?.toBooleanStrictOrNull() == true,
           )
         } ?: emptyList()
 
-      _gatewayDefaultAgentId.value = defaultAgentId.ifEmpty { null }
-      _gatewayAgents.value = agents
-      syncMainSessionKey(resolveAgentIdFromMainSessionKey(mainKey) ?: gatewayDefaultAgentId.value)
-      updateHomeCanvasState()
+      publishGatewayData(gatewayScope) {
+        _gatewayDefaultAgentId.value = defaultAgentId.ifEmpty { null }
+        _gatewayAgents.value = agents
+        val selectedAgentId = selectedChatAgentId?.takeIf { id -> agents.any { it.id == id } }
+        selectedChatAgentId = selectedAgentId
+        syncMainSessionKey(selectedAgentId ?: resolveAgentIdFromMainSessionKey(mainKey) ?: gatewayDefaultAgentId.value)
+        updateHomeCanvasState()
+      }
     } catch (_: Throwable) {
       // ignore
     }
   }
 
   private suspend fun refreshModelCatalogFromGateway() {
-    _modelCatalogRefreshing.value = true
-    _modelCatalogErrorText.value = null
+    val gatewayScope = captureGatewayDataScope() ?: return
+    publishGatewayData(gatewayScope) {
+      _modelCatalogRefreshing.value = true
+      _modelCatalogErrorText.value = null
+    }
     if (!operatorConnected) {
       _modelCatalog.value = emptyList()
       _modelAuthProviders.value = emptyList()
@@ -1914,23 +3358,45 @@ class NodeRuntime(
       return
     }
     try {
-      val modelsRes = operatorSession.request("models.list", "{}")
+      val modelsRes = requestGatewayData(gatewayScope, "models.list", "{}")
       val modelsRoot = json.parseToJsonElement(modelsRes).asObjectOrNull()
-      _modelCatalog.value = parseGatewayModels(modelsRoot?.get("models") as? JsonArray)
-
-      val authRes = operatorSession.request("models.authStatus", "{}")
+      val models = parseGatewayModels(modelsRoot?.get("models") as? JsonArray)
+      val authRes = requestGatewayData(gatewayScope, "models.authStatus", "{}")
       val authRoot = json.parseToJsonElement(authRes).asObjectOrNull()
-      _modelAuthProviders.value = parseGatewayModelProviders(authRoot?.get("providers") as? JsonArray)
+      val providers = parseGatewayModelProviders(authRoot?.get("providers") as? JsonArray)
+      publishGatewayData(gatewayScope) {
+        _modelCatalog.value = models
+        _modelAuthProviders.value = providers
+      }
     } catch (_: Throwable) {
-      _modelCatalogErrorText.value = "Could not load provider catalog."
+      publishGatewayData(gatewayScope) { _modelCatalogErrorText.value = "Could not load provider catalog." }
     } finally {
-      _modelCatalogRefreshing.value = false
+      publishGatewayData(gatewayScope) { _modelCatalogRefreshing.value = false }
     }
   }
 
+  private suspend fun refreshTalkSetupReadinessFromGateway() {
+    val gatewayScope = captureGatewayDataScope() ?: return
+    if (!operatorConnected) {
+      _talkSetupReadiness.value = GatewayTalkSetupReadiness.unverified()
+      return
+    }
+    val readiness =
+      try {
+        val response = requestGatewayData(gatewayScope, "talk.catalog", "{}")
+        parseGatewayTalkSetupReadiness(json.parseToJsonElement(response).asObjectOrNull())
+      } catch (_: Throwable) {
+        GatewayTalkSetupReadiness.unverified(GatewayTalkSetupIssue.CatalogLoadFailed)
+      }
+    publishGatewayData(gatewayScope) { _talkSetupReadiness.value = readiness }
+  }
+
   private suspend fun refreshCronFromGateway() {
-    _cronRefreshing.value = true
-    _cronErrorText.value = null
+    val gatewayScope = captureGatewayDataScope() ?: return
+    publishGatewayData(gatewayScope) {
+      _cronRefreshing.value = true
+      _cronErrorText.value = null
+    }
     if (!operatorConnected) {
       _cronStatus.value = GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null)
       _cronJobs.value = emptyList()
@@ -1938,60 +3404,94 @@ class NodeRuntime(
       return
     }
     try {
-      val statusRes = operatorSession.request("cron.status", "{}")
+      val statusRes = requestGatewayData(gatewayScope, "cron.status", "{}")
       val statusRoot = json.parseToJsonElement(statusRes).asObjectOrNull()
-      _cronStatus.value =
+      val status =
         GatewayCronStatus(
           enabled = statusRoot.boolean("enabled"),
           jobs = statusRoot.long("jobs")?.toInt() ?: 0,
           nextWakeAtMs = statusRoot.long("nextWakeAtMs"),
         )
 
-      val listRes = operatorSession.request("cron.list", """{"includeDisabled":true,"limit":20,"sortBy":"nextRunAtMs","sortDir":"asc"}""")
+      val listRes = requestGatewayData(gatewayScope, "cron.list", """{"includeDisabled":true,"limit":20,"sortBy":"nextRunAtMs","sortDir":"asc"}""")
       val listRoot = json.parseToJsonElement(listRes).asObjectOrNull()
-      _cronJobs.value = parseCronJobs(listRoot?.get("jobs") as? JsonArray)
+      val jobs = parseCronJobs(listRoot?.get("jobs") as? JsonArray)
+      publishGatewayData(gatewayScope) {
+        _cronStatus.value = status
+        _cronJobs.value = jobs
+      }
     } catch (_: Throwable) {
-      _cronErrorText.value = "Could not load cron jobs."
+      publishGatewayData(gatewayScope) { _cronErrorText.value = "Could not load cron jobs." }
     } finally {
-      _cronRefreshing.value = false
+      publishGatewayData(gatewayScope) { _cronRefreshing.value = false }
+    }
+  }
+
+  private suspend fun loadCronJobDetailFromGateway(request: CronJobDetailRequest) {
+    val gatewayScope = captureGatewayDataScope() ?: return
+    if (!operatorConnected) {
+      cronJobDetailRequestGuard.publishIfCurrent(request) {
+        _cronJobDetailState.value = GatewayCronJobDetailState.Error(request.id, "Connect the gateway to inspect cron jobs.")
+      }
+      return
+    }
+    try {
+      val res = requestGatewayData(gatewayScope, "cron.get", cronJobGetParams(request.id))
+      val root = json.parseToJsonElement(res).asObjectOrNull()
+      cronJobDetailRequestGuard.publishIfCurrent(request) {
+        _cronJobDetailState.value =
+          parseGatewayCronJobDetail(root)?.let(GatewayCronJobDetailState::Loaded)
+            ?: GatewayCronJobDetailState.Error(request.id, "Gateway returned an invalid cron job.")
+      }
+    } catch (_: Throwable) {
+      cronJobDetailRequestGuard.publishIfCurrent(request) {
+        _cronJobDetailState.value = GatewayCronJobDetailState.Error(request.id, "Could not load cron job.")
+      }
     }
   }
 
   private suspend fun refreshUsageFromGateway() {
-    _usageRefreshing.value = true
-    _usageErrorText.value = null
+    val gatewayScope = captureGatewayDataScope() ?: return
+    publishGatewayData(gatewayScope) {
+      _usageRefreshing.value = true
+      _usageErrorText.value = null
+    }
     if (!operatorConnected) {
       _usageSummary.value = GatewayUsageSummary(updatedAtMs = null, providers = emptyList())
       _usageRefreshing.value = false
       return
     }
     try {
-      val res = operatorSession.request("usage.status", "{}")
+      val res = requestGatewayData(gatewayScope, "usage.status", "{}")
       val root = json.parseToJsonElement(res).asObjectOrNull()
-      _usageSummary.value =
+      val summary =
         GatewayUsageSummary(
           updatedAtMs = root.long("updatedAt"),
           providers = parseUsageProviders(root?.get("providers") as? JsonArray),
         )
+      publishGatewayData(gatewayScope) { _usageSummary.value = summary }
     } catch (_: Throwable) {
-      _usageErrorText.value = "Could not load usage."
+      publishGatewayData(gatewayScope) { _usageErrorText.value = "Could not load usage." }
     } finally {
-      _usageRefreshing.value = false
+      publishGatewayData(gatewayScope) { _usageRefreshing.value = false }
     }
   }
 
   private suspend fun refreshSkillsFromGateway() {
-    _skillsRefreshing.value = true
-    _skillsErrorText.value = null
+    val gatewayScope = captureGatewayDataScope() ?: return
+    publishGatewayData(gatewayScope) {
+      _skillsRefreshing.value = true
+      _skillsErrorText.value = null
+    }
     if (!operatorConnected) {
       _skillsSummary.value = GatewaySkillsSummary(skills = emptyList())
       _skillsRefreshing.value = false
       return
     }
     try {
-      val res = operatorSession.request("skills.status", "{}")
+      val res = requestGatewayData(gatewayScope, "skills.status", "{}")
       val root = json.parseToJsonElement(res).asObjectOrNull()
-      _skillsSummary.value =
+      val summary =
         GatewaySkillsSummary(
           managedSkillsDirAvailable =
             root
@@ -2001,114 +3501,446 @@ class NodeRuntime(
               ?.isNotEmpty() == true,
           skills = parseSkillSummaries(root?.get("skills") as? JsonArray),
         )
+      publishGatewayData(gatewayScope) { _skillsSummary.value = summary }
     } catch (_: Throwable) {
-      _skillsErrorText.value = "Could not load skills."
+      publishGatewayData(gatewayScope) { _skillsErrorText.value = "Could not load skills." }
     } finally {
-      _skillsRefreshing.value = false
+      publishGatewayData(gatewayScope) { _skillsRefreshing.value = false }
     }
   }
 
   private suspend fun refreshNodesDevicesFromGateway() {
-    _nodesDevicesRefreshing.value = true
-    _nodesDevicesErrorText.value = null
+    val gatewayScope = captureGatewayDataScope() ?: return
+    val refreshGeneration = nodeApprovalRefreshGuard.begin()
+    var refreshStarted = false
+    val currentScope =
+      publishGatewayData(gatewayScope) {
+        refreshStarted =
+          nodeApprovalRefreshGuard.publishIfCurrent(refreshGeneration) {
+            _nodesDevicesRefreshing.value = true
+            _nodesDevicesErrorText.value = null
+            _nodesDevicesSummary.value = _nodesDevicesSummary.value.withoutExactApprovalRequestIds()
+            val pendingFallback = _nodeCapabilityApproval.value.withoutExactRequestId()
+            if (pendingFallback != null) {
+              _nodeCapabilityApproval.value = pendingFallback
+            } else if (
+              _nodeCapabilityApproval.value !is GatewayNodeCapabilityApproval.PendingApproval &&
+              _nodeCapabilityApproval.value !is GatewayNodeCapabilityApproval.PendingReapproval
+            ) {
+              _nodeCapabilityApproval.value = GatewayNodeCapabilityApproval.Loading
+            }
+          }
+      }
+    if (!currentScope || !refreshStarted) return
     if (!operatorConnected) {
-      _nodesDevicesSummary.value =
-        GatewayNodesDevicesSummary(
-          nodes = emptyList(),
-          pendingDevices = emptyList(),
-          pairedDevices = emptyList(),
-        )
-      _nodesDevicesRefreshing.value = false
+      publishGatewayData(gatewayScope) {
+        nodeApprovalRefreshGuard.publishIfCurrent(refreshGeneration) {
+          _nodeCapabilityApproval.value = GatewayNodeCapabilityApproval.Loading
+          _nodesDevicesSummary.value =
+            GatewayNodesDevicesSummary(
+              nodes = emptyList(),
+              pendingDevices = emptyList(),
+              pairedDevices = emptyList(),
+            )
+          _nodesDevicesRefreshing.value = false
+        }
+      }
       return
     }
     try {
-      val nodesRes = operatorSession.request("node.list", "{}")
+      val nodesRes = requestGatewayData(gatewayScope, "node.list", "{}")
       val nodesRoot = json.parseToJsonElement(nodesRes).asObjectOrNull()
+      val nodes = parseGatewayNodeList(nodesRoot)
+      val selfNodeId = identityStore.loadOrCreate().deviceId
+      val approval =
+        currentNodeCapabilityApproval(
+          nodes = nodes,
+          selfNodeId = selfNodeId,
+        )
+      val selfNodeConnected = nodes.firstOrNull { it.id == selfNodeId }?.connected == true
+      var approvalPublished = false
+      val scopePublished =
+        publishGatewayData(gatewayScope) {
+          approvalPublished =
+            nodeApprovalRefreshGuard.publishIfCurrent(refreshGeneration) {
+              _nodeCapabilityApproval.value = approval
+            }
+        }
+      if (!scopePublished || !approvalPublished) {
+        return
+      }
+      publishGatewayData(gatewayScope) {
+        if (selfNodeConnected && !_nodeConnected.value) {
+          updateStatus {
+            nodeConnectionProblem = null
+            _nodeConnected.value = true
+            nodeStatusText = "Connected"
+          }
+        }
+      }
+      scheduleNodeApprovalCommandRefresh(gatewayScope, refreshGeneration, approval)
       val devicesRoot =
         try {
-          val devicesRes = operatorSession.request("device.pair.list", "{}")
+          val devicesRes = requestGatewayData(gatewayScope, "device.pair.list", "{}")
           json.parseToJsonElement(devicesRes).asObjectOrNull()
         } catch (_: Throwable) {
           null
         }
-      _nodesDevicesSummary.value =
-        GatewayNodesDevicesSummary(
-          nodes = parseGatewayNodes(nodesRoot?.get("nodes") as? JsonArray),
-          pendingDevices = parsePendingDevices(devicesRoot?.get("pending") as? JsonArray),
-          pairedDevices = parsePairedDevices(devicesRoot?.get("paired") as? JsonArray),
-          devicePairingAvailable = devicesRoot != null,
-        )
+      publishGatewayData(gatewayScope) {
+        nodeApprovalRefreshGuard.publishIfCurrent(refreshGeneration) {
+          _nodesDevicesSummary.value =
+            GatewayNodesDevicesSummary(
+              nodes = nodes,
+              pendingDevices = parsePendingDevices(devicesRoot?.get("pending") as? JsonArray),
+              pairedDevices = parsePairedDevices(devicesRoot?.get("paired") as? JsonArray),
+              devicePairingAvailable = devicesRoot != null,
+            )
+        }
+      }
     } catch (_: Throwable) {
-      _nodesDevicesErrorText.value = "Could not load nodes and devices."
+      publishGatewayData(gatewayScope) {
+        nodeApprovalRefreshGuard.publishIfCurrent(refreshGeneration) {
+          _nodesDevicesErrorText.value = "Could not load nodes and devices."
+        }
+      }
     } finally {
+      publishGatewayData(gatewayScope) {
+        nodeApprovalRefreshGuard.publishIfCurrent(refreshGeneration) {
+          _nodesDevicesRefreshing.value = false
+        }
+      }
+    }
+  }
+
+  private fun scheduleNodeApprovalCommandRefresh(
+    gatewayScope: GatewayDataScope,
+    refreshGeneration: Long,
+    approval: GatewayNodeCapabilityApproval,
+  ) {
+    val fallback = approval.withoutExactRequestId() ?: return
+    scope.launch {
+      delay(NODE_APPROVAL_COMMAND_FRESH_MS)
+      // Pairing request IDs expire on the Gateway. Age out cached commands before rechecking so
+      // recovery never leaves an old exact ID visible when a refresh fails or races disconnect.
+      var approvalPublished = false
+      val scopePublished =
+        publishGatewayData(gatewayScope) {
+          approvalPublished =
+            nodeApprovalRefreshGuard.publishIfCurrent(refreshGeneration) {
+              _nodeCapabilityApproval.value = fallback
+              _nodesDevicesSummary.value = _nodesDevicesSummary.value.withoutExactApprovalRequestIds()
+            }
+        }
+      if (scopePublished && approvalPublished && operatorConnected) {
+        refreshNodesDevicesFromGateway()
+      }
+    }
+  }
+
+  private suspend fun refreshExecApprovalsFromGateway() {
+    val gatewayScope = captureGatewayDataScope() ?: return
+    val refreshGeneration = execApprovalsRefreshSeq.incrementAndGet()
+    publishGatewayData(gatewayScope) {
+      _execApprovalsRefreshing.value = true
+      _execApprovalsErrorText.value = null
+    }
+    if (!operatorConnected) {
+      publishGatewayData(gatewayScope) {
+        if (execApprovalsRefreshSeq.get() == refreshGeneration) {
+          _execApprovals.value = emptyList()
+          _execApprovalsRefreshing.value = false
+        }
+      }
+      return
+    }
+    try {
+      val res = requestGatewayData(gatewayScope, "exec.approval.list", "{}")
+      val existing = _execApprovals.value.associateBy { it.id }
+      val rows =
+        parseGatewayExecApprovalListPayload(res, json)
+          .filterNot { it.id in resolvedExecApprovalIds }
+          .map { row ->
+            val hydrated =
+              try {
+                fetchExecApprovalDetailFromGateway(
+                  gatewayScope = gatewayScope,
+                  id = row.id,
+                  createdAtMs = row.createdAtMs ?: System.currentTimeMillis(),
+                )
+              } catch (_: Throwable) {
+                null
+              } ?: row.copy(errorText = "Could not load approval details. Refresh and try again.")
+            val current = existing[row.id]
+            if (current == null) {
+              hydrated
+            } else {
+              hydrated.copy(
+                resolvingDecision = current.resolvingDecision,
+                errorText = current.errorText ?: hydrated.errorText,
+              )
+            }
+          }
+      publishExecApprovalsIfCurrent(gatewayScope, refreshGeneration, rows)
+    } catch (_: Throwable) {
+      publishGatewayData(gatewayScope) {
+        if (execApprovalsRefreshSeq.get() == refreshGeneration) {
+          _execApprovalsErrorText.value = "Could not load approvals."
+        }
+      }
+    } finally {
+      publishGatewayData(gatewayScope) {
+        if (execApprovalsRefreshSeq.get() == refreshGeneration) {
+          _execApprovalsRefreshing.value = false
+        }
+      }
+    }
+  }
+
+  private suspend fun refreshExecApprovalFromGateway(id: String) {
+    val gatewayScope = captureGatewayDataScope() ?: return
+    if (!operatorConnected) return
+    if (id in resolvedExecApprovalIds) return
+    try {
+      val current = _execApprovals.value.firstOrNull { it.id == id }
+      val row =
+        fetchExecApprovalDetailFromGateway(
+          gatewayScope = gatewayScope,
+          id = id,
+          createdAtMs = current?.createdAtMs ?: System.currentTimeMillis(),
+        ) ?: return
+      publishGatewayData(gatewayScope) {
+        if (id !in resolvedExecApprovalIds) {
+          invalidateExecApprovalRefreshes()
+          upsertExecApproval(row)
+        }
+      }
+    } catch (_: Throwable) {
+      if (isGatewayDataScopeCurrent(gatewayScope)) {
+        refreshExecApprovalsFromGateway()
+      }
+    }
+  }
+
+  private suspend fun fetchExecApprovalDetailFromGateway(
+    gatewayScope: GatewayDataScope,
+    id: String,
+    createdAtMs: Long,
+  ): GatewayExecApprovalSummary? {
+    val params = buildJsonObject { put("id", JsonPrimitive(id)) }.toString()
+    val res = requestGatewayData(gatewayScope, "exec.approval.get", params)
+    val root = json.parseToJsonElement(res).asObjectOrNull() ?: return null
+    return parseGatewayExecApprovalDetail(root, createdAtMs = createdAtMs)
+  }
+
+  private suspend fun resolveExecApprovalOnGateway(
+    id: String,
+    decision: String,
+  ) {
+    val gatewayScope = captureGatewayDataScope() ?: return
+    var markedResolving = false
+    val currentScope =
+      publishGatewayData(gatewayScope) {
+        synchronized(execApprovalsStateLock) {
+          if (!operatorConnected || id in resolvedExecApprovalIds) return@synchronized
+          val currentRows = _execApprovals.value
+          if (currentRows.none { it.id == id }) return@synchronized
+          invalidateExecApprovalRefreshes()
+          _execApprovals.value =
+            currentRows.map { row ->
+              if (row.id == id) row.copy(resolvingDecision = decision, errorText = null) else row
+            }
+          markedResolving = true
+        }
+      }
+    if (!currentScope || !markedResolving) return
+    try {
+      val params =
+        buildJsonObject {
+          put("id", JsonPrimitive(id))
+          put("decision", JsonPrimitive(decision))
+        }.toString()
+      requestGatewayData(gatewayScope, "exec.approval.resolve", params)
+      publishGatewayData(gatewayScope) { markExecApprovalResolved(id) }
+    } catch (_: Throwable) {
+      publishGatewayData(gatewayScope) {
+        synchronized(execApprovalsStateLock) {
+          if (!operatorConnected || id in resolvedExecApprovalIds) return@synchronized
+          _execApprovals.value =
+            _execApprovals.value.map { row ->
+              if (row.id == id) {
+                row.copy(resolvingDecision = null, errorText = "Could not resolve approval. Refresh and try again.")
+              } else {
+                row
+              }
+            }
+        }
+      }
+    }
+  }
+
+  private fun upsertExecApproval(row: GatewayExecApprovalSummary) {
+    synchronized(execApprovalsStateLock) {
+      if (!operatorConnected || row.id in resolvedExecApprovalIds) return
+      if (row.isExpiredExecApproval()) return
+      val rows = _execApprovals.value
+      val replaced = rows.any { it.id == row.id }
+      val nextRows =
+        (
+          if (replaced) {
+            rows.map { current ->
+              if (current.id == row.id) {
+                row.copy(
+                  resolvingDecision = current.resolvingDecision,
+                  errorText = current.errorText,
+                )
+              } else {
+                current
+              }
+            }
+          } else {
+            rows + row
+          }
+        ).filterActiveExecApprovals()
+          .sortedBy { it.createdAtMs ?: Long.MAX_VALUE }
+      _execApprovals.value = nextRows
+      scheduleExecApprovalExpiryPrune(nextRows)
+    }
+  }
+
+  private fun invalidateExecApprovalRefreshes() {
+    execApprovalsRefreshSeq.incrementAndGet()
+    _execApprovalsRefreshing.value = false
+  }
+
+  private fun markExecApprovalResolved(id: String) {
+    synchronized(execApprovalsStateLock) {
+      resolvedExecApprovalIds.add(id)
+      invalidateExecApprovalRefreshes()
+      _execApprovals.value = _execApprovals.value.filterNot { it.id == id }
+    }
+  }
+
+  private fun publishExecApprovalsIfCurrent(
+    gatewayScope: GatewayDataScope,
+    refreshGeneration: Long,
+    rows: List<GatewayExecApprovalSummary>,
+  ) {
+    publishGatewayData(gatewayScope) {
+      synchronized(execApprovalsStateLock) {
+        if (execApprovalsRefreshSeq.get() == refreshGeneration && operatorConnected) {
+          val nextRows = rows.filterNot { it.id in resolvedExecApprovalIds }.filterActiveExecApprovals()
+          _execApprovals.value = nextRows
+          scheduleExecApprovalExpiryPrune(nextRows)
+        }
+      }
+    }
+  }
+
+  private fun scheduleExecApprovalExpiryPrune(rows: List<GatewayExecApprovalSummary>) {
+    val now = System.currentTimeMillis()
+    val nextExpiry = rows.mapNotNull { it.expiresAtMs }.filter { it > now }.minOrNull() ?: return
+    scope.launch {
+      delay((nextExpiry - now + 250).coerceAtLeast(0))
+      pruneExpiredExecApprovals()
+    }
+  }
+
+  private fun pruneExpiredExecApprovals() {
+    synchronized(execApprovalsStateLock) {
+      _execApprovals.value = _execApprovals.value.filterActiveExecApprovals()
+    }
+  }
+
+  private fun GatewayExecApprovalSummary.isExpiredExecApproval(nowMs: Long = System.currentTimeMillis()): Boolean = expiresAtMs?.let { it <= nowMs } == true
+
+  private fun List<GatewayExecApprovalSummary>.filterActiveExecApprovals(
+    nowMs: Long = System.currentTimeMillis(),
+  ): List<GatewayExecApprovalSummary> = filterNot { it.isExpiredExecApproval(nowMs) }
+
+  private fun invalidateNodeCapabilityApprovalState() {
+    val refreshGeneration = nodeApprovalRefreshGuard.begin()
+    nodeApprovalRefreshGuard.publishIfCurrent(refreshGeneration) {
+      _nodeCapabilityApproval.value = GatewayNodeCapabilityApproval.Loading
+      _nodesDevicesSummary.value = _nodesDevicesSummary.value.withoutExactApprovalRequestIds()
       _nodesDevicesRefreshing.value = false
     }
   }
 
   private suspend fun refreshChannelsFromGateway() {
-    _channelsRefreshing.value = true
-    _channelsErrorText.value = null
+    val gatewayScope = captureGatewayDataScope() ?: return
+    publishGatewayData(gatewayScope) {
+      _channelsRefreshing.value = true
+      _channelsErrorText.value = null
+    }
     if (!operatorConnected) {
       _channelsSummary.value = GatewayChannelsSummary(channels = emptyList())
       _channelsRefreshing.value = false
       return
     }
     try {
-      val res = operatorSession.request("channels.status", """{"probe":false,"timeoutMs":8000}""")
+      val res = requestGatewayData(gatewayScope, "channels.status", """{"probe":false,"timeoutMs":8000}""")
       val root = json.parseToJsonElement(res).asObjectOrNull()
-      _channelsSummary.value =
+      val summary =
         GatewayChannelsSummary(
           updatedAtMs = root.long("ts"),
           partial = root.boolean("partial"),
           warnings = parseStringArray(root?.get("warnings") as? JsonArray),
           channels = parseChannelSummaries(root),
         )
+      publishGatewayData(gatewayScope) { _channelsSummary.value = summary }
     } catch (_: Throwable) {
-      _channelsErrorText.value = "Could not load channels."
+      publishGatewayData(gatewayScope) { _channelsErrorText.value = "Could not load channels." }
     } finally {
-      _channelsRefreshing.value = false
+      publishGatewayData(gatewayScope) { _channelsRefreshing.value = false }
     }
   }
 
   private suspend fun refreshDreamingFromGateway() {
-    _dreamingRefreshing.value = true
-    _dreamingErrorText.value = null
+    val gatewayScope = captureGatewayDataScope() ?: return
+    publishGatewayData(gatewayScope) {
+      _dreamingRefreshing.value = true
+      _dreamingErrorText.value = null
+    }
     if (!operatorConnected) {
       _dreamingSummary.value = GatewayDreamingSummary()
       _dreamingRefreshing.value = false
       return
     }
     try {
-      val statusRes = operatorSession.request("doctor.memory.status", "{}")
+      val statusRes = requestGatewayData(gatewayScope, "doctor.memory.status", "{}")
       val statusRoot = json.parseToJsonElement(statusRes).asObjectOrNull()
-      val diaryRes = operatorSession.request("doctor.memory.dreamDiary", "{}")
+      val diaryRes = requestGatewayData(gatewayScope, "doctor.memory.dreamDiary", "{}")
       val diaryRoot = json.parseToJsonElement(diaryRes).asObjectOrNull()
       val dreaming = statusRoot?.get("dreaming").asObjectOrNull()
-      _dreamingSummary.value =
+      val summary =
         parseDreamingSummary(
           dreaming = dreaming,
           diary = diaryRoot,
         )
+      publishGatewayData(gatewayScope) { _dreamingSummary.value = summary }
     } catch (_: Throwable) {
-      _dreamingErrorText.value = "Could not load dreaming."
+      publishGatewayData(gatewayScope) { _dreamingErrorText.value = "Could not load dreaming." }
     } finally {
-      _dreamingRefreshing.value = false
+      publishGatewayData(gatewayScope) { _dreamingRefreshing.value = false }
     }
   }
 
   private suspend fun refreshHealthLogsFromGateway() {
-    _healthLogsRefreshing.value = true
-    _healthLogsErrorText.value = null
+    val gatewayScope = captureGatewayDataScope() ?: return
+    publishGatewayData(gatewayScope) {
+      _healthLogsRefreshing.value = true
+      _healthLogsErrorText.value = null
+    }
     if (!operatorConnected) {
       _healthLogsSummary.value = GatewayHealthLogsSummary()
       _healthLogsRefreshing.value = false
       return
     }
     try {
-      val res = operatorSession.request("logs.tail", """{"limit":40,"maxBytes":65536}""")
+      val res = requestGatewayData(gatewayScope, "logs.tail", """{"limit":40,"maxBytes":65536}""")
       val root = json.parseToJsonElement(res).asObjectOrNull()
       val lines = (root?.get("lines") as? JsonArray)?.mapNotNull { it.asStringOrNull() }.orEmpty()
-      _healthLogsSummary.value =
+      val summary =
         GatewayHealthLogsSummary(
           fileName =
             root
@@ -2122,41 +3954,28 @@ class NodeRuntime(
           truncated = root.boolean("truncated"),
           entries = lines.map { parseGatewayLogEntry(it) },
         )
+      publishGatewayData(gatewayScope) { _healthLogsSummary.value = summary }
     } catch (_: Throwable) {
-      _healthLogsErrorText.value = "Could not load gateway logs."
+      publishGatewayData(gatewayScope) { _healthLogsErrorText.value = "Could not load gateway logs." }
     } finally {
-      _healthLogsRefreshing.value = false
+      publishGatewayData(gatewayScope) { _healthLogsRefreshing.value = false }
     }
   }
 
-  private fun parseGatewayModels(models: JsonArray?): List<GatewayModelSummary> =
-    models
-      ?.mapNotNull { item ->
-        val obj = item.asObjectOrNull() ?: return@mapNotNull null
-        val id = obj["id"].asStringOrNull()?.trim().orEmpty()
-        if (id.isEmpty()) return@mapNotNull null
-        val provider = obj["provider"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: id.substringBefore('/', "default")
-        val inputTypes = (obj["input"] as? JsonArray)?.mapNotNull { it.asStringOrNull()?.trim()?.lowercase() }?.toSet().orEmpty()
-        GatewayModelSummary(
-          id = id,
-          name = obj["name"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: id,
-          provider = provider,
-          available = obj.optionalBoolean("available"),
-          supportsVision = "image" in inputTypes,
-          supportsAudio = "audio" in inputTypes,
-          supportsDocuments = "document" in inputTypes,
-          supportsReasoning = obj["reasoning"].toString().trim() == "true",
-          contextTokens = obj["contextWindow"].toString().toLongOrNull() ?: obj["contextTokens"].toString().toLongOrNull(),
-        )
-      }.orEmpty()
-
   private fun parseGatewayLogEntry(line: String): GatewayLogEntry {
+    val sanitizedLine = sanitizeGatewayLogText(line)
     val root =
       try {
         json.parseToJsonElement(line).asObjectOrNull()
       } catch (_: Throwable) {
         null
-      } ?: return GatewayLogEntry(time = null, level = null, subsystem = null, message = line.trim().ifEmpty { "Empty log entry" })
+      } ?: return GatewayLogEntry(
+        time = null,
+        level = null,
+        subsystem = null,
+        message = sanitizedLine.trim().ifEmpty { "Empty log entry" },
+        raw = sanitizedLine,
+      )
     val meta = root["_meta"].asObjectOrNull()
     val time = root["time"].asStringOrNull() ?: meta?.get("date").asStringOrNull()
     val level = normalizeLogLevel(meta?.get("logLevelName").asStringOrNull() ?: meta?.get("level").asStringOrNull())
@@ -2174,7 +3993,7 @@ class NodeRuntime(
         ?: root["message"].asStringOrNull()
         ?: line
     val normalizedMessage =
-      message
+      sanitizeGatewayLogText(message)
         .trim()
         .replace(Regex("\\s+"), " ")
         .take(240)
@@ -2182,8 +4001,9 @@ class NodeRuntime(
     return GatewayLogEntry(
       time = time,
       level = level,
-      subsystem = subsystem?.trim()?.takeIf { it.isNotEmpty() },
+      subsystem = subsystem?.let(::sanitizeGatewayLogText)?.trim()?.takeIf { it.isNotEmpty() },
       message = normalizedMessage,
+      raw = sanitizedLine,
     )
   }
 
@@ -2272,6 +4092,7 @@ class NodeRuntime(
         if (name.isEmpty()) return@mapNotNull null
         val missing = obj["missing"].asObjectOrNull()
         GatewaySkillSummary(
+          skillKey = obj["skillKey"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: name,
           name = name,
           description = obj["description"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
           source = obj["source"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: "unknown",
@@ -2286,25 +4107,6 @@ class NodeRuntime(
       }.orEmpty()
 
   private fun skillMissingCount(missing: JsonObject?): Int = listOf("bins", "env", "config", "os").sumOf { key -> (missing?.get(key) as? JsonArray)?.size ?: 0 }
-
-  private fun parseGatewayNodes(nodes: JsonArray?): List<GatewayNodeSummary> =
-    nodes
-      ?.mapNotNull { item ->
-        val obj = item.asObjectOrNull() ?: return@mapNotNull null
-        val id = obj["nodeId"].asStringOrNull()?.trim().orEmpty()
-        if (id.isEmpty()) return@mapNotNull null
-        GatewayNodeSummary(
-          id = id,
-          displayName = obj["displayName"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
-          remoteIp = obj["remoteIp"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
-          version = obj["version"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
-          deviceFamily = obj["deviceFamily"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
-          paired = obj.boolean("paired"),
-          connected = obj.boolean("connected"),
-          capabilities = parseStringArray(obj["caps"] as? JsonArray),
-          commands = parseStringArray(obj["commands"] as? JsonArray),
-        )
-      }.orEmpty()
 
   private fun parsePendingDevices(devices: JsonArray?): List<GatewayPendingDeviceSummary> =
     devices
@@ -2504,7 +4306,7 @@ class NodeRuntime(
   private fun cronScheduleLabel(schedule: JsonObject?): String =
     when (schedule?.get("kind").asStringOrNull()) {
       "at" -> "One time"
-      "every" -> schedule.long("everyMs")?.let(::formatEverySchedule) ?: "Repeating"
+      "every" -> schedule.long("everyMs")?.let(::formatCronInterval) ?: "Repeating"
       "cron" ->
         schedule
           ?.get("expr")
@@ -2522,18 +4324,6 @@ class NodeRuntime(
         else -> null
       }
     return text?.trim()?.replace(Regex("\\s+"), " ")?.takeIf { it.isNotEmpty() } ?: "No prompt"
-  }
-
-  private fun formatEverySchedule(everyMs: Long): String {
-    val minutes = everyMs / 60_000L
-    val hours = minutes / 60L
-    val days = hours / 24L
-    return when {
-      days >= 1 && hours % 24L == 0L -> "Every ${days}d"
-      hours >= 1 && minutes % 60L == 0L -> "Every ${hours}h"
-      minutes >= 1 -> "Every ${minutes}m"
-      else -> "Repeating"
-    }
   }
 
   private fun updateHomeCanvasState() {
@@ -2604,9 +4394,10 @@ class NodeRuntime(
   }
 
   private fun resolveHomeCanvasGatewayState(): HomeCanvasGatewayState {
-    val lower = _statusText.value.trim().lowercase()
+    val display = gatewayConnectionDisplay.value
+    val lower = display.statusText.trim().lowercase()
     return when {
-      _isConnected.value -> HomeCanvasGatewayState.Connected
+      display.isConnected -> HomeCanvasGatewayState.Connected
       lower.contains("connecting") || lower.contains("reconnecting") -> HomeCanvasGatewayState.Connecting
       lower.contains("error") || lower.contains("failed") -> HomeCanvasGatewayState.Error
       else -> HomeCanvasGatewayState.Offline
@@ -2671,11 +4462,6 @@ class NodeRuntime(
     return trimmed.ifEmpty { null }
   }
 
-  private fun triggerCameraFlash() {
-    // Token is used as a pulse trigger; value doesn't matter as long as it changes.
-    _cameraFlashToken.value = SystemClock.elapsedRealtimeNanos()
-  }
-
   private fun showCameraHud(
     message: String,
     kind: CameraHudKind,
@@ -2736,10 +4522,64 @@ internal fun resolveOperatorSessionConnectAuth(
   )
 }
 
-internal fun shouldConnectOperatorSession(
+internal fun resolveGatewayControlPageAuth(
   auth: NodeRuntime.GatewayConnectAuth,
   storedOperatorToken: String?,
-): Boolean = resolveOperatorSessionConnectAuth(auth, storedOperatorToken) != null
+): NodeRuntime.GatewayConnectAuth {
+  val explicitToken = auth.token?.trim()?.takeIf { it.isNotEmpty() }
+  if (explicitToken != null) {
+    return NodeRuntime.GatewayConnectAuth(
+      token = explicitToken,
+      bootstrapToken = null,
+      password = null,
+    )
+  }
+
+  val explicitPassword = auth.password?.trim()?.takeIf { it.isNotEmpty() }
+  if (explicitPassword != null) {
+    return NodeRuntime.GatewayConnectAuth(
+      token = null,
+      bootstrapToken = null,
+      password = explicitPassword,
+    )
+  }
+
+  val storedToken = storedOperatorToken?.trim()?.takeIf { it.isNotEmpty() }
+  if (storedToken != null) {
+    return NodeRuntime.GatewayConnectAuth(
+      token = storedToken,
+      bootstrapToken = null,
+      password = null,
+    )
+  }
+
+  return NodeRuntime.GatewayConnectAuth(
+    token = null,
+    bootstrapToken = null,
+    password = null,
+  )
+}
+
+internal fun operatorSessionUsesStoredDeviceToken(
+  auth: NodeRuntime.GatewayConnectAuth,
+  storedOperatorToken: String?,
+): Boolean {
+  val storedToken = storedOperatorToken?.trim()?.takeIf { it.isNotEmpty() }
+  if (storedToken == null) return false
+  val explicitToken = auth.token?.trim()?.takeIf { it.isNotEmpty() }
+  val explicitPassword = auth.password?.trim()?.takeIf { it.isNotEmpty() }
+  return explicitToken == null && explicitPassword == null
+}
+
+internal fun operatorConnectScopesForAuth(
+  usesStoredDeviceToken: Boolean,
+  storedOperatorScopes: List<String>?,
+): List<String> {
+  if (usesStoredDeviceToken && storedOperatorScopes != null) {
+    return ConnectionManager.operatorScopesForStoredDeviceToken(storedOperatorScopes)
+  }
+  return ConnectionManager.nativeClientOperatorScopes
+}
 
 private enum class HomeCanvasGatewayState {
   Connected,
@@ -2752,6 +4592,7 @@ data class GatewayAgentSummary(
   val id: String,
   val name: String?,
   val emoji: String?,
+  val workspaceGit: Boolean = false,
 )
 
 data class GatewayModelSummary(
@@ -2765,6 +4606,27 @@ data class GatewayModelSummary(
   val supportsReasoning: Boolean,
   val contextTokens: Long?,
 )
+
+internal fun parseGatewayModels(models: JsonArray?): List<GatewayModelSummary> =
+  models
+    ?.mapNotNull { item ->
+      val obj = item.asObjectOrNull() ?: return@mapNotNull null
+      val id = obj["id"].asStringOrNull()?.trim().orEmpty()
+      if (id.isEmpty()) return@mapNotNull null
+      val provider = obj["provider"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: id.substringBefore('/', "default")
+      val inputTypes = (obj["input"] as? JsonArray)?.mapNotNull { it.asStringOrNull()?.trim()?.lowercase() }?.toSet().orEmpty()
+      GatewayModelSummary(
+        id = id,
+        name = obj["name"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: id,
+        provider = provider,
+        available = obj.optionalBoolean("available"),
+        supportsVision = "image" in inputTypes,
+        supportsAudio = "audio" in inputTypes,
+        supportsDocuments = "document" in inputTypes,
+        supportsReasoning = obj["reasoning"].toString().trim() == "true",
+        contextTokens = obj["contextWindow"].toString().toLongOrNull() ?: obj["contextTokens"].toString().toLongOrNull(),
+      )
+    }.orEmpty()
 
 data class GatewayModelProviderSummary(
   val id: String,
@@ -2813,6 +4675,7 @@ data class GatewaySkillsSummary(
 )
 
 data class GatewaySkillSummary(
+  val skillKey: String,
   val name: String,
   val description: String?,
   val source: String,
@@ -2832,6 +4695,144 @@ data class GatewayNodesDevicesSummary(
   val devicePairingAvailable: Boolean = true,
 )
 
+enum class GatewayNodeApprovalState {
+  Loading,
+  Unsupported,
+  Approved,
+  PendingApproval,
+  PendingReapproval,
+  Unapproved,
+}
+
+/** Current phone approval state; only pending variants can carry an approval target. */
+sealed interface GatewayNodeCapabilityApproval {
+  data object Loading : GatewayNodeCapabilityApproval
+
+  data object Unsupported : GatewayNodeCapabilityApproval
+
+  data object Approved : GatewayNodeCapabilityApproval
+
+  data class PendingApproval(
+    val requestId: String?,
+  ) : GatewayNodeCapabilityApproval
+
+  data class PendingReapproval(
+    val requestId: String?,
+  ) : GatewayNodeCapabilityApproval
+
+  data object Unapproved : GatewayNodeCapabilityApproval
+}
+
+internal fun GatewayNodeCapabilityApproval.withoutExactRequestId(): GatewayNodeCapabilityApproval? =
+  when (this) {
+    is GatewayNodeCapabilityApproval.PendingApproval ->
+      requestId?.let { GatewayNodeCapabilityApproval.PendingApproval(requestId = null) }
+    is GatewayNodeCapabilityApproval.PendingReapproval ->
+      requestId?.let { GatewayNodeCapabilityApproval.PendingReapproval(requestId = null) }
+    else -> null
+  }
+
+internal fun GatewayNodesDevicesSummary.withoutExactApprovalRequestIds(): GatewayNodesDevicesSummary = copy(nodes = nodes.map { node -> node.copy(pendingRequestId = null) })
+
+/** Prevents older node.list responses from overwriting newer approval state. */
+internal class GatewayNodeApprovalRefreshGuard {
+  private val lock = Any()
+  private var generation = 0L
+
+  fun begin(): Long =
+    synchronized(lock) {
+      generation += 1
+      generation
+    }
+
+  fun publishIfCurrent(
+    refreshGeneration: Long,
+    publish: () -> Unit,
+  ): Boolean =
+    synchronized(lock) {
+      if (refreshGeneration != generation) return@synchronized false
+      publish()
+      true
+    }
+}
+
+internal fun parseGatewayNodeApprovalState(raw: String?): GatewayNodeApprovalState =
+  when (raw?.trim()?.lowercase()) {
+    null, "" -> GatewayNodeApprovalState.Loading
+    "approved" -> GatewayNodeApprovalState.Approved
+    "pending-approval" -> GatewayNodeApprovalState.PendingApproval
+    "pending-reapproval" -> GatewayNodeApprovalState.PendingReapproval
+    "unapproved" -> GatewayNodeApprovalState.Unapproved
+    else -> GatewayNodeApprovalState.Loading
+  }
+
+internal fun nodeConnectFailureNeedsApprovalRefresh(error: GatewaySession.ErrorShape): Boolean = error.details?.code == "PAIRING_REQUIRED"
+
+internal fun currentNodeCapabilityApproval(
+  nodes: List<GatewayNodeSummary>,
+  selfNodeId: String,
+): GatewayNodeCapabilityApproval {
+  val node = nodes.firstOrNull { it.id == selfNodeId } ?: return GatewayNodeCapabilityApproval.Loading
+  return when (node.approvalState) {
+    GatewayNodeApprovalState.Loading -> GatewayNodeCapabilityApproval.Loading
+    GatewayNodeApprovalState.Unsupported -> GatewayNodeCapabilityApproval.Unsupported
+    GatewayNodeApprovalState.Approved -> GatewayNodeCapabilityApproval.Approved
+    GatewayNodeApprovalState.PendingApproval ->
+      GatewayNodeCapabilityApproval.PendingApproval(
+        normalizeGatewayApprovalRequestId(node.pendingRequestId),
+      )
+    GatewayNodeApprovalState.PendingReapproval ->
+      GatewayNodeCapabilityApproval.PendingReapproval(
+        normalizeGatewayApprovalRequestId(node.pendingRequestId),
+      )
+    GatewayNodeApprovalState.Unapproved -> GatewayNodeCapabilityApproval.Unapproved
+  }
+}
+
+internal fun parseGatewayNodeSummary(item: JsonElement): GatewayNodeSummary? {
+  val obj = item.asObjectOrNull() ?: return null
+  val id = obj["nodeId"].asStringOrNull()?.trim().orEmpty()
+  if (id.isEmpty()) return null
+  return GatewayNodeSummary(
+    id = id,
+    displayName = obj["displayName"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+    remoteIp = obj["remoteIp"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+    version = obj["version"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+    deviceFamily = obj["deviceFamily"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+    paired = obj.boolean("paired"),
+    connected = obj.boolean("connected"),
+    // Only an omitted field identifies a legacy gateway; malformed and future values stay fail-closed.
+    approvalState =
+      if (obj.containsKey("approvalState")) {
+        parseGatewayNodeApprovalState(obj["approvalState"].asStringOrNull())
+      } else {
+        GatewayNodeApprovalState.Unsupported
+      },
+    pendingRequestId = normalizeGatewayApprovalRequestId(obj["pendingRequestId"].asStringOrNull()),
+    capabilities = parseGatewayStringArray(obj["caps"] as? JsonArray),
+    commands = parseGatewayStringArray(obj["commands"] as? JsonArray),
+  )
+}
+
+internal fun parseGatewayNodeList(root: JsonObject?): List<GatewayNodeSummary> {
+  if (root == null) return emptyList()
+  val seen = mutableSetOf<String>()
+  val result = mutableListOf<GatewayNodeSummary>()
+
+  fun append(nodes: JsonArray?) {
+    for (node in nodes?.mapNotNull(::parseGatewayNodeSummary).orEmpty()) {
+      if (seen.add(node.id)) {
+        result.add(node)
+      }
+    }
+  }
+
+  append(root["nodes"] as? JsonArray)
+  append(root["pending"] as? JsonArray)
+  append(root["paired"] as? JsonArray)
+  return result
+}
+
 data class GatewayNodeSummary(
   val id: String,
   val displayName: String?,
@@ -2840,6 +4841,8 @@ data class GatewayNodeSummary(
   val deviceFamily: String?,
   val paired: Boolean,
   val connected: Boolean,
+  val approvalState: GatewayNodeApprovalState,
+  val pendingRequestId: String?,
   val capabilities: List<String>,
   val commands: List<String>,
 )
@@ -2933,7 +4936,18 @@ data class GatewayLogEntry(
   val level: String?,
   val subsystem: String?,
   val message: String,
+  val raw: String,
 )
+
+private val gatewayAnsiControlPattern = Regex("\\u001B\\[[0-?]*[ -/]*[@-~]")
+private val gatewayEscapedAnsiControlPattern = Regex("""\\u001[Bb]\[[0-?]*[ -/]*[@-~]""")
+private val gatewayVisibleSgrPattern = Regex("\\[(?:0|\\d{1,3}(?:;\\d{1,3})*)m(?!])")
+
+internal fun sanitizeGatewayLogText(value: String): String =
+  value
+    .replace(gatewayAnsiControlPattern, "")
+    .replace(gatewayEscapedAnsiControlPattern, "")
+    .replace(gatewayVisibleSgrPattern, "")
 
 private fun JsonObject?.long(key: String): Long? = (this?.get(key) as? JsonPrimitive)?.content?.trim()?.toLongOrNull()
 
@@ -2961,6 +4975,11 @@ private fun JsonObject?.cronStatus(key: String): String? =
     .asStringOrNull()
     ?.trim()
     ?.takeIf { it.isNotEmpty() }
+
+private fun parseGatewayStringArray(items: JsonArray?): List<String> =
+  items
+    ?.mapNotNull { it.asStringOrNull()?.trim()?.takeIf { value -> value.isNotEmpty() } }
+    .orEmpty()
 
 fun providerDisplayName(provider: String): String =
   when (provider.trim().lowercase()) {

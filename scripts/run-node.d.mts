@@ -47,6 +47,7 @@ export function runNodeMain(params?: {
   fs?: unknown;
   stderr?: { write: (value: string) => void };
   process?: NodeJS.Process;
+  signalProcess?: (pid: number, signal?: NodeJS.Signals | number) => boolean | void;
   execPath?: string;
   cwd?: string;
   args?: string[];

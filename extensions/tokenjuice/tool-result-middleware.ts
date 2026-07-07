@@ -5,6 +5,7 @@ import type {
   AgentToolResultMiddlewareEvent,
   OpenClawAgentToolResult,
 } from "openclaw/plugin-sdk/agent-harness";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createTokenjuiceOpenClawEmbeddedExtension } from "./runtime-api.js";
 
 type TokenjuiceToolResultHandler = (
@@ -29,6 +30,95 @@ function readCwd(event: AgentToolResultMiddlewareEvent): string {
   return process.cwd();
 }
 
+function readTextContent(content: OpenClawAgentToolResult["content"]): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .map((item) => {
+      if (typeof item === "string") {
+        return item;
+      }
+      if (item && typeof item === "object" && "text" in item && typeof item.text === "string") {
+        return item.text;
+      }
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function readCommand(args: Record<string, unknown>): string {
+  const command = args.command;
+  return typeof command === "string" ? command : "";
+}
+
+function hasStatus(details: Record<string, unknown>): boolean {
+  const status = details.status;
+  return typeof status === "string" && status.trim() !== "";
+}
+
+function hasFailureState(
+  event: AgentToolResultMiddlewareEvent,
+  details: Record<string, unknown> | undefined,
+): boolean {
+  const exitCode = details?.exitCode;
+  return (
+    event.isError === true ||
+    details?.ok === false ||
+    details?.success === false ||
+    details?.timedOut === true ||
+    Boolean(details?.error) ||
+    (typeof exitCode === "number" && Number.isFinite(exitCode) && exitCode !== 0)
+  );
+}
+
+function normalizeDetails(
+  event: AgentToolResultMiddlewareEvent,
+  current: OpenClawAgentToolResult,
+): unknown {
+  const isExecLike = event.toolName === "exec" || event.toolName === "bash";
+  const details = isRecord(current.details) ? current.details : undefined;
+
+  if (!isExecLike || !readCommand(event.args)) {
+    return current.details;
+  }
+  // A concrete status is already canonical. Other terminal hints are preserved below
+  // while supplying only the completed/failed status Tokenjuice requires.
+  if (details && hasStatus(details)) {
+    return current.details;
+  }
+  const aggregated = readTextContent(current.content);
+  if (!aggregated.trim()) {
+    return current.details;
+  }
+  const failed = hasFailureState(event, details);
+  const existingExitCode = details?.exitCode;
+  const exitCode =
+    typeof existingExitCode === "number" && Number.isFinite(existingExitCode)
+      ? existingExitCode
+      : failed
+        ? 1
+        : 0;
+  const synthesized = {
+    status: failed ? "failed" : "completed",
+    aggregated,
+    exitCode,
+  };
+  if (!details) {
+    return synthesized;
+  }
+  return {
+    ...synthesized,
+    ...details,
+    status: synthesized.status,
+    exitCode: synthesized.exitCode,
+  };
+}
+
 export function createTokenjuiceAgentToolResultMiddleware(): AgentToolResultMiddleware {
   const handlers: TokenjuiceToolResultHandler[] = [];
   createTokenjuiceOpenClawEmbeddedExtension()({
@@ -47,7 +137,7 @@ export function createTokenjuiceAgentToolResultMiddleware(): AgentToolResultMidd
           toolName: event.toolName,
           input: event.args,
           content: current.content,
-          details: current.details,
+          details: normalizeDetails(event, current),
           isError: event.isError,
         },
         { cwd: readCwd(event) },

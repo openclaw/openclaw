@@ -122,7 +122,7 @@ export async function listMattermostDirectoryGroups(
  * user list (unlike channels where membership varies). Uses the first team
  * returned — multi-team setups will only see members from that team.
  *
- * NOTE: per_page=200 for member listing; same pagination caveat as groups.
+ * Uses paginated member listing with per_page=200, the Mattermost API maximum.
  */
 export async function listMattermostDirectoryPeers(
   params: MattermostDirectoryParams,
@@ -151,17 +151,34 @@ export async function listMattermostDirectoryPeers(
         body: JSON.stringify({ term: q, team_id: teamId }),
       });
     } else {
-      const members = await client.request<{ user_id: string }[]>(
-        `/teams/${teamId}/members?per_page=200`,
-      );
-      const userIds = members.map((m) => m.user_id).filter((id) => id !== me.id);
+      const pageSize = 200;
+      const userIds: string[] = [];
+      for (let page = 0; ; page += 1) {
+        const pageMembers = await client.request<ReadonlyArray<{ user_id: string }>>(
+          `/teams/${teamId}/members?page=${page}&per_page=${pageSize}`,
+        );
+        for (const member of pageMembers) {
+          if (member.user_id !== me.id) {
+            userIds.push(member.user_id);
+          }
+        }
+        if (pageMembers.length < pageSize) {
+          break;
+        }
+      }
       if (!userIds.length) {
         return [];
       }
-      users = await client.request<MattermostUser[]>("/users/ids", {
-        method: "POST",
-        body: JSON.stringify(userIds),
-      });
+      users = [];
+      for (let index = 0; index < userIds.length; index += pageSize) {
+        const userIdBatch = userIds.slice(index, index + pageSize);
+        users.push(
+          ...(await client.request<MattermostUser[]>("/users/ids", {
+            method: "POST",
+            body: JSON.stringify(userIdBatch),
+          })),
+        );
+      }
     }
 
     const entries = users

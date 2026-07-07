@@ -4,6 +4,7 @@ import path from "node:path";
 import YAML from "yaml";
 import { z } from "zod";
 import { isRepoRootRelativeRef } from "./cli-paths.js";
+import { resolveQaRepoPath, type QaRepoPathKind } from "./repo-path.js";
 
 export const DEFAULT_QA_AGENT_IDENTITY_MARKDOWN = `# Dev C-3PO
 
@@ -58,14 +59,32 @@ const qaScenarioRepoRefSchema = z
     message: "repo refs must not be absolute or contain parent-directory segments",
   });
 
+const qaScenarioChannelSchema = z
+  .string()
+  .trim()
+  .regex(/^[a-z0-9]+(?:[.-][a-z0-9]+)*$/, {
+    message: "scenario execution channel ids must use lowercase dotted or dashed tokens",
+  });
+
+const qaScenarioTransportPolicySchema = z.object({
+  requireGroupMention: z.literal(true).optional(),
+  senderAllowlist: z.array(z.string().trim().min(1)).min(1).optional(),
+  topLevelReplies: z.literal(true).optional(),
+});
+
 const qaFlowScenarioExecutionSchema = z.object({
   kind: z.literal("flow").default("flow"),
   summary: z.string().trim().min(1).optional(),
+  channel: qaScenarioChannelSchema.optional(),
+  suiteIsolation: z.literal("isolated").optional(),
+  isolationReason: z.string().trim().min(1).optional(),
+  transportPolicy: qaScenarioTransportPolicySchema.optional(),
   config: qaScenarioConfigSchema.optional(),
 });
 
 const qaTestFileScenarioExecutionBaseSchema = z.object({
   summary: z.string().trim().min(1).optional(),
+  channel: qaScenarioChannelSchema.optional(),
   path: qaScenarioRepoRefSchema,
   config: qaScenarioConfigSchema.optional(),
 });
@@ -73,6 +92,12 @@ const qaTestFileScenarioExecutionBaseSchema = z.object({
 const qaTestFileScenarioExecutionSchema = z.discriminatedUnion("kind", [
   qaTestFileScenarioExecutionBaseSchema.extend({ kind: z.literal("vitest") }),
   qaTestFileScenarioExecutionBaseSchema.extend({ kind: z.literal("playwright") }),
+  qaTestFileScenarioExecutionBaseSchema.extend({
+    kind: z.literal("script"),
+    allowBlockedEvidence: z.boolean().optional(),
+    args: z.array(z.string()).optional(),
+    timeoutMs: z.number().int().positive().optional(),
+  }),
 ]);
 
 const qaScenarioExecutionSchema = z.union([
@@ -83,18 +108,25 @@ const qaScenarioExecutionSchema = z.union([
 const qaCoverageIdSchema = z
   .string()
   .trim()
-  .regex(/^[a-z0-9]+(?:[.-][a-z0-9]+)*$/, {
-    message: "coverage ids must use lowercase dotted or dashed tokens",
+  .regex(/^[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+$/, {
+    message: "coverage ids must use lowercase dotted tokens",
   });
 
 const qaCoverageIdListSchema = z.array(qaCoverageIdSchema).min(1);
 
 const qaScenarioCoverageSchema = z
   .object({
-    primary: qaCoverageIdListSchema,
+    primary: qaCoverageIdListSchema.optional(),
     secondary: qaCoverageIdListSchema.optional(),
   })
   .superRefine((coverage, ctx) => {
+    if (!coverage.primary && !coverage.secondary) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "coverage must declare primary or secondary ids",
+      });
+      return;
+    }
     const seen = new Set<string>();
     const coverageEntries = [
       ["primary", coverage.primary],
@@ -116,10 +148,15 @@ const qaScenarioCoverageSchema = z
         });
       }
     }
-  });
+  })
+  .transform((coverage) => ({
+    primary: coverage.primary ?? [],
+    ...(coverage.secondary ? { secondary: coverage.secondary } : {}),
+  }));
 
 const qaScenarioGatewayRuntimeSchema = z.object({
   forwardHostHome: z.boolean().optional(),
+  preserveDebugArtifacts: z.boolean().optional(),
 });
 
 export const QA_RUNTIME_PARITY_TIERS = ["standard", "optional", "live-only", "soak"] as const;
@@ -130,6 +167,31 @@ const qaFlowCallActionSchema = z.object({
   args: z.array(z.unknown()).optional(),
   saveAs: z.string().trim().min(1).optional(),
 });
+
+const qaFlowTransportActionSchema = z.union([
+  z.object({
+    resetTransport: z.literal(true),
+  }),
+  z.object({
+    sendInbound: z.unknown(),
+    saveAs: z.string().trim().min(1).optional(),
+  }),
+  z.object({
+    sendNativeCommand: z.unknown(),
+    saveAs: z.string().trim().min(1).optional(),
+  }),
+  z.object({
+    waitForOutbound: z.unknown(),
+    saveAs: z.string().trim().min(1).optional(),
+  }),
+  z.object({
+    waitForOutboundSequence: z.unknown(),
+    saveAs: z.string().trim().min(1).optional(),
+  }),
+  z.object({
+    waitForNoOutbound: z.unknown(),
+  }),
+]);
 
 const qaFlowSetActionSchema = z.object({
   set: z.string().trim().min(1),
@@ -166,6 +228,7 @@ qaFlowIfShapeBase[qaFlowThenKey] = z.array(z.unknown()).min(1);
 const qaFlowActionSchema: z.ZodType = z.lazy(() =>
   z.union([
     qaFlowCallActionSchema,
+    qaFlowTransportActionSchema,
     qaFlowSetActionSchema,
     qaFlowAssertActionSchema,
     qaFlowThrowActionSchema,
@@ -219,6 +282,7 @@ const qaSeedScenarioBodySchema = z.object({
   plugins: z.array(z.string().trim().min(1)).optional(),
   gatewayConfigPatch: z.record(z.string(), z.unknown()).optional(),
   gatewayRuntime: qaScenarioGatewayRuntimeSchema.optional(),
+  regressionRefs: z.array(z.string().trim().min(1)).optional(),
   docsRefs: z.array(z.string().trim().min(1)).optional(),
   codeRefs: z.array(z.string().trim().min(1)).optional(),
   execution: qaScenarioExecutionSchema.optional(),
@@ -287,37 +351,14 @@ const repoPathCache = new Map<string, string | null>();
 let qaScenarioYamlPathsCache: string[] | null = null;
 let qaScenarioPackCache: QaScenarioPack | null = null;
 
-function walkUpDirectories(start: string): string[] {
-  const roots: string[] = [];
-  let current = path.resolve(start);
-  while (true) {
-    roots.push(current);
-    const parent = path.dirname(current);
-    if (parent === current) {
-      return roots;
-    }
-    current = parent;
-  }
-}
-
-function resolveRepoPath(relativePath: string, kind: "file" | "directory" = "file"): string | null {
+function resolveRepoPath(relativePath: string, kind: QaRepoPathKind = "file"): string | null {
   const cacheKey = `${kind}:${relativePath}`;
   if (repoPathCache.has(cacheKey)) {
     return repoPathCache.get(cacheKey) ?? null;
   }
-  for (const dir of walkUpDirectories(import.meta.dirname)) {
-    const candidate = path.join(dir, relativePath);
-    if (!fs.existsSync(candidate)) {
-      continue;
-    }
-    const stat = fs.statSync(candidate);
-    if ((kind === "file" && stat.isFile()) || (kind === "directory" && stat.isDirectory())) {
-      repoPathCache.set(cacheKey, candidate);
-      return candidate;
-    }
-  }
-  repoPathCache.set(cacheKey, null);
-  return null;
+  const resolved = resolveQaRepoPath(import.meta.dirname, relativePath, kind);
+  repoPathCache.set(cacheKey, resolved);
+  return resolved;
 }
 
 export function hasQaScenarioPack(): boolean {

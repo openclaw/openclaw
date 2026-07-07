@@ -1,14 +1,12 @@
 // Delivery context tests cover context normalization for channel delivery.
 import { describe, expect, it } from "vitest";
 import {
-  formatConversationTarget,
   deliveryContextKey,
   deliveryContextFromSession,
   mergeDeliveryContext,
   normalizeDeliveryContext,
-  normalizeSessionDeliveryFields,
-  resolveConversationDeliveryTarget,
 } from "./delivery-context.js";
+import { normalizeSessionDeliveryFields } from "./delivery-context.shared.js";
 
 describe("delivery context helpers", () => {
   it("normalizes channel/to/accountId and drops empty contexts", () => {
@@ -55,6 +53,31 @@ describe("delivery context helpers", () => {
     });
   });
 
+  it("does not inherit route fields from a different account on the same channel", () => {
+    const merged = mergeDeliveryContext(
+      { channel: "telegram", accountId: "bot-a" },
+      { channel: "telegram", to: "123", accountId: "bot-b", threadId: "99" },
+    );
+
+    expect(merged).toEqual({
+      channel: "telegram",
+      to: undefined,
+      accountId: "bot-a",
+    });
+    expect(merged?.threadId).toBeUndefined();
+
+    expect(
+      mergeDeliveryContext(
+        { accountId: "bot-a" },
+        { channel: "telegram", to: "123", accountId: "bot-b", threadId: "99" },
+      ),
+    ).toEqual({
+      channel: undefined,
+      to: undefined,
+      accountId: "bot-a",
+    });
+  });
+
   it("uses fallback route fields when fallback has no channel", () => {
     const merged = mergeDeliveryContext(
       { channel: "demo-channel" },
@@ -83,22 +106,6 @@ describe("delivery context helpers", () => {
     expect(deliveryContextKey({ channel: "telegram", to: "-100123", threadId: 42.9 })).toBe(
       "telegram|-100123||42",
     );
-  });
-
-  it("formats generic fallback conversation targets as channels", () => {
-    expect(formatConversationTarget({ channel: "demo-channel", conversationId: "123" })).toBe(
-      "channel:123",
-    );
-  });
-
-  it("resolves generic parent-scoped thread delivery targets without channel runtime", () => {
-    expect(
-      resolveConversationDeliveryTarget({
-        channel: "thread-child-chat",
-        conversationId: "msg-child-id",
-        parentConversationId: "channel-parent-id",
-      }),
-    ).toEqual({ to: "channel:msg-child-id" });
   });
 
   it("derives delivery context from a session entry", () => {

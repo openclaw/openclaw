@@ -6,7 +6,6 @@ import { vi } from "vitest";
 import {
   clearMcpOAuthCredentials,
   createMcpOAuthClientProvider,
-  isMcpOAuthRedirectRegistrationError,
   runMcpOAuthLogin,
 } from "./mcp-oauth.js";
 
@@ -86,15 +85,6 @@ describe("MCP OAuth provider", () => {
 
     expect(provider.clientMetadata.redirect_uris).toEqual(["http://127.0.0.1:8989/oauth/callback"]);
     expect(provider.redirectUrl).toBe("http://127.0.0.1:8989/oauth/callback");
-  });
-
-  it("detects redirect registration failures for localhost fallback", () => {
-    expect(
-      isMcpOAuthRedirectRegistrationError(
-        new Error("HTTP 400: invalid_client_metadata redirect_uri must be localhost"),
-      ),
-    ).toBe(true);
-    expect(isMcpOAuthRedirectRegistrationError(new Error("unauthorized"))).toBe(false);
   });
 
   it("retries MCP OAuth login with localhost after redirect registration rejection", async () => {

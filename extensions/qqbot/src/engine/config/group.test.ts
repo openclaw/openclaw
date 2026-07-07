@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_GROUP_HISTORY_LIMIT,
+  resolveGroupCommandLevelFromAccountConfig,
   resolveGroupConfig,
   resolveGroupName,
   resolveGroupPrompt,
@@ -19,6 +20,7 @@ describe("engine/config/group", () => {
       expect(cfg).toStrictEqual({
         requireMention: true,
         ignoreOtherMentions: false,
+        commandLevel: "all",
         name: "",
         prompt: undefined,
         historyLimit: DEFAULT_GROUP_HISTORY_LIMIT,
@@ -33,6 +35,7 @@ describe("engine/config/group", () => {
             groups: {
               "*": {
                 requireMention: false,
+                commandLevel: "strict",
                 historyLimit: 20,
                 name: "wild",
               },
@@ -42,6 +45,7 @@ describe("engine/config/group", () => {
       };
       const resolved = resolveGroupConfig(cfg, "G1");
       expect(resolved.requireMention).toBe(false);
+      expect(resolved.commandLevel).toBe("strict");
       expect(resolved.historyLimit).toBe(20);
       expect(resolved.name).toBe("wild");
     });
@@ -52,14 +56,15 @@ describe("engine/config/group", () => {
           qqbot: {
             appId: "1",
             groups: {
-              "*": { requireMention: true, historyLimit: 20 },
-              GROUPA: { requireMention: false, historyLimit: 5, name: "A" },
+              "*": { requireMention: true, commandLevel: "strict", historyLimit: 20 },
+              GROUPA: { requireMention: false, commandLevel: "all", historyLimit: 5, name: "A" },
             },
           },
         },
       };
       const resolved = resolveGroupConfig(cfg, "GROUPA");
       expect(resolved.requireMention).toBe(false);
+      expect(resolved.commandLevel).toBe("all");
       expect(resolved.historyLimit).toBe(5);
       expect(resolved.name).toBe("A");
     });
@@ -155,6 +160,26 @@ describe("engine/config/group", () => {
       };
       expect(resolveRequireMention(cfg, "G", "bot2")).toBe(false);
       expect(resolveHistoryLimit(cfg, "G", "bot2")).toBe(7);
+    });
+  });
+
+  describe("resolveGroupCommandLevelFromAccountConfig", () => {
+    it("defaults to all when unset", () => {
+      expect(resolveGroupCommandLevelFromAccountConfig({}, "G")).toBe("all");
+    });
+
+    it("uses specific group before wildcard", () => {
+      expect(
+        resolveGroupCommandLevelFromAccountConfig(
+          {
+            groups: {
+              "*": { commandLevel: "strict" },
+              G1: { commandLevel: "all" },
+            },
+          },
+          "G1",
+        ),
+      ).toBe("all");
     });
   });
 

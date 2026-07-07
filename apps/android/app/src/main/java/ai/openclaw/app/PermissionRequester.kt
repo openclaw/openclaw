@@ -278,6 +278,7 @@ class PermissionRequester internal constructor(
       Manifest.permission.READ_CALL_LOG -> "Read Call Log"
       Manifest.permission.ACTIVITY_RECOGNITION -> "Motion Activity"
       Manifest.permission.READ_MEDIA_IMAGES -> "Photos"
+      Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED -> "Photos"
       Manifest.permission.READ_EXTERNAL_STORAGE -> "Photos"
       else -> permission
     }

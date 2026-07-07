@@ -29,24 +29,20 @@ vi.mock("../process/supervisor/index.js", () => ({
 let markBackgrounded: typeof import("./bash-process-registry.js").markBackgrounded;
 let buildExecExitOutcome: typeof import("./bash-tools.exec-runtime.js").buildExecExitOutcome;
 let detectCursorKeyMode: typeof import("./bash-tools.exec-runtime.js").detectCursorKeyMode;
-let emitExecSystemEvent: typeof import("./bash-tools.exec-runtime.js").emitExecSystemEvent;
 let formatExecFailureReason: typeof import("./bash-tools.exec-runtime.js").formatExecFailureReason;
 let renderExecUpdateText: typeof import("./bash-tools.exec-runtime.js").renderExecUpdateText;
 let resolveExecTarget: typeof import("./bash-tools.exec-runtime.js").resolveExecTarget;
 let runExecProcess: typeof import("./bash-tools.exec-runtime.js").runExecProcess;
-let sanitizeHostBaseEnv: typeof import("./bash-tools.exec-runtime.js").sanitizeHostBaseEnv;
 
 beforeAll(async () => {
   ({ markBackgrounded } = await import("./bash-process-registry.js"));
   ({
     buildExecExitOutcome,
     detectCursorKeyMode,
-    emitExecSystemEvent,
     formatExecFailureReason,
     renderExecUpdateText,
     resolveExecTarget,
     runExecProcess,
-    sanitizeHostBaseEnv,
   } = await import("./bash-tools.exec-runtime.js"));
 });
 
@@ -112,33 +108,6 @@ describe("detectCursorKeyMode", () => {
     expect(detectCursorKeyMode("\x1b[?1l\x1b[?1h")).toBe("application");
     // Multiple toggles - last one wins
     expect(detectCursorKeyMode("\x1b[?1h\x1b[?1l\x1b[?1h")).toBe("application");
-  });
-});
-
-describe("sanitizeHostBaseEnv", () => {
-  it("uses value-aware Git protocol inherited env sanitization", () => {
-    expect(
-      sanitizeHostBaseEnv({
-        PATH: "/usr/bin:/bin",
-        GIT_ALLOW_PROTOCOL: "https:ext:ssh",
-        GIT_PROTOCOL_FROM_USER: "1",
-        GIT_SSH_COMMAND: "touch /tmp/pwned",
-        SAFE: "ok",
-      }),
-    ).toEqual({
-      PATH: "/usr/bin:/bin",
-      GIT_ALLOW_PROTOCOL: "https:ssh",
-      GIT_PROTOCOL_FROM_USER: "0",
-      SAFE: "ok",
-    });
-
-    expect(
-      sanitizeHostBaseEnv({
-        GIT_PROTOCOL_FROM_USER: "false",
-      }),
-    ).toEqual({
-      GIT_PROTOCOL_FROM_USER: "false",
-    });
   });
 });
 
@@ -499,149 +468,38 @@ describe("exec notifyOnExit suppression", () => {
     expect(heartbeat.reason).toBe("exec-event");
     expect(heartbeat.sessionKey).toBe("agent:main:main");
   });
-});
 
-describe("emitExecSystemEvent", () => {
-  beforeEach(() => {
-    requestHeartbeatMock.mockClear();
-    enqueueSystemEventMock.mockClear();
+  it("keeps background exec exit-notification snippets on a UTF-16 boundary", async () => {
+    // A backgrounded command whose tail output overflows the 180-char snippet
+    // cap with an emoji straddling the cut must not deliver a lone surrogate to
+    // the user's channel. The emoji's high surrogate lands at index 178, so a
+    // raw slice(0, 179) would keep the dangling half.
+    const head = "a".repeat(178);
+    const overflowingOutput = `${head}🎉${"b".repeat(30)}`;
+    await runBackgroundedExit({ reason: "manual-cancel", stdout: overflowingOutput });
+
+    const [message] = requireSystemEventCall();
+    const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
+    expect(message).not.toMatch(loneSurrogate);
+    // The snippet stays truncated (ellipsis) while keeping the readable head.
+    expect(message).toContain("…");
+    expect(message).toContain(head);
   });
 
-  it("scopes heartbeat wake to the event session key", () => {
-    emitExecSystemEvent("Exec finished", {
-      sessionKey: "agent:ops:main",
-      contextKey: "exec:run-1",
-      deliveryContext: {
-        channel: "telegram",
-        to: "telegram:-100123:topic:47",
-        threadId: 47,
-      },
-    });
+  it("keeps the notify tail source on a UTF-16 boundary", async () => {
+    // The notify path first takes a 400-char tail, then compacts that tail to a
+    // 180-char snippet. If the 400-char tail starts inside an emoji, the final
+    // compacted snippet must not preserve the dangling low surrogate.
+    const prefix = "a".repeat(101);
+    const tailHead = "b".repeat(179);
+    const overflowingOutput = `${prefix}🎉${tailHead}${"c".repeat(220)}`;
+    await runBackgroundedExit({ reason: "manual-cancel", stdout: overflowingOutput });
 
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
-      sessionKey: "agent:ops:main",
-      contextKey: "exec:run-1",
-      deliveryContext: {
-        channel: "telegram",
-        to: "telegram:-100123:topic:47",
-        threadId: 47,
-      },
-    });
-    const heartbeat = requireHeartbeatCall();
-    expect(heartbeat.coalesceMs).toBe(0);
-    expect(heartbeat.reason).toBe("exec-event");
-    expect(heartbeat.sessionKey).toBe("agent:ops:main");
-  });
-
-  it("remaps cron-run event enqueue and wake targets to the drained agent main session", () => {
-    emitExecSystemEvent("Exec finished", {
-      sessionKey: "agent:ops:cron:nightly:run:run-1",
-      contextKey: "exec:run-cron",
-      mainKey: "primary",
-    });
-
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
-      sessionKey: "agent:ops:primary",
-      contextKey: "exec:run-cron",
-    });
-    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
-    const [[heartbeatParams]] = requestHeartbeatMock.mock.calls as unknown as Array<
-      [{ coalesceMs?: number; reason?: string; sessionKey?: string }]
-    >;
-    expect(heartbeatParams.coalesceMs).toBe(0);
-    expect(heartbeatParams.reason).toBe("exec-event");
-    expect(heartbeatParams.sessionKey).toBe("agent:ops:primary");
-  });
-
-  it("routes global-scope cron-run events to the global queue and preserves the agent wake target", () => {
-    emitExecSystemEvent("Exec finished", {
-      sessionKey: "agent:ops:cron:nightly:run:run-1:subagent:worker",
-      contextKey: "exec:run-global",
-      sessionScope: "global",
-    });
-
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
-      sessionKey: "global",
-      contextKey: "exec:run-global",
-    });
-    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
-    const [[heartbeatParams]] = requestHeartbeatMock.mock.calls as unknown as Array<
-      [{ agentId?: string; coalesceMs?: number; reason?: string }]
-    >;
-    expect(heartbeatParams.agentId).toBe("ops");
-    expect(heartbeatParams.coalesceMs).toBe(0);
-    expect(heartbeatParams.reason).toBe("exec-event");
-    expect(requireHeartbeatCall()).not.toHaveProperty("sessionKey");
-  });
-
-  it("routes single-owner dmScope=main direct exec events to the agent main session", () => {
-    emitExecSystemEvent("Exec finished", {
-      sessionKey: "agent:main:telegram:default:direct:123",
-      contextKey: "exec:run-dm",
-      deliveryContext: {
-        channel: "telegram",
-        to: "123",
-      },
-      eventRouting: {
-        dmScope: "main",
-        allowFrom: ["123"],
-        channel: "telegram",
-        accountId: "default",
-      },
-    });
-
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
-      sessionKey: "agent:main:main",
-      contextKey: "exec:run-dm",
-      deliveryContext: {
-        channel: "telegram",
-        to: "123",
-      },
-    });
-    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
-    const heartbeat = requireHeartbeatCall();
-    expect(heartbeat.coalesceMs).toBe(0);
-    expect(heartbeat.reason).toBe("exec-event");
-    expect(heartbeat.sessionKey).toBe("agent:main:main");
-  });
-
-  it("keeps wake unscoped for non-agent session keys", () => {
-    emitExecSystemEvent("Exec finished", {
-      sessionKey: "global",
-      contextKey: "exec:run-global",
-    });
-
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
-      sessionKey: "global",
-      contextKey: "exec:run-global",
-    });
-    const heartbeat = requireHeartbeatCall();
-    expect(heartbeat.coalesceMs).toBe(0);
-    expect(heartbeat.reason).toBe("exec-event");
-  });
-
-  it("ignores events without a session key", () => {
-    emitExecSystemEvent("Exec finished", {
-      sessionKey: "  ",
-      contextKey: "exec:run-2",
-    });
-
-    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-    expect(requestHeartbeatMock).not.toHaveBeenCalled();
-  });
-
-  it("skips heartbeat wake for subagent session keys", () => {
-    emitExecSystemEvent("Exec finished", {
-      sessionKey: "agent:main:subagent:abc-123",
-      contextKey: "exec:run-sub",
-    });
-
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
-      sessionKey: "agent:main:subagent:abc-123",
-      contextKey: "exec:run-sub",
-      deliveryContext: undefined,
-    });
-    expect(requestHeartbeatMock).not.toHaveBeenCalled();
+    const [message] = requireSystemEventCall();
+    const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
+    expect(message).not.toMatch(loneSurrogate);
+    expect(message).not.toContain("�");
+    expect(message).toContain(tailHead);
   });
 });
 

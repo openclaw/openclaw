@@ -1,7 +1,8 @@
 // Mock OpenAI-compatible server for broader E2E scenarios.
 import { createHash } from "node:crypto";
 import http from "node:http";
-import { readPositiveIntEnv } from "./lib/env-limits.mjs";
+import { escapeRegExp } from "../lib/regexp.mjs";
+import { readTcpPortEnv } from "./lib/env-limits.mjs";
 import {
   boundedRequestLogBody,
   isRequestBodyTooLargeError,
@@ -13,8 +14,8 @@ import {
 
 const port =
   process.env.MOCK_PORT != null
-    ? readPositiveIntEnv("MOCK_PORT")
-    : readPositiveIntEnv("OPENCLAW_MOCK_OPENAI_PORT");
+    ? readTcpPortEnv("MOCK_PORT")
+    : readTcpPortEnv("OPENCLAW_MOCK_OPENAI_PORT");
 const successMarker = process.env.SUCCESS_MARKER ?? "OPENCLAW_E2E_OK";
 const requestLog = process.env.MOCK_REQUEST_LOG;
 
@@ -244,9 +245,7 @@ function collectFunctionCallOutputText(body) {
 }
 
 function hasDeclaredTool(bodyText, name) {
-  return new RegExp(`"name"\\s*:\\s*"${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`, "u").test(
-    bodyText,
-  );
+  return new RegExp(`"name"\\s*:\\s*"${escapeRegExp(name)}"`, "u").test(bodyText);
 }
 
 function mcpCodeModeApiFileEvents(body, bodyText) {

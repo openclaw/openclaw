@@ -20,7 +20,6 @@ export const WIKI_VAULT_DIRECTORIES = [
   "_attachments",
   "_views",
   ".openclaw-wiki",
-  ".openclaw-wiki/locks",
   ".openclaw-wiki/cache",
 ] as const;
 
@@ -123,22 +122,6 @@ export async function initializeMemoryWikiVault(
     rootDir,
     "inbox.md",
     withTrailingNewline("# Inbox\n\nDrop raw ideas, questions, and source links here.\n"),
-    createdFiles,
-  );
-  await writeFileIfMissing(
-    rootDir,
-    ".openclaw-wiki/state.json",
-    withTrailingNewline(
-      JSON.stringify(
-        {
-          version: 1,
-          createdAt: resolveMemoryWikiTimestamp(options?.nowMs),
-          renderMode: config.vault.renderMode,
-        },
-        null,
-        2,
-      ),
-    ),
     createdFiles,
   );
   await writeFileIfMissing(rootDir, ".openclaw-wiki/log.jsonl", "", createdFiles);

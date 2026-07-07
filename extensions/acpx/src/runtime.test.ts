@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { RequestedModelUnsupportedError } from "acpx/runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AcpRuntimeError,
@@ -189,6 +190,109 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(() => testing.assertSupportedRuntimeSessionMode("run" as never)).toThrow(
       AcpRuntimeError,
     );
+  });
+
+  it("adds the OpenClaw session key to the managed OpenClaw tools MCP bridge", () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime } = makeRuntime(baseStore, {
+      openclawToolsMcpBridgeEnabled: true,
+      mcpServers: [
+        {
+          name: "openclaw-tools",
+          command: "node",
+          args: ["dist/mcp/openclaw-tools-serve.js"],
+          env: [],
+        },
+      ],
+    });
+
+    const readScopedMcpEnv = (sessionKey: string) => {
+      const delegate = (
+        runtime as unknown as {
+          resolveOpenClawToolsDelegateForSession(sessionKey: string): unknown;
+        }
+      ).resolveOpenClawToolsDelegateForSession(sessionKey) as {
+        options: {
+          mcpServers?: Array<{
+            env?: Array<{ name: string; value: string }>;
+            name: string;
+          }>;
+        };
+      };
+      return delegate.options.mcpServers?.find((server) => server.name === "openclaw-tools")?.env;
+    };
+
+    expect(readScopedMcpEnv("agent:worker:main")).toContainEqual({
+      name: "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY",
+      value: "agent:worker:main",
+    });
+    expect(readScopedMcpEnv("agent:research:main")).toContainEqual({
+      name: "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY",
+      value: "agent:research:main",
+    });
+  });
+
+  it("keeps managed OpenClaw tools MCP delegates reachable for fresh sessions", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime } = makeRuntime(baseStore, {
+      openclawToolsMcpBridgeEnabled: true,
+      mcpServers: [
+        {
+          name: "openclaw-tools",
+          command: "node",
+          args: ["dist/mcp/openclaw-tools-serve.js"],
+          env: [],
+        },
+      ],
+    });
+    const exposedRuntime = runtime as unknown as {
+      openclawToolsSessionDelegates: Map<string, unknown>;
+      resolveOpenClawToolsDelegateForSession(sessionKey: string): unknown;
+    };
+
+    const firstDelegate =
+      exposedRuntime.resolveOpenClawToolsDelegateForSession("agent:worker:main");
+    expect(exposedRuntime.openclawToolsSessionDelegates.has("agent:worker:main")).toBe(true);
+
+    await runtime.prepareFreshSession({ sessionKey: "agent:worker:main" });
+
+    expect(exposedRuntime.openclawToolsSessionDelegates.has("agent:worker:main")).toBe(true);
+    expect(exposedRuntime.resolveOpenClawToolsDelegateForSession("agent:worker:main")).toBe(
+      firstDelegate,
+    );
+  });
+
+  it("uses the no-MCP delegate for startup probes when the OpenClaw tools bridge is enabled", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate, bridgeSafeDelegate } = makeRuntime(baseStore, {
+      openclawToolsMcpBridgeEnabled: true,
+      mcpServers: [
+        {
+          name: "openclaw-tools",
+          command: "node",
+          args: ["dist/mcp/openclaw-tools-serve.js"],
+          env: [],
+        },
+      ],
+    });
+    const defaultProbe = vi.spyOn(delegate, "probeAvailability").mockResolvedValue(undefined);
+    const safeProbe = vi
+      .spyOn(bridgeSafeDelegate, "probeAvailability")
+      .mockResolvedValue(undefined);
+
+    await runtime.probeAvailability();
+
+    expect(safeProbe).toHaveBeenCalledTimes(1);
+    expect(defaultProbe).not.toHaveBeenCalled();
   });
 
   it("normalizes OpenClaw Codex model ids for ACP startup", async () => {
@@ -708,6 +812,100 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
   });
 
+  it("retries without a model when ACPX reports missing model capability", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      agentRegistry: {
+        resolve: (agentName: string) => (agentName === "opencode" ? "opencode acp" : agentName),
+        list: () => ["opencode"],
+      },
+    });
+    const ensure = vi
+      .spyOn(delegate, "ensureSession")
+      .mockRejectedValueOnce(
+        new RequestedModelUnsupportedError(
+          "Cannot apply --model: the ACP agent did not advertise model support",
+          "missing-capability",
+        ),
+      )
+      .mockResolvedValueOnce({
+        sessionKey: "agent:opencode:acp:test",
+        backend: "acpx",
+        runtimeSessionName: "opencode",
+      });
+
+    await runtime.ensureSession({
+      sessionKey: "agent:opencode:acp:test",
+      agent: "opencode",
+      mode: "persistent",
+      model: "openrouter/owl-alpha",
+    });
+
+    expect(ensure).toHaveBeenCalledTimes(2);
+    expect(readFirstEnsureSessionInput(ensure)).toMatchObject({
+      model: "openrouter/owl-alpha",
+      sessionOptions: { model: "openrouter/owl-alpha" },
+    });
+    const [, secondCall] = ensure.mock.calls;
+    expect(secondCall?.[0]).not.toHaveProperty("sessionOptions");
+    expect((secondCall?.[0] as { model?: string } | undefined)?.model).toBeUndefined();
+  });
+
+  it("does not retry when ACPX rejects an explicitly unsupported model id", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      agentRegistry: {
+        resolve: (agentName: string) => (agentName === "opencode" ? "opencode acp" : agentName),
+        list: () => ["opencode"],
+      },
+    });
+    const ensure = vi
+      .spyOn(delegate, "ensureSession")
+      .mockRejectedValueOnce(
+        new RequestedModelUnsupportedError(
+          "Cannot apply --model: the ACP agent did not advertise that model",
+          "unadvertised-model",
+        ),
+      );
+
+    await expect(
+      runtime.ensureSession({
+        sessionKey: "agent:opencode:acp:test",
+        agent: "opencode",
+        mode: "persistent",
+        model: "unknown/model",
+      }),
+    ).rejects.toThrow("did not advertise that model");
+    expect(ensure).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry an unrelated error with similar wording", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const ensure = vi
+      .spyOn(delegate, "ensureSession")
+      .mockRejectedValueOnce(new Error("the ACP agent did not advertise model support"));
+
+    await expect(
+      runtime.ensureSession({
+        sessionKey: "agent:main:acp:test",
+        agent: "main",
+        mode: "persistent",
+        model: "openrouter/owl-alpha",
+      }),
+    ).rejects.toThrow("did not advertise model support");
+    expect(ensure).toHaveBeenCalledTimes(1);
+  });
+
   it("injects Codex ACP startup config into the scoped registry", () => {
     expect(testing.isCodexAcpCommand(CODEX_ACP_COMMAND)).toBe(true);
     expect(testing.isCodexAcpCommand(CODEX_ACP_WRAPPER_COMMAND)).toBe(true);
@@ -1066,6 +1264,46 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
     expect(await wrappedStore.load("agent:codex:acp:binding:test")).toBeUndefined();
     expect(baseStore["load"]).toHaveBeenCalledOnce();
+  });
+
+  it("releases managed OpenClaw tools MCP delegates after close", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+
+    const { runtime } = makeRuntime(baseStore, {
+      openclawToolsMcpBridgeEnabled: true,
+      mcpServers: [
+        {
+          name: "openclaw-tools",
+          command: "node",
+          args: ["dist/mcp/openclaw-tools-serve.js"],
+          env: [],
+        },
+      ],
+    });
+    const exposedRuntime = runtime as unknown as {
+      openclawToolsSessionDelegates: Map<string, { close: AcpRuntime["close"] }>;
+      resolveOpenClawToolsDelegateForSession(sessionKey: string): {
+        close: AcpRuntime["close"];
+      };
+    };
+    const scopedDelegate =
+      exposedRuntime.resolveOpenClawToolsDelegateForSession("agent:codex:main");
+    const close = vi.spyOn(scopedDelegate, "close").mockResolvedValue(undefined);
+
+    await runtime.close({
+      handle: {
+        sessionKey: "agent:codex:main",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:main",
+      },
+      reason: "closed",
+    });
+
+    expect(close).toHaveBeenCalledOnce();
+    expect(exposedRuntime.openclawToolsSessionDelegates.has("agent:codex:main")).toBe(false);
   });
 
   it("cleans up OpenClaw-owned ACPX process trees after close", async () => {

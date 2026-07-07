@@ -109,6 +109,30 @@ describe("resolveCronSession", () => {
     expect(result.isNewSession).toBe(true);
   });
 
+  it("assigns a collision-proof lifecycle revision to each resolved run", () => {
+    const first = resolveWithStoredEntry({ sessionKey: "agent:main:cron:new-job" });
+    const second = resolveWithStoredEntry({ sessionKey: "agent:main:cron:new-job" });
+
+    expect(first.lifecycleRevision).toBe(first.sessionEntry.lifecycleRevision);
+    expect(second.lifecycleRevision).toBe(second.sessionEntry.lifecycleRevision);
+    expect(first.lifecycleRevision).not.toBe(second.lifecycleRevision);
+  });
+
+  it("rejects archived persistent sessions before rollover", () => {
+    expect(() =>
+      resolveWithStoredEntry({
+        sessionKey: "agent:main:main",
+        entry: {
+          sessionId: "archived-session-id",
+          updatedAt: NOW_MS - 1000,
+          archivedAt: NOW_MS,
+        },
+        forceNew: true,
+      }),
+    ).toThrow('Session "agent:main:main" is archived. Restore it before starting new work.');
+    expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
+  });
+
   // New tests for session reuse behavior (#18027)
   describe("session reuse for webhooks/cron", () => {
     it("reuses existing sessionId when session is fresh", () => {
@@ -174,6 +198,22 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.modelOverride).toBe("sonnet-4");
       expect(result.sessionEntry.providerOverride).toBe("anthropic");
       expect(clearBootstrapSnapshot).toHaveBeenCalledWith("webhook:stable-key");
+    });
+
+    it("preserves pin state when rolling to a fresh session", () => {
+      const pinnedAt = NOW_MS - 500;
+      const result = resolveWithStoredEntry({
+        entry: {
+          sessionId: "existing-session-id-pinned",
+          updatedAt: NOW_MS - 1000,
+          pinnedAt,
+        },
+        fresh: true,
+        forceNew: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionEntry.pinnedAt).toBe(pinnedAt);
     });
 
     it("clears stale sessionFile when forceNew rolls to a fresh session", () => {

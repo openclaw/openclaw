@@ -410,6 +410,50 @@ describe("MatrixClient request hardening", () => {
     expect(secondUrl).toContain("/_matrix/media/v3/download/example.org/media");
   });
 
+  it("preserves encrypted media download limits through the crypto facade", async () => {
+    const payload = Buffer.from([9, 10, 11, 12, 13]);
+    const fetchMock = vi.fn(async () => new Response(payload, { status: 200 }));
+    stubRuntimeFetch(fetchMock as unknown as typeof fetch);
+
+    const client = new MatrixClient("http://127.0.0.1:8008", "token", {
+      encryption: true,
+      ssrfPolicy: { allowPrivateNetwork: true },
+    });
+    await (
+      client as unknown as {
+        ensureCryptoSupportInitialized: () => Promise<void>;
+      }
+    ).ensureCryptoSupportInitialized();
+
+    const cryptoFacade = client.crypto;
+    if (!cryptoFacade) {
+      throw new Error("expected Matrix crypto facade");
+    }
+    await expect(
+      cryptoFacade.decryptMedia(
+        {
+          url: "mxc://example.org/encrypted",
+          key: {
+            alg: "A256CTR",
+            ext: true,
+            k: "unused",
+            key_ops: ["encrypt", "decrypt"],
+            kty: "oct",
+          },
+          iv: "unused",
+          hashes: { sha256: "unused" },
+          v: "v2",
+        },
+        {
+          maxBytes: 4,
+          readIdleTimeoutMs: 25,
+        },
+      ),
+    ).rejects.toThrow(/Matrix media exceeds configured size limit/);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("decrypts encrypted room events returned by getEvent", async () => {
     const client = new MatrixClient("https://matrix.example.org", "token");
     matrixJsClient.fetchRoomEvent = vi.fn(async () => ({
@@ -1643,6 +1687,54 @@ describe("MatrixClient crypto bootstrapping", () => {
 
     // repair was attempted
     expect(bootstrapSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects recovery keys when secret-storage metadata cannot authenticate them", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-sdk-test-"));
+    const recoveryKeyPath = path.join(tmpDir, "recovery-key.json");
+    fs.writeFileSync(
+      recoveryKeyPath,
+      JSON.stringify({
+        version: 1,
+        createdAt: new Date().toISOString(),
+        keyId: "SSSSKEY",
+        privateKeyBase64: Buffer.from([1, 2, 3, 4]).toString("base64"),
+      }),
+      "utf8",
+    );
+    const checkKey = vi.fn(async () => true);
+    Object.assign(matrixJsClient, {
+      secretStorage: {
+        getDefaultKeyId: vi.fn(async () => "SSSSKEY"),
+        getKey: vi.fn(async () => [
+          "SSSSKEY",
+          {
+            algorithm: "m.secret_storage.v1.aes-hmac-sha2",
+            iv: "authenticated-iv",
+          },
+        ]),
+        checkKey,
+      },
+    });
+    const client = new MatrixClient("https://matrix.example.org", "token", {
+      encryption: true,
+      recoveryKeyPath,
+    });
+    await (
+      client as unknown as {
+        ensureCryptoSupportInitialized: () => Promise<void>;
+      }
+    ).ensureCryptoSupportInitialized();
+    const bootstrapper = (
+      client as unknown as {
+        cryptoBootstrapper: {
+          deps: { canUnlockSecretStorage: () => Promise<boolean> };
+        };
+      }
+    ).cryptoBootstrapper;
+
+    await expect(bootstrapper.deps.canUnlockSecretStorage()).resolves.toBe(false);
+    expect(checkKey).not.toHaveBeenCalled();
   });
 
   it("provides secret storage callbacks and resolves stored recovery key", async () => {

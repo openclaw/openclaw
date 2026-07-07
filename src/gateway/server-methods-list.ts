@@ -52,6 +52,7 @@ export const GATEWAY_EVENTS = [
   "health",
   "heartbeat",
   "cron",
+  "task",
   "node.pair.requested",
   "node.pair.resolved",
   "node.invoke.request",
@@ -63,5 +64,7 @@ export const GATEWAY_EVENTS = [
   "exec.approval.resolved",
   "plugin.approval.requested",
   "plugin.approval.resolved",
+  "terminal.data",
+  "terminal.exit",
   GATEWAY_EVENT_UPDATE_AVAILABLE,
 ];

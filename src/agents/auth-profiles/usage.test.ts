@@ -952,6 +952,30 @@ describe("markAuthProfileBlockedUntil", () => {
   });
 });
 
+describe("markAuthProfileFailure — detail-less provider failures", () => {
+  it("does not persist unverifiable failures for API-key profiles", async () => {
+    const store = makeStore(undefined);
+    store.profiles["azure-foundry:default"] = {
+      type: "api_key",
+      provider: "azure-foundry",
+      key: "azure-foundry-test-key",
+    };
+
+    for (const profileId of ["azure-foundry:default", "openai:api-key"]) {
+      await markAuthProfileFailure({
+        store,
+        profileId,
+        reason: "no_error_details",
+      });
+    }
+
+    expect(store.usageStats).toBeUndefined();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(storeMocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
+    expect(storeMocks.saveAuthProfileStore).not.toHaveBeenCalled();
+  });
+});
+
 describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
   function mockWhamResponse(status: number, body?: unknown): void {
     fetchMock.mockResolvedValueOnce(
@@ -965,7 +989,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
   async function markCodexFailureAt(params: {
     store: ReturnType<typeof makeStore>;
     now: number;
-    reason?: "rate_limit" | "unknown";
+    reason?: "rate_limit" | "no_error_details" | "unknown";
     useLock?: boolean;
   }): Promise<void> {
     const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(params.now);
@@ -1061,6 +1085,52 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     }
   });
 
+  it("probes WHAM before recording an OpenAI OAuth detail-less failure", async () => {
+    const now = 1_700_000_000_000;
+    const store = makeStore(undefined);
+    mockWhamResponse(200, {
+      rate_limit: {
+        limit_reached: false,
+        primary_window: { used_percent: 45, reset_after_seconds: 9_000 },
+      },
+    });
+
+    await markCodexFailureAt({ store, now, reason: "no_error_details" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBe(now + 15_000);
+    expect(store.usageStats?.["openai:default"]?.failureCounts?.no_error_details).toBe(1);
+  });
+
+  it("does not apply a stale WHAM result after the profile changes", async () => {
+    const now = 1_700_000_000_000;
+    const store = makeStore(undefined);
+    mockWhamResponse(200, {
+      rate_limit: {
+        limit_reached: false,
+        primary_window: { used_percent: 45, reset_after_seconds: 9_000 },
+      },
+    });
+    storeMocks.updateAuthProfileStoreWithLock.mockImplementationOnce(
+      async (lockParams: { updater: (store: AuthProfileStore) => boolean }) => {
+        const freshStore = structuredClone(store);
+        freshStore.profiles["openai:default"] = {
+          type: "api_key",
+          provider: "openai",
+          key: "rotated-api-key",
+        };
+        lockParams.updater(freshStore);
+        return freshStore;
+      },
+    );
+
+    await markCodexFailureAt({ store, now, reason: "no_error_details" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(store.usageStats).toBeUndefined();
+    expect(storeMocks.saveAuthProfileStore).not.toHaveBeenCalled();
+  });
+
   it("maps HTTP 401 to a 12h cooldown", async () => {
     const now = 1_700_000_000_000;
     const store = makeStore({});
@@ -1088,6 +1158,19 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
 
     await markCodexFailureAt({ store, now });
 
+    expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBe(now + 300_000);
+  });
+
+  it("cancels WHAM HTTP error response bodies", async () => {
+    const now = 1_700_000_000_000;
+    const store = makeStore({});
+    const response = new Response("server busy", { status: 500 });
+    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+    fetchMock.mockResolvedValueOnce(response);
+
+    await markCodexFailureAt({ store, now });
+
+    expect(cancel).toHaveBeenCalledOnce();
     expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBe(now + 300_000);
   });
 

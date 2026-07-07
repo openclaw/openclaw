@@ -12,7 +12,6 @@ import { resolveBundledChannelThreadBindingDefaultPlacement } from "./plugins/th
 
 export {
   resolveThreadBindingLifecycle,
-  type ThreadBindingLifecycleRecord,
 } from "../shared/thread-binding-lifecycle.js";
 
 const DEFAULT_THREAD_BINDING_IDLE_HOURS = 24;
@@ -46,7 +45,7 @@ export type ThreadBindingSpawnPolicy = {
 };
 
 /** Starting transcript mode for a spawned thread-bound session. */
-export type ThreadBindingSpawnContext = "isolated" | "fork";
+type ThreadBindingSpawnContext = "isolated" | "fork";
 
 function normalizeChannelId(value: string | undefined | null): string {
   return normalizeLowercaseStringOrEmpty(value);

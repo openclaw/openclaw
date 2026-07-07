@@ -288,6 +288,7 @@ describe("buildWorkspaceSkillStatus", () => {
         blockedByAllowlist: false,
         blockedByAgentFilter: false,
         eligible: false,
+        platformIncompatible: true,
         modelVisible: false,
         userInvocable: true,
         commandVisible: false,

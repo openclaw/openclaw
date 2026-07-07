@@ -1,6 +1,7 @@
 // Qqbot plugin module implements inbound context behavior.
 import type { ChannelIngressDecision } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { EngineAdapters } from "../adapter/index.js";
+import type { QQBotGroupCommandLevel } from "../config/group.js";
 import type { GroupActivationMode, SessionStoreReader } from "../group/activation.js";
 import type { HistoryEntry } from "../group/history.js";
 import type { GroupMessageGateResult } from "../group/message-gating.js";
@@ -18,6 +19,7 @@ export interface ReplyToInfo {
 export interface InboundGroupInfo {
   gate: GroupMessageGateResult;
   activation: GroupActivationMode;
+  commandLevel: QQBotGroupCommandLevel;
   historyLimit: number;
   isMerged: boolean;
   mergedMessages?: readonly QueuedMessage[];
@@ -56,7 +58,11 @@ export interface InboundContext {
   blockReasonCode?: string;
   accessDecision?: ChannelIngressDecision["decision"];
   skipped: boolean;
-  skipReason?: "drop_other_mention" | "block_unauthorized_command" | "skip_no_mention";
+  skipReason?:
+    | "drop_other_mention"
+    | "block_unauthorized_command"
+    | "skip_no_mention"
+    | "private_command_only";
   typing: { keepAlive: TypingKeepAlive | null };
   inputNotifyRefIdx?: string;
 }

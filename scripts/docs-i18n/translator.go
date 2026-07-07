@@ -207,7 +207,9 @@ func runCodexExecPrompt(ctx context.Context, req codexPromptRequest) (string, er
 	}
 	outputPath := outputFile.Name()
 	_ = outputFile.Close()
-	defer os.Remove(outputPath)
+	defer func() {
+		_ = os.Remove(outputPath)
+	}()
 
 	codexHomeBase, err := isolatedCodexHomeBase()
 	if err != nil {
@@ -217,7 +219,9 @@ func runCodexExecPrompt(ctx context.Context, req codexPromptRequest) (string, er
 	if err != nil {
 		return "", err
 	}
-	defer os.RemoveAll(codexHome)
+	defer func() {
+		_ = os.RemoveAll(codexHome)
+	}()
 	if err := writeCodexAuthFile(codexHome); err != nil {
 		return "", err
 	}
@@ -315,11 +319,16 @@ func previewCommandOutput(stdout, stderr string) string {
 		return "no output"
 	}
 	combined = strings.Join(strings.Fields(combined), " ")
-	const limit = 500
+	const (
+		limit      = 1200
+		headLength = 300
+		tailLength = 800
+	)
 	if len(combined) <= limit {
 		return combined
 	}
-	return combined[:limit] + "..."
+	// Codex prints API failures after its header and prompt, so the tail carries the actionable error.
+	return combined[:headLength] + " ... [truncated] ... " + combined[len(combined)-tailLength:]
 }
 
 func sleepWithContext(ctx context.Context, delay time.Duration) error {

@@ -10,7 +10,7 @@ const A2UI_ACTION_KEYS = [
 ] as const;
 
 /** Supported A2UI message dialects accepted by the Canvas host. */
-export type A2UIVersion = "v0.8" | "v0.9";
+type A2UIVersion = "v0.8" | "v0.9";
 
 /** Builds a minimal A2UI JSONL payload that renders text in a single surface. */
 export function buildA2UITextJsonl(text: string) {

@@ -41,7 +41,7 @@ export type ResolveImplicitProvidersForModelsJson = (params: {
 }) => Promise<Record<string, ProviderConfig>>;
 
 /** Planned models.json write/noop/skip result plus plugin catalog sidecar writes. */
-export type ModelsJsonPlan =
+type ModelsJsonPlan =
   | {
       action: "skip";
       pluginCatalogWrites?: Record<string, string>;
@@ -112,6 +112,12 @@ export async function resolveProvidersForModelsJsonWithDeps(
   const cfg = params.cfg.models?.providers
     ? { ...params.cfg, models: { ...params.cfg.models, providers: explicitProviders } }
     : params.cfg;
+  // When models.mode is "replace" the user opts out of provider discovery, so
+  // skip the (potentially slow) implicit-provider resolver entirely and return
+  // only the explicit providers. See openclaw#66957.
+  if (cfg.models?.mode === "replace") {
+    return mergeProviders({ implicit: {}, explicit: explicitProviders });
+  }
   const resolveImplicitProvidersImpl = deps?.resolveImplicitProviders ?? resolveImplicitProviders;
   const implicitProviders = await resolveImplicitProvidersImpl({
     agentDir,

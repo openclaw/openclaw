@@ -454,8 +454,8 @@ describe("createMSTeamsReplyDispatcher", () => {
     });
 
     const lastUpdate = getStreamMock().update.mock.calls.at(-1)?.[0];
-    expect(lastUpdate).toContain("completed");
-    expect(lastUpdate).not.toContain("install dependencies");
+    expect(lastUpdate).toContain("install dependencies");
+    expect(lastUpdate).not.toContain("completed");
   });
 
   it("replaces reasoning progress snapshots in progress mode", async () => {

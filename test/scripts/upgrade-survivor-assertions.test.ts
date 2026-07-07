@@ -146,6 +146,65 @@ function assertConfiguredPluginState(params: { installPath?: string } = {}): voi
 }
 
 describe("upgrade survivor assertions", () => {
+  it("accepts the ACPX OpenClaw tools bridge scenario during seed", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-acpx-"));
+    try {
+      const stateDir = join(root, "state");
+      const workspace = join(root, "workspace");
+      mkdirSync(stateDir, { recursive: true });
+      mkdirSync(workspace, { recursive: true });
+
+      execFileSync(process.execPath, [ASSERTIONS_PATH, "seed"], {
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_TEST_WORKSPACE_DIR: workspace,
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "acpx-openclaw-tools-bridge",
+        },
+        stdio: "pipe",
+      });
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("asserts the ACPX OpenClaw tools bridge config survived", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-acpx-config-"));
+    try {
+      const configPath = join(root, "openclaw.json");
+      const coveragePath = join(root, "coverage.json");
+      writeJson(configPath, {
+        plugins: {
+          allow: ["acpx"],
+          entries: {
+            acpx: {
+              enabled: true,
+              config: {
+                openClawToolsMcpBridge: true,
+              },
+            },
+          },
+        },
+      });
+      writeJson(coveragePath, {
+        acceptedIntents: ["acpx-openclaw-tools-bridge"],
+        skippedIntents: [],
+      });
+
+      execFileSync(process.execPath, [ASSERTIONS_PATH, "assert-config"], {
+        env: {
+          ...process.env,
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON: coveragePath,
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "acpx-openclaw-tools-bridge",
+        },
+        stdio: "pipe",
+      });
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("accepts official ClawHub npm-pack installs for configured external plugins", () => {
     expect(() => assertConfiguredPluginState()).not.toThrow();
   });

@@ -18,7 +18,9 @@ export function buildSlackThreadingToolContext(params: {
     cfg: params.cfg,
     accountId: params.accountId,
   });
-  const configuredReplyToMode = resolveSlackReplyToMode(account, params.context.ChatType);
+  // Preserve the inbound resolver's exact channel match, including names resolved at startup.
+  const configuredReplyToMode =
+    params.context.ReplyToMode ?? resolveSlackReplyToMode(account, params.context.ChatType);
   const messageThreadTs = normalizeSlackThreadTsCandidate(params.context.MessageThreadId);
   const transportThreadTs = normalizeSlackThreadTsCandidate(params.context.TransportThreadId);
   const replyToThreadTs = normalizeSlackThreadTsCandidate(params.context.ReplyToId);

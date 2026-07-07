@@ -9,7 +9,17 @@ import {
 } from "../agents/internal-runtime-context.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import { resolveStateDir } from "../config/paths.js";
+import {
+  isSessionTranscriptLeafControl,
+  mergeSessionTranscriptTreePaths,
+  mergeSessionTranscriptVisiblePathWithOpaqueAppendPath,
+  scanSessionTranscriptTree,
+  selectSessionTranscriptTreePathNodes,
+} from "../config/sessions/transcript-tree.js";
+import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { shortenHomePath } from "../utils.js";
+
+const SESSION_TRANSCRIPTS_CHECK_ID = "core/doctor/session-transcripts";
 
 type TranscriptEntry = Record<string, unknown> & {
   id?: unknown;
@@ -27,6 +37,17 @@ type TranscriptRepairResult = {
   legacyOpenAICodexEntries: number;
   backupPath?: string;
   reason?: string;
+};
+
+export type SessionTranscriptHealthIssue = TranscriptRepairResult & {
+  broken: true;
+};
+
+type ActiveTranscriptPath = {
+  entries: TranscriptEntry[];
+  entriesToPersist: TranscriptEntry[];
+  terminalLeafControl: TranscriptEntry | null;
+  appendParentId: string | null;
 };
 
 const LEGACY_OPENAI_CODEX_PROVIDER_ID = "openai-codex";
@@ -64,6 +85,10 @@ function getMessage(entry: TranscriptEntry): Record<string, unknown> | null {
   return entry.message && typeof entry.message === "object" && !Array.isArray(entry.message)
     ? (entry.message as Record<string, unknown>)
     : null;
+}
+
+function withSelectedParent(entry: TranscriptEntry, parentId: string | null): TranscriptEntry {
+  return entry.parentId === parentId ? entry : { ...entry, parentId };
 }
 
 function normalizeLegacyOpenAICodexTranscriptMetadata(entries: TranscriptEntry[]): number {
@@ -106,36 +131,65 @@ function textFromContent(content: unknown): string | null {
   return text || null;
 }
 
-function selectActivePath(entries: TranscriptEntry[]): TranscriptEntry[] | null {
+function selectActivePath(entries: TranscriptEntry[]): ActiveTranscriptPath | null {
   const sessionEntries = entries.filter((entry) => entry.type !== "session");
-  const leaf = sessionEntries.at(-1);
-  const leafId = leaf ? getEntryId(leaf) : null;
-  if (!leaf || !leafId) {
+  const tree = scanSessionTranscriptTree(sessionEntries);
+  if (!tree.hasExplicitLeafUpdate) {
+    const byId = new Map<string, TranscriptEntry>();
+    for (const entry of sessionEntries) {
+      const id = getEntryId(entry);
+      if (id) {
+        byId.set(id, entry);
+      }
+    }
+    const active: TranscriptEntry[] = [];
+    const seen = new Set<string>();
+    let current = sessionEntries.at(-1);
+    while (current) {
+      const id = getEntryId(current);
+      if (!id || seen.has(id)) {
+        return null;
+      }
+      seen.add(id);
+      active.unshift(current);
+      const parentId = getParentId(current);
+      current = parentId ? byId.get(parentId) : undefined;
+    }
+    return active.length > 0
+      ? {
+          entries: active,
+          entriesToPersist: active,
+          terminalLeafControl: null,
+          appendParentId: getEntryId(active.at(-1) ?? {}),
+        }
+      : null;
+  }
+  if (!tree.hasLeafUpdate) {
     return null;
   }
-
-  const byId = new Map<string, TranscriptEntry>();
-  for (const entry of sessionEntries) {
-    const id = getEntryId(entry);
-    if (id) {
-      byId.set(id, entry);
-    }
-  }
-
-  const active: TranscriptEntry[] = [];
-  const seen = new Set<string>();
-  let current: TranscriptEntry | undefined = leaf;
-  while (current) {
-    const id = getEntryId(current);
-    if (!id || seen.has(id)) {
-      return null;
-    }
-    seen.add(id);
-    active.unshift(current);
-    const parentId = getParentId(current);
-    current = parentId ? byId.get(parentId) : undefined;
-  }
-  return active;
+  const visiblePath = selectSessionTranscriptTreePathNodes(tree, tree.leafId);
+  const appendPath = selectSessionTranscriptTreePathNodes(tree, tree.appendParentId);
+  const visibleEntries = mergeSessionTranscriptTreePaths([visiblePath]).map((node) =>
+    withSelectedParent(node.entry, node.selectedParentId),
+  );
+  const persistedPath = mergeSessionTranscriptVisiblePathWithOpaqueAppendPath({
+    visiblePath,
+    appendPath,
+    appendParentId: tree.appendParentId,
+  });
+  const entriesToPersist = persistedPath.nodes.map((node) =>
+    withSelectedParent(node.entry, node.selectedParentId),
+  );
+  const lastLeafUpdateEntry = tree.nodes.findLast((node) => node.leafId !== undefined)?.entry;
+  const terminalLeafControl = isSessionTranscriptLeafControl(lastLeafUpdateEntry)
+    ? lastLeafUpdateEntry
+    : null;
+  return {
+    entries: visibleEntries,
+    entriesToPersist,
+    terminalLeafControl,
+    appendParentId: persistedPath.appendParentId,
+  };
 }
 
 function hasBrokenPromptRewriteBranch(entries: TranscriptEntry[], activePath: TranscriptEntry[]) {
@@ -181,7 +235,7 @@ function hasBrokenPromptRewriteBranch(entries: TranscriptEntry[], activePath: Tr
 async function writeActiveTranscript(params: {
   filePath: string;
   entries: TranscriptEntry[];
-  activePath: TranscriptEntry[];
+  activePath: ActiveTranscriptPath;
 }): Promise<string> {
   const header = params.entries.find((entry) => entry.type === "session");
   if (!header) {
@@ -191,7 +245,21 @@ async function writeActiveTranscript(params: {
     .toISOString()
     .replace(/[:.]/g, "-")}.bak`;
   await fs.copyFile(params.filePath, backupPath);
-  const next = [header, ...params.activePath].map((entry) => JSON.stringify(entry)).join("\n");
+  const lastPersistedId = getEntryId(params.activePath.entriesToPersist.at(-1) ?? {});
+  const terminalLeafControl = params.activePath.terminalLeafControl
+    ? {
+        ...params.activePath.terminalLeafControl,
+        parentId: lastPersistedId,
+        appendParentId: params.activePath.appendParentId,
+      }
+    : null;
+  const next = [
+    header,
+    ...params.activePath.entriesToPersist,
+    ...(terminalLeafControl ? [terminalLeafControl] : []),
+  ]
+    .map((entry) => JSON.stringify(entry))
+    .join("\n");
   await fs.writeFile(params.filePath, `${next}\n`, "utf-8");
   return backupPath;
 }
@@ -243,14 +311,14 @@ export async function repairBrokenSessionTranscriptFile(params: {
         reason: "no active branch",
       };
     }
-    const broken = hasBrokenPromptRewriteBranch(entries, activePath);
+    const broken = hasBrokenPromptRewriteBranch(entries, activePath.entries);
     if (!broken && legacyOpenAICodexEntries === 0) {
       return {
         filePath: params.filePath,
         broken: false,
         repaired: false,
         originalEntries: entries.length,
-        activeEntries: activePath.length,
+        activeEntries: activePath.entries.length,
         legacyOpenAICodexEntries,
       };
     }
@@ -260,7 +328,7 @@ export async function repairBrokenSessionTranscriptFile(params: {
         broken: true,
         repaired: false,
         originalEntries: entries.length,
-        activeEntries: activePath.length,
+        activeEntries: activePath.entries.length,
         legacyOpenAICodexEntries,
       };
     }
@@ -276,7 +344,7 @@ export async function repairBrokenSessionTranscriptFile(params: {
       broken: true,
       repaired: true,
       originalEntries: entries.length,
-      activeEntries: activePath.length,
+      activeEntries: activePath.entries.length,
       legacyOpenAICodexEntries,
       backupPath,
     };
@@ -311,6 +379,57 @@ async function listSessionTranscriptFiles(sessionDirs: string[]): Promise<string
   return files.toSorted((a, b) => a.localeCompare(b));
 }
 
+export async function detectSessionTranscriptHealthIssues(params?: {
+  sessionDirs?: string[];
+}): Promise<SessionTranscriptHealthIssue[]> {
+  let sessionDirs = params?.sessionDirs;
+  try {
+    sessionDirs ??= await resolveAgentSessionDirs(resolveStateDir(process.env));
+  } catch {
+    return [];
+  }
+
+  const files = await listSessionTranscriptFiles(sessionDirs);
+  const issues: SessionTranscriptHealthIssue[] = [];
+  for (const filePath of files) {
+    const result = await repairBrokenSessionTranscriptFile({ filePath, shouldRepair: false });
+    if (result.broken) {
+      issues.push(result as SessionTranscriptHealthIssue);
+    }
+  }
+  return issues;
+}
+
+export function sessionTranscriptIssueToHealthFinding(
+  issue: SessionTranscriptHealthIssue,
+): HealthFinding {
+  const metadata =
+    issue.legacyOpenAICodexEntries > 0
+      ? ` ${issue.legacyOpenAICodexEntries} legacy OpenAI Codex metadata entr${
+          issue.legacyOpenAICodexEntries === 1 ? "y" : "ies"
+        }`
+      : "";
+  return {
+    checkId: SESSION_TRANSCRIPTS_CHECK_ID,
+    severity: "info",
+    message: `Session transcript has legacy branch or provider metadata that can be cleaned up.${metadata}`,
+    path: issue.filePath,
+    fixHint:
+      "To clean up the advisory artifact, run `openclaw doctor --fix` to rewrite affected transcripts to their active branch.",
+  };
+}
+
+export function sessionTranscriptIssueToRepairEffect(
+  issue: SessionTranscriptHealthIssue,
+): HealthRepairEffect {
+  return {
+    kind: "file",
+    action: "would-rewrite-session-transcript",
+    target: issue.filePath,
+    dryRunSafe: false,
+  };
+}
+
 /** Scans session transcript files and reports or repairs legacy/broken transcript state. */
 export async function noteSessionTranscriptHealth(params?: {
   shouldRepair?: boolean;
@@ -325,14 +444,14 @@ export async function noteSessionTranscriptHealth(params?: {
     return;
   }
 
-  const files = await listSessionTranscriptFiles(sessionDirs);
-  if (files.length === 0) {
-    return;
-  }
-
   const results: TranscriptRepairResult[] = [];
-  for (const filePath of files) {
-    results.push(await repairBrokenSessionTranscriptFile({ filePath, shouldRepair }));
+  if (shouldRepair) {
+    const files = await listSessionTranscriptFiles(sessionDirs);
+    for (const filePath of files) {
+      results.push(await repairBrokenSessionTranscriptFile({ filePath, shouldRepair }));
+    }
+  } else {
+    results.push(...(await detectSessionTranscriptHealthIssues({ sessionDirs })));
   }
   const broken = results.filter((result) => result.broken);
   if (broken.length === 0) {

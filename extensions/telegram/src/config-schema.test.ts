@@ -54,6 +54,19 @@ describe("telegram custom commands schema", () => {
     }
   });
 
+  it("rejects retired group history context mode keys", () => {
+    const res = TelegramConfigSchema.safeParse({ includeGroupHistoryContext: "mention-only" });
+
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(res.error.issues[0]).toMatchObject({
+        code: "unrecognized_keys",
+        keys: ["includeGroupHistoryContext"],
+        path: [],
+      });
+    }
+  });
+
   it("accepts pollingStallThresholdMs overrides per account", () => {
     const res = TelegramConfigSchema.safeParse({
       pollingStallThresholdMs: 120_000,
@@ -133,6 +146,32 @@ describe("telegram custom commands schema", () => {
     expect(res.success).toBe(true);
     if (res.success) {
       expect(res.data.textChunkLimit).toBe(3333);
+    }
+  });
+
+  it("accepts rich message opt-in per account", () => {
+    const res = TelegramConfigSchema.safeParse({
+      richMessages: true,
+      accounts: { ops: { richMessages: false } },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.richMessages).toBe(true);
+      expect(res.data.accounts?.ops?.richMessages).toBe(false);
+    }
+  });
+
+  it("preserves rich message inheritance for account overrides", () => {
+    const res = TelegramConfigSchema.safeParse({
+      richMessages: true,
+      accounts: { ops: {} },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.richMessages).toBe(true);
+      expect(res.data.accounts?.ops?.richMessages).toBeUndefined();
     }
   });
 

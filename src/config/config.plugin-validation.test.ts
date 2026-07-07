@@ -846,7 +846,7 @@ describe("config plugin validation", () => {
 
     expect(res.ok).toBe(true);
     const message =
-      "plugin not installed: yuanbao — install the official external plugin with: openclaw plugins install openclaw-plugin-yuanbao@2.13.1";
+      "plugin not installed: yuanbao — install the official external plugin with: openclaw plugins install openclaw-plugin-yuanbao@2.15.0";
     expectPathMessage(res.warnings, "plugins.entries.yuanbao", message);
     expect((res.warnings ?? []).filter((warning) => warning.message === message)).toHaveLength(1);
   });
@@ -1484,6 +1484,97 @@ describe("config plugin validation", () => {
             issue.allowedValues?.includes("openai-curated"),
         ),
       ).toBe(true);
+    }
+  });
+
+  it("accepts ask destructive policy without dropping adjacent Codex plugin config", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "openclaw" }] },
+        plugins: {
+          entries: {
+            codex: {
+              enabled: true,
+              config: {
+                codexDynamicToolsLoading: "direct",
+                codexPlugins: {
+                  enabled: true,
+                  allow_destructive_actions: "ask",
+                  plugins: {
+                    github: {
+                      enabled: false,
+                      marketplaceName: "openai-curated",
+                      pluginName: "github",
+                      allow_destructive_actions: "auto",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      {
+        env: {
+          ...suiteEnv(),
+          OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "extensions"),
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "global policy",
+      expectedPath: "plugins.entries.codex.config.codexPlugins.allow_destructive_actions",
+      codexPlugins: {
+        enabled: true,
+        allow_destructive_actions: "always",
+        plugins: {},
+      },
+    },
+    {
+      name: "per-plugin policy",
+      expectedPath:
+        "plugins.entries.codex.config.codexPlugins.plugins.github.allow_destructive_actions",
+      codexPlugins: {
+        enabled: true,
+        allow_destructive_actions: "ask",
+        plugins: {
+          github: {
+            marketplaceName: "openai-curated",
+            pluginName: "github",
+            allow_destructive_actions: "always",
+          },
+        },
+      },
+    },
+  ])("rejects old always destructive policy in the $name", ({ codexPlugins, expectedPath }) => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "openclaw" }] },
+        plugins: {
+          entries: {
+            codex: {
+              enabled: true,
+              config: { codexPlugins },
+            },
+          },
+        },
+      },
+      {
+        env: {
+          ...suiteEnv(),
+          OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "extensions"),
+        },
+      },
+    );
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expectPathMessageIncludes(res.issues, expectedPath, "invalid config");
     }
   });
 

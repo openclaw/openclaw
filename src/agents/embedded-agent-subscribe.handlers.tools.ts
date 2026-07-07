@@ -30,7 +30,11 @@ import {
   emitAgentPatchSummaryEvent,
 } from "../infra/agent-events.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
-import { normalizeInteractiveReply, normalizeMessagePresentation } from "../interactive/payload.js";
+import {
+  parseInteractiveParam,
+  parseJsonMessageParam,
+} from "../infra/outbound/message-action-params.js";
+import { hasReplyPayloadContent } from "../interactive/payload.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { truncateUtf16Safe } from "../utils.js";
@@ -45,9 +49,15 @@ import type { ApplyPatchSummary } from "./apply-patch.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
 import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
-import { isDeliveredMessageToolOnlySourceReplyResult } from "./embedded-agent-message-tool-source-reply.js";
-import { isMessagingTool, isMessagingToolSendAction } from "./embedded-agent-messaging.js";
-import type { MessagingToolSourceReplyPayload } from "./embedded-agent-messaging.types.js";
+import {
+  isDeliveredMessageToolOnlySourceReplyResult,
+  isDeliveredMessagingToolResult,
+} from "./embedded-agent-message-tool-source-reply.js";
+import {
+  isMessagingTool,
+  isMessagingToolSendAction,
+  isMessagingToolTargetEvidenceAction,
+} from "./embedded-agent-messaging.js";
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
 import type {
   ToolCallSummary,
@@ -55,6 +65,9 @@ import type {
 } from "./embedded-agent-subscribe.handlers.types.js";
 import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
 import {
+  collectMessagingMediaUrlsFromRecord,
+  collectMessagingMediaUrlsFromToolResult,
+  extractMessagingToolSourceReplyPayload,
   extractToolResultMediaArtifact,
   extractToolErrorCode,
   extractMessagingToolSend,
@@ -70,8 +83,13 @@ import {
 import { inferToolMetaFromArgs } from "./embedded-agent-utils.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import type { AgentEvent } from "./runtime/index.js";
+import {
+  createToolValidationErrorSummary,
+  summarizeToolValidationError,
+} from "./tool-error-summary.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
+import { readToolResultDetails } from "./tool-result-error.js";
 
 type ExecApprovalReplyModule = typeof import("../infra/exec-approval-reply.js");
 type HookRunnerGlobalModule = typeof import("../plugins/hook-runner-global.js");
@@ -291,14 +309,41 @@ function emitTrackedItemEvent(ctx: ToolHandlerContext, itemData: AgentItemEventD
     ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
     data: itemData,
   });
-  void ctx.params.onAgentEvent?.({
+  emitAgentEventCallbackBestEffort(ctx, {
     stream: "item",
     data: itemData,
   });
 }
 
-function readToolResultDetailsRecord(result: unknown): Record<string, unknown> | undefined {
-  return readRecordField(asOptionalObjectRecord(result)?.details);
+function warnBestEffortEventFailure(ctx: ToolHandlerContext, label: string, error: unknown): void {
+  ctx.log.warn(`${label} callback failed: ${String(error)}`);
+}
+
+function emitExecutionPhaseBestEffort(
+  ctx: ToolHandlerContext,
+  info: Parameters<NonNullable<ToolHandlerContext["params"]["onExecutionPhase"]>>[0],
+): void {
+  try {
+    ctx.params.onExecutionPhase?.(info);
+  } catch (error) {
+    warnBestEffortEventFailure(ctx, "tool execution phase", error);
+  }
+}
+
+function emitAgentEventCallbackBestEffort(
+  ctx: ToolHandlerContext,
+  event: Parameters<NonNullable<ToolHandlerContext["params"]["onAgentEvent"]>>[0],
+): void {
+  try {
+    const result = ctx.params.onAgentEvent?.(event);
+    if (isPromiseLike<void>(result)) {
+      void Promise.resolve(result).catch((error: unknown) => {
+        warnBestEffortEventFailure(ctx, "tool agent event", error);
+      });
+    }
+  } catch (error) {
+    warnBestEffortEventFailure(ctx, "tool agent event", error);
+  }
 }
 
 function applyCurrentMessageProvider(
@@ -318,21 +363,21 @@ function applyCurrentMessageProvider(
 }
 
 function applyToolSendReceiptForExtraction(result: unknown, receiptResult: unknown): unknown {
-  const toolSend = readToolResultDetailsRecord(receiptResult)?.toolSend;
+  const toolSend = readToolResultDetails(receiptResult)?.toolSend;
   if (toolSend === undefined) {
     return result;
   }
   return {
     ...readRecordField(result),
     details: {
-      ...readToolResultDetailsRecord(result),
+      ...readToolResultDetails(result),
       toolSend,
     },
   };
 }
 
 function isAsyncStartedToolResult(result: unknown): boolean {
-  const details = readToolResultDetailsRecord(result);
+  const details = readToolResultDetails(result);
   return details?.async === true && details.status === "started";
 }
 
@@ -340,7 +385,7 @@ function readAsyncStartedTaskIds(result: unknown): {
   asyncTaskRunId?: string;
   asyncTaskId?: string;
 } {
-  const details = readToolResultDetailsRecord(result);
+  const details = readToolResultDetails(result);
   if (!details) {
     return {};
   }
@@ -354,7 +399,7 @@ function readAsyncStartedTaskIds(result: unknown): {
 }
 
 function readExecToolDetails(result: unknown): ExecToolDetails | null {
-  const details = readToolResultDetailsRecord(result);
+  const details = readToolResultDetails(result);
   if (!details || typeof details.status !== "string") {
     return null;
   }
@@ -384,7 +429,7 @@ function capLiveExecResult(result: unknown): unknown {
   if (!result || typeof result !== "object" || Array.isArray(result)) {
     return result;
   }
-  const details = readToolResultDetailsRecord(result);
+  const details = readToolResultDetails(result);
   return {
     ...(result as Record<string, unknown>),
     details: {
@@ -435,7 +480,7 @@ function shouldEmitLiveExecUpdate(ctx: ToolHandlerContext, toolCallId: string): 
 }
 
 function readApplyPatchSummary(result: unknown): ApplyPatchSummary | null {
-  const details = readToolResultDetailsRecord(result);
+  const details = readToolResultDetails(result);
   const summary =
     details?.summary && typeof details.summary === "object" && !Array.isArray(details.summary)
       ? (details.summary as Record<string, unknown>)
@@ -508,56 +553,6 @@ function extendExecMeta(toolName: string, args: unknown, meta?: string): string 
   return meta ? `${meta} · ${suffix}` : suffix;
 }
 
-function pushUniqueMediaUrl(urls: string[], seen: Set<string>, value: unknown): void {
-  if (typeof value !== "string") {
-    return;
-  }
-  const normalized = value.trim();
-  if (!normalized || seen.has(normalized)) {
-    return;
-  }
-  seen.add(normalized);
-  urls.push(normalized);
-}
-
-function collectMessagingMediaUrlsFromRecord(record: Record<string, unknown>): string[] {
-  const urls: string[] = [];
-  const seen = new Set<string>();
-  const pushAttachment = (value: unknown) => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      return;
-    }
-    const attachment = value as Record<string, unknown>;
-    pushUniqueMediaUrl(urls, seen, attachment.media);
-    pushUniqueMediaUrl(urls, seen, attachment.mediaUrl);
-    pushUniqueMediaUrl(urls, seen, attachment.path);
-    pushUniqueMediaUrl(urls, seen, attachment.filePath);
-    pushUniqueMediaUrl(urls, seen, attachment.fileUrl);
-    pushUniqueMediaUrl(urls, seen, attachment.url);
-  };
-
-  pushUniqueMediaUrl(urls, seen, record.media);
-  pushUniqueMediaUrl(urls, seen, record.mediaUrl);
-  pushUniqueMediaUrl(urls, seen, record.path);
-  pushUniqueMediaUrl(urls, seen, record.filePath);
-  pushUniqueMediaUrl(urls, seen, record.fileUrl);
-
-  const mediaUrls = record.mediaUrls;
-  if (Array.isArray(mediaUrls)) {
-    for (const mediaUrl of mediaUrls) {
-      pushUniqueMediaUrl(urls, seen, mediaUrl);
-    }
-  }
-  const attachments = record.attachments;
-  if (Array.isArray(attachments)) {
-    for (const attachment of attachments) {
-      pushAttachment(attachment);
-    }
-  }
-
-  return urls;
-}
-
 function readMessagingText(record: Record<string, unknown>): string | undefined {
   for (const key of ["content", "message", "text", "body"]) {
     const value = readStringValue(record[key]);
@@ -568,113 +563,19 @@ function readMessagingText(record: Record<string, unknown>): string | undefined 
   return undefined;
 }
 
-function collectMessagingMediaUrlsFromToolResult(result: unknown): string[] {
-  const urls: string[] = [];
-  const seen = new Set<string>();
-  const appendFromRecord = (value: unknown) => {
-    if (!value || typeof value !== "object") {
-      return;
-    }
-    const extracted = collectMessagingMediaUrlsFromRecord(value as Record<string, unknown>);
-    for (const url of extracted) {
-      if (seen.has(url)) {
-        continue;
-      }
-      seen.add(url);
-      urls.push(url);
-    }
+function hasMessagingRichContent(record: Record<string, unknown>): boolean {
+  const payload = {
+    presentation: record.presentation,
+    interactive: record.interactive,
+    channelData: record.channelData,
   };
-
-  appendFromRecord(result);
-  if (result && typeof result === "object") {
-    appendFromRecord((result as Record<string, unknown>).details);
+  try {
+    parseJsonMessageParam(payload, "presentation");
+    parseInteractiveParam(payload);
+  } catch {
+    return false;
   }
-
-  const outputText = extractToolResultText(result);
-  if (outputText) {
-    try {
-      appendFromRecord(JSON.parse(outputText));
-    } catch {
-      // Ignore non-JSON tool output.
-    }
-  }
-
-  return urls;
-}
-
-function readStringField(record: Record<string, unknown>, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
-function readStringArrayField(record: Record<string, unknown>, key: string): string[] | undefined {
-  const value = record[key];
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const strings = value.filter(
-    (item): item is string => typeof item === "string" && item.trim().length > 0,
-  );
-  return strings.length ? strings : undefined;
-}
-
-function copyRecordField(
-  record: Record<string, unknown>,
-  key: string,
-): Record<string, unknown> | undefined {
-  const value = record[key];
-  return readRecordField(value) ? { ...(value as Record<string, unknown>) } : undefined;
-}
-
-function extractMessagingToolSourceReplyPayload(
-  result: unknown,
-): MessagingToolSourceReplyPayload | undefined {
-  const details = readToolResultDetailsRecord(result);
-  if (!details || details.sourceReplySink !== "internal-ui") {
-    return undefined;
-  }
-  const status = normalizeOptionalLowercaseString(details.deliveryStatus);
-  if (status && status !== "sent") {
-    return undefined;
-  }
-  const sourceReply = readRecordField(details.sourceReply) ?? details;
-  const payload: MessagingToolSourceReplyPayload = {};
-  const text = readStringField(sourceReply, "text") ?? readStringField(details, "message");
-  if (text) {
-    payload.text = text;
-  }
-  const mediaUrl = readStringField(sourceReply, "mediaUrl") ?? readStringField(details, "mediaUrl");
-  if (mediaUrl) {
-    payload.mediaUrl = mediaUrl;
-  }
-  const mediaUrls =
-    readStringArrayField(sourceReply, "mediaUrls") ?? readStringArrayField(details, "mediaUrls");
-  if (mediaUrls) {
-    payload.mediaUrls = mediaUrls;
-  }
-  const audioAsVoice =
-    sourceReply.audioAsVoice === true || details.audioAsVoice === true ? true : undefined;
-  if (audioAsVoice) {
-    payload.audioAsVoice = true;
-  }
-  const presentation = normalizeMessagePresentation(sourceReply.presentation);
-  if (presentation) {
-    payload.presentation = presentation;
-  }
-  const interactive = normalizeInteractiveReply(sourceReply.interactive);
-  if (interactive) {
-    payload.interactive = interactive;
-  }
-  const channelData = copyRecordField(sourceReply, "channelData");
-  if (channelData) {
-    payload.channelData = channelData;
-  }
-  const idempotencyKey =
-    readStringField(sourceReply, "idempotencyKey") ?? readStringField(details, "idempotencyKey");
-  if (idempotencyKey) {
-    payload.idempotencyKey = idempotencyKey;
-  }
-  return Object.keys(payload).length > 0 ? payload : undefined;
+  return hasReplyPayloadContent(payload);
 }
 
 function queuePendingToolMedia(
@@ -911,10 +812,14 @@ export function handleToolExecutionStart(
     toolCallId: string;
     args: unknown;
     replaySafe?: boolean;
+    hideFromChannelProgress?: boolean;
   },
 ): void | Promise<void> {
   const continueAfterBlockReplyFlush = (): void | Promise<void> => {
-    const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.();
+    const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.({
+      reason: "tool_start",
+      assistantMessageIndex: ctx.state.assistantMessageIndex,
+    });
     if (isPromiseLike<void>(onBlockReplyFlushResult)) {
       return onBlockReplyFlushResult.then(() => {
         continueToolExecutionStart();
@@ -927,11 +832,12 @@ export function handleToolExecutionStart(
   const continueToolExecutionStart = () => {
     const rawToolName = evt.toolName;
     const toolName = normalizeToolName(rawToolName);
+    const hideFromChannelProgress = evt.hideFromChannelProgress === true;
     const toolCallId = evt.toolCallId;
     const args = evt.args;
     const runId = ctx.params.runId;
     ctx.state.toolExecutionSinceLastBlockReply = true;
-    ctx.params.onExecutionPhase?.({
+    emitExecutionPhaseBestEffort(ctx, {
       phase: "tool_execution_started",
       tool: toolName,
       toolCallId,
@@ -1034,6 +940,7 @@ export function handleToolExecutionStart(
         name: toolName,
         toolCallId,
         args: sanitizeToolArgs(args) as Record<string, unknown>,
+        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
     });
     const itemData: AgentItemEventData = {
@@ -1046,16 +953,18 @@ export function handleToolExecutionStart(
       meta,
       toolCallId,
       startedAt,
+      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     };
     emitTrackedItemEvent(ctx, itemData);
     // Best-effort typing signal; do not block tool summaries on slow emitters.
-    void ctx.params.onAgentEvent?.({
+    emitAgentEventCallbackBestEffort(ctx, {
       stream: "tool",
       data: {
         phase: "start",
         name: toolName,
         toolCallId,
         args: sanitizeToolArgs(args) as Record<string, unknown>,
+        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
     });
 
@@ -1098,7 +1007,7 @@ export function handleToolExecutionStart(
     if (isMessagingTool(toolName)) {
       const argsRecord = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
       const isMessagingSend = isMessagingToolSendAction(toolName, argsRecord);
-      if (isMessagingSend) {
+      if (isMessagingToolTargetEvidenceAction(toolName, argsRecord)) {
         const telemetryArgs = applyCurrentMessageProvider(
           toolName,
           argsRecord,
@@ -1118,6 +1027,8 @@ export function handleToolExecutionStart(
         if (sendTarget) {
           ctx.state.pendingMessagingTargets.set(toolCallId, sendTarget);
         }
+      }
+      if (isMessagingSend) {
         const text = readMessagingText(argsRecord);
         if (text) {
           ctx.state.pendingMessagingTexts.set(toolCallId, text);
@@ -1147,10 +1058,12 @@ export function handleToolExecutionUpdate(
     toolName: string;
     toolCallId: string;
     partialResult?: unknown;
+    hideFromChannelProgress?: boolean;
   },
 ) {
   const toolName = normalizeToolName(evt.toolName);
   const toolCallId = evt.toolCallId;
+  const hideFromChannelProgress = evt.hideFromChannelProgress === true;
   const partial = evt.partialResult;
   const sanitized = sanitizeToolResult(partial);
   const isExecTool = isExecToolName(toolName);
@@ -1169,6 +1082,7 @@ export function handleToolExecutionUpdate(
         name: toolName,
         toolCallId,
         partialResult: liveResult,
+        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
     });
   }
@@ -1180,18 +1094,20 @@ export function handleToolExecutionUpdate(
     status: "running",
     name: toolName,
     toolCallId,
+    ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     ...(toolProgress
       ? { progressText: toolProgress.text }
       : { meta: ctx.state.toolMetaById.get(toolCallId)?.meta }),
   };
   emitTrackedItemEvent(ctx, itemData);
   if (!toolProgress) {
-    void ctx.params.onAgentEvent?.({
+    emitAgentEventCallbackBestEffort(ctx, {
       stream: "tool",
       data: {
         phase: "update",
         name: toolName,
         toolCallId,
+        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
     });
   }
@@ -1224,7 +1140,7 @@ export function handleToolExecutionUpdate(
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
         data: outputData,
       });
-      void ctx.params.onAgentEvent?.({
+      emitAgentEventCallbackBestEffort(ctx, {
         stream: "command_output",
         data: outputData,
       });
@@ -1239,6 +1155,7 @@ export async function handleToolExecutionEnd(
 ) {
   const rawToolName = evt.toolName;
   const toolName = normalizeToolName(rawToolName);
+  const hideFromChannelProgress = evt.hideFromChannelProgress === true;
   const toolCallId = evt.toolCallId;
   const runId = ctx.params.runId;
   const isError = evt.isError;
@@ -1311,11 +1228,16 @@ export async function handleToolExecutionEnd(
   if (isToolError) {
     const errorMessage = extractToolErrorMessage(sanitizedResult);
     const errorCode = extractToolErrorCode(sanitizedResult);
+    const validationErrorSummary =
+      evt.executionStarted === false && evt.errorKind === "argument-validation"
+        ? createToolValidationErrorSummary(toolName)
+        : undefined;
     ctx.state.lastToolError = {
       toolName,
       meta,
       ...(errorCode ? { errorCode } : {}),
       error: errorMessage,
+      ...(validationErrorSummary ? { validationErrorSummary } : {}),
       timedOut: isToolResultTimedOut(sanitizedResult) || undefined,
       middlewareError: isMiddlewareToolResultError(sanitizedResult) || undefined,
       mutatingAction: attemptedMutatingAction,
@@ -1339,6 +1261,9 @@ export async function handleToolExecutionEnd(
       ctx.state.lastToolError = undefined;
     }
   }
+  const toolErrorSummary = ctx.state.lastToolError
+    ? summarizeToolValidationError(ctx.state.lastToolError)
+    : undefined;
   if (asyncStarted) {
     ctx.state.hadDeterministicSideEffect = true;
   }
@@ -1351,11 +1276,23 @@ export async function handleToolExecutionEnd(
 
   // Commit messaging tool evidence on success, discard on error.
   const messagingArgs = applyCurrentMessageProvider(toolName, startArgs, ctx.params.messageChannel);
-  const isMessagingSend =
-    isMessagingTool(toolName) && isMessagingToolSendAction(toolName, startArgs);
+  const isMessagingInvocation = isMessagingTool(toolName);
+  const isMessagingSend = isMessagingInvocation && isMessagingToolSendAction(toolName, startArgs);
+  const hasMessagingTargetEvidence =
+    isMessagingInvocation && isMessagingToolTargetEvidenceAction(toolName, startArgs);
+  const didDeliverMessagingResult =
+    isMessagingInvocation &&
+    isDeliveredMessagingToolResult({
+      toolName,
+      args: startArgs,
+      result,
+      hookResult: toolSendReceiptResult,
+      isError: isToolError,
+    });
   const messageText = isMessagingSend ? readMessagingText(startArgs) : undefined;
   const argumentMediaUrls = isMessagingSend ? collectMessagingMediaUrlsFromRecord(startArgs) : [];
-  const messageTarget = isMessagingSend
+  const hasRichContent = isMessagingSend && hasMessagingRichContent(startArgs);
+  const messageTarget = hasMessagingTargetEvidence
     ? extractMessagingToolSend(toolName, messagingArgs, {
         config: ctx.params.config,
         currentChannelId: ctx.params.currentChannelId,
@@ -1368,29 +1305,30 @@ export async function handleToolExecutionEnd(
       })
     : undefined;
   const committedMediaUrls =
-    !isToolError && isMessagingSend
+    didDeliverMessagingResult && isMessagingSend
       ? [...argumentMediaUrls, ...collectMessagingMediaUrlsFromToolResult(result)]
       : [];
   ctx.state.pendingMessagingTexts.delete(toolCallId);
   ctx.state.pendingMessagingTargets.delete(toolCallId);
   ctx.state.pendingMessagingMediaUrls.delete(toolCallId);
-  if (!isToolError && messageText) {
+  if (didDeliverMessagingResult && messageText) {
     ctx.state.messagingToolSentTexts.push(messageText);
     ctx.state.messagingToolSentTextsNormalized.push(normalizeTextForComparison(messageText));
     ctx.log.debug(`Committed messaging text: tool=${toolName} len=${messageText.length}`);
     ctx.trimMessagingToolSent();
   }
-  if (!isToolError && messageTarget) {
+  if (didDeliverMessagingResult && messageTarget) {
     const extractionResult = applyToolSendReceiptForExtraction(result, toolSendReceiptResult);
     const confirmedTarget = extractMessagingToolSendResult(messageTarget, extractionResult);
     ctx.state.messagingToolSentTargets.push({
       ...confirmedTarget,
       ...(messageText ? { text: messageText } : {}),
       ...(committedMediaUrls.length > 0 ? { mediaUrls: committedMediaUrls.slice() } : {}),
+      ...(hasRichContent ? { hasRichContent: true as const } : {}),
     });
     ctx.trimMessagingToolSent();
   }
-  if (!isToolError && isMessagingSend) {
+  if (didDeliverMessagingResult && isMessagingSend) {
     if (committedMediaUrls.length > 0) {
       ctx.state.messagingToolSentMediaUrls.push(...committedMediaUrls);
       ctx.trimMessagingToolSent();
@@ -1440,6 +1378,8 @@ export async function handleToolExecutionEnd(
       meta,
       isError: isToolError,
       result: eventResult,
+      ...(toolErrorSummary ? { toolErrorSummary } : {}),
+      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     },
   });
   const endedAt = Date.now();
@@ -1455,12 +1395,13 @@ export async function handleToolExecutionEnd(
     toolCallId,
     startedAt: startData?.startTime,
     endedAt,
+    ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     ...(isToolError && extractToolErrorMessage(sanitizedResult)
       ? { error: extractToolErrorMessage(sanitizedResult) }
       : {}),
   };
   emitTrackedItemEvent(ctx, itemData);
-  void ctx.params.onAgentEvent?.({
+  emitAgentEventCallbackBestEffort(ctx, {
     stream: "tool",
     data: {
       phase: "result",
@@ -1468,6 +1409,8 @@ export async function handleToolExecutionEnd(
       toolCallId,
       meta,
       isError: isToolError,
+      ...(toolErrorSummary ? { toolErrorSummary } : {}),
+      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     },
   });
 
@@ -1506,7 +1449,7 @@ export async function handleToolExecutionEnd(
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
         data: approvalData,
       });
-      void ctx.params.onAgentEvent?.({
+      emitAgentEventCallbackBestEffort(ctx, {
         stream: "approval",
         data: approvalData,
       });
@@ -1573,7 +1516,7 @@ export async function handleToolExecutionEnd(
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
         data: outputData,
       });
-      void ctx.params.onAgentEvent?.({
+      emitAgentEventCallbackBestEffort(ctx, {
         stream: "command_output",
         data: outputData,
       });
@@ -1599,7 +1542,7 @@ export async function handleToolExecutionEnd(
             ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
             data: approvalData,
           });
-          void ctx.params.onAgentEvent?.({
+          emitAgentEventCallbackBestEffort(ctx, {
             stream: "approval",
             data: approvalData,
           });
@@ -1645,7 +1588,7 @@ export async function handleToolExecutionEnd(
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
         data: patchData,
       });
-      void ctx.params.onAgentEvent?.({
+      emitAgentEventCallbackBestEffort(ctx, {
         stream: "patch",
         data: patchData,
       });
@@ -1664,6 +1607,9 @@ export async function handleToolExecutionEnd(
     isToolError,
     result,
     sanitizedResult,
+  });
+  await Promise.resolve(ctx.params.onToolStreamBoundary?.()).catch((error: unknown) => {
+    ctx.log.debug(`embedded run tool stream boundary callback failed: ${String(error)}`);
   });
 
   // Run after_tool_call plugin hook (fire-and-forget)

@@ -62,7 +62,12 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
 
     mocks.initSessionState.mockResolvedValue(
       createGetReplySessionState({
-        sessionCtx: buildGetReplyGroupCtx({ OriginatingChannel: "Telegram", Provider: "telegram" }),
+        sessionCtx: buildGetReplyGroupCtx({
+          OriginatingChannel: "Telegram",
+          Provider: "telegram",
+          SenderId: "42",
+          ChatId: "-100123-native",
+        }),
         sessionKey: "agent:main:telegram:-100123",
         sessionScope: "per-chat",
         isGroup: true,
@@ -103,9 +108,15 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
           sessionId?: string;
           workspaceDir?: string;
           messageProvider?: string;
-          senderId?: string;
           trigger?: string;
           channelId?: string;
+          senderId?: string;
+          chatId?: string;
+          channel?: string;
+          channelContext?: {
+            sender?: { id?: string };
+            chat?: { id?: string };
+          };
         },
       ]
     >;
@@ -115,9 +126,13 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
     expect(hookCtx.sessionId).toBe("session-1");
     expect(hookCtx.workspaceDir).toBe("/tmp/workspace");
     expect(hookCtx.messageProvider).toBe("telegram");
-    expect(hookCtx.senderId).toBe("telegram-user-42");
     expect(hookCtx.trigger).toBe("user");
+    expect(hookCtx.channel).toBe("telegram");
     expect(hookCtx.channelId).toBe("-100123");
+    expect(hookCtx.senderId).toBe("42");
+    expect(hookCtx.chatId).toBe("-100123-native");
+    expect(hookCtx.channelContext?.sender?.id).toBe("42");
+    expect(hookCtx.channelContext?.chat?.id).toBe("-100123-native");
     expect(mocks.handleInlineActions.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.runBeforeAgentReply.mock.invocationCallOrder[0] ?? 0,
     );

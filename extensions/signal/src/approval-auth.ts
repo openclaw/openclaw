@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/approval-auth-runtime";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveSignalAccount } from "./accounts.js";
+import { resolveSignalTarget } from "./aliases.js";
 import { normalizeSignalMessagingTarget } from "./normalize.js";
 import { looksLikeUuid } from "./uuid.js";
 
@@ -25,9 +26,22 @@ export function getSignalApprovalApprovers(params: {
   accountId?: string | null;
 }): string[] {
   const account = resolveSignalAccount(params).config;
+  let defaultTo = account.defaultTo;
+  if (typeof account.defaultTo === "string") {
+    try {
+      defaultTo =
+        resolveSignalTarget({
+          cfg: params.cfg,
+          accountId: params.accountId,
+          input: account.defaultTo,
+        })?.to ?? account.defaultTo;
+    } catch {
+      defaultTo = account.defaultTo;
+    }
+  }
   return resolveApprovalApprovers({
     allowFrom: account.allowFrom,
-    defaultTo: account.defaultTo,
+    defaultTo,
     normalizeApprover: normalizeSignalApproverId,
   });
 }

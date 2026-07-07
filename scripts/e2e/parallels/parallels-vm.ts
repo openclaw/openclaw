@@ -89,15 +89,11 @@ export function resolveUbuntuVmName(requested: string, explicit = false): string
   }
   const fallback =
     names
-      .map((name) => ({ name, version: /ubuntu\s+(\d+(?:\.\d+)*)/i.exec(name)?.[1] }))
-      .filter((item): item is { name: string; version: string } => Boolean(item.version))
-      .map((item) => ({
-        name: item.name,
-        parts: item.version.split(".").map(Number),
-      }))
+      .map((name) => ({ name, parts: parseUbuntuVersionParts(name) }))
+      .filter((item): item is { name: string; parts: number[] } => Boolean(item.parts))
       .filter((item) => item.parts[0] >= 24)
       .toSorted((a, b) => compareVersions(b.parts, a.parts))[0]?.name ??
-    names.find((name) => /ubuntu/i.test(name));
+    names.find(isSafeUbuntuFallbackName);
   if (!fallback) {
     die(`VM not found: ${requested}`);
   }
@@ -128,6 +124,23 @@ function listVms(timeoutMs = PRLCTL_STATUS_TIMEOUT_MS): PrlctlVmListItem[] {
       timeoutMs,
     }).stdout,
   ) as PrlctlVmListItem[];
+}
+
+function parseUbuntuVersionParts(name: string): number[] | undefined {
+  const version = /ubuntu\s+(\d+(?:\.\d+)*)/i.exec(name)?.[1];
+  const parts = version?.split(".").map((part) => Number(part));
+  if (!parts?.every((part) => Number.isSafeInteger(part))) {
+    return undefined;
+  }
+  return parts;
+}
+
+function isSafeUbuntuFallbackName(name: string): boolean {
+  if (!/ubuntu/i.test(name)) {
+    return false;
+  }
+  const hasVersion = /ubuntu\s+\d+(?:\.\d+)*/i.test(name);
+  return !hasVersion || Boolean(parseUbuntuVersionParts(name));
 }
 
 function compareVersions(a: number[], b: number[]): number {

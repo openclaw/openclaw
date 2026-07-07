@@ -86,6 +86,7 @@ function createRuntimeStub(callId = "call-1"): VoiceCallRuntime {
       endCall: vi.fn(async () => ({ success: true })),
       getCall: vi.fn((id: string) => (id === callId ? call : undefined)),
       getCallByProviderCallId: vi.fn(() => undefined),
+      getCallFromMemoryOrStore: vi.fn(async (id: string) => (id === callId ? call : undefined)),
       getActiveCalls: vi.fn(() => [call]),
       getCallHistory: vi.fn(async () => []),
     } as unknown as VoiceCallRuntime["manager"],
@@ -176,6 +177,22 @@ function firstRuntimeConfig(): VoiceCallRuntime["config"] | undefined {
 
 function expectWarningIncludes(text: string): void {
   expect(noopLogger.warn.mock.calls.map(([message]) => String(message)).join("\n")).toContain(text);
+}
+
+function expectRedactedVoiceCallStatus(value: unknown): void {
+  expect(value).toEqual({
+    callId: "call-1",
+    provider: "mock",
+    direction: "outbound",
+    state: "active",
+    startedAt: Date.UTC(2026, 4, 2, 9, 0, 0),
+  });
+  expect(value).not.toHaveProperty("from");
+  expect(value).not.toHaveProperty("to");
+  expect(value).not.toHaveProperty("sessionKey");
+  expect(value).not.toHaveProperty("transcript");
+  expect(value).not.toHaveProperty("processedEventIds");
+  expect(value).not.toHaveProperty("metadata");
 }
 
 async function registerVoiceCallCli(
@@ -475,7 +492,21 @@ describe("voice-call plugin", () => {
     expect(firstRespondCall(respond)[0]).toBe(true);
   });
 
-  it("returns call status", async () => {
+  it("returns redacted call status", async () => {
+    const call = createCallRecord({
+      metadata: { requesterSessionKey: "agent:main:discord:channel:general" },
+      processedEventIds: ["evt-1"],
+      sessionKey: "agent:main:voice:call-1",
+      transcript: [
+        {
+          timestamp: Date.UTC(2026, 4, 2, 9, 1, 0),
+          speaker: "user",
+          text: "private call transcript",
+          isFinal: true,
+        },
+      ],
+    });
+    runtimeStub.manager.getCall = vi.fn(() => call);
     const { methods } = setup({ provider: "mock" });
     const handler = methods.get("voicecall.status") as
       | ((ctx: {
@@ -488,6 +519,41 @@ describe("voice-call plugin", () => {
     const [ok, payload] = firstRespondCall(respond);
     expect(ok).toBe(true);
     expect(payload?.found).toBe(true);
+    expectRedactedVoiceCallStatus(payload?.call);
+  });
+
+  it("returns redacted active call status list", async () => {
+    const call = createCallRecord({
+      metadata: { requesterSessionKey: "agent:main:discord:channel:general" },
+      processedEventIds: ["evt-1"],
+      sessionKey: "agent:main:voice:call-1",
+      transcript: [
+        {
+          timestamp: Date.UTC(2026, 4, 2, 9, 1, 0),
+          speaker: "user",
+          text: "private call transcript",
+          isFinal: true,
+        },
+      ],
+    });
+    runtimeStub.manager.getActiveCalls = vi.fn(() => [call]);
+    const { methods } = setup({ provider: "mock" });
+    const handler = methods.get("voicecall.status") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+
+    await handler?.({ params: {}, respond });
+
+    const [ok, payload] = firstRespondCall(respond);
+    expect(ok).toBe(true);
+    expect(payload?.found).toBe(true);
+    const calls = (payload?.calls as unknown[] | undefined) ?? [];
+    expect(calls).toHaveLength(1);
+    expectRedactedVoiceCallStatus(calls[0]);
   });
 
   it("sends DTMF via voicecall.dtmf", async () => {
@@ -556,7 +622,7 @@ describe("voice-call plugin", () => {
   it("reports ended call history when speaking to a stale call", async () => {
     runtimeStub.manager.getCall = vi.fn(() => undefined);
     runtimeStub.manager.getCallByProviderCallId = vi.fn(() => undefined);
-    runtimeStub.manager.getCallHistory = vi.fn(async () => [
+    runtimeStub.manager.getCallFromMemoryOrStore = vi.fn(async () =>
       createCallRecord({
         callId: "call-1",
         providerCallId: "CA123",
@@ -564,7 +630,7 @@ describe("voice-call plugin", () => {
         endReason: "completed",
         endedAt: Date.UTC(2026, 4, 2, 9, 18, 23),
       }),
-    ]);
+    );
     const { methods } = setup({ provider: "mock" });
     const handler = methods.get("voicecall.speak") as
       | ((ctx: {
@@ -587,7 +653,7 @@ describe("voice-call plugin", () => {
   it("reports stale call history with invalid ended timestamps", async () => {
     runtimeStub.manager.getCall = vi.fn(() => undefined);
     runtimeStub.manager.getCallByProviderCallId = vi.fn(() => undefined);
-    runtimeStub.manager.getCallHistory = vi.fn(async () => [
+    runtimeStub.manager.getCallFromMemoryOrStore = vi.fn(async () =>
       createCallRecord({
         callId: "call-1",
         providerCallId: "CA123",
@@ -595,7 +661,7 @@ describe("voice-call plugin", () => {
         endReason: "completed",
         endedAt: Number.POSITIVE_INFINITY,
       }),
-    ]);
+    );
     const { methods } = setup({ provider: "mock" });
     const handler = methods.get("voicecall.speak") as
       | ((ctx: {
@@ -650,6 +716,56 @@ describe("voice-call plugin", () => {
   });
 
   it("tool get_status returns json payload", async () => {
+    const call = createCallRecord({
+      metadata: { requesterSessionKey: "agent:main:discord:channel:general" },
+      processedEventIds: ["evt-1"],
+      sessionKey: "agent:main:voice:call-1",
+      transcript: [
+        {
+          timestamp: Date.UTC(2026, 4, 2, 9, 1, 0),
+          speaker: "user",
+          text: "private call transcript",
+          isFinal: true,
+        },
+      ],
+    });
+    runtimeStub.manager.getCall = vi.fn(() => call);
+    const { tools } = setup({ provider: "mock" });
+    const tool = tools[0] as {
+      execute: (id: string, params: unknown) => Promise<unknown>;
+    };
+    const result = (await tool.execute("id", {
+      action: "get_status",
+      callId: "call-1",
+    })) as { details: { found?: boolean; call?: unknown } };
+    expect(result.details.found).toBe(true);
+    expectRedactedVoiceCallStatus(result.details.call);
+  });
+
+  it("tool get_status uses the manager's persisted fallback", async () => {
+    const completed = createCallRecord({
+      callId: "call-1",
+      providerCallId: "CA123",
+      state: "completed",
+      endReason: "completed",
+      endedAt: Date.UTC(2026, 4, 2, 9, 18, 23),
+    });
+    runtimeStub.manager.getCallFromMemoryOrStore = vi.fn(async () => completed);
+    const { tools } = setup({ provider: "mock" });
+    const tool = tools[0] as {
+      execute: (id: string, params: unknown) => Promise<unknown>;
+    };
+    const result = (await tool.execute("id", {
+      action: "get_status",
+      callId: "call-1",
+    })) as { details: { found?: boolean; call?: { state?: string } } };
+    expect(runtimeStub.manager["getCallFromMemoryOrStore"]).toHaveBeenCalledWith("call-1");
+    expect(result.details.found).toBe(true);
+    expect(result.details.call?.state).toBe("completed");
+  });
+
+  it("tool get_status reports found:false when the call is neither active nor persisted", async () => {
+    runtimeStub.manager.getCallFromMemoryOrStore = vi.fn(async () => undefined);
     const { tools } = setup({ provider: "mock" });
     const tool = tools[0] as {
       execute: (id: string, params: unknown) => Promise<unknown>;
@@ -658,7 +774,7 @@ describe("voice-call plugin", () => {
       action: "get_status",
       callId: "call-1",
     })) as { details: { found?: boolean } };
-    expect(result.details.found).toBe(true);
+    expect(result.details.found).toBe(false);
   });
 
   it("tool send_dtmf returns json payload", async () => {

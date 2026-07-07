@@ -1045,16 +1045,6 @@ extension MenuSessionsInjector {
         return item
     }
 
-    private func formatVersionLabel(_ version: String) -> String {
-        let trimmed = version.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return version }
-        if trimmed.hasPrefix("v") { return trimmed }
-        if let first = trimmed.unicodeScalars.first, CharacterSet.decimalDigits.contains(first) {
-            return "v\(trimmed)"
-        }
-        return trimmed
-    }
-
     @objc
     private func patchThinking(_ sender: NSMenuItem) {
         guard let dict = sender.representedObject as? [String: Any],

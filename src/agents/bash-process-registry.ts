@@ -4,6 +4,7 @@
  * session retention, and process cleanup for reconnect/poll flows.
  */
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import type { TerminationReason } from "../process/supervisor/types.js";
 import type { DeliveryContext } from "../utils/delivery-context.js";
@@ -25,10 +26,10 @@ function clampTtl(value: number | undefined) {
 let jobTtlMs = clampTtl(readEnvInt("OPENCLAW_BASH_JOB_TTL_MS", "PI_BASH_JOB_TTL_MS"));
 
 /** Lifecycle status recorded for background process sessions. */
-export type ProcessStatus = "running" | "completed" | "failed" | "killed";
+type ProcessStatus = "running" | "completed" | "failed" | "killed";
 
 /** Writable stdin surface shared by child-process and PTY-backed sessions. */
-export type SessionStdin = {
+type SessionStdin = {
   write: (data: string, cb?: (err?: Error | null) => void) => void;
   end: () => void;
   // When backed by a real Node stream (child.stdin), this exists; for PTY wrappers it may not.
@@ -79,6 +80,7 @@ export interface ProcessSession {
   exitCode?: number | null;
   exitSignal?: NodeJS.Signals | number | null;
   exitReason?: TerminationReason;
+  noOutputTimedOut?: boolean;
   exited: boolean;
   truncated: boolean;
   backgrounded: boolean;
@@ -87,7 +89,7 @@ export interface ProcessSession {
 }
 
 /** Retained summary for a completed background session. */
-export interface FinishedSession {
+interface FinishedSession {
   id: string;
   command: string;
   scopeKey?: string;
@@ -98,6 +100,7 @@ export interface FinishedSession {
   exitCode?: number | null;
   exitSignal?: NodeJS.Signals | number | null;
   exitReason?: TerminationReason;
+  noOutputTimedOut?: boolean;
   aggregated: string;
   tail: string;
   truncated: boolean;
@@ -189,11 +192,13 @@ export function markExited(
   exitSignal: NodeJS.Signals | number | null,
   status: ProcessStatus,
   exitReason?: TerminationReason,
+  noOutputTimedOut?: boolean,
 ) {
   session.exited = true;
   session.exitCode = exitCode;
   session.exitSignal = exitSignal;
   session.exitReason = exitReason;
+  session.noOutputTimedOut = noOutputTimedOut;
   session.tail = tail(session.aggregated, 2000);
   moveToFinished(session, status);
 }
@@ -251,6 +256,9 @@ function moveToFinished(session: ProcessSession, status: ProcessStatus) {
     exitCode: session.exitCode,
     exitSignal: session.exitSignal,
     exitReason: session.exitReason,
+    ...(session.noOutputTimedOut !== undefined
+      ? { noOutputTimedOut: session.noOutputTimedOut }
+      : {}),
     aggregated: session.aggregated,
     tail: session.tail,
     truncated: session.truncated,
@@ -263,7 +271,7 @@ export function tail(text: string, max = 2000) {
   if (text.length <= max) {
     return text;
   }
-  return text.slice(text.length - max);
+  return sliceUtf16Safe(text, text.length - max);
 }
 
 function sumPendingChars(buffer: string[]) {
@@ -282,8 +290,9 @@ function capPendingBuffer(buffer: string[], pendingCharsInput: number, cap: numb
   const last = buffer.at(-1);
   if (last && last.length >= cap) {
     buffer.length = 0;
-    buffer.push(last.slice(last.length - cap));
-    return cap;
+    const kept = tail(last, cap);
+    buffer.push(kept);
+    return kept.length;
   }
   let dropCount = 0;
   while (dropCount < buffer.length) {
@@ -299,18 +308,16 @@ function capPendingBuffer(buffer: string[], pendingCharsInput: number, cap: numb
   }
   if (buffer.length && pendingChars > cap) {
     const overflow = pendingChars - cap;
-    buffer[0] = buffer[0].slice(overflow);
-    pendingChars = cap;
+    const previousLength = buffer[0].length;
+    buffer[0] = sliceUtf16Safe(buffer[0], overflow);
+    pendingChars -= previousLength - buffer[0].length;
   }
   return pendingChars;
 }
 
 /** Keeps only the last `max` characters for bounded aggregate output storage. */
-export function trimWithCap(text: string, max: number) {
-  if (text.length <= max) {
-    return text;
-  }
-  return text.slice(text.length - max);
+function trimWithCap(text: string, max: number) {
+  return tail(text, max);
 }
 
 /** Lists backgrounded running sessions visible to reconnect/poll callers. */
@@ -321,11 +328,6 @@ export function listRunningSessions() {
 /** Lists retained finished background sessions. */
 export function listFinishedSessions() {
   return Array.from(finishedSessions.values());
-}
-
-/** Clears retained finished sessions without touching running processes. */
-export function clearFinished() {
-  finishedSessions.clear();
 }
 
 /** Test-only reset for in-memory registry state and retention timers. */

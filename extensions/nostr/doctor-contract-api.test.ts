@@ -102,4 +102,33 @@ describe("nostr doctor state migration", () => {
       lastPublishResults: { "wss://relay.example": "ok" },
     });
   });
+
+  it("preserves legacy account key bytes when importing state files", async () => {
+    const nostrDir = path.join(stateDir, "nostr");
+    const busPath = path.join(nostrDir, "bus-state-Team.A.json");
+    await fs.mkdir(nostrDir, { recursive: true });
+    await fs.writeFile(
+      busPath,
+      JSON.stringify({
+        version: 1,
+        lastProcessedAt: 1700,
+        gatewayStartedAt: 1600,
+      }),
+    );
+
+    const context = createDoctorContext(env);
+    await stateMigrations[0].migrateLegacyState({
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context,
+    });
+
+    const store = context.openPluginStateKeyedStore({ namespace: "bus-state", maxEntries: 256 });
+    await expect(store.lookup("Team.A")).resolves.toMatchObject({
+      lastProcessedAt: 1700,
+    });
+    await expect(store.lookup("team-a")).resolves.toBeUndefined();
+  });
 });

@@ -1,10 +1,10 @@
 // Secret input parsing shared by memory provider config and gateway-resolved snapshots.
 
 /** Supported secret reference backing stores. */
-export type SecretRefSource = "env" | "file" | "exec";
+type SecretRefSource = "env" | "file" | "exec";
 
 /** Canonical secret reference shape used after gateway resolution. */
-export type SecretRef = {
+type SecretRef = {
   source: SecretRefSource;
   provider: string;
   id: string;

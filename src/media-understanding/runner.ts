@@ -15,6 +15,9 @@ import {
   normalizeStringEntries,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
+import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
+import { isMediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
+import { providerSupportsCapability } from "../../packages/media-understanding-common/src/provider-supports.js";
 import { isMinimaxVlmModel, isMinimaxVlmProvider } from "../agents/minimax-vlm.js";
 import {
   buildModelAliasIndex,
@@ -38,9 +41,8 @@ import { logWarn } from "../logger.js";
 import { resolveChannelInboundAttachmentRoots } from "../media/channel-inbound-roots.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { runExec } from "../process/exec.js";
-import type { ActiveMediaModel } from "./active-model.types.js";
+import { createLazyRuntimeModule, createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
-import { isMediaUnderstandingSkipError } from "./errors.js";
 import { fileExists } from "./fs.js";
 import { resolveOpenAiAudioAuthModelApi } from "./openai-audio-api.js";
 import { normalizeMediaExecutionProviderId, normalizeMediaProviderId } from "./provider-id.js";
@@ -48,7 +50,6 @@ import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
 } from "./provider-registry.js";
-import { providerSupportsCapability } from "./provider-supports.js";
 import { resolveModelEntries, resolveScopeDecision } from "./resolve.js";
 import {
   buildModelDecision,
@@ -64,12 +65,11 @@ import type {
   MediaUnderstandingOutput,
   MediaUnderstandingProvider,
 } from "./types.js";
+
 export { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
-export type { ActiveMediaModel } from "./active-model.types.js";
+export type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
 
 type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
-type HasAvailableAuthForProvider =
-  typeof import("../agents/model-auth.js").hasAvailableAuthForProvider;
 type ModelCatalogApi = typeof import("../agents/model-catalog.js");
 type ModelCatalog = Awaited<ReturnType<ModelCatalogApi["loadModelCatalog"]>>;
 
@@ -78,13 +78,14 @@ export type RunCapabilityResult = {
   decision: MediaUnderstandingDecision;
 };
 
-let cachedHasAvailableAuthForProvider: HasAvailableAuthForProvider | null = null;
-let cachedModelCatalogApi: ModelCatalogApi | null = null;
+const loadHasAvailableAuthForProvider = createLazyRuntimeNamedExport(
+  () => import("../agents/model-auth.js"),
+  "hasAvailableAuthForProvider",
+);
 
-async function loadModelCatalogApi(): Promise<ModelCatalogApi> {
-  cachedModelCatalogApi ??= await import("../agents/model-catalog.js");
-  return cachedModelCatalogApi;
-}
+const loadModelCatalogApi = createLazyRuntimeModule(
+  async () => await import("../agents/model-catalog.js"),
+);
 
 function resolveLiteralProviderApiKey(
   cfg: OpenClawConfig | undefined,
@@ -107,9 +108,8 @@ async function hasProviderAuthAvailable(params: {
   if (resolveLiteralProviderApiKey(params.cfg, params.provider)) {
     return true;
   }
-  cachedHasAvailableAuthForProvider ??= (await import("../agents/model-auth.js"))
-    .hasAvailableAuthForProvider;
-  return await cachedHasAvailableAuthForProvider({
+  const hasAvailableAuthForProvider = await loadHasAvailableAuthForProvider();
+  return await hasAvailableAuthForProvider({
     ...params,
     modelApi: resolveOpenAiAudioAuthModelApi({
       capability: params.capability,
@@ -632,7 +632,14 @@ async function resolveKeyEntry(params: {
             explicitModel: model,
             workspaceDir,
           })
-        : model;
+        : capability === "video"
+          ? (model ??
+            resolveDefaultMediaModelFromRegistry({
+              providerId,
+              capability: "video",
+              providerRegistry,
+            }))
+          : model;
     if (capability === "image" && !resolvedModel) {
       return null;
     }
@@ -907,7 +914,13 @@ async function resolveActiveModelEntry(params: {
       providerRegistry: params.providerRegistry,
     });
   } else {
-    model = params.activeModel?.model;
+    model =
+      params.activeModel?.model ??
+      resolveDefaultMediaModelFromRegistry({
+        providerId,
+        capability: "video",
+        providerRegistry: params.providerRegistry,
+      });
   }
   if ((params.capability === "image" || params.capability === "audio") && !model) {
     return null;

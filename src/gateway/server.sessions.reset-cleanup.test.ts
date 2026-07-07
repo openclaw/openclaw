@@ -7,8 +7,18 @@ import {
   readAcpSessionMeta,
   writeAcpSessionMetaForMigration,
 } from "../acp/runtime/session-meta.js";
+import {
+  listRegisteredAgentHarnesses,
+  registerAgentHarness,
+  restoreRegisteredAgentHarnesses,
+} from "../agents/harness/registry.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import { enqueueSystemEvent, peekSystemEvents } from "../infra/system-events.js";
+import {
+  beginSessionWorkAdmission,
+  runExclusiveSessionLifecycle,
+  runExclusiveSessionLifecycleMutation,
+} from "../sessions/session-lifecycle-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
@@ -25,6 +35,9 @@ import {
   sessionStoreEntry,
   expectActiveRunCleanup,
   directSessionReq,
+  getGatewayConfigModule,
+  getSessionsHandlers,
+  sessionHookMocks,
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsTestHarness();
@@ -181,6 +194,132 @@ test("sessions.reset aborts active runs and clears queues", async () => {
   });
 });
 
+test("sessions.reset forwards the retired generation to registered agent harnesses", async () => {
+  const registeredHarnesses = listRegisteredAgentHarnesses();
+  const reset = vi.fn(async () => undefined);
+  registerAgentHarness({
+    id: "reset-observer",
+    label: "Reset observer",
+    supports: () => ({ supported: false }),
+    runAttempt: async () => {
+      throw new Error("not used");
+    },
+    reset,
+  });
+  try {
+    await seedWaitingActiveMainSession();
+
+    const response = await resetMainSession();
+
+    expect(response.ok).toBe(true);
+    expect(reset).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionId: "sess-main",
+      sessionKey: "agent:main:main",
+      sessionFile: undefined,
+      reason: "reset",
+    });
+  } finally {
+    restoreRegisteredAgentHarnesses(registeredHarnesses);
+  }
+});
+
+test("sessions.reset interrupts work admitted before runtime registration", async () => {
+  const { storePath } = await seedActiveMainSession();
+  let interrupted = false;
+  let releaseAdmission = () => {};
+  const admissionLease = await beginSessionWorkAdmission({
+    scope: storePath,
+    identities: ["agent:main:main", "sess-main"],
+    assertAllowed: () => {},
+    onInterrupt: () => {
+      interrupted = true;
+      releaseAdmission();
+    },
+  });
+  releaseAdmission = admissionLease.release;
+
+  const reset = await resetMainSession();
+  expect(reset.ok).toBe(true);
+  expect(interrupted).toBe(true);
+});
+
+test("sessions.reset does not interrupt the admission that initiates it", async () => {
+  const { storePath } = await seedActiveMainSession();
+  let interrupted = false;
+  const admissionLease = await beginSessionWorkAdmission({
+    scope: storePath,
+    identities: ["agent:main:main", "sess-main"],
+    assertAllowed: () => {},
+    onInterrupt: () => {
+      interrupted = true;
+    },
+  });
+
+  try {
+    const reset = await admissionLease.run(resetMainSession);
+    expect(reset.ok).toBe(true);
+    expect(interrupted).toBe(false);
+  } finally {
+    admissionLease.release();
+  }
+});
+
+test("sessions.reset rejects an active lifecycle mutation without interrupting admitted work", async () => {
+  const { storePath } = await seedActiveMainSession();
+  let interrupted = false;
+  const admissionLease = await beginSessionWorkAdmission({
+    scope: storePath,
+    identities: ["agent:main:main", "sess-main"],
+    assertAllowed: () => {},
+    onInterrupt: () => {
+      interrupted = true;
+    },
+  });
+  let releaseMutation = () => {};
+  let markMutationStarted = () => {};
+  const mutationStarted = new Promise<void>((resolve) => {
+    markMutationStarted = resolve;
+  });
+  const blocker = runExclusiveSessionLifecycleMutation({
+    scope: storePath,
+    identities: ["agent:main:main", "sess-main"],
+    run: async () => {
+      markMutationStarted();
+      await new Promise<void>((resolve) => {
+        releaseMutation = resolve;
+      });
+    },
+  });
+  await mutationStarted;
+  const { performGatewaySessionReset } = await import("./session-reset-service.js");
+  const assertCurrent = vi.fn(() => {
+    throw new Error("stale lifecycle");
+  });
+  const reset = await performGatewaySessionReset({
+    key: "main",
+    reason: "reset",
+    commandSource: "gateway:agent",
+    assertCurrent,
+  });
+  releaseMutation();
+
+  try {
+    await blocker;
+    expect(reset).toMatchObject({
+      ok: false,
+      error: {
+        code: "UNAVAILABLE",
+        message: expect.stringContaining("lifecycle mutation in progress"),
+      },
+    });
+    expect(assertCurrent).not.toHaveBeenCalled();
+    expect(interrupted).toBe(false);
+  } finally {
+    admissionLease.release();
+  }
+});
+
 test("sessions.reset skips browser cleanup when root browser support is disabled", async () => {
   await expectResetWithConfigSkipsBrowserCleanup({ browser: { enabled: false } });
 });
@@ -305,6 +444,121 @@ test("sessions.reset finishes after lifecycle rotation during destructive cleanu
   expect(reset.ok).toBe(true);
   expectResetAcpState(readAcpSessionMeta({ sessionKey: "agent:main:main" }));
   expect(prepareFreshSession).not.toHaveBeenCalled();
+});
+
+test("sessions.reset rejects a concurrent archive during lifecycle rotation", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  const sessionKey = "agent:main:subagent:archive-race";
+  await writeSingleLineSession(dir, "sess-archive-race", "hello");
+  await writeSessionStore({
+    entries: {
+      [sessionKey]: sessionStoreEntry("sess-archive-race"),
+    },
+  });
+  let releaseHook = () => {};
+  const hookReleased = new Promise<void>((resolve) => {
+    releaseHook = resolve;
+  });
+  let markHookStarted = () => {};
+  const hookStarted = new Promise<void>((resolve) => {
+    markHookStarted = resolve;
+  });
+  sessionHookMocks.triggerInternalHook.mockImplementationOnce(async () => {
+    markHookStarted();
+    await hookReleased;
+  });
+  const { performGatewaySessionReset } = await import("./session-reset-service.js");
+
+  const resetPromise = performGatewaySessionReset({
+    key: sessionKey,
+    reason: "new",
+    commandSource: "gateway:sessions.reset",
+  });
+  await hookStarted;
+  const archivePromise = directSessionReq("sessions.patch", {
+    key: sessionKey,
+    archived: true,
+  });
+  releaseHook();
+
+  const [reset, archived] = await Promise.all([resetPromise, archivePromise]);
+  expect(reset.ok).toBe(true);
+  expect(archived).toMatchObject({
+    ok: false,
+    error: { message: "Cannot archive a session with an active run." },
+  });
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    { archivedAt?: number; sessionId?: string }
+  >;
+  expect(store[sessionKey]?.archivedAt).toBeUndefined();
+  expect(store[sessionKey]?.sessionId).not.toBe("sess-archive-race");
+});
+
+test.each([
+  { initialSessionId: "sess-queued-archive-race", transition: "rotated" },
+  { initialSessionId: undefined, transition: "created" },
+])("sessions.patch rejects an archive queued behind a $transition session", async (fixture) => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionKey = "agent:main:subagent:queued-archive-race";
+  const replacementSessionId = "sess-after-queued-reset";
+  await writeSessionStore({
+    entries: fixture.initialSessionId
+      ? { [sessionKey]: sessionStoreEntry(fixture.initialSessionId) }
+      : {},
+  });
+  // Resolve the lazy handler/config imports before queue ordering begins.
+  await Promise.all([getSessionsHandlers(), getGatewayConfigModule()]);
+  let releaseBlocker = () => {};
+  let markBlockerStarted = () => {};
+  const blockerStarted = new Promise<void>((resolve) => {
+    markBlockerStarted = resolve;
+  });
+  const blocker = runExclusiveSessionLifecycle({
+    scope: storePath,
+    identities: [sessionKey, fixture.initialSessionId],
+    run: async () => {
+      markBlockerStarted();
+      await new Promise<void>((resolve) => {
+        releaseBlocker = resolve;
+      });
+    },
+  });
+  await blockerStarted;
+  const queuedReset = runExclusiveSessionLifecycleMutation({
+    scope: storePath,
+    identities: [sessionKey, fixture.initialSessionId],
+    run: async () => {
+      await writeSessionStore({
+        entries: {
+          [sessionKey]: sessionStoreEntry(replacementSessionId),
+        },
+      });
+    },
+  });
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+  const archivePromise = directSessionReq("sessions.patch", {
+    key: sessionKey,
+    archived: true,
+  });
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+  releaseBlocker();
+
+  const archived = (await Promise.all([blocker, queuedReset, archivePromise]))[2];
+  expect(archived).toMatchObject({
+    ok: false,
+    error: { message: `Session ${sessionKey} changed before patch. Retry.` },
+  });
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    { archivedAt?: number; sessionId?: string }
+  >;
+  expect(store[sessionKey]?.archivedAt).toBeUndefined();
+  expect(store[sessionKey]?.sessionId).toBe(replacementSessionId);
 });
 
 test("sessions.reset preserves a newer session after lifecycle rotation", async () => {
@@ -653,4 +907,26 @@ test("sessions.reset directly unbinds thread bindings when hooks are unavailable
     targetSessionKey: "agent:main:main",
     reason: "session-reset",
   });
+});
+
+test("sessions.reset preserves explicit responseUsage preference across session rollover", async () => {
+  // Regression: a full session reset must carry the user's display preference forward
+  // so the usage footer mode survives rollovers. Only /usage reset clears the override.
+  const { dir } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-main", "hello");
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main", { responseUsage: "tokens", pinnedAt: 123 }),
+    },
+  });
+
+  const reset = await directSessionReq<{
+    ok: true;
+    key: string;
+    entry: { sessionId: string; responseUsage?: string; pinnedAt?: number };
+  }>("sessions.reset", { key: "main" });
+
+  expect(reset.ok).toBe(true);
+  expect(reset.payload?.entry.responseUsage).toBe("tokens");
+  expect(reset.payload?.entry.pinnedAt).toBe(123);
 });

@@ -8,7 +8,8 @@ import {
   type WhatsAppIdentity,
   type WhatsAppReplyContext,
 } from "../../identity.js";
-import type { WebInboundMessage } from "../../inbound/types.js";
+import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
+import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { normalizeE164 } from "../../text-runtime.js";
 
 export type GroupHistoryEntry = {
@@ -72,7 +73,7 @@ export function resolveVisibleWhatsAppGroupHistory(params: {
 }
 
 export function resolveVisibleWhatsAppReplyContext(params: {
-  msg: WebInboundMessage;
+  msg: AdmittedWebInboundMessage;
   authDir?: string;
   mode: ContextVisibilityMode;
   groupPolicy: "open" | "allowlist" | "disabled";
@@ -82,8 +83,9 @@ export function resolveVisibleWhatsAppReplyContext(params: {
   if (!replyTo) {
     return null;
   }
+  const admission = requireWhatsAppInboundAdmission(params.msg);
   const senderAllowed =
-    params.msg.chatType !== "group" || params.groupPolicy !== "allowlist"
+    admission.conversation.kind !== "group" || params.groupPolicy !== "allowlist"
       ? true
       : isWhatsAppSupplementalSenderAllowed({
           allowFrom: params.groupAllowFrom,

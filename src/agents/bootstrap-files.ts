@@ -11,6 +11,7 @@ import { resolveUserPath } from "../utils.js";
 import { resolveAgentConfig, resolveSessionAgentIds } from "./agent-scope.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
+import type { BootstrapContextRunKind } from "./bootstrap-mode.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 import {
   buildBootstrapContextFiles,
@@ -23,13 +24,11 @@ import {
   DEFAULT_BOOTSTRAP_FILENAME,
   filterBootstrapFilesForSession,
   isWorkspaceSetupCompleted,
-  isWorkspaceBootstrapPending,
   loadWorkspaceBootstrapFiles,
   type WorkspaceBootstrapFile,
 } from "./workspace.js";
 
 export type BootstrapContextMode = "full" | "lightweight";
-type BootstrapContextRunKind = "default" | "heartbeat" | "cron";
 
 const CONTINUATION_SCAN_MAX_TAIL_BYTES = 256 * 1024;
 const CONTINUATION_SCAN_MAX_RECORDS = 500;
@@ -223,6 +222,9 @@ function shouldExcludeHeartbeatBootstrapFile(params: {
   agentId?: string;
   runKind?: BootstrapContextRunKind;
 }): boolean {
+  if (params.runKind === "commitment-only") {
+    return true;
+  }
   if (!params.config || params.runKind === "heartbeat") {
     return false;
   }
@@ -371,5 +373,3 @@ export function buildBootstrapContextForFiles(
   });
   return contextFiles;
 }
-
-export { isWorkspaceBootstrapPending };

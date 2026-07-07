@@ -10,21 +10,13 @@ import {
   resetModelsJsonReadyCacheForTest,
 } from "../../src/agents/models-config.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
-
-type Options = {
-  agentCount: number;
-  cpuProfDir?: string;
-  cpuProfOutput?: string;
-  json: boolean;
-  keepTemp: boolean;
-  lookupsPerRun: number;
-  modelsPerProvider: number;
-  output?: string;
-  providers: number;
-  runs: number;
-  runtimeHooks: boolean;
-  warmup: number;
-};
+import {
+  Issue78851CliArgumentError,
+  issue78851ModelResolutionHelpRequested,
+  issue78851ModelResolutionUsage,
+  parseIssue78851ModelResolutionOptions,
+  type Issue78851ModelResolutionOptions as Options,
+} from "./issue-78851-model-resolution-cli.js";
 
 type PhaseSample = {
   ensureMs: number;
@@ -67,83 +59,6 @@ type Report = {
   tempRoot: string;
   cpuProfilePath?: string;
 };
-
-function parseFlagValue(flag: string): string | undefined {
-  const index = process.argv.indexOf(flag);
-  if (index === -1) {
-    return undefined;
-  }
-  return process.argv[index + 1];
-}
-
-function hasFlag(flag: string): boolean {
-  return process.argv.includes(flag);
-}
-
-function parsePositiveInt(flag: string, fallback: number): number {
-  const raw = parseFlagValue(flag);
-  if (!raw) {
-    return fallback;
-  }
-  const value = Number.parseInt(raw, 10);
-  if (!Number.isFinite(value) || value <= 0) {
-    throw new Error(`${flag} must be a positive integer`);
-  }
-  return value;
-}
-
-function parseNonNegativeInt(flag: string, fallback: number): number {
-  const raw = parseFlagValue(flag);
-  if (!raw) {
-    return fallback;
-  }
-  const value = Number.parseInt(raw, 10);
-  if (!Number.isFinite(value) || value < 0) {
-    throw new Error(`${flag} must be a non-negative integer`);
-  }
-  return value;
-}
-
-function parseOptions(): Options {
-  return {
-    agentCount: parsePositiveInt("--agents", 8),
-    cpuProfDir: parseFlagValue("--cpu-prof-dir"),
-    cpuProfOutput: parseFlagValue("--cpu-prof-output"),
-    json: hasFlag("--json"),
-    keepTemp: hasFlag("--keep-temp"),
-    lookupsPerRun: parsePositiveInt("--lookups", 32),
-    modelsPerProvider: parsePositiveInt("--models-per-provider", 16),
-    output: parseFlagValue("--output"),
-    providers: parsePositiveInt("--providers", 48),
-    runs: parsePositiveInt("--runs", 8),
-    runtimeHooks: hasFlag("--runtime-hooks"),
-    warmup: parseNonNegativeInt("--warmup", 1),
-  };
-}
-
-function printUsage(): void {
-  process.stdout.write(`OpenClaw issue #78851 model-resolution profiler
-
-Usage:
-  pnpm perf:issue-78851 -- [options]
-  node --import tsx scripts/perf/issue-78851-model-resolution.ts [options]
-
-Options:
-  --providers <n>             Synthetic configured providers (default: 48)
-  --models-per-provider <n>   Models per provider (default: 16)
-  --agents <n>                Agent configs/fallback chains (default: 8)
-  --lookups <n>               resolveModelAsync calls per phase (default: 32)
-  --runs <n>                  Measured runs (default: 8)
-  --warmup <n>                Warmup runs before measurement (default: 1)
-  --cpu-prof-dir <dir>        Write a V8 .cpuprofile for the measured loop
-  --cpu-prof-output <path>    Write the V8 .cpuprofile to this exact path
-  --runtime-hooks             Include provider runtime hook resolution
-  --output <path>             Write JSON report
-  --json                      Print JSON report
-  --keep-temp                 Keep generated temp state
-  --help, -h                  Show this text
-`);
-}
 
 function round(value: number): number {
   return Math.round(value * 100) / 100;
@@ -426,11 +341,12 @@ function printHuman(report: Report, cpuProfilePath?: string): void {
 }
 
 async function main(): Promise<void> {
-  if (hasFlag("--help") || hasFlag("-h")) {
-    printUsage();
+  const args = process.argv.slice(2);
+  const options = parseIssue78851ModelResolutionOptions(args);
+  if (issue78851ModelResolutionHelpRequested(args)) {
+    process.stdout.write(issue78851ModelResolutionUsage());
     return;
   }
-  const options = parseOptions();
   const tempRoot = await mkdtemp(path.join(tmpdir(), "openclaw-issue-78851-"));
   const workspaceDir = path.join(tempRoot, "workspace");
   await mkdir(workspaceDir, { recursive: true });
@@ -494,6 +410,10 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
+  if (error instanceof Issue78851CliArgumentError) {
+    process.stderr.write(`${error.message}\n`);
+    process.exit(1);
+  }
   const message = error instanceof Error ? (error.stack ?? error.message) : String(error);
   process.stderr.write(`${message}\n`);
   process.exit(1);

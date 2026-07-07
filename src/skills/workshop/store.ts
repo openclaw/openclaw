@@ -2,7 +2,9 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { resolveStateDir } from "../../config/paths.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { type FileLockOptions, withFileLock } from "../../infra/file-lock.js";
 import { root } from "../../infra/fs-safe.js";
 import { tryReadJson } from "../../infra/json-files.js";
@@ -34,9 +36,9 @@ const MANIFEST_LOCK_REL_PATH = path.join(TARGET_LOCKS_REL_DIR, "proposals-manife
 const PROPOSAL_RECORD_FILE = "proposal.json";
 const PROPOSAL_DRAFT_FILE = "PROPOSAL.md";
 const PROPOSAL_ROLLBACK_FILE = "rollback.json";
-export const MAX_PROPOSAL_BYTES = 1024 * 1024;
+const MAX_PROPOSAL_BYTES = 1024 * 1024;
 export const MAX_PROPOSAL_SUPPORT_FILES = 64;
-export const MAX_PROPOSAL_SUPPORT_FILES_TOTAL_BYTES = 2 * 1024 * 1024;
+const MAX_PROPOSAL_SUPPORT_FILES_TOTAL_BYTES = 2 * 1024 * 1024;
 const PROPOSAL_ID_PATTERN = /^[a-z0-9][a-z0-9-]{5,120}$/;
 const SKILL_WORKSHOP_LOCK_OPTIONS: FileLockOptions = {
   retries: {
@@ -48,7 +50,7 @@ const SKILL_WORKSHOP_LOCK_OPTIONS: FileLockOptions = {
   },
   stale: 60_000,
 };
-const skillWorkshopProcessLocks = new Map<string, Promise<void>>();
+const skillWorkshopProcessLocks = new KeyedAsyncQueue();
 
 type SkillWorkshopStoreOptions = {
   env?: NodeJS.ProcessEnv;
@@ -69,14 +71,14 @@ export function createSkillProposalId(name: string, now = new Date()): string {
 }
 
 export function hashSkillProposalContent(content: string): string {
-  return crypto.createHash("sha256").update(content).digest("hex");
+  return sha256Hex(content);
 }
 
 function contentSizeBytes(content: string): number {
   return Buffer.byteLength(content, "utf8");
 }
 
-export function assertSkillProposalContentSize(content: string): void {
+function assertSkillProposalContentSize(content: string): void {
   if (contentSizeBytes(content) > MAX_PROPOSAL_BYTES) {
     throw new Error("Skill proposal is too large.");
   }
@@ -86,30 +88,16 @@ function resolveSkillWorkshopStateDir(options: SkillWorkshopStoreOptions = {}): 
   return path.resolve(options.stateDir ?? resolveStateDir(options.env));
 }
 
-export function resolveWorkshopPath(options: SkillWorkshopStoreOptions = {}): string {
-  return path.join(resolveSkillWorkshopStateDir(options), WORKSHOP_REL_DIR);
-}
-
-export function resolveProposalDir(
-  proposalId: string,
-  options: SkillWorkshopStoreOptions = {},
-): string {
+function resolveProposalDir(proposalId: string, options: SkillWorkshopStoreOptions = {}): string {
   assertProposalId(proposalId);
   return path.join(resolveSkillWorkshopStateDir(options), proposalRelativeDir(proposalId));
 }
 
-export function resolveProposalRecordPath(
+function resolveProposalRecordPath(
   proposalId: string,
   options: SkillWorkshopStoreOptions = {},
 ): string {
   return path.join(resolveProposalDir(proposalId, options), PROPOSAL_RECORD_FILE);
-}
-
-export function resolveProposalDraftPath(
-  proposalId: string,
-  options: SkillWorkshopStoreOptions = {},
-): string {
-  return path.join(resolveProposalDir(proposalId, options), PROPOSAL_DRAFT_FILE);
 }
 
 export function prepareSkillProposalSupportFiles(
@@ -376,24 +364,10 @@ async function withSkillProposalManifestLock<T>(
 
 async function withSkillWorkshopLock<T>(lockFile: string, fn: () => Promise<T>): Promise<T> {
   const lockKey = path.resolve(lockFile);
-  const previous = skillWorkshopProcessLocks.get(lockKey) ?? Promise.resolve();
-  let releaseQueued!: () => void;
-  const current = new Promise<void>((resolve) => {
-    releaseQueued = resolve;
-  });
-  const previousDone = previous.catch(() => undefined);
-  const queued = previousDone.then(() => current);
-  skillWorkshopProcessLocks.set(lockKey, queued);
-  await previousDone;
-  await fs.mkdir(path.dirname(lockFile), { recursive: true });
-  try {
+  return await skillWorkshopProcessLocks.enqueue(lockKey, async () => {
+    await fs.mkdir(path.dirname(lockFile), { recursive: true });
     return await withFileLock(lockFile, SKILL_WORKSHOP_LOCK_OPTIONS, fn);
-  } finally {
-    releaseQueued();
-    if (skillWorkshopProcessLocks.get(lockKey) === queued) {
-      skillWorkshopProcessLocks.delete(lockKey);
-    }
-  }
+  });
 }
 
 export async function readProposalSupportFiles(
@@ -446,7 +420,7 @@ export function createSkillProposalRollback(params: {
   };
 }
 
-export function assertProposalId(proposalId: string): void {
+function assertProposalId(proposalId: string): void {
   if (!PROPOSAL_ID_PATTERN.test(proposalId)) {
     throw new Error("Invalid skill proposal id.");
   }

@@ -27,7 +27,7 @@ afterEach(async () => {
 describe("getEnvApiKey", () => {
   it("returns no env auth in browser contexts without process", async () => {
     vi.resetModules();
-    const { findEnvKeys, getEnvApiKey } = await import("./env-api-keys.js");
+    const { findEnvKeys, getEnvApiKey } = await import("@openclaw/ai/internal/runtime");
     vi.stubGlobal("process", undefined);
 
     expect(findEnvKeys("openai")).toBeUndefined();
@@ -49,7 +49,7 @@ describe("getEnvApiKey", () => {
       },
       async () => {
         vi.resetModules();
-        const { getEnvApiKey } = await import("./env-api-keys.js");
+        const { getEnvApiKey } = await import("@openclaw/ai/internal/runtime");
 
         expect(getEnvApiKey("google-vertex")).toBe("<authenticated>");
       },
@@ -65,7 +65,7 @@ describe("getEnvApiKey", () => {
       },
       async () => {
         vi.resetModules();
-        const { findEnvKeys, getEnvApiKey } = await import("./env-api-keys.js");
+        const { findEnvKeys, getEnvApiKey } = await import("@openclaw/ai/internal/runtime");
 
         expect(findEnvKeys("moonshot")).toEqual(["MOONSHOT_API_KEY", "KIMI_API_KEY"]);
         expect(getEnvApiKey("moonshot")).toBe("moonshot-key");
@@ -80,7 +80,7 @@ describe("getEnvApiKey", () => {
   it("falls back to alternate canonical Kimi env vars", async () => {
     await withEnvAsync({ KIMICODE_API_KEY: "kimicode-key" }, async () => {
       vi.resetModules();
-      const { findEnvKeys, getEnvApiKey } = await import("./env-api-keys.js");
+      const { findEnvKeys, getEnvApiKey } = await import("@openclaw/ai/internal/runtime");
 
       expect(findEnvKeys("kimi")).toEqual(["KIMICODE_API_KEY"]);
       expect(getEnvApiKey("kimi")).toBe("kimicode-key");
@@ -99,7 +99,7 @@ describe("getEnvApiKey", () => {
       },
       async () => {
         vi.resetModules();
-        const { getEnvApiKey } = await import("./env-api-keys.js");
+        const { getEnvApiKey } = await import("@openclaw/ai/internal/runtime");
 
         expect(getEnvApiKey("google-vertex")).toBeUndefined();
         await writeFile(credentialsPath, "{}", "utf-8");

@@ -40,7 +40,7 @@ vi.mock("./model-auth.js", () => ({
   applyLocalNoAuthHeaderOverride: hoisted.applyLocalNoAuthHeaderOverrideMock,
 }));
 
-vi.mock("./github-copilot-token.js", () => ({
+vi.mock("../plugin-sdk/provider-auth.js", () => ({
   resolveCopilotApiToken: hoisted.resolveCopilotApiTokenMock,
 }));
 
@@ -476,7 +476,11 @@ describe("prepareSimpleCompletionModel", () => {
   });
 
   it("can preserve asynchronous provider model discovery", async () => {
-    hoisted.resolveModelAsyncMock.mockResolvedValueOnce({
+    // Use a standalone mock so the default beforeEach delegation from
+    // resolveModelAsyncMock → resolveModelMock does not pollute call
+    // history. The point of the test is that when useAsyncModelResolution
+    // is true, only the async resolver is invoked.
+    const resolveModelAsync = vi.fn().mockResolvedValue({
       model: {
         provider: "anthropic",
         id: "claude-opus-4-6",
@@ -486,18 +490,21 @@ describe("prepareSimpleCompletionModel", () => {
       },
       modelRegistry: {},
     });
+    // Reset the hoisted sync mock so any leftover calls from earlier tests
+    // or beforeEach setup don't cause a false positive.
+    hoisted.resolveModelMock.mockReset();
 
     const result = await prepareSimpleCompletionModel({
       cfg: undefined,
       provider: "anthropic",
       modelId: "claude-opus-4-6",
       useAsyncModelResolution: true,
-      modelResolver: hoisted.resolveModelAsyncMock,
+      modelResolver: resolveModelAsync,
     });
 
     expectPreparedModelResult(result);
     expect(hoisted.resolveModelMock).not.toHaveBeenCalled();
-    expect(hoisted.resolveModelAsyncMock).toHaveBeenCalledWith(
+    expect(resolveModelAsync).toHaveBeenCalledWith(
       "anthropic",
       "claude-opus-4-6",
       undefined,
@@ -679,6 +686,48 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
     );
   });
 
+  it("preserves max for GPT-5.6 simple completions", async () => {
+    const model = {
+      provider: "openai",
+      id: "gpt-5.6-terra",
+      name: "gpt-5.6-terra",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 372_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    } satisfies Model<"openai-responses">;
+
+    await completeWithPreparedSimpleCompletionModel({
+      model,
+      auth: {
+        apiKey: "sk-test",
+        source: "env:OPENAI_API_KEY",
+        mode: "api-key",
+      },
+      context: {
+        messages: [{ role: "user", content: "pong", timestamp: 1 }],
+      },
+      options: {
+        reasoning: "max",
+      },
+    });
+
+    expect(hoisted.completeMock).toHaveBeenCalledWith(
+      model,
+      {
+        messages: [{ role: "user", content: "pong", timestamp: 1 }],
+      },
+      {
+        reasoning: "max",
+        apiKey: "sk-test",
+      },
+    );
+  });
+
   it("omits reasoning for local simple completion when thinking is off", async () => {
     const model = {
       provider: "openai",
@@ -714,6 +763,53 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
         messages: [{ role: "user", content: "pong", timestamp: 1 }],
       },
       {
+        apiKey: "sk-test",
+      },
+    );
+  });
+
+  it("preserves explicit off for a prepared Claude Sonnet 5 alias", async () => {
+    const model = {
+      provider: "anthropic",
+      id: "production-sonnet",
+      name: "Production Sonnet",
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      params: { canonicalModelId: "claude-sonnet-5" },
+    } satisfies Model<"anthropic-messages">;
+    const preparedModel = {
+      ...model,
+      api: "openclaw-provider-simple:anthropic:production-sonnet",
+    } satisfies Model;
+    hoisted.prepareModelForSimpleCompletionMock.mockReturnValueOnce(preparedModel);
+
+    await completeWithPreparedSimpleCompletionModel({
+      model,
+      auth: {
+        apiKey: "sk-test",
+        source: "env:ANTHROPIC_API_KEY",
+        mode: "api-key",
+      },
+      context: {
+        messages: [{ role: "user", content: "pong", timestamp: 1 }],
+      },
+      options: {
+        reasoning: "off",
+      },
+    });
+
+    expect(hoisted.completeMock).toHaveBeenCalledWith(
+      preparedModel,
+      {
+        messages: [{ role: "user", content: "pong", timestamp: 1 }],
+      },
+      {
+        reasoning: "off",
         apiKey: "sk-test",
       },
     );

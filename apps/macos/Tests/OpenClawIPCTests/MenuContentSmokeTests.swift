@@ -50,4 +50,34 @@ struct MenuContentSmokeTests {
         #expect(titles.contains("Open Canvas") || titles.contains("Close Canvas"))
         #expect(titles.contains("Settings…"))
     }
+
+    @Test func `dock reopen opens dashboard and suppresses default handling`() {
+        let delegate = AppDelegate()
+        var didOpenDashboard = false
+        delegate.openDashboardAction = {
+            didOpenDashboard = true
+        }
+
+        let shouldUseDefaultHandling = delegate.applicationShouldHandleReopen(
+            NSApplication.shared,
+            hasVisibleWindows: false)
+
+        #expect(shouldUseDefaultHandling == false)
+        #expect(didOpenDashboard)
+    }
+
+    @Test func `dock reopen keeps default handling when windows are visible`() {
+        let delegate = AppDelegate()
+        var didOpenDashboard = false
+        delegate.openDashboardAction = {
+            didOpenDashboard = true
+        }
+
+        let shouldUseDefaultHandling = delegate.applicationShouldHandleReopen(
+            NSApplication.shared,
+            hasVisibleWindows: true)
+
+        #expect(shouldUseDefaultHandling)
+        #expect(!didOpenDashboard)
+    }
 }

@@ -143,10 +143,6 @@ export function loadPatternListFromEnv(
   return loadPatternListFile(filePath, envKey);
 }
 
-export function loadPatternListFromArgv(argv: string[] = process.argv): string[] | null {
-  return loadPatternListFromArgvForScope(argv);
-}
-
 function loadPatternListFromArgvForScope(
   argv: string[] = process.argv,
   options: { scopedDir?: string } = {},

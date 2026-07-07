@@ -7,6 +7,7 @@ import {
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
+import { SESSION_TOOL_STDERR_TAIL_BYTES } from "./sessions/tools/limits.js";
 import {
   testing,
   addClientToolsToToolSearchCatalog,
@@ -1288,6 +1289,119 @@ describe("Tool Search", () => {
     ).rejects.toThrow();
   });
 
+  it("suggests recoverable Tool Search steps for guessed tool ids", async () => {
+    const callTool = fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call");
+    const searchTool = fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search");
+    const describeTool = fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe");
+    const writeTool = fakeTool("write", "Write a file to the workspace");
+    applyToolSearchCatalog({
+      tools: [callTool, searchTool, describeTool, writeTool],
+      config: { tools: { toolSearch: { mode: "tools" } } } as never,
+      sessionId: "session-guessed-file-write",
+      sessionKey: "agent:main:main",
+    });
+
+    const runtimeTools = createToolSearchTools({
+      sessionId: "session-guessed-file-write",
+      sessionKey: "agent:main:main",
+      config: { tools: { toolSearch: { mode: "tools" } } } as never,
+    });
+    const runtimeCallTool = runtimeTools[3];
+
+    await expect(
+      runtimeCallTool.execute("call-guessed-file-write", {
+        id: "file_write",
+        args: { path: "memory/2026-05-22.md", content: "remember this" },
+      }),
+    ).rejects.toThrow(
+      "Unknown tool id: file_write. Did you mean: write? Use tool_search to find a tool, tool_describe to inspect it, then tool_call with the exact id or name.",
+    );
+    expect(writeTool.execute).not.toHaveBeenCalled();
+  });
+
+  it("uses exact ids when recovery suggestions have duplicate names", async () => {
+    const callTool = fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call");
+    const searchTool = fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search");
+    const describeTool = fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe");
+    const firstWriteTool = pluginTool("write", "Write a file", "first-plugin");
+    const secondWriteTool = pluginTool("write", "Write another file", "second-plugin");
+    applyToolSearchCatalog({
+      tools: [callTool, searchTool, describeTool, firstWriteTool, secondWriteTool],
+      config: { tools: { toolSearch: { mode: "tools" } } } as never,
+      sessionId: "session-duplicate-recovery",
+      sessionKey: "agent:main:main",
+    });
+
+    const runtimeTools = createToolSearchTools({
+      sessionId: "session-duplicate-recovery",
+      sessionKey: "agent:main:main",
+      config: { tools: { toolSearch: { mode: "tools" } } } as never,
+    });
+
+    await expect(
+      runtimeTools[3].execute("call-duplicate-write", {
+        id: "file_write",
+        args: {},
+      }),
+    ).rejects.toThrow("Did you mean: openclaw:first-plugin:write, openclaw:second-plugin:write?");
+  });
+
+  it("keeps raw Tool Search recovery guidance when no suggestion matches", async () => {
+    const callTool = fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call");
+    const searchTool = fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search");
+    const describeTool = fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe");
+    const writeTool = fakeTool("write", "Write a file to the workspace");
+    applyToolSearchCatalog({
+      tools: [callTool, searchTool, describeTool, writeTool],
+      config: { tools: { toolSearch: { mode: "tools" } } } as never,
+      sessionId: "session-missing-raw-tool",
+      sessionKey: "agent:main:main",
+    });
+
+    const runtimeTools = createToolSearchTools({
+      sessionId: "session-missing-raw-tool",
+      sessionKey: "agent:main:main",
+      config: { tools: { toolSearch: { mode: "tools" } } } as never,
+    });
+    const runtimeCallTool = runtimeTools[3];
+
+    await expect(
+      runtimeCallTool.execute("call-missing-raw-tool", {
+        id: "missing_tool",
+        args: {},
+      }),
+    ).rejects.toThrow(
+      "Unknown tool id: missing_tool. Use tool_search to find a tool, tool_describe to inspect it, then tool_call with the exact id or name.",
+    );
+    expect(writeTool.execute).not.toHaveBeenCalled();
+  });
+
+  it("preserves code-mode bridge recovery guidance for guessed tool ids", async () => {
+    const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
+    const writeTool = fakeTool("write", "Write a file to the workspace");
+    applyToolSearchCatalog({
+      tools: [codeTool, writeTool],
+      config: { tools: { toolSearch: true } } as never,
+      sessionId: "session-code-guessed-file-write",
+      sessionKey: "agent:main:main",
+    });
+
+    const [runtimeCodeTool] = createToolSearchTools({
+      sessionId: "session-code-guessed-file-write",
+      sessionKey: "agent:main:main",
+      config: {},
+    });
+
+    await expect(
+      runtimeCodeTool.execute("call-code-guessed-file-write", {
+        code: `return await openclaw.tools.call("file_write", { path: "memory/2026-05-22.md" });`,
+      }),
+    ).rejects.toThrow(
+      "Unknown tool id: file_write. Did you mean: write? Use openclaw.tools.search to find a tool, openclaw.tools.describe to inspect it, then openclaw.tools.call with the exact id or name.",
+    );
+    expect(writeTool.execute).not.toHaveBeenCalled();
+  });
+
   it("preserves code-mode bridge errors from the child process", async () => {
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     applyToolSearchCatalog({
@@ -1307,7 +1421,9 @@ describe("Tool Search", () => {
       runtimeCodeTool.execute("call-missing-tool", {
         code: `return await openclaw.tools.call("missing_tool", {});`,
       }),
-    ).rejects.toThrow("Unknown tool id: missing_tool");
+    ).rejects.toThrow(
+      "Unknown tool id: missing_tool. Use openclaw.tools.search to find a tool, openclaw.tools.describe to inspect it, then openclaw.tools.call with the exact id or name.",
+    );
   });
 
   it("does not expose host-realm bridge result objects to model-authored code", async () => {
@@ -1407,6 +1523,7 @@ describe("Tool Search", () => {
   }, 5_000);
 
   it("aborts already-started bridged calls when code mode times out", async () => {
+    testing.setToolSearchMinCodeTimeoutMsForTest(50);
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     const target = pluginTool("fake_abort_on_timeout", "Long-running target tool");
     let observedSignal: AbortSignal | undefined;
@@ -1439,7 +1556,7 @@ describe("Tool Search", () => {
 
     const config = {
       tools: {
-        toolSearch: { enabled: true, mode: "code", codeTimeoutMs: 1_000 },
+        toolSearch: { enabled: true, mode: "code", codeTimeoutMs: 100 },
       },
     } as never;
     applyToolSearchCatalog({
@@ -1609,5 +1726,19 @@ describe("Tool Search", () => {
       sessionId,
     });
     expect(second.catalogReused).toBe(false);
+  });
+
+  it("bounds tool_search_code stderr accumulation to the session tool tail limit", () => {
+    let stderrTail = "";
+    stderrTail = testing.appendToolSearchCodeStderrTail(
+      stderrTail,
+      `HEAD_OVERFLOW_${"x".repeat(SESSION_TOOL_STDERR_TAIL_BYTES + 10_000)}TAIL`,
+    );
+
+    expect(stderrTail).not.toContain("HEAD_OVERFLOW_");
+    expect(stderrTail.endsWith("TAIL")).toBe(true);
+    expect(Buffer.byteLength(stderrTail, "utf8")).toBeLessThanOrEqual(
+      SESSION_TOOL_STDERR_TAIL_BYTES,
+    );
   });
 });

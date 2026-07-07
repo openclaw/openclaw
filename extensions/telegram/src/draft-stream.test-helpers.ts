@@ -1,9 +1,10 @@
 // Telegram helper module supports draft stream helpers behavior.
 import { vi } from "vitest";
+import type { TelegramDraftPreview } from "./draft-stream.js";
 
 type TestDraftStream = {
   update: ReturnType<typeof vi.fn<(text: string) => void>>;
-  updatePreview: ReturnType<typeof vi.fn<(preview: { text: string }) => void>>;
+  updatePreview: ReturnType<typeof vi.fn<(preview: TelegramDraftPreview) => void>>;
   flush: ReturnType<typeof vi.fn<() => Promise<void>>>;
   messageId: ReturnType<typeof vi.fn<() => number | undefined>>;
   visibleSinceMs: ReturnType<typeof vi.fn<() => number | undefined>>;
@@ -13,7 +14,11 @@ type TestDraftStream = {
   stop: ReturnType<typeof vi.fn<() => Promise<void>>>;
   discard: ReturnType<typeof vi.fn<() => Promise<void>>>;
   materialize: ReturnType<typeof vi.fn<() => Promise<number | undefined>>>;
+  finalizeToPreview: ReturnType<
+    typeof vi.fn<(preview: TelegramDraftPreview) => Promise<number | undefined>>
+  >;
   forceNewMessage: ReturnType<typeof vi.fn<() => void>>;
+  rotateToNewMessageDeferringDelete: ReturnType<typeof vi.fn<() => number | undefined>>;
   sendMayHaveLanded: ReturnType<typeof vi.fn<() => boolean>>;
   setMessageId: (value: number | undefined) => void;
 };
@@ -41,7 +46,7 @@ export function createTestDraftStream(params?: {
       lastDeliveredText = text.trimEnd();
       params?.onUpdate?.(text);
     }),
-    updatePreview: vi.fn().mockImplementation((preview: { text: string }) => {
+    updatePreview: vi.fn().mockImplementation((preview: TelegramDraftPreview) => {
       if (stopped) {
         return;
       }
@@ -65,12 +70,33 @@ export function createTestDraftStream(params?: {
       await params?.onDiscard?.();
     }),
     materialize: vi.fn().mockImplementation(async () => messageId),
+    finalizeToPreview: vi.fn().mockImplementation(async (preview: TelegramDraftPreview) => {
+      if (messageId == null) {
+        return undefined;
+      }
+      previewRevision += 1;
+      lastDeliveredText = preview.text.trimEnd();
+      stopped = true;
+      return messageId;
+    }),
     forceNewMessage: vi.fn().mockImplementation(() => {
       stopped = false;
       if (params?.clearMessageIdOnForceNew) {
         messageId = undefined;
       }
       visibleSinceMs = undefined;
+    }),
+    rotateToNewMessageDeferringDelete: vi.fn().mockImplementation(() => {
+      // Mirror forceNewMessage's message-id handling (a sequenced harness swaps
+      // ids on the next send; the fixed harness keeps its id unless configured
+      // otherwise) so the rewind semantics match; return the superseded id.
+      const superseded = messageId;
+      stopped = false;
+      if (params?.clearMessageIdOnForceNew) {
+        messageId = undefined;
+      }
+      visibleSinceMs = undefined;
+      return superseded;
     }),
     sendMayHaveLanded: vi.fn().mockReturnValue(false),
     setMessageId: (value: number | undefined) => {
@@ -95,7 +121,7 @@ export function createSequencedTestDraftStream(startMessageId = 1001): TestDraft
       previewRevision += 1;
       lastDeliveredText = text.trimEnd();
     }),
-    updatePreview: vi.fn().mockImplementation((preview: { text: string }) => {
+    updatePreview: vi.fn().mockImplementation((preview: TelegramDraftPreview) => {
       if (activeMessageId == null) {
         activeMessageId = nextMessageId++;
         visibleSinceMs = Date.now();
@@ -112,9 +138,23 @@ export function createSequencedTestDraftStream(startMessageId = 1001): TestDraft
     stop: vi.fn().mockResolvedValue(undefined),
     discard: vi.fn().mockResolvedValue(undefined),
     materialize: vi.fn().mockImplementation(async () => activeMessageId),
+    finalizeToPreview: vi.fn().mockImplementation(async (preview: TelegramDraftPreview) => {
+      if (activeMessageId == null) {
+        return undefined;
+      }
+      previewRevision += 1;
+      lastDeliveredText = preview.text.trimEnd();
+      return activeMessageId;
+    }),
     forceNewMessage: vi.fn().mockImplementation(() => {
       activeMessageId = undefined;
       visibleSinceMs = undefined;
+    }),
+    rotateToNewMessageDeferringDelete: vi.fn().mockImplementation(() => {
+      const superseded = activeMessageId;
+      activeMessageId = undefined;
+      visibleSinceMs = undefined;
+      return superseded;
     }),
     sendMayHaveLanded: vi.fn().mockReturnValue(false),
     setMessageId: (value: number | undefined) => {

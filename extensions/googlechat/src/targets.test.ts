@@ -8,9 +8,12 @@ import {
 } from "./approval-card-actions.js";
 import { resolveGoogleChatGroupRequireMention } from "./group-policy.js";
 import {
+  isGoogleChatGroupSpace,
   isGoogleChatSpaceTarget,
   isGoogleChatUserTarget,
   normalizeGoogleChatTarget,
+  resolveGoogleChatOutboundSessionRoute,
+  resolveGoogleChatSpaceChatType,
 } from "./targets.js";
 
 const mocks = vi.hoisted(() => ({
@@ -99,10 +102,15 @@ const account = {
   config: {},
 } as ResolvedGoogleChatAccount;
 
-function stubSuccessfulSend(name: string) {
-  const fetchMock = vi
-    .fn()
-    .mockResolvedValue(new Response(JSON.stringify({ name }), { status: 200 }));
+function stubSuccessfulSend(name: string, threadName?: string) {
+  const fetchMock = vi.fn().mockResolvedValue(
+    new Response(
+      JSON.stringify({ name, ...(threadName ? { thread: { name: threadName } } : {}) }),
+      {
+        status: 200,
+      },
+    ),
+  );
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
@@ -148,6 +156,84 @@ describe("target helpers", () => {
     expect(isGoogleChatUserTarget("users/abc")).toBe(true);
     expect(isGoogleChatSpaceTarget("spaces/abc")).toBe(true);
     expect(isGoogleChatUserTarget("spaces/abc")).toBe(false);
+  });
+
+  it("uses current space types before deprecated metadata", () => {
+    expect(resolveGoogleChatSpaceChatType({ spaceType: "DIRECT_MESSAGE", type: "ROOM" })).toBe(
+      "direct",
+    );
+    expect(resolveGoogleChatSpaceChatType({ spaceType: "SPACE", type: "DM" })).toBe("group");
+    expect(resolveGoogleChatSpaceChatType({ singleUserBotDm: true })).toBe("direct");
+    expect(resolveGoogleChatSpaceChatType({ type: "ROOM" })).toBe("group");
+    expect(resolveGoogleChatSpaceChatType({})).toBeUndefined();
+    expect(isGoogleChatGroupSpace({})).toBe(true);
+  });
+});
+
+describe("outbound session routing", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    { spaceType: "DIRECT_MESSAGE", chatType: "direct", peerKind: "direct" },
+    { spaceType: "SPACE", chatType: "group", peerKind: "group" },
+  ] as const)("classifies API space type $spaceType", async ({ spaceType, chatType, peerKind }) => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ name: "spaces/AAA", spaceType }), { status: 200 }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const route = await resolveGoogleChatOutboundSessionRoute({
+      cfg: {},
+      agentId: "main",
+      target: "googlechat:spaces/AAA",
+    });
+
+    expect(route).toMatchObject({
+      peer: { kind: peerKind, id: "spaces/AAA" },
+      chatType,
+      from: "googlechat:spaces/AAA",
+      to: "spaces/AAA",
+    });
+    expect(fetchMock).toHaveBeenCalledWith("https://chat.googleapis.com/v1/spaces/AAA", {
+      method: "GET",
+      headers: {
+        Authorization: "Bearer token",
+        "Content-Type": "application/json",
+      },
+    });
+  });
+
+  it("rejects an unclassified space response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(new Response(JSON.stringify({ name: "spaces/AAA" }), { status: 200 })),
+    );
+
+    await expect(
+      resolveGoogleChatOutboundSessionRoute({
+        cfg: {},
+        agentId: "main",
+        target: "spaces/AAA",
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("keeps session-route classification failures non-fatal", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("read unavailable")));
+
+    await expect(
+      resolveGoogleChatOutboundSessionRoute({
+        cfg: {},
+        agentId: "main",
+        target: "spaces/AAA",
+      }),
+    ).resolves.toBeNull();
   });
 });
 
@@ -239,9 +325,9 @@ describe("sendGoogleChatMessage", () => {
   });
 
   it("adds messageReplyOption when sending to an existing thread", async () => {
-    const fetchMock = stubSuccessfulSend("spaces/AAA/messages/123");
+    const fetchMock = stubSuccessfulSend("spaces/AAA/messages/123", "spaces/AAA/threads/xyz");
 
-    await sendGoogleChatMessage({
+    const result = await sendGoogleChatMessage({
       account,
       space: "spaces/AAA",
       text: "hello",
@@ -260,6 +346,10 @@ describe("sendGoogleChatMessage", () => {
     };
     expect(body.text).toBe("hello");
     expect(body.thread?.name).toBe("spaces/AAA/threads/xyz");
+    expect(result).toEqual({
+      messageName: "spaces/AAA/messages/123",
+      threadName: "spaces/AAA/threads/xyz",
+    });
   });
 
   it("does not set messageReplyOption for non-thread sends", async () => {
@@ -558,5 +648,138 @@ describe("verifyGoogleChatRequest", () => {
       reason: "Google Chat cert fetch failed: malformed JSON response",
     });
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  describe("bounded JSON read (readProviderJsonResponse delegation)", () => {
+    afterEach(() => {
+      authTesting.resetGoogleChatAuthForTests();
+      mocks.fetchWithSsrFGuard.mockClear();
+      vi.unstubAllGlobals();
+    });
+
+    it("cancels oversized cert fetch JSON body via the 16 MiB provider cap", async () => {
+      const ONE_MIB = 1024 * 1024;
+      const TOTAL_CHUNKS = 32;
+      const chunk = new Uint8Array(ONE_MIB);
+
+      let bytesPulled = 0;
+      let canceled = false;
+      const oversizedJson = new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (bytesPulled >= TOTAL_CHUNKS * ONE_MIB) {
+              controller.close();
+              return;
+            }
+            bytesPulled += chunk.length;
+            controller.enqueue(chunk);
+          },
+          cancel() {
+            canceled = true;
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+      const release = vi.fn(async () => {});
+      mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+        response: oversizedJson,
+        release,
+      });
+
+      const result = await verifyGoogleChatRequest({
+        bearer: "token",
+        audienceType: "project-number",
+        audience: "123456789",
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.reason).toMatch(/JSON response exceeds 16777216 bytes/);
+      expect(canceled).toBe(true);
+      expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
+      expect(release).toHaveBeenCalledOnce();
+    });
+
+    it("rejects oversized sendMessage JSON body via the 16 MiB provider cap", async () => {
+      const ONE_MIB = 1024 * 1024;
+      const TOTAL_CHUNKS = 32;
+      const chunk = new Uint8Array(ONE_MIB);
+
+      let bytesPulled = 0;
+      let canceled = false;
+      const oversizedJson = new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (bytesPulled >= TOTAL_CHUNKS * ONE_MIB) {
+              controller.close();
+              return;
+            }
+            bytesPulled += chunk.length;
+            controller.enqueue(chunk);
+          },
+          cancel() {
+            canceled = true;
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+      const release = vi.fn(async () => {});
+      mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+        response: oversizedJson,
+        release,
+      });
+
+      await expect(
+        sendGoogleChatMessage({
+          account,
+          space: "spaces/AAA",
+          text: "hello",
+        }),
+      ).rejects.toThrow(/Google Chat API request failed: JSON response exceeds 16777216 bytes/);
+
+      expect(canceled).toBe(true);
+      expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
+    });
+
+    it("caps non-OK sendMessage error bodies before formatting the API error", async () => {
+      const ONE_MIB = 1024 * 1024;
+      const TOTAL_CHUNKS = 32;
+      const chunk = new TextEncoder().encode("x".repeat(ONE_MIB));
+
+      let bytesPulled = 0;
+      let canceled = false;
+      const oversizedError = new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (bytesPulled >= TOTAL_CHUNKS * ONE_MIB) {
+              controller.close();
+              return;
+            }
+            bytesPulled += chunk.length;
+            controller.enqueue(chunk);
+          },
+          cancel() {
+            canceled = true;
+          },
+        }),
+        { status: 500, statusText: "Internal Server Error" },
+      );
+      const release = vi.fn(async () => {});
+      mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+        response: oversizedError,
+        release,
+      });
+
+      await expect(
+        sendGoogleChatMessage({
+          account,
+          space: "spaces/AAA",
+          text: "hello",
+        }),
+      ).rejects.toThrow(/^Google Chat API 500: x+/);
+
+      expect(canceled).toBe(true);
+      expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
+      expect(release).toHaveBeenCalledOnce();
+    });
   });
 });

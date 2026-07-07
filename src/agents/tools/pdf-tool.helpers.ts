@@ -13,7 +13,7 @@ import { providerSupportsNativePdfDocument } from "../../media-understanding/def
 import { extractAssistantText } from "../embedded-agent-utils.js";
 
 /** Normalized PDF model preference used by tool registration and execution. */
-export type PdfModelConfig = { primary?: string; fallbacks?: string[] };
+type PdfModelConfig = { primary?: string; fallbacks?: string[] };
 
 /** Reads `pdf` and `pdfs` tool arguments into a trimmed, de-duplicated PDF input list. */
 export function resolvePdfInputs(record: Record<string, unknown>): string[] {
@@ -65,6 +65,9 @@ export function parsePageRange(range: string, maxPages: number): number[] {
         pages.add(i);
       }
     } else {
+      if (!/^\d+$/.test(part)) {
+        throw new Error(`Invalid page number: "${part}"`);
+      }
       const num = Number(part);
       if (!Number.isFinite(num) || num < 1) {
         throw new Error(`Invalid page number: "${part}"`);
@@ -74,7 +77,11 @@ export function parsePageRange(range: string, maxPages: number): number[] {
       }
     }
   }
-  return Array.from(pages).toSorted((a, b) => a - b);
+  const parsedPages = Array.from(pages).toSorted((a, b) => a - b);
+  if (parsedPages.length === 0) {
+    throw new Error(`No PDF pages matched requested range "${range}"`);
+  }
+  return parsedPages;
 }
 
 /** Converts a provider assistant message into PDF text or throws a model-labelled failure. */

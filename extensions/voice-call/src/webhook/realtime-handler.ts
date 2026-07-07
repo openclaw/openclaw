@@ -27,6 +27,8 @@ import {
   type TalkSessionController,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { normalizeWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import WebSocket, { WebSocketServer } from "ws";
 import type { VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
@@ -63,18 +65,6 @@ const MAX_PARTIAL_USER_TRANSCRIPT_CHARS = 1_200;
 const RECENT_FINAL_USER_TRANSCRIPT_TTL_MS = 2_000;
 const BARGE_IN_REQUIRED_LOUD_CHUNKS = 2;
 const logger = createSubsystemLogger("voice-call/realtime");
-
-function normalizePath(pathname: string): string {
-  const trimmed = pathname.trim();
-  if (!trimmed) {
-    return "/";
-  }
-  const prefixed = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  if (prefixed === "/") {
-    return prefixed;
-  }
-  return prefixed.endsWith("/") ? prefixed.slice(0, -1) : prefixed;
-}
 
 function buildGreetingInstructions(
   baseInstructions: string | undefined,
@@ -165,7 +155,7 @@ function limitPartialUserTranscript(text: string): string {
   if (text.length <= MAX_PARTIAL_USER_TRANSCRIPT_CHARS) {
     return text;
   }
-  const tail = text.slice(-MAX_PARTIAL_USER_TRANSCRIPT_CHARS);
+  const tail = sliceUtf16Safe(text, -MAX_PARTIAL_USER_TRANSCRIPT_CHARS);
   return tail.replace(/^\S+\s+/, "").trimStart() || tail.trimStart();
 }
 
@@ -203,7 +193,7 @@ function buildForcedConsultSpeechPrompt(result: string): string {
   const bounded =
     trimmed.length <= FORCED_CONSULT_RESULT_MAX_CHARS
       ? trimmed
-      : `${trimmed.slice(0, FORCED_CONSULT_RESULT_MAX_CHARS - 16).trimEnd()} [truncated]`;
+      : `${truncateUtf16Safe(trimmed, FORCED_CONSULT_RESULT_MAX_CHARS - 16).trimEnd()} [truncated]`;
   return [
     "Internal OpenClaw consult result is ready.",
     "Do not call tools for this internal result.",
@@ -328,8 +318,8 @@ export class RealtimeCallHandler {
     try {
       const parsed = new URL(url);
       this.publicOrigin = parsed.host;
-      const normalizedServePath = normalizePath(this.servePath);
-      const normalizedPublicPath = normalizePath(parsed.pathname);
+      const normalizedServePath = normalizeWebhookPath(this.servePath);
+      const normalizedPublicPath = normalizeWebhookPath(parsed.pathname);
       const idx = normalizedPublicPath.indexOf(normalizedServePath);
       this.publicPathPrefix = idx > 0 ? normalizedPublicPath.slice(0, idx) : "";
     } catch {
@@ -339,7 +329,7 @@ export class RealtimeCallHandler {
   }
 
   getStreamPathPattern(): string {
-    return `${this.publicPathPrefix}${normalizePath(this.config.streamPath ?? "/voice/stream/realtime")}`;
+    return `${this.publicPathPrefix}${normalizeWebhookPath(this.config.streamPath ?? "/voice/stream/realtime")}`;
   }
 
   buildTwiMLPayload(req: http.IncomingMessage, params?: URLSearchParams): WebhookResponsePayload {
@@ -594,6 +584,45 @@ export class RealtimeCallHandler {
         }),
       );
     };
+    const providerHandlesInputAudioBargeIn =
+      this.realtimeProvider.capabilities?.handlesInputAudioBargeIn === true;
+    const cancelOutputAudioForBargeIn = (
+      source: "local" | "provider",
+      interruptProvider?: (audioPlaybackActive: boolean) => void,
+      clearedAudioBytes = 0,
+    ): void => {
+      const outputAudioActive = talk.outputAudioActive;
+      const pendingTelephonyAudio = audioPacer.hasPendingAudio();
+      if (
+        source === "provider" &&
+        !outputAudioActive &&
+        !pendingTelephonyAudio &&
+        clearedAudioBytes === 0
+      ) {
+        return;
+      }
+      // Capture playback before provider interruption. Local fallback must clear
+      // telephony even after pacing drains because the remote stream buffers audio.
+      const interruptedTurnId = talk.activeTurnId;
+      interruptProvider?.(outputAudioActive || pendingTelephonyAudio);
+      const shouldClearTelephony = source === "local" || pendingTelephonyAudio;
+      const clearedBytes = clearedAudioBytes + (shouldClearTelephony ? audioPacer.clearAudio() : 0);
+      console.log(
+        `[voice-call] realtime outbound audio cleared by ${source} barge-in callId=${callId} providerCallId=${callSid} queuedBytes=${clearedBytes}`,
+      );
+      if (!outputAudioActive || !interruptedTurnId) {
+        return;
+      }
+      const reason = `${source}-barge-in`;
+      finishOutputAudio(reason);
+      const cancelled = talk.cancelTurn({
+        turnId: interruptedTurnId,
+        payload: { callId, providerCallId: callSid, reason },
+      });
+      if (cancelled.ok) {
+        rememberTalkEvent(cancelled.event);
+      }
+    };
     emitTalkEvent({
       type: "session.started",
       payload: { callId, providerCallId: callSid, streamSid },
@@ -650,10 +679,15 @@ export class RealtimeCallHandler {
     const speechDetector = new RealtimeMulawSpeechStartDetector({
       requiredLoudChunks: BARGE_IN_REQUIRED_LOUD_CHUNKS,
     });
+    const interruptResponseOnInputAudio =
+      typeof this.providerConfig.interruptResponseOnInputAudio === "boolean"
+        ? this.providerConfig.interruptResponseOnInputAudio
+        : undefined;
     const session = createRealtimeVoiceBridgeSession({
       provider: this.realtimeProvider,
       cfg: this.coreConfig,
       providerConfig: this.providerConfig,
+      interruptResponseOnInputAudio,
       instructions: this.config.instructions,
       tools: this.config.tools,
       initialGreetingInstructions,
@@ -675,8 +709,12 @@ export class RealtimeCallHandler {
           });
           audioPacer.sendAudio(muLaw);
         },
-        clearAudio: () => {
+        clearAudio: (reason) => {
           const clearedBytes = audioPacer.clearAudio();
+          if (reason === "barge-in") {
+            cancelOutputAudioForBargeIn("provider", undefined, clearedBytes);
+            return;
+          }
           console.log(
             `[voice-call] realtime outbound audio clear requested callId=${callId} providerCallId=${callSid} queuedBytes=${clearedBytes}`,
           );
@@ -868,18 +906,13 @@ export class RealtimeCallHandler {
     const sendAudioToSession = session.sendAudio.bind(session);
     session.sendAudio = (audio) => {
       if (speechDetector.accept(audio)) {
-        const interruptedTurnId = ensureTalkTurn();
-        const clearedBytes = audioPacer.clearAudio();
         console.log(
-          `[voice-call] realtime outbound audio cleared by barge-in callId=${callId} providerCallId=${callSid} queuedBytes=${clearedBytes}`,
+          `[voice-call] realtime local speech detected callId=${callId} providerCallId=${callSid}`,
         );
-        finishOutputAudio("barge-in");
-        const cancelled = talk.cancelTurn({
-          turnId: interruptedTurnId,
-          payload: { callId, providerCallId: callSid, reason: "barge-in" },
-        });
-        if (cancelled.ok) {
-          rememberTalkEvent(cancelled.event);
+        if (!providerHandlesInputAudioBargeIn) {
+          cancelOutputAudioForBargeIn("local", (audioPlaybackActive) => {
+            session.handleBargeIn({ audioPlaybackActive });
+          });
         }
       }
       emitTalkEvent({

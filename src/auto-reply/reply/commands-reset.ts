@@ -2,7 +2,7 @@
 import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
 import { resetConfiguredBindingTargetInPlace } from "../../channels/plugins/binding-targets.js";
-import { updateSessionStoreEntry } from "../../config/sessions/store.js";
+import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { isAcpSessionKey } from "../../routing/session-key.js";
 import { resolveBoundAcpThreadSessionKey } from "./commands-acp/targets.js";
@@ -81,10 +81,12 @@ export async function maybeHandleResetCommand(
         params.sessionStore[params.sessionKey] = targetSessionEntry;
       }
       if (params.storePath && params.sessionKey) {
-        await updateSessionStoreEntry({
-          storePath: params.storePath,
-          sessionKey: params.sessionKey,
-          update: async (entry) => {
+        await updateSessionEntry(
+          {
+            storePath: params.storePath,
+            sessionKey: params.sessionKey,
+          },
+          async (entry) => {
             const next = { ...entry };
             clearAllCliSessions(next);
             return {
@@ -95,7 +97,7 @@ export async function maybeHandleResetCommand(
               lastInteractionAt: now,
             };
           },
-        });
+        );
       }
     }
 

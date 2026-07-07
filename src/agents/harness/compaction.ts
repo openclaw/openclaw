@@ -5,6 +5,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import type { CompactEmbeddedAgentSessionParams } from "../embedded-agent-runner/compact.types.js";
@@ -62,19 +63,13 @@ function resolveHarnessCompactIdentity(params: CompactEmbeddedAgentSessionParams
 async function resolveHarnessCompactApiKey(params: {
   agentDir: string;
   compactParams: CompactEmbeddedAgentSessionParams;
-}): Promise<string | undefined> {
+}): Promise<{ apiKey?: string; runtimeModel?: Model }> {
   const { agentDir, compactParams } = params;
   const existing = compactParams.resolvedApiKey?.trim();
-  if (existing) {
-    return existing;
+  if (!compactParams.provider?.trim() || !compactParams.model?.trim()) {
+    return existing ? { apiKey: existing } : {};
   }
-  if (
-    !compactParams.authProfileId?.trim() ||
-    !compactParams.provider?.trim() ||
-    !compactParams.model?.trim()
-  ) {
-    return undefined;
-  }
+  const authProfileId = compactParams.authProfileId?.trim() || undefined;
   const workspaceDir = resolveUserPath(compactParams.workspaceDir);
   const { model } = await resolveModelAsync(
     compactParams.provider,
@@ -82,21 +77,34 @@ async function resolveHarnessCompactApiKey(params: {
     agentDir,
     compactParams.config,
     {
-      authProfileId: compactParams.authProfileId,
+      authProfileId,
       workspaceDir,
     },
   );
   if (!model) {
-    return undefined;
+    return existing ? { apiKey: existing } : {};
   }
-  const apiKeyInfo = await getApiKeyForModel({
-    model,
-    cfg: compactParams.config,
-    profileId: compactParams.authProfileId,
-    agentDir,
-    workspaceDir,
-  });
-  return apiKeyInfo.apiKey?.trim() || undefined;
+  if (existing) {
+    return { apiKey: existing, runtimeModel: model };
+  }
+  try {
+    const apiKeyInfo = await getApiKeyForModel({
+      model,
+      cfg: compactParams.config,
+      profileId: authProfileId,
+      agentDir,
+      workspaceDir,
+    });
+    return {
+      apiKey: apiKeyInfo.apiKey?.trim() || undefined,
+      runtimeModel: model,
+    };
+  } catch (err) {
+    log.debug("agent harness compaction credential lookup failed", {
+      error: formatErrorMessage(err),
+    });
+    return { runtimeModel: model };
+  }
 }
 
 /** Runs harness-provided compaction when the selected runtime supports it. */
@@ -169,20 +177,28 @@ export async function maybeCompactAgentHarnessSession(
     agentDir: compactIdentity.agentDir,
     agentId: compactIdentity.agentId,
   };
-  let resolvedApiKey: string | undefined;
+  let resolvedApiKey = compactParams.resolvedApiKey?.trim() || undefined;
+  let runtimeModel: Model | undefined;
   try {
-    resolvedApiKey = await resolveHarnessCompactApiKey({
+    const resolved = await resolveHarnessCompactApiKey({
       agentDir: compactIdentity.agentDir,
       compactParams,
     });
+    resolvedApiKey = resolved.apiKey;
+    runtimeModel = resolved.runtimeModel;
   } catch (err) {
     log.debug("agent harness compaction credential lookup failed", {
       error: formatErrorMessage(err),
     });
   }
-  const resolvedCompactParams = resolvedApiKey
-    ? { ...compactParams, resolvedApiKey }
-    : compactParams;
+  const resolvedCompactParams =
+    resolvedApiKey || runtimeModel
+      ? {
+          ...compactParams,
+          ...(resolvedApiKey ? { resolvedApiKey } : {}),
+          ...(runtimeModel ? { runtimeModel } : {}),
+        }
+      : compactParams;
   if (shouldCompactAfterContextEngine) {
     return internalHarness.compactAfterContextEngine?.(resolvedCompactParams);
   }

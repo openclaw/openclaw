@@ -152,7 +152,7 @@ function makeAudioMsg(overrides: AudioMessageOverrides = {}): WebInboundMsg {
     },
     platform,
     ...messageOverrides,
-  });
+  }) as WebInboundMsg;
 }
 
 function makeRoute(overrides: Partial<TestRoute> = {}): TestRoute {

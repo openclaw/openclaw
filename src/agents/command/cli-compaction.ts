@@ -7,8 +7,10 @@
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentCompactionMode } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized as ensureContextEnginesInitializedImpl } from "../../context-engine/init.js";
 import { resolveContextEngine as resolveContextEngineImpl } from "../../context-engine/registry.js";
+import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SkillSnapshot } from "../../skills/types.js";
@@ -198,8 +200,9 @@ function isUnsupportedNativeHarnessCompaction(
   return result?.ok === false && result.failure?.reason === "unsupported_harness_compaction";
 }
 
-function isBelowCompactionTargetReason(reason: string | undefined): boolean {
-  return classifyCompactionReason(reason) === "below_threshold";
+function isBenignCliCompactionNoopReason(reason: string | undefined): boolean {
+  const classification = classifyCompactionReason(reason);
+  return classification === "below_threshold" || classification === "already_compacted_recently";
 }
 
 function isIntentionalNativeAutoCompactionSkip(
@@ -284,6 +287,18 @@ async function compactCliTranscript(params: {
     contextTokenBudget: params.contextTokenBudget,
     trigger: "cli_budget",
   });
+  const runtimeSettings = buildContextEngineRuntimeSettings({
+    contextEngineHost: buildGenericCliContextEngineHostSupport({
+      backendId: params.provider,
+      capabilities: ["compact", "maintain"],
+    }),
+    provider: params.provider,
+    requestedModel: params.model,
+    resolvedModel: params.model,
+    selectedContextEngineId: params.contextEngine.info.id,
+    contextEngineSelectionSource: "configured",
+    promptTokenBudget: params.contextTokenBudget,
+  });
 
   let compactResult: Awaited<ReturnType<typeof params.contextEngine.compact>>;
   try {
@@ -298,22 +313,28 @@ async function compactCliTranscript(params: {
         force: true,
         compactionTarget: "budget",
         runtimeContext,
+        runtimeSettings,
       },
       resolveCompactionTimeoutMs(params.cfg),
     );
   } catch (error) {
-    log.warn(
-      `CLI transcript compaction failed for ${params.provider}/${params.model}: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    const reason = error instanceof Error ? error.message : String(error);
+    if (isBenignCliCompactionNoopReason(reason)) {
+      log.info(
+        `CLI transcript compaction skipped for ${params.provider}/${params.model}: ${reason}`,
+      );
+      return { compacted: false };
+    }
+    log.warn(`CLI transcript compaction failed for ${params.provider}/${params.model}: ${reason}`);
     return {
       compacted: false,
-      failureReason: error instanceof Error ? error.message : String(error),
+      failureReason: reason,
     };
   }
 
   if (!compactResult.compacted) {
     const reason = compactResult.reason ?? "nothing to compact";
-    if (isBelowCompactionTargetReason(reason)) {
+    if (isBenignCliCompactionNoopReason(reason)) {
       log.info(
         `CLI transcript compaction skipped for ${params.provider}/${params.model}: ${reason}`,
       );
@@ -337,6 +358,7 @@ async function compactCliTranscript(params: {
       reason: "compaction",
       sessionManager: params.sessionManager,
       runtimeContext,
+      runtimeSettings,
       config: params.cfg,
     });
   } catch (error) {
@@ -450,7 +472,7 @@ async function compactNativeHarnessCliTranscript(params: {
 
   if (!result?.compacted) {
     const reason = result?.reason ?? "nothing to compact";
-    if (isBelowCompactionTargetReason(reason)) {
+    if (isBenignCliCompactionNoopReason(reason)) {
       log.info(
         `CLI native harness compaction skipped for ${params.provider}/${params.model}: ${reason}`,
       );
@@ -663,6 +685,7 @@ export async function runCliTurnCompactionLifecycle(params: {
         sessionKey: params.sessionKey,
         sessionStore: params.sessionStore,
         storePath: params.storePath,
+        expectedSessionId: params.sessionId,
       })) ?? params.sessionEntry
     );
   }
@@ -680,6 +703,7 @@ export async function runCliTurnCompactionLifecycle(params: {
       tokensAfter: nativeCompactionResult?.result?.tokensAfter,
       newSessionId: nativeCompactionResult?.result?.sessionId,
       newSessionFile: nativeCompactionResult?.result?.sessionFile,
+      expectedSessionId: params.sessionId,
     })) ?? params.sessionEntry
   );
 }

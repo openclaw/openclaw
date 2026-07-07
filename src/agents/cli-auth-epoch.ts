@@ -32,7 +32,9 @@ const defaultCliAuthEpochDeps: CliAuthEpochDeps = {
 const cliAuthEpochDeps: CliAuthEpochDeps = { ...defaultCliAuthEpochDeps };
 
 /** Version salt for CLI auth epoch encoding semantics. */
-export const CLI_AUTH_EPOCH_VERSION = 5;
+export const CLI_AUTH_EPOCH_VERSION = 6;
+
+const GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
 
 /** Overrides credential readers for auth-epoch unit tests. */
 export function setCliAuthEpochTestDeps(overrides: Partial<CliAuthEpochDeps>): void {
@@ -159,7 +161,7 @@ function encodeAuthProfileEpochPart(
   credential: AuthProfileCredential,
 ): string {
   const credentialHash = hashCliAuthEpochPart(encodeAuthProfileCredential(credential));
-  if (hasOAuthAccountIdentity(credential)) {
+  if (hasOAuthAccountIdentity(credential) && credential.provider !== GEMINI_CLI_PROVIDER_ID) {
     return `profile:oauth-identity:${credentialHash}`;
   }
   return `profile:${authProfileId}:${credentialHash}`;
@@ -208,6 +210,7 @@ function getAuthProfileCredential(
 /** Resolves the stable auth epoch hash for a CLI runtime/provider session. */
 export async function resolveCliAuthEpoch(params: {
   provider: string;
+  agentDir?: string;
   authProfileId?: string;
   skipLocalCredential?: boolean;
 }): Promise<string | undefined> {
@@ -223,7 +226,7 @@ export async function resolveCliAuthEpoch(params: {
   }
 
   if (authProfileId) {
-    const store = cliAuthEpochDeps.loadAuthProfileStoreForRuntime(undefined, {
+    const store = cliAuthEpochDeps.loadAuthProfileStoreForRuntime(params.agentDir, {
       readOnly: true,
       allowKeychainPrompt: false,
     });

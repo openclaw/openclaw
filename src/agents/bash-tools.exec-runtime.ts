@@ -1,10 +1,6 @@
-/**
- * Bash exec runtime.
- * Spawns host/sandbox processes, manages session updates/backgrounding,
- * approval messaging constants, environment safety, and exit outcome shaping.
- */
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import {
   type EventSessionRoutingPolicy,
@@ -19,13 +15,15 @@ import {
   type ExecTarget,
 } from "../infra/exec-approvals.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
-import {
-  isDangerousHostInheritedEnvVarName,
-  sanitizeHostInheritedEnvEntry,
-} from "../infra/host-env-security.js";
 import { findPathKey, mergePathPrepend, removePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
+/**
+ * Bash exec runtime.
+ * Spawns host/sandbox processes, manages session updates/backgrounding,
+ * approval messaging constants, environment safety, and exit outcome shaping.
+ */
+import { formatFencedCodeBlock } from "../shared/markdown-code.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
@@ -92,40 +90,6 @@ export function detectCursorKeyMode(raw: string): "application" | "normal" | nul
   return lastSmkx > lastRmkx ? "application" : "normal";
 }
 
-/** Removes dangerous inherited host env vars before non-sandboxed execution. */
-export function sanitizeHostBaseEnv(env: Record<string, string>): Record<string, string> {
-  const sanitized: Record<string, string> = {};
-  for (const [key, value] of Object.entries(env)) {
-    const sanitizedEntry = sanitizeHostInheritedEnvEntry(key, value);
-    if (!sanitizedEntry) {
-      continue;
-    }
-    const [sanitizedKey, sanitizedValue] = sanitizedEntry;
-    sanitized[sanitizedKey] = sanitizedValue;
-  }
-  return sanitized;
-}
-/** Validates caller-provided host env, rejecting dangerous vars and PATH overrides. */
-export function validateHostEnv(env: Record<string, string>): void {
-  for (const key of Object.keys(env)) {
-    const upperKey = key.toUpperCase();
-
-    // 1. Block known dangerous variables (Fail Closed)
-    if (isDangerousHostInheritedEnvVarName(upperKey)) {
-      throw new Error(
-        `Security Violation: Environment variable '${key}' is forbidden during host execution.`,
-      );
-    }
-
-    // 2. Strictly block PATH modification on host
-    // Allowing custom PATH on the gateway/node can lead to binary hijacking.
-    if (upperKey === "PATH") {
-      throw new Error(
-        "Security Violation: Custom 'PATH' variable is forbidden during host execution.",
-      );
-    }
-  }
-}
 /** Default retained aggregate output cap for exec sessions. */
 export const DEFAULT_MAX_OUTPUT = clampWithDefault(
   readEnvInt("OPENCLAW_BASH_MAX_OUTPUT_CHARS", "PI_BASH_MAX_OUTPUT_CHARS"),
@@ -171,17 +135,21 @@ export type ExecProcessOutcome =
       status: "completed";
       exitCode: number;
       exitSignal: NodeJS.Signals | number | null;
+      exitReason?: TerminationReason;
       durationMs: number;
       aggregated: string;
       timedOut: false;
+      noOutputTimedOut?: boolean;
     }
   | {
       status: "failed";
       exitCode: number | null;
       exitSignal: NodeJS.Signals | number | null;
+      exitReason?: TerminationReason;
       durationMs: number;
       aggregated: string;
       timedOut: boolean;
+      noOutputTimedOut?: boolean;
       failureKind: ExecProcessFailureKind;
       reason: string;
     };
@@ -232,7 +200,7 @@ function emitExecProcessCompleted(params: {
 }
 
 /** Renders a host label for user-facing exec policy messages. */
-export function renderExecHostLabel(host: ExecHost) {
+function renderExecHostLabel(host: ExecHost) {
   return host === "sandbox" ? "sandbox" : host === "gateway" ? "gateway" : "node";
 }
 
@@ -326,7 +294,7 @@ function compactNotifyOutput(value: string, maxChars = DEFAULT_NOTIFY_SNIPPET_CH
     return normalized;
   }
   const safe = Math.max(1, maxChars - 1);
-  return `${normalized.slice(0, safe)}…`;
+  return `${truncateUtf16Safe(normalized, safe)}…`;
 }
 
 /** Merges shell-discovered PATH entries into an exec environment. */
@@ -411,11 +379,7 @@ export function buildApprovalPendingMessage(params: {
   host: "gateway" | "node";
   nodeId?: string;
 }) {
-  let fence = "```";
-  while (params.command.includes(fence)) {
-    fence += "`";
-  }
-  const commandBlock = `${fence}sh\n${params.command}\n${fence}`;
+  const commandBlock = formatFencedCodeBlock(params.command, "sh");
   const lines: string[] = [];
   const allowedDecisions = params.allowedDecisions ?? resolveExecApprovalAllowedDecisions();
   const decisionText = allowedDecisions.join("|");
@@ -456,53 +420,6 @@ export function resolveApprovalRunningNoticeMs(value?: number) {
     return 0;
   }
   return Math.floor(value);
-}
-
-/** Emits an exec system event and wakes the routed session when appropriate. */
-export function emitExecSystemEvent(
-  text: string,
-  opts: {
-    sessionKey?: string;
-    contextKey?: string;
-    deliveryContext?: DeliveryContext;
-    /** `session.mainKey` from the runtime config; pass-through of `undefined`
-     *  falls back to the literal "main" default in `resolveEventSessionKey`. */
-    mainKey?: string;
-    /** `session.scope` from the runtime config; needed so global-scope
-     *  agents route cron-run events to the "global" queue. */
-    sessionScope?: "per-sender" | "global";
-    eventRouting?: EventSessionRoutingPolicy;
-  },
-) {
-  const sessionKey = opts.sessionKey?.trim();
-  if (!sessionKey) {
-    return;
-  }
-  const eventRouting = opts.eventRouting ?? {
-    mainKey: opts.mainKey,
-    sessionScope: opts.sessionScope,
-  };
-  enqueueSystemEvent(text, {
-    sessionKey: resolveEventSessionKeyForPolicy(sessionKey, eventRouting),
-    contextKey: opts.contextKey,
-    deliveryContext: opts.deliveryContext,
-  });
-  // Subagent sessions receive exec results via process poll and announce flow;
-  // the heartbeat would fall back to the main session and cause spurious wakes.
-  if (!isSubagentSessionKey(sessionKey)) {
-    requestHeartbeat(
-      scopedHeartbeatWakeOptionsForPolicy(
-        sessionKey,
-        {
-          source: "exec-event",
-          intent: "event",
-          reason: "exec-event",
-          coalesceMs: 0,
-        },
-        eventRouting,
-      ),
-    );
-  }
 }
 
 export { renderExecUpdateText } from "./bash-tools.exec-output.js";
@@ -575,9 +492,11 @@ export function buildExecExitOutcome(params: {
       status: "completed",
       exitCode,
       exitSignal: params.exit.exitSignal,
+      exitReason: params.exit.reason,
       durationMs: params.durationMs,
       aggregated: params.aggregated + exitMsg,
       timedOut: false,
+      noOutputTimedOut: params.exit.noOutputTimedOut,
     };
   }
   const failureKind = classifyExecFailureKind({
@@ -595,9 +514,11 @@ export function buildExecExitOutcome(params: {
     status: "failed",
     exitCode: params.exit.exitCode,
     exitSignal: params.exit.exitSignal,
+    exitReason: params.exit.reason,
     durationMs: params.durationMs,
     aggregated: params.aggregated,
     timedOut: params.exit.timedOut,
+    noOutputTimedOut: params.exit.noOutputTimedOut,
     failureKind,
     reason: joinExecFailureOutput(params.aggregated, reason),
   };
@@ -800,6 +721,21 @@ export async function runExecProcess(opts: {
 
   const timeoutMs = resolveExecTimeoutMs(opts.timeoutSec);
   let sandboxFinalizeToken: unknown;
+  let sandboxFinalized = false;
+  const finalizeSandboxExec = async (params: {
+    status: "completed" | "failed";
+    exitCode: number | null;
+    timedOut: boolean;
+  }) => {
+    if (sandboxFinalized || !opts.sandbox?.finalizeExec) {
+      return;
+    }
+    sandboxFinalized = true;
+    await opts.sandbox.finalizeExec({
+      ...params,
+      token: sandboxFinalizeToken,
+    });
+  };
 
   const spawnSpec:
     | {
@@ -946,6 +882,13 @@ export async function runExecProcess(opts: {
       } catch (retryErr) {
         markExited(session, null, null, "failed");
         maybeNotifyOnExit(session, "failed");
+        await finalizeSandboxExec({
+          status: "failed",
+          exitCode: null,
+          timedOut: false,
+        }).catch((finalizeErr: unknown) => {
+          logWarn(`exec: sandbox finalize after spawn failure failed (${String(finalizeErr)}).`);
+        });
         emitExecProcessCompleted({
           command: opts.command,
           mode: "child",
@@ -962,6 +905,13 @@ export async function runExecProcess(opts: {
     } else {
       markExited(session, null, null, "failed");
       maybeNotifyOnExit(session, "failed");
+      await finalizeSandboxExec({
+        status: "failed",
+        exitCode: null,
+        timedOut: false,
+      }).catch((finalizeErr: unknown) => {
+        logWarn(`exec: sandbox finalize after spawn failure failed (${String(finalizeErr)}).`);
+      });
       emitExecProcessCompleted({
         command: opts.command,
         mode: spawnSpec.mode,
@@ -995,19 +945,23 @@ export async function runExecProcess(opts: {
         timeoutSec: opts.timeoutSec,
       });
 
-      markExited(session, exit.exitCode, exit.exitSignal, outcome.status, exit.reason);
+      markExited(
+        session,
+        exit.exitCode,
+        exit.exitSignal,
+        outcome.status,
+        exit.reason,
+        exit.noOutputTimedOut,
+      );
       maybeNotifyOnExit(session, outcome.status);
       if (!session.child && session.stdin) {
         session.stdin.destroyed = true;
       }
-      if (opts.sandbox?.finalizeExec) {
-        await opts.sandbox.finalizeExec({
-          status: outcome.status,
-          exitCode: exit.exitCode ?? null,
-          timedOut: exit.timedOut,
-          token: sandboxFinalizeToken,
-        });
-      }
+      await finalizeSandboxExec({
+        status: outcome.status,
+        exitCode: exit.exitCode ?? null,
+        timedOut: exit.timedOut,
+      });
       emitExecProcessCompleted({
         command: opts.command,
         mode: usingPty ? "pty" : "child",

@@ -13,6 +13,8 @@ const DEFAULT_WINDOWS_EXTENSION_CHUNK_SIZE = 8;
 const DEFAULT_SHARD_HEARTBEAT_MS = 30_000;
 const DEFAULT_SHARD_TIMEOUT_MS = 15 * 60_000;
 const DEFAULT_SHARD_KILL_GRACE_MS = 5_000;
+const POST_FORCE_KILL_WAIT_MS = 1_000;
+const PROCESS_GROUP_EXIT_POLL_MS = 25;
 const DEFAULT_SPLIT_CORE_SHARD_CONCURRENCY = 4;
 const FAST_LOCAL_CHECK_MIN_CPUS = 12;
 const FAST_LOCAL_CHECK_MIN_MEMORY_BYTES = 48 * 1024 ** 3;
@@ -443,6 +445,7 @@ export async function runShard({ env, extraArgs, runner, shard }) {
     let finished = false;
     let timedOut = false;
     let forceKill = null;
+    let forceKillAt = null;
     const heartbeat =
       heartbeatMs > 0
         ? setInterval(() => {
@@ -461,6 +464,7 @@ export async function runShard({ env, extraArgs, runner, shard }) {
             );
             signalChildProcess({ child, signal: "SIGTERM", useProcessGroup });
             if (killGraceMs > 0) {
+              forceKillAt = Date.now() + killGraceMs;
               forceKill = setTimeout(() => {
                 console.error(`[oxlint:${shard.name}] did not exit cleanly; killing shard`);
                 signalChildProcess({ child, signal: "SIGKILL", useProcessGroup });
@@ -486,22 +490,49 @@ export async function runShard({ env, extraArgs, runner, shard }) {
       if (forceKill) {
         clearTimeout(forceKill);
       }
+      forceKillAt = null;
       unregisterShardChild();
       console.error(`[oxlint:${shard.name}] finished`);
       resolve(status);
+    };
+    const finishAfterForcedTeardown = async (status) => {
+      const graceRemainingMs =
+        forceKillAt === null ? killGraceMs : Math.max(0, forceKillAt - Date.now());
+      if (graceRemainingMs > 0) {
+        await waitForChildProcessGroupExit({
+          child,
+          timeoutMs: graceRemainingMs,
+          useProcessGroup,
+        });
+      }
+      if (isChildProcessGroupAlive({ child, useProcessGroup })) {
+        signalChildProcess({ child, signal: "SIGKILL", useProcessGroup });
+      }
+      await waitForChildProcessGroupExit({
+        child,
+        timeoutMs: POST_FORCE_KILL_WAIT_MS,
+        useProcessGroup,
+      });
+      finish(status);
     };
     child.once("error", (error) => {
       console.error(error);
       finish(1);
     });
     child.once("close", (status) => {
-      finish(
-        parentTerminationSignal
-          ? getSignalExitCode(parentTerminationSignal)
-          : timedOut
-            ? 124
-            : (status ?? 1),
-      );
+      const exitStatus = parentTerminationSignal
+        ? getSignalExitCode(parentTerminationSignal)
+        : timedOut
+          ? 124
+          : (status ?? 1);
+      if (
+        (timedOut || parentTerminationSignal) &&
+        isChildProcessGroupAlive({ child, useProcessGroup })
+      ) {
+        void finishAfterForcedTeardown(exitStatus);
+        return;
+      }
+      finish(exitStatus);
     });
   });
 }
@@ -602,6 +633,31 @@ function signalChildProcess({ child, signal, useProcessGroup }) {
       console.error(error);
     }
   }
+}
+
+function isChildProcessGroupAlive({ child, useProcessGroup }) {
+  if (!useProcessGroup || !child.pid) {
+    return false;
+  }
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
+
+async function waitForChildProcessGroupExit({ child, timeoutMs, useProcessGroup }) {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (!isChildProcessGroupAlive({ child, useProcessGroup })) {
+      return true;
+    }
+    await new Promise((resolvePoll) => {
+      setTimeout(resolvePoll, PROCESS_GROUP_EXIT_POLL_MS);
+    });
+  }
+  return !isChildProcessGroupAlive({ child, useProcessGroup });
 }
 
 function registerShardChild(entry) {

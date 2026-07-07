@@ -1,4 +1,5 @@
 // Openrouter provider module implements model/runtime integration.
+import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
 import type {
   MusicGenerationProvider,
   MusicGenerationRequest,
@@ -46,7 +47,7 @@ function imageToContentPart(image: MusicGenerationSourceImage): {
   const url =
     normalizeOptionalString(image.url) ??
     (image.buffer
-      ? `data:${normalizeOptionalString(image.mimeType) ?? "image/png"};base64,${image.buffer.toString("base64")}`
+      ? toImageDataUrl({ ...image, buffer: image.buffer, defaultMimeType: "image/png" })
       : undefined);
   if (!url) {
     throw new Error("OpenRouter music generation reference image is missing data.");
@@ -179,40 +180,46 @@ async function readOpenRouterAudioStream(
   const result = { audioBuffers: [] as Buffer[], transcriptChunks: [] as string[] };
   let buffer = "";
   let doneSeen = false;
-  for (;;) {
-    const { value, done } = await readOpenRouterStreamChunk(reader, deadline);
-    if (done) {
-      break;
-    }
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split(/\r?\n/u);
-    buffer = lines.pop() ?? "";
-    for (const line of lines) {
-      if (processOpenRouterSseLine(line.trim(), result)) {
-        await reader.cancel();
-        return {
-          audioBuffer: Buffer.concat(result.audioBuffers),
-          transcript: result.transcriptChunks.join(""),
-        };
+  try {
+    for (;;) {
+      const { value, done } = await readOpenRouterStreamChunk(reader, deadline);
+      if (done) {
+        break;
+      }
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split(/\r?\n/u);
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        if (processOpenRouterSseLine(line.trim(), result)) {
+          await reader.cancel();
+          return {
+            audioBuffer: Buffer.concat(result.audioBuffers),
+            transcript: result.transcriptChunks.join(""),
+          };
+        }
       }
     }
-  }
-  resolveOpenRouterStreamRemainingMs(deadline);
-  buffer += decoder.decode();
-  if (buffer.trim()) {
-    for (const line of buffer.split(/\r?\n/u)) {
-      if (processOpenRouterSseLine(line.trim(), result)) {
-        doneSeen = true;
+    resolveOpenRouterStreamRemainingMs(deadline);
+    buffer += decoder.decode();
+    if (buffer.trim()) {
+      for (const line of buffer.split(/\r?\n/u)) {
+        if (processOpenRouterSseLine(line.trim(), result)) {
+          doneSeen = true;
+        }
       }
     }
+    if (!doneSeen) {
+      throw new Error("OpenRouter music generation stream ended before completion");
+    }
+    return {
+      audioBuffer: Buffer.concat(result.audioBuffers),
+      transcript: result.transcriptChunks.join(""),
+    };
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {}
   }
-  if (!doneSeen) {
-    throw new Error("OpenRouter music generation stream ended before completion");
-  }
-  return {
-    audioBuffer: Buffer.concat(result.audioBuffers),
-    transcript: result.transcriptChunks.join(""),
-  };
 }
 
 export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvider {
@@ -329,7 +336,3 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
     },
   };
 }
-
-export const openRouterMusicTestInternals = {
-  readOpenRouterAudioStream,
-};

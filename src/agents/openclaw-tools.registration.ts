@@ -23,7 +23,7 @@ export function collectPresentOpenClawTools(
 }
 
 /** Resolves the default update_plan switch from explicit config or strict execution contract. */
-export function isUpdatePlanToolEnabledForOpenClawTools(params: {
+function isUpdatePlanToolEnabledForOpenClawTools(params: {
   config?: OpenClawConfig;
   agentSessionKey?: string;
   agentId?: string | null;

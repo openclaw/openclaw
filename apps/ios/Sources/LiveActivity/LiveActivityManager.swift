@@ -7,7 +7,7 @@ import os
 final class LiveActivityManager {
     static let shared = LiveActivityManager()
 
-    private let logger = Logger(subsystem: "ai.openclaw.ios", category: "LiveActivity")
+    private let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "LiveActivity")
     private let connectingStaleSeconds: TimeInterval = 120
     private let hydrationStaleSeconds: TimeInterval = 300
     private var currentActivity: Activity<OpenClawActivityAttributes>?

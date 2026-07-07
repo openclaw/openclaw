@@ -13,6 +13,7 @@ import type {
 } from "../../channels/plugins/types.public.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readTrimmedStringAlias } from "../../utils/string-readers.js";
 import { createOutboundPayloadPlan, projectOutboundPayloadPlanForMirror } from "./payloads.js";
 
 type SourceReplyTranscriptMirrorParams = {
@@ -48,13 +49,7 @@ function readFirstString(
   params: Record<string, unknown>,
   keys: readonly string[],
 ): string | undefined {
-  for (const key of keys) {
-    const value = normalizeOptionalString(params[key]);
-    if (value) {
-      return value;
-    }
-  }
-  return undefined;
+  return readTrimmedStringAlias(params, keys);
 }
 
 function resolveSourceReplyTarget(params: Record<string, unknown>): string | undefined {

@@ -7,7 +7,6 @@ export {
   resolveDefaultAgentId,
   resolveSessionAgentId,
 } from "../../../../src/agents/agent-scope.js";
-export { requireApiKey, resolveApiKeyForProvider } from "../../../../src/agents/model-auth.js";
 export { stripInternalRuntimeContext } from "../../../../src/agents/internal-runtime-context.js";
 export { DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR } from "../../../../src/agents/agent-settings.js";
 export {
@@ -54,7 +53,14 @@ export {
   isUsageCountedSessionTranscriptFileName,
   parseUsageCountedSessionIdFromFileName,
 } from "../../../../src/config/sessions/artifacts.js";
+export { canonicalizeMainSessionAlias } from "../../../../src/config/sessions/main-session.js";
 export { resolveSessionTranscriptsDirForAgent } from "../../../../src/config/sessions/paths.js";
+export {
+  listSessionEntries,
+  resolveSessionFilePath,
+  resolveStorePath,
+} from "../../../../src/plugin-sdk/session-store-runtime.js";
+export type { SessionEntry } from "../../../../src/config/sessions/types.js";
 export type { SessionSendPolicyConfig } from "../../../../src/config/types.base.js";
 export type {
   MemoryBackend,
@@ -75,13 +81,7 @@ export { isVerbose, setVerbose } from "../../../../src/globals.js";
 // IO, network, and logging helpers.
 export { isExecCompletionEvent } from "../../../../src/infra/heartbeat-events-filter.js";
 export { root } from "../../../../src/infra/fs-safe.js";
-export { fetchWithSsrFGuard } from "../../../../src/infra/net/fetch-guard.js";
-export { shouldUseEnvHttpProxyForUrl } from "../../../../src/infra/net/proxy-env.js";
-export { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "../../../../src/infra/net/ssrf.js";
 export {
-  DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES,
-  DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS,
-  DEFAULT_SQLITE_WAL_TRUNCATE_INTERVAL_MS,
   configureSqliteConnectionPragmas,
   configureSqliteWalMaintenance,
 } from "../../../../src/infra/sqlite-wal.js";
@@ -90,11 +90,7 @@ export type {
   SqliteWalMaintenance,
   SqliteWalMaintenanceOptions,
 } from "../../../../src/infra/sqlite-wal.js";
-export {
-  installProcessWarningFilter,
-  shouldIgnoreWarning,
-} from "../../../../src/infra/warning-filter.js";
-export type { ProcessWarning } from "../../../../src/infra/warning-filter.js";
+export { installProcessWarningFilter } from "../../../../src/infra/warning-filter.js";
 export { redactSensitiveText } from "../../../../src/logging/redact.js";
 export { createSubsystemLogger } from "../../../../src/logging/subsystem.js";
 export { detectMime } from "@openclaw/media-core/mime";
@@ -155,19 +151,7 @@ export {
   truncateUtf16Safe,
 } from "../../../../src/utils.js";
 export {
-  applyWindowsSpawnProgramPolicy,
   materializeWindowsSpawnProgram,
-  resolveWindowsExecutablePath,
   resolveWindowsSpawnProgram,
-  resolveWindowsSpawnProgramCandidate,
-} from "../../../../src/plugin-sdk/windows-spawn.js";
-export type {
-  ResolveWindowsSpawnProgramCandidateParams,
-  ResolveWindowsSpawnProgramParams,
-  WindowsSpawnCandidateResolution,
-  WindowsSpawnInvocation,
-  WindowsSpawnProgram,
-  WindowsSpawnProgramCandidate,
-  WindowsSpawnResolution,
 } from "../../../../src/plugin-sdk/windows-spawn.js";
 export { resolveGlobalSingleton } from "../../../../src/shared/global-singleton.js";

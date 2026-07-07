@@ -7,7 +7,7 @@ import {
   type RuntimeHealthRecordEnvelope,
 } from "../plugin-state/runtime-health-store.js";
 
-export type RuntimeToolSchemaQuarantine = {
+type RuntimeToolSchemaQuarantine = {
   toolName: string;
   owner?: string;
   reason: string;

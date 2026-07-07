@@ -11,9 +11,33 @@ export type IMessageAttachment = {
   uti?: string | null;
 };
 
+export type IMessagePollOption = {
+  id: string;
+  text: string;
+};
+
+export type IMessagePollVote = {
+  option_id?: string | null;
+  option_text?: string | null;
+  participant?: string | null;
+  event_type?: string | null;
+};
+
+export type IMessagePoll = {
+  kind?: string | null;
+  question?: string | null;
+  poll_guid?: string | null;
+  original_guid?: string | null;
+  creator?: string | null;
+  options?: IMessagePollOption[] | null;
+  vote?: IMessagePollVote | null;
+  votes?: IMessagePollVote[] | null;
+};
+
 export type IMessagePayload = {
   id?: number | null;
   guid?: string | null;
+  poll?: IMessagePoll | null;
   chat_id?: number | null;
   sender?: string | null;
   destination_caller_id?: string | null;
@@ -21,6 +45,10 @@ export type IMessagePayload = {
   is_from_me?: boolean | null;
   text?: string | null;
   reply_to_id?: number | string | null;
+  // imsg emits the replied-to message's GUID here (its inbound events carry
+  // `reply_to_guid`, not a numeric `reply_to_id`); the poll-comment fold matches
+  // a caption's `reply_to_guid` against the poll balloon's guid.
+  reply_to_guid?: string | null;
   reply_to_text?: string | null;
   reply_to_sender?: string | null;
   created_at?: string | null;

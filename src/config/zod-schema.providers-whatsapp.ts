@@ -180,6 +180,7 @@ const WhatsAppConfigObjectSchema = z
         reactions: z.boolean().optional(),
         sendMessage: z.boolean().optional(),
         polls: z.boolean().optional(),
+        calls: z.boolean().optional(),
       })
       .strict()
       .optional(),

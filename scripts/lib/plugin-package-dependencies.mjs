@@ -27,7 +27,10 @@ export function packageNameFromSpecifier(specifier) {
   if (!first) {
     return null;
   }
-  return first.startsWith("@") && second ? `${first}/${second}` : first;
+  if (first.startsWith("@")) {
+    return second ? `${first}/${second}` : null;
+  }
+  return first;
 }
 
 /** Collect runtime dependency specs across bundled plugin packages and note conflicts. */

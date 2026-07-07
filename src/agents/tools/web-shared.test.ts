@@ -1,5 +1,5 @@
-// Shared web helper tests cover timeout normalization and process-local cache
-// expiry guards.
+// Shared web helper tests cover timeout normalization, process-local cache
+// expiry guards, and bounded response body cleanup.
 import {
   MAX_TIMER_TIMEOUT_MS,
   MAX_TIMER_TIMEOUT_SECONDS,
@@ -7,6 +7,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   readCache,
+  readResponseText,
   resolvePositiveTimeoutSeconds,
   resolveTimeoutSeconds,
   withTimeout,
@@ -17,6 +18,28 @@ import {
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+function responseFromReader(params: {
+  chunks: string[];
+  cancel: () => Promise<void>;
+  releaseLock: () => void;
+}): Response {
+  const chunks: Array<ReadableStreamReadResult<Uint8Array>> = params.chunks.map((chunk) => ({
+    done: false,
+    value: new TextEncoder().encode(chunk),
+  }));
+  chunks.push({ done: true, value: undefined });
+  const reader = {
+    read: async () => chunks.shift() ?? { done: true, value: undefined },
+    cancel: params.cancel,
+    releaseLock: params.releaseLock,
+  } as ReadableStreamDefaultReader<Uint8Array>;
+
+  return {
+    body: { getReader: () => reader },
+    headers: new Headers({ "content-type": "text/plain; charset=utf-8" }),
+  } as Response;
+}
 
 describe("web shared timeout seconds", () => {
   it("caps timeoutSeconds at the shared timer-safe ceiling", () => {
@@ -84,5 +107,87 @@ describe("web shared withTimeout", () => {
     signal.dispatchEvent(new Event("abort"));
 
     expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+  });
+});
+
+describe("readResponseText", () => {
+  it("releases bounded response readers after complete reads", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const releaseLock = vi.fn();
+    const response = responseFromReader({
+      chunks: ["hello", " world"],
+      cancel,
+      releaseLock,
+    });
+
+    await expect(readResponseText(response, { maxBytes: 64 })).resolves.toEqual({
+      text: "hello world",
+      truncated: false,
+      bytesRead: 11,
+    });
+    expect(cancel).not.toHaveBeenCalled();
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels and releases bounded response readers after truncation", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const releaseLock = vi.fn();
+    const response = responseFromReader({
+      chunks: ["hello world"],
+      cancel,
+      releaseLock,
+    });
+
+    await expect(readResponseText(response, { maxBytes: 5 })).resolves.toEqual({
+      text: "hello",
+      truncated: true,
+      bytesRead: 5,
+    });
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not invoke whole-body fallbacks when maxBytes is set", async () => {
+    const arrayBuffer = vi.fn(async () => new TextEncoder().encode("hello").buffer);
+    const text = vi.fn(async () => "hello");
+    const response = {
+      arrayBuffer,
+      headers: new Headers(),
+      text,
+    } as unknown as Response;
+
+    await expect(readResponseText(response, { maxBytes: 4 })).resolves.toEqual({
+      text: "",
+      truncated: true,
+      bytesRead: 0,
+    });
+    expect(arrayBuffer).not.toHaveBeenCalled();
+    expect(text).not.toHaveBeenCalled();
+  });
+
+  it("treats a native bodyless response as empty when maxBytes is set", async () => {
+    await expect(
+      readResponseText(new Response(null, { status: 204 }), { maxBytes: 4 }),
+    ).resolves.toEqual({
+      text: "",
+      truncated: false,
+      bytesRead: 0,
+    });
+  });
+
+  it("preserves uncapped text-only fallback byte accounting", async () => {
+    const value = "中文🔥";
+    const text = vi.fn(async () => value);
+    const response = {
+      headers: new Headers(),
+      text,
+    } as unknown as Response;
+
+    await expect(readResponseText(response)).resolves.toEqual({
+      text: value,
+      truncated: false,
+      bytesRead: new TextEncoder().encode(value).byteLength,
+    });
+    expect(text).toHaveBeenCalledTimes(1);
   });
 });

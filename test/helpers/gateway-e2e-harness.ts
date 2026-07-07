@@ -11,13 +11,6 @@ import { createOpenClawTestInstance, type OpenClawTestInstance } from "./opencla
 
 export { extractFirstTextBlock };
 
-export type ChatEventPayload = {
-  runId?: string;
-  sessionKey?: string;
-  state?: string;
-  message?: unknown;
-};
-
 export type GatewayInstance = OpenClawTestInstance;
 
 const GATEWAY_CONNECT_STATUS_TIMEOUT_MS = 10_000;
@@ -243,31 +236,4 @@ export async function waitForNodeStatus(
   }
   const suffix = lastError instanceof Error ? `: ${lastError.message}` : "";
   throw new Error(`timeout waiting for node status for ${nodeId}${suffix}`);
-}
-
-export async function waitForChatFinalEvent(params: {
-  events: ChatEventPayload[];
-  runId: string;
-  sessionKey: string;
-  timeoutMs?: number;
-}): Promise<ChatEventPayload> {
-  const deadline = Date.now() + (params.timeoutMs ?? 45_000);
-  while (Date.now() < deadline) {
-    const match = params.events.find(
-      (evt) =>
-        evt.runId === params.runId && evt.sessionKey === params.sessionKey && evt.state === "final",
-    );
-    if (match) {
-      return match;
-    }
-    await sleep(20);
-  }
-  const observed = params.events
-    .filter((evt) => evt.runId === params.runId || evt.sessionKey === params.sessionKey)
-    .map((evt) => `${evt.runId ?? "no-run"}:${evt.sessionKey ?? "no-session"}:${evt.state}`)
-    .slice(-10)
-    .join(", ");
-  throw new Error(
-    `timeout waiting for final chat event (runId=${params.runId}, sessionKey=${params.sessionKey}, observed=${observed || "none"})`,
-  );
 }

@@ -4,7 +4,7 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
-import { detectMime } from "@openclaw/media-core/mime";
+import { detectMime, kindFromMime } from "@openclaw/media-core/mime";
 import {
   asDateTimestampMs,
   resolveTimestampMsToIsoString,
@@ -23,7 +23,11 @@ import { verifyPairingToken } from "../infra/pairing-token.js";
 import { isWithinDir } from "../infra/path-safety.js";
 import { assertLocalMediaAllowed, getDefaultLocalRoots } from "../media/local-media-access.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
-import { resolveMediaReferenceLocalPath } from "../media/media-reference.js";
+import {
+  resolveMediaReferenceLocalPath,
+  resolveMediaReferenceLocalPathInfo,
+} from "../media/media-reference.js";
+import { extractOriginalFilename } from "../media/store.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
@@ -36,6 +40,7 @@ import {
 import { authorizeHttpGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
+  CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
   type ControlUiBootstrapConfig,
 } from "./control-ui-contract.js";
 import { buildControlUiCspHeader, computeInlineScriptHashes } from "./control-ui-csp.js";
@@ -71,9 +76,22 @@ const CONTROL_UI_OPERATOR_READ_SCOPE = "operator.read";
 const CONTROL_UI_OPERATOR_ROLE = "operator";
 const controlUiAssistantMediaTicketSecret = randomBytes(32);
 
-export type ControlUiRequestOptions = {
+function buildAssistantMediaContentDisposition(filename: string, mime?: string): string {
+  // Keep the RFC 6266 fallback ASCII; filename* carries the exact UTF-8 name.
+  const fallback = filename.replace(/[^\x20-\x7e]|[%"\\]/g, "_") || "download";
+  const extended = encodeURIComponent(filename).replace(
+    /[\x27()*]/g,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  const kind = kindFromMime(mime);
+  const inline = kind === "image" || kind === "audio" || kind === "video";
+  return `${inline ? "inline" : "attachment"}; filename="${fallback}"; filename*=UTF-8''${extended}`;
+}
+
+type ControlUiRequestOptions = {
   basePath?: string;
   config?: OpenClawConfig;
+  terminalEnabled?: boolean;
   agentId?: string;
   root?: ControlUiRootState;
   auth?: ResolvedGatewayAuth;
@@ -154,7 +172,22 @@ const CONTROL_UI_ROOT_PUBLIC_ASSETS = new Set([
   "sw.js",
 ]);
 
-export type ControlUiAvatarResolution =
+/** Rewrites root-absolute Control UI public asset hrefs for configured base paths. */
+export function rewriteControlUiIndexHtmlPublicAssetHrefs(html: string, basePath: string): string {
+  const normalized = normalizeControlUiBasePath(basePath);
+  if (!normalized) {
+    return html;
+  }
+  let next = html;
+  for (const asset of CONTROL_UI_ROOT_PUBLIC_ASSETS) {
+    const rootHref = `href="/${asset}"`;
+    const baseHref = `href="${normalized}/${asset}"`;
+    next = next.split(rootHref).join(baseHref);
+  }
+  return next;
+}
+
+type ControlUiAvatarResolution =
   | { kind: "none"; reason: string; source?: string | null }
   | { kind: "local"; filePath: string; source?: string | null }
   | { kind: "remote"; url: string; source?: string | null }
@@ -600,7 +633,8 @@ export async function handleControlUiAssistantMediaRequest(
     await opened.handle.close().catch(() => {});
   };
   try {
-    localPath = await resolveMediaReferenceLocalPath(source);
+    const resolvedReference = await resolveMediaReferenceLocalPathInfo(source);
+    localPath = resolvedReference.path;
     await assertLocalMediaAllowed(localPath, localRoots);
     opened = await openLocalFileSafely({ filePath: localPath });
     const sniffLength = Math.min(opened.stat.size, 8192);
@@ -613,11 +647,16 @@ export async function handleControlUiAssistantMediaRequest(
       buffer: sniffBuffer?.subarray(0, bytesRead),
       filePath: localPath,
     });
-    if (mime) {
-      res.setHeader("Content-Type", mime);
-    } else {
-      res.setHeader("Content-Type", "application/octet-stream");
-    }
+    const contentType = mime ?? "application/octet-stream";
+    const filename =
+      resolvedReference.kind === "inbound"
+        ? extractOriginalFilename(localPath)
+        : path.basename(localPath);
+    res.setHeader("Content-Type", contentType);
+    res.setHeader(
+      "Content-Disposition",
+      buildAssistantMediaContentDisposition(filename, contentType),
+    );
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Content-Length", String(opened.stat.size));
     const stream = opened.handle.createReadStream({ start: 0, autoClose: false });
@@ -743,17 +782,29 @@ function serveResolvedFile(res: ServerResponse, filePath: string, body: Buffer) 
   res.end(body);
 }
 
-function serveResolvedIndexHtml(res: ServerResponse, body: string) {
-  const hashes = computeInlineScriptHashes(body);
-  if (hashes.length > 0) {
-    res.setHeader(
-      "Content-Security-Policy",
-      buildControlUiCspHeader({ inlineScriptHashes: hashes }),
-    );
-  }
+function serveResolvedIndexHtml(
+  res: ServerResponse,
+  body: string,
+  basePath?: string,
+  allowWasm?: boolean,
+) {
+  const withBasePath = rewriteControlUiIndexHtmlPublicAssetHrefs(body, basePath ?? "");
+  // Let the app initialize fail-closed without guessing whether this document
+  // was served with the terminal's WASM CSP allowance.
+  const prepared = withBasePath.replace(
+    /<html\b/i,
+    `<html ${CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE}="${allowWasm === true}"`,
+  );
+  const hashes = computeInlineScriptHashes(prepared);
+  // Always set the document CSP here (the index carries inline scripts) so the
+  // terminal's WASM relaxation is applied to the page that loads ghostty-web.
+  res.setHeader(
+    "Content-Security-Policy",
+    buildControlUiCspHeader({ inlineScriptHashes: hashes, allowWasm }),
+  );
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
-  res.end(body);
+  res.end(prepared);
 }
 
 function readOpenedFile(fd: number): Promise<Buffer> {
@@ -905,6 +956,10 @@ export async function handleControlUiHttpRequest(
   const url = new URL(urlRaw, "http://localhost");
   const basePath = normalizeControlUiBasePath(opts?.basePath);
   const pathname = url.pathname;
+  // The embedded terminal ships ghostty-web (WASM); relax the index CSP only
+  // for an explicitly enabled terminal so the default policy stays strict.
+  const terminalEnabled =
+    opts?.terminalEnabled ?? opts?.config?.gateway?.terminal?.enabled === true;
   const route = classifyControlUiRequest({
     basePath,
     pathname,
@@ -979,7 +1034,9 @@ export async function handleControlUiHttpRequest(
             : "scripts",
       allowExternalEmbedUrls: config?.gateway?.controlUi?.allowExternalEmbedUrls === true,
       chatMessageMaxWidth: config?.gateway?.controlUi?.chatMessageMaxWidth,
+      seamColor: config?.ui?.seamColor,
       timeFormat: config?.agents?.defaults?.timeFormat,
+      terminalEnabled,
     } satisfies ControlUiBootstrapConfig);
     return true;
   }
@@ -1069,7 +1126,12 @@ export async function handleControlUiHttpRequest(
         return true;
       }
       if (path.basename(safeFile.path) === "index.html") {
-        serveResolvedIndexHtml(res, await readOpenedFileText(safeFile.fd));
+        serveResolvedIndexHtml(
+          res,
+          await readOpenedFileText(safeFile.fd),
+          basePath,
+          terminalEnabled,
+        );
         return true;
       }
       serveResolvedFile(res, safeFile.path, await readOpenedFile(safeFile.fd));
@@ -1097,7 +1159,12 @@ export async function handleControlUiHttpRequest(
       if (respondHeadForFile(req, res, safeIndex.path)) {
         return true;
       }
-      serveResolvedIndexHtml(res, await readOpenedFileText(safeIndex.fd));
+      serveResolvedIndexHtml(
+        res,
+        await readOpenedFileText(safeIndex.fd),
+        basePath,
+        terminalEnabled,
+      );
       return true;
     } finally {
       fs.closeSync(safeIndex.fd);

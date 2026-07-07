@@ -230,17 +230,13 @@ export function resolveIncompleteTurnPayloadText(params: {
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): string | null {
-  // Tool-use terminal guard: when the last assistant message ended with a
-  // tool-call stop reason, the model expected to continue after tool results.
-  // Pre-tool text alone (payloadCount > 0) must not suppress the incomplete-
-  // turn check in that case — the final post-tool response was never
-  // produced. (#76477)
-  const toolUseTerminal = params.attempt.lastAssistant?.stopReason === "toolUse";
+  // Prefer the current attempt's terminal message. The session fallback can
+  // still point at the pre-tool turn after a post-tool answer completes. (#80918)
   const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
   const hasTerminalOutput = hasAttemptTerminalState(params.attempt);
-  // A length terminal is provider-confirmed output-budget exhaustion. Partial
-  // visible text is not a complete final answer and must not bypass recovery.
-  const lengthTerminal = isIncompleteTerminalAssistantTurn({
+  // Tool-use expects a post-tool continuation, while length means the output
+  // budget ended. Partial visible text completes neither. (#76477)
+  const incompleteTerminalAssistant = isIncompleteTerminalAssistantTurn({
     hasAssistantVisibleText: params.payloadCount > 0,
     hasTerminalOutput,
     lastAssistant: assistant,
@@ -255,7 +251,7 @@ export function resolveIncompleteTurnPayloadText(params: {
     Boolean(assistant && hasOnlyAssistantReasoningContent(assistant));
 
   if (
-    (params.payloadCount !== 0 && !toolUseTerminal && !lengthTerminal && !thinkingOnlyTerminal) ||
+    (params.payloadCount !== 0 && !incompleteTerminalAssistant && !thinkingOnlyTerminal) ||
     (params.aborted && params.externalAbort) ||
     params.timedOut ||
     params.attempt.clientToolCalls ||
@@ -282,12 +278,7 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
-  const stopReason = params.attempt.lastAssistant?.stopReason;
-  const incompleteTerminalAssistant = isIncompleteTerminalAssistantTurn({
-    hasAssistantVisibleText: params.payloadCount > 0,
-    hasTerminalOutput,
-    lastAssistant: params.attempt.lastAssistant,
-  });
+  const stopReason = assistant?.stopReason;
   const reasoningOnlyAssistant = isReasoningOnlyAssistantTurn(assistant);
   const emptyResponseAssistant = isEmptyResponseAssistantTurn({
     payloadCount: params.payloadCount,
@@ -295,7 +286,6 @@ export function resolveIncompleteTurnPayloadText(params: {
   });
   if (
     !incompleteTerminalAssistant &&
-    !lengthTerminal &&
     !reasoningOnlyAssistant &&
     !thinkingOnlyTerminal &&
     !emptyResponseAssistant &&

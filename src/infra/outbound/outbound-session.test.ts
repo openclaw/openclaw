@@ -1,7 +1,9 @@
 // Covers outbound session-route resolution through plugin hooks and fallback
 // target parsing, plus best-effort session metadata persistence.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
 import { setMinimalOutboundSessionPluginRegistryForTests } from "./outbound-session.test-helpers.js";
 
@@ -11,7 +13,7 @@ type InboundMetadataParams = {
 };
 
 const mocks = vi.hoisted(() => ({
-  recordSessionMetaFromInbound: vi.fn(async (_params: InboundMetadataParams) => ({ ok: true })),
+  recordInboundSessionMeta: vi.fn(async (_params: InboundMetadataParams) => ({ ok: true })),
   resolveStorePath: vi.fn(
     (_store: unknown, params?: { agentId?: string }) => `/stores/${params?.agentId ?? "main"}.json`,
   ),
@@ -33,13 +35,13 @@ function firstMockArg(
 }
 
 vi.mock("../../config/sessions/inbound.runtime.js", () => ({
-  recordSessionMetaFromInbound: mocks.recordSessionMetaFromInbound,
+  recordInboundSessionMeta: mocks.recordInboundSessionMeta,
   resolveStorePath: mocks.resolveStorePath,
 }));
 
 describe("resolveOutboundSessionRoute", () => {
   beforeEach(() => {
-    mocks.recordSessionMetaFromInbound.mockClear();
+    mocks.recordInboundSessionMeta.mockClear();
     mocks.resolveStorePath.mockClear();
     setMinimalOutboundSessionPluginRegistryForTests();
   });
@@ -63,6 +65,33 @@ describe("resolveOutboundSessionRoute", () => {
       },
     },
   } as OpenClawConfig;
+
+  it("uses a prepared runtime plugin for session-route resolution", async () => {
+    const plugin = {
+      ...createChannelTestPluginBase({ id: "external-channel" }),
+      messaging: {
+        resolveOutboundSessionRoute: ({ target }: { target: string }) => ({
+          sessionKey: `agent:main:external-channel:direct:${target}`,
+          baseSessionKey: `agent:main:external-channel:direct:${target}`,
+          peer: { kind: "direct" as const, id: target },
+          chatType: "direct" as const,
+          from: `external-channel:${target}`,
+          to: `user:${target}`,
+        }),
+      },
+    } satisfies ChannelPlugin;
+
+    const route = await resolveOutboundSessionRoute({
+      cfg: baseConfig,
+      channel: "external-channel",
+      plugin,
+      agentId: "main",
+      target: "u123",
+    });
+
+    expect(route?.to).toBe("user:u123");
+    expect(route?.chatType).toBe("direct");
+  });
 
   async function expectResolvedRoute(params: {
     cfg: OpenClawConfig;
@@ -469,6 +498,23 @@ describe("resolveOutboundSessionRoute", () => {
         chatType: "direct",
       },
     },
+    {
+      name: "uses resolved direct-only channel user targets to avoid phantom group sessions",
+      target: "wxid_abc123@im.wechat",
+      channel: "openclaw-weixin",
+      resolvedTarget: {
+        to: "wxid_abc123@im.wechat",
+        kind: "user" as const,
+        source: "normalized" as const,
+        resolutionSource: "normalized" as const,
+      },
+      expected: {
+        sessionKey: "agent:main:openclaw-weixin:direct:wxid_abc123@im.wechat",
+        from: "openclaw-weixin:wxid_abc123@im.wechat",
+        to: "user:wxid_abc123@im.wechat",
+        chatType: "direct",
+      },
+    },
   ])("$name", async ({ channel = "guildchat", target, threadId, resolvedTarget, expected }) => {
     const route = await resolveOutboundSessionRoute({
       cfg: perChannelPeerSessionCfg,
@@ -498,7 +544,7 @@ describe("resolveOutboundSessionRoute", () => {
 
 describe("ensureOutboundSessionEntry", () => {
   beforeEach(() => {
-    mocks.recordSessionMetaFromInbound.mockClear();
+    mocks.recordInboundSessionMeta.mockClear();
     mocks.resolveStorePath.mockClear();
   });
 
@@ -523,11 +569,8 @@ describe("ensureOutboundSessionEntry", () => {
     expect(mocks.resolveStorePath).toHaveBeenCalledWith("/stores/{agentId}.json", {
       agentId: "main",
     });
-    expect(mocks.recordSessionMetaFromInbound).toHaveBeenCalledOnce();
-    const metadata = firstMockArg(
-      mocks.recordSessionMetaFromInbound,
-      "recordSessionMetaFromInbound",
-    );
+    expect(mocks.recordInboundSessionMeta).toHaveBeenCalledOnce();
+    const metadata = firstMockArg(mocks.recordInboundSessionMeta, "recordInboundSessionMeta");
     expect(metadata.storePath).toBe("/stores/main.json");
     expect(metadata.sessionKey).toBe("agent:main:workspace:channel:c1");
   });

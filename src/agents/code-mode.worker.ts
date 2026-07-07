@@ -5,8 +5,8 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { parentPort, workerData } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { EvalFlags, Intrinsics, JSException, QuickJS, type JSValueHandle } from "quickjs-wasi";
-
 const require = createRequire(import.meta.url);
 const QUICKJS_WASM_PATH = require.resolve("quickjs-wasi/quickjs.wasm");
 let quickJsWasmModulePromise: Promise<WebAssembly.Module> | undefined;
@@ -132,6 +132,11 @@ function isQuickJsInterruptedError(error: unknown): boolean {
   if (error instanceof CodeModeGuestError) {
     return false;
   }
+  // Match on the raw QuickJS message, not the formatted errorMessage() string,
+  // which now leads with the error name and appends backtrace frames.
+  if (error instanceof JSException) {
+    return error.message === "interrupted";
+  }
   return errorMessage(error) === "interrupted";
 }
 
@@ -147,8 +152,27 @@ function getQuickJsWasmModule(): Promise<WebAssembly.Module> {
   return quickJsWasmModulePromise;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+// QuickJS error stacks are backtrace frames only ("    at file:line:col"), with
+// no leading "Name: message" header like V8. Returning .stack alone therefore
+// dropped the actual cause, surfacing failures to the model as a bare location
+// (e.g. "at openclaw-code-mode:user.js:2:37"). Lead with name+message so the
+// model can self-correct, and keep the frames for location.
+function formatQuickJsError(name: string, message: string, stack: string | undefined): string {
+  const header = message ? `${name}: ${message}` : name;
+  if (!stack || stack.split(/\r?\n/, 1)[0] === header) {
+    return header;
+  }
+  return `${header}\n${stack}`;
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof JSException) {
+    return formatQuickJsError(error.name, error.message, error.stack);
+  }
+  if (error instanceof Error) {
+    return error.message || String(error);
+  }
+  return String(error);
 }
 
 function toJsonSafe(value: unknown): unknown {
@@ -178,16 +202,6 @@ function toJsonSafe(value: unknown): unknown {
         return Object.prototype.toString.call(value);
     }
   }
-}
-
-function errorMessage(error: unknown): string {
-  if (error instanceof JSException) {
-    return error.stack || error.message || String(error);
-  }
-  if (error instanceof Error) {
-    return error.message || String(error);
-  }
-  return String(error);
 }
 
 const CONTROLLER_SOURCE = String.raw`
@@ -576,7 +590,15 @@ async function readCompletedResult(vm: QuickJS, resultHandle: JSValueHandle): Pr
   const settled = await vm.resolvePromise(resultHandle);
   if ("error" in settled) {
     try {
-      throw new CodeModeGuestError(errorMessage(vm.dump(settled.error)));
+      // vm.dump rebuilds a host Error carrying the QuickJS name/message/stack;
+      // format it like the synchronous path so async rejections keep their cause
+      // and location instead of collapsing to the bare message.
+      const dumped = vm.dump(settled.error);
+      const text =
+        dumped instanceof Error
+          ? formatQuickJsError(dumped.name, dumped.message, dumped.stack)
+          : errorMessage(dumped);
+      throw new CodeModeGuestError(text);
     } finally {
       settled.error.dispose();
     }
@@ -606,6 +628,53 @@ function waitingResult(params: {
   };
 }
 
+async function runVmExecution(params: {
+  vm: QuickJS;
+  didTimeout: () => boolean;
+  pendingRequests: PendingBridgeRequest[];
+  config: CodeModeConfig;
+  prepare: () => void;
+}): Promise<CodeModeWorkerResult> {
+  let output: unknown[] = [];
+  try {
+    params.prepare();
+    drainPendingJobs(params.vm);
+    output = takeOutput(params.vm);
+    const resultHandle = getResultHandle(params.vm);
+    try {
+      if (params.pendingRequests.length > 0) {
+        // Pending host work suspends the VM instead of blocking in-worker; the
+        // host resumes with settled bridge results via runResume.
+        return waitingResult({
+          vm: params.vm,
+          pendingRequests: params.pendingRequests,
+          output,
+          config: params.config,
+        });
+      }
+      if (resultHandle.isPromise && resultHandle.promiseState === 0) {
+        throw new Error("code mode promise is pending without host work");
+      }
+      return {
+        status: "completed",
+        value: await readCompletedResult(params.vm, resultHandle),
+        output,
+      };
+    } finally {
+      resultHandle.dispose();
+    }
+  } catch (error) {
+    return throwWorkerFailureWithOutput({
+      error,
+      didTimeout: params.didTimeout,
+      output,
+      vm: params.vm,
+    });
+  } finally {
+    params.vm.dispose();
+  }
+}
+
 async function runExec(input: Extract<CodeModeWorkerInput, { kind: "exec" }>) {
   const pendingRequests: PendingBridgeRequest[] = [];
   const { vm, didTimeout } = await createVm({
@@ -615,38 +684,19 @@ async function runExec(input: Extract<CodeModeWorkerInput, { kind: "exec" }>) {
     config: input.config,
     pendingRequests,
   });
-  let output: unknown[] = [];
-  try {
-    vm.evalCode(
-      buildUserSource(input.source),
-      "openclaw-code-mode:user.js",
-      EvalFlags.ASYNC,
-    ).dispose();
-    drainPendingJobs(vm);
-    output = takeOutput(vm);
-    const resultHandle = getResultHandle(vm);
-    try {
-      if (pendingRequests.length > 0) {
-        // Pending host work suspends the VM instead of blocking in-worker; the
-        // host resumes with settled bridge results via runResume.
-        return waitingResult({ vm, pendingRequests, output, config: input.config });
-      }
-      if (resultHandle.isPromise && resultHandle.promiseState === 0) {
-        throw new Error("code mode promise is pending without host work");
-      }
-      return {
-        status: "completed" as const,
-        value: await readCompletedResult(vm, resultHandle),
-        output,
-      };
-    } finally {
-      resultHandle.dispose();
-    }
-  } catch (error) {
-    return throwWorkerFailureWithOutput({ error, didTimeout, output, vm });
-  } finally {
-    vm.dispose();
-  }
+  return runVmExecution({
+    vm,
+    didTimeout,
+    pendingRequests,
+    config: input.config,
+    prepare: () => {
+      vm.evalCode(
+        buildUserSource(input.source),
+        "openclaw-code-mode:user.js",
+        EvalFlags.ASYNC,
+      ).dispose();
+    },
+  });
 }
 
 async function runResume(input: Extract<CodeModeWorkerInput, { kind: "resume" }>) {
@@ -656,52 +706,35 @@ async function runResume(input: Extract<CodeModeWorkerInput, { kind: "resume" }>
     config: input.config,
     pendingRequests,
   });
-  let output: unknown[] = [];
-  try {
-    const settle = vm.global.getProp("__openclawSettleBridge");
-    try {
-      for (const request of input.settledRequests) {
-        const id = vm.newString(request.id);
-        const payload = vm.newString(JSON.stringify(request.ok ? request.value : request.error));
-        try {
-          vm.callFunction(
-            settle,
-            vm.undefined,
-            id,
-            request.ok ? vm.true : vm.false,
-            payload,
-          ).dispose();
-        } finally {
-          id.dispose();
-          payload.dispose();
+  return runVmExecution({
+    vm,
+    didTimeout,
+    pendingRequests,
+    config: input.config,
+    prepare: () => {
+      const settle = vm.global.getProp("__openclawSettleBridge");
+      try {
+        for (const request of input.settledRequests) {
+          const id = vm.newString(request.id);
+          const payload = vm.newString(JSON.stringify(request.ok ? request.value : request.error));
+          try {
+            vm.callFunction(
+              settle,
+              vm.undefined,
+              id,
+              request.ok ? vm.true : vm.false,
+              payload,
+            ).dispose();
+          } finally {
+            id.dispose();
+            payload.dispose();
+          }
         }
+      } finally {
+        settle.dispose();
       }
-    } finally {
-      settle.dispose();
-    }
-    drainPendingJobs(vm);
-    output = takeOutput(vm);
-    const resultHandle = getResultHandle(vm);
-    try {
-      if (pendingRequests.length > 0) {
-        return waitingResult({ vm, pendingRequests, output, config: input.config });
-      }
-      if (resultHandle.isPromise && resultHandle.promiseState === 0) {
-        throw new Error("code mode promise is pending without host work");
-      }
-      return {
-        status: "completed" as const,
-        value: await readCompletedResult(vm, resultHandle),
-        output,
-      };
-    } finally {
-      resultHandle.dispose();
-    }
-  } catch (error) {
-    return throwWorkerFailureWithOutput({ error, didTimeout, output, vm });
-  } finally {
-    vm.dispose();
-  }
+    },
+  });
 }
 
 async function main(): Promise<CodeModeWorkerResult> {
@@ -744,10 +777,15 @@ async function main(): Promise<CodeModeWorkerResult> {
       output: [],
     };
   } catch (error) {
+    const timedOut = isQuickJsInterruptedError(error);
     return {
       status: "failed",
-      error: errorMessage(error),
-      code: error instanceof CodeModeWorkerFailure ? error.code : "internal_error",
+      error: timedOut ? "code mode timeout exceeded" : errorMessage(error),
+      code: timedOut
+        ? "timeout"
+        : error instanceof CodeModeWorkerFailure
+          ? error.code
+          : "internal_error",
       output: error instanceof CodeModeWorkerFailureWithOutput ? error.output : [],
     };
   }

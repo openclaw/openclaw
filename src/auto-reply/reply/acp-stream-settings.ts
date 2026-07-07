@@ -26,7 +26,7 @@ const ACP_TAG_VISIBILITY_DEFAULTS: Record<AcpSessionUpdateTag, boolean> = {
 };
 
 /** ACP delivery strategy for projected assistant output. */
-export type AcpDeliveryMode = "live" | "final_only";
+type AcpDeliveryMode = "live" | "final_only";
 export type AcpHiddenBoundarySeparator = "none" | "space" | "newline" | "paragraph";
 
 /** Normalized ACP projection settings consumed by stream projectors. */

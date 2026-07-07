@@ -1,18 +1,18 @@
 /** Timing for one named stage, including both stage duration and run-relative elapsed time. */
-export type EmbeddedRunStageTiming = {
+type EmbeddedRunStageTiming = {
   name: string;
   durationMs: number;
   elapsedMs: number;
 };
 
 /** Snapshot of all marked stages plus total elapsed time at snapshot creation. */
-export type EmbeddedRunStageSummary = {
+type EmbeddedRunStageSummary = {
   totalMs: number;
   stages: EmbeddedRunStageTiming[];
 };
 
 /** Lightweight monotonic-ish stage tracker used for embedded run startup diagnostics. */
-export type EmbeddedRunStageTracker = {
+type EmbeddedRunStageTracker = {
   mark: (name: string) => void;
   snapshot: () => EmbeddedRunStageSummary;
 };

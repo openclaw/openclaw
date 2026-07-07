@@ -53,7 +53,7 @@ export const baseCfg = {
     dispatch: { enabled: true },
   },
 } as const;
-export const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 
 export async function flushMicrotasks(rounds = 3): Promise<void> {
   for (let index = 0; index < rounds; index += 1) {
@@ -108,11 +108,11 @@ export function mockCallArg(
   return call[0] as Record<string, unknown>;
 }
 
-export function mockCallArgs(mock: ReturnType<typeof vi.fn>): Array<Record<string, unknown>> {
+function mockCallArgs(mock: ReturnType<typeof vi.fn>): Array<Record<string, unknown>> {
   return mock.mock.calls.map((call) => call[0] as Record<string, unknown>);
 }
 
-export function findMockCallFields(
+function findMockCallFields(
   mock: ReturnType<typeof vi.fn>,
   expected: Record<string, unknown>,
 ) {
@@ -215,6 +215,38 @@ export function readySessionMeta(overrides: Partial<SessionAcpMeta> = {}): Sessi
     lastActivityAt: Date.now(),
     ...overrides,
   };
+}
+
+export function mockParentedAcpSessionEntries(params: {
+  childSessionKey: string;
+  parentSessionKey: string;
+}): void {
+  hoisted.readAcpSessionEntryMock.mockImplementation((input: unknown) => {
+    const sessionKey = (input as { sessionKey?: string }).sessionKey;
+    if (sessionKey === params.childSessionKey) {
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        entry: {
+          sessionId: "child-1",
+          updatedAt: Date.now(),
+          spawnedBy: params.parentSessionKey,
+        },
+        acp: readySessionMeta(),
+      };
+    }
+    if (sessionKey === params.parentSessionKey) {
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        entry: {
+          sessionId: "parent-1",
+          updatedAt: Date.now(),
+        },
+      };
+    }
+    return null;
+  });
 }
 
 export function extractStatesFromUpserts(): SessionAcpMeta["state"][] {

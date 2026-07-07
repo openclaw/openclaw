@@ -1,91 +1,24 @@
-// Tests trajectory export command output and filesystem writes.
+// Tests trajectory export command approval routing.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildExportTrajectoryCommandReply } from "./commands-export-trajectory.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
-const hoisted = await vi.hoisted(async () => {
-  const { createExportCommandSessionMocks } = await import("./commands-export-test-mocks.js");
-  return {
-    ...createExportCommandSessionMocks(vi),
-    exportTrajectoryBundleMock: vi.fn(() => ({
-      outputDir: "/tmp/workspace/.openclaw/trajectory-exports/openclaw-trajectory-session",
-      manifest: {
-        eventCount: 7,
-        runtimeEventCount: 3,
-        transcriptEventCount: 4,
-      },
-      events: [{ type: "context.compiled" }],
-      runtimeFile: "/tmp/target-store/session.trajectory.jsonl",
-      supplementalFiles: ["metadata.json", "artifacts.json", "prompts.json"],
-    })),
-    resolveDefaultTrajectoryExportDirMock: vi.fn(
-      () => "/tmp/workspace/.openclaw/trajectory-exports/openclaw-trajectory-session",
-    ),
-    accessMock: vi.fn(
-      async (file: fs.PathLike, actualAccess: (path: fs.PathLike) => Promise<void>) => {
-        await actualAccess(file);
-      },
-    ),
-    statMock: vi.fn(
-      async (file: fs.PathLike, actualStat: (path: fs.PathLike) => Promise<unknown>) => {
-        return await actualStat(file);
-      },
-    ),
-  };
-});
-
-vi.mock("../../config/sessions/paths.js", () => ({
-  resolveDefaultSessionStorePath: hoisted.resolveDefaultSessionStorePathMock,
-  resolveSessionFilePath: hoisted.resolveSessionFilePathMock,
-  resolveSessionFilePathOptions: hoisted.resolveSessionFilePathOptionsMock,
-}));
-
-vi.mock("../../config/sessions/store.js", () => ({
-  loadSessionStore: hoisted.loadSessionStoreMock,
-}));
-
-vi.mock("../../trajectory/export.js", () => ({
-  exportTrajectoryBundle: hoisted.exportTrajectoryBundleMock,
-  resolveDefaultTrajectoryExportDir: hoisted.resolveDefaultTrajectoryExportDirMock,
-}));
-
-vi.mock("node:fs", async () => {
-  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
-  const mockedFs = { ...actual };
-  return {
-    ...mockedFs,
-    default: mockedFs,
-  };
-});
-
-vi.mock("node:fs/promises", async () => {
-  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-  const mockedFs = {
-    ...actual,
-    access: (file: fs.PathLike) => hoisted.accessMock(file, actual.access),
-    stat: (file: fs.PathLike) => hoisted.statMock(file, actual.stat),
-  };
-  return {
-    ...mockedFs,
-    default: mockedFs,
-  };
-});
-
-import {
-  buildExportTrajectoryCommandReply,
-  buildExportTrajectoryReply,
-} from "./commands-export-trajectory.js";
-
 const tempDirs: string[] = [];
-const mockedSessionFile = "/tmp/target-store/session.jsonl";
 
 function makeTempDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-export-command-"));
   tempDirs.push(dir);
   return dir;
 }
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 function makeParams(workspaceDir = makeTempDir()): HandleCommandsParams {
   return {
@@ -188,11 +121,6 @@ function requireRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function exportBundleParams(): Record<string, unknown> {
-  const calls = hoisted.exportTrajectoryBundleMock.mock.calls as unknown[][];
-  return requireRecord(calls[0]?.[0]);
-}
-
 function execCallRecord(
   execCalls: Array<{ defaults: unknown; params: unknown }>,
   index = 0,
@@ -206,150 +134,6 @@ function execCallRecord(
     params: requireRecord(call.params),
   };
 }
-
-describe("buildExportTrajectoryReply", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    hoisted.accessMock.mockImplementation(
-      async (file: fs.PathLike, actualAccess: (path: fs.PathLike) => Promise<void>) => {
-        if (file.toString() === "/tmp/target-store/session.jsonl") {
-          return;
-        }
-        await actualAccess(file);
-      },
-    );
-    hoisted.statMock.mockImplementation(
-      async (file: fs.PathLike, actualStat: (path: fs.PathLike) => Promise<unknown>) => {
-        if (file.toString() === "/tmp/target-store/session.jsonl") {
-          return {};
-        }
-        return await actualStat(file);
-      },
-    );
-    fs.mkdirSync(path.dirname(mockedSessionFile), { recursive: true });
-    fs.writeFileSync(mockedSessionFile, "{}\n");
-  });
-
-  afterEach(() => {
-    fs.rmSync(mockedSessionFile, { force: true });
-    for (const dir of tempDirs.splice(0)) {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("builds a trajectory bundle from the target session", async () => {
-    const params = makeParams();
-    const reply = await buildExportTrajectoryReply(params);
-
-    expect(reply.text).toContain("✅ Trajectory exported!");
-    expect(reply.text).toContain("session-branch.json");
-    expect(reply.text).not.toContain("session.jsonl");
-    expect(reply.text).not.toContain("runtime.jsonl");
-    expect(hoisted.resolveDefaultSessionStorePathMock).toHaveBeenCalledWith("target");
-    const exportParams = exportBundleParams();
-    expect(exportParams.sessionId).toBe("session-1");
-    expect(exportParams.sessionKey).toBe("agent:target:session");
-    expect(exportParams.workspaceDir).toBe(params.workspaceDir);
-    expect(String(exportParams.workspaceDir)).toContain("openclaw-export-command-");
-  });
-
-  it("keeps user-named output paths inside the workspace trajectory export directory", async () => {
-    const params = makeParams();
-    params.command.commandBodyNormalized = "/export-trajectory my-bundle";
-
-    await buildExportTrajectoryReply(params);
-
-    expect(exportBundleParams().outputDir).toBe(
-      path.join(params.workspaceDir, ".openclaw", "trajectory-exports", "my-bundle"),
-    );
-  });
-
-  it("rejects absolute output paths", async () => {
-    const params = makeParams();
-    params.command.commandBodyNormalized = "/export-trajectory /tmp/outside";
-
-    const reply = await buildExportTrajectoryReply(params);
-
-    expect(reply.text).toContain("Failed to resolve output path");
-    expect(hoisted.exportTrajectoryBundleMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects home-relative output paths", async () => {
-    const params = makeParams();
-    params.command.commandBodyNormalized = "/export-trajectory ~/bundle";
-
-    const reply = await buildExportTrajectoryReply(params);
-
-    expect(reply.text).toContain("Failed to resolve output path");
-    expect(hoisted.exportTrajectoryBundleMock).not.toHaveBeenCalled();
-  });
-
-  it("does not echo absolute session paths when the transcript is missing", async () => {
-    fs.rmSync(mockedSessionFile, { force: true });
-    hoisted.accessMock.mockImplementation(
-      async (file: fs.PathLike, actualAccess: (path: fs.PathLike) => Promise<void>) => {
-        if (file.toString() === "/tmp/target-store/session.jsonl") {
-          throw Object.assign(new Error("missing"), { code: "ENOENT" });
-        }
-        await actualAccess(file);
-      },
-    );
-    hoisted.statMock.mockImplementation(
-      async (file: fs.PathLike, actualStat: (path: fs.PathLike) => Promise<unknown>) => {
-        if (file.toString() === "/tmp/target-store/session.jsonl") {
-          throw Object.assign(new Error("missing"), { code: "ENOENT" });
-        }
-        return await actualStat(file);
-      },
-    );
-
-    const reply = await buildExportTrajectoryReply(makeParams());
-
-    expect(reply.text).toBe("❌ Session file not found.");
-    expect(reply.text).not.toContain("/tmp/target-store/session.jsonl");
-    expect(hoisted.exportTrajectoryBundleMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects output paths redirected by a symlinked exports directory", async () => {
-    const workspaceDir = makeTempDir();
-    const outsideDir = makeTempDir();
-    fs.mkdirSync(path.join(workspaceDir, ".openclaw"), { recursive: true });
-    fs.symlinkSync(outsideDir, path.join(workspaceDir, ".openclaw", "trajectory-exports"));
-    const params = makeParams(workspaceDir);
-    params.command.commandBodyNormalized = "/export-trajectory my-bundle";
-
-    const reply = await buildExportTrajectoryReply(params);
-
-    expect(reply.text).toContain("Failed to resolve output path");
-    expect(hoisted.exportTrajectoryBundleMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects default output paths redirected by a symlinked exports directory", async () => {
-    const workspaceDir = makeTempDir();
-    const outsideDir = makeTempDir();
-    fs.mkdirSync(path.join(workspaceDir, ".openclaw"), { recursive: true });
-    fs.symlinkSync(outsideDir, path.join(workspaceDir, ".openclaw", "trajectory-exports"));
-
-    const reply = await buildExportTrajectoryReply(makeParams(workspaceDir));
-
-    expect(reply.text).toContain("Failed to resolve output path");
-    expect(hoisted.exportTrajectoryBundleMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects symlinked state directories before creating export folders", async () => {
-    const workspaceDir = makeTempDir();
-    const outsideDir = makeTempDir();
-    fs.symlinkSync(outsideDir, path.join(workspaceDir, ".openclaw"));
-    const params = makeParams(workspaceDir);
-    params.command.commandBodyNormalized = "/export-trajectory my-bundle";
-
-    const reply = await buildExportTrajectoryReply(params);
-
-    expect(reply.text).toContain("Failed to resolve output path");
-    expect(fs.existsSync(path.join(outsideDir, "trajectory-exports"))).toBe(false);
-    expect(hoisted.exportTrajectoryBundleMock).not.toHaveBeenCalled();
-  });
-});
 
 describe("buildExportTrajectoryCommandReply", () => {
   beforeEach(() => {

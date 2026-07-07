@@ -4,10 +4,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { GatewayClient } from "../gateway/client.js";
 import {
   analyzeArgvCommand,
-  analyzeShellCommand,
   ensureExecApprovals,
   mergeExecApprovalsSocketDefaults,
   normalizeExecApprovals,
@@ -19,6 +19,7 @@ import {
   type ExecApprovalsResolved,
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
+import { planShellAuthorization } from "../infra/exec-authorization-plan.js";
 import {
   requestExecHostViaSocket,
   type ExecHostRequest,
@@ -53,6 +54,7 @@ import { invokeRegisteredNodeHostCommand } from "./plugin-node-host.js";
 
 const OUTPUT_CAP = 200_000;
 const OUTPUT_EVENT_TAIL = 20_000;
+const STREAM_ERROR_KILL_GRACE_MS = 1_000;
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 const execHostEnforced =
@@ -135,7 +137,7 @@ function buildSystemRunPrepareCoverageEnv(params: {
   };
 }
 
-function buildSystemRunAllowAlwaysCoverage(params: {
+async function buildSystemRunAllowAlwaysCoverage(params: {
   argv: string[];
   rawCommand?: string | null;
   cwd: string | null | undefined;
@@ -148,22 +150,30 @@ function buildSystemRunAllowAlwaysCoverage(params: {
     if (!shellWrapper.command) {
       return { complete: false, patterns: [] };
     }
-    const analysis = analyzeShellCommand({
+    const authorizationPlan = await planShellAuthorization({
       command: shellWrapper.command,
       cwd,
       env: params.env,
       platform: process.platform,
     });
-    if (!analysis.ok) {
+    if (!authorizationPlan.ok) {
       return { complete: false, patterns: [] };
     }
-    return resolveAllowAlwaysPatternCoverage({
-      segments: analysis.segments,
+    const candidates = authorizationPlan.groups.flatMap((group) => group.candidates);
+    const reusableSegments = candidates
+      .filter((candidate) => candidate.allowAlways)
+      .map((candidate) => candidate.sourceSegment);
+    const coverage = resolveAllowAlwaysPatternCoverage({
+      segments: reusableSegments,
       cwd,
       env: params.env,
       platform: process.platform,
       strictInlineEval: params.strictInlineEval,
     });
+    return {
+      ...coverage,
+      complete: coverage.complete && reusableSegments.length === candidates.length,
+    };
   }
   const analysis = analyzeArgvCommand({ argv: params.argv, cwd, env: params.env });
   if (!analysis.ok) {
@@ -222,7 +232,7 @@ function truncateOutput(raw: string, maxChars: number): { text: string; truncate
   if (raw.length <= maxChars) {
     return { text: raw, truncated: false };
   }
-  return { text: `... (truncated) ${raw.slice(raw.length - maxChars)}`, truncated: true };
+  return { text: `... (truncated) ${sliceUtf16Safe(raw, raw.length - maxChars)}`, truncated: true };
 }
 
 export function decodeCapturedOutputBuffer(params: {
@@ -304,6 +314,8 @@ async function runCommand(
     child.stderr?.on("data", (chunk) => onChunk(chunk as Buffer, "stderr"));
 
     let timer: NodeJS.Timeout | undefined;
+    let streamError: Error | undefined;
+    let streamKillTimer: NodeJS.Timeout | undefined;
     if (timeoutMs && timeoutMs > 0) {
       timer = setTimeout(() => {
         timedOut = true;
@@ -322,6 +334,9 @@ async function runCommand(
       settled = true;
       if (timer) {
         clearTimeout(timer);
+      }
+      if (streamKillTimer) {
+        clearTimeout(streamKillTimer);
       }
       const stdout = decodeCapturedOutputBuffer({
         buffer: Buffer.concat(stdoutChunks),
@@ -342,11 +357,37 @@ async function runCommand(
       });
     };
 
+    const onStreamError = (err: Error) => {
+      if (settled || streamError) {
+        return;
+      }
+      streamError = err;
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // ignore
+      }
+      // A reported system.run completion must not outlive its command. Escalate
+      // a pipe-failure shutdown, then let the child exit settle the result.
+      streamKillTimer = setTimeout(() => {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // ignore
+        }
+      }, STREAM_ERROR_KILL_GRACE_MS);
+      streamKillTimer.unref?.();
+    };
+
+    child.stdout?.on("error", onStreamError);
+    child.stderr?.on("error", onStreamError);
     child.on("error", (err) => {
-      finalize(undefined, err.message);
+      if (!streamError) {
+        finalize(undefined, err.message);
+      }
     });
     child.on("exit", (code) => {
-      finalize(code === null ? undefined : code, null);
+      finalize(code === null ? undefined : code, streamError?.message ?? null);
     });
   });
 }
@@ -367,7 +408,14 @@ function resolveExecutable(bin: string, env?: Record<string, string>) {
   }
   const extensions =
     process.platform === "win32"
-      ? (process.env.PATHEXT ?? process.env.PathExt ?? ".EXE;.CMD;.BAT;.COM")
+      ? (
+          env?.PATHEXT ??
+          env?.PathExt ??
+          env?.Pathext ??
+          process.env.PATHEXT ??
+          process.env.PathExt ??
+          ".EXE;.CMD;.BAT;.COM"
+        )
           .split(";")
           .map((ext) => normalizeLowercaseStringOrEmpty(ext))
       : [""];
@@ -595,7 +643,7 @@ export async function handleInvoke(
           security: execPolicy.security,
           ask: execPolicy.ask,
         },
-        allowAlwaysCoverage: buildSystemRunAllowAlwaysCoverage({
+        allowAlwaysCoverage: await buildSystemRunAllowAlwaysCoverage({
           argv: prepared.plan.argv,
           rawCommand: typeof params.rawCommand === "string" ? params.rawCommand : null,
           cwd: prepared.plan.cwd,
@@ -767,3 +815,8 @@ async function sendNodeEvent(client: GatewayClient, event: string, payload: unkn
     // ignore: node events are best-effort
   }
 }
+
+export const testing = {
+  STREAM_ERROR_KILL_GRACE_MS,
+  runCommand,
+} as const;

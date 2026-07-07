@@ -1,10 +1,7 @@
 // Session key isolation tests cover separate keys for concurrent cron runs.
 import { describe, expect, it } from "vitest";
-import {
-  makeIsolatedAgentTurnJob,
-  makeIsolatedAgentTurnParams,
-  setupRunCronIsolatedAgentTurnSuite,
-} from "./run.suite-helpers.js";
+import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
   isCliProviderMock,
   loadRunCronIsolatedAgentTurn,
@@ -40,9 +37,9 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     mockRunCronFallbackPassthrough();
 
     const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentTurnParams({
+      makeIsolatedAgentParamsFixture({
         sessionKey: "cron:daily-monitor",
-        job: makeIsolatedAgentTurnJob({
+        job: makeIsolatedAgentJobFixture({
           payload: {
             kind: "agentTurn",
             message: "test",
@@ -98,9 +95,9 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
       );
     mockRunCronFallbackPassthrough();
 
-    const params = makeIsolatedAgentTurnParams({
+    const params = makeIsolatedAgentParamsFixture({
       sessionKey: "cron:daily-monitor",
-      job: makeIsolatedAgentTurnJob({
+      job: makeIsolatedAgentJobFixture({
         payload: {
           kind: "agentTurn",
           message: "test",
@@ -138,9 +135,9 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     mockRunCronFallbackPassthrough();
 
     const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentTurnParams({
+      makeIsolatedAgentParamsFixture({
         sessionKey: "project-alpha-monitor",
-        job: makeIsolatedAgentTurnJob({
+        job: makeIsolatedAgentJobFixture({
           sessionTarget: "session:project-alpha-monitor",
         }),
       }),
@@ -180,9 +177,9 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     });
 
     const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentTurnParams({
+      makeIsolatedAgentParamsFixture({
         sessionKey: "cron:cli-monitor",
-        job: makeIsolatedAgentTurnJob({
+        job: makeIsolatedAgentJobFixture({
           payload: {
             kind: "agentTurn",
             message: "test",
@@ -201,6 +198,7 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
       promptCacheKey?: string;
       bootstrapContextMode?: string;
       bootstrapContextRunKind?: string;
+      cleanupCliLiveSessionOnRunEnd?: boolean;
     };
     expect(runRequest.sessionId).toBe("isolated-cli-run-1");
     expect(runRequest.sessionKey).toBe("agent:default:cron:cli-monitor:run:isolated-cli-run-1");
@@ -208,6 +206,7 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     expect(runRequest.promptCacheKey).toBeUndefined();
     expect(runRequest.bootstrapContextMode).toBe("lightweight");
     expect(runRequest.bootstrapContextRunKind).toBe("cron");
+    expect(runRequest.cleanupCliLiveSessionOnRunEnd).toBe(true);
   });
 
   it("runs externally sourced CLI hook turns", async () => {
@@ -219,9 +218,9 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     });
 
     const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentTurnParams({
+      makeIsolatedAgentParamsFixture({
         sessionKey: "hook:webhook:cli-monitor",
-        job: makeIsolatedAgentTurnJob({
+        job: makeIsolatedAgentJobFixture({
           payload: {
             kind: "agentTurn",
             message: "test",

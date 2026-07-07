@@ -97,15 +97,6 @@ export function getPluginModuleLoaderStats(): PluginModuleLoaderStatsSnapshot {
   };
 }
 
-export function resetPluginModuleLoaderStatsForTest(): void {
-  pluginModuleLoaderStats.calls = 0;
-  pluginModuleLoaderStats.nativeHits = 0;
-  pluginModuleLoaderStats.nativeMisses = 0;
-  pluginModuleLoaderStats.sourceTransformForced = 0;
-  pluginModuleLoaderStats.sourceTransformFallbacks = 0;
-  pluginModuleLoaderStats.sourceTransformTargets.clear();
-}
-
 function loadCreateJitiLoaderFactory(): PluginModuleLoaderFactory {
   if (createJitiLoaderFactory) {
     return createJitiLoaderFactory;

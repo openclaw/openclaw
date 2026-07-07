@@ -1,5 +1,6 @@
 // Whatsapp tests cover channel outbound plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { cacheInboundMessageMeta } from "./quoted-message.js";
 
 const hoisted = vi.hoisted(() => ({
   sendMessageWhatsApp: vi.fn(async () => ({ messageId: "wa-1", toJid: "jid" })),
@@ -102,6 +103,82 @@ describe("whatsappChannelOutbound", () => {
     });
   });
 
+  it("uses the live WhatsApp sender for quoted text replies", async () => {
+    const legacySend = vi.fn(async () => ({ messageId: "legacy-1", toJid: "legacy-jid" }));
+    cacheInboundMessageMeta("default", "5511999999999@c.us", "reply-live-1", {
+      body: "original live body",
+      fromMe: false,
+      participant: "5511999999999@s.whatsapp.net",
+    });
+
+    await whatsappChannelOutbound.sendText!({
+      cfg: {},
+      to: "5511999999999@c.us",
+      text: "quoted reply",
+      replyToId: "reply-live-1",
+      deps: {
+        whatsapp: legacySend,
+      },
+    });
+
+    expect(legacySend).not.toHaveBeenCalled();
+    expect(hoisted.sendMessageWhatsApp).toHaveBeenCalledWith("5511999999999@c.us", "quoted reply", {
+      verbose: false,
+      cfg: {},
+      accountId: undefined,
+      gifPlayback: undefined,
+      quotedMessageKey: {
+        id: "reply-live-1",
+        remoteJid: "5511999999999@c.us",
+        fromMe: false,
+        participant: "5511999999999@s.whatsapp.net",
+        messageText: "original live body",
+      },
+      preserveLeadingWhitespace: true,
+    });
+  });
+
+  it("uses the live WhatsApp sender for quoted media replies", async () => {
+    const legacySend = vi.fn(async () => ({ messageId: "legacy-1", toJid: "legacy-jid" }));
+    cacheInboundMessageMeta("default", "5511999999999@c.us", "reply-media-1", {
+      body: "original media body",
+      fromMe: false,
+      participant: "5511999999999@s.whatsapp.net",
+    });
+
+    await whatsappChannelOutbound.sendMedia!({
+      cfg: {},
+      to: "5511999999999@c.us",
+      text: "quoted image",
+      mediaUrl: "/tmp/photo.png",
+      replyToId: "reply-media-1",
+      deps: {
+        whatsapp: legacySend,
+      },
+    });
+
+    expect(legacySend).not.toHaveBeenCalled();
+    expect(hoisted.sendMessageWhatsApp).toHaveBeenCalledWith("5511999999999@c.us", "quoted image", {
+      verbose: false,
+      cfg: {},
+      mediaUrl: "/tmp/photo.png",
+      mediaAccess: undefined,
+      mediaLocalRoots: undefined,
+      mediaReadFile: undefined,
+      accountId: undefined,
+      gifPlayback: undefined,
+      forceDocument: undefined,
+      quotedMessageKey: {
+        id: "reply-media-1",
+        remoteJid: "5511999999999@c.us",
+        fromMe: false,
+        participant: "5511999999999@s.whatsapp.net",
+        messageText: "original media body",
+      },
+      preserveLeadingWhitespace: true,
+    });
+  });
+
   it("rejects non-WhatsApp provider-prefixed outbound targets", () => {
     const result = whatsappChannelOutbound.resolveTarget?.({
       to: "telegram:1234567890",
@@ -126,6 +203,7 @@ describe("whatsappChannelOutbound", () => {
       cfg: {},
       accountId: undefined,
       gifPlayback: undefined,
+      onDeliveryResult: expect.any(Function),
       preserveLeadingWhitespace: true,
     });
   });

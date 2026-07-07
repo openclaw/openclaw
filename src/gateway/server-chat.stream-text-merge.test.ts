@@ -60,6 +60,29 @@ describe("server chat stream text merge", () => {
     ).toBe("Before tool call\nAfter tool call");
   });
 
+  it("replaces prior live text when Codex assistant item switches with empty delta", () => {
+    const prior = "coordination draft";
+    const replacement = resolveMergedAssistantText({
+      previousText: prior,
+      nextText: "final answer",
+      nextDelta: "",
+    });
+
+    expect(replacement).toBe("final answer");
+    expect(replacement).not.toContain(prior);
+  });
+
+  it("would concatenate superseded text if replacement incorrectly included delta", () => {
+    const prior = "coordination draft";
+    const buggy = resolveMergedAssistantText({
+      previousText: prior,
+      nextText: "final ",
+      nextDelta: "final ",
+    });
+
+    expect(buggy).toBe("coordination draftfinal ");
+  });
+
   it("caps merged live text while preserving the newest assistant output", () => {
     const result = resolveMergedAssistantText({
       previousText: "a".repeat(MAX_LIVE_CHAT_BUFFER_CHARS - 2),

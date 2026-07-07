@@ -13,8 +13,8 @@ import {
 import {
   handleCompactionEnd,
   handleCompactionStart,
-  reconcileSessionStoreCompactionCountAfterSuccess,
 } from "./embedded-agent-subscribe.handlers.compaction.js";
+import reconcileSessionStoreCompactionCountAfterSuccess from "./embedded-agent-subscribe.handlers.compaction.runtime.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { makeZeroUsageSnapshot, type AssistantUsageSnapshot } from "./usage.js";

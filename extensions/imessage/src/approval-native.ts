@@ -1,8 +1,5 @@
 // Imessage plugin module implements approval native behavior.
-import {
-  createChannelApprovalCapability,
-  splitChannelApprovalCapability,
-} from "openclaw/plugin-sdk/approval-delivery-runtime";
+import { createChannelApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
@@ -444,7 +441,3 @@ export const imessageApprovalCapability: ChannelApprovalCapability =
           .imessageApprovalNativeRuntime as unknown as ChannelApprovalNativeRuntimeAdapter,
     }),
   });
-
-export const imessageNativeApprovalAdapter = splitChannelApprovalCapability(
-  imessageApprovalCapability,
-);

@@ -30,7 +30,13 @@ import { EmbeddedBlockChunker, type BlockReplyChunking } from "./embedded-agent-
 import { resolveModelWithRegistry } from "./embedded-agent-runner/model.js";
 import { getActiveEmbeddedRunSnapshot } from "./embedded-agent-runner/runs.js";
 import { resolveEmbeddedAgentStreamFn } from "./embedded-agent-runner/stream-resolution.js";
-import { resolveAvailableAgentHarnessPolicy, selectAgentHarness } from "./harness/selection.js";
+import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
+import {
+  resolveAvailableAgentHarnessPolicy,
+  resolvePluginHarnessPolicyToolsAllow,
+  selectAgentHarness,
+} from "./harness/selection.js";
+import type { AgentHarness } from "./harness/types.js";
 import {
   resolveImageSanitizationLimits,
   type ImageSanitizationLimits,
@@ -319,15 +325,17 @@ async function resolveRuntimeModel(params: {
   if (!model) {
     throw new Error(`Unknown model: ${params.provider}/${params.model}`);
   }
+  const runtimeProvider = model.provider;
+  const runtimeModelId = model.id;
 
   const authProfileId = await resolveSessionAuthProfileOverride({
     cfg: params.cfg,
-    provider: params.provider,
+    provider: runtimeProvider,
     acceptedProviderIds: listOpenAIAuthProfileProvidersForAgentRuntime({
-      provider: params.provider,
+      provider: runtimeProvider,
       harnessRuntime: resolveAvailableAgentHarnessPolicy({
-        provider: params.provider,
-        modelId: params.model,
+        provider: runtimeProvider,
+        modelId: runtimeModelId,
         config: params.cfg,
         agentId: params.agentId,
         sessionKey: params.sessionKey,
@@ -357,6 +365,7 @@ type RunBtwSideQuestionParams = {
   sessionEntry: StoredSessionEntry;
   sessionStore?: Record<string, StoredSessionEntry>;
   sessionKey?: string;
+  sandboxSessionKey?: string;
   storePath?: string;
   resolvedThinkLevel?: ThinkLevel;
   resolvedReasoningLevel: ReasoningLevel;
@@ -366,6 +375,19 @@ type RunBtwSideQuestionParams = {
   isNewSession: boolean;
   messageChannel?: string;
   messageProvider?: string;
+  agentAccountId?: string;
+  messageTo?: string;
+  messageThreadId?: string | number;
+  groupId?: string | null;
+  groupChannel?: string | null;
+  groupSpace?: string | null;
+  memberRoleIds?: string[];
+  spawnedBy?: string | null;
+  senderId?: string | null;
+  senderName?: string | null;
+  senderUsername?: string | null;
+  senderE164?: string | null;
+  senderIsOwner?: boolean;
   currentChannelId?: string;
 };
 
@@ -458,40 +480,96 @@ export async function runBtwSideQuestion(
     config: params.cfg,
   });
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, sessionAgentId);
-  const harness = selectAgentHarness({
-    provider: params.provider,
-    modelId: params.model,
-    config: params.cfg,
-    agentId: sessionAgentId,
-    sessionKey: params.sessionKey,
-  });
-  if (harness.runSideQuestion) {
-    const { model, authProfileId, authProfileIdSource } = await resolveRuntimeModel({
-      cfg: params.cfg,
-      provider: params.provider,
-      model: params.model,
+  const preparedHarnesses = new Map<string, AgentHarness>();
+  const prepareHarness = async (provider: string, modelId: string): Promise<AgentHarness> => {
+    const key = `${provider}/${modelId}`;
+    const cached = preparedHarnesses.get(key);
+    if (cached) {
+      return cached;
+    }
+    await ensureSelectedAgentHarnessPlugin({
+      provider,
+      modelId,
+      config: params.cfg,
       agentId: sessionAgentId,
-      agentDir: params.agentDir,
-      workspaceDir,
-      sessionEntry: params.sessionEntry,
-      sessionStore: params.sessionStore,
       sessionKey: params.sessionKey,
-      storePath: params.storePath,
-      isNewSession: params.isNewSession,
+      workspaceDir,
     });
-    const result = await harness.runSideQuestion({
+    const harness = selectAgentHarness({
+      provider,
+      modelId,
+      config: params.cfg,
+      agentId: sessionAgentId,
+      sessionKey: params.sessionKey,
+    });
+    preparedHarnesses.set(key, harness);
+    return harness;
+  };
+  const harness = await prepareHarness(params.provider, params.model);
+  let runtimeSelection: Awaited<ReturnType<typeof resolveRuntimeModel>> | undefined;
+  const resolveRuntimeSelection = async () => {
+    if (!runtimeSelection) {
+      runtimeSelection = await resolveRuntimeModel({
+        cfg: params.cfg,
+        provider: params.provider,
+        model: params.model,
+        agentId: sessionAgentId,
+        agentDir: params.agentDir,
+        workspaceDir,
+        sessionEntry: params.sessionEntry,
+        sessionStore: params.sessionStore,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+        isNewSession: params.isNewSession,
+      });
+    }
+    return runtimeSelection;
+  };
+  const runHarnessSideQuestion = async (
+    selectedHarness: AgentHarness,
+    runtime: Awaited<ReturnType<typeof resolveRuntimeModel>>,
+  ): Promise<ReplyPayload | undefined> => {
+    if (!selectedHarness.runSideQuestion) {
+      throw new Error(
+        `Selected agent harness "${selectedHarness.id}" does not support /btw side questions.`,
+      );
+    }
+    const toolsAllow = resolvePluginHarnessPolicyToolsAllow({
+      config: params.cfg,
+      sessionKey: params.sessionKey,
+      sandboxSessionKey: params.sandboxSessionKey,
+      agentId: sessionAgentId,
+      provider: runtime.model.provider,
+      modelId: runtime.model.id,
+      messageProvider: params.messageProvider,
+      messageChannel: params.messageChannel,
+      spawnedBy: params.spawnedBy,
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      groupSpace: params.groupSpace,
+      agentAccountId: params.agentAccountId,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
+    });
+    const result = await selectedHarness.runSideQuestion({
       ...params,
-      provider: model.provider,
-      model: model.id,
-      runtimeModel: model,
+      provider: runtime.model.provider,
+      model: runtime.model.id,
+      runtimeModel: runtime.model,
       sessionId,
       sessionFile,
       agentId: sessionAgentId,
       workspaceDir,
-      authProfileId,
-      authProfileIdSource,
+      ...(toolsAllow ? { toolsAllow } : {}),
+      authProfileId: runtime.authProfileId,
+      authProfileIdSource: runtime.authProfileIdSource,
     });
     return { text: result.text };
+  };
+  if (harness.runSideQuestion) {
+    return runHarnessSideQuestion(harness, await resolveRuntimeSelection());
   }
   if (harness.id === "codex") {
     throw new Error(`Selected agent harness "${harness.id}" does not support /btw side questions.`);
@@ -588,19 +666,23 @@ export async function runBtwSideQuestion(
     });
   }
 
-  const { model, authProfileId, authProfileIdSource } = await resolveRuntimeModel({
-    cfg: params.cfg,
-    provider: params.provider,
-    model: params.model,
-    agentId: sessionAgentId,
-    agentDir: params.agentDir,
-    workspaceDir,
-    sessionEntry: params.sessionEntry,
-    sessionStore: params.sessionStore,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
-    isNewSession: params.isNewSession,
-  });
+  const runtimeSelectionForHarness = await resolveRuntimeSelection();
+  // Model resolution can canonicalize a legacy provider alias, so reselect against the resolved
+  // provider/model instead of reusing the raw route's selection.
+  const runtimeHarness = await prepareHarness(
+    runtimeSelectionForHarness.model.provider,
+    runtimeSelectionForHarness.model.id,
+  );
+  if (runtimeHarness.runSideQuestion) {
+    return runHarnessSideQuestion(runtimeHarness, runtimeSelectionForHarness);
+  }
+  if (runtimeHarness.id === "codex") {
+    throw new Error(
+      `Selected agent harness "${runtimeHarness.id}" does not support /btw side questions.`,
+    );
+  }
+
+  const { model, authProfileId, authProfileIdSource } = runtimeSelectionForHarness;
   let externalCliAuthScope = resolveExternalCliAuthOverlayScopeFromSelection({
     provider: model.provider,
     cfg: params.cfg,

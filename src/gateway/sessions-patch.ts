@@ -51,7 +51,7 @@ import {
 } from "../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
-import { parseSessionLabel } from "../sessions/session-label.js";
+import { parseSessionLabel, SESSION_LABEL_MAX_LENGTH } from "../sessions/session-label.js";
 
 function invalid(message: string): { ok: false; error: ErrorShape } {
   return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, message) };
@@ -130,16 +130,22 @@ function normalizeSubagentControlScope(raw: string): "children" | "none" | undef
   return undefined;
 }
 
-/** Apply a validated gateway session patch to an in-memory session store entry. */
-export async function applySessionsPatchToStore(params: {
+type SessionPatchProjectionEntry = {
+  entry: SessionEntry;
+  sessionKey: string;
+};
+
+/** Project a validated gateway session patch for one session entry. */
+export async function projectSessionsPatchEntry(params: {
   cfg: OpenClawConfig;
-  store: Record<string, SessionEntry>;
+  entries: readonly SessionPatchProjectionEntry[];
+  existingEntry?: SessionEntry;
   storeKey: string;
   agentId?: string;
   patch: SessionsPatchParams;
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
 }): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
-  const { cfg, store, storeKey, patch } = params;
+  const { cfg, storeKey, patch } = params;
   const now = Date.now();
   const parsedAgent = parseAgentSessionKey(storeKey);
   const sessionAgentId = normalizeAgentId(
@@ -162,7 +168,7 @@ export async function applySessionsPatchToStore(params: {
     return loadedModelCatalog;
   };
 
-  const existing = store[storeKey];
+  const existing = params.existingEntry;
   // Existing entries without session ids are placeholder aliases; assigning an id makes them real.
   const next: SessionEntry = existing?.sessionId
     ? {
@@ -177,69 +183,85 @@ export async function applySessionsPatchToStore(params: {
       };
   if (existing && !existing.sessionId) {
     delete next.label;
+    delete next.category;
     delete next.displayName;
   }
 
-  if ("spawnedBy" in patch) {
-    const raw = patch.spawnedBy;
-    if (raw === null) {
-      if (existing?.spawnedBy) {
-        return invalid("spawnedBy cannot be cleared once set");
-      }
-    } else if (raw !== undefined) {
-      const trimmed = normalizeOptionalString(raw) ?? "";
-      if (!trimmed) {
-        return invalid("invalid spawnedBy: empty");
-      }
-      if (!supportsSpawnLineage(storeKey)) {
-        return invalid("spawnedBy is only supported for subagent:* or acp:* sessions");
-      }
-      if (existing?.spawnedBy && existing.spawnedBy !== trimmed) {
-        return invalid("spawnedBy cannot be changed once set");
-      }
-      next.spawnedBy = trimmed;
+  type PatchError = ReturnType<typeof invalid> | null;
+  const checkSpawnLineage = (field: string): PatchError =>
+    supportsSpawnLineage(storeKey)
+      ? null
+      : invalid(`${field} is only supported for subagent:* or acp:* sessions`);
+  const applyImmutableString = (
+    field: "spawnedBy" | "spawnedWorkspaceDir" | "spawnedCwd",
+    checkLineageBeforeEmpty: boolean,
+  ): PatchError => {
+    if (!(field in patch)) {
+      return null;
     }
-  }
-
-  if ("spawnedWorkspaceDir" in patch) {
-    const raw = patch.spawnedWorkspaceDir;
+    const raw = patch[field];
     if (raw === null) {
-      if (existing?.spawnedWorkspaceDir) {
-        return invalid("spawnedWorkspaceDir cannot be cleared once set");
-      }
-    } else if (raw !== undefined) {
-      if (!supportsSpawnLineage(storeKey)) {
-        return invalid("spawnedWorkspaceDir is only supported for subagent:* or acp:* sessions");
-      }
-      const trimmed = normalizeOptionalString(raw) ?? "";
-      if (!trimmed) {
-        return invalid("invalid spawnedWorkspaceDir: empty");
-      }
-      if (existing?.spawnedWorkspaceDir && existing.spawnedWorkspaceDir !== trimmed) {
-        return invalid("spawnedWorkspaceDir cannot be changed once set");
-      }
-      next.spawnedWorkspaceDir = trimmed;
+      return existing?.[field] ? invalid(`${field} cannot be cleared once set`) : null;
     }
-  }
-
-  if ("spawnedCwd" in patch) {
-    const raw = patch.spawnedCwd;
+    if (raw === undefined) {
+      return null;
+    }
+    const earlyLineage = checkLineageBeforeEmpty ? checkSpawnLineage(field) : null;
+    if (earlyLineage) {
+      return earlyLineage;
+    }
+    const trimmed = normalizeOptionalString(raw) ?? "";
+    if (!trimmed) {
+      return invalid(`invalid ${field}: empty`);
+    }
+    const lateLineage = checkLineageBeforeEmpty ? null : checkSpawnLineage(field);
+    if (lateLineage) {
+      return lateLineage;
+    }
+    if (existing?.[field] && existing[field] !== trimmed) {
+      return invalid(`${field} cannot be changed once set`);
+    }
+    next[field] = trimmed;
+    return null;
+  };
+  const applyImmutableNormalized = <T extends "subagentRole" | "subagentControlScope">(
+    field: T,
+    normalize: (raw: string) => NonNullable<SessionEntry[T]> | undefined,
+    invalidMessage: string,
+  ): PatchError => {
+    if (!(field in patch)) {
+      return null;
+    }
+    const raw = patch[field];
     if (raw === null) {
-      if (existing?.spawnedCwd) {
-        return invalid("spawnedCwd cannot be cleared once set");
-      }
-    } else if (raw !== undefined) {
-      if (!supportsSpawnLineage(storeKey)) {
-        return invalid("spawnedCwd is only supported for subagent:* or acp:* sessions");
-      }
-      const trimmed = normalizeOptionalString(raw) ?? "";
-      if (!trimmed) {
-        return invalid("invalid spawnedCwd: empty");
-      }
-      if (existing?.spawnedCwd && existing.spawnedCwd !== trimmed) {
-        return invalid("spawnedCwd cannot be changed once set");
-      }
-      next.spawnedCwd = trimmed;
+      return existing?.[field] ? invalid(`${field} cannot be cleared once set`) : null;
+    }
+    if (raw === undefined) {
+      return null;
+    }
+    const lineage = checkSpawnLineage(field);
+    if (lineage) {
+      return lineage;
+    }
+    const normalized = normalize(raw);
+    if (!normalized) {
+      return invalid(invalidMessage);
+    }
+    if (existing?.[field] && existing[field] !== normalized) {
+      return invalid(`${field} cannot be changed once set`);
+    }
+    next[field] = normalized;
+    return null;
+  };
+
+  for (const fieldParams of [
+    { field: "spawnedBy" as const, checkLineageBeforeEmpty: false },
+    { field: "spawnedWorkspaceDir" as const, checkLineageBeforeEmpty: true },
+    { field: "spawnedCwd" as const, checkLineageBeforeEmpty: true },
+  ]) {
+    const result = applyImmutableString(fieldParams.field, fieldParams.checkLineageBeforeEmpty);
+    if (result) {
+      return result;
     }
   }
 
@@ -265,45 +287,25 @@ export async function applySessionsPatchToStore(params: {
     }
   }
 
-  if ("subagentRole" in patch) {
-    const raw = patch.subagentRole;
-    if (raw === null) {
-      if (existing?.subagentRole) {
-        return invalid("subagentRole cannot be cleared once set");
-      }
-    } else if (raw !== undefined) {
-      if (!supportsSpawnLineage(storeKey)) {
-        return invalid("subagentRole is only supported for subagent:* or acp:* sessions");
-      }
-      const normalized = normalizeSubagentRole(raw);
-      if (!normalized) {
-        return invalid('invalid subagentRole (use "orchestrator" or "leaf")');
-      }
-      if (existing?.subagentRole && existing.subagentRole !== normalized) {
-        return invalid("subagentRole cannot be changed once set");
-      }
-      next.subagentRole = normalized;
-    }
-  }
-
-  if ("subagentControlScope" in patch) {
-    const raw = patch.subagentControlScope;
-    if (raw === null) {
-      if (existing?.subagentControlScope) {
-        return invalid("subagentControlScope cannot be cleared once set");
-      }
-    } else if (raw !== undefined) {
-      if (!supportsSpawnLineage(storeKey)) {
-        return invalid("subagentControlScope is only supported for subagent:* or acp:* sessions");
-      }
-      const normalized = normalizeSubagentControlScope(raw);
-      if (!normalized) {
-        return invalid('invalid subagentControlScope (use "children" or "none")');
-      }
-      if (existing?.subagentControlScope && existing.subagentControlScope !== normalized) {
-        return invalid("subagentControlScope cannot be changed once set");
-      }
-      next.subagentControlScope = normalized;
+  for (const fieldParams of [
+    {
+      field: "subagentRole" as const,
+      normalize: normalizeSubagentRole,
+      invalidMessage: 'invalid subagentRole (use "orchestrator" or "leaf")',
+    },
+    {
+      field: "subagentControlScope" as const,
+      normalize: normalizeSubagentControlScope,
+      invalidMessage: 'invalid subagentControlScope (use "children" or "none")',
+    },
+  ]) {
+    const result = applyImmutableNormalized(
+      fieldParams.field,
+      fieldParams.normalize,
+      fieldParams.invalidMessage,
+    );
+    if (result) {
+      return result;
     }
   }
 
@@ -356,8 +358,8 @@ export async function applySessionsPatchToStore(params: {
       if (!parsed.ok) {
         return invalid(parsed.error);
       }
-      for (const [key, entry] of Object.entries(store)) {
-        if (key === storeKey) {
+      for (const { sessionKey, entry } of params.entries) {
+        if (sessionKey === storeKey) {
           continue;
         }
         if (entry?.label === parsed.label) {
@@ -365,6 +367,53 @@ export async function applySessionsPatchToStore(params: {
         }
       }
       next.label = parsed.label;
+    }
+  }
+
+  if ("category" in patch) {
+    const raw = patch.category;
+    if (raw === null) {
+      delete next.category;
+    } else if (raw !== undefined) {
+      // Categories are shared organization buckets, so duplicates are expected (unlike labels).
+      const trimmed = normalizeOptionalString(raw) ?? "";
+      if (!trimmed) {
+        return invalid("invalid category: empty");
+      }
+      if (trimmed.length > SESSION_LABEL_MAX_LENGTH) {
+        return invalid(`invalid category: too long (max ${SESSION_LABEL_MAX_LENGTH})`);
+      }
+      next.category = trimmed;
+    }
+  }
+
+  if ("archived" in patch) {
+    if (patch.archived === true) {
+      // Archived sessions leave the active quick-access set in the same write.
+      next.archivedAt ??= now;
+      delete next.pinnedAt;
+    } else {
+      delete next.archivedAt;
+    }
+  }
+
+  if ("pinned" in patch) {
+    if (patch.pinned === true) {
+      if (next.archivedAt !== undefined) {
+        return invalid("cannot pin an archived session; restore it first");
+      }
+      next.pinnedAt ??= now;
+    } else {
+      delete next.pinnedAt;
+    }
+  }
+
+  if ("unread" in patch) {
+    if (patch.unread === true) {
+      next.markedUnreadAt = now;
+    } else {
+      next.lastReadAt = now;
+      delete next.markedUnreadAt;
     }
   }
 
@@ -395,7 +444,7 @@ export async function applySessionsPatchToStore(params: {
     } else if (raw !== undefined) {
       const normalized = normalizeFastMode(raw);
       if (normalized === undefined) {
-        return invalid("invalid fastMode (use true or false)");
+        return invalid('invalid fastMode (use true, false, or "auto")');
       }
       next.fastMode = normalized;
     }
@@ -443,11 +492,7 @@ export async function applySessionsPatchToStore(params: {
       if (!normalized) {
         return invalid('invalid responseUsage (use "off"|"tokens"|"full")');
       }
-      if (normalized === "off") {
-        delete next.responseUsage;
-      } else {
-        next.responseUsage = normalized;
-      }
+      next.responseUsage = normalized;
     }
   }
 
@@ -642,6 +687,29 @@ export async function applySessionsPatchToStore(params: {
     }
   }
 
-  store[storeKey] = next;
   return { ok: true, entry: next };
+}
+
+/** Apply a validated gateway session patch to an in-memory session store entry. */
+export async function applySessionsPatchToStore(params: {
+  cfg: OpenClawConfig;
+  store: Record<string, SessionEntry>;
+  storeKey: string;
+  agentId?: string;
+  patch: SessionsPatchParams;
+  loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
+}): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
+  const projected = await projectSessionsPatchEntry({
+    cfg: params.cfg,
+    entries: Object.entries(params.store).map(([sessionKey, entry]) => ({ sessionKey, entry })),
+    existingEntry: params.store[params.storeKey],
+    storeKey: params.storeKey,
+    agentId: params.agentId,
+    patch: params.patch,
+    loadGatewayModelCatalog: params.loadGatewayModelCatalog,
+  });
+  if (projected.ok) {
+    params.store[params.storeKey] = projected.entry;
+  }
+  return projected;
 }

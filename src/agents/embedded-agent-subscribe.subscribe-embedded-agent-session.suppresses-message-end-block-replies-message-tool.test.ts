@@ -102,7 +102,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       emit,
       toolCallId: "tool-message-1",
       message: messageText,
-      result: "ok",
+      result: { details: { deliveryStatus: "sent" } },
     });
     emitAssistantMessageEnd(emit, messageText);
     await Promise.resolve();
@@ -342,7 +342,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       toolCallId: "tool-message-media",
       message: "",
       media: "file:///tmp/render.mp4",
-      result: "ok",
+      result: { details: { deliveryStatus: "sent" } },
     });
     await Promise.resolve();
 
@@ -388,7 +388,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       emit,
       toolCallId: "tool-message-final",
       message: "Final answer sent through the message tool.",
-      result: "ok",
+      result: { details: { deliveryStatus: "sent" } },
     });
     onToolResult.mockClear();
 

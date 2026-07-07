@@ -15,6 +15,9 @@
       "openclaw/plugin-sdk/reply-payload-testing": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/reply-payload-testing.d.ts"
       ],
+      "openclaw/plugin-sdk/sqlite-runtime-testing": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/sqlite-runtime-testing.d.ts"
+      ],
       "openclaw/plugin-sdk/ssrf-runtime-internal": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/ssrf-runtime-internal.d.ts"
       ],
@@ -98,6 +101,27 @@
       ],
       "@openclaw/qa-channel/api.js": [
         "../../dist/plugin-sdk/extensions/qa-channel/api.d.ts"
+      ],
+      "@openclaw/ai": [
+        "../../dist/plugin-sdk/packages/ai/src/index.d.ts"
+      ],
+      "@openclaw/ai/diagnostics": [
+        "../../dist/plugin-sdk/packages/ai/src/utils/diagnostics.d.ts"
+      ],
+      "@openclaw/ai/event-stream": [
+        "../../dist/plugin-sdk/packages/ai/src/utils/event-stream.d.ts"
+      ],
+      "@openclaw/ai/providers": [
+        "../../dist/plugin-sdk/packages/ai/src/providers.d.ts"
+      ],
+      "@openclaw/ai/types": [
+        "../../dist/plugin-sdk/packages/ai/src/types.d.ts"
+      ],
+      "@openclaw/ai/validation": [
+        "../../dist/plugin-sdk/packages/ai/src/validation.d.ts"
+      ],
+      "@openclaw/ai/internal/*": [
+        "../../dist/plugin-sdk/packages/ai/src/internal/*.d.ts"
       ],
       "@openclaw/llm-core": [
         "../../dist/plugin-sdk/packages/llm-core/src/index.d.ts"
@@ -221,9 +245,6 @@
       ],
       "@openclaw/media-core/read-byte-stream-with-limit": [
         "../../dist/plugin-sdk/packages/media-core/src/read-byte-stream-with-limit.d.ts"
-      ],
-      "@openclaw/media-core/read-response-with-limit": [
-        "../../dist/plugin-sdk/packages/media-core/src/read-response-with-limit.d.ts"
       ],
       "@openclaw/media-core/*": [
         "../../dist/plugin-sdk/packages/media-core/src/*.d.ts"

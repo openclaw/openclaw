@@ -6,6 +6,7 @@ import {
   type JournalEntry,
   type Mountable,
 } from "@copilotkit/aimock";
+import { writeJson } from "../shared/http-json.js";
 
 type AimockRequestSnapshot = {
   raw: string;
@@ -22,15 +23,10 @@ type AimockRequestSnapshot = {
   toolOutputStructuredError?: true;
 };
 
-function writeJson(res: ServerResponse, status: number, body: unknown) {
-  const text = JSON.stringify(body);
-  res.writeHead(status, {
-    "content-type": "application/json; charset=utf-8",
-    "content-length": Buffer.byteLength(text),
-    "cache-control": "no-store",
-  });
-  res.end(text);
-}
+// Runtime-context delimiters are owned by src/agents/internal-runtime-context.ts.
+// This mock mirrors the wire shape so delimiter drift fails through QA timeouts.
+const INTERNAL_RUNTIME_CONTEXT_BEGIN = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
+const INTERNAL_RUNTIME_CONTEXT_END = "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
 
 function stringifyContent(content: unknown): string {
   if (typeof content === "string") {
@@ -66,10 +62,21 @@ function extractLastUserText(body: ChatCompletionRequest | null | undefined) {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message?.role === "user") {
-      return stringifyContent(message.content);
+      const text = stringifyContent(message.content);
+      if (!isInternalRuntimeContextCarrierText(text)) {
+        return text;
+      }
     }
   }
   return "";
+}
+
+function isInternalRuntimeContextCarrierText(text: string) {
+  const trimmed = text.trim();
+  return (
+    trimmed.includes(INTERNAL_RUNTIME_CONTEXT_BEGIN) &&
+    trimmed.endsWith(INTERNAL_RUNTIME_CONTEXT_END)
+  );
 }
 
 function extractAllInputText(body: ChatCompletionRequest | null | undefined) {

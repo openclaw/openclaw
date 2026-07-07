@@ -39,12 +39,12 @@ type BackupManifest = {
   }>;
 };
 
-export type BackupVerifyOptions = {
+type BackupVerifyOptions = {
   archive: string;
   json?: boolean;
 };
 
-export type BackupVerifyResult = {
+type BackupVerifyResult = {
   ok: true;
   archivePath: string;
   archiveRoot: string;

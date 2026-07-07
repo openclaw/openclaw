@@ -1,4 +1,5 @@
 // Qa Lab tests cover QA evidence summary behavior.
+import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import {
   QA_EVIDENCE_SUMMARY_KIND,
@@ -47,6 +48,7 @@ describe("evidence summary", () => {
     expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
     expect(evidence.kind).toBe(QA_EVIDENCE_SUMMARY_KIND);
     expect(evidence.schemaVersion).toBe(QA_EVIDENCE_SUMMARY_SCHEMA_VERSION);
+    expect(evidence.evidenceMode).toBe("full");
     expect(evidence.profile).toBeUndefined();
     expect(evidence.entries).toHaveLength(1);
     expect(evidence.entries[0]).toMatchObject({
@@ -122,6 +124,29 @@ describe("evidence summary", () => {
     });
   });
 
+  it("prefers the checked-out ref over an inherited GitHub event SHA", () => {
+    const repoRoot = process.cwd();
+    const checkedOutRef = execFileSync("git", ["rev-parse", "--verify", "HEAD"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    }).trim();
+    const evidence = buildQaSuiteEvidenceSummary({
+      artifactPaths: [],
+      channelId: "qa-channel",
+      env: {
+        GITHUB_SHA: "bd479958c04a1eadbda8b6105e0722588d71e9ad",
+      } as NodeJS.ProcessEnv,
+      generatedAt: "2026-06-24T12:00:00.000Z",
+      primaryModel: "mock-openai/gpt-5.5",
+      providerMode: "mock-openai",
+      repoRoot,
+      scenarioDefinitions: [{ id: "ref-probe", title: "Ref probe" }],
+      scenarioResults: [{ name: "Ref probe", status: "pass" }],
+    });
+
+    expect(evidence.entries[0]?.execution?.environment.ref).toBe(checkedOutRef);
+  });
+
   it("builds Telegram live transport evidence entries", () => {
     const evidence = buildLiveTransportEvidenceSummary({
       artifactPaths: [
@@ -141,6 +166,7 @@ describe("evidence summary", () => {
           title: "Telegram canary",
           status: "fail",
           details: "timed out waiting for SUT reply",
+          posture: "user-path",
           rttMs: 4321,
         },
       ],
@@ -166,6 +192,7 @@ describe("evidence summary", () => {
             role: "live-transport-coverage",
           },
         ],
+        posture: "user-path",
         execution: expect.objectContaining({
           runner: "crabbox",
           provider: {
@@ -345,7 +372,7 @@ describe("evidence summary", () => {
           id: "control-ui.browser-run",
           title: "Control UI browser workflow",
           sourcePath: "ui/control-ui.e2e.test.ts",
-          primaryCoverageIds: ["control-ui.browser"],
+          primaryCoverageIds: ["ui.control"],
           docsRefs: ["docs/concepts/qa-e2e-automation.md"],
           codeRefs: ["ui/"],
         },
@@ -373,7 +400,7 @@ describe("evidence summary", () => {
       },
       coverage: [
         {
-          id: "control-ui.browser",
+          id: "ui.control",
           role: "primary",
         },
       ],
@@ -440,6 +467,38 @@ describe("evidence summary", () => {
     expect(evidence.profile).toBe("experimental-profile");
   });
 
+  it.each([
+    { evidenceMode: undefined, expectedMode: "slim", hasExecution: false },
+    { evidenceMode: "full" as const, expectedMode: "full", hasExecution: true },
+  ])(
+    "resolves profile evidence mode $expectedMode",
+    ({ evidenceMode, expectedMode, hasExecution }) => {
+      const evidence = buildQaSuiteEvidenceSummary({
+        artifactPaths: [{ kind: "summary", path: "qa-suite-summary.json" }],
+        ...(evidenceMode ? { evidenceMode } : {}),
+        profile: "smoke-ci",
+        scenarioDefinitions: [
+          {
+            id: "dm-chat-baseline",
+            title: "DM baseline conversation",
+            coverage: {
+              primary: ["channels.dm"],
+            },
+          },
+        ],
+        channelId: "qa-channel",
+        generatedAt: "2026-06-07T12:09:00.000Z",
+        primaryModel: "mock-openai/gpt-5.5",
+        providerMode: "mock-openai",
+        scenarioResults: [{ name: "DM baseline conversation", status: "pass" }],
+      });
+
+      expect(validateQaEvidenceSummaryJson(evidence)).toEqual(evidence);
+      expect(evidence.evidenceMode).toBe(expectedMode);
+      expect("execution" in evidence.entries[0]).toBe(hasExecution);
+    },
+  );
+
   it("keeps mock non-OpenAI model refs attributed to their model provider", () => {
     const evidence = buildQaSuiteEvidenceSummary({
       artifactPaths: [{ kind: "summary", path: "qa-suite-summary.json" }],
@@ -460,11 +519,13 @@ describe("evidence summary", () => {
       scenarioResults: [{ name: "Anthropic parity", status: "pass" }],
     });
 
-    expect(evidence.entries[0]?.execution.provider).toMatchObject({
-      id: "anthropic",
-      model: {
-        name: "claude-opus-4-8",
-        ref: "anthropic/claude-opus-4-8",
+    expect(evidence.entries[0]?.execution).toMatchObject({
+      provider: {
+        id: "anthropic",
+        model: {
+          name: "claude-opus-4-8",
+          ref: "anthropic/claude-opus-4-8",
+        },
       },
     });
     expect(evidence.entries[0]).toMatchObject({
@@ -500,7 +561,7 @@ describe("evidence summary", () => {
       transportId: "telegram",
     });
 
-    expect(evidence.entries[0]?.execution.packageSource).toEqual({
+    expect(evidence.entries[0]?.execution?.packageSource).toEqual({
       kind: "packed-tarball",
       spec: "/tmp/openclaw.tgz",
       sha: "abc123",
@@ -530,7 +591,7 @@ describe("evidence summary", () => {
       transportId: "telegram",
     });
 
-    expect(evidence.entries[0]?.execution.packageSource).toEqual({
+    expect(evidence.entries[0]?.execution?.packageSource).toEqual({
       kind: "npm-package",
       spec: "openclaw@beta",
       sha: "def456",
@@ -558,7 +619,7 @@ describe("evidence summary", () => {
       transportId: "telegram",
     });
 
-    expect(evidence.entries[0]?.execution.packageSource).toEqual({
+    expect(evidence.entries[0]?.execution?.packageSource).toEqual({
       kind: "source-checkout",
       spec: undefined,
       sha: undefined,
@@ -589,7 +650,7 @@ describe("evidence summary", () => {
       transportId: "discord",
     });
 
-    expect(evidence.entries[0]?.execution.artifacts).toEqual(
+    expect(evidence.entries[0]?.execution?.artifacts).toEqual(
       expect.arrayContaining([
         {
           kind: "screenshot",

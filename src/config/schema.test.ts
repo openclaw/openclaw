@@ -144,6 +144,19 @@ describe("config schema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts queued status reaction emoji overrides", () => {
+    const result = OpenClawSchema.safeParse({
+      messages: {
+        statusReactions: {
+          emojis: {
+            queued: "👁️",
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("includes MCP SSE header schema under mcp.servers entries", () => {
     const schema = baseSchema.schema as {
       properties?: Record<string, unknown>;
@@ -251,6 +264,66 @@ describe("config schema", () => {
         }),
       ).toThrow();
     }
+  });
+
+  it("accepts stdio transport for command-bearing MCP servers", () => {
+    const result = OpenClawSchema.safeParse({
+      mcp: {
+        servers: {
+          myTool: {
+            command: "npx",
+            args: ["-y", "@modelcontextprotocol/server-filesystem"],
+            transport: "stdio",
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects unsupported transport values for MCP servers", () => {
+    for (const transport of ["tcp", "websocket", "grpc", ""]) {
+      expect(() =>
+        OpenClawSchema.parse({
+          mcp: {
+            servers: {
+              bad: {
+                url: "https://mcp.example.com/mcp",
+                transport,
+              },
+            },
+          },
+        }),
+      ).toThrow();
+    }
+  });
+
+  it("rejects stdio transport for URL-only MCP servers (command required)", () => {
+    const result = OpenClawSchema.safeParse({
+      mcp: {
+        servers: {
+          bad: {
+            url: "https://mcp.example.com/mcp",
+            transport: "stdio",
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects stdio transport with whitespace-only command", () => {
+    const result = OpenClawSchema.safeParse({
+      mcp: {
+        servers: {
+          bad: {
+            command: "   ",
+            transport: "stdio",
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(false);
   });
 
   it("merges plugin ui hints", () => {

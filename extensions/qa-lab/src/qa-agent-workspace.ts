@@ -7,6 +7,10 @@ import {
   readQaScenarioPackYamlSource,
 } from "./scenario-catalog.js";
 
+function resolveQaAgentWorkspaceRepoLinkType(platform: NodeJS.Platform = process.platform) {
+  return platform === "win32" ? "junction" : "dir";
+}
+
 export async function seedQaAgentWorkspace(params: { workspaceDir: string; repoRoot?: string }) {
   const catalog = readQaBootstrapScenarioCatalog();
   await fs.mkdir(params.workspaceDir, { recursive: true });
@@ -44,6 +48,12 @@ The mounted repo source should be available read-only under \`./repo/\`.
   if (params.repoRoot) {
     const repoLinkPath = path.join(params.workspaceDir, "repo");
     await fs.rm(repoLinkPath, { force: true, recursive: true });
-    await fs.symlink(params.repoRoot, repoLinkPath, "dir");
+    await fs.symlink(params.repoRoot, repoLinkPath, resolveQaAgentWorkspaceRepoLinkType());
   }
 }
+
+const testing = {
+  resolveQaAgentWorkspaceRepoLinkType,
+};
+
+export { testing as __testing };

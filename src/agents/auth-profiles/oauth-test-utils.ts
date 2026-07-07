@@ -10,7 +10,6 @@ import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-d
 import { setTestEnvValue } from "../../test-utils/env.js";
 import type { resolveApiKeyForProfile } from "./oauth.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
-import { saveAuthProfileStore } from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 /** Environment keys OAuth tests override while creating isolated state roots. */
@@ -86,14 +85,6 @@ export async function removeOAuthTestTempRoot(tempRoot: string): Promise<void> {
     closeOpenClawAgentDatabasesForTest();
     await fs.rm(tempRoot, { recursive: true, force: true });
   }
-}
-
-/** Persist an auth profile store without external auth filtering/sync. */
-export function writeAuthProfileStoreForTest(agentDir: string, store: AuthProfileStore): void {
-  saveAuthProfileStore(store, agentDir, {
-    filterExternalAuthProfiles: false,
-    syncExternalCli: false,
-  });
 }
 
 /** Read a persisted auth profile store, falling back to an empty store. */

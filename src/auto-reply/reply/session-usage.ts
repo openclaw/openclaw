@@ -14,10 +14,11 @@ import {
   resolveSessionGoalDisplayState,
   type SessionSystemPromptReport,
   type SessionEntry,
-  updateSessionStoreEntry,
 } from "../../config/sessions.js";
+import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { resolveNonNegativeNumber } from "../../shared/number-coercion.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 
 function applyCliSessionIdToSessionPatch(
@@ -65,10 +66,6 @@ function applyCliSessionIdToSessionPatch(
     };
   }
   return patch;
-}
-
-function resolveNonNegativeNumber(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 function resolveNonNegativeTokenCount(value: number | undefined): number | undefined {
@@ -134,19 +131,23 @@ export async function persistSessionUsageUpdate(params: {
     typeof params.promptTokens === "number" &&
     Number.isFinite(params.promptTokens) &&
     params.promptTokens > 0;
+  const hasUsableLastCallUsage =
+    Boolean(params.lastCallUsage) && params.lastCallUsage?.contextUsage?.state !== "unavailable";
+  const hasUsableUsageContextSnapshot =
+    params.usageIsContextSnapshot === true && params.usage?.contextUsage?.state !== "unavailable";
   const hasFreshContextSnapshot =
-    Boolean(params.lastCallUsage) || hasPromptTokens || params.usageIsContextSnapshot === true;
+    hasUsableLastCallUsage || hasPromptTokens || hasUsableUsageContextSnapshot;
   const compactionTokensAfter = resolveNonNegativeTokenCount(params.compactionTokensAfter);
   const hasCompactionSnapshot = compactionTokensAfter !== undefined;
 
   if (hasUsage || hasFreshContextSnapshot || hasCompactionSnapshot) {
     try {
-      await updateSessionStoreEntry({
-        storePath,
-        sessionKey,
-        skipMaintenance: true,
-        takeCacheOwnership: true,
-        update: async (entry) => {
+      await updateSessionEntry(
+        {
+          storePath,
+          sessionKey,
+        },
+        async (entry) => {
           const updatedAt = Date.now();
           const preserveSessionModelState =
             params.isHeartbeat === true ||
@@ -237,11 +238,15 @@ export async function persistSessionUsageUpdate(params: {
           ) {
             patch.totalTokensFresh = false;
           }
-          return preserveSessionModelState
+          return preserveUserFacingRunState
             ? patch
             : applyCliSessionIdToSessionPatch(params, entry, patch);
         },
-      });
+        {
+          skipMaintenance: true,
+          takeCacheOwnership: true,
+        },
+      );
     } catch (err) {
       logVerbose(`failed to persist ${label}usage update: ${String(err)}`);
     }
@@ -250,12 +255,12 @@ export async function persistSessionUsageUpdate(params: {
 
   if (params.modelUsed || params.contextTokensUsed) {
     try {
-      await updateSessionStoreEntry({
-        storePath,
-        sessionKey,
-        skipMaintenance: true,
-        takeCacheOwnership: true,
-        update: async (entry) => {
+      await updateSessionEntry(
+        {
+          storePath,
+          sessionKey,
+        },
+        async (entry) => {
           const preserveSessionModelState =
             params.isHeartbeat === true ||
             params.preserveRuntimeModel === true ||
@@ -275,11 +280,24 @@ export async function persistSessionUsageUpdate(params: {
               : (params.systemPromptReport ?? entry.systemPromptReport),
             updatedAt: Date.now(),
           };
-          return preserveSessionModelState
+          if (
+            !preserveUserFacingRunState &&
+            (params.preserveFreshTotalTokensOnStaleUsage !== true ||
+              entry.totalTokensFresh !== true)
+          ) {
+            // A completed run without a context snapshot invalidates any fresh
+            // zero persisted for the previously empty session.
+            patch.totalTokensFresh = false;
+          }
+          return preserveUserFacingRunState
             ? patch
             : applyCliSessionIdToSessionPatch(params, entry, patch);
         },
-      });
+        {
+          skipMaintenance: true,
+          takeCacheOwnership: true,
+        },
+      );
     } catch (err) {
       logVerbose(`failed to persist ${label}model/context update: ${String(err)}`);
     }

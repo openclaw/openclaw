@@ -11,8 +11,8 @@ import {
   identitiesOverlap,
   type WhatsAppIdentity,
 } from "../identity.js";
-import type { WebInboundMessage } from "../inbound/types.js";
-import { isWhatsAppGroupJid } from "../normalize-target.js";
+import { requireWhatsAppInboundAdmission } from "../inbound/admission.js";
+import type { AdmittedWebInboundMessage } from "../inbound/types.js";
 import { isSelfChatMode, normalizeE164 } from "../text-runtime.js";
 
 export type MentionConfig = {
@@ -35,14 +35,17 @@ export function buildMentionConfig(
   return { mentionRegexes, allowFrom: cfg.channels?.whatsapp?.allowFrom };
 }
 
-export function resolveMentionTargets(msg: WebInboundMessage, authDir?: string): MentionTargets {
+export function resolveMentionTargets(
+  msg: AdmittedWebInboundMessage,
+  authDir?: string,
+): MentionTargets {
   const normalizedMentions = getMentionIdentities(msg, authDir);
   const self = getSelfIdentity(msg, authDir);
   return { normalizedMentions, self };
 }
 
 export function isBotMentionedFromTargets(
-  msg: WebInboundMessage,
+  msg: AdmittedWebInboundMessage,
   mentionCfg: MentionConfig,
   targets: MentionTargets,
 ): boolean {
@@ -61,7 +64,8 @@ export function isBotMentionedFromTargets(
   // and let real group @mentions go through the identity-overlap check
   // (#49317). Explicit `mentionCfg.isSelfChat` overrides from the caller
   // are honored as-is so multi-account / precomputed paths keep working.
-  const isGroupConversation = isWhatsAppGroupJid(msg.from);
+  const admission = requireWhatsAppInboundAdmission(msg);
+  const isGroupConversation = admission.conversation.kind === "group";
   const isSelfChat = explicitSelfChatOverride
     ? Boolean(mentionCfg.isSelfChat)
     : isSelfChatMode(targets.self.e164, mentionCfg.allowFrom) && !isGroupConversation;
@@ -103,14 +107,15 @@ export function isBotMentionedFromTargets(
 }
 
 export function debugMention(
-  msg: WebInboundMessage,
+  msg: AdmittedWebInboundMessage,
   mentionCfg: MentionConfig,
   authDir?: string,
 ): { wasMentioned: boolean; details: Record<string, unknown> } {
   const mentionTargets = resolveMentionTargets(msg, authDir);
   const result = isBotMentionedFromTargets(msg, mentionCfg, mentionTargets);
+  const admission = requireWhatsAppInboundAdmission(msg);
   const details = {
-    from: msg.from,
+    from: admission.conversation.id,
     body: msg.payload.body,
     bodyClean: normalizeMentionText(msg.payload.body),
     mentionedJids: msg.group?.mentions?.jids ?? null,

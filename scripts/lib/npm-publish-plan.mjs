@@ -24,7 +24,7 @@ export const JUNE_2026_PATCH_FLOOR = 5;
 /**
  * @typedef {object} NpmPublishPlan
  * @property {"stable" | "alpha" | "beta"} channel
- * @property {"latest" | "alpha" | "beta"} publishTag
+ * @property {"latest" | "alpha" | "beta" | "extended-stable"} publishTag
  * @property {("latest" | "alpha" | "beta")[]} mirrorDistTags
  */
 
@@ -45,26 +45,26 @@ export const JUNE_2026_PATCH_FLOOR = 5;
  * @returns {ParsedReleaseVersion | null}
  */
 function parseVersionParts(version, groups, channel) {
-  const year = Number.parseInt(groups.year ?? "", 10);
-  const month = Number.parseInt(groups.month ?? "", 10);
-  const patch = Number.parseInt(groups.patch ?? "", 10);
-  const alphaNumber = channel === "alpha" ? Number.parseInt(groups.alpha ?? "", 10) : undefined;
-  const betaNumber = channel === "beta" ? Number.parseInt(groups.beta ?? "", 10) : undefined;
+  const year = parseSafeIntegerPart(groups.year);
+  const month = parseSafeIntegerPart(groups.month);
+  const patch = parseSafeIntegerPart(groups.patch);
+  const alphaNumber = channel === "alpha" ? parseSafeIntegerPart(groups.alpha) : undefined;
+  const betaNumber = channel === "beta" ? parseSafeIntegerPart(groups.beta) : undefined;
 
   if (
-    !Number.isInteger(year) ||
-    !Number.isInteger(month) ||
-    !Number.isInteger(patch) ||
+    !Number.isSafeInteger(year) ||
+    !Number.isSafeInteger(month) ||
+    !Number.isSafeInteger(patch) ||
     month < 1 ||
     month > 12 ||
     patch < 1
   ) {
     return null;
   }
-  if (channel === "beta" && (!Number.isInteger(betaNumber) || (betaNumber ?? 0) < 1)) {
+  if (channel === "beta" && (!Number.isSafeInteger(betaNumber) || (betaNumber ?? 0) < 1)) {
     return null;
   }
-  if (channel === "alpha" && (!Number.isInteger(alphaNumber) || (alphaNumber ?? 0) < 1)) {
+  if (channel === "alpha" && (!Number.isSafeInteger(alphaNumber) || (alphaNumber ?? 0) < 1)) {
     return null;
   }
 
@@ -78,6 +78,15 @@ function parseVersionParts(version, groups, channel) {
     alphaNumber,
     betaNumber,
   };
+}
+
+function parseSafeIntegerPart(value) {
+  const raw = value ?? "";
+  if (!/^[0-9]+$/.test(raw)) {
+    return null;
+  }
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
 /**
@@ -108,8 +117,12 @@ export function parseReleaseVersion(version) {
   const correctionMatch = CORRECTION_VERSION_REGEX.exec(trimmed);
   if (correctionMatch?.groups) {
     const parsedCorrection = parseVersionParts(trimmed, correctionMatch.groups, "stable");
-    const correctionNumber = Number.parseInt(correctionMatch.groups.correction ?? "", 10);
-    if (parsedCorrection === null || !Number.isInteger(correctionNumber) || correctionNumber < 1) {
+    const correctionNumber = parseSafeIntegerPart(correctionMatch.groups.correction);
+    if (
+      parsedCorrection === null ||
+      !Number.isSafeInteger(correctionNumber) ||
+      correctionNumber < 1
+    ) {
       return null;
     }
 
@@ -186,12 +199,36 @@ export function compareReleaseVersions(left, right) {
 /**
  * @param {string} version
  * @param {string | null} [currentBetaVersion]
+ * @param {string | null} [publishTagOverride]
  * @returns {NpmPublishPlan}
  */
-export function resolveNpmPublishPlan(version, currentBetaVersion) {
+export function resolveNpmPublishPlan(version, currentBetaVersion, publishTagOverride) {
   const parsedVersion = parseReleaseVersion(version);
   if (parsedVersion === null) {
     throw new Error(`Unsupported release version "${version}".`);
+  }
+
+  const normalizedOverride = publishTagOverride?.trim();
+  if (normalizedOverride && normalizedOverride !== "extended-stable") {
+    throw new Error(
+      `Unsupported npm publish tag override "${normalizedOverride}". Expected "extended-stable".`,
+    );
+  }
+  if (normalizedOverride === "extended-stable") {
+    if (
+      parsedVersion.channel !== "stable" ||
+      parsedVersion.correctionNumber !== undefined ||
+      parsedVersion.patch < 33
+    ) {
+      throw new Error(
+        `Extended-stable npm publication requires a final YYYY.M.PATCH version with PATCH >= 33; found "${version}".`,
+      );
+    }
+    return {
+      channel: "stable",
+      publishTag: "extended-stable",
+      mirrorDistTags: [],
+    };
   }
 
   if (parsedVersion.channel === "beta") {

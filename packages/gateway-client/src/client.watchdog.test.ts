@@ -98,6 +98,23 @@ describe("GatewayClient", () => {
     }
   });
 
+  test("sends the configured websocket origin", async () => {
+    const port = await getFreePort();
+    wss = new WebSocketServer({ port, host: "127.0.0.1" });
+    const receivedOrigin = new Promise<string | undefined>((resolve) => {
+      wss?.once("connection", (_socket, request) => resolve(request.headers.origin));
+    });
+    const client = new GatewayClient({
+      url: `ws://127.0.0.1:${port}`,
+      origin: `http://127.0.0.1:${port}`,
+      connectChallengeTimeoutMs: 0,
+    });
+    client.start();
+
+    await expect(receivedOrigin).resolves.toBe(`http://127.0.0.1:${port}`);
+    client.stop();
+  });
+
   test("prefers connectChallengeTimeoutMs and still honors the legacy alias", () => {
     expect(resolveGatewayClientConnectChallengeTimeoutMs({})).toBe(
       DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
@@ -125,6 +142,11 @@ describe("GatewayClient", () => {
         preauthHandshakeTimeoutMs: 30_000,
       }),
     ).toBe(30_000);
+    expect(
+      resolveGatewayClientConnectChallengeTimeoutMs({
+        env: { OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS: "6000" },
+      }),
+    ).toBe(6_000);
   });
 
   test("closes on missing ticks", async () => {
@@ -310,6 +332,27 @@ describe("GatewayClient", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  test("cleans pending request state when websocket send throws", async () => {
+    const client = new GatewayClient({
+      requestTimeoutMs: 25,
+    });
+    const sendError = new Error("synthetic send failure");
+    (
+      client as unknown as {
+        ws: WebSocket | { readyState: number; send: () => void; close: () => void };
+      }
+    ).ws = {
+      readyState: WebSocket.OPEN,
+      send: vi.fn(() => {
+        throw sendError;
+      }),
+      close: vi.fn(),
+    };
+
+    await expect(client.request("status")).rejects.toThrow("synthetic send failure");
+    expect(getPendingCount(client)).toBe(0);
   });
 
   test("does not auto-timeout expectFinal requests", async () => {

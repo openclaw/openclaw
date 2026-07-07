@@ -13,11 +13,15 @@ import {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
   finalizeToolTerminalPresentation,
+  formatToolExecutionErrorMessage,
+  getBeforeToolCallFailureDisposition,
   HEARTBEAT_RESPONSE_TOOL_NAME,
   embeddedAgentLog,
   getChannelAgentToolMeta,
   getPluginToolMeta,
   type EmbeddedRunAttemptParams,
+  isDeliveredMessageToolOnlySourceReplyResult,
+  isDeliveredMessagingToolResult,
   isReplaySafeToolCall,
   isToolWrappedWithBeforeToolCallHook,
   isToolResultError,
@@ -25,6 +29,8 @@ import {
   isMessagingToolSendAction,
   normalizeHeartbeatToolResponse,
   projectRuntimeToolInputSchema,
+  resolveToolExecutionErrorKind,
+  resolveToolResultFailureKind,
   runAgentHarnessAfterToolCallHook,
   sanitizeToolResult,
   setBeforeToolCallDiagnosticsEnabled,
@@ -47,14 +53,18 @@ import type {
   CodexDynamicToolCallOutputContentItem,
   CodexDynamicToolCallParams,
   CodexDynamicToolCallResponse,
+  CodexDynamicToolDiagnosticTerminalReason,
   CodexDynamicToolDiagnosticTerminalType,
+  CodexDynamicToolFunctionSpec,
   CodexDynamicToolSpec,
   JsonValue,
 } from "./protocol.js";
+import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 
 type CodexDynamicToolHookContext = {
   agentId?: string;
   config?: EmbeddedRunAttemptParams["config"];
+  workspaceDir?: string;
   sessionId?: string;
   sessionKey?: string;
   runId?: string;
@@ -62,9 +72,11 @@ type CodexDynamicToolHookContext = {
   currentChannelProvider?: string;
   currentChannelId?: string;
   currentMessagingTarget?: string;
+  currentMessageId?: string | number;
   currentThreadId?: string;
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
+  sourceReplyDeliveryMode?: EmbeddedRunAttemptParams["sourceReplyDeliveryMode"];
   onToolOutcome?: EmbeddedRunAttemptParams["onToolOutcome"];
   allocateToolOutcomeOrdinal?: EmbeddedRunAttemptParams["allocateToolOutcomeOrdinal"];
 };
@@ -99,6 +111,225 @@ function applyCurrentMessageProvider(
   return { ...args, provider };
 }
 
+function normalizeRouteToken(value: string | number | undefined): string | undefined {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? String(value) : undefined;
+  }
+  const normalized = value?.trim().toLowerCase();
+  return normalized ? normalized : undefined;
+}
+
+function sourceRouteTokens(hookContext: CodexDynamicToolHookContext | undefined): Set<string> {
+  const tokens = new Set<string>();
+  const currentTarget = normalizeRouteToken(hookContext?.currentMessagingTarget);
+  const currentChannel = normalizeRouteToken(hookContext?.currentChannelId);
+  const currentProvider = normalizeRouteToken(hookContext?.currentChannelProvider);
+  if (currentTarget) {
+    tokens.add(currentTarget);
+  }
+  if (currentChannel) {
+    tokens.add(currentChannel);
+  }
+  const channelPrefixIndex = currentChannel?.indexOf(":") ?? -1;
+  if (channelPrefixIndex >= 0 && currentChannel) {
+    const unprefixedChannel = currentChannel.slice(channelPrefixIndex + 1);
+    if (unprefixedChannel) {
+      tokens.add(unprefixedChannel);
+      for (const segment of unprefixedChannel.split(/[;,]/u)) {
+        const token = normalizeRouteToken(segment);
+        if (token) {
+          tokens.add(token);
+        }
+      }
+    }
+  }
+  if (currentProvider && currentChannel?.startsWith(`${currentProvider}:`)) {
+    const unprefixedChannel = currentChannel.slice(currentProvider.length + 1);
+    if (unprefixedChannel) {
+      tokens.add(unprefixedChannel);
+    }
+  }
+  return tokens;
+}
+
+function routeTokenMatchesSource(
+  token: string | undefined,
+  hookContext: CodexDynamicToolHookContext | undefined,
+): boolean {
+  const normalized = normalizeRouteToken(token);
+  return normalized !== undefined && sourceRouteTokens(hookContext).has(normalized);
+}
+
+function routeProviderMatchesSource(
+  provider: string | undefined,
+  hookContext: CodexDynamicToolHookContext | undefined,
+): boolean {
+  const normalized = normalizeRouteToken(provider);
+  if (!normalized) {
+    return false;
+  }
+  const currentProvider = normalizeRouteToken(hookContext?.currentChannelProvider);
+  const currentChannel = normalizeRouteToken(hookContext?.currentChannelId);
+  return currentProvider === normalized || currentChannel?.startsWith(`${normalized}:`) === true;
+}
+
+function routeTokenMatchesCurrentMessage(
+  token: string | number | undefined,
+  hookContext: CodexDynamicToolHookContext | undefined,
+): boolean {
+  const normalized = normalizeRouteToken(token);
+  return (
+    normalized !== undefined && normalized === normalizeRouteToken(hookContext?.currentMessageId)
+  );
+}
+
+function readRouteToken(record: Record<string, unknown>, key: string): string | number | undefined {
+  const value = record[key];
+  return typeof value === "string" || typeof value === "number" ? value : undefined;
+}
+
+function explicitRouteTokensMismatchCurrent(
+  args: Record<string, unknown>,
+  keys: readonly string[],
+  currentToken: string | number | undefined,
+): boolean {
+  const normalizedCurrent = normalizeRouteToken(currentToken);
+  if (!normalizedCurrent) {
+    return false;
+  }
+  return keys.some((key) => {
+    const normalized = normalizeRouteToken(readRouteToken(args, key));
+    return normalized !== undefined && normalized !== normalizedCurrent;
+  });
+}
+
+function explicitThreadRouteTargetsNonSource(
+  args: Record<string, unknown>,
+  hookContext: CodexDynamicToolHookContext | undefined,
+  messagingTarget: MessagingToolSend | undefined,
+): boolean {
+  const normalizedCurrentThread = normalizeRouteToken(hookContext?.currentThreadId);
+  const explicitThreadTokens = [
+    ...EXPLICIT_MESSAGE_THREAD_KEYS.map((key) => normalizeRouteToken(readRouteToken(args, key))),
+    normalizeRouteToken(messagingTarget?.threadId),
+  ].filter((value): value is string => value !== undefined);
+
+  if (explicitThreadTokens.length === 0) {
+    return false;
+  }
+  return (
+    normalizedCurrentThread === undefined ||
+    explicitThreadTokens.some((value) => value !== normalizedCurrentThread)
+  );
+}
+
+function replyReceiptMatchesCurrentMessage(
+  value: unknown,
+  hookContext: CodexDynamicToolHookContext | undefined,
+  depth = 0,
+): boolean {
+  if (depth > 4 || value === null) {
+    return false;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed || !["{", "["].includes(trimmed[0] ?? "")) {
+      return false;
+    }
+    try {
+      return replyReceiptMatchesCurrentMessage(JSON.parse(trimmed), hookContext, depth + 1);
+    } catch {
+      return false;
+    }
+  }
+  if (typeof value !== "object") {
+    return false;
+  }
+  if (Array.isArray(value)) {
+    return value.some((item) => replyReceiptMatchesCurrentMessage(item, hookContext, depth + 1));
+  }
+  const record = value as Record<string, unknown>;
+  for (const key of ["repliedTo", "replyTo", "replyToId", "replyToIdFull"]) {
+    if (
+      routeTokenMatchesCurrentMessage(
+        typeof record[key] === "string" ? record[key] : undefined,
+        hookContext,
+      )
+    ) {
+      return true;
+    }
+  }
+  for (const key of [
+    "content",
+    "details",
+    "payload",
+    "receipt",
+    "result",
+    "results",
+    "sendResult",
+    "text",
+  ]) {
+    if (replyReceiptMatchesCurrentMessage(record[key], hookContext, depth + 1)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasExplicitNonSourceMessageRoute(
+  args: Record<string, unknown>,
+  hookContext: CodexDynamicToolHookContext | undefined,
+  messagingTarget: MessagingToolSend | undefined,
+): boolean {
+  const currentProvider = normalizeRouteToken(hookContext?.currentChannelProvider);
+  for (const key of EXPLICIT_MESSAGE_PROVIDER_KEYS) {
+    const provider = normalizeRouteToken(typeof args[key] === "string" ? args[key] : undefined);
+    if (
+      provider &&
+      currentProvider !== provider &&
+      !routeProviderMatchesSource(provider, hookContext)
+    ) {
+      return true;
+    }
+  }
+  const targetValues = [
+    ...EXPLICIT_MESSAGE_TARGET_KEYS.map((key) =>
+      typeof args[key] === "string" ? args[key] : undefined,
+    ),
+    ...(Array.isArray(args.targets)
+      ? args.targets.map((value) => (typeof value === "string" ? value : undefined))
+      : []),
+  ].filter((value): value is string => normalizeRouteToken(value) !== undefined);
+  if (explicitThreadRouteTargetsNonSource(args, hookContext, messagingTarget)) {
+    return true;
+  }
+  if (
+    explicitRouteTokensMismatchCurrent(
+      args,
+      EXPLICIT_MESSAGE_REPLY_KEYS,
+      hookContext?.currentMessageId,
+    )
+  ) {
+    return true;
+  }
+  if (
+    messagingTarget?.to !== undefined &&
+    !routeTokenMatchesSource(messagingTarget.to, hookContext)
+  ) {
+    return true;
+  }
+  if (messagingTarget?.to !== undefined) {
+    return false;
+  }
+  if (targetValues.length === 0) {
+    return false;
+  }
+  if (targetValues.some((value) => !routeTokenMatchesSource(value, hookContext))) {
+    return true;
+  }
+  return false;
+}
+
 /** Runtime bridge returned to Codex app-server attempt code. */
 export type CodexDynamicToolBridge = {
   availableSpecs: CodexDynamicToolSpec[];
@@ -113,6 +344,7 @@ export type CodexDynamicToolBridge = {
   ) => Promise<CodexDynamicToolCallResponse>;
   telemetry: {
     didSendViaMessagingTool: boolean;
+    didDeliverSourceReplyViaMessageTool: boolean;
     messagingToolSentTexts: string[];
     messagingToolSentMediaUrls: string[];
     messagingToolSentTargets: MessagingToolSend[];
@@ -128,9 +360,18 @@ export type CodexDynamicToolBridge = {
 /** Namespace attached to OpenClaw-owned dynamic tools exposed to Codex. */
 export const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
 
-// Keep OpenClaw session spawning searchable in Codex mode so Codex's native
-// spawn_agent remains the primary Codex subagent surface.
-const ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES = new Set(["sessions_yield"]);
+// Keep OpenClaw control-path tools directly callable even when Codex tool_search
+// is unavailable or resolves a connector-only universe. Developer instructions
+// still steer normal Codex subagents to native spawn_agent.
+const ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES = new Set([
+  "agents_list",
+  "sessions_spawn",
+  "sessions_yield",
+]);
+const EXPLICIT_MESSAGE_PROVIDER_KEYS = ["channel", "provider"];
+const EXPLICIT_MESSAGE_TARGET_KEYS = ["target", "to", "channelId"];
+const EXPLICIT_MESSAGE_THREAD_KEYS = ["threadId", "thread_id", "messageThreadId", "topicId"];
+const EXPLICIT_MESSAGE_REPLY_KEYS = ["replyTo", "replyToId", "replyToIdFull"];
 const DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS = 16_000;
 
 /**
@@ -175,6 +416,7 @@ export function createCodexDynamicToolBridge(params: {
   emitQuarantinedDynamicToolDiagnostics(quarantinedTools, params.hookContext);
   const telemetry: CodexDynamicToolBridge["telemetry"] = {
     didSendViaMessagingTool: false,
+    didDeliverSourceReplyViaMessageTool: false,
     messagingToolSentTexts: [],
     messagingToolSentMediaUrls: [],
     messagingToolSentTargets: [],
@@ -201,20 +443,16 @@ export function createCodexDynamicToolBridge(params: {
     ...(params.directToolNames ?? []),
   ]);
   return {
-    availableSpecs: availableTools.map((entry) =>
-      createCodexDynamicToolSpec({
-        entry,
-        loading: params.loading ?? "searchable",
-        directToolNames,
-      }),
-    ),
-    specs: registeredSpecTools.map((entry) =>
-      createCodexDynamicToolSpec({
-        entry,
-        loading: params.loading ?? "searchable",
-        directToolNames,
-      }),
-    ),
+    availableSpecs: createCodexDynamicToolSpecs({
+      entries: availableTools,
+      loading: params.loading ?? "searchable",
+      directToolNames,
+    }),
+    specs: createCodexDynamicToolSpecs({
+      entries: registeredSpecTools,
+      loading: params.loading ?? "searchable",
+      directToolNames,
+    }),
     telemetry,
     handleToolCall: async (call, options) => {
       const toolEntry = toolMap.get(call.tool);
@@ -291,6 +529,7 @@ export function createCodexDynamicToolBridge(params: {
         );
         const telemetryRawResult = sanitizeToolResult(rawResult);
         const rawIsError = isCodexToolResultError(rawResult);
+        const rawResultFailureKind = resolveToolResultFailureKind(rawResult);
         const middlewareResult = await middlewareRunner.applyToolResultMiddleware({
           threadId: call.threadId,
           turnId: call.turnId,
@@ -309,7 +548,19 @@ export function createCodexDynamicToolBridge(params: {
           result: middlewareResult,
         });
         const resultIsError = rawIsError || isCodexToolResultError(result);
-        notifyAgentToolResult(options?.onAgentToolResult, toolName, result, resultIsError);
+        const finalResultFailureKind = resolveToolResultFailureKind(result);
+        const resultFailureKind = rawResultFailureKind ?? finalResultFailureKind;
+        const observerResult =
+          rawResultFailureKind && finalResultFailureKind !== rawResultFailureKind
+            ? {
+                ...result,
+                details: {
+                  ...(isRecord(result.details) ? result.details : {}),
+                  status: rawResultFailureKind,
+                },
+              }
+            : result;
+        notifyAgentToolResult(options?.onAgentToolResult, toolName, observerResult, resultIsError);
         void runAgentHarnessAfterToolCallHook({
           toolName,
           toolCallId: call.callId,
@@ -336,10 +587,9 @@ export function createCodexDynamicToolBridge(params: {
           executedArgs,
           params.hookContext?.currentChannelProvider,
         );
-        const messagingTarget =
-          isMessagingTool(toolName) && isMessagingToolSendAction(toolName, executedArgs)
-            ? extractMessagingToolSend(toolName, messagingTelemetryArgs, messagingContext)
-            : undefined;
+        const messagingTarget = isMessagingTool(toolName)
+          ? extractMessagingToolSend(toolName, messagingTelemetryArgs, messagingContext)
+          : undefined;
         const confirmedMessagingTarget =
           !rawIsError && messagingTarget
             ? extractMessagingToolSendResult(messagingTarget, telemetryRawResult)
@@ -353,7 +603,8 @@ export function createCodexDynamicToolBridge(params: {
           isError: resultIsError,
           messagingTarget: confirmedMessagingTarget,
         });
-        const terminalType = inferToolResultDiagnosticTerminalType(result, resultIsError);
+        const terminalType =
+          resultFailureKind === "blocked" ? "blocked" : resultIsError ? "error" : "completed";
         const response = withDiagnosticTerminalType(
           {
             contentItems: convertToolContents(result.content, toolResultMaxChars),
@@ -361,12 +612,54 @@ export function createCodexDynamicToolBridge(params: {
           },
           terminalType,
         );
+        withDiagnosticFailureDisposition(response, resultFailureKind);
+        const blocksSourceReplyTermination = hasExplicitNonSourceMessageRoute(
+          executedArgs,
+          params.hookContext,
+          confirmedMessagingTarget,
+        );
+        const deliveredSourceReply = isDeliveredMessageToolOnlySourceReplyResult({
+          sourceReplyDeliveryMode: params.hookContext?.sourceReplyDeliveryMode,
+          toolName,
+          args: executedArgs,
+          result,
+          hookResult: rawResult,
+          isError: resultIsError,
+          allowExplicitSourceRoute: !blocksSourceReplyTermination,
+        });
+        const receiptConfirmedSourceReply =
+          params.hookContext?.sourceReplyDeliveryMode === "message_tool_only" &&
+          toolName === "message" &&
+          normalizeRouteToken(
+            typeof executedArgs.action === "string" ? executedArgs.action : undefined,
+          ) === "reply" &&
+          !resultIsError &&
+          !blocksSourceReplyTermination &&
+          isDeliveredMessagingToolResult({
+            toolName,
+            args: executedArgs,
+            result,
+            hookResult: rawResult,
+            isError: resultIsError,
+          }) &&
+          (replyReceiptMatchesCurrentMessage(rawResult, params.hookContext) ||
+            replyReceiptMatchesCurrentMessage(result, params.hookContext));
+        const toolConfirmedSourceReply =
+          params.hookContext?.sourceReplyDeliveryMode === "message_tool_only" &&
+          toolName === "message" &&
+          !resultIsError &&
+          (rawResult.terminate === true || result.terminate === true);
+        if (deliveredSourceReply || receiptConfirmedSourceReply || toolConfirmedSourceReply) {
+          telemetry.didDeliverSourceReplyViaMessageTool = true;
+        }
         withDynamicToolTermination(
           response,
           rawResult.terminate === true ||
             result.terminate === true ||
             isToolResultYield(rawResult) ||
-            isToolResultYield(result),
+            isToolResultYield(result) ||
+            deliveredSourceReply ||
+            receiptConfirmedSourceReply,
         );
         const asyncStarted =
           isAsyncStartedToolResult(rawResult) || isAsyncStartedToolResult(result);
@@ -378,7 +671,16 @@ export function createCodexDynamicToolBridge(params: {
             isReplaySafeToolCall(toolName, executedArgs));
         return withSideEffectEvidence(response, !replaySafe);
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
+        const beforeToolCallDisposition = getBeforeToolCallFailureDisposition(error);
+        const executionDisposition =
+          beforeToolCallDisposition ??
+          (signal.aborted
+            ? resolveCodexToolAbortTerminalReason(signal)
+            : resolveToolExecutionErrorKind(error));
+        const errorMessage = formatToolExecutionErrorMessage(
+          error,
+          "OpenClaw dynamic tool call failed.",
+        );
         const adjustedExecutedArgs = consumeAdjustedParamsForToolCall(
           call.callId,
           toolResultHookContext.runId,
@@ -389,7 +691,7 @@ export function createCodexDynamicToolBridge(params: {
         executionPrevented =
           executionPrevented ||
           consumePreExecutionBlockedToolCall(call.callId, toolResultHookContext.runId);
-        const failedResult = failedToolResult(errorMessage);
+        const failedResult = failedToolResult(errorMessage, executionDisposition);
         finalizeToolTerminalPresentation({
           toolCallId: call.callId,
           runId: toolResultHookContext.runId,
@@ -425,7 +727,7 @@ export function createCodexDynamicToolBridge(params: {
           (isReplaySafeToolInstance(toolEntry.tool) &&
             isReplaySafeToolCall(toolName, executedArgs));
         return withSideEffectEvidence(
-          withDiagnosticTerminalType(
+          withDiagnosticFailureDisposition(
             {
               contentItems: [
                 {
@@ -435,7 +737,7 @@ export function createCodexDynamicToolBridge(params: {
               ],
               success: false,
             },
-            "error",
+            executionDisposition,
           ),
           didStartExecution && !replaySafe,
         );
@@ -463,10 +765,13 @@ function notifyAgentToolResult(
   }
 }
 
-function failedToolResult(message: string): AgentToolResult<unknown> {
+function failedToolResult(
+  message: string,
+  status: "blocked" | CodexDynamicToolDiagnosticTerminalReason = "failed",
+): AgentToolResult<unknown> {
   return {
     content: [{ type: "text", text: message }],
-    details: { status: "failed", error: message },
+    details: { status, error: message },
   };
 }
 
@@ -502,23 +807,40 @@ function wrapProjectedCodexDynamicTools(
   return { tools: wrappedTools, quarantinedTools };
 }
 
-function createCodexDynamicToolSpec(params: {
-  entry: ProjectedCodexDynamicTool;
+function createCodexDynamicToolSpecs(params: {
+  entries: readonly ProjectedCodexDynamicTool[];
   loading: CodexDynamicToolsLoading;
   directToolNames: ReadonlySet<string>;
-}): CodexDynamicToolSpec {
-  const base = {
+}): CodexDynamicToolSpec[] {
+  const specs: CodexDynamicToolSpec[] = [];
+  const namespaceTools: CodexDynamicToolFunctionSpec[] = [];
+  for (const entry of params.entries) {
+    const functionSpec = createCodexDynamicToolFunctionSpec({ entry });
+    if (params.loading === "direct" || params.directToolNames.has(entry.name)) {
+      specs.push(functionSpec);
+      continue;
+    }
+    namespaceTools.push({ ...functionSpec, deferLoading: true });
+  }
+  if (namespaceTools.length > 0) {
+    specs.push({
+      type: "namespace",
+      name: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+      description: "",
+      tools: namespaceTools,
+    });
+  }
+  return specs;
+}
+
+function createCodexDynamicToolFunctionSpec(params: {
+  entry: ProjectedCodexDynamicTool;
+}): CodexDynamicToolFunctionSpec {
+  return {
+    type: "function",
     name: params.entry.name,
     description: params.entry.description,
     inputSchema: params.entry.inputSchema,
-  };
-  if (params.loading === "direct" || params.directToolNames.has(params.entry.name)) {
-    return base;
-  }
-  return {
-    ...base,
-    namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
-    deferLoading: true,
   };
 }
 
@@ -660,6 +982,7 @@ function emitQuarantinedDynamicToolDiagnostics(
   for (const tool of tools) {
     emitTrustedDiagnosticEvent({
       type: "tool.execution.blocked",
+      agentId: ctx?.agentId,
       runId: ctx?.runId,
       sessionId: ctx?.sessionId,
       sessionKey: ctx?.sessionKey,
@@ -787,9 +1110,22 @@ function collectToolTelemetry(params: {
       }
     }
   }
+  if (!isMessagingTool(params.toolName)) {
+    return;
+  }
+  const isMessagingSendAction = isMessagingToolSendAction(params.toolName, params.args);
+  if (!isMessagingSendAction && !params.messagingTarget) {
+    return;
+  }
   if (
-    !isMessagingTool(params.toolName) ||
-    !isMessagingToolSendAction(params.toolName, params.args)
+    !isMessagingSendAction &&
+    !isDeliveredMessagingToolResult({
+      toolName: params.toolName,
+      args: params.args,
+      result: params.result,
+      hookResult: params.mediaTrustResult,
+      isError: params.isError,
+    })
   ) {
     return;
   }
@@ -888,6 +1224,11 @@ function isCodexToolResultError(result: AgentToolResult<unknown>): boolean {
     status !== "success" &&
     status !== "completed" &&
     status !== "recorded" &&
+    status !== "created" &&
+    status !== "updated" &&
+    status !== "accepted" &&
+    status !== "found" &&
+    status !== "missing" &&
     status !== "pending" &&
     status !== "started" &&
     status !== "running" &&
@@ -908,20 +1249,6 @@ function isAsyncStartedToolResult(result: AgentToolResult<unknown>): boolean {
   return isRecord(details) && details.async === true && details.status === "started";
 }
 
-function inferToolResultDiagnosticTerminalType(
-  result: AgentToolResult<unknown>,
-  isError: boolean,
-): CodexDynamicToolDiagnosticTerminalType {
-  const details = result.details;
-  if (isRecord(details) && typeof details.status === "string") {
-    const status = details.status.trim().toLowerCase();
-    if (status === "blocked") {
-      return "blocked";
-    }
-  }
-  return isError ? "error" : "completed";
-}
-
 function withDiagnosticTerminalType<T extends CodexDynamicToolCallResponse>(
   response: T,
   terminalType: CodexDynamicToolDiagnosticTerminalType,
@@ -931,6 +1258,24 @@ function withDiagnosticTerminalType<T extends CodexDynamicToolCallResponse>(
     enumerable: false,
     value: terminalType,
   });
+  return response;
+}
+
+function withDiagnosticFailureDisposition<T extends CodexDynamicToolCallResponse>(
+  response: T,
+  disposition: "blocked" | CodexDynamicToolDiagnosticTerminalReason | undefined,
+): T {
+  if (!disposition) {
+    return response;
+  }
+  withDiagnosticTerminalType(response, disposition === "blocked" ? "blocked" : "error");
+  if (disposition !== "blocked") {
+    Object.defineProperty(response, "diagnosticTerminalReason", {
+      configurable: true,
+      enumerable: false,
+      value: disposition,
+    });
+  }
   return response;
 }
 

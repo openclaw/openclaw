@@ -198,6 +198,7 @@ type SessionsSendDetails = {
   runId?: string;
   reply?: string;
   error?: string;
+  sentBeforeError?: boolean;
   sessionKey?: string;
   delivery?: {
     status?: string;
@@ -495,6 +496,7 @@ describe("sessions tools", () => {
       params: {
         activeMinutes: undefined,
         agentId: "main",
+        archived: false,
         includeDerivedTitles: false,
         includeLastMessage: false,
         includeGlobal: true,
@@ -630,6 +632,10 @@ describe("sessions tools", () => {
           channel: "unknown",
           origin: undefined,
           spawnedBy: undefined,
+          archived: false,
+          archivedAt: undefined,
+          pinned: false,
+          pinnedAt: undefined,
           label: undefined,
           displayName: undefined,
           derivedTitle: "Visible project kickoff",
@@ -1223,6 +1229,7 @@ describe("sessions tools", () => {
     expect(details.status).toBe("timeout");
     expect(details.error).toBe("429 RESOURCE_EXHAUSTED");
     expect(details.runId).toBe("run-pending-model-error");
+    expect(details.sentBeforeError).toBe(true);
     expect(details.delivery?.status).toBe("pending");
     expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
     await vi.waitFor(() =>
@@ -1694,6 +1701,7 @@ describe("sessions tools", () => {
 
   it("sessions_send falls back from stranded cron run key to durable cron parent", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
+    const requesterKey = "agent:main:cron:source-job:run:source-run";
     const runScopedCallerKey = "agent:leasing-ops:cron:monthly-utility:run:run-fast";
     const durableCronCallerKey = "agent:leasing-ops:cron:monthly-utility";
     const queueMessage = vi.fn(async () => {});
@@ -1712,14 +1720,33 @@ describe("sessions tools", () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
       calls.push(request);
+      if (request.method === "chat.history") {
+        const params = request.params as { sessionKey?: string } | undefined;
+        const text =
+          params?.sessionKey === durableCronCallerKey
+            ? "existing durable reply"
+            : "existing run reply";
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text }],
+              timestamp: 20,
+            },
+          ],
+        };
+      }
       if (request.method === "agent") {
         return { runId: "durable-fallback-run", status: "accepted", acceptedAt: 2000 };
+      }
+      if (request.method === "agent.wait") {
+        return { runId: "durable-fallback-run", status: "ok" };
       }
       return {};
     });
 
     const tool = createOpenClawTools({
-      agentSessionKey: "agent:re-portal:main",
+      agentSessionKey: requesterKey,
       agentChannel: "telegram",
       config: {
         ...TEST_CONFIG,
@@ -1750,6 +1777,25 @@ describe("sessions tools", () => {
     expect(params.sessionKey).toBe(durableCronCallerKey);
     expect(params.message).toContain("[Inter-session message]");
     expect(params.message).toContain("[TASK-COMPLETE] re-portal occupancy ready");
+    await waitForCalls(
+      () =>
+        countMatching(
+          calls,
+          (call) =>
+            call.method === "chat.history" &&
+            (call.params as { sessionKey?: string } | undefined)?.sessionKey ===
+              durableCronCallerKey,
+        ),
+      2,
+    );
+    const firstFallbackHistoryIndex = calls.findIndex(
+      (call) =>
+        call.method === "chat.history" &&
+        (call.params as { sessionKey?: string } | undefined)?.sessionKey === durableCronCallerKey,
+    );
+    const fallbackAgentIndex = calls.findIndex((call) => call.method === "agent");
+    expect(firstFallbackHistoryIndex).toBeLessThan(fallbackAgentIndex);
+    expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
   });
 
   it("sessions_send rejects non-cron run-looking keys without durable-session fallback", async () => {
@@ -1949,11 +1995,48 @@ describe("sessions tools", () => {
     const details = sessionsSendDetails(result.details);
     expect(details.status).toBe("timeout");
     expect(details.error).toBe("agent run timed out");
+    expect(details.sentBeforeError).toBe(true);
     expect(details.sessionKey).toBe(targetKey);
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
     expect(countMatching(calls, (call) => call.method === "agent")).toBe(1);
+  });
+
+  it("sessions_send preserves delivery evidence for post-start agent errors", async () => {
+    const targetKey = "agent:director1:main";
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "agent") {
+        return { runId: "run-error", status: "accepted", acceptedAt: 2000 };
+      }
+      if (request.method === "agent.wait") {
+        return { runId: "run-error", status: "error", error: "agent failed" };
+      }
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "agent:main:main",
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-error", {
+      sessionKey: targetKey,
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+    const details = sessionsSendDetails(result.details);
+    expect(details.status).toBe("error");
+    expect(details.error).toBe("agent failed");
+    expect(details.sentBeforeError).toBe(true);
+    expect(details.sessionKey).toBe(targetKey);
   });
 
   it("sessions_send skips duplicate A2A delivery for waited parent-owned native subagents", async () => {

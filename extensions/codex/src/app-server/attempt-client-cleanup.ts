@@ -1,14 +1,88 @@
 /**
- * Best-effort cleanup helpers for timed-out or aborted Codex app-server turns.
+ * Best-effort cleanup helpers for Codex app-server startup attempts and turns.
  */
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexAppServerClient } from "./client.js";
-import { retireSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
+import {
+  clearSharedCodexAppServerClientIfCurrent,
+  clearSharedCodexAppServerClientIfCurrentAndUnclaimed,
+  retireSharedCodexAppServerClientIfCurrent,
+} from "./shared-client.js";
 
 /** Timeout for best-effort app-server turn interruption during cleanup. */
 export const CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS = 5_000;
 /** Timeout for best-effort thread unsubscribe during cleanup. */
 export const CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS = 5_000;
+
+/** Raised when a thread subscription may be live on a client OpenClaw no longer controls. */
+export class CodexAppServerUnsafeSubscriptionError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "CodexAppServerUnsafeSubscriptionError";
+  }
+}
+
+export function isCodexAppServerUnsafeSubscriptionError(
+  error: unknown,
+): error is CodexAppServerUnsafeSubscriptionError {
+  return error instanceof CodexAppServerUnsafeSubscriptionError;
+}
+
+/** Asserts Codex resumed the exact thread this attempt subscribed to. */
+export function assertCodexThreadResumeSubscription(
+  requestedThreadId: string,
+  returnedThreadId: string,
+): void {
+  if (returnedThreadId !== requestedThreadId) {
+    throw new CodexAppServerUnsafeSubscriptionError(
+      `Codex thread/resume returned ${returnedThreadId} for ${requestedThreadId}`,
+    );
+  }
+}
+
+async function closeClientAndWaitIfAvailable(client: CodexAppServerClient): Promise<void> {
+  const closeable = client as {
+    close?: CodexAppServerClient["close"];
+    closeAndWait?: CodexAppServerClient["closeAndWait"];
+  };
+  if (typeof closeable.closeAndWait === "function") {
+    await closeable.closeAndWait();
+    return;
+  }
+  closeable.close?.();
+}
+
+export async function closeCodexStartupClientBestEffort(
+  client: CodexAppServerClient | undefined,
+): Promise<void> {
+  if (!client) {
+    return;
+  }
+  const unclaimedSharedClient = clearSharedCodexAppServerClientIfCurrentAndUnclaimed(client);
+  if (unclaimedSharedClient.closed) {
+    await closeClientAndWaitIfAvailable(client);
+    return;
+  }
+  if (unclaimedSharedClient.found) {
+    const retired = retireSharedCodexAppServerClientIfCurrent(client);
+    if (retired?.closed) {
+      await closeClientAndWaitIfAvailable(client);
+    }
+    return;
+  }
+  const retiredSharedClient = retireSharedCodexAppServerClientIfCurrent(client);
+  if (retiredSharedClient) {
+    if (retiredSharedClient.closed) {
+      await closeClientAndWaitIfAvailable(client);
+    }
+    return;
+  }
+  if (clearSharedCodexAppServerClientIfCurrent(client)) {
+    await closeClientAndWaitIfAvailable(client);
+    return;
+  }
+  await closeClientAndWaitIfAvailable(client);
+}
 
 /** Sends a turn interrupt without blocking abort cleanup on app-server errors. */
 export function interruptCodexTurnBestEffort(
@@ -43,18 +117,20 @@ export async function unsubscribeCodexThreadBestEffort(
     threadId: string;
     timeoutMs: number;
   },
-): Promise<void> {
+): Promise<boolean> {
   try {
     await client.request(
       "thread/unsubscribe",
       { threadId: params.threadId },
       { timeoutMs: params.timeoutMs },
     );
+    return true;
   } catch (error) {
     embeddedAgentLog.debug("codex app-server thread unsubscribe cleanup failed", {
       threadId: params.threadId,
       error,
     });
+    return false;
   }
 }
 

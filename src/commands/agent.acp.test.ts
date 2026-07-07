@@ -41,9 +41,10 @@ const attemptExecutionMocks = vi.hoisted(() => ({
   emitAcpLifecycleError: vi.fn(),
   emitAcpPromptSubmitted: vi.fn(),
   emitAcpRuntimeEvent: vi.fn(),
-  persistAcpTurnTranscript: vi.fn(
-    async ({ sessionEntry }: { sessionEntry?: unknown }) => sessionEntry,
-  ),
+  persistAcpTurnTranscript: vi.fn(async ({ sessionEntry }: { sessionEntry?: unknown }) => ({
+    kind: "persisted",
+    sessionEntry,
+  })),
 }));
 
 vi.mock("../infra/agent-events.js", () => agentEventMocks);
@@ -77,6 +78,11 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
   };
 
   return {
+    createAcpToolLifecycleTracker: () => ({
+      active: new Map(),
+      terminalToolCallIds: new Set(),
+      saturated: false,
+    }),
     createAcpVisibleTextAccumulator,
     emitAcpLifecycleStart: attemptExecutionMocks.emitAcpLifecycleStart,
     emitAcpLifecycleEnd: attemptExecutionMocks.emitAcpLifecycleEnd,

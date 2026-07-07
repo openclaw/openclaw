@@ -9,13 +9,14 @@ vi.mock("node:child_process", async () => {
   };
 });
 
-const tryListenOnPortMock = vi.hoisted(() => vi.fn());
+const probePortUsageMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../infra/ports-probe.js", () => ({
-  tryListenOnPort: (...args: unknown[]) => tryListenOnPortMock(...args),
+  probePortUsage: (...args: unknown[]) => probePortUsageMock(...args),
 }));
 
 import { execFileSync } from "node:child_process";
+import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import {
   forceFreePort,
   forceFreePortAndWait,
@@ -32,10 +33,8 @@ describe("gateway --force helpers", () => {
     vi.clearAllMocks();
     originalKill = process.kill.bind(process);
     originalPlatform = process.platform;
-    tryListenOnPortMock.mockReset();
-    tryListenOnPortMock.mockRejectedValue(
-      Object.assign(new Error("in use"), { code: "EADDRINUSE" }),
-    );
+    probePortUsageMock.mockReset();
+    probePortUsageMock.mockResolvedValue("busy");
     // Pin to linux so all lsof tests are platform-invariant.
     Object.defineProperty(process, "platform", { value: "linux", configurable: true });
   });
@@ -54,6 +53,30 @@ describe("gateway --force helpers", () => {
     ]);
   });
 
+  it("rejects malformed lsof 'p' lines with no PID", () => {
+    const sample = ["p", "cnode", "p456", "cpython", ""].join("\n");
+    expect(() => parseLsofOutput(sample)).toThrow(/malformed PID field/);
+  });
+
+  it("rejects malformed lsof 'p' lines with digit-prefixed garbage", () => {
+    const sample = ["p111abc", "cnode", "p456", "cpython", ""].join("\n");
+    expect(() => parseLsofOutput(sample)).toThrow(/malformed PID field/);
+  });
+
+  it("does not return partial results when a later lsof PID is malformed", () => {
+    const sample = ["p456", "cpython", "pabc", "cnode", ""].join("\n");
+    expect(() => parseLsofOutput(sample)).toThrow(/malformed PID field/);
+  });
+
+  it("handles empty lsof output", () => {
+    expect(parseLsofOutput("")).toEqual<PortProcess[]>([]);
+  });
+
+  it("rejects non-positive lsof PIDs", () => {
+    const sample = ["p0", "cnode", "p456", "cpython", ""].join("\n");
+    expect(() => parseLsofOutput(sample)).toThrow(/malformed PID field/);
+  });
+
   it("returns empty list when lsof finds nothing", () => {
     (execFileSync as unknown as Mock).mockImplementation(() => {
       const err = new Error("no matches") as NodeJS.ErrnoException & { status?: number };
@@ -64,7 +87,7 @@ describe("gateway --force helpers", () => {
   });
 
   it("skips lsof when the port is already bindable", async () => {
-    tryListenOnPortMock.mockResolvedValue(undefined);
+    probePortUsageMock.mockResolvedValue("free");
 
     const result = await forceFreePortAndWait(18789, { timeoutMs: 500, intervalMs: 100 });
 
@@ -74,6 +97,33 @@ describe("gateway --force helpers", () => {
       escalatedToSigkill: false,
     });
     expect(execFileSync).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when lsof has a malformed PID and fuser cannot identify one", async () => {
+    (execFileSync as unknown as Mock).mockImplementation((cmd: string) => {
+      if (cmd.includes("lsof")) {
+        return ["p111abc", "cnode", ""].join("\n");
+      }
+      const err = new Error("no matches") as NodeJS.ErrnoException & {
+        status?: number;
+        stdout?: string;
+        stderr?: string;
+      };
+      err.status = 1;
+      err.stdout = "";
+      err.stderr = "";
+      throw err;
+    });
+
+    await expect(forceFreePortAndWait(18789, { timeoutMs: 200, intervalMs: 100 })).rejects.toThrow(
+      /still busy.*no listener PID/i,
+    );
+
+    expect(execFileSync).toHaveBeenCalledWith(
+      "fuser",
+      ["-k", "-TERM", "18789/tcp"],
+      expect.anything(),
+    );
   });
 
   it("throws when lsof missing", () => {
@@ -198,9 +248,7 @@ describe("gateway --force helpers", () => {
       }
       return "18789/tcp: 4242\n";
     });
-    tryListenOnPortMock
-      .mockRejectedValueOnce(Object.assign(new Error("in use"), { code: "EADDRINUSE" }))
-      .mockResolvedValue(undefined);
+    probePortUsageMock.mockResolvedValueOnce("busy").mockResolvedValue("free");
 
     const result = await forceFreePortAndWait(18789, { timeoutMs: 500, intervalMs: 100 });
 
@@ -230,13 +278,12 @@ describe("gateway --force helpers", () => {
       return "";
     });
 
-    const busyErr = Object.assign(new Error("in use"), { code: "EADDRINUSE" });
-    tryListenOnPortMock
-      .mockRejectedValueOnce(busyErr)
-      .mockRejectedValueOnce(busyErr)
-      .mockRejectedValueOnce(busyErr)
-      .mockRejectedValueOnce(busyErr)
-      .mockResolvedValueOnce(undefined);
+    probePortUsageMock
+      .mockResolvedValueOnce("busy")
+      .mockResolvedValueOnce("busy")
+      .mockResolvedValueOnce("busy")
+      .mockResolvedValueOnce("busy")
+      .mockResolvedValue("free");
 
     const promise = forceFreePortAndWait(18789, {
       timeoutMs: 300,
@@ -257,6 +304,8 @@ describe("gateway --force helpers", () => {
   });
 
   it("throws when lsof is unavailable and fuser is missing", async () => {
+    // An inconclusive four-host probe must continue into the cleanup tools.
+    probePortUsageMock.mockResolvedValue("unknown");
     (execFileSync as unknown as Mock).mockImplementation((cmd: string) => {
       const err = new Error(`spawnSync ${cmd} ENOENT`) as NodeJS.ErrnoException;
       err.code = "ENOENT";
@@ -293,6 +342,16 @@ describe("gateway --force helpers (Windows netstat path)", () => {
       ),
     ].join("\r\n");
 
+  const makeLocalizedNetstatOutput = () =>
+    [
+      "Proto  Local Address          Foreign Address        State           PID",
+      "  TCP    0.0.0.0:18789        0.0.0.0:0              ABHOEREN        42",
+      "  TCP    [::1]:18789          [::]:0                 ABHOEREN        99",
+      "  TCP    127.0.0.1:18789      127.0.0.1:0            ABHOEREN        122",
+      "  TCP    127.0.0.1:18789      127.0.0.1:50123        ESTABLISHED     123",
+      "  TCP    127.0.0.1:18789      0.0.0.0:0                              124",
+    ].join("\r\n");
+
   it("returns empty list when netstat finds no listeners on the port", () => {
     (execFileSync as unknown as Mock).mockReturnValue(makeNetstatOutput(9999, 42));
     expect(listPortListeners(18789)).toStrictEqual([]);
@@ -300,6 +359,14 @@ describe("gateway --force helpers (Windows netstat path)", () => {
 
   it("parses PIDs from netstat output correctly", () => {
     (execFileSync as unknown as Mock).mockReturnValue(makeNetstatOutput(18789, 42, 99));
+    expect(listPortListeners(18789)).toEqual<PortProcess[]>([{ pid: 42 }, { pid: 99 }]);
+    expect(execFileSync).toHaveBeenCalledWith(getWindowsSystem32ExePath("netstat.exe"), ["-ano"], {
+      encoding: "utf-8",
+    });
+  });
+
+  it("parses localized Windows listener rows without depending on the state text", () => {
+    (execFileSync as unknown as Mock).mockReturnValue(makeLocalizedNetstatOutput());
     expect(listPortListeners(18789)).toEqual<PortProcess[]>([{ pid: 42 }, { pid: 99 }]);
   });
 

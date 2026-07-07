@@ -12,3 +12,5 @@ Ballance
 optIn
 Brining
 wit
+allowIn
+planText

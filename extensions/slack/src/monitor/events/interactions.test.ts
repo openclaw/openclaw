@@ -1,4 +1,5 @@
 // Slack tests cover interactions plugin behavior.
+import type { SlackShortcutMiddlewareArgs } from "@slack/bolt";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
@@ -135,7 +136,7 @@ type RegisteredHandler = (args: {
     response_url?: string;
     channel?: { id?: string };
     container?: { channel_id?: string; message_ts?: string; thread_ts?: string };
-    message?: { ts?: string; text?: string; blocks?: unknown[] };
+    message?: { ts?: string; thread_ts?: string; text?: string; blocks?: unknown[] };
   };
   action: Record<string, unknown>;
   respond?: (payload: { text: string; response_type: string }) => Promise<void>;
@@ -180,6 +181,10 @@ type RegisteredViewClosedHandler = (args: {
   };
 }) => Promise<void>;
 
+type RegisteredShortcutHandler = (
+  args: Pick<SlackShortcutMiddlewareArgs, "ack" | "body">,
+) => Promise<void>;
+
 function createContext(overrides?: {
   dmEnabled?: boolean;
   dmPolicy?: "open" | "allowlist" | "pairing" | "disabled";
@@ -204,6 +209,7 @@ function createContext(overrides?: {
   let actionMatcher: RegExp | null = null;
   let viewHandler: RegisteredViewHandler | null = null;
   let viewClosedHandler: RegisteredViewClosedHandler | null = null;
+  let shortcutHandler: RegisteredShortcutHandler | null = null;
   const app = {
     action: vi.fn((matcher: RegExp, next: RegisteredHandler) => {
       actionMatcher = matcher;
@@ -214,6 +220,9 @@ function createContext(overrides?: {
     }),
     viewClosed: vi.fn((_matcher: RegExp, next: RegisteredViewClosedHandler) => {
       viewClosedHandler = next;
+    }),
+    shortcut: vi.fn((_matcher: RegExp, next: RegisteredShortcutHandler) => {
+      shortcutHandler = next;
     }),
     client: {
       chat: {
@@ -307,6 +316,12 @@ function createContext(overrides?: {
       }
       return viewClosedHandler;
     },
+    getShortcutHandler: () => {
+      if (!shortcutHandler) {
+        throw new Error("Expected Slack shortcut handler to be registered");
+      }
+      return shortcutHandler;
+    },
   };
 }
 
@@ -329,6 +344,13 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
     throw new Error(`Expected ${label}`);
   }
   return value as Record<string, unknown>;
+}
+
+function hasLoneSurrogate(value: string): boolean {
+  return Array.from(value).some((char) => {
+    const codePoint = char.codePointAt(0) ?? 0;
+    return codePoint >= 0xd800 && codePoint <= 0xdfff;
+  });
 }
 
 function expectRecordFields(
@@ -395,6 +417,165 @@ describe("registerSlackInteractionEvents", () => {
       handled: false,
       duplicate: false,
     });
+  });
+
+  it("routes global shortcuts to the actor's direct session", async () => {
+    const { ctx, getShortcutHandler, resolveSessionKey } = createContext();
+    const trackEvent = vi.fn();
+    registerSlackInteractionEvents({ ctx: ctx as never, trackEvent });
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await getShortcutHandler()({
+      ack,
+      body: {
+        type: "shortcut",
+        callback_id: "capture-note",
+        trigger_id: "123.trigger",
+        user: { id: "U123", username: "ada", team_id: "T9" },
+        team: { id: "T9", domain: "example" },
+        token: "secret",
+        action_ts: "100.200",
+      },
+    });
+
+    expect(ack).toHaveBeenCalledOnce();
+    expect(trackEvent).toHaveBeenCalledOnce();
+    expect(resolveSessionKey).toHaveBeenCalledWith({
+      channelId: undefined,
+      channelType: "im",
+      senderId: "U123",
+      threadTs: undefined,
+    });
+    expect(slackInteractionPayload()).toMatchObject({
+      interactionType: "global_shortcut",
+      actionId: "shortcut:capture-note",
+      callbackId: "capture-note",
+      userId: "U123",
+      teamId: "T9",
+      triggerId: "[redacted]",
+      actionTs: "100.200",
+    });
+    expect(enqueueSystemEventText()).not.toContain("secret");
+    expect(mockCallArg(enqueueSystemEventMock, 0, "enqueueSystemEvent", 1)).toMatchObject({
+      sessionKey: "agent:ops:slack:channel:C1",
+      deliveryContext: {
+        channel: "slack",
+        to: "user:U123",
+        accountId: "default",
+      },
+    });
+    expect(requestHeartbeatMock).toHaveBeenCalledOnce();
+  });
+
+  it("routes message shortcuts with selected-message context", async () => {
+    const { ctx, getShortcutHandler, resolveSessionKey } = createContext({
+      resolveChannelName: async () => ({ name: "ops", type: "channel" }),
+    });
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    await getShortcutHandler()({
+      ack: vi.fn().mockResolvedValue(undefined),
+      body: {
+        type: "message_action",
+        callback_id: "summarize-message",
+        trigger_id: "456.trigger",
+        response_url: "https://hooks.slack.test/response",
+        message_ts: "200.300",
+        message: {
+          type: "message",
+          user: "U456",
+          ts: "200.300",
+          text: "Selected message",
+          thread_ts: "200.100",
+        },
+        user: { id: "U123", name: "ada", team_id: "T9" },
+        channel: { id: "C1", name: "ops" },
+        team: { id: "T9", domain: "example" },
+        token: "secret",
+        action_ts: "200.400",
+      },
+    });
+
+    expect(resolveSessionKey).toHaveBeenCalledWith({
+      channelId: "C1",
+      channelType: "channel",
+      senderId: "U123",
+      threadTs: "200.100",
+    });
+    expect(slackInteractionPayload()).toMatchObject({
+      interactionType: "message_shortcut",
+      actionId: "shortcut:summarize-message",
+      callbackId: "summarize-message",
+      channelId: "C1",
+      channelName: "ops",
+      messageTs: "200.300",
+      threadTs: "200.100",
+      messageUserId: "U456",
+      messageText: "Selected message",
+      triggerId: "[redacted]",
+      responseUrl: "[redacted]",
+    });
+    expect(enqueueSystemEventText()).not.toContain("secret");
+    expect(mockCallArg(enqueueSystemEventMock, 0, "enqueueSystemEvent", 1)).toMatchObject({
+      deliveryContext: {
+        channel: "slack",
+        to: "channel:C1",
+        accountId: "default",
+        threadId: "200.100",
+      },
+    });
+  });
+
+  it("acknowledges mismatched shortcuts before dropping them", async () => {
+    const order: string[] = [];
+    const { ctx, getShortcutHandler } = createContext({
+      shouldDropMismatchedSlackEvent: () => {
+        order.push("filter");
+        return true;
+      },
+    });
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    await getShortcutHandler()({
+      ack: vi.fn(async () => {
+        order.push("ack");
+      }),
+      body: {
+        type: "shortcut",
+        callback_id: "capture-note",
+        trigger_id: "123.trigger",
+        user: { id: "U123", username: "ada", team_id: "T9" },
+        team: { id: "T9", domain: "example" },
+        token: "secret",
+        action_ts: "100.200",
+      },
+    });
+
+    expect(order).toEqual(["ack", "filter"]);
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+  });
+
+  it("enforces DM policy for global shortcuts", async () => {
+    const { ctx, getShortcutHandler } = createContext({
+      dmEnabled: false,
+      dmPolicy: "disabled",
+    });
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    await getShortcutHandler()({
+      ack: vi.fn().mockResolvedValue(undefined),
+      body: {
+        type: "shortcut",
+        callback_id: "capture-note",
+        trigger_id: "123.trigger",
+        user: { id: "U123", username: "ada", team_id: "T9" },
+        team: { id: "T9", domain: "example" },
+        token: "secret",
+        action_ts: "100.200",
+      },
+    });
+
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
   });
 
   it("enqueues structured events and updates button rows", async () => {
@@ -1216,6 +1397,53 @@ describe("registerSlackInteractionEvents", () => {
     });
   });
 
+  it.each([
+    { name: "current", actionId: "openclaw:reply_link:1:1", value: undefined },
+    {
+      name: "legacy",
+      actionId: "openclaw:reply_button:1:1",
+      value: "/approve req-1 allow-once",
+    },
+  ])("ignores $name Slack callbacks emitted for link-only reply buttons", async (testCase) => {
+    const { ctx, app, getHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await getHandler()({
+      ack,
+      body: {
+        user: { id: "U123" },
+        channel: { id: "C1" },
+        container: { channel_id: "C1", message_ts: "100.200" },
+        message: {
+          ts: "100.200",
+          text: "fallback",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "reply_actions",
+              elements: [{ type: "button", action_id: testCase.actionId }],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: testCase.actionId,
+        block_id: "reply_actions",
+        url: "https://example.com/app",
+        ...(testCase.value ? { value: testCase.value } : {}),
+        text: { type: "plain_text", text: "Launch" },
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    expect(dispatchPluginInteractiveHandlerMock).not.toHaveBeenCalled();
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
+    expect(app.client.chat.update).not.toHaveBeenCalled();
+  });
+
   it("keeps exec approval buttons when gateway resolution fails", async () => {
     resolveApprovalOverGatewayMock.mockRejectedValueOnce(new Error("gateway down"));
     const { ctx, app, getHandler } = createContext();
@@ -1820,6 +2048,67 @@ describe("registerSlackInteractionEvents", () => {
       teamId: "T111",
     });
     expect(app.client.chat.update).not.toHaveBeenCalled();
+  });
+
+  it("uses the message thread timestamp when Slack omits the container thread", async () => {
+    enqueueSystemEventMock.mockClear();
+    const { ctx, getHandler, resolveSessionKey } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const handler = getHandler();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await handler({
+      ack,
+      body: {
+        user: { id: "U333" },
+        team: { id: "T333" },
+        channel: { id: "C333" },
+        container: { channel_id: "C333", message_ts: "333.444" },
+        message: {
+          ts: "333.444",
+          thread_ts: "333.111",
+          text: "fallback",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "reply_actions",
+              elements: [{ type: "button", action_id: "openclaw:reply_button" }],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:reply_button",
+        block_id: "reply_actions",
+        value: "continue",
+        text: { type: "plain_text", text: "Continue" },
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    expect(resolveSessionKey).toHaveBeenCalledWith({
+      channelId: "C333",
+      channelType: "channel",
+      senderId: "U333",
+      threadTs: "333.111",
+    });
+    expectRecordFields(slackInteractionPayload(), {
+      channelId: "C333",
+      messageTs: "333.444",
+      threadTs: "333.111",
+      teamId: "T333",
+    });
+    const eventOptions = requireRecord(
+      mockCallArg(enqueueSystemEventMock, 0, "enqueueSystemEvent", 1),
+      "event options",
+    );
+    expectRecordFields(requireRecord(eventOptions.deliveryContext, "delivery context"), {
+      channel: "slack",
+      to: "channel:C333",
+      accountId: "default",
+      threadId: "333.111",
+    });
   });
 
   it("summarizes multi-select confirmations in updated message rows", async () => {
@@ -3015,6 +3304,89 @@ describe("registerSlackInteractionEvents", () => {
     expect(payload.payloadTruncated).toBe(true);
     expect(Array.isArray(payload.inputs) ? payload.inputs.length : 0).toBeLessThanOrEqual(3);
     expect((payload.inputsOmitted ?? 0) >= 1).toBe(true);
+  });
+
+  it("keeps block action rich text previews UTF-16 safe at the truncation boundary", async () => {
+    enqueueSystemEventMock.mockClear();
+    const { ctx, getHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const handler = getHandler();
+
+    const boundaryText = `${"x".repeat(118)}😀y`;
+    const ack = vi.fn().mockResolvedValue(undefined);
+    await handler({
+      ack,
+      body: {
+        user: { id: "U555" },
+        channel: { id: "C1" },
+        message: {
+          ts: "111.222",
+          text: "fallback",
+          blocks: [{ type: "actions", block_id: "richtext_block", elements: [] }],
+        },
+      },
+      action: {
+        type: "rich_text_input",
+        action_id: "openclaw:richtext",
+        block_id: "richtext_block",
+        rich_text_value: {
+          type: "rich_text",
+          elements: [
+            {
+              type: "rich_text_section",
+              elements: [{ type: "text", text: boundaryText }],
+            },
+          ],
+        },
+      },
+    } as never);
+
+    expect(ack).toHaveBeenCalled();
+    const payload = slackInteractionPayload() as { richTextPreview?: string };
+    expect(payload.richTextPreview).toBe(`${"x".repeat(118)}…`);
+    expect(payload.richTextPreview?.length).toBeLessThanOrEqual(120);
+    expect(hasLoneSurrogate(payload.richTextPreview ?? "")).toBe(false);
+    expect(() => encodeURIComponent(payload.richTextPreview ?? "")).not.toThrow();
+  });
+
+  it("keeps complete emoji in rich text previews when the UTF-16 boundary can include it", async () => {
+    enqueueSystemEventMock.mockClear();
+    const { ctx, getHandler } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+    const handler = getHandler();
+
+    const text = `${"x".repeat(117)}😀yy`;
+    await handler({
+      ack: vi.fn().mockResolvedValue(undefined),
+      body: {
+        user: { id: "U555" },
+        channel: { id: "C1" },
+        message: {
+          ts: "111.333",
+          text: "fallback",
+          blocks: [{ type: "actions", block_id: "richtext_block", elements: [] }],
+        },
+      },
+      action: {
+        type: "rich_text_input",
+        action_id: "openclaw:richtext",
+        block_id: "richtext_block",
+        rich_text_value: {
+          type: "rich_text",
+          elements: [
+            {
+              type: "rich_text_section",
+              elements: [{ type: "text", text }],
+            },
+          ],
+        },
+      },
+    } as never);
+
+    const payload = slackInteractionPayload() as { richTextPreview?: string };
+    expect(payload.richTextPreview).toBe(`${"x".repeat(117)}😀…`);
+    expect(payload.richTextPreview?.length).toBeLessThanOrEqual(120);
+    expect(hasLoneSurrogate(payload.richTextPreview ?? "")).toBe(false);
   });
 });
 const selectedDateTimeEpoch = 1_771_632_300;

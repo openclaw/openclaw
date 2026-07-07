@@ -16,7 +16,7 @@ import {
 } from "node:fs";
 import type { Dirent } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve, win32 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
 import {
@@ -25,6 +25,7 @@ import {
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   writePackageDistInventory,
 } from "../src/infra/package-dist-inventory.ts";
+import { escapeRegExp } from "../src/shared/regexp.js";
 import { checkCliBootstrapExternalImports } from "./check-cli-bootstrap-imports.mjs";
 import {
   collectBundledExtensionManifestErrors,
@@ -94,6 +95,7 @@ const requiredPathGroups = [
   "dist/plugin-sdk/root-alias.cjs",
   "dist/agents/compaction-planning.worker.js",
   "dist/agents/model-provider-auth.worker.js",
+  "dist/audit/audit-event-writer.worker.js",
   "dist/task-registry-control.runtime.js",
   "dist/telegram-ingress-worker.runtime.js",
   "dist/build-info.json",
@@ -381,7 +383,7 @@ function runPack(packDestination: string): PackResult[] {
   return JSON.parse(raw) as PackResult[];
 }
 
-function resolvePackedTarballPath(packDestination: string, results: PackResult[]): string {
+export function resolvePackedTarballPath(packDestination: string, results: PackResult[]): string {
   const filenames = results
     .map((entry) => entry.filename)
     .filter((filename): filename is string => typeof filename === "string" && filename.length > 0);
@@ -390,7 +392,18 @@ function resolvePackedTarballPath(packDestination: string, results: PackResult[]
       `release-check: npm pack produced ${filenames.length} tarballs; expected exactly one.`,
     );
   }
-  return resolve(packDestination, filenames[0]);
+  const filename = filenames[0];
+  if (
+    !filename.endsWith(".tgz") ||
+    filename.includes("\0") ||
+    filename !== basename(filename) ||
+    filename !== win32.basename(filename)
+  ) {
+    throw new Error(
+      `release-check: npm pack reported unsafe tarball filename ${JSON.stringify(filename)}.`,
+    );
+  }
+  return resolve(packDestination, filename);
 }
 
 function installPackedTarball(prefixDir: string, tarballPath: string, cwd: string): void {
@@ -947,7 +960,7 @@ export function collectForbiddenPackContentPaths(
 export { collectPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mjs";
 
 function extractTag(item: string, tag: string): string | null {
-  const escapedTag = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedTag = escapeRegExp(tag);
   const regex = new RegExp(`<${escapedTag}>([^<]+)</${escapedTag}>`);
   return regex.exec(item)?.[1]?.trim() ?? null;
 }
@@ -981,6 +994,9 @@ export function collectAppcastSparkleVersionErrors(xml: string): string[] {
     }
     const floors = sparkleBuildFloorsFromShortVersion(shortVersion);
     if (floors === null) {
+      errors.push(
+        `appcast item '${title}' has invalid sparkle:shortVersionString '${shortVersion}'.`,
+      );
       continue;
     }
 

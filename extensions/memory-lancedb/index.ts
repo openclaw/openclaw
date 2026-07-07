@@ -16,6 +16,7 @@ import {
 } from "openclaw/plugin-sdk/channel-actions";
 import { BUNDLED_CHAT_CHANNEL_ENVELOPE_PREFIXES } from "openclaw/plugin-sdk/chat-channel-ids";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import {
@@ -78,33 +79,13 @@ type OpenAiEmbeddingClient = {
     options: { body: unknown; timeout?: number; maxRetries?: number },
   ): Promise<T>;
 };
-
-let openAiModulePromise: Promise<typeof import("openai")> | undefined;
-function loadOpenAiModule(): Promise<typeof import("openai")> {
-  openAiModulePromise ??= import("openai");
-  return openAiModulePromise;
-}
-
-let memoryEmbeddingProviderModulePromise:
-  | Promise<typeof import("openclaw/plugin-sdk/memory-core-host-engine-embeddings")>
-  | undefined;
-function loadMemoryEmbeddingProviderModule(): Promise<
-  typeof import("openclaw/plugin-sdk/memory-core-host-engine-embeddings")
-> {
-  memoryEmbeddingProviderModulePromise ??=
-    import("openclaw/plugin-sdk/memory-core-host-engine-embeddings");
-  return memoryEmbeddingProviderModulePromise;
-}
-
-let memoryHostCoreModulePromise:
-  | Promise<typeof import("openclaw/plugin-sdk/memory-host-core")>
-  | undefined;
-function loadMemoryHostCoreModule(): Promise<
-  typeof import("openclaw/plugin-sdk/memory-host-core")
-> {
-  memoryHostCoreModulePromise ??= import("openclaw/plugin-sdk/memory-host-core");
-  return memoryHostCoreModulePromise;
-}
+const loadOpenAiModule = createLazyRuntimeModule(() => import("openai"));
+const loadMemoryEmbeddingProviderModule = createLazyRuntimeModule(
+  () => import("openclaw/plugin-sdk/memory-core-host-engine-embeddings"),
+);
+const loadMemoryHostCoreModule = createLazyRuntimeModule(
+  () => import("openclaw/plugin-sdk/memory-host-core"),
+);
 
 function extractUserTextContent(message: unknown): string[] {
   const msgObj = asRecord(message);

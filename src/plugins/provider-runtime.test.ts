@@ -2,6 +2,7 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig, OpenClawConfig } from "../config/types.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import {
   expectAugmentedCodexCatalog,
@@ -22,6 +23,8 @@ type IsPluginProvidersLoadInFlight =
   typeof import("./providers.runtime.js").isPluginProvidersLoadInFlight;
 type ResolveCatalogHookProviderPluginIds =
   typeof import("./providers.js").resolveCatalogHookProviderPluginIds;
+type ResolveUsageHookProviderPluginContracts =
+  typeof import("./providers.js").resolveUsageHookProviderPluginContracts;
 type ResolveExternalAuthProfileCompatFallbackPluginIds =
   typeof import("./providers.js").resolveExternalAuthProfileCompatFallbackPluginIds;
 type ResolveExternalAuthProfileProviderPluginIds =
@@ -35,6 +38,9 @@ const resolvePluginProvidersMock = vi.fn<ResolvePluginProviders>((_) => [] as Pr
 const isPluginProvidersLoadInFlightMock = vi.fn<IsPluginProvidersLoadInFlight>((_) => false);
 const resolveCatalogHookProviderPluginIdsMock = vi.fn<ResolveCatalogHookProviderPluginIds>(
   (_) => [] as string[],
+);
+const resolveUsageHookProviderPluginContractsMock = vi.fn<ResolveUsageHookProviderPluginContracts>(
+  (_) => [],
 );
 const resolveExternalAuthProfileCompatFallbackPluginIdsMock =
   vi.fn<ResolveExternalAuthProfileCompatFallbackPluginIds>((_) => [] as string[]);
@@ -86,6 +92,7 @@ let resolveProviderUsageAuthWithPlugin: typeof import("./provider-runtime.js").r
 let resolveProviderXHighThinking: typeof import("./provider-runtime.js").resolveProviderXHighThinking;
 let normalizeProviderToolSchemasWithPlugin: typeof import("./provider-runtime.js").normalizeProviderToolSchemasWithPlugin;
 let inspectProviderToolSchemasWithPlugin: typeof import("./provider-runtime.js").inspectProviderToolSchemasWithPlugin;
+let listProviderUsagePluginDescriptors: typeof import("./provider-runtime.js").listProviderUsagePluginDescriptors;
 let normalizeProviderResolvedModelWithPlugin: typeof import("./provider-runtime.js").normalizeProviderResolvedModelWithPlugin;
 let prepareProviderDynamicModel: typeof import("./provider-runtime.js").prepareProviderDynamicModel;
 let prepareProviderRuntimeAuth: typeof import("./provider-runtime.js").prepareProviderRuntimeAuth;
@@ -290,6 +297,8 @@ describe("provider-runtime", () => {
     vi.doMock("./providers.js", () => ({
       resolveCatalogHookProviderPluginIds: (params: unknown) =>
         resolveCatalogHookProviderPluginIdsMock(params as never),
+      resolveUsageHookProviderPluginContracts: (params: unknown) =>
+        resolveUsageHookProviderPluginContractsMock(params as never),
       resolveExternalAuthProfileCompatFallbackPluginIds: (params: unknown) =>
         resolveExternalAuthProfileCompatFallbackPluginIdsMock(params as never),
       resolveExternalAuthProfileProviderPluginIds: (params: unknown) =>
@@ -351,6 +360,7 @@ describe("provider-runtime", () => {
       resolveProviderXHighThinking,
       normalizeProviderToolSchemasWithPlugin,
       inspectProviderToolSchemasWithPlugin,
+      listProviderUsagePluginDescriptors,
       normalizeProviderResolvedModelWithPlugin,
       prepareProviderDynamicModel,
       prepareProviderRuntimeAuth,
@@ -376,6 +386,8 @@ describe("provider-runtime", () => {
     isPluginProvidersLoadInFlightMock.mockReturnValue(false);
     resolveCatalogHookProviderPluginIdsMock.mockReset();
     resolveCatalogHookProviderPluginIdsMock.mockReturnValue([]);
+    resolveUsageHookProviderPluginContractsMock.mockReset();
+    resolveUsageHookProviderPluginContractsMock.mockReturnValue([]);
     resolveExternalAuthProfileCompatFallbackPluginIdsMock.mockReset();
     resolveExternalAuthProfileCompatFallbackPluginIdsMock.mockReturnValue([]);
     resolveExternalAuthProfileProviderPluginIdsMock.mockReset();
@@ -401,6 +413,32 @@ describe("provider-runtime", () => {
       provider: "Open Router",
       expectedPluginId: "openrouter",
     });
+  });
+
+  it("auto-discovers only usage providers declared by their owning plugin", () => {
+    resolveUsageHookProviderPluginContractsMock.mockReturnValue([
+      { pluginId: "multi-provider", providerIds: ["declared"] },
+    ]);
+    const usageHooks = {
+      auth: [],
+      resolveUsageAuth: vi.fn(async () => ({ token: "usage-token" })),
+      fetchUsageSnapshot: vi.fn(async () => ({
+        provider: "declared",
+        displayName: "Declared",
+        windows: [],
+      })),
+    };
+    resolvePluginProvidersMock.mockReturnValue([
+      { ...usageHooks, id: "declared", label: "Declared" },
+      { ...usageHooks, id: "undeclared", label: "Undeclared" },
+    ]);
+
+    expect(listProviderUsagePluginDescriptors({ env: process.env })).toEqual([
+      { provider: "declared", displayName: "Declared" },
+    ]);
+    expect(resolvePluginProvidersMock).toHaveBeenCalledWith(
+      expect.objectContaining({ onlyPluginIds: ["multi-provider"] }),
+    );
   });
 
   it("matches providers by hook alias for runtime hook lookup", () => {
@@ -748,32 +786,22 @@ describe("provider-runtime", () => {
       auth: [],
     };
     const config = {} as OpenClawConfig;
-    const originalHome = process.env.HOME;
-    const originalOpenClawHome = process.env.OPENCLAW_HOME;
+    const envSnapshot = captureEnv(["HOME", "OPENCLAW_HOME"]);
     try {
-      process.env.HOME = "/home/one";
-      delete process.env.OPENCLAW_HOME;
+      setTestEnvValue("HOME", "/home/one");
+      deleteTestEnvValue("OPENCLAW_HOME");
       resolvePluginProvidersMock.mockReturnValueOnce([firstProvider]);
       expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID, config })).toBe(
         firstProvider,
       );
 
-      process.env.HOME = "/home/two";
+      setTestEnvValue("HOME", "/home/two");
       resolvePluginProvidersMock.mockReturnValueOnce([secondProvider]);
       expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID, config })).toBe(
         secondProvider,
       );
     } finally {
-      if (originalHome === undefined) {
-        delete process.env.HOME;
-      } else {
-        process.env.HOME = originalHome;
-      }
-      if (originalOpenClawHome === undefined) {
-        delete process.env.OPENCLAW_HOME;
-      } else {
-        process.env.OPENCLAW_HOME = originalOpenClawHome;
-      }
+      envSnapshot.restore();
     }
 
     expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
@@ -1859,6 +1887,9 @@ describe("provider-runtime", () => {
 
   it("dispatches runtime hooks for the matched provider", async () => {
     resolveCatalogHookProviderPluginIdsMock.mockReturnValue(["openai"]);
+    resolveUsageHookProviderPluginContractsMock.mockReturnValue([
+      { pluginId: "demo", providerIds: ["demo"] },
+    ]);
     resolveExternalAuthProfileProviderPluginIdsMock.mockReturnValue(["demo"]);
     const prepareDynamicModel = vi.fn(async () => undefined);
     const createStreamFn = vi.fn(() => vi.fn());
@@ -2004,6 +2035,10 @@ describe("provider-runtime", () => {
         } as ProviderPlugin,
       ];
     });
+
+    expect(listProviderUsagePluginDescriptors({ env: process.env })).toEqual([
+      { provider: "demo", displayName: "Demo" },
+    ]);
 
     expect(
       runProviderDynamicModel({

@@ -1,5 +1,7 @@
 // Image runtime tests cover model-backed image routing, auth/profile handling,
 // provider payload transforms, and MiniMax/Copilot special paths.
+import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
@@ -137,24 +139,23 @@ const { describeImageWithModel } = await import("./image.js");
 describe("describeImageWithModel", () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllEnvs();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
   beforeEach(() => {
+    // Provider endpoint policy comes from manifests. Pin source manifests so a
+    // prior local build cannot make this source-checkout test read partial dist output.
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(process.cwd(), "extensions"));
     vi.stubGlobal("fetch", fetchMock);
     vi.clearAllMocks();
-    fetchMock.mockResolvedValue({
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      headers: { get: vi.fn(() => null) },
-      json: vi.fn(async () => ({
+    fetchMock.mockImplementation(async () =>
+      Response.json({
         base_resp: { status_code: 0 },
         content: "portal ok",
-      })),
-      text: vi.fn(async () => ""),
-    });
+      }),
+    );
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({
         provider: "minimax-portal",
@@ -297,6 +298,67 @@ describe("describeImageWithModel", () => {
       agentDir: "/tmp/openclaw-agent",
     });
     expect(completeMock).toHaveBeenCalledOnce();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("describes images keyless when amazon-bedrock resolves aws-sdk auth", async () => {
+    getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "",
+      source: "profile:amazon-bedrock:default",
+      mode: "aws-sdk",
+    });
+    // Faithful to runtime: requireApiKey throws on an empty resolved key. The
+    // aws-sdk carve-out must return before reaching it.
+    requireApiKeyMock.mockImplementation((auth: { apiKey?: string; mode?: string }) => {
+      const key = auth.apiKey?.trim();
+      if (!key) {
+        throw new Error(
+          `No API key resolved for provider "amazon-bedrock" (auth mode: ${auth.mode}).`,
+        );
+      }
+      return key;
+    });
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "amazon-bedrock",
+        id: "us.anthropic.claude-sonnet-4-6-v1",
+        input: ["text", "image"],
+        api: "bedrock-converse-stream",
+        baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      })),
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "bedrock-converse-stream",
+      provider: "amazon-bedrock",
+      model: "us.anthropic.claude-sonnet-4-6-v1",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "an orange tabby cat" }],
+    });
+
+    const result = await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "amazon-bedrock",
+      model: "us.anthropic.claude-sonnet-4-6-v1",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({
+      text: "an orange tabby cat",
+      model: "us.anthropic.claude-sonnet-4-6-v1",
+    });
+    // The carve-out returns before requireApiKey and skips persisting an
+    // empty-string secret; the empty key flows through to the model runtime.
+    expect(requireApiKeyMock).not.toHaveBeenCalled();
+    expect(setRuntimeApiKeyMock).not.toHaveBeenCalled();
+    const completeCall = requireFirstMockCall(completeMock, "complete");
+    expect(requireRecord(completeCall[2], "stream options").apiKey).toBe("");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -831,6 +893,47 @@ describe("describeImageWithModel", () => {
     });
   });
 
+  it("clamps oversized image description timeouts before scheduling", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "openai",
+        id: "gpt-5.4",
+        input: ["text", "image"],
+        baseUrl: "https://chatgpt.com/backend-api",
+      })),
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "openai-chatgpt-responses",
+      provider: "openai",
+      model: "gpt-5.4",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "codex ok" }],
+    });
+
+    const result = await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "openai",
+      model: "gpt-5.4",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(result).toEqual({
+      text: "codex ok",
+      model: "gpt-5.4",
+    });
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    const firstCall = requireFirstMockCall(completeMock, "image completion");
+    expect(firstCall[2].timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
+  });
+
   it("places OpenRouter image prompts in user content before images", async () => {
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({
@@ -873,6 +976,59 @@ describe("describeImageWithModel", () => {
     const userMessage = context.messages[0];
     if (!userMessage) {
       throw new Error("expected OpenRouter image completion user message");
+    }
+    expect(userMessage.content).toEqual([
+      { type: "text", text: "Describe the image." },
+      {
+        type: "image",
+        data: Buffer.from("png-bytes").toString("base64"),
+        mimeType: "image/png",
+      },
+    ]);
+  });
+
+  it("places DashScope image prompts in user content before images", async () => {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        api: "openai-completions",
+        provider: "qwen",
+        id: "qwen-vl-max-latest",
+        input: ["text", "image"],
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      })),
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "openai-completions",
+      provider: "qwen",
+      model: "qwen-vl-max-latest",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "dashscope ok" }],
+    });
+
+    const result = await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "qwen",
+      model: "qwen-vl-max-latest",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({
+      text: "dashscope ok",
+      model: "qwen-vl-max-latest",
+    });
+    const firstCall = requireFirstMockCall(completeMock, "DashScope image completion");
+    const [, context] = firstCall;
+    expect(context.systemPrompt).toBeUndefined();
+    const userMessage = context.messages[0];
+    if (!userMessage) {
+      throw new Error("expected DashScope image completion user message");
     }
     expect(userMessage.content).toEqual([
       { type: "text", text: "Describe the image." },
