@@ -1732,7 +1732,13 @@ export async function persistSessionResetLifecycle(params: {
   let persistError: Error | undefined;
   try {
     await updateSessionStore(params.storePath, (store) => {
-      store[params.sessionKey] = params.nextEntry;
+      // Preserve user-owned metadata (label) from the previous entry so
+      // custom session labels survive resets and sessionId rotations. (#101451)
+      const nextEntry = { ...params.nextEntry };
+      if (params.previousEntry.label && !nextEntry.label) {
+        nextEntry.label = params.previousEntry.label;
+      }
+      store[params.sessionKey] = nextEntry;
     });
   } catch (err) {
     persistError = err instanceof Error ? err : new Error(String(err));
