@@ -7,7 +7,6 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { connectGatewayClient } from "../gateway/test-helpers.e2e.js";
 import { GatewayChatClient } from "./gateway-chat.js";
 import { sleep, startPty, waitFor, type PtyRun } from "./tui-pty-test-support.js";
 
@@ -634,45 +633,6 @@ describe("TUI PTY real backends", () => {
         await fixture.run.write("/exit\r", { delay: false });
         expect((await fixture.run.waitForExit()).exitCode).toBe(0);
       } finally {
-        await fixture.cleanup();
-      }
-    },
-    LOCAL_TEST_TIMEOUT_MS,
-  );
-
-  it(
-    "shows a message appended by another Gateway client without restarting",
-    async () => {
-      const fixture = await startGatewayModeTui({
-        queueMode: "followup",
-        firstResponseDelayMs: 0,
-      });
-      const marker = "EXTERNAL_GATEWAY_MESSAGE_96252";
-      let externalClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
-      try {
-        await fixture.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
-        await fixture.run.write("seed selected session\r");
-        await fixture.run.waitForOutput("FIRST_RUN_ACTIVE");
-        const seedOffset = fixture.run.output().lastIndexOf("FIRST_RUN_ACTIVE");
-        await waitForOutputAfter(fixture.run, "| idle", seedOffset);
-
-        externalClient = await connectGatewayClient({
-          url: fixture.gateway.url,
-          token: fixture.gateway.gatewayToken,
-          clientDisplayName: "external-session-writer",
-        });
-        await externalClient.request("sessions.send", {
-          key: "agent:main:main",
-          message: marker,
-          idempotencyKey: "external-session-message-96252",
-          timeoutMs: 30_000,
-        });
-
-        await fixture.run.waitForOutput(marker, LOCAL_OUTPUT_TIMEOUT_MS);
-        await fixture.run.write("/exit\r", { delay: false });
-        expect((await fixture.run.waitForExit()).exitCode).toBe(0);
-      } finally {
-        externalClient?.stop();
         await fixture.cleanup();
       }
     },
