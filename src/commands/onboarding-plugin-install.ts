@@ -1,6 +1,7 @@
 /**
  * Onboarding plugin installation flow.
  *
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
  * It selects local, ClawHub, npm, or override install sources; records durable
  * install metadata; and enables plugins requested by setup workflows.
  */
@@ -537,7 +538,7 @@ function summarizeInstallError(message: string): string {
   if (!cleaned) {
     return "Unknown install failure";
   }
-  return cleaned.length > 180 ? `${cleaned.slice(0, 179)}…` : cleaned;
+  return cleaned.length > 180 ? `${truncateUtf16Safe(cleaned, 179)}…` : cleaned;
 }
 
 function isTimeoutError(error: unknown): boolean {
