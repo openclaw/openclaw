@@ -3,7 +3,11 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { EmbeddingProviderAdapter } from "openclaw/plugin-sdk/embedding-providers";
 import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createEmbeddingProvider, resolveEmbeddingProviderFallbackModel } from "./embeddings.js";
+import {
+  createEmbeddingProvider,
+  resolveEmbeddingProviderFallbackModel,
+  resolveEmbeddingProviderIndexIdentity,
+} from "./embeddings.js";
 
 const mockEmbeddingRegistry = vi.hoisted(() => ({
   genericAdapters: [] as EmbeddingProviderAdapter[],
@@ -295,6 +299,55 @@ describe("createEmbeddingProvider", () => {
 
     expect(result.provider?.id).toBe("openai");
     expect(result.provider?.model).toBe("text-embedding-3-large");
+  });
+
+  it("upgrade safety: backfill aligns provider.model with identity resolution for existing indexes", async () => {
+    // #90042 upgrade scenario: pre-fix, an adapter with defaultModel whose
+    // create() returned provider.model="" would propagate the empty model
+    // to every downstream consumer (identity checks, meta writes, chunk
+    // model tags, vector-search filters). Post-fix, createWithAdapter
+    // backfills the resolved model so provider.model matches what
+    // resolveEmbeddingProviderIndexIdentity independently computes.
+    //
+    // Impact on existing indexes: stored meta was written by the identity
+    // path (which already used resolveProviderModel), so it carries the
+    // correct model. After upgrade, provider.model now matches the stored
+    // meta → no spurious mismatch → no unnecessary reindex on first boot.
+    registerMemoryEmbeddingProvider({
+      id: "openai",
+      transport: "remote",
+      defaultModel: "text-embedding-3-small",
+      resolveIndexIdentity: (options) => ({
+        model: options.model,
+        cacheKeyData: {},
+      }),
+      create: async () => ({
+        provider: {
+          id: "openai",
+          model: "",
+          embedQuery: async () => [1],
+          embedBatch: async (texts) => texts.map(() => [1]),
+        },
+      }),
+    });
+
+    const result = await createEmbeddingProvider({
+      ...createOptions("openai"),
+      model: "",
+    });
+
+    expect(result.provider?.model).toBe("text-embedding-3-small");
+
+    const identity = resolveEmbeddingProviderIndexIdentity({
+      ...createOptions("openai"),
+      model: "",
+    });
+    expect(identity?.provider.model).toBe("text-embedding-3-small");
+
+    // Post-upgrade invariant: provider.model and identity model are
+    // consistent, preventing the "index was built for model X, expected "
+    // mismatch that #90042 and #91691 describe.
+    expect(result.provider?.model).toBe(identity?.provider.model);
   });
 
   it("uses config-scoped lookup for generic fallback model resolution", () => {
