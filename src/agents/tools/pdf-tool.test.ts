@@ -17,6 +17,7 @@ import * as pdfModelConfigModule from "./pdf-tool.model-config.js";
 import { resetPdfToolAuthEnv, withTempPdfAgentDir } from "./pdf-tool.test-support.js";
 
 const completeMock = vi.hoisted(() => vi.fn());
+const registerProviderStreamForModelMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../llm/stream.js", async () => {
   const actual = await vi.importActual<typeof import("../../llm/stream.js")>("../../llm/stream.js");
@@ -25,6 +26,10 @@ vi.mock("../../llm/stream.js", async () => {
     complete: completeMock,
   };
 });
+
+vi.mock("../provider-stream.js", () => ({
+  registerProviderStreamForModel: registerProviderStreamForModelMock,
+}));
 
 type PdfToolModule = typeof import("./pdf-tool.js");
 let createPdfTool: PdfToolModule["createPdfTool"];
@@ -183,6 +188,7 @@ describe("createPdfTool", () => {
   beforeEach(() => {
     resetPdfToolAuthEnv();
     completeMock.mockReset();
+    registerProviderStreamForModelMock.mockReset();
   });
 
   afterEach(() => {
@@ -688,6 +694,18 @@ describe("createPdfTool", () => {
       expect(result.content).toEqual([{ type: "text", text: "Bedrock summary" }]);
       expect(modelAuth.requireApiKey).not.toHaveBeenCalled();
       expect(setRuntimeApiKey).not.toHaveBeenCalled();
+      expect(registerProviderStreamForModelMock).toHaveBeenCalledWith({
+        model: expect.objectContaining({
+          provider: "amazon-bedrock",
+          api: "bedrock-converse-stream",
+        }),
+        cfg: expect.objectContaining({
+          agents: expect.objectContaining({
+            defaults: expect.objectContaining({ pdfModel: { primary: bedrockModel } }),
+          }),
+        }),
+        agentDir,
+      });
       expect(firstMockCall(completeMock, "complete")[2]).toMatchObject({ apiKey: "" });
     });
   });
