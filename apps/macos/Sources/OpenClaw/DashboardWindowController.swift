@@ -75,6 +75,29 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         }
     }
 
+    /// Bridges `window.confirm()` in the embedded Control UI to a native alert
+    /// sheet; without this delegate, WebKit treats JavaScript confirm as Cancel,
+    /// so session deletion (and other confirmed actions) silently fail.
+    func webView(
+        _ webView: WKWebView,
+        runJavaScriptConfirmPanelWithMessage message: String,
+        initiatedByFrame frame: WKFrameInfo,
+        completionHandler: @escaping @MainActor @Sendable (Bool) -> Void)
+    {
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+        if let window = self.window {
+            alert.beginSheetModal(for: window) { response in
+                completionHandler(response == .alertFirstButtonReturn)
+            }
+            return
+        }
+        completionHandler(alert.runModal() == .alertFirstButtonReturn)
+    }
+
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("init(coder:) is not supported")

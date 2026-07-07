@@ -207,6 +207,7 @@ export const zh_CN: TranslationMap = {
     searchPlaceholder: "按密钥、代理、标签、类型筛选…",
     selected: "已选择 {count} 项",
     deleteSelected: "删除",
+    deleteSession: "Delete session",
     selectAllOnPage: "选择本页全部",
     selectSession: "选择会话",
     optionalPlaceholder: "（可选）",

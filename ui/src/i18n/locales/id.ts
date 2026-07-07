@@ -209,6 +209,7 @@ export const id: TranslationMap = {
     searchPlaceholder: "Filter menurut kunci, agen, label, jenis…",
     selected: "{count} dipilih",
     deleteSelected: "Hapus",
+    deleteSession: "Delete session",
     selectAllOnPage: "Pilih semua di halaman",
     selectSession: "Pilih sesi",
     optionalPlaceholder: "(opsional)",

@@ -209,6 +209,7 @@ export const vi: TranslationMap = {
     searchPlaceholder: "Lọc theo khóa, agent, nhãn, loại…",
     selected: "Đã chọn {count}",
     deleteSelected: "Xóa",
+    deleteSession: "Delete session",
     selectAllOnPage: "Chọn tất cả trên trang",
     selectSession: "Chọn phiên",
     optionalPlaceholder: "(tùy chọn)",

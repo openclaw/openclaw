@@ -210,6 +210,7 @@ export const fa: TranslationMap = {
     searchPlaceholder: "فیلتر بر اساس کلید، عامل، برچسب، نوع…",
     selected: "{count} انتخاب‌شده",
     deleteSelected: "حذف",
+    deleteSession: "Delete session",
     selectAllOnPage: "انتخاب همه در صفحه",
     selectSession: "انتخاب نشست",
     optionalPlaceholder: "(اختیاری)",

@@ -70,6 +70,7 @@ function buildProps(result: SessionsListResult): SessionsProps {
     onDeselectPage: () => undefined,
     onDeselectAll: () => undefined,
     onDeleteSelected: () => undefined,
+    onDeleteSingleSession: undefined,
     onFork: () => undefined,
     onToggleDetails: () => undefined,
     onBranchFromCheckpoint: () => undefined,
@@ -1248,5 +1249,134 @@ describe("sessions view", () => {
     const emptyCell = container.querySelector(".data-table-empty-cell");
     expect(emptyCell?.textContent?.trim()).toBe("No sessions found.");
     expect(emptyCell?.querySelector("button")).toBeNull();
+  });
+
+  it("renders a per-session delete button when onDeleteSingleSession is provided", async () => {
+    const onDeleteSingleSession = vi.fn();
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent-test/channel",
+            kind: "direct",
+            updatedAt: Date.now(),
+          }),
+        ),
+        onDeleteSingleSession,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const deleteBtn = container.querySelector(
+      '[aria-label="Delete session"]',
+    ) as HTMLButtonElement;
+    expect(deleteBtn).toBeInstanceOf(HTMLButtonElement);
+    expect(deleteBtn).not.toBeNull();
+  });
+
+  it("omits the per-session delete button when onDeleteSingleSession is not provided", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent-test/channel",
+            kind: "direct",
+            updatedAt: Date.now(),
+          }),
+        ),
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.querySelector('[aria-label="Delete session"]')).toBeNull();
+  });
+
+  it("calls onDeleteSingleSession with the session key on click", async () => {
+    const onDeleteSingleSession = vi.fn();
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent-test/channel",
+            kind: "direct",
+            updatedAt: Date.now(),
+          }),
+        ),
+        onDeleteSingleSession,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const deleteBtn = container.querySelector(
+      '[aria-label="Delete session"]',
+    ) as HTMLButtonElement;
+    expect(deleteBtn).toBeInstanceOf(HTMLButtonElement);
+    deleteBtn.click();
+    expect(onDeleteSingleSession).toHaveBeenCalledTimes(1);
+    expect(onDeleteSingleSession).toHaveBeenCalledWith("agent-test/channel");
+  });
+
+  it("disables the per-session delete button while loading", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent-test/channel",
+            kind: "direct",
+            updatedAt: Date.now(),
+          }),
+        ),
+        loading: true,
+        onDeleteSingleSession: vi.fn(),
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const deleteBtn = container.querySelector(
+      '[aria-label="Delete session"]',
+    ) as HTMLButtonElement;
+    expect(deleteBtn).toBeInstanceOf(HTMLButtonElement);
+    expect(deleteBtn.disabled).toBe(true);
+  });
+
+  it("stops click propagation from per-session delete button", async () => {
+    const onDeleteSingleSession = vi.fn();
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent-test/channel",
+            kind: "direct",
+            updatedAt: Date.now(),
+          }),
+        ),
+        onDeleteSingleSession,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const deleteBtn = container.querySelector(
+      '[aria-label="Delete session"]',
+    ) as HTMLButtonElement;
+    expect(deleteBtn).toBeInstanceOf(HTMLButtonElement);
+    const parentTd = deleteBtn.closest("td");
+    const propagationSpy = vi.fn();
+    parentTd?.addEventListener("click", propagationSpy);
+
+    deleteBtn.click();
+
+    // The td's click handler should not fire due to stopPropagation on the button
+    await Promise.resolve();
+    expect(onDeleteSingleSession).toHaveBeenCalledTimes(1);
   });
 });

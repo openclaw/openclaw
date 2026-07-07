@@ -211,6 +211,7 @@ export const nl: TranslationMap = {
     searchPlaceholder: "Filter op sleutel, agent, label, type…",
     selected: "{count} geselecteerd",
     deleteSelected: "Verwijderen",
+    deleteSession: "Delete session",
     selectAllOnPage: "Alles op pagina selecteren",
     selectSession: "Sessie selecteren",
     optionalPlaceholder: "(optioneel)",

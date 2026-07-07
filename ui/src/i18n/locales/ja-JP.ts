@@ -214,6 +214,7 @@ export const ja_JP: TranslationMap = {
     searchPlaceholder: "キー、エージェント、ラベル、種類で絞り込み…",
     selected: "{count} 件選択中",
     deleteSelected: "削除",
+    deleteSession: "Delete session",
     selectAllOnPage: "ページ内をすべて選択",
     selectSession: "セッションを選択",
     optionalPlaceholder: "（任意）",

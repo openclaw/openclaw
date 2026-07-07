@@ -208,6 +208,7 @@ export const ko: TranslationMap = {
     searchPlaceholder: "키, 에이전트, 레이블, 종류로 필터링…",
     selected: "{count}개 선택됨",
     deleteSelected: "삭제",
+    deleteSession: "Delete session",
     selectAllOnPage: "페이지에서 모두 선택",
     selectSession: "세션 선택",
     optionalPlaceholder: "(선택 사항)",

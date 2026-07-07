@@ -213,6 +213,7 @@ export const fr: TranslationMap = {
     searchPlaceholder: "Filtrer par clé, agent, libellé, type…",
     selected: "{count} sélectionné(s)",
     deleteSelected: "Supprimer",
+    deleteSession: "Delete session",
     selectAllOnPage: "Tout sélectionner sur la page",
     selectSession: "Sélectionner la session",
     optionalPlaceholder: "(facultatif)",

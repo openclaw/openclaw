@@ -98,6 +98,7 @@ export type SessionsProps = {
   onDeselectPage: (keys: string[]) => void;
   onDeselectAll: () => void;
   onDeleteSelected: () => void;
+  onDeleteSingleSession?: (key: string) => void;
   onNavigateToChat?: (sessionKey: string) => void;
   onFork: (sessionKey: string) => void | Promise<void>;
   workboardSessionKeys?: Set<string>;
@@ -1267,6 +1268,23 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
           >
             ${row.archived ? icons.archiveRestore : icons.archive}
           </button>
+          ${props.onDeleteSingleSession
+            ? html`
+                <openclaw-tooltip .content=${t("sessionsView.deleteSession")}>
+                  <button
+                    class="icon-btn"
+                    aria-label=${t("sessionsView.deleteSession")}
+                    ?disabled=${props.loading}
+                    @click=${(event: MouseEvent) => {
+                      event.stopPropagation();
+                      props.onDeleteSingleSession!(row.key);
+                    }}
+                  >
+                    ${icons.trash}
+                  </button>
+                </openclaw-tooltip>
+              `
+            : nothing}
           ${props.onAddToWorkboard && canLink
             ? html`
                 <openclaw-tooltip

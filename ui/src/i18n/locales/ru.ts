@@ -211,6 +211,7 @@ export const ru: TranslationMap = {
     searchPlaceholder: "Фильтр по ключу, агенту, метке, типу…",
     selected: "Выбрано: {count}",
     deleteSelected: "Удалить",
+    deleteSession: "Delete session",
     selectAllOnPage: "Выбрать все на странице",
     selectSession: "Выбрать сеанс",
     optionalPlaceholder: "(необязательно)",

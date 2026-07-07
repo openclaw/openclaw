@@ -208,6 +208,7 @@ export const ar: TranslationMap = {
     searchPlaceholder: "تصفية حسب المفتاح أو الوكيل أو التسمية أو النوع…",
     selected: "تم تحديد {count}",
     deleteSelected: "حذف",
+    deleteSession: "Delete session",
     selectAllOnPage: "تحديد الكل في الصفحة",
     selectSession: "تحديد الجلسة",
     optionalPlaceholder: "(اختياري)",

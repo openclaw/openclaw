@@ -210,6 +210,7 @@ export const uk: TranslationMap = {
     searchPlaceholder: "Фільтрувати за ключем, агентом, міткою, типом…",
     selected: "Вибрано: {count}",
     deleteSelected: "Видалити",
+    deleteSession: "Delete session",
     selectAllOnPage: "Вибрати все на сторінці",
     selectSession: "Вибрати сеанс",
     optionalPlaceholder: "(необов’язково)",

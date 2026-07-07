@@ -212,6 +212,7 @@ export const tr: TranslationMap = {
     searchPlaceholder: "Anahtara, ajana, etikete, türe göre filtrele…",
     selected: "{count} seçildi",
     deleteSelected: "Sil",
+    deleteSession: "Delete session",
     selectAllOnPage: "Sayfadakilerin tümünü seç",
     selectSession: "Oturumu seç",
     optionalPlaceholder: "(isteğe bağlı)",

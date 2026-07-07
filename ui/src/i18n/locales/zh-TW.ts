@@ -207,6 +207,7 @@ export const zh_TW: TranslationMap = {
     searchPlaceholder: "依金鑰、代理程式、標籤、類型篩選…",
     selected: "已選取 {count} 個",
     deleteSelected: "刪除",
+    deleteSession: "Delete session",
     selectAllOnPage: "選取此頁全部",
     selectSession: "選取工作階段",
     optionalPlaceholder: "（選填）",

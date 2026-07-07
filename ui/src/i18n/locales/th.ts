@@ -207,6 +207,7 @@ export const th: TranslationMap = {
     searchPlaceholder: "กรองตามคีย์, agent, ป้ายกำกับ, ชนิด…",
     selected: "เลือกแล้ว {count} รายการ",
     deleteSelected: "ลบ",
+    deleteSession: "Delete session",
     selectAllOnPage: "เลือกทั้งหมดในหน้านี้",
     selectSession: "เลือกเซสชัน",
     optionalPlaceholder: "(ไม่บังคับ)",

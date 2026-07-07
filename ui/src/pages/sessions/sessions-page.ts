@@ -564,6 +564,50 @@ class SessionsPage extends LitElement {
     }
   }
 
+  private async deleteSingleSession(key: string) {
+    const context = this.context;
+    if (!context || this.loading) {
+      return;
+    }
+    if (
+      !window.confirm(
+        `Delete this session?\n\nThis will delete the session entry and archive its transcript.`,
+      )
+    ) {
+      return;
+    }
+    this.sessionMutationPending = true;
+    const result = await context.sessions
+      .deleteMany([
+        {
+          key,
+          agentId: this.sessionAgentId(key),
+        },
+      ])
+      .finally(() => {
+        this.sessionMutationPending = false;
+      });
+    if (result.deleted.length > 0) {
+      const selected = new Set(this.selectedKeys);
+      selected.delete(key);
+      this.selectedKeys = selected;
+      if (this.result) {
+        const sessions = this.result.sessions.filter((row) => row.key !== key);
+        this.result = {
+          ...this.result,
+          count: Math.max(0, this.result.count - (this.result.sessions.length - sessions.length)),
+          sessions,
+        };
+      }
+      if (this.expandedSessionKey === key) {
+        this.expandedSessionKey = null;
+      }
+    }
+    if (result.errors.length > 0) {
+      this.error = result.errors.join("; ");
+    }
+  }
+
   private async patchSession(key: string, patch: Parameters<SessionsProps["onPatch"]>[1]) {
     const context = this.context;
     if (!context) {
@@ -841,6 +885,7 @@ class SessionsPage extends LitElement {
           this.selectedKeys = new Set();
         },
         onDeleteSelected: () => void this.deleteSelected(),
+        onDeleteSingleSession: (key) => void this.deleteSingleSession(key),
         onNavigateToChat: (sessionKey) =>
           context.navigate("chat", { search: searchForSession(sessionKey), hash: "" }),
         onFork: (sessionKey) => this.forkSession(sessionKey),

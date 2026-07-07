@@ -209,6 +209,7 @@ export const hi: TranslationMap = {
     searchPlaceholder: "की, एजेंट, लेबल, प्रकार के आधार पर फ़िल्टर करें…",
     selected: "{count} चयनित",
     deleteSelected: "हटाएँ",
+    deleteSession: "Delete session",
     selectAllOnPage: "पेज पर सभी चुनें",
     selectSession: "सेशन चुनें",
     optionalPlaceholder: "(वैकल्पिक)",
