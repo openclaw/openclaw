@@ -147,7 +147,30 @@ describe("root memory repair", () => {
     expect(migration.changed).toBe(true);
     expect(migration.removedLegacy).toBe(true);
     expect(migration.mergedLegacy).toBe(false);
+    expect(migration.archiveOnly).toBe(true);
     expect(migration.archivedLegacyPath).toBeDefined();
     await expectPathMissing(path.join(tmpDir, "memory.md"));
+  });
+
+  it("reports an archive-only repair when the legacy memory file is oversized", async () => {
+    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Canonical\n", "utf8");
+    await fs.writeFile(path.join(tmpDir, "memory.md"), "# Legacy\n".repeat(1_000_000), "utf8");
+    const cfg = { agents: { defaults: { workspace: tmpDir } } } as OpenClawConfig;
+    const prompter = {
+      confirmRuntimeRepair: vi.fn(async () => true),
+    } as unknown as DoctorPrompter;
+
+    await maybeRepairWorkspaceMemoryHealth({ cfg, prompter });
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const repairNote = firstNoteCall();
+    const repairMessage = String(repairNote?.[0] ?? "");
+    const repairLines = repairMessage.split("\n");
+    expect(repairLines[0]).toBe(
+      "Workspace memory root archived (merge skipped because a file exceeded the safe read limit):",
+    );
+    expect(repairLines).toContain(`- canonical: ${path.join(tmpDir, "MEMORY.md")}`);
+    expect(repairLines).toContain(`- removed legacy file: ${path.join(tmpDir, "memory.md")}`);
+    expect(repairNote?.[1]).toBe("Doctor changes");
   });
 });

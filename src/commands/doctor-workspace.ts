@@ -1,12 +1,12 @@
 /** Doctor checks and repairs for workspace memory files and legacy workspace hints. */
 import fs from "node:fs";
 import path from "node:path";
-import { readRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { DEFAULT_AGENTS_FILENAME } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { readRegularFile } from "../infra/regular-file.js";
 import {
   CANONICAL_ROOT_MEMORY_FILENAME,
   LEGACY_ROOT_MEMORY_FILENAME,
@@ -162,6 +162,8 @@ export type RootMemoryMigrationResult = {
   mergedLegacy: boolean;
   archivedLegacyPath?: string;
   copiedBytes?: number;
+  /** True when the legacy file was archived but its content could not be merged. */
+  archiveOnly?: boolean;
 };
 
 async function moveLegacyRootMemoryFileToArchive(params: {
@@ -244,6 +246,7 @@ export async function migrateLegacyRootMemoryFile(
       removedLegacy: true,
       mergedLegacy: false,
       archivedLegacyPath,
+      archiveOnly: true,
       ...(typeof detection.legacyBytes === "number" ? { copiedBytes: detection.legacyBytes } : {}),
     };
   }
@@ -304,8 +307,11 @@ export async function maybeRepairWorkspaceMemoryHealth(params: {
     if (!migration.changed) {
       return;
     }
+    const header = migration.archiveOnly
+      ? "Workspace memory root archived (merge skipped because a file exceeded the safe read limit):"
+      : "Workspace memory root merged:";
     const lines = [
-      "Workspace memory root merged:",
+      header,
       `- canonical: ${migration.canonicalPath}`,
       migration.archivedLegacyPath ? `- backup: ${migration.archivedLegacyPath}` : null,
       migration.mergedLegacy ? `- merged legacy content from: ${migration.legacyPath}` : null,
