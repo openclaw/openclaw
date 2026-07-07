@@ -27,6 +27,20 @@ describe("markdownToIR CJK emphasis flanking", () => {
     expect(styledText("foo**bar**baz")).toEqual(["bar"]);
   });
 
+  it("treats ideographic space (U+3000) as whitespace, not a flanking CJK char", () => {
+    // Opening delimiter followed by U+3000 must not be forced open.
+    expect(styledText("前**\u3000加粗**后")).toEqual([]);
+    // U+3000-separated emphasis keeps normal CommonMark behavior.
+    expect(styledText("前\u3000**加粗**\u3000后")).toEqual(["加粗"]);
+  });
+
+  it("treats Unicode thin space (U+2009) as whitespace in delimiter scanning", () => {
+    // Opening delimiter followed by U+2009 must not be forced open.
+    expect(styledText("前**\u2009加粗**后")).toEqual([]);
+    // Closing delimiter after CJK punctuation still closes when followed by U+2009.
+    expect(styledText("前**加粗：**\u2009后")).toEqual(["加粗："]);
+  });
+
   it("leaves code spans and links on their existing paths", () => {
     const code = markdownToIR("`前**加粗：**后`");
     expect(code.text).toBe("前**加粗：**后");

@@ -185,8 +185,30 @@ function getCodePointAt(value: string, index: number): number {
   return code;
 }
 
+// Mirrors markdown-it's isWhiteSpace (Zs plus control whitespace) so the
+// CJK-friendly override never forces delimiter flags where markdown-it's
+// flanking rules see whitespace (notably U+3000, which is also in the East
+// Asian ranges below).
 function isMarkdownWhitespace(codePoint: number): boolean {
-  return codePoint === 0x20 || codePoint === 0x09 || codePoint === 0x0a || codePoint === 0x0d;
+  if (codePoint >= 0x2000 && codePoint <= 0x200a) {
+    return true;
+  }
+  switch (codePoint) {
+    case 0x09:
+    case 0x0a:
+    case 0x0b:
+    case 0x0c:
+    case 0x0d:
+    case 0x20:
+    case 0xa0:
+    case 0x1680:
+    case 0x202f:
+    case 0x205f:
+    case 0x3000:
+      return true;
+    default:
+      return false;
+  }
 }
 
 function isEastAsianMarkdownFlankingChar(codePoint: number): boolean {
