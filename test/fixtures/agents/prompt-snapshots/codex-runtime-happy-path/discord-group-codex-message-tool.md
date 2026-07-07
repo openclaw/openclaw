@@ -227,24 +227,24 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 50483,
-    "roughTokens": 12621
+    "chars": 51940,
+    "roughTokens": 12985
   },
   "openClawDeveloperInstructions": {
     "chars": 3045,
     "roughTokens": 762
   },
   "totalTextOnly": {
-    "chars": 27663,
-    "roughTokens": 6916
+    "chars": 27570,
+    "roughTokens": 6893
   },
   "totalWithDynamicToolsJson": {
-    "chars": 78148,
-    "roughTokens": 19537
+    "chars": 79512,
+    "roughTokens": 19878
   },
   "userInputText": {
-    "chars": 1535,
-    "roughTokens": 384
+    "chars": 1442,
+    "roughTokens": 361
   }
 }
 ```
@@ -535,18 +535,8 @@ Conversation info (untrusted metadata):
 ```
 
 Chat history since last reply (untrusted, for context):
-```json
-[
-  {
-    "sender": "Peter",
-    "body": "I pushed the Discord-side message-tool bridge."
-  },
-  {
-    "sender": "Pash",
-    "body": "@OpenClaw please verify the Codex happy path too."
-  }
-]
-```
+Peter: I pushed the Discord-side message-tool bridge.
+Pash: @OpenClaw please verify the Codex happy path too.
 
 can you audit whether this prompt path has conflicting silence instructions?
 ````

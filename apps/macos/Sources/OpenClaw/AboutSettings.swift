@@ -176,22 +176,6 @@ private struct AboutLinkRow: View {
     }
 }
 
-private struct AboutMetaRow: View {
-    let label: String
-    let value: String
-
-    var body: some View {
-        HStack {
-            Text(self.label)
-                .foregroundStyle(.secondary)
-            Spacer()
-            Text(self.value)
-                .font(.caption.monospaced())
-                .foregroundStyle(.primary)
-        }
-    }
-}
-
 #if DEBUG
 struct AboutSettings_Previews: PreviewProvider {
     private static let updater = DisabledUpdaterController()

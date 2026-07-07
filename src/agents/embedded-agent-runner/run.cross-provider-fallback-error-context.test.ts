@@ -6,6 +6,7 @@ import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
   MockedFailoverError,
+  mockedClassifyFailoverReason,
   mockedFormatAssistantErrorText,
   mockedGlobalHookRunner,
   mockedIsFailoverAssistantError,
@@ -13,11 +14,13 @@ import {
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
+  warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
 const DEEPSEEK_ERROR_MESSAGE = "429 deepseek rate limit";
+const COMPACTION_REMOVED_ERROR_MESSAGE = "current candidate model unavailable";
 type CurrentAttemptAssistantWithError = NonNullable<
   EmbeddedRunAttemptResult["currentAttemptAssistant"]
 > & { errorMessage: string };
@@ -82,6 +85,39 @@ function makeCrossProviderFallbackConfig() {
   });
 }
 
+function setupCompactionRemovedFallbackAttempt() {
+  mockedIsFailoverAssistantError.mockImplementation((...args: unknown[]) => {
+    const assistant = args[0];
+    return isCurrentAttemptAssistant(assistant) && assistant.provider === "anthropic";
+  });
+  mockedClassifyFailoverReason.mockReturnValue("model_not_found");
+  mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+    makeAttemptResult({
+      assistantTexts: [],
+      lastAssistant: makeAssistantMessageFixture({
+        stopReason: "error",
+        errorMessage: COMPACTION_REMOVED_ERROR_MESSAGE,
+        provider: "anthropic",
+        model: "test-model",
+        content: [],
+      }),
+      currentAttemptAssistant: undefined,
+    }),
+  );
+}
+
+function runCompactionRemovedFallbackAttempt() {
+  return runEmbeddedAgent({
+    ...overflowBaseRunParams,
+    runId: "run-compaction-fallback-error-context",
+    config: makeCrossProviderFallbackConfig(),
+    agentHarnessRuntimeOverride: "openclaw",
+    provider: "anthropic",
+    model: "test-model",
+    modelFallbacksOverride: ["deepseek/deepseek-chat"],
+  });
+}
+
 async function expectDeepseekFallbackError(
   promise: Promise<unknown>,
   getLastFormattedAssistant: () => unknown,
@@ -97,6 +133,14 @@ async function expectDeepseekFallbackError(
 describe("runEmbeddedAgent cross-provider fallback error handling", () => {
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
+    await warmRunOverflowCompactionHarness(runEmbeddedAgent, {
+      config: makeCrossProviderFallbackConfig(),
+      agentHarnessRuntimeOverride: "openclaw",
+      provider: "deepseek",
+      model: "deepseek-chat",
+    });
+    setupCompactionRemovedFallbackAttempt();
+    await runCompactionRemovedFallbackAttempt().catch(() => undefined);
   });
 
   beforeEach(() => {
@@ -142,46 +186,18 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
 
   it("falls back to the session assistant when compaction removes the current attempt slice", async () => {
     const getLastFormattedAssistant = captureFormattedAssistant();
-    const sameCandidateErrorMessage = "429 current candidate rate limit";
-    mockedIsFailoverAssistantError.mockImplementation((...args: unknown[]) => {
-      const assistant = args[0];
-      return isCurrentAttemptAssistant(assistant) && assistant.provider === "anthropic";
-    });
-    mockedIsRateLimitAssistantError.mockImplementation((...args: unknown[]) => {
-      const assistant = args[0];
-      return isCurrentAttemptAssistant(assistant) && assistant.provider === "anthropic";
-    });
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({
-        assistantTexts: [],
-        lastAssistant: makeAssistantMessageFixture({
-          stopReason: "error",
-          errorMessage: sameCandidateErrorMessage,
-          provider: "anthropic",
-          model: "test-model",
-          content: [],
-        }),
-        currentAttemptAssistant: undefined,
-      }),
-    );
-
-    const promise = runEmbeddedAgent({
-      ...overflowBaseRunParams,
-      runId: "run-compaction-fallback-error-context",
-      config: makeCrossProviderFallbackConfig(),
-      agentHarnessRuntimeOverride: "openclaw",
-      provider: "anthropic",
-      model: "test-model",
-      modelFallbacksOverride: ["deepseek/deepseek-chat"],
-    });
+    setupCompactionRemovedFallbackAttempt();
+    const promise = runCompactionRemovedFallbackAttempt();
 
     await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
-    await expect(promise).rejects.toThrow(`anthropic/test-model: ${sameCandidateErrorMessage}`);
-    expect(mockedIsRateLimitAssistantError).toHaveBeenCalledTimes(1);
+    await expect(promise).rejects.toThrow(
+      `anthropic/test-model: ${COMPACTION_REMOVED_ERROR_MESSAGE}`,
+    );
+    expect(mockedIsFailoverAssistantError).toHaveBeenCalledTimes(1);
     expect(getLastFormattedAssistant()).toMatchObject({
       provider: "anthropic",
       model: "test-model",
-      errorMessage: sameCandidateErrorMessage,
+      errorMessage: COMPACTION_REMOVED_ERROR_MESSAGE,
     });
   });
 
@@ -240,7 +256,7 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
       }),
     );
 
-    await runEmbeddedAgent({
+    const result = await runEmbeddedAgent({
       ...overflowBaseRunParams,
       runId: "run-stale-session-assistant-non-timeout",
       config: makeCrossProviderFallbackConfig(),
@@ -252,5 +268,10 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
 
     expect(mockedIsFailoverAssistantError).toHaveBeenCalledWith(undefined);
     expect(getLastFormattedAssistant()).toBeUndefined();
+    expect(result.meta.finalAssistantVisibleText).toBeUndefined();
+    expect(result.meta.agentMeta).toMatchObject({
+      provider: "deepseek",
+      model: "test-model",
+    });
   });
 });

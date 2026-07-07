@@ -1,7 +1,7 @@
 // Provides model selection, usage, and thinking-level utility helpers.
 import {
-  resolveClaudeFable5ModelIdentity,
   resolveClaudeNativeThinkingLevelMap,
+  requiresClaudeMandatoryAdaptiveThinking,
 } from "@openclaw/llm-core";
 import type { Api, Model, ModelThinkingLevel, Usage } from "./types.js";
 
@@ -36,9 +36,9 @@ function resolveThinkingLevelMap<TApi extends Api>(model: Model<TApi>) {
 export function getSupportedThinkingLevels<TApi extends Api>(
   model: Model<TApi>,
 ): ModelThinkingLevel[] {
-  const fableContract =
-    model.api === "anthropic-messages" && resolveClaudeFable5ModelIdentity(model) !== undefined;
-  if (!model.reasoning && !fableContract) {
+  const mandatoryAdaptiveContract =
+    model.api === "anthropic-messages" && requiresClaudeMandatoryAdaptiveThinking(model);
+  if (!model.reasoning && !mandatoryAdaptiveContract) {
     return ["off"];
   }
   const thinkingLevelMap = resolveThinkingLevelMap(model);

@@ -24,6 +24,7 @@ import {
   normalizeJsonSchemaForTypeBox,
 } from "../shared/json-schema-defaults.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
+import { matchesMcpToolFilterPattern } from "./agent-bundle-mcp-filter.js";
 import { sanitizeServerName } from "./agent-bundle-mcp-names.js";
 import type {
   McpCatalogTool,
@@ -185,13 +186,21 @@ export function createBundleMcpJsonSchemaValidator(): jsonSchemaValidator {
       if (!isDraft202012Schema(schema)) {
         return defaultValidator.getValidator<T>(schema);
       }
-      const schemaError = findJsonSchemaShapeError(schema as never);
-      if (schemaError) {
-        throw new Error(`Invalid MCP draft-2020-12 JSON Schema: ${schemaError}`);
+      let validator: ReturnType<typeof Compile>;
+      try {
+        const schemaError = findJsonSchemaShapeError(schema as never);
+        if (schemaError) {
+          throw new Error(schemaError);
+        }
+        validator = Compile(
+          normalizeJsonSchemaForTypeBox(stripJsonSchemaFormats(schema) as never) as never,
+        );
+      } catch (error) {
+        const setupError = toErrorObject(error, "schema setup failed");
+        throw new Error(`Invalid MCP draft-2020-12 JSON Schema: ${setupError.message}`, {
+          cause: error,
+        });
       }
-      const validator = Compile(
-        normalizeJsonSchemaForTypeBox(stripJsonSchemaFormats(schema) as never) as never,
-      );
       return (input: unknown) => {
         const valid = validator.Check(input);
         if (valid) {
@@ -335,21 +344,6 @@ async function listAllPrompts(client: Client, timeoutMs: number) {
   return prompts;
 }
 
-function escapeRegex(value: string): string {
-  return value.replace(/[\\^$+?.()|[\]{}]/g, "\\$&");
-}
-
-function globMatches(pattern: string, value: string): boolean {
-  const trimmed = pattern.trim();
-  if (!trimmed) {
-    return false;
-  }
-  if (!trimmed.includes("*")) {
-    return trimmed === value;
-  }
-  return new RegExp(`^${trimmed.split("*").map(escapeRegex).join(".*")}$`).test(value);
-}
-
 function normalizeStringList(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
@@ -371,10 +365,13 @@ function getMcpToolSelection(rawServer: unknown): McpToolSelection {
 function shouldExposeMcpTool(selection: McpToolSelection, toolName: string): boolean {
   const include = selection.include ?? [];
   const exclude = selection.exclude ?? [];
-  if (include.length > 0 && !include.some((pattern) => globMatches(pattern, toolName))) {
+  if (
+    include.length > 0 &&
+    !include.some((pattern) => matchesMcpToolFilterPattern(pattern, toolName))
+  ) {
     return false;
   }
-  return !exclude.some((pattern) => globMatches(pattern, toolName));
+  return !exclude.some((pattern) => matchesMcpToolFilterPattern(pattern, toolName));
 }
 
 function sanitizeMcpMetadataText(value: string | undefined): string | undefined {

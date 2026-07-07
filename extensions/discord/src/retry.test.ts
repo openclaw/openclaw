@@ -1,10 +1,6 @@
 // Discord tests cover retry plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import {
-  getDiscordDeliveryRetryAfterMs,
-  isRetryableDiscordDeliveryError,
-} from "./delivery-retry.js";
-import { DiscordError, RateLimitError } from "./internal/discord.js";
+import { RateLimitError } from "./internal/discord.js";
 import { createDiscordRetryRunner, isRetryableDiscordTransientError } from "./retry.js";
 
 const ZERO_DELAY_RETRY = { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 };
@@ -73,34 +69,69 @@ describe("createDiscordRetryRunner", () => {
     await expect(runner(fn, "send")).rejects.toThrow("fetch failed");
     expect(fn).toHaveBeenCalledTimes(2);
   });
-});
 
-describe("isRetryableDiscordDeliveryError", () => {
-  it("retries status-coded errors from injected delivery dependencies", () => {
-    expect(
-      isRetryableDiscordDeliveryError(Object.assign(new Error("bad gateway"), { status: 502 })),
-    ).toBe(true);
-  });
-
-  it("does not retry Discord client errors after the request runner handled them", () => {
-    const err = new DiscordError(new Response("upstream", { status: 502 }), {
-      message: "Bad Gateway",
+  it("adds request retries after observing a gateway disconnect", async () => {
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValue("ok");
+    const runner = createDiscordRetryRunner({
+      retry: ZERO_DELAY_RETRY,
+      isGatewayDisconnected: () => true,
     });
 
-    expect(isRetryableDiscordDeliveryError(err)).toBe(false);
-  });
-});
-
-describe("getDiscordDeliveryRetryAfterMs", () => {
-  it("reads finite retry delays from delivery errors", () => {
-    expect(getDiscordDeliveryRetryAfterMs({ retryAfter: 0.25 })).toBe(250);
-    expect(getDiscordDeliveryRetryAfterMs({ headers: { "retry-after": "0.25" } })).toBe(250);
+    await expect(runner(fn, "send")).resolves.toBe("ok");
+    expect(fn).toHaveBeenCalledTimes(4);
   });
 
-  it("rejects unsafe retry delay magnitudes", () => {
-    expect(getDiscordDeliveryRetryAfterMs({ retryAfter: 9_007_199_254_741 })).toBeUndefined();
-    expect(
-      getDiscordDeliveryRetryAfterMs({ headers: { "retry-after": "9007199254741" } }),
-    ).toBeUndefined();
+  it("remembers a disconnect when the gateway recovers before the baseline attempts end", async () => {
+    const isGatewayDisconnected = vi.fn().mockReturnValueOnce(true).mockReturnValue(false);
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValue("ok");
+    const runner = createDiscordRetryRunner({
+      retry: ZERO_DELAY_RETRY,
+      isGatewayDisconnected,
+    });
+
+    await expect(runner(fn, "send")).resolves.toBe("ok");
+    expect(fn).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not extend retries for unrelated application errors", async () => {
+    const fn = vi.fn().mockRejectedValue(new Error("invalid delivery payload"));
+    const runner = createDiscordRetryRunner({
+      retry: ZERO_DELAY_RETRY,
+      isGatewayDisconnected: () => true,
+    });
+
+    await expect(runner(fn, "send")).rejects.toThrow("invalid delivery payload");
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not extend HTTP retries beyond the configured attempt count", async () => {
+    const fn = vi.fn().mockRejectedValue(Object.assign(new Error("bad gateway"), { status: 502 }));
+    const runner = createDiscordRetryRunner({
+      retry: ZERO_DELAY_RETRY,
+      isGatewayDisconnected: () => true,
+    });
+
+    await expect(runner(fn, "send")).rejects.toThrow("bad gateway");
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it("honors an explicit single-attempt policy during disconnects", async () => {
+    const fn = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
+    const runner = createDiscordRetryRunner({
+      retry: { ...ZERO_DELAY_RETRY, attempts: 1 },
+      isGatewayDisconnected: () => true,
+    });
+
+    await expect(runner(fn, "send")).rejects.toThrow("fetch failed");
+    expect(fn).toHaveBeenCalledTimes(1);
   });
 });

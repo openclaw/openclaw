@@ -93,6 +93,11 @@ vi.mock("../agents/command/cli-compaction.js", () => {
 vi.mock("../agents/command/attempt-execution.runtime.js", () => {
   return {
     buildAcpResult: vi.fn(),
+    createAcpToolLifecycleTracker: () => ({
+      active: new Map(),
+      terminalToolCallIds: new Set(),
+      saturated: false,
+    }),
     createAcpVisibleTextAccumulator: vi.fn(),
     emitAcpAssistantDelta: vi.fn(),
     emitAcpLifecycleEnd: vi.fn(),

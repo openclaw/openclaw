@@ -63,6 +63,7 @@ struct LocalChatFixture {
                 name: "Main",
                 identity: ["emoji": AnyCodable("OC")],
                 workspace: "Apple Review Demo",
+                workspacegit: false,
                 model: ["provider": AnyCodable("demo"), "model": AnyCodable("local-demo")],
                 agentruntime: ["kind": AnyCodable("local")],
                 thinkinglevels: nil,
@@ -89,6 +90,7 @@ struct LocalChatFixture {
                 name: "Molty",
                 identity: ["emoji": AnyCodable("M")],
                 workspace: "OpenClaw",
+                workspacegit: false,
                 model: ["provider": AnyCodable("openai"), "model": AnyCodable("gpt-5.5")],
                 agentruntime: ["kind": AnyCodable("gateway")],
                 thinkinglevels: nil,
@@ -99,6 +101,7 @@ struct LocalChatFixture {
                 name: "Research",
                 identity: ["emoji": AnyCodable("RS")],
                 workspace: "OpenClaw",
+                workspacegit: false,
                 model: ["provider": AnyCodable("openai"), "model": AnyCodable("gpt-5.5")],
                 agentruntime: ["kind": AnyCodable("gateway")],
                 thinkinglevels: nil,
@@ -109,6 +112,7 @@ struct LocalChatFixture {
                 name: "Automation",
                 identity: ["emoji": AnyCodable("AU")],
                 workspace: "OpenClaw",
+                workspacegit: false,
                 model: ["provider": AnyCodable("openai"), "model": AnyCodable("gpt-5.5")],
                 agentruntime: ["kind": AnyCodable("gateway")],
                 thinkinglevels: nil,
@@ -129,7 +133,8 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
     func createSession(
         key: String,
         label _: String?,
-        parentSessionKey _: String?) async throws -> OpenClawChatCreateSessionResponse
+        parentSessionKey _: String?,
+        worktree _: Bool?) async throws -> OpenClawChatCreateSessionResponse
     {
         try await self.store.createSession(key: key)
     }
@@ -163,8 +168,25 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
 
     func abortRun(sessionKey _: String, runId _: String) async throws {}
 
-    func listSessions(limit _: Int?) async throws -> OpenClawChatSessionsListResponse {
-        try await self.store.sessions()
+    func listSessions(
+        limit _: Int?,
+        search: String?,
+        archived: Bool) async throws -> OpenClawChatSessionsListResponse
+    {
+        let response = try await self.store.sessions()
+        var sessions = response.sessions
+        if archived {
+            sessions = []
+        }
+        if let search {
+            sessions = OpenClawChatSessionListOrganizer.filter(sessions, search: search)
+        }
+        return OpenClawChatSessionsListResponse(
+            ts: response.ts,
+            path: response.path,
+            count: sessions.count,
+            defaults: response.defaults,
+            sessions: sessions)
     }
 
     func setSessionModel(sessionKey _: String, model _: String?) async throws {}
@@ -201,9 +223,14 @@ struct AppleReviewDemoChatTransport: OpenClawChatTransport {
     func createSession(
         key: String,
         label: String?,
-        parentSessionKey: String?) async throws -> OpenClawChatCreateSessionResponse
+        parentSessionKey: String?,
+        worktree: Bool?) async throws -> OpenClawChatCreateSessionResponse
     {
-        try await self.transport.createSession(key: key, label: label, parentSessionKey: parentSessionKey)
+        try await self.transport.createSession(
+            key: key,
+            label: label,
+            parentSessionKey: parentSessionKey,
+            worktree: worktree)
     }
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
@@ -233,8 +260,12 @@ struct AppleReviewDemoChatTransport: OpenClawChatTransport {
         try await self.transport.abortRun(sessionKey: sessionKey, runId: runId)
     }
 
-    func listSessions(limit: Int?) async throws -> OpenClawChatSessionsListResponse {
-        try await self.transport.listSessions(limit: limit)
+    func listSessions(
+        limit: Int?,
+        search: String?,
+        archived: Bool) async throws -> OpenClawChatSessionsListResponse
+    {
+        try await self.transport.listSessions(limit: limit, search: search, archived: archived)
     }
 
     func setSessionModel(sessionKey: String, model: String?) async throws {

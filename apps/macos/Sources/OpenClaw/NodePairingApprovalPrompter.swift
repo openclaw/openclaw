@@ -265,7 +265,11 @@ final class NodePairingApprovalPrompter {
     }
 
     private func enqueue(_ req: PendingRequest) {
-        if self.queue.contains(req) { return }
+        if self.queue.contains(where: { $0.requestId == req.requestId }) { return }
+        // The gateway keeps at most one live pending request per node; a newer
+        // request supersedes queued ones so missed resolve pushes cannot stack
+        // stale alerts. The actively presented request stays owned by its alert.
+        self.queue.removeAll { $0.nodeId == req.nodeId && $0.requestId != self.alertState.activeRequestId }
         self.queue.append(req)
         self.updatePendingCounts()
         self.presentNextIfNeeded()

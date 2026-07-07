@@ -322,7 +322,12 @@ describe("validateTalkConfigResult", () => {
               instructions: "Speak with crisp diction.",
               mode: "realtime",
               transport: "gateway-relay",
+              vadThreshold: 0.45,
+              silenceDurationMs: 650,
+              prefixPaddingMs: 250,
+              reasoningEffort: "low",
               brain: "agent-consult",
+              consultRouting: "force-agent-consult",
             },
           },
         },
@@ -751,6 +756,18 @@ describe("validateChatEvent", () => {
     ).toBe(true);
   });
 
+  it("accepts an argument-free diagnostic on aborted chat events", () => {
+    expect(
+      validateChatEvent({
+        runId: "run-chat",
+        sessionKey: "agent:main:main",
+        seq: 2,
+        state: "aborted",
+        errorMessage: "edit tool validation failed: path: must be string",
+      }),
+    ).toBe(true);
+  });
+
   it("rejects v3-style chat deltas without deltaText", () => {
     expect(
       validateChatEvent({
@@ -777,6 +794,12 @@ describe("validateChatSendParams", () => {
     };
 
     expect(validateChatSendParams(base)).toBe(true);
+    expect(
+      validateChatSendParams({
+        ...base,
+        expectedSessionRoutingContract: "per-sender|main|main",
+      }),
+    ).toBe(true);
     expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 2 })).toBe(true);
     expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 0 })).toBe(false);
   });

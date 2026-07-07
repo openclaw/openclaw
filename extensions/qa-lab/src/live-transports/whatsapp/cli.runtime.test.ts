@@ -2,14 +2,24 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QA_EVIDENCE_FILENAME } from "../../evidence-summary.js";
 import { runQaWhatsAppCommand } from "./cli.runtime.js";
 
-const runWhatsAppQaLiveMock = vi.hoisted(() => vi.fn());
+const { listWhatsAppQaScenarioCatalogMock, runCanonicalLiveScenariosMock, runWhatsAppQaLiveMock } =
+  vi.hoisted(() => ({
+    listWhatsAppQaScenarioCatalogMock: vi.fn(),
+    runCanonicalLiveScenariosMock: vi.fn(),
+    runWhatsAppQaLiveMock: vi.fn(),
+  }));
 
 vi.mock("../shared/live-artifacts.js", () => ({
   printLiveTransportQaArtifacts: vi.fn(),
+}));
+
+vi.mock("../shared/canonical-scenarios.js", async (importOriginal) => ({
+  ...(await importOriginal()),
+  runCanonicalLiveScenarios: runCanonicalLiveScenariosMock,
 }));
 
 vi.mock("../shared/live-transport-cli.runtime.js", () => ({
@@ -22,15 +32,26 @@ vi.mock("../shared/live-transport-cli.runtime.js", () => ({
 }));
 
 vi.mock("./whatsapp-live.runtime.js", () => ({
+  listWhatsAppQaScenarioCatalog: listWhatsAppQaScenarioCatalogMock,
   runWhatsAppQaLive: runWhatsAppQaLiveMock,
+}));
+
+vi.mock("./adapter.runtime.js", () => ({
+  createWhatsAppQaTransportAdapter: vi.fn(),
 }));
 
 const tempDirs: string[] = [];
 let originalExitCode: typeof process.exitCode;
 
+beforeEach(() => {
+  listWhatsAppQaScenarioCatalogMock.mockReturnValue([{ id: "whatsapp-canary" }]);
+});
+
 afterEach(async () => {
   process.exitCode = originalExitCode;
+  runCanonicalLiveScenariosMock.mockReset();
   runWhatsAppQaLiveMock.mockReset();
+  listWhatsAppQaScenarioCatalogMock.mockReset();
   for (const dir of tempDirs.splice(0)) {
     await fs.rm(dir, { recursive: true, force: true });
   }
@@ -88,6 +109,12 @@ describe("WhatsApp QA CLI runtime", () => {
       scenarios: [],
       summaryPath,
     });
+    runCanonicalLiveScenariosMock.mockResolvedValueOnce({
+      outputDir,
+      reportPath: path.join(outputDir, "canonical-report.md"),
+      scenarios: [],
+      summaryPath,
+    });
 
     await runQaWhatsAppCommand({ repoRoot: outputDir });
 
@@ -104,9 +131,75 @@ describe("WhatsApp QA CLI runtime", () => {
       scenarios: [],
       summaryPath,
     });
+    runCanonicalLiveScenariosMock.mockResolvedValueOnce({
+      outputDir,
+      reportPath: path.join(outputDir, "canonical-report.md"),
+      scenarios: [],
+      summaryPath,
+    });
 
     await runQaWhatsAppCommand({ allowFailures: true, repoRoot: outputDir });
 
     expect(process.exitCode).toBeUndefined();
+  });
+
+  it("delegates canonical WhatsApp scenario ids without starting the legacy runner", async () => {
+    originalExitCode = process.exitCode;
+    process.exitCode = undefined;
+    const { outputDir, summaryPath } = await writeSummary(makeEvidenceSummary("pass"));
+    runCanonicalLiveScenariosMock.mockResolvedValueOnce({
+      outputDir,
+      reportPath: path.join(outputDir, "canonical-report.md"),
+      scenarios: [],
+      summaryPath,
+    });
+
+    await runQaWhatsAppCommand({
+      repoRoot: outputDir,
+      scenarioIds: ["whatsapp-help-command"],
+    });
+
+    expect(runCanonicalLiveScenariosMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelId: "whatsapp",
+        scenarioIds: ["whatsapp-help-command"],
+      }),
+    );
+    expect(runWhatsAppQaLiveMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps remaining WhatsApp defaults when Commander supplies an empty scenario list", async () => {
+    const { outputDir, summaryPath } = await writeSummary(makeEvidenceSummary("pass"));
+    runWhatsAppQaLiveMock.mockResolvedValueOnce({
+      observedMessagesPath: path.join(outputDir, "observed.json"),
+      reportPath: path.join(outputDir, "report.md"),
+      scenarios: [],
+      summaryPath,
+    });
+    runCanonicalLiveScenariosMock.mockResolvedValueOnce({
+      outputDir,
+      reportPath: path.join(outputDir, "canonical-report.md"),
+      scenarios: [],
+      summaryPath,
+    });
+
+    await runQaWhatsAppCommand({ repoRoot: outputDir, scenarioIds: [] });
+
+    expect(runCanonicalLiveScenariosMock).toHaveBeenCalled();
+    expect(runWhatsAppQaLiveMock).toHaveBeenCalledWith(
+      expect.objectContaining({ scenarioIds: undefined }),
+    );
+  });
+
+  it("rejects unknown mixed WhatsApp selections before starting canonical scenarios", async () => {
+    await expect(
+      runQaWhatsAppCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        scenarioIds: ["whatsapp-help-command", "missing-whatsapp-scenario"],
+      }),
+    ).rejects.toThrow("unknown WhatsApp QA scenario id(s): missing-whatsapp-scenario");
+
+    expect(runCanonicalLiveScenariosMock).not.toHaveBeenCalled();
+    expect(runWhatsAppQaLiveMock).not.toHaveBeenCalled();
   });
 });

@@ -20,6 +20,7 @@ import {
   isActiveHarnessContextEngine,
   loadCodexBundleMcpThreadConfig,
   resolveAgentHarnessBeforePromptBuildResult,
+  resolveAgentRunAbortLifecycleFields,
   resolveContextEngineOwnerPluginId,
   resolveSandboxContext,
   resolveSessionAgentIds,
@@ -178,6 +179,7 @@ import {
   hasPendingDynamicToolTerminalDiagnostic,
   isDynamicToolTerminalDiagnosticEvent,
   isMatchingDynamicToolTerminalDiagnostic,
+  resolveCodexToolAbortTerminalReason,
   resolveDynamicToolCallTimeoutMs,
   resolveTerminalDynamicToolBatchAction,
   shouldBlockTerminalReleaseForNonTerminalDynamicToolResult,
@@ -203,11 +205,13 @@ import {
   clearPendingCodexNativeHookRelayUnregistersForTests,
   CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS,
   createCodexNativeHookRelay,
+  emitCodexNativePreToolUseFailureDiagnostic,
   flushPendingCodexNativeHookRelayUnregistersForTests,
   resolveCodexNativeHookRelayEvents,
   resolveCodexNativeHookRelayTtlMs,
   resolveCodexNativeHookRelayUnregisterGraceMs,
   scheduleCodexNativeHookRelayUnregister,
+  type CodexNativePreToolUseFailure,
 } from "./native-hook-relay.js";
 import { registerCodexNativeSubagentMonitor } from "./native-subagent-monitor.js";
 import { describeCodexNotificationCorrelation } from "./notification-correlation.js";
@@ -231,11 +235,10 @@ import {
 import { resolveCodexProviderWebSearchSupport } from "./provider-capabilities.js";
 import { releaseCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
 import {
-  clearCodexAppServerBinding,
-  clearCodexAppServerBindingForThread,
   isCodexAppServerNativeAuthProfile,
-  readCodexAppServerBinding,
-  writeCodexAppServerBinding,
+  sessionBindingIdentity,
+  type CodexAppServerBindingIdentity,
+  type CodexAppServerBindingStore,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
 import { retireSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
@@ -429,6 +432,7 @@ async function runCodexAgentEndHook(
 export async function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParams,
   options: {
+    bindingStore: CodexAppServerBindingStore;
     pluginConfig?: unknown;
     startupTimeoutFloorMs?: number;
     nativeHookRelay?: {
@@ -443,7 +447,7 @@ export async function runCodexAppServerAttempt(
     postToolRawAssistantCompletionIdleTimeoutMs?: number;
     turnTerminalIdleTimeoutMs?: number;
     clientFactory?: CodexAppServerClientFactory;
-  } = {},
+  },
 ): Promise<EmbeddedRunAttemptResult> {
   const attemptStartedAt = Date.now();
   const profilerEnabled = isCodexAppServerProfilerEnabled(params.config);
@@ -494,13 +498,20 @@ export async function runCodexAppServerAttempt(
     agentId: sessionAgentId,
   });
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
+  const bindingIdentity: CodexAppServerBindingIdentity = sessionBindingIdentity({
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+    config: params.config,
+  });
+  const bindingStore = options.bindingStore;
   preDynamicStartupStages.mark("session-agent");
   const activeContextEngine = isActiveHarnessContextEngine(params.contextEngine)
     ? params.contextEngine
     : undefined;
   const isInactiveThreadBootstrapBinding = (binding: CodexAppServerThreadBinding | undefined) =>
     !activeContextEngine && binding?.contextEngine?.projection?.mode === "thread_bootstrap";
-  let startupBinding = await readCodexAppServerBinding(params.sessionFile);
+  let startupBinding = await bindingStore.read(bindingIdentity);
   preDynamicStartupStages.mark("read-binding");
   const startupBindingAuthProfileId = startupBinding?.authProfileId;
   const initialStartupBindingHadInactiveThreadBootstrap =
@@ -631,6 +642,8 @@ export async function runCodexAppServerAttempt(
 
   startupBinding = await rotateOversizedCodexAppServerStartupBinding({
     binding: startupBinding,
+    bindingStore,
+    identity: bindingIdentity,
     sessionFile: params.sessionFile,
     agentDir,
     codexHome: appServer.start.env?.CODEX_HOME,
@@ -878,6 +891,7 @@ export async function runCodexAppServerAttempt(
     hookContext: {
       agentId: sessionAgentId,
       config: params.config,
+      workspaceDir: effectiveWorkspace,
       sessionId: params.sessionId,
       sessionKey: sandboxSessionKey,
       runId: params.runId,
@@ -1253,10 +1267,8 @@ export async function runCodexAppServerAttempt(
     codexTurnPromptText = decorateCodexTurnPromptText(nextPromptBuild);
   };
   const selectNewerVisibleHistoryAfterBinding = (binding: CodexAppServerThreadBinding) => {
-    const bindingUpdatedAt = Date.parse(binding.updatedAt);
-    if (!Number.isFinite(bindingUpdatedAt)) {
-      return [];
-    }
+    const historyCoveredThrough = Date.parse(binding.historyCoveredThrough ?? "");
+    const cutoff = Number.isFinite(historyCoveredThrough) ? historyCoveredThrough : 0;
     return historyMessages.filter((message) => {
       if (message.role !== "user" && message.role !== "assistant") {
         return false;
@@ -1271,6 +1283,13 @@ export async function runCodexAppServerAttempt(
         meta && typeof meta === "object" && !Array.isArray(meta)
           ? (meta as Record<string, unknown>).mirrorIdentity
           : undefined;
+      const mirrorOrigin =
+        meta && typeof meta === "object" && !Array.isArray(meta)
+          ? (meta as Record<string, unknown>).mirrorOrigin
+          : undefined;
+      if (mirrorOrigin === "codex-app-server") {
+        return false;
+      }
       if (typeof mirrorIdentity === "string" && mirrorIdentity.startsWith("codex-app-server:")) {
         return false;
       }
@@ -1280,7 +1299,7 @@ export async function runCodexAppServerAttempt(
           : typeof message.timestamp === "string"
             ? Date.parse(message.timestamp)
             : Number.NaN;
-      return Number.isFinite(timestamp) && timestamp > bindingUpdatedAt;
+      return Number.isFinite(timestamp) && timestamp > cutoff;
     });
   };
   const applyResumeStaleBindingContinuityProjection = (binding: CodexAppServerThreadBinding) => {
@@ -1358,6 +1377,8 @@ export async function runCodexAppServerAttempt(
     });
     startupBinding = await rotateOversizedCodexAppServerStartupBinding({
       binding: startupBinding,
+      bindingStore,
+      identity: bindingIdentity,
       sessionFile: params.sessionFile,
       agentDir,
       codexHome: appServer.start.env?.CODEX_HOME,
@@ -1420,6 +1441,44 @@ export async function runCodexAppServerAttempt(
     trajectoryEndRecorded = true;
   };
   let nativeHookRelay: NativeHookRelayRegistrationHandle | undefined;
+  const nativeSubagentMonitorRef: {
+    current?: ReturnType<typeof registerCodexNativeSubagentMonitor>;
+  } = {};
+  const pendingNativePreToolUseFailures: CodexNativePreToolUseFailure[] = [];
+  const projectorRef: { current?: CodexAppServerEventProjector } = {};
+  let nativePreToolUseFailureFallbackActive = false;
+  let nativePreToolUseFailureFallbackTerminalReason:
+    | CodexNativePreToolUseFailure["disposition"]
+    | undefined;
+  const emitNativePreToolUseFailure = (failure: CodexNativePreToolUseFailure) => {
+    emitCodexNativePreToolUseFailureDiagnostic({
+      agentId: sessionAgentId,
+      sessionId: params.sessionId,
+      sessionKey: sandboxSessionKey,
+      runId: params.runId,
+      signal: runAbortController.signal,
+      failure,
+      ...(nativePreToolUseFailureFallbackActive
+        ? {
+            terminalReason: nativePreToolUseFailureFallbackTerminalReason ?? failure.disposition,
+          }
+        : {}),
+    });
+  };
+  const flushPendingNativePreToolUseFailures = () => {
+    for (const failure of pendingNativePreToolUseFailures.splice(0)) {
+      emitNativePreToolUseFailure(failure);
+    }
+  };
+  const activateNativePreToolUseFailureFallback = () => {
+    if (!nativePreToolUseFailureFallbackActive) {
+      nativePreToolUseFailureFallbackTerminalReason = runAbortController.signal.aborted
+        ? resolveCodexToolAbortTerminalReason(runAbortController.signal)
+        : undefined;
+      nativePreToolUseFailureFallbackActive = true;
+    }
+    flushPendingNativePreToolUseFailures();
+  };
   let releaseSharedClientLease: (() => void) | undefined;
   let sharedCodexClientRetiredForOneShotCleanup = false;
   const releaseSharedClientLeaseOnce = () => {
@@ -1495,6 +1554,16 @@ export async function runCodexAppServerAttempt(
       startupTimeoutMs,
       turnStartTimeoutMs: params.timeoutMs,
       signal: runAbortController.signal,
+      onPreToolUseFailure: (failure) => {
+        const projector = projectorRef.current;
+        if (projector) {
+          projector.recordNativeToolPreToolUseFailure(failure);
+        } else if (nativePreToolUseFailureFallbackActive) {
+          emitNativePreToolUseFailure(failure);
+        } else {
+          pendingNativePreToolUseFailures.push(failure);
+        }
+      },
     });
     return {
       configPatch: nativeHookRelay
@@ -1518,6 +1587,7 @@ export async function runCodexAppServerAttempt(
     pluginAppServer = attemptAppServer;
     const startupResult = await startCodexAttemptThread({
       attemptClientFactory,
+      bindingStore,
       appServer: attemptAppServer,
       pluginConfig,
       computerUseConfig,
@@ -1608,6 +1678,7 @@ export async function runCodexAppServerAttempt(
       data: { phase: "thread_ready", threadId: thread.threadId },
     });
   } catch (error) {
+    activateNativePreToolUseFailureFallback();
     nativeHookRelay?.unregister();
     await releaseSandboxExecEnvironment();
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
@@ -1688,7 +1759,6 @@ export async function runCodexAppServerAttempt(
   let terminalDynamicToolReleaseCheckScheduled = false;
   let currentTurnHadNonTerminalDynamicToolResult = false;
   const turnIdRef: { current?: string } = {};
-  const projectorRef: { current?: CodexAppServerEventProjector } = {};
   const userInputBridgeRef: {
     current?: ReturnType<typeof createCodexUserInputBridge>;
   } = {};
@@ -1880,6 +1950,23 @@ export async function runCodexAppServerAttempt(
       },
     });
     lifecycleTerminalEmitted = true;
+  };
+  const buildLifecycleTerminalMeta = (input: { aborted: boolean; timedOut: boolean }) => {
+    const abortFields = input.aborted
+      ? resolveAgentRunAbortLifecycleFields(runAbortController.signal)
+      : undefined;
+    if (input.timedOut || abortFields?.stopReason === "timeout") {
+      return {
+        aborted: true,
+        status: "timed_out",
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      } as const;
+    }
+    return input.aborted
+      ? ({ aborted: true, status: "cancelled", stopReason: "stop" } as const)
+      : undefined;
   };
 
   const executionPhaseKeys = new Set<string>();
@@ -2286,7 +2373,7 @@ export async function runCodexAppServerAttempt(
     appServer.start.transport === "stdio"
       ? (appServer.start.env?.CODEX_HOME ?? resolveCodexAppServerHomeDir(agentDir))
       : undefined;
-  registerCodexNativeSubagentMonitor({
+  nativeSubagentMonitorRef.current = registerCodexNativeSubagentMonitor({
     client,
     parentThreadId: thread.threadId,
     requesterSessionKey: params.sessionKey,
@@ -2366,6 +2453,8 @@ export async function runCodexAppServerAttempt(
             internalExecAutoReview: appServer.approvalsReviewer === "user",
             autoApprove: shouldAutoApproveCodexAppServerApprovals(appServer),
             signal: runAbortController.signal,
+            onNativeToolFailureDisposition: (itemId, disposition) =>
+              projector?.recordNativeToolApprovalFailure(itemId, disposition),
           });
         }
         return undefined;
@@ -2398,6 +2487,7 @@ export async function runCodexAppServerAttempt(
       });
       emitDynamicToolStartedDiagnostic({
         call,
+        agentId: sessionAgentId,
         runId: params.runId,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
@@ -2521,6 +2611,7 @@ export async function runCodexAppServerAttempt(
           emitDynamicToolTerminalDiagnostic({
             response,
             call,
+            agentId: sessionAgentId,
             runId: params.runId,
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
@@ -2554,6 +2645,7 @@ export async function runCodexAppServerAttempt(
         ) {
           emitDynamicToolErrorDiagnostic({
             call,
+            agentId: sessionAgentId,
             runId: params.runId,
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
@@ -2755,16 +2847,11 @@ export async function runCodexAppServerAttempt(
         },
       );
       try {
-        const preRetrySessionFile = activeSessionFile;
-        const clearedPreRetryBinding = await clearCodexAppServerBindingForThread(
-          preRetrySessionFile,
-          thread.threadId,
-        );
-        const clearedActiveBinding =
-          activeSessionFile !== preRetrySessionFile
-            ? await clearCodexAppServerBindingForThread(activeSessionFile, thread.threadId)
-            : false;
-        if (!clearedPreRetryBinding && !clearedActiveBinding) {
+        const clearedBinding = await bindingStore.mutate(bindingIdentity, {
+          kind: "clear",
+          threadId: thread.threadId,
+        });
+        if (!clearedBinding) {
           embeddedAgentLog.warn(
             "codex app-server preserved newer context-engine binding after resume overflow; skipping fresh retry",
             {
@@ -2779,23 +2866,20 @@ export async function runCodexAppServerAttempt(
           // the saved binding so the next run will re-project instead
           // of assuming the old epoch is still in the thread.
           {
-            const retryBinding = await readCodexAppServerBinding(activeSessionFile);
+            const retryBinding = await bindingStore.read(bindingIdentity);
             if (
               retryBinding &&
               retryBinding.threadId === thread.threadId &&
               retryBinding.contextEngine?.projection
             ) {
-              const {
-                schemaVersion: _schemaVersion,
-                sessionFile: _boundSessionFile,
-                updatedAt: _updatedAt,
-                ...bindingForWrite
-              } = retryBinding;
-              await writeCodexAppServerBinding(activeSessionFile, {
-                ...bindingForWrite,
-                contextEngine: bindingForWrite.contextEngine
-                  ? { ...bindingForWrite.contextEngine, projection: undefined }
-                  : undefined,
+              await bindingStore.mutate(bindingIdentity, {
+                kind: "patch",
+                threadId: retryBinding.threadId,
+                patch: {
+                  contextEngine: retryBinding.contextEngine
+                    ? { ...retryBinding.contextEngine, projection: undefined }
+                    : undefined,
+                },
               });
               embeddedAgentLog.info(
                 "codex app-server cleared stale context-engine projection after overflow retry",
@@ -2830,7 +2914,7 @@ export async function runCodexAppServerAttempt(
       });
       const turnStartErrorMessage = usageLimitError?.message ?? formatErrorMessage(turnStartError);
       if (isInvalidCodexImagePayloadError(turnStartErrorMessage)) {
-        await clearCodexBindingAfterInvalidImagePayload(activeSessionFile, {
+        await clearCodexBindingAfterInvalidImagePayload(bindingStore, bindingIdentity, {
           phase: "turn_start",
           threadId: thread.threadId,
           error: turnStartErrorMessage,
@@ -2900,6 +2984,7 @@ export async function runCodexAppServerAttempt(
       }
       notificationCleanup();
       requestCleanup();
+      activateNativePreToolUseFailureFallback();
       nativeHookRelay?.unregister();
       await releaseSandboxExecEnvironment();
       await runAgentCleanupStep({
@@ -2932,6 +3017,7 @@ export async function runCodexAppServerAttempt(
     }
   }
   if (!turn) {
+    activateNativePreToolUseFailureFallback();
     await releaseSharedClientLeaseAndRetireOneShotClient();
     throw new Error("codex app-server turn/start failed without an error");
   }
@@ -2969,6 +3055,7 @@ export async function runCodexAppServerAttempt(
       nativePostToolUseRelayEnabled:
         nativeHookRelay?.allowedEvents.includes("post_tool_use") === true &&
         nativeHookRelay.shouldRelayEvent("post_tool_use"),
+      runAbortSignal: runAbortController.signal,
       trajectoryRecorder,
       onNativeToolResultRecorded: maybeAnnounceFastModeAutoOff,
     },
@@ -3013,6 +3100,9 @@ export async function runCodexAppServerAttempt(
   turnWatches.touchActivity("turn:start", { arm: true });
   turnWatches.armAttemptIdleWatch();
   turnWatches.touchActivity("turn:start", { attemptProgress: true });
+  for (const failure of pendingNativePreToolUseFailures.splice(0)) {
+    activeProjector.recordNativeToolPreToolUseFailure(failure);
+  }
   for (const notification of pendingNotifications.splice(0)) {
     await enqueueNotification(notification);
   }
@@ -3074,7 +3164,7 @@ export async function runCodexAppServerAttempt(
     if (shouldRetireClient) {
       void (async () => {
         // Timed-out native turns cannot be safely resumed on the same thread.
-        await clearCodexAppServerBindingForThread(activeSessionFile, thread.threadId);
+        await bindingStore.mutate(bindingIdentity, { kind: "clear", threadId: thread.threadId });
         await retireCodexAppServerClientAfterTimedOutTurn(client, {
           threadId: thread.threadId,
           turnId: activeTurnId,
@@ -3167,7 +3257,7 @@ export async function runCodexAppServerAttempt(
           ? formatErrorMessage(finalPromptError)
           : undefined;
     if (isInvalidCodexImagePayloadError(finalPromptErrorMessage)) {
-      await clearCodexBindingAfterInvalidImagePayload(activeSessionFile, {
+      await clearCodexBindingAfterInvalidImagePayload(bindingStore, bindingIdentity, {
         phase: "turn_completed",
         threadId: thread.threadId,
         turnId: activeTurnId,
@@ -3189,11 +3279,7 @@ export async function runCodexAppServerAttempt(
           error: finalPromptErrorMessage,
         },
       );
-      const preClearSessionFile = activeSessionFile;
-      await clearCodexAppServerBindingForThread(preClearSessionFile, thread.threadId);
-      if (activeSessionFile !== preClearSessionFile) {
-        await clearCodexAppServerBindingForThread(activeSessionFile, thread.threadId);
-      }
+      await bindingStore.mutate(bindingIdentity, { kind: "clear", threadId: thread.threadId });
     }
     const refreshedUsageLimitPromptError = await refreshCodexUsageLimitPromptError({
       client,
@@ -3387,22 +3473,15 @@ export async function runCodexAppServerAttempt(
     if (shouldDelayNativeHookRelayUnregister) {
       try {
         await markCodexAppServerBindingCoveredThroughTurn({
-          sessionFile: params.sessionFile,
+          bindingStore,
+          identity: bindingIdentity,
           threadId: thread.threadId,
-          authProfileStore: params.authProfileStore,
-          agentDir: params.agentDir,
-          config: params.config,
         });
       } catch (error) {
-        const clearedStaleBinding = await clearCodexAppServerBindingForThread(
-          params.sessionFile,
-          thread.threadId,
-          {
-            authProfileStore: params.authProfileStore,
-            agentDir: params.agentDir,
-            config: params.config,
-          },
-        );
+        const clearedStaleBinding = await bindingStore.mutate(bindingIdentity, {
+          kind: "clear",
+          threadId: thread.threadId,
+        });
         if (!clearedStaleBinding) {
           throw error;
         }
@@ -3453,11 +3532,12 @@ export async function runCodexAppServerAttempt(
       emitLifecycleTerminal({
         phase: "error",
         error: formatErrorMessage(finalPromptError),
+        ...buildLifecycleTerminalMeta({ aborted: finalAborted, timedOut: effectiveTimedOut }),
       });
     } else {
       emitLifecycleTerminal({
         phase: "end",
-        ...(finalAborted ? { aborted: true } : {}),
+        ...buildLifecycleTerminalMeta({ aborted: finalAborted, timedOut: effectiveTimedOut }),
       });
     }
     return {
@@ -3481,6 +3561,10 @@ export async function runCodexAppServerAttempt(
     emitLifecycleTerminal({
       phase: "error",
       error: "codex app-server run completed without lifecycle terminal event",
+      ...buildLifecycleTerminalMeta({
+        aborted: runAbortController.signal.aborted && !clientClosedAbort,
+        timedOut,
+      }),
     });
     if (trajectoryRecorder && !trajectoryEndRecorded) {
       trajectoryRecorder.recordEvent("session.ended", {
@@ -3506,7 +3590,20 @@ export async function runCodexAppServerAttempt(
     if (!timedOut && !runAbortController.signal.aborted) {
       await steeringQueueRef.current?.flushPending();
     }
-    if (!timedOut) {
+    const yieldedOneShotCleanupDeferred =
+      !timedOut &&
+      params.cleanupBundleMcpOnRunEnd === true &&
+      yieldDetected &&
+      nativeSubagentMonitorRef.current?.deferUntilParentSettles(thread.threadId, async () => {
+        // Keep the parent subscription alive until native child delivery;
+        // unsubscribing first drops the completion signal that settles cleanup.
+        await unsubscribeCodexThreadBestEffort(client, {
+          threadId: thread.threadId,
+          timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+        });
+        await releaseSharedClientLeaseAndRetireOneShotClient();
+      });
+    if (!timedOut && !yieldedOneShotCleanupDeferred) {
       await unsubscribeCodexThreadBestEffort(client, {
         threadId: thread.threadId,
         timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
@@ -3517,7 +3614,9 @@ export async function runCodexAppServerAttempt(
     notificationCleanup();
     requestCleanup();
     closeCleanup?.();
-    await releaseSharedClientLeaseAndRetireOneShotClient();
+    if (!yieldedOneShotCleanupDeferred) {
+      await releaseSharedClientLeaseAndRetireOneShotClient();
+    }
     if (nativeHookRelay) {
       if (shouldDelayNativeHookRelayUnregister) {
         // Codex hook subprocesses can outlive a completed app-server turn by a
@@ -3547,11 +3646,16 @@ function readDynamicToolCallParams(
 }
 
 async function clearCodexBindingAfterInvalidImagePayload(
-  sessionFile: string,
+  bindingStore: CodexAppServerBindingStore,
+  identity: CodexAppServerBindingIdentity,
   fields: { phase: string; threadId?: string; turnId?: string; error?: string },
 ): Promise<void> {
-  const currentBinding = await readCodexAppServerBinding(sessionFile);
-  if (fields.threadId && currentBinding && currentBinding.threadId !== fields.threadId) {
+  const currentBinding = await bindingStore.read(identity);
+  const expectedThreadId = fields.threadId ?? currentBinding?.threadId;
+  if (!expectedThreadId) {
+    return;
+  }
+  if (currentBinding && currentBinding.threadId !== expectedThreadId) {
     embeddedAgentLog.warn(
       "codex app-server image payload error detected for unbound thread; preserving thread binding",
       { ...fields, boundThreadId: currentBinding.threadId },
@@ -3562,34 +3666,18 @@ async function clearCodexBindingAfterInvalidImagePayload(
     "codex app-server image payload error detected; clearing thread binding",
     fields,
   );
-  await clearCodexAppServerBinding(sessionFile);
+  await bindingStore.mutate(identity, { kind: "clear", threadId: expectedThreadId });
 }
 
 async function markCodexAppServerBindingCoveredThroughTurn(params: {
-  sessionFile: string;
+  bindingStore: CodexAppServerBindingStore;
+  identity: CodexAppServerBindingIdentity;
   threadId: string;
-  authProfileStore: EmbeddedRunAttemptParams["authProfileStore"];
-  agentDir?: string;
-  config?: EmbeddedRunAttemptParams["config"];
 }): Promise<void> {
-  const currentBinding = await readCodexAppServerBinding(params.sessionFile, {
-    authProfileStore: params.authProfileStore,
-    agentDir: params.agentDir,
-    config: params.config,
-  });
-  if (!currentBinding || currentBinding.threadId !== params.threadId) {
-    return;
-  }
-  const {
-    schemaVersion: _schemaVersion,
-    sessionFile: _boundSessionFile,
-    updatedAt: _updatedAt,
-    ...bindingForWrite
-  } = currentBinding;
-  await writeCodexAppServerBinding(params.sessionFile, bindingForWrite, {
-    authProfileStore: params.authProfileStore,
-    agentDir: params.agentDir,
-    config: params.config,
+  await params.bindingStore.mutate(params.identity, {
+    kind: "patch",
+    threadId: params.threadId,
+    patch: { historyCoveredThrough: new Date().toISOString() },
   });
 }
 
@@ -3785,6 +3873,9 @@ function handleApprovalRequest(params: {
   internalExecAutoReview?: boolean;
   autoApprove?: boolean;
   signal?: AbortSignal;
+  onNativeToolFailureDisposition?: Parameters<
+    typeof handleCodexAppServerApprovalRequest
+  >[0]["onNativeToolFailureDisposition"];
 }): Promise<JsonValue | undefined> {
   return handleCodexAppServerApprovalRequest({
     method: params.method,
@@ -3798,6 +3889,7 @@ function handleApprovalRequest(params: {
     internalExecAutoReview: params.internalExecAutoReview,
     autoApprove: params.autoApprove,
     signal: params.signal,
+    onNativeToolFailureDisposition: params.onNativeToolFailureDisposition,
   });
 }
 

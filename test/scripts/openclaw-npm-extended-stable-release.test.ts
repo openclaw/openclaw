@@ -286,6 +286,46 @@ describe("extended-stable npm run identity", () => {
     ).not.toThrow();
   });
 
+  it("accepts only a completed successful Plugin NPM Release run on the exact branch and SHA", () => {
+    const pluginRun = {
+      workflowName: "Plugin NPM Release",
+      displayTitle: `Plugin NPM Release [extended-stable] ${sha}`,
+      event: "workflow_dispatch",
+      status: "completed",
+      conclusion: "success",
+      headBranch: branch,
+      headSha: sha,
+    };
+    expect(
+      validateExtendedStableRunIdentity({
+        run: pluginRun,
+        kind: "plugin",
+        npmDistTag: "extended-stable",
+        expectedBranch: branch,
+        expectedSha: sha,
+      }),
+    ).toBe(pluginRun);
+    for (const changes of [
+      { workflowName: "OpenClaw NPM Release" },
+      { displayTitle: `Plugin NPM Release [default] ${sha}` },
+      { displayTitle: `Plugin NPM Release [extended-stable] ${"b".repeat(40)}` },
+      { status: "in_progress" },
+      { conclusion: "failure" },
+      { headBranch: "main" },
+      { headSha: "b".repeat(40) },
+    ]) {
+      expect(() =>
+        validateExtendedStableRunIdentity({
+          run: { ...pluginRun, ...changes },
+          kind: "plugin",
+          npmDistTag: "extended-stable",
+          expectedBranch: branch,
+          expectedSha: sha,
+        }),
+      ).toThrow();
+    }
+  });
+
   it.each([
     ["wrong branch", { headBranch: "main" }],
     ["missing branch", { headBranch: undefined }],

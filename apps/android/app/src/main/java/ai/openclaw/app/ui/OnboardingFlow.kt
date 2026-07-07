@@ -151,6 +151,34 @@ internal enum class OnboardingStep {
   Permissions,
 }
 
+internal enum class OnboardingNodeApprovalSuccess {
+  ShowPermissions,
+  CompleteOnboarding,
+}
+
+/** Keeps post-pairing navigation in one closed mode so approval and permissions cannot form a cycle. */
+internal enum class OnboardingAccessStage(
+  val nodeApprovalBackStep: OnboardingStep,
+  val permissionsBackStep: OnboardingStep,
+  val nodeApprovalSuccess: OnboardingNodeApprovalSuccess,
+) {
+  DirectPermissions(
+    nodeApprovalBackStep = OnboardingStep.Recovery,
+    permissionsBackStep = OnboardingStep.Recovery,
+    nodeApprovalSuccess = OnboardingNodeApprovalSuccess.ShowPermissions,
+  ),
+  InitialApproval(
+    nodeApprovalBackStep = OnboardingStep.Recovery,
+    permissionsBackStep = OnboardingStep.NodeApproval,
+    nodeApprovalSuccess = OnboardingNodeApprovalSuccess.ShowPermissions,
+  ),
+  PermissionReapproval(
+    nodeApprovalBackStep = OnboardingStep.Permissions,
+    permissionsBackStep = OnboardingStep.Recovery,
+    nodeApprovalSuccess = OnboardingNodeApprovalSuccess.CompleteOnboarding,
+  ),
+}
+
 internal enum class OnboardingGatewayInputSource {
   SetupScanner,
   SetupGallery,
@@ -197,8 +225,7 @@ internal data class OnboardingBackState(
 internal fun onboardingBackDestination(
   step: OnboardingStep,
   lastGatewayInputSource: OnboardingGatewayInputSource = OnboardingGatewayInputSource.SetupScanner,
-  nodeApprovalBackStep: OnboardingStep = OnboardingStep.Recovery,
-  permissionsBackStep: OnboardingStep = OnboardingStep.NodeApproval,
+  accessStage: OnboardingAccessStage = OnboardingAccessStage.InitialApproval,
 ): OnboardingBackDestination? =
   when (step) {
     OnboardingStep.Welcome -> null
@@ -214,16 +241,15 @@ internal fun onboardingBackDestination(
         -> OnboardingBackDestination(OnboardingStep.SetupCode)
         OnboardingGatewayInputSource.Manual -> OnboardingBackDestination(OnboardingStep.Manual)
       }
-    OnboardingStep.NodeApproval -> OnboardingBackDestination(nodeApprovalBackStep)
-    OnboardingStep.Permissions -> OnboardingBackDestination(permissionsBackStep)
+    OnboardingStep.NodeApproval -> OnboardingBackDestination(accessStage.nodeApprovalBackStep)
+    OnboardingStep.Permissions -> OnboardingBackDestination(accessStage.permissionsBackStep)
   }
 
 internal fun onboardingBackStateAfterBack(
   step: OnboardingStep,
   lastGatewayInputSource: OnboardingGatewayInputSource = OnboardingGatewayInputSource.SetupScanner,
   setupCodeEntryOpenedFromScanner: Boolean = false,
-  nodeApprovalBackStep: OnboardingStep = OnboardingStep.Recovery,
-  permissionsBackStep: OnboardingStep = OnboardingStep.NodeApproval,
+  accessStage: OnboardingAccessStage = OnboardingAccessStage.InitialApproval,
 ): OnboardingBackState? {
   if (step == OnboardingStep.EnterSetupCode) {
     return OnboardingBackState(
@@ -235,8 +261,7 @@ internal fun onboardingBackStateAfterBack(
     onboardingBackDestination(
       step = step,
       lastGatewayInputSource = lastGatewayInputSource,
-      nodeApprovalBackStep = nodeApprovalBackStep,
-      permissionsBackStep = permissionsBackStep,
+      accessStage = accessStage,
     ) ?: return null
   return OnboardingBackState(step = destination.step, inlineQrScannerActive = destination.inlineQrScannerActive)
 }
@@ -260,7 +285,6 @@ fun OnboardingFlow(
     val nodesDevicesRefreshing by viewModel.nodesDevicesRefreshing.collectAsState()
     val serverName by viewModel.serverName.collectAsState()
     val gateways by viewModel.gateways.collectAsState()
-    val savedToken by viewModel.gatewayToken.collectAsState()
     val savedManualHost by viewModel.manualHost.collectAsState()
     val savedManualPort by viewModel.manualPort.collectAsState()
     val savedManualTls by viewModel.manualTls.collectAsState()
@@ -278,7 +302,7 @@ fun OnboardingFlow(
     var manualHost by rememberSaveable { mutableStateOf("") }
     var manualPort by rememberSaveable { mutableStateOf("18789") }
     var manualTls by rememberSaveable { mutableStateOf(false) }
-    var token by rememberSaveable { mutableStateOf(savedToken) }
+    var token by rememberSaveable { mutableStateOf("") }
     var password by rememberSaveable { mutableStateOf("") }
     var setupError by rememberSaveable { mutableStateOf<String?>(null) }
     var setupScanError by rememberSaveable { mutableStateOf<String?>(null) }
@@ -289,8 +313,7 @@ fun OnboardingFlow(
     var setupCodeEntryOpenedFromScanner by rememberSaveable { mutableStateOf(false) }
     var connectAttemptStartedAtMs by rememberSaveable { mutableLongStateOf(0L) }
     var recoveryNowMs by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
-    var nodeApprovalBackStep by rememberSaveable { mutableStateOf(OnboardingStep.Recovery) }
-    var permissionsBackStep by rememberSaveable { mutableStateOf(OnboardingStep.NodeApproval) }
+    var accessStage by rememberSaveable { mutableStateOf(OnboardingAccessStage.InitialApproval) }
     var nodeApprovalCheckRequested by rememberSaveable { mutableStateOf(false) }
     var nodeApprovalCheckRefreshStarted by rememberSaveable { mutableStateOf(false) }
     var nodeApprovalAutoContinueEnabled by rememberSaveable { mutableStateOf(false) }
@@ -325,8 +348,7 @@ fun OnboardingFlow(
           step = step,
           lastGatewayInputSource = lastGatewayInputSource,
           setupCodeEntryOpenedFromScanner = setupCodeEntryOpenedFromScanner,
-          nodeApprovalBackStep = nodeApprovalBackStep,
-          permissionsBackStep = permissionsBackStep,
+          accessStage = accessStage,
         ) ?: return
       inlineQrScannerActive = next.inlineQrScannerActive
       setupCodeEntryOpenedFromScanner = next.setupCodeEntryOpenedFromScanner
@@ -338,8 +360,7 @@ fun OnboardingFlow(
         onboardingBackDestination(
           step = step,
           lastGatewayInputSource = lastGatewayInputSource,
-          nodeApprovalBackStep = nodeApprovalBackStep,
-          permissionsBackStep = permissionsBackStep,
+          accessStage = accessStage,
         ) != null,
     ) {
       goBack()
@@ -364,6 +385,19 @@ fun OnboardingFlow(
       while (true) {
         delay(1_000L)
         recoveryNowMs = SystemClock.elapsedRealtime()
+      }
+    }
+
+    fun advanceAfterNodeApproval() {
+      nodeApprovalCheckRequested = false
+      nodeApprovalCheckRefreshStarted = false
+      nodeApprovalAutoContinueEnabled = false
+      when (accessStage.nodeApprovalSuccess) {
+        OnboardingNodeApprovalSuccess.ShowPermissions -> {
+          accessStage = OnboardingAccessStage.InitialApproval
+          step = OnboardingStep.Permissions
+        }
+        OnboardingNodeApprovalSuccess.CompleteOnboarding -> viewModel.setOnboardingCompleted(true)
       }
     }
 
@@ -407,10 +441,7 @@ fun OnboardingFlow(
           ready = ready,
         )
       ) {
-        nodeApprovalCheckRequested = false
-        nodeApprovalCheckRefreshStarted = false
-        permissionsBackStep = OnboardingStep.NodeApproval
-        step = OnboardingStep.Permissions
+        advanceAfterNodeApproval()
       }
     }
 
@@ -423,11 +454,7 @@ fun OnboardingFlow(
           autoContinueEnabled = nodeApprovalAutoContinueEnabled,
         )
       ) {
-        nodeApprovalCheckRequested = false
-        nodeApprovalCheckRefreshStarted = false
-        nodeApprovalAutoContinueEnabled = false
-        permissionsBackStep = OnboardingStep.NodeApproval
-        step = OnboardingStep.Permissions
+        advanceAfterNodeApproval()
       }
     }
 
@@ -468,14 +495,14 @@ fun OnboardingFlow(
         )
       ) {
         OnboardingStep.Permissions -> {
-          permissionsBackStep = OnboardingStep.Recovery
+          accessStage = OnboardingAccessStage.DirectPermissions
           step = OnboardingStep.Permissions
         }
         OnboardingStep.NodeApproval -> {
           nodeApprovalCheckRequested = false
           nodeApprovalCheckRefreshStarted = false
           nodeApprovalAutoContinueEnabled = true
-          nodeApprovalBackStep = OnboardingStep.Recovery
+          accessStage = OnboardingAccessStage.InitialApproval
           step = OnboardingStep.NodeApproval
         }
         else -> {
@@ -543,7 +570,8 @@ fun OnboardingFlow(
         val message =
           when (scanned.error) {
             GatewayEndpointValidationError.INSECURE_REMOTE_URL,
-            GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED ->
+            GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED,
+            ->
               gatewayEndpointValidationMessage(scanned.error, GatewayEndpointInputSource.QR_SCAN)
             else -> "That QR code is not an OpenClaw setup QR. Generate a fresh code with openclaw qr, then try again."
           }
@@ -830,13 +858,7 @@ fun OnboardingFlow(
                 nodeCapabilityApproval = nodeCapabilityApproval,
               )
             ) {
-              val reapprovalBackSteps =
-                permissionReapprovalBackSteps(
-                  currentNodeApprovalBackStep = nodeApprovalBackStep,
-                  currentPermissionsBackStep = permissionsBackStep,
-                )
-              nodeApprovalBackStep = reapprovalBackSteps.nodeApprovalBackStep
-              permissionsBackStep = reapprovalBackSteps.permissionsBackStep
+              accessStage = OnboardingAccessStage.PermissionReapproval
               nodeApprovalCheckRequested = false
               nodeApprovalCheckRefreshStarted = false
               nodeApprovalAutoContinueEnabled = false
@@ -1093,17 +1115,6 @@ private fun GatewayPrerequisiteRow(
       Text(text = title, style = ClawTheme.type.body.copy(fontWeight = FontWeight.SemiBold), color = ClawTheme.colors.text)
       Text(text = body, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
     }
-  }
-}
-
-@Composable
-private fun GatewayCommand(
-  label: String,
-  command: String,
-) {
-  Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-    Text(text = label, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
-    Text(text = command, style = ClawTheme.type.mono.copy(fontSize = 16.sp, lineHeight = 22.sp), color = ClawTheme.colors.text)
   }
 }
 
@@ -2685,27 +2696,6 @@ internal fun gatewayPairingContinueDestination(
     else -> null
   }
 
-internal data class OnboardingPermissionReapprovalBackSteps(
-  val nodeApprovalBackStep: OnboardingStep,
-  val permissionsBackStep: OnboardingStep,
-)
-
-internal fun permissionReapprovalBackSteps(
-  currentNodeApprovalBackStep: OnboardingStep,
-  currentPermissionsBackStep: OnboardingStep,
-): OnboardingPermissionReapprovalBackSteps {
-  val originalPermissionsBackStep =
-    if (currentNodeApprovalBackStep == OnboardingStep.Permissions) {
-      currentPermissionsBackStep
-    } else {
-      currentNodeApprovalBackStep
-    }
-  return OnboardingPermissionReapprovalBackSteps(
-    nodeApprovalBackStep = OnboardingStep.Permissions,
-    permissionsBackStep = originalPermissionsBackStep,
-  )
-}
-
 internal fun nodeApprovalCheckingInProgress(
   checkRequested: Boolean,
   refreshStarted: Boolean,
@@ -2997,7 +2987,7 @@ private fun rememberPermissionState(
         null
       },
       if (smsAvailable) {
-        PermissionRowModel("SMS", "Read and send SMS messages", Icons.Default.Notifications, smsGranted) {
+        PermissionRowModel("SMS", "Device access; Gateway opt-in still required", Icons.Default.Notifications, smsGranted) {
           request(Manifest.permission.SEND_SMS, Manifest.permission.READ_SMS)
         }
       } else {

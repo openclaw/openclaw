@@ -9,7 +9,7 @@ type AgentSelectionGateway = {
   subscribe: (listener: (snapshot: AgentSelectionGateway["snapshot"]) => void) => () => void;
 };
 
-export type AgentSelectionState = {
+type AgentSelectionState = {
   selectedId: string | null;
 };
 

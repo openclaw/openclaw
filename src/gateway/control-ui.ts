@@ -4,7 +4,7 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
-import { detectMime } from "@openclaw/media-core/mime";
+import { detectMime, kindFromMime } from "@openclaw/media-core/mime";
 import {
   asDateTimestampMs,
   resolveTimestampMsToIsoString,
@@ -23,7 +23,11 @@ import { verifyPairingToken } from "../infra/pairing-token.js";
 import { isWithinDir } from "../infra/path-safety.js";
 import { assertLocalMediaAllowed, getDefaultLocalRoots } from "../media/local-media-access.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
-import { resolveMediaReferenceLocalPath } from "../media/media-reference.js";
+import {
+  resolveMediaReferenceLocalPath,
+  resolveMediaReferenceLocalPathInfo,
+} from "../media/media-reference.js";
+import { extractOriginalFilename } from "../media/store.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
@@ -71,6 +75,18 @@ const CONTROL_UI_ASSETS_MISSING_MESSAGE =
 const CONTROL_UI_OPERATOR_READ_SCOPE = "operator.read";
 const CONTROL_UI_OPERATOR_ROLE = "operator";
 const controlUiAssistantMediaTicketSecret = randomBytes(32);
+
+function buildAssistantMediaContentDisposition(filename: string, mime?: string): string {
+  // Keep the RFC 6266 fallback ASCII; filename* carries the exact UTF-8 name.
+  const fallback = filename.replace(/[^\x20-\x7e]|[%"\\]/g, "_") || "download";
+  const extended = encodeURIComponent(filename).replace(
+    /[\x27()*]/g,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  const kind = kindFromMime(mime);
+  const inline = kind === "image" || kind === "audio" || kind === "video";
+  return `${inline ? "inline" : "attachment"}; filename="${fallback}"; filename*=UTF-8''${extended}`;
+}
 
 type ControlUiRequestOptions = {
   basePath?: string;
@@ -617,7 +633,8 @@ export async function handleControlUiAssistantMediaRequest(
     await opened.handle.close().catch(() => {});
   };
   try {
-    localPath = await resolveMediaReferenceLocalPath(source);
+    const resolvedReference = await resolveMediaReferenceLocalPathInfo(source);
+    localPath = resolvedReference.path;
     await assertLocalMediaAllowed(localPath, localRoots);
     opened = await openLocalFileSafely({ filePath: localPath });
     const sniffLength = Math.min(opened.stat.size, 8192);
@@ -630,11 +647,16 @@ export async function handleControlUiAssistantMediaRequest(
       buffer: sniffBuffer?.subarray(0, bytesRead),
       filePath: localPath,
     });
-    if (mime) {
-      res.setHeader("Content-Type", mime);
-    } else {
-      res.setHeader("Content-Type", "application/octet-stream");
-    }
+    const contentType = mime ?? "application/octet-stream";
+    const filename =
+      resolvedReference.kind === "inbound"
+        ? extractOriginalFilename(localPath)
+        : path.basename(localPath);
+    res.setHeader("Content-Type", contentType);
+    res.setHeader(
+      "Content-Disposition",
+      buildAssistantMediaContentDisposition(filename, contentType),
+    );
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Content-Length", String(opened.stat.size));
     const stream = opened.handle.createReadStream({ start: 0, autoClose: false });

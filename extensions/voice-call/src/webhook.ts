@@ -1014,6 +1014,11 @@ export class VoiceCallWebhookServer {
         from: call.from,
         transcript: call.transcript,
         userMessage,
+        onEarlyText: async (text) => {
+          console.log(`[voice-call] Early AI response: "${text}"`);
+          const speakResult = await this.manager.speak(callId, text, { listenAfterPlayback: true });
+          return speakResult.success;
+        },
       });
 
       if (result.error) {
@@ -1021,7 +1026,7 @@ export class VoiceCallWebhookServer {
         return;
       }
 
-      if (result.text) {
+      if (result.text && !result.deliveredEarly) {
         console.log(`[voice-call] AI response: "${result.text}"`);
         await this.manager.speak(callId, result.text, { listenAfterPlayback: true });
       }

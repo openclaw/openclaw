@@ -9,7 +9,12 @@ import { setTimeout as nativeSleep } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { acquireGatewayLock, GatewayLockError, type GatewayLockOptions } from "./gateway-lock.js";
+import {
+  acquireGatewayLock,
+  GatewayLockError,
+  readActiveGatewayLockPort,
+  type GatewayLockOptions,
+} from "./gateway-lock.js";
 
 type GatewayLock = NonNullable<Awaited<ReturnType<typeof acquireGatewayLock>>>;
 
@@ -94,11 +99,17 @@ function makeProcStat(pid: number, startTime: number) {
   return `${pid} (node) ${fields.join(" ")}`;
 }
 
-function createLockPayload(params: { configPath: string; startTime: number; createdAt?: string }) {
+function createLockPayload(params: {
+  configPath: string;
+  startTime: number;
+  createdAt?: string;
+  port?: number;
+}) {
   return {
     pid: process.pid,
     createdAt: params.createdAt ?? new Date().toISOString(),
     configPath: params.configPath,
+    ...(params.port ? { port: params.port } : {}),
     startTime: params.startTime,
   };
 }
@@ -197,6 +208,66 @@ describe("gateway lock", () => {
     await acquiredLock.release();
     const lock2 = await acquireForTest(env);
     await expectGatewayLock(lock2).release();
+  });
+
+  it("records and reads the active runtime port from a verified gateway lock", async () => {
+    const env = await makeEnv();
+    const lock = expectGatewayLock(
+      await acquireForTest(env, {
+        platform: "darwin",
+        port: 48789,
+        readProcessCmdline: () => ["openclaw-gateway"],
+      }),
+    );
+
+    try {
+      await expect(
+        readActiveGatewayLockPort({
+          env,
+          lockDir: resolveTestLockDir(),
+          platform: "darwin",
+          readProcessCmdline: () => ["openclaw-gateway"],
+        }),
+      ).resolves.toBe(48789);
+    } finally {
+      await lock.release();
+    }
+  });
+
+  it("keeps a retitled gateway lock owned during concurrent acquisition", async () => {
+    const env = await makeEnv();
+    const lock = expectGatewayLock(await acquireForTest(env, { platform: "darwin", port: 48789 }));
+    const connectSpy = createPortProbeConnectionSpy("connect");
+
+    try {
+      await expect(
+        acquireForTest(env, {
+          platform: "darwin",
+          port: 48789,
+          timeoutMs: 15,
+          readProcessCmdline: () => ["openclaw-gateway"],
+        }),
+      ).rejects.toBeInstanceOf(GatewayLockError);
+      expect(connectSpy).toHaveBeenCalled();
+    } finally {
+      await lock.release();
+    }
+  });
+
+  it("ignores active-port metadata when the lock owner cannot be verified", async () => {
+    const env = await makeEnv();
+    const { lockPath, configPath } = resolveLockPath(env);
+    const payload = createLockPayload({ configPath, startTime: 111, port: 48789 });
+    await fs.writeFile(lockPath, JSON.stringify(payload), "utf8");
+
+    await expect(
+      readActiveGatewayLockPort({
+        env,
+        lockDir: resolveTestLockDir(),
+        platform: "darwin",
+        readProcessCmdline: () => null,
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it("treats recycled linux pid as stale when start time mismatches", async () => {
