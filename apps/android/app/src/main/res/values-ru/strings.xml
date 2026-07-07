@@ -1,37 +1,9 @@
 <resources>
     <string name="app_name">OpenClaw Node</string>
-    <string name="gateway_connection">Подключение к шлюзу</string>
-    <string name="connect_gateway">Подключить шлюз</string>
-    <string name="disconnect">Отключить</string>
     <string name="trust_this_gateway">Доверять этому шлюзу?</string>
     <string name="trust_and_continue">Доверять и продолжить</string>
     <string name="cancel">Отмена</string>
     <string name="new_chat_in_worktree">Новый чат в worktree</string>
-    <string name="endpoint">Конечная точка</string>
-    <string name="status">Статус</string>
-    <string name="connected_gateway_ready">Ваш шлюз активен и готов.</string>
-    <string name="connect_gateway_get_started">Подключитесь к своему шлюзу, чтобы начать.</string>
-    <string name="copy_report_for_claw">Скопировать отчет для Claw</string>
-    <string name="advanced_controls">Расширенные настройки</string>
-    <string name="connection_method">Способ подключения</string>
-    <string name="setup_code">Код настройки</string>
-    <string name="manual">Вручную</string>
-    <string name="paste_setup_code">Вставьте код настройки</string>
-    <string name="host">Хост</string>
-    <string name="use_tls">Использовать TLS</string>
-    <string name="token_optional">Токен (необязательно)</string>
-    <string name="password">Пароль</string>
-    <string name="custom_headers_optional">Пользовательские заголовки (необязательно)</string>
-    <string name="custom_headers_explainer">Отправляются при каждом подключении к этому gateway, например заголовки токена службы Cloudflare Access. Хранятся в зашифрованном виде и применяются при следующем переподключении.</string>
-    <string name="custom_header_value">Значение заголовка</string>
-    <string name="custom_header_reserved">Этот заголовок управляется подключением и не может быть переопределен.</string>
-    <string name="add_custom_header">Добавить заголовок</string>
-    <string name="remove_custom_header">Удалить %1$s</string>
-    <string name="run_onboarding_again">Запустить настройку заново</string>
-    <string name="resolved_endpoint">Разрешенная конечная точка</string>
     <string name="gateway_trust_first_seen">Проверьте отпечаток сертификата, прежде чем доверять этому шлюзу.\n\n%1$s</string>
     <string name="gateway_trust_changed">Сертификат шлюза изменился. Продолжайте, только если вы ожидали это изменение.\n\nСтарый SHA-256:\n%1$s\n\nНовый SHA-256:\n%2$s</string>
-    <string name="switch_gateway">Переключить gateway</string>
-    <string name="select_gateway">Выбрать gateway</string>
-    <string name="active_gateway">Активный gateway</string>
 </resources>

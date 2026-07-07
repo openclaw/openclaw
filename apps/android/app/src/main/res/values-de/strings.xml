@@ -1,37 +1,9 @@
 <resources>
     <string name="app_name">OpenClaw Node</string>
-    <string name="gateway_connection">Gateway-Verbindung</string>
-    <string name="connect_gateway">Gateway verbinden</string>
-    <string name="disconnect">Trennen</string>
     <string name="trust_this_gateway">Diesem Gateway vertrauen?</string>
     <string name="trust_and_continue">Vertrauen und fortfahren</string>
     <string name="cancel">Abbrechen</string>
     <string name="new_chat_in_worktree">Neuer Chat im Worktree</string>
-    <string name="endpoint">Endpunkt</string>
-    <string name="status">Status</string>
-    <string name="connected_gateway_ready">Ihr Gateway ist aktiv und bereit.</string>
-    <string name="connect_gateway_get_started">Verbinden Sie sich mit Ihrem Gateway, um loszulegen.</string>
-    <string name="copy_report_for_claw">Bericht für Claw kopieren</string>
-    <string name="advanced_controls">Erweiterte Steuerungen</string>
-    <string name="connection_method">Verbindungsmethode</string>
-    <string name="setup_code">Einrichtungscode</string>
-    <string name="manual">Manuell</string>
-    <string name="paste_setup_code">Einrichtungscode einfügen</string>
-    <string name="host">Host</string>
-    <string name="use_tls">TLS verwenden</string>
-    <string name="token_optional">Token (optional)</string>
-    <string name="password">Passwort</string>
-    <string name="custom_headers_optional">Benutzerdefinierte Header (optional)</string>
-    <string name="custom_headers_explainer">Wird bei jeder Verbindung zu diesem Gateway gesendet, zum Beispiel Cloudflare Access-Diensttoken-Header. Wird verschlüsselt gespeichert und beim nächsten erneuten Verbindungsaufbau angewendet.</string>
-    <string name="custom_header_value">Header-Wert</string>
-    <string name="custom_header_reserved">Dieser Header wird von der Verbindung verwaltet und kann nicht überschrieben werden.</string>
-    <string name="add_custom_header">Header hinzufügen</string>
-    <string name="remove_custom_header">%1$s entfernen</string>
-    <string name="run_onboarding_again">Onboarding erneut ausführen</string>
-    <string name="resolved_endpoint">Aufgelöster Endpunkt</string>
     <string name="gateway_trust_first_seen">Überprüfen Sie den Zertifikatfingerabdruck, bevor Sie diesem Gateway vertrauen.\n\n%1$s</string>
     <string name="gateway_trust_changed">Das Gateway-Zertifikat wurde geändert. Fahren Sie nur fort, wenn Sie diese Änderung erwartet haben.\n\nAlter SHA-256-Wert:\n%1$s\n\nNeuer SHA-256-Wert:\n%2$s</string>
-    <string name="switch_gateway">Gateway wechseln</string>
-    <string name="select_gateway">Gateway auswählen</string>
-    <string name="active_gateway">Aktives Gateway</string>
 </resources>

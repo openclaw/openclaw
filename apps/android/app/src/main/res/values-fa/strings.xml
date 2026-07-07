@@ -1,37 +1,9 @@
 <resources>
     <string name="app_name">OpenClaw Node</string>
-    <string name="gateway_connection">اتصال دروازه</string>
-    <string name="connect_gateway">اتصال به دروازه</string>
-    <string name="disconnect">قطع اتصال</string>
     <string name="trust_this_gateway">به این دروازه اعتماد دارید؟</string>
     <string name="trust_and_continue">اعتماد و ادامه</string>
     <string name="cancel">لغو</string>
     <string name="new_chat_in_worktree">چت جدید در worktree</string>
-    <string name="endpoint">نقطه پایانی</string>
-    <string name="status">وضعیت</string>
-    <string name="connected_gateway_ready">دروازه شما فعال و آماده است.</string>
-    <string name="connect_gateway_get_started">برای شروع، به دروازه خود متصل شوید.</string>
-    <string name="copy_report_for_claw">کپی گزارش برای Claw</string>
-    <string name="advanced_controls">کنترل‌های پیشرفته</string>
-    <string name="connection_method">روش اتصال</string>
-    <string name="setup_code">کد راه‌اندازی</string>
-    <string name="manual">دستی</string>
-    <string name="paste_setup_code">کد راه‌اندازی را جای‌گذاری کنید</string>
-    <string name="host">میزبان</string>
-    <string name="use_tls">استفاده از TLS</string>
-    <string name="token_optional">توکن (اختیاری)</string>
-    <string name="password">رمز عبور</string>
-    <string name="custom_headers_optional">هدرهای سفارشی (اختیاری)</string>
-    <string name="custom_headers_explainer">با هر اتصال به این gateway ارسال می‌شود، برای مثال هدرهای توکن سرویس Cloudflare Access. به‌صورت رمزگذاری‌شده ذخیره می‌شود و در اتصال مجدد بعدی اعمال می‌شود.</string>
-    <string name="custom_header_value">مقدار هدر</string>
-    <string name="custom_header_reserved">این هدر توسط اتصال مدیریت می‌شود و قابل بازنویسی نیست.</string>
-    <string name="add_custom_header">افزودن هدر</string>
-    <string name="remove_custom_header">حذف %1$s</string>
-    <string name="run_onboarding_again">اجرای دوباره فرایند شروع به کار</string>
-    <string name="resolved_endpoint">نقطه پایانی حل‌شده</string>
     <string name="gateway_trust_first_seen">پیش از اعتماد به این دروازه، اثر انگشت گواهی را تأیید کنید.\n\n%1$s</string>
     <string name="gateway_trust_changed">گواهی دروازه تغییر کرده است. فقط در صورتی ادامه دهید که انتظار این تغییر را داشتید.\n\nSHA-256 قدیمی:\n%1$s\n\nSHA-256 جدید:\n%2$s</string>
-    <string name="switch_gateway">تغییر Gateway</string>
-    <string name="select_gateway">انتخاب Gateway</string>
-    <string name="active_gateway">Gateway فعال</string>
 </resources>

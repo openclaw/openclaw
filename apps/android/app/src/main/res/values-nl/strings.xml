@@ -1,37 +1,9 @@
 <resources>
     <string name="app_name">OpenClaw Node</string>
-    <string name="gateway_connection">Gatewayverbinding</string>
-    <string name="connect_gateway">Gateway verbinden</string>
-    <string name="disconnect">Verbinding verbreken</string>
     <string name="trust_this_gateway">Deze gateway vertrouwen?</string>
     <string name="trust_and_continue">Vertrouwen en doorgaan</string>
     <string name="cancel">Annuleren</string>
     <string name="new_chat_in_worktree">Nieuwe chat in worktree</string>
-    <string name="endpoint">Endpoint</string>
-    <string name="status">Status</string>
-    <string name="connected_gateway_ready">Je gateway is actief en klaar voor gebruik.</string>
-    <string name="connect_gateway_get_started">Verbind met je gateway om te beginnen.</string>
-    <string name="copy_report_for_claw">Rapport voor Claw kopiëren</string>
-    <string name="advanced_controls">Geavanceerde bediening</string>
-    <string name="connection_method">Verbindingsmethode</string>
-    <string name="setup_code">Setupcode</string>
-    <string name="manual">Handmatig</string>
-    <string name="paste_setup_code">Setupcode plakken</string>
-    <string name="host">Host</string>
-    <string name="use_tls">TLS gebruiken</string>
-    <string name="token_optional">Token (optioneel)</string>
-    <string name="password">Wachtwoord</string>
-    <string name="custom_headers_optional">Aangepaste headers (optioneel)</string>
-    <string name="custom_headers_explainer">Meegestuurd met elke verbinding met deze Gateway, bijvoorbeeld headers voor Cloudflare Access-servicetokens. Versleuteld opgeslagen en toegepast bij de volgende herverbinding.</string>
-    <string name="custom_header_value">Headerwaarde</string>
-    <string name="custom_header_reserved">Deze header wordt beheerd door de verbinding en kan niet worden overschreven.</string>
-    <string name="add_custom_header">Header toevoegen</string>
-    <string name="remove_custom_header">%1$s verwijderen</string>
-    <string name="run_onboarding_again">Onboarding opnieuw uitvoeren</string>
-    <string name="resolved_endpoint">Opgelost endpoint</string>
     <string name="gateway_trust_first_seen">Controleer de certificaatvingerafdruk voordat je deze gateway vertrouwt.\n\n%1$s</string>
     <string name="gateway_trust_changed">Het gatewaycertificaat is gewijzigd. Ga alleen door als je deze wijziging verwachtte.\n\nOude SHA-256:\n%1$s\n\nNieuwe SHA-256:\n%2$s</string>
-    <string name="switch_gateway">Van gateway wisselen</string>
-    <string name="select_gateway">Gateway selecteren</string>
-    <string name="active_gateway">Actieve gateway</string>
 </resources>

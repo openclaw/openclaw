@@ -6637,37 +6637,13 @@
       "kind": "resource-string",
       "line": 3,
       "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Gateway Connection",
-      "surface": "android",
-      "id": "native.android.55da01a287502809"
-    },
-    {
-      "kind": "resource-string",
-      "line": 4,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Connect Gateway",
-      "surface": "android",
-      "id": "native.android.edb177f35510f636"
-    },
-    {
-      "kind": "resource-string",
-      "line": 5,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Disconnect",
-      "surface": "android",
-      "id": "native.android.ed2b7c53127062b1"
-    },
-    {
-      "kind": "resource-string",
-      "line": 6,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "Trust this gateway?",
       "surface": "android",
       "id": "native.android.cd32b06480d9bb69"
     },
     {
       "kind": "resource-string",
-      "line": 7,
+      "line": 4,
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "Trust and continue",
       "surface": "android",
@@ -6675,7 +6651,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 8,
+      "line": 5,
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "Cancel",
       "surface": "android",
@@ -6683,7 +6659,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 9,
+      "line": 6,
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "New chat in worktree",
       "surface": "android",
@@ -6691,183 +6667,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 10,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Endpoint",
-      "surface": "android",
-      "id": "native.android.c12edfa8fda16801"
-    },
-    {
-      "kind": "resource-string",
-      "line": 11,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Status",
-      "surface": "android",
-      "id": "native.android.75efde06ba05f289"
-    },
-    {
-      "kind": "resource-string",
-      "line": 12,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Your gateway is active and ready.",
-      "surface": "android",
-      "id": "native.android.3fa18ce9f5965142"
-    },
-    {
-      "kind": "resource-string",
-      "line": 13,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Connect to your gateway to get started.",
-      "surface": "android",
-      "id": "native.android.df305a8c797e5600"
-    },
-    {
-      "kind": "resource-string",
-      "line": 14,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Copy Report for Claw",
-      "surface": "android",
-      "id": "native.android.6b6a08e8d4eff2d2"
-    },
-    {
-      "kind": "resource-string",
-      "line": 15,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Advanced controls",
-      "surface": "android",
-      "id": "native.android.8f1072da28d67483"
-    },
-    {
-      "kind": "resource-string",
-      "line": 16,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Connection method",
-      "surface": "android",
-      "id": "native.android.a6739759bcab830c"
-    },
-    {
-      "kind": "resource-string",
-      "line": 17,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Setup Code",
-      "surface": "android",
-      "id": "native.android.139b14a5e9980de6"
-    },
-    {
-      "kind": "resource-string",
-      "line": 18,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Manual",
-      "surface": "android",
-      "id": "native.android.be082a5c0a39d06b"
-    },
-    {
-      "kind": "resource-string",
-      "line": 19,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Paste setup code",
-      "surface": "android",
-      "id": "native.android.9bab58464c4fc9b0"
-    },
-    {
-      "kind": "resource-string",
-      "line": 20,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Host",
-      "surface": "android",
-      "id": "native.android.f23d9864f1b619f7"
-    },
-    {
-      "kind": "resource-string",
-      "line": 21,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Use TLS",
-      "surface": "android",
-      "id": "native.android.5677de0e2a1c0faf"
-    },
-    {
-      "kind": "resource-string",
-      "line": 22,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Token (optional)",
-      "surface": "android",
-      "id": "native.android.9f17b363626f2516"
-    },
-    {
-      "kind": "resource-string",
-      "line": 23,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Password",
-      "surface": "android",
-      "id": "native.android.005e23b33d333f6a"
-    },
-    {
-      "kind": "resource-string",
-      "line": 24,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Custom headers (optional)",
-      "surface": "android",
-      "id": "native.android.43900769f2cf0458"
-    },
-    {
-      "kind": "resource-string",
-      "line": 25,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Sent with every connection to this gateway, for example Cloudflare Access service token headers. Stored encrypted and applied on the next reconnect.",
-      "surface": "android",
-      "id": "native.android.6d42cb48a4a32331"
-    },
-    {
-      "kind": "resource-string",
-      "line": 26,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Header value",
-      "surface": "android",
-      "id": "native.android.c4d4f0299965fe55"
-    },
-    {
-      "kind": "resource-string",
-      "line": 27,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "This header is managed by the connection and cannot be overridden.",
-      "surface": "android",
-      "id": "native.android.123e497273b8586e"
-    },
-    {
-      "kind": "resource-string",
-      "line": 28,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Add header",
-      "surface": "android",
-      "id": "native.android.94f0633a1fb099bc"
-    },
-    {
-      "kind": "resource-string",
-      "line": 29,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Remove %1$s",
-      "surface": "android",
-      "id": "native.android.ff4c8c3b56827d8e"
-    },
-    {
-      "kind": "resource-string",
-      "line": 30,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Run onboarding again",
-      "surface": "android",
-      "id": "native.android.a43f43c1338a6960"
-    },
-    {
-      "kind": "resource-string",
-      "line": 31,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Resolved endpoint",
-      "surface": "android",
-      "id": "native.android.8a14b91132d358be"
-    },
-    {
-      "kind": "resource-string",
-      "line": 32,
+      "line": 7,
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "Verify the certificate fingerprint before trusting this gateway.\n\n%1$s",
       "surface": "android",
@@ -6875,35 +6675,11 @@
     },
     {
       "kind": "resource-string",
-      "line": 33,
+      "line": 8,
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "The gateway certificate changed. Continue only if you expected this.\n\nOld SHA-256:\n%1$s\n\nNew SHA-256:\n%2$s",
       "surface": "android",
       "id": "native.android.6ad2d3f084142bed"
-    },
-    {
-      "kind": "resource-string",
-      "line": 34,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Switch gateway",
-      "surface": "android",
-      "id": "native.android.7c49ec7fe94a9063"
-    },
-    {
-      "kind": "resource-string",
-      "line": 35,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Select gateway",
-      "surface": "android",
-      "id": "native.android.9e0a677fd629a15f"
-    },
-    {
-      "kind": "resource-string",
-      "line": 36,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Active gateway",
-      "surface": "android",
-      "id": "native.android.b0034ac5bbc6b25f"
     },
     {
       "kind": "plist-string",

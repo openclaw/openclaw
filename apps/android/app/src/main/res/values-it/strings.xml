@@ -1,37 +1,9 @@
 <resources>
     <string name="app_name">OpenClaw Node</string>
-    <string name="gateway_connection">Connessione al gateway</string>
-    <string name="connect_gateway">Connetti gateway</string>
-    <string name="disconnect">Disconnetti</string>
     <string name="trust_this_gateway">Considerare attendibile questo gateway?</string>
     <string name="trust_and_continue">Considera attendibile e continua</string>
     <string name="cancel">Annulla</string>
     <string name="new_chat_in_worktree">Nuova chat nel worktree</string>
-    <string name="endpoint">Endpoint</string>
-    <string name="status">Stato</string>
-    <string name="connected_gateway_ready">Il tuo gateway è attivo e pronto.</string>
-    <string name="connect_gateway_get_started">Connettiti al tuo gateway per iniziare.</string>
-    <string name="copy_report_for_claw">Copia report per Claw</string>
-    <string name="advanced_controls">Controlli avanzati</string>
-    <string name="connection_method">Metodo di connessione</string>
-    <string name="setup_code">Codice di configurazione</string>
-    <string name="manual">Manuale</string>
-    <string name="paste_setup_code">Incolla codice di configurazione</string>
-    <string name="host">Host</string>
-    <string name="use_tls">Usa TLS</string>
-    <string name="token_optional">Token (opzionale)</string>
-    <string name="password">Password</string>
-    <string name="custom_headers_optional">Intestazioni personalizzate (facoltativo)</string>
-    <string name="custom_headers_explainer">Inviate con ogni connessione a questo gateway, ad esempio le intestazioni dei token del servizio Cloudflare Access. Archiviate crittografate e applicate alla prossima riconnessione.</string>
-    <string name="custom_header_value">Valore dell\'intestazione</string>
-    <string name="custom_header_reserved">Questa intestazione è gestita dalla connessione e non può essere sovrascritta.</string>
-    <string name="add_custom_header">Aggiungi intestazione</string>
-    <string name="remove_custom_header">Rimuovi %1$s</string>
-    <string name="run_onboarding_again">Esegui di nuovo l’onboarding</string>
-    <string name="resolved_endpoint">Endpoint risolto</string>
     <string name="gateway_trust_first_seen">Verifica l’impronta digitale del certificato prima di considerare attendibile questo gateway.\n\n%1$s</string>
     <string name="gateway_trust_changed">Il certificato del gateway è cambiato. Continua solo se ti aspettavi questa modifica.\n\nSHA-256 precedente:\n%1$s\n\nNuovo SHA-256:\n%2$s</string>
-    <string name="switch_gateway">Cambia gateway</string>
-    <string name="select_gateway">Seleziona gateway</string>
-    <string name="active_gateway">Gateway attivo</string>
 </resources>
