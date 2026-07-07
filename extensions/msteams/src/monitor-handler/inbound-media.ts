@@ -136,19 +136,22 @@ export async function resolveMSTeamsInboundMedia(params: {
     // Teams strips `<attachment id>` tags from the HTML delivered to bots in
     // group chats, so real file attachments can arrive with an empty extracted
     // ID list (#89594). With `channels.msteams.graphMediaFallback` enabled,
-    // attempt the Graph fetch for any group-chat message that carried an HTML
+    // attempt the Graph fetch for a group-chat message that carried an HTML
     // attachment and produced no media — at the cost of one Graph message
     // lookup per such message. The default stays off so mention-only messages
-    // don't generate spurious lookups (#58617). Channel conversations are
-    // excluded: the channel Graph URL builder still has known team-GUID and
-    // reply-URL defects, so widening the trigger there would route channel
-    // traffic into a path that can 400/404 (see the channel attachment repair
-    // tracked alongside #89594).
-    const isChannelConversation = conversationType.trim().toLowerCase() === "channel";
+    // don't generate spurious lookups (#58617).
+    //
+    // The widened trigger is an allowlist on the group-chat conversation type,
+    // not "everything except channel": personal DMs also arrive as `personal`
+    // and can carry Graph-compatible `19:...` chat IDs that are not caught by
+    // `isBotFrameworkPersonalChatId`, so a denylist would change DM behavior
+    // too. Channel conversations stay out because their Graph URL builder has
+    // separate known team-GUID and reply-URL defects (broader channel repair).
+    const isGroupChatConversation = conversationType.trim().toLowerCase() === "groupchat";
     const hasGraphFallbackCandidate =
       hasHtmlFileAttachment ||
       (params.graphMediaFallback === true &&
-        !isChannelConversation &&
+        isGroupChatConversation &&
         attachments.some(
           (att) =>
             typeof att.contentType === "string" &&

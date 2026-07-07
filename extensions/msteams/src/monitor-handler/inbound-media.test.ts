@@ -177,6 +177,33 @@ describe("resolveMSTeamsInboundMedia graph fallback trigger", () => {
     expect(buildMSTeamsGraphMessageUrls).not.toHaveBeenCalled();
   });
 
+  it("does NOT apply graphMediaFallback to personal chats with Graph-compatible 19: IDs", async () => {
+    vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([]);
+    // A personal DM can carry a `19:...@unq.gbl.spaces` chat ID that is NOT a
+    // Bot Framework personal ID, so isBotFrameworkPersonalChatId does not catch
+    // it. The trigger must be a group-chat allowlist, not "not channel", or the
+    // documented group-chat option would silently change DM Graph behavior.
+    vi.mocked(extractMSTeamsHtmlAttachmentIds).mockReturnValueOnce([]);
+    vi.mocked(downloadMSTeamsGraphMedia).mockClear();
+    vi.mocked(buildMSTeamsGraphMessageUrls).mockClear();
+
+    await resolveMSTeamsInboundMedia({
+      ...baseParams,
+      conversationType: "personal",
+      conversationId: "19:user_bot@unq.gbl.spaces",
+      graphMediaFallback: true,
+      attachments: [
+        {
+          contentType: "text/html",
+          content: "<div>please read the attached file</div>",
+        },
+      ],
+    });
+
+    expect(downloadMSTeamsGraphMedia).not.toHaveBeenCalled();
+    expect(buildMSTeamsGraphMessageUrls).not.toHaveBeenCalled();
+  });
+
   it("does NOT apply graphMediaFallback to channel conversations", async () => {
     vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([]);
     // Channel Graph URL building still has known team-GUID and reply-URL
