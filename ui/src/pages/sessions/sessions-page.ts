@@ -12,7 +12,7 @@ import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
-import { isPluginEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
+import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
 import {
   loadStoredSessionCustomGroups,
   saveStoredSessionCustomGroups,
@@ -738,10 +738,8 @@ class SessionsPage extends LitElement {
       return html``;
     }
     const gateway = context.gateway.snapshot;
-    const workboardEnabled = isPluginEnabledInConfigSnapshot(
+    const workboardEnabled = isWorkboardEnabledInConfigSnapshot(
       context.runtimeConfig.state.configSnapshot,
-      "workboard",
-      { enabledByDefault: false },
     );
     const canCapture = workboardEnabled && hasOperatorWriteAccess(gateway.hello?.auth ?? null);
     const workboardState = context.workboard.state;

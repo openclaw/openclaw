@@ -400,7 +400,7 @@ export async function diagnoseChromeCdp(
   }
   const wsUrl = normalizeCdpWsUrl(wsUrlRaw, discoveryUrl);
   try {
-    await assertCdpEndpointAllowed(wsUrl, ssrfPolicy);
+    await assertCdpEndpointAllowed(wsUrl, ssrfPolicy, { source: "discovered" });
   } catch (err) {
     return failureDiagnostic({
       cdpUrl,

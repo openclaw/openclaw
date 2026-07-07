@@ -31,4 +31,7 @@
     <string name="resolved_endpoint">نقطة النهاية التي تم حلها</string>
     <string name="gateway_trust_first_seen">تحقق من بصمة الشهادة قبل الوثوق بهذه البوابة.\n\n%1$s</string>
     <string name="gateway_trust_changed">تم تغيير شهادة البوابة. تابع فقط إذا كنت تتوقع هذا التغيير.\n\nSHA-256 القديم:\n%1$s\n\nSHA-256 الجديد:\n%2$s</string>
+    <string name="switch_gateway">تبديل Gateway</string>
+    <string name="select_gateway">تحديد Gateway</string>
+    <string name="active_gateway">Gateway النشط</string>
 </resources>

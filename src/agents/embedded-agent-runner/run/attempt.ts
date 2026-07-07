@@ -307,6 +307,7 @@ import {
 import { buildEmbeddedSandboxInfo, resolveEmbeddedSandboxInfoExecPolicy } from "../sandbox-info.js";
 import {
   mapSandboxSkillEntriesForPrompt,
+  mapSandboxSkillUsagePaths,
   resolveSandboxSkillRuntimeInputs,
 } from "../sandbox-skills.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
@@ -463,9 +464,11 @@ import {
   waitForCompactionRetryWithAggregateTimeout,
 } from "./compaction-retry-aggregate-timeout.js";
 import {
+  canContinueFromMessage,
   resolveRunTimeoutDuringCompaction,
   selectCompactionTimeoutSnapshot,
   shouldFlagCompactionTimeout,
+  trimToContinuableTail,
 } from "./compaction-timeout.js";
 import {
   resolveFinalAssistantRawText,
@@ -500,6 +503,7 @@ import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
   buildPrePromptContextBudgetStatus,
   estimateLlmBoundaryTokenPressure,
+  estimateRenderedLlmBoundaryTokenPressure,
   formatPrePromptPrecheckLog,
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
@@ -509,6 +513,22 @@ import {
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
+
+type PreflightRecoveryBudgetSnapshot = Pick<
+  MidTurnPrecheckRequest,
+  "estimatedPromptTokens" | "promptBudgetBeforeReserve" | "overflowTokens"
+>;
+
+// Carries the measured prompt budget into the outer recovery loop. The synthetic
+// precheck error is only a routing signal, so compaction engines need these
+// fields to compact against the prompt OpenClaw actually rendered.
+function buildPreflightRecoveryBudgetSnapshot(snapshot: PreflightRecoveryBudgetSnapshot) {
+  return {
+    estimatedPromptTokens: snapshot.estimatedPromptTokens,
+    promptBudgetBeforeReserve: snapshot.promptBudgetBeforeReserve,
+    overflowTokens: snapshot.overflowTokens,
+  };
+}
 
 export {
   appendAttemptCacheTtlIfNeeded,
@@ -717,6 +737,34 @@ function removeTrailingMidTurnPrecheckAssistantError(params: {
       "[context-overflow-midturn-precheck] removed synthetic assistant error from active session but could not locate matching persisted SessionManager entry",
     );
   }
+}
+
+function normalizeCompactionRecoveryTranscriptTail(params: {
+  activeSession: { agent: { state: { messages: AgentMessage[] } } };
+  sessionManager: ReturnType<typeof guardSessionManager>;
+}): number {
+  const messages = params.activeSession.agent.state.messages;
+  const continuableMessages = trimToContinuableTail(messages) ?? [];
+
+  // This is the single recovery owner for compaction exits that hand control
+  // back to a continuation. AgentCore rejects assistant tails before providers run.
+  const removedEntries = params.sessionManager.removeTrailingEntries(
+    (entry) => entry.type === "message" && !canContinueFromMessage(entry.message),
+    {
+      preserveTrailing: (entry) =>
+        entry.type === "custom" ||
+        entry.type === "label" ||
+        entry.type === "session_info" ||
+        (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message)),
+    },
+  );
+  params.activeSession.agent.state.messages =
+    removedEntries > 0
+      ? params.sessionManager.buildSessionContext().messages
+      : continuableMessages.length === messages.length
+        ? messages
+        : continuableMessages;
+  return removedEntries;
 }
 
 function collectAttemptExplicitToolAllowlistSources(params: {
@@ -1076,6 +1124,11 @@ export async function runEmbeddedAttempt(
       skillsWorkspaceDir: effectiveSkillsWorkspace,
       skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
     });
+    const skillUsagePaths = mapSandboxSkillUsagePaths({
+      paths: sandbox?.skillUsagePaths,
+      skillsWorkspaceDir: effectiveSkillsWorkspace,
+      skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
+    });
 
     const skillsPrompt = resolveSkillsPromptForRun({
       skillsSnapshot: skillsSnapshotForRun,
@@ -1351,6 +1404,7 @@ export async function runEmbeddedAttempt(
             onToolOutcome: params.onToolOutcome,
             allocateToolOutcomeOrdinal: params.allocateToolOutcomeOrdinal,
             skillsSnapshot: skillsSnapshotForRun,
+            skillUsagePaths,
             conversationCapabilityProfile: runtimeCapabilityProfile,
             onYield: (message) => {
               yieldDetected = true;
@@ -3334,15 +3388,42 @@ export async function runEmbeddedAttempt(
             // history in place would otherwise leave the precheck reading
             // already-windowed messages instead of the true pre-assembly state.
             const preassemblyContextEngineMessagesForPrecheck = activeSession.messages.slice();
+            const contextEngineAssembleReserveTokens = Math.max(
+              0,
+              Math.floor(settingsManager.getCompactionReserveTokens()),
+            );
+            const contextEngineAssembleContextTokenBudget = Math.max(
+              1,
+              Math.floor(
+                params.contextTokenBudget ??
+                  params.model.contextWindow ??
+                  params.model.maxTokens ??
+                  DEFAULT_CONTEXT_TOKENS,
+              ),
+            );
+            const contextEngineAssemblePromptBudget = Math.max(
+              1,
+              contextEngineAssembleContextTokenBudget - contextEngineAssembleReserveTokens,
+            );
+            const contextEngineAssembleRenderedPromptTokens =
+              estimateRenderedLlmBoundaryTokenPressure({
+                systemPrompt: systemPromptText,
+                prompt: params.prompt ?? "",
+              });
+            const contextEngineAssembleMessageBudget = Math.max(
+              1,
+              contextEngineAssemblePromptBudget - contextEngineAssembleRenderedPromptTokens,
+            );
             const assembled = await assembleAttemptContextEngine({
               contextEngine: activeContextEngine,
               sessionId: params.sessionId,
               sessionKey: params.sessionKey,
               messages: activeSession.messages,
-              tokenBudget: params.contextTokenBudget,
+              tokenBudget: contextEngineAssembleMessageBudget,
               availableTools: new Set(capabilityToolNames),
               citationsMode: params.config?.memory?.citations,
               modelId: params.modelId,
+              maxOutputTokens: contextEngineAssembleReserveTokens,
               contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
               providerId: params.provider,
               requestedModelId: params.requestedModelId,
@@ -3911,6 +3992,7 @@ export async function runEmbeddedAttempt(
             preflightRecovery = {
               route: "truncate_tool_results_only",
               source: "mid-turn",
+              ...buildPreflightRecoveryBudgetSnapshot(request),
               handled: true,
               truncatedCount: truncationResult.truncatedCount,
             };
@@ -3921,7 +4003,11 @@ export async function runEmbeddedAttempt(
               `handled=true truncatedCount=${truncationResult.truncatedCount}`,
             );
           } else {
-            preflightRecovery = { route: "compact_only", source: "mid-turn" };
+            preflightRecovery = {
+              route: "compact_only",
+              source: "mid-turn",
+              ...buildPreflightRecoveryBudgetSnapshot(request),
+            };
             promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
             promptErrorSource = "precheck";
             logMidTurnPrecheck(
@@ -3930,7 +4016,11 @@ export async function runEmbeddedAttempt(
             );
           }
         } else {
-          preflightRecovery = { route: request.route, source: "mid-turn" };
+          preflightRecovery = {
+            route: request.route,
+            source: "mid-turn",
+            ...buildPreflightRecoveryBudgetSnapshot(request),
+          };
           promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
           promptErrorSource = "precheck";
           logMidTurnPrecheck(request.route);
@@ -4761,6 +4851,7 @@ export async function runEmbeddedAttempt(
             if (truncationResult.truncated) {
               preflightRecovery = {
                 route: "truncate_tool_results_only",
+                ...buildPreflightRecoveryBudgetSnapshot(preemptiveCompaction),
                 handled: true,
                 truncatedCount: truncationResult.truncatedCount,
               };
@@ -4783,7 +4874,10 @@ export async function runEmbeddedAttempt(
                   `${params.provider}/${params.modelId}; falling back to compaction ` +
                   `reason=${truncationResult.reason ?? "unknown"} sessionFile=${params.sessionFile}`,
               );
-              preflightRecovery = { route: "compact_only" };
+              preflightRecovery = {
+                route: "compact_only",
+                ...buildPreflightRecoveryBudgetSnapshot(preemptiveCompaction),
+              };
               promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
               promptErrorSource = "precheck";
               skipPromptSubmission = true;
@@ -4792,8 +4886,14 @@ export async function runEmbeddedAttempt(
           if (preemptiveCompaction?.shouldCompact) {
             preflightRecovery =
               preemptiveCompaction.route === "compact_then_truncate"
-                ? { route: "compact_then_truncate" }
-                : { route: "compact_only" };
+                ? {
+                    route: "compact_then_truncate",
+                    ...buildPreflightRecoveryBudgetSnapshot(preemptiveCompaction),
+                  }
+                : {
+                    route: "compact_only",
+                    ...buildPreflightRecoveryBudgetSnapshot(preemptiveCompaction),
+                  };
             promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
             promptErrorSource = "precheck";
             log.warn(
@@ -5124,6 +5224,19 @@ export async function runEmbeddedAttempt(
             modelApi: params.model.api,
             isCacheTtlEligibleProvider,
           });
+
+          if (timedOutDuringCompaction) {
+            const removedEntries = normalizeCompactionRecoveryTranscriptTail({
+              activeSession,
+              sessionManager: activeSessionManager,
+            });
+            if (removedEntries > 0 && !isProbeSession) {
+              log.warn(
+                `normalized compaction timeout transcript tail: ` +
+                  `removedEntries=${removedEntries} runId=${params.runId} sessionId=${params.sessionId}`,
+              );
+            }
+          }
 
           // If timeout occurred during compaction, use pre-compaction snapshot when available
           // (compaction restructures messages but does not add user/assistant turns).

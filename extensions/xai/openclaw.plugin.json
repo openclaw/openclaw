@@ -84,6 +84,7 @@
       "provider": "xai",
       "method": "api-key",
       "choiceId": "xai-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "xAI API key",
       "groupId": "xai",
       "groupLabel": "xAI (Grok)",

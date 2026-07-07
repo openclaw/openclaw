@@ -44,7 +44,7 @@ export type ApplicationNavigationPreferences = {
 
 export type ApplicationNavigationOptions = Partial<Pick<RouteLocation, "search" | "hash">>;
 
-export type SkillWorkshopRevisionHandoff = {
+type SkillWorkshopRevisionHandoff = {
   sessionKey: string;
   instructions: string;
   proposalId: string;

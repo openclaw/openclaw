@@ -31,4 +31,7 @@
     <string name="resolved_endpoint">Визначена кінцева точка</string>
     <string name="gateway_trust_first_seen">Перевірте відбиток сертифіката, перш ніж довіряти цьому шлюзу.\n\n%1$s</string>
     <string name="gateway_trust_changed">Сертифікат шлюзу змінився. Продовжуйте, лише якщо ви очікували цю зміну.\n\nСтарий SHA-256:\n%1$s\n\nНовий SHA-256:\n%2$s</string>
+    <string name="switch_gateway">Перемкнути gateway</string>
+    <string name="select_gateway">Виберіть gateway</string>
+    <string name="active_gateway">Активний gateway</string>
 </resources>

@@ -1652,6 +1652,30 @@ describe("CodexAppServerEventProjector", () => {
     ).toBe(false);
   });
 
+  it("projects thread-scoped guardian warnings", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+
+    await projector.handleNotification({
+      method: "guardianWarning",
+      params: { threadId: "thread-other", message: "Wrong thread." },
+    } as ProjectorNotification);
+    await projector.handleNotification({
+      method: "guardianWarning",
+      params: {
+        threadId: THREAD_ID,
+        message: "Guardian rejection limit reached; ending turn as interrupted.",
+      },
+    } as ProjectorNotification);
+
+    const warning = findAgentEvent(onAgentEvent, {
+      stream: "codex_app_server.guardian",
+      phase: "warning",
+    }).data;
+    expect(warning.message).toBe("Guardian rejection limit reached; ending turn as interrupted.");
+    expect(onAgentEvent).toHaveBeenCalledTimes(1);
+  });
+
   it("projects reasoning end, plan updates, compaction state, and tool metadata", async () => {
     const onReasoningStream = vi.fn();
     const onReasoningEnd = vi.fn();

@@ -129,12 +129,13 @@ extension OpenClawChatViewModel {
 
     // MARK: - Capture
 
-    /// Offline capture path used by performSend when the gateway is
-    /// unhealthy: persist first, then render the queued bubble. A full queue
-    /// refuses the enqueue and keeps the draft so no text is lost.
+    /// Durable capture path used before text or attachment delivery: persist
+    /// first, then render the queued bubble. A full queue refuses the enqueue
+    /// and keeps the exact draft intact.
     func enqueueOutboxCommand(
         text: String,
         draftInput: String,
+        draftAttachments: [OpenClawPendingAttachment] = [],
         session: SessionSnapshot) async
     {
         guard let outbox else { return }
@@ -157,6 +158,14 @@ extension OpenClawChatViewModel {
             routingContract: routingContract,
             agentID: agentID,
             text: text,
+            attachments: draftAttachments.map {
+                OpenClawChatOutboxAttachment(
+                    type: $0.type,
+                    mimeType: $0.mimeType,
+                    fileName: $0.fileName,
+                    data: $0.data,
+                    durationSeconds: $0.durationSeconds)
+            },
             thinking: self.effectiveThinkingLevelForSend,
             createdAt: Date().timeIntervalSince1970,
             status: .queued,
@@ -169,6 +178,8 @@ extension OpenClawChatViewModel {
             return
         }
         if self.input == draftInput { self.input = "" }
+        let capturedAttachmentIDs = Set(draftAttachments.map(\.id))
+        self.attachments.removeAll { capturedAttachmentIDs.contains($0.id) }
         self.errorText = nil
         self.presentOutboxCommands([command])
         // Health can recover between the send-gate check and the enqueue;
@@ -307,13 +318,16 @@ extension OpenClawChatViewModel {
             sessionKey: sessionKey,
             agentID: command.agentID)
         let messageKey = Self.outboxUserIdempotencyKey(command.id)
+        let canonicalMessage = Self.adoptingCanonicalMessage(
+            message,
+            over: Self.outboxUserMessage(for: command))
         let previous = self.pendingCacheWriteTask
         let task = Task.detached {
             await previous?.value
             await transcriptCache.mergeCanonicalTranscriptMessage(
                 sessionKey: sessionKey,
                 agentID: cacheAgentID,
-                message: message,
+                message: canonicalMessage,
                 canonicalMessageIdempotencyKey: messageKey)
         }
         self.pendingCacheWriteTask = task
@@ -354,16 +368,26 @@ extension OpenClawChatViewModel {
     }
 
     private static func outboxUserMessage(for command: OpenClawChatOutboxCommand) -> OpenClawChatMessage {
-        OpenClawChatMessage(
+        var content = [
+            OpenClawChatMessageContent(
+                type: "text",
+                text: command.text,
+                mimeType: nil,
+                fileName: nil,
+                content: nil),
+        ]
+        content.append(contentsOf: command.attachments.map { attachment in
+            OpenClawChatMessageContent(
+                type: attachment.type,
+                text: nil,
+                mimeType: attachment.mimeType,
+                fileName: attachment.fileName,
+                durationSeconds: attachment.durationSeconds,
+                content: AnyCodable(attachment.data.base64EncodedString()))
+        })
+        return OpenClawChatMessage(
             role: "user",
-            content: [
-                OpenClawChatMessageContent(
-                    type: "text",
-                    text: command.text,
-                    mimeType: nil,
-                    fileName: nil,
-                    content: nil),
-            ],
+            content: content,
             // Message timestamps are milliseconds; outbox rows store seconds.
             timestamp: command.createdAt * 1000,
             idempotencyKey: self.outboxUserIdempotencyKey(command.id))
@@ -510,7 +534,13 @@ extension OpenClawChatViewModel {
                         next.thinking,
                         sessionKey: next.sessionKey),
                     idempotencyKey: next.id,
-                    attachments: [])
+                    attachments: next.attachments.map {
+                        OpenClawChatAttachmentPayload(
+                            type: $0.type,
+                            mimeType: $0.mimeType,
+                            fileName: $0.fileName,
+                            content: $0.data.base64EncodedString())
+                    })
                 if response.status == "error" || response.status == "timeout" {
                     // Gateway rejected the run: this burns a retry attempt,
                     // unlike transport-level failures handled in catch.

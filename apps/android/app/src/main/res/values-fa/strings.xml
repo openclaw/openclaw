@@ -31,4 +31,7 @@
     <string name="resolved_endpoint">نقطه پایانی حل‌شده</string>
     <string name="gateway_trust_first_seen">پیش از اعتماد به این دروازه، اثر انگشت گواهی را تأیید کنید.\n\n%1$s</string>
     <string name="gateway_trust_changed">گواهی دروازه تغییر کرده است. فقط در صورتی ادامه دهید که انتظار این تغییر را داشتید.\n\nSHA-256 قدیمی:\n%1$s\n\nSHA-256 جدید:\n%2$s</string>
+    <string name="switch_gateway">تغییر Gateway</string>
+    <string name="select_gateway">انتخاب Gateway</string>
+    <string name="active_gateway">Gateway فعال</string>
 </resources>

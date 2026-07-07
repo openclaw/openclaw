@@ -164,6 +164,28 @@ afterEach(async () => {
 });
 
 describe("pw-session connection scoping", () => {
+  it("allows loopback CDP control without widening the navigation allowlist", async () => {
+    const browser = makeBrowser("A", "https://example.com");
+    connectOverCdpSpy.mockResolvedValue(browser.browser);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+    const ssrfPolicy = {
+      dangerouslyAllowPrivateNetwork: true,
+      hostnameAllowlist: ["example.com"],
+    };
+
+    const page = await getPageForTargetId({
+      cdpUrl: "http://127.0.0.1:9222",
+      ssrfPolicy,
+    });
+
+    expect(page.url()).toBe("https://example.com");
+    expect(connectOverCdpSpy).toHaveBeenCalledTimes(1);
+    expect(ssrfPolicy).toStrictEqual({
+      dangerouslyAllowPrivateNetwork: true,
+      hostnameAllowlist: ["example.com"],
+    });
+  });
+
   it("does not share in-flight connectOverCDP promises across different cdpUrls", async () => {
     const browserA = makeBrowser("A", "https://a.example");
     const browserB = makeBrowser("B", "https://b.example");

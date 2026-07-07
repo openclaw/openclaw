@@ -2,7 +2,7 @@
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { getChatAttachmentPreviewUrl } from "./attachment-payload-store.ts";
 
-export type UserChatMessageContentBlock = {
+type UserChatMessageContentBlock = {
   type: string;
   text?: string;
   url?: string;

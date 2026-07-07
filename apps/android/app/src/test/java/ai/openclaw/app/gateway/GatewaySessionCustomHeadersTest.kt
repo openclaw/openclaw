@@ -37,11 +37,13 @@ private const val CONNECT_CHALLENGE_FRAME =
 
 private class NoopDeviceAuthStore : DeviceAuthTokenStore {
   override fun loadEntry(
+    gatewayId: String,
     deviceId: String,
     role: String,
   ): DeviceAuthEntry? = null
 
   override fun saveToken(
+    gatewayId: String,
     deviceId: String,
     role: String,
     token: String,
@@ -49,6 +51,7 @@ private class NoopDeviceAuthStore : DeviceAuthTokenStore {
   ) = Unit
 
   override fun clearToken(
+    gatewayId: String,
     deviceId: String,
     role: String,
   ) = Unit

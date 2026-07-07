@@ -14,6 +14,7 @@ import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
+import { createForkedSessionTranscript } from "../../config/sessions/session-accessor.js";
 import {
   isSessionTranscriptLeafControl,
   mergeSessionTranscriptVisiblePathWithOpaqueAppendPath,
@@ -24,7 +25,6 @@ import {
   resolveFreshSessionTotalTokens,
   type SessionEntry as StoreSessionEntry,
 } from "../../config/sessions/types.js";
-import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import { readLatestRecentSessionUsageFromTranscriptAsync } from "../../gateway/session-utils.fs.js";
 import { readRegularFile } from "../../infra/fs-safe.js";
 
@@ -246,41 +246,11 @@ function buildBranchLabelEntries(params: {
   return labelEntries;
 }
 
-async function writeForkHeaderOnly(params: {
-  parentSessionFile: string;
-  sessionDir: string;
-  cwd: string;
-}): Promise<{ sessionId: string; sessionFile: string }> {
-  const sessionId = crypto.randomUUID();
-  const timestamp = new Date().toISOString();
-  const fileTimestamp = timestamp.replace(/[:.]/g, "-");
-  const sessionFile = path.join(params.sessionDir, `${fileTimestamp}_${sessionId}.jsonl`);
-  const header = {
-    type: "session",
-    version: CURRENT_SESSION_VERSION,
-    id: sessionId,
-    timestamp,
-    cwd: params.cwd,
-    parentSession: params.parentSessionFile,
-  } satisfies SessionHeader;
-  await fs.mkdir(path.dirname(sessionFile), { recursive: true });
-  await fs.writeFile(sessionFile, `${JSON.stringify(header)}\n`, {
-    encoding: "utf-8",
-    mode: 0o600,
-    flag: "wx",
-  });
-  return { sessionId, sessionFile };
-}
-
 async function writeBranchedSession(params: {
   parentSessionFile: string;
   source: ForkSourceTranscript;
   sessionDir: string;
 }): Promise<{ sessionId: string; sessionFile: string }> {
-  const sessionId = crypto.randomUUID();
-  const timestamp = new Date().toISOString();
-  const fileTimestamp = timestamp.replace(/[:.]/g, "-");
-  const sessionFile = path.join(params.sessionDir, `${fileTimestamp}_${sessionId}.jsonl`);
   const pathEntries = params.source.branchEntries;
   const pathEntryIds = new Set(
     pathEntries.flatMap((entry) =>
@@ -295,33 +265,27 @@ async function writeBranchedSession(params: {
     pathEntryIds,
     lastEntryId: lastPathEntryId,
   });
-  const header = {
-    type: "session",
-    version: CURRENT_SESSION_VERSION,
-    id: sessionId,
-    timestamp,
+  return await createForkedSessionTranscript({
     cwd: params.source.cwd,
-    parentSession: params.parentSessionFile,
-  } satisfies SessionHeader;
-  const leafEntry = params.source.preserveLeafControl
-    ? {
-        type: "leaf",
-        id: generateEntryId(pathEntryIds),
-        parentId: labelEntries.at(-1)?.id ?? lastPathEntryId,
-        timestamp,
-        targetId: params.source.leafId,
-        appendParentId: params.source.appendParentId,
-        ...(params.source.appendMode ? { appendMode: params.source.appendMode } : {}),
-      }
-    : null;
-  const entries = [header, ...pathEntries, ...labelEntries, ...(leafEntry ? [leafEntry] : [])];
-  await fs.mkdir(path.dirname(sessionFile), { recursive: true });
-  await fs.writeFile(sessionFile, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`, {
-    encoding: "utf-8",
-    mode: 0o600,
-    flag: "wx",
+    parentSessionFile: params.parentSessionFile,
+    sessionsDir: params.sessionDir,
+    buildEntries: ({ timestamp }) => {
+      // The leaf-control record shares the fork header timestamp so the copied
+      // branch reopens on the same active leaf the parent displayed.
+      const leafEntry = params.source.preserveLeafControl
+        ? {
+            type: "leaf",
+            id: generateEntryId(pathEntryIds),
+            parentId: labelEntries.at(-1)?.id ?? lastPathEntryId,
+            timestamp,
+            targetId: params.source.leafId,
+            appendParentId: params.source.appendParentId,
+            ...(params.source.appendMode ? { appendMode: params.source.appendMode } : {}),
+          }
+        : null;
+      return [...pathEntries, ...labelEntries, ...(leafEntry ? [leafEntry] : [])];
+    },
   });
-  return { sessionId, sessionFile };
 }
 
 /** Creates a child session transcript from a parent session branch. */
@@ -349,10 +313,11 @@ export async function forkSessionFromParentRuntime(params: {
     const targetSessionsDir = params.targetSessionsDir ?? source.sessionDir;
     return shouldPersistBranch
       ? await writeBranchedSession({ parentSessionFile, source, sessionDir: targetSessionsDir })
-      : await writeForkHeaderOnly({
-          parentSessionFile,
-          sessionDir: targetSessionsDir,
+      : // Header-only fork: nothing on the active branch is worth copying.
+        await createForkedSessionTranscript({
           cwd: source.cwd,
+          parentSessionFile,
+          sessionsDir: targetSessionsDir,
         });
   } catch {
     return null;

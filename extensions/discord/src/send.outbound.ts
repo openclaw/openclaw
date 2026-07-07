@@ -33,6 +33,7 @@ import {
   resolveDiscordSendEmbeds,
   sendDiscordMedia,
   sendDiscordText,
+  type DiscordAllowedMentions,
   type DiscordSendProgress,
   type DiscordSendComponents,
   type DiscordSendEmbeds,
@@ -59,6 +60,7 @@ type DiscordSendOpts = {
   embeds?: DiscordSendEmbeds;
   silent?: boolean;
   suppressEmbeds?: boolean;
+  allowedMentions?: DiscordAllowedMentions;
   /** Persist each concrete platform send before any later chunk can fail. */
   onDeliveryResult?: (result: DiscordSendResult) => Promise<void> | void;
 };
@@ -79,6 +81,7 @@ async function sendDiscordThreadTextChunks(params: {
   maxChars?: number;
   silent?: boolean;
   suppressEmbeds?: boolean;
+  allowedMentions?: DiscordAllowedMentions;
   onResult?: DiscordSendProgress;
 }): Promise<void> {
   for (const chunk of params.chunks) {
@@ -91,6 +94,7 @@ async function sendDiscordThreadTextChunks(params: {
       chunkMode: params.chunkMode,
       silent: params.silent,
       suppressEmbeds: params.suppressEmbeds,
+      allowedMentions: params.allowedMentions,
       maxChars: params.maxChars,
       onResult: params.onResult,
     });
@@ -220,6 +224,7 @@ export async function sendMessageDiscord(
       components: starterComponents,
       embeds: starterEmbeds,
       flags: starterFlags,
+      allowedMentions: opts.allowedMentions,
     });
     let threadRes: { id: string; message?: { id: string; channel_id: string } };
     try {
@@ -283,6 +288,7 @@ export async function sendMessageDiscord(
           chunkMode,
           silent: opts.silent,
           suppressEmbeds,
+          allowedMentions: opts.allowedMentions,
           maxChars: textLimit,
           onResult: reportThreadResult,
         });
@@ -296,6 +302,7 @@ export async function sendMessageDiscord(
           maxChars: textLimit,
           silent: opts.silent,
           suppressEmbeds,
+          allowedMentions: opts.allowedMentions,
           onResult: reportThreadResult,
         });
       } else {
@@ -309,6 +316,7 @@ export async function sendMessageDiscord(
           maxChars: textLimit,
           silent: opts.silent,
           suppressEmbeds,
+          allowedMentions: opts.allowedMentions,
           onResult: reportThreadResult,
         });
       }
@@ -366,6 +374,7 @@ export async function sendMessageDiscord(
         chunkMode,
         silent: opts.silent,
         suppressEmbeds,
+        allowedMentions: opts.allowedMentions,
         maxChars: textLimit,
         onResult: reportResult,
       });
@@ -382,6 +391,7 @@ export async function sendMessageDiscord(
         chunkMode,
         silent: opts.silent,
         suppressEmbeds,
+        allowedMentions: opts.allowedMentions,
         maxChars: textLimit,
         onResult: reportResult,
       });

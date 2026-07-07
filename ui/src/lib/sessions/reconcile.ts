@@ -1,4 +1,4 @@
-import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
 import { compareSessionRowsByUpdatedAt } from "./navigation.ts";
 import {
@@ -21,18 +21,20 @@ export type SessionChangedResult = {
   runId?: string | null;
   clientRunId?: string | null;
   hasActiveRun?: boolean | null;
+  status?: SessionRunStatus | null;
   isChatTurn?: boolean;
   row?: GatewaySessionRow;
   deletedKey?: string;
   result: SessionsListResult | null;
 };
 
-export type SessionChangedEventInfo = {
+type SessionChangedEventInfo = {
   key: string;
   agentId: string | null;
   runId: string | null;
   clientRunId: string | null;
   hasActiveRun: boolean | null;
+  status: SessionRunStatus | null;
   archived: boolean | null;
   isChatTurn: boolean;
 };
@@ -157,6 +159,16 @@ function recordOrNull(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function sessionRunStatus(value: unknown): SessionRunStatus | null {
+  return value === "running" ||
+    value === "done" ||
+    value === "failed" ||
+    value === "killed" ||
+    value === "timeout"
+    ? value
+    : null;
+}
+
 type ParsedSessionChangedEvent = SessionChangedEventInfo & {
   event: Record<string, unknown>;
   source: Record<string, unknown>;
@@ -197,6 +209,9 @@ function parseSessionChangedEvent(payload: unknown): ParsedSessionChangedEvent |
       stringValue(recordValue(source, "clientRunId")) ??
       null,
     hasActiveRun,
+    status:
+      sessionRunStatus(recordValue(source, "status")) ??
+      sessionRunStatus(recordValue(event, "status")),
     archived:
       typeof recordValue(source, "archived") === "boolean"
         ? (recordValue(source, "archived") as boolean)
@@ -222,6 +237,7 @@ export function readSessionChangedEvent(payload: unknown): SessionChangedEventIn
     runId: parsed.runId,
     clientRunId: parsed.clientRunId,
     hasActiveRun: parsed.hasActiveRun,
+    status: parsed.status,
     archived: parsed.archived,
     isChatTurn: parsed.isChatTurn,
   };
@@ -349,6 +365,7 @@ export function reconcileSessionChanged(
     runId: parsed.runId,
     clientRunId: parsed.clientRunId,
     hasActiveRun: parsed.hasActiveRun,
+    status: parsed.status,
     isChatTurn: parsed.isChatTurn,
     row: reconciledRow,
     result: reconciledResult,

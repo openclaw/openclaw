@@ -5,7 +5,15 @@ read_when:
 title: "WebChat (macOS)"
 ---
 
-The macOS menu bar app embeds the WebChat UI as a native SwiftUI view. It connects to the Gateway and defaults to the primary session for the selected agent (`main`, or `global` when `session.scope` is `global`), with a session switcher for other sessions.
+The macOS menu bar app embeds the WebChat UI as a native SwiftUI view. It connects to the Gateway and defaults to the primary session for the selected agent (`main`, or `global` when `session.scope` is `global`).
+
+The full chat window is a native split view:
+
+- **Sessions sidebar**: searchable session list with pinned and recent sections, unread indicators, and context menus for pin/unpin, copy session key, and delete. A toolbar button (or Cmd-N) creates a real new session via `sessions.create`.
+- **Window toolbar**: context-usage ring (tokens and session cost, with a compact action), thinking-level picker, model picker, and a session actions menu (new session, refresh, copy session key, export transcript, compact, clear history).
+- **Transcript and composer**: assistant messages render as plain text with an avatar, user messages as accent bubbles. Typing `/` opens slash-command autocomplete backed by `commands.list`, with arrow/Tab/Return/Escape keyboard navigation. Right-click a message to copy it.
+
+The anchored quick-chat panel from the menu bar keeps the compact single-column layout with inline pickers.
 
 - **Local mode**: connects directly to the local Gateway WebSocket.
 - **Remote mode**: forwards the Gateway control port over SSH and uses that tunnel as the data plane.

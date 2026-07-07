@@ -20,6 +20,10 @@ const VIEWPORTS = [
   [1440, 900],
 ] as const;
 const TOUCH_TARGET_MIN_PX = 43.5;
+const LONG_SIDE_RESULT_BODY = Array.from(
+  { length: 80 },
+  (_, index) => `<p>Line ${index + 1}: keep the complete side result readable.</p>`,
+).join("");
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const describeBrowserLayout = canRunPlaywrightChromium(chromiumExecutablePath)
   ? describe
@@ -38,6 +42,13 @@ type ControlRect = {
   scrollTop?: number;
   text?: string;
   display?: string;
+};
+
+type ChatFixtureOptions = {
+  composerAttachment?: boolean;
+  sideResultBody?: string;
+  singleAgent?: boolean;
+  slashMenu?: boolean;
 };
 
 function expectFiniteRect(rect: Pick<ControlRect, "x" | "y" | "width" | "height">) {
@@ -124,9 +135,9 @@ function activityAlignmentHtml() {
   `;
 }
 
-function chatBubbleActionsHtml() {
+function chatFooterActionsHtml() {
   return `
-    <div class="chat-bubble-actions">
+    <div class="chat-group-footer-actions">
       <button class="btn btn--xs chat-expand-btn" type="button" aria-label="Open in canvas">
         <span class="chat-expand-btn__icon" aria-hidden="true">${iconSvg()}</span>
       </button>
@@ -174,11 +185,18 @@ function chatControlsHtml(opts: { agent?: boolean } = {}) {
 function composerControlsHtml() {
   return `
     <div class="agent-chat__composer-controls">
+      <div class="chat-settings-popover-wrapper">
+        <button class="chat-settings-chip" type="button" aria-label="Settings">
+          <span class="chat-settings-chip__icon">${iconSvg()}</span>
+        </button>
+        <div class="chat-settings-popover" role="dialog" aria-label="Settings">
+          <div class="chat-settings-popover__section">Settings content</div>
+        </div>
+      </div>
       <div class="chat-composer-model-control">
         <details class="chat-controls__session chat-controls__inline-select chat-controls__model">
           <summary class="chat-controls__inline-select-trigger" data-chat-composer-model="true" aria-label="Chat model">
-            <span class="chat-controls__inline-select-label">Default model</span>
-            <span class="chat-controls__effort-chip">Off</span>
+            <span class="chat-controls__inline-select-label">Default model · Off</span>
             <span class="chat-controls__inline-select-icon">${iconSvg()}</span>
           </summary>
           <div class="chat-controls__inline-select-menu chat-controls__inline-select-menu--combined">
@@ -190,13 +208,6 @@ function composerControlsHtml() {
             <div class="chat-controls__reasoning-panel">Reasoning</div>
           </div>
         </details>
-      </div>
-      <div class="chat-settings-popover-wrapper">
-        <button class="chat-settings-chip" type="button" aria-label="Chat settings">
-          <span class="chat-settings-chip__icon">${iconSvg()}</span>
-          <span class="chat-settings-chip__text">Chat settings</span>
-          <span class="chat-settings-chip__chevron">${iconSvg()}</span>
-        </button>
       </div>
     </div>
   `;
@@ -234,14 +245,7 @@ function chatHeaderControlsHtml(hidden = false) {
   `;
 }
 
-function chatHtml(
-  opts: {
-    composerAttachment?: boolean;
-    sideResult?: boolean;
-    singleAgent?: boolean;
-    slashMenu?: boolean;
-  } = {},
-) {
+function chatHtml(opts: ChatFixtureOptions = {}) {
   return `
     <div class="shell shell--chat" data-chat-responsive-fixture>
       <header class="topbar">
@@ -261,18 +265,25 @@ function chatHtml(
                   <div class="chat-group user">
                     <div class="chat-avatar user">V</div>
                     <div class="chat-group-messages">
-                      <div class="chat-bubble"><div class="chat-text">Please keep every control visible at the smallest viewport.</div></div>
+                      <div class="chat-bubble"><div class="chat-text">Keep this visible.</div></div>
                     </div>
                   </div>
                   <div class="chat-group assistant">
                     <div class="chat-avatar assistant">A</div>
                     <div class="chat-group-messages">
-                      <div class="chat-bubble has-copy">
-                        ${chatBubbleActionsHtml()}
+                      <div class="chat-bubble"><div class="chat-text">It stays readable.</div></div>
+                      <div class="chat-bubble">
                         <div class="chat-text">
                           <p>The chat shell should stay compact and readable.</p>
                           <pre><code>const importantLongIdentifier = "control-ui-chat-responsive-regression-fixture-keeps-code-scrollable"; console.log(importantLongIdentifier);</code></pre>
                         </div>
+                      </div>
+                      <div class="chat-group-footer">
+                        <div class="chat-group-footer__meta">
+                          <span class="chat-sender-name">Assistant</span>
+                          <span class="chat-group-timestamp">9:41 PM</span>
+                        </div>
+                        ${chatFooterActionsHtml()}
                       </div>
                     </div>
                   </div>
@@ -281,70 +292,101 @@ function chatHtml(
             </div>
           </div>
           ${
-            opts.sideResult
+            opts.sideResultBody !== undefined
               ? `<section class="chat-side-result" role="status" aria-live="polite">
                   <div class="chat-side-result__header">
                     <div class="chat-side-result__label-row"><span class="chat-side-result__label">BTW</span><span class="chat-side-result__meta">Not saved to chat history</span></div>
                     <button class="btn chat-side-result__dismiss">${iconSvg()}</button>
                   </div>
                   <div class="chat-side-result__question">What should I check next?</div>
-                  <div class="chat-side-result__body"><p>Inspect the responsive controls and keep the transcript usable.</p></div>
+                  <div class="chat-side-result__body">${opts.sideResultBody}</div>
                 </section>`
               : ""
           }
-          <div class="agent-chat__input">
-            ${
-              opts.slashMenu
-                ? `<div class="slash-menu" role="listbox" aria-label="Command suggestions">
-                    <div class="slash-menu-group">
-                      <div class="slash-menu-group__label">Commands</div>
-                      <div class="slash-menu-item slash-menu-item--active" role="option" aria-selected="true">
-                        <span class="slash-menu-icon">${iconSvg()}</span>
-                        <span class="slash-menu-name">/plan</span>
-                        <span class="slash-menu-desc">Create a plan</span>
+          <div class="agent-chat__composer-shell">
+            <div class="agent-chat__input">
+              ${
+                opts.slashMenu
+                  ? `<div class="slash-menu" role="listbox" aria-label="Command suggestions">
+                      <div class="slash-menu-group">
+                        <div class="slash-menu-group__label">Commands</div>
+                        <div class="slash-menu-item slash-menu-item--active" role="option" aria-selected="true">
+                          <span class="slash-menu-icon">${iconSvg()}</span>
+                          <span class="slash-menu-name">/plan</span>
+                          <span class="slash-menu-desc">Create a plan</span>
+                        </div>
+                        <div class="slash-menu-item" role="option">
+                          <span class="slash-menu-icon">${iconSvg()}</span>
+                          <span class="slash-menu-name">/review</span>
+                          <span class="slash-menu-desc">Review changes</span>
+                        </div>
+                        <div class="slash-menu-item" role="option">
+                          <span class="slash-menu-icon">${iconSvg()}</span>
+                          <span class="slash-menu-name">/fix</span>
+                          <span class="slash-menu-desc">Fix current issue</span>
+                        </div>
                       </div>
-                      <div class="slash-menu-item" role="option">
-                        <span class="slash-menu-icon">${iconSvg()}</span>
-                        <span class="slash-menu-name">/review</span>
-                        <span class="slash-menu-desc">Review changes</span>
+                    </div>`
+                  : ""
+              }
+              ${
+                opts.composerAttachment
+                  ? `<div class="chat-attachments-preview">
+                      <div class="chat-attachment-thumb chat-attachment-thumb--file">
+                        <div class="chat-attachment-file">
+                          <span class="chat-attachment-file__icon">${iconSvg()}</span>
+                          <span class="chat-attachment-file__name">landscape-proof-attachment.txt</span>
+                        </div>
+                        <button class="chat-attachment-remove" type="button" aria-label="Remove attachment">&times;</button>
                       </div>
-                      <div class="slash-menu-item" role="option">
-                        <span class="slash-menu-icon">${iconSvg()}</span>
-                        <span class="slash-menu-name">/fix</span>
-                        <span class="slash-menu-desc">Fix current issue</span>
-                      </div>
-                    </div>
-                  </div>`
-                : ""
-            }
-            ${
-              opts.composerAttachment
-                ? `<div class="chat-attachments-preview">
-                    <div class="chat-attachment-thumb chat-attachment-thumb--file">
-                      <div class="chat-attachment-file">
-                        <span class="chat-attachment-file__icon">${iconSvg()}</span>
-                        <span class="chat-attachment-file__name">landscape-proof-attachment.txt</span>
-                      </div>
-                      <button class="chat-attachment-remove" type="button" aria-label="Remove attachment">&times;</button>
-                    </div>
-                  </div>`
-                : ""
-            }
-            <div class="agent-chat__composer-combobox">
-              <textarea rows="1">Queued follow-up for the active operator session</textarea>
-            </div>
-            <div class="agent-chat__toolbar">
-              <div class="agent-chat__toolbar-left">
-                <button class="agent-chat__input-btn">${iconSvg()}</button>
-                <div class="agent-chat__talk-group">
-                  <button class="agent-chat__input-btn agent-chat__talk-toggle">${iconSvg()}</button>
-                  <button class="agent-chat__input-btn agent-chat__talk-caret">${iconSvg()}</button>
+                    </div>`
+                  : ""
+              }
+              <div class="agent-chat__composer-status-stack"> </div>
+              <div class="agent-chat__composer-input-row">
+                <details class="agent-chat__attach-menu">
+                  <summary class="agent-chat__input-btn agent-chat__input-btn--attach" aria-label="Add attachment">${iconSvg()}</summary>
+                  <div class="agent-chat__attach-menu-popover" role="menu">
+                    <button class="agent-chat__attach-menu-option" role="menuitem">${iconSvg()}<span>Camera</span></button>
+                    <button class="agent-chat__attach-menu-option" role="menuitem">${iconSvg()}<span>Photo</span></button>
+                    <button class="agent-chat__attach-menu-option" role="menuitem">${iconSvg()}<span>File</span></button>
+                  </div>
+                </details>
+                <div class="agent-chat__composer-combobox">
+                  <textarea rows="1">Queued follow-up for the active operator session</textarea>
                 </div>
-                <span class="agent-chat__token-count">8</span>
+                <div class="agent-chat__composer-actions">
+                  <button class="chat-send-btn chat-send-btn--voice" aria-label="Start voice input">${iconSvg()}</button>
+                </div>
               </div>
-              ${composerControlsHtml()}
-              <div class="agent-chat__toolbar-right">
-                <button class="chat-send-btn">${iconSvg()}</button>
+              <div class="agent-chat__composer-footer">
+                ${composerControlsHtml()}
+                <div class="agent-chat__composer-meta">
+                  <div class="context-usage">
+                    <details>
+                      <summary class="context-ring" role="status" aria-label="Session context usage: 46k/200k (23%)">
+                        <svg class="context-ring__dial" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+                          <circle class="context-ring__track" cx="8" cy="8" r="6.5"></circle>
+                          <circle class="context-ring__fill" cx="8" cy="8" r="6.5"></circle>
+                        </svg>
+                      </summary>
+                      <section class="context-usage__popover">
+                        <div class="context-usage__quota">
+                          <a class="chat-controls__quota chat-controls__quota--ok" href="/usage">
+                            <span class="chat-controls__quota-label">Usage Remaining</span>
+                            <span class="chat-controls__quota-value">28%</span>
+                          </a>
+                        </div>
+                      </section>
+                    </details>
+                  </div>
+                  <div class="agent-chat__composer-progress">
+                    <span class="agent-chat__run-status agent-chat__run-status--in-progress">
+                      ${iconSvg()}<span class="agent-chat__run-status-label">In progress</span>
+                    </span>
+                  </div>
+                  <span class="agent-chat__token-count">8</span>
+                </div>
               </div>
             </div>
           </div>
@@ -354,16 +396,7 @@ function chatHtml(
   `;
 }
 
-async function openFixture(
-  width: number,
-  height: number,
-  opts: {
-    composerAttachment?: boolean;
-    sideResult?: boolean;
-    singleAgent?: boolean;
-    slashMenu?: boolean;
-  } = {},
-) {
+async function openFixture(width: number, height: number, opts: ChatFixtureOptions = {}) {
   const page = await openBrowserPage(width, height);
   try {
     await page.setContent(
@@ -562,10 +595,33 @@ describeBrowserLayout("chat responsive browser layout", () => {
 
       const details = page.locator("details.msg-meta");
       const context = page.locator(".msg-meta__details");
+      const initialLayout = await page.evaluate(() => {
+        const footer = document.querySelector<HTMLElement>(".chat-group-footer")!;
+        const group = document.querySelector<HTMLElement>(".chat-group")!;
+        return {
+          footerHeight: footer.getBoundingClientRect().height,
+          groupHeight: group.getBoundingClientRect().height,
+        };
+      });
       expect(await context.isVisible()).toBe(false);
 
       await page.locator(".msg-meta__summary").hover();
       expect(await context.isVisible()).toBe(true);
+      const hoverLayout = await page.evaluate(() => {
+        const footer = document.querySelector<HTMLElement>(".chat-group-footer")!;
+        const group = document.querySelector<HTMLElement>(".chat-group")!;
+        const summary = document.querySelector<HTMLElement>(".msg-meta__summary")!;
+        const detailsOverlay = document.querySelector<HTMLElement>(".msg-meta__details")!;
+        return {
+          contextBottom: detailsOverlay.getBoundingClientRect().bottom,
+          footerHeight: footer.getBoundingClientRect().height,
+          groupHeight: group.getBoundingClientRect().height,
+          summaryTop: summary.getBoundingClientRect().top,
+        };
+      });
+      expect(hoverLayout.footerHeight).toBeCloseTo(initialLayout.footerHeight, 2);
+      expect(hoverLayout.groupHeight).toBeCloseTo(initialLayout.groupHeight, 2);
+      expect(hoverLayout.contextBottom).toBeLessThanOrEqual(hoverLayout.summaryTop + 4);
 
       await page.mouse.move(0, 0);
       expect(await context.isVisible()).toBe(false);
@@ -574,6 +630,114 @@ describeBrowserLayout("chat responsive browser layout", () => {
       await page.mouse.move(0, 0);
       expect(await details.getAttribute("open")).toBe("");
       expect(await context.isVisible()).toBe(true);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it.each([
+    [393, 852],
+    [1366, 900],
+  ] as const)(
+    "anchors received bubbles left and sent bubbles right at %sx%s",
+    async (width, height) => {
+      const page = await openFixture(width, height);
+      try {
+        const roles = await page.evaluate(() => {
+          const rectFor = (selector: string) => {
+            const node = document.querySelector(selector) as HTMLElement | null;
+            if (!node) {
+              return null;
+            }
+            const rect = node.getBoundingClientRect();
+            return {
+              x: rect.x,
+              y: rect.y,
+              width: rect.width,
+              height: rect.height,
+            };
+          };
+          return {
+            assistantLane: rectFor(".chat-group.assistant .chat-group-messages"),
+            assistantBubble: rectFor(".chat-group.assistant .chat-bubble:first-child"),
+            userLane: rectFor(".chat-group.user .chat-group-messages"),
+            userBubble: rectFor(".chat-group.user .chat-bubble:first-child"),
+          };
+        });
+
+        const assistantLane = expectControlRect(roles.assistantLane, "assistant message lane");
+        const assistantBubble = expectControlRect(roles.assistantBubble, "assistant bubble");
+        const userLane = expectControlRect(roles.userLane, "user message lane");
+        const userBubble = expectControlRect(roles.userBubble, "user bubble");
+
+        expect(Math.abs(assistantBubble.x - assistantLane.x)).toBeLessThanOrEqual(1);
+        expect(
+          Math.abs(userBubble.x + userBubble.width - (userLane.x + userLane.width)),
+        ).toBeLessThanOrEqual(1);
+        expect(userLane.x).toBeGreaterThan(assistantLane.x);
+        expect(userBubble.width).toBeLessThan(userLane.width);
+        expect(assistantBubble.width).toBeLessThan(assistantLane.width);
+      } finally {
+        await closeBrowserPage(page);
+      }
+    },
+  );
+
+  it.each([
+    [393, 852],
+    [1366, 900],
+    [1920, 1080],
+  ] as const)("uses compact radii and optical chat-box insets at %sx%s", async (width, height) => {
+    const page = await openFixture(width, height);
+    try {
+      const geometry = await page.evaluate(() => {
+        const styleFor = (selector: string) => {
+          const node = document.querySelector<HTMLElement>(selector);
+          if (!node) {
+            return null;
+          }
+          const style = getComputedStyle(node);
+          return {
+            borderRadius: Number.parseFloat(style.borderTopLeftRadius),
+            paddingBottom: Number.parseFloat(style.paddingBottom),
+            paddingLeft: Number.parseFloat(style.paddingLeft),
+            paddingRight: Number.parseFloat(style.paddingRight),
+            paddingTop: Number.parseFloat(style.paddingTop),
+          };
+        };
+        return {
+          bubble: styleFor(".chat-group.assistant .chat-bubble:first-child"),
+          composer: styleFor(".agent-chat__input"),
+          footer: styleFor(".agent-chat__composer-footer"),
+          textarea: styleFor(".agent-chat__composer-combobox > textarea"),
+        };
+      });
+
+      expect(geometry.bubble).not.toBeNull();
+      expect(geometry.composer).not.toBeNull();
+      expect(geometry.footer).not.toBeNull();
+      expect(geometry.textarea).not.toBeNull();
+
+      expect(geometry.bubble?.borderRadius).toBe(10);
+      expect(
+        new Set([
+          geometry.bubble?.paddingTop,
+          geometry.bubble?.paddingRight,
+          geometry.bubble?.paddingBottom,
+          geometry.bubble?.paddingLeft,
+        ]),
+      ).toEqual(new Set([16]));
+      expect(geometry.composer?.borderRadius).toBe(10);
+
+      const composerInset = width <= 768 ? 4 : 8;
+      const textareaBlockInset = width <= 768 ? 10 : composerInset;
+      expect(geometry.textarea?.paddingTop).toBe(textareaBlockInset);
+      expect(geometry.textarea?.paddingRight).toBe(composerInset);
+      expect(geometry.textarea?.paddingBottom).toBe(textareaBlockInset);
+      expect(geometry.textarea?.paddingLeft).toBe(composerInset - 4);
+      expect(geometry.footer?.paddingLeft).toBe(composerInset);
+      expect(geometry.footer?.paddingRight).toBe(composerInset);
+      expect(geometry.footer?.paddingBottom).toBe(composerInset);
     } finally {
       await closeBrowserPage(page);
     }
@@ -654,7 +818,7 @@ describeBrowserLayout("chat responsive browser layout", () => {
     [320, 568],
     [1366, 900],
   ] as const)(
-    "keeps short assistant text clear of bubble actions at %sx%s",
+    "keeps short assistant footer actions below the bubble at %sx%s",
     async (width, height) => {
       const page = await openBrowserPage(width, height);
       try {
@@ -665,9 +829,15 @@ describeBrowserLayout("chat responsive browser layout", () => {
                 <div class="chat-group assistant">
                   <div class="chat-avatar assistant">A</div>
                   <div class="chat-group-messages">
-                    <div class="chat-bubble has-copy">
-                      ${chatBubbleActionsHtml()}
+                    <div class="chat-bubble">
                       <div class="chat-text"><p>Done.</p></div>
+                    </div>
+                    <div class="chat-group-footer">
+                      <div class="chat-group-footer__meta">
+                        <span class="chat-sender-name">Assistant</span>
+                        <span class="chat-group-timestamp">9:41 PM</span>
+                      </div>
+                      ${chatFooterActionsHtml()}
                     </div>
                   </div>
                 </div>
@@ -678,8 +848,8 @@ describeBrowserLayout("chat responsive browser layout", () => {
         await page.locator(".chat-bubble").hover();
 
         const text = await getTextContentRect(page, ".chat-text p");
-        const actions = await getRect(page, ".chat-bubble-actions");
-        expect(text.right).toBeLessThanOrEqual(actions.left - 1);
+        const actions = await getRect(page, ".chat-group-footer-actions");
+        expect(text.bottom).toBeLessThanOrEqual(actions.top - 1);
       } finally {
         await closeBrowserPage(page);
       }
@@ -790,19 +960,166 @@ describeBrowserLayout("chat responsive browser layout", () => {
   it("keeps composer actions touch-sized on phones", async () => {
     const page = await openFixture(320, 568);
     try {
-      const sizes = await page
-        .locator(".agent-chat__input-btn, .agent-chat__toolbar .btn--ghost, .chat-send-btn")
-        .evaluateAll((nodes) =>
-          nodes.map((node) => {
-            const rect = (node as HTMLElement).getBoundingClientRect();
-            return { width: rect.width, height: rect.height };
-          }),
-        );
+      const sizes = await page.locator(".chat-send-btn").evaluateAll((nodes) =>
+        nodes.map((node) => {
+          const rect = (node as HTMLElement).getBoundingClientRect();
+          return { width: rect.width, height: rect.height };
+        }),
+      );
       expect(sizes.length).toBeGreaterThan(0);
       for (const size of sizes) {
         expect(size.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
         expect(size.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
       }
+      const attach = await getRect(page, ".agent-chat__input-btn--attach");
+      expect(attach.width).toBeGreaterThanOrEqual(36);
+      expect(attach.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("aligns the reasoning default action with the reasoning heading", async () => {
+    const page = await openBrowserPage(520, 600);
+    try {
+      await page.setContent(`
+        <!doctype html>
+        <html>
+          <head><style>${readUiCss()}</style></head>
+          <body>
+            <div class="chat-controls__reasoning-panel">
+              <div class="chat-controls__reasoning-heading">
+                <span class="chat-controls__inline-select-section-label">Reasoning</span>
+                <button class="chat-controls__reasoning-default">(Default is High)</button>
+              </div>
+            </div>
+          </body>
+        </html>
+      `);
+
+      const [headingBox, defaultBox] = await Promise.all([
+        page.locator(".chat-controls__reasoning-heading > span").boundingBox(),
+        page.locator(".chat-controls__reasoning-default").boundingBox(),
+      ]);
+      expect(headingBox).not.toBeNull();
+      expect(defaultBox).not.toBeNull();
+      if (!headingBox || !defaultBox) {
+        throw new Error("Expected reasoning labels to have layout boxes");
+      }
+      expect(defaultBox.x).toBeGreaterThanOrEqual(headingBox.x + headingBox.width - 1);
+      expect(
+        Math.abs(defaultBox.y + defaultBox.height / 2 - (headingBox.y + headingBox.height / 2)),
+      ).toBeLessThanOrEqual(2);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("keeps the expanded mobile composer tight, scrollable, and separated from the thread", async () => {
+    const page = await openFixture(393, 852);
+    try {
+      const textarea = page.locator(".agent-chat__composer-combobox > textarea");
+      await textarea.fill(
+        Array.from({ length: 8 }, (_value, index) => `Mobile composer line ${index + 1}`).join(
+          "\n",
+        ),
+      );
+      await textarea.evaluate((node) => {
+        const textareaNode = node as HTMLTextAreaElement;
+        textareaNode.style.height = `${textareaNode.scrollHeight}px`;
+      });
+      await page.waitForTimeout(220);
+
+      const layout = await page.evaluate(() => {
+        const rectFor = (selector: string) => {
+          const node = document.querySelector(selector) as HTMLElement | null;
+          if (!node) {
+            return null;
+          }
+          const rect = node.getBoundingClientRect();
+          return {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+          };
+        };
+        const textareaNode = document.querySelector<HTMLTextAreaElement>(
+          ".agent-chat__composer-combobox > textarea",
+        );
+        const textareaStyle = textareaNode ? getComputedStyle(textareaNode) : null;
+        const textareaRect = rectFor(".agent-chat__composer-combobox > textarea");
+        return {
+          attach: rectFor('.agent-chat__input-btn[aria-label="Add attachment"]'),
+          attachIcon: rectFor('.agent-chat__input-btn[aria-label="Add attachment"] svg'),
+          input: rectFor(".agent-chat__input"),
+          meta: rectFor(".agent-chat__composer-meta"),
+          model: rectFor(".chat-composer-model-control"),
+          context: rectFor(".context-ring"),
+          send: rectFor(".chat-send-btn"),
+          settings: rectFor(".chat-settings-chip"),
+          settingsIcon: rectFor(".chat-settings-chip__icon svg"),
+          shell: rectFor(".agent-chat__composer-shell"),
+          textarea:
+            textareaNode && textareaRect
+              ? {
+                  ...textareaRect,
+                  clientHeight: textareaNode.clientHeight,
+                  lineHeight: Number.parseFloat(textareaStyle?.lineHeight ?? "0"),
+                  paddingBottom: Number.parseFloat(textareaStyle?.paddingBottom ?? "0"),
+                  paddingTop: Number.parseFloat(textareaStyle?.paddingTop ?? "0"),
+                  scrollHeight: textareaNode.scrollHeight,
+                }
+              : null,
+          thread: rectFor(".chat-thread"),
+          viewportWidth: window.innerWidth,
+        };
+      });
+
+      const shell = expectControlRect(layout.shell, "composer shell");
+      const input = expectControlRect(layout.input, "composer input");
+      const thread = expectControlRect(layout.thread, "chat thread");
+      const meta = expectControlRect(layout.meta, "composer metadata");
+      const model = expectControlRect(layout.model, "model selector");
+      const context = expectControlRect(layout.context, "context control");
+      const send = expectControlRect(layout.send, "primary action");
+      const settings = expectControlRect(layout.settings, "settings control");
+      const attach = expectControlRect(layout.attach, "attachment control");
+      const settingsIcon = expectControlRect(layout.settingsIcon, "settings icon");
+      const attachIcon = expectControlRect(layout.attachIcon, "attachment icon");
+      const textareaRect = expectControlRect(layout.textarea, "composer textarea");
+      const textareaMetrics = layout.textarea;
+      if (
+        textareaMetrics?.clientHeight === undefined ||
+        textareaMetrics.scrollHeight === undefined ||
+        textareaMetrics.lineHeight === undefined ||
+        textareaMetrics.paddingTop === undefined ||
+        textareaMetrics.paddingBottom === undefined
+      ) {
+        throw new Error("Expected textarea sizing metrics");
+      }
+
+      const fiveLineHeight =
+        textareaMetrics.lineHeight * 5 + textareaMetrics.paddingTop + textareaMetrics.paddingBottom;
+      expect(textareaRect.height).toBeLessThanOrEqual(fiveLineHeight + 1);
+      expect(textareaMetrics.scrollHeight).toBeGreaterThan(textareaMetrics.clientHeight);
+      expect(input.y - (thread.y + thread.height)).toBeGreaterThanOrEqual(5.5);
+      expect(shell.x).toBeLessThanOrEqual(8);
+      expect(layout.viewportWidth - (shell.x + shell.width)).toBeLessThanOrEqual(8);
+      expect(attach.x - input.x).toBeLessThanOrEqual(10);
+      expect(model.x).toBeGreaterThanOrEqual(settings.x + settings.width - 1);
+      expect(context.x).toBeGreaterThanOrEqual(model.x + model.width - 1);
+      expect(input.x + input.width - (send.x + send.width)).toBeLessThanOrEqual(8);
+      for (const control of [model, settings, context]) {
+        expect(
+          Math.abs(control.y + control.height / 2 - (settings.y + settings.height / 2)),
+        ).toBeLessThanOrEqual(2);
+      }
+      expect(meta.y).toBeGreaterThanOrEqual(settings.y - 1);
+      expect(settingsIcon.width).toBeGreaterThanOrEqual(18);
+      expect(settingsIcon.height).toBeGreaterThanOrEqual(18);
+      expect(attachIcon.width).toBeGreaterThanOrEqual(18);
+      expect(attachIcon.height).toBeGreaterThanOrEqual(18);
     } finally {
       await closeBrowserPage(page);
     }
@@ -835,12 +1152,16 @@ describeBrowserLayout("chat responsive browser layout", () => {
     [320, 568],
     [393, 852],
     [568, 320],
+    [1366, 900],
+    [1920, 1080],
   ] as const)(
-    "keeps current composer model, settings, and send controls from overlapping at %sx%s",
+    "keeps the composer bottom controls, attachment, and primary action aligned at %sx%s",
     async (width, height) => {
       const page = await openFixture(width, height);
       try {
         await expectNoHorizontalOverflow(page);
+        // Measure the settled footer row after the context ring's 200ms entrance animation.
+        await page.waitForTimeout(220);
         const controls = await page.evaluate(() => {
           const rectFor = (selector: string) => {
             const node = document.querySelector(selector) as HTMLElement | null;
@@ -857,42 +1178,139 @@ describeBrowserLayout("chat responsive browser layout", () => {
             };
           };
           return {
+            chat: rectFor(".card.chat"),
+            shell: rectFor(".agent-chat__composer-shell"),
             input: rectFor(".agent-chat__input"),
             thread: rectFor(".chat-thread"),
+            footer: rectFor(".agent-chat__composer-footer"),
+            progress: rectFor(".agent-chat__composer-progress"),
             textarea: rectFor(".agent-chat__composer-combobox > textarea"),
-            left: rectFor(".agent-chat__toolbar-left"),
+            meta: rectFor(".agent-chat__composer-meta"),
             model: rectFor(".chat-composer-model-control"),
+            context: rectFor(".context-ring"),
             settings: rectFor(".chat-settings-chip"),
-            settingsLabel: rectFor(".chat-settings-chip__text"),
+            attach: rectFor('.agent-chat__input-btn[aria-label="Add attachment"]'),
             send: rectFor(".chat-send-btn"),
           };
         });
 
+        const chat = expectControlRect(controls.chat, "chat surface");
+        const shell = expectControlRect(controls.shell, "composer shell");
         const input = expectControlRect(controls.input, "composer");
         const thread = expectControlRect(controls.thread, "chat thread");
+        const footer = expectControlRect(controls.footer, "composer footer");
+        const progress = expectControlRect(controls.progress, "composer progress");
         const textarea = expectControlRect(controls.textarea, "composer textarea");
-        const left = expectControlRect(controls.left, "composer left controls");
+        const meta = expectControlRect(controls.meta, "composer metadata");
         const model = expectControlRect(controls.model, "composer model control");
+        const context = expectControlRect(controls.context, "composer context control");
         const settings = expectControlRect(controls.settings, "composer settings control");
+        const attach = expectControlRect(controls.attach, "composer attach control");
         const send = expectControlRect(controls.send, "composer send control");
-        const settingsLabel = expectControlRect(controls.settingsLabel, "settings label");
 
-        for (const control of [left, model, settings, send]) {
+        for (const control of [
+          footer,
+          progress,
+          textarea,
+          meta,
+          model,
+          context,
+          settings,
+          attach,
+          send,
+        ]) {
           expect(control.x).toBeGreaterThanOrEqual(input.x - 1);
           expect(control.x + control.width).toBeLessThanOrEqual(input.x + input.width + 1);
         }
+        for (const control of [input, send]) {
+          expect(control.x).toBeGreaterThanOrEqual(shell.x - 1);
+          expect(control.x + control.width).toBeLessThanOrEqual(shell.x + shell.width + 1);
+        }
+        expect(model.y).toBeGreaterThanOrEqual(footer.y - 1);
+        expect(model.y + model.height).toBeLessThanOrEqual(footer.y + footer.height + 1);
+        expect(settings.y).toBeGreaterThanOrEqual(footer.y - 1);
+        expect(settings.y + settings.height).toBeLessThanOrEqual(footer.y + footer.height + 1);
+        expect(model.y).toBeGreaterThanOrEqual(textarea.y);
+        expect(context.y).toBeGreaterThanOrEqual(textarea.y);
+        expect(progress.y).toBeGreaterThanOrEqual(textarea.y);
+        expect(
+          Math.abs(attach.y + attach.height / 2 - (send.y + send.height / 2)),
+        ).toBeLessThanOrEqual(2);
+        expect(attach.x + attach.width).toBeLessThanOrEqual(textarea.x + 1);
+        expect(model.x).toBeGreaterThanOrEqual(settings.x + settings.width - 1);
+        expect(send.x).toBeGreaterThanOrEqual(textarea.x + textarea.width - 1);
+        expect(send.x + send.width).toBeLessThanOrEqual(input.x + input.width + 1);
+        expect(progress.x).toBeGreaterThanOrEqual(context.x + context.width - 1);
+        expect(
+          Math.abs(progress.y + progress.height / 2 - (context.y + context.height / 2)),
+        ).toBeLessThanOrEqual(2);
+        expect(rectsOverlap(progress, context)).toBe(false);
         expect(rectsOverlap(model, settings)).toBe(false);
         expect(rectsOverlap(model, send)).toBe(false);
         expect(rectsOverlap(settings, send)).toBe(false);
-        expect(settings.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
-        expect(settings.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
-        expect(settingsLabel.display).toBe("none");
+        const composerFontSize = await page
+          .locator(".agent-chat__composer-combobox > textarea")
+          .evaluate((textareaNode) => Number.parseFloat(getComputedStyle(textareaNode).fontSize));
+        if (width <= 768) {
+          expect(composerFontSize).toBe(16);
+          expect(model.width).toBeGreaterThanOrEqual(width === 320 ? 32 : 64);
+          expect(model.width).toBeLessThanOrEqual(footer.width);
+          expect(send.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+          expect(send.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+          for (const control of [model, settings, context, progress]) {
+            expect(
+              Math.abs(control.y + control.height / 2 - (settings.y + settings.height / 2)),
+            ).toBeLessThanOrEqual(2);
+          }
+          expect(footer.height).toBeLessThanOrEqual(49.1);
+          expect(settings.width).toBeGreaterThanOrEqual(36);
+          expect(settings.height).toBeGreaterThanOrEqual(36);
+        } else {
+          expect(composerFontSize).toBe(14);
+          expect(send.width).toBeCloseTo(36, 2);
+          expect(send.height).toBeCloseTo(36, 2);
+        }
+
+        if (width >= 1600) {
+          expect(shell.width).toBeGreaterThanOrEqual(767);
+          expect(shell.width).toBeLessThanOrEqual(769);
+          expect(
+            Math.abs(shell.x + shell.width / 2 - (chat.x + chat.width / 2)),
+          ).toBeLessThanOrEqual(1);
+          expect(input.height).toBeLessThanOrEqual(112);
+        }
 
         if (width > height && height <= 500) {
           expect(input.height).toBeLessThanOrEqual(height * 0.38);
           expect(thread.height).toBeGreaterThanOrEqual(height * 0.4 - 1);
-          expect(textarea.height).toBeLessThanOrEqual(56);
+          expect(textarea.height).toBeLessThanOrEqual(56.1);
         }
+      } finally {
+        await closeBrowserPage(page);
+      }
+    },
+  );
+
+  it.each([
+    [320, 568],
+    [393, 852],
+  ] as const)(
+    "insets attachment previews from the composer edge at %sx%s",
+    async (width, height) => {
+      const page = await openFixture(width, height, { composerAttachment: true });
+      try {
+        await expectNoHorizontalOverflow(page);
+        const input = await getBoundingBox(page, ".agent-chat__input");
+        const preview = await getBoundingBox(page, ".chat-attachments-preview");
+        const attachment = await getBoundingBox(page, ".chat-attachment-thumb");
+        const previewPaddingTop = await page
+          .locator(".chat-attachments-preview")
+          .evaluate((node) => Number.parseFloat(getComputedStyle(node).paddingTop));
+
+        expect(attachment.x - input.x).toBeGreaterThanOrEqual(9.5);
+        expect(previewPaddingTop).toBe(10);
+        expect(preview.x).toBeGreaterThanOrEqual(input.x);
+        expect(preview.x + preview.width).toBeLessThanOrEqual(input.x + input.width + 1);
       } finally {
         await closeBrowserPage(page);
       }
@@ -966,20 +1384,21 @@ describeBrowserLayout("chat responsive browser layout", () => {
           return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
         };
         return {
+          shell: rectFor(".agent-chat__composer-shell"),
           input: rectFor(".agent-chat__input"),
-          left: rectFor(".agent-chat__toolbar-left"),
+          meta: rectFor(".agent-chat__composer-meta"),
           model: rectFor(".chat-composer-model-control"),
           settings: rectFor(".chat-settings-chip"),
           send: rectFor(".chat-send-btn"),
         };
       });
 
+      const scrolledShell = expectControlRect(scrolled.shell, "scrolled composer shell");
       const scrolledInput = expectControlRect(scrolled.input, "scrolled composer");
       for (const [label, control] of [
-        ["composer left controls", scrolled.left],
+        ["composer metadata", scrolled.meta],
         ["composer model control", scrolled.model],
         ["composer settings control", scrolled.settings],
-        ["composer send control", scrolled.send],
       ] as const) {
         const rect = expectControlRect(control, label);
         expect(rect.y).toBeGreaterThanOrEqual(scrolledInput.y - 1);
@@ -987,6 +1406,9 @@ describeBrowserLayout("chat responsive browser layout", () => {
           scrolledInput.y + scrolledInput.height + 1,
         );
       }
+      const send = expectControlRect(scrolled.send, "composer send control");
+      expect(send.y).toBeGreaterThanOrEqual(scrolledShell.y - 1);
+      expect(send.y + send.height).toBeLessThanOrEqual(scrolledShell.y + scrolledShell.height + 1);
     } finally {
       await closeBrowserPage(page);
     }
@@ -1021,7 +1443,7 @@ describeBrowserLayout("chat responsive browser layout", () => {
           input: rectFor(".agent-chat__input"),
           menu: rectFor(".slash-menu"),
           textarea: rectFor(".agent-chat__composer-combobox > textarea"),
-          toolbar: rectFor(".agent-chat__toolbar"),
+          footer: rectFor(".agent-chat__composer-footer"),
         };
       });
 
@@ -1054,20 +1476,78 @@ describeBrowserLayout("chat responsive browser layout", () => {
         };
         return {
           input: rectFor(".agent-chat__input"),
-          toolbar: rectFor(".agent-chat__toolbar"),
+          footer: rectFor(".agent-chat__composer-footer"),
         };
       });
 
       const scrolledInput = expectControlRect(scrolled.input, "scrolled composer");
-      const toolbar = expectControlRect(scrolled.toolbar, "composer toolbar");
-      expect(toolbar.y).toBeGreaterThanOrEqual(scrolledInput.y - 1);
-      expect(toolbar.y + toolbar.height).toBeLessThanOrEqual(
+      const footer = expectControlRect(scrolled.footer, "composer footer");
+      expect(footer.y).toBeGreaterThanOrEqual(scrolledInput.y - 1);
+      expect(footer.y + footer.height).toBeLessThanOrEqual(
         scrolledInput.y + scrolledInput.height + 1,
       );
     } finally {
       await closeBrowserPage(page);
     }
   });
+
+  it.each([
+    [320, 568],
+    [393, 852],
+    [568, 320],
+  ] as const)(
+    "keeps mobile model and settings popovers inside the viewport at %sx%s",
+    async (width, height) => {
+      const page = await openFixture(width, height);
+      try {
+        const modelTrigger = page.locator('[data-chat-composer-model="true"]');
+        await modelTrigger.click();
+
+        const modelMenu = await getRect(page, ".chat-controls__inline-select-menu--combined");
+        expect(modelMenu.left).toBeGreaterThanOrEqual(0);
+        expect(modelMenu.right).toBeLessThanOrEqual(width);
+        expect(modelMenu.top).toBeGreaterThanOrEqual(0);
+        expect(modelMenu.bottom).toBeLessThanOrEqual(height);
+
+        await modelTrigger.click();
+        await page.locator(".chat-settings-popover").evaluate((node) => {
+          node.classList.add("chat-settings-popover--open");
+        });
+
+        const settingsMenu = await getRect(page, ".chat-settings-popover--open");
+        expect(settingsMenu.left).toBeGreaterThanOrEqual(0);
+        expect(settingsMenu.right).toBeLessThanOrEqual(width);
+        expect(settingsMenu.top).toBeGreaterThanOrEqual(0);
+        expect(settingsMenu.bottom).toBeLessThanOrEqual(height);
+      } finally {
+        await closeBrowserPage(page);
+      }
+    },
+  );
+
+  it.each([
+    [768, 900],
+    [1024, 768],
+    [1366, 900],
+  ] as const)(
+    "keeps the left-aligned desktop settings popover inside the viewport at %sx%s",
+    async (width, height) => {
+      const page = await openFixture(width, height);
+      try {
+        await page.locator(".chat-settings-popover").evaluate((node) => {
+          node.classList.add("chat-settings-popover--open");
+        });
+
+        const settingsMenu = await getRect(page, ".chat-settings-popover--open");
+        expect(settingsMenu.left).toBeGreaterThanOrEqual(0);
+        expect(settingsMenu.right).toBeLessThanOrEqual(width);
+        expect(settingsMenu.top).toBeGreaterThanOrEqual(0);
+        expect(settingsMenu.bottom).toBeLessThanOrEqual(height);
+      } finally {
+        await closeBrowserPage(page);
+      }
+    },
+  );
 
   describe("slash command keyboard navigation", () => {
     let page: Page;
@@ -1189,14 +1669,70 @@ describeBrowserLayout("chat responsive browser layout", () => {
     }
   });
 
+  it.each([
+    [1024, 768],
+    [1366, 900],
+  ] as const)(
+    "scrolls long BTW side result bodies instead of expanding the card at %sx%s",
+    async (width, height) => {
+      const page = await openFixture(width, height, {
+        sideResultBody: LONG_SIDE_RESULT_BODY,
+      });
+      try {
+        const body = await page.locator(".chat-side-result__body").evaluate((node) => {
+          const style = getComputedStyle(node as HTMLElement);
+          return {
+            overflowY: style.overflowY,
+            clientHeight: (node as HTMLElement).clientHeight,
+            scrollHeight: (node as HTMLElement).scrollHeight,
+          };
+        });
+        expect(body.overflowY).toBe("auto");
+        expect(body.clientHeight).toBeLessThan(body.scrollHeight);
+        expect(body.clientHeight).toBeLessThanOrEqual(480);
+
+        const scrollTop = await page.locator(".chat-side-result__body").evaluate((node) => {
+          const element = node as HTMLElement;
+          element.scrollTop = element.scrollHeight;
+          return element.scrollTop;
+        });
+        expect(scrollTop).toBeGreaterThan(0);
+      } finally {
+        await closeBrowserPage(page);
+      }
+    },
+  );
+
   it("renders BTW side results as a mobile overlay without horizontal overflow", async () => {
-    const page = await openFixture(320, 568, { sideResult: true });
+    const page = await openFixture(320, 568, {
+      sideResultBody: LONG_SIDE_RESULT_BODY,
+    });
     try {
       await expectNoHorizontalOverflow(page);
-      const position = await page
-        .locator(".chat-side-result")
-        .evaluate((node) => getComputedStyle(node).position);
-      expect(position).toBe("fixed");
+      const card = await page.locator(".chat-side-result").evaluate((node) => {
+        const element = node as HTMLElement;
+        const style = getComputedStyle(element);
+        return {
+          clientHeight: element.clientHeight,
+          overflowY: style.overflowY,
+          position: style.position,
+          scrollHeight: element.scrollHeight,
+        };
+      });
+      const bodyOverflowY = await page
+        .locator(".chat-side-result__body")
+        .evaluate((node) => getComputedStyle(node).overflowY);
+      expect(card.position).toBe("fixed");
+      expect(card.overflowY).toBe("auto");
+      expect(card.clientHeight).toBeLessThan(card.scrollHeight);
+      expect(bodyOverflowY).toBe("visible");
+
+      const scrollTop = await page.locator(".chat-side-result").evaluate((node) => {
+        const element = node as HTMLElement;
+        element.scrollTop = element.scrollHeight;
+        return element.scrollTop;
+      });
+      expect(scrollTop).toBeGreaterThan(0);
     } finally {
       await closeBrowserPage(page);
     }

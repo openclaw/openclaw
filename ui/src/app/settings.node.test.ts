@@ -436,6 +436,27 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(loadSettings().chatSendShortcut).toBe("enter");
   });
 
+  it("persists only a normalized realtime Talk microphone id", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    const gwUrl = expectedGatewayUrl("");
+    const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
+    saveSettings({ ...loadSettings(), realtimeTalkInputDeviceId: " usb-mic " });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}").realtimeTalkInputDeviceId).toBe(
+      "usb-mic",
+    );
+    expect(loadSettings().realtimeTalkInputDeviceId).toBe("usb-mic");
+
+    saveSettings({ ...loadSettings(), realtimeTalkInputDeviceId: "" });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(
+      "realtimeTalkInputDeviceId",
+    );
+  });
+
   it("clears the current-tab token when saving an empty token", () => {
     setTestLocation({
       protocol: "https:",
