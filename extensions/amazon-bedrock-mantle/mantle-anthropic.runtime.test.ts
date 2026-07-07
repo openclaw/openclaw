@@ -214,6 +214,26 @@ describe("createMantleAnthropicStreamFn", () => {
     expect(streamOptions.effort).toBe("low");
   });
 
+  it("disables legacy thinking when the adjusted budget is below 1024", () => {
+    const model = createTestModel({
+      id: "anthropic.claude-haiku-4-5",
+      name: "Claude Haiku 4.5",
+      reasoning: true,
+      maxTokens: 1500,
+    });
+    const deps = createTestDeps();
+    deps.stream.mockReturnValue({ kind: "anthropic-stream" } as never);
+
+    void createMantleAnthropicStreamFn(deps)(
+      model,
+      { messages: [] },
+      { apiKey: "bedrock-bearer-token", reasoning: "low" },
+    );
+
+    expect(firstStreamOptions(deps)).toMatchObject({ maxTokens: 1500, thinkingEnabled: false });
+    expect(firstStreamOptions(deps)).not.toHaveProperty("thinkingBudgetTokens");
+  });
+
   it.each([
     { reasoning: undefined, effort: "high" },
     { reasoning: "off" as const, effort: "low" },
