@@ -112,4 +112,27 @@ describe("NodeExecutionEnv exec stream errors", () => {
     const result = await resultPromise;
     expect(result.ok).toBe(true);
   });
+
+  it("contains stdout errors during Windows shell discovery", async () => {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      const child = mockSpawnChild();
+      const resultPromise = new NodeExecutionEnv({ cwd: process.cwd() }).exec("echo hello");
+      await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled(), { timeout: 2000 });
+
+      child.stdout.emit("error", new Error("where stdout failed"));
+
+      const result = await resultPromise;
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe("shell_unavailable");
+      }
+      expect(spawnMock.mock.calls[0]?.[0]).toBe("where");
+    } finally {
+      if (platformDescriptor) {
+        Object.defineProperty(process, "platform", platformDescriptor);
+      }
+    }
+  });
 });

@@ -131,6 +131,17 @@ function abortResult(
   return signal?.aborted ? err(new FileError("aborted", "aborted", path)) : undefined;
 }
 
+type ChildOutputStreamName = "stdout" | "stderr";
+
+function listenForChildOutputErrors(
+  child: ReturnType<typeof spawn>,
+  onError: (stream: ChildOutputStreamName, error: Error) => void,
+): void {
+  for (const streamName of ["stdout", "stderr"] as const) {
+    child[streamName]?.on("error", (error: Error) => onError(streamName, error));
+  }
+}
+
 async function pathExists(path: string): Promise<boolean> {
   try {
     await access(path, constants.F_OK);
@@ -159,12 +170,19 @@ async function runCommand(
     }
     const timeout = setTimeout(() => {
       if (child.pid) {
-        killProcessTree(child.pid, { force: true });
+        killProcessTree(child.pid, { force: true, detached: false });
       }
     }, timeoutMs);
     child.stdout?.setEncoding("utf8");
     child.stdout?.on("data", (chunk: string) => {
       stdout += chunk;
+    });
+    listenForChildOutputErrors(child, () => {
+      if (child.pid) {
+        killProcessTree(child.pid, { force: true, detached: false });
+      }
+      clearTimeout(timeout);
+      resolveLocal({ stdout: "", status: null });
     });
     child.on("error", () => {
       clearTimeout(timeout);
@@ -374,7 +392,7 @@ export class NodeExecutionEnv implements ExecutionEnv {
       // Guard stdout/stderr against stream errors (e.g. EPIPE when the
       // child exits before all pipe data is consumed). Without listeners,
       // Node.js throws an uncaught exception that crashes the process.
-      const onStreamError = (stream: "stdout" | "stderr", error: Error) => {
+      const onStreamError = (stream: ChildOutputStreamName, error: Error) => {
         if (settled) {
           return;
         }
@@ -383,8 +401,7 @@ export class NodeExecutionEnv implements ExecutionEnv {
           err(new ExecutionError("spawn_error", `${stream} read error: ${error.message}`, error)),
         );
       };
-      child.stdout?.on("error", (e) => onStreamError("stdout", e));
-      child.stderr?.on("error", (e) => onStreamError("stderr", e));
+      listenForChildOutputErrors(child, onStreamError);
 
       child.on("error", (error) => {
         settle(err(new ExecutionError("spawn_error", error.message, error)));
