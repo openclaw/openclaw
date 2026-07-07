@@ -444,13 +444,13 @@ function assertNoCronShellExecution(value: unknown): void {
     return;
   }
   const payload = isRecord(value.payload) ? value.payload : undefined;
-  if (payload?.kind === "command") {
+  if (normalizeLowercaseStringOrEmpty(payload?.kind) === "command") {
     throw new Error(
       "cron command payloads cannot be created or edited through the agent cron tool; use the CLI or Gateway API.",
     );
   }
   const schedule = isRecord(value.schedule) ? value.schedule : undefined;
-  if (schedule?.kind === "on-exit") {
+  if (normalizeLowercaseStringOrEmpty(schedule?.kind) === "on-exit") {
     throw new Error(
       "cron on-exit schedules cannot be created or edited through the agent cron tool; use the CLI or Gateway API.",
     );

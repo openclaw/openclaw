@@ -1046,7 +1046,10 @@ describe("cron tool", () => {
     expect(params?.failureAlert).toBe(false);
   });
 
-  it("rejects command payloads from the agent cron tool on add", async () => {
+  it.each([
+    ["canonical", "command"],
+    ["mixed-case", "Command"],
+  ])("rejects %s command payloads from the agent cron tool on add", async (_case, kind) => {
     const tool = createTestCronTool();
 
     await expect(
@@ -1056,14 +1059,17 @@ describe("cron tool", () => {
           name: "command",
           schedule: { at: new Date(123).toISOString() },
           sessionTarget: "isolated",
-          payload: { kind: "command", argv: ["sh", "-lc", "echo ok"] },
+          payload: { kind, argv: ["sh", "-lc", "echo ok"] },
         },
       }),
     ).rejects.toThrow("cron command payloads cannot be created or edited");
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
-  it("rejects on-exit schedules from the agent cron tool on add", async () => {
+  it.each([
+    ["canonical", "on-exit"],
+    ["mixed-case", "On-Exit"],
+  ])("rejects %s on-exit schedules from the agent cron tool on add", async (_case, kind) => {
     const tool = createTestCronTool();
 
     await expect(
@@ -1071,7 +1077,7 @@ describe("cron tool", () => {
         action: "add",
         job: {
           name: "watch command",
-          schedule: { kind: "on-exit", command: "make" },
+          schedule: { kind, command: "make" },
           payload: { kind: "agentTurn", message: "done" },
         },
       }),
@@ -2073,7 +2079,10 @@ describe("cron tool", () => {
     expect(params?.patch?.failureAlert).toBe(false);
   });
 
-  it("rejects command payloads from the agent cron tool on update", async () => {
+  it.each([
+    ["canonical", "command"],
+    ["mixed-case", "Command"],
+  ])("rejects %s command payloads from the agent cron tool on update", async (_case, kind) => {
     const tool = createTestCronTool();
 
     await expect(
@@ -2081,14 +2090,17 @@ describe("cron tool", () => {
         action: "update",
         id: "job-4",
         patch: {
-          payload: { kind: "command", argv: ["sh", "-lc", "echo ok"] },
+          payload: { kind, argv: ["sh", "-lc", "echo ok"] },
         },
       }),
     ).rejects.toThrow("cron command payloads cannot be created or edited");
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
-  it("rejects on-exit schedules from the agent cron tool on update", async () => {
+  it.each([
+    ["canonical", "on-exit"],
+    ["mixed-case", "On-Exit"],
+  ])("rejects %s on-exit schedules from the agent cron tool on update", async (_case, kind) => {
     const tool = createTestCronTool();
 
     await expect(
@@ -2096,7 +2108,7 @@ describe("cron tool", () => {
         action: "update",
         id: "job-4",
         patch: {
-          schedule: { kind: "on-exit", command: "make" },
+          schedule: { kind, command: "make" },
         },
       }),
     ).rejects.toThrow("cron on-exit schedules cannot be created or edited");
