@@ -8,7 +8,6 @@ import {
   normalizeSidebarPinnedRoutes,
   sidebarMoreRoutes,
 } from "./app-navigation.ts";
-import { routeIdFromPath } from "./app-routes.ts";
 
 describe("sidebar pinned routes", () => {
   it("defaults to a small pinned set drawn from the customizable routes", () => {
@@ -52,27 +51,5 @@ describe("sidebar pinned routes", () => {
     expect(more).not.toContain("overview");
     expect(more).not.toContain("usage");
     expect(new Set([...pinned, ...more])).toEqual(new Set(SIDEBAR_NAV_ROUTES));
-  });
-
-  it("routes every published settings slice", () => {
-    expect(routeIdFromPath("/settings/communications")).toBe("communications");
-    expect(routeIdFromPath("/settings/appearance")).toBe("appearance");
-    expect(routeIdFromPath("/settings/automation")).toBe("automation");
-    expect(routeIdFromPath("/settings/infrastructure")).toBe("infrastructure");
-    expect(routeIdFromPath("/settings/ai-agents")).toBe("ai-agents");
-    expect(routeIdFromPath("/settings/general")).toBe("config");
-    expect(routeIdFromPath("/settings/channels")).toBe("channels");
-    expect(routeIdFromPath("/settings/worktrees")).toBe("worktrees");
-  });
-
-  it("keeps old settings paths as aliases", () => {
-    expect(routeIdFromPath("/communications")).toBe("communications");
-    expect(routeIdFromPath("/appearance")).toBe("appearance");
-    expect(routeIdFromPath("/automation")).toBe("automation");
-    expect(routeIdFromPath("/infrastructure")).toBe("infrastructure");
-    expect(routeIdFromPath("/ai-agents")).toBe("ai-agents");
-    expect(routeIdFromPath("/config")).toBe("config");
-    expect(routeIdFromPath("/channels")).toBe("channels");
-    expect(routeIdFromPath("/worktrees")).toBe("worktrees");
   });
 });

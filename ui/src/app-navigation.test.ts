@@ -9,6 +9,7 @@ import {
 } from "./app-navigation.ts";
 import { normalizePath } from "./app-route-paths.ts";
 import {
+  createApplicationRouter,
   inferBasePathFromPathname,
   normalizeBasePath,
   pathForRoute,
@@ -21,6 +22,28 @@ import { pluginTabKey, pluginTabRefFromSearch, pluginTabSearch } from "./pages/p
 const ALL_ROUTES: RouteId[] = Array.from(
   new Set<RouteId>(["chat", ...SIDEBAR_NAV_ROUTES, ...SETTINGS_NAVIGATION_ROUTES]),
 );
+
+const SETTINGS_ROUTE_PATHS = [
+  { routeId: "config", path: "/settings/general", alias: "/config" },
+  { routeId: "channels", path: "/settings/channels", alias: "/channels" },
+  {
+    routeId: "communications",
+    path: "/settings/communications",
+    alias: "/communications",
+  },
+  { routeId: "appearance", path: "/settings/appearance", alias: "/appearance" },
+  { routeId: "automation", path: "/settings/automation", alias: "/automation" },
+  { routeId: "mcp", path: "/settings/mcp", alias: "/mcp" },
+  {
+    routeId: "infrastructure",
+    path: "/settings/infrastructure",
+    alias: "/infrastructure",
+  },
+  { routeId: "worktrees", path: "/settings/worktrees", alias: "/worktrees" },
+  { routeId: "ai-agents", path: "/settings/ai-agents", alias: "/ai-agents" },
+  { routeId: "debug", path: "/settings/debug", alias: "/debug" },
+  { routeId: "logs", path: "/settings/logs", alias: "/logs" },
+] as const satisfies readonly { routeId: RouteId; path: string; alias: string }[];
 
 const leadingSlashNormalizerCases = [
   { name: "normalizeBasePath", normalize: normalizeBasePath, input: "ui", expected: "/ui" },
@@ -177,16 +200,11 @@ describe("pathForRoute", () => {
   it("returns correct path without base", () => {
     expect(pathForRoute("chat")).toBe("/chat");
     expect(pathForRoute("overview")).toBe("/overview");
-    expect(pathForRoute("worktrees")).toBe("/settings/worktrees");
-    expect(pathForRoute("config")).toBe("/settings/general");
-    expect(pathForRoute("appearance")).toBe("/settings/appearance");
-    expect(pathForRoute("logs")).toBe("/settings/logs");
   });
 
   it("prepends base path", () => {
     expect(pathForRoute("chat", "/ui")).toBe("/ui/chat");
     expect(pathForRoute("sessions", "/apps/openclaw")).toBe("/apps/openclaw/sessions");
-    expect(pathForRoute("config", "/ui")).toBe("/ui/settings/general");
   });
 });
 
@@ -195,21 +213,9 @@ describe("routeIdFromPath", () => {
     expect(routeIdFromPath("/chat")).toBe("chat");
     expect(routeIdFromPath("/overview")).toBe("overview");
     expect(routeIdFromPath("/activity")).toBe("activity");
-    expect(routeIdFromPath("/worktrees")).toBe("worktrees");
-    expect(routeIdFromPath("/settings/worktrees")).toBe("worktrees");
     expect(routeIdFromPath("/sessions")).toBe("sessions");
     expect(routeIdFromPath("/dreaming")).toBe("dreams");
     expect(routeIdFromPath("/dreams")).toBe("dreams");
-    expect(routeIdFromPath("/settings/general")).toBe("config");
-    expect(routeIdFromPath("/settings/appearance")).toBe("appearance");
-    expect(routeIdFromPath("/settings/logs")).toBe("logs");
-  });
-
-  it("keeps legacy top-level settings paths routed", () => {
-    expect(routeIdFromPath("/config")).toBe("config");
-    expect(routeIdFromPath("/appearance")).toBe("appearance");
-    expect(routeIdFromPath("/worktrees")).toBe("worktrees");
-    expect(routeIdFromPath("/logs")).toBe("logs");
   });
 
   it("leaves root fallback to application startup", () => {
@@ -219,14 +225,11 @@ describe("routeIdFromPath", () => {
   it("handles base paths", () => {
     expect(routeIdFromPath("/ui/chat", "/ui")).toBe("chat");
     expect(routeIdFromPath("/apps/openclaw/sessions", "/apps/openclaw")).toBe("sessions");
-    expect(routeIdFromPath("/ui/settings/general", "/ui")).toBe("config");
-    expect(routeIdFromPath("/ui/appearance", "/ui")).toBe("appearance");
   });
 
   it("rejects route-shaped paths outside the configured base path", () => {
     expect(routeIdFromPath("/xx/chat", "/ui")).toBeNull();
     expect(routeIdFromPath("/other/sessions", "/apps/openclaw")).toBeNull();
-    expect(routeIdFromPath("/xx/settings/general", "/ui")).toBeNull();
   });
 
   it("returns null for unknown path", () => {
@@ -237,6 +240,34 @@ describe("routeIdFromPath", () => {
     expect(routeIdFromPath("/CHAT")).toBeNull();
     expect(routeIdFromPath("/Overview")).toBeNull();
   });
+});
+
+describe("compiled settings routes", () => {
+  const router = createApplicationRouter();
+
+  it.each(SETTINGS_ROUTE_PATHS)(
+    "routes $routeId through its canonical path and legacy alias",
+    ({ routeId, path, alias }) => {
+      expect(pathForRoute(routeId)).toBe(path);
+      expect(routeIdFromPath(path)).toBe(routeId);
+      expect(routeIdFromPath(alias)).toBe(routeId);
+      expect(router.pathForRoute(routeId)).toBe(path);
+      expect(router.routeIdFromPath(path)).toBe(routeId);
+      expect(router.routeIdFromPath(alias)).toBe(routeId);
+    },
+  );
+
+  it.each(SETTINGS_ROUTE_PATHS)(
+    "routes $routeId under a configured mount path",
+    ({ routeId, path, alias }) => {
+      expect(pathForRoute(routeId, "/settings")).toBe(`/settings${path}`);
+      expect(routeIdFromPath(`/settings${path}`, "/settings")).toBe(routeId);
+      expect(routeIdFromPath(`/settings${alias}`, "/settings")).toBe(routeId);
+      expect(router.pathForRoute(routeId, "/settings")).toBe(`/settings${path}`);
+      expect(router.routeIdFromPath(`/settings${path}`, "/settings")).toBe(routeId);
+      expect(router.routeIdFromPath(`/settings${alias}`, "/settings")).toBe(routeId);
+    },
+  );
 });
 
 describe("inferBasePathFromPathname", () => {
