@@ -216,6 +216,31 @@ function createInlineEvalHit(
   };
 }
 
+function matchJoinedExactFlag(spec: InterpreterFlagSpec, lower: string): string | null {
+  for (const flag of spec.exactFlags) {
+    if (flag.startsWith("--")) {
+      const prefix = `${flag}=`;
+      if (lower.startsWith(prefix) && lower.length > prefix.length) {
+        return flag;
+      }
+      continue;
+    }
+    if (/^-[a-z]$/.test(flag) && lower.startsWith(flag) && lower.length > flag.length) {
+      return flag;
+    }
+  }
+  return null;
+}
+
+function matchJoinedRawExactFlag(spec: InterpreterFlagSpec, token: string): string | null {
+  for (const [flag, label] of spec.rawExactFlags ?? []) {
+    if (/^-[A-Za-z]$/.test(flag) && token.startsWith(flag) && token.length > flag.length) {
+      return label;
+    }
+  }
+  return null;
+}
+
 export function detectInterpreterInlineEvalArgv(
   argv: string[] | undefined | null,
 ): InterpreterInlineEvalHit | null {
@@ -243,6 +268,10 @@ export function detectInterpreterInlineEvalArgv(
       if (rawExactFlag) {
         return createInlineEvalHit(executable, argv, rawExactFlag);
       }
+      const joinedRawExactFlag = matchJoinedRawExactFlag(spec, token);
+      if (joinedRawExactFlag) {
+        return createInlineEvalHit(executable, argv, joinedRawExactFlag);
+      }
       const rawPrefixFlag = spec.rawPrefixFlags?.find(
         ({ prefix }) => token.startsWith(prefix) && token.length > prefix.length,
       );
@@ -252,6 +281,10 @@ export function detectInterpreterInlineEvalArgv(
       const lower = normalizeLowercaseStringOrEmpty(token);
       if (spec.exactFlags.has(lower)) {
         return createInlineEvalHit(executable, argv, lower);
+      }
+      const joinedExactFlag = matchJoinedExactFlag(spec, lower);
+      if (joinedExactFlag) {
+        return createInlineEvalHit(executable, argv, joinedExactFlag);
       }
       const prefixFlag = spec.prefixFlags?.find(
         ({ prefix }) => lower.startsWith(prefix) && lower.length > prefix.length,
