@@ -115,44 +115,20 @@ describe("createDiscordGatewaySupervisor", () => {
     supervisor.dispose();
   });
 
-  it("keeps suppressing late gateway errors after dispose", () => {
+  it("removes the gateway error listener on dispose", () => {
     const emitter = new EventEmitter();
-    const runtime = { error: vi.fn() };
     const supervisor = createDiscordGatewaySupervisor({
       gateway: { emitter },
       isDisallowedIntentsError: () => false,
-      runtime: runtime as never,
+      runtime: { error: vi.fn() } as never,
     });
 
-    supervisor.dispose();
-
-    emitter.emit("error", new Error("Max reconnect attempts (0) reached after close code 1005"));
-    expect(runtime.error).toHaveBeenCalledTimes(1);
-    expect(String(firstErrorArg(runtime))).toContain(
-      "suppressed late gateway reconnect-exhausted error after dispose",
-    );
-  });
-
-  it("dedupes identical late gateway errors after dispose", () => {
-    const emitter = new EventEmitter();
-    const runtime = { error: vi.fn() };
-    const supervisor = createDiscordGatewaySupervisor({
-      gateway: { emitter },
-      isDisallowedIntentsError: () => false,
-      runtime: runtime as never,
-    });
+    expect(emitter.listenerCount("error")).toBe(1);
 
     supervisor.dispose();
-    const first = new TypeError();
-    first.stack = "TypeError\n    at gatewayCrash (discord-gateway.js:12:34)";
-    const second = new TypeError();
-    second.stack = "TypeError\n    at gatewayCrash (discord-gateway.js:12:34)";
-    emitter.emit("error", first);
-    emitter.emit("error", second);
+    expect(emitter.listenerCount("error")).toBe(0);
 
-    expect(runtime.error).toHaveBeenCalledTimes(1);
-    expect(String(firstErrorArg(runtime))).toContain(
-      "suppressed late gateway fatal error after dispose: TypeError @ gatewayCrash (discord-gateway.js:12:34)",
-    );
+    supervisor.dispose();
+    expect(emitter.listenerCount("error")).toBe(0);
   });
 });
