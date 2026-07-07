@@ -309,17 +309,25 @@ export function buildGatewayCronService(params: {
     }
 
     // When an explicit agentId was provided by the caller (e.g. cron timer with
-    // job.agentId), preserve it directly instead of re-resolving through
-    // resolveCronAgent. ResolveCronAgent may silently fall back to the default
-    // agent when the requested agent is not in the runtime config's agent list,
-    // causing the heartbeat to run in the wrong agent's session (#99912).
-    // The runtime config is still merged via resolveCronAgent so startup config
-    // agents (e.g. heartbeat overrides) are available to downstream consumers.
+    // job.agentId), use resolveCronAgent to check whether the agent is known.
+    // If the agent exists in the merged runtime+startup config, preserve it
+    // directly — bypassing resolveCronAgent's silent fallback to default that
+    // caused the heartbeat routing bug (#99912).
+    // If the agent does not exist in any config, the old fallback behavior is
+    // preserved (resolveCronAgent returns the default agent).
     if (requestedAgentId) {
-      const { cfg: runtimeConfig } = resolveCronAgent(requestedAgentId);
+      const { agentId: resolvedAgentId, cfg: runtimeConfig } = resolveCronAgent(
+        requestedAgentId,
+      );
+      const agentId = normalizeAgentId(resolvedAgentId) === requestedAgentId
+        ? requestedAgentId
+        : resolvedAgentId || undefined;
+      if (!agentId) {
+        return { runtimeConfig, agentId: undefined, sessionKey: undefined };
+      }
       const resolvedSessionKey = resolveCronSessionKey({
         runtimeConfig,
-        agentId: requestedAgentId,
+        agentId,
         requestedSessionKey,
       });
       const sessionKey =
@@ -330,7 +338,7 @@ export function buildGatewayCronService(params: {
               runtimeConfig.session?.scope,
             )
           : resolvedSessionKey;
-      return { runtimeConfig, agentId: requestedAgentId, sessionKey };
+      return { runtimeConfig, agentId, sessionKey };
     }
 
     // No explicit agentId — derive from sessionKey or fall back to default.

@@ -1675,7 +1675,7 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("preserves explicit agentId in resolveCronTarget even when agent is absent from runtime config", async () => {
+  it("falls back to default agent for explicit agentId absent from all config", async () => {
     const tmpDir = path.join(os.tmpdir(), `server-cron-absent-agent-${Date.now()}`);
     const cfg = {
       session: { mainKey: "main" },
@@ -1716,10 +1716,9 @@ describe("buildGatewayCronService", () => {
         callArg(runHeartbeatOnceMock, 0, 0, "heartbeat options"),
         "heartbeat options",
       );
-      // The explicit agentId must be preserved even when the agent does
-      // not appear in either runtime or startup config (regression: the
-      // old resolveCronAgent path silently fell back to the default agent).
-      expect(options.agentId).toBe("historian2");
+      // An explicit agentId that does not exist in any config falls back to
+      // the default agent (unknown agents should not be silently preserved).
+      expect(options.agentId).toBe("main");
     } finally {
       state.cron.stop();
     }
