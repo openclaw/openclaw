@@ -1,5 +1,4 @@
 // Orchestrates security audit collection and report formatting.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
@@ -39,6 +38,7 @@ import {
   resolveMergedSafeBinProfileFixtures,
 } from "../infra/exec-safe-bin-runtime-policy.js";
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
+import { readRegularFile } from "../infra/regular-file.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { collectDeepCodeSafetyFindings } from "./audit-deep-code-safety.js";
@@ -1070,9 +1070,14 @@ async function readGlobalMcporterRegistrySummary(
   stateDir: string,
 ): Promise<McpServerSourceSummary | null> {
   const registryPath = path.join(stateDir, "skills", "config", "mcporter.json");
+  const MAX_MCPORTER_REGISTRY_BYTES = 16 * 1024 * 1024;
   let parsed: unknown;
   try {
-    parsed = JSON.parse(await fs.readFile(registryPath, "utf8")) as unknown;
+    const { buffer } = await readRegularFile({
+      filePath: registryPath,
+      maxBytes: MAX_MCPORTER_REGISTRY_BYTES,
+    });
+    parsed = JSON.parse(buffer.toString("utf-8")) as unknown;
   } catch {
     return null;
   }
