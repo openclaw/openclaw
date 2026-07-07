@@ -1,6 +1,13 @@
 // Narrow session-store helpers for channel hot paths.
 
 import {
+  readAmbientTranscriptWatermark as readAmbientTranscriptWatermarkFromEntry,
+  resolveAmbientTranscriptWatermarkKey,
+  updateAmbientTranscriptWatermark,
+  type AmbientTranscriptWatermarkScope,
+} from "../config/sessions/ambient-transcript-watermark.js";
+import { resolveStorePath as resolveSessionStorePath } from "../config/sessions/paths.js";
+import {
   cleanupSessionLifecycleArtifacts as cleanupAccessorSessionLifecycleArtifacts,
   listSessionEntries as listAccessorSessionEntries,
   loadSessionEntry,
@@ -10,15 +17,16 @@ import {
   type SessionAccessScope,
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { resolveStorePath as resolveSessionStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore as loadSessionStoreImpl } from "../config/sessions/store-load.js";
-import type { ResolvedSessionMaintenanceConfig } from "../config/sessions/store.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import { normalizeResolvedMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
+import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/store.js";
+import type { AmbientTranscriptWatermark, SessionEntry } from "../config/sessions/types.js";
 
 type SessionStoreReadParams = {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   hydrateSkillPromptRefs?: boolean;
+  readConsistency?: "latest";
   sessionKey: string;
   storePath?: string;
 };
@@ -41,13 +49,15 @@ type SessionStoreEntryPatch = (
 
 type PatchSessionEntryParams = SessionStoreReadParams & {
   fallbackEntry?: SessionEntry;
-  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
+  maintenanceConfig?: ResolvedSessionMaintenanceConfigInput;
   preserveActivity?: boolean;
   replaceEntry?: boolean;
   update: SessionStoreEntryPatch;
 };
 
-type ReadSessionUpdatedAtParams = SessionStoreReadParams;
+type ReadAmbientTranscriptWatermarkParams = SessionStoreReadParams & {
+  key: string;
+};
 
 type UpdateSessionStoreEntryParams = {
   storePath: string;
@@ -89,6 +99,7 @@ function toSessionAccessScope(params: SessionStoreReadParams): SessionAccessScop
     ...(params.hydrateSkillPromptRefs !== undefined
       ? { hydrateSkillPromptRefs: params.hydrateSkillPromptRefs }
       : {}),
+    ...(params.readConsistency !== undefined ? { readConsistency: params.readConsistency } : {}),
     ...(params.storePath !== undefined ? { storePath: params.storePath } : {}),
   };
 }
@@ -126,15 +137,27 @@ export async function patchSessionEntry(
 ): Promise<SessionEntry | null> {
   return await patchAccessorSessionEntry(toSessionAccessScope(params), params.update, {
     fallbackEntry: params.fallbackEntry,
-    maintenanceConfig: params.maintenanceConfig,
+    maintenanceConfig:
+      params.maintenanceConfig !== undefined
+        ? normalizeResolvedMaintenanceConfigInput(params.maintenanceConfig)
+        : undefined,
     preserveActivity: params.preserveActivity,
     replaceEntry: params.replaceEntry,
   });
 }
 
 /** Reads the last activity timestamp for one session entry. */
-export function readSessionUpdatedAt(params: ReadSessionUpdatedAtParams): number | undefined {
+export function readSessionUpdatedAt(params: SessionStoreReadParams): number | undefined {
   return readAccessorSessionUpdatedAt(toSessionAccessScope(params));
+}
+
+export { resolveAmbientTranscriptWatermarkKey, updateAmbientTranscriptWatermark };
+export type { AmbientTranscriptWatermarkScope };
+
+export function readAmbientTranscriptWatermark(
+  params: ReadAmbientTranscriptWatermarkParams,
+): AmbientTranscriptWatermark | undefined {
+  return readAmbientTranscriptWatermarkFromEntry(getSessionEntry(params), params.key);
 }
 
 /** Updates an existing session entry by store path and session key. */
@@ -204,11 +227,13 @@ export {
 export { resolveSessionKey } from "../config/sessions/session-key.js";
 export { resolveGroupSessionKey } from "../config/sessions/group.js";
 export { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
+export { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+// SDK-facing names are a shipped plugin contract; internals route through the
+// session accessor so the storage backend can change beneath them.
 export {
-  clearSessionStoreCacheForTest,
-  recordSessionMetaFromInbound,
-  updateLastRoute,
-} from "../config/sessions/store.js";
+  recordInboundSessionMeta as recordSessionMetaFromInbound,
+  updateSessionLastRoute as updateLastRoute,
+} from "../config/sessions/session-accessor.js";
 /**
  * @deprecated Use patchSessionEntry/upsertSessionEntry for writes. These
  * whole-store helpers are kept only during the transition before SQLite

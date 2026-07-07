@@ -192,6 +192,20 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   }
 
+  function useNonStreamingBlockAccount() {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "auto",
+        streaming: false,
+        blockStreaming: true,
+      },
+    });
+  }
+
   function setupNonStreamingAutoDispatcher() {
     useNonStreamingAutoAccount();
 
@@ -200,6 +214,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       agentId: "agent",
       runtime: { log: vi.fn(), error: vi.fn() } as never,
       chatId: "oc_chat",
+      sendTarget: "oc_chat",
     });
 
     return firstMockArg(createReplyDispatcherWithTypingMock, "reply dispatcher options");
@@ -215,6 +230,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       agentId: "agent",
       runtime: {} as never,
       chatId: "oc_chat",
+      sendTarget: "oc_chat",
       ...overrides,
     });
 
@@ -338,6 +354,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       agentId: "agent",
       runtime: {} as never,
       chatId: "oc_chat",
+      sendTarget: "oc_chat",
       replyToMessageId: "om_parent",
     });
 
@@ -353,6 +370,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       agentId: "agent",
       runtime: {} as never,
       chatId: "oc_chat",
+      sendTarget: "oc_chat",
       replyToMessageId: "om_parent",
       messageCreateTimeMs: Date.now() - 3 * 60_000,
     });
@@ -369,6 +387,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       agentId: "agent",
       runtime: {} as never,
       chatId: "oc_chat",
+      sendTarget: "oc_chat",
       replyToMessageId: "om_parent",
       messageCreateTimeMs: Math.floor((Date.now() - 3 * 60_000) / 1000),
     });
@@ -385,6 +404,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       agentId: "agent",
       runtime: {} as never,
       chatId: "oc_chat",
+      sendTarget: "oc_chat",
       replyToMessageId: "om_parent",
       messageCreateTimeMs: Date.now() - 30_000,
     });
@@ -419,6 +439,23 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
+  it("routes visible sends to sendTarget while keeping chatId separate", async () => {
+    useNonStreamingAutoAccount();
+    const { options } = createDispatcherHarness({
+      chatId: "oc_p2p_chat",
+      sendTarget: "user:ou_sender",
+      replyToMessageId: "om_direct",
+      skipReplyToInMessages: true,
+    });
+
+    await options.deliver({ text: "plain text" }, { kind: "final" });
+
+    expectMockArgFields(sendMessageFeishuMock, "message send params", {
+      to: "user:ou_sender",
+      replyToMessageId: undefined,
+    });
+  });
+
   it("streams auto mode plain final text when streaming is enabled", async () => {
     const { options } = createDispatcherHarness();
     await options.deliver({ text: "plain text" }, { kind: "final" });
@@ -435,7 +472,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   it("keeps oversized auto mode plain final text on the chunked message path", async () => {
     const runtime = getFeishuRuntimeMock();
     runtime.channel.text.resolveTextChunkLimit.mockReturnValue(10);
-    runtime.channel.text.chunkTextWithMode.mockReturnValue(["0123456789", "abcdefghij"]);
+    runtime.channel.text.chunkMarkdownTextWithMode.mockReturnValue(["0123456789", "abcdefghij"]);
 
     const { options } = createDispatcherHarness();
     await options.deliver({ text: "0123456789abcdefghij" }, { kind: "final" });
@@ -460,7 +497,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   it("keeps oversized auto mode markdown final text on the chunked message path (AC-M2-H1)", async () => {
     const runtime = getFeishuRuntimeMock();
     runtime.channel.text.resolveTextChunkLimit.mockReturnValue(10);
-    runtime.channel.text.chunkTextWithMode.mockReturnValue(["```ts\nx\n```", "tail"]);
+    runtime.channel.text.chunkMarkdownTextWithMode.mockReturnValue(["```ts\nx\n```", "tail"]);
 
     const { options } = createDispatcherHarness({ runtime: createRuntimeLogger() });
     await options.deliver({ text: "```ts\nconst x = 1\n```\ntail" }, { kind: "final" });
@@ -468,8 +505,8 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
 
     // auto mode no longer upgrades code blocks to a static card; markdown goes to the tag:md post message path.
     expect(streamingInstances).toHaveLength(0);
-    expect(runtime.channel.text.chunkTextWithMode).toHaveBeenCalledTimes(1);
-    expect(runtime.channel.text.chunkMarkdownTextWithMode).not.toHaveBeenCalled();
+    expect(runtime.channel.text.chunkMarkdownTextWithMode).toHaveBeenCalledTimes(1);
+    expect(runtime.channel.text.chunkTextWithMode).not.toHaveBeenCalled();
     expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
     expectMockArgFields(sendMessageFeishuMock, "first message send params", {
       text: "```ts\nx\n```",
@@ -488,7 +525,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   it("discards partial streaming preview before oversized final text fallback", async () => {
     const runtime = getFeishuRuntimeMock();
     runtime.channel.text.resolveTextChunkLimit.mockReturnValue(10);
-    runtime.channel.text.chunkTextWithMode.mockReturnValue(["final text", " overflow"]);
+    runtime.channel.text.chunkMarkdownTextWithMode.mockReturnValue(["final text", " overflow"]);
 
     const { result, options } = createDispatcherHarness({ runtime: createRuntimeLogger() });
     result.replyOptions.onPartialReply?.({ text: "partial" });
@@ -614,6 +651,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       agentId: "agent",
       runtime: {} as never,
       chatId: "oc_chat",
+      sendTarget: "oc_chat",
     });
 
     expect(result.replyOptions).toHaveProperty("disableBlockStreaming", true);
@@ -642,6 +680,58 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances[0].close).toHaveBeenCalledWith("plain block", {
       note: "Agent: agent",
     });
+  });
+
+  it("sends complete chunked blocks to the DM target", async () => {
+    useNonStreamingBlockAccount();
+    const runtime = getFeishuRuntimeMock();
+    runtime.channel.text.resolveTextChunkLimit.mockReturnValue(10);
+    runtime.channel.text.chunkMarkdownTextWithMode.mockImplementation((text: string) =>
+      text === "First paragraph." ? ["First ", "paragraph."] : [text],
+    );
+    const mentions = [{ openId: "ou_target", name: "Target User", key: "@_user_1" }];
+    const { options } = createDispatcherHarness({
+      chatId: "oc_p2p_chat",
+      sendTarget: "user:ou_sender",
+      mentionTargets: mentions,
+    });
+
+    await options.deliver({ text: "First paragraph." }, { kind: "block" });
+    await options.deliver(
+      { text: "Second paragraph.", mediaUrl: "https://example.com/block.png" },
+      { kind: "block" },
+    );
+    await options.onIdle?.();
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(3);
+    expectMockArgFields(sendMessageFeishuMock, "first block chunk", {
+      to: "user:ou_sender",
+      text: "First ",
+      mentions,
+    });
+    expectMockArgFields(sendMessageFeishuMock, "second block chunk", { text: "paragraph." }, 1);
+    expectMockArgFields(sendMessageFeishuMock, "second block", { text: "Second paragraph." }, 2);
+    expect(sendMessageFeishuMock.mock.calls[1]?.[0]).not.toHaveProperty("mentions");
+    expect(sendMessageFeishuMock.mock.calls[2]?.[0]).not.toHaveProperty("mentions");
+    expectMockArgFields(sendMediaFeishuMock, "block media", {
+      to: "user:ou_sender",
+      mediaUrl: "https://example.com/block.png",
+    });
+    expect(streamingInstances).toHaveLength(0);
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("delivers a final message when it differs from independently sent blocks", async () => {
+    useNonStreamingBlockAccount();
+    const { options } = createDispatcherHarness();
+
+    await options.deliver({ text: "partial block" }, { kind: "block" });
+    await options.deliver({ text: "final answer" }, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expectMockArgFields(sendMessageFeishuMock, "block message", { text: "partial block" });
+    expectMockArgFields(sendMessageFeishuMock, "final message", { text: "final answer" }, 1);
   });
 
   it("does not prepend automatic mentions to streaming card closes", async () => {
@@ -677,6 +767,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       agentId: "agent",
       runtime: {} as never,
       chatId: "oc_chat",
+      sendTarget: "oc_chat",
     });
 
     expect(result.replyOptions).toHaveProperty("disableBlockStreaming", true);
@@ -702,6 +793,43 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("strips prose from identity emoji in streaming and static card headers", async () => {
+    const identity = {
+      name: "Agent",
+      emoji: "根据心情/语气自由切换 😊🇺🇸👍🏽👨‍👩‍👧‍👦",
+      theme: "green" as const,
+    };
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+      identity,
+    });
+    await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "final" });
+
+    expectStreamingStartOptions(0, {
+      header: { title: "😊🇺🇸👍🏽👨‍👩‍👧‍👦 Agent", template: "green" },
+    });
+
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: false,
+      },
+    });
+    const { options: staticOptions } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+      identity,
+    });
+    await staticOptions.deliver({ text: "| a | b |\n| - | - |" }, { kind: "final" });
+
+    expectLastMockArgFields(sendStructuredCardFeishuMock, "structured card params", {
+      header: { title: "😊🇺🇸👍🏽👨‍👩‍👧‍👦 Agent", template: "green" },
+    });
   });
 
   it("suppresses internal markdown block payloads when block streaming is disabled (AC-M2-H1)", async () => {
@@ -946,7 +1074,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   it("skips oversized late final text after streaming card close", async () => {
     const runtime = getFeishuRuntimeMock();
     runtime.channel.text.resolveTextChunkLimit.mockReturnValue(10);
-    runtime.channel.text.chunkTextWithMode.mockReturnValue(["oversized ", "late final"]);
+    runtime.channel.text.chunkMarkdownTextWithMode.mockReturnValue(["oversized ", "late final"]);
 
     const { options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
@@ -2071,6 +2199,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         agentId: "agent",
         runtime: { log: vi.fn(), error: errorMock } as never,
         chatId: "oc_chat",
+        sendTarget: "oc_chat",
       });
 
       const options = firstTypingDispatcherOptions();

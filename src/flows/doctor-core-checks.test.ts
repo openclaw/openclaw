@@ -95,6 +95,12 @@ function createDeps(overrides: Partial<CoreHealthCheckDeps> = {}): CoreHealthChe
     async collectProviderCatalogProjectionFindings() {
       return [];
     },
+    async collectGatewayHealthFindings() {
+      return [];
+    },
+    async collectGatewayDaemonFindings() {
+      return [];
+    },
     ...overrides,
   };
 }
@@ -164,6 +170,47 @@ describe("CORE_HEALTH_CHECKS", () => {
     ).toBe(false);
   });
 
+  it("warns when autonomous Skill Workshop capture is enabled but policy hides its tool", async () => {
+    const check = getCheck(
+      createCoreHealthChecks(createDeps()),
+      "core/doctor/skill-workshop-tool-policy",
+    );
+
+    const findings = await check.detect({
+      mode: "doctor",
+      runtime,
+      cfg: {
+        skills: { workshop: { autonomous: { enabled: true } } },
+        tools: { profile: "messaging" },
+      },
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/skill-workshop-tool-policy",
+        severity: "warning",
+        message: 'tools.profile: "messaging" does not include "skill_workshop".',
+        path: "tools.profile",
+        fixHint: 'Add tools.alsoAllow: ["skill_workshop"].',
+      }),
+    ]);
+  });
+
+  it("does not warn when autonomous Skill Workshop capture is disabled", async () => {
+    const check = getCheck(
+      createCoreHealthChecks(createDeps()),
+      "core/doctor/skill-workshop-tool-policy",
+    );
+
+    await expect(
+      check.detect({
+        mode: "doctor",
+        runtime,
+        cfg: { tools: { profile: "messaging" } },
+      }),
+    ).resolves.toEqual([]);
+  });
+
   it("threads deep mode into structured extra gateway service detection", async () => {
     const check = getCheck(
       createCoreHealthChecks(createDeps()),
@@ -229,6 +276,64 @@ describe("CORE_HEALTH_CHECKS", () => {
         target: "legacy-gateway.service",
       }),
     );
+  });
+
+  it("exposes gateway health findings as an opt-in structured check", async () => {
+    const findings: HealthFinding[] = [
+      {
+        checkId: "core/doctor/gateway-health",
+        severity: "warning",
+        message: "Gateway is not reachable.",
+      },
+    ];
+    const collectGatewayHealthFindings = vi.fn(async () => findings);
+    const check = getCheck(
+      createCoreHealthChecks(
+        createDeps({
+          collectGatewayHealthFindings,
+        }),
+      ),
+      "core/doctor/gateway-health",
+    );
+    const ctx = {
+      mode: "lint" as const,
+      runtime,
+      cfg: { gateway: { mode: "local" as const } },
+    };
+
+    await expect(check.detect(ctx)).resolves.toBe(findings);
+
+    expect(collectGatewayHealthFindings).toHaveBeenCalledWith(ctx);
+    expect((check as { defaultEnabled?: boolean }).defaultEnabled).toBe(false);
+  });
+
+  it("exposes gateway daemon findings as an opt-in structured check", async () => {
+    const findings: HealthFinding[] = [
+      {
+        checkId: "core/doctor/gateway-daemon",
+        severity: "warning",
+        message: "Gateway service is not installed.",
+      },
+    ];
+    const collectGatewayDaemonFindings = vi.fn(async () => findings);
+    const check = getCheck(
+      createCoreHealthChecks(
+        createDeps({
+          collectGatewayDaemonFindings,
+        }),
+      ),
+      "core/doctor/gateway-daemon",
+    );
+    const ctx = {
+      mode: "lint" as const,
+      runtime,
+      cfg: { gateway: { mode: "local" as const } },
+    };
+
+    await expect(check.detect(ctx)).resolves.toBe(findings);
+
+    expect(collectGatewayDaemonFindings).toHaveBeenCalledWith(ctx);
+    expect((check as { defaultEnabled?: boolean }).defaultEnabled).toBe(false);
   });
 
   it("converts unavailable skills into repair-capable health findings", async () => {
@@ -745,6 +850,30 @@ describe("CORE_HEALTH_CHECKS", () => {
         checkId: "core/doctor/provider-catalog-projection",
         severity: "error",
         target: "mockplugin",
+      }),
+    );
+  });
+
+  it("registers stale session locks as a legacy-owned structured check", async () => {
+    const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/session-locks");
+
+    if (typeof check.repair !== "function") {
+      throw new Error("expected session lock check repair");
+    }
+    await expect(
+      check.repair(
+        {
+          mode: "fix",
+          runtime,
+          cfg: {},
+          cwd: "/tmp/openclaw-test-workspace",
+        },
+        [],
+      ),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        status: "skipped",
+        reason: "legacy doctor session lock contribution owns cleanup",
       }),
     );
   });

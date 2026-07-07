@@ -35,6 +35,19 @@ const NARRATIVE_SESSION_LOCKS_KEY = Symbol.for(
   "openclaw.memoryCore.dreamingNarrative.sessionLocks",
 );
 const EXPECTS_POSIX_PRIVATE_FILE_MODE = process.platform !== "win32";
+const originalNarrativeStateDir = process.env.OPENCLAW_STATE_DIR;
+
+function setNarrativeTestEnv(stateDir: string): void {
+  Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
+}
+
+function restoreNarrativeTestEnv(): void {
+  if (originalNarrativeStateDir === undefined) {
+    Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
+  } else {
+    Reflect.set(process.env, "OPENCLAW_STATE_DIR", originalNarrativeStateDir);
+  }
+}
 
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
 
@@ -89,7 +102,7 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  vi.unstubAllEnvs();
+  restoreNarrativeTestEnv();
   resolveGlobalMap<string, unknown>(DREAMS_FILE_LOCKS_KEY).clear();
   resolveGlobalMap<string, unknown>(NARRATIVE_SESSION_LOCKS_KEY).clear();
 });
@@ -1228,7 +1241,7 @@ describe("generateAndAppendDreamNarrative", () => {
     vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfig").mockReturnValue({
       session: {},
     } as never);
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    setNarrativeTestEnv(stateDir);
     vi.spyOn(memoryCoreHostRuntimeCoreModule, "resolveStateDir").mockReturnValue(stateDir);
 
     const subagent = createMockSubagent("The repository whispered of forgotten endpoints.");
@@ -1297,7 +1310,7 @@ describe("generateAndAppendDreamNarrative", () => {
     vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfig").mockReturnValue({
       session: {},
     } as never);
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    setNarrativeTestEnv(stateDir);
     vi.spyOn(memoryCoreHostRuntimeCoreModule, "resolveStateDir").mockReturnValue(stateDir);
 
     const subagent = createMockSubagent("A forgotten endpoint hummed in the dark.");

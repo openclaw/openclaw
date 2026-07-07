@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 
 type EnvValue = string | undefined | ((home: string) => string | undefined);
@@ -36,9 +37,9 @@ function snapshotEnv(): EnvSnapshot {
 function restoreEnv(snapshot: EnvSnapshot) {
   const restoreKey = (key: string, value: string | undefined) => {
     if (value === undefined) {
-      delete process.env[key];
+      deleteTestEnvValue(key);
     } else {
-      process.env[key] = value;
+      setTestEnvValue(key, value);
     }
   };
   restoreKey("HOME", snapshot.home);
@@ -60,19 +61,19 @@ function snapshotExtraEnv(keys: string[]): Record<string, string | undefined> {
 function restoreExtraEnv(snapshot: Record<string, string | undefined>) {
   for (const [key, value] of Object.entries(snapshot)) {
     if (value === undefined) {
-      delete process.env[key];
+      deleteTestEnvValue(key);
     } else {
-      process.env[key] = value;
+      setTestEnvValue(key, value);
     }
   }
 }
 
 function setTempHome(base: string) {
-  process.env.HOME = base;
-  process.env.USERPROFILE = base;
+  setTestEnvValue("HOME", base);
+  setTestEnvValue("USERPROFILE", base);
   // Ensure tests using HOME isolation aren't affected by leaked OPENCLAW_HOME.
-  delete process.env.OPENCLAW_HOME;
-  process.env.OPENCLAW_STATE_DIR = path.join(base, ".openclaw");
+  deleteTestEnvValue("OPENCLAW_HOME");
+  setTestEnvValue("OPENCLAW_STATE_DIR", path.join(base, ".openclaw"));
 
   if (process.platform !== "win32") {
     return;
@@ -81,8 +82,8 @@ function setTempHome(base: string) {
   if (!match) {
     return;
   }
-  process.env.HOMEDRIVE = match[1];
-  process.env.HOMEPATH = match[2] || "\\";
+  setTestEnvValue("HOMEDRIVE", match[1]);
+  setTestEnvValue("HOMEPATH", match[2] || "\\");
 }
 
 async function allocateTempHomeBase(prefix: string): Promise<string> {
@@ -126,9 +127,9 @@ export async function withTempHome<T>(
     for (const [key, raw] of Object.entries(opts.env)) {
       const value = typeof raw === "function" ? raw(base) : raw;
       if (value === undefined) {
-        delete process.env[key];
+        deleteTestEnvValue(key);
       } else {
-        process.env[key] = value;
+        setTestEnvValue(key, value);
       }
     }
   }

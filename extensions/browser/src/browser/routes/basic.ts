@@ -195,7 +195,11 @@ async function buildBrowserStatus(req: BrowserRequest, ctx: BrowserRouteContext)
     enabled: current.resolved.enabled,
     profile: profileCtx.profile.name,
     driver: profileCtx.profile.driver,
-    transport: capabilities.usesChromeMcp ? ("chrome-mcp" as const) : ("cdp" as const),
+    transport: capabilities.usesChromeMcp
+      ? ("chrome-mcp" as const)
+      : capabilities.mode === "local-extension"
+        ? ("extension" as const)
+        : ("cdp" as const),
     running: cdpReady,
     cdpReady,
     cdpHttp,

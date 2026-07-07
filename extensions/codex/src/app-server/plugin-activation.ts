@@ -98,7 +98,9 @@ export async function ensureCodexPluginActivation(
     "plugin/install",
     pluginReadParams(
       resolved.marketplace,
-      params.identity.pluginName,
+      resolved.marketplace.remoteMarketplaceName && resolved.summary.remotePluginId
+        ? resolved.summary.remotePluginId
+        : params.identity.pluginName,
     ) satisfies v2.PluginInstallParams,
   )) as v2.PluginInstallResponse;
   const refreshDiagnostics: CodexPluginActivationDiagnostic[] = [];

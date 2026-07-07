@@ -8,6 +8,7 @@ import {
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { upsertAuthProfile } from "openclaw/plugin-sdk/provider-auth";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyCodexAppServerAuthProfile,
@@ -238,6 +239,23 @@ describe("bridgeCodexAppServerStartOptions", () => {
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
+  });
+
+  it("uses the native user Codex home for coexistence mode", async () => {
+    await withTempDir("openclaw-codex-user-home-", async (root) => {
+      const agentDir = path.join(root, "agent");
+      const codexHome = path.join(root, "user-codex-home");
+      vi.stubEnv("CODEX_HOME", codexHome);
+      const startOptions = createStartOptions({ homeScope: "user" });
+      await expect(
+        bridgeCodexAppServerStartOptions({ startOptions, agentDir, authProfileId: null }),
+      ).resolves.toEqual({
+        ...startOptions,
+        env: { CODEX_HOME: codexHome },
+      });
+      await expect(fs.access(codexHome)).resolves.toBeUndefined();
+      await expectPathMissing(resolveCodexAppServerHomeDir(agentDir));
+    });
   });
 
   it("preserves inherited HOME when clearEnv asks to clear app-server isolation vars", async () => {

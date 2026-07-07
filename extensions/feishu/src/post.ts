@@ -132,6 +132,7 @@ function renderElement(
   imageKeys: string[],
   mediaKeys: Array<{ fileKey: string; fileName?: string }>,
   mentionedOpenIds: string[],
+  renderMediaPlaceholders: boolean,
 ): string {
   if (!isRecord(element)) {
     return escapeMarkdownText(toStringOrEmpty(element));
@@ -157,7 +158,7 @@ function renderElement(
       if (imageKey) {
         imageKeys.push(imageKey);
       }
-      return "![image]";
+      return renderMediaPlaceholders ? "![image]" : "";
     }
     case "media": {
       const fileKey = normalizeFeishuExternalKey(toStringOrEmpty(element.file_key));
@@ -165,7 +166,7 @@ function renderElement(
         const fileName = toStringOrEmpty(element.file_name) || undefined;
         mediaKeys.push({ fileKey, fileName });
       }
-      return "[media]";
+      return renderMediaPlaceholders ? "[media]" : "";
     }
     case "emotion":
       return renderEmotionElement(element);
@@ -243,7 +244,15 @@ type RenderedPostBody = {
   mentionedOpenIds: string[];
 };
 
-function renderPostParagraphs(source: unknown[], useV2: boolean): RenderedPostBody {
+type RenderPostParagraphOptions = {
+  useV2: boolean;
+  renderMediaPlaceholders: boolean;
+};
+
+function renderPostParagraphs(
+  source: unknown[],
+  options: RenderPostParagraphOptions,
+): RenderedPostBody {
   const imageKeys: string[] = [];
   const mediaKeys: Array<{ fileKey: string; fileName?: string }> = [];
   const mentionedOpenIds: string[] = [];
@@ -255,11 +264,17 @@ function renderPostParagraphs(source: unknown[], useV2: boolean): RenderedPostBo
     }
     let renderedParagraph = "";
     for (const element of paragraph) {
-      renderedParagraph += renderElement(element, imageKeys, mediaKeys, mentionedOpenIds);
+      renderedParagraph += renderElement(
+        element,
+        imageKeys,
+        mediaKeys,
+        mentionedOpenIds,
+        options.renderMediaPlaceholders,
+      );
       // content_v2 md elements: collect non-code-block image_key from the native
       // markdown text (content-path tag:img is already collected by renderElement;
       // md inline images need this separate scan).
-      if (useV2 && isRecord(element)) {
+      if (options.useV2 && isRecord(element)) {
         const tag = normalizeLowercaseStringOrEmpty(toStringOrEmpty(element.tag));
         if (tag === "md" || tag === "lark_md") {
           const mdText = toStringOrEmpty(element.text) || toStringOrEmpty(element.content);
@@ -278,7 +293,10 @@ function isUnusablePostBody(rendered: RenderedPostBody): boolean {
   return rendered.body === "" && rendered.imageKeys.length === 0 && rendered.mediaKeys.length === 0;
 }
 
-export function parsePostContent(content: string): PostParseResult {
+export function parsePostContent(
+  content: string,
+  options: { renderMediaPlaceholders?: boolean; emptyTextFallback?: string } = {},
+): PostParseResult {
   try {
     const parsed = JSON.parse(content);
     const payload = resolvePostPayload(parsed);
@@ -294,21 +312,28 @@ export function parsePostContent(content: string): PostParseResult {
     // Prefer the parallel content_v2 (native markdown) when present; an absent or
     // empty content_v2 falls back to content with byte-identical behavior.
     const hasV2 = Array.isArray(payload.contentV2) && payload.contentV2.length > 0;
+    const renderMediaPlaceholders = options.renderMediaPlaceholders !== false;
     let rendered = renderPostParagraphs(
       hasV2 ? (payload.contentV2 as unknown[]) : payload.content,
-      hasV2,
+      {
+        useV2: hasV2,
+        renderMediaPlaceholders,
+      },
     );
     // content_v2 can be a non-empty array that still renders no usable text/media
     // (e.g. only unknown tags); fall back to content so the agent isn't fed an empty body.
     if (hasV2 && isUnusablePostBody(rendered)) {
-      rendered = renderPostParagraphs(payload.content, false);
+      rendered = renderPostParagraphs(payload.content, {
+        useV2: false,
+        renderMediaPlaceholders,
+      });
     }
 
     const title = escapeMarkdownText(payload.title.trim());
     const textContent = [title, rendered.body].filter(Boolean).join("\n\n").trim();
 
     return {
-      textContent: textContent || FALLBACK_POST_TEXT,
+      textContent: textContent || (options.emptyTextFallback ?? FALLBACK_POST_TEXT),
       // One image referenced twice (common in content_v2 markdown) is one download
       // and one dedupe-key part; order-preserving dedup keeps content/content_v2 key
       // sets identical so the message dedupe key stays stable.

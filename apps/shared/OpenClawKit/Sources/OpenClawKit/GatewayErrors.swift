@@ -19,6 +19,7 @@ public enum GatewayConnectAuthDetailCode: String, Sendable {
     case authTailscaleWhoisFailed = "AUTH_TAILSCALE_WHOIS_FAILED"
     case authTailscaleIdentityMismatch = "AUTH_TAILSCALE_IDENTITY_MISMATCH"
     case pairingRequired = "PAIRING_REQUIRED"
+    case protocolMismatch = "PROTOCOL_MISMATCH"
     case controlUiDeviceIdentityRequired = "CONTROL_UI_DEVICE_IDENTITY_REQUIRED"
     case deviceIdentityRequired = "DEVICE_IDENTITY_REQUIRED"
     case deviceAuthInvalid = "DEVICE_AUTH_INVALID"
@@ -54,6 +55,10 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
     public let docsURLString: String?
     public let retryableOverride: Bool?
     public let pauseReconnectOverride: Bool?
+    public let clientMinProtocol: Int?
+    public let clientMaxProtocol: Int?
+    public let expectedProtocol: Int?
+    public let minimumProbeProtocol: Int?
 
     public init(
         message: String,
@@ -69,7 +74,11 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
         actionCommand: String? = nil,
         docsURLString: String? = nil,
         retryableOverride: Bool? = nil,
-        pauseReconnectOverride: Bool? = nil)
+        pauseReconnectOverride: Bool? = nil,
+        clientMinProtocol: Int? = nil,
+        clientMaxProtocol: Int? = nil,
+        expectedProtocol: Int? = nil,
+        minimumProbeProtocol: Int? = nil)
     {
         let trimmedMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedDetailCode = detailCodeRaw?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -90,6 +99,10 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
         self.docsURLString = Self.trimmedOrNil(docsURLString)
         self.retryableOverride = retryableOverride
         self.pauseReconnectOverride = pauseReconnectOverride
+        self.clientMinProtocol = clientMinProtocol
+        self.clientMaxProtocol = clientMaxProtocol
+        self.expectedProtocol = expectedProtocol
+        self.minimumProbeProtocol = minimumProbeProtocol
     }
 
     public init(
@@ -106,7 +119,11 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
         actionCommand: String? = nil,
         docsURLString: String? = nil,
         retryableOverride: Bool? = nil,
-        pauseReconnectOverride: Bool? = nil)
+        pauseReconnectOverride: Bool? = nil,
+        clientMinProtocol: Int? = nil,
+        clientMaxProtocol: Int? = nil,
+        expectedProtocol: Int? = nil,
+        minimumProbeProtocol: Int? = nil)
     {
         self.init(
             message: message,
@@ -122,7 +139,11 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
             actionCommand: actionCommand,
             docsURLString: docsURLString,
             retryableOverride: retryableOverride,
-            pauseReconnectOverride: pauseReconnectOverride)
+            pauseReconnectOverride: pauseReconnectOverride,
+            clientMinProtocol: clientMinProtocol,
+            clientMaxProtocol: clientMaxProtocol,
+            expectedProtocol: expectedProtocol,
+            minimumProbeProtocol: minimumProbeProtocol)
     }
 
     private static func trimmedOrNil(_ value: String?) -> String? {
@@ -163,6 +184,7 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
              .authRateLimited,
              .authScopeMismatch,
              .pairingRequired,
+             .protocolMismatch,
              .controlUiDeviceIdentityRequired,
              .deviceIdentityRequired:
             true

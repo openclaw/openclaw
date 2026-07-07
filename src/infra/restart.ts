@@ -60,7 +60,8 @@ let pendingRestartPreparing = false;
 const activeDeferralPolls = new Set<ReturnType<typeof setInterval>>();
 
 function shouldPreferRestartReason(next?: string, current?: string): boolean {
-  return next === "update.run" && current !== "update.run";
+  const isUpdateRestart = (reason?: string) => reason === "update.run" || reason === "update.auto";
+  return isUpdateRestart(next) && !isUpdateRestart(current);
 }
 
 function hasUnconsumedRestartSignal(): boolean {
@@ -120,6 +121,15 @@ function clearActiveDeferralPolls(): void {
 export function resetGatewayRestartStateForInProcessRestart(): void {
   clearActiveDeferralPolls();
   clearPendingScheduledRestart();
+  // Cancel any in-progress deferred channel reload so it doesn't race with
+  // the restart to start the same channel (e.g. telegram double-spawn).
+  void import("../gateway/server-reload-handlers.js")
+    .then((mod) => {
+      mod.abortPendingChannelReloads();
+    })
+    .catch(() => {
+      // Best-effort: the module may not be loaded in minimal/test gateways.
+    });
 }
 
 export type RestartAuditInfo = {
@@ -563,7 +573,15 @@ async function emitPreparedGatewayRestart(
     pendingRestartSessionKey = undefined;
   }
 
-  const emitted = emitGatewayRestart(reasonOverride, intent);
+  // A managed update can coalesce while beforeEmit awaits. Promote that reason
+  // at the last possible moment so the run loop performs a process exit.
+  const preferredReason = shouldPreferRestartReason(pendingRestartReason, reasonOverride)
+    ? pendingRestartReason
+    : undefined;
+  const emitted = emitGatewayRestart(
+    preferredReason ?? reasonOverride,
+    preferredReason && intent ? { ...intent, reason: preferredReason } : intent,
+  );
   if (!emitted) {
     await preparedHooks?.afterEmitRejected?.().catch(() => undefined);
   }
