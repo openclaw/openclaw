@@ -11,6 +11,7 @@ import {
 } from "@openclaw/crabline";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   isRecord,
@@ -43,6 +44,10 @@ import type {
 const CRABLINE_TRANSPORT_ID = "crabline";
 const TELEGRAM_QA_DRIVER_ID = "100001";
 const TELEGRAM_QA_OBSERVER_ID = "100002";
+// Crabline inbound injection responses are small metadata envelopes. Cap the
+// JSON parse size so a misbehaving local adapter cannot push an unbounded body
+// into the gateway QA worker.
+const CRABLINE_INBOUND_JSON_MAX_BYTES = 16 * 1024 * 1024;
 
 type QaCrablineTransportState = QaTransportState & {
   cleanup: () => Promise<void>;
@@ -209,7 +214,11 @@ async function postCrablineInbound(params: {
         `Crabline ${params.adapter.channel} inbound injection failed with HTTP ${response.status}.`,
       );
     }
-    const result: unknown = await response.json();
+    const result: unknown = await readProviderJsonResponse(
+      response,
+      `qa-lab-crabline-${params.adapter.channel}-inbound`,
+      { maxBytes: CRABLINE_INBOUND_JSON_MAX_BYTES },
+    );
     if (params.adapter.channel === "matrix" && isRecord(result) && isRecord(result.event)) {
       return readStringValue(result.event.event_id);
     }
