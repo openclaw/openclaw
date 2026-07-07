@@ -35,6 +35,18 @@ function normalizeChildBindingParentChannelId(raw?: string | null): string | und
   }
 }
 
+function resolveChildBindingParentChannelId(params: {
+  parentConversationId?: string;
+  conversationId?: string;
+}): string | undefined {
+  const parent = normalizeChildBindingParentChannelId(params.parentConversationId);
+  const conversation = normalizeChildBindingParentChannelId(params.conversationId);
+  if (parent && parent !== conversation) {
+    return parent;
+  }
+  return undefined;
+}
+
 function toSessionBindingTargetKind(raw: string): BindingTargetKind {
   return raw === "subagent" ? "subagent" : "session";
 }
@@ -157,7 +169,10 @@ export function createThreadBindingSessionAdapter(params: {
 
       if (placement === "child") {
         createThread = true;
-        channelId = normalizeChildBindingParentChannelId(input.conversation.parentConversationId);
+        channelId = resolveChildBindingParentChannelId({
+          parentConversationId: input.conversation.parentConversationId,
+          conversationId,
+        });
         if (!channelId && conversationId) {
           channelId =
             (await resolveChannelIdForBinding({
