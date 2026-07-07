@@ -185,6 +185,7 @@ type ResolveApiKeyForProfileParams = {
   profileId: string;
   agentDir?: string;
   forceRefresh?: boolean;
+  workspaceDir?: string;
 };
 
 type SecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
@@ -464,7 +465,10 @@ export async function resolveApiKeyForProfile(
         hasRuntimeAuthProfileStoreSnapshot(params.agentDir)
       ) {
         const snapshot = getRuntimeAuthProfileStoreSnapshot(params.agentDir);
-        const providerKey = resolveProviderIdForAuth(cred.provider);
+        const providerKey = resolveProviderIdForAuth(cred.provider, {
+          config: cfg,
+          workspaceDir: params.workspaceDir,
+        });
         if (snapshot?.lastGood?.[providerKey] === profileId) {
           delete snapshot.lastGood[providerKey];
           if (Object.keys(snapshot.lastGood).length === 0) {

@@ -103,6 +103,7 @@ export function resolveOpenClawPluginToolsForOptions(params: {
             store: authProfileStore,
             profileId,
             agentDir: params.options?.agentDir,
+            workspaceDir: params.options?.workspaceDir,
           });
           if (resolved?.apiKey) {
             return resolved.apiKey;

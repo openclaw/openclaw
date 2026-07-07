@@ -550,6 +550,7 @@ export async function resolveProviderEntryApiKeyBinding(params: {
   provider: string;
   store: AuthProfileStore;
   agentDir?: string;
+  workspaceDir?: string;
 }): Promise<ProviderEntryApiKeyBindingResolution> {
   const reference = resolveProviderEntryApiKeyProfileReference(params);
   if (reference.kind === "none" || reference.kind === "marker") {
@@ -567,6 +568,7 @@ export async function resolveProviderEntryApiKeyBinding(params: {
       store: params.store,
       profileId: reference.profileId,
       agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
     });
     if (!resolved) {
       return { kind: "profile-unresolved", profileId: reference.profileId };
@@ -1055,6 +1057,7 @@ export async function resolveApiKeyForProvider(params: {
       profileId,
       agentDir,
       forceRefresh: params.forceRefresh,
+      workspaceDir: params.workspaceDir,
     });
     if (!resolved) {
       throw new Error(`No credentials found for profile "${profileId}".`);
@@ -1168,6 +1171,7 @@ export async function resolveApiKeyForProvider(params: {
     provider,
     store: scopedStore,
     agentDir,
+    workspaceDir: params.workspaceDir,
   });
   if (providerEntryBinding.kind === "profile-resolved") {
     assertAuthModeAllowedForModel({
@@ -1276,6 +1280,7 @@ export async function resolveApiKeyForProvider(params: {
         profileId: candidate,
         agentDir,
         forceRefresh: params.forceRefresh,
+        workspaceDir: params.workspaceDir,
       });
       if (resolved) {
         const resolvedProfileId = resolved.profileId ?? candidate;
@@ -1549,6 +1554,7 @@ export async function hasAvailableAuthForProvider(params: {
         store,
         profileId: candidate,
         agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
       });
       const mode = resolved?.profileType ?? store.profiles[candidate]?.type;
       if (
