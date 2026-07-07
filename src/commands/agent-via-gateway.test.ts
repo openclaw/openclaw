@@ -1668,6 +1668,7 @@ describe("agentCliCommand", () => {
 
       expect(callGateway).toHaveBeenCalledTimes(1);
       expect(startOneShotDiagnosticsExporters).not.toHaveBeenCalled();
+      expect(loadRuntimeConfig).not.toHaveBeenCalled();
     });
   });
 
