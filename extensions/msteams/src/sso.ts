@@ -24,6 +24,7 @@
  * that ack; these helpers encapsulate token exchange and persistence.
  */
 
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import { readMSTeamsHttpErrorDetail } from "./http-error.js";
 import type { MSTeamsSsoTokenStore } from "./sso-token-store.js";
@@ -130,9 +131,15 @@ async function callUserTokenService(
   }
   let parsed: unknown;
   try {
-    parsed = await response.json();
-  } catch {
-    return { error: "invalid JSON from User Token service", status: response.status };
+    parsed = await readProviderJsonResponse<unknown>(
+      response,
+      "invalid JSON from User Token service",
+    );
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error.message : "invalid JSON from User Token service",
+      status: response.status,
+    };
   }
   if (!parsed || typeof parsed !== "object") {
     return { error: "empty response from User Token service", status: response.status };
