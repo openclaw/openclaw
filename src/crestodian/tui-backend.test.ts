@@ -188,6 +188,57 @@ describe("runCrestodianTui", () => {
     expect(runTuiCalls).toBe(2);
   });
 
+  it("turns embedded model setup exits into errors and resumes Crestodian", async () => {
+    const exit = vi.fn();
+    const error = vi.fn();
+    const runModelSetup = vi.fn(async (params: { runtime: RuntimeEnv }) => {
+      params.runtime.exit(1);
+      return {};
+    });
+    let runTuiCalls = 0;
+
+    await runCrestodianTui(
+      {
+        deps: { loadOverview: async () => ({ ...overview, defaultModel: undefined }) },
+        runModelSetup,
+        runTui: async (opts) => {
+          runTuiCalls += 1;
+          if (runTuiCalls > 1) {
+            return { exitReason: "exit" };
+          }
+          const backend = opts.backend as unknown as {
+            setRequestExitHandler: (handler: () => void) => void;
+            sendChat: (opts: { message: string }) => Promise<{ runId: string }>;
+            engine: {
+              handle: () => Promise<{
+                text: string;
+                action: "open-tui";
+                handoff: { kind: "model-setup" };
+              }>;
+            };
+          };
+          backend.engine.handle = async () => ({
+            text: "Opening masked model-provider setup in the terminal.",
+            action: "open-tui",
+            handoff: { kind: "model-setup" },
+          });
+          await new Promise<void>((resolve) => {
+            backend.setRequestExitHandler(resolve);
+            void backend.sendChat({ message: "yes" });
+          });
+          return { exitReason: "exit" };
+        },
+      },
+      { log: vi.fn(), error, exit },
+    );
+
+    expect(exit).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith(
+      "Model provider setup failed: embedded model setup exited with code 1",
+    );
+    expect(runTuiCalls).toBe(2);
+  });
+
   it("consumes a returned model-setup request before resuming after the wizard", async () => {
     const runModelSetup = vi.fn(async () => ({
       model: "openai/gpt-5.5",

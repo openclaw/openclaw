@@ -58,6 +58,15 @@ type CrestodianHistoryMessage = {
 const CRESTODIAN_AGENT_ID = "crestodian";
 const CRESTODIAN_SESSION_KEY = buildAgentMainSessionKey({ agentId: CRESTODIAN_AGENT_ID });
 
+function createEmbeddedModelSetupRuntime(runtime: RuntimeEnv): RuntimeEnv {
+  return {
+    ...runtime,
+    exit: (code): never => {
+      throw new Error(`embedded model setup exited with code ${String(code)}`);
+    },
+  };
+}
+
 function createChatEngine(opts: CrestodianTuiOptions): CrestodianChatEngine {
   return new CrestodianChatEngine({
     yes: opts.yes,
@@ -372,7 +381,7 @@ export async function runCrestodianTui(
         const result = await runModelSetup({
           ...(handoff.workspace ? { workspace: handoff.workspace } : {}),
           prompter: createClackPrompter(),
-          runtime,
+          runtime: createEmbeddedModelSetupRuntime(runtime),
         });
         runtime.log(
           result.model
