@@ -1,4 +1,7 @@
 // Exec approvals CLI tests cover approval command registration and output handling.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { Readable } from "node:stream";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -367,6 +370,155 @@ describe("exec approvals CLI", () => {
         source: "/tmp/node-exec-approvals.json defaults.askFallback",
       },
     );
+  });
+
+  it("shows host-native node approvals without approvals-file policy math", async () => {
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "config.get") {
+        return { config: { tools: { exec: { security: "full", ask: "off" } } } };
+      }
+      if (method === "exec.approvals.node.get") {
+        return {
+          enabled: true,
+          hash: "sha256:current",
+          baseHash: "sha256:current",
+          defaultAction: "deny",
+          rules: [{ pattern: "hostname", action: "allow" }],
+        } as never;
+      }
+      return {} as never;
+    });
+
+    await runApprovalsCommand(["approvals", "get", "--node", "windows", "--json"]);
+
+    expect(writtenJson().defaultAction).toBe("deny");
+    expect(effectivePolicy()).toEqual({
+      note: "This node enforces a host-native exec policy; OpenClaw approvals-file policy math does not apply.",
+      scopes: [],
+    });
+    expect(callGatewayFromCli.mock.calls.map((call) => call[0])).toEqual([
+      "exec.approvals.node.get",
+    ]);
+    expect(runtimeErrors).toHaveLength(0);
+  });
+
+  it("writes host-native node approvals with the current hash", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-native-approvals-"));
+    const policyPath = path.join(dir, "policy.json");
+    fs.writeFileSync(
+      policyPath,
+      JSON.stringify({
+        defaultAction: "deny",
+        rules: [{ pattern: "hostname", action: "allow" }],
+      }),
+    );
+    callGatewayFromCli.mockImplementation(
+      async (method: string, _opts: unknown, params?: unknown) => {
+        if (method === "exec.approvals.node.get") {
+          return {
+            enabled: true,
+            hash: "sha256:current",
+            defaultAction: "deny",
+            rules: [],
+          } as never;
+        }
+        return { method, params };
+      },
+    );
+
+    try {
+      await runApprovalsCommand([
+        "approvals",
+        "set",
+        "--node",
+        "windows",
+        "--file",
+        policyPath,
+        "--json",
+      ]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+
+    expect(callGatewayFromCli.mock.calls[1]?.[0]).toBe("exec.approvals.node.set");
+    expect(callGatewayFromCli.mock.calls[1]?.[2]).toEqual({
+      nodeId: "node-1",
+      native: {
+        defaultAction: "deny",
+        rules: [{ pattern: "hostname", action: "allow" }],
+      },
+      baseHash: "sha256:current",
+    });
+    expect(callGatewayFromCli.mock.calls[2]?.[0]).toBe("exec.approvals.node.get");
+    expect(runtimeErrors).toHaveLength(0);
+  });
+
+  it("rejects unknown host-native policy fields instead of dropping them", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-native-approvals-"));
+    const policyPath = path.join(dir, "policy.json");
+    fs.writeFileSync(
+      policyPath,
+      JSON.stringify({ rules: [{ pattern: "hostname", action: "allow", shell: "powershell" }] }),
+    );
+    callGatewayFromCli.mockResolvedValue({
+      enabled: true,
+      hash: "sha256:current",
+      defaultAction: "deny",
+      rules: [],
+    } as never);
+
+    try {
+      await expect(
+        runApprovalsCommand(["approvals", "set", "--node", "windows", "--file", policyPath]),
+      ).rejects.toThrow("__exit__:1");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+
+    expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
+    expect(runtimeErrors[0]).toContain("Unknown host-native exec approval rule 1 field: shell");
+  });
+
+  it("rejects remote configuration when a host-native policy is disabled", async () => {
+    callGatewayFromCli.mockResolvedValue({
+      enabled: false,
+      message: "No exec policy configured",
+    } as never);
+
+    await expect(
+      runApprovalsCommand([
+        "approvals",
+        "set",
+        "--node",
+        "windows",
+        "--file",
+        "/does/not/exist.json",
+      ]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
+    expect(runtimeErrors[0]).toContain("disabled on this node and cannot be configured remotely");
+  });
+
+  it("rejects allowlist helpers for host-native nodes", async () => {
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "exec.approvals.node.get") {
+        return {
+          enabled: true,
+          hash: "sha256:current",
+          defaultAction: "deny",
+          rules: [],
+        } as never;
+      }
+      return {} as never;
+    });
+
+    await expect(
+      runApprovalsCommand(["approvals", "allowlist", "add", "--node", "windows", "hostname"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
+    expect(runtimeErrors[0]).toContain("do not support allowlist mutations");
   });
 
   it("keeps gateway approvals output when config.get fails", async () => {

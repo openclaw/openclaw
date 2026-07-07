@@ -7863,24 +7863,78 @@ public struct ExecApprovalsNodeGetParams: Codable, Sendable {
     }
 }
 
+public struct ExecApprovalsNodeSnapshot: Codable, Sendable {
+    public let path: String?
+    public let exists: Bool?
+    public let hash: String?
+    public let file: [String: AnyCodable]?
+    public let enabled: Bool?
+    public let basehash: String?
+    public let defaultaction: AnyCodable?
+    public let rules: [[String: AnyCodable]]?
+    public let constraints: [String: AnyCodable]?
+    public let message: String?
+
+    public init(
+        path: String?,
+        exists: Bool?,
+        hash: String?,
+        file: [String: AnyCodable]?,
+        enabled: Bool?,
+        basehash: String?,
+        defaultaction: AnyCodable?,
+        rules: [[String: AnyCodable]]?,
+        constraints: [String: AnyCodable]?,
+        message: String?)
+    {
+        self.path = path
+        self.exists = exists
+        self.hash = hash
+        self.file = file
+        self.enabled = enabled
+        self.basehash = basehash
+        self.defaultaction = defaultaction
+        self.rules = rules
+        self.constraints = constraints
+        self.message = message
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case path
+        case exists
+        case hash
+        case file
+        case enabled
+        case basehash = "baseHash"
+        case defaultaction = "defaultAction"
+        case rules
+        case constraints
+        case message
+    }
+}
+
 public struct ExecApprovalsNodeSetParams: Codable, Sendable {
     public let nodeid: String
-    public let file: [String: AnyCodable]
+    public let file: [String: AnyCodable]?
+    public let native: [String: AnyCodable]?
     public let basehash: String?
 
     public init(
         nodeid: String,
-        file: [String: AnyCodable],
+        file: [String: AnyCodable]?,
+        native: [String: AnyCodable]?,
         basehash: String?)
     {
         self.nodeid = nodeid
         self.file = file
+        self.native = native
         self.basehash = basehash
     }
 
     private enum CodingKeys: String, CodingKey {
         case nodeid = "nodeId"
         case file
+        case native
         case basehash = "baseHash"
     }
 }
