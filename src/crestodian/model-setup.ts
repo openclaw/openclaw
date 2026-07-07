@@ -55,7 +55,7 @@ export async function runCrestodianModelSetup(params: {
     operation: "models.setup",
     summary: model ? `Configured model provider with ${model}` : "Ran model provider setup",
     configPath: committed.path,
-    configHashBefore: before.hash ?? null,
+    configHashBefore: committed.previousHash,
     configHashAfter: committed.persistedHash,
     details: {
       workspace,

@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => {
       async (params: {
         transform: (
           currentConfig: Record<string, unknown>,
-          context: { snapshot: { valid: boolean } },
+          context: { snapshot: { valid: boolean; hash: string } },
         ) =>
           | Promise<{ nextConfig: Record<string, unknown> }>
           | { nextConfig: Record<string, unknown> };
@@ -21,12 +21,13 @@ const mocks = vi.hoisted(() => {
             agents: { defaults: { workspace: "/configured/work" } },
             gateway: { port: 19001 },
           },
-          { snapshot: { valid: true } },
+          { snapshot: { valid: true, hash: "current" } },
         );
         committedConfigs.push(transformed.nextConfig);
         return {
           nextConfig: transformed.nextConfig,
           path: "/tmp/openclaw.json",
+          previousHash: "current",
           persistedHash: "after",
         };
       },
@@ -75,7 +76,7 @@ vi.mock("../wizard/setup.model-auth.js", () => ({
 }));
 
 describe("runCrestodianModelSetup", () => {
-  it("reuses onboarding model auth, persists config, and audits the selected model", async () => {
+  it("preserves concurrent config and audits the commit-time snapshot", async () => {
     const prompter = {} as WizardPrompter;
     const runtime = {
       log: vi.fn(),
@@ -116,7 +117,7 @@ describe("runCrestodianModelSetup", () => {
     expect(mocks.appendAudit).toHaveBeenCalledWith(
       expect.objectContaining({
         operation: "models.setup",
-        configHashBefore: "before",
+        configHashBefore: "current",
         configHashAfter: "after",
         details: {
           workspace: "/configured/work",
