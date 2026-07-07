@@ -17,7 +17,7 @@ const PERSISTENT_NAMESPACE = "whatsapp.approval-reactions";
 const PERSISTENT_MAX_ENTRIES = 1000;
 const DEFAULT_REACTION_TARGET_TTL_MS = 24 * 60 * 60 * 1000;
 
-export type WhatsAppApprovalReactionBinding = ApprovalReactionDecisionBinding;
+type WhatsAppApprovalReactionBinding = ApprovalReactionDecisionBinding;
 
 type WhatsAppApprovalReactionResolution = {
   approvalId: string;

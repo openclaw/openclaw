@@ -300,7 +300,7 @@ describe("Dockerfile", () => {
     expect(templatesCopyIndex).toBeLessThan(userIndex);
   });
 
-  it("keeps package manager patch files in runtime images", async () => {
+  it("keeps package manager metadata in runtime images", async () => {
     const dockerfile = collapseDockerContinuations(await readFile(dockerfilePath, "utf8"));
     const pruneProd = "CI=true pnpm prune --prod";
     const finalWorkspaceCopy =

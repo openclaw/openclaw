@@ -12,7 +12,7 @@ import { renderDebug } from "./view.ts";
 
 const DEBUG_POLL_INTERVAL_MS = 3000;
 
-export class DebugPage extends LitElement {
+class DebugPage extends LitElement {
   override createRenderRoot() {
     return this;
   }

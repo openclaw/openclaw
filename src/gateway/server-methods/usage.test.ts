@@ -89,6 +89,20 @@ describe("gateway usage helpers", () => {
     return result.value;
   }
 
+  function withTimeZone<T>(timeZone: string, run: () => T): T {
+    const previous = process.env.TZ;
+    process.env.TZ = timeZone;
+    try {
+      return run();
+    } finally {
+      if (previous === undefined) {
+        delete process.env.TZ;
+      } else {
+        process.env.TZ = previous;
+      }
+    }
+  }
+
   beforeEach(() => {
     testApi.costUsageCache.clear();
     vi.useRealTimers();
@@ -260,6 +274,35 @@ describe("gateway usage helpers", () => {
     const expectedStart = new Date(2026, 1, 5).getTime();
     expect(range.startMs).toBe(expectedStart);
     expect(range.endMs).toBe(expectedStart + dayMs - 1);
+  });
+
+  it("resolveDateRange uses gateway calendar end boundaries for explicit DST-short days", () => {
+    withTimeZone("America/New_York", () => {
+      const range = expectDateRange(
+        testApi.resolveDateRange({
+          startDate: "2026-03-08",
+          endDate: "2026-03-08",
+          mode: "gateway",
+        }),
+      );
+      expect(range.startMs).toBe(new Date(2026, 2, 8).getTime());
+      expect(range.endMs).toBe(new Date(2026, 2, 9).getTime() - 1);
+    });
+  });
+
+  it("resolveDateRange keeps trailing gateway ranges on calendar days across DST", () => {
+    withTimeZone("America/New_York", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-03-09T12:00:00.000Z"));
+      const range = expectDateRange(
+        testApi.resolveDateRange({
+          days: 2,
+          mode: "gateway",
+        }),
+      );
+      expect(range.startMs).toBe(new Date(2026, 2, 8).getTime());
+      expect(range.endMs).toBe(new Date(2026, 2, 10).getTime() - 1);
+    });
   });
 
   it("resolveDateRange clamps days to at least 1 and defaults to 30 days", () => {

@@ -466,10 +466,14 @@ function collectCurrentInboundContext(items: FollowupRun[]): FollowupRun["curren
     return undefined;
   }
   const resumableText = renderField("resumableText");
+  const injectedGoalContexts = [
+    ...new Set(contexts.flatMap(({ context }) => context.injectedGoalContexts ?? [])),
+  ];
   return {
     text,
     ...(resumableText ? { resumableText } : {}),
     promptJoiner: "\n\n",
+    ...(injectedGoalContexts.length > 0 ? { injectedGoalContexts } : {}),
   };
 }
 

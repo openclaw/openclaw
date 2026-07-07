@@ -34,6 +34,10 @@ let pageState: {
 
 const sessionMocks = vi.hoisted(() => ({
   assertPageNavigationCompletedSafely: vi.fn(async () => {}),
+  beginActionDownloadCaptureOnPage: vi.fn(() => ({
+    drain: vi.fn(async (): Promise<HarnessManagedDownload[] | undefined> => undefined),
+    dispose: vi.fn(() => {}),
+  })),
   closeBlockedNavigationTarget: vi.fn(async () => {}),
   getPageForTargetId: vi.fn(async () => {
     if (!currentPage) {
@@ -70,6 +74,7 @@ const sessionMocks = vi.hoisted(() => ({
     }
     return err.name === "SsrFBlockedError" || err.name === "InvalidBrowserNavigationUrlError";
   }),
+  quarantineBlockedNavigationTarget: vi.fn(async () => {}),
   restoreRoleRefsForTarget: vi.fn(() => {}),
   respondToObservedDialogOnPage: vi.fn(async () => {
     throw new Error("No dialog is pending.");

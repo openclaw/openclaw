@@ -35,7 +35,7 @@ export type SkillsRouteData = {
   error: string | null;
 };
 
-export class SkillsPage extends LitElement {
+class SkillsPage extends LitElement {
   override createRenderRoot() {
     return this;
   }

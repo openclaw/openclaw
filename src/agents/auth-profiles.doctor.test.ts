@@ -2,8 +2,11 @@
  * Auth-profile doctor copy tests.
  * Covers provider-specific repair hints without invoking real auth flows.
  */
-import { beforeAll, describe, expect, it } from "vitest";
-import { formatAuthDoctorHint } from "./auth-profiles/doctor.js";
+import { describe, expect, it } from "vitest";
+import {
+  formatAuthDoctorHint,
+  formatAuthDoctorHintWithPluginBuilder,
+} from "./auth-profiles/doctor.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 
 const EMPTY_STORE: AuthProfileStore = {
@@ -12,17 +15,21 @@ const EMPTY_STORE: AuthProfileStore = {
 };
 
 describe("formatAuthDoctorHint", () => {
-  let restoredQwenHint: string;
+  it("does not report restored qwen portal auth as removed", async () => {
+    let pluginBuilderCalled = false;
+    const hint = await formatAuthDoctorHintWithPluginBuilder(
+      {
+        store: EMPTY_STORE,
+        provider: "qwen-portal",
+      },
+      async () => {
+        pluginBuilderCalled = true;
+        return undefined;
+      },
+    );
 
-  beforeAll(async () => {
-    restoredQwenHint = await formatAuthDoctorHint({
-      store: EMPTY_STORE,
-      provider: "qwen-portal",
-    });
-  });
-
-  it("does not report restored qwen portal auth as removed", () => {
-    expect(restoredQwenHint).toBe("");
+    expect(pluginBuilderCalled).toBe(true);
+    expect(hint).toBe("");
   });
 
   it("guides legacy qwen portal oauth profiles to re-authenticate", async () => {

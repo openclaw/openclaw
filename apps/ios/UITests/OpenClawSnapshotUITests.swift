@@ -127,6 +127,59 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "location-always-granted-after-slow-prompt")
     }
 
+    func testLocationWhileUsingStaysSelectedAfterSlowSystemPermissionResponse() throws {
+        XCUIApplication().resetAuthorizationStatus(for: .location)
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "settings",
+            initialDestination: "settings",
+            name: "location-while-using-slow-prompt"))
+
+        let permissions = try XCTUnwrap(
+            self.app?.buttons.containing(.staticText, identifier: "Permissions").firstMatch)
+        XCTAssertTrue(permissions.waitForExistence(timeout: 8))
+        permissions.tap()
+
+        let offMode = try XCTUnwrap(self.app?.buttons["Off"])
+        if !offMode.isSelected {
+            offMode.tap()
+            XCTAssertTrue(offMode.isSelected)
+        }
+        let whileUsingMode = try XCTUnwrap(self.app?.buttons["While Using"])
+        XCTAssertTrue(whileUsingMode.waitForExistence(timeout: 5))
+        whileUsingMode.tap()
+
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let prompt = springboard.alerts.firstMatch
+        XCTAssertTrue(prompt.waitForExistence(timeout: 5))
+        Thread.sleep(forTimeInterval: 3)
+        XCTAssertTrue(prompt.exists)
+        XCTAssertTrue(whileUsingMode.isSelected)
+        XCTAssertTrue(self.app?.staticTexts["Requesting iOS location permission…"].exists == true)
+
+        let allow = prompt.buttons.matching(
+            NSPredicate(format: "label CONTAINS[c] 'While Using'")).firstMatch
+        XCTAssertTrue(allow.exists)
+        allow.tap()
+
+        self.app?.activate()
+        XCTAssertTrue(whileUsingMode.waitForExistence(timeout: 5))
+        XCTAssertTrue(whileUsingMode.isSelected)
+        XCTAssertFalse(self.app?.staticTexts["Requesting iOS location permission…"].exists == true)
+        let foregroundAllowed = try XCTUnwrap(self.app?.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Foreground location requests")).firstMatch)
+        XCTAssertTrue(foregroundAllowed.waitForExistence(timeout: 5))
+
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "settings",
+            initialDestination: "settings",
+            name: "location-while-using-relaunch"))
+        let relaunchedPermissions = try XCTUnwrap(
+            self.app?.buttons.containing(.staticText, identifier: "Permissions").firstMatch)
+        XCTAssertTrue(relaunchedPermissions.waitForExistence(timeout: 8))
+        relaunchedPermissions.tap()
+        XCTAssertTrue(self.app?.buttons["While Using"].isSelected == true)
+    }
+
     func testSettingsBackReturnsToOriginatingPhoneTab() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone settings navigation only")
 

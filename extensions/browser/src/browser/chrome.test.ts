@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { createServer } from "node:http";
+import { createServer as createTcpServer } from "node:net";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -671,17 +672,48 @@ describe("browser chrome helpers", () => {
     expect(formatted).not.toContain("supersecret123");
   });
 
-  it("adds a WSL2 portproxy hint for empty HTTP CDP replies", () => {
-    const formatted = formatChromeCdpDiagnostic({
-      ok: false,
-      code: "http_unreachable",
-      cdpUrl: "http://172.30.144.1:9222",
-      message: "fetch failed: other side closed",
-      elapsedMs: 12,
-    });
+  it.each(["fetch failed: other side closed", "fetch failed: read ECONNRESET"])(
+    "adds a WSL2 portproxy hint for empty HTTP CDP replies: %s",
+    (message) => {
+      const formatted = formatChromeCdpDiagnostic({
+        ok: false,
+        code: "http_unreachable",
+        cdpUrl: "http://172.30.144.1:9222",
+        message,
+        elapsedMs: 12,
+      });
 
-    expect(formatted).toContain("svchost/iphlpsvc owns the CDP port");
-    expect(formatted).toContain("127.0.0.1:9222 -> 127.0.0.1:9222");
+      expect(formatted).toContain("netsh interface portproxy show all");
+      expect(formatted).toContain("svchost/iphlpsvc owns");
+      expect(formatted).toContain("127.0.0.1:9222 -> 127.0.0.1:9222");
+      expect(formatted).toContain("falls back to [::1] only when the IPv4 bind fails");
+      expect(formatted).toContain("v4tov6");
+    },
+  );
+
+  it("surfaces Windows listener checks from a real empty-reply CDP probe", async () => {
+    // A broken portproxy accepts the WSL-side socket and closes it without an
+    // HTTP body. The host checks must survive the full probe/format path.
+    const portproxy = createTcpServer((socket) => socket.destroy());
+    await new Promise<void>((resolve, reject) => {
+      portproxy.listen(0, "127.0.0.1", () => resolve());
+      portproxy.once("error", reject);
+    });
+    try {
+      const addr = portproxy.address() as AddressInfo;
+      const diagnostic = expectFailedChromeCdpDiagnostic(
+        await diagnoseChromeCdp(`http://127.0.0.1:${addr.port}`, 500, 50),
+      );
+      expect(diagnostic.code).toBe("http_unreachable");
+      const formatted = formatChromeCdpDiagnostic(diagnostic);
+      expect(formatted).toContain("netstat -ano");
+      expect(formatted).toContain("v4tov6");
+      expect(formatted).not.toContain("Chrome 136");
+    } finally {
+      await new Promise<void>((resolve) => {
+        portproxy.close(() => resolve());
+      });
+    }
   });
 
   it("probes direct ws:// CDP URLs (with /devtools/ path) via handshake instead of HTTP", async () => {
@@ -1077,6 +1109,8 @@ describe("browser chrome launch args", () => {
         cdpIsLoopback: true,
         cdpPortRangeStart: 18800,
         cdpPortRangeEnd: 18810,
+        extensionRelayDefaultPort: 18808,
+        extensionRelayPorts: {},
         evaluateEnabled: false,
         remoteCdpTimeoutMs: 1500,
         remoteCdpHandshakeTimeoutMs: 3000,

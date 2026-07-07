@@ -143,7 +143,8 @@ function scenarioWithCoverage(params: {
 
 describe("qa coverage report", () => {
   it("groups scenario coverage metadata by theme and surface", () => {
-    const inventory = buildQaCoverageInventory(readQaScenarioPack().scenarios);
+    const scenarios = readQaScenarioPack().scenarios;
+    const inventory = buildQaCoverageInventory(scenarios);
 
     expect(inventory.scenarioCount).toBeGreaterThan(0);
     expect(inventory.coverageIdCount).toBeGreaterThan(0);
@@ -169,6 +170,22 @@ describe("qa coverage report", () => {
     ).toMatchObject({
       channelDriver: "live",
     });
+    for (const [categoryId, scenarioRef] of [
+      ["docker-podman-hosting.container-setup", "qa/scenarios/runtime/compose-setup.yaml"],
+      [
+        "docker-podman-hosting.image-release-and-validation",
+        "qa/scenarios/runtime/docker-package-install.yaml",
+      ],
+    ] as const) {
+      const category = inventory.scorecardTaxonomy.categories.find(
+        (entry) => entry.id === categoryId,
+      );
+      expect(category?.profiles).toContain("release");
+      expect(category?.profiles).not.toContain("smoke-ci");
+      expect(scenarios.find((scenario) => scenario.sourcePath === scenarioRef)?.category).toBe(
+        categoryId,
+      );
+    }
     expect(
       inventory.scorecardTaxonomy.profiles.find((profile) => profile.id === "all"),
     ).toMatchObject({
@@ -276,7 +293,6 @@ describe("qa coverage report", () => {
     expect(report).toContain(
       "- telegram (telegram): canary: always-on, help-command: telegram-help-command, mention-gating: telegram-mention-gating; missing baseline: allowlist-block, top-level-reply-shape, restart-resume",
     );
-    expect(report).toContain("thread-follow-up: slack-thread-follow-up");
     expect(report).toContain("## Scorecard Taxonomy");
     expect(report).toContain("- Taxonomy: taxonomy.yaml");
     expect(report).toContain("- Fulfilled taxonomy categories:");
@@ -302,6 +318,21 @@ describe("qa coverage report", () => {
     );
     expect(report).toContain("  - execution: playwright ui/src/e2e/chat-flow.e2e.test.ts");
     expect(report).not.toContain("Native test refs");
+  });
+
+  it("includes required channel driver flags in scenario match commands", () => {
+    const matches = findQaScenarioMatches(
+      readQaScenarioPack().scenarios,
+      "whatsapp-access-control-group-disabled",
+    );
+    const report = renderQaScenarioMatchesMarkdownReport({
+      query: "whatsapp-access-control-group-disabled",
+      matches,
+    });
+
+    expect(report).toContain(
+      "- Suite command: `pnpm openclaw qa suite --channel-driver live --channel whatsapp --scenario whatsapp-access-control-group-disabled`",
+    );
   });
 
   it("splits qa suite targets when matches mix execution kinds", () => {

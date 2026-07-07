@@ -80,7 +80,7 @@ export function readChatQueueForSession(
     : (host.chatQueueBySession?.[sessionKey] ?? []);
 }
 
-export function writeChatQueueForSession(
+function writeChatQueueForSession(
   host: ChatQueueSessionHost,
   sessionKey: string,
   queue: ChatQueueItem[],
@@ -221,16 +221,4 @@ export function markQueuedChatSendsWaitingForReconnect(host: ChatQueueStoreHost)
   if (changed) {
     host.chatQueueBySession = queueBySession;
   }
-}
-
-export function hasReconnectableQueuedChatSends(host: ChatQueueStoreHost): boolean {
-  const matches = (item: ChatQueueItem) =>
-    Boolean(item.sendRunId) &&
-    item.sendState === "waiting-reconnect" &&
-    !item.pendingRunId &&
-    !item.localCommandName;
-  return (
-    host.chatQueue.some(matches) ||
-    Object.values(host.chatQueueBySession ?? {}).some((queue) => queue.some(matches))
-  );
 }

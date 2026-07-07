@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
+import * as Logger from "../../logger.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import { prepareSessionManagerForRun } from "../embedded-agent-runner/session-manager-init.js";
 import { repairSessionFileIfNeeded } from "../session-file-repair.js";
@@ -13,6 +14,7 @@ import {
   CURRENT_SESSION_VERSION,
   findMostRecentSession,
   loadEntriesFromFile,
+  parseSessionEntries,
   SessionManager,
   type SessionEntry,
 } from "./session-manager.js";
@@ -2644,6 +2646,140 @@ describe("SessionManager.open", () => {
 
     const after = await fs.stat(sessionFile);
     expect(after.mtimeMs).toBe(before.mtimeMs);
+  });
+});
+
+describe("parseSessionEntries", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("parses valid JSONL lines without logging warnings", () => {
+    const warnSpy = vi.spyOn(Logger, "logWarn").mockImplementation(() => {});
+    const content = [
+      JSON.stringify({ type: "session", id: "s1" }),
+      JSON.stringify({ type: "message", id: "m1" }),
+    ].join("\n");
+
+    const entries = parseSessionEntries(content);
+
+    expect(entries).toHaveLength(2);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("logs a warning and skips malformed JSONL lines while preserving valid entries", () => {
+    const warnSpy = vi.spyOn(Logger, "logWarn").mockImplementation(() => {});
+    const content = [
+      JSON.stringify({ type: "session", id: "s1" }),
+      "not valid json {{{",
+      JSON.stringify({ type: "message", id: "m1" }),
+    ].join("\n");
+
+    const entries = parseSessionEntries(content);
+
+    expect(entries).toHaveLength(2);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("parseJsonlEntries: skipped 1 malformed JSONL line"),
+    );
+  });
+
+  it("reports the correct skip count for multiple malformed lines", () => {
+    const warnSpy = vi.spyOn(Logger, "logWarn").mockImplementation(() => {});
+    const content = [
+      "bad line 1",
+      JSON.stringify({ type: "session", id: "s1" }),
+      "bad line 2",
+      "bad line 3",
+    ].join("\n");
+
+    const entries = parseSessionEntries(content);
+
+    expect(entries).toHaveLength(1);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("parseJsonlEntries: skipped 3 malformed JSONL line"),
+    );
+  });
+
+  it("skips empty lines without counting them as malformed", () => {
+    const warnSpy = vi.spyOn(Logger, "logWarn").mockImplementation(() => {});
+    const content = [
+      "",
+      JSON.stringify({ type: "session", id: "s1" }),
+      "",
+      JSON.stringify({ type: "message", id: "m1" }),
+      "",
+    ].join("\n");
+
+    const entries = parseSessionEntries(content);
+
+    expect(entries).toHaveLength(2);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("parseJsonlEntries logs warning for malformed lines via loadEntriesFromFile", async () => {
+    const warnSpy = vi.spyOn(Logger, "logWarn").mockImplementation(() => {});
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const header = buildSessionHeader(dir);
+    const content = [
+      JSON.stringify(header),
+      "not valid json {{{",
+      JSON.stringify(buildMessageEntry(1, null)),
+    ].join("\n");
+    await fs.writeFile(sessionFile, content, "utf8");
+
+    const entries = loadEntriesFromFile(sessionFile);
+
+    expect(entries.length).toBeGreaterThanOrEqual(1);
+    expect(warnSpy).toHaveBeenCalled();
+    expect(
+      warnSpy.mock.calls.some((call) =>
+        call[0].includes("parseJsonlEntries: skipped 1 malformed JSONL line"),
+      ),
+    ).toBe(true);
+  });
+
+  it("buildSessionInfo logs warning for malformed lines via SessionManager.list", async () => {
+    const warnSpy = vi.spyOn(Logger, "logWarn").mockImplementation(() => {});
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const header = buildSessionHeader(dir);
+    const content = [
+      JSON.stringify(header),
+      "not valid json {{{",
+      JSON.stringify(buildMessageEntry(1, null)),
+    ].join("\n");
+    await fs.writeFile(sessionFile, content, "utf8");
+
+    const sessions = await SessionManager.list(dir, dir);
+
+    expect(sessions).toHaveLength(1);
+    expect(warnSpy).toHaveBeenCalled();
+    expect(
+      warnSpy.mock.calls.some((call) =>
+        call[0].includes("buildSessionInfo: skipped 1 malformed JSONL line"),
+      ),
+    ).toBe(true);
+  });
+
+  it("buildSessionInfo does not log warning for clean session listing", async () => {
+    const warnSpy = vi.spyOn(Logger, "logWarn").mockImplementation(() => {});
+    const dir = await makeTempDir();
+    const sessionFile = path.join(dir, "session.jsonl");
+    const header = buildSessionHeader(dir);
+    const content = [JSON.stringify(header), JSON.stringify(buildMessageEntry(1, null))].join("\n");
+    await fs.writeFile(sessionFile, content, "utf8");
+
+    const sessions = await SessionManager.list(dir, dir);
+
+    expect(sessions).toHaveLength(1);
+    // buildSessionInfo must not log any warning for a clean listing.
+    const buildSessionInfoCalls = warnSpy.mock.calls.filter((call) =>
+      call[0].includes("buildSessionInfo"),
+    );
+    expect(buildSessionInfoCalls).toHaveLength(0);
   });
 });
 

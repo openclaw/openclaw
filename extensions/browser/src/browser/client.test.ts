@@ -210,6 +210,13 @@ describe("browser client", () => {
               url: "https://x",
               result: 1,
               results: [{ ok: true }],
+              downloads: [
+                {
+                  url: "https://x/report.pdf",
+                  suggestedFilename: "report.pdf",
+                  path: "/tmp/openclaw/downloads/report.pdf",
+                },
+              ],
             }),
           } as unknown as Response;
         }
@@ -346,6 +353,13 @@ describe("browser client", () => {
     expect(act.ok).toBe(true);
     expect(act.targetId).toBe("t1");
     expect(act.results).toEqual([{ ok: true }]);
+    expect(act.downloads).toEqual([
+      {
+        url: "https://x/report.pdf",
+        suggestedFilename: "report.pdf",
+        path: "/tmp/openclaw/downloads/report.pdf",
+      },
+    ]);
 
     const fileChooser = await browserArmFileChooser("http://127.0.0.1:18791", {
       paths: ["/tmp/a.txt"],

@@ -21,6 +21,7 @@ type MockWebSocketEventType = "close" | "error" | "message" | "open";
 
 const wsInstances: MockGoogleLiveWebSocket[] = [];
 const createdSources: MockAudioBufferSource[] = [];
+let getUserMedia: ReturnType<typeof vi.fn>;
 
 async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
@@ -147,6 +148,7 @@ function createClient(): RealtimeTalkTransportContext["client"] {
 function createTransport(
   callbacks: RealtimeTalkTransportContext["callbacks"] = {},
   client = createClient(),
+  inputDeviceId?: string,
 ) {
   return new GoogleLiveRealtimeTalkTransport(
     createSession(
@@ -156,6 +158,7 @@ function createTransport(
       callbacks,
       client,
       sessionKey: "main",
+      inputDeviceId,
     },
   );
 }
@@ -190,17 +193,29 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     createdSources.length = 0;
     vi.stubGlobal("WebSocket", MockGoogleLiveWebSocket);
     vi.stubGlobal("AudioContext", MockAudioContext);
+    getUserMedia = vi.fn(async () => ({
+      getTracks: () => [{ stop: vi.fn() }],
+    }));
     vi.stubGlobal("navigator", {
       mediaDevices: {
-        getUserMedia: vi.fn(async () => ({
-          getTracks: () => [{ stop: vi.fn() }],
-        })),
+        getUserMedia,
       },
     });
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("captures from the selected microphone with an exact constraint", async () => {
+    const transport = createTransport({}, createClient(), "usb-mic");
+
+    await transport.start();
+
+    expect(getUserMedia).toHaveBeenCalledWith({
+      audio: { deviceId: { exact: "usb-mic" } },
+    });
+    transport.stop();
   });
 
   it("requests ArrayBuffer frames and decodes binary setup messages", async () => {

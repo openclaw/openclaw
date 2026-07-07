@@ -625,6 +625,120 @@ PY
     });
   });
 
+  describe("file links", () => {
+    it("links multi-segment paths only when enabled", () => {
+      const enabled = htmlFragment(
+        toSanitizedMarkdownHtml("see src/lib/foo.ts for details", { fileLinks: true }),
+      );
+      const link = enabled.querySelector<HTMLAnchorElement>("a.markdown-file-link");
+      expect(link?.dataset.filePath).toBe("src/lib/foo.ts");
+      expect(link?.hasAttribute("href")).toBe(false);
+
+      const disabled = htmlFragment(
+        toSanitizedMarkdownHtml("see src/lib/foo.ts and src/lib/foo.ts:42 for details"),
+      );
+      expect(disabled.querySelector("a[data-file-path]")).toBeNull();
+    });
+
+    it("links prefixed single-segment paths but not bare prose filenames", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("~/notes.md ./x.ts ../y.ts foo.ts", { fileLinks: true }),
+      );
+      expect(
+        [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")].map(
+          (link) => link.dataset.filePath,
+        ),
+      ).toEqual(["~/notes.md", "./x.ts", "../y.ts"]);
+      expect(fragment.textContent).toContain("foo.ts");
+    });
+
+    it("preserves line suffixes in labels while storing the parsed line", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("src/lib/foo.ts:42 and foo.ts:7:3", { fileLinks: true }),
+      );
+      const links = [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")];
+      expect(links[0]?.dataset.filePath).toBe("src/lib/foo.ts");
+      expect(links[0]?.dataset.fileLine).toBe("42");
+      expect(links[0]?.textContent).toBe("src/lib/foo.ts:42");
+      expect(links[1]?.dataset.filePath).toBe("foo.ts");
+      expect(links[1]?.dataset.fileLine).toBe("7");
+      expect(links[1]?.textContent).toBe("foo.ts:7:3");
+    });
+
+    it("links Windows absolute paths", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("C:/repo/src/foo.ts:42 and `D:\\work\\bar.ts`", {
+          fileLinks: true,
+        }),
+      );
+      const links = [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")];
+      expect(links.map((link) => link.dataset.filePath)).toEqual([
+        "C:/repo/src/foo.ts",
+        "D:\\work\\bar.ts",
+      ]);
+      expect(links[0]?.dataset.fileLine).toBe("42");
+    });
+
+    it("links inline-code paths and conservative bare filenames", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("`src/lib/foo.ts` `navigation.ts` `foo.bar()` `notes.xyz123`", {
+          fileLinks: true,
+        }),
+      );
+      expect(
+        [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")].map(
+          (link) => link.dataset.filePath,
+        ),
+      ).toEqual(["src/lib/foo.ts", "navigation.ts"]);
+      expect(fragment.textContent).toContain("foo.bar()");
+      expect(fragment.textContent).toContain("notes.xyz123");
+    });
+
+    it("converts explicit relative and absolute local file links", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("[foo.ts](src/utils/foo.ts:42) [x](/Users/a/b.ts)", {
+          fileLinks: true,
+        }),
+      );
+      const links = [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")];
+      expect(links).toHaveLength(2);
+      expect(links[0]?.dataset).toMatchObject({
+        filePath: "src/utils/foo.ts",
+        fileLine: "42",
+      });
+      expect(links[1]?.dataset.filePath).toBe("/Users/a/b.ts");
+      expect(links.every((link) => !link.hasAttribute("href"))).toBe(true);
+
+      const disabled = htmlFragment(toSanitizedMarkdownHtml("[x](/Users/a/b.ts)"));
+      expect(disabled.querySelector("a")?.hasAttribute("href")).toBe(false);
+      expect(disabled.querySelector("a")?.hasAttribute("data-file-path")).toBe(false);
+    });
+
+    it("leaves http links as normal links", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("https://example.com/a/b.ts", { fileLinks: true }),
+      );
+      const link = fragment.querySelector<HTMLAnchorElement>("a");
+      expect(link?.href).toBe("https://example.com/a/b.ts");
+      expect(link?.hasAttribute("data-file-path")).toBe(false);
+    });
+
+    it("does not link paths inside fenced code blocks", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("```ts\nsrc/lib/foo.ts:42\n```", { fileLinks: true }),
+      );
+      expect(fragment.querySelector("a[data-file-path]")).toBeNull();
+      expect(fragment.querySelector("code")?.textContent).toContain("src/lib/foo.ts:42");
+    });
+
+    it("guards common prose false positives", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("Node.js, e.g. version 1.2.3", { fileLinks: true }),
+      );
+      expect(fragment.querySelector("a[data-file-path]")).toBeNull();
+    });
+  });
+
   describe("security", () => {
     it("blocks javascript: in links via DOMPurify", () => {
       const html = toSanitizedMarkdownHtml("[click me](javascript:alert(1))");

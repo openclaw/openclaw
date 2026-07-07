@@ -24,7 +24,7 @@ function isAllowedDataImageUrl(url: string): boolean {
   return !BLOCKED_DATA_IMAGE_MIME_TYPES.has(mimeType);
 }
 
-export type ResolveSafeExternalUrlOptions = {
+type ResolveSafeExternalUrlOptions = {
   allowDataImage?: boolean;
 };
 
@@ -56,7 +56,7 @@ export function resolveSafeExternalUrl(
   }
 }
 
-export type OpenExternalUrlSafeOptions = ResolveSafeExternalUrlOptions & {
+type OpenExternalUrlSafeOptions = ResolveSafeExternalUrlOptions & {
   baseHref?: string;
 };
 

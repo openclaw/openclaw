@@ -154,6 +154,7 @@ vi.mock("./overview.js", () => ({
     tools: {
       codex: { command: "codex", found: false, error: "not found" },
       claude: { command: "claude", found: false, error: "not found" },
+      gemini: { command: "gemini", found: false, error: "not found" },
       apiKeys: { openai: true, anthropic: false },
     },
     gateway: {
@@ -238,8 +239,14 @@ describe("parseCrestodianOperation", () => {
     });
   });
 
-  it("keeps ambiguous model requests read-only", () => {
-    expect(parseCrestodianOperation("models please")).toEqual({ kind: "models" });
+  it("routes ambiguous model requests to the AI instead of guessing", () => {
+    expect(parseCrestodianOperation("models please").kind).toBe("none");
+    expect(parseCrestodianOperation("why did my gateway stop").kind).toBe("none");
+    expect(parseCrestodianOperation("should I talk to my agent about this?").kind).toBe("none");
+    expect(parseCrestodianOperation("set me up with telegram").kind).toBe("none");
+    expect(parseCrestodianOperation("can I set the default model gpt-5.5 later?").kind).toBe(
+      "none",
+    );
   });
 
   it("parses gateway lifecycle operations", () => {
@@ -350,9 +357,9 @@ describe("parseCrestodianOperation", () => {
       kind: "channel-setup",
       channel: "discord",
     });
-    // Channel setup is persistent: it writes channel config after the wizard.
+    // Starting the wizard is not a write; the wizard collects explicit answers.
     expect(isPersistentCrestodianOperation({ kind: "channel-setup", channel: "telegram" })).toBe(
-      true,
+      false,
     );
     expect(isPersistentCrestodianOperation({ kind: "channel-list" })).toBe(false);
   });
@@ -518,7 +525,6 @@ describe("parseCrestodianOperation", () => {
     expect(runPluginsSearch).toHaveBeenCalledWith("calendar", runtime);
     expect(lines.join("\n")).toContain("plugin rows");
     expect(lines.join("\n")).toContain("search rows: calendar");
-    expect(lines.join("\n")).toContain("[crestodian] done: plugins.search");
   });
 
   it("installs plugins only after approval and audits the write", async () => {

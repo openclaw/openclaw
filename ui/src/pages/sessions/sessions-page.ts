@@ -12,7 +12,11 @@ import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
-import { isPluginEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
+import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
+import {
+  loadStoredSessionCustomGroups,
+  saveStoredSessionCustomGroups,
+} from "../../lib/sessions/custom-groups.ts";
 import { normalizeSessionsGroupBy, type SessionsGroupBy } from "../../lib/sessions/grouping.ts";
 import {
   filterSessionRows,
@@ -30,32 +34,9 @@ import { getSafeLocalStorage } from "../../local-storage.ts";
 import { renderSessions, type SessionsProps } from "./view.ts";
 
 const GROUP_BY_STORAGE_KEY = "openclaw:sessions:group-by";
-const CUSTOM_GROUPS_STORAGE_KEY = "openclaw:sessions:custom-groups";
 
 function loadStoredGroupBy(): SessionsGroupBy {
   return normalizeSessionsGroupBy(getSafeLocalStorage()?.getItem(GROUP_BY_STORAGE_KEY));
-}
-
-// Custom group names live in localStorage so empty groups survive until a session
-// is assigned; assigned groups persist server-side via the session category field.
-function loadStoredCustomGroups(): string[] {
-  try {
-    const raw = getSafeLocalStorage()?.getItem(CUSTOM_GROUPS_STORAGE_KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed)
-      ? parsed.filter((name): name is string => typeof name === "string" && name.trim().length > 0)
-      : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveStoredCustomGroups(groups: readonly string[]) {
-  try {
-    getSafeLocalStorage()?.setItem(CUSTOM_GROUPS_STORAGE_KEY, JSON.stringify(groups));
-  } catch {
-    // ignore storage failures; groups still derive from session categories
-  }
 }
 
 export type SessionsRouteData = {
@@ -63,7 +44,7 @@ export type SessionsRouteData = {
   connected: boolean;
   result: SessionsListResult | null;
   error: string | null;
-  expandedCheckpointKey: string | null;
+  expandedSessionKey: string | null;
   showArchived: boolean;
 };
 
@@ -72,7 +53,7 @@ function parseFilterInteger(value: string): number | undefined {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
-export class SessionsPage extends LitElement {
+class SessionsPage extends LitElement {
   @consume({ context: applicationContext, subscribe: false })
   private context?: ApplicationContext;
 
@@ -86,16 +67,18 @@ export class SessionsPage extends LitElement {
   @state() private includeGlobal = true;
   @state() private includeUnknown = false;
   @state() private showArchived = false;
-  @state() private filtersCollapsed = false;
   @state() private searchQuery = "";
   @state() private sortColumn: "key" | "kind" | "updated" | "tokens" = "updated";
   @state() private sortDir: "asc" | "desc" = "desc";
   @state() private groupBy: SessionsGroupBy = loadStoredGroupBy();
-  @state() private customGroups: string[] = loadStoredCustomGroups();
+  @state() private customGroups: string[] = loadStoredSessionCustomGroups();
   @state() private page = 0;
   @state() private pageSize = 25;
   @state() private selectedKeys = new Set<string>();
-  @state() private expandedCheckpointKey: string | null = null;
+  @state() private expandedSessionKey: string | null = null;
+  // Route deep-link target (?session=...); unlike expandedSessionKey it also
+  // narrows sessionListOptions so the linked session is guaranteed to load.
+  private deepLinkSessionKey: string | null = null;
   @state() private checkpointItemsByKey: Record<string, SessionCompactionCheckpoint[]> = {};
   @state() private checkpointLoadingKey: string | null = null;
   @state() private checkpointBusyKey: string | null = null;
@@ -231,7 +214,8 @@ export class SessionsPage extends LitElement {
       this.error = null;
       this.loading = false;
       this.selectedKeys = new Set();
-      this.expandedCheckpointKey = null;
+      this.expandedSessionKey = null;
+      this.deepLinkSessionKey = null;
       this.checkpointItemsByKey = {};
       this.checkpointLoadingKey = null;
       this.checkpointBusyKey = null;
@@ -265,7 +249,7 @@ export class SessionsPage extends LitElement {
       return;
     }
     this.showArchived = data.showArchived;
-    if (data.expandedCheckpointKey) {
+    if (data.expandedSessionKey) {
       this.activeMinutes = "";
       this.limit = "";
       this.includeGlobal = true;
@@ -279,13 +263,16 @@ export class SessionsPage extends LitElement {
       this.includeGlobal = true;
       this.includeUnknown = false;
     }
-    this.expandedCheckpointKey = data.expandedCheckpointKey;
+    this.expandedSessionKey = data.expandedSessionKey;
+    // Only route-driven expansion narrows the list query; interactive drawer
+    // opens must keep loading the full roster (see sessionListOptions).
+    this.deepLinkSessionKey = data.expandedSessionKey;
     const gateway = context.gateway.snapshot;
     if (data.client !== gateway.client || data.connected !== gateway.connected) {
       this.routeDataEnabled = false;
       void this.loadSessions();
-      if (data.expandedCheckpointKey) {
-        void this.loadCheckpoint(data.expandedCheckpointKey);
+      if (data.expandedSessionKey) {
+        void this.loadCheckpoint(data.expandedSessionKey);
       }
       return;
     }
@@ -297,8 +284,8 @@ export class SessionsPage extends LitElement {
     const sharedSessions = context.sessions.state;
     this.ignorePendingSharedRefresh = sharedSessions.loading;
     this.ensureAgentIdentities(this.result);
-    if (data.expandedCheckpointKey) {
-      void this.loadCheckpoint(data.expandedCheckpointKey);
+    if (data.expandedSessionKey) {
+      void this.loadCheckpoint(data.expandedSessionKey);
     }
   }
 
@@ -339,16 +326,17 @@ export class SessionsPage extends LitElement {
   }
 
   private sessionListOptions() {
-    const checkpointKey = this.expandedCheckpointKey;
+    // Narrow the query only for a route deep link (?session=...); an open
+    // drawer is pure UI state and must not filter subsequent reloads.
+    const deepLinkKey = this.deepLinkSessionKey;
     return {
-      activeMinutes:
-        checkpointKey || this.showArchived ? 0 : parseFilterInteger(this.activeMinutes),
-      limit: checkpointKey ? 50 : parseFilterInteger(this.limit),
-      search: checkpointKey ?? undefined,
-      includeGlobal: checkpointKey ? true : this.includeGlobal,
-      includeUnknown: checkpointKey ? true : this.includeUnknown,
+      activeMinutes: deepLinkKey || this.showArchived ? 0 : parseFilterInteger(this.activeMinutes),
+      limit: deepLinkKey ? 50 : parseFilterInteger(this.limit),
+      search: deepLinkKey ?? undefined,
+      includeGlobal: deepLinkKey ? true : this.includeGlobal,
+      includeUnknown: deepLinkKey ? true : this.includeUnknown,
       showArchived: this.showArchived,
-      ...(checkpointKey ? { agentId: this.sessionAgentId(checkpointKey) } : {}),
+      ...(deepLinkKey ? { agentId: this.sessionAgentId(deepLinkKey) } : {}),
     };
   }
 
@@ -443,7 +431,7 @@ export class SessionsPage extends LitElement {
       ) {
         delete nextItems[key];
         delete nextErrors[key];
-        if (this.expandedCheckpointKey === key) {
+        if (this.expandedSessionKey === key) {
           checkpointKey = key;
         }
       }
@@ -467,6 +455,8 @@ export class SessionsPage extends LitElement {
     this.showArchived = next.showArchived;
     this.page = 0;
     this.selectedKeys = new Set();
+    // Explicit filter edits leave deep-link mode; load the full roster.
+    this.deepLinkSessionKey = null;
     void this.loadSessions();
   }
 
@@ -509,8 +499,11 @@ export class SessionsPage extends LitElement {
           sessions,
         };
       }
-      if (this.expandedCheckpointKey && deleted.has(this.expandedCheckpointKey)) {
-        this.expandedCheckpointKey = null;
+      if (this.expandedSessionKey && deleted.has(this.expandedSessionKey)) {
+        this.expandedSessionKey = null;
+      }
+      if (this.deepLinkSessionKey && deleted.has(this.deepLinkSessionKey)) {
+        this.deepLinkSessionKey = null;
       }
     }
     if (result.errors.length > 0) {
@@ -537,7 +530,7 @@ export class SessionsPage extends LitElement {
   private rememberCustomGroup(name: string) {
     if (!this.customGroups.includes(name)) {
       this.customGroups = [...this.customGroups, name];
-      saveStoredCustomGroups(this.customGroups);
+      saveStoredSessionCustomGroups(this.customGroups);
     }
   }
 
@@ -609,17 +602,50 @@ export class SessionsPage extends LitElement {
     }
   }
 
-  private async toggleCheckpointDetails(sessionKey: string) {
+  private async forkSession(key: string) {
     const context = this.context;
     if (!context) {
       return;
     }
-    if (this.expandedCheckpointKey === sessionKey) {
-      this.checkpointRequestId += 1;
-      this.expandedCheckpointKey = null;
+    const agentId = this.sessionAgentId(key);
+    const forkedKey = await context.sessions.create({
+      parentSessionKey: key,
+      fork: true,
+      ...(agentId ? { agentId } : {}),
+    });
+    if (forkedKey) {
+      context.navigate("chat", { search: searchForSession(forkedKey), hash: "" });
+    } else if (context.sessions.state.error) {
+      this.error = context.sessions.state.error;
+    }
+  }
+
+  private async toggleSessionDetails(sessionKey: string) {
+    const context = this.context;
+    if (!context) {
       return;
     }
-    this.expandedCheckpointKey = sessionKey;
+    // Any interactive toggle ends deep-link mode so reloads return the roster.
+    this.deepLinkSessionKey = null;
+    if (this.expandedSessionKey === sessionKey) {
+      this.checkpointRequestId += 1;
+      this.expandedSessionKey = null;
+      return;
+    }
+    this.expandedSessionKey = sessionKey;
+    // Every row opens the details drawer; only fetch compaction history when
+    // the row reports checkpoints, so plain sessions skip the round-trip.
+    const row = this.result?.sessions.find((session) => session.key === sessionKey);
+    const hasCheckpoints =
+      (row?.compactionCheckpointCount ?? 0) > 0 || Boolean(row?.latestCompactionCheckpoint);
+    if (!hasCheckpoints) {
+      // Seed an empty cache entry so reconcileCheckpointCache sees this key
+      // and reloads the open drawer if the session compacts on a refresh.
+      if (!this.checkpointItemsByKey[sessionKey]) {
+        this.checkpointItemsByKey = { ...this.checkpointItemsByKey, [sessionKey]: [] };
+      }
+      return;
+    }
     if (this.checkpointItemsByKey[sessionKey]) {
       return;
     }
@@ -712,10 +738,8 @@ export class SessionsPage extends LitElement {
       return html``;
     }
     const gateway = context.gateway.snapshot;
-    const workboardEnabled = isPluginEnabledInConfigSnapshot(
+    const workboardEnabled = isWorkboardEnabledInConfigSnapshot(
       context.runtimeConfig.state.configSnapshot,
-      "workboard",
-      { enabledByDefault: false },
     );
     const canCapture = workboardEnabled && hasOperatorWriteAccess(gateway.hello?.auth ?? null);
     const workboardState = context.workboard.state;
@@ -739,7 +763,6 @@ export class SessionsPage extends LitElement {
           agentsList: context.agents.state.agentsList,
           hello: context.gateway.snapshot.hello,
         }),
-        filtersCollapsed: this.filtersCollapsed,
         basePath: context.basePath,
         searchQuery: this.searchQuery,
         agentIdentityById: this.sessionAgentIdentityById(this.result),
@@ -756,15 +779,12 @@ export class SessionsPage extends LitElement {
             .filter((key): key is string => typeof key === "string" && key.length > 0),
         ),
         workboardBusySessionKey: [...workboardState.capturingSessionKeys][0] ?? null,
-        expandedCheckpointKey: this.expandedCheckpointKey,
+        expandedSessionKey: this.expandedSessionKey,
         checkpointItemsByKey: this.checkpointItemsByKey,
         checkpointLoadingKey: this.checkpointLoadingKey,
         checkpointBusyKey: this.checkpointBusyKey,
         checkpointErrorByKey: this.checkpointErrorByKey,
         onFiltersChange: (next) => this.updateFilters(next),
-        onToggleFiltersCollapsed: () => {
-          this.filtersCollapsed = !this.filtersCollapsed;
-        },
         onClearFilters: () => {
           this.activeMinutes = "";
           this.limit = "";
@@ -774,6 +794,7 @@ export class SessionsPage extends LitElement {
           this.searchQuery = "";
           this.page = 0;
           this.selectedKeys = new Set();
+          this.deepLinkSessionKey = null;
           void this.loadSessions();
         },
         onSearchChange: (query) => {
@@ -822,10 +843,11 @@ export class SessionsPage extends LitElement {
         onDeleteSelected: () => void this.deleteSelected(),
         onNavigateToChat: (sessionKey) =>
           context.navigate("chat", { search: searchForSession(sessionKey), hash: "" }),
+        onFork: (sessionKey) => this.forkSession(sessionKey),
         onAddToWorkboard: canCapture
           ? (session: GatewaySessionRow) => this.addToWorkboard(session)
           : undefined,
-        onToggleCheckpointDetails: (sessionKey) => void this.toggleCheckpointDetails(sessionKey),
+        onToggleDetails: (sessionKey) => void this.toggleSessionDetails(sessionKey),
         onBranchFromCheckpoint: (sessionKey, checkpointId) =>
           void this.branchCheckpoint(sessionKey, checkpointId),
         onRestoreCheckpoint: (sessionKey, checkpointId) =>

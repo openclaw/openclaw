@@ -143,3 +143,25 @@ describe("application approval overlays", () => {
     overlays.dispose();
   });
 });
+
+describe("application update overlays", () => {
+  it("surfaces a coalesced restart while reconnect verification remains active", async () => {
+    const request = vi.fn<RequestFn>().mockResolvedValue({
+      ok: true,
+      restart: { coalesced: true },
+      result: { status: "ok", after: { version: "2.0.0" } },
+    });
+    const harness = createGatewayHarness(client(request));
+    const overlays = createApplicationOverlays(harness.gateway);
+
+    await overlays.runUpdate();
+
+    expect(request).toHaveBeenCalledWith("update.run", {});
+    expect(overlays.snapshot.updateStatusBanner).toEqual({
+      tone: "info",
+      text: "Update installed. A gateway restart is already in progress; status will refresh after it reconnects.",
+    });
+    expect(overlays.snapshot.updateRunning).toBe(false);
+    overlays.dispose();
+  });
+});

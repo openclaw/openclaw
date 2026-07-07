@@ -20,6 +20,7 @@
    (it is display:none <=1120px, where the gutter should stay). */
 @media (min-width: 1121px) {
   .content--chat:has(.chat-workbench) {
+    padding-left: 0;
     padding-right: 0;
   }
 
@@ -497,6 +498,331 @@
   flex: 1;
   overflow: auto;
   padding: 16px;
+}
+
+.sidebar-file-view {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: color-mix(in srgb, var(--secondary) 42%, transparent);
+}
+
+.sidebar-file-view__path-bar {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 10px 8px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  background: color-mix(in srgb, var(--secondary) 72%, transparent);
+}
+
+.sidebar-file-view__path-field {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 4px;
+}
+
+.sidebar-file-view__path {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-file-view__actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+}
+
+.sidebar-file-view__action {
+  display: inline-grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  flex: 0 0 auto;
+  padding: 0;
+  color: var(--muted);
+}
+
+.sidebar-file-view__action:hover,
+.sidebar-file-view__action:focus-visible,
+.sidebar-file-view__action.copied {
+  color: var(--accent);
+}
+
+.sidebar-file-view__action svg {
+  width: 14px;
+  height: 14px;
+}
+
+.sidebar-file-view__editor {
+  position: relative;
+}
+
+.sidebar-file-view__editor-menu {
+  position: absolute;
+  z-index: var(--z-dropdown);
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 132px;
+  padding: 5px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  box-shadow: 0 12px 28px color-mix(in srgb, black 24%, transparent);
+}
+
+.sidebar-file-view__editor-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar-file-view__editor-item:hover,
+.sidebar-file-view__editor-item:focus-visible {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.file-view__search {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--secondary) 56%, transparent);
+}
+
+.file-view__search input {
+  min-width: 0;
+  flex: 1;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--input);
+  border-radius: var(--radius-sm);
+  outline: none;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+}
+
+.file-view__search input:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.file-view__search-counter {
+  min-width: 4.5ch;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  text-align: right;
+}
+
+.file-view__search-action {
+  display: inline-grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  padding: 0;
+}
+
+.file-view__search-action svg {
+  width: 13px;
+  height: 13px;
+}
+
+.file-view__search-action--previous svg {
+  transform: rotate(180deg);
+}
+
+.file-view {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 0;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  tab-size: 2;
+}
+
+.file-view__line {
+  display: grid;
+  /* Fixed gutter width (digit count set per file): an auto gutter column would
+     absorb free space on short lines and indent their code past longer lines. */
+  grid-template-columns: calc(var(--file-view-ln-digits, 3) * 1ch + 18px) max-content;
+  min-width: max-content;
+}
+
+.file-view__line--target {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.file-view__line--match {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.file-view__line--current {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.file-view__ln {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  padding: 0 10px 0 8px;
+  color: var(--muted);
+  background: var(--panel);
+  text-align: right;
+  user-select: none;
+}
+
+.file-view__line--target .file-view__ln,
+.file-view__line--match .file-view__ln {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+}
+
+.file-view__line--current .file-view__ln {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 22%, var(--panel));
+}
+
+.file-view__lc {
+  padding-right: 12px;
+  white-space: pre;
+}
+
+.file-view :where(.hljs-comment, .hljs-quote) {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.file-view :where(.hljs-keyword, .hljs-selector-tag, .hljs-subst) {
+  color: #ff8a80;
+}
+
+.file-view
+  :where(
+    .hljs-number,
+    .hljs-literal,
+    .hljs-variable,
+    .hljs-template-variable,
+    .hljs-tag .hljs-attr
+  ) {
+  color: #79c0ff;
+}
+
+.file-view :where(.hljs-string, .hljs-doctag) {
+  color: #a5d6ff;
+}
+
+.file-view :where(.hljs-title, .hljs-section, .hljs-selector-id, .hljs-function .hljs-title) {
+  color: #d2a8ff;
+}
+
+.file-view :where(.hljs-type, .hljs-class .hljs-title, .hljs-built_in, .hljs-builtin-name) {
+  color: #ffa657;
+}
+
+.file-view
+  :where(
+    .hljs-attr,
+    .hljs-attribute,
+    .hljs-name,
+    .hljs-selector-class,
+    .hljs-selector-attr,
+    .hljs-selector-pseudo
+  ) {
+  color: #7ee787;
+}
+
+.file-view :where(.hljs-symbol, .hljs-bullet, .hljs-link) {
+  color: var(--accent-2);
+}
+
+.file-view .hljs-deletion {
+  color: #ffa198;
+  background: rgba(248, 81, 73, 0.12);
+}
+
+.file-view .hljs-addition {
+  color: #7ee787;
+  background: rgba(46, 160, 67, 0.12);
+}
+
+:root[data-theme-mode="light"] .file-view :where(.hljs-keyword, .hljs-selector-tag, .hljs-subst) {
+  color: #cf222e;
+}
+
+:root[data-theme-mode="light"]
+  .file-view
+  :where(.hljs-number, .hljs-literal, .hljs-variable, .hljs-template-variable) {
+  color: #0550ae;
+}
+
+:root[data-theme-mode="light"] .file-view :where(.hljs-string, .hljs-doctag) {
+  color: #0a3069;
+}
+
+:root[data-theme-mode="light"]
+  .file-view
+  :where(.hljs-title, .hljs-section, .hljs-selector-id, .hljs-function .hljs-title) {
+  color: #8250df;
+}
+
+:root[data-theme-mode="light"]
+  .file-view
+  :where(.hljs-type, .hljs-class .hljs-title, .hljs-built_in, .hljs-builtin-name) {
+  color: #953800;
+}
+
+:root[data-theme-mode="light"]
+  .file-view
+  :where(
+    .hljs-attr,
+    .hljs-attribute,
+    .hljs-name,
+    .hljs-selector-class,
+    .hljs-selector-attr,
+    .hljs-selector-pseudo
+  ) {
+  color: #116329;
+}
+
+.sidebar-file-view__footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
 }
 
 .sidebar-markdown {

@@ -80,6 +80,26 @@ export interface ApnsRegistrations {
   updated_at_ms: number;
 }
 
+export interface AuditEvents {
+  action: string;
+  actor_id: string;
+  actor_type: string;
+  agent_id: string;
+  error_code: string | null;
+  event_id: string;
+  kind: string;
+  occurred_at: number;
+  run_id: string;
+  sequence: Generated<number>;
+  session_id: string | null;
+  session_key: string | null;
+  source_id: string;
+  source_sequence: number;
+  status: string;
+  tool_call_id: string | null;
+  tool_name: string | null;
+}
+
 export interface AuthProfileState {
   state_json: string;
   store_key: string;
@@ -185,6 +205,24 @@ export interface ChannelPairingRequests {
   request_id: string;
 }
 
+export interface ClawhubPromotionClaims {
+  claimed_at_ms: number;
+  ends_at_ms: number;
+  model_keys_json: string;
+  provider: string | null;
+  slug: string;
+}
+
+export interface ClawhubPromotionsFeedState {
+  etag: string | null;
+  feed_sequence: number | null;
+  last_checked_at_ms: number | null;
+  notified_slugs_json: Generated<string>;
+  payload_json: string | null;
+  state_key: string;
+  updated_at_ms: number;
+}
+
 export interface CommandLogEntries {
   action: string;
   entry_json: string;
@@ -243,6 +281,7 @@ export interface CronJobs {
   consecutive_errors: number | null;
   consecutive_skipped: number | null;
   created_at_ms: number;
+  declaration_key: string | null;
   delete_after_run: number | null;
   delivery_account_id: string | null;
   delivery_best_effort: number | null;
@@ -254,6 +293,7 @@ export interface CronJobs {
   delivery_thread_id_type: string | null;
   delivery_to: string | null;
   description: string | null;
+  display_name: string | null;
   enabled: number;
   every_ms: number | null;
   failure_alert_account_id: string | null;
@@ -280,6 +320,8 @@ export interface CronJobs {
   last_run_status: string | null;
   name: string;
   next_run_at_ms: number | null;
+  owner_agent_id: string | null;
+  owner_session_key: string | null;
   payload_allow_unsafe_external_content: number | null;
   payload_external_content_source_json: string | null;
   payload_fallbacks_json: string | null;
@@ -490,6 +532,16 @@ export interface FlowRuns {
   sync_mode: Generated<string>;
   updated_at: number;
   wait_json: string | null;
+}
+
+export interface GatewayBootLifecycle {
+  boot_id: string;
+  completed_at_ms: number | null;
+  outcome: string | null;
+  pid: number;
+  reason: string | null;
+  started_at_ms: number;
+  startup_reason: string | null;
 }
 
 export interface GatewayRestartHandoff {
@@ -765,6 +817,25 @@ export interface SchemaMeta {
   updated_at: number;
 }
 
+export interface SkillCuratorState {
+  id: Generated<number>;
+  last_attempt_at_ms: number;
+  last_error: string | null;
+  last_result_json: string;
+  last_success_at_ms: number | null;
+}
+
+export interface SkillLifecycle {
+  archived_reason: string | null;
+  created_at_ms: number;
+  pinned: Generated<number>;
+  skill_file: string;
+  skill_key: string;
+  skill_name: string;
+  state: string;
+  state_changed_at_ms: number;
+}
+
 export interface SkillUploads {
   actual_sha256: string | null;
   archive_blob: Uint8Array;
@@ -780,6 +851,17 @@ export interface SkillUploads {
   size_bytes: number;
   slug: string;
   upload_id: string;
+}
+
+export interface SkillUsage {
+  first_used_at_ms: number;
+  last_agent_id: string | null;
+  last_used_at_ms: number;
+  skill_file: string;
+  skill_key: string;
+  skill_name: string;
+  skill_source: string;
+  use_count: number;
 }
 
 export interface StateLeases {
@@ -954,6 +1036,21 @@ export interface WorkspaceSetupState {
   workspace_path: string;
 }
 
+export interface Worktrees {
+  base_ref: string;
+  branch: string;
+  created_at: number;
+  id: string;
+  last_active_at: number;
+  owner_id: string | null;
+  owner_kind: string;
+  path: string;
+  removed_at: number | null;
+  repo_fingerprint: string;
+  repo_root: string;
+  snapshot_ref: string | null;
+}
+
 export interface DB {
   acp_replay_events: AcpReplayEvents;
   acp_replay_sessions: AcpReplaySessions;
@@ -962,6 +1059,7 @@ export interface DB {
   agent_model_catalogs: AgentModelCatalogs;
   android_notification_recent_packages: AndroidNotificationRecentPackages;
   apns_registrations: ApnsRegistrations;
+  audit_events: AuditEvents;
   auth_profile_state: AuthProfileState;
   auth_profile_stores: AuthProfileStores;
   backup_runs: BackupRuns;
@@ -971,6 +1069,8 @@ export interface DB {
   channel_ingress_events: ChannelIngressEvents;
   channel_pairing_allow_entries: ChannelPairingAllowEntries;
   channel_pairing_requests: ChannelPairingRequests;
+  clawhub_promotion_claims: ClawhubPromotionClaims;
+  clawhub_promotions_feed_state: ClawhubPromotionsFeedState;
   command_log_entries: CommandLogEntries;
   commitments: Commitments;
   config_health_entries: ConfigHealthEntries;
@@ -987,6 +1087,7 @@ export interface DB {
   diagnostic_stability_bundles: DiagnosticStabilityBundles;
   exec_approvals_config: ExecApprovalsConfig;
   flow_runs: FlowRuns;
+  gateway_boot_lifecycle: GatewayBootLifecycle;
   gateway_restart_handoff: GatewayRestartHandoff;
   gateway_restart_intent: GatewayRestartIntent;
   gateway_restart_sentinel: GatewayRestartSentinel;
@@ -1007,7 +1108,10 @@ export interface DB {
   plugin_state_entries: PluginStateEntries;
   sandbox_registry_entries: SandboxRegistryEntries;
   schema_meta: SchemaMeta;
+  skill_curator_state: SkillCuratorState;
+  skill_lifecycle: SkillLifecycle;
   skill_uploads: SkillUploads;
+  skill_usage: SkillUsage;
   state_leases: StateLeases;
   subagent_runs: SubagentRuns;
   task_delivery_state: TaskDeliveryState;
@@ -1020,4 +1124,5 @@ export interface DB {
   web_push_subscriptions: WebPushSubscriptions;
   web_push_vapid_keys: WebPushVapidKeys;
   workspace_setup_state: WorkspaceSetupState;
+  worktrees: Worktrees;
 }

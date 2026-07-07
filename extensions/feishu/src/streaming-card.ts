@@ -8,10 +8,11 @@ import {
   resolveDateTimestampMs,
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithSsrFGuard, type LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getFeishuUserAgent } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
+import { readFeishuJsonResponse } from "./json-response.js";
 import { resolveFeishuCardTemplate, type CardHeaderConfig } from "./send.js";
 import type { FeishuDomain } from "./types.js";
 
@@ -23,6 +24,15 @@ type CardState = {
   currentText: string;
   sentText: string;
   hasNote: boolean;
+};
+
+export type FeishuStreamingFetch = typeof fetch;
+
+export type FeishuStreamingDeps = {
+  /** Override fetch for tests while preserving the real SSRF guard path. */
+  fetchImpl?: FeishuStreamingFetch;
+  /** Override hostname lookup for hermetic SSRF-guard tests. */
+  lookupFn?: LookupFn;
 };
 
 /** Options for customising the initial streaming card appearance. */
@@ -92,7 +102,7 @@ function resolveAllowedHostnames(domain?: FeishuDomain): string[] {
   return ["open.feishu.cn"];
 }
 
-async function getToken(creds: Credentials): Promise<string> {
+async function getToken(creds: Credentials, deps?: FeishuStreamingDeps): Promise<string> {
   const key = `${creds.domain ?? "feishu"}|${creds.appId}`;
   const cached = tokenCache.get(key);
   const rawNow = Date.now();
@@ -110,20 +120,25 @@ async function getToken(creds: Credentials): Promise<string> {
       headers: { "Content-Type": "application/json", "User-Agent": getFeishuUserAgent() },
       body: JSON.stringify({ app_id: creds.appId, app_secret: creds.appSecret }),
     },
+    fetchImpl: deps?.fetchImpl,
+    lookupFn: deps?.lookupFn,
     policy: { allowedHostnames: resolveAllowedHostnames(creds.domain) },
     auditContext: "feishu.streaming-card.token",
   });
-  if (!response.ok) {
-    await release();
-    throw new Error(`Token request failed with HTTP ${response.status}`);
-  }
-  const data = (await response.json()) as {
+  let data: {
     code: number;
     msg: string;
     tenant_access_token?: string;
     expire?: number;
   };
-  await release();
+  try {
+    if (!response.ok) {
+      throw new Error(`Token request failed with HTTP ${response.status}`);
+    }
+    data = await readFeishuJsonResponse(response, "feishu.streaming-card.token");
+  } finally {
+    await release();
+  }
   if (data.code !== 0 || !data.tenant_access_token) {
     throw new Error(`Token error: ${data.msg}`);
   }
@@ -217,11 +232,20 @@ export class FeishuStreamingSession {
   private pendingText: string | null = null;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private updateThrottleMs = STREAMING_UPDATE_THROTTLE_MS;
+  private fetchImpl?: FeishuStreamingFetch;
+  private lookupFn?: LookupFn;
 
-  constructor(client: Client, creds: Credentials, log?: (msg: string) => void) {
+  constructor(
+    client: Client,
+    creds: Credentials,
+    log?: (msg: string) => void,
+    deps?: FeishuStreamingDeps,
+  ) {
     this.client = client;
     this.creds = creds;
     this.log = log;
+    this.fetchImpl = deps?.fetchImpl;
+    this.lookupFn = deps?.lookupFn;
   }
 
   async start(
@@ -267,25 +291,33 @@ export class FeishuStreamingSession {
       init: {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${await getToken(this.creds)}`,
+          Authorization: `Bearer ${await getToken(this.creds, {
+            fetchImpl: this.fetchImpl,
+            lookupFn: this.lookupFn,
+          })}`,
           "Content-Type": "application/json",
           "User-Agent": getFeishuUserAgent(),
         },
         body: JSON.stringify({ type: "card_json", data: JSON.stringify(cardJson) }),
       },
+      fetchImpl: this.fetchImpl,
+      lookupFn: this.lookupFn,
       policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
       auditContext: "feishu.streaming-card.create",
     });
-    if (!createRes.ok) {
-      await releaseCreate();
-      throw new Error(`Create card request failed with HTTP ${createRes.status}`);
-    }
-    const createData = (await createRes.json()) as {
+    let createData: {
       code: number;
       msg: string;
       data?: { card_id: string };
     };
-    await releaseCreate();
+    try {
+      if (!createRes.ok) {
+        throw new Error(`Create card request failed with HTTP ${createRes.status}`);
+      }
+      createData = await readFeishuJsonResponse(createRes, "feishu.streaming-card.create");
+    } finally {
+      await releaseCreate();
+    }
     if (createData.code !== 0 || !createData.data?.card_id) {
       throw new Error(`Create card failed: ${createData.msg}`);
     }
@@ -369,7 +401,10 @@ export class FeishuStreamingSession {
         init: {
           method: "PUT",
           headers: {
-            Authorization: `Bearer ${await getToken(this.creds)}`,
+            Authorization: `Bearer ${await getToken(this.creds, {
+              fetchImpl: this.fetchImpl,
+              lookupFn: this.lookupFn,
+            })}`,
             "Content-Type": "application/json",
             "User-Agent": getFeishuUserAgent(),
           },
@@ -379,6 +414,8 @@ export class FeishuStreamingSession {
             uuid: `s_${this.state.cardId}_${this.state.sequence}`,
           }),
         },
+        fetchImpl: this.fetchImpl,
+        lookupFn: this.lookupFn,
         policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
         auditContext: "feishu.streaming-card.update",
       });
@@ -409,7 +446,10 @@ export class FeishuStreamingSession {
         init: {
           method: "PUT",
           headers: {
-            Authorization: `Bearer ${await getToken(this.creds)}`,
+            Authorization: `Bearer ${await getToken(this.creds, {
+              fetchImpl: this.fetchImpl,
+              lookupFn: this.lookupFn,
+            })}`,
             "Content-Type": "application/json",
             "User-Agent": getFeishuUserAgent(),
           },
@@ -419,6 +459,8 @@ export class FeishuStreamingSession {
             uuid: `r_${this.state.cardId}_${this.state.sequence}`,
           }),
         },
+        fetchImpl: this.fetchImpl,
+        lookupFn: this.lookupFn,
         policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
         auditContext: "feishu.streaming-card.replace",
       });
@@ -512,7 +554,10 @@ export class FeishuStreamingSession {
       init: {
         method: "PUT",
         headers: {
-          Authorization: `Bearer ${await getToken(this.creds)}`,
+          Authorization: `Bearer ${await getToken(this.creds, {
+            fetchImpl: this.fetchImpl,
+            lookupFn: this.lookupFn,
+          })}`,
           "Content-Type": "application/json",
           "User-Agent": getFeishuUserAgent(),
         },
@@ -522,6 +567,8 @@ export class FeishuStreamingSession {
           uuid: `n_${this.state.cardId}_${this.state.sequence}`,
         }),
       },
+      fetchImpl: this.fetchImpl,
+      lookupFn: this.lookupFn,
       policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
       auditContext: "feishu.streaming-card.note-update",
     })
@@ -571,7 +618,10 @@ export class FeishuStreamingSession {
       init: {
         method: "PATCH",
         headers: {
-          Authorization: `Bearer ${await getToken(this.creds)}`,
+          Authorization: `Bearer ${await getToken(this.creds, {
+            fetchImpl: this.fetchImpl,
+            lookupFn: this.lookupFn,
+          })}`,
           "Content-Type": "application/json; charset=utf-8",
           "User-Agent": getFeishuUserAgent(),
         },
@@ -583,6 +633,8 @@ export class FeishuStreamingSession {
           uuid: `c_${this.state.cardId}_${this.state.sequence}`,
         }),
       },
+      fetchImpl: this.fetchImpl,
+      lookupFn: this.lookupFn,
       policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
       auditContext: "feishu.streaming-card.close",
     })

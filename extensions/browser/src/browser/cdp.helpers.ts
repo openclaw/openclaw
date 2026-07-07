@@ -23,7 +23,7 @@ import {
 import { CDP_HTTP_REQUEST_TIMEOUT_MS, CDP_WS_HANDSHAKE_TIMEOUT_MS } from "./cdp-timeouts.js";
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
 import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
-import { withAllowedHostname } from "./ssrf-policy-helpers.js";
+import { withExactHostnamePolicy } from "./ssrf-policy-helpers.js";
 import { normalizeBrowserTimerDelayMs } from "./timer-delay.js";
 
 export { isLoopbackHost };
@@ -77,6 +77,7 @@ export function isDirectCdpWebSocketEndpoint(url: string): boolean {
 export async function assertCdpEndpointAllowed(
   cdpUrl: string,
   ssrfPolicy?: SsrFPolicy,
+  options?: { source?: "configured" | "discovered" },
 ): Promise<void> {
   if (!ssrfPolicy) {
     return;
@@ -86,9 +87,13 @@ export async function assertCdpEndpointAllowed(
     throw new Error(`Invalid CDP URL protocol: ${parsed.protocol.replace(":", "")}`);
   }
   try {
-    const policy = isLoopbackHost(parsed.hostname)
-      ? withAllowedHostname(ssrfPolicy, parsed.hostname)
-      : ssrfPolicy;
+    // Configured loopback CDP is a local control plane. Discovered endpoints
+    // must remain within the caller's selected-host policy and cannot claim a
+    // new loopback exception through returned JSON.
+    const policy =
+      isLoopbackHost(parsed.hostname) && options?.source !== "discovered"
+        ? withExactHostnamePolicy(ssrfPolicy, parsed.hostname)
+        : ssrfPolicy;
     await resolvePinnedHostnameWithPolicy(parsed.hostname, {
       policy,
     });
@@ -352,7 +357,7 @@ export async function fetchCdpChecked(
         // Loopback CDP is an OpenClaw control plane, not page navigation. Allow
         // its exact host while preserving the caller's policy for remote hosts.
         const policy = isLoopbackHost(parsedUrl.hostname)
-          ? withAllowedHostname(ssrfPolicy, parsedUrl.hostname)
+          ? withExactHostnamePolicy(ssrfPolicy, parsedUrl.hostname)
           : (ssrfPolicy ?? { allowPrivateNetwork: true });
         const guarded = await fetchWithSsrFGuard({
           url: fetchUrl,

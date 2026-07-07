@@ -45,6 +45,14 @@ openclaw hooks info session-memory
 
 ## Event types
 
+Hooks subscribe to a specific key from this table, or to a bare family name
+(`command`, `session`, `agent`, `gateway`, `message`) to receive every action
+in that family. OpenClaw core emits nothing else, so any other name is almost
+always a typo that leaves the hook silently dead (only a plugin emitting a
+custom event could fire it). The hook loader logs a warning for such names
+(for example `command:nwe`), and `openclaw hooks info <name>` flags them, so a
+hook that never runs is diagnosable.
+
 | Event                    | When it fires                                              |
 | ------------------------ | ---------------------------------------------------------- |
 | `command:new`            | `/new` command issued                                      |

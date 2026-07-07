@@ -30,7 +30,9 @@ handshake. Only clients that explicitly call `node.pair.*` use this flow.
 4. On approval, the Gateway issues a **new token** (tokens rotate on re-pair).
 5. The node reconnects using the token and is now paired.
 
-Pending requests expire automatically after **5 minutes**.
+Pending requests expire automatically **5 minutes after the node's last
+retry** — an actively reconnecting node keeps its one pending request alive
+rather than generating a fresh request (and approval prompt) per attempt.
 
 ## CLI workflow (headless friendly)
 

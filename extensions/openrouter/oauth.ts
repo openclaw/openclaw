@@ -8,7 +8,10 @@ import {
   type ProviderAuthResult,
 } from "openclaw/plugin-sdk/provider-auth";
 import { generateOAuthState } from "openclaw/plugin-sdk/provider-auth-runtime";
-import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
 
@@ -71,11 +74,13 @@ function extractOpenRouterError(value: unknown): string | undefined {
 }
 
 async function readResponseBody(response: Response): Promise<unknown> {
-  const text = response.ok
-    ? await response.text()
-    : await readResponseTextLimited(response, OPENROUTER_OAUTH_ERROR_BODY_LIMIT_BYTES).catch(
-        () => "",
-      );
+  if (response.ok) {
+    return await readProviderJsonResponse(response, "OpenRouter OAuth key exchange");
+  }
+  const text = await readResponseTextLimited(
+    response,
+    OPENROUTER_OAUTH_ERROR_BODY_LIMIT_BYTES,
+  ).catch(() => "");
   if (!text.trim()) {
     return null;
   }

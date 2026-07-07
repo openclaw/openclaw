@@ -65,7 +65,6 @@ import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 const COST_USAGE_CACHE_TTL_MS = 30_000;
 const COST_USAGE_CACHE_MAX = 256;
 const SESSIONS_USAGE_AGENT_LOAD_CONCURRENCY = 12;
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 type DateRange = { startMs: number; endMs: number };
 // Keep validation and parsed timestamps in one result so handlers cannot forward
@@ -74,6 +73,7 @@ type DateRangeResolution = { ok: true; value: DateRange } | { ok: false; error: 
 type DateInterpretation =
   | { mode: "utc" | "gateway" }
   | { mode: "specific"; utcOffsetMinutes: number };
+type DateParts = { year: number; monthIndex: number; day: number };
 
 type CostUsageCacheEntry = {
   summary?: CostUsageSummary;
@@ -139,9 +139,7 @@ function resolveSessionUsageFileOrRespond(
   return { config, entry, agentId, sessionId, sessionFile };
 }
 
-const parseDateParts = (
-  raw: unknown,
-): { year: number; monthIndex: number; day: number } | undefined => {
+const parseDateParts = (raw: unknown): DateParts | undefined => {
   if (typeof raw !== "string" || !raw.trim()) {
     return undefined;
   }
@@ -169,6 +167,29 @@ const parseDateParts = (
   }
   return { year, monthIndex, day };
 };
+
+const shiftDateParts = (parts: DateParts, days: number): DateParts => {
+  const shifted = new Date(Date.UTC(parts.year, parts.monthIndex, parts.day + days));
+  return {
+    year: shifted.getUTCFullYear(),
+    monthIndex: shifted.getUTCMonth(),
+    day: shifted.getUTCDate(),
+  };
+};
+
+const datePartsToStartMs = (parts: DateParts, interpretation: DateInterpretation): number => {
+  const { year, monthIndex, day } = parts;
+  if (interpretation.mode === "gateway") {
+    return new Date(year, monthIndex, day).getTime();
+  }
+  if (interpretation.mode === "specific") {
+    return Date.UTC(year, monthIndex, day) - interpretation.utcOffsetMinutes * 60 * 1000;
+  }
+  return Date.UTC(year, monthIndex, day);
+};
+
+const datePartsToEndMs = (parts: DateParts, interpretation: DateInterpretation): number =>
+  datePartsToStartMs(shiftDateParts(parts, 1), interpretation) - 1;
 
 // usage.cost / sessions.usage accept optional startDate/endDate. parseDateParts returns
 // undefined for both absent and invalid input, so an explicitly supplied but unparseable
@@ -243,6 +264,25 @@ const resolveDayBucketUtcOffsetMinutes = (interpretation: DateInterpretation) =>
       ? interpretation.utcOffsetMinutes
       : 0;
 
+const getDateParts = (date: Date, interpretation: DateInterpretation): DateParts => {
+  if (interpretation.mode === "gateway") {
+    return { year: date.getFullYear(), monthIndex: date.getMonth(), day: date.getDate() };
+  }
+  if (interpretation.mode === "specific") {
+    const shifted = new Date(date.getTime() + interpretation.utcOffsetMinutes * 60 * 1000);
+    return {
+      year: shifted.getUTCFullYear(),
+      monthIndex: shifted.getUTCMonth(),
+      day: shifted.getUTCDate(),
+    };
+  }
+  return {
+    year: date.getUTCFullYear(),
+    monthIndex: date.getUTCMonth(),
+    day: date.getUTCDate(),
+  };
+};
+
 /**
  * Parse a date string (YYYY-MM-DD) to start-of-day timestamp based on interpretation mode.
  * Returns undefined if invalid.
@@ -255,32 +295,16 @@ const parseDateToMs = (
   if (!parts) {
     return undefined;
   }
-  const { year, monthIndex, day } = parts;
-  if (interpretation.mode === "gateway") {
-    const ms = new Date(year, monthIndex, day).getTime();
-    return Number.isNaN(ms) ? undefined : ms;
-  }
-  if (interpretation.mode === "specific") {
-    const ms = Date.UTC(year, monthIndex, day) - interpretation.utcOffsetMinutes * 60 * 1000;
-    return Number.isNaN(ms) ? undefined : ms;
-  }
-  const ms = Date.UTC(year, monthIndex, day);
-  return Number.isNaN(ms) ? undefined : ms;
+  return datePartsToStartMs(parts, interpretation);
 };
 
-const getTodayStartMs = (now: Date, interpretation: DateInterpretation): number => {
-  if (interpretation.mode === "gateway") {
-    return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  }
-  if (interpretation.mode === "specific") {
-    const shifted = new Date(now.getTime() + interpretation.utcOffsetMinutes * 60 * 1000);
-    return (
-      Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()) -
-      interpretation.utcOffsetMinutes * 60 * 1000
-    );
-  }
-  return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+const formatDateLabel = (ms: number, interpretation: DateInterpretation): string => {
+  const parts = getDateParts(new Date(ms), interpretation);
+  return formatDateParts(parts.year, parts.monthIndex, parts.day);
 };
+
+const formatDateParts = (year: number, monthIndex: number, day: number): string =>
+  `${year}-${String(monthIndex + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 
 const parseDays = (raw: unknown): number | undefined => {
   if (typeof raw === "number" && Number.isFinite(raw)) {
@@ -314,6 +338,15 @@ const resolveRangeDays = (raw: unknown): number | "all" | undefined => {
   return undefined;
 };
 
+const resolveTrailingDays = (
+  endDateParts: DateParts,
+  days: number,
+  interpretation: DateInterpretation,
+): DateRange => ({
+  startMs: datePartsToStartMs(shiftDateParts(endDateParts, -(days - 1)), interpretation),
+  endMs: datePartsToEndMs(endDateParts, interpretation),
+});
+
 /**
  * Get date range from params (startDate/endDate or days).
  * Falls back to last 30 days if not provided.
@@ -336,18 +369,19 @@ const resolveDateRange = (params: {
 
   const now = new Date();
   const interpretation = resolveDateInterpretation(params);
-  const todayStartMs = getTodayStartMs(now, interpretation);
-  const todayEndMs = todayStartMs + DAY_MS - 1;
+  const todayDateParts = getDateParts(now, interpretation);
+  const todayEndMs = datePartsToEndMs(todayDateParts, interpretation);
 
-  const startMs = parseDateToMs(params.startDate, interpretation);
-  const endMs = parseDateToMs(params.endDate, interpretation);
+  const startDateParts = parseDateParts(params.startDate);
+  const endDateParts = parseDateParts(params.endDate);
 
-  if (startMs !== undefined && endMs !== undefined) {
-    if (startMs > endMs) {
+  if (startDateParts && endDateParts) {
+    const startMs = datePartsToStartMs(startDateParts, interpretation);
+    const endStartMs = datePartsToStartMs(endDateParts, interpretation);
+    if (startMs > endStartMs) {
       return { ok: false, error: "startDate must not be after endDate" };
     }
-    // endMs should be end of day
-    return { ok: true, value: { startMs, endMs: endMs + DAY_MS - 1 } };
+    return { ok: true, value: { startMs, endMs: datePartsToEndMs(endDateParts, interpretation) } };
   }
 
   const rangeDays = resolveRangeDays(params.range);
@@ -355,20 +389,17 @@ const resolveDateRange = (params: {
     return { ok: true, value: { startMs: 0, endMs: todayEndMs } };
   }
   if (rangeDays !== undefined) {
-    const start = todayStartMs - (rangeDays - 1) * DAY_MS;
-    return { ok: true, value: { startMs: start, endMs: todayEndMs } };
+    return { ok: true, value: resolveTrailingDays(todayDateParts, rangeDays, interpretation) };
   }
 
   const days = parseDays(params.days);
   if (days !== undefined) {
     const clampedDays = Math.max(1, days);
-    const start = todayStartMs - (clampedDays - 1) * DAY_MS;
-    return { ok: true, value: { startMs: start, endMs: todayEndMs } };
+    return { ok: true, value: resolveTrailingDays(todayDateParts, clampedDays, interpretation) };
   }
 
   // Default to last 30 days
-  const defaultStartMs = todayStartMs - 29 * DAY_MS;
-  return { ok: true, value: { startMs: defaultStartMs, endMs: todayEndMs } };
+  return { ok: true, value: resolveTrailingDays(todayDateParts, 30, interpretation) };
 };
 
 type DiscoveredSessionWithAgent = DiscoveredSession & { agentId: string };
@@ -904,7 +935,6 @@ export const testApi = {
   parseUtcOffsetToMinutes,
   resolveDateInterpretation,
   parseDateToMs,
-  getTodayStartMs,
   parseDays,
   resolveDateRange,
   discoverAllSessionsForUsage,
@@ -978,9 +1008,8 @@ export const usageHandlers: GatewayRequestHandlers = {
     }
     const config = context.getRuntimeConfig();
     const { startMs, endMs } = dateRange.value;
-    const dailyUtcOffsetMinutes = resolveDayBucketUtcOffsetMinutes(
-      resolveDateInterpretation({ mode: p.mode, utcOffset: p.utcOffset }),
-    );
+    const dateInterpretation = resolveDateInterpretation({ mode: p.mode, utcOffset: p.utcOffset });
+    const dailyUtcOffsetMinutes = resolveDayBucketUtcOffsetMinutes(dateInterpretation);
     const limit = typeof p.limit === "number" && Number.isFinite(p.limit) ? p.limit : 50;
     const includeContextWeight = p.includeContextWeight ?? false;
     const specificKey = normalizeOptionalString(p.key) ?? null;
@@ -1426,12 +1455,6 @@ export const usageHandlers: GatewayRequestHandlers = {
       }
     }
 
-    // Format dates back to YYYY-MM-DD strings
-    const formatDateStr = (ms: number) => {
-      const d = new Date(ms);
-      return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
-    };
-
     const tail = buildUsageAggregateTail({
       byChannelMap,
       latencyTotals,
@@ -1471,8 +1494,8 @@ export const usageHandlers: GatewayRequestHandlers = {
 
     const result: SessionsUsageResult = {
       updatedAt: now,
-      startDate: formatDateStr(startMs),
-      endDate: formatDateStr(endMs),
+      startDate: formatDateLabel(startMs, dateInterpretation),
+      endDate: formatDateLabel(endMs, dateInterpretation),
       sessions,
       totals: aggregateTotals,
       aggregates,

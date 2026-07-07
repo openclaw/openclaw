@@ -1,4 +1,5 @@
 // Crestodian chat engine: transport-agnostic conversation over typed operations.
+import { isSensitiveConfigPath } from "../config/sensitive-paths.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { WizardSession, type WizardStep } from "../wizard/session.js";
 import {
@@ -8,8 +9,13 @@ import {
   type CrestodianAgentSession,
   type CrestodianAgentTurnRunner,
 } from "./agent-turn.js";
+import {
+  classifyCrestodianApprovalText,
+  type CrestodianApprovalClassifier,
+  type CrestodianApprovalIntent,
+} from "./approval-intent.js";
 import type { CrestodianAssistantPlanner, CrestodianAssistantTurn } from "./assistant.js";
-import { approvalQuestion, isYes } from "./dialogue.js";
+import { approvalQuestion } from "./dialogue.js";
 import {
   describeCrestodianPersistentOperation,
   executeCrestodianOperation,
@@ -25,13 +31,15 @@ import { loadCrestodianOverview, type CrestodianOverview } from "./overview.js";
  * and the gateway `crestodian.chat` RPC both drive this engine, so onboarding
  * behaves the same in a terminal and in the macOS app.
  *
- * Every free-form message is an AI turn: the custodian persona replies and may
- * propose exactly one typed command. The model never mutates anything — its
- * command re-parses through the same closed operation union, and persistent
- * operations still wait for the user's conversational "yes". Exact typed
- * commands, approvals, and hosted wizards resolve deterministically so the
- * conversation keeps working when no model is usable yet (fresh machine,
- * logged-out CLIs, broken config).
+ * The conversation is AI-only: every message is an AI turn (agent loop first,
+ * single-turn planner as fallback), and approval of pending mutations is
+ * judged from the user's own words by a host-run classifier — never by the
+ * conversation model itself, which cannot self-approve (see
+ * crestodian-tool.ts). The anchored typed-command grammar is not a chat
+ * feature: it only takes over when no model is usable at all (fresh machine,
+ * logged-out CLIs, broken config), so repair keeps working configless.
+ * Hosted wizards resolve deterministically because they are structured forms,
+ * not conversation.
  */
 export type CrestodianChatEngineOptions = {
   yes?: boolean;
@@ -39,6 +47,8 @@ export type CrestodianChatEngineOptions = {
   planWithAssistant?: CrestodianAssistantPlanner;
   /** Test seam for the embedded agent-loop turn runner. */
   runAgentTurn?: CrestodianAgentTurnRunner;
+  /** Test seam for the approval-intent classifier. */
+  classifyApproval?: CrestodianApprovalClassifier;
   /** Where side effects run; the gateway surface never manages its own daemon. */
   surface?: "cli" | "gateway";
   /** Test seam for the channel-setup wizard hosted by the chat bridge. */
@@ -164,10 +174,13 @@ function renderWizardStep(step: WizardStep): string {
 function parseWizardAnswer(step: WizardStep, text: string): { value: unknown } | null {
   const trimmed = text.trim();
   if (step.type === "confirm") {
-    if (isYes(trimmed)) {
+    // Wizard confirms are structured form fields, so the closed-list
+    // classifier decides; ambiguous answers re-render the prompt.
+    const intent = classifyCrestodianApprovalText(trimmed);
+    if (intent === "approve") {
       return { value: true };
     }
-    if (/^(n|no|nope|skip)$/i.test(trimmed)) {
+    if (intent === "decline") {
       return { value: false };
     }
     return null;
@@ -214,11 +227,22 @@ function parseWizardAnswer(step: WizardStep, text: string): { value: unknown } |
   return { value: step.type === "action" ? true : undefined };
 }
 
-const DECLINE_RE = /^(n|no|nope|skip|not now|cancel|later)\b/i;
-
 function formatOperationError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   return `That did not go through: ${message}`;
+}
+
+/**
+ * A typed `config set` against a sensitive path carries a raw secret; the
+ * stored history feeds future planner prompts (and CLI-harness transcripts),
+ * so the value is masked the same way hosted-wizard secrets are.
+ */
+function redactSensitiveCommandText(text: string): string {
+  const operation = parseCrestodianOperation(text);
+  if (operation.kind === "config-set" && isSensitiveConfigPath(operation.path)) {
+    return `config set ${operation.path} <redacted secret>`;
+  }
+  return text;
 }
 
 /**
@@ -248,12 +272,15 @@ export class CrestodianChatEngine {
   private wizardBridge: ActiveWizardBridge | null = null;
   private readonly history: CrestodianAssistantTurn[] = [];
   private readonly agentSession: CrestodianAgentSession = createCrestodianAgentSession();
+  /** Turns run strictly one at a time; interleaved handles corrupt wizard/pending state. */
+  private turnQueue: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly opts: CrestodianChatEngineOptions = {}) {}
 
   /**
-   * Seed a proposed operation that a bare "yes" will apply. Used by first-run
-   * onboarding: the welcome message states the plan, the user just agrees.
+   * Seed a proposed operation that the user's next approval will apply. Used
+   * by first-run onboarding: the welcome message states the plan, the user
+   * just agrees.
    */
   propose(operation: CrestodianOperation): string {
     this.clearPendingProposals();
@@ -277,11 +304,21 @@ export class CrestodianChatEngine {
   }
 
   async handle(text: string): Promise<CrestodianChatReply> {
+    const turn = this.turnQueue.then(() => this.handleSerialized(text));
+    // The queue must survive a failed turn or every later message would reject.
+    this.turnQueue = turn.catch(() => undefined);
+    return await turn;
+  }
+
+  private async handleSerialized(text: string): Promise<CrestodianChatReply> {
     // Snapshot before resolving: wizard answers to sensitive steps (tokens,
     // passwords) must never enter the AI-visible history.
     const sensitiveTurn = this.wizardBridge?.step?.sensitive === true;
     const reply = await this.resolveTurn(text);
-    this.history.push({ role: "user", text: sensitiveTurn ? "<redacted secret>" : text });
+    this.history.push({
+      role: "user",
+      text: sensitiveTurn ? "<redacted secret>" : redactSensitiveCommandText(text),
+    });
     if (reply.text) {
       this.history.push({ role: "assistant", text: reply.text });
     }
@@ -296,67 +333,101 @@ export class CrestodianChatEngine {
       // A hosted wizard consumes every reply until it finishes or is cancelled.
       return { text: await this.resolveWizardBridgeReply(text), action: "none" };
     }
+    const trimmed = text.trim();
+    if (!trimmed) {
+      return {
+        text: "Tiny claw tap: tell me what you want — setup, repair, channels, anything config.",
+        action: "none",
+      };
+    }
+    if (/^(quit|exit)$/i.test(trimmed)) {
+      // Leaving the process is a host action, not a conversation the AI owns.
+      return { text: "Crestodian retracts into shell. Bye.", action: "exit" };
+    }
+
+    // Secret hygiene: an exact `config set` on a sensitive path carries a raw
+    // token and must never reach a model. It runs on the deterministic path
+    // (redacted proposal + approval), matching the wizard's masked-input rules.
+    const typed = parseCrestodianOperation(text);
+    if (typed.kind === "config-set" && isSensitiveConfigPath(typed.path)) {
+      return await this.runOperation(typed, undefined);
+    }
+
+    // Approval is judged from the user's own words, host-side. The classifier
+    // only runs while a proposal is pending, and "other" (questions, new
+    // requests) keeps the proposal pending and lets the AI carry on.
+    const intent = await this.classifyApprovalIntent(text);
     if (this.pending) {
-      // Approval is deterministic: "yes" applies, a clear "no" drops the
-      // proposal. Anything else goes to the AI with the proposal kept pending,
-      // so questions ("what's a workspace?") don't silently cancel setup.
-      if (isYes(text)) {
-        const pending = this.pending;
-        this.clearPendingProposals();
-        if (pending.kind === "channel-setup") {
-          return { text: await this.startChannelSetupWizard(pending.channel), action: "none" };
-        }
-        const capture = createCaptureRuntime();
-        let applied = false;
-        try {
-          const result = await executeCrestodianOperation(pending, capture, {
-            approved: true,
-            deps: this.commandDeps(),
-          });
-          applied = result.applied;
-        } catch (error) {
-          capture.error(formatOperationError(error));
-        }
-        const verify = applied ? await this.verifyConfigAfterWrite() : null;
-        return {
-          text: [capture.read() || "Applied. Audit entry written.", verify]
-            .filter(Boolean)
-            .join("\n\n"),
-          action: "none",
-        };
+      if (intent === "approve") {
+        return await this.applyPendingProposal();
       }
-      if (DECLINE_RE.test(text.trim())) {
+      if (intent === "decline") {
         this.clearPendingProposals();
         return { text: "Skipped. No barnacles on config today.", action: "none" };
       }
     }
-
-    if (DECLINE_RE.test(text.trim()) && this.agentSession.proposalRef.current) {
-      this.clearPendingProposals();
-      return { text: "Skipped. No barnacles on config today.", action: "none" };
+    if (intent === "decline") {
+      // A declined agent-loop proposal must never stay armable: void the
+      // registered hash now and let the AI acknowledge conversationally.
+      this.agentSession.proposalRef.current = undefined;
     }
 
-    // Exact typed commands run deterministically (instant, no model); strict
-    // grammar keeps anything conversational flowing to the AI custodian.
-    const direct = parseCrestodianOperation(text, { strict: true });
-    if (direct.kind !== "none") {
-      return await this.runOperation(direct, undefined);
-    }
-    if (!text.trim()) {
-      return { text: direct.message, action: "none" };
-    }
-    if (/^(quit|exit)$/i.test(text.trim())) {
-      return { text: "Crestodian retracts into shell. Bye.", action: "exit" };
-    }
+    return await this.resolveAssistantTurn(text, intent === "approve");
+  }
 
-    return await this.resolveAssistantTurn(text);
+  private async classifyApprovalIntent(text: string): Promise<CrestodianApprovalIntent> {
+    const hasProposal =
+      this.pending !== null || this.agentSession.proposalRef.current !== undefined;
+    if (!hasProposal) {
+      return "other";
+    }
+    const classify =
+      this.opts.classifyApproval ??
+      (await import("./approval-intent.js")).classifyCrestodianApprovalIntent;
+    return await classify({
+      message: text,
+      ...(this.pending ? { proposal: describeCrestodianPersistentOperation(this.pending) } : {}),
+    });
+  }
+
+  private async applyPendingProposal(): Promise<CrestodianChatReply> {
+    const pending = this.pending;
+    this.clearPendingProposals();
+    if (!pending) {
+      return { text: "", action: "none" };
+    }
+    if (pending.kind === "channel-setup") {
+      return { text: await this.startChannelSetupWizard(pending.channel), action: "none" };
+    }
+    const capture = createCaptureRuntime();
+    let applied = false;
+    try {
+      const result = await executeCrestodianOperation(pending, capture, {
+        approved: true,
+        deps: this.commandDeps(),
+      });
+      applied = result.applied;
+    } catch (error) {
+      capture.error(formatOperationError(error));
+    }
+    const verify = applied ? await this.verifyConfigAfterWrite() : null;
+    return {
+      text: [capture.read() || "Applied. Audit entry written.", verify]
+        .filter(Boolean)
+        .join("\n\n"),
+      action: "none",
+    };
   }
 
   /**
-   * AI turn: the custodian persona answers and may propose one typed command.
-   * Falls back to deterministic guidance when no model backend is usable.
+   * AI turn: the custodian persona answers and acts through the ring-zero
+   * tool. Falls back to the single-turn planner, then to the anchored typed
+   * grammar when no model backend is usable at all.
    */
-  private async resolveAssistantTurn(text: string): Promise<CrestodianChatReply> {
+  private async resolveAssistantTurn(
+    text: string,
+    approvalArmed: boolean,
+  ): Promise<CrestodianChatReply> {
     const overview = await this.loadOverview();
 
     // Preferred path: the real agent loop (embedded runtime, ring-zero tool,
@@ -366,19 +437,27 @@ export class CrestodianChatEngine {
     try {
       const loopReply = await withDeadline(
         agentTurn({
-          input: text,
+          input: this.pending
+            ? // Hand a host-seeded proposal (onboarding welcome) to the loop so
+              // the conversation can reshape it through the tool handshake.
+              `[pending-proposal] Awaiting the user's approval: ${describeCrestodianPersistentOperation(this.pending)}. If they want it (or a variant), drive it through the crestodian tool yourself.\n${text}`
+            : text,
           overview,
           surface: this.opts.surface ?? "cli",
-          // Mutations unlock only on an explicit user approval in this exact
-          // message; the model cannot self-approve (see crestodian-tool.ts).
-          approvalArmed: isYes(text),
+          // Mutations unlock only on host-verified approval of THIS message;
+          // the model cannot self-approve (see crestodian-tool.ts).
+          approvalArmed,
           session: this.agentSession,
         }).catch(() => null),
         null,
         AGENT_TURN_DEADLINE_MS,
       );
       if (loopReply?.text) {
-        return { text: loopReply.text, action: "none" };
+        // The loop owns the conversation now. A stale engine-side proposal
+        // must not survive it, or a later approval could apply an operation
+        // the user was no longer looking at.
+        this.pending = null;
+        return await this.applyAgentTurnReply(loopReply);
       }
     } catch {
       // Fall through to the single-turn planner.
@@ -399,13 +478,7 @@ export class CrestodianChatEngine {
       ASSISTANT_TURN_DEADLINE_MS,
     ).catch(() => null);
     if (!plan) {
-      return {
-        text: [
-          "I could not reach a model for that (deterministic mode).",
-          "I can run doctor/status/health, check or restart Gateway, list agents/models, set default model, connect channels (`connect telegram`), show audit, or switch to your agent TUI.",
-        ].join("\n"),
-        action: "none",
-      };
+      return this.resolveDeterministicTurn(text);
     }
 
     const replyText = plan.reply ?? "";
@@ -418,12 +491,52 @@ export class CrestodianChatEngine {
       return { text: replyText || "…", action: "none" };
     }
     // Security contract: surface the interpreted command and model before
-    // anything runs (docs/cli/crestodian.md, Model-Assisted Planner).
+    // anything runs (docs/cli/crestodian.md, AI conversation).
     const provenance = `(${plan.modelLabel ?? "model"} → \`${plan.command}\`)`;
     const executed = await this.runOperation(operation, provenance);
     return {
       ...executed,
       text: [replyText, executed.text].filter(Boolean).join("\n\n"),
+    };
+  }
+
+  private async applyAgentTurnReply(loopReply: {
+    text: string;
+    directive?: import("./agent-turn.js").CrestodianAgentTurnDirective;
+  }): Promise<CrestodianChatReply> {
+    if (loopReply.directive?.kind === "channel-setup") {
+      const wizardIntro = await this.startChannelSetupWizard(loopReply.directive.channel);
+      return {
+        text: [loopReply.text, wizardIntro].filter(Boolean).join("\n\n"),
+        action: "none",
+      };
+    }
+    if (loopReply.directive?.kind === "open-tui") {
+      return {
+        text: loopReply.text,
+        action: "open-tui",
+        handoff: loopReply.directive,
+      };
+    }
+    return { text: loopReply.text, action: "none" };
+  }
+
+  /**
+   * Last resort with zero usable models: the anchored typed grammar keeps
+   * setup/repair working on a fresh or broken machine (docs/cli/crestodian.md,
+   * configless contract). This is never reached while any model answers.
+   */
+  private async resolveDeterministicTurn(text: string): Promise<CrestodianChatReply> {
+    const direct = parseCrestodianOperation(text);
+    if (direct.kind !== "none") {
+      return await this.runOperation(direct, undefined);
+    }
+    return {
+      text: [
+        "I could not reach a model for that (deterministic mode).",
+        "I can run doctor/status/health, check or restart Gateway, list agents/models, set default model, connect channels (`connect telegram`), show audit, or switch to your agent TUI.",
+      ].join("\n"),
+      action: "none",
     };
   }
 
@@ -439,7 +552,9 @@ export class CrestodianChatEngine {
       };
     }
 
-    if (operation.kind === "channel-setup" && this.opts.yes) {
+    if (operation.kind === "channel-setup") {
+      // Starting the wizard is not a write; the wizard collects explicit
+      // answers and commits only at the end.
       return { text: await this.startChannelSetupWizard(operation.channel), action: "none" };
     }
 
@@ -509,6 +624,7 @@ export class CrestodianChatEngine {
     const notice = `⚠ openclaw.json failed validation after that write:\n${issuesText}`;
     const recovery = await this.resolveAssistantTurn(
       `[config-verify] The config file is now invalid:\n${issuesText}\nPropose one corrective command from the allowed list.`,
+      false,
     );
     if (!recovery.text || recovery.text.includes("deterministic mode")) {
       return `${notice}\nSay \`doctor fix\` to repair it, or \`config schema <path>\` to check the expected shape.`;

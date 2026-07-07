@@ -98,6 +98,23 @@ describe("GatewayClient", () => {
     }
   });
 
+  test("sends the configured websocket origin", async () => {
+    const port = await getFreePort();
+    wss = new WebSocketServer({ port, host: "127.0.0.1" });
+    const receivedOrigin = new Promise<string | undefined>((resolve) => {
+      wss?.once("connection", (_socket, request) => resolve(request.headers.origin));
+    });
+    const client = new GatewayClient({
+      url: `ws://127.0.0.1:${port}`,
+      origin: `http://127.0.0.1:${port}`,
+      connectChallengeTimeoutMs: 0,
+    });
+    client.start();
+
+    await expect(receivedOrigin).resolves.toBe(`http://127.0.0.1:${port}`);
+    client.stop();
+  });
+
   test("prefers connectChallengeTimeoutMs and still honors the legacy alias", () => {
     expect(resolveGatewayClientConnectChallengeTimeoutMs({})).toBe(
       DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,

@@ -1296,4 +1296,115 @@ describe("pw-tools-core interaction navigation guard", () => {
       vi.useRealTimers();
     }
   });
+
+  it("returns click downloads without adding a second policy grace", async () => {
+    const page = { url: vi.fn(() => "https://example.com") };
+    const click = vi.fn(async () => {});
+    const drain = vi.fn(async () => [
+      {
+        url: "https://example.com/report.pdf",
+        suggestedFilename: "report.pdf",
+        path: "/tmp/openclaw/downloads/report.pdf",
+      },
+    ]);
+    const dispose = vi.fn();
+    getPwToolsCoreSessionMocks().beginActionDownloadCaptureOnPage.mockReturnValueOnce({
+      drain,
+      dispose,
+    });
+    setPwToolsCoreCurrentPage(page);
+    setPwToolsCoreCurrentRefLocator({ click });
+
+    const result = await mod.executeActViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      action: { kind: "click", ref: "1" },
+      ssrfPolicy: { allowPrivateNetwork: false },
+    });
+
+    expect(result.downloads).toEqual([
+      {
+        url: "https://example.com/report.pdf",
+        suggestedFilename: "report.pdf",
+        path: "/tmp/openclaw/downloads/report.pdf",
+      },
+    ]);
+    expect(drain).toHaveBeenCalledWith({
+      firstEventGraceMs: 0,
+      maxWaitMs: 1_000,
+      quietMs: 250,
+    });
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(getPwToolsCoreSessionMocks().beginActionDownloadCaptureOnPage).toHaveBeenCalledWith(
+      page,
+      { beforeSave: expect.any(Function) },
+    );
+  });
+
+  it("quarantines the target without closing it when an action download fails policy", async () => {
+    const page = { url: vi.fn(() => "https://example.com") };
+    const click = vi.fn(async () => {});
+    const blocked = new Error("blocked action download");
+    blocked.name = "InvalidBrowserNavigationUrlError";
+    const dispose = vi.fn();
+    getPwToolsCoreSessionMocks().beginActionDownloadCaptureOnPage.mockReturnValueOnce({
+      drain: vi.fn(async () => {
+        throw blocked;
+      }),
+      dispose,
+    });
+    setPwToolsCoreCurrentPage(page);
+    setPwToolsCoreCurrentRefLocator({ click });
+
+    await expect(
+      mod.executeActViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        action: { kind: "click", ref: "1" },
+      }),
+    ).rejects.toBe(blocked);
+
+    expect(getPwToolsCoreSessionMocks().quarantineBlockedNavigationTarget).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18792",
+      page,
+      targetId: "T1",
+    });
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("captures key-triggered downloads with a bounded event grace", async () => {
+    const page = {
+      keyboard: { press: vi.fn(async () => {}) },
+      url: vi.fn(() => "https://example.com"),
+    };
+    const drain = vi.fn(async () => [
+      {
+        url: "https://example.com/report.pdf",
+        suggestedFilename: "report.pdf",
+        path: "/tmp/openclaw/downloads/report.pdf",
+      },
+    ]);
+    const dispose = vi.fn();
+    getPwToolsCoreSessionMocks().beginActionDownloadCaptureOnPage.mockReturnValueOnce({
+      drain,
+      dispose,
+    });
+    setPwToolsCoreCurrentPage(page);
+
+    const result = await mod.executeActViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      action: { kind: "press", key: "Enter" },
+    });
+
+    expect(result.downloads).toEqual([
+      expect.objectContaining({ suggestedFilename: "report.pdf" }),
+    ]);
+    expect(drain).toHaveBeenCalledWith({
+      firstEventGraceMs: 250,
+      maxWaitMs: 1_000,
+      quietMs: 250,
+    });
+    expect(dispose).toHaveBeenCalledOnce();
+  });
 });

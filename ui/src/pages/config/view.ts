@@ -46,7 +46,7 @@ const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
   140: "XXL",
 };
 
-export type WebPushUiState = {
+type WebPushUiState = {
   supported: boolean;
   permission: NotificationPermission | "unsupported";
   subscribed: boolean;

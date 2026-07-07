@@ -124,6 +124,8 @@ private fun stableMessageVersion(message: ChatMessage): String {
       append(content.fileName.orEmpty())
       append(',')
       append(content.base64?.length ?: 0)
+      append(',')
+      append(content.durationMs ?: "")
     }
   }
 }
@@ -163,6 +165,8 @@ private fun latestContentVersion(
       append(content.fileName.orEmpty())
       append(',')
       append(content.base64?.length ?: 0)
+      append(',')
+      append(content.durationMs ?: "")
     }
     append(":runs=")
     append(pendingRunCount)

@@ -4,7 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 import { i18n, t } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { renderAgentFiles } from "./panels-status-files.ts";
-import { renderAgents, type AgentsProps } from "./view.ts";
+import { renderAgents } from "./view.ts";
+
+type AgentsProps = Parameters<typeof renderAgents>[0];
 
 function createSkill() {
   return {

@@ -1657,12 +1657,27 @@ describe("runMessageAction plugin dispatch", () => {
   });
 
   describe("presentation-only send behavior", () => {
-    const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
-      jsonResult({
-        ok: true,
-        presentation: params.presentation ?? null,
-        message: params.message ?? null,
-      }),
+    const handleAction = vi.fn(
+      async ({ cfg, params }: { cfg: OpenClawConfig; params: Record<string, unknown> }) => {
+        const message = typeof params.message === "string" ? params.message : "";
+        const responsePrefix = cfg.messages?.responsePrefix;
+        const rawMessage =
+          responsePrefix && message.startsWith(`${responsePrefix} `)
+            ? message.slice(responsePrefix.length + 1)
+            : message;
+        let detectedCard = false;
+        try {
+          detectedCard = isRecord((JSON.parse(rawMessage) as { body?: unknown }).body);
+        } catch {
+          // Non-JSON text remains a normal plugin message.
+        }
+        return jsonResult({
+          ok: true,
+          presentation: params.presentation ?? null,
+          message: params.message ?? null,
+          detectedCard,
+        });
+      },
     );
 
     const cardPlugin: ChannelPlugin = {
@@ -1736,6 +1751,44 @@ describe("runMessageAction plugin dispatch", () => {
         },
         "result payload",
       );
+    });
+
+    it("keeps prefixed JSON recoverable by plugin-owned card detection", async () => {
+      const cardJson = JSON.stringify({
+        body: {
+          elements: [{ tag: "markdown", content: "Card body" }],
+        },
+      });
+      const result = await runMessageAction({
+        cfg: {
+          channels: {
+            cardchat: {
+              enabled: true,
+            },
+          },
+          messages: { responsePrefix: "[Nexus]" },
+        } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "cardchat",
+          target: "channel:test-card",
+          message: cardJson,
+        },
+        dryRun: false,
+      });
+
+      expect(result.kind).toBe("send");
+      expect(result.handledBy).toBe("plugin");
+      expectRecordFields(
+        readRecordField(result, "payload", "result payload"),
+        {
+          ok: true,
+          detectedCard: true,
+        },
+        "result payload",
+      );
+      const pluginParams = readRecordField(readFirstPluginCall(handleAction), "params", "params");
+      expect(pluginParams.message).toBe(`[Nexus] ${cardJson}`);
     });
   });
 

@@ -78,11 +78,25 @@ public struct WebSocketTaskBox: @unchecked Sendable {
 
 public protocol WebSocketSessioning: AnyObject {
     func makeWebSocketTask(url: URL) -> WebSocketTaskBox
+    func makeWebSocketTask(request: URLRequest) -> WebSocketTaskBox
+}
+
+extension WebSocketSessioning {
+    /// Compatibility path for existing session conformers. URLSession and pinning sessions
+    /// override this requirement so operator headers remain attached to the upgrade request.
+    public func makeWebSocketTask(request: URLRequest) -> WebSocketTaskBox {
+        guard let url = request.url else { preconditionFailure("WebSocket request URL is required") }
+        return self.makeWebSocketTask(url: url)
+    }
 }
 
 extension URLSession: WebSocketSessioning {
     public func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
-        let task = self.webSocketTask(with: url)
+        self.makeWebSocketTask(request: URLRequest(url: url))
+    }
+
+    public func makeWebSocketTask(request: URLRequest) -> WebSocketTaskBox {
+        let task = self.webSocketTask(with: request)
         // Avoid "Message too long" receive errors for large snapshots / history payloads.
         task.maximumMessageSize = 16 * 1024 * 1024 // 16 MB
         return WebSocketTaskBox(task: task)
@@ -236,20 +250,6 @@ private struct SelectedConnectAuth {
     let suppressedDeviceTokenRetry: Bool
 }
 
-private enum GatewayConnectErrorCodes {
-    static let authTokenMismatch = GatewayConnectAuthDetailCode.authTokenMismatch.rawValue
-    static let authDeviceTokenMismatch = GatewayConnectAuthDetailCode.authDeviceTokenMismatch.rawValue
-    static let authTokenMissing = GatewayConnectAuthDetailCode.authTokenMissing.rawValue
-    static let authTokenNotConfigured = GatewayConnectAuthDetailCode.authTokenNotConfigured.rawValue
-    static let authPasswordMissing = GatewayConnectAuthDetailCode.authPasswordMissing.rawValue
-    static let authPasswordMismatch = GatewayConnectAuthDetailCode.authPasswordMismatch.rawValue
-    static let authPasswordNotConfigured = GatewayConnectAuthDetailCode.authPasswordNotConfigured.rawValue
-    static let authRateLimited = GatewayConnectAuthDetailCode.authRateLimited.rawValue
-    static let pairingRequired = GatewayConnectAuthDetailCode.pairingRequired.rawValue
-    static let controlUiDeviceIdentityRequired = GatewayConnectAuthDetailCode.controlUiDeviceIdentityRequired.rawValue
-    static let deviceIdentityRequired = GatewayConnectAuthDetailCode.deviceIdentityRequired.rawValue
-}
-
 public actor GatewayChannelActor {
     nonisolated static func resolveRequestTimeoutMs(_ timeoutMs: Double?, defaultMs: Double) -> Double? {
         timeoutMs == 0 ? nil : (timeoutMs ?? defaultMs)
@@ -289,6 +289,7 @@ public actor GatewayChannelActor {
     private var issuedDeviceAuthRoles = Set<String>()
     private var reconnectPausedForAuthFailure = false
     private let defaultRequestTimeoutMs: Double = 15000
+    private let extraHeadersProvider: (@Sendable () -> [String: String])?
     private let pushHandler: (@Sendable (GatewayPush) async -> Void)?
     private var connectOptions: GatewayConnectOptions?
     private let disconnectHandler: (@Sendable (String) async -> Void)?
@@ -301,12 +302,14 @@ public actor GatewayChannelActor {
         session: WebSocketSessionBox? = nil,
         pushHandler: (@Sendable (GatewayPush) async -> Void)? = nil,
         connectOptions: GatewayConnectOptions? = nil,
-        disconnectHandler: (@Sendable (String) async -> Void)? = nil)
+        disconnectHandler: (@Sendable (String) async -> Void)? = nil,
+        extraHeadersProvider: (@Sendable () -> [String: String])? = nil)
     {
         self.url = url
         self.token = token
         self.bootstrapToken = bootstrapToken
         self.password = password
+        self.extraHeadersProvider = extraHeadersProvider
         self.session = session?.session ?? URLSession(configuration: .default)
         self.pushHandler = pushHandler
         self.connectOptions = connectOptions
@@ -381,6 +384,21 @@ public actor GatewayChannelActor {
         }
     }
 
+    /// Operator-supplied proxy credentials (Cloudflare Access-style) ride on the upgrade
+    /// request. Read from the provider at connect time so edits apply on the next reconnect
+    /// without re-pairing. Values are credentials: never log them.
+    private func makeUpgradeRequest() -> URLRequest {
+        var request = URLRequest(url: self.url)
+        // Custom headers can contain service tokens or Authorization values. Do not even read
+        // the provider for cleartext routes, where credentials would be exposed in transit.
+        guard self.url.scheme?.lowercased() == "wss" else { return request }
+        guard let headers = self.extraHeadersProvider?(), !headers.isEmpty else { return request }
+        for (name, value) in GatewayCustomHeaders.sanitized(headers) {
+            request.setValue(value, forHTTPHeaderField: name)
+        }
+        return request
+    }
+
     public func connect() async throws {
         if self.connected, self.task?.state == .running { return }
         if self.isConnecting {
@@ -393,7 +411,7 @@ public actor GatewayChannelActor {
         defer { self.isConnecting = false }
 
         self.task?.cancel(with: .goingAway, reason: nil)
-        self.task = self.session.makeWebSocketTask(url: self.url)
+        self.task = self.session.makeWebSocketTask(request: self.makeUpgradeRequest())
         self.task?.resume()
         do {
             try await AsyncTimeout.withTimeout(

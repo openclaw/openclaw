@@ -1,6 +1,7 @@
 // Decides whether an inbound turn may start, queue, or abort a reply run.
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   beginSessionWorkAdmission,
   type SessionWorkAdmissionLease,
@@ -22,7 +23,7 @@ export type ReplyTurnKind = "visible" | "heartbeat" | "queued_followup" | "contr
 
 /** Admission result for a reply turn attempting to own the session run slot. */
 export type ReplyTurnAdmission =
-  | { status: "owned"; operation: ReplyOperation }
+  | { status: "owned"; operation: ReplyOperation; sessionEntry?: SessionEntry }
   | {
       status: "skipped";
       reason: "active-run" | "aborted" | "lifecycle-invalidated";
@@ -91,6 +92,7 @@ export async function admitReplyTurn(params: {
     try {
       const storePath = params.storePath;
       let operation: ReplyOperation | undefined;
+      let admittedSessionEntry: SessionEntry | undefined;
       let interruptedBeforeOperation = false;
       const admission = storePath
         ? await beginSessionWorkAdmission({
@@ -108,6 +110,7 @@ export async function admitReplyTurn(params: {
                 sessionKey: params.sessionKey,
                 readConsistency: "latest",
               });
+              admittedSessionEntry = currentEntry;
               if (expectedSessionId && !currentEntry) {
                 rejectLifecycleInvalidatedWork({
                   kind: params.kind,
@@ -211,6 +214,7 @@ export async function admitReplyTurn(params: {
       return {
         status: "owned",
         operation,
+        ...(admittedSessionEntry ? { sessionEntry: admittedSessionEntry } : {}),
       };
     } catch (error) {
       if (isAbortSignalAborted(params.upstreamAbortSignal)) {

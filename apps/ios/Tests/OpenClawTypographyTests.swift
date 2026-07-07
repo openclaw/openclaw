@@ -5,6 +5,24 @@ import UIKit
 @testable import OpenClaw
 
 struct OpenClawTypographyTests {
+    @Test func `session controls use branded typography`() throws {
+        let support = try String(
+            contentsOf: Self.sourceURL("Design/CommandCenterSupport.swift"),
+            encoding: .utf8)
+        let commandCenter = try String(
+            contentsOf: Self.sourceURL("Design/CommandCenterTab.swift"),
+            encoding: .utf8)
+
+        #expect(support.contains("TextField(self.editorPlaceholder"))
+        #expect(support.contains("Label(\"Move to Group\""))
+        #expect(support.contains("Label(\"Delete…\""))
+        #expect(support.contains(".font(OpenClawType.subhead)"))
+        #expect(support.contains(".font(OpenClawType.subheadSemiBold)"))
+        #expect(commandCenter.contains("Toggle(isOn: self.$showArchived)"))
+        #expect(commandCenter.contains("Text(\"Show Archived\")"))
+        #expect(commandCenter.contains(".font(OpenClawType.captionMedium)"))
+    }
+
     @Test func `bundled fonts load from app bundle`() {
         for name in OpenClawType.registeredPostScriptNames {
             #expect(UIFont(name: name, size: 12) != nil, "Missing bundled font: \(name)")
@@ -210,13 +228,13 @@ struct OpenClawTypographyTests {
         #expect(onboardingWizard.contains("self.developerModeEnabled = true"))
 
         #expect(settingsSections.contains(".font(OpenClawType.body)"))
-        #expect(settingsSections.contains("Toggle(isOn: self.$talkButtonEnabled)"))
-        #expect(settingsSections.contains("Text(\"Show Talk Control\")"))
+        #expect(settingsSections.contains("self.settingsToggle(\"Show Talk Control\", isOn: self.$talkButtonEnabled)"))
+        #expect(settingsSections.contains("OpenClawToggleIndicator(isOn: isOn.wrappedValue)"))
         #expect(settingsSections.contains("TextField(\"Default Share Instruction\""))
         #expect(settingsSections.contains(".font(OpenClawType.subhead)"))
         #expect(settingsSections.contains("private struct AppearanceSettingsScreen"))
         #expect(settingsSections.contains("Section(\"Gateway\")"))
-        #expect(settingsSections.contains("LabeledContent(\"Address\", value: self.gatewayAddress)"))
+        #expect(settingsSections.contains("SettingsDetailRow(\"Address\", value: self.gatewayAddress)"))
         #expect(settingsSections.contains("func gatewayActionButton"))
         #expect(settingsSections.contains("func settingsToggle"))
         #expect(settingsSections.contains(".font(OpenClawType.subheadSemiBold)"))
@@ -387,7 +405,7 @@ struct OpenClawTypographyTests {
 
     private static func isShorthandControlCall(_ line: String) -> Bool {
         line.range(
-            of: #"\b(Button|Link|Picker|Toggle|TextField|SecureField|Menu|DisclosureGroup)\s*\(""#,
+            of: #"\b(Button|Link|Picker|Toggle|TextField|SecureField|Menu|DisclosureGroup|LabeledContent)\s*\(""#,
             options: .regularExpression) != nil
     }
 

@@ -252,6 +252,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       resolveRuntimeCliBackends: () => [],
     });
     setCliRunnerPrepareTestDeps({
+      isWorkspaceBootstrapPending: vi.fn(async () => false),
       makeBootstrapWarn: vi.fn(() => () => undefined),
       resolveBootstrapContextForRun: vi.fn(async () => ({
         bootstrapFiles: [],
@@ -1180,6 +1181,128 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     expect(context.bootstrapPromptWarningLines).toEqual([]);
     expect(context.systemPromptReport.injectedWorkspaceFiles).toEqual([]);
     expect(context.systemPromptReport.tools.entries).toEqual([]);
+  });
+
+  it.each([
+    {
+      name: "full guidance for a backend with native file tools",
+      nativeToolMode: "always-on" as const,
+      transportsSystemPrompt: true,
+      expectedText:
+        "BOOTSTRAP.md is included below in Project Context; follow it before replying normally.",
+    },
+    {
+      name: "limited guidance for a backend without native file tools",
+      nativeToolMode: undefined,
+      transportsSystemPrompt: true,
+      expectedText: "this run cannot safely complete the full BOOTSTRAP.md workflow here",
+    },
+    {
+      name: "no guidance for a backend without system-prompt transport",
+      nativeToolMode: "always-on" as const,
+      transportsSystemPrompt: false,
+      expectedText: undefined,
+    },
+  ])("renders $name", async ({ nativeToolMode, transportsSystemPrompt, expectedText }) => {
+    const { dir, sessionFile } = createSessionFile();
+    const bootstrapPath = path.join(dir, "BOOTSTRAP.md");
+    const config = {
+      agents: { defaults: { workspace: dir } },
+    } satisfies OpenClawConfig;
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "test-cli",
+          pluginId: "test",
+          bundleMcp: false,
+          nativeToolMode,
+          config: {
+            command: "test-cli",
+            args: ["--print"],
+            ...(transportsSystemPrompt ? { systemPromptArg: "--system-prompt" } : {}),
+            systemPromptWhen: "first",
+            sessionMode: "existing",
+            output: "text",
+            input: "arg",
+          },
+        },
+      ],
+    });
+    setCliRunnerPrepareTestDeps({
+      isWorkspaceBootstrapPending: vi.fn(async () => true),
+      resolveBootstrapContextForRun: vi.fn(async () => ({
+        bootstrapFiles: [
+          {
+            name: "BOOTSTRAP.md" as const,
+            path: bootstrapPath,
+            content: "Complete the first-run ritual, then delete this file.",
+            missing: false,
+          },
+        ],
+        contextFiles: [
+          {
+            path: bootstrapPath,
+            content: "Complete the first-run ritual, then delete this file.",
+          },
+        ],
+      })),
+    });
+
+    try {
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:main",
+        sessionFile,
+        workspaceDir: dir,
+        config,
+        prompt: "Hello",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: `run-bootstrap-${nativeToolMode ?? "limited"}`,
+        trigger: "user",
+        extraSystemPrompt: "stable prompt",
+        cliSessionBinding: {
+          sessionId: "cli-session",
+          extraSystemPromptHash: hashCliSessionText("stable prompt"),
+          cwdHash: hashCliSessionText(dir),
+        },
+      });
+
+      if (expectedText) {
+        expect(context.systemPrompt).toContain("## Bootstrap Pending");
+        expect(context.systemPrompt).toContain(expectedText);
+        if (nativeToolMode === "always-on") {
+          expect(context.systemPrompt).toContain("## " + bootstrapPath);
+          expect(context.systemPrompt).toContain("Complete the first-run ritual");
+          expect(context.systemPromptReport.injectedWorkspaceFiles).toEqual([
+            expect.objectContaining({
+              name: "BOOTSTRAP.md",
+              injectedChars: expect.any(Number),
+              truncated: false,
+            }),
+          ]);
+        } else {
+          expect(context.systemPrompt).not.toContain("## " + bootstrapPath);
+          expect(context.systemPrompt).not.toContain("Complete the first-run ritual");
+          expect(context.systemPromptReport.injectedWorkspaceFiles).toEqual([]);
+        }
+        expect(context.reusableCliSession).toEqual({
+          mode: "reuse-with-drift",
+          sessionId: "cli-session",
+          drift: { reasons: ["system-prompt"] },
+        });
+      } else {
+        expect(context.systemPrompt).not.toContain("## Bootstrap Pending");
+        expect(context.reusableCliSession).toEqual({
+          mode: "reuse",
+          sessionId: "cli-session",
+        });
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("applies prompt-build hook context to Claude-style CLI preparation", async () => {

@@ -466,6 +466,7 @@ function createMockReplyOperation(): {
       abortSignal: new AbortController().signal,
       resetTriggered: false,
       terminalRecovery: false,
+      acceptedSteeredInboundAudio: false,
       phase: "running",
       result: null,
       hasOwnedSessionId: vi.fn((sessionId: string) => sessionId === "session"),
@@ -482,6 +483,7 @@ function createMockReplyOperation(): {
       abortByUser: vi.fn(() => true),
       abortForRestart: vi.fn(() => true),
       markTerminalRecovery: vi.fn(),
+      markAcceptedSteeredInboundAudio: vi.fn(),
     },
   };
 }
@@ -2317,6 +2319,47 @@ describe("runAgentTurnWithFallback", () => {
       ]),
     );
     expect(lifecycleEvents.some((event) => event.data.phase === "end")).toBe(false);
+  });
+
+  it("preserves a CLI watchdog timeout through the lifecycle backstop", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      try {
+        return await params.run("codex-cli", "gpt-5.4");
+      } catch (cause) {
+        throw new Error("All model fallback candidates failed", { cause });
+      }
+    });
+    state.runCliAgentMock.mockRejectedValueOnce(
+      new FailoverError("CLI produced no output", { reason: "timeout" }),
+    );
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "codex-cli";
+    followupRun.run.model = "gpt-5.4";
+    const emitAgentEvent = vi.mocked((await import("../../infra/agent-events.js")).emitAgentEvent);
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        followupRun,
+        opts: { runId: "run-cli-timeout" },
+      }),
+    );
+
+    expect(
+      emitAgentEvent.mock.calls
+        .map((call) => call[0])
+        .find(
+          (event) =>
+            event.runId === "run-cli-timeout" &&
+            event.stream === "lifecycle" &&
+            event.data.phase === "error",
+        )?.data,
+    ).toMatchObject({
+      stopReason: "timeout",
+      timeoutPhase: "provider",
+      fallbackExhaustedFailure: true,
+    });
   });
 
   it("keeps fallback auth available for later same-provider fallback models", async () => {

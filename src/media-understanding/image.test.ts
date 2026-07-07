@@ -150,17 +150,12 @@ describe("describeImageWithModel", () => {
     vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(process.cwd(), "extensions"));
     vi.stubGlobal("fetch", fetchMock);
     vi.clearAllMocks();
-    fetchMock.mockResolvedValue({
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      headers: { get: vi.fn(() => null) },
-      json: vi.fn(async () => ({
+    fetchMock.mockImplementation(async () =>
+      Response.json({
         base_resp: { status_code: 0 },
         content: "portal ok",
-      })),
-      text: vi.fn(async () => ""),
-    });
+      }),
+    );
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({
         provider: "minimax-portal",
@@ -303,6 +298,67 @@ describe("describeImageWithModel", () => {
       agentDir: "/tmp/openclaw-agent",
     });
     expect(completeMock).toHaveBeenCalledOnce();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("describes images keyless when amazon-bedrock resolves aws-sdk auth", async () => {
+    getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: "",
+      source: "profile:amazon-bedrock:default",
+      mode: "aws-sdk",
+    });
+    // Faithful to runtime: requireApiKey throws on an empty resolved key. The
+    // aws-sdk carve-out must return before reaching it.
+    requireApiKeyMock.mockImplementation((auth: { apiKey?: string; mode?: string }) => {
+      const key = auth.apiKey?.trim();
+      if (!key) {
+        throw new Error(
+          `No API key resolved for provider "amazon-bedrock" (auth mode: ${auth.mode}).`,
+        );
+      }
+      return key;
+    });
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "amazon-bedrock",
+        id: "us.anthropic.claude-sonnet-4-6-v1",
+        input: ["text", "image"],
+        api: "bedrock-converse-stream",
+        baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      })),
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "bedrock-converse-stream",
+      provider: "amazon-bedrock",
+      model: "us.anthropic.claude-sonnet-4-6-v1",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "an orange tabby cat" }],
+    });
+
+    const result = await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "amazon-bedrock",
+      model: "us.anthropic.claude-sonnet-4-6-v1",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({
+      text: "an orange tabby cat",
+      model: "us.anthropic.claude-sonnet-4-6-v1",
+    });
+    // The carve-out returns before requireApiKey and skips persisting an
+    // empty-string secret; the empty key flows through to the model runtime.
+    expect(requireApiKeyMock).not.toHaveBeenCalled();
+    expect(setRuntimeApiKeyMock).not.toHaveBeenCalled();
+    const completeCall = requireFirstMockCall(completeMock, "complete");
+    expect(requireRecord(completeCall[2], "stream options").apiKey).toBe("");
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

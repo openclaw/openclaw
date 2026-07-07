@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   canonicalizeRealtimeTranscriptionProviderId: vi.fn((providerId: string | undefined) =>
     providerId === "openai-realtime" ? "openai" : providerId?.trim().toLowerCase(),
   ),
+  getRealtimeTranscriptionProvider: vi.fn(),
   listRealtimeTranscriptionProviders: vi.fn(() => []),
   resolveConfiguredRealtimeVoiceProvider: vi.fn(),
   createTalkRealtimeRelaySession: vi.fn(),
@@ -65,6 +66,7 @@ vi.mock("../../talk/provider-registry.js", () => ({
 
 vi.mock("../../realtime-transcription/provider-registry.js", () => ({
   canonicalizeRealtimeTranscriptionProviderId: mocks.canonicalizeRealtimeTranscriptionProviderId,
+  getRealtimeTranscriptionProvider: mocks.getRealtimeTranscriptionProvider,
   listRealtimeTranscriptionProviders: mocks.listRealtimeTranscriptionProviders,
 }));
 
@@ -159,6 +161,21 @@ function expectRespondError(mock: ReturnType<typeof vi.fn>, expected: Record<str
   expect(mockCallArg(mock, 0, 1)).toBeUndefined();
   return expectRecordFields(mockCallArg(mock, 0, 2), expected);
 }
+
+beforeEach(() => {
+  mocks.getRealtimeTranscriptionProvider.mockImplementation((providerId: string | undefined) => {
+    const normalized = providerId?.trim().toLowerCase();
+    const providers = mocks.listRealtimeTranscriptionProviders() as Array<{
+      id: string;
+      aliases?: string[];
+    }>;
+    return providers.find(
+      (provider) =>
+        provider.id.toLowerCase() === normalized ||
+        provider.aliases?.some((alias) => alias.toLowerCase() === normalized),
+    );
+  });
+});
 
 describe("talk.catalog handler", () => {
   beforeEach(() => {
@@ -451,6 +468,60 @@ describe("talk.catalog handler", () => {
         ],
       },
       realtime: { ready: true, activeProvider: "realtime-fast" },
+    });
+  });
+
+  it("includes a provider-map transcription provider missing from the active registry", async () => {
+    const openai = {
+      id: "openai",
+      label: "OpenAI Realtime Transcription",
+      isConfigured: vi.fn(() => false),
+    };
+    const xai = {
+      id: "xai",
+      label: "xAI Realtime Transcription",
+      resolveConfig: vi.fn(({ rawConfig }) => rawConfig),
+      isConfigured: vi.fn(({ providerConfig }) => providerConfig.apiKey === "xai-key"),
+    };
+    mocks.listRealtimeTranscriptionProviders.mockReturnValue([openai] as never);
+    mocks.getRealtimeTranscriptionProvider.mockImplementation((providerId: string | undefined) =>
+      providerId === "xai" ? (xai as never) : undefined,
+    );
+
+    const respond = vi.fn();
+    await talkHandlers["talk.catalog"]({
+      req: { type: "req", id: "1", method: "talk.catalog" },
+      params: {},
+      client: { connect: { scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            plugins: {
+              entries: {
+                "voice-call": {
+                  config: {
+                    streaming: {
+                      providers: { xai: { apiKey: "xai-key" } },
+                    },
+                  },
+                },
+              },
+            },
+          }) as OpenClawConfig,
+      } as never,
+    });
+
+    expect(mockCallArg(respond, 0, 1)).toMatchObject({
+      transcription: {
+        ready: true,
+        activeProvider: "xai",
+        providers: [
+          { id: "openai", configured: false },
+          { id: "xai", configured: true },
+        ],
+      },
     });
   });
 
@@ -1665,6 +1736,66 @@ describe("talk.session unified handlers", () => {
     });
   });
 
+  it("creates transcription sessions with an aliased provider missing from the active registry", async () => {
+    const openai = {
+      id: "openai",
+      aliases: ["openai-realtime"],
+      label: "OpenAI Realtime Transcription",
+      resolveConfig: vi.fn(({ rawConfig }) => rawConfig),
+      isConfigured: vi.fn(({ providerConfig }) => providerConfig.apiKey === "openai-key"),
+      createSession: vi.fn(),
+    };
+    mocks.listRealtimeTranscriptionProviders.mockReturnValue([
+      { id: "xai", label: "xAI Realtime Transcription", isConfigured: () => true },
+    ] as never);
+    mocks.getRealtimeTranscriptionProvider.mockImplementation((providerId: string | undefined) =>
+      providerId === "openai-realtime" ? (openai as never) : undefined,
+    );
+    mocks.createTalkTranscriptionRelaySession.mockReturnValue({
+      provider: "openai",
+      mode: "transcription",
+      transport: "gateway-relay",
+      transcriptionSessionId: "stt-openai-1",
+      audio: { inputEncoding: "g711_ulaw", inputSampleRateHz: 8000 },
+      expiresAt: 1_797_986_400,
+    });
+
+    const respond = vi.fn();
+    await talkHandlers["talk.session.create"]({
+      req: { type: "req", id: "1", method: "talk.session.create" },
+      params: { mode: "transcription", transport: "gateway-relay", brain: "none" },
+      client: { connId: "conn-1" } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            plugins: {
+              entries: {
+                "voice-call": {
+                  config: {
+                    streaming: {
+                      provider: "openai-realtime",
+                      providers: { openai: { apiKey: "openai-key" } },
+                    },
+                  },
+                },
+              },
+            },
+          }) as OpenClawConfig,
+      } as never,
+    });
+
+    expectRespondOk(respond, {
+      provider: "openai",
+      transcriptionSessionId: "stt-openai-1",
+    });
+    expect(mockCallArg(mocks.createTalkTranscriptionRelaySession)).toMatchObject({
+      provider: openai,
+      providerConfig: { apiKey: "openai-key" },
+    });
+  });
+
   it("creates and controls managed-room sessions through the unified API", async () => {
     const broadcastToConnIds = vi.fn();
     const createRespond = vi.fn();
@@ -2116,6 +2247,38 @@ describe("talk.client.toolCall handler", () => {
     expect(chatInput.params?.idempotencyKey).toMatch(/^talk-call-1-/);
     const response = expectRespondOk(respond, { runId: "run-voice-1" }) as Record<string, unknown>;
     expect(response.idempotencyKey).toMatch(/^talk-call-1-/);
+  });
+
+  it("returns the tool-call acknowledgement while the agent run continues", async () => {
+    let finishRun: (() => void) | undefined;
+    mocks.chatSend.mockImplementationOnce(
+      ({ respond }: { respond: (ok: boolean, result?: unknown, error?: unknown) => void }) =>
+        new Promise<void>((resolve) => {
+          finishRun = resolve;
+          respond(true, { runId: "run-active" }, undefined);
+        }),
+    );
+    const respond = vi.fn();
+
+    await talkHandlers["talk.client.toolCall"]({
+      req: { type: "req", id: "1", method: "talk.client.toolCall" },
+      params: {
+        sessionKey: "main",
+        callId: "call-active",
+        name: "openclaw_agent_consult",
+        args: { question: "What is running?" },
+      },
+      client: { connId: "conn-1" } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {
+        getRuntimeConfig: () => ({}) as OpenClawConfig,
+        logGateway: { warn: vi.fn() },
+      } as never,
+    });
+
+    expectRespondOk(respond, { runId: "run-active" });
+    finishRun?.();
   });
 
   it("passes configured consult thinking and fast-mode overrides to chat.send", async () => {

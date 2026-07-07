@@ -211,8 +211,7 @@ openclaw-chat-page {
   animation: fade-in 150ms var(--ease-out);
 }
 
-.context-usage__header,
-.context-usage__model {
+.context-usage__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -248,6 +247,14 @@ openclaw-chat-page {
   border-radius: inherit;
   background: var(--ctx-color, var(--accent));
   box-shadow: 0 0 12px color-mix(in srgb, var(--ctx-color, var(--accent)) 46%, transparent);
+}
+
+.context-usage__quota {
+  margin-bottom: 14px;
+}
+
+.context-usage__quota:last-child {
+  margin-bottom: 0;
 }
 
 .context-usage__section-label {
@@ -293,9 +300,13 @@ openclaw-chat-page {
 }
 
 .context-usage__model {
+  display: block;
   margin-top: 12px;
+  overflow: hidden;
   color: var(--muted);
   font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .context-usage__model + .context-usage__model {
@@ -303,12 +314,8 @@ openclaw-chat-page {
 }
 
 .context-usage__model strong {
-  max-width: 70%;
-  overflow: hidden;
   color: var(--text);
   font-weight: 650;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .context-ring__action {
@@ -360,17 +367,39 @@ openclaw-chat-page {
 .agent-chat__goal {
   align-self: center;
   display: flex;
-  align-items: center;
+  flex-direction: column;
   max-width: calc(100% - 20px);
-  gap: 8px;
+  min-width: 0;
   margin: 0 auto 8px;
-  padding: 7px 12px;
+  padding: 5px 8px 5px 12px;
   color: color-mix(in srgb, var(--text) 82%, var(--muted));
   background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
   border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-lg);
   font-size: 12px;
   line-height: 1.25;
+}
+
+.agent-chat__goal-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+}
+
+.agent-chat__goal-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.agent-chat__goal-icon svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .agent-chat__goal-label,
@@ -382,13 +411,76 @@ openclaw-chat-page {
 }
 
 .agent-chat__goal-label {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   font-weight: 700;
 }
 
 .agent-chat__goal-objective {
   flex: 1 1 auto;
   color: var(--muted);
+}
+
+.agent-chat__goal-elapsed {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-chat__goal-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 2px;
+}
+
+.agent-chat__goal-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--muted);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.agent-chat__goal-action:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+.agent-chat__goal-action svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.agent-chat__goal-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 6px 2px 3px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  color: var(--text);
+}
+
+.agent-chat__goal-detail-objective {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.agent-chat__goal-detail-note,
+.agent-chat__goal-detail-meta {
+  color: var(--muted);
+  overflow-wrap: anywhere;
 }
 
 .agent-chat__goal--active {
@@ -732,15 +824,28 @@ openclaw-chat-page {
   height: 16px;
   flex-shrink: 0;
 }
+.agent-chat__composer-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: end;
+  gap: 6px;
+  width: calc(100% - 36px);
+  max-width: 48rem;
+  margin: 8px auto 14px;
+}
+
 .agent-chat__input {
+  --chat-box-inset: 8px;
+
   position: relative;
   display: flex;
   flex-direction: column;
-  margin: 0 18px 14px;
+  min-width: 0;
+  margin: 0;
   padding: 0;
   background: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius-xl);
+  border-radius: var(--radius-md);
   box-shadow: var(--shadow-sm);
   flex-shrink: 0;
   transition:
@@ -760,9 +865,54 @@ openclaw-chat-page {
   }
 }
 
+.agent-chat__composer-progress {
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, currentColor 32%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, currentColor 8%, var(--card));
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.agent-chat__composer-progress--mobile {
+  display: none;
+}
+
+.agent-chat__composer-progress .agent-chat__run-status {
+  width: 100%;
+  max-width: none;
+  height: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  justify-content: flex-start;
+  color: inherit;
+  font-size: var(--control-ui-text-sm);
+}
+
+.agent-chat__composer-progress--in-progress {
+  color: var(--info);
+}
+
+.agent-chat__composer-progress--done {
+  color: var(--ok);
+}
+
+.agent-chat__composer-progress--interrupted {
+  color: var(--warn);
+}
+
 .agent-chat__composer-combobox {
+  position: relative;
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .agent-chat__sr-only {
@@ -779,14 +929,15 @@ openclaw-chat-page {
 
 .agent-chat__composer-combobox > textarea {
   width: 100%;
-  min-height: 40px;
-  max-height: 150px;
+  min-height: 36px;
+  max-height: calc(7em + 24px);
   resize: none;
-  padding: 12px 14px 8px;
+  padding: var(--chat-box-inset);
+  padding-left: calc(var(--chat-box-inset) - 4px);
   border: none;
   background: transparent;
   color: var(--text);
-  font-size: var(--control-ui-input-text-size);
+  font-size: var(--control-ui-text-md);
   font-family: inherit;
   line-height: 1.4;
   outline: none;
@@ -801,6 +952,12 @@ openclaw-chat-page {
   color: var(--muted);
 }
 
+@media (hover: none) and (pointer: coarse) {
+  .agent-chat__composer-combobox > textarea {
+    font-size: var(--control-ui-input-text-size);
+  }
+}
+
 .agent-chat__composer-status-stack {
   display: flex;
   flex-wrap: wrap;
@@ -809,7 +966,9 @@ openclaw-chat-page {
   padding: 8px 10px 0;
 }
 
-.agent-chat__composer-status-stack:empty {
+.agent-chat__composer-status-stack:not(
+  :has(.compaction-indicator, .fallback-indicator, .agent-chat__goal)
+) {
   display: none;
 }
 
@@ -819,17 +978,40 @@ openclaw-chat-page {
   margin: 0;
 }
 
-/* Model/effort/settings cluster hugs the send button on the right; the left
-   toolbar half absorbs all spare width. */
+/* Keep settings, split view, and run status together while the model picker
+   uses the remaining footer space. */
 .agent-chat__composer-controls {
   display: flex;
   position: relative;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 6px;
-  flex: 0 1 auto;
+  flex: 1 1 auto;
+  width: auto;
   min-width: 0;
+  margin-left: 0;
   padding: 0;
+}
+
+.agent-chat__composer-run-status {
+  display: inline-flex;
+  order: 2;
+  flex: 0 0 auto;
+  align-items: center;
+}
+
+.agent-chat__composer-controls .chat-composer-model-control {
+  order: 3;
+}
+
+/* openclaw-tooltip renders as display: contents, so this button participates
+   directly in the parent flex layout. */
+.agent-chat__composer-controls .chat-open-split-view {
+  order: 1;
+}
+
+.agent-chat__composer-run-status .agent-chat__run-status {
+  max-width: min(240px, 30vw);
 }
 
 .agent-chat__composer-session {
@@ -858,8 +1040,9 @@ openclaw-chat-page {
   position: relative;
   display: inline-flex;
   align-items: center;
-  margin-left: auto;
+  margin-left: 0;
   min-width: 0;
+  order: 0;
 }
 
 .chat-composer-model-control {
@@ -867,6 +1050,8 @@ openclaw-chat-page {
   flex: 0 0 auto;
   min-width: 0;
   max-width: 70vw;
+  margin-left: auto;
+  order: 3;
 }
 
 .chat-composer-model-control .chat-controls__model {
@@ -877,29 +1062,20 @@ openclaw-chat-page {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
   flex: 0 0 auto;
-  width: 34px;
-  min-width: 34px;
-  height: 34px;
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
   padding: 0;
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
-  font: inherit;
-  font-size: 13px;
   cursor: pointer;
   transition:
     background var(--duration-fast) ease,
     border-color var(--duration-fast) ease,
     color var(--duration-fast) ease;
-}
-
-/* Icon-only chip; the title/aria-label carries the "Chat settings" wording. */
-.chat-settings-chip__text,
-.chat-settings-chip__chevron {
-  display: none;
 }
 
 .chat-settings-chip:hover,
@@ -914,8 +1090,8 @@ openclaw-chat-page {
 }
 
 .chat-settings-chip svg {
-  width: 15px;
-  height: 15px;
+  width: 18px;
+  height: 18px;
   stroke: currentColor;
   fill: none;
   stroke-width: 1.7px;
@@ -925,16 +1101,19 @@ openclaw-chat-page {
 
 .chat-settings-popover {
   position: absolute;
-  right: 0;
+  left: 0;
+  right: auto;
   bottom: calc(100% + 10px);
   z-index: 60;
   display: none;
-  width: min(320px, calc(100vw - 42px));
-  padding: 12px;
+  width: min(520px, calc(100vw - 42px));
+  max-height: min(680px, calc(100vh - 120px));
+  padding: 14px;
   border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
   border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--bg-elevated) 94%, var(--card));
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.22);
+  overflow-y: auto;
 }
 
 .chat-settings-popover--open {
@@ -947,11 +1126,16 @@ openclaw-chat-page {
   gap: 8px;
 }
 
+.chat-settings-popover__section + .chat-settings-popover__section {
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
+}
+
 .chat-settings-popover__label {
   color: var(--muted);
-  font-size: 12px; /* was 11px */
+  font-size: 12px;
   font-weight: 650;
-  letter-spacing: 0.08em;
+  letter-spacing: 0;
   text-transform: uppercase;
 }
 
@@ -1007,6 +1191,25 @@ openclaw-chat-page {
   white-space: nowrap;
 }
 
+.chat-settings-popover__preference {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chat-settings-popover__preference select {
+  width: 100%;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--card) 74%, transparent);
+  color: var(--text);
+  font: inherit;
+}
+
 .agent-chat__stt-interim {
   padding: 10px 14px 0;
   color: var(--muted);
@@ -1015,30 +1218,47 @@ openclaw-chat-page {
   overflow-wrap: anywhere;
 }
 
-/* Chromeless status row: the composer frame is the only chrome, so the
-   toolbar sits flush inside it with no divider line. */
-.agent-chat__toolbar {
+.agent-chat__composer-input-row {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 2px 8px 8px;
+  align-items: flex-end;
+  gap: 4px;
+  min-width: 0;
+  padding: var(--chat-box-inset);
 }
 
-.agent-chat__toolbar-left,
+.agent-chat__composer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  gap: 8px;
+  min-height: 44px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
+  padding: 0 var(--chat-box-inset) var(--chat-box-inset);
+}
+
+.agent-chat__composer-meta,
 .agent-chat__toolbar-right {
   display: flex;
   align-items: center;
   gap: 4px;
 }
 
-.agent-chat__toolbar-left {
-  flex: 1 1 auto;
+.agent-chat__composer-meta {
+  flex: 0 0 auto;
   min-width: 0;
 }
 
+.agent-chat__composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
 .agent-chat__input-btn,
-.agent-chat__toolbar .btn--ghost {
+.agent-chat__toolbar-right .btn--ghost {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1056,9 +1276,9 @@ openclaw-chat-page {
 }
 
 .agent-chat__input-btn svg,
-.agent-chat__toolbar .btn--ghost svg {
-  width: 16px;
-  height: 16px;
+.agent-chat__toolbar-right .btn--ghost svg {
+  width: 18px;
+  height: 18px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.5px;
@@ -1071,15 +1291,89 @@ openclaw-chat-page {
 }
 
 .agent-chat__input-btn:hover:not(:disabled),
-.agent-chat__toolbar .btn--ghost:hover:not(:disabled) {
+.agent-chat__toolbar-right .btn--ghost:hover:not(:disabled) {
   color: var(--text);
   background: var(--bg-hover);
 }
 
 .agent-chat__input-btn:disabled,
-.agent-chat__toolbar .btn--ghost:disabled {
+.agent-chat__toolbar-right .btn--ghost:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.agent-chat__attach-menu {
+  display: flex;
+  align-items: center;
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.agent-chat__attach-menu > summary {
+  list-style: none;
+}
+
+.agent-chat__attach-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.agent-chat__attach-menu > summary[aria-disabled="true"] {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.agent-chat__attach-menu[open] > summary {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.agent-chat__attach-menu-popover {
+  position: absolute;
+  z-index: 30;
+  left: 0;
+  bottom: calc(100% + 8px);
+  display: grid;
+  gap: 2px;
+  width: 152px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+}
+
+.agent-chat__attach-menu-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.agent-chat__attach-menu-option:hover,
+.agent-chat__attach-menu-option:focus-visible {
+  background: var(--bg-hover);
+  outline: none;
+}
+
+.agent-chat__attach-menu-option svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 /* Selected/open states stay a quiet neutral wash; only live recording gets a
@@ -1093,33 +1387,6 @@ openclaw-chat-page {
 .agent-chat__input-btn--talk {
   color: var(--danger, #ef4444);
   background: color-mix(in srgb, var(--danger, #ef4444) 9%, transparent);
-}
-
-/* Split talk control: mic toggles Talk, the narrow caret opens Talk settings
-   (mirrors a mic-with-dropdown control; negative margin keeps the pair reading
-   as one unit without a wrapper border). */
-.agent-chat__talk-group {
-  display: inline-flex;
-  align-items: center;
-}
-
-.agent-chat__talk-group .agent-chat__talk-toggle {
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
-}
-
-.agent-chat__talk-group .agent-chat__talk-caret {
-  min-width: 20px;
-  width: 20px;
-  margin-left: -2px;
-  padding: 0;
-  border-top-left-radius: 0;
-  border-bottom-left-radius: 0;
-}
-
-.agent-chat__talk-group .agent-chat__talk-caret svg {
-  width: 13px;
-  height: 13px;
 }
 
 .agent-chat__talk-status {
@@ -1197,6 +1464,24 @@ openclaw-chat-page {
   padding: 10px 12px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
   background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
+}
+
+.agent-chat__talk-options--settings {
+  display: grid;
+  gap: 10px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.agent-chat__talk-options--settings .agent-chat__talk-options-primary {
+  width: 100%;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.agent-chat__talk-options--settings .agent-chat__talk-options-advanced {
+  width: 100%;
+  min-width: 0;
 }
 
 .agent-chat__talk-options-primary {
@@ -1398,6 +1683,116 @@ openclaw-chat-page {
   background: color-mix(in srgb, var(--text) 6%, transparent);
 }
 
+.agent-chat__talk-input-setting {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 6px;
+}
+
+.agent-chat__talk-input-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  gap: 6px;
+  align-items: end;
+}
+
+.agent-chat__talk-input-refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--input) 88%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--card) 92%, var(--bg-elevated) 8%);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.agent-chat__talk-input-refresh:hover:not(:disabled),
+.agent-chat__talk-input-refresh:focus-visible {
+  border-color: color-mix(in srgb, var(--text) 18%, var(--input));
+  background: var(--bg-hover);
+  color: var(--text);
+  outline: none;
+}
+
+.agent-chat__talk-input-refresh:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+
+.agent-chat__talk-input-refresh:disabled {
+  cursor: wait;
+  opacity: 0.75;
+}
+
+.agent-chat__talk-input-refresh svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.agent-chat__talk-input-refresh:disabled svg {
+  animation: chat-run-status-spin 0.9s linear infinite;
+}
+
+.agent-chat__talk-input-spinner {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  color: var(--muted);
+  animation: chat-run-status-spin 0.9s linear infinite;
+}
+
+.agent-chat__talk-input-spinner svg {
+  width: 100%;
+  height: 100%;
+}
+
+.agent-chat__talk-input-message {
+  padding: 0 2px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.agent-chat__talk-input-message--loading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.agent-chat__talk-input-message--error {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 8px 9px;
+  border: 1px solid color-mix(in srgb, var(--danger) 22%, var(--border));
+  border-radius: var(--radius-sm);
+  background: var(--danger-subtle);
+  color: var(--text);
+}
+
+.agent-chat__talk-input-message-icon {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  margin-top: 1px;
+  color: var(--danger);
+}
+
+.agent-chat__talk-input-message-icon svg {
+  width: 100%;
+  height: 100%;
+}
+
 .agent-chat__input-divider {
   width: 1px;
   height: 16px;
@@ -1405,12 +1800,23 @@ openclaw-chat-page {
   margin: 0 4px;
 }
 
+.agent-chat__token-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 0 0 16px;
+  box-sizing: border-box;
+  min-height: 16px;
+  padding: 0 var(--chat-box-inset) 2px;
+}
+
 .agent-chat__token-count {
   font-size: 0.7rem;
+  line-height: 1;
   color: var(--muted);
   white-space: nowrap;
-  flex-shrink: 0;
-  align-self: center;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
 }
 
 .agent-chat__run-status {
@@ -1479,39 +1885,26 @@ openclaw-chat-page {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  min-width: 34px;
-  width: 34px;
-  height: 34px;
-  border-radius: var(--radius-full);
-  border: none;
-  background: var(--accent);
-  color: var(--primary-foreground);
+  min-width: 36px;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
   cursor: pointer;
   flex-shrink: 0;
   transition:
     background var(--duration-fast) ease,
+    border-color var(--duration-fast) ease,
     color var(--duration-fast) ease,
     opacity var(--duration-fast) ease;
   padding: 0;
 }
 
 @media (max-width: 860px) {
-  .agent-chat__talk-options {
-    flex-direction: column;
-  }
-
-  .agent-chat__talk-options-primary {
-    width: 100%;
-    grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
-  }
-
-  .agent-chat__talk-settings-link {
-    align-self: flex-end;
-  }
-
   .agent-chat__input-btn,
-  .agent-chat__toolbar .btn--ghost,
-  .chat-send-btn {
+  .agent-chat__toolbar-right .btn--ghost {
     width: 36px;
     min-width: 36px;
     padding: 0;
@@ -1522,21 +1915,9 @@ openclaw-chat-page {
   }
 }
 
-@media (max-width: 560px) {
-  .agent-chat__run-status {
-    width: 24px;
-    padding: 0;
-    justify-content: center;
-  }
-
-  .agent-chat__run-status-label {
-    display: none;
-  }
-}
-
 .chat-send-btn svg {
-  width: 15px;
-  height: 15px;
+  width: 20px;
+  height: 20px;
   stroke: currentColor;
   fill: none;
   stroke-width: 1.5px;
@@ -1545,84 +1926,168 @@ openclaw-chat-page {
 }
 
 .chat-send-btn:hover:not(:disabled) {
-  background: var(--accent-hover);
-  color: var(--primary-foreground);
+  background: color-mix(in srgb, var(--accent) 11%, transparent);
+  border-color: var(--accent-hover);
+  color: var(--accent-hover);
+}
+
+.chat-send-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
 .chat-send-btn:disabled {
-  background: color-mix(in srgb, var(--muted) 16%, transparent);
+  border-color: color-mix(in srgb, var(--muted) 45%, transparent);
+  background: transparent;
   color: var(--muted);
   opacity: 0.55;
   cursor: not-allowed;
 }
 
 .chat-send-btn--stop {
-  background: var(--danger);
-  color: var(--destructive-foreground);
+  border-color: var(--danger);
+  background: transparent;
+  color: var(--danger);
 }
 
 .chat-send-btn--stop:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--danger) 85%, #fff);
+  border-color: color-mix(in srgb, var(--danger) 82%, #fff);
+  background: color-mix(in srgb, var(--danger) 11%, transparent);
+  color: color-mix(in srgb, var(--danger) 82%, #fff);
+}
+
+@media (min-width: 1600px) {
+  .agent-chat__composer-combobox > textarea {
+    max-height: calc(7em + 12px);
+  }
+
+  .agent-chat__composer-footer {
+    min-height: 28px;
+  }
+
+  .agent-chat__composer-footer .agent-chat__input-btn {
+    min-width: 28px;
+    height: 28px;
+    padding-inline: 6px;
+  }
+
+  .agent-chat__composer-input-row .agent-chat__input-btn {
+    min-width: 36px;
+    width: 36px;
+    height: 36px;
+    padding-inline: 0;
+  }
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  .agent-chat__toolbar {
-    flex-wrap: wrap;
-    align-items: center;
+  .agent-chat__input {
+    --chat-box-inset: 4px;
   }
 
-  .agent-chat__toolbar-left {
-    order: 1;
+  .agent-chat__composer-input-row {
+    gap: 0;
+  }
+
+  .agent-chat__composer-input-row .agent-chat__input-btn--attach {
+    width: 36px;
+    min-width: 36px;
+    height: 44px;
+  }
+
+  .agent-chat__composer-combobox {
+    align-self: stretch;
+  }
+
+  .agent-chat__composer-combobox > textarea {
     flex: 1 1 auto;
+    min-height: 44px;
+    max-height: calc(7em + var(--chat-box-inset) + var(--chat-box-inset));
+    padding-top: 10px;
+    padding-bottom: 10px;
+    font-size: var(--control-ui-input-text-size);
   }
 
-  .agent-chat__toolbar-right {
-    order: 2;
-    flex: 0 0 auto;
-    margin-left: auto;
+  .agent-chat__composer-actions {
+    flex-direction: column;
+    gap: 4px;
+    margin-left: var(--chat-box-inset);
   }
 
   .agent-chat__composer-controls {
-    order: 3;
+    order: 0;
     display: grid;
-    flex: 1 0 100%;
-    grid-template-columns: minmax(0, 1fr) 44px;
-    gap: 8px;
-    width: 100%;
+    grid-template-columns: 40px minmax(0, max-content);
+    flex: 1 1 0;
+    width: auto;
+    margin-left: 0;
+    gap: 0;
+  }
+
+  .agent-chat__composer-progress--mobile {
+    display: flex;
+  }
+
+  .agent-chat__composer-run-status {
+    display: none;
+  }
+
+  .agent-chat__composer-meta {
+    margin-left: 0;
   }
 
   .agent-chat__composer-controls .chat-controls__model,
   .chat-composer-model-control {
+    width: fit-content;
     min-width: 0;
+    max-width: min(70vw, 100%);
+    margin-left: 0;
   }
 
   /* The borderless trigger is 30px on desktop; keep a >=40px touch target
      inside the mobile composer grid. */
   .agent-chat__composer-controls .chat-controls__inline-select-trigger {
+    width: fit-content;
+    max-width: 100%;
     height: 40px;
     min-height: 40px;
+    gap: 4px;
+    padding: 0 2px 0 4px;
   }
 
-  /* Desktop restores the quota pill in the composer flex row (#93041); the mobile composer is a
-     fixed 2-col grid (model | settings), so the pill would push the settings chip to a new row. */
-  .agent-chat__composer-controls .chat-controls__quota {
-    display: none;
+  .agent-chat__input .chat-controls__inline-select-menu--combined {
+    position: fixed;
+    left: auto;
+    right: max(12px, var(--safe-area-right));
+    bottom: calc(96px + var(--safe-area-bottom));
+    width: min(420px, calc(100vw - 24px));
+    max-height: min(460px, calc(100vh - 116px - var(--safe-area-bottom)));
   }
 
   .chat-settings-popover-wrapper {
-    width: 44px;
+    width: 40px;
     margin-left: 0;
-    justify-self: end;
+    justify-self: start;
   }
 
   .chat-settings-chip {
-    width: 44px;
-    min-width: 44px;
-    max-width: 44px;
+    width: 36px;
+    min-width: 36px;
+    max-width: 36px;
     height: 44px;
     min-height: 44px;
     justify-content: center;
     padding: 0;
+  }
+
+  .agent-chat__toolbar-right {
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: calc(var(--chat-box-inset, 4px) + 1px);
+  }
+
+  .agent-chat__composer-shell {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
   }
 }
 
@@ -1638,7 +2103,26 @@ openclaw-chat-page {
     overscroll-behavior: contain;
   }
 
+  .agent-chat__input:has(.chat-controls__inline-select[open]),
+  .agent-chat__input:has(.chat-settings-popover--open),
+  .agent-chat__input:has(.agent-chat__attach-menu[open]) {
+    overflow: visible;
+  }
+
+  .agent-chat__input .chat-controls__inline-select-menu--combined,
+  .chat-settings-popover {
+    max-height: calc(100vh - 148px);
+  }
+
+  .agent-chat__composer-footer {
+    position: sticky;
+    bottom: 0;
+    z-index: 3;
+    background: var(--card);
+  }
+
   .agent-chat__composer-combobox > textarea {
+    min-height: 48px;
     max-height: 56px;
     overflow-y: auto;
   }
@@ -1655,7 +2139,10 @@ openclaw-chat-page {
 
 @media (max-width: 640px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   /* Backdrop-filter contains fixed descendants; lift it and the landscape scroll clip while open. */
-  .agent-chat__input:has(.context-usage details[open]) {
+  .agent-chat__input:has(.chat-controls__inline-select[open]),
+  .agent-chat__input:has(.chat-settings-popover--open),
+  .agent-chat__input:has(.context-usage details[open]),
+  .agent-chat__input:has(.agent-chat__attach-menu[open]) {
     overflow: visible;
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
@@ -1898,6 +2385,10 @@ openclaw-chat-page {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+  flex-shrink: 0;
+  margin-top: 7px;
+  padding-block-start: 10px;
+  padding-inline-start: 10px;
   margin-bottom: 8px;
 }
 
@@ -1969,7 +2460,9 @@ openclaw-chat-page {
   white-space: nowrap;
 }
 
-.agent-chat__file-input {
+.agent-chat__file-input,
+.agent-chat__photo-input,
+.agent-chat__camera-input {
   display: none;
 }
 
@@ -2084,155 +2577,6 @@ openclaw-chat-page {
   stroke-width: 1.5px;
 }
 
-.chat-session-picker {
-  position: absolute;
-  top: calc(100% + 8px);
-  left: 0;
-  z-index: 90;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  width: min(520px, calc(100vw - 32px));
-  max-height: min(520px, calc(100vh - 132px));
-  padding: 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--card);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.34);
-  overflow: hidden;
-}
-
-.chat-session-picker__search-row {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-}
-
-.chat-session-picker__search {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.chat-session-picker__search input {
-  box-sizing: border-box;
-  width: 100%;
-  min-height: 36px;
-  padding: 0 12px;
-  font-size: 13px;
-}
-
-.chat-session-picker .chat-session-picker__icon-button.btn--icon {
-  flex: 0 0 36px;
-  width: 36px;
-  min-width: 36px;
-  height: 36px;
-  padding: 0;
-  border-radius: var(--radius-md);
-}
-
-.chat-session-picker .chat-session-picker__icon-button.btn--icon svg {
-  width: 16px;
-  height: 16px;
-}
-
-.chat-session-picker__list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-height: 0;
-  overflow-y: auto;
-}
-
-/* Rows are single-line and minimal: label + trailing time/spinner. The
-   whole row (option button + aside) shares one hover surface so the
-   session-row hover-reveal actions feel like part of the row. */
-.chat-session-picker__option-row {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  padding-right: 6px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  transition:
-    background var(--duration-fast) ease,
-    border-color var(--duration-fast) ease;
-}
-
-.chat-session-picker__option-row:hover,
-.chat-session-picker__option-row:focus-within {
-  background: var(--bg-hover);
-  border-color: color-mix(in srgb, var(--border) 78%, transparent);
-}
-
-.chat-session-picker__option-row--selected {
-  background: color-mix(in srgb, var(--accent-subtle) 72%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 28%, transparent);
-}
-
-.chat-session-picker__option {
-  display: flex;
-  align-items: center;
-  flex: 1 1 auto;
-  min-width: 0;
-  min-height: 34px;
-  padding: 6px 8px 6px 10px;
-  border: none;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.chat-session-picker__option-label {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-strong);
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.chat-session-picker__option-row--selected .chat-session-picker__option-label {
-  font-weight: 600;
-}
-
-/* Touch has no hover: the picker is a deliberate management surface, so
-   keep the actions visible there instead of unreachable. */
-@media (hover: none) {
-  .chat-session-picker .session-action {
-    opacity: 1;
-    pointer-events: auto;
-  }
-
-  .chat-session-picker .session-row-trail {
-    opacity: 0;
-  }
-}
-
-.chat-session-picker__status {
-  padding: 14px 10px;
-  color: var(--muted);
-  font-size: 13px;
-  text-align: center;
-}
-
-.chat-session-picker__footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding-top: 8px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
-}
-
-.chat-session-picker__count {
-  color: var(--muted);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-
 .chat-controls__agent {
   grid-area: agent;
 }
@@ -2267,6 +2611,11 @@ openclaw-chat-page {
     animation: none;
     border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
     box-shadow: var(--focus-ring);
+  }
+
+  .agent-chat__talk-input-refresh:disabled svg,
+  .agent-chat__talk-input-spinner {
+    animation: none;
   }
 }
 
@@ -2336,32 +2685,7 @@ openclaw-chat-page {
   white-space: nowrap;
 }
 
-/* Effort chip inside the model trigger: shows the effective thinking level as
-   a muted pill (accent-washed when the session overrides the default). It is
-   decorative (aria-hidden); the trigger aria-label carries the full state. */
-.chat-controls__effort-chip {
-  display: inline-flex;
-  align-items: center;
-  flex: 0 0 auto;
-  height: 18px;
-  padding: 0 7px;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--text) 6%, transparent);
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1;
-  white-space: nowrap;
-}
-
-.chat-controls__effort-chip--override {
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  color: color-mix(in srgb, var(--accent) 72%, var(--text));
-}
-
-/* Chevron pins right so label+chip stay grouped when the trigger stretches
-   (mobile grid cell); on desktop the trigger is content-sized so this is a
-   no-op vs the old space-between layout. */
+/* Keep the chevron pinned right when the mobile trigger stretches. */
 .chat-controls__inline-select-icon {
   display: inline-flex;
   width: 14px;
@@ -2430,29 +2754,137 @@ openclaw-chat-page {
   background: color-mix(in srgb, var(--text) 6%, transparent);
 }
 
-/* The combined model picker anchors to a right-aligned trigger, so the menu
-   grows leftward and the reasoning panel flies out to the left; anchoring
-   left like the generic menu would clip both at the viewport edge. */
+/* The combined picker contains provider, model, and reasoning controls in one
+   bounded surface instead of opening a second flyout. */
 .chat-controls__inline-select-menu--combined {
   left: auto;
   right: 0;
-  width: max(100%, min(320px, calc(100vw - 32px)));
-  max-height: none;
-  overflow: visible;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  width: min(420px, calc(100vw - 24px));
+  max-height: min(460px, calc(100vh - 96px));
+  padding: 0;
+  overflow: hidden;
 }
 
-.chat-controls__combined-model-list {
+.chat-controls__model-browser {
   display: grid;
+  grid-template-columns: 136px minmax(0, 1fr);
+  min-height: 132px;
+  max-height: 236px;
+  flex: 1 1 236px;
+  overflow: hidden;
+}
+
+.chat-controls__provider-list {
+  display: flex;
+  flex-direction: column;
   gap: 2px;
-  max-height: min(376px, calc(100vh - 164px));
+  min-width: 0;
+  padding: 8px 6px;
+  border-right: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  background: color-mix(in srgb, var(--card) 78%, transparent);
   overflow-y: auto;
-  padding-right: 2px;
+}
+
+.chat-controls__provider-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 32px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 550;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-controls__provider-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  color: var(--muted);
+}
+
+.chat-controls__provider-icon:not(.chat-controls__provider-icon--fallback) {
+  background: currentColor;
+  mask: var(--provider-icon-url) center / contain no-repeat;
+  -webkit-mask: var(--provider-icon-url) center / contain no-repeat;
+}
+
+.chat-controls__provider-icon--fallback {
+  border: 1px solid color-mix(in srgb, currentColor 48%, transparent);
+  border-radius: var(--radius-sm);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.chat-controls__provider-icon[data-provider-icon="codex"] {
+  color: #10a37f;
+}
+
+.chat-controls__provider-icon[data-provider-icon="claude"] {
+  color: #d97757;
+}
+
+.chat-controls__provider-icon[data-provider-icon="gemini"] {
+  color: #4285f4;
+}
+
+.chat-controls__provider-icon[data-provider-icon="opencode"],
+.chat-controls__provider-icon[data-provider-icon="opencodego"] {
+  color: var(--text-strong);
+}
+
+.chat-controls__inline-select-trigger > .chat-controls__provider-icon {
+  width: 16px;
+  height: 16px;
+  flex-basis: 16px;
+}
+
+.chat-controls__provider-option:hover,
+.chat-controls__provider-option:focus-visible {
+  background: var(--bg-hover);
+  color: var(--text);
+  outline: none;
+}
+
+.chat-controls__provider-option[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--border) 74%, transparent);
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  color: var(--text-strong);
+}
+
+.chat-controls__provider-models {
+  min-width: 0;
+  padding: 8px;
+  overflow-y: auto;
+}
+
+.chat-controls__provider-model-group {
+  display: grid;
+  gap: 4px;
+}
+
+.chat-controls__provider-model-group[hidden] {
+  display: none;
 }
 
 .chat-controls__inline-select-section-label {
-  padding: 4px 8px 3px;
+  padding: 3px 6px 2px;
   color: var(--muted);
-  font-size: 12px; /* was 10px */
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -2463,40 +2895,50 @@ openclaw-chat-page {
   display: block;
 }
 
-.chat-controls__combined-model-arrow svg {
-  transform: rotate(-90deg);
+.chat-controls__combined-model-option {
+  justify-content: flex-start;
+  gap: 8px;
+  min-height: 44px;
+  padding: 6px 8px;
+}
+
+.chat-controls__model-option-copy {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.chat-controls__model-option-title,
+.chat-controls__model-option-provider {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-controls__model-option-title {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chat-controls__model-option-provider {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 450;
 }
 
 .chat-controls__reasoning-panel {
-  position: absolute;
-  bottom: 0;
-  right: calc(100% + 8px);
-  z-index: 90;
+  position: static;
   display: grid;
-  gap: 6px;
-  width: 180px;
-  max-height: min(520px, calc(100vh - 96px));
-  padding: 8px;
-  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--bg-elevated) 96%, var(--card));
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
-  overflow-x: hidden;
-  overflow-y: auto;
-  opacity: 0;
-  pointer-events: none;
-  transform: translateX(4px);
-  transition:
-    opacity var(--duration-fast) ease,
-    transform var(--duration-fast) ease;
-}
-
-.chat-controls__inline-select[open] .chat-controls__reasoning-panel,
-.chat-controls__inline-select-menu--combined:hover > .chat-controls__reasoning-panel,
-.chat-controls__inline-select-menu--combined:focus-within > .chat-controls__reasoning-panel {
-  opacity: 1;
-  pointer-events: auto;
-  transform: translateX(0);
+  gap: 4px;
+  flex: 0 0 auto;
+  width: auto;
+  max-height: none;
+  padding: 9px 10px 10px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  background: color-mix(in srgb, var(--card) 78%, transparent);
+  overflow: visible;
 }
 
 .chat-controls__reasoning-head {
@@ -2505,6 +2947,37 @@ openclaw-chat-page {
   justify-content: space-between;
   gap: 8px;
   min-width: 0;
+}
+
+.chat-controls__reasoning-heading {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.chat-controls__reasoning-default {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.chat-controls__reasoning-default:hover:not(:disabled),
+.chat-controls__reasoning-default:focus-visible {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+.chat-controls__reasoning-default:focus-visible {
+  outline: none;
+}
+
+.chat-controls__reasoning-default:disabled {
+  cursor: default;
 }
 
 .chat-controls__reasoning-value {
@@ -2518,14 +2991,13 @@ openclaw-chat-page {
 }
 
 /* Discrete effort slider: native range input for keyboard/a11y, decorative
-   stop dots layered underneath (pointer-events: none). Dot inset must track
-   half the thumb width so dots align with the thumb's travel. */
+   stop dots layered underneath. */
 .chat-controls__reasoning-slider {
   position: relative;
   display: flex;
   align-items: center;
-  height: 26px;
-  margin: 2px 8px 0;
+  height: 22px;
+  margin: 0 6px;
 }
 
 .chat-controls__reasoning-dots {
@@ -2555,7 +3027,7 @@ openclaw-chat-page {
   position: relative;
   z-index: 1;
   width: 100%;
-  height: 26px;
+  height: 22px;
   margin: 0;
   padding: 0;
   background: transparent;
@@ -2571,8 +3043,6 @@ openclaw-chat-page {
   outline: none;
 }
 
-/* --reasoning-fill is set inline (and live-updated on drag) so the filled
-   segment tracks the thumb; pseudo-elements inherit the custom property. */
 .chat-controls__reasoning-range::-webkit-slider-runnable-track {
   height: 3px;
   border-radius: var(--radius-full);
@@ -2598,13 +3068,10 @@ openclaw-chat-page {
   box-shadow: var(--focus-ring);
 }
 
-/* Inherited default (no override): hollow-looking muted thumb. */
 .chat-controls__reasoning-range--inherit::-webkit-slider-thumb {
   background: var(--muted);
 }
 
-/* Inherited default that is not on the offered scale (e.g. "adaptive"):
-   ghost the parked thumb so its position does not read as the default. */
 .chat-controls__reasoning-range--unanchored::-webkit-slider-thumb {
   opacity: 0.35;
 }
@@ -2641,50 +3108,28 @@ openclaw-chat-page {
 .chat-controls__reasoning-scale {
   display: flex;
   justify-content: space-between;
-  margin: 0 8px;
+  margin: 0 6px;
   color: var(--muted);
   font-size: 11px;
-}
-
-.chat-controls__reasoning-reset {
-  margin: 2px 8px 0;
-  padding: 0;
-  border: none;
-  background: none;
-  color: var(--muted);
-  font: inherit;
-  font-size: 11px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.chat-controls__reasoning-reset:hover:not(:disabled) {
-  color: var(--text);
-  text-decoration: underline;
-}
-
-.chat-controls__reasoning-reset:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
 }
 
 .chat-controls__reasoning-options {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 4px;
+  grid-template-columns: repeat(auto-fit, minmax(58px, 1fr));
+  gap: 8px;
 }
 
 .chat-controls__reasoning-option {
   display: inline-flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
   gap: 5px;
   min-width: 0;
   min-height: 32px;
-  padding: 6px 8px;
-  border: 1px solid transparent;
+  padding: 5px;
+  border: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
   border-radius: var(--radius-sm);
-  background: transparent;
+  background: color-mix(in srgb, var(--card) 74%, transparent);
   color: var(--muted);
   font: inherit;
   font-size: 12px;
@@ -2701,8 +3146,8 @@ openclaw-chat-page {
 }
 
 .chat-controls__reasoning-option--selected {
-  border-color: color-mix(in srgb, var(--text) 24%, var(--border));
-  background: color-mix(in srgb, var(--text) 8%, var(--card));
+  border-color: color-mix(in srgb, var(--accent) 76%, var(--border));
+  background: color-mix(in srgb, var(--accent) 12%, var(--card));
   color: var(--text-strong);
 }
 
@@ -2711,9 +3156,21 @@ openclaw-chat-page {
   opacity: 0.55;
 }
 
-.chat-controls__reasoning-option .chat-controls__inline-select-check {
-  width: 12px;
-  height: 12px;
+.chat-controls__picker-actions {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 0 auto;
+  padding: 7px 10px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  background: color-mix(in srgb, var(--bg-elevated) 96%, var(--card));
+}
+
+.chat-controls__use-default-model {
+  margin-right: auto;
 }
 
 .chat-controls__inline-select-check {
@@ -2724,19 +3181,18 @@ openclaw-chat-page {
   flex: 0 0 auto;
 }
 
-.chat-controls__quota {
-  grid-area: quota;
+.context-usage__quota .chat-controls__quota {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
+  justify-content: space-between;
   gap: 4px;
   box-sizing: border-box;
-  min-width: 0;
-  height: 30px;
-  padding: 0 8px;
-  border: none;
+  width: 100%;
+  min-height: 40px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
   border-radius: var(--radius-sm);
-  background: transparent;
+  background: color-mix(in srgb, var(--card) 72%, transparent);
   color: var(--fg);
   font-size: 12px;
   font-weight: 650;
@@ -2745,7 +3201,7 @@ openclaw-chat-page {
   white-space: nowrap;
 }
 
-.chat-controls__quota:hover {
+.context-usage__quota .chat-controls__quota:hover {
   background: color-mix(in srgb, var(--text) 7%, transparent);
 }
 
@@ -2840,6 +3296,15 @@ openclaw-chat-page {
 }
 
 @media (max-width: 768px) {
+  .agent-chat__talk-options--settings .agent-chat__talk-options-primary,
+  .agent-chat__talk-options--settings .agent-chat__talk-options-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .agent-chat__talk-input-setting {
+    order: -1;
+  }
+
   .chat-controls__session {
     min-width: 120px;
     max-width: none;
@@ -2860,35 +3325,31 @@ openclaw-chat-page {
   }
 
   .agent-chat__input-btn,
-  .agent-chat__toolbar .btn--ghost,
+  .agent-chat__toolbar-right .btn--ghost,
   .chat-send-btn {
     width: 44px;
     min-width: 44px;
     height: 44px;
   }
 
-  /* Preserve the phone touch target despite the narrower desktop split caret. */
-  .agent-chat__talk-group .agent-chat__talk-caret {
-    width: 44px;
-    min-width: 44px;
+  .agent-chat__composer-shell {
+    width: calc(100% - 8px);
+    margin: 6px 4px calc(14px + var(--safe-area-bottom));
+    gap: 6px;
   }
 
-  /* The model trigger owns the left mobile grid column; grow its menu rightward. */
-  .chat-controls__inline-select-menu--combined {
-    left: 0;
-    right: auto;
+  .agent-chat__composer-shell:has(.agent-chat__composer-combobox > textarea:focus) {
+    margin-bottom: 0;
   }
 
-  .chat-controls__reasoning-panel {
-    top: auto;
-    bottom: calc(100% + 8px);
-    left: 0;
-    right: auto;
-    width: min(220px, calc(100vw - 48px));
+  .agent-chat__composer-footer {
+    flex-wrap: nowrap;
+    gap: 3px;
+    min-height: 44px;
   }
 
-  .agent-chat__input {
-    margin: 0 8px calc(14px + var(--safe-area-bottom));
+  .agent-chat__composer-controls .chat-controls__model {
+    min-width: 0;
   }
 
   .agent-chat__suggestions {
@@ -2901,8 +3362,12 @@ openclaw-chat-page {
 }
 
 @media (display-mode: standalone) and (max-width: 768px) {
-  .agent-chat__input {
+  .agent-chat__composer-shell {
     margin-bottom: calc(14px + max(var(--safe-area-bottom), 34px));
+  }
+
+  .agent-chat__composer-shell:has(.agent-chat__composer-combobox > textarea:focus) {
+    margin-bottom: 0;
   }
 }
 
@@ -2922,10 +3387,6 @@ openclaw-chat-page {
     justify-content: flex-start;
   }
 
-  .chat-settings-chip {
-    max-width: 48vw;
-  }
-
   .chat-settings-popover {
     position: fixed;
     left: max(12px, var(--safe-area-left));
@@ -2933,7 +3394,17 @@ openclaw-chat-page {
     bottom: calc(96px + var(--safe-area-bottom));
     width: auto;
     max-height: min(480px, calc(100vh - var(--shell-topbar-height) - 116px));
-    overflow: visible;
+    overflow-y: auto;
+  }
+
+  .chat-controls__model-browser {
+    grid-template-columns: 120px minmax(0, 1fr);
+    min-height: 180px;
+  }
+
+  .chat-controls__provider-option {
+    padding-inline: 8px;
+    font-size: 12px;
   }
 
   .chat-controls {
@@ -2947,15 +3418,6 @@ openclaw-chat-page {
 
   .chat-controls__model {
     min-width: 150px;
-  }
-
-  .chat-bubble.has-copy {
-    padding-top: 34px;
-    padding-right: 12px;
-  }
-
-  .chat-bubble.has-copy.chat-bubble--has-actions {
-    padding-top: 8px;
   }
 }
 
