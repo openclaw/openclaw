@@ -3,6 +3,7 @@ import { resolveStorePath } from "../../config/sessions/paths.js";
 import { updateSessionStore } from "../../config/sessions/store.js";
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withTimeout } from "../../infra/fs-safe.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 
 /**
@@ -11,6 +12,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
  * See #26905.
  */
 const DEFAULT_PARENT_FORK_MAX_TOKENS = 100_000;
+const PARENT_FORK_TOKEN_TIMEOUT_MS = 2_000;
 const sessionForkRuntimeLoader = createLazyImportLoader(() => import("./session-fork.runtime.js"));
 
 export type ParentForkDecision =
@@ -296,5 +298,9 @@ async function resolveParentForkTokenCount(params: {
   storePath: string;
 }): Promise<number | undefined> {
   const runtime = await loadSessionForkRuntime();
-  return runtime.resolveParentForkTokenCountRuntime(params);
+  return await withTimeout(
+    runtime.resolveParentForkTokenCountRuntime(params),
+    PARENT_FORK_TOKEN_TIMEOUT_MS,
+    "resolveParentForkTokenCount",
+  ).catch(() => undefined);
 }

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { forkSessionEntryFromParent } from "./session-fork.js";
+import { forkSessionEntryFromParent, resolveParentForkDecision } from "./session-fork.js";
 
 const runtimeMocks = vi.hoisted(() => ({
   forkSessionFromParentRuntime: vi.fn(),
@@ -83,5 +83,51 @@ describe("forkSessionEntryFromParent", () => {
       { sessionFile?: string }
     >;
     expect(stored[sessionKey]?.sessionFile).toBe(path.join(activeStoreDir, "forked-session.jsonl"));
+  });
+});
+
+describe("resolveParentForkDecision", () => {
+  it("returns fork with parentTokens when the runtime resolves quickly", async () => {
+    runtimeMocks.resolveParentForkTokenCountRuntime.mockResolvedValue(50_000);
+
+    const decision = await resolveParentForkDecision({
+      parentEntry: { sessionId: "parent", updatedAt: 1 },
+      agentId: "main",
+      storePath: "/tmp/sessions.json",
+    });
+
+    expect(decision.status).toBe("fork");
+    expect(decision).toHaveProperty("parentTokens", 50_000);
+  });
+
+  it("returns fork without parentTokens when the runtime hangs (timeout protection)", async () => {
+    // Simulate a hung filesystem runtime that never resolves.
+    runtimeMocks.resolveParentForkTokenCountRuntime.mockReturnValue(new Promise<number>(() => {}));
+
+    const decision = await resolveParentForkDecision({
+      parentEntry: { sessionId: "parent", updatedAt: 1 },
+      agentId: "main",
+      storePath: "/tmp/sessions.json",
+    });
+
+    // Must still return a decision (not throw/timeout the caller).
+    // Fork proceeds without a token estimate rather than blocking (#101718).
+    expect(decision.status).toBe("fork");
+    expect(decision).not.toHaveProperty("parentTokens");
+  });
+
+  it("returns skip when parent is too large", async () => {
+    runtimeMocks.resolveParentForkTokenCountRuntime.mockResolvedValue(200_000);
+
+    const decision = await resolveParentForkDecision({
+      parentEntry: { sessionId: "parent", updatedAt: 1 },
+      agentId: "main",
+      storePath: "/tmp/sessions.json",
+    });
+
+    expect(decision.status).toBe("skip");
+    expect(decision.reason).toBe("parent-too-large");
+    expect(decision.parentTokens).toBe(200_000);
+    expect(decision.maxTokens).toBe(100_000);
   });
 });
