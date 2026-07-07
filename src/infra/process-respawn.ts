@@ -53,6 +53,9 @@ function spawnDetachedGatewayProcess(opts: GatewayRespawnOptions = {}): {
     detached: true,
     stdio: "inherit",
   });
+  // ponytail: no-op error handler prevents Node crash on async spawn failure.
+  // The child is detached and unref'd — there is nothing to reject.
+  child.on("error", () => {});
   child.unref();
   return { child, pid: child.pid ?? undefined };
 }
