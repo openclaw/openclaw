@@ -7,7 +7,7 @@ import type { PluginsListOptions } from "./plugins-list-command.js";
 import { parseStrictPositiveIntOption } from "./program/helpers.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
-type PluginUpdateOptions = {
+export type PluginUpdateOptions = {
   all?: boolean;
   acknowledgeClawhubRisk?: boolean;
   dryRun?: boolean;
@@ -40,7 +40,7 @@ export type PluginMarketplaceRefreshOptions = {
   json?: boolean;
 };
 
-type PluginSearchOptions = {
+export type PluginSearchOptions = {
   json?: boolean;
   limit?: number;
 };
@@ -58,18 +58,18 @@ export type PluginRegistryOptions = {
   refresh?: boolean;
 };
 
-type PluginAuthoringBuildOptions = {
+export type PluginAuthoringBuildOptions = {
   root?: string;
   entry?: string;
   check?: boolean;
 };
 
-type PluginAuthoringValidateOptions = {
+export type PluginAuthoringValidateOptions = {
   root?: string;
   entry?: string;
 };
 
-type PluginAuthoringInitOptions = {
+export type PluginAuthoringInitOptions = {
   directory?: string;
   force?: boolean;
   type?: string;

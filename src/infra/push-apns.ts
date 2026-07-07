@@ -7,7 +7,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../config/paths.js";
 import type { DeviceIdentity } from "./device-identity.js";
 import { formatErrorMessage, toErrorObject } from "./errors.js";
@@ -212,9 +211,9 @@ function parseReason(body: string): string | undefined {
     const parsed = JSON.parse(trimmed) as { reason?: unknown };
     return typeof parsed.reason === "string" && parsed.reason.trim().length > 0
       ? parsed.reason.trim()
-      : truncateUtf16Safe(trimmed, 200);
+      : trimmed.slice(0, 200);
   } catch {
-    return truncateUtf16Safe(trimmed, 200);
+    return trimmed.slice(0, 200);
   }
 }
 

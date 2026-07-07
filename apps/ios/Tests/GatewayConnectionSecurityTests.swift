@@ -120,36 +120,6 @@ import Testing
         #expect(controller._test_resolveManualUseTLS(host: "0.0.0.0", useTLS: false) == false)
     }
 
-    @Test @MainActor func `manual transport presentation shows effective remote security`() {
-        let presentation = GatewayConnectionController.manualTransportPresentation(
-            host: "gateway.example.com",
-            requestedTLS: false)
-
-        #expect(presentation.requiresTLS)
-        #expect(presentation.effectiveTLS)
-        #expect(presentation.helperText == "Secure connection is required for this host.")
-    }
-
-    @Test @MainActor func `manual transport presentation allows unencrypted private LAN`() {
-        let presentation = GatewayConnectionController.manualTransportPresentation(
-            host: "192.168.1.20",
-            requestedTLS: false)
-
-        #expect(!presentation.requiresTLS)
-        #expect(!presentation.effectiveTLS)
-        #expect(presentation.helperText == "Use only on a trusted private network.")
-    }
-
-    @Test @MainActor func `manual transport presentation does not repeat selected private LAN TLS state`() {
-        let presentation = GatewayConnectionController.manualTransportPresentation(
-            host: "192.168.1.20",
-            requestedTLS: true)
-
-        #expect(!presentation.requiresTLS)
-        #expect(presentation.effectiveTLS)
-        #expect(presentation.helperText == nil)
-    }
-
     @Test @MainActor func `manual connections allow private lan plaintext`() {
         let controller = self.makeController()
 
@@ -240,7 +210,7 @@ import Testing
         #expect(appModel.gatewayStatusText == "Verify gateway TLS fingerprint")
     }
 
-    @Test @MainActor func `stale trust acceptance releases auto connect suppression`() async {
+    @Test @MainActor func staleTrustAcceptanceReleasesAutoConnectSuppression() async {
         let host = "gateway-\(UUID().uuidString).example.com"
         let port = 18789
         let stableID = "manual|\(host.lowercased())|\(port)"
@@ -376,7 +346,7 @@ import Testing
         #expect(appModel.gatewayStatusText == message)
     }
 
-    @Test @MainActor func `target switch cancels suspended discovery resolution`() async {
+    @Test @MainActor func targetSwitchCancelsSuspendedDiscoveryResolution() async {
         let defaults = UserDefaults.standard
         let previousInstanceID = defaults.string(forKey: "node.instanceId")
         defer {

@@ -1,15 +1,15 @@
 import path from "node:path";
 
-type VersionScriptFormat = "json" | "shell";
-type VersionQueryCliOptions = {
+export type VersionScriptFormat = "json" | "shell";
+export type VersionQueryCliOptions = {
   field: string | null;
   format: VersionScriptFormat;
   help: boolean;
   releaseVersion: string | null;
   rootDir: string;
 };
-type VersionSyncMode = "check" | "write";
-type VersionSyncCliOptions = {
+export type VersionSyncMode = "check" | "write";
+export type VersionSyncCliOptions = {
   help: boolean;
   mode: VersionSyncMode;
   releaseVersion: string | null;

@@ -895,6 +895,7 @@ async function resumeThread(
         {
           threadId: normalizedThreadId,
           excludeTurns: true,
+          persistExtendedHistory: true,
         },
         {
           config: ctx.config,

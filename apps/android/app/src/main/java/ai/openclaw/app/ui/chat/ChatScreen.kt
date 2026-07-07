@@ -90,7 +90,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.input.key.onPreInterceptKeyBeforeSoftKeyboard
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -1492,8 +1501,6 @@ private fun ChatInputPill(
   onSend: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  val hardwareEnterHandler = remember { PhysicalChatSendKeyHandler() }
-
   Surface(
     modifier = modifier.heightIn(min = ClawTheme.spacing.touchTarget),
     shape = RoundedCornerShape(ClawTheme.radii.control),
@@ -1516,40 +1523,28 @@ private fun ChatInputPill(
         onClick = onStartVoiceNote,
       )
       Box(modifier = Modifier.weight(1f)) {
-        ChatTextFieldValueAdapter(
+        BasicTextField(
           value = value,
           onValueChange = onValueChange,
-          keyHandler = hardwareEnterHandler,
-        ) { textFieldValue, updateTextFieldValue ->
-          BasicTextField(
-            value = textFieldValue,
-            onValueChange = updateTextFieldValue,
-            textStyle = ClawTheme.type.body.copy(color = ClawTheme.colors.text),
-            cursorBrush = SolidColor(ClawTheme.colors.primary),
-            minLines = 1,
-            maxLines = 4,
-            modifier =
-              Modifier
-                .fillMaxWidth()
-                .onPreInterceptKeyBeforeSoftKeyboard { event ->
-                  hardwareEnterHandler.handle(
-                    event = event,
-                    sendEnabled = sendEnabled,
-                    textEmpty = textFieldValue.text.isEmpty(),
-                    compositionActive = textFieldValue.composition != null,
-                    onSend = onSend,
-                  )
-                },
-            decorationBox = { innerTextField ->
-              Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
-                if (value.isEmpty()) {
-                  Text(text = "Message OpenClaw", style = ClawTheme.type.body, color = ClawTheme.colors.textSubtle)
-                }
-                innerTextField()
+          textStyle = ClawTheme.type.body.copy(color = ClawTheme.colors.text),
+          cursorBrush = SolidColor(ClawTheme.colors.primary),
+          minLines = 1,
+          maxLines = 4,
+          modifier =
+            Modifier
+              .fillMaxWidth()
+              .onPreviewKeyEvent { event ->
+                handlePhysicalChatSend(event = event, sendEnabled = sendEnabled, onSend = onSend)
+              },
+          decorationBox = { innerTextField ->
+            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
+              if (value.isEmpty()) {
+                Text(text = "Message OpenClaw", style = ClawTheme.type.body, color = ClawTheme.colors.textSubtle)
               }
-            },
-          )
-        }
+              innerTextField()
+            }
+          },
+        )
       }
       Surface(
         onClick = onVoice,
@@ -1564,6 +1559,19 @@ private fun ChatInputPill(
       }
     }
   }
+}
+
+/** Intercepts one unmodified hardware Enter before BasicTextField inserts a newline. */
+internal fun handlePhysicalChatSend(
+  event: KeyEvent,
+  sendEnabled: Boolean,
+  onSend: () -> Unit,
+): Boolean {
+  val enterKey = event.key == Key.Enter || event.key == Key.NumPadEnter
+  val modified = event.isShiftPressed || event.isCtrlPressed || event.isAltPressed || event.isMetaPressed
+  if (event.type != KeyEventType.KeyDown || event.nativeKeyEvent.repeatCount != 0 || !enterKey || modified) return false
+  if (sendEnabled) onSend()
+  return true
 }
 
 @Composable

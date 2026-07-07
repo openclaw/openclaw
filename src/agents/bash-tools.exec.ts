@@ -1583,10 +1583,9 @@ export function createExecTool(
       let execCommandOverride: string | undefined;
       const backgroundRequested = params.background === true;
       const yieldRequested = typeof params.yieldMs === "number";
-      const foregroundFallbackWarning =
-        !allowBackground && (backgroundRequested || yieldRequested)
-          ? "Warning: background execution is disabled; running synchronously."
-          : undefined;
+      if (!allowBackground && (backgroundRequested || yieldRequested)) {
+        warnings.push("Warning: background execution is disabled; running synchronously.");
+      }
       const yieldWindow = allowBackground
         ? backgroundRequested
           ? 0
@@ -1886,7 +1885,6 @@ export function createExecTool(
             defaultTimeoutSec,
             approvalRunningNoticeMs,
             warnings,
-            foregroundWarnings: foregroundFallbackWarning ? [foregroundFallbackWarning] : [],
             notifySessionKey,
             notifyOnExit,
             trustedSafeBinDirs,
@@ -1947,12 +1945,6 @@ export function createExecTool(
           if (gatewayResult.allowWithoutEnforcedCommand) {
             execCommandOverride = undefined;
           }
-        }
-
-        // Pending approvals have not started the command. Add fallback warnings only
-        // after approval routing proves this call will execute in the foreground.
-        if (foregroundFallbackWarning) {
-          warnings.push(foregroundFallbackWarning);
         }
 
         const explicitTimeoutSec = typeof params.timeout === "number" ? params.timeout : null;

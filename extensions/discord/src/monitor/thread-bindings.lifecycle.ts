@@ -36,9 +36,9 @@ export type AcpThreadBindingReconciliationResult = {
   staleSessionKeys: string[];
 };
 
-type AcpThreadBindingHealthStatus = "healthy" | "stale" | "uncertain";
+export type AcpThreadBindingHealthStatus = "healthy" | "stale" | "uncertain";
 
-type AcpThreadBindingHealthProbe = (params: {
+export type AcpThreadBindingHealthProbe = (params: {
   cfg: OpenClawConfig;
   accountId: string;
   sessionKey: string;

@@ -2,7 +2,6 @@
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { z } from "zod";
 import {
   joinQaCredentialEndpoint,
@@ -15,7 +14,6 @@ import { fingerprintQaCredentialId } from "./qa-credentials-fingerprint.runtime.
 
 const DEFAULT_ENDPOINT_PREFIX = QA_CREDENTIALS_DEFAULT_ENDPOINT_PREFIX;
 const DEFAULT_HTTP_TIMEOUT_MS = 15_000;
-const QA_CREDENTIAL_ADMIN_MAX_RESPONSE_BYTES = 1024 * 1024;
 
 const actorRoleSchema = z.union([z.literal("ci"), z.literal("maintainer")]);
 const credentialStatusSchema = z.union([z.literal("active"), z.literal("disabled")]);
@@ -377,7 +375,6 @@ async function postJson<T>(params: {
 }) {
   const httpTimeoutMs = resolveTimerTimeoutMs(params.httpTimeoutMs, DEFAULT_HTTP_TIMEOUT_MS);
   let response: Response;
-  let text: string;
   try {
     response = await params.fetchImpl(params.url, {
       method: "POST",
@@ -388,21 +385,14 @@ async function postJson<T>(params: {
       body: JSON.stringify(params.body),
       signal: AbortSignal.timeout(httpTimeoutMs),
     });
-    const responseBytes = await readResponseWithLimit(
-      response,
-      QA_CREDENTIAL_ADMIN_MAX_RESPONSE_BYTES,
-      {
-        onOverflow: ({ size, maxBytes }) =>
-          new Error(`Convex credential admin response exceeds ${maxBytes} bytes (${size} bytes)`),
-      },
-    );
-    text = new TextDecoder().decode(responseBytes);
   } catch (error) {
     throw new QaCredentialAdminError({
       code: "BROKER_REQUEST_FAILED",
       message: `Convex credential admin request failed: ${formatErrorMessage(error)}`,
     });
   }
+
+  const text = await response.text();
   const payload = parseJsonResponsePayload(text);
 
   const brokerError = toBrokerError(payload, response.status);

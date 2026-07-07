@@ -55,7 +55,7 @@ export type PluginActivationConfigSourceLike<TRootConfig> = {
   rootConfig?: TRootConfig;
 };
 
-const PLUGIN_ACTIVATION_REASON_BY_CAUSE: Record<PluginActivationCause, string> = {
+export const PLUGIN_ACTIVATION_REASON_BY_CAUSE: Record<PluginActivationCause, string> = {
   "enabled-in-config": "enabled in config",
   "bundled-channel-enabled-in-config": "channel enabled in config",
   "selected-memory-slot": "selected memory slot",
@@ -72,7 +72,7 @@ const PLUGIN_ACTIVATION_REASON_BY_CAUSE: Record<PluginActivationCause, string> =
   "bundled-disabled-by-default": "bundled (disabled by default)",
 };
 
-function resolvePluginActivationReason(
+export function resolvePluginActivationReason(
   cause?: PluginActivationCause,
   reason?: string,
 ): string | undefined {
@@ -298,11 +298,11 @@ export function resolvePluginActivationDecisionShared<TRootConfig>(params: {
   };
 }
 
-function toEnableStateResult(state: EnableStateLike): { enabled: boolean; reason?: string } {
+export function toEnableStateResult(state: EnableStateLike): { enabled: boolean; reason?: string } {
   return state.enabled ? { enabled: true } : { enabled: false, reason: state.reason };
 }
 
-function resolveEnableStateResult<TParams>(
+export function resolveEnableStateResult<TParams>(
   params: TParams,
   resolveState: (params: TParams) => EnableStateLike,
 ): { enabled: boolean; reason?: string } {

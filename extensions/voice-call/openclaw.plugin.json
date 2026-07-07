@@ -71,10 +71,6 @@
       "label": "Twilio Auth Token",
       "sensitive": true
     },
-    "twilio.region": {
-      "label": "Twilio Region",
-      "advanced": true
-    },
     "outbound.defaultMode": {
       "label": "Default Call Mode"
     },
@@ -290,10 +286,6 @@
           },
           "authToken": {
             "type": ["string", "object"]
-          },
-          "region": {
-            "type": "string",
-            "enum": ["us1", "ie1", "au1"]
           }
         }
       },

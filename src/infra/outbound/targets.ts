@@ -38,7 +38,7 @@ import {
 export type OutboundChannel = DeliverableMessageChannel;
 
 /** Heartbeat target channel id from agent/default heartbeat config. */
-type HeartbeatTarget = OutboundChannel;
+export type HeartbeatTarget = OutboundChannel;
 
 /** Resolved outbound delivery destination and routing hints. */
 export type OutboundTarget = {

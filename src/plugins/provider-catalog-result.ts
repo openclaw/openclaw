@@ -115,7 +115,7 @@ function copyProviderCatalogModel(model: unknown): ModelDefinitionConfig | undef
 }
 
 /** Copies the supported provider config fields from a provider catalog result. */
-function copyProviderCatalogProviderConfig(
+export function copyProviderCatalogProviderConfig(
   providerConfig: unknown,
 ): ModelProviderConfig | undefined {
   if (!isRecord(providerConfig)) {

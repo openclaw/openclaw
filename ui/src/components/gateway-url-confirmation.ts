@@ -4,7 +4,7 @@ import { property } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
 import "./modal-dialog.ts";
 
-type GatewayUrlConfirmationProps = {
+export type GatewayUrlConfirmationProps = {
   pendingGatewayUrl: string | null;
   onConfirm: () => void;
   onCancel: () => void;
@@ -45,7 +45,7 @@ function renderGatewayUrlConfirmation(props: GatewayUrlConfirmationProps) {
   `;
 }
 
-class GatewayUrlConfirmation extends LitElement {
+export class GatewayUrlConfirmation extends LitElement {
   override createRenderRoot() {
     return this;
   }

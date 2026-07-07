@@ -63,7 +63,6 @@ export const ja_JP: TranslationMap = {
     docs: "ドキュメント",
     theme: "テーマ",
     colorMode: "カラーモード",
-    colorModeOption: "カラーモード: {mode}",
     resources: "リソース",
     search: "検索",
     save: "保存",

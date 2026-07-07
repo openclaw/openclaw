@@ -51,7 +51,7 @@ const FEISHU_TRANSCODABLE_AUDIO_EXTS = new Set([
   ".wma",
 ]);
 
-type SaveMessageResourceResult = {
+export type SaveMessageResourceResult = {
   saved: SavedMedia;
   contentType?: string;
   fileName?: string;
@@ -398,11 +398,11 @@ export async function saveMessageResourceFeishu(params: {
   }
 }
 
-type UploadImageResult = {
+export type UploadImageResult = {
   imageKey: string;
 };
 
-type UploadFileResult = {
+export type UploadFileResult = {
   fileKey: string;
 };
 
@@ -417,7 +417,7 @@ export type SendMediaResult = {
  * Upload an image to Feishu and get an image_key for sending.
  * Supports: JPEG, PNG, WEBP, GIF, TIFF, BMP, ICO
  */
-async function uploadImageFeishu(params: {
+export async function uploadImageFeishu(params: {
   cfg: ClawdbotConfig;
   image: Buffer | string; // Buffer or file path
   imageType?: "message" | "avatar";
@@ -470,7 +470,7 @@ export function sanitizeFileNameForUpload(fileName: string): string {
  * Upload a file to Feishu and get a file_key for sending.
  * Max file size: 30MB
  */
-async function uploadFileFeishu(params: {
+export async function uploadFileFeishu(params: {
   cfg: ClawdbotConfig;
   file: Buffer | string; // Buffer or file path
   fileName: string;
@@ -514,7 +514,7 @@ async function uploadFileFeishu(params: {
 /**
  * Send an image message using an image_key
  */
-async function sendImageFeishu(params: {
+export async function sendImageFeishu(params: {
   cfg: ClawdbotConfig;
   to: string;
   imageKey: string;
@@ -568,7 +568,7 @@ async function sendImageFeishu(params: {
 /**
  * Send a file message using a file_key
  */
-async function sendFileFeishu(params: {
+export async function sendFileFeishu(params: {
   cfg: ClawdbotConfig;
   to: string;
   fileKey: string;
@@ -625,7 +625,7 @@ async function sendFileFeishu(params: {
 /**
  * Helper to detect file type from extension
  */
-function detectFileType(
+export function detectFileType(
   fileName: string,
 ): "opus" | "mp4" | "pdf" | "doc" | "xls" | "ppt" | "stream" {
   const ext = normalizeLowercaseStringOrEmpty(path.extname(fileName));

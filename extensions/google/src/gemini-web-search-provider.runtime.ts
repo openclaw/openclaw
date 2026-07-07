@@ -25,7 +25,6 @@ import {
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveGoogleApiClientHeaders } from "../google-api-client-header.js";
 import {
   resolveGeminiConfig,
   resolveGeminiBaseUrl,
@@ -170,7 +169,7 @@ function resolveGeminiTimeRangeFilter(
   };
 }
 
-function resolveGeminiRuntimeApiKey(gemini?: GeminiConfig): string | undefined {
+export function resolveGeminiRuntimeApiKey(gemini?: GeminiConfig): string | undefined {
   return (
     readConfiguredSecretString(gemini?.apiKey, "tools.web.search.gemini.apiKey") ??
     readProviderEnvValue(["GEMINI_API_KEY"]) ??
@@ -201,12 +200,6 @@ async function runGeminiSearch(params: {
         headers: {
           "Content-Type": "application/json",
           "x-goog-api-key": params.apiKey,
-          ...resolveGoogleApiClientHeaders({
-            baseUrl: params.baseUrl,
-            api: "google-generative-ai",
-            capability: "other",
-            transport: "http",
-          }),
         },
         body: JSON.stringify({
           contents: [{ parts: [{ text: params.query }] }],

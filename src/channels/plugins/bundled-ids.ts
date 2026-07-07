@@ -27,7 +27,7 @@ export function listBundledChannelPluginIdsForRoot(
 /**
  * Lists bundled channel ids for a package root/cache scope.
  */
-function listBundledChannelIdsForRoot(
+export function listBundledChannelIdsForRoot(
   _packageRoot: string,
   env: NodeJS.ProcessEnv = process.env,
   discovery?: PluginDiscoveryResult,

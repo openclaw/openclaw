@@ -43,7 +43,7 @@ export type AcpxProcessLeaseStore = {
   markState(leaseId: string, state: AcpxProcessLeaseState): Promise<void>;
 };
 
-type AcpxProcessLeaseFile = {
+export type AcpxProcessLeaseFile = {
   version: 1;
   leases: AcpxProcessLease[];
 };

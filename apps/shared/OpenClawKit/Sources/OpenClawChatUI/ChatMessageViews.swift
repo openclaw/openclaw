@@ -920,16 +920,12 @@ private struct ChatAssistantTextBody: View {
                 let font = segment.kind == .thinking
                     ? OpenClawChatTypography.callout.italic()
                     : OpenClawChatTypography.body
-                let inlineMathTypography: ChatMarkdownRenderer.InlineMathTypography = segment.kind == .thinking
-                    ? .callout
-                    : .body
                 ChatMarkdownRenderer(
                     text: segment.text,
                     context: .assistant,
                     variant: self.markdownVariant,
                     font: font,
                     textColor: OpenClawChatTheme.assistantText,
-                    inlineMathTypography: inlineMathTypography,
                     isComplete: self.isComplete)
             }
         }
@@ -1007,9 +1003,6 @@ private struct ChatStreamingAssistantTextBody: View {
                 let font = segment.kind == .thinking
                     ? OpenClawChatTypography.callout.italic()
                     : OpenClawChatTypography.body
-                let inlineMathTypography: ChatMarkdownRenderer.InlineMathTypography = segment.kind == .thinking
-                    ? .callout
-                    : .body
                 let reveal = self.reveal(
                     segmentIndex: entry.offset,
                     now: now)
@@ -1019,7 +1012,6 @@ private struct ChatStreamingAssistantTextBody: View {
                     variant: self.markdownVariant,
                     font: font,
                     textColor: OpenClawChatTheme.assistantText,
-                    inlineMathTypography: inlineMathTypography,
                     reveal: reveal)
             }
         }
@@ -1068,7 +1060,6 @@ private struct ChatStreamingAssistantTextBody: View {
         return deadline
     }
 
-    @MainActor
     private struct Snapshot {
         struct Segment {
             let kind: AssistantTextSegment.Kind

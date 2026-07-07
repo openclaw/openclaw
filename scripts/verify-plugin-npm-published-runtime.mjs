@@ -379,7 +379,7 @@ export function parseVerifyPublishedPluginRuntimeArgs(argv) {
   return { help: false, spec: first };
 }
 
-async function verifyPublishedPluginRuntime(spec) {
+export async function verifyPublishedPluginRuntime(spec) {
   const workingDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-npm-runtime."));
   try {
     const tarballPath = await packPublishedPackage(spec, workingDir);

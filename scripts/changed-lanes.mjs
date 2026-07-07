@@ -357,7 +357,7 @@ export function listStagedChangedPaths(cwd = process.cwd()) {
 /**
  * Classifies package.json script-only changes from git content.
  */
-function classifyPackageJsonChangeFromGit(params) {
+export function classifyPackageJsonChangeFromGit(params) {
   try {
     const { before, after } = readPackageJsonBeforeAfter(params);
     if (isLiveDockerPackageScriptOnlyChange(before, after)) {
@@ -482,7 +482,7 @@ function stableJson(value) {
 /**
  * Writes changed-lane booleans to the GitHub Actions output file.
  */
-function writeChangedLaneGitHubOutput(result, outputPath = process.env.GITHUB_OUTPUT) {
+export function writeChangedLaneGitHubOutput(result, outputPath = process.env.GITHUB_OUTPUT) {
   if (!outputPath) {
     throw new Error("GITHUB_OUTPUT is required");
   }

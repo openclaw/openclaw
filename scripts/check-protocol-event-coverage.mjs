@@ -420,7 +420,7 @@ function collectSwiftStaticStringConstants(sources) {
  * Runs the full coverage check against a repo checkout and returns error
  * strings plus a summary for logging.
  */
-function collectProtocolEventCoverageErrors(params = {}) {
+export function collectProtocolEventCoverageErrors(params = {}) {
   const rootDir = params.rootDir ?? process.cwd();
   const fsImpl = params.fs ?? fs;
 

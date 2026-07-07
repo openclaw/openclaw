@@ -21,7 +21,6 @@ import {
   resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../../../routing/session-key.js";
-import { shortenHomePath } from "../../../utils.js";
 import { resolveHookConfig } from "../../config.js";
 import type { HookHandler } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
@@ -250,7 +249,7 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
     const memoryFilePath = path.join(memoryDir, filename);
     log.debug("Memory file path resolved", {
       filename,
-      path: shortenHomePath(memoryFilePath),
+      path: memoryFilePath.replace(os.homedir(), "~"),
     });
 
     const timeStr = localTimestamp.time;
@@ -283,7 +282,7 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
     log.debug("Memory file written successfully");
 
     // Log completion (but don't send user-visible confirmation - it's internal housekeeping)
-    const relPath = shortenHomePath(memoryFilePath);
+    const relPath = memoryFilePath.replace(os.homedir(), "~");
     log.info(`Session context saved to ${relPath}`);
   } catch (err) {
     if (err instanceof Error) {

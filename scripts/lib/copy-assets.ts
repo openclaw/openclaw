@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-type BuildCopyContext = {
+export type BuildCopyContext = {
   prefix: string;
   projectRoot: string;
   verbose: boolean;

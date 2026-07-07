@@ -58,7 +58,10 @@ function directoryPatternCoversInclude(excludePattern: string, includePattern: s
   return candidate === excludeRoot || candidate.startsWith(`${excludeRoot}/`);
 }
 
-function includePatternIsFullyExcluded(includePattern: string, excludePattern: string): boolean {
+export function includePatternIsFullyExcluded(
+  includePattern: string,
+  excludePattern: string,
+): boolean {
   const include = normalizePathPattern(includePattern);
   const exclude = normalizePathPattern(excludePattern);
   return (

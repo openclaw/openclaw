@@ -99,8 +99,8 @@ struct ChatViewModelSessionDeletionTests {
         let transport = DeleteSessionTestTransport()
         let vm = OpenClawChatViewModel(
             sessionKey: "global",
-            transport: transport,
-            activeAgentId: "ops")
+            activeAgentId: "ops",
+            transport: transport)
         vm.load()
         try await waitUntil("initial bootstrap history") {
             await MainActor.run { transport.historyRequests.contains("global") }

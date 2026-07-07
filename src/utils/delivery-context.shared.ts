@@ -84,7 +84,9 @@ export function deliveryContextFromChannelRoute(
 }
 
 /** Converts delivery context fields into the SDK channel route reference shape. */
-function channelRouteFromDeliveryContext(context?: DeliveryContext): ChannelRouteRef | undefined {
+export function channelRouteFromDeliveryContext(
+  context?: DeliveryContext,
+): ChannelRouteRef | undefined {
   return normalizeChannelRouteTarget(normalizeDeliveryContext(context));
 }
 

@@ -354,7 +354,6 @@ export function buildChannelOutboundSessionRoute(params: {
   agentId: string;
   channel: string;
   accountId?: string | null;
-  recipientSessionExact?: boolean | "direct-alias" | "delivery-identity";
   peer: { kind: "direct" | "group" | "channel"; id: string };
   chatType: "direct" | "group" | "channel";
   from: string;
@@ -371,9 +370,6 @@ export function buildChannelOutboundSessionRoute(params: {
   return {
     sessionKey: baseSessionKey,
     baseSessionKey,
-    ...(params.recipientSessionExact !== undefined
-      ? { recipientSessionExact: params.recipientSessionExact }
-      : {}),
     peer: params.peer,
     chatType: params.chatType,
     from: params.from,

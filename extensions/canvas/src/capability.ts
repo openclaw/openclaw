@@ -16,7 +16,7 @@ export const CANVAS_CAPABILITY_PATH_PREFIX = PLUGIN_NODE_CAPABILITY_PATH_PREFIX;
 export const CANVAS_CAPABILITY_TTL_MS = DEFAULT_PLUGIN_NODE_CAPABILITY_TTL_MS;
 
 /** Normalized Canvas capability-scoped URL shape. */
-type NormalizedCanvasScopedUrl = NormalizedPluginNodeCapabilityUrl;
+export type NormalizedCanvasScopedUrl = NormalizedPluginNodeCapabilityUrl;
 
 /** Creates a new opaque Canvas capability token. */
 export function mintCanvasCapabilityToken(): string {

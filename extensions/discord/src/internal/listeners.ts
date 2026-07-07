@@ -10,7 +10,7 @@ import {
 import type { Client } from "./client.js";
 import { Guild, Message, User } from "./structures.js";
 
-type DiscordMessageDispatchData = {
+export type DiscordMessageDispatchData = {
   id?: string;
   channel_id: string;
   channelId?: string;
@@ -23,7 +23,7 @@ type DiscordMessageDispatchData = {
   channel?: unknown;
 };
 
-type DiscordReactionDispatchData = {
+export type DiscordReactionDispatchData = {
   user_id?: string;
   channel_id: string;
   message_id: string;
@@ -38,7 +38,7 @@ type DiscordReactionDispatchData = {
   rawMessage?: APIMessage;
 };
 
-abstract class BaseListener {
+export abstract class BaseListener {
   abstract readonly type: string;
   abstract handle(data: unknown, client: Client): Promise<void> | void;
 }

@@ -1,13 +1,7 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
-import {
-  reconcileSessionRunTerminal,
-  scopedAgentParamsForSession,
-  type SessionCapability,
-  type SessionRunTerminal,
-  type SessionScopeHost,
-} from "../../lib/sessions/index.ts";
+import { scopedAgentParamsForSession, type SessionScopeHost } from "../../lib/sessions/index.ts";
 import { uiSessionRowMatchesSelectedChat } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { formatConnectError } from "./connect-error.ts";
@@ -24,21 +18,16 @@ export type ChatRunUiStatus = {
   occurredAt: number;
 };
 
-type TerminalSessionRunStatus = Exclude<SessionRunStatus, "running">;
-
 type LocalTerminalReconcile = {
   sessionKey: string;
   runId: string | null;
   phase: ChatRunUiStatus["phase"];
-  sessionStatus: TerminalSessionRunStatus;
+  sessionStatus: SessionRunStatus;
 };
 
 type TimerHandle = ReturnType<typeof globalThis.setTimeout>;
 
-type RunLifecycleHost = Omit<
-  Partial<Parameters<typeof resetToolStream>[0]>,
-  "hello" | "sessions"
-> & {
+type RunLifecycleHost = Omit<Partial<Parameters<typeof resetToolStream>[0]>, "hello"> & {
   sessionKey: string;
   agentsList?: { mainKey?: string | null } | null;
   hello?: { snapshot?: unknown } | null;
@@ -53,14 +42,13 @@ type RunLifecycleHost = Omit<
   chatRunStatus?: ChatRunUiStatus | null;
   chatRunStatusClearTimer?: TimerHandle | number | null;
   sessionsResult?: SessionsListResult | null;
-  sessions?: Pick<SessionCapability, "reconcileRunTerminal" | "setModelOverride">;
   lastLocalTerminalReconcile?: LocalTerminalReconcile | null;
   requestUpdate?: () => void;
 };
 
 type ReconcileOptions = {
   outcome?: ChatRunUiStatus["phase"];
-  sessionStatus?: TerminalSessionRunStatus;
+  sessionStatus?: SessionRunStatus;
   runId?: string | null;
   sessionKey?: string | null;
   sessionKeys?: readonly (string | null | undefined)[];
@@ -171,9 +159,7 @@ function clearTimer(timer: TimerHandle | number | null | undefined) {
   }
 }
 
-function canResetToolStream(
-  host: RunLifecycleHost,
-): host is RunLifecycleHost & Parameters<typeof resetToolStream>[0] {
+function canResetToolStream(host: RunLifecycleHost): host is Parameters<typeof resetToolStream>[0] {
   return (
     host.toolStreamById instanceof Map &&
     Array.isArray(host.toolStreamOrder) &&
@@ -229,14 +215,6 @@ function sessionKeysFor(host: RunLifecycleHost, options: ReconcileOptions): Set<
   if (primary) {
     keys.add(primary);
   }
-  if (uiSessionRowMatchesSelectedChat(host, "global", primary)) {
-    keys.add("global");
-  }
-  for (const row of host.sessionsResult?.sessions ?? []) {
-    if (uiSessionRowMatchesSelectedChat(host, row.key, primary)) {
-      keys.add(row.key);
-    }
-  }
   for (const key of options.sessionKeys ?? []) {
     const normalized = toSessionKey(key);
     if (normalized) {
@@ -251,7 +229,7 @@ function reconcileSessionRows(
   options: ReconcileOptions,
   occurredAt: number,
 ) {
-  if (!options.outcome) {
+  if (!options.outcome || !host.sessionsResult) {
     return;
   }
   const keys = sessionKeysFor(host, options);
@@ -260,16 +238,29 @@ function reconcileSessionRows(
   }
   const status =
     options.sessionStatus ?? (options.outcome === "done" ? ("done" as const) : ("killed" as const));
-  const terminal: SessionRunTerminal = {
-    sessionKeys: [...keys],
-    runId: options.runId ?? host.chatRunId ?? null,
-    status,
-    endedAt: occurredAt,
-  };
-  if (host.sessionsResult) {
-    host.sessionsResult = reconcileSessionRunTerminal(host.sessionsResult, terminal);
+  let changed = false;
+  const sessions = host.sessionsResult.sessions.map((row) => {
+    if (!keys.has(row.key)) {
+      return row;
+    }
+    const next = {
+      ...row,
+      hasActiveRun: false,
+      status,
+      endedAt: row.endedAt ?? occurredAt,
+    };
+    if (status === "killed") {
+      next.abortedLastRun = true;
+    }
+    if (typeof next.startedAt === "number" && typeof next.endedAt === "number") {
+      next.runtimeMs = Math.max(0, next.endedAt - next.startedAt);
+    }
+    changed = true;
+    return next;
+  });
+  if (changed) {
+    host.sessionsResult = { ...host.sessionsResult, sessions };
   }
-  host.sessions?.reconcileRunTerminal(terminal);
 }
 
 export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: ReconcileOptions = {}) {
@@ -320,9 +311,7 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
 }
 
 function currentSessionRow(host: RunLifecycleHost) {
-  return host.sessionsResult?.sessions.find((row) =>
-    uiSessionRowMatchesSelectedChat(host, row.key, host.sessionKey),
-  );
+  return host.sessionsResult?.sessions.find((row) => row.key === host.sessionKey);
 }
 
 // After a terminal chat event clears local run state, a racing sessions.list
@@ -344,9 +333,8 @@ function reconcileStaleSelectedSessionRunAfterLocalCompletion(host: RunLifecycle
     return false;
   }
   if (!isSessionRunActive(row)) {
-    // This may be our own shared terminal projection rather than a Gateway
-    // publication. Retain the identity so a duplicate stale event cannot
-    // revive the completed run.
+    // The server now reflects a non-active state, so stop suppressing.
+    host.lastLocalTerminalReconcile = null;
     return false;
   }
   // Browser and Gateway clocks can differ. Only an exact active-run identity
@@ -361,12 +349,7 @@ function reconcileStaleSelectedSessionRunAfterLocalCompletion(host: RunLifecycle
   }
   reconcileSessionRows(
     host,
-    {
-      outcome: recent.phase,
-      sessionStatus: recent.sessionStatus,
-      sessionKey: recent.sessionKey,
-      runId: recent.runId,
-    },
+    { outcome: recent.phase, sessionStatus: recent.sessionStatus, sessionKey: recent.sessionKey },
     Date.now(),
   );
   host.requestUpdate?.();
@@ -391,7 +374,10 @@ export function reconcileStaleChatRunAfterSessionStatePublication(host: RunLifec
   // Both session subscriptions and direct event reconciliation can republish
   // canonical rows after the local terminal projection; guard both paths.
   const canReconcile =
-    host.lastLocalTerminalReconcile != null && !host.chatRunId && host.chatStream == null;
+    host.chatRunStatus == null &&
+    host.lastLocalTerminalReconcile != null &&
+    !host.chatRunId &&
+    host.chatStream == null;
   return canReconcile && reconcileChatRunFromCurrentSessionRow(host, { publishRunStatus: false });
 }
 
@@ -432,7 +418,7 @@ export function reconcileChatRunFromSessionRow(
   }
   reconcileChatRunLifecycle(host, {
     outcome: row.status === "done" ? "done" : "interrupted",
-    sessionStatus: row.status === "running" || row.status === undefined ? "killed" : row.status,
+    sessionStatus: row.status === "done" ? "done" : (row.status ?? "killed"),
     runId: host.chatRunId,
     sessionKey: host.sessionKey,
     sessionKeys: [row.key],

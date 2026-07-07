@@ -31,7 +31,7 @@ export type TerminalSessionInfo = {
   createdAtMs: number;
 };
 
-type TerminalExitInfo = {
+export type TerminalExitInfo = {
   exitCode: number | null;
   signal: number | null;
   reason?: string;

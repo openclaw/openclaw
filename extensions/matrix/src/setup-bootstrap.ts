@@ -6,7 +6,7 @@ import { formatMatrixErrorMessage } from "./matrix/errors.js";
 import type { RuntimeEnv } from "./runtime-api.js";
 import type { CoreConfig } from "./types.js";
 
-type MatrixSetupVerificationBootstrapResult = {
+export type MatrixSetupVerificationBootstrapResult = {
   attempted: boolean;
   success: boolean;
   recoveryKeyCreatedAt: string | null;

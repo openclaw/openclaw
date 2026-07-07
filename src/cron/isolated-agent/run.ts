@@ -11,6 +11,11 @@ import { expandToolGroups, normalizeToolName } from "../../agents/tool-policy.js
 import { deriveContextPromptTokens } from "../../agents/usage.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+  selectApplicableRuntimeConfig,
+} from "../../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
@@ -75,7 +80,7 @@ import {
   resolveHeartbeatAckMaxChars,
 } from "./helpers.js";
 import { resolveCronModelSelection } from "./model-selection.js";
-import { buildCronAgentDefaultsConfig, resolveCronActiveRuntimeConfig } from "./run-config.js";
+import { buildCronAgentDefaultsConfig } from "./run-config.js";
 import { resolveCronPreflightCandidates } from "./run-fallback-policy.js";
 import {
   adoptCronRunSessionMetadata,
@@ -564,6 +569,21 @@ type PreparedCronRunContext = {
 type CronPreparationResult =
   | { ok: true; context: PreparedCronRunContext }
   | { ok: false; result: RunCronAgentTurnResult };
+
+function resolveCronActiveRuntimeConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const runtimeConfig = getRuntimeConfigSnapshot();
+  const runtimeSourceConfig = getRuntimeConfigSourceSnapshot();
+  if (!runtimeConfig || !runtimeSourceConfig) {
+    return cfg;
+  }
+  return (
+    selectApplicableRuntimeConfig({
+      inputConfig: cfg,
+      runtimeConfig,
+      runtimeSourceConfig,
+    }) ?? cfg
+  );
+}
 
 async function prepareCronRunContext(params: {
   input: RunCronAgentTurnParams;

@@ -93,7 +93,7 @@ export function parseDirectAgentSessionTarget(
 }
 
 /** Resolve the configured DM allowlist that applies to an event session. */
-function resolveEventSessionAllowFrom(params: {
+export function resolveEventSessionAllowFrom(params: {
   cfg?: OpenClawConfig;
   sessionKey?: string | null;
   channel?: string | null;

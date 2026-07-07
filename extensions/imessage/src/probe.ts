@@ -22,11 +22,6 @@ import {
   setCachedIMessagePrivateApiStatus,
   type IMessagePrivateApiStatus,
 } from "./private-api-status.js";
-import {
-  IMESSAGE_INSTALL_COMMAND,
-  IMESSAGE_UPDATE_COMMAND,
-  isAutoManagedIMessageCliPath,
-} from "./setup-core.js";
 
 // Re-export for backwards compatibility
 export { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
@@ -105,7 +100,7 @@ function isDefaultLocalIMessageCliPath(cliPath: string): boolean {
   return trimmed === "imsg" || (!trimmed.includes("/") && path.basename(trimmed) === "imsg");
 }
 
-function resolveIMessageNonMacHostError(
+export function resolveIMessageNonMacHostError(
   cliPath: string,
   platform: NodeJS.Platform = process.platform,
 ): string | undefined {
@@ -128,7 +123,7 @@ async function probeRpcSupport(cliPath: string, timeoutMs: number): Promise<RpcS
       const fatal = {
         supported: false,
         fatal: true,
-        error: `imsg CLI does not support the "rpc" subcommand. Update imsg on the Messages Mac: ${IMESSAGE_UPDATE_COMMAND}`,
+        error: 'imsg CLI does not support the "rpc" subcommand (update imsg)',
       };
       setCachedRpcSupport(cliPath, fatal);
       return fatal;
@@ -297,8 +292,7 @@ export async function probeIMessage(
   opts: IMessageProbeOptions = {},
 ): Promise<IMessageProbe> {
   const cfg = opts.cliPath || opts.dbPath ? undefined : getRuntimeConfig();
-  const explicitCliPath = opts.cliPath?.trim() || cfg?.channels?.imessage?.cliPath?.trim();
-  const cliPath = explicitCliPath || "imsg";
+  const cliPath = opts.cliPath?.trim() || cfg?.channels?.imessage?.cliPath?.trim() || "imsg";
   const dbPath = opts.dbPath?.trim() || cfg?.channels?.imessage?.dbPath?.trim();
   // Use explicit timeout if provided, otherwise fall back to config, then default
   const effectiveTimeout =
@@ -311,15 +305,7 @@ export async function probeIMessage(
 
   const detected = await detectBinary(cliPath);
   if (!detected) {
-    const error = isAutoManagedIMessageCliPath(cliPath, {
-      explicit: explicitCliPath !== undefined,
-    })
-      ? `imsg not found (${cliPath}). Install imsg on the Messages Mac: ${IMESSAGE_INSTALL_COMMAND}`
-      : `imsg command not found (${cliPath}). Check the configured iMessage cliPath or wrapper.`;
-    return {
-      ok: false,
-      error,
-    };
+    return { ok: false, error: `imsg not found (${cliPath})` };
   }
 
   const rpcSupport = await probeRpcSupport(cliPath, effectiveTimeout);

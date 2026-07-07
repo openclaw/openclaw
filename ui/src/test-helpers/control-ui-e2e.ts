@@ -54,7 +54,6 @@ export type ControlUiMockGatewayScenario = {
   }>;
   defaultAgentId?: string;
   deferredMethods?: string[];
-  deviceToken?: string;
   featureMethods?: string[];
   historyMessages?: unknown[];
   methodResponses?: Record<string, unknown>;
@@ -219,7 +218,6 @@ function normalizeScenario(
     controlUiTabs: scenario.controlUiTabs ?? [],
     defaultAgentId,
     deferredMethods: scenario.deferredMethods ?? [],
-    deviceToken: scenario.deviceToken?.trim() || "e2e-device-token",
     featureMethods: scenario.featureMethods ?? ["chat.metadata", "chat.startup"],
     historyMessages: scenario.historyMessages ?? [],
     methodResponses: scenario.methodResponses ?? {},
@@ -431,7 +429,7 @@ function installControlUiMockGateway(input: {
       case "connect":
         return {
           auth: {
-            deviceToken: scenario.deviceToken,
+            deviceToken: "e2e-device-token",
             role: "operator",
             scopes: [
               "operator.admin",

@@ -168,7 +168,7 @@ function resolveKimiAnthropicThinkingBudgetTokens(
   return KIMI_ANTHROPIC_THINKING_BUDGETS[thinkingLevel];
 }
 
-function resolveKimiThinkingConfig(params: {
+export function resolveKimiThinkingConfig(params: {
   configuredThinking: unknown;
   thinkingLevel?: KimiThinkingLevel;
 }): KimiThinkingConfig {

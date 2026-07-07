@@ -46,6 +46,7 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
+import { readRecentCodexRateLimits, rememberCodexRateLimits } from "./rate-limit-cache.js";
 import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 import {
@@ -72,7 +73,6 @@ export type CodexAppServerToolTelemetry = {
 export type CodexAppServerEventProjectorOptions = {
   nativePostToolUseRelayEnabled?: boolean;
   onNativeToolResultRecorded?: () => void | Promise<void>;
-  readRecentRateLimits?: () => JsonValue | undefined;
   runAbortSignal?: AbortSignal;
   trajectoryRecorder?: CodexTrajectoryRecorder | null;
 };
@@ -449,6 +449,22 @@ const ZERO_USAGE: Usage = {
   },
 };
 
+const CURRENT_TOKEN_USAGE_KEYS = [
+  "last",
+  "current",
+  "lastCall",
+  "lastCallUsage",
+  "lastTokenUsage",
+  "last_token_usage",
+] as const;
+
+const CODEX_PROMPT_TOTAL_INPUT_KEYS = [
+  "inputTokens",
+  "input_tokens",
+  "promptTokens",
+  "prompt_tokens",
+] as const;
+
 const MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM = 20;
 const TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS = 12_000;
 const MISSING_TOOL_RESULT_ERROR =
@@ -552,6 +568,7 @@ export class CodexAppServerEventProjector {
   private tokenUsage: ReturnType<typeof normalizeUsage>;
   private guardianReviewCount = 0;
   private completedCompactionCount = 0;
+  private latestRateLimits: JsonValue | undefined;
 
   constructor(
     private readonly params: EmbeddedRunAttemptParams,
@@ -658,6 +675,11 @@ export class CodexAppServerEventProjector {
     if (!params) {
       return;
     }
+    if (notification.method === "account/rateLimits/updated") {
+      this.latestRateLimits = params;
+      rememberCodexRateLimits(params);
+      return;
+    }
     if (isHookNotificationMethod(notification.method)) {
       if (!this.isHookNotificationForCurrentThread(params)) {
         return;
@@ -695,6 +717,9 @@ export class CodexAppServerEventProjector {
       case "item/commandExecution/outputDelta":
         this.handleOutputDelta(params, "bash");
         break;
+      case "item/fileChange/outputDelta":
+        this.handleOutputDelta(params, "apply_patch");
+        break;
       case "item/autoApprovalReview/started":
       case "item/autoApprovalReview/completed":
         this.handleGuardianReviewNotification(notification.method, params);
@@ -716,7 +741,7 @@ export class CodexAppServerEventProjector {
         await this.handleRawResponseItemCompleted(params);
         break;
       case "error":
-        if (params.willRetry === true) {
+        if (readBooleanAlias(params, ["willRetry", "will_retry"]) === true) {
           break;
         }
         this.promptError = this.formatCodexErrorMessage(params) ?? "codex app-server error";
@@ -924,7 +949,7 @@ export class CodexAppServerEventProjector {
   }
 
   private async handleAssistantDelta(params: JsonObject): Promise<void> {
-    const itemId = readString(params, "itemId") ?? "assistant";
+    const itemId = readString(params, "itemId") ?? readString(params, "id") ?? "assistant";
     const delta = readString(params, "delta") ?? "";
     if (!delta) {
       return;
@@ -932,8 +957,11 @@ export class CodexAppServerEventProjector {
     if (itemId !== this.pendingRawTerminalAssistantEchoItemId) {
       this.pendingRawTerminalAssistantEchoItemId = undefined;
     }
-    // Deltas carry no phase; the item/started notification for this item has
-    // already recorded it in assistantPhaseByItem.
+    this.rememberAssistantPhase(readItem(params.item));
+    const phase = readString(params, "phase");
+    if (phase) {
+      this.assistantPhaseByItem.set(itemId, phase);
+    }
     const isCommentary = this.isCommentaryAssistantItem(itemId);
     if (!isCommentary && itemId !== this.latestTerminalAssistantCandidateItemId) {
       this.markTerminalAssistantCandidateSupersededBy();
@@ -993,7 +1021,7 @@ export class CodexAppServerEventProjector {
     method: ReasoningDeltaMethod,
     params: JsonObject,
   ): Promise<void> {
-    const itemId = readString(params, "itemId") ?? "reasoning";
+    const itemId = readString(params, "itemId") ?? readString(params, "id") ?? "reasoning";
     const delta = readString(params, "delta") ?? "";
     if (!delta) {
       return;
@@ -1025,7 +1053,7 @@ export class CodexAppServerEventProjector {
   }
 
   private handlePlanDelta(params: JsonObject): void {
-    const itemId = readString(params, "itemId") ?? "plan";
+    const itemId = readString(params, "itemId") ?? readString(params, "id") ?? "plan";
     const delta = readString(params, "delta") ?? "";
     if (!delta) {
       return;
@@ -1057,7 +1085,7 @@ export class CodexAppServerEventProjector {
 
   private async handleItemStarted(params: JsonObject): Promise<void> {
     const item = readItem(params.item);
-    const itemId = item?.id ?? readString(params, "itemId");
+    const itemId = item?.id ?? readString(params, "itemId") ?? readString(params, "id");
     if (
       item?.type === "agentMessage" &&
       itemId &&
@@ -1120,7 +1148,7 @@ export class CodexAppServerEventProjector {
     const item = readItem(params.item);
     this.recordNativeToolOutcome(item);
     this.clearTerminalPresentationForNativeItem(item);
-    const itemId = item?.id ?? readString(params, "itemId");
+    const itemId = item?.id ?? readString(params, "itemId") ?? readString(params, "id");
     if (
       item?.type === "agentMessage" &&
       itemId &&
@@ -1203,13 +1231,14 @@ export class CodexAppServerEventProjector {
   }
 
   private handleTokenUsage(params: JsonObject): void {
-    // v2 ThreadTokenUsageUpdatedNotification: tokenUsage = {total, last, modelContextWindow}.
     const tokenUsage = isJsonObject(params.tokenUsage) ? params.tokenUsage : undefined;
-    const last = tokenUsage && isJsonObject(tokenUsage.last) ? tokenUsage.last : undefined;
-    if (!last) {
+    const current =
+      (tokenUsage ? readFirstJsonObject(tokenUsage, CURRENT_TOKEN_USAGE_KEYS) : undefined) ??
+      readFirstJsonObject(params, CURRENT_TOKEN_USAGE_KEYS);
+    if (!current) {
       return;
     }
-    const usage = normalizeCodexTokenUsage(last);
+    const usage = normalizeCodexTokenUsage(current);
     if (usage) {
       this.tokenUsage = usage;
     }
@@ -1276,7 +1305,7 @@ export class CodexAppServerEventProjector {
   }
 
   private async handleTurnCompleted(params: JsonObject): Promise<void> {
-    const turn = readCodexTurn(params.turn);
+    const turn = readTurn(params.turn);
     if (!turn || turn.id !== this.turnId) {
       return;
     }
@@ -1286,7 +1315,7 @@ export class CodexAppServerEventProjector {
         formatCodexUsageLimitErrorMessage({
           message: turn.error?.message,
           codexErrorInfo: turn.error?.codexErrorInfo as JsonValue | null | undefined,
-          rateLimits: this.options.readRecentRateLimits?.(),
+          rateLimits: this.latestRateLimits ?? readRecentCodexRateLimits(),
         }) ??
         turn.error?.message ??
         "codex app-server turn failed";
@@ -1352,7 +1381,7 @@ export class CodexAppServerEventProjector {
   }
 
   private isCurrentTurnSnapshotItem(item: CodexThreadItem): boolean {
-    const itemTurnId = readItemString(item, "turnId");
+    const itemTurnId = readItemString(item, "turnId") ?? readItemString(item, "turn_id");
     return itemTurnId === undefined || itemTurnId === this.turnId;
   }
 
@@ -2231,7 +2260,7 @@ export class CodexAppServerEventProjector {
       formatCodexUsageLimitErrorMessage({
         message: error ? readString(error, "message") : undefined,
         codexErrorInfo: error?.codexErrorInfo,
-        rateLimits: this.options.readRecentRateLimits?.(),
+        rateLimits: this.latestRateLimits ?? readRecentCodexRateLimits(),
       }) ?? readCodexErrorNotificationMessage(params)
     );
   }
@@ -2434,7 +2463,7 @@ export class CodexAppServerEventProjector {
 
   private isNotificationForTurn(params: JsonObject): boolean {
     const threadId = readCodexNotificationThreadId(params);
-    const turnId = readCodexNotificationTurnId(params);
+    const turnId = readNotificationTurnId(params);
     return threadId === this.threadId && turnId === this.turnId;
   }
 
@@ -2447,6 +2476,10 @@ export class CodexAppServerEventProjector {
 
 function isHookNotificationMethod(method: string): method is "hook/started" | "hook/completed" {
   return method === "hook/started" || method === "hook/completed";
+}
+
+function readNotificationTurnId(record: JsonObject): string | undefined {
+  return readCodexNotificationTurnId(record);
 }
 
 function readString(record: JsonObject, key: string): string | undefined {
@@ -2538,10 +2571,27 @@ function readNonNegativeInteger(record: JsonObject, key: string): number | undef
   return value !== undefined && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
+function readBoolean(record: JsonObject, key: string): boolean | undefined {
+  const value = record[key];
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function readBooleanAlias(record: JsonObject, keys: readonly string[]): boolean | undefined {
+  for (const key of keys) {
+    const value = readBoolean(record, key);
+    if (value !== undefined) {
+      return value;
+    }
+  }
+  return undefined;
+}
 
 function readCodexErrorNotificationMessage(record: JsonObject): string | undefined {
   const error = record.error;
-  return isJsonObject(error) ? readString(error, "message") : undefined;
+  if (isJsonObject(error)) {
+    return readString(error, "message") ?? readString(error, "error");
+  }
+  return readString(record, "message");
 }
 
 function readHookOutputEntries(
@@ -2563,20 +2613,52 @@ function readHookOutputEntries(
   });
 }
 
+function readFirstJsonObject(record: JsonObject, keys: readonly string[]): JsonObject | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (isJsonObject(value)) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function readNumberAlias(record: JsonObject, keys: readonly string[]): number | undefined {
+  for (const key of keys) {
+    const value = readNumber(record, key);
+    if (value !== undefined) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
 function normalizeCodexTokenUsage(record: JsonObject): ReturnType<typeof normalizeUsage> {
-  // v2 TokenUsageBreakdown. inputTokens includes cached input; OpenClaw usage
-  // tracks uncached input and cache reads separately.
-  const inputTokens = readNumber(record, "inputTokens");
-  const cacheRead = readNumber(record, "cachedInputTokens");
+  const promptTotalInput = readNumberAlias(record, CODEX_PROMPT_TOTAL_INPUT_KEYS);
+  const cacheRead = readNumberAlias(record, [
+    "cachedInputTokens",
+    "cached_input_tokens",
+    "cacheRead",
+    "cache_read",
+    "cache_read_input_tokens",
+    "cached_tokens",
+  ]);
   const input =
-    inputTokens !== undefined && cacheRead !== undefined
-      ? Math.max(0, inputTokens - cacheRead)
-      : inputTokens;
+    promptTotalInput !== undefined && cacheRead !== undefined
+      ? Math.max(0, promptTotalInput - cacheRead)
+      : (promptTotalInput ?? readNumber(record, "input"));
+
   return normalizeUsage({
     input,
-    output: readNumber(record, "outputTokens"),
+    output: readNumberAlias(record, ["outputTokens", "output_tokens", "output"]),
     cacheRead,
-    total: readNumber(record, "totalTokens"),
+    cacheWrite: readNumberAlias(record, [
+      "cacheWrite",
+      "cache_write",
+      "cacheCreationInputTokens",
+      "cache_creation_input_tokens",
+    ]),
+    total: readNumberAlias(record, ["totalTokens", "total_tokens", "total"]),
   });
 }
 
@@ -2707,7 +2789,9 @@ function auditNativeToolTerminalStatus(item: CodexThreadItem): CodexNativeToolAu
   return "unknown";
 }
 
-function auditNativeToolUnfinishedStatus(item: CodexThreadItem): CodexNativeToolUnfinishedStatus {
+function auditNativeToolUnfinishedStatus(
+  item: CodexThreadItem,
+): CodexNativeToolUnfinishedStatus {
   // Search and image generation publish explicit terminal states. An enclosing
   // run outcome cannot substitute when that dependency-owned state is absent.
   return item.type === "webSearch" || item.type === "imageGeneration" ? "unknown" : "failed";
@@ -3130,4 +3214,8 @@ function readItem(value: JsonValue | undefined): CodexThreadItem | undefined {
     return undefined;
   }
   return value as CodexThreadItem;
+}
+
+function readTurn(value: JsonValue | undefined): CodexTurn | undefined {
+  return readCodexTurn(value);
 }

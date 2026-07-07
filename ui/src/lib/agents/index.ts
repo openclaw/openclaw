@@ -60,13 +60,13 @@ type AgentGateway = {
   subscribe: (listener: (snapshot: AgentGatewaySnapshot) => void) => () => void;
 };
 
-type AgentFilesStatus = {
+export type AgentFilesStatus = {
   list: AgentsFilesListResult | null;
   loading: boolean;
   error: string | null;
 };
 
-type AgentCapabilityState = {
+export type AgentCapabilityState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   agentsLoading: boolean;
@@ -86,7 +86,7 @@ export type AgentCapability = {
   dispose: () => void;
 };
 
-async function loadAgentsList(client: GatewayBrowserClient): Promise<AgentsListResult> {
+export async function loadAgentsList(client: GatewayBrowserClient): Promise<AgentsListResult> {
   return client.request<AgentsListResult>("agents.list", {});
 }
 

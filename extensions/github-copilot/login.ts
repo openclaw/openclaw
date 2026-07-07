@@ -260,12 +260,12 @@ function normalizeGitHubDeviceUserCode(raw: string): string {
   return userCode;
 }
 
-type GitHubCopilotDeviceFlowResult =
+export type GitHubCopilotDeviceFlowResult =
   | { status: "authorized"; accessToken: string }
   | { status: "access_denied" }
   | { status: "expired" };
 
-type GitHubCopilotDeviceFlowIO = {
+export type GitHubCopilotDeviceFlowIO = {
   showCode(args: { verificationUrl: string; userCode: string; expiresInMs: number }): Promise<void>;
   openUrl?: (url: string) => Promise<void>;
 };

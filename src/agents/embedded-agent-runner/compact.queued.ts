@@ -8,11 +8,10 @@ import {
   resolveContextEngineOwnerPluginId,
 } from "../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
-import {
-  resolveCompactionSuccessorTranscript,
-  type ContextEngine,
-  type ContextEngineRuntimeContext,
-  type ContextEngineRuntimeSettings,
+import type {
+  ContextEngine,
+  ContextEngineRuntimeContext,
+  ContextEngineRuntimeSettings,
 } from "../../context-engine/types.js";
 import {
   createFileBackedCompactionCheckpointStore,
@@ -441,9 +440,8 @@ export async function compactEmbeddedAgentSession(
             reason: formatErrorMessage(compactErr),
           };
         }
-        const delegatedSuccessor = resolveCompactionSuccessorTranscript(result);
-        const delegatedSessionId = delegatedSuccessor.sessionId;
-        const delegatedSessionFile = delegatedSuccessor.sessionFile;
+        const delegatedSessionId = result.result?.sessionId;
+        const delegatedSessionFile = result.result?.sessionFile;
         const delegatedRotatedTranscript =
           (typeof delegatedSessionId === "string" && delegatedSessionId !== params.sessionId) ||
           (typeof delegatedSessionFile === "string" && delegatedSessionFile !== params.sessionFile);

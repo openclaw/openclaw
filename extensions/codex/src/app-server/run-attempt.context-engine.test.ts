@@ -17,6 +17,7 @@ import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-de
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CodexAppServerClientFactory } from "./client-factory.js";
 import { CODEX_TURN_START_TEXT_INPUT_MAX_CHARS } from "./context-engine-projection.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { runCodexAppServerAttempt as runCodexAppServerAttemptImpl } from "./run-attempt.js";
@@ -27,21 +28,17 @@ import {
   testCodexAppServerBindingStore,
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
-import {
-  adaptCodexTestClientFactory,
-  createCodexTestModel,
-  type CodexTestAppServerClientFactory,
-} from "./test-support.js";
+import { createCodexTestModel } from "./test-support.js";
 
 let tempDir: string;
-let codexAppServerClientFactoryForTest: CodexTestAppServerClientFactory | undefined;
+let codexAppServerClientFactoryForTest: CodexAppServerClientFactory | undefined;
 
 type RunCodexAppServerAttemptOptions = Omit<
   NonNullable<Parameters<typeof runCodexAppServerAttemptImpl>[1]>,
   "bindingStore"
 >;
 
-function setCodexAppServerClientFactoryForTest(factory: CodexTestAppServerClientFactory): void {
+function setCodexAppServerClientFactoryForTest(factory: CodexAppServerClientFactory): void {
   codexAppServerClientFactoryForTest = factory;
 }
 
@@ -53,11 +50,7 @@ function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParams,
   options: RunCodexAppServerAttemptOptions = {},
 ) {
-  const clientFactory =
-    options.clientFactory ??
-    (codexAppServerClientFactoryForTest
-      ? adaptCodexTestClientFactory(codexAppServerClientFactoryForTest)
-      : undefined);
+  const clientFactory = options.clientFactory ?? codexAppServerClientFactoryForTest;
   return runCodexAppServerAttemptImpl(params, {
     ...options,
     bindingStore: testCodexAppServerBindingStore,
@@ -216,14 +209,7 @@ function createStartedThreadHarness(
   requestImpl: (method: string, params: unknown) => Promise<unknown> = async () => undefined,
 ) {
   const requests: Array<{ method: string; params: unknown }> = [];
-  const notificationHandlers = new Set<
-    (notification: CodexServerNotification) => Promise<void> | void
-  >();
-  const notify = async (notification: CodexServerNotification) => {
-    await Promise.all(
-      [...notificationHandlers].map((handler) => Promise.resolve(handler(notification))),
-    );
-  };
+  let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
   const request = vi.fn(async (method: string, params?: unknown) => {
     requests.push({ method, params });
     const override = await requestImpl(method, params);
@@ -244,14 +230,11 @@ function createStartedThreadHarness(
       ({
         ...mockClientRuntimeMethods(),
         request,
-        addNotificationHandler: (
-          handler: (notification: CodexServerNotification) => Promise<void> | void,
-        ) => {
-          notificationHandlers.add(handler);
-          return () => notificationHandlers.delete(handler);
+        addNotificationHandler: (handler: typeof notify) => {
+          notify = handler;
+          return () => undefined;
         },
         addRequestHandler: () => () => undefined,
-        addCloseHandler: () => () => undefined,
       }) as never,
   );
 

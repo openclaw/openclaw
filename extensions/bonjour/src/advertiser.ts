@@ -18,12 +18,12 @@ const childProcessModule = nodeRequire("node:child_process") as {
 };
 
 /** Running Bonjour advertiser handle. */
-type GatewayBonjourAdvertiser = {
+export type GatewayBonjourAdvertiser = {
   stop: () => Promise<void>;
 };
 
 /** Input data used to publish OpenClaw gateway Bonjour records. */
-type GatewayBonjourAdvertiseOpts = {
+export type GatewayBonjourAdvertiseOpts = {
   instanceName?: string;
   gatewayPort: number;
   sshPort?: number;

@@ -170,7 +170,6 @@ async function channelsAddCommandImpl(
     await prompter.intro("Channel setup");
     let nextConfigLocal = await onboardChannels.setupChannels(cfg, runtime, prompter, {
       allowDisable: false,
-      allowIMessageInstall: true,
       allowSignalInstall: true,
       onPostWriteHook: (hook) => {
         postWriteHooks.collect(hook);

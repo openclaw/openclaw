@@ -27,7 +27,7 @@ export type StructureClient = {
   fetchUser(id: string): Promise<User>;
 };
 
-class Base {
+export class Base {
   constructor(protected client: StructureClient) {}
 }
 

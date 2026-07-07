@@ -17,7 +17,7 @@ export type PluginJsonValueLimits = {
 };
 
 /** Default safety limits for plugin JSON hook payloads. */
-const PLUGIN_JSON_VALUE_LIMITS: PluginJsonValueLimits = {
+export const PLUGIN_JSON_VALUE_LIMITS: PluginJsonValueLimits = {
   maxDepth: 32,
   maxNodes: 4096,
   maxObjectKeys: 512,

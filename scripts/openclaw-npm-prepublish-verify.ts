@@ -19,7 +19,7 @@ type InstalledPackageJson = {
   version?: string;
 };
 
-type OpenClawNpmPrepublishVerifyArgs =
+export type OpenClawNpmPrepublishVerifyArgs =
   | {
       expectedVersion?: string;
       dependencyTarballPaths: string[];

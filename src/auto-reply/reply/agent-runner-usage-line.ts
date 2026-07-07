@@ -15,7 +15,7 @@ import { buildUsageContract } from "../usage-bar/contract.js";
 import { loadUsageBarTemplate } from "../usage-bar/template.js";
 import { renderUsageBar } from "../usage-bar/translator.js";
 
-const formatResponseUsageLine = (params: {
+export const formatResponseUsageLine = (params: {
   usage?: {
     input?: number;
     output?: number;

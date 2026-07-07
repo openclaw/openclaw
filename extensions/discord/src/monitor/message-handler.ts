@@ -66,7 +66,7 @@ const loadMessagePreflightRuntime = createLazyRuntimeModule(
   () => import("./message-handler.preflight.js"),
 );
 
-type DiscordMessageHandlerWithLifecycle = DiscordMessageHandler & {
+export type DiscordMessageHandlerWithLifecycle = DiscordMessageHandler & {
   deactivate: () => void;
 };
 

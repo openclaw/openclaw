@@ -10,7 +10,7 @@ import { collectPublishablePluginPackages } from "./lib/plugin-npm-release.ts";
 
 const DEFAULT_CLAWHUB_CLI_PACKAGE = "clawhub@0.23.1";
 
-type PluginReleasePretagPackTarget = {
+export type PluginReleasePretagPackTarget = {
   packageDir: string;
   packageName: string;
   packClawHub: boolean;

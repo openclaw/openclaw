@@ -15,7 +15,7 @@ import {
   authorizeGatewayHttpRequestOrReply,
   resolveTrustedHttpOperatorScopes,
 } from "./http-utils.js";
-import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "./method-scopes.js";
+import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { loadSessionEntry } from "./session-utils.js";
 
 type SessionKeyPathResolution =
@@ -79,9 +79,7 @@ export async function handleSessionKillHttpRequest(
   }
 
   const requestedScopes = resolveTrustedHttpOperatorScopes(req, requestAuth);
-  // Run kills stay admin-only: sessions.delete is dynamic (write may delete
-  // archived sessions via RPC), but this endpoint terminates live runs.
-  const scopeAuth = authorizeOperatorScopesForRequiredScope(ADMIN_SCOPE, requestedScopes);
+  const scopeAuth = authorizeOperatorScopesForMethod("sessions.delete", requestedScopes);
   if (!scopeAuth.allowed) {
     sendMissingScopeForbidden(res, scopeAuth.missingScope);
     return true;

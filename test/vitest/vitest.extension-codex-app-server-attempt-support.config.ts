@@ -1,13 +1,12 @@
 // Vitest extension codex app server attempt support config wires the extension codex app server attempt support test shard.
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
-function createExtensionCodexAppServerAttemptSupportVitestConfig(
+export function createExtensionCodexAppServerAttemptSupportVitestConfig(
   env: Record<string, string | undefined> = process.env,
 ) {
   return createScopedVitestConfig(
     [
       "extensions/codex/src/app-server/attempt-context.test.ts",
-      "extensions/codex/src/app-server/attempt-notifications.test.ts",
       "extensions/codex/src/app-server/attempt-results.test.ts",
       "extensions/codex/src/app-server/attempt-startup.test.ts",
       "extensions/codex/src/app-server/attempt-timeouts.test.ts",

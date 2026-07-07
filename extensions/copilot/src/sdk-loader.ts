@@ -14,7 +14,7 @@ export const COPILOT_SDK_SPEC = "@github/copilot-sdk@1.0.5";
 
 let cached: Promise<typeof Sdk> | undefined;
 
-interface LoadCopilotSdkOptions {
+export interface LoadCopilotSdkOptions {
   readonly fallbackDir?: string;
   readonly primaryImport?: () => Promise<typeof Sdk>;
   readonly fallbackImport?: (absolutePath: string) => Promise<typeof Sdk>;

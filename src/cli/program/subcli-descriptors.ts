@@ -30,11 +30,6 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
-    name: "promos",
-    description: "Discover and claim promotional model offers from ClawHub",
-    hasSubcommands: true,
-  },
-  {
     name: "infer",
     description: "Run provider-backed inference commands through a stable CLI surface",
     hasSubcommands: true,

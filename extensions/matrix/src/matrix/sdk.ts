@@ -234,7 +234,7 @@ export type MatrixRecoveryKeyVerificationResult = MatrixOwnDeviceVerificationSta
   error?: string;
 };
 
-type MatrixOwnCrossSigningPublicationStatus = {
+export type MatrixOwnCrossSigningPublicationStatus = {
   userId: string | null;
   masterKeyPublished: boolean;
   selfSigningKeyPublished: boolean;
@@ -282,7 +282,7 @@ export type MatrixOwnDeviceInfo = {
   current: boolean;
 };
 
-type MatrixRoomKeyBackupResetOptions = {
+export type MatrixRoomKeyBackupResetOptions = {
   rotateRecoveryKey?: boolean;
 };
 

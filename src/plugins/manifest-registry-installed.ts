@@ -45,7 +45,7 @@ type InstalledPackageMetadata = {
   packageOptionalDependencies?: PluginDependencySpecMap;
 };
 
-function clearInstalledManifestRegistryProcessCaches(): void {
+export function clearInstalledManifestRegistryProcessCaches(): void {
   installedPackageJsonPathCache.clear();
   installedPackageMetadataCache.clear();
   installedManifestRegistryRealpathCache.clear();

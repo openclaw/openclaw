@@ -35,7 +35,7 @@ export type SidebarFullMessageRequest = {
   kind: "assistant_message" | "tool_output";
 };
 
-type MarkdownSidebarContent = {
+export type MarkdownSidebarContent = {
   kind: "markdown";
   content: string;
   rawText?: string | null;
@@ -43,7 +43,7 @@ type MarkdownSidebarContent = {
   unavailableReason?: DetailUnavailableReason | null;
 };
 
-type CanvasSidebarContent = {
+export type CanvasSidebarContent = {
   kind: "canvas";
   docId: string;
   title?: string;
@@ -54,7 +54,7 @@ type CanvasSidebarContent = {
   unavailableReason?: DetailUnavailableReason | null;
 };
 
-type ImageSidebarContent = {
+export type ImageSidebarContent = {
   kind: "image";
   title: string;
   src: string;
@@ -64,7 +64,7 @@ type ImageSidebarContent = {
   unavailableReason?: DetailUnavailableReason | null;
 };
 
-type FileSidebarContent = {
+export type FileSidebarContent = {
   kind: "file";
   path: string;
   name: string;
@@ -436,7 +436,7 @@ function resolveSidebarCanvasSandbox(
   return content.kind === "canvas" ? resolveEmbedSandbox(embedSandboxMode) : "allow-scripts";
 }
 
-type MarkdownSidebarProps = {
+export type MarkdownSidebarProps = {
   content: SidebarContent | null;
   error: string | null;
   fileView?: FileViewControls;
@@ -592,7 +592,7 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
   `;
 }
 
-class ChatDetailPanel extends LitElement {
+export class ChatDetailPanel extends LitElement {
   @property({ attribute: false }) content: SidebarContent | null = null;
   @property({ attribute: false }) loadFullMessage?:
     | ((request: SidebarFullMessageRequest) => Promise<DetailFullMessageResult | null | undefined>)

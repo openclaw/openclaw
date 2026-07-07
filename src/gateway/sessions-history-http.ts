@@ -228,97 +228,40 @@ export async function handleSessionHistoryHttpRequest(
     cursor,
   });
   sentHistory = sseState.snapshot();
-  let streamStopped = false;
-  let streamQueue = Promise.resolve();
-  const streamResources: {
-    heartbeat?: ReturnType<typeof setInterval>;
-    unsubscribe?: () => void;
-  } = {};
-
-  function releaseStreamResources() {
-    if (streamStopped) {
-      return;
-    }
-    streamStopped = true;
-    if (streamResources.heartbeat) {
-      clearInterval(streamResources.heartbeat);
-    }
-    if (streamResources.unsubscribe) {
-      streamResources.unsubscribe();
-    }
-  }
-
-  function detachStreamListeners() {
-    req.off("close", handleRequestStreamClose);
-    req.off("error", handleRequestStreamError);
-    res.off("close", handleResponseStreamClose);
-    res.off("finish", handleResponseStreamFinish);
-    res.off("error", handleResponseStreamError);
-  }
-
-  function closeStream() {
-    releaseStreamResources();
-    if (!res.writableEnded && !res.destroyed) {
-      res.end();
-    }
-  }
-
-  function handleRequestStreamClose() {
-    releaseStreamResources();
-    req.off("close", handleRequestStreamClose);
-    req.off("error", handleRequestStreamError);
-  }
-
-  function handleRequestStreamError(error: Error) {
-    // Node HTTP streams emit process-fatal `error` events without listeners.
-    // Request-side failures mean the SSE owner should release and end locally.
-    log.warn("session history SSE request stream errored; closing stream", { error });
-    closeStream();
-  }
-
-  function handleResponseStreamFinish() {
-    releaseStreamResources();
-    // `finish` only means Node handed the response bytes to the OS. Keep the
-    // error listener until `close` so a late flush failure stays stream-local.
-    res.off("finish", handleResponseStreamFinish);
-  }
-
-  function handleResponseStreamClose() {
-    releaseStreamResources();
-    detachStreamListeners();
-  }
-
-  function handleResponseStreamError(error: Error) {
-    // The response stream is already failing, so only release local resources;
-    // writing an end frame here can re-enter the errored ServerResponse.
-    log.warn("session history SSE response stream errored; cleaning up stream", { error });
-    releaseStreamResources();
-  }
-  const isStreamClosed = () => streamStopped || res.writableEnded || res.destroyed;
-
-  req.on("close", handleRequestStreamClose);
-  req.on("error", handleRequestStreamError);
-  res.on("close", handleResponseStreamClose);
-  res.on("finish", handleResponseStreamFinish);
-  res.on("error", handleResponseStreamError);
-
   setSseHeaders(res);
   res.write("retry: 1000\n\n");
-  if (isStreamClosed()) {
-    return true;
-  }
   sseWrite(res, "history", {
     sessionKey: target.canonicalKey,
     ...sentHistory,
   });
-  if (isStreamClosed()) {
-    return true;
-  }
+
+  let cleanedUp = false;
+  let streamQueue = Promise.resolve();
+
+  const cleanup = () => {
+    if (cleanedUp) {
+      return;
+    }
+    cleanedUp = true;
+    if (heartbeat) {
+      clearInterval(heartbeat);
+    }
+    if (unsubscribe) {
+      unsubscribe();
+    }
+  };
+
+  const closeStream = () => {
+    cleanup();
+    if (!res.writableEnded) {
+      res.end();
+    }
+  };
 
   const queueStreamWork = (work: () => Promise<void>) => {
     streamQueue = streamQueue
       .then(async () => {
-        if (streamStopped || res.writableEnded) {
+        if (cleanedUp || res.writableEnded) {
           return;
         }
         await work();
@@ -352,7 +295,7 @@ export async function handleSessionHistoryHttpRequest(
     return authorizeOperatorScopesForMethod("chat.history", requestedScopes).allowed;
   };
 
-  streamResources.heartbeat = setInterval(() => {
+  const heartbeat: ReturnType<typeof setInterval> | undefined = setInterval(() => {
     queueStreamWork(async () => {
       if (!(await isStreamStillAuthorized())) {
         closeStream();
@@ -364,7 +307,7 @@ export async function handleSessionHistoryHttpRequest(
     });
   }, 15_000);
 
-  streamResources.unsubscribe = onInternalSessionTranscriptUpdate((update) => {
+  const unsubscribe: (() => void) | undefined = onInternalSessionTranscriptUpdate((update) => {
     // Filter to candidate sessions synchronously before enqueueing any async
     // work. Transcript updates use a global fan-out listener, so every
     // transcript write in the gateway would otherwise append a Promise-chain
@@ -434,5 +377,8 @@ export async function handleSessionHistoryHttpRequest(
       });
     });
   });
+  req.on("close", cleanup);
+  res.on("close", cleanup);
+  res.on("finish", cleanup);
   return true;
 }

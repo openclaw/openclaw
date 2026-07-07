@@ -109,7 +109,7 @@ export function renderCodexModelInstructions(params: {
   throw new Error(`Codex model ${params.model.slug} has no renderable instructions.`);
 }
 
-async function createCodexModelPromptFixture(params: {
+export async function createCodexModelPromptFixture(params: {
   catalogPath: string;
   catalogLabel?: string;
   model: string;

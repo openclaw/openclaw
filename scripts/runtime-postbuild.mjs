@@ -149,14 +149,14 @@ export const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [
 /**
  * Lists generated plugin SDK root-alias outputs.
  */
-function listPluginSdkRootAliasOutputs() {
+export function listPluginSdkRootAliasOutputs() {
   return [PLUGIN_SDK_ROOT_ALIAS_OUTPUT];
 }
 
 /**
  * Lists generated official channel catalog outputs.
  */
-function listOfficialChannelCatalogOutputs() {
+export function listOfficialChannelCatalogOutputs() {
   return [OFFICIAL_CHANNEL_CATALOG_OUTPUT];
 }
 
@@ -232,7 +232,7 @@ function resolveStableRootRuntimeAliasCandidate(params) {
 /**
  * Lists stable aliases for hashed root runtime/contract chunks.
  */
-function listStableRootRuntimeAliasOutputs(params = {}) {
+export function listStableRootRuntimeAliasOutputs(params = {}) {
   const rootDir = params.rootDir ?? ROOT;
   const distDir = path.join(rootDir, "dist");
   const fsImpl = params.fs ?? fs;
@@ -252,7 +252,7 @@ function listStableRootRuntimeAliasOutputs(params = {}) {
 /**
  * Lists compatibility chunk outputs required for old CLI exit paths.
  */
-function listLegacyCliExitCompatOutputs(params = {}) {
+export function listLegacyCliExitCompatOutputs(params = {}) {
   const chunks = params.chunks ?? LEGACY_CLI_EXIT_COMPAT_CHUNKS;
   return chunks
     .map(({ dest }) => dest.replace(/\\/g, "/"))
@@ -262,7 +262,7 @@ function listLegacyCliExitCompatOutputs(params = {}) {
 /**
  * Lists legacy hashed runtime aliases that may be needed during live upgrades.
  */
-function listLegacyRootRuntimeCompatOutputs(params = {}) {
+export function listLegacyRootRuntimeCompatOutputs(params = {}) {
   const rootDir = params.rootDir ?? ROOT;
   const distDir = path.join(rootDir, "dist");
   const fsImpl = params.fs ?? fs;

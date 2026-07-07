@@ -159,7 +159,7 @@ async function runScheduler(options: ProducerOptions, appendLog: (chunk: unknown
   });
 }
 
-async function runDockerArtifactProofProducer(
+export async function runDockerArtifactProofProducer(
   options: ProducerOptions,
 ): Promise<QaEvidenceSummaryJson> {
   const proof = PROOFS[options.lane];

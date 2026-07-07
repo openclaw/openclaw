@@ -492,7 +492,7 @@ async function runMeasured(
   );
 }
 
-async function runPluginLifecycleMatrix() {
+export async function runPluginLifecycleMatrix() {
   const pluginId = "lifecycle-claw";
   const packageName = "@openclaw/lifecycle-claw";
   const resourceDir = tempDirs.make("openclaw-plugin-lifecycle-matrix-");

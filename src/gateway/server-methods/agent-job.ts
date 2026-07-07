@@ -331,7 +331,6 @@ export async function waitForAgentJob(params: {
   return await new Promise((resolve) => {
     let settled = false;
     let pendingErrorTimer: NodeJS.Timeout | undefined;
-    let pendingErrorSnapshot: AgentRunSnapshot | undefined;
     let pendingTimeoutTimer: NodeJS.Timeout | undefined;
     let pendingTimeoutSnapshot: AgentRunSnapshot | undefined;
     let removeWaiter = () => {};
@@ -342,7 +341,6 @@ export async function waitForAgentJob(params: {
       }
       clearTimeout(pendingErrorTimer);
       pendingErrorTimer = undefined;
-      pendingErrorSnapshot = undefined;
     };
 
     const clearPendingTimeoutTimer = () => {
@@ -397,7 +395,6 @@ export async function waitForAgentJob(params: {
       timerRef.unref?.();
       if (kind === "error") {
         pendingErrorTimer = timerRef;
-        pendingErrorSnapshot = snapshot;
       } else {
         pendingTimeoutTimer = timerRef;
         pendingTimeoutSnapshot = snapshot;
@@ -481,30 +478,8 @@ export async function waitForAgentJob(params: {
     removeWaiter = addAgentRunWaiter(runId);
 
     const timer = setSafeTimeout(() => {
-      // Fresh waits can only consume terminal state observed by this waiter;
-      // the shared maps may still hold a previous attempt inside retry grace.
-      const pendingErrorCandidate = ignoreCachedSnapshot
-        ? pendingErrorSnapshot
-        : getPendingAgentRunError(runId)?.snapshot;
-      if (pendingErrorCandidate) {
-        finish(createPendingErrorTimeoutSnapshot(pendingErrorCandidate));
-        return;
-      }
-      const pendingTimeoutCandidate = ignoreCachedSnapshot
-        ? pendingTimeoutSnapshot
-        : getPendingAgentRunTimeout(runId)?.snapshot;
-      // Forward only canonical hard timeouts. Reuse the shared terminal-outcome
-      // classifier (which excludes restart-cancelled and soft queue/draining
-      // snapshots) instead of rederiving the hard/soft gate here, so those stay
-      // correctable via retry grace.
-      if (
-        pendingTimeoutCandidate &&
-        terminalOutcomeFromSnapshot(pendingTimeoutCandidate)?.reason === "hard_timeout"
-      ) {
-        finish(pendingTimeoutCandidate);
-        return;
-      }
-      finish(null);
+      const pendingError = getPendingAgentRunError(runId);
+      finish(pendingError ? createPendingErrorTimeoutSnapshot(pendingError.snapshot) : null);
     }, timeoutMs);
     const onAbort: (() => void) | undefined = () => finish(null);
     signal?.addEventListener("abort", onAbort, { once: true });

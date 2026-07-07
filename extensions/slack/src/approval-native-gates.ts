@@ -369,7 +369,7 @@ export function shouldHandleSlackPluginViaForwardingSession(params: {
   });
 }
 
-function isSlackNativeApprovalClientEnabled(params: {
+export function isSlackNativeApprovalClientEnabled(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   approvalKind: SlackApprovalKind;

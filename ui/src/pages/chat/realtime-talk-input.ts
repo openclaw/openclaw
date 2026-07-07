@@ -5,7 +5,7 @@ export type RealtimeTalkInputDevice = {
   label: string;
 };
 
-type RealtimeTalkInputDiscovery = {
+export type RealtimeTalkInputDiscovery = {
   devices: RealtimeTalkInputDevice[];
   warning: string | null;
 };

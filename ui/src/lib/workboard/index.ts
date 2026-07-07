@@ -1,4 +1,3 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { requestSessionCreate } from "../sessions/index.ts";
@@ -17,10 +16,16 @@ export const WORKBOARD_STATUSES = [
 ] as const;
 
 export const WORKBOARD_PRIORITIES = ["low", "normal", "high", "urgent"] as const;
-const WORKBOARD_EXECUTION_ENGINES = ["codex", "claude"] as const;
-const WORKBOARD_EXECUTION_MODES = ["autonomous", "manual"] as const;
-const WORKBOARD_EXECUTION_STATUSES = ["idle", "running", "review", "blocked", "done"] as const;
-const WORKBOARD_EVENT_KINDS = [
+export const WORKBOARD_EXECUTION_ENGINES = ["codex", "claude"] as const;
+export const WORKBOARD_EXECUTION_MODES = ["autonomous", "manual"] as const;
+export const WORKBOARD_EXECUTION_STATUSES = [
+  "idle",
+  "running",
+  "review",
+  "blocked",
+  "done",
+] as const;
+export const WORKBOARD_EVENT_KINDS = [
   "created",
   "edited",
   "moved",
@@ -64,7 +69,7 @@ export const WORKBOARD_PROOF_STATUSES = ["passed", "failed", "skipped", "unknown
 export const WORKBOARD_TEMPLATE_IDS = ["bugfix", "docs", "release", "pr_review", "plugin"] as const;
 export const WORKBOARD_DIAGNOSTIC_SEVERITIES = ["warning", "error", "critical"] as const;
 
-const WORKBOARD_ENGINE_MODELS = {
+export const WORKBOARD_ENGINE_MODELS = {
   codex: "openai/gpt-5.5",
   claude: "anthropic/claude-sonnet-4-6",
 } as const;
@@ -290,7 +295,7 @@ export type WorkboardLifecycle = {
   sourceUpdatedAt?: number;
 };
 
-type WorkboardTaskStatus =
+export type WorkboardTaskStatus =
   | "queued"
   | "running"
   | "completed"
@@ -315,7 +320,7 @@ export type WorkboardTaskSummary = {
   error?: string;
 };
 
-type WorkboardDependencyParent = {
+export type WorkboardDependencyParent = {
   id: string;
   title: string;
   status?: WorkboardStatus;
@@ -328,7 +333,7 @@ export type WorkboardDependencyState = {
   blockedParents: WorkboardDependencyParent[];
 };
 
-type WorkboardDispatchSummary = {
+export type WorkboardDispatchSummary = {
   started: number;
   failures: number;
   promoted: number;
@@ -339,9 +344,9 @@ type WorkboardDispatchSummary = {
 
 export type WorkboardAutoRefreshIntervalMs = 0 | 5000 | 15000 | 30000 | 60000;
 
-type WorkboardRefreshSource = "initial" | "manual" | "poll";
+export type WorkboardRefreshSource = "initial" | "manual" | "poll";
 
-type WorkboardViewPresetId =
+export type WorkboardViewPresetId =
   | "all"
   | "default_agent"
   | "ready"
@@ -3713,7 +3718,7 @@ function buildCardSessionLabel(card: WorkboardCard): string {
     return `${title}${suffixText}`;
   }
   const titleMax = WORKBOARD_SESSION_LABEL_MAX_CHARS - suffixText.length;
-  return `${truncateUtf16Safe(title, titleMax - 3).trimEnd()}...${suffixText}`;
+  return `${title.slice(0, titleMax - 3).trimEnd()}...${suffixText}`;
 }
 
 function sanitizeSessionSegment(value: string | undefined, fallback: string): string {

@@ -25,7 +25,6 @@ import {
   projectAccountWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
-import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntriesLower,
@@ -40,7 +39,6 @@ import {
   validateSynologyGatewayAccountStartup,
 } from "./gateway-runtime.js";
 import { collectSynologyChatSecurityAuditFindings } from "./security-audit.js";
-import { buildSynologyChatOutboundSessionKey } from "./session-key.js";
 import { synologyChatSetupAdapter, synologyChatSetupWizard } from "./setup-surface.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 
@@ -164,9 +162,6 @@ type SynologyChatPlugin = Omit<
   messaging: {
     targetPrefixes?: readonly string[];
     normalizeTarget: (target: string) => string | undefined;
-    resolveOutboundSessionRoute: NonNullable<
-      ChannelPlugin<ResolvedSynologyChatAccount>["messaging"]
-    >["resolveOutboundSessionRoute"];
     targetResolver: {
       looksLikeId: (id: string) => boolean;
       hint: string;
@@ -214,16 +209,6 @@ function requireIncomingUrl(account: ResolvedSynologyChatAccount): string {
     throw new Error("Synology Chat incoming URL not configured");
   }
   return account.incomingUrl;
-}
-
-function normalizeSynologyChatTarget(target: string): string | undefined {
-  const trimmed = target.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const unprefixed = trimmed.replace(/^synology(?:[-_]?chat)?:/i, "").trim();
-  const chatUserId = parseStrictNonNegativeInteger(unprefixed);
-  return chatUserId === undefined ? undefined : String(chatUserId);
 }
 
 function createSynologyChatSendResult(params: {
@@ -331,30 +316,23 @@ export function createSynologyChatPlugin(): SynologyChatPlugin {
       approvalCapability: synologyChatApprovalAuth,
       messaging: {
         targetPrefixes: ["synology-chat", "synology_chat", "synology"],
-        normalizeTarget: normalizeSynologyChatTarget,
-        resolveOutboundSessionRoute: ({ agentId, accountId, target }) => {
-          const chatUserId = normalizeSynologyChatTarget(target);
-          if (!chatUserId) {
-            return null;
+        normalizeTarget: (target: string) => {
+          const trimmed = target.trim();
+          if (!trimmed) {
+            return undefined;
           }
-          const resolvedAccountId = accountId?.trim() || DEFAULT_ACCOUNT_ID;
-          const sessionKey = buildSynologyChatOutboundSessionKey({
-            agentId,
-            accountId: resolvedAccountId,
-            chatUserId,
-          });
-          return {
-            sessionKey,
-            baseSessionKey: sessionKey,
-            recipientSessionExact: "delivery-identity",
-            peer: { kind: "direct", id: `chat-api-${chatUserId}` },
-            chatType: "direct",
-            from: `synology-chat:chat-api:${chatUserId}`,
-            to: chatUserId,
-          };
+          // Strip common prefixes
+          return trimmed.replace(/^synology(?:[-_]?chat)?:/i, "").trim();
         },
         targetResolver: {
-          looksLikeId: (id: string) => normalizeSynologyChatTarget(id) !== undefined,
+          looksLikeId: (id: string) => {
+            const trimmed = id?.trim();
+            if (!trimmed) {
+              return false;
+            }
+            // Synology Chat user IDs are numeric
+            return /^\d+$/.test(trimmed) || /^synology(?:[-_]?chat)?:/i.test(trimmed);
+          },
           hint: "<userId>",
         },
       },

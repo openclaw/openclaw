@@ -6,7 +6,6 @@ import {
 import { parseGeminiAuth } from "./gemini-auth.js";
 export { parseGeminiAuth };
 export { applyGoogleGeminiModelDefault, GOOGLE_GEMINI_DEFAULT_MODEL } from "./onboard.js";
-import { resolveGoogleApiClientHeaders } from "./google-api-client-header.js";
 import {
   DEFAULT_GOOGLE_API_BASE_URL,
   normalizeGoogleGenerativeAiBaseUrl,
@@ -86,15 +85,7 @@ export function resolveGoogleGenerativeAiHttpRequestConfig(params: {
     allowPrivateNetwork: params.request?.allowPrivateNetwork,
     headers: params.headers,
     request: params.request,
-    defaultHeaders: {
-      ...parseGeminiAuth(params.apiKey).headers,
-      ...resolveGoogleApiClientHeaders({
-        baseUrl: params.baseUrl,
-        api: "google-generative-ai",
-        capability: params.capability,
-        transport: params.transport,
-      }),
-    },
+    defaultHeaders: parseGeminiAuth(params.apiKey).headers,
     provider: "google",
     api: "google-generative-ai",
     capability: params.capability,

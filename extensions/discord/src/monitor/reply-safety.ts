@@ -57,7 +57,7 @@ function stripDiscordInternalChannelLines(text: string): string {
   return kept.join("\n");
 }
 
-function sanitizeDiscordFrontChannelText(text: string): string {
+export function sanitizeDiscordFrontChannelText(text: string): string {
   const withoutToolCallBlocks = stripPlainTextToolCallBlocks(text);
   const withoutAssistantScaffolding = sanitizeAssistantVisibleText(withoutToolCallBlocks);
   const withoutResidualToolCallBlocks = stripPlainTextToolCallBlocks(withoutAssistantScaffolding);

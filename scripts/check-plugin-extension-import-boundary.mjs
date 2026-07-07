@@ -212,7 +212,7 @@ function formatEntry(entry) {
 /**
  * Runs the plugin-extension import boundary baseline check.
  */
-async function runPluginExtensionImportBoundaryCheck(argv, io) {
+export async function runPluginExtensionImportBoundaryCheck(argv, io) {
   return await runBaselineInventoryCheck({
     argv: argv ?? process.argv.slice(2),
     io,

@@ -1754,7 +1754,6 @@
                       "cli/commitments",
                       "cli/message",
                       "cli/models",
-                      "cli/promos",
                       "cli/sessions",
                       "cli/system",
                       "cli/tasks"

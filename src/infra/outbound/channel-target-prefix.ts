@@ -53,7 +53,7 @@ export function stripTargetTopicSuffix(
 }
 
 /** Parsed provider prefix and the channel that owns it. */
-type ChannelTargetProviderPrefix = {
+export type ChannelTargetProviderPrefix = {
   prefix: string;
   channel: string;
 };

@@ -34,7 +34,7 @@ export type RealtimeTalkLaunchOptions = {
   reasoningEffort?: string;
 };
 
-type RealtimeTalkLocalOptions = {
+export type RealtimeTalkLocalOptions = {
   inputDeviceId?: string;
 };
 

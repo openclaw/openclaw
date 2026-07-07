@@ -36,7 +36,9 @@ export function formatActiveGoalContext(sessionEntry?: SessionEntry): string | u
   return `${ACTIVE_GOAL_CONTEXT_PREFIX}${boundedObjective}${ACTIVE_GOAL_CONTEXT_SUFFIX}`;
 }
 
-function formatPendingSkillSuggestionContext(sessionEntry?: SessionEntry): string | undefined {
+export function formatPendingSkillSuggestionContext(
+  sessionEntry?: SessionEntry,
+): string | undefined {
   const rawSkillName = normalizeOptionalString(sessionEntry?.pendingSkillSuggestion?.skillName);
   if (!rawSkillName) {
     return undefined;

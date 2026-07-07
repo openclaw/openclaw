@@ -38,7 +38,7 @@ export type OutputRuntimeEnv = {
   exit(code: number): void;
 };
 
-interface PathCommandOptions {
+export interface PathCommandOptions {
   readonly json?: boolean;
   readonly human?: boolean;
   readonly valueJson?: boolean;
@@ -66,7 +66,7 @@ const defaultRuntime: OutputRuntimeEnv = {
 
 // Defense-in-depth: replace the redaction sentinel with `[REDACTED]`
 // before writing, even if upstream emits it.
-function scrubSentinel(s: string): string {
+export function scrubSentinel(s: string): string {
   if (!s.includes(REDACTED_SENTINEL)) {
     return s;
   }

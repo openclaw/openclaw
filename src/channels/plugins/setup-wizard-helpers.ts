@@ -570,7 +570,7 @@ export function setChannelDmPolicyWithAllowFrom(params: {
   };
 }
 
-function setCompatChannelDmPolicyWithAllowFrom(params: {
+export function setCompatChannelDmPolicyWithAllowFrom(params: {
   cfg: OpenClawConfig;
   channel: string;
   dmPolicy: DmPolicy;
@@ -599,7 +599,7 @@ function setCompatChannelDmPolicyWithAllowFrom(params: {
   });
 }
 
-function setCompatChannelAllowFrom(params: {
+export function setCompatChannelAllowFrom(params: {
   cfg: OpenClawConfig;
   channel: string;
   allowFrom: string[];
@@ -639,7 +639,7 @@ export function setAccountDmAllowFromForChannel(params: {
   });
 }
 
-function createCompatChannelDmPolicy(params: {
+export function createCompatChannelDmPolicy(params: {
   label: string;
   channel: string;
   promptAllowFrom?: ChannelSetupDmPolicy["promptAllowFrom"];
@@ -837,7 +837,7 @@ export function createAccountScopedGroupAccessSection<TResolved>(params: {
 type AccountScopedChannel = string;
 type CompatDmChannel = string;
 
-function patchCompatDmChannelConfig(params: {
+export function patchCompatDmChannelConfig(params: {
   cfg: OpenClawConfig;
   channel: string;
   patch: Record<string, unknown>;

@@ -14,7 +14,6 @@ import {
   resolveExecApprovalUnavailableDecisions,
 } from "../infra/exec-approvals.js";
 import { defaultExecAutoReviewer, type ExecAutoReviewInput } from "../infra/exec-auto-review.js";
-import { tail } from "./bash-process-registry.js";
 import {
   buildExecApprovalRequesterContext,
   buildExecApprovalTurnSourceContext,
@@ -30,6 +29,7 @@ import {
   shouldSkipNodeApprovalPrepare,
 } from "./bash-tools.exec-host-node-phases.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
+import { tail } from "./bash-process-registry.js";
 import * as execHostShared from "./bash-tools.exec-host-shared.js";
 import {
   DEFAULT_NOTIFY_TAIL_CHARS,
@@ -483,10 +483,5 @@ export async function executeNodeHostCommand(
           scopes: APPROVED_NODE_INVOKE_SCOPES,
         })
       : await callGatewayTool("node.invoke", { timeoutMs: target.invokeTimeoutMs }, invoke);
-  return formatNodeRunToolResult({
-    raw,
-    startedAt,
-    cwd: params.workdir,
-    warnings: [...params.warnings, ...(params.foregroundWarnings ?? [])],
-  });
+  return formatNodeRunToolResult({ raw, startedAt, cwd: params.workdir });
 }

@@ -156,8 +156,6 @@ import { clipTelegramProgressText } from "./truncate.js";
 
 export { resetTelegramReplyFenceForTests };
 
-// Telegram sendChatAction can fail transiently; keep the tolerance scoped to this transport.
-const TELEGRAM_MAX_CONSECUTIVE_TYPING_FAILURES = 5;
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-dispatch");
 
@@ -2156,7 +2154,6 @@ export const dispatchTelegramMessage = async ({
       accountId: route.accountId,
       typing: {
         start: sendTyping,
-        maxConsecutiveFailures: TELEGRAM_MAX_CONSECUTIVE_TYPING_FAILURES,
         onStartError: (err) => {
           logTypingFailure({
             log: logVerbose,

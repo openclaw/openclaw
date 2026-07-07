@@ -641,7 +641,7 @@ function readReportInput(entry) {
   };
 }
 
-function readReportInputs(entries) {
+export function readReportInputs(entries) {
   const invalid = [];
   const missing = [];
   const reports = [];

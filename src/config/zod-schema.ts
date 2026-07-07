@@ -921,13 +921,6 @@ export const OpenClawSchema = z
         enabled: z.boolean().optional(),
         store: z.string().optional(),
         maxConcurrentRuns: z.number().int().positive().optional(),
-        triggers: z
-          .object({
-            enabled: z.boolean().optional(),
-            minIntervalMs: z.number().int().positive().optional(),
-          })
-          .strict()
-          .optional(),
         retry: z
           .object({
             maxAttempts: z.number().int().min(0).max(10).optional(),

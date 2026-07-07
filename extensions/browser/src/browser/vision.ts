@@ -14,7 +14,7 @@ export const DEFAULT_BROWSER_SCREENSHOT_DESCRIPTION_PROMPT =
   "Describe what is visible in this browser screenshot. Capture page layout, headings, primary content blocks, visible text, and notable interactive elements so a text-only assistant can reason about the page.";
 
 /** Input context for browser screenshot image understanding. */
-type BrowserScreenshotDescriptionContext = {
+export type BrowserScreenshotDescriptionContext = {
   cfg: OpenClawConfig;
   filePath: string;
   agentDir?: string;
@@ -35,14 +35,14 @@ type BrowserScreenshotDescriptionContext = {
 };
 
 /** Dependencies injected so Browser tests can avoid loading media runtimes. */
-type BrowserScreenshotDescriptionDeps = {
+export type BrowserScreenshotDescriptionDeps = {
   describeImageFile: typeof DescribeImageFileFn;
   normalizeBrowserScreenshot: typeof NormalizeBrowserScreenshotFn;
   saveMediaBuffer: typeof SaveMediaBufferFn;
 };
 
 /** Result returned from browser screenshot description. */
-type BrowserScreenshotDescriptionResult = {
+export type BrowserScreenshotDescriptionResult = {
   text: string;
   provider?: string;
   model?: string;

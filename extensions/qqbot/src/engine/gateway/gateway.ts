@@ -1,6 +1,5 @@
 // Qqbot plugin module implements gateway behavior.
 import path from "node:path";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   classifyCoreCommandForGroup,
   PRIVATE_CHAT_ONLY_TEXT,
@@ -62,7 +61,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
 
   onMessageSent(account.appId, (refIdx, meta) => {
     log?.info(
-      `onMessageSent called: refIdx=${refIdx}, mediaType=${meta.mediaType}, ttsText=${meta.ttsText === undefined ? undefined : truncateUtf16Safe(meta.ttsText, 30)}`,
+      `onMessageSent called: refIdx=${refIdx}, mediaType=${meta.mediaType}, ttsText=${meta.ttsText?.slice(0, 30)}`,
     );
     const attachments: RefAttachmentSummary[] = [];
     if (meta.mediaType) {

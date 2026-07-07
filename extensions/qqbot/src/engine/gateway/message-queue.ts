@@ -1,5 +1,4 @@
 // Qqbot plugin module implements message queue behavior.
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatErrorMessage } from "../utils/format.js";
 
 const DEFAULT_GLOBAL_QUEUE_SIZE = 1000;
@@ -246,7 +245,7 @@ export function createMessageQueue(ctx: MessageQueueContext): MessageQueue {
 
     for (const cmd of commands) {
       log?.debug?.(
-        `Processing command independently for ${peerId}: ${truncateUtf16Safe((cmd.content ?? "").trim(), 50)}`,
+        `Processing command independently for ${peerId}: ${(cmd.content ?? "").trim().slice(0, 50)}`,
       );
       await processOne(cmd, peerId, "Command processor");
     }

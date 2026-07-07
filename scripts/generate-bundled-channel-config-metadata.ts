@@ -235,7 +235,7 @@ function resolveChannelUnsupportedSecretRefSurfacePatterns(
   }
 }
 
-async function collectBundledChannelConfigMetadata(params?: { repoRoot?: string }) {
+export async function collectBundledChannelConfigMetadata(params?: { repoRoot?: string }) {
   const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
   const sources = collectBundledPluginSources({ repoRoot, requirePackageJson: true });
   const entries: BundledChannelConfigMetadata[] = [];
@@ -289,7 +289,7 @@ async function collectBundledChannelConfigMetadata(params?: { repoRoot?: string 
   return entries.toSorted((left, right) => left.channelId.localeCompare(right.channelId));
 }
 
-async function writeBundledChannelConfigMetadataModule(params?: {
+export async function writeBundledChannelConfigMetadataModule(params?: {
   repoRoot?: string;
   outputPath?: string;
   check?: boolean;

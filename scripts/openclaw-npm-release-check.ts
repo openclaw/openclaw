@@ -32,7 +32,7 @@ type PackageJson = {
   peerDependenciesMeta?: Record<string, { optional?: boolean }>;
 };
 
-type ParsedReleaseVersion = {
+export type ParsedReleaseVersion = {
   version: string;
   baseVersion: string;
   channel: "stable" | "alpha" | "beta";
@@ -44,7 +44,7 @@ type ParsedReleaseVersion = {
   correctionNumber?: number;
 };
 
-type ParsedReleaseTag = {
+export type ParsedReleaseTag = {
   version: string;
   packageVersion: string;
   baseVersion: string;
@@ -52,13 +52,13 @@ type ParsedReleaseTag = {
   correctionNumber?: number;
 };
 
-type NpmPublishPlan = {
+export type NpmPublishPlan = {
   channel: "stable" | "alpha" | "beta";
   publishTag: "latest" | "alpha" | "beta";
   mirrorDistTags: ("latest" | "alpha" | "beta")[];
 };
 
-type NpmDistTagMirrorAuth = {
+export type NpmDistTagMirrorAuth = {
   hasAuth: boolean;
   source: "node-auth-token" | "npm-token" | "none";
 };

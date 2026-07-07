@@ -78,7 +78,7 @@ export function buildReplyPromptBodies(params: {
 }
 
 /** Startup action associated with a reply prompt envelope. */
-type ReplyPromptEnvelopeStartupAction = "new" | "reset";
+export type ReplyPromptEnvelopeStartupAction = "new" | "reset";
 
 /** Full prompt envelope passed into reply run preparation. */
 export type ReplyPromptEnvelope = ReturnType<typeof buildReplyPromptBodies> & {

@@ -10,7 +10,7 @@ export type LockFileOwnerPayload = {
   starttime?: number;
 };
 
-function readLockFileOwnerPayload(
+export function readLockFileOwnerPayload(
   payload: Record<string, unknown> | null,
 ): LockFileOwnerPayload | null {
   if (!payload) {

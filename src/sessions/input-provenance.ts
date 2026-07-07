@@ -22,7 +22,7 @@ export type InputProvenance = {
 };
 
 export const INTER_SESSION_PROMPT_PREFIX_BASE = "[Inter-session message]";
-const AGENT_MEDIATED_COMPLETION_SOURCE_TOOLS = [
+export const AGENT_MEDIATED_COMPLETION_SOURCE_TOOLS = [
   "agent_harness_task",
   "image_generate",
   "music_generate",
@@ -114,7 +114,9 @@ export function hasInterSessionUserProvenance(
 // Prefix text is model-facing safety context for inter-session handoffs. It
 // states source metadata and explicitly prevents treating the payload as direct
 // end-user instruction.
-function buildInterSessionPromptPrefix(inputProvenance: InputProvenance | undefined): string {
+export function buildInterSessionPromptPrefix(
+  inputProvenance: InputProvenance | undefined,
+): string {
   const provenance = inputProvenance?.kind === "inter_session" ? inputProvenance : undefined;
   const details = [
     provenance?.sourceSessionKey ? `sourceSession=${provenance.sourceSessionKey}` : undefined,

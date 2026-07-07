@@ -425,7 +425,7 @@ export async function getMessageFeishu(params: {
   }
 }
 
-type FeishuThreadMessageInfo = {
+export type FeishuThreadMessageInfo = {
   messageId: string;
   senderId?: string;
   senderType?: string;
@@ -518,7 +518,7 @@ export async function listFeishuThreadMessages(params: {
   return results;
 }
 
-type SendFeishuMessageParams = {
+export type SendFeishuMessageParams = {
   cfg: ClawdbotConfig;
   to: string;
   text: string;
@@ -618,7 +618,7 @@ export async function sendMessageFeishu(
   });
 }
 
-type SendFeishuCardParams = {
+export type SendFeishuCardParams = {
   cfg: ClawdbotConfig;
   to: string;
   card: Record<string, unknown>;

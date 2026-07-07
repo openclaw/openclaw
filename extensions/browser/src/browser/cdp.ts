@@ -318,7 +318,7 @@ export type AriaSnapshotNode = {
 };
 
 /** Prefix assigned to generated accessibility-node refs. */
-const AX_REF_PREFIX = "ax";
+export const AX_REF_PREFIX = "ax";
 export const AX_REF_PATTERN = new RegExp(`^${AX_REF_PREFIX}\\d+$`);
 
 /** Raw accessibility node subset read from CDP Accessibility.getFullAXTree. */
@@ -437,7 +437,7 @@ export async function snapshotAria(opts: {
 }
 
 /** Role snapshot ref metadata used by agent-facing snapshots. */
-type CdpRoleRef = {
+export type CdpRoleRef = {
   role: string;
   name?: string;
   nth?: number;
@@ -446,7 +446,7 @@ type CdpRoleRef = {
 };
 
 /** Options for CDP role snapshot extraction and compaction. */
-type CdpRoleSnapshotOptions = {
+export type CdpRoleSnapshotOptions = {
   interactive?: boolean;
   compact?: boolean;
   maxDepth?: number;

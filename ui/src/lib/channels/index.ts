@@ -34,7 +34,7 @@ export type ChannelsState = {
   whatsappBusy: boolean;
 };
 
-type LoadChannelsOptions = {
+export type LoadChannelsOptions = {
   softTimeoutMs?: number;
 };
 

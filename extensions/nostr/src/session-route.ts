@@ -4,14 +4,10 @@ import {
   stripChannelTargetPrefix,
   type ChannelOutboundSessionRouteParams,
 } from "openclaw/plugin-sdk/core";
-import { normalizePubkey } from "./nostr-key-utils.js";
 
 export function resolveNostrOutboundSessionRoute(params: ChannelOutboundSessionRouteParams) {
-  const rawTarget = stripChannelTargetPrefix(params.target, "nostr");
-  let target: string;
-  try {
-    target = normalizePubkey(rawTarget);
-  } catch {
+  const target = stripChannelTargetPrefix(params.target, "nostr");
+  if (!target) {
     return null;
   }
   return buildChannelOutboundSessionRoute({
@@ -19,7 +15,6 @@ export function resolveNostrOutboundSessionRoute(params: ChannelOutboundSessionR
     agentId: params.agentId,
     channel: "nostr",
     accountId: params.accountId,
-    recipientSessionExact: true,
     peer: {
       kind: "direct",
       id: target,

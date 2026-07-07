@@ -201,7 +201,6 @@ import {
 import {
   ExecApprovalsGetParamsSchema,
   ExecApprovalsNodeGetParamsSchema,
-  ExecApprovalsNodeSnapshotSchema,
   ExecApprovalsNodeSetParamsSchema,
   ExecApprovalsSetParamsSchema,
   ExecApprovalsSnapshotSchema,
@@ -669,7 +668,6 @@ export const ProtocolSchemas = {
   ExecApprovalsGetParams: ExecApprovalsGetParamsSchema,
   ExecApprovalsSetParams: ExecApprovalsSetParamsSchema,
   ExecApprovalsNodeGetParams: ExecApprovalsNodeGetParamsSchema,
-  ExecApprovalsNodeSnapshot: ExecApprovalsNodeSnapshotSchema,
   ExecApprovalsNodeSetParams: ExecApprovalsNodeSetParamsSchema,
   ExecApprovalsSnapshot: ExecApprovalsSnapshotSchema,
   ExecApprovalGetParams: ExecApprovalGetParamsSchema,

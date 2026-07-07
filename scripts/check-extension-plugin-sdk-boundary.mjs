@@ -229,7 +229,7 @@ function collectEntriesByModeFromModuleReferences(filePath, references) {
 /**
  * Collects the current extension plugin SDK boundary inventory.
  */
-async function collectExtensionPluginSdkBoundaryInventory(mode) {
+export async function collectExtensionPluginSdkBoundaryInventory(mode) {
   if (!MODES.has(mode)) {
     throw new Error(`Unknown mode: ${mode}`);
   }
@@ -307,7 +307,7 @@ function formatInventoryHuman(mode, inventory) {
 /**
  * Runs the boundary inventory check with CLI-style inputs and outputs.
  */
-async function runExtensionPluginSdkBoundaryCheck(argv, io) {
+export async function runExtensionPluginSdkBoundaryCheck(argv, io) {
   const args = argv ?? process.argv.slice(2);
   const streams = io ?? { stdout: process.stdout, stderr: process.stderr };
   const json = args.includes("--json");

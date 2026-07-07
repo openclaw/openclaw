@@ -69,7 +69,7 @@ function isInstalledRecordPresentOnDisk(
 }
 
 /** Ensures the runtime plugin required by the selected model is installed and enabled. */
-async function ensureRuntimePluginForModelSelection(params: {
+export async function ensureRuntimePluginForModelSelection(params: {
   cfg: OpenClawConfig;
   model?: string;
   prompter: WizardPrompter;
@@ -140,7 +140,7 @@ async function ensureRuntimePluginForModelSelection(params: {
 }
 
 /** Repairs missing install records for runtime plugins required by model selection. */
-async function repairRuntimePluginInstallForModelSelection(params: {
+export async function repairRuntimePluginInstallForModelSelection(params: {
   cfg: OpenClawConfig;
   model?: string;
   env?: NodeJS.ProcessEnv;

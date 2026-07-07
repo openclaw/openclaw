@@ -14,7 +14,7 @@ const loadMessageActionTtsRuntime = createLazyRuntimeModule(
 );
 
 /** Reads the session-level TTS auto mode for a message-action send. */
-function resolveMessageActionSessionTtsAuto(params: {
+export function resolveMessageActionSessionTtsAuto(params: {
   cfg: OpenClawConfig;
   sessionKey?: string;
   agentId?: string;

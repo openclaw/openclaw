@@ -1,10 +1,9 @@
 // Control UI component implements the file preview modal element.
 import { LitElement, css, html, type PropertyValues } from "lit";
 import { property, query } from "lit/decorators.js";
-import { renderCopyButton } from "./copy-button.ts";
 import { icons } from "./icons.ts";
 
-type FilePreviewModalFile = {
+export type FilePreviewModalFile = {
   path: string;
   size: string;
   contents: string;
@@ -21,16 +20,7 @@ export class OpenClawFilePreviewModal extends LitElement {
   @property() readOnlyLabel = "read-only";
   @property() emptyTitle = "No files match";
   @property() emptySubtitle = "Try another file name or content search.";
-  @property() copyLabel = "Copy file";
   @query(".search") private searchInput?: HTMLInputElement;
-  @query(".detail-body") private detailBody?: HTMLElement;
-
-  private filteredFiles: FilePreviewModalFile[] = [];
-  private activeFile?: FilePreviewModalFile;
-  private derivedInputsReady = false;
-  private codeSource?: string;
-  private codeChunks: string[] = [];
-  private resetScrollAfterUpdate = true;
 
   static override styles = css`
     :host {
@@ -260,17 +250,8 @@ export class OpenClawFilePreviewModal extends LitElement {
       border-bottom: 1px solid var(--border);
     }
 
-    .detail-title-row {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      margin-bottom: 10px;
-    }
-
     .title {
-      flex: 1;
-      min-width: 0;
-      margin: 0;
+      margin: 0 0 10px;
       font-family: var(--mono);
       font-size: 22px;
       color: var(--text-strong);
@@ -279,84 +260,6 @@ export class OpenClawFilePreviewModal extends LitElement {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-    }
-
-    .chat-copy-btn {
-      width: 32px;
-      height: 32px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      flex: 0 0 auto;
-      padding: 0;
-      border: 1px solid var(--border);
-      border-radius: var(--radius-md);
-      background: var(--bg-elevated);
-      color: var(--muted);
-      cursor: pointer;
-    }
-
-    .chat-copy-btn:hover {
-      border-color: var(--border-strong);
-      color: var(--text-strong);
-    }
-
-    .chat-copy-btn:focus-visible {
-      outline: 2px solid var(--accent);
-      outline-offset: 2px;
-    }
-
-    .chat-copy-btn__icon {
-      display: inline-flex;
-      width: 16px;
-      height: 16px;
-      position: relative;
-    }
-
-    .chat-copy-btn__icon-copy,
-    .chat-copy-btn__icon-check {
-      position: absolute;
-      inset: 0;
-      transition: opacity 150ms ease;
-    }
-
-    .chat-copy-btn__icon-check {
-      opacity: 0;
-    }
-
-    .chat-copy-btn[data-copied="1"] .chat-copy-btn__icon-copy {
-      opacity: 0;
-    }
-
-    .chat-copy-btn[data-copied="1"] .chat-copy-btn__icon-check {
-      opacity: 1;
-    }
-
-    .chat-copy-btn[data-copying="1"] {
-      opacity: 0;
-      pointer-events: none;
-    }
-
-    .chat-copy-btn[data-error="1"] {
-      border-color: var(--danger-subtle);
-      background: var(--danger-subtle);
-      color: var(--danger);
-    }
-
-    .chat-copy-btn[data-copied="1"] {
-      border-color: var(--ok-subtle);
-      background: var(--ok-subtle);
-      color: var(--ok);
-    }
-
-    .chat-copy-btn svg {
-      width: 16px;
-      height: 16px;
-      stroke: currentColor;
-      fill: none;
-      stroke-width: 1.5px;
-      stroke-linecap: round;
-      stroke-linejoin: round;
     }
 
     .chips {
@@ -390,26 +293,20 @@ export class OpenClawFilePreviewModal extends LitElement {
 
     .detail-body {
       flex: 1;
-      overflow-x: hidden;
-      overflow-y: auto;
+      overflow: auto;
       padding: 20px 24px 24px;
     }
 
-    .code-content {
-      min-width: 0;
-    }
-
-    .code-chunk {
+    .pre {
       margin: 0;
-      min-width: 0;
       font-family: var(--mono);
       font-size: 13px;
       line-height: 1.7;
       color: var(--text);
+      background: transparent;
+      border: none;
       white-space: pre-wrap;
       word-break: break-word;
-      content-visibility: auto;
-      contain-intrinsic-block-size: auto 1414px;
     }
 
     .foot {
@@ -472,33 +369,9 @@ export class OpenClawFilePreviewModal extends LitElement {
     }
   `;
 
-  protected override willUpdate(changed: PropertyValues<this>) {
-    const inputsChanged =
-      !this.derivedInputsReady ||
-      changed.has("activePath") ||
-      changed.has("query") ||
-      changed.has("files");
-    if (!inputsChanged) {
-      return;
-    }
-
-    this.derivedInputsReady = true;
-    this.filteredFiles = this.filterFiles();
-    const nextActiveFile = this.resolveActiveFile(this.filteredFiles);
-    this.activeFile = nextActiveFile;
-
-    const nextCodeSource = nextActiveFile?.contents;
-    if (nextCodeSource !== this.codeSource) {
-      this.codeSource = nextCodeSource;
-      this.codeChunks = nextCodeSource === undefined ? [] : chunkFileContents(nextCodeSource);
-    }
-
-    this.resetScrollAfterUpdate = true;
-  }
-
   override render() {
-    const filteredFiles = this.filteredFiles;
-    const activeFile = this.activeFile;
+    const filteredFiles = this.filterFiles();
+    const activeFile = this.resolveActiveFile(filteredFiles);
     const fileCount =
       filteredFiles.length === this.files.length
         ? `${this.files.length} files`
@@ -521,6 +394,7 @@ export class OpenClawFilePreviewModal extends LitElement {
             placeholder=${this.searchPlaceholder}
             .value=${this.query}
             @input=${this.handleQueryInput}
+            autofocus
           />
           <span class="state">${fileCount}</span>
         </header>
@@ -561,10 +435,7 @@ export class OpenClawFilePreviewModal extends LitElement {
     return html`
       <section class="detail">
         <div class="detail-head">
-          <div class="detail-title-row">
-            <h2 class="title">${file.path}</h2>
-            ${file.contents ? renderCopyButton(file.contents, this.copyLabel) : ""}
-          </div>
+          <h2 class="title">${file.path}</h2>
           <div class="chips">
             <span class="chip accent">${fileKind(file.path)}</span>
             <span class="chip">${file.size}</span>
@@ -573,11 +444,7 @@ export class OpenClawFilePreviewModal extends LitElement {
           </div>
         </div>
         <div class="detail-body">
-          <div class="code-content">
-            ${this.codeChunks.map(
-              (chunk, index) => html`<pre class="code-chunk" data-chunk=${index}>${chunk}</pre>`,
-            )}
-          </div>
+          <pre class="pre">${file.contents}</pre>
         </div>
       </section>
     `;
@@ -611,21 +478,7 @@ export class OpenClawFilePreviewModal extends LitElement {
     this.focusModal();
   }
 
-  override connectedCallback() {
-    super.connectedCallback();
-    this.resetScrollAfterUpdate = true;
-    this.requestUpdate();
-  }
-
   protected override updated(changed: PropertyValues<this>) {
-    if (this.resetScrollAfterUpdate) {
-      this.resetScrollAfterUpdate = false;
-      const body = this.detailBody;
-      if (body) {
-        body.scrollTop = 0;
-        body.scrollLeft = 0;
-      }
-    }
     if (changed.has("activePath") || changed.has("query") || changed.has("files")) {
       this.scrollActiveFileIntoView();
     }
@@ -715,17 +568,6 @@ export class OpenClawFilePreviewModal extends LitElement {
       }),
     );
   };
-}
-
-const FILE_PREVIEW_CHUNK_LINES = 64;
-
-function chunkFileContents(contents: string): string[] {
-  const lines = contents.split("\n");
-  const chunks: string[] = [];
-  for (let index = 0; index < lines.length; index += FILE_PREVIEW_CHUNK_LINES) {
-    chunks.push(lines.slice(index, index + FILE_PREVIEW_CHUNK_LINES).join("\n"));
-  }
-  return chunks;
 }
 
 function fileKind(path: string): string {

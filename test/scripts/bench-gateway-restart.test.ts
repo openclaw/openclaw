@@ -1,5 +1,5 @@
 // Bench Gateway Restart tests cover bench gateway restart script behavior.
-import { spawn } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createServer } from "node:http";
 import os from "node:os";
@@ -20,38 +20,6 @@ import { registerStopChildBehaviorTests } from "./bench-gateway-child-test-suppo
 
 type GatewayRestartIntentDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_intent">;
 
-type BenchCliResult = {
-  status: number | null;
-  stderr: string;
-  stdout: string;
-};
-
-function runBenchCli(args: string[]): Promise<BenchCliResult> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      ["--import", "tsx", "scripts/bench-gateway-restart.ts", ...args],
-      {
-        cwd: process.cwd(),
-        env: { ...process.env, NODE_NO_WARNINGS: "1" },
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
-    let stderr = "";
-    let stdout = "";
-    child.stderr.setEncoding("utf8");
-    child.stdout.setEncoding("utf8");
-    child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
-    });
-    child.stdout.on("data", (chunk: string) => {
-      stdout += chunk;
-    });
-    child.once("error", reject);
-    child.once("close", (status) => resolve({ status, stderr, stdout }));
-  });
-}
-
 function readRestartIntentRow(env: NodeJS.ProcessEnv) {
   const { db } = openOpenClawStateDatabase({ env });
   const stateDb = getNodeSqliteKysely<GatewayRestartIntentDatabase>(db);
@@ -65,15 +33,34 @@ function readRestartIntentRow(env: NodeJS.ProcessEnv) {
 }
 
 describe("gateway restart benchmark script", () => {
-  let helpResult: BenchCliResult;
-  let unknownArgsResult: BenchCliResult;
+  let helpResult: ReturnType<typeof spawnSync>;
+  let unknownArgsResult: ReturnType<typeof spawnSync>;
 
-  beforeAll(async () => {
-    // These validation-only processes share no state; overlap their TSX startup cost.
-    [helpResult, unknownArgsResult] = await Promise.all([
-      runBenchCli(["--help"]),
-      runBenchCli(["--wat"]),
-    ]);
+  beforeAll(() => {
+    helpResult = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/bench-gateway-restart.ts", "--help"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          NODE_NO_WARNINGS: "1",
+        },
+      },
+    );
+    unknownArgsResult = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/bench-gateway-restart.ts", "--wat"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          NODE_NO_WARNINGS: "1",
+        },
+      },
+    );
   });
 
   it("prints help without running benchmark cases", () => {

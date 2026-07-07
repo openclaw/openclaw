@@ -8,7 +8,7 @@ describe("OpenCode Go context metadata", () => {
   let configuredModels: OpenClawConfig["models"];
 
   beforeAll(async () => {
-    const cfg: OpenClawConfig = { plugins: { allow: ["opencode-go"] } };
+    const cfg: OpenClawConfig = {};
 
     await refreshContextWindowCache(cfg);
     contextWindowTokens = resolveMemoryFlushContextWindowTokens({

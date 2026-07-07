@@ -11,9 +11,7 @@ import { resolveConversationCapabilityProfile } from "../conversation-capability
 import {
   applyLocalModelLeanToolSearchDefaults,
   filterLocalModelLeanTools,
-  isLocalModelLeanEnabled,
   resolveLocalModelLeanPreserveToolNames,
-  shouldCatalogToolForLocalModelLean,
 } from "../local-model-lean.js";
 import { filterRuntimeCompatibleTools } from "../tool-schema-projection.js";
 import {
@@ -78,11 +76,6 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
 }): AgentHarnessToolSurfaceRuntime {
   const forceDirectMessageTool =
     params.forceMessageTool === true || params.sourceReplyDeliveryMode === "message_tool_only";
-  const localModelLeanEnabled = isLocalModelLeanEnabled({
-    config: params.config,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-  });
   const codeModeConfig = resolveCodeModeConfig(params.config, params.agentId);
   const toolSearchRuntimeConfig = forceDirectMessageTool
     ? params.config
@@ -207,10 +200,6 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
             runId: params.runId,
             catalogRef: toolSearchCatalogRef,
             toolHookContext: options.hookContext,
-            shouldCatalogTool:
-              localModelLeanEnabled && toolSearchConfig.mode === "tools"
-                ? shouldCatalogToolForLocalModelLean
-                : undefined,
           });
     const projectedCompactedTools = options.localModelLeanApplied
       ? compacted.tools

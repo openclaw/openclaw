@@ -163,11 +163,7 @@ describe("existing-session browser routes", () => {
   it("allows labeled AI snapshots for existing-session profiles", async () => {
     const handler = getSnapshotGetHandler();
     const response = createBrowserRouteResponse();
-    const ctrl = new AbortController();
-    await handler?.(
-      { params: {}, query: { format: "ai", labels: "1" }, signal: ctrl.signal },
-      response.res,
-    );
+    await handler?.({ params: {}, query: { format: "ai", labels: "1" } }, response.res);
 
     expect(response.statusCode).toBe(200);
     const body = requireRecord(response.body, "response body");
@@ -183,16 +179,6 @@ describe("existing-session browser routes", () => {
     expect(snapshotParams.profileName).toBe("chrome-live");
     expectExistingSessionProfile(snapshotParams.profile);
     expect(snapshotParams.targetId).toBe("7");
-    const renderParams = requireRecord(
-      callArg(chromeMcpMocks.evaluateChromeMcpScript, 0, 0, "label params"),
-      "label params",
-    );
-    const cleanupParams = requireRecord(
-      callArg(chromeMcpMocks.evaluateChromeMcpScript, 1, 0, "label cleanup params"),
-      "label cleanup params",
-    );
-    expect(renderParams.signal).toBe(ctrl.signal);
-    expect(cleanupParams.signal).toBeUndefined();
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
     expect(chromeMcpMocks.takeChromeMcpScreenshot).toHaveBeenCalled();
   });

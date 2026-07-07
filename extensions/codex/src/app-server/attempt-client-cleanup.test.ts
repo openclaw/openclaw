@@ -32,7 +32,7 @@ describe("Codex app-server attempt client cleanup", () => {
         threadId: "thread-1",
         timeoutMs: 123,
       }),
-    ).resolves.toBe(false);
+    ).resolves.toBeUndefined();
 
     expect(request).toHaveBeenCalledWith(
       "thread/unsubscribe",

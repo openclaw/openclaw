@@ -9,7 +9,6 @@
  * - Getting chat members for per-user sharing
  */
 
-import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import { createMSTeamsHttpError } from "./http-error.js";
 import { buildUserAgent } from "./user-agent.js";
@@ -55,11 +54,11 @@ export async function uploadToOneDrive(params: {
     throw await createMSTeamsHttpError(res, "OneDrive upload failed");
   }
 
-  const data = await readProviderJsonResponse<{
+  const data = (await res.json()) as {
     id?: string;
     webUrl?: string;
     name?: string;
-  }>(res, "msteams.graph-upload.uploadOneDriveFile");
+  };
 
   if (!data.id || !data.webUrl || !data.name) {
     throw new Error("OneDrive upload response missing required fields");
@@ -107,9 +106,9 @@ async function createSharingLink(params: {
     throw await createMSTeamsHttpError(res, "Create sharing link failed");
   }
 
-  const data = await readProviderJsonResponse<{
+  const data = (await res.json()) as {
     link?: { webUrl?: string };
-  }>(res, "msteams.graph-upload.createOneDriveSharingLink");
+  };
 
   if (!data.link?.webUrl) {
     throw new Error("Create sharing link response missing webUrl");
@@ -201,11 +200,11 @@ export async function uploadToSharePoint(params: {
     throw await createMSTeamsHttpError(res, "SharePoint upload failed");
   }
 
-  const data = await readProviderJsonResponse<{
+  const data = (await res.json()) as {
     id?: string;
     webUrl?: string;
     name?: string;
-  }>(res, "msteams.graph-upload.uploadSharePointFile");
+  };
 
   if (!data.id || !data.webUrl || !data.name) {
     throw new Error("SharePoint upload response missing required fields");
@@ -261,11 +260,11 @@ export async function getDriveItemProperties(params: {
     throw await createMSTeamsHttpError(res, "Get driveItem properties failed");
   }
 
-  const data = await readProviderJsonResponse<{
+  const data = (await res.json()) as {
     eTag?: string;
     webDavUrl?: string;
     name?: string;
-  }>(res, "msteams.graph-upload.getDriveItemProperties");
+  };
 
   if (!data.eTag || !data.webDavUrl || !data.name) {
     throw new Error("DriveItem response missing required properties (eTag, webDavUrl, or name)");
@@ -332,9 +331,9 @@ export async function resolveGraphChatId(params: {
     return null;
   }
 
-  const data = await readProviderJsonResponse<{
+  const data = (await res.json()) as {
     value?: Array<{ id?: string }>;
-  }>(res, "msteams.graph-upload.getOneOnOneChatId");
+  };
 
   const chats = data.value ?? [];
 
@@ -372,12 +371,12 @@ async function getChatMembers(params: {
     throw await createMSTeamsHttpError(res, "Get chat members failed");
   }
 
-  const data = await readProviderJsonResponse<{
+  const data = (await res.json()) as {
     value?: Array<{
       userId?: string;
       displayName?: string;
     }>;
-  }>(res, "msteams.graph-upload.getChatMembers");
+  };
 
   return (data.value ?? [])
     .map((m) => ({
@@ -436,9 +435,9 @@ async function createSharePointSharingLink(params: {
     throw await createMSTeamsHttpError(res, "Create SharePoint sharing link failed");
   }
 
-  const data = await readProviderJsonResponse<{
+  const data = (await res.json()) as {
     link?: { webUrl?: string };
-  }>(res, "msteams.graph-upload.createSharePointSharingLink");
+  };
 
   if (!data.link?.webUrl) {
     throw new Error("Create SharePoint sharing link response missing webUrl");

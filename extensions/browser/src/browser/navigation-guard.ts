@@ -43,7 +43,7 @@ export type BrowserNavigationPolicyOptions = {
 export type BrowserNavigationProxyMode = "direct" | "explicit-browser-proxy";
 
 /** Minimal request shape used to walk browser redirect chains. */
-type BrowserNavigationRequestLike = {
+export type BrowserNavigationRequestLike = {
   url(): string;
   redirectedFrom(): BrowserNavigationRequestLike | null;
 };

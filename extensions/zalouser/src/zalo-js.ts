@@ -26,7 +26,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sleep, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { sleep } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeZaloReactionIcon } from "./reaction.js";
 import { createZalouserSendReceipt } from "./send-receipt.js";
 import type {
@@ -986,12 +986,7 @@ function toInboundMessage(message: Message, ownUserId?: string): ZaloInboundMess
   };
 }
 
-function truncatePayloadText(text: string): string {
-  return truncateUtf16Safe(text, 2000);
-}
-
 export const testing = {
-  truncatePayloadText,
   toInboundMessage,
   readCachedGroupContext,
   writeCachedGroupContext,
@@ -1243,7 +1238,7 @@ export async function sendZaloTextMessage(
             contentType: media.contentType,
             kind: media.kind,
           });
-          const payloadText = truncatePayloadText(text || options.caption || "");
+          const payloadText = (text || options.caption || "").slice(0, 2000);
           const textStyles = clampTextStyles(payloadText, options.textStyles);
 
           if (media.kind === "audio") {
@@ -1318,7 +1313,7 @@ export async function sendZaloTextMessage(
           };
         }
 
-        const payloadText = truncatePayloadText(text);
+        const payloadText = text.slice(0, 2000);
         const textStyles = clampTextStyles(payloadText, options.textStyles);
         const response = await api.sendMessage(
           textStyles ? { msg: payloadText, styles: textStyles } : payloadText,

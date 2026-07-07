@@ -348,7 +348,7 @@ function matchesScopedPluginOrDreamingSidecar(params: {
   );
 }
 
-class PluginLoadFailureError extends Error {
+export class PluginLoadFailureError extends Error {
   readonly pluginIds: string[];
   readonly registry: PluginRegistry;
 

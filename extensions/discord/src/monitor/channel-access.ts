@@ -57,7 +57,7 @@ function resolveDiscordChannelStringWithAliasSafe(
   return resolveDiscordChannelStringPropertySafe(rawData, snakeKey);
 }
 
-type DiscordChannelInfoSafe = {
+export type DiscordChannelInfoSafe = {
   name?: string;
   topic?: string;
   type?: number;

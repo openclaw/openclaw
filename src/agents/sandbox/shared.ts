@@ -26,7 +26,7 @@ export function slugifySessionKey(value: string) {
 }
 
 /** Resolves the per-session sandbox workspace directory under the configured sandbox root. */
-function resolveSandboxWorkspaceDir(root: string, sessionKey: string) {
+export function resolveSandboxWorkspaceDir(root: string, sessionKey: string) {
   const resolvedRoot = resolveUserPath(root);
   const slug = slugifySessionKey(sessionKey);
   return path.join(resolvedRoot, slug);

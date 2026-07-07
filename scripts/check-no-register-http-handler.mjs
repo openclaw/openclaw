@@ -19,7 +19,7 @@ function isDeprecatedRegisterHttpHandlerCall(expression) {
 /**
  * Finds deprecated `registerHttpHandler(...)` call lines.
  */
-function findDeprecatedRegisterHttpHandlerLines(content, fileName = "source.ts") {
+export function findDeprecatedRegisterHttpHandlerLines(content, fileName = "source.ts") {
   const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
   return collectCallExpressionLines(ts, sourceFile, (node) =>
     isDeprecatedRegisterHttpHandlerCall(node.expression) ? node.expression : null,

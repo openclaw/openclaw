@@ -32,7 +32,6 @@ import {
   OPEN_TAB_DISCOVERY_WINDOW_MS,
 } from "./server-context.constants.js";
 import type {
-  BrowserOperationOptions,
   BrowserServerState,
   BrowserTab,
   ProfileRuntimeState,
@@ -46,7 +45,7 @@ type TabOpsDeps = {
 };
 
 type ProfileTabOps = {
-  listTabs: (options?: BrowserOperationOptions) => Promise<BrowserTab[]>;
+  listTabs: () => Promise<BrowserTab[]>;
   openTab: (url: string, opts?: { label?: string }) => Promise<BrowserTab>;
   labelTab: (targetId: string, label: string) => Promise<BrowserTab>;
 };
@@ -201,10 +200,10 @@ export function createProfileTabOps({
     };
   };
 
-  const readTabs = async (options?: BrowserOperationOptions): Promise<BrowserTab[]> => {
+  const readTabs = async (): Promise<BrowserTab[]> => {
     if (capabilities.usesChromeMcp) {
       const { listChromeMcpTabs } = await getChromeMcpModule();
-      return await listChromeMcpTabs(profile.name, profile, options);
+      return await listChromeMcpTabs(profile.name, profile);
     }
 
     if (capabilities.usesPersistentPlaywright) {
@@ -262,8 +261,8 @@ export function createProfileTabOps({
     return tabs;
   };
 
-  const listTabs = async (options?: BrowserOperationOptions): Promise<BrowserTab[]> => {
-    const tabs = await readTabs(options);
+  const listTabs = async (): Promise<BrowserTab[]> => {
+    const tabs = await readTabs();
     return assignTabAliases(getProfileState(), tabs);
   };
 

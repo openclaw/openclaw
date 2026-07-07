@@ -10,7 +10,7 @@ import type {
 
 export type MemoryWikiImportedSourceGroup = "bridge" | "unsafe-local";
 
-type MemoryWikiImportedSourceStateEntry = {
+export type MemoryWikiImportedSourceStateEntry = {
   group: MemoryWikiImportedSourceGroup;
   pagePath: string;
   sourcePath: string;
@@ -19,7 +19,7 @@ type MemoryWikiImportedSourceStateEntry = {
   renderFingerprint: string;
 };
 
-type MemoryWikiImportedSourceState = {
+export type MemoryWikiImportedSourceState = {
   version: 1;
   entries: Record<string, MemoryWikiImportedSourceStateEntry>;
 };

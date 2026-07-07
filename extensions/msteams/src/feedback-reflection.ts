@@ -22,7 +22,7 @@ import { getMSTeamsRuntime } from "./runtime.js";
 import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
 import type { MSTeamsApp } from "./sdk.js";
 
-type FeedbackEvent = {
+export type FeedbackEvent = {
   type: "custom";
   event: "feedback";
   ts: number;
@@ -56,7 +56,7 @@ export function buildFeedbackEvent(params: {
   };
 }
 
-type RunFeedbackReflectionParams = {
+export type RunFeedbackReflectionParams = {
   cfg: OpenClawConfig;
   app: MSTeamsApp;
   appId: string;

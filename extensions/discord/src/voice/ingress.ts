@@ -11,7 +11,7 @@ import { authorizeDiscordVoiceIngress } from "./access.js";
 import type { VoiceSessionEntry } from "./session.js";
 import type { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
 
-const DISCORD_VOICE_MESSAGE_PROVIDER = "discord-voice";
+export const DISCORD_VOICE_MESSAGE_PROVIDER = "discord-voice";
 
 const logger = createSubsystemLogger("discord/voice");
 
@@ -21,7 +21,7 @@ export type DiscordVoiceIngressContext = {
   speakerLabel: string;
 };
 
-type DiscordVoiceAgentTurnResult = {
+export type DiscordVoiceAgentTurnResult = {
   context: DiscordVoiceIngressContext;
   text: string;
 };

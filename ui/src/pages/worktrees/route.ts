@@ -3,8 +3,7 @@ import { html } from "lit";
 
 export const page = definePage({
   id: "worktrees",
-  path: "/settings/worktrees",
-  aliases: ["/worktrees"],
+  path: "/worktrees",
   component: () =>
     import("./worktrees-page.ts").then(() => ({
       header: true,

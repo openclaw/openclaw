@@ -6,7 +6,7 @@ export type MemoryReindexLockHandle = {
   release: () => void;
 };
 
-function resolveMemoryReindexLockPath(dbPath: string): string {
+export function resolveMemoryReindexLockPath(dbPath: string): string {
   return `${dbPath}.reindex-lock.sqlite`;
 }
 

@@ -45,7 +45,7 @@ type SsoStoreData = {
   tokens: Record<string, MSTeamsSsoStoredToken>;
 };
 
-type MSTeamsSsoStoreData = SsoStoreData;
+export type MSTeamsSsoStoreData = SsoStoreData;
 
 export const MSTEAMS_SSO_TOKENS_LEGACY_FILENAME = "msteams-sso-tokens.json";
 export const MSTEAMS_SSO_TOKENS_NAMESPACE = "sso-tokens";

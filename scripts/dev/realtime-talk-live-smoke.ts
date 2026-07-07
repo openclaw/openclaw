@@ -11,7 +11,7 @@ import {
 } from "../lib/dev-tooling-safety.ts";
 
 const OPENAI_REALTIME_MODEL =
-  process.env.OPENCLAW_REALTIME_OPENAI_MODEL?.trim() || "gpt-realtime-2.1";
+  process.env.OPENCLAW_REALTIME_OPENAI_MODEL?.trim() || "gpt-realtime-2";
 const OPENAI_REALTIME_VOICE = process.env.OPENCLAW_REALTIME_OPENAI_VOICE?.trim() || "alloy";
 const DEFAULT_OPENAI_HTTP_TIMEOUT_MS = 30_000;
 const OPENAI_HTTP_RESPONSE_MAX_BYTES = 256 * 1024;
@@ -24,7 +24,6 @@ const GOOGLE_LIVE_WS_URL =
 
 type RealtimeSmokeCliOptions = {
   help: boolean;
-  openAIOnly: boolean;
 };
 
 // Keep live stacks behind their owning smoke paths so help and safety helpers stay lightweight.
@@ -67,8 +66,7 @@ function usage(): string {
     "Usage: node --import tsx scripts/dev/realtime-talk-live-smoke.ts [options]",
     "",
     "Options:",
-    "  --openai-only  Run only the OpenAI backend and browser legs",
-    "  -h, --help     Show this help",
+    "  -h, --help    Show this help",
     "",
     "Environment:",
     "  OPENAI_API_KEY",
@@ -78,15 +76,12 @@ function usage(): string {
 
 function parseRealtimeSmokeArgs(argv = process.argv.slice(2)): RealtimeSmokeCliOptions {
   for (const arg of argv) {
-    if (arg === "--help" || arg === "-h" || arg === "--openai-only") {
+    if (arg === "--help" || arg === "-h") {
       continue;
     }
     throw new CliArgumentError(`Unknown argument: ${arg}`);
   }
-  return {
-    help: argv.includes("--help") || argv.includes("-h"),
-    openAIOnly: argv.includes("--openai-only"),
-  };
+  return { help: argv.includes("--help") || argv.includes("-h") };
 }
 
 function getEnv(name: string): string | undefined {
@@ -804,18 +799,16 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
       results.push(await smokeOpenAIBackendBridge(openAIKey));
       results.push(await smokeOpenAIWebRtc(browser, openAIKey));
     }
-    if (!cli.openAIOnly) {
-      if (!googleKey) {
-        results.push({
-          name: "google-live-browser-ws",
-          ok: false,
-          details: { error: "GEMINI_API_KEY or GOOGLE_API_KEY missing" },
-        });
-      } else {
-        results.push(await smokeGoogleLiveBrowserWs(browser, googleKey));
-      }
-      results.push(await smokeGatewayRelayBrowser(browser));
+    if (!googleKey) {
+      results.push({
+        name: "google-live-browser-ws",
+        ok: false,
+        details: { error: "GEMINI_API_KEY or GOOGLE_API_KEY missing" },
+      });
+    } else {
+      results.push(await smokeGoogleLiveBrowserWs(browser, googleKey));
     }
+    results.push(await smokeGatewayRelayBrowser(browser));
   } finally {
     await browser.close();
   }

@@ -1,22 +1,11 @@
 // Verifies default model alias config values and overrides.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { applyModelDefaults as applyModelDefaultsWithPolicy } from "./defaults.js";
-import type { ModelProviderConfig, OpenClawConfig } from "./types.js";
-
-const providerPolicyMocks = vi.hoisted(() => ({
-  normalizeProviderConfigForConfigDefaults: vi.fn(
-    (params: { providerConfig: ModelProviderConfig }) => params.providerConfig,
-  ),
-}));
-
-vi.mock("./provider-policy.js", () => ({
-  applyProviderConfigDefaultsForConfig: (params: { config: OpenClawConfig }) => params.config,
-  normalizeProviderConfigForConfigDefaults: (
-    ...args: Parameters<typeof providerPolicyMocks.normalizeProviderConfigForConfigDefaults>
-  ) => providerPolicyMocks.normalizeProviderConfigForConfigDefaults(...args),
-}));
+import type { OpenClawConfig } from "./types.js";
+import { validateConfigObjectWithPlugins } from "./validation.js";
 
 const emptyManifestRegistry = { plugins: [] } satisfies Pick<PluginManifestRegistry, "plugins">;
 
@@ -28,16 +17,44 @@ function applyModelDefaults(
 }
 
 describe("applyModelDefaults", () => {
+  beforeAll(() => {
+    vi.stubEnv(
+      "OPENCLAW_BUNDLED_PLUGINS_DIR",
+      path.resolve(import.meta.dirname, "../../extensions"),
+    );
+    // Provider public artifacts are process-stable. Keep their one-time load out of assertions.
+    applyModelDefaults({
+      models: {
+        providers: {
+          google: {
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+            models: [],
+          },
+        },
+      },
+    });
+    applyModelDefaults({
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            models: [],
+          },
+        },
+      },
+    });
+  });
+
   beforeEach(() => {
-    providerPolicyMocks.normalizeProviderConfigForConfigDefaults.mockReset();
-    providerPolicyMocks.normalizeProviderConfigForConfigDefaults.mockImplementation(
-      (params) => params.providerConfig,
+    vi.stubEnv(
+      "OPENCLAW_BUNDLED_PLUGINS_DIR",
+      path.resolve(import.meta.dirname, "../../extensions"),
     );
   });
 
-  function mockNormalizedProvider(provider: ModelProviderConfig) {
-    providerPolicyMocks.normalizeProviderConfigForConfigDefaults.mockReturnValueOnce(provider);
-  }
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
 
   function buildProxyProviderConfig(overrides?: { contextWindow?: number; maxTokens?: number }) {
     return {
@@ -293,7 +310,7 @@ describe("applyModelDefaults", () => {
     });
   });
 
-  it("applies provider policy normalization to configured provider rows", () => {
+  it("normalizes provider-prefixed Gemini ids in configured Google provider rows", () => {
     const cfg = {
       models: {
         providers: {
@@ -317,20 +334,12 @@ describe("applyModelDefaults", () => {
       },
     } satisfies OpenClawConfig;
 
-    const provider = cfg.models.providers.google;
-    mockNormalizedProvider({
-      ...provider,
-      models: provider.models.map((model) =>
-        Object.assign({}, model, { id: "google/gemini-3.1-pro-preview" }),
-      ),
-    });
-
     const next = applyModelDefaults(cfg);
 
     expect(next.models?.providers?.google?.models?.[0]?.id).toBe("google/gemini-3.1-pro-preview");
   });
 
-  it("preserves an explicit provider api after provider policy normalization", () => {
+  it("normalizes provider-prefixed Gemini ids for OpenAI-compatible Google provider rows", () => {
     const cfg = {
       models: {
         providers: {
@@ -353,14 +362,6 @@ describe("applyModelDefaults", () => {
         },
       },
     } satisfies OpenClawConfig;
-
-    const provider = cfg.models.providers.google;
-    mockNormalizedProvider({
-      ...provider,
-      models: provider.models.map((model) =>
-        Object.assign({}, model, { id: "google/gemini-3.1-pro-preview" }),
-      ),
-    });
 
     const next = applyModelDefaults(cfg);
 
@@ -405,6 +406,24 @@ describe("applyModelDefaults", () => {
     expect(next.models?.providers?.myproxy?.models?.[0]?.id).toBe("vendor/modern-model");
   });
 
+  it("loads manifest policies for model defaults even when plugin validation is skipped", () => {
+    const cfg = buildProxyProviderConfig();
+    const model = cfg.models.providers.myproxy.models[0];
+    model.id = "latest";
+    model.name = "Custom latest";
+    const result = validateConfigObjectWithPlugins(cfg, {
+      pluginValidation: "skip",
+      loadPluginMetadataSnapshot: () => ({
+        manifestRegistry: buildCustomProviderManifestRegistry(),
+      }),
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.models?.providers?.myproxy?.models?.[0]?.id).toBe("vendor/modern-model");
+    }
+  });
+
   it("fills missing model provider defaults", () => {
     const cfg = buildProxyProviderConfig();
 
@@ -438,7 +457,7 @@ describe("applyModelDefaults", () => {
     expect(model?.maxTokens).toBe(16384);
   });
 
-  it("propagates a provider policy api default to models", () => {
+  it("defaults anthropic provider and model api to anthropic-messages", () => {
     const cfg = {
       models: {
         providers: {
@@ -460,11 +479,6 @@ describe("applyModelDefaults", () => {
         },
       },
     } satisfies OpenClawConfig;
-
-    mockNormalizedProvider({
-      ...cfg.models.providers.anthropic,
-      api: "anthropic-messages",
-    });
 
     const next = applyModelDefaults(cfg);
     const provider = next.models?.providers?.anthropic;

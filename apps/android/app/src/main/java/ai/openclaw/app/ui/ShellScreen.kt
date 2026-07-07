@@ -883,14 +883,18 @@ internal fun overviewRecentSessions(sessions: List<ChatSessionEntry>): List<Chat
         .sortedWith(
           compareByDescending<IndexedValue<ChatSessionEntry>> { entry -> entry.value.overviewRecentSessionRecencyMs() }
             .thenBy { entry -> entry.index },
-        ).first()
-    }.sortedWith(
+        )
+        .first()
+    }
+    .sortedWith(
       compareByDescending<IndexedValue<ChatSessionEntry>> { entry -> entry.value.overviewRecentSessionRecencyMs() }
         .thenBy { entry -> entry.value.key },
-    ).take(overviewRecentSessionLimit)
+    )
+    .take(overviewRecentSessionLimit)
     .map { entry -> entry.value }
 
-private fun ChatSessionEntry.overviewRecentSessionRecencyMs(): Long = lastActivityAt ?: updatedAtMs ?: Long.MIN_VALUE
+private fun ChatSessionEntry.overviewRecentSessionRecencyMs(): Long =
+  lastActivityAt ?: updatedAtMs ?: Long.MIN_VALUE
 
 internal data class OverviewMetricCard(
   val title: String,

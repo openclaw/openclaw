@@ -15,7 +15,7 @@ type ConfigPresetPatch = {
   };
 };
 
-type ConfigPreset = {
+export type ConfigPreset = {
   id: ConfigPresetId;
   label: string;
   description: string;

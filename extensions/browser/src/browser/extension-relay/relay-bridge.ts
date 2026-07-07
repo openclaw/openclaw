@@ -68,7 +68,7 @@ type AuxiliaryTabSession = {
 };
 
 /** Browser identity reported by the paired extension. */
-type ExtensionIdentity = {
+export type ExtensionIdentity = {
   userAgent: string;
   browserVersion: string;
   extensionVersion: string;

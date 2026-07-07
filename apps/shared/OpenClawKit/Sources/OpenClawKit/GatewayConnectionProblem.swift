@@ -807,7 +807,6 @@ public enum GatewayConnectionProblemMapper {
         let message: String
         let owner: GatewayConnectionProblem.Owner
         let actionLabel: String
-        let actionCommand: String?
         if let clientMax = authError.clientMaxProtocol,
            let expected = authError.expectedProtocol,
            clientMax < expected
@@ -817,7 +816,6 @@ public enum GatewayConnectionProblemMapper {
                 ?? "This app is older than the gateway. Update OpenClaw on this device, then retry."
             owner = .iphone
             actionLabel = authError.actionLabel ?? "Update app"
-            actionCommand = authError.actionCommand
         } else if let clientMin = authError.clientMinProtocol,
                   let expected = authError.expectedProtocol,
                   clientMin > expected
@@ -826,15 +824,13 @@ public enum GatewayConnectionProblemMapper {
             message = authError.userMessageOverride
                 ?? "The gateway is older than this app. Update OpenClaw on the gateway host, then retry."
             owner = .gateway
-            actionLabel = authError.actionLabel ?? "Copy update command"
-            actionCommand = authError.actionCommand ?? "openclaw update"
+            actionLabel = authError.actionLabel ?? "Update gateway"
         } else {
             title = authError.titleOverride ?? "OpenClaw update required"
             message = authError.userMessageOverride
                 ?? "The app and gateway use incompatible protocol versions. Update OpenClaw on both, then retry."
             owner = .both
             actionLabel = authError.actionLabel ?? "Update OpenClaw"
-            actionCommand = authError.actionCommand
         }
         return self.problem(
             kind: .protocolMismatch,
@@ -842,7 +838,7 @@ public enum GatewayConnectionProblemMapper {
             title: title,
             message: message,
             actionLabel: actionLabel,
-            actionCommand: actionCommand,
+            actionCommand: authError.actionCommand,
             docsURL: self.docsURL(
                 authError.docsURLString,
                 fallback: "https://docs.openclaw.ai/gateway/troubleshooting"),

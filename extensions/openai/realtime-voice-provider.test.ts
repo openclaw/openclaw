@@ -289,7 +289,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   it("declares realtime Talk capabilities for catalog selection", () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
 
-    expect(provider.defaultModel).toBe("gpt-realtime-2.1");
+    expect(provider.defaultModel).toBe("gpt-realtime-2");
     expect(provider.capabilities).toEqual({
       transports: ["webrtc", "gateway-relay"],
       inputAudioFormats: [
@@ -525,11 +525,6 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
 
     expectRecordFields(requireFetchRequest(), "fetch request", {
       url: "https://api.openai.com/v1/realtime/client_secrets",
-      policy: {
-        allowRfc2544BenchmarkRange: true,
-        allowIpv6UniqueLocalRange: true,
-        hostnameAllowlist: ["api.openai.com"],
-      },
     });
     expectRecordFields(requireFetchInit(), "fetch init", { method: "POST" });
     expectRecordFields(requireFetchHeaders(), "fetch headers", {
@@ -541,7 +536,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     });
     const body = requireFetchJsonBody();
     const bodySession = requireRecord(body.session, "fetch session");
-    expect(bodySession.model).toBe("gpt-realtime-2.1");
+    expect(bodySession.model).toBe("gpt-realtime-2");
     expect(requireNestedRecord(bodySession, ["audio", "input"])).toEqual({
       noise_reduction: { type: "near_field" },
       turn_detection: {
@@ -558,7 +553,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       transport: "webrtc",
       clientSecret: "client-secret-123",
       offerUrl: "https://api.openai.com/v1/realtime/calls",
-      model: "gpt-realtime-2.1",
+      model: "gpt-realtime-2",
       expiresAt: 1_765_000_000_000,
     });
     // originator, version, and User-Agent are server-side attribution headers; they
@@ -920,7 +915,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     const session = requireSession(socket);
     expectRecordFields(session, "session", {
       type: "realtime",
-      model: "gpt-realtime-2.1",
+      model: "gpt-realtime-2",
       output_modalities: ["audio"],
     });
     const inputAudio = requireNestedRecord(session, ["audio", "input"]);

@@ -85,7 +85,7 @@ type ChatThinkingSelectState = {
   options: Array<{ value: string; label: string }>;
 };
 
-function resolveThinkingLevelOptionsForSession(
+export function resolveThinkingLevelOptionsForSession(
   session: GatewaySessionRow | undefined,
   defaults: ThinkingSessionDefaults,
 ): GatewayThinkingLevelOption[] {

@@ -53,7 +53,8 @@ export const HOOK_INSTALL_ERROR_CODE = {
   EMPTY_OPENCLAW_HOOKS: "empty_openclaw_hooks",
 } as const;
 
-type HookInstallErrorCode = (typeof HOOK_INSTALL_ERROR_CODE)[keyof typeof HOOK_INSTALL_ERROR_CODE];
+export type HookInstallErrorCode =
+  (typeof HOOK_INSTALL_ERROR_CODE)[keyof typeof HOOK_INSTALL_ERROR_CODE];
 
 /** Integrity drift payload surfaced when npm metadata no longer matches an install record. */
 export type HookNpmIntegrityDriftParams = {

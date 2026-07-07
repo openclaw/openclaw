@@ -243,15 +243,13 @@ extension RootTabs {
         if gatewayConnected {
             return .none
         }
-        // Saved gateway state survives independently of the onboarding markers.
-        // Explicit resets bypass this route through evaluateOnboardingPresentation(force:).
-        if hasExistingGatewayConfig {
-            return .none
-        }
         if shouldPresentOnLaunch || !hasConnectedOnce || !onboardingComplete {
             return .onboarding
         }
-        return .settings
+        if !hasExistingGatewayConfig {
+            return .settings
+        }
+        return .none
     }
 
     static func shouldPresentQuickSetup(

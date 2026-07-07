@@ -8,7 +8,7 @@ import { normalizeIMessageHandle } from "./targets.js";
 
 type ApprovalKind = "exec" | "plugin";
 
-function normalizeIMessageApproverId(value: string | number): string | undefined {
+export function normalizeIMessageApproverId(value: string | number): string | undefined {
   const raw = String(value).trim();
   if (!raw) {
     return undefined;

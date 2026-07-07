@@ -9,21 +9,21 @@ interface PrlctlVmListItem {
   status?: string;
 }
 
-interface WaitForVmStatusOptions {
+export interface WaitForVmStatusOptions {
   probeTimeoutMs?: () => number | undefined;
 }
 
-interface EnsureVmRunningOptions extends WaitForVmStatusOptions {
+export interface EnsureVmRunningOptions extends WaitForVmStatusOptions {
   transitionTimeoutMs?: () => number | undefined;
 }
 
-function listVmNames(): string[] {
+export function listVmNames(): string[] {
   return listVms()
     .map((item) => (item.name ?? "").trim())
     .filter(Boolean);
 }
 
-function vmStatus(vmName: string, timeoutMs?: number): string {
+export function vmStatus(vmName: string, timeoutMs?: number): string {
   return listVms(timeoutMs).find((vm) => vm.name === vmName)?.status || "missing";
 }
 

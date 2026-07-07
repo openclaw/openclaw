@@ -586,7 +586,7 @@ export function validateLiveShardReportPayload(
 /**
  * Reads and validates the live-shard Vitest JSON report.
  */
-function validateLiveShardReport(reportPath, expectedFiles = []) {
+export function validateLiveShardReport(reportPath, expectedFiles = []) {
   let payload;
   try {
     payload = JSON.parse(fs.readFileSync(reportPath, "utf8"));

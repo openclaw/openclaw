@@ -19,7 +19,7 @@ import {
 } from "./socket-timing.js";
 import { jidToE164 } from "./text-runtime.js";
 
-type WhatsAppQaDriverObservedMessageKind =
+export type WhatsAppQaDriverObservedMessageKind =
   | "media"
   | "location"
   | "poll"
@@ -27,20 +27,20 @@ type WhatsAppQaDriverObservedMessageKind =
   | "text"
   | "unknown";
 
-type WhatsAppQaDriverQuotedMessage = {
+export type WhatsAppQaDriverQuotedMessage = {
   messageId?: string;
   participant?: string;
   text?: string;
 };
 
-type WhatsAppQaDriverObservedReaction = {
+export type WhatsAppQaDriverObservedReaction = {
   emoji: string;
   fromMe?: boolean;
   messageId?: string;
   participant?: string;
 };
 
-type WhatsAppQaDriverObservedPoll = {
+export type WhatsAppQaDriverObservedPoll = {
   options: string[];
   question?: string;
 };
@@ -61,14 +61,14 @@ export type WhatsAppQaDriverObservedMessage = {
   text: string;
 };
 
-type WhatsAppQaDriverSendTextOptions = Pick<ActiveWebSendOptions, "quotedMessageKey">;
+export type WhatsAppQaDriverSendTextOptions = Pick<ActiveWebSendOptions, "quotedMessageKey">;
 
-type WhatsAppQaDriverSendMediaOptions = Pick<
+export type WhatsAppQaDriverSendMediaOptions = Pick<
   ActiveWebSendOptions,
   "asDocument" | "fileName" | "gifPlayback" | "quotedMessageKey"
 >;
 
-type WhatsAppQaDriverSendReactionOptions = {
+export type WhatsAppQaDriverSendReactionOptions = {
   fromMe: boolean;
   participant?: string;
 };

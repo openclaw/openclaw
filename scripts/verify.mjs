@@ -25,7 +25,7 @@ export function usage() {
 /**
  * Parses verify wrapper CLI args.
  */
-function parseVerifyArgs(argv) {
+export function parseVerifyArgs(argv) {
   const args = { help: false };
   for (const arg of argv) {
     if (arg === "--help" || arg === "-h") {

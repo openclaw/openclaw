@@ -76,7 +76,7 @@ export type RuntimeConfigCapability = {
   dispose: () => void;
 };
 
-type LoadConfigOptions = {
+export type LoadConfigOptions = {
   discardPendingChanges?: boolean;
 };
 
@@ -167,7 +167,7 @@ export async function loadConfig(state: ConfigState, options: LoadConfigOptions 
   }
 }
 
-async function loadConfigSchema(state: ConfigState) {
+export async function loadConfigSchema(state: ConfigState) {
   const client = state.client;
   if (!client || !state.connected) {
     return;

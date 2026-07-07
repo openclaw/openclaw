@@ -488,7 +488,6 @@ async function runSetupWizardOnce(
             .map((plugin) => plugin.id)
         : [];
     nextConfig = await setupChannels(nextConfig, runtime, prompter, {
-      allowIMessageInstall: true,
       allowSignalInstall: true,
       deferStatusUntilSelection: flow === "quickstart",
       forceAllowFromChannels: quickstartAllowFromChannels,

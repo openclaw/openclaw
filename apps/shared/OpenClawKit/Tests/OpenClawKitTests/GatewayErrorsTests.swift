@@ -88,8 +88,6 @@ struct GatewayErrorsTests {
         #expect(problem?.title == "Gateway update required")
         #expect(problem?
             .message == "The gateway is older than this app. Update OpenClaw on the gateway host, then retry.")
-        #expect(problem?.actionLabel == "Copy update command")
-        #expect(problem?.actionCommand == "openclaw update")
         #expect(problem?.retryable == false)
         #expect(problem?.pauseReconnect == true)
     }

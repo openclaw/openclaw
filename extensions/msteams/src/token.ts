@@ -15,7 +15,7 @@ import { resolveMSTeamsStorePath } from "./storage.js";
 
 // ── Credential types ───────────────────────────────────────────────────────
 
-type MSTeamsSecretCredentials = {
+export type MSTeamsSecretCredentials = {
   type: "secret";
   appId: string;
   appPassword: string;

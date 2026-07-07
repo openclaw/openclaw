@@ -942,28 +942,15 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });
 
-  it("uses the read-only catalog for Claude CLI thinking menus", async () => {
+  it("hydrates runtime catalog metadata for thinking menu defaults", async () => {
     const cfg = {
       agents: {
         defaults: {
-          model: { primary: "anthropic/claude-opus-4-8" },
+          model: { primary: "openai/gpt-5.5" },
         },
       },
     } as OpenClawConfig;
     sessionMocks.loadSessionStore.mockReturnValue({});
-    agentRuntimeMocks.loadModelCatalog.mockImplementation(async (params) => {
-      if (!params?.readOnly) {
-        throw new Error("native /think must not start full model discovery");
-      }
-      return [
-        {
-          provider: "anthropic",
-          id: "claude-opus-4-8",
-          name: "Claude Opus 4.8",
-          reasoning: true,
-        },
-      ];
-    });
 
     const { handler, sendMessage } = registerAndResolveCommandHandler({
       commandName: "think",
@@ -974,14 +961,13 @@ describe("registerTelegramNativeCommands — session metadata", () => {
 
     expect(agentRuntimeMocks.loadModelCatalog).toHaveBeenCalledWith({
       config: cfg,
-      readOnly: true,
     });
     expectSendMessageCall({
       sendMessage,
       chatId: 100,
-      textIncludes: "Current thinking level: off.\nChoose level for /think.",
+      textIncludes: "Current thinking level: medium.\nChoose level for /think.",
       requireReplyMarkup: true,
-      label: "Claude CLI thinking menu",
+      label: "runtime catalog thinking menu",
     });
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });

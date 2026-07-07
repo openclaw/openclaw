@@ -11,7 +11,7 @@ type ParsedExecApprovalCommand = {
 
 export type UnsafeExecControlShellCommandKind = "approve" | "channel-login";
 
-function parseExecApprovalShellCommand(raw: string): ParsedExecApprovalCommand | null {
+export function parseExecApprovalShellCommand(raw: string): ParsedExecApprovalCommand | null {
   const normalized = raw.trimStart();
   const match = normalized.match(
     /^\/approve(?:@[^\s]+)?\s+([A-Za-z0-9][A-Za-z0-9._:-]*)\s+(allow-once|allow-always|always|deny)\b/i,

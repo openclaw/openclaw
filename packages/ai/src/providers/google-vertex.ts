@@ -19,7 +19,7 @@ import {
 } from "./google-shared.js";
 import { buildBaseOptions } from "./simple-options.js";
 
-interface GoogleVertexOptions extends GoogleProviderOptions {
+export interface GoogleVertexOptions extends GoogleProviderOptions {
   project?: string;
   location?: string;
 }

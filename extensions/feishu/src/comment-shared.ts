@@ -78,7 +78,7 @@ function formatFeishuApiFailure(
   return `${errorPrefix}: ${details || "unknown error"}`;
 }
 
-function createFeishuApiError(
+export function createFeishuApiError(
   error: unknown,
   errorPrefix: string,
   options: {

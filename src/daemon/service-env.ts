@@ -194,7 +194,6 @@ function addCommonEnvConfiguredBinDirs(
   options: Pick<MinimalServicePathOptions, "cwd" | "home">,
 ): void {
   addEnvConfiguredBinDir(dirs, env?.PNPM_HOME, options);
-  addEnvConfiguredBinDir(dirs, appendSubdir(env?.PNPM_HOME, "bin"), options);
   addEnvConfiguredBinDir(dirs, appendSubdir(env?.NPM_CONFIG_PREFIX, "bin"), options);
   addEnvConfiguredBinDir(dirs, appendSubdir(env?.BUN_INSTALL, "bin"), options);
   addEnvConfiguredBinDir(dirs, appendSubdir(env?.VOLTA_HOME, "bin"), options);
@@ -275,7 +274,7 @@ function resolveDarwinUserBinDirs(
   addEnvConfiguredBinDir(dirs, env?.NVM_DIR, pathOptions);
   // fnm: use aliases/default (not current)
   addEnvConfiguredBinDir(dirs, appendSubdir(env?.FNM_DIR, "aliases/default/bin"), pathOptions);
-  // pnpm 10 placed binaries directly in PNPM_HOME; pnpm 11 uses PNPM_HOME/bin.
+  // pnpm: binary is directly in PNPM_HOME (not in bin subdirectory)
 
   // Common user bin directories
   addCommonUserBinDirs(dirs, home, existsSync, includeMissingUserBinDefaults);
@@ -289,9 +288,7 @@ function resolveDarwinUserBinDirs(
   addExistingDir(dirs, `${home}/Library/Application Support/fnm/aliases/default/bin`, existsSync); // fnm default
   addExistingDir(dirs, `${home}/.fnm/aliases/default/bin`, existsSync); // fnm if customized to ~/.fnm
   // pnpm: macOS default is ~/Library/pnpm, not ~/.local/share/pnpm
-  addExistingDir(dirs, `${home}/Library/pnpm/bin`, existsSync); // pnpm 11 default
   addExistingDir(dirs, `${home}/Library/pnpm`, existsSync); // pnpm default
-  addExistingDir(dirs, `${home}/.local/share/pnpm/bin`, existsSync); // pnpm 11 XDG fallback
   addExistingDir(dirs, `${home}/.local/share/pnpm`, existsSync); // pnpm XDG fallback
 
   return dirs;
@@ -333,7 +330,6 @@ function resolveLinuxUserBinDirs(
   addExistingDir(dirs, `${home}/.local/share/fnm/current/bin`, existsSync); // fnm legacy current symlink
   addExistingDir(dirs, `${home}/.fnm/aliases/default/bin`, existsSync); // fnm if customized to ~/.fnm
   addExistingDir(dirs, `${home}/.fnm/current/bin`, existsSync); // fnm legacy current symlink
-  addExistingDir(dirs, `${home}/.local/share/pnpm/bin`, existsSync); // pnpm 11 global bin
   addExistingDir(dirs, `${home}/.local/share/pnpm`, existsSync); // pnpm global bin
 
   return dirs;
@@ -373,10 +369,10 @@ export function getMinimalServicePathParts(options: MinimalServicePathOptions = 
   for (const dir of extraDirs) {
     add(dir);
   }
-  for (const dir of systemDirs) {
+  for (const dir of userDirs) {
     add(dir);
   }
-  for (const dir of userDirs) {
+  for (const dir of systemDirs) {
     add(dir);
   }
 

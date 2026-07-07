@@ -306,7 +306,7 @@ function buildSecurityAuditSuppressionsActiveFinding(params: {
   };
 }
 
-function applySecurityAuditSuppressions(
+export function applySecurityAuditSuppressions(
   findings: SecurityAuditFinding[],
   suppressions: SecurityAuditSuppression[] | undefined,
 ): { findings: SecurityAuditFinding[]; suppressedFindings: SecurityAuditSuppressedFinding[] } {
@@ -1153,7 +1153,7 @@ function collectAgentSkillMcpBoundaryScopes(cfg: OpenClawConfig): AgentSkillMcpB
   });
 }
 
-async function collectAgentSkillMcpBoundaryFindings(params: {
+export async function collectAgentSkillMcpBoundaryFindings(params: {
   cfg: OpenClawConfig;
   stateDir: string;
 }): Promise<SecurityAuditFinding[]> {

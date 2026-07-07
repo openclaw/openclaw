@@ -343,6 +343,7 @@ async function resumeThreadWithOverrides(params: {
         sandbox: params.sandbox ?? runtime.sandbox,
         approvalsReviewer: runtime.approvalsReviewer,
         ...(params.serviceTier ? { serviceTier: params.serviceTier } : {}),
+        persistExtendedHistory: true,
       },
       { timeoutMs: runtime.requestTimeoutMs },
     );

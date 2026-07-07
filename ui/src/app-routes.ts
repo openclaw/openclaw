@@ -23,7 +23,7 @@ import { page as usagePage } from "./pages/usage/route.ts";
 import { page as workboardPage } from "./pages/workboard/route.ts";
 import { page as worktreesPage } from "./pages/worktrees/route.ts";
 
-type AppRouteModule = {
+export type AppRouteModule = {
   render: (data: unknown) => unknown;
 };
 
@@ -83,11 +83,13 @@ export async function startApplicationRouter(
 }
 
 export {
+  APP_ROUTE_DEFINITIONS,
   APP_ROUTE_IDS,
   inferBasePathFromPathname,
   isRouteId,
   locationForRoute,
   normalizeBasePath,
+  normalizePath,
   pathForRoute,
   routeIdFromPath,
   type RouteId,

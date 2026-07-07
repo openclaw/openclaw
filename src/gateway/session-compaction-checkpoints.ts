@@ -66,7 +66,7 @@ export type CompactionCheckpointForkedTranscript = ForkedCompactionCheckpointTra
   totalTokens?: number;
 };
 
-type CompactionCheckpointTranscriptForkResult =
+export type CompactionCheckpointTranscriptForkResult =
   | { status: "created"; transcript: CompactionCheckpointForkedTranscript }
   | { status: "missing-boundary" }
   | { status: "failed" };

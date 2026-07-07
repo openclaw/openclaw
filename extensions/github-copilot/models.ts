@@ -245,7 +245,7 @@ function asCopilotApiModelEntry(value: unknown): CopilotApiModelEntry {
   return value as CopilotApiModelEntry;
 }
 
-type FetchCopilotModelCatalogParams = {
+export type FetchCopilotModelCatalogParams = {
   /** Short-lived Copilot API token (from `resolveCopilotApiToken`). */
   copilotApiToken: string;
   /** Resolved baseUrl from the same token-exchange response. */

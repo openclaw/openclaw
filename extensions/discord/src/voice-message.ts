@@ -86,7 +86,7 @@ export type VoiceMessageMetadata = {
 /**
  * Get audio duration using ffprobe
  */
-async function getAudioDuration(filePath: string): Promise<number> {
+export async function getAudioDuration(filePath: string): Promise<number> {
   try {
     const stdout = await runFfprobe([
       "-v",
@@ -112,7 +112,7 @@ async function getAudioDuration(filePath: string): Promise<number> {
  * Generate waveform data from audio file using ffmpeg
  * Returns base64 encoded byte array of amplitude samples (0-255)
  */
-async function generateWaveform(filePath: string): Promise<string> {
+export async function generateWaveform(filePath: string): Promise<string> {
   try {
     // Extract raw PCM and sample amplitude values
     return await generateWaveformFromPcm(filePath);

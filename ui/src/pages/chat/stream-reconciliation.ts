@@ -110,10 +110,10 @@ function extractToolMessageRefs(message: unknown): ToolMessageRef[] {
   return refs;
 }
 
-type AssistantMessageVisibility = (message: unknown) => boolean;
-type StreamVisibility = (stream: string) => boolean;
+export type AssistantMessageVisibility = (message: unknown) => boolean;
+export type StreamVisibility = (stream: string) => boolean;
 
-type MaterializeVisibleStreamOptions = {
+export type MaterializeVisibleStreamOptions = {
   includeCurrent?: boolean;
   requirePersistedTool?: boolean;
   replacementMessages?: unknown[];
@@ -131,7 +131,7 @@ export function currentLiveToolCallIds(state: StreamReconciliationState): string
     : [];
 }
 
-function lastUserMessageIndex(messages: unknown[]): number {
+export function lastUserMessageIndex(messages: unknown[]): number {
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
     if (!message || typeof message !== "object") {

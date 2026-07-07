@@ -6,7 +6,7 @@ import type {
 } from "./agent-tool-result-middleware-types.js";
 import { getActivePluginRegistry } from "./runtime.js";
 
-const AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIMES = [
+export const AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIMES = [
   "openclaw",
   "codex",
 ] as const satisfies AgentToolResultMiddlewareRuntime[];

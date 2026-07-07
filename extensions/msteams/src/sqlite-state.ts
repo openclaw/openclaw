@@ -4,7 +4,7 @@ import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { getMSTeamsRuntime } from "./runtime.js";
 import { withFileLock } from "./store-fs.js";
 
-type MSTeamsSqliteStateOptions = {
+export type MSTeamsSqliteStateOptions = {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   stateDir?: string;
@@ -47,7 +47,9 @@ export function toPluginJsonValue<T>(value: T): T {
   return JSON.parse(serialized) as T;
 }
 
-function resolveMSTeamsSqliteStateDir(options: MSTeamsSqliteStateOptions | undefined): string {
+export function resolveMSTeamsSqliteStateDir(
+  options: MSTeamsSqliteStateOptions | undefined,
+): string {
   return (
     resolveStateDirOverride(options) ??
     getMSTeamsRuntime().state.resolveStateDir(options?.env ?? process.env, options?.homedir)

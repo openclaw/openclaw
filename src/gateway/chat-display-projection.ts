@@ -63,7 +63,7 @@ function truncateChatHistoryText(
 }
 
 /** Return true for known tool-call/tool-result block type spellings in transcripts. */
-function isToolHistoryBlockType(type: unknown): boolean {
+export function isToolHistoryBlockType(type: unknown): boolean {
   if (typeof type !== "string") {
     return false;
   }

@@ -4,7 +4,7 @@
 import { pathToFileURL } from "node:url";
 import { writePackageDistInventory } from "../src/infra/package-dist-inventory.ts";
 
-async function writeCurrentPackageDistInventory(): Promise<void> {
+export async function writeCurrentPackageDistInventory(): Promise<void> {
   await writePackageDistInventory(process.cwd());
 }
 

@@ -486,7 +486,7 @@ function resolveTsdownEnv(env, params = {}) {
   };
 }
 
-function tsdownBuildUsage() {
+export function tsdownBuildUsage() {
   return [
     "Usage: node scripts/tsdown-build.mjs [tsdown args...]",
     "",

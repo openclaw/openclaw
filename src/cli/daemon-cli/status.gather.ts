@@ -733,17 +733,8 @@ export async function gatherDaemonStatus(
     : undefined;
 
   let lastError: string | undefined;
-  if (
-    shouldInspectLocalGateway &&
-    loaded &&
-    runtime?.status === "running" &&
-    portStatus &&
-    (portStatus.status !== "busy" || rpc?.ok === false)
-  ) {
-    lastError =
-      (await readLastGatewayErrorLine(mergedDaemonEnv as NodeJS.ProcessEnv, {
-        requirePatternMatch: portStatus.status === "busy",
-      })) ?? undefined;
+  if (loaded && runtime?.status === "running" && portStatus && portStatus.status !== "busy") {
+    lastError = (await readLastGatewayErrorLine(mergedDaemonEnv as NodeJS.ProcessEnv)) ?? undefined;
   }
 
   // Plugin version drift detection.

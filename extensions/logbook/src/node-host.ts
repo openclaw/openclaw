@@ -10,13 +10,13 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 const execFileAsync = promisify(execFile);
 
-type LogbookSnapshotParams = {
+export type LogbookSnapshotParams = {
   screenIndex?: number;
   maxWidth?: number;
   quality?: number;
 };
 
-type LogbookSnapshotPayload = { format: "jpeg"; base64: string } | { error: string };
+export type LogbookSnapshotPayload = { format: "jpeg"; base64: string } | { error: string };
 
 function readParams(value: unknown): LogbookSnapshotParams {
   if (!value || typeof value !== "object") {

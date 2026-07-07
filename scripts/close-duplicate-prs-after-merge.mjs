@@ -149,7 +149,7 @@ export function parseUnifiedDiffRanges(diffText) {
 /**
  * Reports whether two PR diffs touch overlapping hunks.
  */
-function hasOverlappingHunks(leftRanges, rightRanges) {
+export function hasOverlappingHunks(leftRanges, rightRanges) {
   for (const [path, left] of leftRanges) {
     const right = rightRanges.get(path) ?? [];
     for (const leftRange of left) {

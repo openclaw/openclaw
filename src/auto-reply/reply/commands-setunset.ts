@@ -3,7 +3,7 @@ import { parseSlashCommandOrNull } from "./commands-slash-parse.js";
 import { parseConfigValue } from "./config-value.js";
 
 /** Parsed set/unset action or a user-facing parse error. */
-type SetUnsetParseResult =
+export type SetUnsetParseResult =
   | { kind: "set"; path: string; value: unknown }
   | { kind: "unset"; path: string }
   | { kind: "error"; message: string };

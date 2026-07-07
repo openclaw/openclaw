@@ -276,7 +276,7 @@ export function createCronRunDiagnosticsFromMissingWebSearchProvider(params: {
 }
 
 /** Extracts failed exec details from tool metadata into cron diagnostics. */
-function createCronRunDiagnosticsFromExecDetails(
+export function createCronRunDiagnosticsFromExecDetails(
   details: unknown,
   opts?: {
     nowMs?: () => number;
@@ -318,7 +318,7 @@ function createCronRunDiagnosticsFromExecDetails(
 }
 
 /** Extracts tool-call failure diagnostics from an agent reply payload. */
-function createCronRunDiagnosticsFromToolPayload(
+export function createCronRunDiagnosticsFromToolPayload(
   payload: unknown,
   opts?: { nowMs?: () => number; finalStatus?: "ok" | "error" | "skipped" },
 ): CronRunDiagnostics | undefined {

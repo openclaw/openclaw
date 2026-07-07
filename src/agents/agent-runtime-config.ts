@@ -1,22 +1,15 @@
 /** Resolves agent runtime config, including SecretRef materialization for agent command use. */
-import {
-  getAgentRuntimeCommandSecretTargetIds,
-  getScopedChannelsCommandSecretTargets,
-} from "../cli/command-secret-targets.js";
+import { getAgentRuntimeCommandSecretTargetIds } from "../cli/command-secret-targets.js";
 import { getRuntimeConfig, readConfigFileSnapshotForWrite } from "../config/io.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { discoverConfigSecretTargetsByIds } from "../secrets/target-registry.js";
 
 /** Loads runtime/source config and resolves command SecretRefs when the agent path needs them. */
 export async function resolveAgentRuntimeConfig(
   runtime: RuntimeEnv,
-  params?: {
-    runtimeTargetsChannelSecrets?: boolean;
-    runtimeChannelSecretScope?: { channel: string; accountId?: string };
-  },
+  params?: { runtimeTargetsChannelSecrets?: boolean },
 ): Promise<{
   loadedRaw: OpenClawConfig;
   sourceConfig: OpenClawConfig;
@@ -24,11 +17,9 @@ export async function resolveAgentRuntimeConfig(
 }> {
   const loadedRaw = getRuntimeConfig();
   const includeChannelTargets = params?.runtimeTargetsChannelSecrets === true;
-  const channelSecretScope = params?.runtimeChannelSecretScope;
   const hasRuntimeSecretRefs = hasAgentRuntimeSecretRefs({
     config: loadedRaw,
     includeChannelTargets,
-    channel: channelSecretScope?.channel,
   });
   const sourceConfig = await (async () => {
     try {
@@ -42,26 +33,18 @@ export async function resolveAgentRuntimeConfig(
     return loadedRaw;
   })();
   const cfg = hasRuntimeSecretRefs
-    ? await (async () => {
-        const runtimeSecretTargets = resolveAgentRuntimeSecretTargets({
+    ? (
+        await (
+          await import("../cli/command-config-resolution.runtime.js")
+        ).resolveCommandConfigWithSecrets({
           config: loadedRaw,
-          includeChannelTargets,
-          channelSecretScope,
-        });
-        return (
-          await (
-            await import("../cli/command-config-resolution.runtime.js")
-          ).resolveCommandConfigWithSecrets({
-            config: loadedRaw,
-            commandName: "agent",
-            targetIds: runtimeSecretTargets.targetIds,
-            ...(runtimeSecretTargets.allowedPaths
-              ? { allowedPaths: runtimeSecretTargets.allowedPaths }
-              : {}),
-            runtime,
-          })
-        ).resolvedConfig;
-      })()
+          commandName: "agent",
+          targetIds: getAgentRuntimeCommandSecretTargetIds({
+            includeChannelTargets,
+          }),
+          runtime,
+        })
+      ).resolvedConfig
     : loadedRaw;
   setRuntimeConfigSnapshot(cfg, sourceConfig);
   return { loadedRaw, sourceConfig, cfg };
@@ -83,7 +66,6 @@ function hasNestedSecretRef(value: unknown): boolean {
 function hasAgentRuntimeSecretRefs(params: {
   config: OpenClawConfig;
   includeChannelTargets: boolean;
-  channel?: string;
 }): boolean {
   const { config } = params;
   if (hasNestedSecretRef(config.models?.providers)) {
@@ -118,46 +100,5 @@ function hasAgentRuntimeSecretRefs(params: {
   ) {
     return true;
   }
-  if (params.includeChannelTargets) {
-    return hasNestedSecretRef(config.channels);
-  }
-  if (!params.channel) {
-    return false;
-  }
-  return hasNestedSecretRef(
-    (config.channels as Record<string, unknown> | undefined)?.[params.channel],
-  );
-}
-
-function resolveAgentRuntimeSecretTargets(params: {
-  config: OpenClawConfig;
-  includeChannelTargets: boolean;
-  channelSecretScope?: { channel: string; accountId?: string };
-}): { targetIds: Set<string>; allowedPaths?: Set<string> } {
-  const baseTargetIds = getAgentRuntimeCommandSecretTargetIds({
-    includeChannelTargets: params.includeChannelTargets,
-  });
-  if (params.includeChannelTargets || !params.channelSecretScope) {
-    return { targetIds: baseTargetIds };
-  }
-  const channelTargets = getScopedChannelsCommandSecretTargets({
-    config: params.config,
-    channel: params.channelSecretScope.channel,
-    accountId: params.channelSecretScope.accountId,
-    defaultAccountWhenMissing: true,
-  });
-  const targetIds = new Set(baseTargetIds);
-  for (const targetId of channelTargets.targetIds) {
-    targetIds.add(targetId);
-  }
-  if (!channelTargets.allowedPaths) {
-    return { targetIds };
-  }
-
-  // Account scoping must not exclude the agent's model/tool secrets from the same resolution.
-  const allowedPaths = new Set(channelTargets.allowedPaths);
-  for (const target of discoverConfigSecretTargetsByIds(params.config, baseTargetIds)) {
-    allowedPaths.add(target.path);
-  }
-  return { targetIds, allowedPaths };
+  return params.includeChannelTargets ? hasNestedSecretRef(config.channels) : false;
 }

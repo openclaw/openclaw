@@ -325,10 +325,10 @@ export type QaNativeCoverageEvidenceKind = "script" | "vitest" | "playwright";
 export type QaScorecardEvidenceKind = QaNativeCoverageEvidenceKind | "qa-scenario";
 export type QaScorecardEvidenceMode = z.infer<typeof qaScorecardEvidenceModeSchema>;
 export type QaScorecardChannelDriver = z.infer<typeof qaScorecardChannelDriverSchema>;
-type QaMaturityScoreKey = (typeof QA_MATURITY_SCORE_KEYS)[number];
+export type QaMaturityScoreKey = (typeof QA_MATURITY_SCORE_KEYS)[number];
 export type QaMaturityScoreObject = z.infer<typeof qaMaturityScoreObjectSchema>;
 export type QaMaturityScoreSurfaceLts = z.infer<typeof qaMaturityScoreSurfaceLtsSchema>;
-type QaMaturityScoreCategory = z.infer<typeof qaMaturityScoreCategorySchema>;
+export type QaMaturityScoreCategory = z.infer<typeof qaMaturityScoreCategorySchema>;
 export type QaMaturityScoreSurface = z.infer<typeof qaMaturityScoreSurfaceSchema>;
 export type QaMaturityScores = z.infer<typeof qaMaturityScoresSchema>;
 export type QaMaturityTaxonomyLevel = z.infer<typeof qaMaturityLevelSchema>;
@@ -456,7 +456,7 @@ function formatZodIssuePath(pathLocal: PropertyKey[]) {
   return pathLocal.length ? pathLocal.map(String).join(".") : "<root>";
 }
 
-function parseQaMaturityTaxonomy(value: unknown, label = QA_MATURITY_TAXONOMY_PATH) {
+export function parseQaMaturityTaxonomy(value: unknown, label = QA_MATURITY_TAXONOMY_PATH) {
   const parsed = qaMaturityTaxonomySchema.safeParse(value);
   if (parsed.success) {
     return parsed.data;
@@ -467,7 +467,7 @@ function parseQaMaturityTaxonomy(value: unknown, label = QA_MATURITY_TAXONOMY_PA
   throw new Error(`${label}: ${issues}`);
 }
 
-function parseQaMaturityScores(value: unknown, label = QA_MATURITY_SCORES_PATH) {
+export function parseQaMaturityScores(value: unknown, label = QA_MATURITY_SCORES_PATH) {
   const parsed = qaMaturityScoresSchema.safeParse(value);
   if (parsed.success) {
     return parsed.data;
@@ -574,7 +574,7 @@ export function activeQaMaturityTaxonomySurfaces(taxonomy: QaMaturityTaxonomy) {
   return taxonomy.surfaces.filter((surface) => !surface.archived);
 }
 
-function buildQaMaturityTaxonomyCategoryIndex(
+export function buildQaMaturityTaxonomyCategoryIndex(
   taxonomy: QaMaturityTaxonomy,
 ): QaMaturityTaxonomyCategoryIndex {
   const active = activeQaMaturityTaxonomySurfaces(taxonomy);
@@ -639,7 +639,7 @@ function expectedMaturitySurfaceLtsStatus(supportedCategories: number, totalCate
   return supportedCategories === totalCategories ? "full" : "partial";
 }
 
-function validateQaMaturityScoresAgainstTaxonomy(params: {
+export function validateQaMaturityScoresAgainstTaxonomy(params: {
   coverageScores?: QaMaturityCoverageScores;
   scores: QaMaturityScores;
   taxonomy: QaMaturityTaxonomy;

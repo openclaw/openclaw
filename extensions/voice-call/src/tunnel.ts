@@ -1,5 +1,5 @@
 // Voice Call plugin module implements tunnel behavior.
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn } from "node:child_process";
 import {
   appendBoundedChildOutput,
   emptyBoundedChildOutput,
@@ -8,16 +8,6 @@ import {
 import { getTailscaleDnsName } from "./webhook/tailscale.js";
 
 const NGROK_LOG_BUFFER_MAX_CHARS = 16_384;
-
-function listenForChildStreamErrors(
-  proc: Pick<ChildProcessWithoutNullStreams, "stdout" | "stderr">,
-  onError: (stream: "stdout" | "stderr", error: Error) => void,
-): void {
-  // Keep both listeners for the child lifetime: a late unhandled stream error
-  // would otherwise escape after the startup promise has already settled.
-  proc.stdout.on("error", (error) => onError("stdout", error));
-  proc.stderr.on("error", (error) => onError("stderr", error));
-}
 
 /**
  * Tunnel configuration for exposing the webhook server.
@@ -82,7 +72,6 @@ export async function startNgrokTunnel(config: {
     });
 
     let resolved = false;
-    let closed = false;
     let publicUrl: string | null = null;
     let outputBuffer = "";
 
@@ -93,17 +82,6 @@ export async function startNgrokTunnel(config: {
         reject(new Error("ngrok startup timed out (30s)"));
       }
     }, 30000);
-
-    const rejectIfPending = (message: string, kill = false) => {
-      if (!resolved) {
-        resolved = true;
-        clearTimeout(timeout);
-        if (kill && !closed) {
-          proc.kill("SIGKILL");
-        }
-        reject(new Error(message));
-      }
-    };
 
     const processLine = (line: string) => {
       try {
@@ -133,30 +111,10 @@ export async function startNgrokTunnel(config: {
             publicUrl: fullUrl,
             provider: "ngrok",
             stop: async () => {
-              if (closed) {
-                return;
-              }
+              proc.kill("SIGTERM");
               await new Promise<void>((res) => {
-                let finished = false;
-                const finish = () => {
-                  if (finished) {
-                    return;
-                  }
-                  finished = true;
-                  clearTimeout(fallback);
-                  proc.off("close", finish);
-                  res();
-                };
-                if (closed) {
-                  res();
-                  return;
-                }
-                proc.once("close", finish);
-                const fallback = setTimeout(finish, 2000);
-                proc.kill("SIGTERM");
-                if (closed) {
-                  finish();
-                }
+                proc.on("close", () => res());
+                setTimeout(res, 2000); // Fallback timeout
               });
             },
           });
@@ -179,28 +137,29 @@ export async function startNgrokTunnel(config: {
         }
       }
     });
+
     proc.stderr.on("data", (data: Buffer) => {
       const msg = data.toString();
       // Check for common errors
       if (msg.includes("ERR_NGROK")) {
-        rejectIfPending(
-          `ngrok error: ${formatBoundedChildOutput(
-            appendBoundedChildOutput(emptyBoundedChildOutput(), msg),
-          )}`,
-          true,
-        );
+        if (!resolved) {
+          resolved = true;
+          clearTimeout(timeout);
+          const output = appendBoundedChildOutput(emptyBoundedChildOutput(), msg);
+          reject(new Error(`ngrok error: ${formatBoundedChildOutput(output)}`));
+        }
       }
-    });
-    listenForChildStreamErrors(proc, (stream, error) => {
-      rejectIfPending(`ngrok ${stream} error: ${error.message}`, true);
     });
 
     proc.on("error", (err) => {
-      rejectIfPending(`Failed to start ngrok: ${err.message}`);
+      if (!resolved) {
+        resolved = true;
+        clearTimeout(timeout);
+        reject(new Error(`Failed to start ngrok: ${err.message}`));
+      }
     });
 
     proc.on("close", (code) => {
-      closed = true;
       if (!resolved) {
         resolved = true;
         clearTimeout(timeout);
@@ -221,18 +180,6 @@ async function runNgrokCommand(args: string[]): Promise<string> {
 
     let stdout = emptyBoundedChildOutput();
     let stderr = emptyBoundedChildOutput();
-    let settled = false;
-
-    const rejectIfPending = (error: Error, kill = false) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (kill) {
-        proc.kill("SIGKILL");
-      }
-      reject(error);
-    };
 
     proc.stdout.on("data", (data) => {
       stdout = appendBoundedChildOutput(stdout, data.toString());
@@ -240,15 +187,8 @@ async function runNgrokCommand(args: string[]): Promise<string> {
     proc.stderr.on("data", (data) => {
       stderr = appendBoundedChildOutput(stderr, data.toString());
     });
-    listenForChildStreamErrors(proc, (stream, error) => {
-      rejectIfPending(new Error(`ngrok command ${stream} error: ${error.message}`), true);
-    });
 
     proc.on("close", (code) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
       if (code === 0) {
         resolve(stdout.text);
       } else {
@@ -257,7 +197,7 @@ async function runNgrokCommand(args: string[]): Promise<string> {
       }
     });
 
-    proc.on("error", (error) => rejectIfPending(error));
+    proc.on("error", reject);
   });
 }
 
@@ -282,24 +222,12 @@ export async function startTailscaleTunnel(config: {
     const proc = spawn("tailscale", [config.mode, "--bg", "--yes", "--set-path", path, localUrl], {
       stdio: ["ignore", "pipe", "pipe"],
     });
-    let resolved = false;
     let stdout = emptyBoundedChildOutput();
     let stderr = emptyBoundedChildOutput();
 
-    const rejectIfPending = (error: Error, kill = false) => {
-      if (resolved) {
-        return;
-      }
-      resolved = true;
-      clearTimeout(timeout);
-      if (kill) {
-        proc.kill("SIGKILL");
-      }
-      reject(error);
-    };
-
     const timeout = setTimeout(() => {
-      rejectIfPending(new Error(`Tailscale ${config.mode} timed out`), true);
+      proc.kill("SIGKILL");
+      reject(new Error(`Tailscale ${config.mode} timed out`));
     }, 10000);
 
     proc.stdout.on("data", (data) => {
@@ -308,19 +236,9 @@ export async function startTailscaleTunnel(config: {
     proc.stderr.on("data", (data) => {
       stderr = appendBoundedChildOutput(stderr, data.toString());
     });
-    listenForChildStreamErrors(proc, (stream, error) => {
-      rejectIfPending(
-        new Error(`Tailscale ${config.mode} ${stream} error: ${error.message}`),
-        true,
-      );
-    });
 
     proc.on("close", (code) => {
       clearTimeout(timeout);
-      if (resolved) {
-        return;
-      }
-      resolved = true;
       if (code === 0) {
         const publicUrl = `https://${dnsName}${path}`;
         console.log(`[voice-call] Tailscale ${config.mode} active: ${publicUrl}`);
@@ -340,7 +258,8 @@ export async function startTailscaleTunnel(config: {
     });
 
     proc.on("error", (err) => {
-      rejectIfPending(err);
+      clearTimeout(timeout);
+      reject(err);
     });
   });
 }

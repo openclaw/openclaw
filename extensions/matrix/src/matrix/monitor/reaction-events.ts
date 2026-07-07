@@ -22,9 +22,9 @@ const loadExecApprovalResolver = createLazyRuntimeModule(
   () => import("../../exec-approval-resolver.js"),
 );
 
-type MatrixReactionNotificationMode = "off" | "own";
+export type MatrixReactionNotificationMode = "off" | "own";
 
-function resolveMatrixReactionNotificationMode(params: {
+export function resolveMatrixReactionNotificationMode(params: {
   cfg: CoreConfig;
   accountId: string;
 }): MatrixReactionNotificationMode {

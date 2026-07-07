@@ -101,7 +101,6 @@ function compactCronListJob(job: CronJob) {
     enabled: job.enabled,
     nextRunAtMs: job.state.nextRunAtMs ?? null,
     scheduleKind: job.schedule.kind,
-    ...(job.trigger ? { trigger: true } : {}),
     lastRunAtMs: job.state.lastRunAtMs ?? null,
     lastRunStatus: job.state.lastRunStatus ?? job.state.lastStatus ?? null,
     lastRunError: job.state.lastError ?? null,
@@ -190,7 +189,6 @@ async function assertValidCronUpdatePatch(params: {
   const nextJob = structuredClone(params.currentJob);
   applyJobPatch(nextJob, params.patch, {
     defaultAgentId: params.defaultAgentId,
-    cronConfig: params.cfg.cron,
   });
   if ("delivery" in params.patch) {
     const delivery =

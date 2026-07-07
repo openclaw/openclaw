@@ -1,5 +1,4 @@
 // Slack plugin module implements channel type behavior.
-import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -14,26 +13,7 @@ export type SlackConversationInfo = {
   user?: string;
 };
 
-const SLACK_CONVERSATION_INFO_CACHE_MAX_ENTRIES = 1024;
 const SLACK_CONVERSATION_INFO_CACHE = new Map<string, SlackConversationInfo>();
-
-function getCachedSlackConversationInfo(cacheKey: string): SlackConversationInfo | undefined {
-  const cached = SLACK_CONVERSATION_INFO_CACHE.get(cacheKey);
-  if (cached) {
-    SLACK_CONVERSATION_INFO_CACHE.delete(cacheKey);
-    SLACK_CONVERSATION_INFO_CACHE.set(cacheKey, cached);
-  }
-  return cached;
-}
-
-function setCachedSlackConversationInfo(
-  cacheKey: string,
-  conversationInfo: SlackConversationInfo,
-): void {
-  SLACK_CONVERSATION_INFO_CACHE.delete(cacheKey);
-  SLACK_CONVERSATION_INFO_CACHE.set(cacheKey, conversationInfo);
-  pruneMapToMaxSize(SLACK_CONVERSATION_INFO_CACHE, SLACK_CONVERSATION_INFO_CACHE_MAX_ENTRIES);
-}
 
 export async function resolveSlackConversationInfo(params: {
   cfg: OpenClawConfig;
@@ -46,7 +26,7 @@ export async function resolveSlackConversationInfo(params: {
   }
   const account = resolveSlackAccount({ cfg: params.cfg, accountId: params.accountId });
   const cacheKey = `${account.accountId}:${channelId}`;
-  const cached = getCachedSlackConversationInfo(cacheKey);
+  const cached = SLACK_CONVERSATION_INFO_CACHE.get(cacheKey);
   if (cached) {
     return cached;
   }
@@ -62,7 +42,7 @@ export async function resolveSlackConversationInfo(params: {
       groupChannels.includes(`mpim:${channelIdLower}`))
   ) {
     const result = { type: "group" } as const;
-    setCachedSlackConversationInfo(cacheKey, result);
+    SLACK_CONVERSATION_INFO_CACHE.set(cacheKey, result);
     return result;
   }
 
@@ -79,7 +59,7 @@ export async function resolveSlackConversationInfo(params: {
     })
   ) {
     const result = { type: "channel" } as const;
-    setCachedSlackConversationInfo(cacheKey, result);
+    SLACK_CONVERSATION_INFO_CACHE.set(cacheKey, result);
     return result;
   }
 
@@ -90,7 +70,7 @@ export async function resolveSlackConversationInfo(params: {
   if (!token) {
     const result = { type: isNativeImChannel ? "dm" : "unknown" } as const;
     if (!isNativeImChannel) {
-      setCachedSlackConversationInfo(cacheKey, result);
+      SLACK_CONVERSATION_INFO_CACHE.set(cacheKey, result);
     }
     return result;
   }
@@ -109,7 +89,7 @@ export async function resolveSlackConversationInfo(params: {
           : undefined;
       const result: SlackConversationInfo = user ? { type: "dm", user } : { type: "dm" };
       if (user) {
-        setCachedSlackConversationInfo(cacheKey, result);
+        SLACK_CONVERSATION_INFO_CACHE.set(cacheKey, result);
       }
       return result;
     }
@@ -117,12 +97,12 @@ export async function resolveSlackConversationInfo(params: {
     const channel = info.channel as { is_im?: boolean; is_mpim?: boolean } | undefined;
     const type = channel?.is_im ? "dm" : channel?.is_mpim ? "group" : "channel";
     const result = { type } as const;
-    setCachedSlackConversationInfo(cacheKey, result);
+    SLACK_CONVERSATION_INFO_CACHE.set(cacheKey, result);
     return result;
   } catch {
     const result = { type: isNativeImChannel ? "dm" : "unknown" } as const;
     if (!isNativeImChannel) {
-      setCachedSlackConversationInfo(cacheKey, result);
+      SLACK_CONVERSATION_INFO_CACHE.set(cacheKey, result);
     }
     return result;
   }

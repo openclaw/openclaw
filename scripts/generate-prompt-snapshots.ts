@@ -116,7 +116,7 @@ async function checkSnapshots() {
   console.log(`Prompt snapshots are current (${files.length} files).`);
 }
 
-async function runPromptSnapshotGenerator(argv = process.argv.slice(2)) {
+export async function runPromptSnapshotGenerator(argv = process.argv.slice(2)) {
   const mode = argv.includes("--write") ? "write" : argv.includes("--check") ? "check" : undefined;
 
   if (!mode) {

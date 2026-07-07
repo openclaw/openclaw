@@ -109,7 +109,7 @@ function readStableReleases(file, publishedVersions) {
 /**
  * Expands the release-history token into recent stable plus pinned historical baselines.
  */
-function resolveReleaseHistory(args) {
+export function resolveReleaseHistory(args) {
   const releasesJson = args.get("releases-json");
   if (!releasesJson) {
     throw new Error("--releases-json is required when requested baselines include release-history");
@@ -136,7 +136,7 @@ function resolveReleaseHistory(args) {
 /**
  * Resolves the last N stable release versions from release metadata.
  */
-function resolveLastStable(args, count) {
+export function resolveLastStable(args, count) {
   const releasesJson = args.get("releases-json");
   if (!releasesJson) {
     throw new Error("--releases-json is required when requested baselines include last-stable-*");
@@ -152,7 +152,7 @@ function resolveLastStable(args, count) {
 /**
  * Resolves all stable release versions at or after the requested minimum.
  */
-function resolveAllSince(args, minimumVersion) {
+export function resolveAllSince(args, minimumVersion) {
   const releasesJson = args.get("releases-json");
   if (!releasesJson) {
     throw new Error("--releases-json is required when requested baselines include all-since-*");

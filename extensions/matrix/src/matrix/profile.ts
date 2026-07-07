@@ -5,7 +5,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MatrixClient } from "./sdk.js";
 
-const MATRIX_PROFILE_AVATAR_MAX_BYTES = 10 * 1024 * 1024;
+export const MATRIX_PROFILE_AVATAR_MAX_BYTES = 10 * 1024 * 1024;
 
 type MatrixProfileClient = Pick<
   MatrixClient,
@@ -27,11 +27,11 @@ export type MatrixProfileSyncResult = {
   convertedAvatarFromHttp: boolean;
 };
 
-function isMatrixMxcUri(value: string): boolean {
+export function isMatrixMxcUri(value: string): boolean {
   return normalizeLowercaseStringOrEmpty(normalizeOptionalString(value)).startsWith("mxc://");
 }
 
-function isMatrixHttpAvatarUri(value: string): boolean {
+export function isMatrixHttpAvatarUri(value: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(normalizeOptionalString(value));
   return normalized.startsWith("https://") || normalized.startsWith("http://");
 }

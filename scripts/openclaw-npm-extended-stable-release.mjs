@@ -72,18 +72,8 @@ export function validateNpmPublishBoundary(
 export function validateExtendedStableNpmReleaseRequest(request) {
   const bypassExtendedStableGuard = request.bypassExtendedStableGuard ?? false;
   requireExtendedStableBypassTag(request.npmDistTag, bypassExtendedStableGuard);
-  const shaPreflight =
-    request.preflightOnly === true && /^[0-9a-f]{40}$/iu.test(request.releaseTag);
-  if (
-    shaPreflight &&
-    request.checkoutSha &&
-    request.releaseTag.toLowerCase() !== request.checkoutSha.toLowerCase()
-  ) {
-    throw new Error("Validation-only SHA must match the checked-out commit exactly.");
-  }
-  const effectiveReleaseTag = shaPreflight ? `v${request.packageVersion}` : request.releaseTag;
-  const taggedVersion = effectiveReleaseTag.startsWith("v")
-    ? parseReleaseVersion(effectiveReleaseTag.slice(1))
+  const taggedVersion = request.releaseTag.startsWith("v")
+    ? parseReleaseVersion(request.releaseTag.slice(1))
     : null;
 
   if (request.npmDistTag !== "extended-stable") {
@@ -99,7 +89,7 @@ export function validateExtendedStableNpmReleaseRequest(request) {
 
   if (
     taggedVersion === null ||
-    effectiveReleaseTag !== `v${taggedVersion.version}` ||
+    request.releaseTag !== `v${taggedVersion.version}` ||
     taggedVersion.channel !== "stable"
   ) {
     throw new Error(
@@ -304,11 +294,9 @@ function validateRequestFromRepository() {
   const npmDistTag = process.env.RELEASE_NPM_DIST_TAG ?? "";
   const releaseTag = process.env.RELEASE_TAG ?? "";
   const npmWorkflowRef = process.env.NPM_WORKFLOW_REF ?? "";
-  const preflightOnly = process.env.PREFLIGHT_ONLY === "true";
   const bypassExtendedStableGuard = parseExtendedStableGuardBypass(
     process.env.BYPASS_EXTENDED_STABLE_GUARD ?? "",
   );
-  const packageVersion = JSON.parse(readFileSync("package.json", "utf8")).version;
   if (npmDistTag !== "extended-stable") {
     return validateExtendedStableNpmReleaseRequest({
       bypassExtendedStableGuard,
@@ -318,59 +306,26 @@ function validateRequestFromRepository() {
       checkoutSha: "",
       tagSha: "",
       extendedStableBranchSha: "",
-      packageVersion,
+      packageVersion: JSON.parse(readFileSync("package.json", "utf8")).version,
       mainPackageVersion: "",
     });
   }
 
-  const shaPreflight = preflightOnly && /^[0-9a-f]{40}$/iu.test(releaseTag);
-  const effectiveReleaseTag = shaPreflight ? `v${packageVersion}` : releaseTag;
-  const parsed = effectiveReleaseTag.startsWith("v")
-    ? parseReleaseVersion(effectiveReleaseTag.slice(1))
-    : null;
+  const parsed = releaseTag.startsWith("v") ? parseReleaseVersion(releaseTag.slice(1)) : null;
   if (!parsed || parsed.channel !== "stable" || parsed.correctionNumber !== undefined) {
     return validateExtendedStableNpmReleaseRequest({
       npmDistTag,
       bypassExtendedStableGuard,
       releaseTag,
-      preflightOnly,
       npmWorkflowRef,
       checkoutSha: "",
       tagSha: "",
       extendedStableBranchSha: "",
-      packageVersion,
+      packageVersion: JSON.parse(readFileSync("package.json", "utf8")).version,
       mainPackageVersion: "",
     });
   }
   const extendedStableBranch = `extended-stable/${parsed.year}.${parsed.month}.33`;
-  if (shaPreflight) {
-    execFileSync(
-      "git",
-      [
-        "fetch",
-        "--no-tags",
-        "origin",
-        `+refs/heads/${extendedStableBranch}:refs/remotes/origin/${extendedStableBranch}`,
-        ...(bypassExtendedStableGuard ? [] : ["+refs/heads/main:refs/remotes/origin/main"]),
-      ],
-      { stdio: "inherit" },
-    );
-    const checkoutSha = git(["rev-parse", "HEAD"]);
-    return validateExtendedStableNpmReleaseRequest({
-      npmDistTag,
-      bypassExtendedStableGuard,
-      releaseTag,
-      preflightOnly,
-      npmWorkflowRef,
-      checkoutSha,
-      tagSha: checkoutSha,
-      extendedStableBranchSha: git(["rev-parse", `refs/remotes/origin/${extendedStableBranch}`]),
-      packageVersion,
-      mainPackageVersion: bypassExtendedStableGuard
-        ? ""
-        : packageVersionAt("refs/remotes/origin/main"),
-    });
-  }
   if (bypassExtendedStableGuard) {
     execFileSync(
       "git",
@@ -395,7 +350,7 @@ function validateRequestFromRepository() {
       checkoutSha: git(["rev-parse", "HEAD"]),
       tagSha: git(["rev-parse", `${releaseTag}^{commit}`]),
       extendedStableBranchSha: git(["rev-parse", `refs/remotes/origin/${extendedStableBranch}`]),
-      packageVersion,
+      packageVersion: JSON.parse(readFileSync("package.json", "utf8")).version,
       mainPackageVersion: "",
     });
   }
@@ -423,7 +378,7 @@ function validateRequestFromRepository() {
     checkoutSha: git(["rev-parse", "HEAD"]),
     tagSha: git(["rev-parse", `${releaseTag}^{commit}`]),
     extendedStableBranchSha: git(["rev-parse", `refs/remotes/origin/${extendedStableBranch}`]),
-    packageVersion,
+    packageVersion: JSON.parse(readFileSync("package.json", "utf8")).version,
     mainPackageVersion: packageVersionAt("refs/remotes/origin/main"),
   });
 }

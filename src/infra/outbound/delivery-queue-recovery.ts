@@ -12,9 +12,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   claimRecoveryEntry as claimSharedRecoveryEntry,
   computeBackoffMs,
-  createRecoveryReplayPacer,
   getErrnoCode,
-  isPreConnectNetworkError,
   releaseRecoveryEntry as releaseSharedRecoveryEntry,
 } from "../delivery-recovery.shared.js";
 import { formatErrorMessage } from "../errors.js";
@@ -32,7 +30,6 @@ import {
   ackDelivery,
   failDelivery,
   failDeliveryAfterPlatformSend,
-  failDeliveryBeforePlatformSend,
   loadPendingDelivery,
   loadPendingDeliveries,
   markDeliveryPlatformOutcomeUnknown,
@@ -96,7 +93,6 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
 
 const drainInProgress = new Map<string, boolean>();
 const entriesInProgress = new Set<string>();
-const recoveryReplayPacer = createRecoveryReplayPacer();
 
 function resolveRecoveryDeadlineMs(maxRecoveryMs: number | undefined): number {
   const durationMs =
@@ -508,12 +504,11 @@ async function drainQueuedEntry(opts: {
     if (results.length > 0) {
       deliveredResults = [...results];
     }
-    const failedOutcomes = payloadOutcomes.filter((outcome) => outcome.status === "failed");
-    const failedOutcome = failedOutcomes[0];
+    const failedOutcome = payloadOutcomes.find((outcome) => outcome.status === "failed");
     if (failedOutcome) {
       const errMsg = formatErrorMessage(failedOutcome.error);
       opts.onFailed?.(entry, errMsg);
-      if (results.length > 0 || failedOutcomes.some((outcome) => outcome.sentBeforeError)) {
+      if (results.length > 0 || failedOutcome.sentBeforeError) {
         postSendState ??= await persistRecoveredPostSendState({
           entry,
           log: opts.log,
@@ -526,12 +521,7 @@ async function drainQueuedEntry(opts: {
           await runCommitHooksAfterAck();
         }
       } else {
-        const recordFailure = failedOutcomes.every((outcome) =>
-          isPreConnectNetworkError(outcome.error),
-        )
-          ? failDeliveryBeforePlatformSend
-          : failDelivery;
-        await recordFailure(entry.id, errMsg, opts.stateDir);
+        await failDelivery(entry.id, errMsg, opts.stateDir);
       }
       return "failed";
     }
@@ -609,10 +599,7 @@ async function drainQueuedEntry(opts: {
       }
     } else {
       try {
-        const recordFailure = isPreConnectNetworkError(err)
-          ? failDeliveryBeforePlatformSend
-          : failDelivery;
-        await recordFailure(entry.id, errMsg, opts.stateDir);
+        await failDelivery(entry.id, errMsg, opts.stateDir);
         return "failed";
       } catch (failErr) {
         if (getErrnoCode(failErr) === "ENOENT") {
@@ -698,8 +685,6 @@ export async function drainPendingDeliveries(opts: {
             continue;
           }
         }
-
-        await recoveryReplayPacer.wait();
 
         const result = await drainQueuedEntry({
           entry: currentEntry,
@@ -791,12 +776,6 @@ export async function recoverPendingDeliveries(opts: {
           `Delivery ${currentEntry.id} not ready for retry yet — backoff ${currentRetryEligibility.remainingBackoffMs}ms remaining`,
         );
         continue;
-      }
-
-      const paceResult = await recoveryReplayPacer.wait(deadline);
-      if (paceResult === "deadline-exceeded") {
-        opts.log.warn(`Recovery time budget exceeded — remaining entries deferred to next startup`);
-        break;
       }
 
       const result = await drainQueuedEntry({

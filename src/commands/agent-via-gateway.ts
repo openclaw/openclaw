@@ -17,6 +17,7 @@ import {
   readGatewayDispatchConfigWithShellEnvFallback,
 } from "../config/gateway-dispatch-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createAbortError } from "../infra/abort-signal.js";
 import {
   callGateway,
   isGatewayCredentialsRequiredError,
@@ -27,7 +28,6 @@ import {
 } from "../gateway/call.js";
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
-import { createAbortError } from "../infra/abort-signal.js";
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import {
@@ -709,20 +709,9 @@ async function agentViaGatewayCommand(
   }
   const timeoutSeconds = parseTimeoutSeconds({ cfg, timeout: opts.timeout });
   const gatewayTimeoutMs = resolveGatewayAgentTimeoutMs(timeoutSeconds);
-  const channel = normalizeMessageChannel(opts.channel);
-  const deferExplicitRecipientSession = Boolean(
-    !explicitSessionKey &&
-    !opts.sessionId?.trim() &&
-    agentId &&
-    channel &&
-    channel !== "last" &&
-    opts.to?.trim() &&
-    classifySessionKeyShape(opts.to) !== "agent",
-  );
 
-  const sessionKey = deferExplicitRecipientSession
-    ? undefined
-    : classifySessionKeyShape(explicitSessionKey) === "agent"
+  const sessionKey =
+    classifySessionKeyShape(explicitSessionKey) === "agent"
       ? explicitSessionKey
       : (await loadAgentSessionModule()).resolveSessionKeyForRequest({
           cfg,
@@ -731,10 +720,8 @@ async function agentViaGatewayCommand(
           sessionId: opts.sessionId,
           sessionKey: explicitSessionKey,
         }).sessionKey;
-  const abortSessionKey = deferExplicitRecipientSession
-    ? (await loadAgentSessionModule()).resolveSessionKeyForRequest({ cfg, agentId }).sessionKey
-    : sessionKey;
 
+  const channel = normalizeMessageChannel(opts.channel);
   const idempotencyKey = normalizeOptionalString(opts.runId) || randomIdempotencyKey();
   const modelOverride = normalizeOptionalString(opts.model);
   const hasModelOverride = Boolean(modelOverride);
@@ -751,7 +738,7 @@ async function agentViaGatewayCommand(
       };
 
   let acceptedRunId: string | undefined = idempotencyKey;
-  let acceptedSessionKey: string | undefined = abortSessionKey;
+  let acceptedSessionKey: string | undefined = sessionKey;
   let acceptedGatewayRun = false;
   let activeConnectionAbortAttempted = false;
   let activeConnectionAbortSucceeded = false;

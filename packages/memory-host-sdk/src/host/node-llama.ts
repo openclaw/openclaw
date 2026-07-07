@@ -1,7 +1,7 @@
 // Minimal node-llama-cpp type facade used by the local embedding provider.
 
 /** Embedding vector returned by node-llama-cpp. */
-type LlamaEmbedding = {
+export type LlamaEmbedding = {
   vector: Float32Array | number[];
 };
 
@@ -21,7 +21,7 @@ export type LlamaModel = {
 };
 
 /** Options accepted by node-llama-cpp model file resolution. */
-type ResolveModelFileOptions = {
+export type ResolveModelFileOptions = {
   directory?: string;
   signal?: AbortSignal;
 };
@@ -33,7 +33,7 @@ export type Llama = {
 };
 
 /** Imported node-llama-cpp module shape used by local embeddings. */
-type NodeLlamaCppModule = {
+export type NodeLlamaCppModule = {
   LlamaLogLevel: {
     error: number;
   };

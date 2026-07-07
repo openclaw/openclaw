@@ -178,7 +178,10 @@ function sanitizeInheritedGitAllowProtocolValue(value: string): string {
   return safeProtocols.join(":");
 }
 
-function sanitizeHostInheritedEnvEntry(rawKey: string, value: string): [string, string] | null {
+export function sanitizeHostInheritedEnvEntry(
+  rawKey: string,
+  value: string,
+): [string, string] | null {
   const key = normalizeEnvVarKey(rawKey);
   if (!key) {
     return null;

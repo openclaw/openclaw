@@ -2,7 +2,7 @@
 import os from "node:os";
 import { getMatrixRuntime } from "../runtime.js";
 
-type MatrixSqliteStateOptions = {
+export type MatrixSqliteStateOptions = {
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
   stateRootDir?: string;

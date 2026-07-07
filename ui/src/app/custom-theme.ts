@@ -1,4 +1,3 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Control UI module implements custom theme behavior.
 import { z } from "zod";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
@@ -430,7 +429,7 @@ function describeThemeLabel(value: string | undefined) {
   if (!normalized) {
     return "Custom";
   }
-  return truncateUtf16Safe(normalized, 80);
+  return normalized.slice(0, 80);
 }
 
 export function normalizeTweakcnThemeUrl(input: string): TweakcnThemeResolution {

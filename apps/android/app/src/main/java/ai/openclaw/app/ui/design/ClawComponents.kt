@@ -458,7 +458,6 @@ internal fun ClawSegmentedControl(
   selected: String,
   onSelect: (String) -> Unit,
   modifier: Modifier = Modifier,
-  enabledOptions: Set<String> = options.toSet(),
 ) {
   Row(
     modifier =
@@ -470,26 +469,20 @@ internal fun ClawSegmentedControl(
   ) {
     options.forEach { option ->
       val active = option == selected
-      val enabled = option in enabledOptions
       Box(
         modifier =
           Modifier
             .weight(1f)
             .clip(RoundedCornerShape(ClawTheme.radii.control))
             .background(if (active) ClawTheme.colors.primary else Color.Transparent)
-            .clickable(enabled = enabled) { onSelect(option) }
+            .clickable { onSelect(option) }
             .padding(horizontal = 9.dp, vertical = 7.dp),
         contentAlignment = Alignment.Center,
       ) {
         Text(
           text = option,
           style = ClawTheme.type.caption,
-          color =
-            when {
-              active -> ClawTheme.colors.primaryText
-              enabled -> ClawTheme.colors.textMuted
-              else -> ClawTheme.colors.textSubtle
-            },
+          color = if (active) ClawTheme.colors.primaryText else ClawTheme.colors.textMuted,
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )

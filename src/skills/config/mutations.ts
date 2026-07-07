@@ -4,7 +4,7 @@ import { REDACTED_SENTINEL } from "../../config/redact-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 
-function patchSkillConfigEntry(
+export function patchSkillConfigEntry(
   cfg: OpenClawConfig,
   skillKey: string,
   patch: { enabled?: boolean; apiKey?: string; env?: Record<string, string> },

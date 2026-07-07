@@ -51,11 +51,6 @@ function runTailscaleCommand(
       resolve(result);
     };
 
-    const timer = setTimeout(() => {
-      proc.kill("SIGKILL");
-      finish({ code: -1, stdout: "" });
-    }, timeoutMs);
-
     proc.stdout.on("data", (data) => {
       stdout = appendTailscaleCommandStdout(stdout, data);
       if (stdout.exceeded) {
@@ -63,10 +58,11 @@ function runTailscaleCommand(
         finish({ code: -1, stdout: "" });
       }
     });
-    proc.stdout.on("error", () => {
+
+    const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
       proc.kill("SIGKILL");
       finish({ code: -1, stdout: "" });
-    });
+    }, timeoutMs);
 
     proc.on("error", () => {
       finish({ code: -1, stdout: "" });

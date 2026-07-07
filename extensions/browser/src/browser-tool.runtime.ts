@@ -39,11 +39,9 @@ export {
   browserArmDialog,
   browserArmFileChooser,
   browserConsoleMessages,
-  browserDownload,
   browserNavigate,
   browserPdfSave,
   browserScreenshotAction,
-  browserWaitForDownload,
 } from "./browser/client-actions.js";
 export {
   browserCloseTab,
@@ -62,7 +60,6 @@ export { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "./browser/constants.js";
 export { resolveExistingUploadPaths } from "./browser/paths.js";
 export { getBrowserProfileCapabilities } from "./browser/profile-capabilities.js";
 export { applyBrowserProxyPaths, persistBrowserProxyFiles } from "./browser/proxy-files.js";
-export { stageBrowserScreenshotForSharing } from "./browser/screenshot-sharing.js";
 export {
   touchSessionBrowserTab,
   trackSessionBrowserTab,

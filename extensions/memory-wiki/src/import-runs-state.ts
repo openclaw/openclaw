@@ -7,7 +7,7 @@ import type {
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 
-type ChatGptImportRunEntry = {
+export type ChatGptImportRunEntry = {
   path: string;
   snapshotPath?: string;
 };
@@ -117,7 +117,7 @@ function asNonNegativeInteger(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
 }
 
-function normalizeMemoryWikiImportRunRecord(raw: unknown): ChatGptImportRunRecord | null {
+export function normalizeMemoryWikiImportRunRecord(raw: unknown): ChatGptImportRunRecord | null {
   const record = asRecord(raw);
   if (!record) {
     return null;

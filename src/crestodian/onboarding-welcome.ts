@@ -5,10 +5,11 @@ import type { CrestodianChatEngine } from "./chat-engine.js";
 import { formatCrestodianOnboardingWelcome } from "./overview.js";
 
 /**
- * The basic bootstrap is conversational: the welcome message carries the plan
- * and the engine holds it as the pending proposal, so a bare "yes" applies it.
- * Providerless installs may then hand off to the shared model/auth wizard.
- * Already-configured installs get the channels/handoff guide instead.
+ * Onboarding is a conversation, not a wizard: the welcome message carries the
+ * whole plan (detected AI, workspace, gateway defaults, security note) and the
+ * engine holds it as the pending proposal, so a bare "yes" applies everything.
+ * On an already-configured install the welcome becomes the channels/handoff
+ * guide instead of re-proposing setup.
  */
 /**
  * "Configured" must match the app onboarding gate (wizard metadata or gateway
@@ -81,7 +82,7 @@ export async function buildOnboardingWelcome(params: {
 
   const aiLine = detected
     ? `- AI: ${detected.label} — ${detected.modelRef} (${detected.detail}). I'll reuse it; switching later is one sentence.`
-    : "- AI: nothing detected yet (no Claude Code or Codex login, no OPENAI_API_KEY/ANTHROPIC_API_KEY). I'll set up the basics first, then ask whether you want to configure a model provider with masked credential prompts.";
+    : "- AI: nothing detected yet (no Claude Code or Codex login, no OPENAI_API_KEY/ANTHROPIC_API_KEY). I can still set up the basics; add access later and tell me `set default model <provider/model>`.";
 
   const welcome = [
     "## Hi, I'm Crestodian — let's hatch your agent.",

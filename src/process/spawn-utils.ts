@@ -3,7 +3,7 @@ import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { spawn } from "node:child_process";
 import { toErrorObject } from "../infra/errors.js";
 
-type SpawnFallback = {
+export type SpawnFallback = {
   label: string;
   options: SpawnOptions;
 };

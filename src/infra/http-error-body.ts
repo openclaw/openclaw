@@ -1,5 +1,3 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-
 export async function readResponseBodySnippet(
   response: Response,
   limits: { maxBytes: number; maxChars: number },
@@ -10,14 +8,13 @@ export async function readResponseBodySnippet(
       const text = await response.text();
       const encoded = new TextEncoder().encode(text);
       if (encoded.byteLength > limits.maxBytes) {
-        return truncateUtf16Safe(
-          new TextDecoder().decode(encoded.subarray(0, limits.maxBytes), {
+        return new TextDecoder()
+          .decode(encoded.subarray(0, limits.maxBytes), {
             stream: true,
-          }),
-          limits.maxChars,
-        );
+          })
+          .slice(0, limits.maxChars);
       }
-      return truncateUtf16Safe(text, limits.maxChars);
+      return text.slice(0, limits.maxChars);
     }
 
     const reader = body.getReader();
@@ -57,10 +54,7 @@ export async function readResponseBodySnippet(
       } catch {}
     }
 
-    return truncateUtf16Safe(
-      new TextDecoder().decode(Buffer.concat(chunks, total)),
-      limits.maxChars,
-    );
+    return new TextDecoder().decode(Buffer.concat(chunks, total)).slice(0, limits.maxChars);
   } catch {
     return "";
   }

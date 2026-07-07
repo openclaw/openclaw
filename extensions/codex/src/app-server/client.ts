@@ -120,6 +120,7 @@ export class CodexAppServerClient {
   private readonly requestHandlers = new Set<CodexServerRequestHandler>();
   private readonly notificationHandlers = new Set<CodexServerNotificationHandler>();
   private readonly closeHandlers = new Set<(client: CodexAppServerClient) => void>();
+  private activeSharedLeaseCountProvider: (() => number | undefined) | undefined;
   private nextId = 1;
   private initialized = false;
   private closed = false;
@@ -139,12 +140,6 @@ export class CodexAppServerClient {
     this.child = child;
     this.lines = createInterface({ input: child.stdout });
     this.lines.on("line", (line) => this.handleLine(line));
-    this.lines.on("error", (error) =>
-      this.closeWithError(error instanceof Error ? error : new Error(String(error))),
-    );
-    child.stdout.on("error", (error) =>
-      this.closeWithError(error instanceof Error ? error : new Error(String(error))),
-    );
     child.stderr.on("data", (chunk: Buffer | string) => {
       const text = chunk.toString("utf8");
       this.stderrTail = appendBoundedTail(this.stderrTail, text, CODEX_APP_SERVER_STDERR_TAIL_MAX);
@@ -152,11 +147,6 @@ export class CodexAppServerClient {
       if (trimmed) {
         embeddedAgentLog.debug(`codex app-server stderr: ${trimmed}`);
       }
-    });
-    // Codex reserves stderr for diagnostics; losing that stream must not tear
-    // down an otherwise healthy JSON-RPC connection on stdout.
-    child.stderr.on("error", (error) => {
-      embeddedAgentLog.warn("codex app-server stderr stream failed", { error });
     });
     child.once("error", (error) =>
       this.closeWithError(error instanceof Error ? error : new Error(String(error))),
@@ -323,6 +313,18 @@ export class CodexAppServerClient {
   addNotificationHandler(handler: CodexServerNotificationHandler): () => void {
     this.notificationHandlers.add(handler);
     return () => this.notificationHandlers.delete(handler);
+  }
+
+  /** Installs a lease-count provider used to route unscoped notifications. */
+  setActiveSharedLeaseCountProviderForUnscopedNotifications(
+    provider: (() => number | undefined) | undefined,
+  ): void {
+    this.activeSharedLeaseCountProvider = provider;
+  }
+
+  /** Reads the active shared-client lease count when available. */
+  getActiveSharedLeaseCountForUnscopedNotifications(): number | undefined {
+    return this.activeSharedLeaseCountProvider?.();
   }
 
   /** Registers a close handler and returns its disposer. */
@@ -585,6 +587,12 @@ function defaultServerRequestResponse(
   if (request.method === "item/permissions/requestApproval") {
     return { permissions: {}, scope: "turn" };
   }
+  if (isCodexAppServerApprovalRequest(request.method)) {
+    return {
+      decision: "decline",
+      reason: "OpenClaw codex app-server bridge does not grant native approvals yet.",
+    };
+  }
   if (request.method === "item/tool/requestUserInput") {
     return {
       answers: {},
@@ -623,35 +631,28 @@ function timeoutServerRequestResponse(
   };
 }
 
-/** Raised when the initialize handshake detects an unsupported app-server version. */
-export class CodexAppServerVersionError extends Error {
-  readonly detectedVersion?: string;
-
-  constructor(detectedVersion: string | undefined) {
-    const detected = detectedVersion
-      ? `detected ${detectedVersion}`
-      : "OpenClaw could not determine the running Codex version";
-    super(
-      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but ${detected}. Update the configured Codex app-server binary, or remove custom command overrides to use the managed binary.`,
-    );
-    this.name = "CodexAppServerVersionError";
-    this.detectedVersion = detectedVersion;
-  }
-}
-
 function assertSupportedCodexAppServerVersion(response: CodexInitializeResponse): string {
   const detectedVersion = readCodexVersionFromUserAgent(response.userAgent);
-  if (
-    !detectedVersion ||
-    compareCodexAppServerVersions(detectedVersion, MIN_CODEX_APP_SERVER_VERSION) < 0
-  ) {
-    throw new CodexAppServerVersionError(detectedVersion);
+  if (!detectedVersion) {
+    throw new Error(
+      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but OpenClaw could not determine the running Codex version. Update the configured Codex app-server binary, or remove custom command overrides to use the managed binary.`,
+    );
+  }
+  if (compareCodexAppServerVersions(detectedVersion, MIN_CODEX_APP_SERVER_VERSION) < 0) {
+    throw new Error(
+      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but detected ${detectedVersion}. Update the configured Codex app-server binary, or remove custom command overrides to use the managed binary.`,
+    );
   }
   return detectedVersion;
 }
 
 export function isUnsupportedCodexAppServerVersionError(error: unknown): boolean {
-  return error instanceof CodexAppServerVersionError;
+  return (
+    error instanceof Error &&
+    error.message.startsWith(
+      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required`,
+    )
+  );
 }
 
 function buildCodexAppServerRuntimeIdentity(
@@ -758,9 +759,6 @@ function buildCodexAppServerExitError(code: unknown, signal: unknown, stderrTail
   );
 }
 
-// Codex has emitted JSON with raw newlines inside string values, which breaks
-// line framing. Buffer the fragments and re-join with an escaped newline so
-// the message parses; bounded by CODEX_APP_SERVER_PARSE_BUFFER_MAX*.
 function shouldBufferCodexAppServerParseFailure(value: string, error: unknown): boolean {
   if (!value.startsWith("{") && !value.startsWith("[")) {
     return false;

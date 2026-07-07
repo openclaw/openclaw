@@ -24,7 +24,7 @@ import {
 import { resolveWhatsAppSocketTiming, type WhatsAppSocketTimingOptions } from "./socket-timing.js";
 
 type WaSocket = Awaited<ReturnType<typeof createWaSocket>>;
-type StartWebLoginWithQrResult = {
+export type StartWebLoginWithQrResult = {
   qrDataUrl?: string;
   message: string;
   connected?: boolean;

@@ -22,7 +22,7 @@ import {
 import { guardSentinel } from "../sentinel.js";
 import type { YamlAst } from "./ast.js";
 
-type YamlEditResult =
+export type YamlEditResult =
   | { readonly ok: true; readonly ast: YamlAst }
   | {
       readonly ok: false;

@@ -4,8 +4,8 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-type MobileReleasePlatform = "ios" | "android";
-type MobileReleaseCommand = "preflight" | "record" | "resolve";
+export type MobileReleasePlatform = "ios" | "android";
+export type MobileReleaseCommand = "preflight" | "record" | "resolve";
 
 type GitDeps = {
   execFileSync?: typeof execFileSync;
@@ -218,11 +218,11 @@ function assertRootDir(rootDir: string): void {
   }
 }
 
-function resolveCommitSha(sha: string, rootDir: string, deps: GitDeps = {}): string {
+export function resolveCommitSha(sha: string, rootDir: string, deps: GitDeps = {}): string {
   return git(["rev-parse", "--verify", `${sha}^{commit}`], rootDir, deps).trim();
 }
 
-function readRemoteRef(
+export function readRemoteRef(
   remote: string,
   ref: string,
   rootDir: string,

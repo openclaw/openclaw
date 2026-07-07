@@ -11,7 +11,6 @@ import {
   pathExistsSync,
   resolveLocalPathFromRootsSync,
 } from "openclaw/plugin-sdk/security-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { GatewayAccount } from "../types.js";
 import { MediaFileType } from "../types.js";
 import {
@@ -457,10 +456,7 @@ export async function sendPhoto(
     if (localFile) {
       return await sendPhotoFromLocal(ctx, localFile);
     }
-    return {
-      channel: "qqbot",
-      error: `Failed to download image: ${truncateUtf16Safe(mediaPath, 80)}`,
-    };
+    return { channel: "qqbot", error: `Failed to download image: ${mediaPath.slice(0, 80)}` };
   }
 
   if (isLocal) {
@@ -468,10 +464,7 @@ export async function sendPhoto(
   }
 
   if (!isHttp && !isData) {
-    return {
-      channel: "qqbot",
-      error: `Unsupported image source: ${truncateUtf16Safe(mediaPath, 50)}`,
-    };
+    return { channel: "qqbot", error: `Unsupported image source: ${mediaPath.slice(0, 50)}` };
   }
 
   // Remote URL or data: URL — try direct upload first, fall back to
@@ -627,10 +620,7 @@ export async function sendVoice(
     if (localFile) {
       return await sendVoiceFromLocal(ctx, localFile, directUploadFormats, transcodeEnabled);
     }
-    return {
-      channel: "qqbot",
-      error: `Failed to download audio: ${truncateUtf16Safe(mediaPath, 80)}`,
-    };
+    return { channel: "qqbot", error: `Failed to download audio: ${mediaPath.slice(0, 80)}` };
   }
 
   return await sendVoiceFromLocal(ctx, mediaPath, directUploadFormats, transcodeEnabled);
@@ -739,10 +729,7 @@ export async function sendVideoMsg(
     if (localFile) {
       return await sendVideoFromLocal(ctx, localFile);
     }
-    return {
-      channel: "qqbot",
-      error: `Failed to download video: ${truncateUtf16Safe(mediaPath, 80)}`,
-    };
+    return { channel: "qqbot", error: `Failed to download video: ${mediaPath.slice(0, 80)}` };
   }
 
   try {
@@ -854,10 +841,7 @@ export async function sendDocument(
     if (localFile) {
       return await sendDocumentFromLocal(ctx, localFile);
     }
-    return {
-      channel: "qqbot",
-      error: `Failed to download file: ${truncateUtf16Safe(mediaPath, 80)}`,
-    };
+    return { channel: "qqbot", error: `Failed to download file: ${mediaPath.slice(0, 80)}` };
   }
 
   try {
@@ -951,7 +935,7 @@ async function downloadToFallbackDir(httpUrl: string, caller: string): Promise<s
     const downloadDir = getQQBotMediaDir("downloads", "url-fallback");
     const localFile = await downloadFile(httpUrl, downloadDir);
     if (!localFile) {
-      debugError(`${caller} fallback: download also failed for ${truncateUtf16Safe(httpUrl, 80)}`);
+      debugError(`${caller} fallback: download also failed for ${httpUrl.slice(0, 80)}`);
       return null;
     }
     debugLog(`${caller} fallback: downloaded → ${localFile}`);

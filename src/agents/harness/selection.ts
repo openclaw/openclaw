@@ -90,7 +90,6 @@ type PluginHarnessToolPolicyContext = Pick<
   | "senderName"
   | "senderUsername"
   | "senderE164"
-  | "senderIsOwner"
 >;
 
 type PluginHarnessToolPolicy = { allow?: string[]; deny?: string[] };
@@ -464,7 +463,6 @@ function resolvePluginHarnessToolPolicies(
     senderName: params.senderName,
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
-    senderIsOwner: params.senderIsOwner,
   });
   const groupPolicyParams = {
     config: params.config,

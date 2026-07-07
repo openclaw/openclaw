@@ -48,14 +48,14 @@ export type AcpxProcessCleanupDeps = {
 };
 
 /** Result from cleaning up a single ACPX process tree. */
-type AcpxProcessCleanupResult = {
+export type AcpxProcessCleanupResult = {
   inspectedPids: number[];
   terminatedPids: number[];
   skippedReason?: "missing-root" | "not-openclaw-owned" | "unverified-root";
 };
 
 /** Result from startup orphan reaping. */
-type AcpxStartupReapResult = {
+export type AcpxStartupReapResult = {
   inspectedPids: number[];
   terminatedPids: number[];
   skippedReason?: "unsupported-platform" | "process-list-unavailable";
@@ -211,7 +211,7 @@ function parseProcessList(stdout: string): AcpxProcessInfo[] {
 }
 
 /** List host processes in the compact shape needed by ACPX cleanup. */
-async function listPlatformProcesses(): Promise<AcpxProcessInfo[]> {
+export async function listPlatformProcesses(): Promise<AcpxProcessInfo[]> {
   if (process.platform === "win32") {
     return [];
   }

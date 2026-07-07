@@ -20,21 +20,12 @@ const files = [
   },
 ];
 
-type RenderPreviewOptions = {
-  query?: string;
-  activePath?: string;
-  previewFiles?: typeof files;
-};
-
-async function renderPreview(options: RenderPreviewOptions = {}) {
-  const query = options.query ?? "";
-  const activePath = options.activePath ?? "templates/digest.md";
-  const previewFiles = options.previewFiles ?? files;
+async function renderPreview(query = "") {
   render(
     html`
       <openclaw-file-preview-modal
-        .files=${previewFiles}
-        .activePath=${activePath}
+        .files=${files}
+        .activePath=${"templates/digest.md"}
         .query=${query}
         .contextLabel=${"in morning-catchup"}
       ></openclaw-file-preview-modal>
@@ -47,7 +38,6 @@ async function renderPreview(options: RenderPreviewOptions = {}) {
   if (!modal) {
     throw new Error("expected file preview modal");
   }
-  await modal.updateComplete;
   await modal.updateComplete;
   return modal;
 }
@@ -69,7 +59,7 @@ describe("openclaw-file-preview-modal", () => {
   });
 
   it("filters files by path or contents", async () => {
-    const modal = await renderPreview({ query: "sender" });
+    const modal = await renderPreview("sender");
 
     expect(shadowText(modal)).toContain("1/2 files");
     expect(shadowText(modal)).toContain("filters/auto-senders.txt");
@@ -140,7 +130,7 @@ describe("openclaw-file-preview-modal", () => {
   });
 
   it("blocks background arrow-key scrolling even when no files match", async () => {
-    const modal = await renderPreview({ query: "missing" });
+    const modal = await renderPreview("missing");
     const onDocumentKeydown = vi.fn();
     document.addEventListener("keydown", onDocumentKeydown);
 
@@ -155,49 +145,5 @@ describe("openclaw-file-preview-modal", () => {
 
     expect(arrowDown.defaultPrevented).toBe(true);
     expect(onDocumentKeydown).not.toHaveBeenCalled();
-  });
-
-  it("chunks large files without changing their text and resets the scroller on file changes", async () => {
-    const firstContents = Array.from({ length: 500 }, (_, index) => `first-${index}`).join("\n");
-    const secondContents = Array.from({ length: 500 }, (_, index) => `second-${index}`).join("\n");
-    const previewFiles = [
-      { path: "first.ts", size: "5 KB", contents: firstContents },
-      { path: "second.ts", size: "5 KB", contents: secondContents },
-    ];
-    const modal = await renderPreview({ activePath: "first.ts", previewFiles });
-    const body = modal.shadowRoot?.querySelector<HTMLElement>(".detail-body");
-    expect(body).toBeInstanceOf(HTMLElement);
-    const firstChunks = [...(modal.shadowRoot?.querySelectorAll<HTMLElement>(".code-chunk") ?? [])];
-    expect(firstChunks).toHaveLength(8);
-    expect(firstChunks.map((chunk) => chunk.textContent ?? "").join("\n")).toBe(firstContents);
-
-    body!.scrollTop = 2200;
-
-    const updatedModal = await renderPreview({ activePath: "second.ts", previewFiles });
-    const updatedBody = updatedModal.shadowRoot?.querySelector<HTMLElement>(".detail-body");
-    const secondChunks = [
-      ...(updatedModal.shadowRoot?.querySelectorAll<HTMLElement>(".code-chunk") ?? []),
-    ];
-
-    expect(updatedBody?.scrollTop).toBe(0);
-    expect(secondChunks.map((chunk) => chunk.textContent ?? "").join("\n")).toBe(secondContents);
-  });
-
-  it("copies the complete active file while only a virtual window is rendered", async () => {
-    const writeText = vi.fn().mockResolvedValue(undefined);
-    vi.stubGlobal("navigator", { clipboard: { writeText } } as unknown as Navigator);
-    const contents = Array.from({ length: 500 }, (_, index) => `line-${index}`).join("\n");
-    const previewFiles = [{ path: "large.ts", size: "5 KB", contents }];
-    const modal = await renderPreview({ activePath: "large.ts", previewFiles });
-    const copyButton = modal.shadowRoot?.querySelector<HTMLButtonElement>(".chat-copy-btn");
-
-    expect(copyButton).toBeInstanceOf(HTMLButtonElement);
-    expect(modal.shadowRoot?.querySelectorAll(".code-chunk").length).toBe(8);
-    copyButton!.click();
-
-    await vi.waitFor(() => {
-      expect(writeText).toHaveBeenCalledWith(contents);
-      expect(copyButton?.dataset.copied).toBe("1");
-    });
   });
 });

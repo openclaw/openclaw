@@ -37,7 +37,7 @@ function resolvePath(cwd: string, path: string): string {
 }
 
 /** Convert user-facing timeout seconds into a positive, timer-safe millisecond delay. */
-function resolveExecTimeoutMs(timeoutSeconds: unknown): number | undefined {
+export function resolveExecTimeoutMs(timeoutSeconds: unknown): number | undefined {
   if (
     typeof timeoutSeconds !== "number" ||
     !Number.isFinite(timeoutSeconds) ||
@@ -131,17 +131,6 @@ function abortResult(
   return signal?.aborted ? err(new FileError("aborted", "aborted", path)) : undefined;
 }
 
-type ChildOutputStreamName = "stdout" | "stderr";
-
-function listenForChildOutputErrors(
-  child: ReturnType<typeof spawn>,
-  onError: (stream: ChildOutputStreamName, error: Error) => void,
-): void {
-  for (const streamName of ["stdout", "stderr"] as const) {
-    child[streamName]?.on("error", (error: Error) => onError(streamName, error));
-  }
-}
-
 async function pathExists(path: string): Promise<boolean> {
   try {
     await access(path, constants.F_OK);
@@ -170,19 +159,12 @@ async function runCommand(
     }
     const timeout = setTimeout(() => {
       if (child.pid) {
-        killProcessTree(child.pid, { force: true, detached: false });
+        killProcessTree(child.pid, { force: true });
       }
     }, timeoutMs);
     child.stdout?.setEncoding("utf8");
     child.stdout?.on("data", (chunk: string) => {
       stdout += chunk;
-    });
-    listenForChildOutputErrors(child, () => {
-      if (child.pid) {
-        killProcessTree(child.pid, { force: true, detached: false });
-      }
-      clearTimeout(timeout);
-      resolveLocal({ stdout: "", status: null });
     });
     child.on("error", () => {
       clearTimeout(timeout);
@@ -388,20 +370,6 @@ export class NodeExecutionEnv implements ExecutionEnv {
           onAbort();
         }
       });
-
-      // Guard stdout/stderr against stream errors (e.g. EPIPE when the
-      // child exits before all pipe data is consumed). Without listeners,
-      // Node.js throws an uncaught exception that crashes the process.
-      const onStreamError = (stream: ChildOutputStreamName, error: Error) => {
-        if (settled) {
-          return;
-        }
-        onAbort();
-        settle(
-          err(new ExecutionError("spawn_error", `${stream} read error: ${error.message}`, error)),
-        );
-      };
-      listenForChildOutputErrors(child, onStreamError);
 
       child.on("error", (error) => {
         settle(err(new ExecutionError("spawn_error", error.message, error)));

@@ -54,14 +54,14 @@ export type { MatrixSendOpts, MatrixSendResult } from "./send/types.js";
 export { resolveMatrixMentionsForBody } from "./send/formatting.js";
 export { resolveMatrixRoomId } from "./send/targets.js";
 
-type MatrixPreparedSingleText = {
+export type MatrixPreparedSingleText = {
   trimmedText: string;
   convertedText: string;
   singleEventLimit: number;
   fitsInSingleEvent: boolean;
 };
 
-type MatrixPreparedChunkedText = MatrixPreparedSingleText & {
+export type MatrixPreparedChunkedText = MatrixPreparedSingleText & {
   chunks: string[];
 };
 

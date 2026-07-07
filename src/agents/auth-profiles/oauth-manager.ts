@@ -53,7 +53,7 @@ export type OAuthManagerAdapter = {
   isRefreshTokenReusedError: (error: unknown) => boolean;
 };
 
-type ResolvedOAuthAccess = {
+export type ResolvedOAuthAccess = {
   apiKey: string;
   credential: OAuthCredential;
 };
@@ -77,12 +77,9 @@ export class OAuthManagerRefreshError extends OAuthRefreshFailureError {
       typeof params.cause === "object" && params.cause !== null
         ? (params.cause as { code?: unknown; lockPath?: unknown; cause?: unknown })
         : undefined;
-    const isRefreshContention = structuredCause?.code === "refresh_contention";
-    // Keep the file-lock cause on structured fields only. Flattening it here
-    // exposes local lock paths in user-facing auth diagnostics.
-    const surfacedCause =
-      isRefreshContention && params.cause instanceof Error
-        ? new Error(params.cause.message)
+    const delegatedCause =
+      structuredCause?.code === "refresh_contention" && structuredCause.cause
+        ? structuredCause.cause
         : params.cause;
     const storedCredential = params.refreshedStore.profiles[params.profileId];
     const secrets = collectOAuthCredentialSecrets(
@@ -90,12 +87,12 @@ export class OAuthManagerRefreshError extends OAuthRefreshFailureError {
       ...(params.attemptedCredentials ?? []),
       storedCredential?.type === "oauth" ? storedCredential : undefined,
     );
-    const causeMessage = formatRedactedOAuthRefreshError(surfacedCause, secrets);
+    const causeMessage = formatRedactedOAuthRefreshError(params.cause, secrets);
     super({
       provider: params.credential.provider,
       profileId: params.profileId,
       message: `OAuth token refresh failed for ${params.credential.provider}: ${causeMessage}`,
-      cause: createRedactedOAuthRefreshCause(surfacedCause, secrets),
+      cause: createRedactedOAuthRefreshCause(delegatedCause, secrets),
     });
     this.name = "OAuthManagerRefreshError";
     this.#credential = params.credential;

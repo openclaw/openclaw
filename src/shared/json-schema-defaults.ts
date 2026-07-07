@@ -120,7 +120,7 @@ function compilesUnicodePattern(pattern: string): boolean {
 }
 
 /** Repair JSON Schema regex patterns that fail TypeBox's unicode RegExp compile. */
-function repairJsonSchemaPatternForUnicodeRegExp(pattern: string): string {
+export function repairJsonSchemaPatternForUnicodeRegExp(pattern: string): string {
   if (compilesUnicodePattern(pattern)) {
     return pattern;
   }

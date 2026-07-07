@@ -591,9 +591,10 @@ private fun SessionRow(
             menuExpanded = false
             onSetArchived(true)
           }
-          // Delete is archive-gated: the bounded operator session lacks
-          // operator.admin, and the gateway only grants write-scope deletes
-          // for archived sessions. Archived rows keep the Delete item.
+          SessionMenuItem("Delete…") {
+            menuExpanded = false
+            onDelete()
+          }
         }
       }
     }

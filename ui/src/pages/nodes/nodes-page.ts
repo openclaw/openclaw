@@ -246,18 +246,8 @@ class NodesPage extends LitElement implements NodesPageDataState {
           onDeviceApprove: (requestId) => void approveDevicePairing(this, requestId),
           onDeviceReject: (requestId) => void rejectDevicePairing(this, requestId),
           onDeviceRotate: (deviceId, role, scopes) =>
-            void rotateDeviceToken(this, {
-              deviceId,
-              gatewayUrl: this.context.gateway.connection.gatewayUrl,
-              role,
-              scopes,
-            }),
-          onDeviceRevoke: (deviceId, role) =>
-            void revokeDeviceToken(this, {
-              deviceId,
-              gatewayUrl: this.context.gateway.connection.gatewayUrl,
-              role,
-            }),
+            void rotateDeviceToken(this, { deviceId, role, scopes }),
+          onDeviceRevoke: (deviceId, role) => void revokeDeviceToken(this, { deviceId, role }),
           onLoadConfig: () =>
             void this.context.runtimeConfig.refresh({ discardPendingChanges: true }),
           onLoadExecApprovals: () =>

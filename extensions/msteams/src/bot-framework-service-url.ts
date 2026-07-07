@@ -16,7 +16,7 @@ const DEFAULT_BOT_FRAMEWORK_SERVICE_URL_HOST_ALLOWLIST = [
   "botframework.azure.cn",
 ] as const;
 
-const BOT_FRAMEWORK_SERVICE_URL_HOST_ALLOWLIST = normalizeHostnameSuffixAllowlist(
+export const BOT_FRAMEWORK_SERVICE_URL_HOST_ALLOWLIST = normalizeHostnameSuffixAllowlist(
   DEFAULT_BOT_FRAMEWORK_SERVICE_URL_HOST_ALLOWLIST,
 );
 

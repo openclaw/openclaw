@@ -110,7 +110,7 @@ function hasCandidateAuthProfileStoreSource(agentDir: string): boolean {
 /**
  * Returns whether auth profile files or OAuth state exist for candidate agent dirs.
  */
-function hasCandidateAuthProfileStoreSources(params: {
+export function hasCandidateAuthProfileStoreSources(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv | Record<string, string | undefined>;
   agentDirs?: string[];

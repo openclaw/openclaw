@@ -3,16 +3,16 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { FsSafeError, resolveAbsolutePathForRead } from "openclaw/plugin-sdk/security-runtime";
 
-type InvalidPathResult = {
+export type InvalidPathResult = {
   ok: false;
   code: "INVALID_PATH";
   message: string;
 };
 
-const SYMLINK_REJECTED_MESSAGE =
+export const SYMLINK_REJECTED_MESSAGE =
   "path traverses a symlink; refusing because followSymlinks=false (set plugins.entries.file-transfer.config.nodes.<node>.followSymlinks=true to allow, or update allowReadPaths to the canonical path)";
 
-type FsSafeReadErrorCode = "INVALID_PATH" | "NOT_FOUND" | "SYMLINK_REDIRECT";
+export type FsSafeReadErrorCode = "INVALID_PATH" | "NOT_FOUND" | "SYMLINK_REDIRECT";
 
 export function classifyFsSafeReadError(err: unknown): FsSafeReadErrorCode | undefined {
   if (!(err instanceof FsSafeError)) {
@@ -43,7 +43,7 @@ export function readAbsolutePath(input: unknown): string | InvalidPathResult {
   return input;
 }
 
-function canonicalPathFromFsSafeError(err: unknown): string | undefined {
+export function canonicalPathFromFsSafeError(err: unknown): string | undefined {
   if (!(err instanceof FsSafeError) || !err.cause || typeof err.cause !== "object") {
     return undefined;
   }

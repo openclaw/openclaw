@@ -18,7 +18,6 @@ export function buildOutboundBaseSessionKey(params: {
 }): string {
   return buildAgentSessionKey({
     agentId: params.agentId,
-    mainKey: params.cfg.session?.mainKey,
     channel: params.channel,
     accountId: params.accountId,
     peer: params.peer,

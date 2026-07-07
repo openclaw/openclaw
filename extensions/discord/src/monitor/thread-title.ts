@@ -6,7 +6,6 @@ import {
   extractAssistantText,
   prepareSimpleCompletionModelForAgent,
 } from "openclaw/plugin-sdk/simple-completion-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { withAbortTimeout } from "./timeouts.js";
 
 const DEFAULT_THREAD_TITLE_TIMEOUT_MS = 60_000;
@@ -52,8 +51,9 @@ export async function generateThreadTitle(params: {
   }
 
   try {
-    const userMessage = buildThreadTitleCompletionUserMessage({
-      sourceText,
+    const promptText = truncateThreadTitleSourceText(sourceText);
+    const userMessage = buildThreadTitleUserMessage({
+      sourceText: promptText,
       channelName: params.channelName,
       channelDescription: params.channelDescription,
     });
@@ -104,12 +104,11 @@ async function completeThreadTitle(params: {
   });
 }
 
-function buildThreadTitleCompletionUserMessage(params: {
+function buildThreadTitleUserMessage(params: {
   sourceText: string;
   channelName?: string;
   channelDescription?: string;
 }): string {
-  const sourceText = truncateThreadTitleSourceText(params.sourceText);
   const channelName = normalizeTitleContextField(
     params.channelName,
     MAX_THREAD_TITLE_CHANNEL_NAME_CHARS,
@@ -125,7 +124,7 @@ function buildThreadTitleCompletionUserMessage(params: {
   if (channelDescription) {
     messageLines.push(`Channel description: ${channelDescription}`);
   }
-  messageLines.push(`Message:\n${sourceText}`);
+  messageLines.push(`Message:\n${params.sourceText}`);
   return messageLines.join("\n\n");
 }
 
@@ -133,7 +132,7 @@ function truncateThreadTitleSourceText(sourceText: string): string {
   if (sourceText.length <= MAX_THREAD_TITLE_SOURCE_CHARS) {
     return sourceText;
   }
-  return `${truncateUtf16Safe(sourceText, MAX_THREAD_TITLE_SOURCE_CHARS)}...`;
+  return `${sourceText.slice(0, MAX_THREAD_TITLE_SOURCE_CHARS)}...`;
 }
 
 function resolveThreadTitleTimeoutMs(timeoutMs: number | undefined): number {
@@ -202,5 +201,5 @@ function normalizeTitleContextField(raw: string | undefined, maxChars: number): 
   if (singleLine.length <= maxChars) {
     return singleLine;
   }
-  return `${truncateUtf16Safe(singleLine, maxChars)}...`;
+  return `${singleLine.slice(0, maxChars)}...`;
 }

@@ -10,7 +10,7 @@ export type ThemeModeChangeDetail = {
   element: HTMLElement;
 };
 
-class ThemeModeToggle extends LitElement {
+export class ThemeModeToggle extends LitElement {
   override createRenderRoot() {
     return this;
   }
@@ -43,7 +43,7 @@ class ThemeModeToggle extends LitElement {
     ];
 
     return html`
-      <div class="theme-mode-toggle" role="group" aria-label=${t("common.colorMode")}>
+      <div class="topbar-theme-mode" role="group" aria-label=${t("common.colorMode")}>
         ${options.map((option) => {
           const label = t(option.labelKey);
           const tooltip = t("common.colorModeOption", { mode: label });
@@ -51,8 +51,8 @@ class ThemeModeToggle extends LitElement {
             <openclaw-tooltip .content=${tooltip}>
               <button
                 type="button"
-                class="theme-mode-toggle__btn ${option.id === this.mode
-                  ? "theme-mode-toggle__btn--active"
+                class="topbar-theme-mode__btn ${option.id === this.mode
+                  ? "topbar-theme-mode__btn--active"
                   : ""}"
                 aria-label=${tooltip}
                 aria-pressed=${option.id === this.mode}

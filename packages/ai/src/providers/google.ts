@@ -13,7 +13,7 @@ import {
 } from "./google-shared.js";
 import { buildBaseOptions } from "./simple-options.js";
 
-type GoogleOptions = GoogleProviderOptions;
+export type GoogleOptions = GoogleProviderOptions;
 
 // Counter for generating unique tool call IDs
 let toolCallCounter = 0;

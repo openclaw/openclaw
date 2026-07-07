@@ -44,9 +44,6 @@ export type MattermostWebSocketLike = {
 };
 
 export type MattermostWebSocketFactory = (url: string) => MattermostWebSocketLike;
-// Mattermost events can include double-encoded post props plus server/plugin metadata.
-// Keep channel-compatible headroom while bounding ws's 100 MiB default before parsing.
-export const MATTERMOST_WEBSOCKET_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
 const MattermostEventPayloadSchema = z.object({
   event: z.string().optional(),
   data: z
@@ -116,10 +113,7 @@ type CreateMattermostConnectOnceOpts = {
 
 const defaultMattermostWebSocketFactory: MattermostWebSocketFactory = (url) => {
   const agent = createDebugProxyWebSocketAgent(resolveDebugProxySettings());
-  return new WebSocket(url, {
-    ...(agent ? { agent } : {}),
-    maxPayload: MATTERMOST_WEBSOCKET_MAX_PAYLOAD_BYTES,
-  }) as MattermostWebSocketLike;
+  return new WebSocket(url, agent ? { agent } : undefined) as MattermostWebSocketLike;
 };
 
 function parsePostedPayload(

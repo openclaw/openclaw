@@ -35,7 +35,10 @@ function resolveBundledChannelWorkspaceArtifactPath(
   return null;
 }
 
-function resolveBundledChannelContractArtifactUrl(pluginId: string, entryBaseName: string): string {
+export function resolveBundledChannelContractArtifactUrl(
+  pluginId: string,
+  entryBaseName: string,
+): string {
   const normalizedEntryBaseName = entryBaseName.replace(/\.(?:[cm]?js|ts)$/u, "");
   const record = resolvePluginRuntimeRecord(pluginId, () => {
     throw new Error(`missing bundled channel plugin '${pluginId}'`);

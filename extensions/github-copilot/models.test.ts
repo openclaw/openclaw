@@ -354,18 +354,14 @@ describe("github-copilot token", () => {
   it("fetches and stores token when cache is missing", async () => {
     jsonStoreMocks.loadJsonFile.mockReturnValue(undefined);
 
-    const fetchImpl = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          token: "fresh;proxy-ep=https://proxy.contoso.test;",
-          expires_at: Math.floor(Date.now() / 1000) + 3600,
-        }),
-        {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        },
-      ),
-    );
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        token: "fresh;proxy-ep=https://proxy.contoso.test;",
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+      }),
+    });
 
     const res = await resolveCopilotApiToken({
       githubToken: "gh",

@@ -1,8 +1,8 @@
 // Private device-pair -> Gateway live-display envelope.
 // Keep this local so pairing QR metadata does not become public Plugin SDK API.
-const DEVICE_PAIR_PAIRING_QR_CHANNEL_DATA_KEY = "openclawPairingQr";
+export const DEVICE_PAIR_PAIRING_QR_CHANNEL_DATA_KEY = "openclawPairingQr";
 
-type DevicePairPairingQrChannelData = {
+export type DevicePairPairingQrChannelData = {
   setupCode: string;
   expiresAtMs: number;
 };

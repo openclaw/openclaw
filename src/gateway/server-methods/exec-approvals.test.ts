@@ -143,13 +143,7 @@ describe("exec approvals gateway methods", () => {
 
   it("relays approved exec-approval commands", async () => {
     const command = "system.execApprovals.get";
-    const payload = {
-      path: "/tmp/exec-approvals.json",
-      exists: true,
-      hash: "sha256:file",
-      file: { version: 1 },
-    };
-    const invoke = vi.fn().mockResolvedValue({ ok: true, payload });
+    const invoke = vi.fn().mockResolvedValue({ ok: true, payload: { exists: true } });
     const respond = vi.fn();
 
     await execApprovalsHandlers["exec.approvals.node.get"]({
@@ -180,103 +174,7 @@ describe("exec approvals gateway methods", () => {
     });
 
     expect(invoke).toHaveBeenCalledWith({ nodeId: "node-1", command, params: {} });
-    expect(respond).toHaveBeenCalledWith(true, payload, undefined);
-  });
-
-  it("relays host-native approval writes without file-shape translation", async () => {
-    const command = "system.execApprovals.set";
-    const invoke = vi.fn().mockResolvedValue({
-      ok: true,
-      payload: { updated: true, hash: "sha256:next" },
-    });
-    const respond = vi.fn();
-    const params = {
-      nodeId: "windows-node",
-      native: {
-        defaultAction: "deny" as const,
-        rules: [{ pattern: "hostname", action: "allow" as const }],
-      },
-      baseHash: "sha256:current",
-    };
-
-    await execApprovalsHandlers["exec.approvals.node.set"]({
-      req: {
-        type: "req",
-        id: "req-native-set",
-        method: "exec.approvals.node.set",
-        params,
-      },
-      params,
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: {
-        getRuntimeConfig: () => ({}),
-        nodeRegistry: {
-          get: () => ({
-            nodeId: "windows-node",
-            connId: "conn-1",
-            platform: "windows",
-            deviceFamily: "Windows",
-            declaredCommands: [command],
-            commands: [command],
-          }),
-          invoke,
-        },
-      } as never,
-    });
-
-    expect(invoke).toHaveBeenCalledWith({
-      nodeId: "windows-node",
-      command,
-      params: {
-        defaultAction: "deny",
-        rules: [{ pattern: "hostname", action: "allow" }],
-        baseHash: "sha256:current",
-      },
-    });
-    expect(respond).toHaveBeenCalledWith(true, { updated: true, hash: "sha256:next" }, undefined);
-  });
-
-  it("rejects malformed node approval snapshots at the gateway boundary", async () => {
-    const command = "system.execApprovals.get";
-    const respond = vi.fn();
-
-    await execApprovalsHandlers["exec.approvals.node.get"]({
-      req: {
-        type: "req",
-        id: "req-invalid-native-get",
-        method: "exec.approvals.node.get",
-        params: { nodeId: "windows-node" },
-      },
-      params: { nodeId: "windows-node" },
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: {
-        getRuntimeConfig: () => ({}),
-        nodeRegistry: {
-          get: () => ({
-            nodeId: "windows-node",
-            connId: "conn-1",
-            platform: "windows",
-            deviceFamily: "Windows",
-            declaredCommands: [command],
-            commands: [command],
-          }),
-          invoke: vi.fn().mockResolvedValue({
-            ok: true,
-            payload: { enabled: true, hash: "sha256:current", rules: [] },
-          }),
-        },
-      } as never,
-    });
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: "node returned invalid exec approvals payload" }),
-    );
+    expect(respond).toHaveBeenCalledWith(true, { exists: true }, undefined);
   });
 
   it("preserves unavailable details for unknown nodes", async () => {

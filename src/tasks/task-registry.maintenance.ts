@@ -883,7 +883,7 @@ function reconcileTaskRecordForOperatorInspectionWithContexts(
   return projectTaskLost(task, now, backingSessionContext);
 }
 
-function reconcileTaskRecordForOperatorInspection(
+export function reconcileTaskRecordForOperatorInspection(
   task: TaskRecord,
   context: CronRecoveryContext = createCronRecoveryContext(),
 ): TaskRecord {

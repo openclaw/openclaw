@@ -14,7 +14,7 @@ type MSTeamsAccountRef = {
   aadObjectId?: string;
 };
 
-type MSTeamsSdkReferenceSource = {
+export type MSTeamsSdkReferenceSource = {
   activityId?: string;
   user?: MSTeamsAccountRef;
   agent?: MSTeamsAccountRef | null;

@@ -222,7 +222,7 @@ function isDiscordAgentProxyVoiceMode(mode: DiscordVoiceMode): boolean {
   return mode === "agent-proxy";
 }
 
-function resolveDiscordRealtimeInterruptResponseOnInputAudio(params: {
+export function resolveDiscordRealtimeInterruptResponseOnInputAudio(params: {
   realtimeConfig: DiscordRealtimeVoiceConfig;
   providerId: string;
 }): boolean {
@@ -230,7 +230,7 @@ function resolveDiscordRealtimeInterruptResponseOnInputAudio(params: {
   return readProviderConfigBoolean(providerConfig, "interruptResponseOnInputAudio") ?? true;
 }
 
-function resolveDiscordRealtimeBargeIn(params: {
+export function resolveDiscordRealtimeBargeIn(params: {
   realtimeConfig: DiscordRealtimeVoiceConfig;
   providerId: string;
 }): boolean {
@@ -241,7 +241,7 @@ function resolveDiscordRealtimeBargeIn(params: {
   return resolveDiscordRealtimeInterruptResponseOnInputAudio(params);
 }
 
-function buildDiscordSpeakExactUserMessage(text: string): string {
+export function buildDiscordSpeakExactUserMessage(text: string): string {
   return [
     "Internal OpenClaw voice playback result.",
     "Do not call openclaw_agent_consult or any other tool for this message.",

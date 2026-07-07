@@ -6,12 +6,12 @@ import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import type { IMessageAttachment } from "./types.js";
 
-type StagedIMessageAttachment = {
+export type StagedIMessageAttachment = {
   path: string;
   contentType?: string;
 };
 
-type StagedIMessageAttachments = {
+export type StagedIMessageAttachments = {
   attachments: StagedIMessageAttachment[];
   unavailableCount: number;
 };

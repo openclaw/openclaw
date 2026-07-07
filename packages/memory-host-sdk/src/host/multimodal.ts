@@ -17,11 +17,11 @@ const MEMORY_MULTIMODAL_SPECS = {
 /** Supported multimodal memory modality. */
 export type MemoryMultimodalModality = keyof typeof MEMORY_MULTIMODAL_SPECS;
 /** All supported multimodal memory modalities in stable config order. */
-const MEMORY_MULTIMODAL_MODALITIES = Object.keys(
+export const MEMORY_MULTIMODAL_MODALITIES = Object.keys(
   MEMORY_MULTIMODAL_SPECS,
 ) as MemoryMultimodalModality[];
 /** User selection for one modality or all modalities. */
-type MemoryMultimodalSelection = MemoryMultimodalModality | "all";
+export type MemoryMultimodalSelection = MemoryMultimodalModality | "all";
 
 /** Normalized multimodal memory ingestion settings. */
 export type MemoryMultimodalSettings = {
@@ -31,10 +31,10 @@ export type MemoryMultimodalSettings = {
 };
 
 /** Default max bytes for one multimodal memory file. */
-const DEFAULT_MEMORY_MULTIMODAL_MAX_FILE_BYTES = 10 * 1024 * 1024;
+export const DEFAULT_MEMORY_MULTIMODAL_MAX_FILE_BYTES = 10 * 1024 * 1024;
 
 /** Normalize user modality selections to supported modalities. */
-function normalizeMemoryMultimodalModalities(
+export function normalizeMemoryMultimodalModalities(
   raw: MemoryMultimodalSelection[] | undefined,
 ): MemoryMultimodalModality[] {
   if (raw === undefined || raw.includes("all")) {

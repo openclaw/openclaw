@@ -503,6 +503,7 @@ async function requestNewConversationBindingThread(
       ...buildThreadRequestRuntimeOptions(params, resolved),
       developerInstructions: CODEX_CONVERSATION_THREAD_DEVELOPER_INSTRUCTIONS,
       experimentalRawEvents: true,
+      persistExtendedHistory: true,
     },
     { timeoutMs: resolved.runtime.requestTimeoutMs },
   );
@@ -565,6 +566,7 @@ async function attachExistingThread(
             ...(resolved.modelProvider ? { modelProvider: resolved.modelProvider } : {}),
             personality: CODEX_NATIVE_PERSONALITY_NONE,
             ...buildThreadRequestRuntimeOptions(params, resolved),
+            persistExtendedHistory: true,
           },
           { timeoutMs: resolved.runtime.requestTimeoutMs },
         );
@@ -693,6 +695,7 @@ async function runBoundTurn(params: {
             ...(serviceTier ? { serviceTier } : {}),
             developerInstructions: CODEX_CONVERSATION_THREAD_DEVELOPER_INSTRUCTIONS,
             experimentalRawEvents: true,
+            persistExtendedHistory: true,
           },
           { timeoutMs: runtime.requestTimeoutMs },
         ),

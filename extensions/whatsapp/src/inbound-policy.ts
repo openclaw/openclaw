@@ -19,7 +19,7 @@ import type { AdmittedWebInboundMessage } from "./inbound/types.js";
 import { resolveWhatsAppRuntimeGroupPolicy } from "./runtime-group-policy.js";
 import { isSelfChatMode, normalizeE164 } from "./text-runtime.js";
 
-type ResolvedWhatsAppInboundPolicy = {
+export type ResolvedWhatsAppInboundPolicy = {
   account: ResolvedWhatsAppAccount;
   dmPolicy: DmPolicy;
   groupPolicy: GroupPolicy;

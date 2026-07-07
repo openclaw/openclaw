@@ -22,7 +22,7 @@ import {
 
 export type NormalizeReplySkipReason = "empty" | "silent" | "heartbeat";
 
-type NormalizeReplyOptions = {
+export type NormalizeReplyOptions = {
   responsePrefix?: string;
   applyChannelTransforms?: boolean;
   /** Context for template variable interpolation in responsePrefix */

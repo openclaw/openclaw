@@ -7,7 +7,7 @@ import {
   parsePluginReleaseArgs,
 } from "./lib/plugin-clawhub-release.ts";
 
-async function collectPluginReleasePlanForClawHub(argv: string[]) {
+export async function collectPluginReleasePlanForClawHub(argv: string[]) {
   const { selection, selectionMode, baseRef, headRef } = parsePluginReleaseArgs(argv);
   return await collectPluginClawHubReleasePlan({
     selection,

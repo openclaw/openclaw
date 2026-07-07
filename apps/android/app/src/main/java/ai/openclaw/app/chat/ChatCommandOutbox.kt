@@ -121,6 +121,9 @@ interface ChatCommandOutbox {
     gatewayId: String,
     nowMs: Long,
   )
+
+  /** Purges every row for all gateways; used when pairing/auth state is reset. */
+  suspend fun clearAll()
 }
 
 @Entity(tableName = "outbox_commands")
@@ -198,6 +201,9 @@ internal interface ChatOutboxDao {
 
   @Query("DELETE FROM outbox_commands WHERE gatewayId = :gatewayId")
   suspend fun deleteGateway(gatewayId: String)
+
+  @Query("DELETE FROM outbox_commands")
+  suspend fun deleteAll()
 }
 
 /**
@@ -332,6 +338,10 @@ class RoomChatCommandOutbox internal constructor(
       failedStatus = ChatOutboxStatus.Failed.dbValue,
       error = OUTBOX_EXPIRED_ERROR,
     )
+  }
+
+  override suspend fun clearAll() {
+    database.outboxDao().deleteAll()
   }
 
   private fun scopedGatewayId(gatewayId: String): String? = gatewayId.trim().takeIf { it.isNotEmpty() }

@@ -109,7 +109,7 @@ function currentUid(overrideUid?: number | null): number | null {
   return process.getuid();
 }
 
-type CandidateBlockReason =
+export type CandidateBlockReason =
   | "source_escapes_root"
   | "path_stat_failed"
   | "path_world_writable"

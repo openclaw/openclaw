@@ -145,7 +145,7 @@ export const POLICY_FIX_METADATA = [
   ),
   m(
     CHECK_IDS.policyGatewayHttpEndpointEnabled,
-    "automatic",
+    "reviewRequired",
     "Disable denied Gateway HTTP endpoints.",
     { policyPath: ["gateway", "http", "denyEndpoints"], configTargets: ["gateway.http"] },
   ),

@@ -43,9 +43,9 @@ const CREDENTIAL_QUERY_PARAM_NAMES = new Set([
 ]);
 const QUERY_PARAM_NAME_SEPARATOR_RE = /[\p{C}\p{Z}\u115F\u1160\u3164\uFFA0+]/gu;
 
-type CopilotProviderMode = "github-copilot" | "byok";
+export type CopilotProviderMode = "github-copilot" | "byok";
 
-type CopilotModelProviderInput = {
+export type CopilotModelProviderInput = {
   api?: string;
   id: string;
   provider: string;

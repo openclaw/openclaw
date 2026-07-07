@@ -5,7 +5,6 @@
 import path from "node:path";
 import type { Page } from "playwright-core";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS } from "./constants.js";
 import type { BrowserDownloadResult } from "./download-types.js";
 import { resolveStrictExistingUploadPaths } from "./paths.js";
 import { createDownloadCaptureForPage } from "./pw-download-capture.js";
@@ -59,7 +58,7 @@ export async function armFileUploadViaPlaywright(opts: {
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   const state = ensurePageState(page);
-  const timeout = normalizeTimeoutMs(opts.timeoutMs, DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS);
+  const timeout = normalizeTimeoutMs(opts.timeoutMs, 120_000);
 
   state.armIdUpload = bumpUploadArmId();
   const armId = state.armIdUpload;
@@ -123,7 +122,7 @@ export async function armDialogViaPlaywright(opts: {
   timeoutMs?: number;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
-  const timeout = normalizeTimeoutMs(opts.timeoutMs, DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS);
+  const timeout = normalizeTimeoutMs(opts.timeoutMs, 120_000);
   try {
     await respondToObservedDialogOnPage({
       page,

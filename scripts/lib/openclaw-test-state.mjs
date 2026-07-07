@@ -336,12 +336,12 @@ export async function createState(options = {}) {
 }
 
 /** Render a dotenv-style env file for a created test state plan. */
-function renderEnvFile(plan) {
+export function renderEnvFile(plan) {
   return `${renderExports(plan.env)}\n`;
 }
 
 /** Render shell commands that create and export an isolated OpenClaw test state. */
-function renderShellSnippet(options = {}) {
+export function renderShellSnippet(options = {}) {
   const label = normalizeLabel(options.label);
   const scenario = requireScenario(options.scenario);
   const config = scenarioConfig(scenario, options);
@@ -374,7 +374,7 @@ function renderShellSnippet(options = {}) {
 }
 
 /** Render a reusable shell function for creating isolated OpenClaw test state. */
-function renderShellFunction() {
+export function renderShellFunction() {
   return `openclaw_test_state_create() {
   local raw_label="\${1:-state}"
   local label="$raw_label"

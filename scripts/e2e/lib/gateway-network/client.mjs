@@ -20,7 +20,7 @@ function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function hasGatewayHealthSummaryPayload(response) {
+export function hasGatewayHealthSummaryPayload(response) {
   if (!isRecord(response) || !isRecord(response.payload)) {
     return false;
   }
@@ -43,7 +43,7 @@ export function responseError(method, response) {
   return new Error(`${method} failed: ${message}`);
 }
 
-function isRetryableStartupError(message) {
+export function isRetryableStartupError(message) {
   return (
     message.includes("gateway starting") ||
     message.includes("closed before frame") ||

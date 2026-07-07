@@ -125,25 +125,6 @@ export class ContextEngineRuntimeSettingsUnsupportedError extends Error {
   }
 }
 
-/**
- * Typed session target for compaction results.
- *
- * Makes the storage mode explicit and carries precise session identity
- * instead of a raw file path string. File-backed is the only storage mode
- * today; new storage modes extend this union when they ship.
- */
-export type ContextEngineSessionTarget = {
-  kind: "file";
-  /** Agent that owns the session, when the caller resolved it. */
-  agentId?: string;
-  /** Runtime session id for the post-compaction live session. */
-  sessionId: string;
-  /** Stable session key used for aliases, policy, and store resolution. */
-  sessionKey?: string;
-  /** Live transcript artifact path for the file-backed session. */
-  sessionFile: string;
-};
-
 export type CompactResult = {
   ok: boolean;
   compacted: boolean;
@@ -156,37 +137,10 @@ export type CompactResult = {
     details?: unknown;
     /** Session id after compaction, when the runtime rotated transcripts. */
     sessionId?: string;
-    /** Typed post-compaction live session target; successor when the runtime rotated transcripts. */
-    sessionTarget?: ContextEngineSessionTarget;
-    /**
-     * Raw session file path after compaction.
-     *
-     * @deprecated Use `sessionTarget`. Shipped plugin-sdk contract: released
-     * third-party context engines (v2026.6.x and earlier) report rotated
-     * transcripts through this field. Remove once typed session targets are
-     * the only successor contract.
-     */
+    /** Session file after compaction, when the runtime rotated transcripts. */
     sessionFile?: string;
   };
 };
-
-/**
- * Resolve the post-compaction live transcript identity from a compact result.
- *
- * Prefers the typed `sessionTarget`. Reading the raw fields is the named
- * compat path for shipped third-party engines that predate `sessionTarget`;
- * it is removed together with the deprecated `sessionFile` result field.
- */
-export function resolveCompactionSuccessorTranscript(result: CompactResult): {
-  sessionId?: string;
-  sessionFile?: string;
-} {
-  const target = result.result?.sessionTarget;
-  return {
-    sessionId: target?.sessionId ?? result.result?.sessionId,
-    sessionFile: target?.sessionFile ?? result.result?.sessionFile,
-  };
-}
 
 export type IngestResult = {
   /** Whether the message was ingested (false if duplicate or no-op) */

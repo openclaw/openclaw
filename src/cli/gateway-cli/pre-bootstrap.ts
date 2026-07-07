@@ -404,7 +404,7 @@ async function guardGatewayRunSelectedConfig(
   }
 }
 
-async function guardGatewayRunReset(params: GatewayRunGuardParams): Promise<boolean> {
+export async function guardGatewayRunReset(params: GatewayRunGuardParams): Promise<boolean> {
   gatewayRunTargetSelectedByConfig = false;
   const envBeforeGuard = { ...process.env };
   try {

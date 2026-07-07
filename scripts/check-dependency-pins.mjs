@@ -117,7 +117,7 @@ export function collectDependencyPinViolations(cwd = process.cwd()) {
 /**
  * Builds the full dependency pin audit payload.
  */
-function collectDependencyPinAudit(cwd = process.cwd()) {
+export function collectDependencyPinAudit(cwd = process.cwd()) {
   const packageJsonFiles = listTrackedPackageJsonFiles(cwd);
   let packageSpecCount = 0;
   for (const relativePath of packageJsonFiles) {

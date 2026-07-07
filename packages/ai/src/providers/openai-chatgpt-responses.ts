@@ -95,7 +95,7 @@ const CODEX_RESPONSE_STATUSES = new Set<CodexResponseStatus>([
 // Types
 // ============================================================================
 
-interface OpenAICodexResponsesOptions extends StreamOptions {
+export interface OpenAICodexResponsesOptions extends StreamOptions {
   reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   reasoningSummary?: "auto" | "concise" | "detailed" | "off" | "on" | null;
   serviceTier?: ResponseCreateParamsStreaming["service_tier"];
@@ -914,7 +914,7 @@ type WebSocketConstructor = new (
   protocols?: string | string[] | { headers?: Record<string, string> },
 ) => WebSocketLike;
 
-interface OpenAICodexWebSocketDebugStats {
+export interface OpenAICodexWebSocketDebugStats {
   requests: number;
   connectionsCreated: number;
   connectionsReused: number;

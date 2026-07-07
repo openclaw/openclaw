@@ -11,7 +11,7 @@ import {
 } from "../oc-path.js";
 import type { YamlAst } from "./ast.js";
 
-type YamlOcPathMatch =
+export type YamlOcPathMatch =
   | { readonly kind: "root"; readonly node: YamlAst }
   | { readonly kind: "scalar"; readonly value: unknown; readonly path: readonly string[] }
   | {

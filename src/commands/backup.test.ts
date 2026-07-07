@@ -17,7 +17,6 @@ import {
 } from "./backup-shared.js";
 import {
   backupVerifyCommandMock,
-  createMockTarStream,
   createBackupTestRuntime,
   mockStateOnlyBackupPlan,
   resetBackupTempHome,
@@ -79,7 +78,9 @@ describe("backup commands", () => {
   beforeEach(async () => {
     await resetBackupTempHome(tempHome);
     tarCreateMock.mockReset();
-    tarCreateMock.mockImplementation(() => createMockTarStream());
+    tarCreateMock.mockImplementation(async ({ file }: { file: string }) => {
+      await fs.writeFile(file, "archive-bytes", "utf8");
+    });
     backupVerifyCommandMock.mockReset();
     backupVerifyCommandMock.mockResolvedValue({
       ok: true,
@@ -267,16 +268,17 @@ describe("backup commands", () => {
         }),
       );
       tarCreateMock.mockImplementationOnce(
-        (options: { onWriteEntry?: (entry: { path: string }) => void }, entryPaths: string[]) =>
-          createMockTarStream({
-            beforeRead: async () => {
-              capturedManifest = JSON.parse(
-                await fs.readFile(entryPaths[0], "utf8"),
-              ) as CapturedBackupManifest;
-              capturedEntryPaths = entryPaths;
-              capturedOnWriteEntry = options.onWriteEntry ?? null;
-            },
-          }),
+        async (
+          options: { file: string; onWriteEntry?: (entry: { path: string }) => void },
+          entryPaths: string[],
+        ) => {
+          capturedManifest = JSON.parse(
+            await fs.readFile(entryPaths[0], "utf8"),
+          ) as CapturedBackupManifest;
+          capturedEntryPaths = entryPaths;
+          capturedOnWriteEntry = options.onWriteEntry ?? null;
+          await fs.writeFile(options.file, "archive-bytes", "utf8");
+        },
       );
       const result = await backupCreateCommand(runtime, {
         output: backupDir,
@@ -365,20 +367,21 @@ describe("backup commands", () => {
       const runtime = createBackupTestRuntime();
       await mockStateOnlyBackupPlan(stateDir);
       tarCreateMock.mockImplementationOnce(
-        (options: { filter?: (entryPath: string) => boolean }, entryPaths: string[]) =>
-          createMockTarStream({
-            beforeRead: () => {
-              const manifestPath = entryPaths[0];
-              const stateRoot = entryPaths[1];
-              if (!manifestPath || !stateRoot) {
-                throw new Error("backup test expected manifest and state entries");
-              }
-              expect(options.filter?.(manifestPath)).toBe(true);
-              expect(
-                options.filter?.(path.join(stateRoot, "agents", "main", "sessions", "s.jsonl")),
-              ).toBe(false);
-            },
-          }),
+        async (
+          options: { file: string; filter?: (entryPath: string) => boolean },
+          entryPaths: string[],
+        ) => {
+          const manifestPath = entryPaths[0];
+          const stateRoot = entryPaths[1];
+          if (!manifestPath || !stateRoot) {
+            throw new Error("backup test expected manifest and state entries");
+          }
+          expect(options.filter?.(manifestPath)).toBe(true);
+          expect(
+            options.filter?.(path.join(stateRoot, "agents", "main", "sessions", "s.jsonl")),
+          ).toBe(false);
+          await fs.writeFile(options.file, "archive-bytes", "utf8");
+        },
       );
 
       const result = await backupCreateCommand(runtime, {

@@ -325,12 +325,12 @@ export function createNpmProjectInstallEnv(
 }
 
 /** Returns true when caller env already pins npm's lifecycle script shell. */
-function hasNpmScriptShellSetting(env: NodeJS.ProcessEnv): boolean {
+export function hasNpmScriptShellSetting(env: NodeJS.ProcessEnv): boolean {
   return NPM_CONFIG_SCRIPT_SHELL_KEYS.some((key) => Boolean(env[key]?.trim()));
 }
 
 /** Resolves an absolute POSIX shell for npm lifecycle scripts when one is available. */
-function resolvePosixNpmScriptShell(env: NodeJS.ProcessEnv): string | null {
+export function resolvePosixNpmScriptShell(env: NodeJS.ProcessEnv): string | null {
   if (process.platform === "win32") {
     return null;
   }

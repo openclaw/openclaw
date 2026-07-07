@@ -1,4 +1,3 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Control UI view renders usage render overview screen content.
 import { html, nothing } from "lit";
 import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
@@ -97,7 +96,7 @@ function renderFilterChips(
   const selectedSession =
     selectedSessions.length === 1 ? sessions.find((s) => s.key === selectedSessions[0]) : null;
   const sessionsLabel = selectedSession
-    ? truncateUtf16Safe(selectedSession.label || selectedSession.key, 20) +
+    ? (selectedSession.label || selectedSession.key).slice(0, 20) +
       ((selectedSession.label || selectedSession.key).length > 20 ? "…" : "")
     : selectedSessions.length === 1
       ? selectedSessions[0].slice(0, 8) + "…"

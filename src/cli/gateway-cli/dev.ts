@@ -3,7 +3,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { extractFrontmatterBlock } from "../../../packages/markdown-core/src/frontmatter.js";
 import { resolveWorkspaceTemplateSearchDirs } from "../../agents/workspace-templates.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { handleReset } from "../../commands/onboard-helpers.js";
@@ -30,7 +29,14 @@ async function loadDevTemplate(name: string, fallback: string): Promise<string> 
         }
         throw error;
       }
-      return extractFrontmatterBlock(raw)?.body.replace(/^\s+/, "") ?? raw;
+      if (!raw.startsWith("---")) {
+        return raw;
+      }
+      const endIndex = raw.indexOf("\n---", 3);
+      if (endIndex === -1) {
+        return raw;
+      }
+      return raw.slice(endIndex + "\n---".length).replace(/^\s+/, "");
     }
   } catch {
     return fallback;

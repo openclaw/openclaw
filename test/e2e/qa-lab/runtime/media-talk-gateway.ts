@@ -570,7 +570,7 @@ async function produceProof(options: ProducerOptions): Promise<ProofResult> {
   }
 }
 
-async function runMediaTalkGatewayProducer(
+export async function runMediaTalkGatewayProducer(
   options: ProducerOptions,
 ): Promise<QaEvidenceSummaryJson> {
   const scenario = SCENARIOS[options.scenarioId];

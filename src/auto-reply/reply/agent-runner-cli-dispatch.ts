@@ -210,7 +210,7 @@ function readCommentaryTextPayload(evt: AgentEventPayload): CommentaryTextPayloa
   };
 }
 
-type CliToolEventPayload = {
+export type CliToolEventPayload = {
   name: string | undefined;
   phase: "start" | "update" | "result";
   args: Record<string, unknown> | undefined;

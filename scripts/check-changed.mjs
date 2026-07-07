@@ -120,7 +120,7 @@ function executableExistsOnPath(command, env = process.env) {
   return false;
 }
 
-function shouldSkipAppLintForMissingSwiftlint(options = {}) {
+export function shouldSkipAppLintForMissingSwiftlint(options = {}) {
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
   const swiftlintAvailable = options.swiftlintAvailable ?? executableExistsOnPath("swiftlint", env);
@@ -244,7 +244,7 @@ export function createShrinkwrapGuardCommand(paths) {
   };
 }
 
-async function runChangedCheckViaCrabbox(argv = [], env = process.env) {
+export async function runChangedCheckViaCrabbox(argv = [], env = process.env) {
   console.error("[check:changed] delegating to Blacksmith Testbox via `pnpm crabbox:run`.");
   return await runManagedCommand({
     bin: "pnpm",
@@ -567,7 +567,7 @@ function createTargetedOxlintCommand({
   };
 }
 
-async function runChangedCheck(result, options = {}) {
+export async function runChangedCheck(result, options = {}) {
   const baseEnv = resolveLocalHeavyCheckEnv(options.env ?? process.env);
   const childEnv = createChangedCheckChildEnv(baseEnv);
   const plan = createChangedCheckPlan(result, {

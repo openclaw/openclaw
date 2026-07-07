@@ -49,7 +49,7 @@ type PreparedDeliveryTarget = {
   recipientUserId?: string;
 };
 
-type DiscordApprovalHandlerContext = {
+export type DiscordApprovalHandlerContext = {
   token: string;
   config: DiscordExecApprovalConfig;
 };

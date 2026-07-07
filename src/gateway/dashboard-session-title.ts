@@ -1,4 +1,3 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Dashboard session titles use the shared utility-model completion path.
 import { generateConversationLabel } from "../auto-reply/reply/conversation-label-generator.js";
 import { updateSessionEntry } from "../config/sessions/session-accessor.js";
@@ -49,7 +48,7 @@ export function normalizeDashboardSessionTitle(raw: string): string | null {
   }
   const unwrapped = firstLine.replace(/^\s*(?:title\s*:\s*)?/i, "").replace(/^["'`]+|["'`]+$/g, "");
   const normalized = unwrapped.replace(/\s+/g, " ").trim();
-  return normalized ? truncateUtf16Safe(normalized, DASHBOARD_SESSION_TITLE_MAX_CHARS) : null;
+  return normalized ? normalized.slice(0, DASHBOARD_SESSION_TITLE_MAX_CHARS) : null;
 }
 
 export async function maybeGenerateDashboardSessionTitle(params: {
@@ -81,7 +80,7 @@ export async function maybeGenerateDashboardSessionTitle(params: {
   dashboardTitleRequests.add(requestKey);
   try {
     const generated = await generateConversationLabel({
-      userMessage: truncateUtf16Safe(sourceText, DASHBOARD_SESSION_TITLE_SOURCE_MAX_CHARS),
+      userMessage: sourceText.slice(0, DASHBOARD_SESSION_TITLE_SOURCE_MAX_CHARS),
       prompt: DASHBOARD_SESSION_TITLE_PROMPT,
       cfg: params.cfg,
       agentId: params.agentId,

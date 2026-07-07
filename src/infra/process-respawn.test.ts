@@ -54,15 +54,6 @@ function clearSupervisorHints() {
   }
 }
 
-function mockDetachedChild(pid: number) {
-  return {
-    pid,
-    kill: vi.fn(),
-    on: vi.fn(),
-    unref: vi.fn(),
-  };
-}
-
 function expectLaunchdSupervisedWithoutKickstart(params?: { launchJobLabel?: string }) {
   setPlatform("darwin");
   if (params?.launchJobLabel) {
@@ -311,7 +302,7 @@ describe("respawnGatewayProcessForUpdate", () => {
       "gateway",
       "run",
     ];
-    spawnMock.mockReturnValue(mockDetachedChild(5151));
+    spawnMock.mockReturnValue({ pid: 5151, unref: vi.fn(), kill: vi.fn() });
 
     const result = respawnGatewayProcessForUpdate();
 
@@ -338,7 +329,7 @@ describe("respawnGatewayProcessForUpdate", () => {
       "gateway",
       "run",
     ];
-    spawnMock.mockReturnValue(mockDetachedChild(7171));
+    spawnMock.mockReturnValue({ pid: 7171, unref: vi.fn(), kill: vi.fn() });
 
     const result = respawnGatewayProcessForUpdate();
 
@@ -361,7 +352,7 @@ describe("respawnGatewayProcessForUpdate", () => {
     const entry =
       "/app/node_modules/.pnpm/@anthropic+sdk@1.0.0/node_modules/@anthropic/sdk/dist/index.js";
     process.argv = ["/usr/local/bin/node", entry, "gateway", "run"];
-    spawnMock.mockReturnValue(mockDetachedChild(8181));
+    spawnMock.mockReturnValue({ pid: 8181, unref: vi.fn(), kill: vi.fn() });
 
     respawnGatewayProcessForUpdate();
 
@@ -378,7 +369,7 @@ describe("respawnGatewayProcessForUpdate", () => {
     process.env.XPC_SERVICE_NAME = "ai.openclaw.mac";
     process.execArgv = [];
     process.argv = ["/usr/local/bin/node", "/repo/dist/index.js", "gateway", "run"];
-    spawnMock.mockReturnValue(mockDetachedChild(6161));
+    spawnMock.mockReturnValue({ pid: 6161, unref: vi.fn(), kill: vi.fn() });
 
     const result = respawnGatewayProcessForUpdate();
 
@@ -393,27 +384,6 @@ describe("respawnGatewayProcessForUpdate", () => {
         stdio: "inherit",
       },
     );
-  });
-
-  it("registers a no-op detached child error listener before unref", () => {
-    clearSupervisorHints();
-    setPlatform("linux");
-    process.execArgv = [];
-    process.argv = ["/usr/local/bin/node", "/repo/dist/index.js", "gateway", "run"];
-    const child = mockDetachedChild(9191);
-    spawnMock.mockReturnValue(child);
-
-    const result = respawnGatewayProcessForUpdate();
-
-    expect(result.mode).toBe("spawned");
-    expect(result.child).toBe(child);
-    expect(child.on).toHaveBeenCalledWith("error", expect.any(Function));
-    const errorListener = child.on.mock.calls.find(([event]) => event === "error")?.[1];
-    expect(() => errorListener?.(new Error("spawn ENOENT"))).not.toThrow();
-    expect(child.unref).toHaveBeenCalledOnce();
-    const onCallOrder = child.on.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY;
-    const unrefCallOrder = child.unref.mock.invocationCallOrder[0] ?? Number.NEGATIVE_INFINITY;
-    expect(onCallOrder).toBeLessThan(unrefCallOrder);
   });
 
   it("exits to a managed supervisor for updates even when respawn is disabled", () => {

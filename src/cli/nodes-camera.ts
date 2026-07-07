@@ -227,7 +227,7 @@ export async function writeBase64ToFile(
 }
 
 /** Require the node remote IP needed to validate URL-backed camera payloads. */
-function requireNodeRemoteIp(remoteIp?: string): string {
+export function requireNodeRemoteIp(remoteIp?: string): string {
   const normalized = remoteIp?.trim();
   if (!normalized) {
     throw new Error("camera URL payload requires node remoteIp");

@@ -6,7 +6,7 @@ import type {
   SessionsPatchResult,
 } from "../api/types.ts";
 
-const OPENAI_GPT5_MODEL: ModelCatalogEntry = {
+export const OPENAI_GPT5_MODEL: ModelCatalogEntry = {
   id: "gpt-5",
   name: "GPT-5",
   provider: "openai",
@@ -44,7 +44,9 @@ export function createAmbiguousModelCatalog(
   }));
 }
 
-function createMainSessionRow(overrides: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
+export function createMainSessionRow(
+  overrides: Partial<GatewaySessionRow> = {},
+): GatewaySessionRow {
   return {
     key: "main",
     kind: "direct",

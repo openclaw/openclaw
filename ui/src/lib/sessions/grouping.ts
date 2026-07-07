@@ -24,7 +24,7 @@ export type SessionRowGroup = {
   rows: GatewaySessionRow[];
 };
 
-type SidebarSessionSection<Row> = {
+export type SidebarSessionSection<Row> = {
   id: "pinned" | "ungrouped" | `category:${string}`;
   category?: string;
   rows: Row[];

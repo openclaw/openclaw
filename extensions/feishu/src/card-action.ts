@@ -4,7 +4,6 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
@@ -245,7 +244,7 @@ function pruneChatTypeCache(now: number): void {
 }
 
 function sanitizeLogValue(v: string): string {
-  return truncateUtf16Safe(v.replace(/[\r\n]/g, " "), 500);
+  return v.replace(/[\r\n]/g, " ").slice(0, 500);
 }
 
 function resolveFeishuApprovalCardExpiresAt(nowRaw = Date.now()): number | undefined {

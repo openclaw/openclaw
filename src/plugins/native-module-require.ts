@@ -151,7 +151,7 @@ function requireWithOptionalAliases(
 }
 
 /** Runs a native require block with temporary CJS/ESM alias hooks and restores both afterward. */
-function withNativeRequireAliases<T>(
+export function withNativeRequireAliases<T>(
   aliasMap: Record<string, string> | undefined,
   run: () => T,
 ): T {

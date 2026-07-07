@@ -653,41 +653,8 @@ export async function prepareSlackMessage(params: {
   }
   const { senderId, allowFromLower } = authorization;
   const messageText = message.text ?? "";
-  let resolvedSenderName = normalizeOptionalString(message.username);
-  const resolveSenderName = async (): Promise<string> => {
-    if (resolvedSenderName) {
-      return resolvedSenderName;
-    }
-    if (message.user) {
-      const sender = await ctx.resolveUserName(message.user);
-      const normalized = normalizeOptionalString(sender?.name);
-      if (normalized) {
-        resolvedSenderName = normalized;
-        return resolvedSenderName;
-      }
-    }
-    resolvedSenderName = message.user ?? message.bot_id ?? "unknown";
-    return resolvedSenderName;
-  };
   const mentionMetadata = collectSlackMentionMetadata(messageText);
   const { mentionedUserIds, mentionedSubteamIds, hasAnyMention } = mentionMetadata;
-  const messageAssistantThreadContext = resolveSlackMessageAssistantThreadContext(message);
-  const assistantContextLookupChannelId =
-    messageAssistantThreadContext?.assistantChannelId ?? message.channel;
-  const assistantContextLookupThreadTs =
-    messageAssistantThreadContext?.threadTs ?? message.thread_ts ?? message.ts;
-  const cachedAssistantThreadContext = isDirectMessage
-    ? ctx.getSlackAssistantThreadContext(
-        assistantContextLookupChannelId,
-        assistantContextLookupThreadTs,
-      )
-    : undefined;
-  const restoredAssistantThreadContextPromise =
-    isDirectMessage &&
-    !cachedAssistantThreadContext &&
-    !hasSlackAssistantThreadMetadata(messageAssistantThreadContext)
-      ? restoreSlackAssistantThreadContextFromMetadata({ ctx, message })
-      : Promise.resolve(undefined);
   const { explicitlyMentionedBotUser, explicitlyMentionedBotSubteam, explicitlyMentioned } =
     await resolveSlackExplicitMentionState({
       ctx,
@@ -709,7 +676,23 @@ export async function prepareSlackMessage(params: {
     : isGroupDm
       ? "group"
       : "channel";
-  const restoredAssistantThreadContext = await restoredAssistantThreadContextPromise;
+  const messageAssistantThreadContext = resolveSlackMessageAssistantThreadContext(message);
+  const assistantContextLookupChannelId =
+    messageAssistantThreadContext?.assistantChannelId ?? message.channel;
+  const assistantContextLookupThreadTs =
+    messageAssistantThreadContext?.threadTs ?? message.thread_ts ?? message.ts;
+  const cachedAssistantThreadContext = isDirectMessage
+    ? ctx.getSlackAssistantThreadContext(
+        assistantContextLookupChannelId,
+        assistantContextLookupThreadTs,
+      )
+    : undefined;
+  const restoredAssistantThreadContext =
+    isDirectMessage &&
+    !cachedAssistantThreadContext &&
+    !hasSlackAssistantThreadMetadata(messageAssistantThreadContext)
+      ? await restoreSlackAssistantThreadContextFromMetadata({ ctx, message })
+      : undefined;
   const assistantThreadContext = mergeSlackAssistantThreadContext(
     messageAssistantThreadContext,
     cachedAssistantThreadContext ?? restoredAssistantThreadContext,
@@ -842,14 +825,6 @@ export async function prepareSlackMessage(params: {
       return null;
     }
   }
-  const senderNameForAuthPromise: Promise<
-    { ok: true; name: string | undefined } | { ok: false; error: unknown }
-  > = ctx.allowNameMatching
-    ? resolveSenderName().then(
-        (name) => ({ ok: true, name }),
-        (error: unknown) => ({ ok: false, error }),
-      )
-    : Promise.resolve({ ok: true, name: undefined });
   const directThreadRoutedToDmSession =
     !assistantThreadContext &&
     isDirectMessage &&
@@ -881,6 +856,22 @@ export async function prepareSlackMessage(params: {
           );
   }
 
+  let resolvedSenderName = normalizeOptionalString(message.username);
+  const resolveSenderName = async (): Promise<string> => {
+    if (resolvedSenderName) {
+      return resolvedSenderName;
+    }
+    if (message.user) {
+      const sender = await ctx.resolveUserName(message.user);
+      const normalized = normalizeOptionalString(sender?.name);
+      if (normalized) {
+        resolvedSenderName = normalized;
+        return resolvedSenderName;
+      }
+    }
+    resolvedSenderName = message.user ?? message.bot_id ?? "unknown";
+    return resolvedSenderName;
+  };
   const recordDroppedHistory = async (
     reason: "slack-mention-detection-unavailable" | "slack-no-mention" | "slack-other-mention",
   ): Promise<void> => {
@@ -939,11 +930,7 @@ export async function prepareSlackMessage(params: {
       },
     });
   };
-  const senderNameForAuthResult = await senderNameForAuthPromise;
-  if (!senderNameForAuthResult.ok) {
-    throw senderNameForAuthResult.error;
-  }
-  const senderNameForAuth = senderNameForAuthResult.name;
+  const senderNameForAuth = ctx.allowNameMatching ? await resolveSenderName() : undefined;
 
   const allowTextCommands = shouldHandleTextCommands({
     cfg,
@@ -1084,26 +1071,14 @@ export async function prepareSlackMessage(params: {
     return null;
   }
 
-  const threadStarterPromise =
+  const threadStarter =
     isThreadReply && threadTs
-      ? resolveSlackThreadStarter({
+      ? await resolveSlackThreadStarter({
           channelId: message.channel,
           threadTs,
           client: ctx.app.client,
         })
-      : Promise.resolve(null);
-  const chatType = resolveSlackChatType(conversation.resolvedChannelType);
-  const inboundEventKind = classifyChannelInboundEvent({
-    conversation: { kind: chatType },
-    unmentionedGroupPolicy: resolveUnmentionedGroupInboundPolicy({
-      cfg,
-      agentId: route.agentId,
-    }),
-    wasMentioned: effectiveWasMentioned,
-    hasControlCommand: hasControlCommandInMessage,
-    hasAbortRequest,
-  });
-  const threadStarter = await threadStarterPromise;
+      : null;
   const resolvedMessageContent = await resolveSlackMessageContent({
     message,
     isThreadReply,
@@ -1118,6 +1093,18 @@ export async function prepareSlackMessage(params: {
     return null;
   }
   const { rawBody, effectiveDirectMedia } = resolvedMessageContent;
+  const chatType = resolveSlackChatType(conversation.resolvedChannelType);
+  const inboundEventKind = classifyChannelInboundEvent({
+    conversation: { kind: chatType },
+    unmentionedGroupPolicy: resolveUnmentionedGroupInboundPolicy({
+      cfg,
+      agentId: route.agentId,
+    }),
+    wasMentioned: effectiveWasMentioned,
+    hasControlCommand: hasControlCommandInMessage,
+    hasAbortRequest,
+  });
+
   const ackReaction = resolveAckReaction(cfg, route.agentId, {
     channel: "slack",
     accountId: account.accountId,

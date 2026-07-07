@@ -5,10 +5,7 @@ import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agen
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import { getRuntimeConfig, projectConfigOntoRuntimeSourceSnapshot } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
-import {
-  hasSessionActiveAutoModelFallback,
-  hasSessionAutoModelFallbackProvenance,
-} from "../config/sessions/model-override-provenance.js";
+import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { listSessionEntries } from "../config/sessions/session-accessor.js";
 import { resolveSessionTotalTokens, type SessionEntry } from "../config/sessions/types.js";
@@ -435,9 +432,8 @@ export async function getStatusSummary(
             selectedModelComparisonLabel,
             configuredSessionModelComparisonLabel,
           ) &&
-          (hasUserPinnedModelSelection(entry) || hasSessionActiveAutoModelFallback(entry));
-        // Session rows show the live selected model and warn for user-pinned
-        // differences as well as runtime fallback selections (#96126).
+          hasUserPinnedModelSelection(entry);
+        // Session rows show the live selected model but warn only for user-pinned differences.
         const contextTokens =
           resolveContextTokensForModel({
             cfg,
@@ -497,11 +493,7 @@ export async function getStatusSummary(
           model,
           configuredModel: configuredSessionModelLabel,
           selectedModel: selectedModelLabel,
-          modelSelectionReason: modelSelectionDiffers
-            ? hasUserPinnedModelSelection(entry)
-              ? "session override"
-              : "fallback selected"
-            : null,
+          modelSelectionReason: modelSelectionDiffers ? "session override" : null,
           runtime,
           contextTokens,
           flags: buildFlags(entry),

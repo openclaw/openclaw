@@ -53,7 +53,7 @@ export type DreamingEntry = {
   lastRecalledAt?: string;
 };
 
-type DreamingStatus = {
+export type DreamingStatus = {
   enabled: boolean;
   timezone?: string;
   verboseLogging: boolean;
@@ -83,7 +83,7 @@ type DreamingStatus = {
   };
 };
 
-type WikiImportInsightItem = {
+export type WikiImportInsightItem = {
   pagePath: string;
   title: string;
   riskLevel: "low" | "medium" | "high" | "unknown";
@@ -106,7 +106,7 @@ type WikiImportInsightItem = {
   updatedAt?: string;
 };
 
-type WikiImportInsightCluster = {
+export type WikiImportInsightCluster = {
   key: string;
   label: string;
   itemCount: number;
@@ -124,7 +124,7 @@ export type WikiImportInsights = {
   clusters: WikiImportInsightCluster[];
 };
 
-type WikiMemoryPalaceItem = {
+export type WikiMemoryPalaceItem = {
   pagePath: string;
   title: string;
   kind: "entity" | "concept" | "source" | "synthesis" | "report";
@@ -140,7 +140,7 @@ type WikiMemoryPalaceItem = {
   snippet?: string;
 };
 
-type WikiMemoryPalaceCluster = {
+export type WikiMemoryPalaceCluster = {
   key: WikiMemoryPalaceItem["kind"];
   label: string;
   itemCount: number;
@@ -151,7 +151,7 @@ type WikiMemoryPalaceCluster = {
   items: WikiMemoryPalaceItem[];
 };
 
-type WikiMemoryPalacePageCounts = Record<WikiMemoryPalaceItem["kind"], number>;
+export type WikiMemoryPalacePageCounts = Record<WikiMemoryPalaceItem["kind"], number>;
 
 export type WikiMemoryPalace = {
   totalItems: number;

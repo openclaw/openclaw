@@ -81,14 +81,6 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
     const host = makeHost({
       chatRunId: "run-before-terminal-event",
       chatStream: "final answer",
-      sessionsResult: makeSessionsResult([
-        {
-          key: "s1",
-          hasActiveRun: true,
-          activeRunIds: ["run-before-terminal-event"],
-          status: "running",
-        },
-      ]),
     });
 
     expect(
@@ -103,29 +95,6 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
     expect(host.chatRunId).toBeNull();
     expect(host.chatStream).toBeNull();
     expect(rowActive(host)).toBe(false);
-  });
-
-  it("suppresses a stale completed run published under an equivalent alias", () => {
-    const host = makeHost({
-      sessionKey: "main",
-      sessionsResult: makeSessionsResult([
-        {
-          key: "agent:main:main",
-          hasActiveRun: true,
-          activeRunIds: ["r1"],
-          status: "running",
-        },
-      ]),
-      lastLocalTerminalReconcile: {
-        sessionKey: "main",
-        runId: "r1",
-        phase: "done",
-        sessionStatus: "done",
-      },
-    });
-
-    expect(reconcileChatRunFromCurrentSessionRow(host)).toBe(true);
-    expect(isSessionRunActive(host.sessionsResult?.sessions[0] ?? {})).toBe(false);
   });
 
   it("suppresses a stale active row after a recent local completion", () => {
@@ -204,7 +173,7 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
     expect(rowActive(host)).toBe(true);
   });
 
-  it("retains completed run identity across a terminal row projection", () => {
+  it("clears the flag once the server poll reports a non-active row", () => {
     const host = makeHost({
       sessionsResult: makeSessionsResult([{ key: "s1", hasActiveRun: false, status: "done" }]),
       lastLocalTerminalReconcile: {
@@ -215,7 +184,7 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
       },
     });
     expect(reconcileChatRunFromCurrentSessionRow(host)).toBe(false);
-    expect(host.lastLocalTerminalReconcile?.runId).toBe("r1");
+    expect(host.lastLocalTerminalReconcile).toBeNull();
   });
 
   it("does not arm stale-row suppression from generic lifecycle cleanup", () => {
@@ -237,22 +206,6 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
       { key: "s1", hasActiveRun: true, activeRunIds: ["r1"], status: "running" },
     ]);
     expect(reconcileChatRunFromCurrentSessionRow(host)).toBe(false);
-    expect(rowActive(host)).toBe(true);
-  });
-
-  it("does not clear an unidentified active row from an unowned terminal event", () => {
-    const host = makeHost({
-      sessionsResult: makeSessionsResult([{ key: "s1", hasActiveRun: true, status: "running" }]),
-    });
-
-    reconcileChatRunLifecycle(host, {
-      outcome: "done",
-      sessionStatus: "done",
-      runId: null,
-      sessionKey: "s1",
-      publishRunStatus: false,
-    });
-
     expect(rowActive(host)).toBe(true);
   });
 
@@ -359,78 +312,6 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
     expect(host.chatStream).toBeNull();
   });
 
-  it("publishes the canonical global row key for a selected agent alias", () => {
-    const reconcileRunTerminal = vi.fn();
-    const host = makeHost({
-      sessionKey: "agent:work:main",
-      chatRunId: "run-global",
-      chatStream: "streaming",
-      sessionsResult: makeSessionsResult([
-        {
-          key: "global",
-          hasActiveRun: true,
-          activeRunIds: ["run-global"],
-          status: "running",
-        },
-      ]),
-      sessions: {
-        reconcileRunTerminal,
-        setModelOverride: vi.fn(),
-      },
-    });
-
-    reconcileChatRunLifecycle(host, {
-      outcome: "done",
-      sessionStatus: "done",
-      runId: "run-global",
-      sessionKey: "agent:work:main",
-      clearLocalRun: true,
-      clearChatStream: true,
-    });
-
-    expect(host.sessionsResult?.sessions[0]).toMatchObject({
-      key: "global",
-      hasActiveRun: false,
-      status: "done",
-    });
-    expect(reconcileRunTerminal).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "run-global",
-        sessionKeys: expect.arrayContaining(["agent:work:main", "global"]),
-      }),
-    );
-  });
-
-  it("publishes the canonical global key before the local session list loads", () => {
-    const reconcileRunTerminal = vi.fn();
-    const host = makeHost({
-      sessionKey: "agent:work:main",
-      chatRunId: "run-global",
-      chatStream: "streaming",
-      sessionsResult: null,
-      sessions: {
-        reconcileRunTerminal,
-        setModelOverride: vi.fn(),
-      },
-    });
-
-    reconcileChatRunLifecycle(host, {
-      outcome: "done",
-      sessionStatus: "done",
-      runId: "run-global",
-      sessionKey: "agent:work:main",
-      clearLocalRun: true,
-      clearChatStream: true,
-    });
-
-    expect(reconcileRunTerminal).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "run-global",
-        sessionKeys: expect.arrayContaining(["agent:work:main", "global"]),
-      }),
-    );
-  });
-
   it("arms suppression on a completed turn, then suppresses the racing refresh", () => {
     const host = makeHost({
       chatRunId: "r1",
@@ -512,7 +393,7 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
     }
   });
 
-  it("reconciles stale session publications while terminal status is visible", () => {
+  it("waits for terminal status to expire before reconciling session publications", () => {
     const completedAt = Date.now();
     const host = makeHost({
       chatRunStatus: {
@@ -529,6 +410,10 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
       },
     });
 
+    expect(reconcileStaleChatRunAfterSessionStatePublication(host)).toBe(false);
+    expect(rowActive(host)).toBe(true);
+
+    host.chatRunStatus = null;
     expect(reconcileStaleChatRunAfterSessionStatePublication(host)).toBe(true);
     expect(rowActive(host)).toBe(false);
   });

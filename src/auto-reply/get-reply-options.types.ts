@@ -14,7 +14,7 @@ export type BlockReplyContext = {
 };
 
 /** Context passed to onModelSelected callback with actual model used. */
-type ModelSelectedContext = {
+export type ModelSelectedContext = {
   provider: string;
   model: string;
   thinkLevel: string | undefined;

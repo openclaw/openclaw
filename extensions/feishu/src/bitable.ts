@@ -23,7 +23,7 @@ type BitableRecordUpdateFields = NonNullable<
   NonNullable<BitableRecordUpdatePayload["data"]>["fields"]
 >;
 
-class LarkApiError extends Error {
+export class LarkApiError extends Error {
   readonly code: number;
   readonly api: string;
   readonly context?: Record<string, unknown>;

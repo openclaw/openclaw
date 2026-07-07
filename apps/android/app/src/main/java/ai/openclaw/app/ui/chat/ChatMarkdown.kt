@@ -74,7 +74,6 @@ import org.commonmark.node.Paragraph
 import org.commonmark.node.SoftLineBreak
 import org.commonmark.node.StrongEmphasis
 import org.commonmark.node.ThematicBreak
-import org.commonmark.parser.IncludeSourceSpans
 import org.commonmark.parser.Parser
 import java.net.URI
 import java.util.Locale
@@ -96,7 +95,6 @@ private val markdownParser: Parser by lazy {
   Parser
     .builder()
     .extensions(extensions)
-    .includeSourceSpans(IncludeSourceSpans.BLOCKS_AND_INLINES)
     .build()
 }
 
@@ -107,27 +105,18 @@ fun ChatMarkdown(
   textColor: Color,
   isStreaming: Boolean = false,
 ) {
-  val blocks = remember(text, isStreaming) { segmentChatMarkdown(text, isStreaming) }
+  val document = remember(text) { parseChatMarkdown(text) }
   val inlineStyles =
     InlineStyles(inlineCodeBg = mobileCodeBg, inlineCodeColor = mobileCodeText, linkColor = mobileAccent, baseCallout = mobileCallout)
 
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-    for (block in blocks) {
-      when (block) {
-        is ChatMarkdownSourceBlock.Markdown -> {
-          val document = remember(block.source) { parseChatMarkdown(block.source) }
-          RenderMarkdownBlocks(
-            start = document.firstChild,
-            textColor = textColor,
-            inlineStyles = inlineStyles,
-            listDepth = 0,
-            isStreaming = isStreaming,
-          )
-        }
-        is ChatMarkdownSourceBlock.Math -> ChatMathBlock(latex = block.latex, textColor = textColor)
-        is ChatMarkdownSourceBlock.MathFallback -> ChatMathFallback(latex = block.latex)
-      }
-    }
+    RenderMarkdownBlocks(
+      start = document.firstChild,
+      textColor = textColor,
+      inlineStyles = inlineStyles,
+      listDepth = 0,
+      isStreaming = isStreaming,
+    )
   }
 }
 

@@ -10,15 +10,8 @@ import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-run
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { resolveOutboundAttachmentFromUrl } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveSignalAccount } from "./accounts.js";
-import {
-  appendSignalApprovalReactionHintForOutboundMessage,
-  registerSignalApprovalReactionTargetForOutboundMessage,
-} from "./approval-reactions.js";
 import { signalRpcRequest } from "./client-adapter.js";
 import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
@@ -39,9 +32,6 @@ export type SignalSendOpts = {
   timeoutMs?: number;
   textMode?: "markdown" | "plain";
   textStyles?: SignalTextStyleRange[];
-  replyToId?: string | null;
-  replyToAuthor?: string | null;
-  replyToBody?: string | null;
 };
 
 export type SignalSendResult = {
@@ -145,8 +135,6 @@ function createSignalSendReceipt(params: {
   timestamp?: number;
   target: SignalTarget;
   kind: MessageReceiptPartKind;
-  replyToId?: string;
-  nativeReplyStatus?: "sent" | "fallback";
 }): MessageReceipt {
   const messageId = params.messageId.trim();
   const results: MessageReceiptSourceResult[] =
@@ -157,12 +145,6 @@ function createSignalSendReceipt(params: {
             messageId,
             meta: {
               targetType: params.target.type,
-              ...(params.replyToId
-                ? {
-                    replyToId: params.replyToId,
-                    nativeReplyStatus: params.nativeReplyStatus ?? "sent",
-                  }
-                : {}),
             },
           },
         ]
@@ -182,58 +164,7 @@ function createSignalSendReceipt(params: {
   return createMessageReceiptFromOutboundResults({
     results,
     kind: params.kind,
-    ...(params.replyToId ? { replyToId: params.replyToId } : {}),
   });
-}
-
-function parseSignalReplyTimestamp(raw: string | null | undefined): number | undefined {
-  const value = normalizeOptionalString(raw);
-  if (!value || !/^\d+$/.test(value)) {
-    return undefined;
-  }
-  const timestamp = Number(value);
-  if (!Number.isSafeInteger(timestamp) || timestamp <= 0) {
-    return undefined;
-  }
-  return timestamp;
-}
-
-function resolveSignalQuoteParams(opts: SignalSendOpts):
-  | {
-      replyToId: string;
-      params: Record<string, unknown>;
-    }
-  | undefined {
-  const timestamp = parseSignalReplyTimestamp(opts.replyToId);
-  const author = normalizeOptionalString(opts.replyToAuthor);
-  if (timestamp === undefined || !author) {
-    return undefined;
-  }
-  return {
-    replyToId: String(timestamp),
-    params: {
-      quoteTimestamp: timestamp,
-      quoteAuthor: author,
-      quoteMessage: opts.replyToBody ?? "",
-    },
-  };
-}
-
-function isSignalQuoteMetadataRejection(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  const normalized = normalizeLowercaseStringOrEmpty(message);
-  if (!normalized.includes("quote")) {
-    return false;
-  }
-  return (
-    normalized.includes("reject") ||
-    normalized.includes("invalid") ||
-    normalized.includes("unrecognized") ||
-    normalized.includes("unsupported") ||
-    normalized.includes("not found") ||
-    normalized.includes("no such") ||
-    normalized.includes("unknown")
-  );
 }
 
 export async function sendMessageSignal(
@@ -249,17 +180,7 @@ export async function sendMessageSignal(
   });
   const { baseUrl, account } = resolveSignalRpcContext(opts, accountInfo);
   const target = parseTarget(to);
-  const targetAuthor = normalizeOptionalString(account);
-  const targetAuthorUuid = normalizeOptionalString(accountInfo.config.accountUuid);
-  const outboundText = appendSignalApprovalReactionHintForOutboundMessage({
-    cfg,
-    accountId: accountInfo.accountId,
-    to,
-    text: text ?? "",
-    targetAuthor,
-    targetAuthorUuid,
-  });
-  let message = outboundText;
+  let message = text ?? "";
   let messageFromPlaceholder = false;
   let textStyles: SignalTextStyleRange[] = [];
   const textMode = opts.textMode ?? "markdown";
@@ -334,44 +255,13 @@ export async function sendMessageSignal(
   }
   Object.assign(params, targetParams);
 
-  const quote = resolveSignalQuoteParams(opts);
-  const sendOpts = {
+  const result = await signalRpcRequest<{ timestamp?: number }>("send", params, {
     baseUrl,
     timeoutMs: opts.timeoutMs,
     apiMode,
-    maxAttachmentBytes: maxBytes,
-  };
-  let nativeReplyStatus: "sent" | "fallback" | undefined;
-  let result: { timestamp?: number } | undefined;
-  if (quote) {
-    try {
-      result = await signalRpcRequest<{ timestamp?: number }>(
-        "send",
-        { ...params, ...quote.params },
-        sendOpts,
-      );
-      nativeReplyStatus = "sent";
-    } catch (error) {
-      if (!isSignalQuoteMetadataRejection(error)) {
-        throw error;
-      }
-      result = await signalRpcRequest<{ timestamp?: number }>("send", params, sendOpts);
-      nativeReplyStatus = "fallback";
-    }
-  } else {
-    result = await signalRpcRequest<{ timestamp?: number }>("send", params, sendOpts);
-  }
+  });
   const timestamp = result?.timestamp;
   const messageId = timestamp ? String(timestamp) : "unknown";
-  registerSignalApprovalReactionTargetForOutboundMessage({
-    cfg,
-    accountId: accountInfo.accountId,
-    to,
-    messageId,
-    text: outboundText,
-    targetAuthor,
-    targetAuthorUuid,
-  });
   return {
     messageId,
     timestamp,
@@ -379,7 +269,6 @@ export async function sendMessageSignal(
       messageId,
       target,
       kind: attachments && attachments.length > 0 ? "media" : "text",
-      ...(quote ? { replyToId: quote.replyToId, nativeReplyStatus } : {}),
       ...(timestamp != null ? { timestamp } : {}),
     }),
   };

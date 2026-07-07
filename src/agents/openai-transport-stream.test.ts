@@ -142,15 +142,6 @@ function expectRecordFields(record: unknown, expected: Record<string, unknown>) 
 }
 
 describe("openai transport stream", () => {
-  it("keeps bounded redacted diagnostics UTF-16 well-formed", () => {
-    const payload = testing.stringifyRedactedPayload(`${"x".repeat(7_998)}🚀tail`);
-    const event = testing.stringifyRedactedEvent(`${"x".repeat(1_998)}🚀tail`);
-
-    expect(payload).toContain(`${"x".repeat(7_998)}…<truncated>`);
-    expect(event).toContain(`${"x".repeat(1_998)}…<truncated>`);
-    expect(payload).not.toContain("\uD83D");
-    expect(event).not.toContain("\uD83D");
-  });
   it("fails Azure Responses streams when headers arrive but no first event follows", async () => {
     vi.useFakeTimers();
     try {
@@ -2226,62 +2217,6 @@ describe("openai transport stream", () => {
         totalTokens: 30,
       },
     );
-  });
-
-  it("preserves a valid provider-reported usage cost", () => {
-    const model = {
-      id: "openrouter/free",
-      name: "OpenRouter Free",
-      api: "openai-completions",
-      provider: "openrouter",
-      baseUrl: "https://openrouter.ai/api/v1",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 200_000,
-      maxTokens: 8_192,
-    } satisfies Model<"openai-completions">;
-
-    const usage = parseTransportChunkUsage(
-      {
-        prompt_tokens: 10,
-        completion_tokens: 5,
-        total_tokens: 15,
-        cost: 0,
-      },
-      model,
-    );
-
-    expect(usage.cost.total).toBe(0);
-    expect(usage.cost.totalOrigin).toBe("provider-billed");
-  });
-
-  it("keeps the catalog estimate for an invalid provider-reported usage cost", () => {
-    const model = {
-      id: "openrouter/free",
-      name: "OpenRouter Free",
-      api: "openai-completions",
-      provider: "openrouter",
-      baseUrl: "https://openrouter.ai/api/v1",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 200_000,
-      maxTokens: 8_192,
-    } satisfies Model<"openai-completions">;
-
-    const usage = parseTransportChunkUsage(
-      {
-        prompt_tokens: 10,
-        completion_tokens: 5,
-        total_tokens: 15,
-        cost: -1,
-      },
-      model,
-    );
-
-    expect(usage.cost.total).toBeCloseTo(0.00002);
-    expect(usage.cost.totalOrigin).toBeUndefined();
   });
 
   it("clamps uncached prompt usage at zero", () => {

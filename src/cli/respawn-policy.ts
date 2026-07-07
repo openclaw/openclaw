@@ -29,7 +29,7 @@ const GATEWAY_RUN_VALUE_FLAGS = [
 
 const INTERACTIVE_TTY_COMMANDS = new Set(["tui", "terminal", "chat"]);
 
-function isInteractiveTtyCommandArgv(argv: string[]): boolean {
+export function isInteractiveTtyCommandArgv(argv: string[]): boolean {
   const invocation = resolveCliArgvInvocation(argv);
   return invocation.primary !== null && INTERACTIVE_TTY_COMMANDS.has(invocation.primary);
 }

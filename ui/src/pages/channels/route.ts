@@ -17,8 +17,7 @@ function loadChannelsRoute(context: ApplicationContext) {
 
 export const page = definePage({
   id: "channels",
-  path: "/settings/channels",
-  aliases: ["/channels"],
+  path: "/channels",
   loader: (context: ApplicationContext) => loadChannelsRoute(context),
   component: () =>
     import("./channels-page.ts").then(() => ({

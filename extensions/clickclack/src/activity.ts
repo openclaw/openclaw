@@ -19,10 +19,10 @@ import { buildChannelProgressDraftLine } from "openclaw/plugin-sdk/channel-outbo
 import type { ClickClackMessage, ClickClackMessageProvenance } from "./types.js";
 
 /** Debounce window for PATCHing streaming commentary snapshots. */
-const CLICKCLACK_COMMENTARY_FLUSH_MS = 700;
+export const CLICKCLACK_COMMENTARY_FLUSH_MS = 700;
 
 /** Item event payload shape delivered by `replyOptions.onItemEvent`. */
-type ClickClackItemEventPayload = {
+export type ClickClackItemEventPayload = {
   itemId?: string;
   toolCallId?: string;
   kind?: string;
@@ -36,7 +36,7 @@ type ClickClackItemEventPayload = {
 };
 
 /** Destination for durable activity rows (channel or DM conversation). */
-type ClickClackActivityTarget = {
+export type ClickClackActivityTarget = {
   channelId?: string;
   conversationId?: string;
 };

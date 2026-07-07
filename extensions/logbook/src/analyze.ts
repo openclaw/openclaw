@@ -7,11 +7,11 @@ import type { LogbookCard, LogbookCardDraft, LogbookDistraction } from "./types.
 /** Cards within this window before a batch are treated as a revisable draft. */
 export const CARD_LOOKBACK_MS = 45 * 60 * 1000;
 /** Frame gap that splits one analysis window into separate batches. */
-const BATCH_MAX_GAP_MS = 2 * 60 * 1000;
+export const BATCH_MAX_GAP_MS = 2 * 60 * 1000;
 /** Upper bound of images sent to the vision model per batch. */
 export const MAX_FRAMES_PER_CALL = 16;
 
-type ParsedSegment = { startMs: number; endMs: number; text: string };
+export type ParsedSegment = { startMs: number; endMs: number; text: string };
 
 /** Parses "HH:MM:SS" (or "H:MM", with optional am/pm) on a local day into epoch ms. */
 export function clockToMs(day: string, clock: string): number | null {
@@ -120,7 +120,9 @@ type RawCard = {
   appSites?: unknown;
 };
 
-type CardParseResult = { ok: true; drafts: LogbookCardDraft[] } | { ok: false; error: string };
+export type CardParseResult =
+  | { ok: true; drafts: LogbookCardDraft[] }
+  | { ok: false; error: string };
 
 function normalizeCategory(value: unknown): string {
   const category = typeof value === "string" ? value.trim().toLowerCase() : "";
@@ -241,7 +243,7 @@ export function parseCardsJson(params: {
 }
 
 /** Sub-minute slack so minute-rounded model times do not fail coverage checks. */
-const COVERAGE_TOLERANCE_MS = 2 * 60 * 1000;
+export const COVERAGE_TOLERANCE_MS = 2 * 60 * 1000;
 
 function formatClockForError(ms: number): string {
   const date = new Date(ms);

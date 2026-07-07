@@ -147,7 +147,7 @@ export function createExecApprovalPendingState(params: {
 }
 
 /** Builds pending approval state plus rounded notice duration. */
-function createExecApprovalRequestState(params: {
+export function createExecApprovalRequestState(params: {
   warnings: string[];
   timeoutMs: number;
   approvalRunningNoticeMs: number;
@@ -163,7 +163,7 @@ function createExecApprovalRequestState(params: {
 }
 
 /** Creates a fresh approval id/slug/context key for a pending request. */
-function createExecApprovalRequestContext(params: {
+export function createExecApprovalRequestContext(params: {
   warnings: string[];
   timeoutMs: number;
   approvalRunningNoticeMs: number;
@@ -188,7 +188,7 @@ function createExecApprovalRequestContext(params: {
 }
 
 /** Creates a pending approval context using the default approval timeout. */
-function createDefaultExecApprovalRequestContext(params: {
+export function createDefaultExecApprovalRequestContext(params: {
   warnings: string[];
   approvalRunningNoticeMs: number;
   createApprovalSlug: (approvalId: string) => string;

@@ -18,7 +18,6 @@ import {
 } from "./server-context.constants.js";
 import type {
   BrowserTab,
-  BrowserOperationOptions,
   EnsureTabAvailableOptions,
   ProfileRuntimeState,
 } from "./server-context.types.js";
@@ -29,7 +28,7 @@ type SelectionDeps = {
   getProfileState: () => ProfileRuntimeState;
   getCdpControlPolicy: () => SsrFPolicy | undefined;
   ensureBrowserAvailable: (opts?: { headless?: boolean }) => Promise<void>;
-  listTabs: (options?: BrowserOperationOptions) => Promise<BrowserTab[]>;
+  listTabs: () => Promise<BrowserTab[]>;
   openTab: (url: string) => Promise<BrowserTab>;
 };
 
@@ -84,9 +83,7 @@ export function createProfileSelectionOps({
     targetId?: string,
     options?: EnsureTabAvailableOptions,
   ): Promise<BrowserTab> => {
-    options?.signal?.throwIfAborted();
     await ensureBrowserAvailable();
-    options?.signal?.throwIfAborted();
     const profileState = getProfileState();
     let lastNonEmptyTabs: BrowserTab[] = [];
     let lastListError: unknown;
@@ -95,14 +92,13 @@ export function createProfileSelectionOps({
 
     const readTabs = async (): Promise<BrowserTab[]> => {
       try {
-        const tabs = await listTabs(options);
+        const tabs = await listTabs();
         sawSuccessfulList = true;
         if (tabs.length > 0) {
           lastNonEmptyTabs = tabs;
         }
         return tabs;
       } catch (err) {
-        options?.signal?.throwIfAborted();
         lastListError = err;
         return [];
       }

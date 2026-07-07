@@ -29,7 +29,7 @@ export function resolveGoogleMeetRealtimeTools(policy: GoogleMeetToolPolicy): Re
   return resolveRealtimeVoiceAgentConsultTools(policy);
 }
 
-function submitGoogleMeetConsultWorkingResponse(
+export function submitGoogleMeetConsultWorkingResponse(
   session: RealtimeVoiceBridgeSession,
   callId: string,
 ): void {

@@ -9,7 +9,9 @@ export function loadIncludePatternsFromEnv(
   return loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
 }
 
-function createExtensionCodexVitestConfig(env: Record<string, string | undefined> = process.env) {
+export function createExtensionCodexVitestConfig(
+  env: Record<string, string | undefined> = process.env,
+) {
   return createScopedVitestConfig(
     loadIncludePatternsFromEnv(env) ??
       codexExtensionTestRoots.map((root) => `${root}/**/*.test.ts`),

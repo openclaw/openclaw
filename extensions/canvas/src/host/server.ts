@@ -35,7 +35,7 @@ export const CANVAS_LIVE_RELOAD_MAX_INBOUND_MESSAGE_BYTES = 64 * 1024;
 type ChokidarWatch = typeof import("chokidar").watch;
 
 /** Options for Canvas host creation. */
-type CanvasHostOpts = {
+export type CanvasHostOpts = {
   runtime: RuntimeEnv;
   rootDir?: string;
   port?: number;
@@ -47,7 +47,7 @@ type CanvasHostOpts = {
 };
 
 /** Options for starting a standalone Canvas host HTTP server. */
-type CanvasHostServerOpts = CanvasHostOpts & {
+export type CanvasHostServerOpts = CanvasHostOpts & {
   handler?: CanvasHostHandler;
   ownsHandler?: boolean;
 };
@@ -60,7 +60,7 @@ export type CanvasHostServer = {
 };
 
 /** Options for creating only the Canvas host request handler. */
-type CanvasHostHandlerOpts = {
+export type CanvasHostHandlerOpts = {
   runtime: RuntimeEnv;
   rootDir?: string;
   basePath?: string;

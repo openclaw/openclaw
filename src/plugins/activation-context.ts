@@ -114,7 +114,7 @@ export function withActivatedPluginIds(params: {
   };
 }
 
-function applyPluginCompatibilityOverrides(params: {
+export function applyPluginCompatibilityOverrides(params: {
   config?: OpenClawConfig;
   compat?: PluginActivationCompatConfig;
   env: NodeJS.ProcessEnv;
@@ -183,7 +183,7 @@ function applyPluginAutoEnableForActivation(params: {
   });
 }
 
-function resolvePluginActivationSnapshot(params: {
+export function resolvePluginActivationSnapshot(params: {
   rawConfig?: OpenClawConfig;
   resolvedConfig?: OpenClawConfig;
   autoEnabledReasons?: Record<string, string[]>;
@@ -220,7 +220,7 @@ function resolvePluginActivationSnapshot(params: {
   };
 }
 
-function resolvePluginActivationInputs(params: {
+export function resolvePluginActivationInputs(params: {
   rawConfig?: OpenClawConfig;
   resolvedConfig?: OpenClawConfig;
   autoEnabledReasons?: Record<string, string[]>;

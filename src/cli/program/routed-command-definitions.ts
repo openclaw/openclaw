@@ -28,7 +28,7 @@ type ModelsStatusCommandModule = typeof import("../../commands/models/list.statu
 type TasksJsonCommandModule = typeof import("../../commands/tasks-json.js");
 
 /** Typed parsed route definition that binds one parser to its runner. */
-type RoutedCommandDefinition<TParse extends RouteArgParser<unknown>> = {
+export type RoutedCommandDefinition<TParse extends RouteArgParser<unknown>> = {
   parseArgs: TParse;
   runParsedArgs: (args: ParsedRouteArgs<TParse>) => Promise<void>;
 };

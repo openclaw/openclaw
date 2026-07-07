@@ -25,7 +25,7 @@ import type { BrowserRouteContext, ProfileStatus } from "./server-context.js";
 import { movePathToTrash } from "./trash.js";
 
 /** Input accepted when creating a browser profile. */
-type CreateProfileParams = {
+export type CreateProfileParams = {
   name: string;
   color?: string;
   cdpUrl?: string;
@@ -34,7 +34,7 @@ type CreateProfileParams = {
 };
 
 /** Result returned after creating a browser profile. */
-type CreateProfileResult = {
+export type CreateProfileResult = {
   ok: true;
   profile: string;
   transport: "cdp" | "chrome-mcp";
@@ -46,7 +46,7 @@ type CreateProfileResult = {
 };
 
 /** Result returned after deleting a browser profile. */
-type DeleteProfileResult = {
+export type DeleteProfileResult = {
   ok: true;
   profile: string;
   deleted: boolean;

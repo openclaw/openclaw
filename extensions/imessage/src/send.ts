@@ -25,11 +25,7 @@ import {
   type IMessageApprovalConversationKey,
   registerIMessageApprovalReactionTargetForOutboundMessage,
 } from "./approval-reactions.js";
-import {
-  appendIMessageCliStderrTail,
-  appendIMessageCliStdout,
-  listenForIMessageCliStreamErrors,
-} from "./cli-output.js";
+import { appendIMessageCliStderrTail, appendIMessageCliStdout } from "./cli-output.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
 import { DEFAULT_IMESSAGE_SEND_TIMEOUT_MS } from "./constants.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
@@ -90,7 +86,7 @@ type IMessageSendOpts = {
   }) => Promise<string | null> | string | null;
 };
 
-type IMessageSendResult = {
+export type IMessageSendResult = {
   /**
    * Generic identifier returned by the bridge. May be a GUID string, a
    * numeric ROWID stringified, or the literal "ok"/"unknown" placeholders
@@ -650,11 +646,6 @@ async function runIMessageCliJson(
     });
     child.stderr.on("data", (chunk) => {
       stderr = appendIMessageCliStderrTail(stderr, chunk);
-    });
-    listenForIMessageCliStreamErrors({
-      child,
-      isSettled: () => settled,
-      fail,
     });
     child.on("error", (error) => {
       if (settled) {

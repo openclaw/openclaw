@@ -22,7 +22,6 @@ import {
   resolveContextEngineOwnerPluginId,
 } from "../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
-import { resolveCompactionSuccessorTranscript } from "../../context-engine/types.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
@@ -1874,12 +1873,13 @@ async function runEmbeddedAgentInternal(
           compactResult: Awaited<ReturnType<typeof contextEngine.compact>>,
         ): string | undefined => {
           const previousSessionId = activeSessionId;
-          const successor = resolveCompactionSuccessorTranscript(compactResult);
-          adoptActiveSessionId(successor.sessionId);
-          if (successor.sessionFile && successor.sessionFile !== activeSessionFile) {
-            activeSessionFile = successor.sessionFile;
+          const nextSessionId = compactResult.result?.sessionId;
+          const nextSessionFile = compactResult.result?.sessionFile;
+          adoptActiveSessionId(nextSessionId);
+          if (nextSessionFile && nextSessionFile !== activeSessionFile) {
+            activeSessionFile = nextSessionFile;
           }
-          return successor.sessionId && successor.sessionId !== previousSessionId
+          return nextSessionId && nextSessionId !== previousSessionId
             ? previousSessionId
             : undefined;
         };
@@ -1939,9 +1939,7 @@ async function runEmbeddedAgentInternal(
                 messageCount: -1,
                 compactedCount: -1,
                 tokenCount: compactResult.result?.tokensAfter,
-                sessionFile:
-                  resolveCompactionSuccessorTranscript(compactResult).sessionFile ??
-                  activeSessionFile,
+                sessionFile: compactResult.result?.sessionFile ?? activeSessionFile,
                 ...(previousSessionId ? { previousSessionId } : {}),
               },
               resolveActiveHookContext(),

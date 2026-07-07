@@ -400,13 +400,25 @@ function resolveTelegramFastCommandState(params: {
   }
 }
 
+async function resolveTelegramDefaultThinkingLevel(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+}): Promise<string> {
+  return resolveThinkingDefaultWithRuntimeCatalog({
+    cfg: params.cfg,
+    provider: params.provider,
+    model: params.model,
+    loadModelCatalog: () => loadModelCatalog({ config: params.cfg }),
+  });
+}
+
 async function resolveTelegramThinkMenuCurrentLevel(params: {
   cfg: OpenClawConfig;
   agentId: string;
   provider?: string;
   model?: string;
   thinkingLevel?: string;
-  catalog: Awaited<ReturnType<typeof loadModelCatalog>>;
 }): Promise<string> {
   const explicit = normalizeOptionalString(params.thinkingLevel);
   if (explicit) {
@@ -422,11 +434,10 @@ async function resolveTelegramThinkMenuCurrentLevel(params: {
     cfg: params.cfg,
     agentId: params.agentId,
   });
-  return await resolveThinkingDefaultWithRuntimeCatalog({
+  return await resolveTelegramDefaultThinkingLevel({
     cfg: params.cfg,
     provider: params.provider ?? defaultModel.provider,
     model: params.model ?? defaultModel.model,
-    loadModelCatalog: async () => params.catalog,
   });
 }
 
@@ -1395,10 +1406,10 @@ export const registerTelegramNativeCommands = ({
                 sessionKey: targetSessionKeyForMenu,
               }))
             : {};
-        // Native /think must not wait on provider discovery; persisted rows retain its metadata.
+        // Native /think choices need live-discovery metadata; empty keeps config fallback.
         const menuModelCatalog =
           commandDefinition?.key === "think" && menuNeedsModelContext
-            ? await loadModelCatalog({ config: runtimeCfg, readOnly: true })
+            ? await loadModelCatalog({ config: runtimeCfg })
             : undefined;
         const menu = commandDefinition
           ? resolveCommandArgMenu({
@@ -1419,7 +1430,6 @@ export const registerTelegramNativeCommands = ({
                     cfg: runtimeCfg,
                     agentId: route.agentId,
                     ...menuModelContext,
-                    catalog: menuModelCatalog ?? [],
                   })
                 : undefined,
             currentFastModeStatus:

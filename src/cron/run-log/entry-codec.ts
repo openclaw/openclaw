@@ -81,7 +81,6 @@ export function parseCronRunLogEntryObject(
     runAtMs: entryObj.runAtMs,
     durationMs: entryObj.durationMs,
     nextRunAtMs: entryObj.nextRunAtMs,
-    triggerFired: entryObj.triggerFired === true ? true : undefined,
     model: typeof entryObj.model === "string" && entryObj.model.trim() ? entryObj.model : undefined,
     provider: normalizedProvider,
     usage: usage

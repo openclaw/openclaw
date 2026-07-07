@@ -11,7 +11,7 @@ type GatewayMethodChannelPlugin = {
 };
 
 /** Lists core methods intentionally advertised to gateway clients. */
-function listCoreGatewayMethods(): string[] {
+export function listCoreGatewayMethods(): string[] {
   return listCoreAdvertisedGatewayMethodNames();
 }
 

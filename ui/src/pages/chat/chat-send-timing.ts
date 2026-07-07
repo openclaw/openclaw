@@ -10,7 +10,7 @@ import {
   scheduleControlUiAfterPaint,
 } from "./performance.ts";
 
-type ChatSendTimingPhase =
+export type ChatSendTimingPhase =
   | "pending-visible"
   | "pending-painted"
   | "request-start"

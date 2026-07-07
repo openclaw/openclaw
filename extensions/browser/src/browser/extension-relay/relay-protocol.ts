@@ -14,7 +14,7 @@ export type RelayTabInfo = {
 };
 
 /** First message the extension sends after the WebSocket opens. */
-type ExtensionHelloMessage = {
+export type ExtensionHelloMessage = {
   type: "hello";
   userAgent: string;
   /** Full browser product string, e.g. "Chrome/144.0.7204.49". */
@@ -24,13 +24,13 @@ type ExtensionHelloMessage = {
 };
 
 /** Full refresh of shared tabs; sent on any group membership or tab change. */
-type ExtensionTabsMessage = {
+export type ExtensionTabsMessage = {
   type: "tabs";
   tabs: RelayTabInfo[];
 };
 
 /** CDP event emitted by an attached tab (child sessions carry sessionId). */
-type ExtensionCdpEventMessage = {
+export type ExtensionCdpEventMessage = {
   type: "cdpEvent";
   tabId: number;
   sessionId?: string;
@@ -39,28 +39,28 @@ type ExtensionCdpEventMessage = {
 };
 
 /** Successful response to a relay command (cdp/attach/createTab/...). */
-type ExtensionResultMessage = {
+export type ExtensionResultMessage = {
   type: "result";
   seq: number;
   result?: unknown;
 };
 
 /** Failed response to a relay command. */
-type ExtensionErrorMessage = {
+export type ExtensionErrorMessage = {
   type: "error";
   seq: number;
   message: string;
 };
 
 /** chrome.debugger detached outside relay control (infobar cancel, tab gone). */
-type ExtensionDetachedMessage = {
+export type ExtensionDetachedMessage = {
   type: "detached";
   tabId: number;
   reason: string;
 };
 
 /** Keepalive reply; message traffic keeps the MV3 service worker alive. */
-type ExtensionPongMessage = {
+export type ExtensionPongMessage = {
   type: "pong";
 };
 
@@ -92,7 +92,7 @@ export type RelayCommandBody =
   | { type: "activateTab"; tabId: number };
 
 /** Keepalive probe; the extension answers with pong. */
-type RelayPingMessage = {
+export type RelayPingMessage = {
   type: "ping";
 };
 

@@ -377,7 +377,7 @@ function loadReplyMediaPathsRuntime() {
 function formatSuppressedReplyPayloadForLog(reply: ReplyPayload): string {
   const metadata = getReplyPayloadMetadata(reply);
   const text = normalizeOptionalString(reply.text);
-  const textPreview = text ? truncateUtf16Safe(text.replace(/\s+/g, " "), 160) : undefined;
+  const textPreview = text ? text.replace(/\s+/g, " ").slice(0, 160) : undefined;
   const sendableParts = resolveSendableOutboundReplyParts(reply);
   const richParts = [
     reply.presentation ? "presentation" : undefined,
@@ -1462,8 +1462,6 @@ export async function dispatchReplyFromConfig(
   let dispatchLifecycleAbortController: AbortController | undefined;
   let preDispatchLifecycleInterrupted = false;
   const dispatchLifecycleWork = new Set<Promise<void>>();
-  const hasInboundAudioForTts = () =>
-    inboundAudio || dispatchReplyOperation?.acceptedSteeredInboundAudio === true;
   const trackDispatchLifecycleWork = (work: Promise<unknown>) => {
     if (!dispatchReplyOperation && !preDispatchLifecycleAdmission) {
       return;
@@ -2802,7 +2800,7 @@ export async function dispatchReplyFromConfig(
               cfg,
               channel: deliveryChannel,
               kind: "final",
-              inboundAudio: hasInboundAudioForTts(),
+              inboundAudio,
               ttsAuto: sessionTtsAuto,
               agentId: sessionAgentId,
               accountId: replyRoute.accountId,
@@ -3527,7 +3525,7 @@ export async function dispatchReplyFromConfig(
                         cfg,
                         channel: deliveryChannel,
                         kind: "tool",
-                        inboundAudio: hasInboundAudioForTts(),
+                        inboundAudio,
                         ttsAuto: sessionTtsAuto,
                         agentId: sessionAgentId,
                         accountId: replyRoute.accountId,
@@ -3776,7 +3774,7 @@ export async function dispatchReplyFromConfig(
                               cfg,
                               channel: deliveryChannel,
                               kind: "block",
-                              inboundAudio: hasInboundAudioForTts(),
+                              inboundAudio,
                               ttsAuto: sessionTtsAuto,
                               agentId: sessionAgentId,
                               accountId: replyRoute.accountId,
@@ -3983,7 +3981,7 @@ export async function dispatchReplyFromConfig(
             cfg,
             channel: deliveryChannel,
             kind: "final",
-            inboundAudio: hasInboundAudioForTts(),
+            inboundAudio,
             ttsAuto: sessionTtsAuto,
             agentId: sessionAgentId,
             accountId: replyRoute.accountId,

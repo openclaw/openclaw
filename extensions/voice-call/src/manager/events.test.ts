@@ -370,7 +370,6 @@ describe("processEvent (functional)", () => {
     {
       name: "speaking",
       expectedState: "speaking",
-      expectedTranscript: [],
       createEvent: (timestamp: number): NormalizedEvent => ({
         id: "evt-live-speaking",
         type: "call.speaking",
@@ -381,22 +380,8 @@ describe("processEvent (functional)", () => {
       }),
     },
     {
-      name: "assistant speech",
-      expectedState: "speaking",
-      expectedTranscript: [{ speaker: "bot", text: "hello" }],
-      createEvent: (timestamp: number): NormalizedEvent => ({
-        id: "evt-live-assistant-speech",
-        type: "call.assistant-speech",
-        callId: "call-live",
-        providerCallId: "provider-live",
-        timestamp,
-        transcript: "hello",
-      }),
-    },
-    {
       name: "listening",
       expectedState: "listening",
-      expectedTranscript: [{ speaker: "user", text: "hello" }],
       createEvent: (timestamp: number): NormalizedEvent => ({
         id: "evt-live-listening",
         type: "call.speech",
@@ -409,7 +394,7 @@ describe("processEvent (functional)", () => {
     },
   ])(
     "starts max-duration enforcement when $name arrives before answered",
-    async ({ expectedState, expectedTranscript, createEvent }) => {
+    async ({ expectedState, createEvent }) => {
       const now = new Date("2026-03-22T12:00:00.000Z").getTime();
       vi.useFakeTimers();
       vi.setSystemTime(now);
@@ -451,9 +436,6 @@ describe("processEvent (functional)", () => {
       }
       expect(call.state).toBe(expectedState);
       expect(call.answeredAt).toBe(liveTimestamp);
-      expect(call.transcript.map(({ speaker, text }) => ({ speaker, text }))).toEqual(
-        expectedTranscript,
-      );
       expect(ctx.maxDurationTimers.has("call-live")).toBe(true);
 
       await vi.advanceTimersByTimeAsync(1_000);

@@ -47,7 +47,7 @@ export type ConfigPageId =
   | "ai-agents";
 
 type ConfigFormMode = "form" | "raw";
-type ConfigSelection = { activeSection: string | null; activeSubsection: string | null };
+export type ConfigSelection = { activeSection: string | null; activeSubsection: string | null };
 
 const CONFIG_PAGE_I18N_KEYS = {
   config: "config",

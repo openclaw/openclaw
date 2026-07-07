@@ -39,13 +39,13 @@ import type {
 } from "./send.types.js";
 import { DISCORD_MAX_EVENT_COVER_BYTES } from "./send.types.js";
 
-type DiscordAbsentVoiceState = Pick<APIVoiceState, "guild_id" | "user_id" | "channel_id"> & {
+export type DiscordAbsentVoiceState = Pick<APIVoiceState, "guild_id" | "user_id" | "channel_id"> & {
   connected: false;
   absent: true;
   reason: "unknown_voice_state";
 };
 
-type DiscordVoiceStatus = APIVoiceState | DiscordAbsentVoiceState;
+export type DiscordVoiceStatus = APIVoiceState | DiscordAbsentVoiceState;
 
 export async function fetchMemberInfoDiscord(
   guildId: string,

@@ -5,7 +5,6 @@
  * Handles urgent commands, normal slash commands, and file delivery.
  */
 
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveGroupCommandLevelFromAccountConfig } from "../config/group.js";
 import type { QueuedMessage } from "../gateway/message-queue.js";
 import type { GatewayAccount, EngineLogger } from "../gateway/types.js";
@@ -94,7 +93,7 @@ export async function trySlashCommand(
     if (isGroup && !commandAuthorized) {
       return "enqueue";
     }
-    log?.info(`Urgent command detected: ${truncateUtf16Safe(content, 20)}`);
+    log?.info(`Urgent command detected: ${content.slice(0, 20)}`);
     return "urgent";
   }
 

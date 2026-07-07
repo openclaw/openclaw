@@ -18,10 +18,10 @@ import {
 } from "./guard-shared.mjs";
 
 /** Marker used to identify dependency guard comments. */
-const dependencyChangeMarker = "<!-- openclaw:dependency-guard -->";
-const dependencyGraphGuardMarker = "<!-- openclaw:dependency-graph-guard -->";
+export const dependencyChangeMarker = "<!-- openclaw:dependency-guard -->";
+export const dependencyGraphGuardMarker = "<!-- openclaw:dependency-graph-guard -->";
 export const dependencyChangedLabel = "dependencies-changed";
-const allowDependenciesCommand = "/allow-dependencies-change";
+export const allowDependenciesCommand = "/allow-dependencies-change";
 export {
   GITHUB_API_REQUEST_TIMEOUT_MS,
   GITHUB_ERROR_BODY_MAX_BYTES,
@@ -253,7 +253,7 @@ export function isDependencyGuardMarkerComment(comment, marker, trustedAuthors) 
   return Boolean(login && trustedAuthors.has(login) && comment.body?.includes(marker));
 }
 
-function renderDependencyAwarenessComment(dependencyFiles) {
+export function renderDependencyAwarenessComment(dependencyFiles) {
   const listedFiles = dependencyFiles.slice(0, maxListedFiles);
   const omittedCount = dependencyFiles.length - listedFiles.length;
   const fileLines = listedFiles.map((filename) => `- ${markdownCode(filename)}`);

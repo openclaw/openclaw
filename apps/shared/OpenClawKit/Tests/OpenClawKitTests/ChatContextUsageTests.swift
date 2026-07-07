@@ -150,10 +150,10 @@ struct ChatContextUsageTests {
             inputTokens: nil,
             outputTokens: nil,
             totalTokens: 5000,
-            totalTokensFresh: false,
             modelProvider: nil,
             model: nil,
-            contextTokens: 10000)
+            contextTokens: 10000,
+            totalTokensFresh: false)
         let result = ChatContextUsageCalculator.usage(
             messages: [self.message()],
             sessionEntry: entry,
@@ -190,8 +190,8 @@ struct ChatContextUsageTests {
     @Test @MainActor func `view model resolves context totals through a selected global alias`() {
         let vm = OpenClawChatViewModel(
             sessionKey: "global",
-            transport: ContextUsageTestTransport(),
-            activeAgentId: "ops")
+            activeAgentId: "ops",
+            transport: ContextUsageTestTransport())
         vm.sessions = [OpenClawChatSessionEntry(
             key: "agent:ops:global",
             kind: nil,

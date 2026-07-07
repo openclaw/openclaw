@@ -123,7 +123,7 @@ export async function resolveRuntimeMatrixClientWithReadiness(opts: {
   });
 }
 
-async function stopResolvedRuntimeMatrixClient(
+export async function stopResolvedRuntimeMatrixClient(
   resolved: ResolvedRuntimeMatrixClient,
   mode: ResolvedRuntimeMatrixClientStopMode = "stop",
 ): Promise<void> {

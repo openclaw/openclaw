@@ -344,7 +344,7 @@ function normalizeEnvProxyValue(value: string | undefined): string | null | unde
   return trimmed.length > 0 ? trimmed : null;
 }
 
-type WhatsAppConnectionWaitOptions =
+export type WhatsAppConnectionWaitOptions =
   | {
       timeout: "none";
     }

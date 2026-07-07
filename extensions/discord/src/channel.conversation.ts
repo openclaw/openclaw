@@ -119,7 +119,7 @@ export function resolveDiscordCommandConversation(params: {
   return conversationId ? { conversationId } : null;
 }
 
-function resolveDiscordThreadConversationRef(params: {
+export function resolveDiscordThreadConversationRef(params: {
   threadId?: string | number | null;
   threadParentId?: string | number | null;
   parentSessionKey?: string | null;

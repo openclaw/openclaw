@@ -23,11 +23,11 @@ type LlamaCppLocalOptions = {
   contextSize?: number | "auto";
 };
 
-type LlamaCppEmbeddingProviderRuntimeOptions = {
+export type LlamaCppEmbeddingProviderRuntimeOptions = {
   nodeLlamaCppImportUrl?: string;
 };
 
-const LLAMA_CPP_EMBEDDING_PROVIDER_ID = "local";
+export const LLAMA_CPP_EMBEDDING_PROVIDER_ID = "local";
 export const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL =
   "hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf";
 const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_CACHE_FILE_NAME =
@@ -155,7 +155,7 @@ export function formatLlamaCppSetupError(err: unknown): string {
 
 const requireFromPlugin = createRequire(import.meta.url);
 
-function resolveNodeLlamaCppImportUrl(): string {
+export function resolveNodeLlamaCppImportUrl(): string {
   return pathToFileURL(requireFromPlugin.resolve("node-llama-cpp")).href;
 }
 

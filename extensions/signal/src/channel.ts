@@ -19,16 +19,9 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
-import {
-  resolveSignalAccount,
-  resolveSignalReplyToMode,
-  type ResolvedSignalAccount,
-} from "./accounts.js";
+import { resolveSignalAccount, type ResolvedSignalAccount } from "./accounts.js";
 import { listSignalAliasDirectoryEntries, resolveSignalTarget } from "./aliases.js";
 import {
   shouldSuppressLocalSignalExecApprovalPrompt,
@@ -199,14 +192,10 @@ function resolveSignalOutboundSessionRoute(params: {
   target: string;
   resolvedTarget?: { to: string };
 }) {
-  const target = params.resolvedTarget?.to ?? params.target;
-  const resolved = resolveSignalOutboundTarget(target);
+  const resolved = resolveSignalOutboundTarget(params.resolvedTarget?.to ?? params.target);
   if (!resolved) {
     return null;
   }
-  const normalizedTarget = target.replace(/^signal:/i, "").trim();
-  const recipientSessionExact: true | "direct-alias" =
-    resolved.chatType === "group" || /^\+?\d{3,15}$/.test(normalizedTarget) ? true : "direct-alias";
   const baseSessionKey = buildSignalBaseSessionKey({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -216,7 +205,6 @@ function resolveSignalOutboundSessionRoute(params: {
   return {
     sessionKey: baseSessionKey,
     baseSessionKey,
-    recipientSessionExact,
     ...resolved,
   };
 }
@@ -330,20 +318,17 @@ async function registerDeliveredSignalApprovalPayloadForReactions(
     cfg: params.cfg,
     accountId: params.target.accountId ?? undefined,
   });
-  const targetAuthor = normalizeOptionalString(account.config.account);
-  const targetAuthorUuid = normalizeOptionalString(account.config.accountUuid);
-  if (!targetAuthor && !targetAuthorUuid) {
+  if (!account.config.account) {
     return;
   }
   const { registerSignalApprovalReactionTargetForDeliveredPayload } =
     await loadSignalApprovalReactionsModule();
   registerSignalApprovalReactionTargetForDeliveredPayload({
     cfg: params.cfg,
-    target: { ...params.target, accountId: account.accountId },
+    target: params.target,
     payload: params.payload,
     results: params.results,
-    targetAuthor,
-    targetAuthorUuid,
+    targetAuthor: account.config.account,
   });
 }
 
@@ -354,9 +339,7 @@ async function renderSignalApprovalPayloadForReactions(
     cfg: params.ctx.cfg,
     accountId: params.ctx.accountId ?? undefined,
   });
-  const targetAuthor = normalizeOptionalString(account.config.account);
-  const targetAuthorUuid = normalizeOptionalString(account.config.accountUuid);
-  if (!targetAuthor && !targetAuthorUuid) {
+  if (!account.config.account) {
     return null;
   }
   const { addSignalApprovalReactionHintToStructuredPayload } =
@@ -366,8 +349,7 @@ async function renderSignalApprovalPayloadForReactions(
     accountId: params.ctx.accountId ?? undefined,
     to: params.ctx.to,
     payload: params.payload,
-    targetAuthor,
-    targetAuthorUuid,
+    targetAuthor: account.config.account,
   });
 }
 
@@ -527,9 +509,6 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
       },
     },
     security: signalSecurityAdapter,
-    threading: {
-      resolveReplyToMode: (params) => resolveSignalReplyToMode(params),
-    },
     outbound: {
       base: {
         deliveryMode: "direct",

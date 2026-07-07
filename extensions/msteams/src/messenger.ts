@@ -45,7 +45,7 @@ import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
 import type { MSTeamsActivityLike } from "./sdk-types.js";
 import type { MSTeamsApp } from "./sdk.js";
 
-type MSTeamsConversationReference = {
+export type MSTeamsConversationReference = {
   activityId?: string;
   user?: { id?: string; name?: string; aadObjectId?: string };
   agent?: { id?: string; name?: string; aadObjectId?: string } | null;
@@ -67,7 +67,7 @@ type MSTeamsConversationReference = {
   aadObjectId?: string;
 };
 
-type MSTeamsReplyRenderOptions = {
+export type MSTeamsReplyRenderOptions = {
   textChunkLimit: number;
   chunkText?: boolean;
   mediaMode?: "split" | "inline";
@@ -84,13 +84,13 @@ export type MSTeamsRenderedMessage = {
   mediaUrl?: string;
 };
 
-type MSTeamsSendRetryOptions = {
+export type MSTeamsSendRetryOptions = {
   maxAttempts?: number;
   baseDelayMs?: number;
   maxDelayMs?: number;
 };
 
-type MSTeamsSendRetryEvent = {
+export type MSTeamsSendRetryEvent = {
   messageIndex: number;
   messageCount: number;
   nextAttempt: number;

@@ -8,7 +8,7 @@ const ACP_TOOL_TERMINAL_OUTCOMES = {
   cancelled: "cancelled",
 } as const;
 
-type AcpToolTerminalOutcome =
+export type AcpToolTerminalOutcome =
   (typeof ACP_TOOL_TERMINAL_OUTCOMES)[keyof typeof ACP_TOOL_TERMINAL_OUTCOMES];
 
 export function resolveAcpToolTerminalOutcome(status: unknown): AcpToolTerminalOutcome | undefined {

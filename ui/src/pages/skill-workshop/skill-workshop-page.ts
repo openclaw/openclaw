@@ -29,9 +29,9 @@ import {
 } from "./storage.ts";
 import { renderSkillWorkshop } from "./view.ts";
 
-type SkillWorkshopPageContext = ApplicationContext & SkillWorkshopContext;
+export type SkillWorkshopPageContext = ApplicationContext & SkillWorkshopContext;
 
-type SkillWorkshopRevisionRequest = (
+export type SkillWorkshopRevisionRequest = (
   instructions: string,
   proposal: SkillWorkshopState["skillWorkshopProposals"][number],
   proposalAgentId: string,

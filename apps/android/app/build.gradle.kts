@@ -61,9 +61,7 @@ plugins {
 
 android {
   namespace = "ai.openclaw.app"
-  // AndroidX Core 1.19 and Lifecycle 2.11 require API 37 compilation.
-  // targetSdk stays separate so runtime behavior changes remain an explicit migration.
-  compileSdk = 37
+  compileSdk = 36
 
   // Release signing is local-only; keep the keystore path and passwords out of the repo.
   signingConfigs {

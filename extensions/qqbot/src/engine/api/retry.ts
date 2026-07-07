@@ -11,7 +11,6 @@
  */
 
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { EngineLogger } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 
@@ -89,7 +88,7 @@ export async function withRetry<T>(
           policy.backoff === "exponential" ? policy.baseDelayMs * 2 ** attempt : policy.baseDelayMs;
 
         logger?.debug?.(
-          `[qqbot:retry] Attempt ${attempt + 1} failed, retrying in ${delay}ms: ${truncateUtf16Safe(lastError.message, 100)}`,
+          `[qqbot:retry] Attempt ${attempt + 1} failed, retrying in ${delay}ms: ${lastError.message.slice(0, 100)}`,
         );
         await sleep(delay);
       }

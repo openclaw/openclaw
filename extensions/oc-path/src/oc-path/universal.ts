@@ -99,7 +99,7 @@ export type SetResult =
       readonly detail?: string;
     };
 
-type SetOcPathOptions = {
+export type SetOcPathOptions = {
   readonly valueJson?: boolean;
 };
 

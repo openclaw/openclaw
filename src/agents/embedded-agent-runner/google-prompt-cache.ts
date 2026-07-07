@@ -14,7 +14,6 @@ import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
 import { readResponseWithLimit } from "../../infra/http-body.js";
 import { streamWithPayloadPatch } from "../../llm/providers/stream-wrappers/stream-payload-utils.js";
 import type { Model } from "../../llm/types.js";
-import { resolveProviderRequestHeaders } from "../provider-request-config.js";
 import { buildGuardedModelFetch } from "../provider-transport-fetch.js";
 import type { StreamFn } from "../runtime/index.js";
 import { isSessionWriteLockAcquireError } from "../session-write-lock-error.js";
@@ -296,27 +295,6 @@ async function readGooglePromptCacheJson<T>(response: Response): Promise<T> {
   return JSON.parse(buffer.toString("utf8")) as T;
 }
 
-function buildGooglePromptCacheHeaders(params: {
-  apiKey: string;
-  baseUrl: string;
-  headers?: Record<string, string>;
-  model: GooglePromptCacheModel;
-}): Record<string, string> | undefined {
-  const authHeaders = parseGeminiAuth(params.apiKey).headers;
-  return (
-    resolveProviderRequestHeaders({
-      provider: params.model.provider,
-      api: params.model.api,
-      baseUrl: params.baseUrl,
-      capability: "llm",
-      transport: "http",
-      defaultHeaders: authHeaders,
-      callerHeaders: params.headers,
-      precedence: "caller-wins",
-    }) ?? mergeTransportHeaders(authHeaders, params.headers)
-  );
-}
-
 async function updateGooglePromptCacheTtl(params: {
   apiKey: string;
   baseUrl: string;
@@ -324,19 +302,13 @@ async function updateGooglePromptCacheTtl(params: {
   cachedContent: string;
   fetchImpl: typeof fetch;
   headers?: Record<string, string>;
-  model: GooglePromptCacheModel;
   signal?: AbortSignal;
 }): Promise<{ expireTime?: string } | null> {
   let response: Response | undefined;
   try {
     response = await params.fetchImpl(`${params.baseUrl}/${params.cachedContent}?updateMask=ttl`, {
       method: "PATCH",
-      headers: buildGooglePromptCacheHeaders({
-        apiKey: params.apiKey,
-        baseUrl: params.baseUrl,
-        headers: params.headers,
-        model: params.model,
-      }),
+      headers: mergeTransportHeaders(parseGeminiAuth(params.apiKey).headers, params.headers),
       body: JSON.stringify({
         ttl: resolveGooglePromptCacheTtl(params.cacheRetention),
       }),
@@ -358,7 +330,6 @@ async function createGooglePromptCache(params: {
   cacheRetention: CacheRetention;
   fetchImpl: typeof fetch;
   headers?: Record<string, string>;
-  model: GooglePromptCacheModel;
   modelId: string;
   signal?: AbortSignal;
   systemPrompt: string;
@@ -369,12 +340,7 @@ async function createGooglePromptCache(params: {
   try {
     response = await params.fetchImpl(`${params.baseUrl}/cachedContents`, {
       method: "POST",
-      headers: buildGooglePromptCacheHeaders({
-        apiKey: params.apiKey,
-        baseUrl: params.baseUrl,
-        headers: params.headers,
-        model: params.model,
-      }),
+      headers: mergeTransportHeaders(parseGeminiAuth(params.apiKey).headers, params.headers),
       body: JSON.stringify({
         model: params.modelId.startsWith("models/") ? params.modelId : `models/${params.modelId}`,
         ttl: resolveGooglePromptCacheTtl(params.cacheRetention),
@@ -452,7 +418,6 @@ async function ensureGooglePromptCache(
         cachedContent: latestEntry.cachedContent,
         fetchImpl,
         headers: params.model.headers,
-        model: params.model,
         signal: params.signal,
       }).catch(() => null);
       if (refreshed) {
@@ -481,7 +446,6 @@ async function ensureGooglePromptCache(
     cacheRetention: params.cacheRetention,
     fetchImpl,
     headers: params.model.headers,
-    model: params.model,
     modelId: params.model.id,
     signal: params.signal,
     systemPrompt: params.systemPrompt,

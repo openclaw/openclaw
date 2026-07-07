@@ -39,7 +39,7 @@ type BucketState<TData> = {
   routeKeys: Set<string>;
 };
 
-type RestSchedulerLaneOptions = {
+export type RestSchedulerLaneOptions = {
   maxQueueSize: number;
   staleAfterMs?: number;
   weight: number;

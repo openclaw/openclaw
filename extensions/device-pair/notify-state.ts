@@ -81,7 +81,7 @@ export function normalizeLegacyNotifyState(raw: unknown): LegacyNotifyStateFile 
   return { subscribers, notifiedRequestIds };
 }
 
-function normalizeNotifyThreadKey(messageThreadId?: string | number): string {
+export function normalizeNotifyThreadKey(messageThreadId?: string | number): string {
   if (typeof messageThreadId === "number" && Number.isFinite(messageThreadId)) {
     return String(Math.trunc(messageThreadId));
   }

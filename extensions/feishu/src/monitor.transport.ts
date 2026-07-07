@@ -2,7 +2,6 @@
 import crypto from "node:crypto";
 import * as http from "node:http";
 import * as Lark from "@larksuiteoapi/node-sdk";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForAbortableDelay } from "./async.js";
 import { createFeishuWSClient } from "./client.js";
 import {
@@ -152,7 +151,7 @@ function formatFeishuWsErrorForLog(err: unknown): string {
   if (redacted.length <= FEISHU_WS_LOG_ERROR_MAX_LENGTH) {
     return redacted;
   }
-  return `${truncateUtf16Safe(redacted, FEISHU_WS_LOG_ERROR_MAX_LENGTH)}...`;
+  return `${redacted.slice(0, FEISHU_WS_LOG_ERROR_MAX_LENGTH)}...`;
 }
 
 function isFeishuWsTerminalError(err: Error): boolean {

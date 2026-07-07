@@ -19,7 +19,7 @@ const nonCoreGatewayTestExclude = [
   "src/gateway/sessions-history-http.test.ts",
 ];
 
-function createGatewayCoreVitestConfig(env?: Record<string, string | undefined>) {
+export function createGatewayCoreVitestConfig(env?: Record<string, string | undefined>) {
   return createScopedVitestConfig(["src/gateway/**/*.test.ts"], {
     dir: "src/gateway",
     env,

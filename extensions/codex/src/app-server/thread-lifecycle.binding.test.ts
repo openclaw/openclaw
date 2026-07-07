@@ -1,7 +1,6 @@
 // Codex tests cover thread lifecycle.binding plugin behavior.
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { CodexAppServerRpcError } from "./client.js";
 import { fingerprintCodexAppServerNetworkProxyConfigPatch } from "./config.js";
 import type { CodexDynamicToolFunctionSpec } from "./protocol.js";
 import {
@@ -372,14 +371,14 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
   });
 
-  it("sends canonical typed dynamic tools on thread start", async () => {
+  it("sends legacy flat dynamic tools on thread start", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
     const appServer = createThreadLifecycleAppServerOptions();
     const request = vi.fn(async (method: string, _requestParams?: unknown) => {
       if (method === "thread/start") {
-        return threadStartResult("thread-typed-tools");
+        return threadStartResult("thread-flat-tools");
       }
       throw new Error(`unexpected method: ${method}`);
     });
@@ -400,22 +399,17 @@ describe("Codex app-server thread lifecycle bindings", () => {
       | undefined;
     expect(startParams?.dynamicTools).toEqual([
       expect.objectContaining({
-        type: "function",
         name: "message",
         description: "Send a message.",
       }),
       expect.objectContaining({
-        type: "namespace",
-        name: "openclaw",
-        tools: [
-          expect.objectContaining({
-            type: "function",
-            name: "web_search",
-            deferLoading: true,
-          }),
-        ],
+        name: "web_search",
+        namespace: "openclaw",
+        deferLoading: true,
       }),
     ]);
+    expect(startParams?.dynamicTools?.[0]).not.toHaveProperty("type");
+    expect(startParams?.dynamicTools?.[1]).not.toHaveProperty("type");
   });
 
   it("keeps the bound local provider when recoverable resume failure starts a fresh thread", async () => {
@@ -435,12 +429,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     const appServer = createThreadLifecycleAppServerOptions();
     const request = vi.fn(async (method: string, _requestParams?: unknown) => {
       if (method === "thread/resume") {
-        // Only a structured RPC rejection proves Codex holds no resume
-        // subscription; anything else retires the client instead.
-        throw new CodexAppServerRpcError({ code: -32_000, message: "stale thread" }, method);
-      }
-      if (method === "thread/unsubscribe") {
-        return { status: "not_subscribed" };
+        throw new Error("stale thread");
       }
       if (method === "thread/start") {
         const response = threadStartResult("thread-new");
@@ -463,56 +452,11 @@ describe("Codex app-server thread lifecycle bindings", () => {
     const startParams = request.mock.calls.find(([method]) => method === "thread/start")?.[1] as
       | Record<string, unknown>
       | undefined;
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "thread/resume",
-      "thread/unsubscribe",
-      "thread/start",
-    ]);
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/resume", "thread/start"]);
     expect(startParams?.model).toBe("local-model-2");
     expect(startParams?.modelProvider).toBe("lmstudio");
     expect(binding.threadId).toBe("thread-new");
     expect(binding.modelProvider).toBe("lmstudio");
-  });
-
-  it("falls back to a fresh thread when a rejected resume also fails unsubscribe", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-existing",
-      cwd: workspaceDir,
-      model: "gpt-5.4-codex",
-      modelProvider: "openai",
-      dynamicToolsFingerprint: "[]",
-    });
-    const request = vi.fn(async (method: string) => {
-      if (method === "thread/resume") {
-        throw new CodexAppServerRpcError({ code: -32_000, message: "thread not found" }, method);
-      }
-      if (method === "thread/unsubscribe") {
-        throw new Error("unsubscribe rejected");
-      }
-      if (method === "thread/start") {
-        return threadStartResult("thread-recovered");
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    // The RPC rejection already proves no resume subscription exists, so a
-    // failing cosmetic unsubscribe must not block stale-binding recovery.
-    const binding = await startOrResumeThread({
-      client: { request } as never,
-      params: createParams(sessionFile, workspaceDir),
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer: createThreadLifecycleAppServerOptions(),
-    });
-
-    expect(binding.threadId).toBe("thread-recovered");
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "thread/resume",
-      "thread/unsubscribe",
-      "thread/start",
-    ]);
   });
 
   it("keeps the bound local provider when stale fingerprints force a fresh thread", async () => {
@@ -609,15 +553,13 @@ describe("Codex app-server thread lifecycle bindings", () => {
     params.disableTools = false;
     const appServer = createThreadLifecycleAppServerOptions();
     let starts = 0;
-    const request = vi.fn(async (method: string, requestParams?: unknown) => {
+    const request = vi.fn(async (method: string, _params?: unknown) => {
       if (method === "thread/start") {
         starts += 1;
         return threadStartResult(`thread-${starts}`);
       }
       if (method === "thread/resume") {
-        // Resume must echo the requested thread; anything else is rejected as
-        // an unsafe subscription.
-        return threadStartResult((requestParams as { threadId: string }).threadId);
+        return threadStartResult("thread-existing");
       }
       throw new Error(`unexpected method: ${method}`);
     });
@@ -1089,15 +1031,13 @@ describe("Codex app-server thread lifecycle bindings", () => {
     params.disableTools = false;
     const appServer = createThreadLifecycleAppServerOptions();
     let starts = 0;
-    const request = vi.fn(async (method: string, requestParams?: unknown) => {
+    const request = vi.fn(async (method: string, _params?: unknown) => {
       if (method === "thread/start") {
         starts += 1;
         return threadStartResult(`thread-${starts}`);
       }
       if (method === "thread/resume") {
-        // Resume must echo the requested thread; anything else is rejected as
-        // an unsafe subscription.
-        return threadStartResult((requestParams as { threadId: string }).threadId);
+        return threadStartResult("thread-existing");
       }
       throw new Error(`unexpected method: ${method}`);
     });
@@ -1129,7 +1069,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
 
     expect(restrictedBinding.threadId).toBe("thread-2");
     expect(savedAfterRestriction?.threadId).toBe("thread-1");
-    expect(resumedBinding.threadId).toBe("thread-1");
+    expect(resumedBinding.threadId).toBe("thread-existing");
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "thread/start",
       "thread/start",

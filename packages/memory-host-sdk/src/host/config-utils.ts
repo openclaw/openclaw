@@ -13,7 +13,7 @@ export { splitShellArgs } from "./openclaw-runtime-io.js";
 // Shared OpenClaw config helpers used by memory host, QMD, and agent context code.
 
 /** Chat shape used by memory send-policy matching. */
-type ChatType = "direct" | "group" | "channel";
+export type ChatType = "direct" | "group" | "channel";
 /** Memory backend selected by user config. */
 export type MemoryBackend = "builtin" | "qmd";
 /** Citation injection behavior for memory search results. */
@@ -24,16 +24,16 @@ export type MemoryQmdSearchMode = "query" | "search" | "vsearch";
 export type MemoryQmdStartupMode = "off" | "idle" | "immediate";
 
 /** Action returned by a session send-policy rule. */
-type SessionSendPolicyAction = "allow" | "deny";
+export type SessionSendPolicyAction = "allow" | "deny";
 /** Match criteria for one memory send-policy rule. */
-type SessionSendPolicyMatch = {
+export type SessionSendPolicyMatch = {
   channel?: string;
   chatType?: ChatType;
   keyPrefix?: string;
   rawKeyPrefix?: string;
 };
 /** One ordered rule in session send-policy config. */
-type SessionSendPolicyRule = {
+export type SessionSendPolicyRule = {
   action: SessionSendPolicyAction;
   match?: SessionSendPolicyMatch;
 };
@@ -58,14 +58,14 @@ export type MemoryQmdMcporterConfig = {
 };
 
 /** QMD session export config. */
-type MemoryQmdSessionConfig = {
+export type MemoryQmdSessionConfig = {
   enabled?: boolean;
   exportDir?: string;
   retentionDays?: number;
 };
 
 /** QMD update, debounce, startup, and timeout config. */
-type MemoryQmdUpdateConfig = {
+export type MemoryQmdUpdateConfig = {
   interval?: string;
   debounceMs?: number;
   onBoot?: boolean;
@@ -79,7 +79,7 @@ type MemoryQmdUpdateConfig = {
 };
 
 /** Search and injection limits for QMD memory results. */
-type MemoryQmdLimitsConfig = {
+export type MemoryQmdLimitsConfig = {
   maxResults?: number;
   maxSnippetChars?: number;
   maxInjectedChars?: number;
@@ -102,14 +102,14 @@ export type MemoryQmdConfig = {
 };
 
 /** Top-level memory config shared by host and runtime callers. */
-type MemoryConfig = {
+export type MemoryConfig = {
   backend?: MemoryBackend;
   citations?: MemoryCitationsMode;
   qmd?: MemoryQmdConfig;
 };
 
 /** Per-agent memory search enablement and extra collection paths. */
-type MemorySearchConfig = {
+export type MemorySearchConfig = {
   enabled?: boolean;
   extraPaths?: string[];
   qmd?: {
@@ -118,13 +118,13 @@ type MemorySearchConfig = {
 };
 
 /** Agent context limits that bound memory file reads. */
-type AgentContextLimitsConfig = {
+export type AgentContextLimitsConfig = {
   memoryGetMaxChars?: number;
   memoryGetDefaultLines?: number;
 };
 
 /** Secret reference accepted by provider header config. */
-type SecretInput =
+export type SecretInput =
   | string
   | {
       source: string;
@@ -262,7 +262,7 @@ function legacyStateDirs(homedir: () => string): string[] {
 }
 
 /** Resolve the current state root while preserving shipped legacy installs when present. */
-function resolveStateDir(
+export function resolveStateDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
 ): string {

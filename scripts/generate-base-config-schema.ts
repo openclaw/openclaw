@@ -3,7 +3,7 @@
 import { pathToFileURL } from "node:url";
 import { computeBaseConfigSchemaResponse } from "../src/config/schema-base.js";
 
-function checkBaseConfigSchema(): void {
+export function checkBaseConfigSchema(): void {
   computeBaseConfigSchemaResponse({
     generatedAt: "2026-05-05T00:00:00.000Z",
   });

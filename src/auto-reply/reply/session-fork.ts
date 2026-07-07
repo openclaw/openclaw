@@ -1,11 +1,7 @@
+import path from "node:path";
 import { resolveStorePath } from "../../config/sessions/paths.js";
-import {
-  forkSessionEntryFromParentTarget,
-  forkSessionFromParentTranscript,
-  type ParentForkedSessionTranscript,
-  type SessionParentForkDecision,
-} from "../../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import { updateSessionStore } from "../../config/sessions/store.js";
+import { mergeSessionEntry, type SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 
@@ -17,7 +13,19 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 const DEFAULT_PARENT_FORK_MAX_TOKENS = 100_000;
 const sessionForkRuntimeLoader = createLazyImportLoader(() => import("./session-fork.runtime.js"));
 
-export type ParentForkDecision = SessionParentForkDecision;
+export type ParentForkDecision =
+  | {
+      status: "fork";
+      maxTokens: number;
+      parentTokens?: number;
+    }
+  | {
+      status: "skip";
+      reason: "parent-too-large";
+      maxTokens: number;
+      parentTokens: number;
+      message: string;
+    };
 
 type ParentForkDecisionParams = {
   parentEntry: SessionEntry;
@@ -27,17 +35,17 @@ type ParentForkDecisionParams = {
 };
 
 type ForkSessionFromParentParams = {
-  parentSessionKey: string;
   parentEntry: SessionEntry;
   agentId: string;
   config?: OpenClawConfig;
-  sessionKey: string;
-  storePath?: string;
-  /** Cross-agent forks land the child transcript beside the child's store. */
-  targetStorePath?: string;
+  sessionsDir?: string;
+  targetSessionsDir?: string;
 };
 
-export type ForkedParentSessionEntry = ParentForkedSessionTranscript;
+export type ForkedParentSessionEntry = {
+  sessionId: string;
+  sessionFile: string;
+};
 
 export type ForkSessionEntryFromParentResult =
   | {
@@ -104,6 +112,14 @@ function resolveParentForkStorePath(params: {
   );
 }
 
+function resolveParentForkSessionsDir(params: {
+  agentId: string;
+  config?: OpenClawConfig;
+  sessionsDir?: string;
+}): string {
+  return params.sessionsDir ?? path.dirname(resolveParentForkStorePath(params));
+}
+
 export async function resolveParentForkDecision(
   params: ParentForkDecisionParams,
 ): Promise<ParentForkDecision> {
@@ -131,34 +147,41 @@ export async function resolveParentForkDecision(
 export async function forkSessionFromParent(
   params: ForkSessionFromParentParams,
 ): Promise<{ sessionId: string; sessionFile: string } | null> {
-  const storePath = resolveParentForkStorePath(params);
-  const fork = await forkSessionFromParentTranscript({
-    agentId: params.agentId,
-    parentEntry: params.parentEntry,
-    parentSessionKey: params.parentSessionKey,
-    sessionKey: params.sessionKey,
-    storePath,
-    ...(params.targetStorePath ? { targetStorePath: params.targetStorePath } : {}),
+  const runtime = await loadSessionForkRuntime();
+  return runtime.forkSessionFromParentRuntime({
+    ...params,
+    sessionsDir: resolveParentForkSessionsDir(params),
   });
-  return fork.status === "created" ? fork.transcript : null;
 }
 
-function normalizeForkTarget(params: { canonicalKey: string; storeKeys?: readonly string[] }): {
-  canonicalKey: string;
-  storeKeys: string[];
-} {
-  const keys = new Set<string>();
-  const remember = (value: string) => {
-    const trimmed = value.trim();
-    if (trimmed) {
-      keys.add(trimmed);
+function resolveEntryFromStoreKeys(params: {
+  store: Record<string, SessionEntry>;
+  keys: readonly string[];
+}): SessionEntry | undefined {
+  for (const key of params.keys) {
+    const entry = params.store[key];
+    if (entry) {
+      return entry;
     }
-  };
-  remember(params.canonicalKey);
-  for (const key of params.storeKeys ?? []) {
-    remember(key);
   }
-  return { canonicalKey: params.canonicalKey, storeKeys: [...keys] };
+  return undefined;
+}
+
+function persistForkedSessionEntry(params: {
+  store: Record<string, SessionEntry>;
+  sessionKey: string;
+  sessionStoreKeys?: readonly string[];
+  existing: SessionEntry;
+  patch: Partial<SessionEntry>;
+}): SessionEntry {
+  const next = mergeSessionEntry(params.existing, params.patch);
+  params.store[params.sessionKey] = next;
+  for (const key of params.sessionStoreKeys ?? []) {
+    if (key !== params.sessionKey) {
+      delete params.store[key];
+    }
+  }
+  return next;
 }
 
 /**
@@ -169,30 +192,103 @@ export async function forkSessionEntryFromParent(
   params: ForkSessionEntryFromParentParams,
 ): Promise<ForkSessionEntryFromParentResult> {
   const storePath = resolveParentForkStorePath(params);
-  return await forkSessionEntryFromParentTarget({
-    agentId: params.agentId,
-    decisionSkipPatch: params.decisionSkipPatch,
-    fallbackEntry: params.fallbackEntry,
-    parentTarget: normalizeForkTarget({
-      canonicalKey: params.parentSessionKey,
-      storeKeys: params.parentStoreKeys,
-    }),
-    patch: params.patch,
-    resolveDecision: (parentEntry) =>
-      resolveParentForkDecision({
+  return await updateSessionStore(
+    storePath,
+    async (store) => {
+      const parentEntry = resolveEntryFromStoreKeys({
+        store,
+        keys: params.parentStoreKeys ?? [params.parentSessionKey],
+      });
+      if (!parentEntry?.sessionId) {
+        return { status: "missing-parent" };
+      }
+
+      const entry =
+        resolveEntryFromStoreKeys({
+          store,
+          keys: params.sessionStoreKeys ?? [params.sessionKey],
+        }) ?? params.fallbackEntry;
+      if (!entry) {
+        return { status: "missing-entry" };
+      }
+
+      if (params.skipForkWhen?.(entry)) {
+        const patch = params.skipPatch?.(entry);
+        const sessionEntry = patch
+          ? persistForkedSessionEntry({
+              store,
+              sessionKey: params.sessionKey,
+              sessionStoreKeys: params.sessionStoreKeys,
+              existing: entry,
+              patch,
+            })
+          : entry;
+        return { status: "skipped", reason: "existing-entry", parentEntry, sessionEntry };
+      }
+
+      const decision = await resolveParentForkDecision({
         parentEntry,
         agentId: params.agentId,
         config: params.config,
         storePath,
-      }),
-    sessionTarget: normalizeForkTarget({
-      canonicalKey: params.sessionKey,
-      storeKeys: params.sessionStoreKeys,
-    }),
-    skipForkWhen: params.skipForkWhen,
-    skipPatch: params.skipPatch,
-    storePath,
-  });
+      });
+      if (decision.status === "skip") {
+        const patch = params.decisionSkipPatch?.({ decision, entry, parentEntry });
+        const sessionEntry = patch
+          ? persistForkedSessionEntry({
+              store,
+              sessionKey: params.sessionKey,
+              sessionStoreKeys: params.sessionStoreKeys,
+              existing: entry,
+              patch,
+            })
+          : entry;
+        return {
+          status: "skipped",
+          reason: "decision-skip",
+          parentEntry,
+          sessionEntry,
+          decision,
+        };
+      }
+
+      const fork = await forkSessionFromParent({
+        parentEntry,
+        agentId: params.agentId,
+        config: params.config,
+        sessionsDir: params.sessionsDir ?? path.dirname(storePath),
+      });
+      if (!fork) {
+        return { status: "failed" };
+      }
+      const sessionEntry = persistForkedSessionEntry({
+        store,
+        sessionKey: params.sessionKey,
+        sessionStoreKeys: params.sessionStoreKeys,
+        existing: entry,
+        patch: {
+          ...params.patch?.({ entry, parentEntry, fork, decision }),
+          sessionId: fork.sessionId,
+          sessionFile: fork.sessionFile,
+          forkedFromParent: true,
+        },
+      });
+      return {
+        status: "forked",
+        fork,
+        parentEntry,
+        sessionEntry,
+        decision,
+      };
+    },
+    {
+      skipSaveWhenResult: (result) =>
+        result.status === "missing-entry" ||
+        result.status === "missing-parent" ||
+        result.status === "failed" ||
+        (result.status === "skipped" && result.sessionEntry === params.fallbackEntry),
+    },
+  );
 }
 
 async function resolveParentForkTokenCount(params: {

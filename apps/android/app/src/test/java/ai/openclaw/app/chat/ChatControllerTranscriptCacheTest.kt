@@ -60,6 +60,11 @@ class ChatControllerTranscriptCacheTest {
       savedTranscripts.removeAll { it.first == gatewayId }
       savedSessions.removeAll { it.first == gatewayId }
     }
+
+    override suspend fun clearAll() {
+      transcripts.clear()
+      sessions = emptyList()
+    }
   }
 
   private fun cachedMessage(

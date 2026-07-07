@@ -738,7 +738,7 @@ async function createMaintenanceScenario(workspaceDir: string): Promise<PromptSc
 }
 
 /** Create a temp workspace with prompt composition context files. */
-async function createWorkspaceWithPromptCompositionFiles(): Promise<string> {
+export async function createWorkspaceWithPromptCompositionFiles(): Promise<string> {
   const workspaceDir = await makeTempWorkspace("openclaw-prompt-cache-");
   await writeWorkspaceFile({
     dir: workspaceDir,

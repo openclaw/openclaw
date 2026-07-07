@@ -313,7 +313,7 @@ export function makeCfg(home: string): OpenClawConfig {
   } as OpenClawConfig);
 }
 
-async function loadGetReplyFromConfig() {
+export async function loadGetReplyFromConfig() {
   return (await import("../../../src/auto-reply/reply.js")).getReplyFromConfig;
 }
 
@@ -399,7 +399,7 @@ export async function expectBareNewOrResetAcknowledged(params: {
   expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
 }
 
-function installTriggerHandlingE2eTestHooks() {
+export function installTriggerHandlingE2eTestHooks() {
   afterEach(() => {
     clearRuntimeAuthProfileStoreSnapshots();
     vi.clearAllMocks();
@@ -418,7 +418,7 @@ export function mockRunEmbeddedAgentOk(text = "ok"): AnyMock {
   return runEmbeddedAgentMock;
 }
 
-function createBlockReplyCollector() {
+export function createBlockReplyCollector() {
   const blockReplies: Array<{ text?: string }> = [];
   return {
     blockReplies,

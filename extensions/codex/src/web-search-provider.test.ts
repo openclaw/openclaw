@@ -247,8 +247,8 @@ describe("codex web search provider", () => {
           clearEnv: ["CODEX_HOME", "KEEP_CLEARED"],
         },
       }),
-      clientFactory: async (options) => {
-        isolatedStartOptions = options?.startOptions;
+      clientFactory: async (startOptions) => {
+        isolatedStartOptions = startOptions;
         return client;
       },
     });

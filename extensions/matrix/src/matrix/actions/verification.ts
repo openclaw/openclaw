@@ -18,7 +18,7 @@ type MatrixVerificationDmLookupOpts = {
   verificationDmUserId?: string;
 };
 
-type MatrixSelfVerificationResult = MatrixVerificationSummary & {
+export type MatrixSelfVerificationResult = MatrixVerificationSummary & {
   deviceOwnerVerified: boolean;
   ownerVerification: MatrixOwnDeviceVerificationStatus;
 };

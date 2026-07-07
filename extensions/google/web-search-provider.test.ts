@@ -383,7 +383,6 @@ describe("google web search provider", () => {
       await tool?.execute({ query: "OpenClaw provider key fallback" });
 
       expect(getFetchHeaders(mockFetch)["x-goog-api-key"]).toBe("AIza-provider-test");
-      expect(getFetchHeaders(mockFetch)["x-goog-api-client"]).toMatch(/^openclaw\//u);
     });
   });
 
@@ -418,7 +417,6 @@ describe("google web search provider", () => {
       await tool?.execute({ query: "OpenClaw plugin key precedence" });
 
       expect(getFetchHeaders(mockFetch)["x-goog-api-key"]).toBe("AIza-plugin-test");
-      expect(getFetchHeaders(mockFetch)["x-goog-api-client"]).toMatch(/^openclaw\//u);
     });
   });
 

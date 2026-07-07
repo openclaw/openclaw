@@ -530,7 +530,7 @@ function resolveContainedSkillPath(params: {
   return null;
 }
 
-function resolveNestedSkillsRoot(
+export function resolveNestedSkillsRoot(
   dir: string,
   opts?: {
     maxEntriesToScan?: number;

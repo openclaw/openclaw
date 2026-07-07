@@ -12,9 +12,7 @@ export function resolveZaloOutboundSessionRoute(params: ChannelOutboundSessionRo
   if (!trimmed) {
     return null;
   }
-  const normalizedTarget = normalizeLowercaseStringOrEmpty(trimmed);
-  const isGroup = normalizedTarget.startsWith("group:");
-  const recipientSessionExact = /^(?:group|user|dm):/.test(normalizedTarget);
+  const isGroup = normalizeLowercaseStringOrEmpty(trimmed).startsWith("group:");
   const peerId = stripTargetKindPrefix(trimmed);
   if (!peerId) {
     return null;
@@ -24,7 +22,6 @@ export function resolveZaloOutboundSessionRoute(params: ChannelOutboundSessionRo
     agentId: params.agentId,
     channel: "zalo",
     accountId: params.accountId,
-    recipientSessionExact,
     peer: {
       kind: isGroup ? "group" : "direct",
       id: peerId,

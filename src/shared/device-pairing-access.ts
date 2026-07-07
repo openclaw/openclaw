@@ -66,7 +66,7 @@ function includesAll(allowed: readonly string[], requested: readonly string[]): 
 }
 
 /** Normalizes requested roles/scopes from pending pairing records, including legacy singular role. */
-function summarizePendingDeviceAccess(request: PendingLike): DevicePairingAccessSummary {
+export function summarizePendingDeviceAccess(request: PendingLike): DevicePairingAccessSummary {
   return {
     roles: normalizeRoleList(request.roles, request.role),
     scopes: normalizeDeviceAuthScopes(request.scopes),
@@ -74,7 +74,7 @@ function summarizePendingDeviceAccess(request: PendingLike): DevicePairingAccess
 }
 
 /** Summarizes currently approved device access, excluding roles whose tokens are revoked. */
-function summarizeApprovedDeviceAccess(device: PairedLike): DevicePairingAccessSummary {
+export function summarizeApprovedDeviceAccess(device: PairedLike): DevicePairingAccessSummary {
   const approvedRoles = normalizeRoleList(device.roles, device.role);
   const tokenList = Array.isArray(device.tokens)
     ? device.tokens

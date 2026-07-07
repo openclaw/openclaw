@@ -63,7 +63,7 @@ export const ExecApprovalsFileSchema = Type.Object(
   { additionalProperties: false },
 );
 
-/** File-backed read snapshot with path/hash metadata for optimistic writes. */
+/** Read snapshot with path/hash metadata for optimistic writes. */
 export const ExecApprovalsSnapshotSchema = Type.Object(
   {
     path: NonEmptyString,
@@ -72,96 +72,6 @@ export const ExecApprovalsSnapshotSchema = Type.Object(
     file: ExecApprovalsFileSchema,
   },
   { additionalProperties: false },
-);
-
-const NativeExecApprovalActionSchema = Type.Union([
-  Type.Literal("allow"),
-  Type.Literal("deny"),
-  Type.Literal("prompt"),
-]);
-
-/** One rule owned and enforced by a host-native exec policy implementation. */
-const NativeExecApprovalRuleSchema = Type.Object(
-  {
-    pattern: NonEmptyString,
-    action: NativeExecApprovalActionSchema,
-    shells: Type.Optional(Type.Array(NonEmptyString)),
-    description: Type.Optional(Type.String()),
-    enabled: Type.Optional(Type.Boolean()),
-  },
-  { additionalProperties: false },
-);
-
-const NativeExecApprovalConstraintsSchema = Type.Object(
-  {
-    baseHashRequired: Type.Optional(Type.Boolean()),
-    defaultAllowAllowed: Type.Optional(Type.Boolean()),
-    broadAllowRulesAllowed: Type.Optional(Type.Boolean()),
-    dangerousAllowRulesAllowed: Type.Optional(Type.Boolean()),
-  },
-  { additionalProperties: false },
-);
-
-/** Node read snapshot supporting file-backed and host-native approval owners. */
-export const ExecApprovalsNodeSnapshotSchema = Type.Object(
-  {
-    path: Type.Optional(Type.String()),
-    exists: Type.Optional(Type.Boolean()),
-    hash: Type.Optional(Type.String()),
-    file: Type.Optional(ExecApprovalsFileSchema),
-    enabled: Type.Optional(Type.Boolean()),
-    baseHash: Type.Optional(NonEmptyString),
-    defaultAction: Type.Optional(NativeExecApprovalActionSchema),
-    rules: Type.Optional(Type.Array(NativeExecApprovalRuleSchema)),
-    constraints: Type.Optional(NativeExecApprovalConstraintsSchema),
-    message: Type.Optional(Type.String()),
-  },
-  {
-    additionalProperties: false,
-    oneOf: [
-      {
-        required: ["path", "exists", "hash", "file"],
-        not: {
-          anyOf: [
-            { required: ["enabled"] },
-            { required: ["baseHash"] },
-            { required: ["defaultAction"] },
-            { required: ["rules"] },
-            { required: ["constraints"] },
-            { required: ["message"] },
-          ],
-        },
-      },
-      {
-        properties: { enabled: { const: true }, hash: { minLength: 1 } },
-        required: ["enabled", "hash", "defaultAction", "rules"],
-        not: {
-          anyOf: [
-            { required: ["path"] },
-            { required: ["exists"] },
-            { required: ["file"] },
-            { required: ["message"] },
-          ],
-        },
-      },
-      {
-        properties: { enabled: { const: false } },
-        required: ["enabled"],
-        not: {
-          anyOf: [
-            { required: ["path"] },
-            { required: ["exists"] },
-            { required: ["hash"] },
-            { required: ["file"] },
-            { required: ["baseHash"] },
-            { required: ["defaultAction"] },
-            { required: ["rules"] },
-            { required: ["constraints"] },
-          ],
-        },
-      },
-    ],
-  },
 );
 
 /** Empty request payload for reading local exec approval policy. */
@@ -184,34 +94,14 @@ export const ExecApprovalsNodeGetParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-/** Writable host-native policy fields; the node remains the validation authority. */
-const NativeExecApprovalPolicySchema = Type.Object(
-  {
-    defaultAction: Type.Optional(NativeExecApprovalActionSchema),
-    // Windows treats set as full replacement; omission would silently clear the rule list.
-    rules: Type.Array(NativeExecApprovalRuleSchema),
-  },
-  { additionalProperties: false },
-);
-
-/** Node-scoped write for exactly one file-backed or host-native approval owner. */
+/** Node-scoped exec approval policy write request with optional base hash guard. */
 export const ExecApprovalsNodeSetParamsSchema = Type.Object(
   {
     nodeId: NonEmptyString,
-    file: Type.Optional(ExecApprovalsFileSchema),
-    native: Type.Optional(NativeExecApprovalPolicySchema),
+    file: ExecApprovalsFileSchema,
     baseHash: Type.Optional(NonEmptyString),
   },
-  {
-    additionalProperties: false,
-    oneOf: [
-      { required: ["file"], not: { required: ["native"] } },
-      {
-        required: ["native", "baseHash"],
-        not: { required: ["file"] },
-      },
-    ],
-  },
+  { additionalProperties: false },
 );
 
 /** Lookup request for one pending exec approval by id. */

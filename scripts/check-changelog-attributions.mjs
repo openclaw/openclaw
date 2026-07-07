@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 /**
  * Exact handles that changelog thanks entries must not credit.
  */
-const FORBIDDEN_CHANGELOG_THANKS_HANDLES = [
+export const FORBIDDEN_CHANGELOG_THANKS_HANDLES = [
   "codex",
   "openclaw",
   "steipete",
@@ -20,28 +20,28 @@ const FORBIDDEN_CHANGELOG_THANKS_HANDLES = [
 /**
  * Handle prefixes that identify forbidden changelog thanks credits.
  */
-const FORBIDDEN_CHANGELOG_THANKS_HANDLE_PREFIXES = ["app/"];
+export const FORBIDDEN_CHANGELOG_THANKS_HANDLE_PREFIXES = ["app/"];
 /**
  * Handle suffixes that identify forbidden changelog thanks credits.
  */
-const FORBIDDEN_CHANGELOG_THANKS_HANDLE_SUFFIXES = ["[bot]"];
+export const FORBIDDEN_CHANGELOG_THANKS_HANDLE_SUFFIXES = ["[bot]"];
 /**
  * Handles that require an explicit human credit instead.
  */
-const CHANGELOG_THANKS_REQUIRE_HUMAN_CREDIT_HANDLES = new Set([
+export const CHANGELOG_THANKS_REQUIRE_HUMAN_CREDIT_HANDLES = [
   "clawsweeper",
   "openclaw-clawsweeper",
   "clawsweeper[bot]",
   "openclaw-clawsweeper[bot]",
-]);
+];
 /**
  * Handle prefixes that require explicit human credit instead.
  */
-const CHANGELOG_THANKS_REQUIRE_HUMAN_CREDIT_HANDLE_PREFIXES = ["app/"];
+export const CHANGELOG_THANKS_REQUIRE_HUMAN_CREDIT_HANDLE_PREFIXES = ["app/"];
 /**
  * Handle suffixes that require explicit human credit instead.
  */
-const CHANGELOG_THANKS_REQUIRE_HUMAN_CREDIT_HANDLE_SUFFIXES = ["[bot]"];
+export const CHANGELOG_THANKS_REQUIRE_HUMAN_CREDIT_HANDLE_SUFFIXES = ["[bot]"];
 
 const THANKS_PATTERN = /\bThanks\b/iu;
 const THANKED_HANDLE_PATTERN = /@([-_/A-Za-z0-9]+(?:\[bot\])?)/giu;
@@ -79,7 +79,7 @@ export function requiresExplicitHumanChangelogThanks(handle) {
     return false;
   }
   return (
-    CHANGELOG_THANKS_REQUIRE_HUMAN_CREDIT_HANDLES.has(normalized) ||
+    CHANGELOG_THANKS_REQUIRE_HUMAN_CREDIT_HANDLES.includes(normalized) ||
     CHANGELOG_THANKS_REQUIRE_HUMAN_CREDIT_HANDLE_PREFIXES.some((prefix) =>
       normalized.startsWith(prefix),
     ) ||

@@ -459,7 +459,7 @@ export function parseUnionSeg(seg: string): readonly string[] | null {
  * Value predicate `[key<op>value]`. Operators: `=` `!=` (string),
  * `<` `<=` `>` `>=` (numeric). Multi-char tried before single-char.
  */
-type PredicateOp = "=" | "!=" | "<" | "<=" | ">" | ">=";
+export type PredicateOp = "=" | "!=" | "<" | "<=" | ">" | ">=";
 
 const PREDICATE_OPS: readonly PredicateOp[] = ["!=", "<=", ">=", "<", ">", "="];
 
@@ -625,7 +625,7 @@ function scanBracketAware(s: string, onChar: ScanCallback, onUnbalanced: () => n
 }
 
 /** First top-level occurrence of `ch` in `s`; -1 when absent. */
-function indexOfTopLevel(s: string, ch: string): number {
+export function indexOfTopLevel(s: string, ch: string): number {
   let result = -1;
   const failLocal = (): never => {
     throw new OcPathError(`Unbalanced bracket/brace in oc:// path: ${s}`, s, "OC_PATH_UNBALANCED");

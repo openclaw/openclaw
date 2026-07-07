@@ -31,7 +31,6 @@ import {
   listGoogleChatAccountIds,
   normalizeGoogleChatTarget,
   resolveGoogleChatAccount,
-  resolveGoogleChatOutboundSessionRoute,
   type ChannelMessageActionAdapter,
   type ChannelStatusIssue,
   type ResolvedGoogleChatAccount,
@@ -92,7 +91,6 @@ export const googlechatPlugin = createChatChannelPlugin({
     messaging: {
       targetPrefixes: ["googlechat", "google-chat", "gchat"],
       normalizeTarget: normalizeGoogleChatTarget,
-      resolveOutboundSessionRoute: (params) => resolveGoogleChatOutboundSessionRoute(params),
       targetResolver: {
         looksLikeId: (raw, normalized) => {
           const value = normalized ?? raw.trim();

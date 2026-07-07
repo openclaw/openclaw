@@ -356,9 +356,6 @@ async function resolveSlackOutboundSessionRoute(params: {
   const isDm = parsed.kind === "user";
   let peerKind: "direct" | "channel" | "group" = isDm ? "direct" : "channel";
   let peerId = parsed.id;
-  let recipientSessionExact = isDm
-    ? /^[UW][A-Z0-9]{8,}$/i.test(parsed.id)
-    : /^C[A-Z0-9]{8,}$/i.test(parsed.id);
   if (!isDm && /^D/i.test(parsed.id)) {
     const conversation = await resolveSlackConversationInfo({
       cfg: params.cfg,
@@ -370,7 +367,6 @@ async function resolveSlackOutboundSessionRoute(params: {
     }
     peerKind = "direct";
     peerId = conversation.user;
-    recipientSessionExact = true;
   } else if (!isDm && /^G/i.test(parsed.id)) {
     const channelType = await resolveSlackChannelType({
       cfg: params.cfg,
@@ -383,7 +379,6 @@ async function resolveSlackOutboundSessionRoute(params: {
     if (channelType === "dm") {
       peerKind = "direct";
     }
-    recipientSessionExact = channelType !== "unknown";
   }
   const peer: RoutePeer = {
     kind: peerKind,
@@ -399,7 +394,6 @@ async function resolveSlackOutboundSessionRoute(params: {
     route: {
       sessionKey: baseSessionKey,
       baseSessionKey,
-      recipientSessionExact,
       peer,
       chatType: peerKind === "direct" ? ("direct" as const) : ("channel" as const),
       from:

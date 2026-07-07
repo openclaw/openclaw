@@ -244,7 +244,7 @@ async function validatePackagePayload(params: {
   return failures;
 }
 
-function isBundleInstallRecord(record: PluginInstallRecord): boolean {
+export function isBundleInstallRecord(record: PluginInstallRecord): boolean {
   return (
     (record as { format?: unknown }).format === "bundle" || record.clawhubFamily === "bundle-plugin"
   );

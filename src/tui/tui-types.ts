@@ -27,10 +27,6 @@ export type TuiResult = {
   crestodianMessage?: string;
 };
 
-export type TuiHistoryLoadResult =
-  | { loaded: true; inFlightRunId: string | null }
-  | { loaded: false };
-
 export type ChatEvent = {
   runId: string;
   sessionKey: string;

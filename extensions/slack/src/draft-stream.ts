@@ -23,7 +23,7 @@ type SlackDraftStream = {
   channelId: () => string | undefined;
 };
 
-type SlackDraftStreamUpdate =
+export type SlackDraftStreamUpdate =
   | string
   | {
       text: string;

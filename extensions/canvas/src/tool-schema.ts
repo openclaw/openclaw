@@ -10,7 +10,7 @@ import {
 import { Type } from "typebox";
 
 /** Agent tool actions supported by the Canvas plugin. */
-const CANVAS_ACTIONS = [
+export const CANVAS_ACTIONS = [
   "present",
   "hide",
   "navigate",
@@ -21,7 +21,7 @@ const CANVAS_ACTIONS = [
 ] as const;
 
 /** Snapshot formats accepted by the Canvas tool. */
-const CANVAS_SNAPSHOT_FORMATS = ["png", "jpg", "jpeg"] as const;
+export const CANVAS_SNAPSHOT_FORMATS = ["png", "jpg", "jpeg"] as const;
 
 /** TypeBox schema for the model-facing Canvas tool arguments. */
 export const CanvasToolSchema = Type.Object({

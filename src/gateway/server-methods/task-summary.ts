@@ -10,7 +10,7 @@ import {
 
 type TaskLedgerStatus = TaskSummary["status"];
 
-const TASK_STATUS_TO_LEDGER_STATUS: Record<TaskStatus, TaskLedgerStatus> = {
+export const TASK_STATUS_TO_LEDGER_STATUS: Record<TaskStatus, TaskLedgerStatus> = {
   queued: "queued",
   running: "running",
   succeeded: "completed",

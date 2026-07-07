@@ -644,11 +644,7 @@ describe("finalizeSetupWizard", () => {
         skipUi: false,
       },
       baseConfig: {},
-      nextConfig: {
-        agents: {
-          list: [{ id: "main", agentDir: "/tmp/custom-agent" }],
-        },
-      },
+      nextConfig: {},
       workspaceDir: "/tmp",
       settings: {
         port: 18789,
@@ -663,14 +659,6 @@ describe("finalizeSetupWizard", () => {
     });
 
     expect(launchTuiCli).toHaveBeenCalledWith(expect.objectContaining({ message: undefined }), {});
-    expect(resolveDefaultModelAuthStatus).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agents: {
-          list: [{ id: "main", agentDir: "/tmp/custom-agent" }],
-        },
-      }),
-      { agentDir: "/tmp/custom-agent" },
-    );
     expectNoteContains(
       prompter,
       'No credentials are configured for provider "openai"',

@@ -1,4 +1,3 @@
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Control UI chat domain owns pure tool-card extraction rules.
 import { extractCanvasFromText } from "../../../../src/chat/canvas-render.js";
 import {
@@ -239,7 +238,7 @@ export function formatCollapsedToolPreviewText(value: string | undefined): strin
   if (!normalized) {
     return undefined;
   }
-  return truncateUtf16Safe(normalized, 120);
+  return normalized.slice(0, 120);
 }
 
 function findFirstUnmatchedCard(

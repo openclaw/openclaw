@@ -25,7 +25,7 @@ export type EffectiveReplyRouteEntry = Pick<
 >;
 
 /** Effective channel target selected for source reply delivery. */
-type EffectiveReplyRoute = {
+export type EffectiveReplyRoute = {
   channel?: string;
   to?: string;
   accountId?: string;

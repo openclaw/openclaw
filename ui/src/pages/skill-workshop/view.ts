@@ -15,7 +15,7 @@ import {
 
 type SkillWorkshopEmptyIcon = "search" | "clock" | "check" | "x" | "shield" | "refresh";
 
-type SkillWorkshopProps = {
+export type SkillWorkshopProps = {
   loading: boolean;
   error: string | null;
   inspectingKey: string | null;

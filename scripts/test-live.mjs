@@ -9,7 +9,7 @@ import {
 /**
  * Renders CLI usage for the live-test wrapper.
  */
-function testLiveUsage() {
+export function testLiveUsage() {
   return [
     "Usage: node scripts/test-live.mjs [options] [--] [vitest targets/args...]",
     "",

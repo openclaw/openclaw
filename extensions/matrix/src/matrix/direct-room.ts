@@ -9,7 +9,7 @@ function trimMaybeString(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-function normalizeJoinedMatrixMembers(joinedMembers: unknown): string[] {
+export function normalizeJoinedMatrixMembers(joinedMembers: unknown): string[] {
   if (!Array.isArray(joinedMembers)) {
     return [];
   }
@@ -72,7 +72,7 @@ export async function hasDirectMatrixMemberFlag(
   }
 }
 
-type MatrixDirectRoomEvidence = {
+export type MatrixDirectRoomEvidence = {
   joinedMembers: string[] | null;
   strict: boolean;
   viaMemberState: boolean;

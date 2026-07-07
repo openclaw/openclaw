@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { translateNativeEntries } from "./control-ui-i18n.ts";
 
-type NativeI18nSurface = "android" | "apple";
+export type NativeI18nSurface = "android" | "apple";
 
 export const NATIVE_I18N_LOCALES = [
   "zh-CN",
@@ -1000,7 +1000,7 @@ function render(entries: NativeI18nEntry[]): string {
   return `${JSON.stringify({ version: 1, entries }, null, 2)}\n`;
 }
 
-async function syncNativeI18n(options: { checkOnly: boolean; write: boolean }) {
+export async function syncNativeI18n(options: { checkOnly: boolean; write: boolean }) {
   const expected = render(await collectNativeI18nEntries());
   let current = "";
   try {

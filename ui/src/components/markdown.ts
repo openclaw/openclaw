@@ -18,8 +18,11 @@ import yaml from "highlight.js/lib/languages/yaml";
 import MarkdownIt from "markdown-it";
 import markdownItTaskLists from "markdown-it-task-lists";
 import { stripUnsupportedCitationControlMarkers } from "../../../src/shared/text/citation-control-markers.js";
-import { routeIdFromPath } from "../app-route-paths.ts";
-import { resolveControlUiBasePath } from "../app/browser.ts";
+import {
+  inferBasePathFromPathname,
+  normalizeBasePath,
+  routeIdFromPath,
+} from "../app-route-paths.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { truncateText } from "../lib/format.ts";
@@ -393,12 +396,16 @@ const APP_RESOURCE_PATH_PREFIXES = [
   ["plugins", "diffs"],
   ["plugins", "diffs-language-pack"],
 ];
+type WindowWithControlUiBasePath = Window &
+  typeof globalThis & {
+    [key: string]: unknown;
+  };
 const markdownCache = new Map<string, string>();
 const TAIL_LINK_BLUR_CLASS = "chat-link-tail-blur";
 const FENCE_OPEN_RE = /^[ \t]{0,3}(`{3,}|~{3,})/;
 const FENCE_CONTAINER_PREFIX_RE = /^[ \t]{0,3}(?:(?:>\s?)|(?:(?:[-+*]|\d{1,9}[.)])[ \t]+))/;
 
-type MarkdownCodeBlockChrome = "copy" | "none";
+export type MarkdownCodeBlockChrome = "copy" | "none";
 
 export type MarkdownRenderOptions = {
   codeBlockChrome?: MarkdownCodeBlockChrome;
@@ -552,7 +559,11 @@ function currentControlUiBasePath(): string {
   if (typeof window === "undefined") {
     return "";
   }
-  return resolveControlUiBasePath(window.location.pathname);
+  const configured = (window as WindowWithControlUiBasePath)["__OPENCLAW_CONTROL_UI_BASE_PATH__"];
+  if (typeof configured === "string") {
+    return normalizeBasePath(configured);
+  }
+  return inferBasePathFromPathname(window.location.pathname);
 }
 
 function pathSegments(pathname: string): string[] {
@@ -1396,7 +1407,7 @@ export function toSanitizedMarkdownHtml(
   return sanitized;
 }
 
-function toEscapedPlainTextHtml(value: string): string {
+export function toEscapedPlainTextHtml(value: string): string {
   return `<div class="markdown-plain-text-fallback">${escapeHtml(value.replace(/\r\n?/g, "\n"))}</div>`;
 }
 

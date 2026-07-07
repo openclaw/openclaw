@@ -293,7 +293,7 @@ function normalizeManifestLane(value: unknown): QaConfidenceManifestLane {
   };
 }
 
-function normalizeQaConfidenceManifest(value: unknown): QaConfidenceManifest {
+export function normalizeQaConfidenceManifest(value: unknown): QaConfidenceManifest {
   if (!isRecord(value)) {
     throw new Error("confidence manifest must be an object");
   }
@@ -1269,7 +1269,9 @@ export async function buildQaConfidenceSelfTestSummary(
   };
 }
 
-function renderQaConfidenceSelfTestMarkdownReport(summary: QaConfidenceSelfTestSummary): string {
+export function renderQaConfidenceSelfTestMarkdownReport(
+  summary: QaConfidenceSelfTestSummary,
+): string {
   const lines = [
     "# OpenClaw QA Confidence Self-Test",
     "",

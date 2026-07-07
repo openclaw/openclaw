@@ -292,7 +292,6 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
       break;
 
     case "call.speaking":
-    case "call.assistant-speech":
       ensureMaxDurationTimerForLiveCall({
         ctx,
         call,
@@ -302,9 +301,6 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): Process
         },
       });
       transitionState(call, "speaking");
-      if (event.type === "call.assistant-speech" && event.transcript.trim()) {
-        addTranscriptEntry(call, "bot", event.transcript);
-      }
       break;
 
     case "call.speech":

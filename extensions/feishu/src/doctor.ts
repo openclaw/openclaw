@@ -64,14 +64,14 @@ type FeishuDoctorSessionEntry = {
   entry: FeishuSessionEntry;
 };
 
-type FeishuDoctorInspection = {
+export type FeishuDoctorInspection = {
   stateDir: string;
   feishuStateDir: string;
   findings: FeishuDoctorFinding[];
   sessionEntries: FeishuDoctorSessionEntry[];
 };
 
-type FeishuDoctorRepairReport = {
+export type FeishuDoctorRepairReport = {
   backupDir: string;
   stateDirRepairAttempted: boolean;
   rebuiltStateDir: boolean;
@@ -544,7 +544,7 @@ function collectRepairSessionEntries(
   );
 }
 
-function inspectFeishuDoctorState(params: {
+export function inspectFeishuDoctorState(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): FeishuDoctorInspection {

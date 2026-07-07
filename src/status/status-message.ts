@@ -45,10 +45,7 @@ import {
   type SessionScope,
 } from "../config/sessions.js";
 import { resolveSessionLifecycleTimestamps } from "../config/sessions/lifecycle.js";
-import {
-  hasSessionActiveAutoModelFallback,
-  hasSessionAutoModelFallbackProvenance,
-} from "../config/sessions/model-override-provenance.js";
+import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readRecentSessionUsageFromTranscript } from "../gateway/session-transcript-readers.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
@@ -1077,18 +1074,15 @@ export function buildStatusMessage(args: StatusArgs): string {
   const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";
   const configuredDefaultModelLabel = normalizeOptionalString(args.configuredDefaultModelLabel);
   const sessionHasPersistedModelSelection = hasUserPinnedModelSelection(entry);
-  const sessionHasAutoFallback = hasSessionActiveAutoModelFallback(entry);
   const configDefaultDiffersFromSession =
-    (sessionHasPersistedModelSelection || sessionHasAutoFallback) &&
+    sessionHasPersistedModelSelection &&
     configuredDefaultModelLabel &&
     selectedModelLabel !== configuredDefaultModelLabel &&
     !areRuntimeModelRefsEquivalent(selectedModelLabel, configuredDefaultModelLabel, {
       config: args.config,
     });
   const overrideLabel = configDefaultDiffersFromSession
-    ? sessionHasPersistedModelSelection
-      ? ` · pinned session; config primary ${configuredDefaultModelLabel} · clear /model default`
-      : ` · auto fallback; config primary ${configuredDefaultModelLabel} · check provider`
+    ? ` · pinned session; config primary ${configuredDefaultModelLabel} · clear /model default`
     : "";
   const modelLines = [
     `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}${overrideLabel}`,

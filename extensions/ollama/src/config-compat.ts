@@ -48,7 +48,7 @@ export const legacyConfigRules: LegacyConfigRule[] = [
   },
 ];
 
-function migrateOllamaCloudRetiredBaseUrl(config: OpenClawConfig): {
+export function migrateOllamaCloudRetiredBaseUrl(config: OpenClawConfig): {
   config: OpenClawConfig;
   changes: string[];
 } | null {

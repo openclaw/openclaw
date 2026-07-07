@@ -4,7 +4,6 @@ export {
   enqueueDelivery,
   failDelivery,
   failDeliveryAfterPlatformSend,
-  failDeliveryBeforePlatformSend,
   loadPendingDelivery,
   loadPendingDeliveries,
   markDeliveryPlatformOutcomeUnknown,

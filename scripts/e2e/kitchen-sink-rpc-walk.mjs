@@ -150,7 +150,7 @@ export function readPositiveInt(raw, fallback, label = "value") {
   return parsed;
 }
 
-function clampKitchenSinkTimerTimeoutMs(value) {
+export function clampKitchenSinkTimerTimeoutMs(value) {
   if (!Number.isFinite(value)) {
     return 1;
   }
@@ -212,7 +212,7 @@ export function resolveKitchenSinkRpcConfig(env = process.env) {
   };
 }
 
-async function findAvailableLoopbackPort(options = {}) {
+export async function findAvailableLoopbackPort(options = {}) {
   const createServer = options.createServer ?? (() => net.createServer());
   const server = createServer();
   return await new Promise((resolve, reject) => {
@@ -718,7 +718,7 @@ export function parseGatewayCliRequestFailure(error) {
   return payload?.ok === false ? createGatewayClientRequestError(payload.error) : null;
 }
 
-function createGatewayClientRequestError(requestError) {
+export function createGatewayClientRequestError(requestError) {
   if (
     requestError?.type !== "gateway_request_error" ||
     !isNonEmptyString(requestError.code) ||
@@ -1540,7 +1540,7 @@ export function extractPluginCommandNames(payload) {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-function extractToolEntries(payload) {
+export function extractToolEntries(payload) {
   return (Array.isArray(payload?.groups) ? payload.groups : []).flatMap((group) =>
     Array.isArray(group?.tools) ? group.tools : [],
   );

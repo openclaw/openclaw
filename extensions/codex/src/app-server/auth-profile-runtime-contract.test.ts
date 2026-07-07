@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness";
 import { AUTH_PROFILE_RUNTIME_CONTRACT } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CodexAppServerClientFactory } from "./client-factory.js";
 import { runCodexAppServerAttempt as runCodexAppServerAttemptImpl } from "./run-attempt.js";
 import {
   readCodexAppServerBinding,
@@ -16,20 +17,16 @@ import {
   testCodexAppServerBindingStore,
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
-import {
-  adaptCodexTestClientFactory,
-  createCodexTestModel,
-  type CodexTestAppServerClientFactory,
-} from "./test-support.js";
+import { createCodexTestModel } from "./test-support.js";
 
-let codexAppServerClientFactoryForTest: CodexTestAppServerClientFactory | undefined;
+let codexAppServerClientFactoryForTest: CodexAppServerClientFactory | undefined;
 
 type RunCodexAppServerAttemptOptions = Omit<
   NonNullable<Parameters<typeof runCodexAppServerAttemptImpl>[1]>,
   "bindingStore"
 >;
 
-function setCodexAppServerClientFactoryForTest(factory: CodexTestAppServerClientFactory): void {
+function setCodexAppServerClientFactoryForTest(factory: CodexAppServerClientFactory): void {
   codexAppServerClientFactoryForTest = factory;
 }
 
@@ -41,11 +38,7 @@ function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParams,
   options: RunCodexAppServerAttemptOptions = {},
 ) {
-  const clientFactory =
-    options.clientFactory ??
-    (codexAppServerClientFactoryForTest
-      ? adaptCodexTestClientFactory(codexAppServerClientFactoryForTest)
-      : undefined);
+  const clientFactory = options.clientFactory ?? codexAppServerClientFactoryForTest;
   return runCodexAppServerAttemptImpl(params, {
     ...options,
     bindingStore: testCodexAppServerBindingStore,
@@ -164,12 +157,7 @@ function createCodexAuthProfileHarness(params: { startMethod: "thread/start" | "
   const seenAuthProfileIds: Array<string | undefined> = [];
   const seenAgentDirs: Array<string | undefined> = [];
   const requests: Array<{ method: string; params: unknown }> = [];
-  const notificationHandlers = new Set<(notification: unknown) => Promise<void> | void>();
-  const notify = async (notification: unknown) => {
-    await Promise.all(
-      [...notificationHandlers].map((handler) => Promise.resolve(handler(notification))),
-    );
-  };
+  let notify: (notification: unknown) => Promise<void> = async () => undefined;
   setCodexAppServerClientFactoryForTest(async (_startOptions, authProfileId, agentDir) => {
     seenAuthProfileIds.push(authProfileId);
     seenAgentDirs.push(agentDir);
@@ -185,12 +173,11 @@ function createCodexAuthProfileHarness(params: { startMethod: "thread/start" | "
         }
         throw new Error(`unexpected method: ${method}`);
       }),
-      addNotificationHandler: (handler: (notification: unknown) => Promise<void> | void) => {
-        notificationHandlers.add(handler);
-        return () => notificationHandlers.delete(handler);
+      addNotificationHandler: (handler: (notification: unknown) => Promise<void>) => {
+        notify = handler;
+        return () => undefined;
       },
       addRequestHandler: () => () => undefined,
-      addCloseHandler: () => () => undefined,
     } as never;
   });
   return {

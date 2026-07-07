@@ -16,7 +16,6 @@ export function resolveTlonOutboundSessionRoute(params: ChannelOutboundSessionRo
       agentId: params.agentId,
       channel: "tlon",
       accountId: params.accountId,
-      recipientSessionExact: true,
       peer: {
         kind: "group",
         id: parsed.nest,
@@ -31,7 +30,6 @@ export function resolveTlonOutboundSessionRoute(params: ChannelOutboundSessionRo
     agentId: params.agentId,
     channel: "tlon",
     accountId: params.accountId,
-    recipientSessionExact: true,
     peer: {
       kind: "direct",
       id: parsed.ship,

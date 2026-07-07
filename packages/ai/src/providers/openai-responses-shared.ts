@@ -167,7 +167,7 @@ function resolveReplayableResponsesMessageId(params: {
   return params.previousReplayItemWasReasoning ? params.textSignatureId : undefined;
 }
 
-interface OpenAIResponsesStreamOptions {
+export interface OpenAIResponsesStreamOptions {
   serviceTier?: ResponseCreateParamsStreaming["service_tier"];
   resolveServiceTier?: (
     responseServiceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
@@ -179,7 +179,7 @@ interface OpenAIResponsesStreamOptions {
   ) => void;
 }
 
-interface ConvertResponsesMessagesOptions {
+export interface ConvertResponsesMessagesOptions {
   includeSystemPrompt?: boolean;
   replayResponsesItemIds?: boolean;
 }
@@ -217,7 +217,7 @@ type ResponsesLifecycleStreamOptions = Pick<
 type OpenAIResponsesProcessStreamOptions = OpenAIResponsesStreamOptions &
   FirstStreamEventInternalOptions;
 
-type ResponsesReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export type ResponsesReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 function isResponsesReasoningEffort(
   effort: string | undefined,
@@ -231,7 +231,7 @@ function isResponsesReasoningEffort(
     effort === "max"
   );
 }
-type ResponsesReasoningSummary = "auto" | "detailed" | "concise" | null;
+export type ResponsesReasoningSummary = "auto" | "detailed" | "concise" | null;
 
 type ResponsesCommonParamsOptions = Pick<StreamOptions, "maxTokens" | "temperature"> & {
   reasoningEffort?: ResponsesReasoningEffort;

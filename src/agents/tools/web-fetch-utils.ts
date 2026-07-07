@@ -3,7 +3,6 @@
  *
  * Converts lightweight HTML into bounded markdown/text without pulling in a full renderer.
  */
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { decodeHtmlEntityAt } from "../utils/html.js";
 import { sanitizeHtml, stripInvisibleUnicode } from "./web-fetch-visibility.js";
 
@@ -131,7 +130,7 @@ export function truncateText(
   if (value.length <= maxChars) {
     return { text: value, truncated: false };
   }
-  return { text: truncateUtf16Safe(value, maxChars), truncated: true };
+  return { text: value.slice(0, maxChars), truncated: true };
 }
 
 /** Sanitizes HTML and extracts either markdown or plain text content. */

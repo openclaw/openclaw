@@ -2,6 +2,10 @@
 
 export {
   CHARS_PER_TOKEN_ESTIMATE,
+  DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES,
+  DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS,
+  DEFAULT_SQLITE_WAL_TRUNCATE_INTERVAL_MS,
+  applyWindowsSpawnProgramPolicy,
   configureSqliteConnectionPragmas,
   configureSqliteWalMaintenance,
   root,
@@ -13,16 +17,27 @@ export {
   redactSensitiveText,
   resolveGlobalSingleton,
   resolveUserPath,
+  resolveWindowsExecutablePath,
   resolveWindowsSpawnProgram,
+  resolveWindowsSpawnProgramCandidate,
   runTasksWithConcurrency,
   shortenHomeInString,
   shortenHomePath,
+  shouldIgnoreWarning,
   splitShellArgs,
   truncateUtf16Safe,
 } from "./openclaw-runtime.js";
 
 export type {
+  ProcessWarning,
+  ResolveWindowsSpawnProgramCandidateParams,
+  ResolveWindowsSpawnProgramParams,
   SqliteConnectionPragmaOptions,
   SqliteWalMaintenance,
   SqliteWalMaintenanceOptions,
+  WindowsSpawnCandidateResolution,
+  WindowsSpawnInvocation,
+  WindowsSpawnProgram,
+  WindowsSpawnProgramCandidate,
+  WindowsSpawnResolution,
 } from "./openclaw-runtime.js";

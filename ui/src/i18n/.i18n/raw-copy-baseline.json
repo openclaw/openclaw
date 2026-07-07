@@ -3926,13 +3926,6 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/nodes/view-exec-approvals.ts",
-      "text": "Default action"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/nodes/view-exec-approvals.ts",
       "text": "Defaults"
     },
     {
@@ -3989,13 +3982,6 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/nodes/view-exec-approvals.ts",
-      "text": "Host-native policy"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/nodes/view-exec-approvals.ts",
       "text": "Load exec approvals to edit allowlists."
     },
     {
@@ -4004,13 +3990,6 @@
       "name": "text",
       "path": "ui/src/pages/nodes/view-exec-approvals.ts",
       "text": "Mode"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/nodes/view-exec-approvals.ts",
-      "text": "Native"
     },
     {
       "count": 1,
@@ -4039,13 +4018,6 @@
       "name": "text",
       "path": "ui/src/pages/nodes/view-exec-approvals.ts",
       "text": "Pattern"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/nodes/view-exec-approvals.ts",
-      "text": "Read-only here. Edit from the companion app or CLI."
     },
     {
       "count": 1,

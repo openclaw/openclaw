@@ -1,5 +1,5 @@
 // Control UI config module wires control ui chunking behavior.
-function normalizeModuleId(id: string): string {
+export function normalizeModuleId(id: string): string {
   return id.replace(/\\/g, "/");
 }
 

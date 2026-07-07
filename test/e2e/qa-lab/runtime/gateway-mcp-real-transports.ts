@@ -713,7 +713,7 @@ async function produceProof(options: ProducerOptions): Promise<ProofResult> {
   }
 }
 
-async function runGatewayMcpRealTransportProducer(
+export async function runGatewayMcpRealTransportProducer(
   options: ProducerOptions,
 ): Promise<QaEvidenceSummaryJson> {
   const scenario = SCENARIOS[options.scenarioId];

@@ -353,15 +353,6 @@ function coercePayload(payload: UnknownRecord) {
   return next;
 }
 
-function coerceTrigger(trigger: UnknownRecord): UnknownRecord {
-  const script = typeof trigger.script === "string" ? trigger.script.trim() : "";
-  const once = parseBoolean(trigger.once);
-  return {
-    script,
-    ...(once !== undefined ? { once } : {}),
-  };
-}
-
 function coerceDelivery(delivery: UnknownRecord) {
   const next: UnknownRecord = { ...delivery };
   const parsed = parseDeliveryInput(delivery);
@@ -622,16 +613,6 @@ export function normalizeCronJobInput(
 
   if (isRecord(base.payload)) {
     next.payload = coercePayload(base.payload);
-  }
-
-  if ("trigger" in base) {
-    if (base.trigger === null) {
-      next.trigger = null;
-    } else if (isRecord(base.trigger)) {
-      next.trigger = coerceTrigger(base.trigger);
-    } else {
-      delete next.trigger;
-    }
   }
 
   if (isRecord(base.delivery)) {

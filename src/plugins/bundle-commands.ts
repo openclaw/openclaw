@@ -5,10 +5,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import {
-  parseFrontmatterBlock,
-  stripFrontmatterBlock,
-} from "../../packages/markdown-core/src/frontmatter.js";
+import { parseFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readRootJsonObjectSync } from "../infra/json-files.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
@@ -44,6 +41,18 @@ function parseFrontmatterBool(value: string | undefined, fallback: boolean): boo
     return false;
   }
   return fallback;
+}
+
+function stripFrontmatter(content: string): string {
+  const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  if (!normalized.startsWith("---")) {
+    return normalized.trim();
+  }
+  const endIndex = normalized.indexOf("\n---", 3);
+  if (endIndex === -1) {
+    return normalized.trim();
+  }
+  return normalized.slice(endIndex + 4).trim();
 }
 
 function readClaudeBundleManifest(rootDir: string): Record<string, unknown> {
@@ -124,7 +133,7 @@ function loadBundleCommandsFromRoot(params: {
     if (parseFrontmatterBool(frontmatter["disable-model-invocation"], false)) {
       continue;
     }
-    const promptTemplate = stripFrontmatterBlock(raw);
+    const promptTemplate = stripFrontmatter(raw);
     if (!promptTemplate) {
       continue;
     }

@@ -12,7 +12,7 @@ const DEFAULT_CLAUDE_MODEL_BY_FAMILY: Record<string, string> = {
 };
 
 /** Normalized Claude CLI selection plus runtime refs used by setup migrations. */
-type ClaudeCliAnthropicModelRefs = {
+export type ClaudeCliAnthropicModelRefs = {
   selectedRef: string;
   runtimeRefs: string[];
   rewriteRef?: string;

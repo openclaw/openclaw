@@ -32,18 +32,6 @@ describe("extractToolResultMediaArtifact", () => {
     });
   });
 
-  it("does not deliver explicitly private image results", () => {
-    expect(
-      extractToolResultMediaArtifact({
-        content: [{ type: "image", data: "base64data", mimeType: "image/png" }],
-        details: {
-          path: "/tmp/browser-screenshot.png",
-          media: { outbound: false },
-        },
-      }),
-    ).toBeUndefined();
-  });
-
   it("extracts structured details.media top-level aliases", () => {
     expect(
       extractToolResultMediaArtifact({

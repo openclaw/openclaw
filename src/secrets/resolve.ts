@@ -78,7 +78,7 @@ type ProviderResolutionOutput = Map<string, unknown>;
 
 /** Error for failures that affect an entire configured secret provider. */
 /** Error emitted when a configured secret provider cannot resolve a ref. */
-class SecretProviderResolutionError extends Error {
+export class SecretProviderResolutionError extends Error {
   readonly scope = "provider" as const;
   readonly source: SecretRefSource;
   readonly provider: string;
@@ -97,7 +97,7 @@ class SecretProviderResolutionError extends Error {
 }
 
 /** Error for failures limited to one SecretRef id under a provider. */
-class SecretRefResolutionError extends Error {
+export class SecretRefResolutionError extends Error {
   readonly scope = "ref" as const;
   readonly source: SecretRefSource;
   readonly provider: string;

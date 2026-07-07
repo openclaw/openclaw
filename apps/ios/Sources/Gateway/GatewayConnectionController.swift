@@ -1261,8 +1261,7 @@ final class GatewayConnectionController {
             "TLS fingerprint verification timed out for \(host):\(port). "
                 + "Secure endpoint was reached, but TLS did not finish in time."
         case .tlsUnavailable:
-            "No secure gateway endpoint was detected at \(host):\(port). "
-                + "Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected."
+            "No TLS endpoint detected at \(host):\(port). Remote gateways must use HTTPS/WSS."
         case .certificateUnavailable:
             "Could not read the TLS certificate from \(host):\(port)."
         }
@@ -1495,12 +1494,6 @@ private struct GatewayPendingTrustConnect {
     let gatewayGeneration: UInt64?
 }
 
-struct GatewayManualTransportPresentation: Equatable {
-    let requiresTLS: Bool
-    let effectiveTLS: Bool
-    let helperText: String?
-}
-
 extension GatewayConnectionController {
     private func buildGatewayURL(host: String, port: Int, useTLS: Bool) -> URL? {
         let scheme = useTLS ? "wss" : "ws"
@@ -1512,29 +1505,11 @@ extension GatewayConnectionController {
     }
 
     private func resolveManualUseTLS(host: String, useTLS: Bool) -> Bool {
-        Self.manualTransportPresentation(
-            host: host,
-            requestedTLS: useTLS).effectiveTLS
+        useTLS || self.shouldRequireTLS(host: host)
     }
 
-    static func manualTransportPresentation(
-        host: String,
-        requestedTLS: Bool) -> GatewayManualTransportPresentation
-    {
-        let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
-        let requiresTLS = !trimmedHost.isEmpty && !LoopbackHost.isLocalNetworkHost(trimmedHost)
-        let effectiveTLS = requestedTLS || requiresTLS
-        let helperText: String? = if requiresTLS {
-            "Secure connection is required for this host."
-        } else if effectiveTLS {
-            nil
-        } else {
-            "Use only on a trusted private network."
-        }
-        return GatewayManualTransportPresentation(
-            requiresTLS: requiresTLS,
-            effectiveTLS: effectiveTLS,
-            helperText: helperText)
+    private func shouldRequireTLS(host: String) -> Bool {
+        !LoopbackHost.isLocalNetworkHost(host)
     }
 
     private func manualStableID(host: String, port: Int) -> String {

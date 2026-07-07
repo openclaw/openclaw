@@ -206,7 +206,7 @@ export function normalizeClaudeSettingSourcesArgs(args?: string[]): string[] | u
 }
 
 /** Map OpenClaw thinking levels to Claude CLI effort flags for a model id. */
-function mapClaudeCliThinkingLevelToEffort(
+export function mapClaudeCliThinkingLevelToEffort(
   thinkingLevel?: string | null,
 ): ClaudeCliEffort | undefined {
   switch (normalizeOptionalLowercaseString(thinkingLevel)) {

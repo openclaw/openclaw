@@ -18,7 +18,7 @@ export type StopChildResult = ChildExit & {
   exitedBeforeTeardown: boolean;
 };
 
-type StopChildOptions = {
+export type StopChildOptions = {
   killGraceMs?: number;
   platform?: NodeJS.Platform;
   runTaskkill?: typeof spawnSync;

@@ -25,7 +25,7 @@ type LoginFailureKind =
   | "protocol-mismatch"
   | "network";
 
-type LoginFailureFeedback = {
+export type LoginFailureFeedback = {
   kind: LoginFailureKind;
   title: string;
   summary: string;
@@ -35,7 +35,7 @@ type LoginFailureFeedback = {
   rawError: string;
 };
 
-type LoginGateProps = {
+export type LoginGateProps = {
   basePath: string;
   connected: boolean;
   lastError: string | null;
@@ -108,7 +108,7 @@ function buildFeedback(params: {
   };
 }
 
-function resolveLoginFailureFeedback(
+export function resolveLoginFailureFeedback(
   params: LoginFailureFeedbackParams,
 ): LoginFailureFeedback | null {
   if (params.connected || !params.lastError) {
@@ -431,7 +431,7 @@ function renderLoginGate(props: LoginGateProps) {
   `;
 }
 
-class LoginGate extends LitElement {
+export class LoginGate extends LitElement {
   override createRenderRoot() {
     return this;
   }

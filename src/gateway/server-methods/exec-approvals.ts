@@ -5,7 +5,6 @@ import {
   errorShape,
   validateExecApprovalsGetParams,
   validateExecApprovalsNodeGetParams,
-  validateExecApprovalsNodeSnapshot,
   validateExecApprovalsNodeSetParams,
   validateExecApprovalsSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -103,7 +102,6 @@ async function respondWithExecApprovalsNodePayload<TParams extends { nodeId: str
   command: "system.execApprovals.get" | "system.execApprovals.set";
   commandParams: (parsedParams: TParams) => Record<string, unknown>;
   readPayload: (response: { payload?: unknown; payloadJSON?: string | null }) => unknown;
-  validatePayload?: (payload: unknown) => boolean;
 }): Promise<void> {
   const rawParams = params.rawParams;
   if (!assertValidParams(rawParams, params.validate, params.method, params.respond)) {
@@ -147,16 +145,7 @@ async function respondWithExecApprovalsNodePayload<TParams extends { nodeId: str
     if (!respondUnavailableOnNodeInvokeError(params.respond, res)) {
       return;
     }
-    const payload = params.readPayload(res);
-    if (params.validatePayload && !params.validatePayload(payload)) {
-      params.respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "node returned invalid exec approvals payload"),
-      );
-      return;
-    }
-    params.respond(true, payload, undefined);
+    params.respond(true, params.readPayload(res), undefined);
   });
 }
 
@@ -209,7 +198,6 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
       // Node invocations can return structured payloads or JSON strings
       // depending on the transport; normalize before echoing the RPC response.
       readPayload: (res) => (res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload),
-      validatePayload: validateExecApprovalsNodeSnapshot,
     });
   },
   "exec.approvals.node.set": async ({ params, respond, context }) => {
@@ -220,13 +208,13 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
       context,
       respond,
       command: "system.execApprovals.set",
-      // Host-native nodes own a different policy model. Preserve that model at
-      // the node boundary instead of pretending it is an OpenClaw approvals file.
-      commandParams: (parsedParams) =>
-        "native" in parsedParams
-          ? { ...parsedParams.native, baseHash: parsedParams.baseHash }
-          : { file: parsedParams.file, baseHash: parsedParams.baseHash },
-      readPayload: (res) => (res.payloadJSON ? safeParseJson(res.payloadJSON) : res.payload),
+      commandParams: (parsedParams) => ({
+        file: parsedParams.file,
+        baseHash: parsedParams.baseHash,
+      }),
+      // node.set returns JSON on the command channel; keep the gateway response
+      // shape aligned with local exec.approvals.set.
+      readPayload: (res) => safeParseJson(res.payloadJSON ?? null),
     });
   },
 };

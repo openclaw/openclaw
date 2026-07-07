@@ -129,7 +129,7 @@ type MatrixPrepareTargetParams = {
 const MATRIX_APPROVAL_DELIVERY_ATTEMPTS = 3;
 const MATRIX_APPROVAL_DELIVERY_RETRY_DELAY_MS = 250;
 
-type MatrixApprovalHandlerDeps = {
+export type MatrixApprovalHandlerDeps = {
   nowMs?: () => number;
   sendMessage?: typeof sendMessageMatrix;
   sendSingleTextMessage?: typeof sendSingleTextMessageMatrix;
@@ -139,7 +139,7 @@ type MatrixApprovalHandlerDeps = {
   repairDirectRooms?: typeof repairMatrixDirectRooms;
 };
 
-type MatrixApprovalHandlerContext = {
+export type MatrixApprovalHandlerContext = {
   client: MatrixClient;
   deps?: MatrixApprovalHandlerDeps;
 };

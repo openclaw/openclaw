@@ -111,7 +111,6 @@ export function resolveZalouserOutboundSessionRoute(params: ChannelOutboundSessi
     agentId: params.agentId,
     channel: "zalouser",
     accountId: params.accountId,
-    recipientSessionExact: isGroup,
     peer: {
       kind: isGroup ? "group" : "direct",
       id: peerId,

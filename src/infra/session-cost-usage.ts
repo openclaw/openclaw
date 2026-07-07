@@ -4,7 +4,6 @@ import path from "node:path";
 import readline from "node:readline";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
 import { normalizeUsage } from "../agents/usage.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
@@ -77,7 +76,7 @@ export type {
 
 // Bump when the durable cache schema or the meaning of cached totals changes, so
 // older builds are rebuilt instead of served stale.
-const USAGE_COST_CACHE_VERSION = 7;
+const USAGE_COST_CACHE_VERSION = 6;
 const USAGE_COST_CACHE_FILE = ".usage-cost-cache.json";
 const USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS = 10_000;
 const USAGE_COST_CACHE_TEMP_FILE_GRACE_MS = USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS;
@@ -836,9 +835,6 @@ function buildSessionCostSummaryFromCacheEntry(params: {
   };
 }
 
-const normalizeUsageCostTotalOrigin = (value: unknown): CostBreakdown["totalOrigin"] =>
-  value === "provider-billed" ? value : undefined;
-
 const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | undefined => {
   if (!usageRaw || typeof usageRaw !== "object") {
     return undefined;
@@ -860,7 +856,6 @@ const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | unde
     output: asFiniteNumber(cost.output),
     cacheRead: asFiniteNumber(cost.cacheRead),
     cacheWrite: asFiniteNumber(cost.cacheWrite),
-    totalOrigin: normalizeUsageCostTotalOrigin(cost.totalOrigin),
   };
 };
 
@@ -1146,13 +1141,12 @@ const isModelPricingKnown = (cost: ReturnType<typeof resolveModelCostConfig>): b
 
 const shouldPreserveRecordedZeroCost = (costBreakdown: CostBreakdown | undefined): boolean =>
   costBreakdown?.total === 0 &&
-  (costBreakdown.totalOrigin === "provider-billed" ||
-    [
-      costBreakdown.input,
-      costBreakdown.output,
-      costBreakdown.cacheRead,
-      costBreakdown.cacheWrite,
-    ].some((value) => value !== undefined && value !== 0));
+  [
+    costBreakdown.input,
+    costBreakdown.output,
+    costBreakdown.cacheRead,
+    costBreakdown.cacheWrite,
+  ].some((value) => value !== undefined && value !== 0);
 
 const shouldRecomputeRecordedZeroCost = (params: {
   cost: ReturnType<typeof resolveModelCostConfig>;
@@ -1239,17 +1233,6 @@ async function* readJsonlRecords(
   }
 }
 
-async function* readJsonlRecordsBestEffort(
-  filePath: string,
-): AsyncGenerator<Record<string, unknown>> {
-  try {
-    yield* readJsonlRecords(filePath);
-  } catch {
-    // Diagnostic readers return the records available before a stream failure.
-    // Durable cache scans use the strict reader so partial data is never marked fresh.
-  }
-}
-
 async function scanTranscriptFile(params: {
   filePath: string;
   config?: OpenClawConfig;
@@ -1309,8 +1292,8 @@ async function scanTranscriptFile(params: {
         })
       ) {
         // Fill in missing estimates and override fabricated API-provided zeros
-        // for known-priced models such as DeepSeek V4. Providers that mark
-        // the total as provider-billed keep their authoritative zero total.
+        // for known-priced models such as DeepSeek V4. Providers that reconcile
+        // only the total keep their authoritative zero when components are nonzero.
         entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
         entry.costBreakdown = undefined;
       }
@@ -2160,7 +2143,7 @@ export async function discoverAllSessions(params?: {
             if (message?.role === "user") {
               const content = message.content;
               if (typeof content === "string") {
-                firstUserMessage = truncateUtf16Safe(content, 100);
+                firstUserMessage = content.slice(0, 100);
               } else if (Array.isArray(content)) {
                 for (const block of content) {
                   if (
@@ -2170,7 +2153,7 @@ export async function discoverAllSessions(params?: {
                   ) {
                     const text = (block as Record<string, unknown>).text;
                     if (typeof text === "string") {
-                      firstUserMessage = truncateUtf16Safe(text, 100);
+                      firstUserMessage = text.slice(0, 100);
                     }
                     break;
                   }
@@ -2668,7 +2651,7 @@ export async function loadSessionLogs(params: {
   const retentionLimit = limit * 2;
   const resolveCost = createUsageCostResolver(params.config);
 
-  for await (const parsed of readJsonlRecordsBestEffort(sessionFile)) {
+  for await (const parsed of readJsonlRecords(sessionFile)) {
     try {
       const message = parsed.message as Record<string, unknown> | undefined;
       if (!message) {
@@ -2750,10 +2733,10 @@ export async function loadSessionLogs(params: {
         continue;
       }
 
-      // Truncate very long content.
+      // Truncate very long content
       const maxLen = 2000;
       if (content.length > maxLen) {
-        content = truncateUtf16Safe(content, maxLen) + "…";
+        content = content.slice(0, maxLen) + "…";
       }
 
       // Get timestamp

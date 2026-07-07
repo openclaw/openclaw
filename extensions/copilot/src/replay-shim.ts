@@ -20,7 +20,7 @@
 //   - `src/agents/pi-embedded-runner/run/types.ts` —
 //     `AgentHarnessAttemptResult.replayMetadata` field requirement.
 
-type ReplayDecision =
+export type ReplayDecision =
   | {
       readonly action: "resume";
       readonly sdkSessionId: string;
@@ -32,7 +32,7 @@ type ReplayDecision =
       readonly downgradeReason: "no-replay-state" | "no-sdk-session-id" | "replay-invalid";
     };
 
-interface ReplayShimInput {
+export interface ReplayShimInput {
   readonly sdkSessionId?: string;
   readonly replayInvalid?: boolean;
 }
@@ -86,9 +86,9 @@ export function decideReplayAction(input?: ReplayShimInput): ReplayDecision {
   };
 }
 
-type ResumeFailureKind = "missing" | "unknown";
+export type ResumeFailureKind = "missing" | "unknown";
 
-interface ResumeFailureClassification {
+export interface ResumeFailureClassification {
   readonly recoverable: boolean;
   readonly kind: ResumeFailureKind;
 }
@@ -167,7 +167,7 @@ export function classifyResumeFailure(error: unknown): ResumeFailureClassificati
   return { recoverable: false, kind: "unknown" };
 }
 
-interface ReplayMetadataComputeInput {
+export interface ReplayMetadataComputeInput {
   readonly priorReplayInvalid?: boolean;
   readonly priorHadPotentialSideEffects?: boolean;
   readonly thisAttemptTimedOut?: boolean;
@@ -176,7 +176,7 @@ interface ReplayMetadataComputeInput {
   readonly thisAttemptResumeFailureRecovered?: boolean;
 }
 
-interface ComputedReplayMetadata {
+export interface ComputedReplayMetadata {
   readonly hadPotentialSideEffects: boolean;
   readonly replaySafe: boolean;
 }

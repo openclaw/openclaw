@@ -569,7 +569,6 @@ describe("slackPlugin status", () => {
       from: "slack:U09G2DJ0275",
       to: "user:U09G2DJ0275",
       threadId: "1778110574.653649",
-      recipientSessionExact: true,
     });
     expectRecordFields(requireRecord(route?.peer, "Slack direct peer"), "Slack direct peer", {
       kind: "direct",
@@ -652,7 +651,6 @@ describe("slackPlugin status", () => {
       chatType: "channel",
       from: "slack:group:G123",
       to: "channel:G123",
-      recipientSessionExact: true,
     });
     expectRecordFields(requireRecord(route?.peer, "Slack MPIM peer"), "Slack MPIM peer", {
       kind: "group",

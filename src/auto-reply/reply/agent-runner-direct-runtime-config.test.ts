@@ -135,9 +135,7 @@ function createReplyOperation(): ReplyOperation {
     abortByUser: vi.fn(),
     abortForRestart: vi.fn(),
     terminalRecovery: false,
-    acceptedSteeredInboundAudio: false,
     markTerminalRecovery: vi.fn(),
-    markAcceptedSteeredInboundAudio: vi.fn(),
   };
 }
 

@@ -8,7 +8,7 @@ const cleanupSignals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 
 type CleanupSignal = (typeof cleanupSignals)[number];
 
-type E2eStateDir = {
+export type E2eStateDir = {
   stateDir: string;
   created: boolean;
   cleanup: () => void;

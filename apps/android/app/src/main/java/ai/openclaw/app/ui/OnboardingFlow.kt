@@ -588,11 +588,6 @@ fun OnboardingFlow(
         setupError = "That looks like a setup code. Go back and choose Setup Gateway, then Use setup code."
         return
       }
-      val transport =
-        gatewayManualTransportPresentation(
-          hostInput = manualHost,
-          requestedTls = manualTls,
-        )
       val plan =
         resolveGatewayConnectPlan(
           useSetupCode = false,
@@ -602,14 +597,14 @@ fun OnboardingFlow(
           savedManualTls = savedManualTls,
           manualHostInput = manualHost,
           manualPortInput = manualPort,
-          manualTlsInput = transport.effectiveTls,
+          manualTlsInput = manualTls,
           bootstrapTokenInput = "",
           tokenInput = token,
           passwordInput = password,
         )
       if (plan == null) {
         val endpointError =
-          composeGatewayManualUrl(manualHost, manualPort, transport.effectiveTls)
+          composeGatewayManualUrl(manualHost, manualPort, manualTls)
             ?.let(::parseGatewayEndpointResult)
             ?.error
             ?: GatewayEndpointValidationError.INVALID_URL
@@ -1579,13 +1574,6 @@ private fun ManualGatewaySetupScreen(
   onPair: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  val transport =
-    remember(manualHost, manualTls) {
-      gatewayManualTransportPresentation(
-        hostInput = manualHost,
-        requestedTls = manualTls,
-      )
-    }
   ClawScaffold(modifier = modifier, contentPadding = onboardingContentPadding()) {
     Column(modifier = Modifier.fillMaxSize().imePadding(), verticalArrangement = Arrangement.SpaceBetween) {
       LazyColumn(
@@ -1625,27 +1613,16 @@ private fun ManualGatewaySetupScreen(
           }
         }
         item {
-          LabeledField(label = "Connection security") {
+          LabeledField(label = "Connection type") {
             Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-              TogglePill(
-                text = "Unencrypted",
-                selected = !transport.effectiveTls,
-                enabled = !transport.requiresTls,
-                onClick = { onManualTlsChange(false) },
-              )
-              TogglePill(
-                text = "Secure (TLS)",
-                selected = transport.effectiveTls,
-                onClick = { onManualTlsChange(true) },
-              )
+              TogglePill(text = "Local network", selected = !manualTls, onClick = { onManualTlsChange(false) })
+              TogglePill(text = "Secure remote", selected = manualTls, onClick = { onManualTlsChange(true) })
             }
-            transport.helperText?.let { helperText ->
-              Text(
-                text = helperText,
-                style = ClawTheme.type.caption,
-                color = ClawTheme.colors.textMuted,
-              )
-            }
+            Text(
+              text = "Local works for LAN or emulator hosts. Secure remote is for wss:// or Tailscale Serve/Funnel.",
+              style = ClawTheme.type.caption,
+              color = ClawTheme.colors.textMuted,
+            )
           }
         }
         error?.let { message ->
@@ -1737,7 +1714,6 @@ private fun GatewayRecoveryScreen(
     )
   val context = LocalContext.current
   val approvalCommand = recoveryGatewayApprovalCommand(gatewayConnectionProblem)
-  val protocolUpdateCommand = recoveryGatewayProtocolMismatchCommand(gatewayConnectionProblem)
   val recoveryTitle =
     when {
       recoveryState == GatewayRecoveryUiState.Connected -> "Gateway paired"
@@ -1826,16 +1802,6 @@ private fun GatewayRecoveryScreen(
         approvalCommand?.let { command ->
           Spacer(modifier = Modifier.height(18.dp))
           ApprovalCommandBlock(command = command, onCopy = { copyApprovalCommand(context, command) })
-        }
-        protocolUpdateCommand?.let { command ->
-          Spacer(modifier = Modifier.height(18.dp))
-          Text(
-            text = "On the Gateway computer, run:",
-            style = ClawTheme.type.caption,
-            color = ClawTheme.colors.textMuted,
-          )
-          Spacer(modifier = Modifier.height(8.dp))
-          ApprovalCommandBlock(command = command, onCopy = { copyGatewayCommand(context, command) })
         }
         if (recoveryProgressItems.isNotEmpty()) {
           Spacer(modifier = Modifier.height(20.dp))
@@ -2293,12 +2259,10 @@ private fun OnboardingHeader(
 private fun TogglePill(
   text: String,
   selected: Boolean,
-  enabled: Boolean = true,
   onClick: () -> Unit,
 ) {
   Surface(
     onClick = onClick,
-    enabled = enabled,
     modifier = Modifier.height(34.dp),
     shape = RoundedCornerShape(ClawTheme.radii.pill),
     color = if (selected) ClawTheme.colors.primary else ClawTheme.colors.surfaceRaised,
@@ -2672,15 +2636,6 @@ private fun recoveryGatewayProtocolMismatchDetail(gatewayConnectionProblem: Gate
   return protocolMismatchVersions(clientMin, clientMax, expected)?.let { "$summary $it" } ?: summary
 }
 
-internal fun recoveryGatewayProtocolMismatchCommand(
-  gatewayConnectionProblem: GatewayConnectionProblem?,
-): String? {
-  if (gatewayConnectionProblem?.code != "PROTOCOL_MISMATCH") return null
-  val clientMin = gatewayConnectionProblem.clientMinProtocol ?: return null
-  val expected = gatewayConnectionProblem.expectedProtocol ?: return null
-  return "openclaw update".takeIf { clientMin > expected }
-}
-
 private fun protocolMismatchVersions(
   clientMin: Int?,
   clientMax: Int?,
@@ -2801,15 +2756,6 @@ private fun copyApprovalCommand(
   val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
   clipboard.setPrimaryClip(ClipData.newPlainText("OpenClaw pairing approval command", command))
   Toast.makeText(context, "Approval command copied", Toast.LENGTH_SHORT).show()
-}
-
-private fun copyGatewayCommand(
-  context: Context,
-  command: String,
-) {
-  val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-  clipboard.setPrimaryClip(ClipData.newPlainText("OpenClaw gateway command", command))
-  Toast.makeText(context, "Command copied", Toast.LENGTH_SHORT).show()
 }
 
 /** One permission row plus launcher callback for onboarding's final setup step. */

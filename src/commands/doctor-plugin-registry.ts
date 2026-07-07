@@ -321,7 +321,7 @@ export function maybeRepairStaleManagedNpmBundledPlugins(
 }
 
 /** Removes local install records that shadow current bundled plugin sources. */
-async function maybeRepairStaleLocalBundledPluginInstallRecords(
+export async function maybeRepairStaleLocalBundledPluginInstallRecords(
   params: PluginRegistryDoctorRepairParams,
 ): Promise<string[]> {
   const stale = await listStaleLocalBundledPluginInstallRecordShadows(params);

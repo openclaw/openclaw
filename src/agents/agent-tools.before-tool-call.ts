@@ -268,7 +268,7 @@ const pendingTerminalPresentationByToolCall = new Map<
   }
 >();
 
-function resolveToolTerminalPresentation(params: {
+export function resolveToolTerminalPresentation(params: {
   tool: AnyAgentTool;
   toolParams: unknown;
   result: Awaited<ReturnType<AnyAgentTool["execute"]>>;

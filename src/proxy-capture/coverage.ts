@@ -125,7 +125,7 @@ const DEBUG_PROXY_COVERAGE_ENTRIES: readonly DebugProxyCoverageEntry[] = [
 
 let warnedCoverageSessionKey: string | null = null;
 
-function listDebugProxyCoverageEntries(): DebugProxyCoverageEntry[] {
+export function listDebugProxyCoverageEntries(): DebugProxyCoverageEntry[] {
   // Return copies because callers may render/sort/filter entries for CLI output.
   return DEBUG_PROXY_COVERAGE_ENTRIES.map((entry) => ({
     ...entry,
@@ -133,7 +133,7 @@ function listDebugProxyCoverageEntries(): DebugProxyCoverageEntry[] {
   }));
 }
 
-function summarizeDebugProxyCoverage(
+export function summarizeDebugProxyCoverage(
   entries: readonly DebugProxyCoverageEntry[] = DEBUG_PROXY_COVERAGE_ENTRIES,
 ): DebugProxyCoverageSummary {
   let captured = 0;

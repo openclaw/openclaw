@@ -13,7 +13,7 @@ import type { AstBlock, AstItem, FrontmatterEntry, MdAst } from "./ast.js";
 import { formatOcPath, type OcPath } from "./oc-path.js";
 import { guardSentinel } from "./sentinel.js";
 
-type MdEditResult =
+export type MdEditResult =
   | { readonly ok: true; readonly ast: MdAst }
   | {
       readonly ok: false;

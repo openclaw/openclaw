@@ -14,12 +14,12 @@ const BROWSER_INTERNAL_TARGET_URL_PREFIXES = [
   "opera://",
 ];
 
-type BrowserTargetUrlLike = {
+export type BrowserTargetUrlLike = {
   url?: string | null;
 };
 
 /** Return true for browser-owned chrome/devtools/internal URLs. */
-function isBrowserInternalTargetUrl(url: string | null | undefined): boolean {
+export function isBrowserInternalTargetUrl(url: string | null | undefined): boolean {
   const normalized = url?.trim().toLowerCase() ?? "";
   return BROWSER_INTERNAL_TARGET_URL_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }

@@ -3,7 +3,7 @@ import { LitElement, html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { titleForRoute, type NavigationRouteId } from "../app-navigation.ts";
 
-class DashboardHeader extends LitElement {
+export class DashboardHeader extends LitElement {
   override createRenderRoot() {
     return this;
   }

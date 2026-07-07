@@ -890,7 +890,6 @@ type MessageToolOptions = {
   agentThreadId?: string | number;
   currentMessageId?: string | number;
   currentInboundAudio?: boolean;
-  hasCurrentInboundAudio?: () => boolean;
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
   sameChannelThreadRequired?: boolean;
@@ -1504,7 +1503,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           sandboxRoot: options?.sandboxRoot,
           sourceReplyDeliveryMode: sourceReplySinkDeliveryMode,
           inboundEventKind: options?.inboundEventKind,
-          inboundAudio: options?.hasCurrentInboundAudio?.() ?? options?.currentInboundAudio,
+          inboundAudio: options?.currentInboundAudio,
           abortSignal: signal,
         });
       } catch (error) {

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -448,11 +449,9 @@ export async function createGatewaySession(params: {
         const fork = await forkSessionFromParent({
           parentEntry: currentParentSessionEntry,
           agentId: parentSessionTarget.agentId,
-          parentSessionKey: canonicalParentSessionKey,
-          sessionKey: target.canonicalKey,
-          storePath: parentSessionTarget.storePath,
+          sessionsDir: path.dirname(parentSessionTarget.storePath),
           // Keep the fork transcript owned by the child store across agent boundaries.
-          targetStorePath: target.storePath,
+          targetSessionsDir: path.dirname(target.storePath),
         });
         if (!fork) {
           return {

@@ -14,6 +14,7 @@ import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_CONTROL_METHODS, type CodexControlMethod } from "./app-server/capabilities.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./app-server/protocol.js";
+import { rememberCodexRateLimits } from "./app-server/rate-limit-cache.js";
 import {
   summarizeCodexAccountUsage,
   type CodexAccountUsageSummary,
@@ -330,6 +331,7 @@ async function readSubscriptionUsage(params: {
   if (!limits.ok) {
     return undefined;
   }
+  rememberCodexRateLimits(limits.value);
   return summarizeCodexAccountUsage(limits.value, params.now);
 }
 

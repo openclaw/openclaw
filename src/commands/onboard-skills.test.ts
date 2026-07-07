@@ -38,16 +38,7 @@ vi.mock("./onboard-helpers.js", () => ({
   resolveNodeManagerOptions: mocks.resolveNodeManagerOptions,
 }));
 
-import { setupSkills, testing } from "./onboard-skills.js";
-
-describe("skill onboarding text bounds", () => {
-  it("keeps install failures and hints UTF-16 well-formed", () => {
-    expect(testing.summarizeInstallFailure(`${"x".repeat(138)}🚀tail`)).toBe(`${"x".repeat(138)}…`);
-    expect(testing.formatSkillHint({ description: `${"x".repeat(88)}🚀tail`, install: [] })).toBe(
-      `${"x".repeat(88)}…`,
-    );
-  });
-});
+import { setupSkills } from "./onboard-skills.js";
 
 function createBundledSkill(params: {
   name: string;

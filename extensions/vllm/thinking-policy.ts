@@ -12,7 +12,9 @@ const VLLM_BINARY_THINKING_PROFILE = {
   defaultLevel: "off",
 } satisfies ProviderThinkingProfile;
 
-function normalizeVllmQwenThinkingFormat(value: unknown): VllmQwenThinkingFormat | undefined {
+export function normalizeVllmQwenThinkingFormat(
+  value: unknown,
+): VllmQwenThinkingFormat | undefined {
   if (typeof value !== "string") {
     return undefined;
   }

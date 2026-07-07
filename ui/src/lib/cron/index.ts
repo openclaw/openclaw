@@ -24,7 +24,7 @@ import {
 } from "../gateway-errors.ts";
 import { normalizeLowercaseStringOrEmpty, sortUniqueStrings } from "../string-coerce.ts";
 
-const CRON_CHANNEL_LAST = "last";
+export const CRON_CHANNEL_LAST = "last";
 
 export type CronFormState = {
   name: string;

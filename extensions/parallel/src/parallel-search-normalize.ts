@@ -8,7 +8,6 @@ import {
   wrapWebContent,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 // Internal-only bounds (the model-facing tool schema declares its own copies).
 const PARALLEL_MAX_SEARCH_COUNT = 40;
@@ -59,7 +58,7 @@ export function normalizeParallelObjective(value: string | undefined): string | 
   }
   return trimmed.length <= PARALLEL_MAX_OBJECTIVE_CHARS
     ? trimmed
-    : truncateUtf16Safe(trimmed, PARALLEL_MAX_OBJECTIVE_CHARS);
+    : trimmed.slice(0, PARALLEL_MAX_OBJECTIVE_CHARS);
 }
 
 export function normalizeParallelClientModel(value: string | undefined): string | undefined {
@@ -69,7 +68,7 @@ export function normalizeParallelClientModel(value: string | undefined): string 
   }
   return trimmed.length <= PARALLEL_CLIENT_MODEL_MAX_LENGTH
     ? trimmed
-    : truncateUtf16Safe(trimmed, PARALLEL_CLIENT_MODEL_MAX_LENGTH);
+    : trimmed.slice(0, PARALLEL_CLIENT_MODEL_MAX_LENGTH);
 }
 
 // Parallel's API caps each entry at 200 chars and accepts up to 5 queries. We
@@ -91,7 +90,7 @@ export function normalizeParallelSearchQueries(value: unknown): string[] {
     const capped =
       trimmed.length <= PARALLEL_MAX_SEARCH_QUERY_CHARS
         ? trimmed
-        : truncateUtf16Safe(trimmed, PARALLEL_MAX_SEARCH_QUERY_CHARS);
+        : trimmed.slice(0, PARALLEL_MAX_SEARCH_QUERY_CHARS);
     if (seen.has(capped)) {
       continue;
     }

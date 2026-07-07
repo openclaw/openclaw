@@ -647,7 +647,7 @@ async function writeProducerMetadata(params: {
   );
 }
 
-async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
+export async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
   await fs.mkdir(options.artifactBase, { recursive: true });
   await writePreflight(options.artifactBase);
 

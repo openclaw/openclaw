@@ -315,7 +315,7 @@ async function produceProof(options: ProducerOptions): Promise<ProofResult> {
   }
 }
 
-async function runVoiceCallGatewayProducer(
+export async function runVoiceCallGatewayProducer(
   options: ProducerOptions,
 ): Promise<QaEvidenceSummaryJson> {
   const writer = createQaScriptEvidenceWriter({
