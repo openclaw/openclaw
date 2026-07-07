@@ -1,5 +1,9 @@
 // Covers embedded backend behavior used by the TUI runtime.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+} from "../agents/internal-runtime-context.js";
 import { isEmbeddedMode, setEmbeddedMode } from "../infra/embedded-mode.js";
 import {
   clearEmbeddedPluginApprovalBroker,
@@ -21,6 +25,7 @@ const updateSessionGoalStatusMock = vi.fn();
 const ensureRuntimePluginsLoadedMock = vi.fn();
 const ensureContextWindowCacheLoadedMock = vi.fn(async () => undefined);
 const runSessionStartupMigrationMock = vi.fn<() => Promise<void>>(async () => undefined);
+const createGatewaySessionMock = vi.fn();
 const listSessionsFromStoreAsyncMock = vi.fn(
   async (_options?: unknown): Promise<{ sessions: unknown[] }> => ({ sessions: [] }),
 );
@@ -206,6 +211,10 @@ vi.mock("../gateway/server-model-catalog.js", () => ({
   loadGatewayModelCatalog: (params?: unknown) => loadGatewayModelCatalogMock(params),
 }));
 
+vi.mock("../gateway/session-create-service.js", () => ({
+  createGatewaySession: (...args: unknown[]) => createGatewaySessionMock(...args),
+}));
+
 vi.mock("../gateway/session-reset-service.js", () => ({
   performGatewaySessionReset: () => ({ ok: true, key: "agent:main:main", entry: {} }),
 }));
@@ -287,6 +296,13 @@ describe("EmbeddedTuiBackend", () => {
     ensureContextWindowCacheLoadedMock.mockResolvedValue(undefined);
     runSessionStartupMigrationMock.mockReset();
     runSessionStartupMigrationMock.mockResolvedValue(undefined);
+    createGatewaySessionMock.mockReset();
+    createGatewaySessionMock.mockResolvedValue({
+      ok: true,
+      key: "agent:main:tui-created",
+      entry: { sessionId: "created-session" },
+      resetExisting: false,
+    });
     listSessionsFromStoreAsyncMock.mockReset();
     listSessionsFromStoreAsyncMock.mockResolvedValue({ sessions: [] });
     loadCombinedSessionStoreForGatewayMock.mockReset();
@@ -344,6 +360,34 @@ describe("EmbeddedTuiBackend", () => {
     defaultRuntime.error = originalRuntimeError;
   });
 
+  it("creates TUI sessions through the shared gateway lifecycle", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    const result = await backend.createSession({
+      key: "tui-created",
+      agentId: "main",
+      parentSessionKey: "agent:main:main",
+    });
+
+    expect(createGatewaySessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: {},
+        key: "tui-created",
+        agentId: "main",
+        parentSessionKey: "agent:main:main",
+        emitCommandHooks: true,
+        commandSource: "tui:embedded",
+        loadGatewayModelCatalog: expect.any(Function),
+      }),
+    );
+    expect(result).toEqual({
+      ok: true,
+      key: "agent:main:tui-created",
+      entry: { sessionId: "created-session" },
+    });
+  });
+
   it("bridges assistant and lifecycle events into chat events", async () => {
     const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
     const pending = deferred<{
@@ -373,7 +417,7 @@ describe("EmbeddedTuiBackend", () => {
     registeredListener?.({
       runId: "run-local-1",
       stream: "assistant",
-      data: { text: "hello", delta: "hello" },
+      data: { delta: "hello" },
     });
     registeredListener?.({
       runId: "run-local-1",
@@ -390,7 +434,7 @@ describe("EmbeddedTuiBackend", () => {
         payload: {
           runId: "run-local-1",
           stream: "assistant",
-          data: { text: "hello", delta: "hello" },
+          data: { delta: "hello" },
         },
       },
       {
@@ -1242,6 +1286,152 @@ describe("EmbeddedTuiBackend", () => {
     });
   });
 
+  it("retains the latest tool validation summary for an aborted chat event", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const pending = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockImplementationOnce(() => pending.promise);
+
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = (evt) => {
+      events.push({ event: evt.event, payload: evt.payload });
+    };
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "edit the file",
+      runId: "run-validation-loop",
+    });
+
+    registeredListener?.({
+      runId: "run-validation-loop",
+      stream: "tool",
+      data: {
+        phase: "result",
+        toolErrorSummary: "edit tool validation failed: edits: must have required properties edits",
+      },
+    });
+    registeredListener?.({
+      runId: "run-validation-loop",
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        aborted: true,
+      },
+    });
+    await flushMicrotasks();
+
+    expect(events).toContainEqual({
+      event: "chat",
+      payload: {
+        runId: "run-validation-loop",
+        sessionKey: "agent:main:main",
+        state: "aborted",
+        errorMessage: "edit tool validation failed: edits: must have required properties edits",
+      },
+    });
+  });
+
+  it.each([
+    { stream: "assistant", data: { text: "Recovered" } },
+    { stream: "tool", data: { phase: "start", name: "read" } },
+  ] as const)(
+    "clears stale validation diagnostics on local $stream progress",
+    async (progressEvent) => {
+      const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+      const pending = deferred<{
+        payloads: Array<{ text: string }>;
+        meta: Record<string, unknown>;
+      }>();
+      agentCommandFromIngressMock.mockImplementationOnce(() => pending.promise);
+
+      const backend = new EmbeddedTuiBackend();
+      const events: Array<{ event: string; payload: unknown }> = [];
+      backend.onEvent = (evt) => {
+        events.push({ event: evt.event, payload: evt.payload });
+      };
+      backend.start();
+      await backend.sendChat({
+        sessionKey: "agent:main:main",
+        message: "recover after invalid arguments",
+        runId: "run-recovered-validation",
+      });
+
+      registeredListener?.({
+        runId: "run-recovered-validation",
+        stream: "tool",
+        data: {
+          phase: "result",
+          toolErrorSummary: "edit tool validation failed: invalid arguments",
+        },
+      });
+      registeredListener?.({
+        runId: "run-recovered-validation",
+        stream: progressEvent.stream,
+        data: progressEvent.data,
+      });
+      registeredListener?.({
+        runId: "run-recovered-validation",
+        stream: "lifecycle",
+        data: { phase: "end", aborted: true },
+      });
+      await flushMicrotasks();
+
+      expect(events).toContainEqual({
+        event: "chat",
+        payload: {
+          runId: "run-recovered-validation",
+          sessionKey: "agent:main:main",
+          state: "aborted",
+        },
+      });
+    },
+  );
+
+  it("drops unsafe lifecycle tool-error summaries", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const pending = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockImplementationOnce(() => pending.promise);
+
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = (evt) => {
+      events.push({ event: evt.event, payload: evt.payload });
+    };
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "open the page",
+      runId: "run-unsafe-abort",
+    });
+
+    registeredListener?.({
+      runId: "run-unsafe-abort",
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        aborted: true,
+        toolErrorSummary: "browser failed\nsecret output",
+      },
+    });
+    await flushMicrotasks();
+
+    expect(events).toContainEqual({
+      event: "chat",
+      payload: {
+        runId: "run-unsafe-abort",
+        sessionKey: "agent:main:main",
+        state: "aborted",
+      },
+    });
+  });
+
   it("sends broad stop-like text as a normal prompt when idle", async () => {
     const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
     const pending = deferred<{
@@ -1788,6 +1978,56 @@ describe("EmbeddedTuiBackend", () => {
       { state: "delta", deltaText: "Hello world", replace: undefined },
       { state: "delta", deltaText: "Goodbye world", replace: true },
     ]);
+  });
+
+  it("keeps internal context private when local deltas split its delimiters", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const pending = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = (evt) => {
+      events.push({ event: evt.event, payload: evt.payload });
+    };
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "split internal context",
+      runId: "run-local-split-context",
+    });
+
+    const deltas = [
+      `Visible\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\n`,
+      "private runtime detail\n",
+      `${INTERNAL_RUNTIME_CONTEXT_END}\nAfter`,
+    ];
+    deltas.forEach((delta) => {
+      registeredListener?.({
+        runId: "run-local-split-context",
+        stream: "assistant",
+        data: { delta },
+      });
+    });
+    registeredListener?.({
+      runId: "run-local-split-context",
+      stream: "lifecycle",
+      data: { phase: "end", stopReason: "stop" },
+    });
+    pending.resolve({ payloads: [{ text: "Visible\n\nAfter" }], meta: {} });
+    await flushMicrotasks();
+
+    const chatPayloads = events
+      .filter((entry) => entry.event === "chat")
+      .map((entry) => entry.payload);
+    expect(JSON.stringify(chatPayloads)).not.toContain("private runtime detail");
+    expect(chatPayloads.at(-1)).toMatchObject({
+      state: "final",
+      message: { content: [{ text: "Visible\n\nAfter" }] },
+    });
   });
 
   it("keeps a fallback response deliverable after a retryable lifecycle error", async () => {

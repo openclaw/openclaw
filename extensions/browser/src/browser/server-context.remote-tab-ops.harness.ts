@@ -24,6 +24,8 @@ export function makeState(
       controlPort: 18791,
       cdpPortRangeStart: 18800,
       cdpPortRangeEnd: 18899,
+      extensionRelayDefaultPort: 18799,
+      extensionRelayPorts: {},
       cdpProtocol: profile === "remote" ? "https" : "http",
       cdpHost: profile === "remote" ? "1.1.1.1" : "127.0.0.1",
       cdpIsLoopback: profile !== "remote",

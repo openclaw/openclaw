@@ -37,12 +37,14 @@ function bodyStream(text: string): { body: ReadableStream<Uint8Array> } {
 const wsMockState = vi.hoisted(() => ({
   behavior: "close" as "close" | "open" | "error" | "unexpected-response",
   urls: [] as string[],
+  options: [] as Array<{ maxPayload?: number } | undefined>,
 }));
 
 beforeEach(() => {
   vi.spyOn(fetchModule, "resolveFetch").mockReturnValue(mockFetch as unknown as typeof fetch);
   wsMockState.behavior = "close";
   wsMockState.urls = [];
+  wsMockState.options = [];
 });
 
 function requireFetchCall(index = 0): [RequestInfo | URL, RequestInit] {
@@ -84,8 +86,9 @@ vi.mock("ws", () => ({
   default: class MockWebSocket {
     private handlers = new Map<string, Array<(...args: unknown[]) => void>>();
 
-    constructor(url: string | URL) {
+    constructor(url: string | URL, options?: { maxPayload?: number }) {
       wsMockState.urls.push(String(url));
+      wsMockState.options.push(options);
       setTimeout(() => {
         if (wsMockState.behavior === "open") {
           this.emit("open");
@@ -202,6 +205,7 @@ describe("containerCheck", () => {
 
     expect(result).toEqual({ ok: true, status: 101, error: null });
     expect(wsMockState.urls).toEqual(["ws://localhost:8080/v1/receive/%2B14259798283"]);
+    expect(wsMockState.options).toEqual([{ maxPayload: 1024 * 1024 }]);
   });
 
   it("rejects container receive endpoints that do not upgrade to WebSocket", async () => {
@@ -314,6 +318,19 @@ describe("containerRestRequest", () => {
     ).rejects.toThrow("Signal REST 500: Server error details");
   });
 
+  it("bounds REST error response bodies before reporting failures", async () => {
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 500,
+      statusText: "Internal Server Error",
+      ...bodyStream("x".repeat(20_000)),
+    });
+
+    await expect(
+      containerRestRequest("/v2/send", { baseUrl: "http://localhost:8080" }, "POST"),
+    ).rejects.toThrow(`Signal REST 500: ${"x".repeat(16 * 1024)}`);
+  });
+
   it("handles empty response body", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
@@ -393,6 +410,29 @@ describe("containerSendMessage", () => {
         recipients: ["+15550001111"],
       }),
     );
+  });
+
+  it("passes quote metadata through v2 send using container field names", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      ...bodyStream(JSON.stringify({ timestamp: "1700000000000" })),
+    });
+
+    await containerSendMessage({
+      baseUrl: "http://localhost:8080",
+      account: "+14259798283",
+      recipients: ["+15550001111"],
+      message: "Hello world",
+      quoteTimestamp: 1699999999999,
+      quoteAuthor: "+15550002222",
+      quoteMessage: "original",
+    });
+
+    const body = parseFetchBody();
+    expect(body.quote_timestamp).toBe(1699999999999);
+    expect(body.quote_author).toBe("+15550002222");
+    expect(body.quote_message).toBe("original");
   });
 
   it("normalizes invalid send timestamps before returning", async () => {
@@ -595,6 +635,88 @@ describe("containerRpcRequest typing", () => {
 
     const body = parseFetchBody();
     expect(body.recipient).toBe("group.Z3JvdXAtMTIz");
+  });
+});
+
+describe("containerRpcRequest send", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("translates native quote params to container send fields", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      ...bodyStream(JSON.stringify({ timestamp: "1700000000000" })),
+    });
+
+    await containerRpcRequest(
+      "send",
+      {
+        account: "+14259798283",
+        recipient: ["+15550001111"],
+        message: "Hello world",
+        quoteTimestamp: 1699999999999,
+        quoteAuthor: "+15550002222",
+        quoteMessage: "original",
+      },
+      { baseUrl: "http://localhost:8080" },
+    );
+
+    const body = parseFetchBody();
+    expect(body.quote_timestamp).toBe(1699999999999);
+    expect(body.quote_author).toBe("+15550002222");
+    expect(body.quote_message).toBe("original");
+  });
+
+  it("strips uuid prefixes from native quote authors", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      ...bodyStream(JSON.stringify({ timestamp: "1700000000000" })),
+    });
+
+    await containerRpcRequest(
+      "send",
+      {
+        account: "+14259798283",
+        recipient: ["+15550001111"],
+        message: "Hello world",
+        quoteTimestamp: 1699999999999,
+        quoteAuthor: "uuid:author-uuid",
+        quoteMessage: "original",
+      },
+      { baseUrl: "http://localhost:8080" },
+    );
+
+    const body = parseFetchBody();
+    expect(body.quote_author).toBe("author-uuid");
+  });
+
+  it("ignores malformed native quote params at the container boundary", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      ...bodyStream(JSON.stringify({ timestamp: "1700000000000" })),
+    });
+
+    await containerRpcRequest(
+      "send",
+      {
+        account: "+14259798283",
+        recipient: ["+15550001111"],
+        message: "Hello world",
+        quoteTimestamp: "not-a-timestamp",
+        quoteAuthor: ["+15550002222"],
+        quoteMessage: { text: "original" },
+      },
+      { baseUrl: "http://localhost:8080" },
+    );
+
+    const body = parseFetchBody();
+    expect(body).not.toHaveProperty("quote_timestamp");
+    expect(body).not.toHaveProperty("quote_author");
+    expect(body).not.toHaveProperty("quote_message");
   });
 });
 
@@ -945,6 +1067,7 @@ describe("streamContainerEvents", () => {
     expect(log).toHaveBeenCalledWith(
       "[signal-ws] connecting to ws://localhost:8080/v1/receive/<redacted>",
     );
+    expect(wsMockState.options).toEqual([{ maxPayload: 1024 * 1024 }]);
     expectMockLogNotContains(log, "+14259798283");
     expectMockLogNotContains(log, "%2B14259798283");
   });

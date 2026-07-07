@@ -6,6 +6,10 @@ import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
 import { fingerprintCodexAppServerNetworkProxyConfigPatch } from "./config.js";
+import {
+  resetCodexTestBindingStore,
+  testCodexAppServerBindingStore,
+} from "./session-binding.test-helpers.js";
 import { createCodexTestModel } from "./test-support.js";
 import {
   buildDeveloperInstructions,
@@ -18,9 +22,15 @@ import {
   resolveCodexAppServerThreadModelSelection,
   resolveReasoningEffort,
   shouldWarnCodexThreadLifecycleTimingSummary,
-  startOrResumeThread,
+  startOrResumeThread as startOrResumeThreadImpl,
   type CodexThreadLifecycleTimingLogger,
 } from "./thread-lifecycle.js";
+
+function startOrResumeThread(
+  params: Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore">,
+) {
+  return startOrResumeThreadImpl({ ...params, bindingStore: testCodexAppServerBindingStore });
+}
 
 let tempDir: string;
 
@@ -223,8 +233,14 @@ describe("Codex app-server native code mode config", () => {
     const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }));
 
     expect(instructions).toContain("Use Codex native `spawn_agent` for Codex subagents");
+    // Codex defers native collab tools behind tool_search on search-capable
+    // models; the instructions must teach the retrieval path or models fall
+    // back to the always-direct sessions_spawn.
     expect(instructions).toContain(
-      "Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation.",
+      "when `spawn_agent` is not directly listed, load it with `tool_search` before spawning",
+    );
+    expect(instructions).toContain(
+      "Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.",
     );
   });
 
@@ -289,12 +305,10 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(instructions).toContain("## Skill Workshop");
-    expect(instructions).toContain(
-      "Use `skill_workshop` when the user wants to create, update, revise, list, inspect, apply, reject, or quarantine a reusable skill, Skill Workshop proposal, playbook, workflow, procedure, or durable instruction.",
-    );
-    expect(instructions).toContain(
-      "Use `action=apply`, `action=reject`, or `action=quarantine` only after the user explicitly asks to approve/use/apply, reject, or quarantine a specific proposal.",
-    );
+    expect(instructions).toContain("Route durable skill work");
+    expect(instructions).toContain("through the `skill_workshop` tool");
+    expect(instructions).toContain("Generated skills are pending proposals.");
+    expect(instructions).toContain("only when the user explicitly asks");
   });
 
   it("keeps developer instructions compact when no dynamic tools are deferred", () => {
@@ -904,7 +918,6 @@ describe("Codex app-server turn params", () => {
       serviceTier: "flex",
       personality: "none",
       developerInstructions: resumeParams.developerInstructions,
-      persistExtendedHistory: true,
     });
     expect(resumeParams.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
     const turnParams = buildTurnStartParams(params, {
@@ -1184,6 +1197,9 @@ describe("Codex app-server model provider selection", () => {
 describe("Codex app-server thread lifecycle timing", () => {
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-thread-lifecycle-"));
+    // Bindings are keyed by session identity, not tempDir, so sibling tests
+    // would otherwise leak resumable threads into fresh-start expectations.
+    resetCodexTestBindingStore();
   });
 
   afterEach(async () => {

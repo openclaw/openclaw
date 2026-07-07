@@ -33,6 +33,7 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { mattermostApprovalAuth } from "./approval-auth.js";
 import {
   chunkTextForOutbound,
@@ -627,6 +628,7 @@ const mattermostOutbound: ChannelOutboundAdapter = {
   chunker: chunkTextForOutbound,
   chunkerMode: "markdown",
   textChunkLimit: 4000,
+  sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
   deliveryCapabilities: {
     durableFinal: {
       text: true,

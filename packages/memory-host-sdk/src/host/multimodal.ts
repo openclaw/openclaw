@@ -10,18 +10,18 @@ const MEMORY_MULTIMODAL_SPECS = {
   },
   audio: {
     labelPrefix: "Audio file",
-    extensions: [".mp3", ".wav", ".ogg", ".opus", ".m4a", ".aac", ".flac"],
+    extensions: [".mp3", ".wav", ".ogg", ".opus", ".m4a", ".m2a", ".aac", ".flac"],
   },
 } as const;
 
 /** Supported multimodal memory modality. */
 export type MemoryMultimodalModality = keyof typeof MEMORY_MULTIMODAL_SPECS;
 /** All supported multimodal memory modalities in stable config order. */
-export const MEMORY_MULTIMODAL_MODALITIES = Object.keys(
+const MEMORY_MULTIMODAL_MODALITIES = Object.keys(
   MEMORY_MULTIMODAL_SPECS,
 ) as MemoryMultimodalModality[];
 /** User selection for one modality or all modalities. */
-export type MemoryMultimodalSelection = MemoryMultimodalModality | "all";
+type MemoryMultimodalSelection = MemoryMultimodalModality | "all";
 
 /** Normalized multimodal memory ingestion settings. */
 export type MemoryMultimodalSettings = {
@@ -34,7 +34,7 @@ export type MemoryMultimodalSettings = {
 export const DEFAULT_MEMORY_MULTIMODAL_MAX_FILE_BYTES = 10 * 1024 * 1024;
 
 /** Normalize user modality selections to supported modalities. */
-export function normalizeMemoryMultimodalModalities(
+function normalizeMemoryMultimodalModalities(
   raw: MemoryMultimodalSelection[] | undefined,
 ): MemoryMultimodalModality[] {
   if (raw === undefined || raw.includes("all")) {

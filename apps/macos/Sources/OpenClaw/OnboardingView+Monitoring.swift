@@ -43,9 +43,9 @@ extension OnboardingView {
         self.updatePermissionMonitoring(for: pageIndex)
         self.updateDiscoveryMonitoring(for: pageIndex)
         self.maybeInstallCLI(for: pageIndex)
-        self.maybeStartCrestodianChat(for: pageIndex)
-        // Crestodian setup creates the workspace (BOOTSTRAP.md); re-check so
-        // the Meet-your-agent page joins the flow once setup ran.
+        self.maybeStartAISetup(for: pageIndex)
+        // AI setup creates the workspace (BOOTSTRAP.md); re-check so the
+        // Meet-your-agent page joins the flow once setup ran.
         self.refreshBootstrapStatus()
         maybeKickoffOnboardingChat(for: pageIndex)
     }
@@ -77,6 +77,8 @@ extension OnboardingView {
         guard self.onboardingVisible, !installingCLI else { return }
         installingCLI = true
         OnboardingController.shared.setWindowCloseEnabled(false)
+        // Cmd-W bypasses the disabled close button; the delegate asks first.
+        OnboardingController.shared.busyReason = "OpenClaw is installing the Gateway service."
         Task { @MainActor in await self.runCLIInstall() }
     }
 
@@ -91,9 +93,12 @@ extension OnboardingView {
     }
 
     func runCLIInstall() async {
+        self.cliInstallPhase = .installing
         defer {
             self.installingCLI = false
+            self.cliInstallPhase = .idle
             OnboardingController.shared.setWindowCloseEnabled(true)
+            OnboardingController.shared.busyReason = nil
         }
         let installed = await CLIInstaller.install { message in
             self.cliStatus = message
@@ -101,6 +106,9 @@ extension OnboardingView {
         guard installed else { return }
         cliInstallLocation = CLIInstaller.managedExecutableLocation()
         cliStatus = "Starting OpenClaw Gateway…"
+        // The step checklist shows one spinner at a time: install first,
+        // then the service start.
+        self.cliInstallPhase = .startingService
         switch await CLIInstaller.activateLocalGateway() {
         case .ready:
             cliStatus = "OpenClaw Gateway is ready."

@@ -113,6 +113,11 @@ type MockOpenAiRequestSnapshot = {
   toolOutputStructuredError?: true;
 };
 
+// Runtime-context delimiters are owned by src/agents/internal-runtime-context.ts.
+// This mock mirrors the wire shape so delimiter drift fails through QA timeouts.
+const INTERNAL_RUNTIME_CONTEXT_BEGIN = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
+const INTERNAL_RUNTIME_CONTEXT_END = "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+
 // Anthropic /v1/messages request/response shapes the mock actually needs.
 // This is a subset of the real Anthropic Messages API — just enough so the
 // QA suite can run its parity pack against a "baseline" Anthropic provider
@@ -368,7 +373,7 @@ function extractLastUserText(input: ResponsesInputItem[]) {
       continue;
     }
     const text = extractInputText(item.content);
-    if (text) {
+    if (text && !isInternalRuntimeContextCarrierText(text)) {
       return text;
     }
   }
@@ -378,11 +383,22 @@ function extractLastUserText(input: ResponsesInputItem[]) {
 function findLastUserIndex(input: ResponsesInputItem[]) {
   for (let index = input.length - 1; index >= 0; index -= 1) {
     const item = input[index];
-    if (item.role === "user" && Array.isArray(item.content)) {
+    if (item.role !== "user" || !Array.isArray(item.content)) {
+      continue;
+    }
+    if (!isInternalRuntimeContextCarrierText(extractInputText(item.content))) {
       return index;
     }
   }
   return -1;
+}
+
+function isInternalRuntimeContextCarrierText(text: string) {
+  const trimmed = text.trim();
+  return (
+    trimmed.includes(INTERNAL_RUNTIME_CONTEXT_BEGIN) &&
+    trimmed.endsWith(INTERNAL_RUNTIME_CONTEXT_END)
+  );
 }
 
 function isToolOutputContinuationText(text: string) {
@@ -705,45 +721,13 @@ function buildWhatsAppPendingHistoryReply(allInputText: string) {
 }
 
 function extractStructuredWhatsAppPendingHistoryContext(beforeTrigger: string) {
-  const blocks = extractJsonBlocksByLabel(
-    beforeTrigger,
-    QA_WHATSAPP_PENDING_HISTORY_STRUCTURED_LABEL,
-  );
-  return blocks
-    .flatMap((block) => {
-      if (!Array.isArray(block)) {
-        return [];
-      }
-      return block.flatMap((entry) => {
-        if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-          return [];
-        }
-        const body = (entry as Record<string, unknown>)["body"];
-        return typeof body === "string" ? [body] : [];
-      });
-    })
-    .join("\n");
-}
-
-function extractJsonBlocksByLabel(text: string, label: string): unknown[] {
   const blockRe = new RegExp(
-    `${escapeRegExp(label)}\\s*\\n\`\`\`json\\n([\\s\\S]*?)\\n\`\`\``,
+    `${escapeRegExp(QA_WHATSAPP_PENDING_HISTORY_STRUCTURED_LABEL)}\\n((?:(?!\\n\\n)[\\s\\S])+)\\n\\n`,
     "gu",
   );
-  const blocks: unknown[] = [];
-  for (const match of text.matchAll(blockRe)) {
-    const rawJson = match[1];
-    if (!rawJson) {
-      continue;
-    }
-    try {
-      blocks.push(JSON.parse(rawJson) as unknown);
-    } catch {
-      // The mock only trusts the exact structured block emitted by the inbound
-      // prompt builder; malformed user text must not satisfy this QA oracle.
-    }
-  }
-  return blocks;
+  return Array.from(beforeTrigger.matchAll(blockRe), (match) => match[1]?.trim())
+    .filter((block): block is string => Boolean(block))
+    .join("\n");
 }
 
 function buildWhatsAppBroadcastReply(allInputText: string) {
@@ -3639,8 +3623,13 @@ async function buildMessagesPayload(
   return { events, input, extracted, responseBody, streamEvents, model: normalizedModel };
 }
 
-export async function startQaMockOpenAiServer(params?: { host?: string; port?: number }) {
+export async function startQaMockOpenAiServer(params?: {
+  host?: string;
+  port?: number;
+  finalOnlyMarkerPauseMs?: number;
+}) {
   const host = params?.host ?? "127.0.0.1";
+  const finalOnlyMarkerPauseMs = params?.finalOnlyMarkerPauseMs ?? 1_500;
   const scenarioState: MockScenarioState = {
     anthropicThinkingErrorPhase: 0,
     subagentFanoutPhase: 0,
@@ -3791,7 +3780,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
           return;
         }
         if (QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(allInputText)) {
-          await writeSseWithPreviewPause(res, events, 1_500);
+          await writeSseWithPreviewPause(res, events, finalOnlyMarkerPauseMs);
         } else {
           writeSse(res, events);
         }

@@ -240,6 +240,11 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
     const request = mockCallArg(ssrfMocks.fetchWithSsrFGuard);
     expect(request.auditContext).toBe("openai-realtime-transcription-session");
     expect(request.url).toBe("https://api.openai.com/v1/realtime/transcription_sessions");
+    expect(request.policy).toEqual({
+      allowRfc2544BenchmarkRange: true,
+      allowIpv6UniqueLocalRange: true,
+      hostnameAllowlist: ["api.openai.com"],
+    });
     const init = request.init as {
       method?: string;
       headers?: Record<string, string>;

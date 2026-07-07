@@ -168,7 +168,7 @@ function formatTerminalChatSendAckError(
   return "The run ended before the message was accepted.";
 }
 
-export type ChatSendOptions = {
+type ChatSendOptions = {
   confirmReset?: boolean;
   restoreDraft?: boolean;
   skillWorkshopRevision?: ChatQueueSkillWorkshopRevision;
@@ -335,7 +335,7 @@ export async function requestSkillWorkshopRevisionChatSend(
   return normalizeChatSendAck(payload, params.runId);
 }
 
-export function appendUserChatMessage(
+function appendUserChatMessage(
   state: ChatState,
   message: string,
   attachments?: ChatAttachment[],

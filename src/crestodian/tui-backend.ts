@@ -6,6 +6,7 @@ import type {
 } from "../../packages/gateway-protocol/src/index.js";
 import { buildAgentMainSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { notifyListeners } from "../shared/listeners.js";
 import type {
   ChatSendOptions,
   TuiAgentsList,
@@ -13,6 +14,7 @@ import type {
   TuiEvent,
   TuiModelChoice,
   TuiSessionList,
+  TuiSessionCreateOptions,
 } from "../tui/tui-backend.js";
 import { runTui as defaultRunTui } from "../tui/tui.js";
 import type { CrestodianAssistantPlanner } from "./assistant.js";
@@ -227,6 +229,15 @@ class CrestodianTuiBackend implements TuiBackend {
     return { ok: true };
   }
 
+  async createSession(_opts: TuiSessionCreateOptions) {
+    await this.resetSession();
+    return {
+      ok: true as const,
+      key: CRESTODIAN_SESSION_KEY,
+      entry: { sessionId: "crestodian", updatedAt: Date.now() },
+    };
+  }
+
   async getGatewayStatus(): Promise<string> {
     const overview = await loadOverviewForTui(this.opts);
     return overview.gateway.reachable ? "Gateway reachable" : "Gateway unreachable";
@@ -246,7 +257,12 @@ class CrestodianTuiBackend implements TuiBackend {
   }
 
   private emit(event: string, payload: unknown): void {
-    this.onEvent?.({
+    const listener = this.onEvent;
+    if (!listener) {
+      return;
+    }
+    // A renderer failure must not reject the backend's fire-and-forget response path.
+    notifyListeners([listener], {
       event,
       payload,
       seq: this.nextSeq(),

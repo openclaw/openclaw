@@ -628,6 +628,7 @@
       "provider": "google",
       "method": "api-key",
       "choiceId": "gemini-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "Google Gemini API key",
       "groupId": "google",
       "groupLabel": "Google",
@@ -674,7 +675,8 @@
     "realtimeVoiceProviders": ["google"],
     "speechProviders": ["google"],
     "videoGenerationProviders": ["google"],
-    "webSearchProviders": ["gemini"]
+    "webSearchProviders": ["gemini"],
+    "usageProviders": ["google-gemini-cli"]
   },
   "mediaUnderstandingProviderMetadata": {
     "google": {

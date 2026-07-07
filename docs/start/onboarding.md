@@ -7,9 +7,9 @@ title: "Onboarding (macOS app)"
 sidebarTitle: "Onboarding: macOS App"
 ---
 
-The macOS app's first-run flow: pick where the Gateway runs, complete local
-setup through a Crestodian conversation, grant permissions, and hand off to
-the agent's own bootstrap ritual.
+The macOS app's first-run flow: pick where the Gateway runs, connect a
+verified AI backend, grant permissions, and hand off to the agent's own
+bootstrap ritual.
 For CLI onboarding and a comparison of both paths, see [Onboarding Overview](/start/onboarding-overview).
 
 <Steps>
@@ -65,16 +65,23 @@ Where does the **Gateway** run?
   preferring npm first. Node remains the recommended runtime for the Gateway
   itself. Existing compatible installations are reused.
 </Step>
-<Step title="Talk to Crestodian">
-  Local setup opens a dedicated conversation with Crestodian after the Gateway
-  is ready. Crestodian detects an existing Claude Code or Codex login and
-  supported API keys, proposes the workspace and configuration, then waits for
-  approval before writing anything. Next remains locked until the conversation
-  has authored setup state. Credential prompts use masked input; after an
-  ambiguous transport failure, restart the setup conversation instead of
-  replaying the previous turn.
+<Step title="Connect your AI">
+  Once the Gateway is ready, onboarding looks for AI access you already have:
+  a Claude Code, Codex, or Gemini CLI login, or `OPENAI_API_KEY` /
+  `ANTHROPIC_API_KEY`. The best option is tested with a real completion and
+  only saved after it answers; when a test fails the app automatically tries
+  the next option and shows why the previous one failed. If several options
+  are found you can switch between them before continuing.
 
-Remote and Configure Later flows skip this local setup conversation.
+If nothing is found (or nothing works), the manual key/token picker loads the
+Gateway's active text-inference provider plugins instead of using a fixed app
+list. The selected provider supplies its starter model and config; OpenClaw
+verifies the credential with the same live test before storing its auth profile. Next
+remains locked until one backend has passed, so the first agent chat cannot
+start without working inference. The Crestodian chat stays available from this
+page (and later under Settings → Crestodian) for help in plain language.
+
+Configure Later skips this step.
 </Step>
 <Step title="Permissions">
 

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   emitDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -6,6 +6,10 @@ import {
 import { createDiagnosticLogRecordCapture } from "./diagnostic-log-capture.js";
 
 describe("diagnostic log capture", () => {
+  beforeEach(() => {
+    resetDiagnosticEventsForTest();
+  });
+
   afterEach(() => {
     resetDiagnosticEventsForTest();
   });

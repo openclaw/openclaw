@@ -72,6 +72,10 @@ import {
   resolveSessionWorkStartError,
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
+import {
+  resolveSessionRoutingContract,
+  SESSION_ROUTING_CHANGED_ERROR_REASON,
+} from "../../config/sessions/main-session.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -230,7 +234,10 @@ import {
   loadOptionalServerMethodModelCatalog,
   startOptionalServerMethodModelCatalogLoad,
 } from "./optional-model-catalog.js";
-import { hasTrackedActiveSessionRun, hasVisibleActiveSessionRun } from "./session-active-runs.js";
+import {
+  hasTrackedActiveSessionRun,
+  resolveVisibleActiveSessionRunState,
+} from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type {
   GatewayClient,
@@ -3245,7 +3252,7 @@ async function handleChatHistoryRequest({
   });
   const activeRunAgentId =
     canonicalKey === "global" ? (selectedAgent.agentId ?? defaultAgentId) : selectedAgent.agentId;
-  sessionInfo.hasActiveRun = hasVisibleActiveSessionRun({
+  const activeRunState = resolveVisibleActiveSessionRunState({
     context,
     requestedKey: sessionKey,
     canonicalKey,
@@ -3253,6 +3260,8 @@ async function handleChatHistoryRequest({
     ...(activeRunAgentId ? { agentId: activeRunAgentId } : {}),
     defaultAgentId,
   });
+  sessionInfo.hasActiveRun = activeRunState.active;
+  sessionInfo.activeRunIds = activeRunState.runIds;
   const defaults = getSessionDefaults(cfg, modelCatalog, { allowPluginNormalization: false });
   const thinkingLevel = sessionInfo.thinkingLevel ?? sessionInfo.thinkingDefault;
   const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
@@ -3470,12 +3479,15 @@ export const chatHandlers: GatewayRequestHandlers = {
       const sessionKeyAliases = uniqueStrings(
         canonicalAbortSessionKey === rawSessionKey ? [] : [rawSessionKey],
       );
+      const sessionLoadOptions = abortAgentId ? { agentId: abortAgentId } : undefined;
+      const { entry } = loadSessionEntry(rawSessionKey, sessionLoadOptions);
       const res = await abortChatRunsForSessionKeyWithPartials({
         context,
         ops,
         sessionKey: canonicalAbortSessionKey,
         sessionKeyAliases: sessionKeyAliases.length > 0 ? sessionKeyAliases : undefined,
         agentId: abortAgentId,
+        sessionId: entry?.sessionId,
         defaultAgentId,
         abortOrigin: "rpc",
         stopReason: "rpc",
@@ -3700,6 +3712,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       systemInputProvenance?: InputProvenance;
       systemProvenanceReceipt?: string;
       suppressCommandInterpretation?: boolean;
+      expectedSessionRoutingContract?: string;
       idempotencyKey: string;
     };
     const suppressCommandInterpretation = p.suppressCommandInterpretation === true;
@@ -3787,6 +3800,20 @@ export const chatHandlers: GatewayRequestHandlers = {
     );
     const sessionLoadMs = roundedChatSendTimingMs(performance.now() - sessionLoadStartedAtMs);
     const { cfg, storePath, entry, canonicalKey: sessionKey, legacyKey } = sessionLoadResult;
+    const expectedSessionRoutingContract = normalizeOptionalText(p.expectedSessionRoutingContract);
+    const sessionRoutingChanged = (candidateConfig: OpenClawConfig) =>
+      expectedSessionRoutingContract !== undefined &&
+      expectedSessionRoutingContract.toLowerCase() !==
+        resolveSessionRoutingContract(candidateConfig);
+    const respondSessionRoutingChanged = () => {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "session routing changed; review and retry", {
+          details: { reason: SESSION_ROUTING_CHANGED_ERROR_REASON },
+        }),
+      );
+    };
     const selectedAgent = validateChatSelectedAgent({
       cfg,
       requestedSessionKey: rawSessionKey,
@@ -3856,6 +3883,10 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
 
     if (stopCommand) {
+      if (sessionRoutingChanged(cfg)) {
+        respondSessionRoutingChanged();
+        return;
+      }
       const defaultAgentId = resolveDefaultAgentId(cfg);
       const stopAgentId =
         sessionKey === "global" ? (selectedAgent.agentId ?? defaultAgentId) : selectedAgent.agentId;
@@ -3938,6 +3969,12 @@ export const chatHandlers: GatewayRequestHandlers = {
         cached: true,
         runId: clientRunId,
       });
+      return;
+    }
+    // Cached/in-flight retries are already bound to their original target and
+    // must remain queryable after config changes. Gate only a new dispatch.
+    if (sessionRoutingChanged(cfg)) {
+      respondSessionRoutingChanged();
       return;
     }
     const archivedSessionError = resolveSessionWorkStartError(sessionKey, entry);
@@ -4056,7 +4093,11 @@ export const chatHandlers: GatewayRequestHandlers = {
             });
             return;
           }
-          const latestEntry = loadSessionEntry(rawSessionKey, sessionLoadOptions).entry;
+          const latestSession = loadSessionEntry(rawSessionKey, sessionLoadOptions);
+          if (sessionRoutingChanged(latestSession.cfg)) {
+            throw new Error(SESSION_ROUTING_CHANGED_ERROR_REASON);
+          }
+          const latestEntry = latestSession.entry;
           if (entry && !latestEntry) {
             throw new Error(`Session "${sessionKey}" was deleted while starting work. Retry.`);
           }
@@ -4101,6 +4142,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
     } catch (err) {
       clearPendingChatSendReservation();
+      if (err instanceof Error && err.message === SESSION_ROUTING_CHANGED_ERROR_REASON) {
+        respondSessionRoutingChanged();
+        return;
+      }
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
       return;
     }
@@ -4281,6 +4326,15 @@ export const chatHandlers: GatewayRequestHandlers = {
       cleanupAdmittedRun({ force: true });
       clearAgentRunContext(clientRunId, lifecycleGeneration);
       respond(true, payload, undefined, { runId: clientRunId });
+      return;
+    }
+
+    // Attachment preparation and admission can suspend. Recheck immediately
+    // before ACK/dispatch so hot config reload cannot cross the send boundary.
+    if (sessionRoutingChanged(context.getRuntimeConfig())) {
+      cleanupAdmittedRun({ force: true });
+      clearAgentRunContext(clientRunId, lifecycleGeneration);
+      respondSessionRoutingChanged();
       return;
     }
 

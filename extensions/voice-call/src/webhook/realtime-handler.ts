@@ -584,6 +584,45 @@ export class RealtimeCallHandler {
         }),
       );
     };
+    const providerHandlesInputAudioBargeIn =
+      this.realtimeProvider.capabilities?.handlesInputAudioBargeIn === true;
+    const cancelOutputAudioForBargeIn = (
+      source: "local" | "provider",
+      interruptProvider?: (audioPlaybackActive: boolean) => void,
+      clearedAudioBytes = 0,
+    ): void => {
+      const outputAudioActive = talk.outputAudioActive;
+      const pendingTelephonyAudio = audioPacer.hasPendingAudio();
+      if (
+        source === "provider" &&
+        !outputAudioActive &&
+        !pendingTelephonyAudio &&
+        clearedAudioBytes === 0
+      ) {
+        return;
+      }
+      // Capture playback before provider interruption. Local fallback must clear
+      // telephony even after pacing drains because the remote stream buffers audio.
+      const interruptedTurnId = talk.activeTurnId;
+      interruptProvider?.(outputAudioActive || pendingTelephonyAudio);
+      const shouldClearTelephony = source === "local" || pendingTelephonyAudio;
+      const clearedBytes = clearedAudioBytes + (shouldClearTelephony ? audioPacer.clearAudio() : 0);
+      console.log(
+        `[voice-call] realtime outbound audio cleared by ${source} barge-in callId=${callId} providerCallId=${callSid} queuedBytes=${clearedBytes}`,
+      );
+      if (!outputAudioActive || !interruptedTurnId) {
+        return;
+      }
+      const reason = `${source}-barge-in`;
+      finishOutputAudio(reason);
+      const cancelled = talk.cancelTurn({
+        turnId: interruptedTurnId,
+        payload: { callId, providerCallId: callSid, reason },
+      });
+      if (cancelled.ok) {
+        rememberTalkEvent(cancelled.event);
+      }
+    };
     emitTalkEvent({
       type: "session.started",
       payload: { callId, providerCallId: callSid, streamSid },
@@ -640,10 +679,15 @@ export class RealtimeCallHandler {
     const speechDetector = new RealtimeMulawSpeechStartDetector({
       requiredLoudChunks: BARGE_IN_REQUIRED_LOUD_CHUNKS,
     });
+    const interruptResponseOnInputAudio =
+      typeof this.providerConfig.interruptResponseOnInputAudio === "boolean"
+        ? this.providerConfig.interruptResponseOnInputAudio
+        : undefined;
     const session = createRealtimeVoiceBridgeSession({
       provider: this.realtimeProvider,
       cfg: this.coreConfig,
       providerConfig: this.providerConfig,
+      interruptResponseOnInputAudio,
       instructions: this.config.instructions,
       tools: this.config.tools,
       initialGreetingInstructions,
@@ -665,8 +709,12 @@ export class RealtimeCallHandler {
           });
           audioPacer.sendAudio(muLaw);
         },
-        clearAudio: () => {
+        clearAudio: (reason) => {
           const clearedBytes = audioPacer.clearAudio();
+          if (reason === "barge-in") {
+            cancelOutputAudioForBargeIn("provider", undefined, clearedBytes);
+            return;
+          }
           console.log(
             `[voice-call] realtime outbound audio clear requested callId=${callId} providerCallId=${callSid} queuedBytes=${clearedBytes}`,
           );
@@ -858,18 +906,13 @@ export class RealtimeCallHandler {
     const sendAudioToSession = session.sendAudio.bind(session);
     session.sendAudio = (audio) => {
       if (speechDetector.accept(audio)) {
-        const interruptedTurnId = ensureTalkTurn();
-        const clearedBytes = audioPacer.clearAudio();
         console.log(
-          `[voice-call] realtime outbound audio cleared by barge-in callId=${callId} providerCallId=${callSid} queuedBytes=${clearedBytes}`,
+          `[voice-call] realtime local speech detected callId=${callId} providerCallId=${callSid}`,
         );
-        finishOutputAudio("barge-in");
-        const cancelled = talk.cancelTurn({
-          turnId: interruptedTurnId,
-          payload: { callId, providerCallId: callSid, reason: "barge-in" },
-        });
-        if (cancelled.ok) {
-          rememberTalkEvent(cancelled.event);
+        if (!providerHandlesInputAudioBargeIn) {
+          cancelOutputAudioForBargeIn("local", (audioPlaybackActive) => {
+            session.handleBargeIn({ audioPlaybackActive });
+          });
         }
       }
       emitTalkEvent({

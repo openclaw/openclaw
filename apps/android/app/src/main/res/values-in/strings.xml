@@ -6,6 +6,7 @@
     <string name="trust_this_gateway">Percayai gateway ini?</string>
     <string name="trust_and_continue">Percayai dan lanjutkan</string>
     <string name="cancel">Batal</string>
+    <string name="new_chat_in_worktree">Chat baru di worktree</string>
     <string name="endpoint">Endpoint</string>
     <string name="status">Status</string>
     <string name="connected_gateway_ready">Gateway Anda aktif dan siap.</string>
@@ -20,8 +21,17 @@
     <string name="use_tls">Gunakan TLS</string>
     <string name="token_optional">Token (opsional)</string>
     <string name="password">Kata sandi</string>
+    <string name="custom_headers_optional">Header kustom (opsional)</string>
+    <string name="custom_headers_explainer">Dikirim dengan setiap koneksi ke gateway ini, misalnya header token layanan Cloudflare Access. Disimpan secara terenkripsi dan diterapkan pada koneksi ulang berikutnya.</string>
+    <string name="custom_header_value">Nilai header</string>
+    <string name="custom_header_reserved">Header ini dikelola oleh koneksi dan tidak dapat ditimpa.</string>
+    <string name="add_custom_header">Tambahkan header</string>
+    <string name="remove_custom_header">Hapus %1$s</string>
     <string name="run_onboarding_again">Jalankan onboarding lagi</string>
     <string name="resolved_endpoint">Endpoint yang diselesaikan</string>
     <string name="gateway_trust_first_seen">Verifikasi sidik jari sertifikat sebelum memercayai gateway ini.\n\n%1$s</string>
     <string name="gateway_trust_changed">Sertifikat gateway berubah. Lanjutkan hanya jika Anda mengharapkan perubahan ini.\n\nSHA-256 lama:\n%1$s\n\nSHA-256 baru:\n%2$s</string>
+    <string name="switch_gateway">Ganti gateway</string>
+    <string name="select_gateway">Pilih gateway</string>
+    <string name="active_gateway">Gateway aktif</string>
 </resources>

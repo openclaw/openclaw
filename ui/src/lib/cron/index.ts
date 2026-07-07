@@ -24,7 +24,7 @@ import {
 } from "../gateway-errors.ts";
 import { normalizeLowercaseStringOrEmpty, sortUniqueStrings } from "../string-coerce.ts";
 
-export const CRON_CHANNEL_LAST = "last";
+const CRON_CHANNEL_LAST = "last";
 
 export type CronFormState = {
   name: string;
@@ -72,7 +72,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object");
 }
 
-export function isCronPayload(value: unknown): value is CronPayload {
+function isCronPayload(value: unknown): value is CronPayload {
   if (!isRecord(value)) {
     return false;
   }
@@ -93,7 +93,7 @@ export function getCronJobPayload(job: CronJob): CronPayload | null {
   return isCronPayload(payload) ? payload : null;
 }
 
-export function hasCronJobPayload(job: CronJob): boolean {
+function hasCronJobPayload(job: CronJob): boolean {
   return getCronJobPayload(job) !== null;
 }
 
@@ -155,7 +155,7 @@ export type CronFieldErrors = Partial<Record<CronFieldKey, string>>;
 
 export type CronJobsScheduleKindFilter = "all" | "at" | "every" | "cron" | "on-exit";
 export type CronJobsLastStatusFilter = "all" | CronRunStatus | "unknown";
-export type CronRunsLoadStatus = "ok" | "error" | "skipped";
+type CronRunsLoadStatus = "ok" | "error" | "skipped";
 
 export type CronState = {
   client: GatewayBrowserClient | null;

@@ -123,6 +123,7 @@ import {
   getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
   markReplyPayloadAsTtsSupplement,
+  setReplyPayloadMetadata,
   type ReplyPayload,
 } from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
@@ -152,7 +153,10 @@ import type { ReplySessionBinding } from "./get-reply.types.js";
 import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
-import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
+import {
+  appendReplyDispatcherBeforeDeliverCancelled,
+  waitForReplyDispatcherIdle,
+} from "./reply-dispatcher.js";
 import type {
   DispatcherOutcomeCountsView,
   ReplyDispatchKind,
@@ -195,11 +199,51 @@ type TranscriptMirror = SourceReplyTranscriptMirror & {
   storePath?: string;
   preferText?: boolean;
   deliveryMirror?: SessionTranscriptDeliveryMirror;
+  transcriptOwner?: boolean;
 };
 type InternalReplyResolverOptions = {
   onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
 };
+
+function createFinalDispatchPayloadDedupeKey(payload: ReplyPayload): string {
+  const metadata = getReplyPayloadMetadata(payload);
+  return JSON.stringify({
+    payload: {
+      text: payload.text,
+      mediaUrl: payload.mediaUrl,
+      mediaUrls: payload.mediaUrls,
+      trustedLocalMedia: payload.trustedLocalMedia,
+      sensitiveMedia: payload.sensitiveMedia,
+      presentation: payload.presentation,
+      delivery: payload.delivery,
+      interactive: payload.interactive,
+      btw: payload.btw,
+      replyToId: payload.replyToId,
+      replyToTag: payload.replyToTag,
+      replyToCurrent: payload.replyToCurrent,
+      audioAsVoice: payload.audioAsVoice,
+      spokenText: payload.spokenText,
+      ttsSupplement: payload.ttsSupplement,
+      isError: payload.isError,
+      isReasoning: payload.isReasoning,
+      isCommentary: payload.isCommentary,
+      isReasoningSnapshot: payload.isReasoningSnapshot,
+      isCompactionNotice: payload.isCompactionNotice,
+      isFallbackNotice: payload.isFallbackNotice,
+      isStatusNotice: payload.isStatusNotice,
+      channelData: payload.channelData,
+    },
+    identity: {
+      assistantMessageIndex: metadata?.assistantMessageIndex,
+      assistantTranscriptOwned: metadata?.assistantTranscriptOwned,
+      replyToIdExplicit: metadata?.replyToIdExplicit,
+      replyDelivery: metadata?.replyDelivery,
+      replyDeliverySource: metadata?.replyDeliverySource,
+      sourceReplyTranscriptMirror: metadata?.sourceReplyTranscriptMirror,
+    },
+  });
+}
 
 class DispatchReplyOperationAbortedError extends Error {
   constructor() {
@@ -866,42 +910,107 @@ function transcriptMirrorForDeliveredPayload(
   };
 }
 
+const STALE_FOREGROUND_SUPPRESSED_FINAL_TEXT =
+  "Channel final suppressed before delivery: stale foreground";
+
+function captureSuppressedTranscriptMirror(params: {
+  metadata: TranscriptMirror;
+  payload: ReplyPayload;
+  deliveryId?: string | number;
+}): TranscriptMirror | undefined {
+  const payloadMetadata = getReplyPayloadMetadata(params.payload);
+  if (
+    !params.metadata.transcriptOwner ||
+    payloadMetadata?.foregroundDeliverySuppression?.reason !== "stale-foreground"
+  ) {
+    return undefined;
+  }
+  const sourceMessageId = normalizeOptionalString(params.metadata.deliveryMirror?.sourceMessageId);
+  if (!sourceMessageId) {
+    return undefined;
+  }
+  const { transcriptOwner: _transcriptOwner, ...metadata } = params.metadata;
+  return {
+    ...metadata,
+    // The transcript owner already persisted the answer; this row records only delivery state.
+    text: STALE_FOREGROUND_SUPPRESSED_FINAL_TEXT,
+    mediaUrls: undefined,
+    preferText: true,
+    idempotencyKey: `channel-final-suppressed:${sourceMessageId}:${params.deliveryId ?? "single"}`,
+    deliveryMirror: {
+      kind: "channel-final-suppressed",
+      reason: "stale-foreground",
+      sourceMessageId,
+    },
+  };
+}
+
 function captureDeliveredTranscriptMirror(params: {
   dispatcher: ReplyDispatcher;
   metadata?: TranscriptMirror;
+  deliveryId?: string | number;
+  captureToken?: object;
 }): () => TranscriptMirror | undefined {
   if (!params.metadata || !params.dispatcher.appendBeforeDeliver) {
-    return () => params.metadata;
+    return () => (params.metadata?.transcriptOwner ? undefined : params.metadata);
   }
   const metadata = params.metadata;
   let deliveredMetadata: TranscriptMirror | undefined;
+  let suppressedMetadata: TranscriptMirror | undefined;
   let observedFinal = false;
   const { idempotencyKey, sessionKey } = metadata;
   params.dispatcher.appendBeforeDeliver((payload, info) => {
     if (info.kind !== "final") {
       return payload;
     }
+    if (getReplyPayloadMetadata(payload)?.finalDeliveryCapture !== params.captureToken) {
+      return payload;
+    }
     observedFinal = true;
-    const payloadMetadata = getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror;
+    const payloadMetadata = getReplyPayloadMetadata(payload);
+    const payloadMirror = payloadMetadata?.sourceReplyTranscriptMirror;
     if (
-      payloadMetadata &&
-      payloadMetadata.idempotencyKey === idempotencyKey &&
-      payloadMetadata.sessionKey === sessionKey
+      payloadMirror &&
+      payloadMirror.idempotencyKey === idempotencyKey &&
+      payloadMirror.sessionKey === sessionKey
     ) {
       deliveredMetadata = transcriptMirrorForDeliveredPayload(
         {
-          ...payloadMetadata,
+          ...payloadMirror,
           ...(metadata.expectedSessionId ? { expectedSessionId: metadata.expectedSessionId } : {}),
           storePath: metadata.storePath,
         },
         payload,
       );
-    } else if (!payloadMetadata && (!idempotencyKey || metadata.deliveryMirror)) {
+    } else if (
+      !payloadMirror &&
+      !metadata.transcriptOwner &&
+      (!idempotencyKey || metadata.deliveryMirror)
+    ) {
       deliveredMetadata = transcriptMirrorForDeliveredPayload(metadata, payload);
     }
     return payload;
   });
-  return () => (observedFinal ? deliveredMetadata : metadata);
+  appendReplyDispatcherBeforeDeliverCancelled(params.dispatcher, (payload, info) => {
+    if (info.kind !== "final") {
+      return;
+    }
+    if (getReplyPayloadMetadata(payload)?.finalDeliveryCapture !== params.captureToken) {
+      return;
+    }
+    observedFinal = true;
+    suppressedMetadata = captureSuppressedTranscriptMirror({
+      metadata,
+      payload,
+      deliveryId: params.deliveryId,
+    });
+  });
+  return () =>
+    observedFinal
+      ? (suppressedMetadata ?? deliveredMetadata)
+      : metadata.transcriptOwner
+        ? undefined
+        : metadata;
 }
 
 async function mirrorTranscriptAfterDispatcherSettled(params: {
@@ -911,11 +1020,15 @@ async function mirrorTranscriptAfterDispatcherSettled(params: {
   cfg: OpenClawConfig;
 }): Promise<void> {
   const after = getDispatcherFinalOutcomeCounts(params.dispatcher);
-  if (after.cancelled > params.before.cancelled || after.failed > params.before.failed) {
-    return;
-  }
   const metadata = params.metadata();
   if (!metadata) {
+    return;
+  }
+  const suppressedFinal = metadata.deliveryMirror?.kind === "channel-final-suppressed";
+  if (
+    !suppressedFinal &&
+    (after.cancelled > params.before.cancelled || after.failed > params.before.failed)
+  ) {
     return;
   }
   await mirrorDeliveredReplyToTranscript({
@@ -1349,6 +1462,8 @@ export async function dispatchReplyFromConfig(
   let dispatchLifecycleAbortController: AbortController | undefined;
   let preDispatchLifecycleInterrupted = false;
   const dispatchLifecycleWork = new Set<Promise<void>>();
+  const hasInboundAudioForTts = () =>
+    inboundAudio || dispatchReplyOperation?.acceptedSteeredInboundAudio === true;
   const trackDispatchLifecycleWork = (work: Promise<unknown>) => {
     if (!dispatchReplyOperation && !preDispatchLifecycleAdmission) {
       return;
@@ -2687,7 +2802,7 @@ export async function dispatchReplyFromConfig(
               cfg,
               channel: deliveryChannel,
               kind: "final",
-              inboundAudio,
+              inboundAudio: hasInboundAudioForTts(),
               ttsAuto: sessionTtsAuto,
               agentId: sessionAgentId,
               accountId: replyRoute.accountId,
@@ -2728,8 +2843,7 @@ export async function dispatchReplyFromConfig(
       );
       const transcriptMirror =
         sourceReplyTranscriptMirror ??
-        (!hasTranscriptOwner &&
-        normalizedCurrentSurface === "slack" &&
+        (normalizedCurrentSurface === "slack" &&
         hasVisibleFinalContent &&
         transcriptMirrorSessionKey
           ? transcriptMirrorForDeliveredPayload(
@@ -2741,6 +2855,7 @@ export async function dispatchReplyFromConfig(
                   : {}),
                 storePath: transcriptMirrorSessionBinding?.storePath ?? sessionStoreEntry.storePath,
                 preferText: true,
+                ...(hasTranscriptOwner ? { transcriptOwner: true } : {}),
                 idempotencyKey: transcriptMirrorSourceId
                   ? `channel-final:${transcriptMirrorSourceId}:${options.deliveryId ?? "single"}`
                   : undefined,
@@ -2758,9 +2873,18 @@ export async function dispatchReplyFromConfig(
       const finalOutcomeBefore = transcriptMirror
         ? getDispatcherFinalOutcomeCounts(dispatcher)
         : undefined;
+      const finalDeliveryCapture = transcriptMirror ? {} : undefined;
       const deliveredTranscriptMirror = transcriptMirror
-        ? captureDeliveredTranscriptMirror({ dispatcher, metadata: transcriptMirror })
+        ? captureDeliveredTranscriptMirror({
+            dispatcher,
+            metadata: transcriptMirror,
+            deliveryId: options.deliveryId,
+            captureToken: finalDeliveryCapture,
+          })
         : undefined;
+      if (finalDeliveryCapture) {
+        setReplyPayloadMetadata(normalizedPayload, { finalDeliveryCapture });
+      }
       const queuedFinal = dispatcher.sendFinalReply(normalizedPayload);
       if (queuedFinal && deliveredTranscriptMirror && finalOutcomeBefore) {
         // The common settle owner runs this after successful delivery or
@@ -3403,7 +3527,7 @@ export async function dispatchReplyFromConfig(
                         cfg,
                         channel: deliveryChannel,
                         kind: "tool",
-                        inboundAudio,
+                        inboundAudio: hasInboundAudioForTts(),
                         ttsAuto: sessionTtsAuto,
                         agentId: sessionAgentId,
                         accountId: replyRoute.accountId,
@@ -3652,7 +3776,7 @@ export async function dispatchReplyFromConfig(
                               cfg,
                               channel: deliveryChannel,
                               kind: "block",
-                              inboundAudio,
+                              inboundAudio: hasInboundAudioForTts(),
                               ttsAuto: sessionTtsAuto,
                               agentId: sessionAgentId,
                               accountId: replyRoute.accountId,
@@ -3782,6 +3906,7 @@ export async function dispatchReplyFromConfig(
       !sendPolicyDenied &&
       getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true &&
       (ctx.InboundEventKind !== "room_event" || explicitCommandTurnCtx);
+    const sentFinalPayloadDedupeKeys = new Set<string>();
     for (const [replyIndex, reply] of replies.entries()) {
       throwIfDispatchOperationAborted();
       // Durable reasoning is a channel-owned lane; generic channels keep the
@@ -3809,6 +3934,11 @@ export async function dispatchReplyFromConfig(
         }
         continue;
       }
+      const finalPayloadDedupeKey = createFinalDispatchPayloadDedupeKey(reply);
+      if (sentFinalPayloadDedupeKeys.has(finalPayloadDedupeKey)) {
+        continue;
+      }
+      sentFinalPayloadDedupeKeys.add(finalPayloadDedupeKey);
       attemptedFinalDelivery = true;
       const finalReply = await sendFinalPayload(reply, { deliveryId: String(replyIndex) });
       queuedFinal = finalReply.queuedFinal || queuedFinal;
@@ -3853,7 +3983,7 @@ export async function dispatchReplyFromConfig(
             cfg,
             channel: deliveryChannel,
             kind: "final",
-            inboundAudio,
+            inboundAudio: hasInboundAudioForTts(),
             ttsAuto: sessionTtsAuto,
             agentId: sessionAgentId,
             accountId: replyRoute.accountId,
