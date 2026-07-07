@@ -142,7 +142,7 @@ async function answerInitialize(harness: ClientHarness): Promise<void> {
     timeout: HARNESS_REQUEST_TIMEOUT_MS,
   });
   const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
-  harness.send({ id: initialize.id, result: { userAgent: "openclaw/0.125.0 (macOS; test)" } });
+  harness.send({ id: initialize.id, result: { userAgent: "openclaw/0.142.0 (macOS; test)" } });
 }
 
 async function waitForRequest(

@@ -217,8 +217,11 @@ Required members:
 </ParamField>
 
 `compact` returns a `CompactResult`. When compaction rotates the active
-transcript, `result.sessionId` and `result.sessionFile` identify the successor
-session that the next retry or turn must use.
+transcript, `result.sessionTarget` (a typed `ContextEngineSessionTarget`
+carrying the storage mode, session identity, and transcript artifact path)
+identifies the successor session that the next retry or turn must use;
+`result.sessionId` mirrors the successor id. `result.sessionFile` is
+deprecated - report successors through `sessionTarget` instead.
 
 Optional members:
 

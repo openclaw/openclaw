@@ -15,6 +15,7 @@ import {
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { buildGuardedModelFetch } from "openclaw/plugin-sdk/provider-transport-runtime";
 
 const MANTLE_ANTHROPIC_BETA = "fine-grained-tool-streaming-2025-05-14";
 type AnthropicOptions = ConstructorParameters<typeof Anthropic>[0];
@@ -177,6 +178,7 @@ export function createMantleAnthropicStreamFn(deps?: {
         model.headers,
         options?.headers,
       ),
+      fetch: buildGuardedModelFetch(model),
     });
     const base = buildMantleAnthropicBaseOptions(model, options, apiKey);
     // Plugin package deps can give this plugin a distinct physical SDK copy.

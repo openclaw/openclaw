@@ -1,9 +1,11 @@
 // Child adapter tests cover adapting child processes to supervisor runs.
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
   getWindowsInstallRoots,
   resetWindowsInstallRootsForTests,
@@ -37,6 +39,7 @@ vi.mock("../../../infra/windows-encoding.js", () => ({
 }));
 
 let createChildAdapter: typeof import("./child.js").createChildAdapter;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createStubChild(pid = 1234) {
   const child = new EventEmitter() as ChildProcess;
@@ -160,6 +163,25 @@ describe("createChildAdapter", () => {
     }
     vi.useRealTimers();
   });
+
+  const createWindowsNpmShim = async (params: { command: string; packagePath: string[] }) => {
+    const binDir = tempDirs.make("openclaw-child-shim-");
+    const entrypoint = path.join(binDir, "node_modules", ...params.packagePath);
+    await mkdir(path.dirname(entrypoint), { recursive: true });
+    await writeFile(entrypoint, "", "utf8");
+    const relativeEntrypoint = path.relative(binDir, entrypoint).replaceAll(path.sep, "\\");
+    const shimHead =
+      "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n";
+    const shimCommand = entrypoint.endsWith(".exe")
+      ? `"%dp0%\\${relativeEntrypoint}" %*\r\n`
+      : `IF EXIST "%dp0%\\node.exe" (\r\n  SET "_prog=%dp0%\\node.exe"\r\n) ELSE (\r\n  SET "_prog=node"\r\n)\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%" "%dp0%\\${relativeEntrypoint}" %*\r\n`;
+    await writeFile(
+      path.join(binDir, `${params.command}.cmd`),
+      `${shimHead}${shimCommand}`,
+      "utf8",
+    );
+    return { binDir, entrypoint };
+  };
 
   it("uses process-tree kill for default SIGKILL", async () => {
     const { adapter, killMock } = await createAdapterHarness({ pid: 4321 });
@@ -408,6 +430,7 @@ describe("createChildAdapter", () => {
     await createAdapterHarness({
       pid: 3335,
       argv: ["pnpm", "--version"],
+      env: { PATH: "", PATHEXT: ".EXE;.CMD;.BAT" },
     });
 
     const spawnArgs = firstSpawnWithFallbackParams();
@@ -421,6 +444,48 @@ describe("createChildAdapter", () => {
     expect(spawnArgs.options?.detached).toBe(false);
     expect(spawnArgs.options?.windowsHide).toBe(true);
     expect(spawnArgs.options?.windowsVerbatimArguments).toBe(true);
+    expect(spawnArgs.fallbacks).toStrictEqual([]);
+  });
+
+  it("unwraps Gemini's npm shim and preserves prompt argv on Windows", async () => {
+    setPlatform("win32");
+    const { binDir, entrypoint } = await createWindowsNpmShim({
+      command: "gemini",
+      packagePath: ["@google", "gemini-cli", "bundle", "gemini.js"],
+    });
+    const nodePath = path.join(binDir, "node.exe");
+    await writeFile(nodePath, "", "utf8");
+    const prompt = "explain A&B | C > D and 100% coverage";
+
+    await createAdapterHarness({
+      pid: 3336,
+      argv: ["gemini", "--prompt", prompt],
+      env: { PATH: binDir, PATHEXT: ".EXE;.CMD;.BAT" },
+    });
+
+    const spawnArgs = firstSpawnWithFallbackParams();
+    expect(spawnArgs.argv?.[0]?.toLowerCase()).toBe(nodePath.toLowerCase());
+    expect(spawnArgs.argv?.slice(1)).toEqual([entrypoint, "--prompt", prompt]);
+    expect(spawnArgs.options?.windowsVerbatimArguments).toBeUndefined();
+    expect(spawnArgs.fallbacks).toStrictEqual([]);
+  });
+
+  it("unwraps Claude's npm shim to its native executable on Windows", async () => {
+    setPlatform("win32");
+    const { binDir, entrypoint } = await createWindowsNpmShim({
+      command: "claude",
+      packagePath: ["@anthropic-ai", "claude-code", "bin", "claude.exe"],
+    });
+
+    await createAdapterHarness({
+      pid: 3337,
+      argv: ["claude", "--version"],
+      env: { PATH: binDir, PATHEXT: ".EXE;.CMD;.BAT" },
+    });
+
+    const spawnArgs = firstSpawnWithFallbackParams();
+    expect(spawnArgs.argv).toEqual([entrypoint, "--version"]);
+    expect(spawnArgs.options?.windowsVerbatimArguments).toBeUndefined();
     expect(spawnArgs.fallbacks).toStrictEqual([]);
   });
 
