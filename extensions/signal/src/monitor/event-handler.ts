@@ -91,7 +91,7 @@ import { renderSignalMentions } from "./mentions.js";
 const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE =
   /reply session initialization conflicted for \S+/u;
 
-function isRetryableSignalInboundError(error: unknown): boolean {
+export function isRetryableSignalInboundError(error: unknown): boolean {
   const candidates: unknown[] = [];
   let current: unknown = error;
   while (current) {
