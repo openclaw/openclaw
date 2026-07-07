@@ -614,7 +614,10 @@ function inferGlobalRootFromPackageRoot(pkgRoot?: string | null): string | null 
     return null;
   }
   const normalized = path.resolve(trimmed);
-  const globalRoot = path.dirname(normalized);
+  let globalRoot = path.dirname(normalized);
+  if (path.basename(globalRoot).startsWith("@")) {
+    globalRoot = path.dirname(globalRoot);
+  }
   return path.basename(globalRoot) === "node_modules" ? globalRoot : null;
 }
 

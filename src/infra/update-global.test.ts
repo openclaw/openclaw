@@ -525,6 +525,44 @@ describe("update global helpers", () => {
     });
   });
 
+  it("falls back to the running root for scoped packages when the probe is rejected", async () => {
+    await withMockedPlatform("darwin", async () => {
+      await withTempDir({ prefix: "openclaw-update-scoped-probe-" }, async (base) => {
+        const nvmPrefix = path.join(base, "home", ".nvm", "versions", "node", "v24.5.0");
+        const nvmRoot = path.join(nvmPrefix, "lib", "node_modules");
+        const pkgRoot = path.join(nvmRoot, "@scope", "cli");
+        const cellarRoot = path.join(
+          base,
+          "opt",
+          "homebrew",
+          "Cellar",
+          "node",
+          "26.3.1",
+          "lib",
+          "node_modules",
+        );
+        await fs.mkdir(pkgRoot, { recursive: true });
+
+        const runCommand = createNpmRootRunner({ defaultNpmRoot: cellarRoot });
+
+        await expect(
+          resolveGlobalInstallTarget({
+            manager: "npm",
+            runCommand,
+            timeoutMs: 1000,
+            pkgRoot,
+            packageName: "@scope/cli",
+          }),
+        ).resolves.toEqual({
+          manager: "npm",
+          command: "npm",
+          globalRoot: nvmRoot,
+          packageRoot: pkgRoot,
+        });
+      });
+    });
+  });
+
   it("still adopts the probed npm root when it matches the running per-Node tree", async () => {
     await withMockedPlatform("darwin", async () => {
       await withTempDir({ prefix: "openclaw-update-matching-probe-" }, async (base) => {
