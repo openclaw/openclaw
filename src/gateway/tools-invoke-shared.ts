@@ -154,6 +154,7 @@ export async function invokeGatewayTool(params: {
   accountId?: string;
   agentTo?: string;
   agentThreadId?: string;
+  agentThreadParentId?: string;
   senderIsOwner?: boolean;
   toolCallIdPrefix: string;
   approvalMode?: "request" | "report";
@@ -204,6 +205,7 @@ export async function invokeGatewayTool(params: {
       accountId: params.accountId,
       agentTo: params.agentTo,
       agentThreadId: params.agentThreadId,
+      agentThreadParentId: params.agentThreadParentId,
       senderIsOwner: params.senderIsOwner,
       allowGatewaySubagentBinding: true,
       allowMediaInvokeCommands: true,
