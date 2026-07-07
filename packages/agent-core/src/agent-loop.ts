@@ -9,6 +9,7 @@ import type {
   ToolResultMessage,
 } from "../../llm-core/src/index.js";
 import type { EventStream as SourceEventStream } from "../../llm-core/src/index.js";
+import { TranscriptNotContinuableError } from "./errors.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
 import type {
@@ -143,7 +144,7 @@ export function agentLoopContinue(
   }
 
   if (context.messages[context.messages.length - 1].role === "assistant") {
-    throw new Error("Cannot continue from message role: assistant");
+    throw new TranscriptNotContinuableError(context.messages[context.messages.length - 1].role);
   }
 
   const stream = createAgentStream();
@@ -209,7 +210,7 @@ export async function runAgentLoopContinue(
   }
 
   if (context.messages[context.messages.length - 1].role === "assistant") {
-    throw new Error("Cannot continue from message role: assistant");
+    throw new TranscriptNotContinuableError(context.messages[context.messages.length - 1].role);
   }
 
   const newMessages: AgentMessage[] = [];

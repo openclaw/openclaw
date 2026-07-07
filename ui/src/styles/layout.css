@@ -769,6 +769,10 @@
   stroke-linejoin: round;
 }
 
+.sidebar-recent-session--dragging {
+  opacity: 0.45;
+}
+
 .sidebar-recent-session {
   display: flex;
   align-items: center;

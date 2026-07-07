@@ -10,11 +10,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerClientFactory } from "./client-factory.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { runCodexAppServerAttempt } from "./run-attempt.js";
+import {
+  registerCodexTestSessionIdentity,
+  resetCodexTestBindingStore,
+  testCodexAppServerBindingStore,
+} from "./session-binding.test-helpers.js";
 import { createCodexTestModel } from "./test-support.js";
 
 let tempDir: string;
 
 function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAttemptParams {
+  registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
   return {
     prompt: "hello",
     sessionId: "session-1",
@@ -100,6 +106,7 @@ function mockClientRuntimeMethods() {
 
 describe("Codex app-server main thread cleanup", () => {
   beforeEach(async () => {
+    resetCodexTestBindingStore();
     vi.useRealTimers();
     resetAgentEventsForTest();
     vi.stubEnv("OPENCLAW_TRAJECTORY", "0");
@@ -145,6 +152,7 @@ describe("Codex app-server main thread cleanup", () => {
     };
 
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      bindingStore: testCodexAppServerBindingStore,
       clientFactory,
     });
     await vi.waitFor(() => expect(requests.map((entry) => entry.method)).toContain("turn/start"), {
@@ -200,6 +208,7 @@ describe("Codex app-server main thread cleanup", () => {
 
     await expect(
       runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+        bindingStore: testCodexAppServerBindingStore,
         clientFactory,
       }),
     ).rejects.toThrow("turn start exploded");

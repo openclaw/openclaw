@@ -37,6 +37,7 @@ import {
   renameSessionGroup,
   saveStoredSessionCustomGroups,
 } from "../lib/sessions/custom-groups.ts";
+import { writeSessionDragData } from "../lib/sessions/drag.ts";
 import {
   groupSidebarSessionRows,
   normalizeSidebarSessionsGrouping,
@@ -149,6 +150,7 @@ export class AppSidebar extends LitElement {
   @state() private sessionMenu: SidebarSessionMenuState | null = null;
   @state() private sessionGroupSubmenuOpen = false;
   @state() private sessionGroupMenu: SidebarSessionGroupMenuState | null = null;
+  @state() private draggingSessionKey: string | null = null;
   @state() private sessionSortMode: SidebarSessionSortMode = "created";
   @state() private sessionsGrouping: SidebarSessionsGrouping = loadStoredSidebarSessionsGrouping();
   @state() private sessionSortMenuPosition: { x: number; y: number } | null = null;
@@ -1207,6 +1209,7 @@ export class AppSidebar extends LitElement {
       session.active ? "sidebar-recent-session--active" : "",
       session.pinned ? "session-row-host--pinned" : "",
       session.hasActiveRun ? "session-row-host--running" : "",
+      this.draggingSessionKey === session.key ? "sidebar-recent-session--dragging" : "",
     ]
       .filter(Boolean)
       .join(" ");
@@ -1214,6 +1217,16 @@ export class AppSidebar extends LitElement {
       <div
         class=${rowClass}
         data-session-key=${session.key}
+        draggable="true"
+        @dragstart=${(event: DragEvent) => {
+          if (event.dataTransfer) {
+            writeSessionDragData(event.dataTransfer, session.key);
+            this.draggingSessionKey = session.key;
+          }
+        }}
+        @dragend=${() => {
+          this.draggingSessionKey = null;
+        }}
         @contextmenu=${(event: MouseEvent) => {
           event.preventDefault();
           this.openSessionMenu(session, event.clientX, event.clientY);
@@ -1224,6 +1237,7 @@ export class AppSidebar extends LitElement {
         <a
           href=${session.href}
           class="sidebar-recent-session__link"
+          draggable="false"
           title=${`${session.label} · ${session.key}`}
           @click=${(event: MouseEvent) => {
             if (!shouldHandleNavigationClick(event)) {

@@ -1579,6 +1579,8 @@ export const en: TranslationMap = {
       splitDown: "Split down",
       closePane: "Close pane",
       sessionSelect: "Pane session",
+      dropSplit: "Split",
+      dropOpenHere: "Open here",
     },
     sidebar: {
       allSessions: "All sessions",

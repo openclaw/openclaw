@@ -1987,6 +1987,8 @@ export type PluginCommandContext = {
   senderIsOwner?: boolean;
   /** Gateway client scopes for internal control-plane callers */
   gatewayClientScopes?: string[];
+  /** Host-resolved agent that owns the active session. */
+  agentId?: string;
   /** Stable host session key for the active conversation when available. */
   sessionKey?: string;
   /** Ephemeral host session id for the active conversation when available. */

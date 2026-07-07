@@ -2505,6 +2505,10 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
   });
 
   it("retries overflow recovery against the rotated compacted transcript", async () => {
+    mockedContextEngine.info.ownsCompaction = true;
+    mockedGlobalHookRunner.hasHooks.mockImplementation(
+      (hookName) => hookName === "before_compaction" || hookName === "after_compaction",
+    );
     mockedRunEmbeddedAttempt
       .mockResolvedValueOnce(makeAttemptResult({ promptError: makeOverflowError() }))
       .mockResolvedValueOnce(
@@ -2560,6 +2564,13 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       });
       expect(replyOperation.sessionId).toBe("rotated-session");
       expect(onSessionIdChanged).toHaveBeenCalledWith("rotated-session");
+      expectRecordFields(mockCallArg(mockedGlobalHookRunner.runAfterCompaction), {
+        previousSessionId: "test-session",
+        sessionFile: "/tmp/rotated-session.json",
+      });
+      expectRecordFields(mockCallArg(mockedGlobalHookRunner.runAfterCompaction, 0, 1), {
+        sessionId: "rotated-session",
+      });
     } finally {
       replyOperation.complete();
     }

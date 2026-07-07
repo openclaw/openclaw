@@ -11,12 +11,28 @@ import {
 } from "./run-attempt-test-harness.js";
 import {
   readCodexAppServerBinding,
+  registerCodexTestSessionIdentity,
+  testCodexAppServerBindingStore,
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
-} from "./session-binding.js";
+} from "./session-binding.test-helpers.js";
 import {
   shouldRotateCodexAppServerBindingForRuntime,
-  startOrResumeThread,
+  startOrResumeThread as startOrResumeThreadImpl,
 } from "./thread-lifecycle.js";
+
+function startOrResumeThread(
+  params: Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore">,
+) {
+  registerCodexTestSessionIdentity(
+    params.params.sessionFile,
+    params.params.sessionId,
+    params.params.sessionKey,
+  );
+  return startOrResumeThreadImpl({
+    ...params,
+    bindingStore: testCodexAppServerBindingStore,
+  });
+}
 
 function createThreadLifecycleAppServerOptions(): Parameters<
   typeof startOrResumeThread
@@ -91,15 +107,12 @@ const DEFAULT_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
 });
 
 function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppServerBinding>) {
-  const [sessionFile, binding, lookup] = args;
-  return writeRawCodexAppServerBinding(
-    sessionFile,
-    {
-      webSearchThreadConfigFingerprint: DEFAULT_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,
-      ...binding,
-    },
-    lookup,
-  );
+  const [sessionFile, binding] = args;
+  registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
+  return writeRawCodexAppServerBinding(sessionFile, {
+    webSearchThreadConfigFingerprint: DEFAULT_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,
+    ...binding,
+  });
 }
 
 function createMessageDynamicTool(
@@ -2277,6 +2290,18 @@ describe("Codex app-server thread lifecycle bindings", () => {
     const params = createParams(sessionFile, workspaceDir);
     delete params.authProfileId;
     params.agentDir = path.join(tempDir, "agent");
+    params.authProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:bound": {
+          type: "oauth",
+          provider: "openai",
+          access: "scoped-access",
+          refresh: "scoped-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
 
     const binding = await startOrResumeThread({
       client: {
@@ -2309,5 +2334,6 @@ describe("Codex app-server thread lifecycle bindings", () => {
     });
 
     expect(binding.authProfileId).toBe("openai:bound");
+    expect(binding.modelProvider).toBeUndefined();
   });
 });

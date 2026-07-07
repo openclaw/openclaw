@@ -12,6 +12,7 @@ import { startCodexAttemptThread } from "./attempt-startup.js";
 import { defaultLeasedCodexAppServerClientFactory } from "./client-factory.js";
 import { CodexAppServerClient } from "./client.js";
 import { type CodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { testCodexAppServerBindingStore } from "./session-binding.test-helpers.js";
 import {
   clearSharedCodexAppServerClient,
   getLeasedSharedCodexAppServerClient,
@@ -101,6 +102,7 @@ function startThreadWithHarness(
   const effectivePluginConfig = overrides?.pluginConfig ?? pluginConfig;
 
   const run = startCodexAttemptThread({
+    bindingStore: testCodexAppServerBindingStore,
     attemptClientFactory:
       overrides?.attemptClientFactory?.(harness) ?? defaultLeasedCodexAppServerClientFactory,
     appServer: resolveCodexAppServerRuntimeOptions({ pluginConfig: effectivePluginConfig }),
