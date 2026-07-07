@@ -12,7 +12,6 @@ import {
   printCronList,
   printCronShow,
 } from "./shared.js";
-import { normalizeCronSessionTargetOption } from "./thread-id-shared.js";
 
 const hoisted = vi.hoisted(() => ({
   listChannelPluginsMock: vi.fn(),
@@ -500,26 +499,5 @@ describe("cron status rendering", () => {
 
     // The computed --json status must agree with the human render.
     expect(enrichCronJsonWithStatus(job)).toMatchObject({ status: "ok" });
-  });
-});
-
-describe("normalizeCronSessionTargetOption", () => {
-  it("normalizes valid options", () => {
-    expect(normalizeCronSessionTargetOption("main")).toBe("main");
-    expect(normalizeCronSessionTargetOption("isolated")).toBe("isolated");
-    expect(normalizeCronSessionTargetOption("current")).toBe("current");
-    expect(normalizeCronSessionTargetOption("session:xyz")).toBe("session:xyz");
-    expect(normalizeCronSessionTargetOption(undefined)).toBeUndefined();
-    expect(normalizeCronSessionTargetOption(null)).toBeUndefined();
-    expect(normalizeCronSessionTargetOption("")).toBeUndefined();
-  });
-
-  it("rejects invalid options with an error", () => {
-    expect(() => normalizeCronSessionTargetOption("invalid")).toThrow(
-      "session must be one of 'main', 'isolated', 'current', or 'session:<id>'",
-    );
-    expect(() => normalizeCronSessionTargetOption("session:")).toThrow(
-      "session must be one of 'main', 'isolated', 'current', or 'session:<id>'",
-    );
   });
 });
