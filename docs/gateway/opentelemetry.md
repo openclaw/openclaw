@@ -111,6 +111,15 @@ stdout, or `both` for both.
 }
 ```
 
+<Note>
+A shared `endpoint` (or `OTEL_EXPORTER_OTLP_ENDPOINT`) may itself end in a
+signal-specific path such as `/v1/traces`, as is common with hosted OTLP
+frontends. When several signals are enabled, each signal is routed to its own
+path (`/v1/metrics`, `/v1/logs`) by rewriting that trailing segment, so a single
+shared base URL works for every signal. Signal-specific `*Endpoint` config and
+`OTEL_EXPORTER_OTLP_*_ENDPOINT` env vars are always used verbatim.
+</Note>
+
 ### Environment variables
 
 | Variable                                                                                                          | Purpose                                                                                                                                                                                                                                                                                                        |
