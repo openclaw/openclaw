@@ -676,7 +676,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
   });
 
   if (statusReactionController) {
-    void statusReactionController.setThinking().catch(() => {
+    void Promise.resolve(statusReactionController.setThinking()).catch(() => {
       // best-effort: status reaction lifecycle is non-critical
     });
   }

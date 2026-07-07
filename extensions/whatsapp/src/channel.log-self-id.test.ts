@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
-  createEmptyPluginRegistry,
   createTestRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
@@ -56,7 +55,9 @@ describe("logSelfId rejects safely", () => {
     });
 
     // Flush microtasks so the .catch() processes the rejection.
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     // Assert the mock was actually called so the test is meaningful.
     // Passing means no unhandled rejection was reported by the runner.

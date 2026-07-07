@@ -37,18 +37,12 @@ import {
   renameSessionGroup,
   saveStoredSessionCustomGroups,
 } from "../lib/sessions/custom-groups.ts";
-<<<<<<< HEAD
+import { writeSessionDragData } from "../lib/sessions/drag.ts";
 import {
   groupSidebarSessionRows,
   normalizeSidebarSessionsGrouping,
   type SidebarSessionsGrouping,
 } from "../lib/sessions/grouping.ts";
-||||||| parent of 34789c2eac0 (feat(control-ui): drag sessions into split view with animated drop preview)
-import { groupSidebarSessionRows } from "../lib/sessions/grouping.ts";
-=======
-import { writeSessionDragData } from "../lib/sessions/drag.ts";
-import { groupSidebarSessionRows } from "../lib/sessions/grouping.ts";
->>>>>>> 34789c2eac0 (feat(control-ui): drag sessions into split view with animated drop preview)
 import {
   compareSessionRowsByUpdatedAt,
   resolveSessionNavigation,
@@ -155,12 +149,8 @@ export class AppSidebar extends LitElement {
   @state() private customizeMenuPosition: { x: number; y: number } | null = null;
   @state() private sessionMenu: SidebarSessionMenuState | null = null;
   @state() private sessionGroupSubmenuOpen = false;
-<<<<<<< HEAD
   @state() private sessionGroupMenu: SidebarSessionGroupMenuState | null = null;
-||||||| parent of 34789c2eac0 (feat(control-ui): drag sessions into split view with animated drop preview)
-=======
   @state() private draggingSessionKey: string | null = null;
->>>>>>> 34789c2eac0 (feat(control-ui): drag sessions into split view with animated drop preview)
   @state() private sessionSortMode: SidebarSessionSortMode = "created";
   @state() private sessionsGrouping: SidebarSessionsGrouping = loadStoredSidebarSessionsGrouping();
   @state() private sessionSortMenuPosition: { x: number; y: number } | null = null;
