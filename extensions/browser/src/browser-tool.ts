@@ -163,6 +163,10 @@ function readTargetUrlParam(params: Record<string, unknown>) {
   );
 }
 
+function formatScreenshotShareHint(filePath: string): string {
+  return `[Screenshot saved to ${JSON.stringify(filePath)}. Use this path with the message tool to share the screenshot explicitly.]`;
+}
+
 const LEGACY_BROWSER_ACT_REQUEST_KEYS = [
   "kind",
   "targetId",
@@ -829,6 +833,7 @@ export function createBrowserTool(opts?: {
               });
           touchTrackedTab(readStringValue(result.targetId) ?? targetId);
           const screenshotPath = result.path;
+          const shareHint = formatScreenshotShareHint(screenshotPath);
           // Screenshots stay in the tool result for agent vision, but channel
           // delivery must remain an explicit message-tool action.
           const screenshotDetails = {
@@ -870,7 +875,7 @@ export function createBrowserTool(opts?: {
                   includeWarning: true,
                 },
               );
-              const text = `${headerLines.join("\n")}\n${wrappedDescription}`;
+              const text = `${headerLines.join("\n")}\n${wrappedDescription}\n${shareHint}`;
               return {
                 content: [{ type: "text", text }],
                 details: {
@@ -878,8 +883,8 @@ export function createBrowserTool(opts?: {
                   // Do NOT include details.media here — the vision path returns
                   // a text description as the deliverable output. Exposing the raw
                   // screenshot as media would cause channel delivery to auto-send
-                  // potentially sensitive page content. The local screenshot file
-                  // is still referenced in result.path for diagnostic purposes.
+                  // potentially sensitive page content. The text block carries the
+                  // local path for an explicit message-tool send instead.
                   vision: {
                     provider: described.provider,
                     model: described.model,
@@ -894,7 +899,7 @@ export function createBrowserTool(opts?: {
             // input too, so defang line-start final-reply media directives.
             const rawReason = err instanceof Error ? err.message : String(err);
             const reason = neutralizeMediaDirectives(rawReason);
-            const extraText = `[browser screenshot vision failed: ${reason}]`;
+            const extraText = `[browser screenshot vision failed: ${reason}]\n${shareHint}`;
             return await browserToolDeps.imageResultFromFile({
               label: "browser:screenshot",
               path: screenshotPath,
@@ -906,6 +911,7 @@ export function createBrowserTool(opts?: {
           return await browserToolDeps.imageResultFromFile({
             label: "browser:screenshot",
             path: screenshotPath,
+            extraText: shareHint,
             details: screenshotDetails,
             imageSanitization,
           });

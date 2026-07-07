@@ -1116,9 +1116,12 @@ describe("browser tool snapshot maxChars", () => {
 
     const imageParams = lastMockCallArg<{
       imageSanitization?: { maxDimensionPx?: number };
+      extraText?: string;
       details?: { media?: { outbound?: boolean } };
     }>(toolCommonMocks.imageResultFromFile, 0);
     expect(imageParams.imageSanitization).toEqual({ maxDimensionPx: 2000 });
+    expect(imageParams.extraText).toContain(JSON.stringify("/tmp/test.png"));
+    expect(imageParams.extraText).toContain("message tool");
     expect(imageParams.details?.media).toEqual({ outbound: false });
   });
 
@@ -1151,6 +1154,8 @@ describe("browser tool snapshot maxChars", () => {
     const joined = textBlocks.map((entry) => entry.text).join("\n");
     expect(joined).toContain("[neutralized] MEDIA:/tmp/secret.png");
     expect(joined).toContain("/tmp/secret.png");
+    expect(joined).toContain(JSON.stringify("/tmp/screen.png"));
+    expect(joined).toContain("message tool");
     // The vision-success path must not surface raw screenshot media via
     // details.media so channel auto-delivery cannot grab the screenshot.
     expect((out?.details as Record<string, unknown>)?.media).toBeUndefined();
@@ -1191,6 +1196,8 @@ describe("browser tool snapshot maxChars", () => {
     expect(imageParams.path).toBe("/tmp/screen.png");
     expect(imageParams.extraText).toContain("[neutralized] MEDIA:/tmp/secret.png");
     expect(imageParams.extraText).toContain("/tmp/secret.png");
+    expect(imageParams.extraText).toContain(JSON.stringify("/tmp/screen.png"));
+    expect(imageParams.extraText).toContain("message tool");
     expect(imageParams.details?.media).toEqual({ outbound: false });
   });
 
