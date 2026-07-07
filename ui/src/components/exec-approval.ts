@@ -224,7 +224,7 @@ function renderExecApprovalPrompt(props: ExecApprovalProps) {
   `;
 }
 
-export class ExecApproval extends LitElement {
+class ExecApproval extends LitElement {
   override createRenderRoot() {
     return this;
   }

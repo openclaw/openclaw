@@ -28,7 +28,7 @@ function renderConnectionBanner(props: ConnectionBannerProps) {
   `;
 }
 
-export class ConnectionBanner extends LitElement {
+class ConnectionBanner extends LitElement {
   override createRenderRoot() {
     return this;
   }
