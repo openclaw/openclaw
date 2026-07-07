@@ -114,6 +114,7 @@ function defaultChannelSetupWizardRunner(
     const nextConfig = await setupChannels(baseConfig, defaultRuntime, prompter, {
       initialSelection: [channel],
       forceAllowFromChannels: [channel],
+      allowIMessageInstall: true,
       allowSignalInstall: true,
       deferStatusUntilSelection: true,
       quickstartDefaults: true,
