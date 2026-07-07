@@ -74,6 +74,40 @@ describe("agent defaults schema", () => {
     );
   });
 
+  it("accepts native subagent announceTarget on defaults and agent entries", () => {
+    const defaults = AgentDefaultsSchema.parse({
+      subagents: {
+        announceTarget: "parent",
+      },
+    });
+    const agent = AgentEntrySchema.parse({
+      id: "coordinator",
+      subagents: {
+        announceTarget: "channel",
+      },
+    });
+
+    expect(defaults?.subagents?.announceTarget).toBe("parent");
+    expect(agent.subagents?.announceTarget).toBe("channel");
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({
+        subagents: {
+          announceTarget: "stream",
+        },
+      }),
+      "subagents.announceTarget",
+    );
+    expectSchemaFailurePath(
+      AgentEntrySchema.safeParse({
+        id: "coordinator",
+        subagents: {
+          announceTarget: "stream",
+        },
+      }),
+      "subagents.announceTarget",
+    );
+  });
+
   it("accepts videoGenerationModel", () => {
     expectSchemaSuccess(
       AgentDefaultsSchema.safeParse({
