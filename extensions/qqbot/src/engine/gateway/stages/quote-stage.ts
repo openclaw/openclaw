@@ -13,6 +13,7 @@ import {
 } from "../../ref/format-message-ref.js";
 import { formatRefEntryForAgent, getRefIndex } from "../../ref/store.js";
 import { MSG_TYPE_QUOTE } from "../../utils/text-parsing.js";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatVoiceText } from "../../utils/voice-text.js";
 import { processAttachments } from "../inbound-attachments.js";
 import type { InboundPipelineDeps, ReplyToInfo } from "../inbound-context.js";
@@ -89,7 +90,7 @@ export async function resolveQuote(
         attachmentProcessor,
       );
       log?.debug?.(
-        `Quote detected via msg_elements[0] (cache miss): id=${event.refMsgIdx}, content="${(refBody ?? "").slice(0, 80)}..."`,
+        `Quote detected via msg_elements[0] (cache miss): id=${event.refMsgIdx}, content="${truncateUtf16Safe(refBody ?? "", 80)}..."`,
       );
       return {
         id: event.refMsgIdx,
