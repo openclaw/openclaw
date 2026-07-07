@@ -482,7 +482,7 @@ describe("update global helpers", () => {
     });
   });
 
-  it("does not adopt an ephemeral per-Node npm root probed from PATH", async () => {
+  it("keeps npm self-updates on the running package root when the PATH probe diverges", async () => {
     await withMockedPlatform("darwin", async () => {
       await withTempDir({ prefix: "openclaw-update-ephemeral-probe-" }, async (base) => {
         // The running install lives in an nvm tree while `npm root -g` on
@@ -525,7 +525,7 @@ describe("update global helpers", () => {
     });
   });
 
-  it("falls back to the running root for scoped packages when the probe is rejected", async () => {
+  it("keeps scoped npm self-updates on the running package root", async () => {
     await withMockedPlatform("darwin", async () => {
       await withTempDir({ prefix: "openclaw-update-scoped-probe-" }, async (base) => {
         const nvmPrefix = path.join(base, "home", ".nvm", "versions", "node", "v24.5.0");
@@ -563,12 +563,12 @@ describe("update global helpers", () => {
     });
   });
 
-  it("still adopts the probed npm root when it matches the running per-Node tree", async () => {
+  it("keeps the npm probe when the package root is not globally installed", async () => {
     await withMockedPlatform("darwin", async () => {
-      await withTempDir({ prefix: "openclaw-update-matching-probe-" }, async (base) => {
+      await withTempDir({ prefix: "openclaw-update-probe-only-" }, async (base) => {
         const nvmPrefix = path.join(base, "home", ".nvm", "versions", "node", "v24.5.0");
         const nvmRoot = path.join(nvmPrefix, "lib", "node_modules");
-        const pkgRoot = path.join(nvmRoot, "openclaw");
+        const pkgRoot = path.join(base, "checkout", "node_modules", "openclaw");
         await fs.mkdir(pkgRoot, { recursive: true });
 
         const runCommand = createNpmRootRunner({ defaultNpmRoot: nvmRoot });
@@ -584,7 +584,7 @@ describe("update global helpers", () => {
           manager: "npm",
           command: "npm",
           globalRoot: nvmRoot,
-          packageRoot: pkgRoot,
+          packageRoot: path.join(nvmRoot, "openclaw"),
         });
       });
     });
