@@ -7,7 +7,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   formatSessionArchiveTimestamp,
-  isArchivedTrajectorySessionArtifactName,
+  isArchivedTrajectoryRuntimeArtifactName,
   parseSessionArchiveTimestamp,
   type SessionArchiveReason,
 } from "../config/sessions/artifacts.js";
@@ -697,12 +697,14 @@ export async function cleanupArchivedSessionTranscripts(opts: {
       canonicalizePathForComparison(dir) === canonicalizePathForComparison(overrideDirResolved);
     const isOriginalDir = originalDirs.has(dir);
     // The override directory is operator-configured and may contain unrelated
-    // archive-looking files. Only remove files that carry an OpenClaw trajectory
-    // runtime header when scanning the override-only directory. If the override
-    // directory is also an explicitly requested cleanup directory, normal
-    // transcript archive cleanup must continue to work there (#94593).
+    // archive-looking files. Only remove trajectory runtime files that carry an
+    // OpenClaw trajectory runtime header when scanning the override-only
+    // directory; pointer archives are owned session artifacts and should follow
+    // normal retention rules. If the override directory is also an explicitly
+    // requested cleanup directory, normal transcript archive cleanup must
+    // continue to work there (#94593).
     const requireTrajectoryHeader = (entry: string) =>
-      isOverrideDir && (!isOriginalDir || isArchivedTrajectorySessionArtifactName(entry));
+      isOverrideDir && (!isOriginalDir || isArchivedTrajectoryRuntimeArtifactName(entry));
     const entries = await fs.promises.readdir(dir).catch(() => []);
     for (const entry of entries) {
       for (const rule of rules) {

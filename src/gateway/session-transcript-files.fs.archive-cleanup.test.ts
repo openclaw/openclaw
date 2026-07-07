@@ -194,13 +194,21 @@ describe("cleanupArchivedSessionTranscripts", () => {
       source: "runtime",
       sessionId: "session",
     });
+    const pointerHeader = JSON.stringify({
+      traceSchema: "openclaw-trajectory-pointer",
+      schemaVersion: 1,
+      sessionId: "session",
+      runtimeFile: "/some/session.trajectory.jsonl",
+    });
     try {
       process.env.OPENCLAW_TRAJECTORY_DIR = dir;
       const transcriptArchive = `session.jsonl.reset.${OLD_STAMP}`;
-      const trajectoryArchive = `session.trajectory.jsonl.reset.${OLD_STAMP}`;
+      const trajectoryRuntimeArchive = `session.trajectory.jsonl.reset.${OLD_STAMP}`;
+      const trajectoryPointerArchive = `session.trajectory-path.json.reset.${OLD_STAMP}`;
       const unrelated = `backup.jsonl.deleted.${OLD_STAMP}`;
       await fsPromises.writeFile(path.join(dir, transcriptArchive), "transcript\n");
-      await fsPromises.writeFile(path.join(dir, trajectoryArchive), `${runtimeHeader}\n`);
+      await fsPromises.writeFile(path.join(dir, trajectoryRuntimeArchive), `${runtimeHeader}\n`);
+      await fsPromises.writeFile(path.join(dir, trajectoryPointerArchive), `${pointerHeader}\n`);
       await fsPromises.writeFile(path.join(dir, unrelated), "not a trajectory\n");
 
       const result = await cleanupArchivedSessionTranscripts({
@@ -209,8 +217,8 @@ describe("cleanupArchivedSessionTranscripts", () => {
         nowMs: NOW_MS,
       });
 
-      expect(result.removed).toBe(2);
-      expect(result.scanned).toBe(2);
+      expect(result.removed).toBe(3);
+      expect(result.scanned).toBe(3);
       expect(await remaining()).toEqual([unrelated]);
     } finally {
       if (previous === undefined) {

@@ -126,6 +126,12 @@ export function isArchivedTrajectorySessionArtifactName(fileName: string): boole
   return liveName !== null && isTrajectorySessionArtifactName(liveName);
 }
 
+/** Returns true for archived trajectory runtime artifacts (not pointers). */
+export function isArchivedTrajectoryRuntimeArtifactName(fileName: string): boolean {
+  const liveName = stripSessionArchiveSuffix(fileName);
+  return liveName !== null && isTrajectoryRuntimeArtifactName(liveName);
+}
+
 /** Returns true for primary session transcript files that represent live session history. */
 export function isPrimarySessionTranscriptFileName(fileName: string): boolean {
   if (fileName === "sessions.json") {
