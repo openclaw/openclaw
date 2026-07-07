@@ -492,4 +492,13 @@ describe("sessionsTailCommand", () => {
     expect(output).toContain("trajectory-dir ok");
     expect(output).not.toContain("No sessions found");
   });
+
+  it("rejects oversized trajectory snapshots", async () => {
+    const runtime = makeRuntime();
+    fs.writeFileSync(trajectoryPath, Buffer.alloc(16 * 1024 * 1024 + 1, "x"), "utf8");
+
+    await expect(sessionsTailCommand({ store: storePath, sessionKey }, runtime)).rejects.toThrow(
+      /exceeds limit of 16777216 bytes/,
+    );
+  });
 });

@@ -7,6 +7,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readRegularFileSync } from "openclaw/plugin-sdk/security-runtime";
 import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveSessionFilePath } from "../config/sessions/paths.js";
@@ -277,10 +278,19 @@ function formatProgressLine(event: TrajectoryEvent): string {
   return [formatTimestamp(event.ts), typeLabel, sessionLabel, preview].join(" ").trimEnd();
 }
 
+// Trajectory snapshots are read to render recent events; 16 MiB is generous
+// headroom for busy sessions while preventing a rotated/runaway file from OOMing
+// the tail command.
+const TRAJECTORY_SNAPSHOT_MAX_BYTES = 16 * 1024 * 1024;
+
 function readTrajectorySnapshot(filePath: string): TrajectorySnapshot {
   try {
     const stat = fs.statSync(filePath);
-    const text = fs.readFileSync(filePath, "utf8");
+    const { buffer } = readRegularFileSync({
+      filePath,
+      maxBytes: TRAJECTORY_SNAPSHOT_MAX_BYTES,
+    });
+    const text = buffer.toString("utf8");
     return {
       events: parseTrajectoryEventLines(text.split(/\r?\n/u)),
       fileState: fileStateFromStat(stat),
@@ -361,7 +371,11 @@ async function readTrajectoryPointerSessionId(sessionFile: string): Promise<stri
     return undefined;
   }
   try {
-    const parsed = JSON.parse(fs.readFileSync(pointerPath, "utf8")) as unknown;
+    const { buffer } = readRegularFileSync({
+      filePath: pointerPath,
+      maxBytes: 64 * 1024,
+    });
+    const parsed = JSON.parse(buffer.toString("utf8")) as unknown;
     if (!isRecord(parsed) || typeof parsed.sessionId !== "string") {
       return undefined;
     }
