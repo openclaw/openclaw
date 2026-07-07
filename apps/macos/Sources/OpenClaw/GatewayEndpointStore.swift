@@ -701,6 +701,18 @@ extension GatewayEndpointStore {
         if let token = tokenCandidate?.trimmingCharacters(in: .whitespacesAndNewlines),
            !token.isEmpty
         {
+            // Detect and reject unresolved environment variable placeholders (e.g., ${OPENCLAW_GATEWAY_TOKEN})
+            let pattern = #"\\$\\{([A-Za-z_][A-Za-z0-9_]*)\\}"#
+            if let regex = try? NSRegularExpression(pattern: pattern, options: []),
+               let match = regex.firstMatch(in: token, range: NSRange(token.startIndex..., in: token)),
+               let varNameRange = Range(match.range(at: 1), in: token),
+               ProcessInfo.processInfo.environment[String(token[varNameRange])] == nil {
+                throw NSError(
+                    domain: "Dashboard",
+                    code: 3,
+                    userInfo: [NSLocalizedDescriptionKey: "Dashboard token contains an unresolved environment variable placeholder \\(String(token[varNameRange])). Please either set the environment variable or provide a literal token in the configuration."]
+                )
+            }
             fragmentItems.append(URLQueryItem(name: "token", value: token))
         }
         components.queryItems = nil

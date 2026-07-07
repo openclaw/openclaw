@@ -299,6 +299,41 @@ struct GatewayEndpointStoreTests {
         #expect(url.query == nil)
     }
 
+    @Test func `dashboard URL throws when token contains unresolved env var placeholder`() throws {
+        let config: GatewayConnection.Config = try (
+            url: #require(URL(string: "ws://127.0.0.1:18789")),
+            token: "${OPENCLAW_GATEWAY_TOKEN}",
+            password: nil)
+
+        // Ensure the env var is not set
+        unsetenv("OPENCLAW_GATEWAY_TOKEN")
+
+        #expect(throws: (any Error).self) {
+            try GatewayEndpointStore.dashboardURL(
+                for: config,
+                mode: .local,
+                localBasePath: "/control")
+        }
+    }
+
+    @Test func `dashboard URL accepts token when env var placeholder is resolved`() throws {
+        let config: GatewayConnection.Config = try (
+            url: #require(URL(string: "ws://127.0.0.1:18789")),
+            token: "${RESOLVED_TOKEN}",
+            password: nil)
+
+        // Set the env var to simulate a resolved placeholder
+        setenv("RESOLVED_TOKEN", "abc123", 1)
+        defer { unsetenv("RESOLVED_TOKEN") }
+
+        let url = try GatewayEndpointStore.dashboardURL(
+            for: config,
+            mode: .local,
+            localBasePath: "/control")
+        #expect(url.absoluteString == "http://127.0.0.1:18789/control/#token=abc123")
+        #expect(url.query == nil)
+    }
+
     @Test func `normalize gateway url adds default port for loopback ws`() {
         let url = GatewayRemoteConfig.normalizeGatewayUrl("ws://127.0.0.1")
         #expect(url?.port == 18789)
