@@ -79,6 +79,7 @@ import { resolveConversationBindingContextFromMessage } from "./conversation-bin
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
+import { resolveReplyInitConflictAction } from "./reply-session-init-conflict.js";
 import { isResetAuthorizedForContext } from "./reset-authorization.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import {
@@ -402,6 +403,7 @@ async function initSessionStateAttemptLocked(
   attemptContext: InitSessionStateAttemptContext,
   staleSnapshotRetried: boolean,
   lifecycleMutationIdentity: { sessionId: string; sessionKey: string } | undefined,
+  conflictRecoveryAttempted = false,
 ): Promise<InitSessionStateAttemptOutcome> {
   const { ctx, cfg, commandAuthorized } = params;
   const { agentId, conversationBindingContext, isSystemEvent, sessionCtxForState, storePath } =
@@ -1026,10 +1028,59 @@ async function initSessionStateAttemptLocked(
     storePath,
   });
   if (!committed.ok) {
-    if (!staleSnapshotRetried) {
-      return await initSessionStateAttemptLocked(params, attemptContext, true, undefined);
+    const conflictAction = resolveReplyInitConflictAction({
+      staleSnapshotRetried,
+      conflictRecoveryAttempted,
+    });
+    if (conflictAction.kind === "stale-snapshot-retry") {
+      return await initSessionStateAttemptLocked(
+        params,
+        attemptContext,
+        true,
+        undefined,
+        conflictRecoveryAttempted,
+      );
     }
-    throw new Error(`reply session initialization conflicted for ${sessionKey}`);
+    if (conflictAction.kind === "self-heal-retry") {
+      // The optimistic-concurrency commit keeps losing its race even after a
+      // fresh-snapshot retry. Left alone this wedges the session for ANY runtime
+      // (native Anthropic and the Codex harness alike): init never completes for
+      // this sessionKey, the store entry is never committed, and completed
+      // tool-results silently return empty. Reuse the same runtime-agnostic
+      // recovery the rollover/timeout paths use — dispose the session's MCP
+      // runtime and run the registered harness reset hooks (each runtime releases
+      // its lane and clears its stale native thread binding; the Codex harness
+      // additionally lets its transcript mirror rebuild) — then retry init
+      // exactly once so initialization can complete and unwedge the session.
+      const wedgedSessionId = entry?.sessionId;
+      log.warn(
+        `reply session initialization conflicted for ${sessionKey}; running harness self-heal before final retry`,
+        { wedgedSessionId },
+      );
+      if (wedgedSessionId) {
+        await retireSessionMcpRuntime({
+          sessionId: wedgedSessionId,
+          reason: "reply-session-init-conflict",
+          onError: (error, sessionIdLocal) => {
+            log.warn(
+              `failed to dispose bundle MCP runtime for conflicted session ${sessionIdLocal}`,
+              { error: String(error) },
+            );
+          },
+        });
+      }
+      await resetRegisteredAgentHarnessSessions({
+        agentId,
+        sessionId: wedgedSessionId,
+        sessionKey,
+        sessionFile: entry?.sessionFile,
+        reason: "reset",
+      });
+      return await initSessionStateAttemptLocked(params, attemptContext, false, undefined, true);
+    }
+    throw new Error(
+      `reply session initialization conflicted for ${sessionKey} after harness self-heal retry`,
+    );
   }
   sessionEntry = committed.sessionEntry;
   sessionId = sessionEntry.sessionId;
