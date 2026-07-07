@@ -198,6 +198,22 @@ async function postCrablineInbound(params: {
         `Crabline ${params.adapter.channel} inbound injection failed with HTTP ${response.status}.`,
       );
     }
+    const result: unknown = await response.json();
+    if (params.adapter.channel === "matrix" && isRecord(result) && isRecord(result.event)) {
+      return readStringValue(result.event.event_id);
+    }
+    if (params.adapter.channel === "slack" && isRecord(result) && isRecord(result.message)) {
+      return readStringValue(result.message.ts);
+    }
+    if (
+      params.adapter.channel === "telegram" &&
+      isRecord(result) &&
+      isRecord(result.update) &&
+      isRecord(result.update.message)
+    ) {
+      return normalizeStringifiedOptionalString(result.update.message.message_id);
+    }
+    return undefined;
   } finally {
     await release();
   }
@@ -237,8 +253,21 @@ function createCrablineState(params: {
           outboundEvents.push(lifecycle);
         }
       }
+      const normalizedEvent =
+        params.adapter.channel === "telegram" &&
+        isRecord(event) &&
+        isRecord(event.body) &&
+        normalizeStringifiedOptionalString(event.body.chat_id)
+          ? {
+              ...event,
+              body: {
+                ...event.body,
+                chat_id: normalizeStringifiedOptionalString(event.body.chat_id),
+              },
+            }
+          : event;
       const outbound = params.adapter.createOutboundFromRecorderEvent({
-        event,
+        event: normalizedEvent,
         targetByProviderTarget,
       }) as QaBusOutboundMessageInput | null;
       if (outbound) {
@@ -248,15 +277,18 @@ function createCrablineState(params: {
     async addInboundMessage(input: QaBusInboundMessageInput) {
       const providerInbound = params.adapter.createInbound({ input });
       targetByProviderTarget.set(providerInbound.providerTargetKey, providerInbound.qaTarget);
+      const providerMessageId = await postCrablineInbound({
+        adapter: params.adapter,
+        providerInbound,
+      });
       const message = baseState.addInboundMessage({
         ...input,
         conversation: providerInbound.stateConversation,
         ...(providerInbound.threadId ? { threadId: providerInbound.threadId } : {}),
       });
-      await postCrablineInbound({
-        adapter: params.adapter,
-        providerInbound,
-      });
+      if (providerMessageId) {
+        message.id = providerMessageId;
+      }
       return message;
     },
     rememberProviderTarget(providerTargetKey, qaTarget) {

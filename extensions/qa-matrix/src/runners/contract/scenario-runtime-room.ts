@@ -39,7 +39,6 @@ import {
   primeMatrixQaDriverScenarioClient,
   resolveMatrixQaNoReplyWindowMs,
   runAssertedDriverTopLevelScenario,
-  runConfigurableTopLevelScenario,
   runDriverTopLevelMentionScenario,
   runNoReplyExpectedScenario,
   runTopologyScopedTopLevelScenario,
@@ -50,9 +49,6 @@ import {
 import type { MatrixQaCanaryArtifact, MatrixQaScenarioExecution } from "./scenario-types.js";
 
 type MatrixQaThreadScenarioResult = Awaited<ReturnType<typeof runThreadScenario>>;
-
-const MATRIX_SUBAGENT_THREAD_HOOK_ERROR_RE =
-  /thread=true is unavailable because no channel plugin registered subagent_spawning hooks/i;
 
 function assertMatrixQaInReplyTarget(params: {
   actualEventId?: string;
@@ -83,16 +79,6 @@ function buildMatrixQaThreadArtifacts(result: MatrixQaThreadScenarioResult) {
     rootEventId: result.rootEventId,
     token: result.token,
   };
-}
-
-function failIfMatrixSubagentThreadHookError(event: MatrixQaObservedEvent) {
-  const body = event.body ?? "";
-  if (MATRIX_SUBAGENT_THREAD_HOOK_ERROR_RE.test(body)) {
-    throw new Error(`Matrix subagent thread spawn hit missing hook error: ${body || "<empty>"}`);
-  }
-  if (/\bsessions_spawn failed:/i.test(body)) {
-    throw new Error(`Matrix subagent thread spawn failed: ${body || "<empty>"}`);
-  }
 }
 
 function buildMatrixQaThreadDetailLines(params: {
@@ -201,22 +187,6 @@ export async function runMatrixQaCanary(params: {
   return canary;
 }
 
-export async function runThreadFollowUpScenario(context: MatrixQaScenarioContext) {
-  const result = await runThreadScenario(context);
-  assertThreadReplyArtifact(result.reply, {
-    expectedRootEventId: result.rootEventId,
-    label: "thread reply",
-  });
-  return {
-    artifacts: buildMatrixQaThreadArtifacts(result),
-    details: [
-      `root event: ${result.rootEventId}`,
-      `driver thread event: ${result.driverEventId}`,
-      ...buildMatrixReplyDetails("reply", result.reply),
-    ].join("\n"),
-  } satisfies MatrixQaScenarioExecution;
-}
-
 export async function runThreadRootPreservationScenario(context: MatrixQaScenarioContext) {
   const result = await runThreadScenario(context, {
     createNestedReply: true,
@@ -274,121 +244,6 @@ export async function runThreadNestedReplyShapeScenario(context: MatrixQaScenari
   } satisfies MatrixQaScenarioExecution;
 }
 
-export async function runThreadIsolationScenario(context: MatrixQaScenarioContext) {
-  const threadPhase = await runThreadScenario(context);
-  assertThreadReplyArtifact(threadPhase.reply, {
-    expectedRootEventId: threadPhase.rootEventId,
-    label: "thread isolation reply",
-  });
-  const topLevelPhase = await runAssertedDriverTopLevelScenario({
-    context,
-    label: "top-level follow-up reply",
-    tokenPrefix: "MATRIX_QA_TOPLEVEL",
-  });
-  return {
-    artifacts: {
-      threadDriverEventId: threadPhase.driverEventId,
-      threadReply: threadPhase.reply,
-      threadRootEventId: threadPhase.rootEventId,
-      threadToken: threadPhase.token,
-      topLevelDriverEventId: topLevelPhase.driverEventId,
-      topLevelReply: topLevelPhase.reply,
-      topLevelToken: topLevelPhase.token,
-    },
-    details: [
-      `thread root event: ${threadPhase.rootEventId}`,
-      `thread driver event: ${threadPhase.driverEventId}`,
-      ...buildMatrixReplyDetails("thread reply", threadPhase.reply),
-      `top-level driver event: ${topLevelPhase.driverEventId}`,
-      ...buildMatrixReplyDetails("top-level reply", topLevelPhase.reply),
-    ].join("\n"),
-  } satisfies MatrixQaScenarioExecution;
-}
-
-export async function runSubagentThreadSpawnScenario(context: MatrixQaScenarioContext) {
-  const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
-  const childToken = buildMatrixQaToken("MATRIX_QA_SUBAGENT_CHILD");
-  const spawnArgs = {
-    task: `Finish with exactly ${childToken}.`,
-    label: "matrix-thread-subagent",
-    thread: true,
-    mode: "session",
-    runTimeoutSeconds: 120,
-  };
-  const triggerBody = [
-    `${context.sutUserId} Run this exact OpenClaw Matrix thread-spawn QA check. Use tool calls, not prose.`,
-    `Step 1: call sessions_spawn with exactly this JSON input: ${JSON.stringify(spawnArgs)}.`,
-    'Step 2: after spawn returns status="accepted", wait for the child session reply in the spawned Matrix thread.',
-    "Do not omit thread=true; the child must bind to this Matrix thread.",
-    `Do not write ${childToken} in the parent response.`,
-  ].join(" ");
-  const introPromise = client.waitForRoomEvent({
-    observedEvents: context.observedEvents,
-    predicate: (event) => {
-      failIfMatrixSubagentThreadHookError(event);
-      return (
-        event.roomId === context.roomId &&
-        event.sender === context.sutUserId &&
-        event.type === "m.room.message" &&
-        isMatrixQaMessageLikeKind(event.kind) &&
-        /\bsession active\b/i.test(event.body ?? "") &&
-        /Messages here go directly to this session/i.test(event.body ?? "")
-      );
-    },
-    roomId: context.roomId,
-    since: startSince,
-    timeoutMs: context.timeoutMs,
-  });
-  const driverEventId = await client.sendTextMessage({
-    body: triggerBody,
-    mentionUserIds: [context.sutUserId],
-    roomId: context.roomId,
-  });
-  const intro = await introPromise;
-  const completion = await client.waitForRoomEvent({
-    observedEvents: context.observedEvents,
-    predicate: (event) => {
-      failIfMatrixSubagentThreadHookError(event);
-      return (
-        event.roomId === context.roomId &&
-        event.sender === context.sutUserId &&
-        event.type === "m.room.message" &&
-        isMatrixQaMessageLikeKind(event.kind) &&
-        (event.body ?? "").includes(childToken) &&
-        event.relatesTo?.relType === "m.thread" &&
-        event.relatesTo.eventId === intro.event.eventId
-      );
-    },
-    roomId: context.roomId,
-    since: intro.since,
-    timeoutMs: context.timeoutMs,
-  });
-  advanceMatrixQaActorCursor({
-    actorId: "driver",
-    syncState: context.syncState,
-    nextSince: completion.since,
-    startSince,
-  });
-  const subagentIntro = buildMatrixReplyArtifact(intro.event);
-  const subagentCompletion = buildMatrixReplyArtifact(completion.event, childToken);
-  return {
-    artifacts: {
-      driverEventId,
-      subagentCompletion,
-      subagentIntro,
-      threadRootEventId: intro.event.eventId,
-      threadToken: childToken,
-      triggerBody,
-    },
-    details: [
-      `driver event: ${driverEventId}`,
-      `subagent thread root event: ${intro.event.eventId}`,
-      ...buildMatrixReplyDetails("subagent intro", subagentIntro),
-      ...buildMatrixReplyDetails("subagent completion", subagentCompletion),
-    ].join("\n"),
-  } satisfies MatrixQaScenarioExecution;
-}
-
 export async function runTopLevelReplyShapeScenario(context: MatrixQaScenarioContext) {
   const result = await runAssertedDriverTopLevelScenario({
     context,
@@ -400,39 +255,6 @@ export async function runTopLevelReplyShapeScenario(context: MatrixQaScenarioCon
       driverEventId: result.driverEventId,
       reply: result.reply,
       token: result.token,
-    },
-    details: [
-      `driver event: ${result.driverEventId}`,
-      ...buildMatrixReplyDetails("reply", result.reply),
-    ].join("\n"),
-  } satisfies MatrixQaScenarioExecution;
-}
-
-export async function runRoomThreadReplyOverrideScenario(context: MatrixQaScenarioContext) {
-  const result = await runConfigurableTopLevelScenario({
-    accessToken: context.driverAccessToken,
-    actorId: "driver",
-    baseUrl: context.baseUrl,
-    observedEvents: context.observedEvents,
-    replyPredicate: (event, params) =>
-      event.relatesTo?.relType === "m.thread" && event.relatesTo?.eventId === params.driverEventId,
-    roomId: context.roomId,
-    syncState: context.syncState,
-    syncStreams: context.syncStreams,
-    sutUserId: context.sutUserId,
-    timeoutMs: context.timeoutMs,
-    tokenPrefix: "MATRIX_QA_ROOM_THREAD",
-  });
-  assertThreadReplyArtifact(result.reply, {
-    expectedRootEventId: result.driverEventId,
-    label: "room thread override reply",
-  });
-  return {
-    artifacts: {
-      driverEventId: result.driverEventId,
-      reply: result.reply,
-      token: result.token,
-      triggerBody: result.body,
     },
     details: [
       `driver event: ${result.driverEventId}`,

@@ -29,6 +29,14 @@ const factories = [
 ] as const;
 
 describe("live transport adapter factories", () => {
+  it("assigns shared thread scenarios to Slack", () => {
+    expect(slackQaAdapterFactory.scenarioIds).toEqual([
+      "channel-chat-baseline",
+      "thread-follow-up",
+      "thread-isolation",
+    ]);
+  });
+
   it.each([
     ["telegram", createTelegram],
     ["slack", createSlack],

@@ -947,6 +947,10 @@ workspace config:
   `agents.list[].tools.deny` when policy requires those tools to be denied
 - set insecure `gateway.controlUi.*` toggles to `false`
 - set `gateway.mode=local` when policy denies remote gateway mode
+- set reported channel ingress `groupPolicy` paths to `allowlist` when policy
+  denies open group ingress
+- set reported channel ingress `requireMention` paths to `true` when policy
+  requires group mentions
 - set `logging.redactSensitive=tools` when policy requires sensitive logging
   redaction
 - set `diagnostics.otel.captureContent=false`, or
@@ -962,6 +966,10 @@ Scoped required-deny repairs are skipped when the finding reports inherited
 root `tools.deny`, because adding the required tool to root config would affect
 more than the scoped policy target. Agent-local required-deny repairs can update
 the reported `agents.list[].tools.deny` path.
+
+Scoped channel ingress repairs are skipped when the finding reports inherited
+`channels.defaults.*`, because changing the shared channel default would affect
+more than the scoped policy target.
 
 ```jsonc
 {

@@ -1263,7 +1263,10 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
         : []),
     ]),
   ];
-  const gatewayConfigPatch = collectQaSuiteGatewayConfigPatch(selectedScenarios);
+  const gatewayConfigPatch = collectQaSuiteGatewayConfigPatch(
+    selectedScenarios,
+    params?.adapterOptions?.sutAccountId?.trim() || "sut",
+  );
   const gatewayRuntimeOptions = collectQaSuiteGatewayRuntimeOptions(selectedScenarios);
   const concurrency = normalizeQaSuiteConcurrency(
     params?.concurrency,

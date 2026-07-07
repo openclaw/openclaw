@@ -771,7 +771,6 @@ describe("qa scenario catalog", () => {
       "group-message-tool-unavailable-fallback",
       "qa-channel-reconnect-dedupe",
       "reaction-edit-delete",
-      "thread-follow-up",
       "image-generation-roundtrip",
       "image-understanding-attachment",
       "native-image-generation",
@@ -795,6 +794,28 @@ describe("qa scenario catalog", () => {
         | undefined;
       expect(config?.requiredChannelDriver, scenarioId).toBe("qa-channel");
     }
+  });
+
+  it("routes canonical thread relation flows through Crabline Matrix", () => {
+    for (const scenarioId of ["thread-follow-up", "thread-isolation"]) {
+      const scenario = readQaScenarioById(scenarioId);
+      const config = readQaScenarioExecutionConfig(scenarioId) as
+        | { requiredChannelDriver?: string }
+        | undefined;
+
+      expect(scenario.execution.channel, scenarioId).toBe("matrix");
+      expect(config?.requiredChannelDriver, scenarioId).toBeUndefined();
+    }
+  });
+
+  it("keeps Matrix subagent thread spawn explicitly selectable", () => {
+    const scenario = readQaScenarioById("subagent-thread-spawn");
+    const config = readQaScenarioExecutionConfig("subagent-thread-spawn") as
+      | { requiredChannelDriver?: string }
+      | undefined;
+
+    expect(scenario.execution.channel).toBe("matrix");
+    expect(config?.requiredChannelDriver).toBe("live");
   });
 
   it("routes native command session targeting through Crabline Telegram", () => {

@@ -583,7 +583,9 @@ describe("qa cli runtime", () => {
 
     const suiteArgs = mockFirstObjectArg(runQaSuite);
     expect(suiteArgs.channelDriver).toBe("crabline");
-    expect(suiteArgs.scenarioIds).toEqual(expect.arrayContaining(["dm-chat-baseline"]));
+    expect(suiteArgs.scenarioIds).toEqual(
+      expect.arrayContaining(["dm-chat-baseline", "thread-follow-up", "thread-isolation"]),
+    );
     expect(suiteArgs.scenarioIds).not.toEqual(
       expect.arrayContaining([
         "instruction-followthrough-repo-contract",
@@ -592,7 +594,6 @@ describe("qa cli runtime", () => {
         "group-message-tool-unavailable-fallback",
         "qa-channel-reconnect-dedupe",
         "reaction-edit-delete",
-        "thread-follow-up",
         "claude-cli-provider-capabilities",
         "claude-cli-provider-capabilities-subscription",
         "image-generation-roundtrip",
