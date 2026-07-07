@@ -413,4 +413,20 @@ describe("respawnGatewayProcessForUpdate", () => {
     expect(result.mode).toBe("failed");
     expect(result.detail).toContain("spawn failed");
   });
+
+  it("attaches an error listener to the detached child before unref to prevent crashes", () => {
+    clearSupervisorHints();
+    setPlatform("linux");
+    process.execArgv = [];
+    process.argv = ["/usr/local/bin/node", "/app/dist/index.js", "gateway", "run"];
+
+    const on = vi.fn();
+    const unref = vi.fn();
+    spawnMock.mockReturnValue({ pid: 9191, on, unref, kill: vi.fn() });
+
+    const result = respawnGatewayProcessForUpdate();
+
+    expect(result.mode).toBe("spawned");
+    expect(on).toHaveBeenCalledWith("error", expect.any(Function));
+  });
 });

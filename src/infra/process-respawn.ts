@@ -53,6 +53,7 @@ function spawnDetachedGatewayProcess(opts: GatewayRespawnOptions = {}): {
     detached: true,
     stdio: "inherit",
   });
+  child.on("error", () => {});
   child.unref();
   return { child, pid: child.pid ?? undefined };
 }
