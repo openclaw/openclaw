@@ -428,6 +428,23 @@ describe("secret ref resolver", () => {
     );
   });
 
+  itPosix("rejects exec refs when missing response id is inherited", async () => {
+    await expect(
+      resolveSecretRefValue(
+        { source: "exec", provider: "execmain", id: "toString" },
+        {
+          config: {
+            secrets: {
+              providers: {
+                execmain: createExecProviderConfig(execMissingIdScriptPath),
+              },
+            },
+          },
+        },
+      ),
+    ).rejects.toThrow('response missing id "toString"');
+  });
+
   itPosix("rejects exec refs with invalid JSON when jsonOnly is true", async () => {
     await expect(resolveExecSecret(execInvalidJsonScriptPath, { jsonOnly: true })).rejects.toThrow(
       "returned invalid JSON",
