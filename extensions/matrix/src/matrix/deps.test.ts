@@ -1,7 +1,9 @@
 // Matrix tests cover deps plugin behavior.
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import {
   ensureMatrixCryptoRuntime,
@@ -184,6 +186,40 @@ describe("runFixedCommandWithTimeout", () => {
     expect(Buffer.byteLength(result.stderr, "utf8")).toBe(MATRIX_COMMAND_OUTPUT_TAIL_BYTES);
     expect(result.stdout).toBe("a".repeat(MATRIX_COMMAND_OUTPUT_TAIL_BYTES));
     expect(result.stderr).toBe("b".repeat(MATRIX_COMMAND_OUTPUT_TAIL_BYTES));
+  });
+
+  it("fails cleanly when bootstrap command stdio streams error", async () => {
+    for (const streamName of ["stdout", "stderr"] as const) {
+      const proc = new EventEmitter() as EventEmitter & {
+        stdout: PassThrough;
+        stderr: PassThrough;
+        exitCode: number | null;
+        kill: ReturnType<typeof vi.fn>;
+      };
+      proc.stdout = new PassThrough();
+      proc.stderr = new PassThrough();
+      proc.exitCode = null;
+      proc.kill = vi.fn(() => {
+        proc.exitCode = 143;
+        return true;
+      });
+      const spawnMock = vi.fn(() => proc);
+
+      const resultPromise = runFixedCommandWithTimeout({
+        argv: ["matrix-bootstrap"],
+        cwd: process.cwd(),
+        timeoutMs: 10_000,
+        spawn: spawnMock,
+      });
+
+      expect(() => proc[streamName].emit("error", new Error("EPIPE"))).not.toThrow();
+      await expect(resultPromise).resolves.toStrictEqual({
+        code: 1,
+        stdout: "",
+        stderr: `${streamName} stream failed: EPIPE`,
+      });
+      expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
+    }
   });
 });
 

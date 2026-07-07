@@ -49,6 +49,30 @@ type CommandResult = {
   stderr: string;
 };
 
+type CommandReadable = {
+  on(event: "data", listener: (chunk: Buffer | string) => void): unknown;
+  on(event: "error", listener: (error: Error) => void): unknown;
+};
+
+type CommandProcess = {
+  stdout?: CommandReadable | null;
+  stderr?: CommandReadable | null;
+  exitCode: number | null;
+  kill(signal?: NodeJS.Signals): boolean;
+  on(event: "error", listener: (error: Error) => void): unknown;
+  on(event: "close", listener: (code: number | null) => void): unknown;
+};
+
+type CommandSpawnFn = (
+  command: string,
+  args: string[],
+  options: {
+    cwd: string;
+    env: NodeJS.ProcessEnv;
+    stdio: ["ignore", "pipe", "pipe"];
+  },
+) => CommandProcess;
+
 let defaultMatrixCryptoRuntimeEnsurePromise: Promise<void> | null = null;
 
 function appendBoundedOutputTail(current: string, chunk: Buffer | string): string {
@@ -77,6 +101,7 @@ export async function runFixedCommandWithTimeout(params: {
   cwd: string;
   timeoutMs: number;
   env?: NodeJS.ProcessEnv;
+  spawn?: CommandSpawnFn;
 }): Promise<CommandResult> {
   return await new Promise((resolve) => {
     const [command, ...args] = params.argv;
@@ -89,7 +114,11 @@ export async function runFixedCommandWithTimeout(params: {
       return;
     }
 
-    const proc = spawn(command, args, {
+    const spawnFn: CommandSpawnFn =
+      params.spawn ??
+      ((spawnCommand, spawnArgs, spawnOptions) =>
+        spawn(spawnCommand, spawnArgs, spawnOptions) as unknown as CommandProcess);
+    const proc = spawnFn(command, args, {
       cwd: params.cwd,
       env: { ...process.env, ...params.env },
       stdio: ["ignore", "pipe", "pipe"],
@@ -124,6 +153,19 @@ export async function runFixedCommandWithTimeout(params: {
     proc.stderr?.on("data", (chunk: Buffer | string) => {
       stderr = appendBoundedOutputTail(stderr, chunk);
     });
+    const failReadableStream = (streamName: "stdout" | "stderr") => (error: Error) => {
+      if (proc.exitCode === null) {
+        proc.kill("SIGTERM");
+      }
+      const message = `${streamName} stream failed: ${formatErrorMessage(error)}`;
+      finalize({
+        code: 1,
+        stdout,
+        stderr: stderr ? appendBoundedOutputTail(stderr, `\n${message}`) : message,
+      });
+    };
+    proc.stdout?.on("error", failReadableStream("stdout"));
+    proc.stderr?.on("error", failReadableStream("stderr"));
 
     timer = setTimeout(() => {
       proc.kill("SIGKILL");
