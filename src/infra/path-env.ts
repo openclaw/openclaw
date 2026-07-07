@@ -72,6 +72,10 @@ function isSameOrChildPath(candidate: string, parent: string): boolean {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+function isFilesystemRoot(dirPath: string): boolean {
+  return path.dirname(dirPath) === dirPath;
+}
+
 function normalizeTrustedPackageManagerRoot(params: {
   value: string | undefined;
   cwd: string | undefined;
@@ -91,7 +95,7 @@ function normalizeTrustedPackageManagerRoot(params: {
 
   const cwd = path.resolve(params.cwd);
   const homeDir = path.resolve(params.homeDir);
-  if (cwd === homeDir) {
+  if (cwd === homeDir || isFilesystemRoot(cwd)) {
     return normalized;
   }
   if (isSameOrChildPath(normalized, cwd)) {
@@ -104,6 +108,7 @@ function normalizeTrustedPackageManagerRoot(params: {
   if (
     realCwd &&
     realCwd !== realHome &&
+    !isFilesystemRoot(realCwd) &&
     realCandidate &&
     isSameOrChildPath(realCandidate, realCwd)
   ) {

@@ -356,6 +356,30 @@ describe("ensureOpenClawCliOnPath", () => {
     expectPathsAfter(updated, "/usr/bin", [pnpmHome, pnpmHomeBin, npmPrefixBin]);
   });
 
+  it("keeps package-manager env roots when cwd is the filesystem root", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-package-manager-root-cwd");
+    const pnpmHome = path.join(tmp, "pnpm-home");
+    const pnpmHomeBin = path.join(pnpmHome, "bin");
+    const npmPrefix = path.join(tmp, "npm-prefix");
+    const npmPrefixBin = path.join(npmPrefix, "bin");
+    for (const dir of [pnpmHome, pnpmHomeBin, npmPrefix, npmPrefixBin]) {
+      setDir(dir);
+    }
+
+    resetBootstrapEnv("/usr/bin:/bin");
+    process.env.PNPM_HOME = pnpmHome;
+    process.env.NPM_CONFIG_PREFIX = npmPrefix;
+
+    const updated = bootstrapPath({
+      execPath: appCli,
+      cwd: path.parse(tmp).root,
+      homeDir: tmp,
+      platform: "linux",
+    });
+
+    expectPathsAfter(updated, "/usr/bin", [pnpmHome, pnpmHomeBin, npmPrefixBin]);
+  });
+
   it("ignores relative package-manager env roots", () => {
     const { tmp, appCli } = setupAppCliRoot("case-package-manager-relative");
     resetBootstrapEnv("/usr/bin:/bin");
