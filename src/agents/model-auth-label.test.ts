@@ -29,6 +29,7 @@ vi.mock("./model-auth.js", () => ({
   resolveProviderEntryApiKeyProfileReference: mocks.resolveProviderEntryApiKeyProfileReference,
   resolveUsableCustomProviderApiKey: mocks.resolveUsableCustomProviderApiKey,
   resolveEnvApiKey: mocks.resolveEnvApiKey,
+  resolveProviderConfig: (cfg: any, provider: string) => cfg?.models?.providers?.[provider],
 }));
 
 vi.mock("./cli-credentials.js", () => ({

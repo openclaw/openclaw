@@ -293,7 +293,7 @@ export function resolveUsableCustomProviderApiKey(params: {
       return null;
     }
     const envValue = normalizeOptionalSecretInput((params.env ?? process.env)[envVarName]);
-    if (!envValue) {
+    if (!envValue || isNonSecretApiKeyMarker(envValue)) {
       return null;
     }
     const applied = new Set(getShellEnvAppliedKeys());
@@ -1006,6 +1006,43 @@ function resolveScopedAuthProfileStore(params: {
   });
 }
 
+async function resolveExplicitModelsJsonApiKey(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+  store: AuthProfileStore,
+  agentDir?: string,
+): Promise<ResolvedProviderAuth | null> {
+  const providerEntryBinding = await resolveProviderEntryApiKeyBinding({
+    cfg,
+    provider,
+    store,
+    agentDir,
+  });
+  if (providerEntryBinding.kind === "literal") {
+    return {
+      apiKey: providerEntryBinding.apiKey,
+      source: providerEntryBinding.source,
+      mode: "api-key",
+    };
+  }
+  const explicitProviderConfig = resolveProviderConfig(cfg, provider);
+  if (explicitProviderConfig && coerceSecretRef(explicitProviderConfig.apiKey)) {
+    const runtimeCustomKey = resolveManagedSecretRefRuntimeProviderAuth({ cfg, provider });
+    if (runtimeCustomKey) {
+      return runtimeCustomKey;
+    }
+    const customKey = resolveUsableCustomProviderApiKey({ cfg, provider });
+    if (customKey) {
+      return {
+        apiKey: customKey.apiKey,
+        source: customKey.source,
+        mode: "api-key",
+      };
+    }
+  }
+  return null;
+}
+
 /** Resolves the credential that should be used for one provider request. */
 export async function resolveApiKeyForProvider(params: {
   provider: string;
@@ -1025,6 +1062,26 @@ export async function resolveApiKeyForProvider(params: {
   const { provider, cfg, profileId, preferredProfile } = params;
   const agentDir = params.agentDir?.trim() || (cfg ? resolveDefaultAgentDir(cfg) : undefined);
   let scopedStore: AuthProfileStore | undefined = params.store;
+
+  scopedStore ??= resolveScopedAuthProfileStore({
+    agentDir,
+    cfg,
+    provider,
+    profileId,
+    preferredProfile,
+  });
+
+  if (!params.lockedProfile) {
+    const resolvedExplicit = await resolveExplicitModelsJsonApiKey(
+      cfg,
+      provider,
+      scopedStore,
+      agentDir,
+    );
+    if (resolvedExplicit) {
+      return resolvedExplicit;
+    }
+  }
 
   if (profileId) {
     const awsSdkProfileAuth = resolveConfiguredAwsSdkProfileAuth({ cfg, provider, profileId });
@@ -1163,34 +1220,21 @@ export async function resolveApiKeyForProvider(params: {
     provider,
     preferredProfile,
   });
+  const resolvedExplicit = await resolveExplicitModelsJsonApiKey(
+    cfg,
+    provider,
+    scopedStore,
+    agentDir,
+  );
+  if (resolvedExplicit) {
+    return resolvedExplicit;
+  }
   const providerEntryBinding = await resolveProviderEntryApiKeyBinding({
     cfg,
     provider,
     store: scopedStore,
     agentDir,
   });
-  if (providerEntryBinding.kind === "literal") {
-    return {
-      apiKey: providerEntryBinding.apiKey,
-      source: providerEntryBinding.source,
-      mode: "api-key",
-    };
-  }
-  const explicitProviderConfig = resolveProviderConfig(cfg, provider);
-  if (explicitProviderConfig && coerceSecretRef(explicitProviderConfig.apiKey)) {
-    const runtimeCustomKey = resolveManagedSecretRefRuntimeProviderAuth({ cfg, provider });
-    if (runtimeCustomKey) {
-      return runtimeCustomKey;
-    }
-    const customKey = resolveUsableCustomProviderApiKey({ cfg, provider });
-    if (customKey) {
-      return {
-        apiKey: customKey.apiKey,
-        source: customKey.source,
-        mode: "api-key",
-      };
-    }
-  }
   if (providerEntryBinding.kind === "profile-resolved") {
     assertAuthModeAllowedForModel({
       provider,

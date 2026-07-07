@@ -149,8 +149,18 @@ export function resolveProviderAuthOverview(params: {
   });
   const customKey = getCustomProviderApiKey(cfg, provider);
   const usableCustomKey = resolveUsableCustomProviderApiKey({ cfg, provider });
+  const customProviderConfig = cfg.models?.providers?.[provider];
+  const isLiteral =
+    typeof customProviderConfig?.apiKey === "string" &&
+    !isNonSecretApiKeyMarker(customProviderConfig.apiKey);
 
   const effective: ProviderAuthOverview["effective"] = (() => {
+    if (isLiteral) {
+      return { kind: "models.json", detail: formatMarkerOrSecret(customProviderConfig.apiKey) };
+    }
+    if (usableCustomKey) {
+      return { kind: "models.json", detail: formatMarkerOrSecret(usableCustomKey.apiKey) };
+    }
     if (profiles.length > 0) {
       // Profiles win over env/config markers because runtime auth selection uses
       // the profile store before provider-wide fallback material.
@@ -174,9 +184,6 @@ export function resolveProviderAuthOverview(params: {
         kind: "env",
         detail: isOAuthEnv ? "OAuth (env)" : maskApiKey(envKey.apiKey),
       };
-    }
-    if (usableCustomKey) {
-      return { kind: "models.json", detail: formatMarkerOrSecret(usableCustomKey.apiKey) };
     }
     if (params.syntheticAuth) {
       return { kind: "synthetic", detail: params.syntheticAuth.source };
