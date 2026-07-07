@@ -1156,6 +1156,15 @@ async function agentCommandInternal(
           const transcriptResult = await attemptExecutionRuntime.persistAcpTurnTranscript({
             body,
             transcriptBody,
+            ...(opts.suppressPromptPersistence !== true && opts.transcriptMedia?.length
+              ? {
+                  userInput: {
+                    text: transcriptBody,
+                    media: opts.transcriptMedia,
+                    mediaOnlyText: "[User sent media without caption]",
+                  },
+                }
+              : {}),
             finalText: finalTextRaw,
             sessionId,
             sessionKey,
@@ -1763,12 +1772,25 @@ async function agentCommandInternal(
         lifecycleEnded: false,
       };
       const attemptLifecycleCallbacks = createAgentAttemptLifecycleCallbacks(attemptLifecycleState);
+      const transcriptMedia = opts.transcriptMedia ?? [];
+      const hasTranscriptMedia = transcriptMedia.length > 0;
       const suppressUserTurnPersistence =
-        opts.suppressPromptPersistence === true || opts.transcriptMessage === "";
+        opts.suppressPromptPersistence === true ||
+        (opts.transcriptMessage === "" && !hasTranscriptMedia);
       const recorderTranscriptText = transcriptBody || undefined;
       const userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
-        ...(!suppressUserTurnPersistence && recorderTranscriptText
-          ? { input: { text: recorderTranscriptText } }
+        ...(!suppressUserTurnPersistence && (recorderTranscriptText || hasTranscriptMedia)
+          ? {
+              input: {
+                text: recorderTranscriptText,
+                ...(hasTranscriptMedia
+                  ? {
+                      media: transcriptMedia,
+                      mediaOnlyText: "[User sent media without caption]",
+                    }
+                  : {}),
+              },
+            }
           : {}),
         target: {
           transcriptPath: attemptSessionFile,
