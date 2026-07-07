@@ -503,6 +503,38 @@ describe("web_fetch extraction fallbacks", () => {
     await rm(details.fullOutputPath, { force: true });
   });
 
+  it("does not split an emoji at the web_fetch spill file cap", async () => {
+    const prefix = "x".repeat(WEB_FETCH_SPILL_MAX_CHARS - 1);
+    const fullText = `${prefix}${String.fromCodePoint(0x1f600)}tail`;
+    installPlainTextFetch(fullText);
+
+    const tool = createFetchTool({
+      firecrawl: { enabled: false },
+      maxChars: 500,
+      maxResponseBytes: WEB_FETCH_SPILL_MAX_CHARS + 1_000,
+    });
+
+    const result = await tool?.execute?.("call", { url: "https://example.com/spill-utf16" });
+    const details = result?.details as {
+      text?: string;
+      fullOutputPath?: string;
+      spilledChars?: number;
+      spillTruncated?: boolean;
+    };
+    if (!details.fullOutputPath) {
+      throw new Error("expected fullOutputPath");
+    }
+
+    expect(details.spilledChars).toBe(WEB_FETCH_SPILL_MAX_CHARS - 1);
+    expect(details.text).toContain(`Spilled first ${WEB_FETCH_SPILL_MAX_CHARS - 1} chars.`);
+    expect(details.spillTruncated).toBe(true);
+    const spilledText = await readFile(details.fullOutputPath, "utf8");
+    expect(spilledText).toContain(prefix);
+    expect(spilledText).not.toContain(String.fromCodePoint(0x1f600));
+    expect(spilledText).not.toContain(String.fromCharCode(0xd83d));
+    await rm(details.fullOutputPath, { force: true });
+  });
+
   it("marks byte-capped web_fetch spills as partial", async () => {
     const fullText = "z".repeat(40_000);
     installMockFetch((input: RequestInfo | URL) => {

@@ -1,10 +1,11 @@
 // Creates backup archives while filtering volatile runtime state.
 import { randomUUID } from "node:crypto";
-import { constants as fsConstants, type Stats } from "node:fs";
+import { constants as fsConstants, createWriteStream, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { pipeline } from "node:stream/promises";
 import { resolveDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
 import {
@@ -170,30 +171,62 @@ function isTarEofRaceError(err: unknown): boolean {
 
 export type BackupTarRetryLogger = (message: string) => void;
 
+function resolveBackupTarAttemptTempPath(tempArchivePath: string, attempt: number): string {
+  return attempt === 1 ? tempArchivePath : `${tempArchivePath}.retry-${attempt}`;
+}
+
+function resolveBackupTarAttemptTempPaths(tempArchivePath: string): string[] {
+  return Array.from({ length: BACKUP_TAR_MAX_ATTEMPTS }, (_value, index) =>
+    resolveBackupTarAttemptTempPath(tempArchivePath, index + 1),
+  );
+}
+
+async function removeBackupTempArchiveBestEffort(tempArchivePath: string): Promise<void> {
+  await fs.rm(tempArchivePath, { force: true }).catch(() => undefined);
+}
+
+async function writeArchiveStreamToFile(params: {
+  archivePath: string;
+  archiveStream: AsyncIterable<Uint8Array> | NodeJS.ReadableStream;
+}): Promise<void> {
+  // Own both stream lifecycles so a tar read error closes the output handle
+  // before retry cleanup touches the partial archive.
+  await pipeline(params.archiveStream, createWriteStream(params.archivePath));
+}
+
 async function writeTarArchiveWithRetry(params: {
   tempArchivePath: string;
-  runTar: () => Promise<void>;
+  runTar: (tempArchivePath: string) => Promise<void>;
   log?: BackupTarRetryLogger;
   sleepMs?: (ms: number) => Promise<void>;
-}): Promise<void> {
+}): Promise<string> {
   const sleepFn = params.sleepMs ?? sleep;
   let lastErr: unknown;
+  const attemptTempArchivePaths: string[] = [];
   for (let attempt = 1; attempt <= BACKUP_TAR_MAX_ATTEMPTS; attempt += 1) {
+    const attemptTempArchivePath = resolveBackupTarAttemptTempPath(params.tempArchivePath, attempt);
+    attemptTempArchivePaths.push(attemptTempArchivePath);
     try {
-      await params.runTar();
-      return;
+      await params.runTar(attemptTempArchivePath);
+      for (const staleTempArchivePath of attemptTempArchivePaths.slice(0, -1)) {
+        await removeBackupTempArchiveBestEffort(staleTempArchivePath);
+      }
+      return attemptTempArchivePath;
     } catch (err) {
       lastErr = err;
       if (!isTarEofRaceError(err) || attempt === BACKUP_TAR_MAX_ATTEMPTS) {
+        for (const staleTempArchivePath of attemptTempArchivePaths) {
+          await removeBackupTempArchiveBestEffort(staleTempArchivePath);
+        }
         break;
       }
       try {
-        await fs.rm(params.tempArchivePath, { force: true });
+        await fs.rm(attemptTempArchivePath, { force: true });
       } catch (cleanupErr) {
         const code = (cleanupErr as NodeJS.ErrnoException).code;
         if (code && code !== "ENOENT") {
           params.log?.(
-            `Backup archiver could not remove temp archive ${params.tempArchivePath} between retries: ${code}. Continuing.`,
+            `Backup archiver could not remove temp archive ${attemptTempArchivePath} between retries: ${code}. Continuing.`,
           );
         }
       }
@@ -216,6 +249,7 @@ async function writeTarArchiveWithRetry(params: {
 }
 
 export const testApi = {
+  writeArchiveStreamToFile,
   writeTarArchiveWithRetry,
   isTarEofRaceError,
   createBackupVolatileStatCache,
@@ -778,6 +812,7 @@ export async function createBackupArchive(
   const tempDir = await fs.mkdtemp(path.join(tempRoot, "openclaw-backup-"));
   const manifestPath = path.join(tempDir, "manifest.json");
   const tempArchivePath = buildTempArchivePath(outputPath);
+  const tempArchiveCleanupPaths = resolveBackupTarAttemptTempPaths(tempArchivePath);
   const stateAsset = result.assets.find((asset) => asset.kind === "state");
   try {
     const stateSqliteBackup = stateAsset
@@ -855,39 +890,41 @@ export async function createBackupArchive(
       }
       return true;
     };
-    await writeTarArchiveWithRetry({
+    const completedTempArchivePath = await writeTarArchiveWithRetry({
       tempArchivePath,
       log: opts.log,
-      runTar: async () => {
+      runTar: async (attemptTempArchivePath) => {
         // tar.c re-walks the tree (and thus re-invokes tarFilter) on every
         // attempt, so reset the closure counter here or retries would report
         // cumulative skip counts across attempts instead of the final one.
         skippedVolatileCount = 0;
         unexpectedSqliteSourcePaths.length = 0;
-        await tar.c(
-          {
-            file: tempArchivePath,
-            gzip: true,
-            portable: true,
-            preservePaths: true,
-            linkCache: new BackupLinkCache(),
-            statCache: createBackupVolatileStatCache(volatilePlan),
-            filter: tarFilter,
-            onWriteEntry: (entry) => {
-              entry.path = remapArchiveEntryPath({
-                entryPath: entry.path,
-                manifestPath,
-                archiveRoot,
-                sourcePathRemaps,
-              });
+        await writeArchiveStreamToFile({
+          archivePath: attemptTempArchivePath,
+          archiveStream: tar.c(
+            {
+              gzip: true,
+              portable: true,
+              preservePaths: true,
+              linkCache: new BackupLinkCache(),
+              statCache: createBackupVolatileStatCache(volatilePlan),
+              filter: tarFilter,
+              onWriteEntry: (entry) => {
+                entry.path = remapArchiveEntryPath({
+                  entryPath: entry.path,
+                  manifestPath,
+                  archiveRoot,
+                  sourcePathRemaps,
+                });
+              },
             },
-          },
-          [
-            manifestPath,
-            ...stateSqliteBackup.snapshots.map((snapshot) => snapshot.sourcePath),
-            ...result.assets.map((asset) => asset.sourcePath),
-          ],
-        );
+            [
+              manifestPath,
+              ...stateSqliteBackup.snapshots.map((snapshot) => snapshot.sourcePath),
+              ...result.assets.map((asset) => asset.sourcePath),
+            ],
+          ),
+        });
         const unexpectedSqliteSourcePath = unexpectedSqliteSourcePaths[0];
         if (unexpectedSqliteSourcePath) {
           throw new Error(
@@ -904,9 +941,11 @@ export async function createBackupArchive(
         } (live sessions, cron logs, queues, sockets, pid/tmp).`,
       );
     }
-    await publishTempArchive({ tempArchivePath, outputPath });
+    await publishTempArchive({ tempArchivePath: completedTempArchivePath, outputPath });
   } finally {
-    await fs.rm(tempArchivePath, { force: true }).catch(() => undefined);
+    for (const cleanupPath of tempArchiveCleanupPaths) {
+      await removeBackupTempArchiveBestEffort(cleanupPath);
+    }
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
   }
 
