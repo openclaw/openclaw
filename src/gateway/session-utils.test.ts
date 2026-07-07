@@ -3,20 +3,25 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadSessionStore, type SessionEntry } from "../config/sessions.js";
 import { writeSessionStoreForTest } from "../config/sessions/test-helpers.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  getActivePluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
   canonicalizeSpawnedByForAgent,
   buildGatewaySessionRow,
   capArrayByJsonBytes,
   classifySessionKey,
+  deriveSessionUnread,
   deriveSessionTitle,
   getSessionDefaults,
   listAgentsForGateway,
@@ -100,8 +105,10 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
 }
 
 describe("gateway session utils", () => {
+  const emptyPluginRegistry = createEmptyPluginRegistry();
+
   beforeAll(() => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
+    setActivePluginRegistry(emptyPluginRegistry);
     listSessionsFromStore({
       cfg: createModelDefaultsConfig({ primary: "anthropic/claude-sonnet-4.6" }),
       storePath: "",
@@ -116,17 +123,48 @@ describe("gateway session utils", () => {
       opts: {},
     });
     resetConfigRuntimeState();
-    resetPluginRuntimeStateForTest();
   });
 
   afterEach(() => {
     resetConfigRuntimeState();
+    if (getActivePluginRegistry() !== emptyPluginRegistry) {
+      setActivePluginRegistry(emptyPluginRegistry);
+    }
+  });
+
+  afterAll(() => {
     resetPluginRuntimeStateForTest();
   });
 
   test("capArrayByJsonBytes trims from the front", () => {
     const res = capArrayByJsonBytes(["a", "b", "c"], 10);
     expect(res.items).toEqual(["b", "c"]);
+  });
+
+  test.each([
+    { name: "never read", entry: {}, expected: false },
+    {
+      name: "interaction after read",
+      entry: { lastReadAt: 10, lastInteractionAt: 11 },
+      expected: true,
+    },
+    {
+      name: "read after interaction",
+      entry: { lastReadAt: 11, lastInteractionAt: 10 },
+      expected: false,
+    },
+    {
+      name: "activity after read",
+      entry: { lastReadAt: 10, lastActivityAt: 11 },
+      expected: true,
+    },
+    {
+      name: "explicitly marked unread",
+      entry: { lastReadAt: 20, lastInteractionAt: 10, lastActivityAt: 10, markedUnreadAt: 1 },
+      expected: true,
+    },
+  ])("derives unread state for $name", ({ entry, expected }) => {
+    expect(deriveSessionUnread(entry)).toBe(expected);
   });
 
   test("session lists apply a bounded default and expose truncation metadata", async () => {
@@ -1644,6 +1682,32 @@ describe("gateway session utils", () => {
       id: "codex",
       source: "implicit",
     });
+  });
+
+  test("listAgentsForGateway reports whether each workspace is a git checkout", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-workspace-git-"));
+    const gitWorkspace = path.join(root, "git");
+    const plainWorkspace = path.join(root, "plain");
+    fs.mkdirSync(path.join(gitWorkspace, ".git"), { recursive: true });
+    fs.mkdirSync(plainWorkspace, { recursive: true });
+    const cfg = {
+      agents: {
+        list: [
+          { id: "main", default: true, workspace: gitWorkspace },
+          { id: "plain", workspace: plainWorkspace },
+        ],
+      },
+    } as OpenClawConfig;
+    try {
+      const result = listAgentsForGateway(cfg);
+
+      expect(result.agents.map(({ id, workspaceGit }) => ({ id, workspaceGit }))).toEqual([
+        { id: "main", workspaceGit: true },
+        { id: "plain", workspaceGit: false },
+      ]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("listAgentsForGateway reports explicit plugin runtime metadata", () => {

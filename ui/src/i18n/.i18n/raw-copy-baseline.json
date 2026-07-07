@@ -12,13 +12,6 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/components/app-topbar.ts",
-      "text": "⌘K"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
       "path": "ui/src/components/command-palette.ts",
       "text": "esc"
     },
@@ -1852,13 +1845,6 @@
     {
       "count": 1,
       "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "Talk settings"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
       "name": "title",
       "path": "ui/src/pages/chat/components/chat-composer.ts",
       "text": "Cancel reply"
@@ -1963,10 +1949,31 @@
     },
     {
       "count": 1,
-      "kind": "html-text",
-      "name": "text",
+      "kind": "object-property",
+      "name": "label",
       "path": "ui/src/pages/chat/components/chat-composer.ts",
-      "text": "Talk settings"
+      "text": "Clear goal"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/chat/components/chat-composer.ts",
+      "text": "Edit goal"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/chat/components/chat-composer.ts",
+      "text": "Pause goal"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/chat/components/chat-composer.ts",
+      "text": "Resume goal"
     },
     {
       "count": 1,
@@ -2026,17 +2033,10 @@
     },
     {
       "count": 1,
-      "kind": "html-text",
-      "name": "text",
+      "kind": "html-attribute",
+      "name": "aria-label",
       "path": "ui/src/pages/chat/components/chat-model-controls.ts",
-      "text": "Faster"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-model-controls.ts",
-      "text": "Model"
+      "text": "Speed"
     },
     {
       "count": 1,
@@ -2050,35 +2050,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-model-controls.ts",
-      "text": "Smarter"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-model-controls.ts",
       "text": "Speed"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "aria-label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Talk options"
-    },
-    {
-      "count": 1,
-      "kind": "html-attribute",
-      "name": "placeholder",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Auto"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Model"
     },
     {
       "count": 1,
@@ -2116,32 +2088,11 @@
       "text": "Coral"
     },
     {
-      "count": 2,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Default"
-    },
-    {
       "count": 1,
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
       "text": "Echo"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "High"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Low"
     },
     {
       "count": 1,
@@ -2155,21 +2106,7 @@
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Medium"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
       "text": "Sage"
-    },
-    {
-      "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Sensitivity"
     },
     {
       "count": 1,
@@ -2187,17 +2124,52 @@
     },
     {
       "count": 1,
-      "kind": "object-property",
-      "name": "label",
-      "path": "ui/src/pages/chat/components/chat-realtime-controls.ts",
-      "text": "Voice"
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-sidebar.ts",
+      "text": "Close sidebar"
     },
     {
       "count": 1,
       "kind": "html-attribute",
       "name": "aria-label",
       "path": "ui/src/pages/chat/components/chat-sidebar.ts",
-      "text": "Close sidebar"
+      "text": "Copy path"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-sidebar.ts",
+      "text": "Next match"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-sidebar.ts",
+      "text": "Previous match"
+    },
+    {
+      "count": 2,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-sidebar.ts",
+      "text": "Search in file"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/pages/chat/components/chat-sidebar.ts",
+      "text": "Show in Files"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "placeholder",
+      "path": "ui/src/pages/chat/components/chat-sidebar.ts",
+      "text": "Search"
     },
     {
       "count": 1,
@@ -2228,7 +2200,7 @@
       "text": "Sanitized rich-text preview for quick reading."
     },
     {
-      "count": 4,
+      "count": 5,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/chat/components/chat-sidebar.ts",
@@ -3591,13 +3563,6 @@
       "name": "text",
       "path": "ui/src/pages/cron/view.ts",
       "text": "Optional routing key for job delivery and wake routing."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/pages/cron/view.ts",
-      "text": "Run if due"
     },
     {
       "count": 1,

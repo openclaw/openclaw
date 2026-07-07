@@ -260,13 +260,13 @@ struct LowCoverageHelperTests {
 
         // pid 10: our live tunnel (parent alive). Disk-only records from a crashed
         // sibling instance: pid 20 orphaned, pid 30 already gone.
-        let memory = [record(pid: 10, port: 18790, timestamp: 300)]
+        let own = [record(pid: 10, port: 18790, timestamp: 300)]
         let disk = [
             record(pid: 20, port: 18789, timestamp: 100),
             record(pid: 30, port: 18791, timestamp: 200),
-            record(pid: 10, port: 1, timestamp: 1), // superseded by the in-memory record
+            record(pid: 10, port: 1, timestamp: 1), // superseded by the own record
         ]
-        let plan = PortGuardian.planTunnelReap(memory: memory, disk: disk, processInfo: { pid in
+        let plan = PortGuardian.planTunnelReap(own: own, disk: disk, processInfo: { pid in
             switch pid {
             case 10: .init(parentPid: 987, startedAt: 299, fullCommand: tunnel(port: 18790))
             case 20: .init(parentPid: 1, startedAt: 99, fullCommand: tunnel(port: 18789))
@@ -276,6 +276,9 @@ struct LowCoverageHelperTests {
         #expect(plan.reap.map(\.pid) == [20])
         #expect(plan.keep.map(\.pid) == [10])
         #expect(plan.keep.first?.port == 18790)
+        // The dead pid 30 is reported as a drop; the shadowed pid-10 disk record is
+        // superseded, not dropped, so a reap cycle cannot delete the fresh record.
+        #expect(plan.drop.map(\.pid) == [30])
     }
 
     @Test func `port guardian classifies a real orphaned tunnel process for reaping`() async throws {

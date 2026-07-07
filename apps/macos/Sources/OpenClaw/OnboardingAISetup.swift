@@ -42,38 +42,10 @@ final class OnboardingAISetupModel {
         case connected
     }
 
-    enum ManualProvider: String, CaseIterable, Identifiable {
-        case anthropic
-        case openai
-        case google
-
-        var id: String {
-            self.rawValue
-        }
-
-        var title: String {
-            switch self {
-            case .anthropic: "Claude (Anthropic)"
-            case .openai: "OpenAI"
-            case .google: "Google Gemini"
-            }
-        }
-
-        var keyHint: String {
-            switch self {
-            case .anthropic: "sk-ant-…"
-            case .openai: "sk-…"
-            case .google: "AIza…"
-            }
-        }
-
-        var consoleName: String {
-            switch self {
-            case .anthropic: "console.anthropic.com"
-            case .openai: "platform.openai.com"
-            case .google: "aistudio.google.com"
-            }
-        }
+    struct ManualProvider: Identifiable, Equatable, Decodable {
+        let id: String
+        let label: String
+        let hint: String?
     }
 
     private(set) var phase: Phase = .idle {
@@ -86,6 +58,9 @@ final class OnboardingAISetupModel {
     }
 
     private(set) var candidates: [Candidate] = []
+    private(set) var manualProviders: [ManualProvider] = []
+    private(set) var providerCatalogLoaded = false
+    private(set) var providerCatalogError: String?
     private(set) var statuses: [String: CandidateStatus] = [:]
     private(set) var selectedKind: String?
     private(set) var connectedModelRef: String?
@@ -94,11 +69,15 @@ final class OnboardingAISetupModel {
     /// Set once every detected candidate failed; opens the manual key form.
     private(set) var exhaustedAutoCandidates = false
 
-    var manualProvider: ManualProvider = .anthropic
+    var manualProviderID = ""
     var manualKey: String = ""
     private(set) var manualTesting = false
     private(set) var manualError: String?
     var showManualEntry = false
+
+    var selectedManualProvider: ManualProvider? {
+        self.manualProviders.first { $0.id == self.manualProviderID }
+    }
 
     var connected: Bool {
         self.phase == .connected
@@ -125,6 +104,7 @@ final class OnboardingAISetupModel {
         }
 
         let candidates: [DetectedCandidate]
+        let manualProviders: [ManualProvider]?
         let workspace: String
         let configuredModel: String?
         let setupComplete: Bool
@@ -148,6 +128,9 @@ final class OnboardingAISetupModel {
         self.attemptToken = UUID()
         self.phase = .idle
         self.candidates = []
+        self.manualProviders = []
+        self.providerCatalogLoaded = false
+        self.providerCatalogError = nil
         self.statuses = [:]
         self.selectedKind = nil
         self.detectError = nil
@@ -162,6 +145,7 @@ final class OnboardingAISetupModel {
         let token = self.attemptToken
         self.phase = .detecting
         self.detectError = nil
+        self.providerCatalogError = nil
         do {
             let data = try await GatewayConnection.shared.request(
                 method: "crestodian.setup.detect",
@@ -170,6 +154,7 @@ final class OnboardingAISetupModel {
                 retryTransportFailures: true)
             guard token == self.attemptToken else { return }
             let result = try JSONDecoder().decode(DetectResult.self, from: data)
+            let manualProviders = result.manualProviders ?? []
             self.candidates = result.candidates.map { detected in
                 Candidate(
                     kind: detected.kind,
@@ -178,6 +163,14 @@ final class OnboardingAISetupModel {
                     modelRef: detected.modelRef,
                     recommended: detected.recommended,
                     credentials: detected.credentials)
+            }
+            self.manualProviders = manualProviders
+            self.providerCatalogLoaded = result.manualProviders != nil
+            if result.manualProviders == nil {
+                self.providerCatalogError = OnboardingAISetupError.providerCatalogUnavailable.localizedDescription
+            }
+            if !manualProviders.contains(where: { $0.id == self.manualProviderID }) {
+                self.manualProviderID = manualProviders.first?.id ?? ""
             }
             for candidate in self.candidates {
                 self.statuses[candidate.kind] = .untried
@@ -188,7 +181,7 @@ final class OnboardingAISetupModel {
                 // stays one click away while the test runs server-side.
                 await self.activate(kind: first.kind)
             } else {
-                self.showManualEntry = true
+                self.showManualEntry = !self.manualProviders.isEmpty
             }
         } catch {
             guard token == self.attemptToken else { return }
@@ -251,14 +244,53 @@ final class OnboardingAISetupModel {
             }
         } catch {
             guard token == self.attemptToken else { return }
+            // Activating a CLI candidate can install a provider plugin (Codex),
+            // and the gateway restarts itself to load it — dropping this RPC's
+            // socket after the server already tested and persisted the model.
+            // A transport error means "outcome unknown", not "failed": re-read
+            // server state before reporting failure.
+            if await self.reconcileActivationAfterTransportDrop(kind: kind, token: token) { return }
+            guard token == self.attemptToken else { return }
             self.statuses[kind] = .failed(message: Self.friendlyTransportError(error.localizedDescription))
             await self.tryNextAfterFailure(of: kind)
         }
     }
 
+    /// After a transport drop during activate, poll `crestodian.setup.detect`
+    /// (the gateway restart takes a few seconds) and count the attempt as
+    /// connected only when the server persisted exactly the model this
+    /// candidate would have written. Returns true when reconciled.
+    private func reconcileActivationAfterTransportDrop(kind: String, token: UUID) async -> Bool {
+        guard let expected = self.candidates.first(where: { $0.kind == kind })?.modelRef else {
+            return false
+        }
+        for delayMs in [2000, 4000, 6000] {
+            try? await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
+            guard token == self.attemptToken else { return false }
+            guard let data = try? await GatewayConnection.shared.request(
+                method: "crestodian.setup.detect",
+                params: [:],
+                timeoutMs: 10000,
+                retryTransportFailures: true)
+            else { continue }
+            guard token == self.attemptToken else { return false }
+            guard let result = try? JSONDecoder().decode(DetectResult.self, from: data) else { return false }
+            if result.setupComplete, result.configuredModel == expected {
+                self.finishConnected(
+                    kind: kind,
+                    result: ActivateResult(ok: true, modelRef: expected, latencyMs: nil, status: nil, error: nil))
+                return true
+            }
+            // The gateway answered and setup is not complete: the activation
+            // genuinely failed before persisting — report the original error.
+            return false
+        }
+        return false
+    }
+
     func submitManualKey() {
         let key = self.manualKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !key.isEmpty, !self.manualTesting else { return }
+        guard let provider = self.selectedManualProvider, !key.isEmpty, !self.manualTesting else { return }
         self.manualError = nil
         self.manualTesting = true
         let token = self.attemptToken
@@ -269,7 +301,7 @@ final class OnboardingAISetupModel {
                     method: "crestodian.setup.activate",
                     params: [
                         "kind": AnyCodable("api-key"),
-                        "provider": AnyCodable(self.manualProvider.rawValue),
+                        "authChoice": AnyCodable(provider.id),
                         "apiKey": AnyCodable(key),
                     ],
                     timeoutMs: 150_000,
@@ -281,7 +313,7 @@ final class OnboardingAISetupModel {
                     self.finishConnected(kind: "api-key", result: result)
                 } else {
                     self.manualError = Self.friendlyFailure(
-                        label: self.manualProvider.title,
+                        label: provider.label,
                         status: result.status,
                         error: result.error)
                 }
@@ -333,13 +365,26 @@ final class OnboardingAISetupModel {
 
     var connectedSummary: String {
         guard let modelRef = self.connectedModelRef else { return "Your AI is connected." }
-        let label = self.candidates.first { $0.kind == self.selectedKind }?.label
+        let label = self.candidates.first { $0.kind == self.selectedKind }?.label ??
+            (self.selectedKind == "api-key" ? self.selectedManualProvider?.label : nil)
         let via = label.map { " via \($0)" } ?? ""
         if let latency = self.connectedLatencyMs {
             let seconds = Double(latency) / 1000
             return "\(modelRef)\(via) — replied in \(String(format: "%.1f", seconds))s"
         }
         return "\(modelRef)\(via)"
+    }
+}
+
+private enum OnboardingAISetupError: LocalizedError {
+    case providerCatalogUnavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .providerCatalogUnavailable:
+            "The Gateway is running an older OpenClaw version that doesn’t provide the " +
+                "supported provider list. Update OpenClaw on the gateway, then try again."
+        }
     }
 }
 
@@ -409,10 +454,21 @@ struct OnboardingAISetupView: View {
             }
         }
 
+        if let providerCatalogError = self.model.providerCatalogError {
+            OnboardingErrorCard(
+                title: "Couldn’t load the full provider list",
+                message: providerCatalogError,
+                docsSlug: "start/onboarding",
+                retryTitle: "Try again")
+            {
+                self.model.retryFromScratch()
+            }
+        }
+
         if self.model.exhaustedAutoCandidates, !self.model.connected {
             OnboardingErrorCard(
                 title: "None of the found options worked",
-                message: "The details are listed on each option above. You can fix the login and retry, or connect with an API key below.",
+                message: "The details are listed on each option above. You can fix the login and retry, or connect with an API key or token below.",
                 docsSlug: "concepts/model-providers",
                 retryTitle: "Check again")
             {
@@ -420,7 +476,7 @@ struct OnboardingAISetupView: View {
             }
         }
 
-        if !self.model.connected {
+        if !self.model.connected, self.model.providerCatalogLoaded {
             self.manualSection
         }
 
@@ -462,7 +518,7 @@ struct OnboardingAISetupView: View {
             Text("No AI accounts found on this Mac")
                 .font(.headline)
             Text(
-                "That’s fine — you can connect one with an API key. " +
+                "That’s fine — you can connect one with an API key or token. " +
                     "If you use Claude Code, Codex, or the Gemini CLI on this Mac, " +
                     "sign in there first and hit “Check again”.")
                 .font(.subheadline)
@@ -574,7 +630,16 @@ struct OnboardingAISetupView: View {
 
     private var manualSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if self.model.candidates.isEmpty || self.model.showManualEntry {
+            if self.model.manualProviders.isEmpty {
+                OnboardingErrorCard(
+                    title: "No key-based providers are available",
+                    message: "Enable or install a text-inference provider plugin on this Gateway, then check again.",
+                    docsSlug: "concepts/model-providers",
+                    retryTitle: "Check again")
+                {
+                    self.model.retryFromScratch()
+                }
+            } else if self.model.candidates.isEmpty || self.model.showManualEntry {
                 self.manualForm
             } else {
                 Button {
@@ -582,7 +647,7 @@ struct OnboardingAISetupView: View {
                         self.model.showManualEntry = true
                     }
                 } label: {
-                    Label("Connect with an API key instead…", systemImage: "key")
+                    Label("Connect with an API key or token instead…", systemImage: "key")
                         .font(.callout)
                 }
                 .buttonStyle(.link)
@@ -593,18 +658,18 @@ struct OnboardingAISetupView: View {
 
     private var manualForm: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Connect with an API key")
+            Text("Connect with an API key or token")
                 .font(.headline)
             HStack(spacing: 8) {
-                Picker("Provider", selection: self.$model.manualProvider) {
-                    ForEach(OnboardingAISetupModel.ManualProvider.allCases) { provider in
-                        Text(provider.title).tag(provider)
+                Picker("Provider", selection: self.$model.manualProviderID) {
+                    ForEach(self.model.manualProviders) { provider in
+                        Text(provider.label).tag(provider.id)
                     }
                 }
                 .labelsHidden()
-                .frame(width: 170)
+                .frame(width: 230)
 
-                SecureField(self.model.manualProvider.keyHint, text: self.$model.manualKey)
+                SecureField("API key or token", text: self.$model.manualKey)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { self.model.submitManualKey() }
 
@@ -624,9 +689,7 @@ struct OnboardingAISetupView: View {
                 .disabled(self.model.manualTesting ||
                     self.model.manualKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            Text(
-                "Create a key at \(self.model.manualProvider.consoleName), paste it here, " +
-                    "and OpenClaw checks it with a real test question.")
+            Text(self.manualProviderHelp)
                 .font(.caption)
                 .foregroundStyle(.secondary)
             if let manualError = self.model.manualError {
@@ -643,6 +706,14 @@ struct OnboardingAISetupView: View {
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color(NSColor.controlBackgroundColor)))
+    }
+
+    private var manualProviderHelp: String {
+        let hint = self.model.selectedManualProvider?.hint?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let hint, !hint.isEmpty else {
+            return "Paste the key or token here, and OpenClaw checks it with a real test question."
+        }
+        return "\(hint). Paste it here, and OpenClaw checks it with a real test question."
     }
 
     private var crestodianSheet: some View {

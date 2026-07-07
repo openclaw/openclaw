@@ -1,10 +1,12 @@
 package ai.openclaw.app
 
-import ai.openclaw.app.chat.deleteChatTranscriptCacheDatabase
+import ai.openclaw.app.chat.ChatCacheDatabase
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import android.app.Application
 import android.os.StrictMode
+import androidx.room.withTransaction
+import kotlinx.coroutines.runBlocking
 
 /**
  * Android Application singleton that owns process-wide secure prefs and lazy NodeRuntime startup.
@@ -29,25 +31,36 @@ class NodeApp : Application() {
   fun peekRuntime(): NodeRuntime? = synchronized(runtimeLock) { runtimeInstance }
 
   /** Clears pairing auth without racing lazy process-runtime construction. */
-  suspend fun resetGatewaySetupAuth(): Boolean {
+  suspend fun resetGatewaySetupAuth(stableId: String): Boolean {
     val runtime =
       synchronized(runtimeLock) {
         runtimeInstance?.let { return@synchronized it }
         // Keep runtime construction blocked through the direct purge: a runtime built from the old
         // credentials could otherwise reconnect and rewrite device auth after this reset returns.
-        return runCatching { resetGatewaySetupAuthBeforeRuntime() }.getOrDefault(false)
+        return runCatching { resetGatewaySetupAuthBeforeRuntime(stableId) }.getOrDefault(false)
       }
-    return runtime.resetGatewaySetupAuth()
+    return runtime.resetGatewaySetupAuth(stableId)
   }
 
-  private fun resetGatewaySetupAuthBeforeRuntime(): Boolean {
-    // Delete first: credential destruction must not strand an unreadable cache after a failed purge.
-    if (!deleteChatTranscriptCacheDatabase(this)) return false
-    prefs.clearGatewaySetupAuth()
+  private fun resetGatewaySetupAuthBeforeRuntime(stableId: String): Boolean {
+    val gatewayId = stableId.trim().takeIf { it.isNotEmpty() } ?: return false
+    val database = ChatCacheDatabase.open(this)
+    try {
+      runBlocking {
+        database.withTransaction {
+          database.dao().deleteMessages(gatewayId)
+          database.dao().deleteSessions(gatewayId)
+          database.outboxDao().deleteGateway(gatewayId)
+        }
+      }
+    } finally {
+      database.close()
+    }
+    prefs.clearGatewayCredentials(gatewayId)
     val deviceId = DeviceIdentityStore(this).loadOrCreate().deviceId
     val deviceAuthStore = DeviceAuthStore(prefs)
-    deviceAuthStore.clearToken(deviceId, "node")
-    deviceAuthStore.clearToken(deviceId, "operator")
+    deviceAuthStore.clearToken(gatewayId, deviceId, "node")
+    deviceAuthStore.clearToken(gatewayId, deviceId, "operator")
     return true
   }
 

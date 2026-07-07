@@ -1,343 +1,59 @@
 import { consume } from "@lit/context";
-import { html, LitElement } from "lit";
-import { property } from "lit/decorators.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import {
-  applicationContext,
-  type ApplicationContext,
-  type ApplicationGatewaySnapshot,
-} from "../../app/context.ts";
-import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
-import {
-  COMMAND_PALETTE_TARGET_EVENT,
-  type CommandPaletteTargetDetail,
-} from "../../components/command-palette.ts";
-import "../../components/tooltip.ts";
+import { html, LitElement, nothing } from "lit";
+import { property, state } from "lit/decorators.js";
+import { repeat } from "lit/directives/repeat.js";
+import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { loadSettings, patchSettings } from "../../app/settings.ts";
+import "../../components/resizable-divider.ts";
 import { t } from "../../i18n/index.ts";
-import { resolveSessionDisplayName } from "../../lib/session-display.ts";
+import { readSessionDragData, sessionDragActive } from "../../lib/sessions/drag.ts";
+import { searchForSession } from "../../lib/sessions/index.ts";
+import "./chat-pane.ts";
 import {
-  resolveSessionKey,
-  searchForSession,
-  scopedAgentParamsForSession,
-} from "../../lib/sessions/index.ts";
+  resolveSplitDropZone,
+  splitDropIndicatorRect,
+  type SplitDropRect,
+  type SplitDropZone,
+} from "./split-drop-zone.ts";
 import {
-  areUiSessionKeysEquivalent,
-  buildAgentMainSessionKey,
-  parseAgentSessionKey,
-  resolveAgentIdFromSessionKey,
-  resolveUiConfiguredMainKey,
-  uiSessionEventMatches,
-} from "../../lib/sessions/session-key.ts";
-import { refreshChatAvatar } from "./chat-avatar.ts";
-import { refreshSlashCommands } from "./chat-commands.ts";
-import {
-  applyChatAgentsList,
-  clearChatHistory,
-  loadChatHistory,
-  syncSelectedSessionMessageSubscription,
-} from "./chat-history.ts";
-import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
-import { dismissRealtimeTalkError } from "./chat-realtime.ts";
-import { flushChatQueueForEvent, retryReconnectableQueuedChatSends } from "./chat-send.ts";
-import {
-  flushChatQueueAfterIdleSessionReconciliation,
-  switchChatFastMode,
-  switchChatModel,
-  switchChatThinkingLevel,
-} from "./chat-session.ts";
-import {
-  canCreateChatSession,
-  ChatStateController,
-  createPageState,
-  dismissChatError,
-  handleChatManualRefresh,
-  handlePageGatewayEvent,
-  refreshChatCommands,
-  refreshChatModelAuthStatus,
-  refreshPageChat,
-  refreshRouteSessionOptions,
-  resetChatStateForRouteSession,
-  resolveAssistantAttachmentAuthToken,
-  resolveChatAgentId,
-  resolveChatAvatarUrl,
-  saveRouteSessionSettings,
-  type ChatPageHost,
-} from "./chat-state.ts";
-import { renderChat, resetChatViewState, type ChatProps } from "./chat-view.ts";
-import { renderChatControls } from "./components/chat-controls.ts";
-import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
-import {
-  CHAT_DETAIL_FULL_MESSAGE_MAX_CHARS,
-  type DetailFullMessageResult,
-  type SidebarFullMessageRequest,
-} from "./components/chat-sidebar.ts";
-import { exportChatMarkdown } from "./export.ts";
-import {
-  hasAbortableSessionRun,
-  reconcileStaleChatRunAfterSessionStatePublication,
-} from "./run-lifecycle.ts";
-import { scheduleChatScroll } from "./scroll.ts";
-import { clearChatMessagesFromCache } from "./session-message-cache.ts";
+  closePane,
+  createSinglePaneLayout,
+  createSplitLayout,
+  findPane,
+  insertPane,
+  panesOf,
+  resizeColumns,
+  resizePanes,
+  setActivePane,
+  setPaneSession,
+  type ChatSplitLayout,
+  type ChatSplitPane,
+} from "./split-layout.ts";
 
 type ChatRouteData = {
   sessionKey: string;
   draft?: string;
 };
 
-type ChatPageContext = ApplicationContext;
+const NARROW_SPLIT_QUERY = "(max-width: 1099px)";
 
-const CHAT_OPEN_DETAILS_SELECTOR =
-  ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__talk-select[open]";
-
-const NEW_SESSION_ACTIVE_RUN_MESSAGE =
-  "Start a new session after the active run or queued messages finish.";
-const NEW_SESSION_LIST_LOADING_MESSAGE =
-  "Session list is still refreshing. Try New Chat again in a moment.";
-const NEW_SESSION_CREATE_FAILED_MESSAGE =
-  "New Chat could not create a new session. Try again in a moment.";
+type DropIndicator = { paneId: string; zone: SplitDropZone; rect: SplitDropRect };
+type ChatPaneElement = HTMLElement & { paneId?: string };
 
 export class ChatPage extends LitElement {
   @consume({ context: applicationContext, subscribe: false })
-  private context!: ChatPageContext;
+  private context!: ApplicationContext;
   @property({ attribute: false }) data!: ChatRouteData;
+  @state() private layout: ChatSplitLayout | undefined;
+  @state() private narrow = false;
+  @state() private dropIndicator: DropIndicator | null = null;
 
-  private readonly chatState = new ChatStateController<ChatPageHost>(this);
-  private state: ChatPageHost | undefined;
-  private connectedClient: GatewayBrowserClient | null = null;
-  private connectionGeneration = 0;
-
-  private applyRouteSessionKey(sessionKey: string) {
-    const state = this.state;
-    if (!state) {
-      return;
-    }
-    const nextSessionKey = resolveSessionKey(sessionKey, this.context.gateway.snapshot.hello);
-    if (!nextSessionKey) {
-      return;
-    }
-    state.sessionKey = nextSessionKey;
-    saveRouteSessionSettings(state, nextSessionKey);
-    this.context.gateway.setSessionKey(nextSessionKey);
-    const agentId = parseAgentSessionKey(nextSessionKey)?.agentId;
-    if (agentId) {
-      this.context.agentSelection.set(agentId);
-    }
-  }
-
-  private switchRouteSession(nextSessionKey: string) {
-    const state = this.state;
-    if (!state) {
-      return;
-    }
-    const previousSessionKey = state.sessionKey;
-    const previousSessionsResult = state.sessionsResult;
-    const nextSessionRow = state.sessionsResult?.sessions.find((row) => row.key === nextSessionKey);
-    const nextSessionLabel = resolveSessionDisplayName(nextSessionKey, nextSessionRow);
-    resetChatStateForRouteSession(state, nextSessionKey);
-    this.context.gateway.setSessionKey(nextSessionKey);
-    if (previousSessionKey !== nextSessionKey) {
-      state.announceSessionSwitch?.(nextSessionKey, nextSessionLabel);
-    }
-    void state.loadAssistantIdentity();
-    void refreshChatAvatar(state);
-    void refreshSlashCommands({
-      client: state.client,
-      agentId: parseAgentSessionKey(nextSessionKey)?.agentId,
-    });
-    const subscriptionSync = syncSelectedSessionMessageSubscription(state);
-    const historyLoad = loadChatHistory(state);
-    state.requestUpdate();
-    const scheduleHistoryScroll = () => {
-      if (state.sessionKey !== nextSessionKey) {
-        return;
-      }
-      state.requestUpdate();
-      scheduleChatScroll(state, true);
-    };
-    void historyLoad.then(scheduleHistoryScroll, scheduleHistoryScroll);
-    void historyLoad.then(
-      () => this.sendPendingSkillWorkshopRevision(nextSessionKey),
-      () => this.sendPendingSkillWorkshopRevision(nextSessionKey),
-    );
-    const sessionsRefresh = refreshRouteSessionOptions(state);
-    flushChatQueueAfterIdleSessionReconciliation(
-      state,
-      nextSessionKey,
-      historyLoad,
-      sessionsRefresh,
-      previousSessionsResult,
-      () => void flushChatQueueForEvent(state),
-    );
-    void subscriptionSync;
-    void historyLoad;
-    void sessionsRefresh;
-  }
-
-  private readonly handleCommandPaletteSlashCommand = (command: string) => {
-    const state = this.state;
-    if (!state) {
-      return;
-    }
-    state.handleChatDraftChange(command.endsWith(" ") ? command : `${command} `);
-    state.requestUpdate?.();
-  };
-
-  private announceCommandPaletteTarget(
-    onSlashCommand: CommandPaletteTargetDetail["onSlashCommand"],
-  ) {
-    this.dispatchEvent(
-      new CustomEvent<CommandPaletteTargetDetail>(COMMAND_PALETTE_TARGET_EVENT, {
-        bubbles: true,
-        composed: true,
-        detail: {
-          owner: this,
-          onSlashCommand,
-        },
-      }),
-    );
-  }
-
-  private readonly createSession = async (): Promise<boolean> => {
-    const state = this.state;
-    if (!state || !state.client || !state.connected) {
-      return false;
-    }
-    if (!canCreateChatSession(state)) {
-      state.lastError = NEW_SESSION_ACTIVE_RUN_MESSAGE;
-      state.chatError = state.lastError;
-      state.requestUpdate?.();
-      return false;
-    }
-    if (state.sessionsLoading) {
-      state.lastError = NEW_SESSION_LIST_LOADING_MESSAGE;
-      state.chatError = state.lastError;
-      state.requestUpdate?.();
-      return false;
-    }
-
-    state.lastError = null;
-    state.chatError = null;
-    const previousSessionKey = state.sessionKey;
-    const nextSessionKey = await this.context.sessions.create({
-      currentSessionKey: previousSessionKey,
-      agentId:
-        scopedAgentParamsForSession(state, previousSessionKey).agentId ??
-        resolveAgentIdFromSessionKey(previousSessionKey),
-    });
-    if (
-      !nextSessionKey ||
-      state.sessionKey !== previousSessionKey ||
-      !canCreateChatSession(state)
-    ) {
-      if (!nextSessionKey) {
-        state.lastError =
-          state.sessionsError ??
-          (state.sessionsLoading
-            ? NEW_SESSION_LIST_LOADING_MESSAGE
-            : NEW_SESSION_CREATE_FAILED_MESSAGE);
-        state.chatError = state.lastError;
-        state.requestUpdate?.();
-      }
-      return false;
-    }
-    this.chatState.captureCreatedSessionComposer(nextSessionKey);
-    this.context.navigate("chat", {
-      search: searchForSession(nextSessionKey),
-    });
-    return true;
-  };
-
-  private sendPendingSkillWorkshopRevision(expectedSessionKey: string) {
-    const state = this.state;
-    if (!state || !state.connected || state.sessionKey !== expectedSessionKey) {
-      return;
-    }
-    const revision = this.context.skillWorkshopRevision.consume(expectedSessionKey);
-    if (!revision) {
-      return;
-    }
-    void state
-      .handleSendChat(revision.instructions, {
-        restoreDraft: true,
-        skillWorkshopRevision: {
-          proposalId: revision.proposalId,
-          agentId: revision.proposalAgentId,
-        },
-      })
-      .catch((error: unknown) => {
-        state.lastError = error instanceof Error ? error.message : String(error);
-        state.chatError = state.lastError;
-        state.requestUpdate?.();
-      });
-  }
-
-  private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
-    if (event.defaultPrevented || event.key !== "Escape") {
-      return;
-    }
-    const state = this.state;
-    if (!state) {
-      return;
-    }
-    const openDetails = this.querySelectorAll<HTMLDetailsElement>(CHAT_OPEN_DETAILS_SELECTOR);
-    if (openDetails.length > 0) {
-      event.preventDefault();
-      openDetails.forEach((details) => {
-        details.open = false;
-      });
-      return;
-    }
-    if (state.realtimeTalkOptionsOpen) {
-      event.preventDefault();
-      state.realtimeTalkOptionsOpen = false;
-      state.requestUpdate();
-      return;
-    }
-    if (!state.chatMobileControlsOpen) {
-      return;
-    }
-    event.preventDefault();
-    state.setChatMobileControlsOpen(false, { restoreFocus: true });
-  };
-
-  private readonly handleDocumentPointerdown = (event: PointerEvent) => {
-    const state = this.state;
-    if (!state) {
-      return;
-    }
-    const path = event.composedPath();
-    let changed = false;
-    this.querySelectorAll<HTMLDetailsElement>(CHAT_OPEN_DETAILS_SELECTOR).forEach((details) => {
-      if (!path.includes(details)) {
-        details.open = false;
-        changed = true;
-      }
-    });
-    if (state.realtimeTalkOptionsOpen) {
-      const insideTalkOptions = Array.from(
-        this.querySelectorAll(
-          ".agent-chat__talk-options, [aria-label='Talk settings'], [aria-label='Talk options']",
-        ),
-      ).some((node) => path.includes(node));
-      if (!insideTalkOptions) {
-        state.realtimeTalkOptionsOpen = false;
-        changed = true;
-      }
-    }
-    if (changed) {
-      state.requestUpdate();
-    }
-    if (!state.chatMobileControlsOpen) {
-      return;
-    }
-    const wrapper =
-      this.querySelector(".chat-settings-popover-wrapper") ??
-      this.querySelector(".chat-mobile-controls-wrapper");
-    if (wrapper && path.includes(wrapper)) {
-      return;
-    }
-    state.setChatMobileControlsOpen(false);
-  };
+  private mediaQuery: MediaQueryList | null = null;
+  // Light-DOM enter/leave events bubble from every nested child, so only clear
+  // the shared preview after the whole balanced drag has left the page.
+  private dragDepth = 0;
+  private dragFrame = 0;
+  private pendingDragOver: { pane: ChatPaneElement; x: number; y: number } | null = null;
 
   override createRenderRoot() {
     return this;
@@ -345,484 +61,447 @@ export class ChatPage extends LitElement {
 
   override connectedCallback() {
     super.connectedCallback();
-    document.addEventListener("keydown", this.handleDocumentKeydown, true);
-    document.addEventListener("pointerdown", this.handleDocumentPointerdown, true);
-    const chatState = this.chatState;
-    chatState.addCleanup(() => {
-      document.removeEventListener("keydown", this.handleDocumentKeydown, true);
-      document.removeEventListener("pointerdown", this.handleDocumentPointerdown, true);
-    });
-    const pageState = createPageState(this.context, chatState.requestUpdate, this);
-    pageState.createChatSession = async () => {
-      await this.createSession();
-    };
-    pageState.exportCurrentChat = () =>
-      exportChatMarkdown(pageState.chatMessages, pageState.assistantName);
-    pageState.refreshCurrentSessionTools = async () => {
-      await pageState.onModelChanged?.();
-      pageState.requestUpdate?.();
-    };
-    pageState.refreshCurrentChat = async () => {
-      await refreshPageChat(pageState);
-      pageState.requestUpdate?.();
-    };
-    this.state = pageState;
-    chatState.attach(pageState);
-    this.announceCommandPaletteTarget(this.handleCommandPaletteSlashCommand);
-    if (this.data?.sessionKey) {
-      this.applyRouteSessionKey(this.data.sessionKey);
-    }
-    chatState.restoreComposer({ preserveCurrent: true });
-    if (this.data?.draft !== undefined) {
-      this.state.handleChatDraftChange(this.data.draft);
-    }
-    chatState.addCleanup(
-      this.context.nativeChatDrafts.subscribe((draft) => {
-        const state = this.state;
-        if (!state) {
-          return;
-        }
-        state.handleChatDraftChange(draft);
-        state.requestUpdate?.();
-      }),
-    );
-    chatState.startComposerPersistence();
-    chatState.addCleanup(
-      this.context.gateway.subscribe((snapshot) => {
-        this.applyGatewaySnapshot(snapshot);
-      }),
-    );
-    chatState.addCleanup(
-      this.context.gateway.subscribeEvents((event) => {
-        const state = this.state;
-        if (state) {
-          handlePageGatewayEvent(state, event);
-        }
-      }),
-    );
-    this.applyApplicationConfig(this.context.config.current);
-    chatState.addCleanup(
-      this.context.config.subscribe((config) => {
-        this.applyApplicationConfig(config);
-      }),
-    );
-    this.applySessionsState(this.context.sessions.state);
-    chatState.addCleanup(
-      this.context.sessions.subscribe((state) => {
-        this.applySessionsState(state);
-      }),
-    );
-    this.applyGatewaySnapshot(this.context.gateway.snapshot);
-  }
-
-  override willUpdate(changedProperties: Map<PropertyKey, unknown>) {
-    if (changedProperties.has("data") && this.state && this.data) {
-      const nextSessionKey = resolveSessionKey(
-        this.data.sessionKey,
-        this.context.gateway.snapshot.hello,
-      );
-      if (nextSessionKey && nextSessionKey !== this.state.sessionKey) {
-        this.switchRouteSession(nextSessionKey);
-      } else if (nextSessionKey) {
-        this.applyRouteSessionKey(nextSessionKey);
-      }
-      this.chatState.restoreCreatedSessionComposer(nextSessionKey);
-      if (this.data.draft !== undefined && this.data.draft !== this.state.chatMessage) {
-        this.state.handleChatDraftChange(this.data.draft);
-      }
-    }
+    this.layout = loadSettings().chatSplitLayout;
+    this.mediaQuery = window.matchMedia(NARROW_SPLIT_QUERY);
+    this.narrow = this.mediaQuery.matches;
+    this.mediaQuery.addEventListener("change", this.handleViewportChange);
+    this.addEventListener("dragenter", this.handleDragEnter);
+    this.addEventListener("dragover", this.handleDragOver);
+    this.addEventListener("dragleave", this.handleDragLeave);
+    this.addEventListener("drop", this.handleDrop);
+    window.addEventListener("dragend", this.handleWindowDragEnd);
+    this.syncRouteToActivePane();
   }
 
   override disconnectedCallback() {
-    this.announceCommandPaletteTarget(null);
-    resetChatViewState();
-    this.state = undefined;
-    this.connectedClient = null;
+    this.mediaQuery?.removeEventListener("change", this.handleViewportChange);
+    this.mediaQuery = null;
+    this.removeEventListener("dragenter", this.handleDragEnter);
+    this.removeEventListener("dragover", this.handleDragOver);
+    this.removeEventListener("dragleave", this.handleDragLeave);
+    this.removeEventListener("drop", this.handleDrop);
+    window.removeEventListener("dragend", this.handleWindowDragEnd);
+    this.clearDropIndicator();
     super.disconnectedCallback();
   }
 
-  private applySessionsState(stateValue: ApplicationContext["sessions"]["state"]) {
-    const state = this.state;
-    if (!state) {
-      return;
-    }
-    const selectedSessionDeleted = stateValue.deletedSessions.some(({ key, agentId }) =>
-      uiSessionEventMatches(
-        {
-          agentsList: this.context.agents.state.agentsList,
-          hello: this.context.gateway.snapshot.hello,
-          sessionKey: state.sessionKey,
-        },
-        key,
-        agentId,
-      ),
-    );
-    for (const { key } of stateValue.deletedSessions) {
-      clearChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey: key });
-    }
-    state.sessionsResult = stateValue.result;
-    state.sessionsResultAgentId = stateValue.agentId;
-    state.sessionsLoading = stateValue.loading;
-    state.sessionsError = stateValue.error;
-    const selectedSession = stateValue.result?.sessions.find((row) =>
-      areUiSessionKeysEquivalent(row.key, state.sessionKey),
-    );
-    if (selectedSession) {
-      state.selectedChatSessionArchived = selectedSession.archived === true;
-    }
-    if (selectedSessionDeleted) {
-      const agentId =
-        parseAgentSessionKey(state.sessionKey)?.agentId ??
-        this.context.agentSelection.state.selectedId ??
-        "main";
-      this.context.replace("chat", {
-        search: searchForSession(
-          buildAgentMainSessionKey({
-            agentId,
-            mainKey: resolveUiConfiguredMainKey({
-              agentsList: this.context.agents.state.agentsList,
-              hello: this.context.gateway.snapshot.hello,
-            }),
-          }),
-        ),
-      });
-      return;
-    }
-    const reconciledLocalCompletion = reconcileStaleChatRunAfterSessionStatePublication(state);
-    if (!reconciledLocalCompletion) {
-      state.requestUpdate?.();
+  override updated(changedProperties: Map<PropertyKey, unknown>) {
+    if (changedProperties.has("data")) {
+      this.syncRouteToActivePane();
     }
   }
 
-  private applyApplicationConfig(config: ApplicationContext["config"]["current"]) {
-    const state = this.state;
-    if (!state) {
-      return;
+  private readonly handleViewportChange = (event: MediaQueryListEvent) => {
+    this.narrow = event.matches;
+    if (event.matches) {
+      this.clearDropIndicator();
     }
-    const rootsChanged =
-      state.localMediaPreviewRoots.length !== config.localMediaPreviewRoots.length ||
-      state.localMediaPreviewRoots.some(
-        (value, index) => value !== config.localMediaPreviewRoots[index],
-      );
-    if (
-      !rootsChanged &&
-      state.embedSandboxMode === config.embedSandboxMode &&
-      state.allowExternalEmbedUrls === config.allowExternalEmbedUrls &&
-      state.chatMessageMaxWidth === config.chatMessageMaxWidth
-    ) {
-      return;
-    }
-    state.localMediaPreviewRoots = config.localMediaPreviewRoots;
-    state.embedSandboxMode = config.embedSandboxMode;
-    state.allowExternalEmbedUrls = config.allowExternalEmbedUrls;
-    state.chatMessageMaxWidth = config.chatMessageMaxWidth;
-    state.requestUpdate?.();
-  }
+  };
 
-  private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
-    const state = this.state;
-    if (!state) {
+  private readonly handleDragEnter = (event: DragEvent) => {
+    if (this.narrow || !sessionDragActive(event.dataTransfer)) {
       return;
     }
-    const wasConnected = state.connected;
-    const clientChanged = this.connectedClient !== snapshot.client;
-    state.client = snapshot.client;
-    state.connected = snapshot.connected;
-    state.hello = snapshot.hello;
-    state.assistantAgentId = snapshot.assistantAgentId;
-    const routeSessionKey = this.data?.sessionKey?.trim();
-    const canonicalRouteSessionKey = routeSessionKey
-      ? resolveSessionKey(routeSessionKey, snapshot.hello)
-      : null;
-    if (
-      routeSessionKey &&
-      canonicalRouteSessionKey &&
-      canonicalRouteSessionKey !== routeSessionKey
-    ) {
-      this.context.replace("chat", {
-        search: searchForSession(canonicalRouteSessionKey),
-      });
-      state.requestUpdate?.();
+    this.dragDepth += 1;
+  };
+
+  private readonly handleDragOver = (event: DragEvent) => {
+    if (this.narrow || !sessionDragActive(event.dataTransfer)) {
       return;
     }
-    state.assistantName = this.context.config.current.assistantIdentity.name;
-    if (!snapshot.connected) {
-      if (wasConnected) {
-        this.connectionGeneration += 1;
-        const currentSessionId =
-          typeof state.currentSessionId === "string" ? state.currentSessionId.trim() : "";
-        if (currentSessionId) {
-          state.reconnectResumeSessionId = currentSessionId;
-        }
-        markQueuedChatSendsWaitingForReconnect(state);
+    event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = "copy";
+    }
+    const target = event.target instanceof Element ? event.target : null;
+    const pane = target?.closest<ChatPaneElement>("openclaw-chat-pane");
+    if (!pane || !this.contains(pane)) {
+      // Dividers and pane gaps sit between drop targets; keep the last preview
+      // instead of flickering it away while the pointer crosses them.
+      return;
+    }
+    this.pendingDragOver = { pane, x: event.clientX, y: event.clientY };
+    if (this.dragFrame) {
+      return;
+    }
+    this.dragFrame = window.requestAnimationFrame(() => {
+      this.dragFrame = 0;
+      const pending = this.pendingDragOver;
+      this.pendingDragOver = null;
+      if (!pending || this.narrow || !this.isConnected) {
+        return;
       }
-      this.connectedClient = null;
-      state.realtimeTalkSession?.stop();
-      state.realtimeTalkSession = null;
-      state.realtimeTalkActive = false;
-      state.realtimeTalkStatus = "idle";
-      state.resetToolStream();
-      state.requestUpdate?.();
+      const indicator = this.resolveDropIndicator(pending.pane, pending.x, pending.y);
+      if (!indicator) {
+        return;
+      }
+      const current = this.dropIndicator;
+      if (
+        current?.paneId === indicator.paneId &&
+        current.zone.kind === indicator.zone.kind &&
+        (indicator.zone.kind === "center" ||
+          (current.zone.kind === "edge" && current.zone.edge === indicator.zone.edge))
+      ) {
+        return;
+      }
+      this.dropIndicator = indicator;
+    });
+  };
+
+  private readonly handleDragLeave = (event: DragEvent) => {
+    if (this.narrow || !sessionDragActive(event.dataTransfer)) {
       return;
     }
-    if (clientChanged && snapshot.client) {
-      const startupClient = snapshot.client;
-      const startupGeneration = ++this.connectionGeneration;
-      const startupSessionKey = state.sessionKey;
-      const agentsListBeforeStartup = this.context.agents.state.agentsList;
-      const clientIsCurrent = () =>
-        this.connectionGeneration === startupGeneration &&
-        this.connectedClient === startupClient &&
-        state.client === startupClient &&
-        state.connected;
-      const finishStartup = async () => {
-        if (!clientIsCurrent()) {
-          return;
-        }
-        let agentsList = this.context.agents.state.agentsList;
-        if (agentsList === agentsListBeforeStartup) {
-          agentsList = await this.context.agents.ensureList();
-        }
-        if (!clientIsCurrent()) {
-          return;
-        }
-        if (agentsList) {
-          applyChatAgentsList(state, agentsList, startupClient);
-        }
-        state.requestUpdate?.();
-        if (state.sessionKey === startupSessionKey) {
-          this.sendPendingSkillWorkshopRevision(startupSessionKey);
-        }
-      };
-      this.connectedClient = startupClient;
-      void syncSelectedSessionMessageSubscription(state, { force: true });
-      void retryReconnectableQueuedChatSends(state);
-      void refreshPageChat(state, { startup: true, awaitHistory: true }).finally(() => {
-        void finishStartup();
-      });
-      void refreshChatModelAuthStatus(state).finally(() => state.requestUpdate?.());
-      void state.loadAssistantIdentity();
+    this.dragDepth = Math.max(0, this.dragDepth - 1);
+    if (this.dragDepth === 0) {
+      this.clearDropIndicator();
     }
-    state.requestUpdate?.();
+  };
+
+  private readonly handleDrop = (event: DragEvent) => {
+    if (this.narrow || !sessionDragActive(event.dataTransfer)) {
+      return;
+    }
+    event.preventDefault();
+    const sessionKey = readSessionDragData(event.dataTransfer);
+    const target = event.target instanceof Element ? event.target : null;
+    const pane = target?.closest<ChatPaneElement>("openclaw-chat-pane");
+    // Fall back to the retained preview when the drop lands on a divider or
+    // gap, so the drop always matches what the indicator promised.
+    const indicator =
+      (pane && this.contains(pane)
+        ? this.resolveDropIndicator(pane, event.clientX, event.clientY)
+        : null) ?? this.dropIndicator;
+    this.clearDropIndicator();
+    if (sessionKey && indicator) {
+      this.applySessionDrop(sessionKey, indicator.paneId, indicator.zone);
+    }
+  };
+
+  private readonly handleWindowDragEnd = () => {
+    this.clearDropIndicator();
+  };
+
+  private clearDropIndicator() {
+    this.dragDepth = 0;
+    this.clearDropPreview();
+  }
+
+  private clearDropPreview() {
+    this.pendingDragOver = null;
+    if (this.dragFrame) {
+      window.cancelAnimationFrame(this.dragFrame);
+      this.dragFrame = 0;
+    }
+    this.dropIndicator = null;
+  }
+
+  private resolveDropIndicator(pane: ChatPaneElement, x: number, y: number): DropIndicator | null {
+    const paneId = pane.paneId;
+    const container = this.querySelector<HTMLElement>(".chat-split-view__drop-container");
+    if (!paneId || !container) {
+      return null;
+    }
+    const paneRect = pane.getBoundingClientRect();
+    const zone = resolveSplitDropZone(paneRect, x, y);
+    const indicatorRect = splitDropIndicatorRect(paneRect, zone);
+    const containerRect = container.getBoundingClientRect();
+    return {
+      paneId,
+      zone,
+      rect: {
+        left: indicatorRect.left - containerRect.left,
+        top: indicatorRect.top - containerRect.top,
+        width: indicatorRect.width,
+        height: indicatorRect.height,
+      },
+    };
+  }
+
+  // Route and active pane mirror each other: route changes land in the active
+  // pane here, and pane-side changes call updateRoute. The equality guards on
+  // both paths are what keep that from looping.
+  private syncRouteToActivePane() {
+    const layout = this.layout;
+    const sessionKey = this.data?.sessionKey?.trim();
+    if (!layout || !sessionKey) {
+      return;
+    }
+    const activePane = findPane(layout, layout.activePaneId)?.pane;
+    if (!activePane || activePane.sessionKey === sessionKey) {
+      return;
+    }
+    this.persistLayout(setPaneSession(layout, activePane.id, sessionKey));
+  }
+
+  private persistLayout(layout: ChatSplitLayout | undefined) {
+    this.layout = layout;
+    patchSettings({ chatSplitLayout: layout });
+  }
+
+  private updateRoute(sessionKey: string, replace = false) {
+    if (this.data?.sessionKey === sessionKey) {
+      return;
+    }
+    const options = { search: searchForSession(sessionKey) };
+    if (replace) {
+      this.context.replace("chat", options);
+    } else {
+      this.context.navigate("chat", options);
+    }
+  }
+
+  private applySessionDrop(sessionKey: string, paneId: string, zone: SplitDropZone): void {
+    const trimmed = sessionKey.trim();
+    if (!trimmed) {
+      return;
+    }
+    const layout = this.layout;
+    if (!layout) {
+      if (zone.kind === "center") {
+        this.updateRoute(trimmed);
+        return;
+      }
+      const currentSessionKey = this.data?.sessionKey?.trim();
+      if (!currentSessionKey) {
+        return;
+      }
+      const next = insertPane(createSinglePaneLayout(currentSessionKey), "p1", trimmed, zone.edge);
+      this.persistLayout(next);
+      this.updateRoute(trimmed, true);
+      return;
+    }
+    const pane = findPane(layout, paneId)?.pane;
+    if (!pane) {
+      return;
+    }
+    if (zone.kind === "center") {
+      if (pane.sessionKey === trimmed) {
+        return;
+      }
+      const active = setActivePane(layout, paneId);
+      this.persistLayout(setPaneSession(active, paneId, trimmed));
+      this.updateRoute(trimmed, true);
+      return;
+    }
+    this.persistLayout(insertPane(layout, paneId, trimmed, zone.edge));
+    this.updateRoute(trimmed, true);
+  }
+
+  private readonly handleFocusPane = (paneId: string) => {
+    const layout = this.layout;
+    if (!layout || layout.activePaneId === paneId) {
+      return;
+    }
+    const pane = findPane(layout, paneId)?.pane;
+    if (!pane) {
+      return;
+    }
+    this.persistLayout(setActivePane(layout, paneId));
+    this.updateRoute(pane.sessionKey, true);
+  };
+
+  private readonly handlePaneSessionChange = (
+    paneId: string,
+    sessionKey: string,
+    options?: { replace?: boolean },
+  ) => {
+    const trimmed = sessionKey.trim();
+    if (!trimmed) {
+      return;
+    }
+    const layout = this.layout;
+    if (!layout) {
+      this.updateRoute(trimmed, options?.replace);
+      return;
+    }
+    const pane = findPane(layout, paneId)?.pane;
+    if (!pane || pane.sessionKey === trimmed) {
+      return;
+    }
+    this.persistLayout(setPaneSession(layout, paneId, trimmed));
+    if (layout.activePaneId === paneId) {
+      this.updateRoute(trimmed, options?.replace);
+    }
+  };
+
+  private readonly openSplitView = () => {
+    const sessionKey = this.data?.sessionKey?.trim();
+    if (sessionKey) {
+      this.persistLayout(createSplitLayout(sessionKey));
+    }
+  };
+
+  private readonly handleSplitRight = (paneId: string) => {
+    const layout = this.layout;
+    const pane = layout ? findPane(layout, paneId)?.pane : null;
+    if (!layout || !pane) {
+      return;
+    }
+    this.persistLayout(insertPane(layout, paneId, pane.sessionKey, "right"));
+  };
+
+  private readonly handleSplitDown = (paneId: string) => {
+    const layout = this.layout;
+    const pane = layout ? findPane(layout, paneId)?.pane : null;
+    if (!layout || !pane) {
+      return;
+    }
+    this.persistLayout(insertPane(layout, paneId, pane.sessionKey, "down"));
+  };
+
+  private readonly handleClosePane = (paneId: string) => {
+    const layout = this.layout;
+    if (!layout) {
+      return;
+    }
+    const survivingPane = panesOf(layout).find((pane) => pane.id !== paneId);
+    const next = closePane(layout, paneId);
+    this.persistLayout(next);
+    if (!next && survivingPane) {
+      this.updateRoute(survivingPane.sessionKey, true);
+      return;
+    }
+    if (next) {
+      const activePane = findPane(next, next.activePaneId)?.pane;
+      if (activePane) {
+        this.updateRoute(activePane.sessionKey, true);
+      }
+    }
+  };
+
+  private renderPane(pane: ChatSplitPane, active: boolean, weight: number) {
+    // Narrow viewports render only the active pane, so splitting there would
+    // create invisible panes; keep session switching and close available.
+    const canSplit = !this.narrow;
+    return html`
+      <openclaw-chat-pane
+        class="chat-split-view__pane"
+        style="flex: ${weight} 1 0"
+        .paneId=${pane.id}
+        .sessionKey=${pane.sessionKey}
+        .active=${active}
+        .chrome=${"pane"}
+        .draft=${active ? this.data?.draft : undefined}
+        .onFocusPane=${this.handleFocusPane}
+        .onPaneSessionChange=${this.handlePaneSessionChange}
+        .onSplitRight=${canSplit ? this.handleSplitRight : undefined}
+        .onSplitDown=${canSplit ? this.handleSplitDown : undefined}
+        .onClosePane=${this.handleClosePane}
+      ></openclaw-chat-pane>
+    `;
+  }
+
+  private renderSplitLayout(layout: ChatSplitLayout) {
+    if (this.narrow) {
+      const activePane = findPane(layout, layout.activePaneId)?.pane;
+      return activePane
+        ? html`<div class="chat-split-view chat-split-view--narrow">
+            ${this.renderPane(activePane, true, 1)}
+          </div>`
+        : nothing;
+    }
+    return html`
+      <div class="chat-split-view">
+        ${repeat(
+          layout.columns,
+          (column) => column.id,
+          (column, columnIndex) => html`
+            <div
+              class="chat-split-view__column"
+              style="flex: ${layout.columnWeights[columnIndex]} 1 0"
+            >
+              ${repeat(
+                column.panes,
+                (pane) => pane.id,
+                (pane, paneIndex) => html`
+                  ${this.renderPane(
+                    pane,
+                    pane.id === layout.activePaneId,
+                    column.paneWeights[paneIndex],
+                  )}
+                  ${paneIndex < column.panes.length - 1
+                    ? html`
+                        <resizable-divider
+                          orientation="horizontal"
+                          .splitRatio=${column.paneWeights[paneIndex] /
+                          (column.paneWeights[paneIndex] + column.paneWeights[paneIndex + 1])}
+                          .minRatio=${0.15}
+                          .maxRatio=${0.85}
+                          .label=${t("nav.resize")}
+                          @resize=${(event: CustomEvent<{ splitRatio: number }>) => {
+                            const current = this.layout;
+                            if (current) {
+                              this.persistLayout(
+                                resizePanes(current, column.id, paneIndex, event.detail.splitRatio),
+                              );
+                            }
+                          }}
+                        ></resizable-divider>
+                      `
+                    : nothing}
+                `,
+              )}
+            </div>
+            ${columnIndex < layout.columns.length - 1
+              ? html`
+                  <resizable-divider
+                    .splitRatio=${layout.columnWeights[columnIndex] /
+                    (layout.columnWeights[columnIndex] + layout.columnWeights[columnIndex + 1])}
+                    .minRatio=${0.15}
+                    .maxRatio=${0.85}
+                    .label=${t("nav.resize")}
+                    @resize=${(event: CustomEvent<{ splitRatio: number }>) => {
+                      const current = this.layout;
+                      if (current) {
+                        this.persistLayout(
+                          resizeColumns(current, columnIndex, event.detail.splitRatio),
+                        );
+                      }
+                    }}
+                  ></resizable-divider>
+                `
+              : nothing}
+          `,
+        )}
+      </div>
+    `;
   }
 
   override render() {
-    const state = this.state;
-    if (!state) {
-      return html`<main class="app-shell app-shell--booting" aria-busy="true"></main>`;
-    }
-    const currentAgentId = resolveChatAgentId(state);
-    const selectedSessionArchived =
-      state.selectedChatSessionArchived ||
-      state.sessionsResult?.sessions.some(
-        (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, state.sessionKey),
-      ) === true;
-    const disabledReason = !state.connected
-      ? t("chat.disconnected")
-      : selectedSessionArchived
-        ? t("chat.archivedSessionDisabled")
-        : null;
-    const canOpenRealtimeTalkSettings = hasOperatorAdminAccess(
-      this.context.gateway.snapshot.hello?.auth ?? null,
-    );
-    const props: ChatProps = {
-      sessionKey: state.sessionKey,
-      onSessionKeyChange: (next) => {
-        this.context.navigate("chat", {
-          search: searchForSession(next),
-        });
-      },
-      thinkingLevel: state.chatThinkingLevel,
-      autoExpandToolCalls: state.chatVerboseLevel === "full",
-      showThinking: state.settings.chatShowThinking,
-      showToolCalls: state.settings.chatShowToolCalls,
-      loading: state.chatLoading,
-      sending: state.chatSending,
-      canAbort: hasAbortableSessionRun(state),
-      runStatus: state.chatRunStatus,
-      compactionStatus: state.compactionStatus,
-      fallbackStatus: state.fallbackStatus,
-      messages: state.chatMessages,
-      sideResult: state.chatSideResult,
-      toolMessages: state.chatToolMessages,
-      streamSegments: state.chatStreamSegments,
-      stream: state.chatStream,
-      streamStartedAt: state.chatStreamStartedAt,
-      assistantAvatarUrl: resolveChatAvatarUrl(state),
-      draft: state.chatMessage,
-      queue: state.chatQueue,
-      realtimeTalkActive: state.realtimeTalkActive,
-      realtimeTalkStatus: state.realtimeTalkStatus,
-      realtimeTalkDetail: state.realtimeTalkDetail,
-      realtimeTalkTranscript: state.realtimeTalkTranscript,
-      realtimeTalkConversation: state.realtimeTalkConversation,
-      realtimeTalkOptionsOpen: state.realtimeTalkOptionsOpen,
-      realtimeTalkOptions: state.realtimeTalkOptions,
-      canOpenRealtimeTalkSettings,
-      connected: state.connected,
-      canSend: state.connected && !selectedSessionArchived,
-      disabledReason,
-      error: state.lastError,
-      sessions: state.sessionsResult,
-      composerControls: renderChatControls({
-        agentsList: state.agentsList,
-        connected: state.connected,
-        hideCronSessions: state.sessionsHideCron,
-        loading: state.chatLoading,
-        manualRefreshInFlight: state.chatManualRefreshInFlight,
-        model: {
-          activeRunId: state.chatRunId,
-          connected: state.connected,
-          gatewayAvailable: Boolean(state.client),
-          loading: state.chatLoading,
-          modelCatalog: state.chatModelCatalog,
-          modelOverrides: state.sessions.state.modelOverrides,
-          modelSwitching: Boolean(state.chatModelSwitchPromises[state.sessionKey]),
-          modelsLoading: state.chatModelsLoading,
-          sending: state.chatSending,
-          sessionKey: state.sessionKey,
-          sessionsResult: state.sessionsResult,
-          stream: state.chatStream,
-          onFastModeSelect: (next) => switchChatFastMode(state, next),
-          onModelSelect: (next) => switchChatModel(state, next),
-          onThinkingSelect: (next) => switchChatThinkingLevel(state, next),
-        },
-        onboarding: state.onboarding,
-        quota: {
-          basePath: state.basePath,
-          modelAuthStatusResult: state.modelAuthStatusResult,
-        },
-        runId: state.chatRunId,
-        sending: state.chatSending,
-        settings: state.settings,
-        settingsOpen: state.chatMobileControlsOpen,
-        sessionKey: state.sessionKey,
-        sessionsResult: state.sessionsResult,
-        stream: state.chatStream,
-        onRefresh: () => handleChatManualRefresh(state),
-        onSettingsChange: state.applySettings,
-        onSettingsOpenChange: state.setChatMobileControlsOpen,
-        onToggleCronSessions: () => {
-          state.sessionsHideCron = !state.sessionsHideCron;
-          state.requestUpdate?.();
-        },
-      }),
-      sessionWorkspace: createSessionWorkspaceProps(state),
-      onRefresh: () => {
-        state.chatSideResult = null;
-        state.resetToolStream();
-        void refreshPageChat(state, { awaitHistory: true, scheduleScroll: false });
-      },
-      onChatScroll: state.handleChatScroll,
-      getDraft: () => state.chatMessage,
-      onDraftChange: state.handleChatDraftChange,
-      onRequestUpdate: state.requestUpdate,
-      onHistoryKeydown: state.handleChatInputHistoryKey,
-      onSlashIntent: () => refreshChatCommands(state),
-      showNewMessages: state.chatNewMessagesBelow && !state.chatManualRefreshInFlight,
-      onScrollToBottom: state.scrollToBottom,
-      attachments: state.chatAttachments,
-      onAttachmentsChange: (next) => {
-        state.chatAttachments = next;
-        state.requestUpdate?.();
-      },
-      onSend: () => void state.handleSendChat(),
-      onCompact: () => void state.handleSendChat("/compact"),
-      onOpenSessionCheckpoints: () => {
-        const search = new URLSearchParams({ session: state.sessionKey });
-        if (selectedSessionArchived) {
-          search.set("showArchived", "1");
-        }
-        this.context.navigate("sessions", { search: `?${search.toString()}` });
-      },
-      onToggleRealtimeTalk: () => void state.toggleRealtimeTalk(),
-      onToggleRealtimeTalkOptions: () => {
-        state.realtimeTalkOptionsOpen = !state.realtimeTalkOptionsOpen;
-        state.requestUpdate?.();
-      },
-      onRealtimeTalkOptionsChange: state.updateRealtimeTalkOptions,
-      onOpenRealtimeTalkSettings: () => {
-        if (!canOpenRealtimeTalkSettings) {
-          return;
-        }
-        state.realtimeTalkOptionsOpen = false;
-        this.context.navigate("communications", { search: "?section=talk" });
-      },
-      onDismissError: () => {
-        dismissChatError(state as never);
-        state.requestUpdate?.();
-      },
-      onDismissRealtimeTalkError: () => {
-        dismissRealtimeTalkError(state as never);
-        state.requestUpdate?.();
-      },
-      onAbort: () => void state.handleAbortChat({ preserveDraft: true }),
-      onQueueRemove: state.removeQueuedMessage,
-      onQueueRetry: (id) => void state.retryQueuedChatMessage(id),
-      onQueueSteer: (id) => void state.steerQueuedChatMessage(id),
-      onDismissSideResult: () => {
-        state.chatSideResult = null;
-        state.requestUpdate?.();
-      },
-      replyTarget: state.chatReplyTarget ?? null,
-      onClearReply: () => {
-        state.chatReplyTarget = null;
-        state.requestUpdate?.();
-      },
-      onSetReply: (target) => {
-        state.chatReplyTarget = target;
-        state.requestUpdate?.();
-      },
-      onNewSession: () => void this.createSession(),
-      onClearHistory: () => void clearChatHistory(state),
-      agentsList: state.agentsList,
-      currentAgentId,
-      fullMessageAgentId: scopedAgentParamsForSession(state, state.sessionKey).agentId,
-      onAgentChange: (agentId) => {
-        this.context.agentSelection.set(agentId);
-        const nextSessionKey = buildAgentMainSessionKey({ agentId });
-        this.context.navigate("chat", {
-          search: searchForSession(nextSessionKey),
-        });
-      },
-      onSessionSelect: (next) => {
-        this.context.navigate("chat", {
-          search: searchForSession(next),
-        });
-      },
-      onLoadSidebarFullMessage: async (
-        request: SidebarFullMessageRequest,
-      ): Promise<DetailFullMessageResult | null> => {
-        if (!state.client || !state.connected) {
-          return null;
-        }
-        return state.client.request<DetailFullMessageResult>("chat.message.get", {
-          sessionKey: request.sessionKey,
-          ...(request.agentId ? { agentId: request.agentId } : {}),
-          messageId: request.messageId,
-          maxChars: CHAT_DETAIL_FULL_MESSAGE_MAX_CHARS,
-        });
-      },
-      sidebarOpen: state.sidebarOpen,
-      sidebarContent: state.sidebarContent,
-      splitRatio: state.splitRatio,
-      canvasPluginSurfaceUrl: state.hello?.pluginSurfaceUrls?.canvas ?? null,
-      onOpenSidebar: state.handleOpenSidebar,
-      onCloseSidebar: state.handleCloseSidebar,
-      onSplitRatioChange: state.handleSplitRatioChange,
-      assistantName: state.assistantName,
-      assistantAvatar: state.assistantAvatar,
-      userName: state.userName,
-      userAvatar: state.userAvatar,
-      localMediaPreviewRoots: state.localMediaPreviewRoots,
-      embedSandboxMode: state.embedSandboxMode,
-      allowExternalEmbedUrls: state.allowExternalEmbedUrls,
-      chatMessageMaxWidth: state.chatMessageMaxWidth,
-      assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state as never),
-      onAssistantAttachmentLoaded: () => state.scrollToBottom(),
-      basePath: state.basePath,
-    };
-    return renderChat(props);
+    const indicator = this.dropIndicator;
+    return html`
+      <div class="chat-split-view__drop-container">
+        ${this.layout
+          ? this.renderSplitLayout(this.layout)
+          : html`
+              <openclaw-chat-pane
+                .paneId=${"single"}
+                .sessionKey=${this.data?.sessionKey ?? ""}
+                .active=${true}
+                .chrome=${"none"}
+                .draft=${this.data?.draft}
+                .onFocusPane=${this.handleFocusPane}
+                .onPaneSessionChange=${this.handlePaneSessionChange}
+                .onOpenSplitView=${this.narrow ? undefined : this.openSplitView}
+              ></openclaw-chat-pane>
+            `}
+        ${indicator
+          ? html`<div
+              class="chat-split-view__drop-indicator ${indicator.zone.kind === "center"
+                ? "chat-split-view__drop-indicator--center"
+                : ""}"
+              style=${`left: ${indicator.rect.left}px; top: ${indicator.rect.top}px; width: ${indicator.rect.width}px; height: ${indicator.rect.height}px;`}
+            >
+              <span class="chat-split-view__drop-indicator-label"
+                >${indicator.zone.kind === "center"
+                  ? t("chat.splitView.dropOpenHere")
+                  : t("chat.splitView.dropSplit")}</span
+              >
+            </div>`
+          : nothing}
+      </div>
+    `;
   }
 }
 

@@ -1,7 +1,6 @@
 // Handles /learn by turning the command into a Skill Workshop authoring turn.
 import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import { resolveConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
-import { applyFinalEffectiveToolPolicy } from "../../agents/embedded-agent-runner/effective-tool-policy.js";
 import {
   agentHarnessExposesOpenClawTools,
   selectAgentHarness,
@@ -14,8 +13,8 @@ import { supportsModelTools } from "../../agents/model-tool-support.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { isToolAllowedByPolicyName } from "../../agents/tool-policy-match.js";
 import { resolveConfiguredModelCompat } from "../../agents/tools-effective-inventory.js";
-import { createSkillWorkshopTool } from "../../agents/tools/skill-workshop-tool.js";
 import { buildLearnPrompt, DEFAULT_LEARN_REQUEST } from "../../skills/workshop/learn-prompt.js";
+import { resolveSkillWorkshopToolPolicyAvailability } from "../../skills/workshop/tool-policy-diagnostic.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type {
   CommandHandler,
@@ -149,6 +148,7 @@ function workshopIsAvailable(params: HandleCommandsParams): boolean {
       senderName: params.ctx.SenderName,
       senderUsername: params.ctx.SenderUsername,
       senderE164: params.ctx.SenderE164,
+      senderIsOwner: params.command.senderIsOwner,
       agentAccountId: params.command.accountId ?? params.ctx.AccountId,
       modelProvider: params.provider,
       modelId: params.model,
@@ -156,19 +156,10 @@ function workshopIsAvailable(params: HandleCommandsParams): boolean {
       groupChannel: params.sessionEntry?.groupChannel ?? params.ctx.GroupChannel,
       groupSpace: params.sessionEntry?.space ?? params.ctx.GroupSpace,
     });
-    const tools = applyFinalEffectiveToolPolicy({
-      bundledTools: [
-        createSkillWorkshopTool({
-          workspaceDir: params.workspaceDir,
-          config: params.cfg,
-          agentId: capabilityProfile.agentId,
-        }),
-      ],
+    return resolveSkillWorkshopToolPolicyAvailability({
       config: params.cfg,
       conversationCapabilityProfile: capabilityProfile,
-      warn: () => undefined,
-    });
-    return tools.some((tool) => tool.name === SKILL_WORKSHOP_TOOL_NAME);
+    }).available;
   } catch {
     return false;
   }

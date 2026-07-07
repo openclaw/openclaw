@@ -1,11 +1,33 @@
 import Foundation
-import OpenClawChatUI
 import OpenClawKit
 import OpenClawProtocol
 import Testing
 import UIKit
 import UserNotifications
 @testable import OpenClaw
+@testable import OpenClawChatUI
+
+@MainActor
+private final class MockVoiceNoteAudioCapture: VoiceNoteAudioCapture {
+    private(set) var cancelCallCount = 0
+    private(set) var permissionRequestCount = 0
+
+    func requestPermission() async -> Bool {
+        self.permissionRequestCount += 1
+        return true
+    }
+
+    func start(url _: URL) throws {}
+    func stop() -> TimeInterval {
+        1
+    }
+
+    func cancel() {
+        self.cancelCallCount += 1
+    }
+
+    func setFailureHandler(_: @escaping @MainActor () -> Void) {}
+}
 
 private func makeAgentDeepLinkURL(
     message: String,
@@ -344,6 +366,21 @@ private actor WatchSnapshotSendGate {
     @Test @MainActor func `chat session key defaults to main base`() {
         let appModel = NodeAppModel()
         #expect(appModel.chatSessionKey == "main")
+        #expect(appModel.chatDeliveryAgentId == nil)
+    }
+
+    @Test @MainActor func `chat delivery owner requires persisted or gateway ownership`() {
+        let appModel = NodeAppModel()
+        #expect(appModel.chatDeliveryAgentId == nil)
+
+        appModel.gatewayDefaultAgentId = " Agent-A "
+        #expect(appModel.chatDeliveryAgentId == "agent-a")
+
+        appModel.setSelectedAgentId(" Agent-B ")
+        #expect(appModel.chatDeliveryAgentId == "agent-b")
+
+        appModel.openChat(sessionKey: "agent:Agent-C:incident")
+        #expect(appModel.chatDeliveryAgentId == "agent-c")
     }
 
     @Test @MainActor func `init preserves saved talk mode preference`() {
@@ -381,6 +418,7 @@ private actor WatchSnapshotSendGate {
                 name: "Joshtimus Prime",
                 identity: nil,
                 workspace: nil,
+                workspacegit: nil,
                 model: nil,
                 agentruntime: nil),
             AgentSummary(
@@ -388,6 +426,7 @@ private actor WatchSnapshotSendGate {
                 name: "Rust Claw",
                 identity: nil,
                 workspace: nil,
+                workspacegit: nil,
                 model: nil,
                 agentruntime: nil),
         ]
@@ -410,6 +449,7 @@ private actor WatchSnapshotSendGate {
                 name: "Rust Claw",
                 identity: nil,
                 workspace: nil,
+                workspacegit: nil,
                 model: nil,
                 agentruntime: nil),
         ]
@@ -706,6 +746,26 @@ private actor WatchSnapshotSendGate {
         appModel.voiceWake.stop()
     }
 
+    @Test @MainActor func `PTT start preserves an active voice note`() async {
+        let capture = MockVoiceNoteAudioCapture()
+        let recorder = OpenClawVoiceNoteRecorder(capture: capture)
+        #expect(await recorder.start())
+        let appModel = NodeAppModel(
+            talkMode: TalkModeManager(allowSimulatorCapture: true),
+            voiceNoteRecorder: recorder)
+
+        let request = BridgeInvokeRequest(
+            id: "ptt-start-with-voice-note",
+            command: OpenClawTalkCommand.pttStart.rawValue)
+        let response = await appModel._test_handleInvoke(request)
+
+        #expect(response.ok == false)
+        #expect(response.error?.message.contains("active voice note") == true)
+        #expect(recorder.isRecording)
+        #expect(capture.cancelCallCount == 0)
+        recorder.cancel()
+    }
+
     @Test @MainActor func `overlapping PTT owners keep voice wake suspended until final release`() {
         let appModel = NodeAppModel(talkMode: TalkModeManager(allowSimulatorCapture: true))
         appModel.voiceWake.isEnabled = true
@@ -713,6 +773,7 @@ private actor WatchSnapshotSendGate {
         appModel.voiceWake.statusText = "Listening"
 
         appModel._test_acquirePttVoiceWakeLease()
+        #expect(appModel.isTalkCaptureActive == true)
         appModel._test_acquirePttVoiceWakeLease()
         #expect(appModel.voiceWake._test_isSuspendedForExternalAudio() == true)
 
@@ -721,7 +782,23 @@ private actor WatchSnapshotSendGate {
 
         appModel._test_releasePttVoiceWakeLease()
         #expect(appModel.voiceWake._test_isSuspendedForExternalAudio() == false)
+        #expect(appModel.isTalkCaptureActive == false)
         appModel.voiceWake.stop()
+    }
+
+    @Test @MainActor func `voice note start cannot race an acquired PTT lease`() async {
+        let capture = MockVoiceNoteAudioCapture()
+        let recorder = OpenClawVoiceNoteRecorder(capture: capture)
+        let appModel = NodeAppModel(
+            talkMode: TalkModeManager(allowSimulatorCapture: true),
+            voiceNoteRecorder: recorder)
+        appModel._test_acquirePttVoiceWakeLease()
+
+        #expect(await recorder.start() == false)
+        #expect(recorder.isRecording == false)
+        #expect(capture.permissionRequestCount == 0)
+
+        appModel._test_releasePttVoiceWakeLease()
     }
 
     @Test @MainActor func `late watch snapshot is repaired after gateway switch`() async throws {
@@ -1015,6 +1092,7 @@ private actor WatchSnapshotSendGate {
                     "emoji": AnyCodable("OC"),
                 ],
                 workspace: nil,
+                workspacegit: nil,
                 model: nil,
                 agentruntime: nil),
         ]

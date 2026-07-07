@@ -14,8 +14,10 @@ Availability: iPhone app builds are distributed through Apple channels when enab
 - Connects to a Gateway over WebSocket (LAN or tailnet).
 - Exposes node capabilities: Canvas, Screen snapshot, Camera capture, Location, Talk mode, Voice wake.
 - Receives `node.invoke` commands and reports node status events.
+- Browses the selected agent's workspace read-only from the Agents surface (Files): directory drill-down, syntax-highlighted text previews, image previews, and share-sheet export. No write operations; previews are size-capped by the gateway.
 - Keeps a small read-only offline cache of recent chat sessions and transcripts per paired gateway: cold opens paint the last known transcript immediately and refresh once the gateway responds, recent chats stay browsable while disconnected, and reset/forget purges the protected local cache.
-- Queues text messages sent while disconnected in a durable per-gateway outbox (up to 50): queued bubbles show in the transcript, flush in order on reconnect with idempotency keys so nothing sends twice, retry with backoff before surfacing as "Not sent" with retry/delete in the message context menu, and expire instead of sending after 48 hours offline; reset/forget clears the queue with the cache.
+- Queues text messages sent while disconnected in a durable per-gateway outbox (up to 50): queued bubbles show in the transcript, flush in order on reconnect with idempotent retries, remain durable until canonical history confirms the send, retry with backoff before surfacing a retry/delete action, and expire instead of sending after 48 hours offline; reset/forget clears the queue with the cache.
+- Speaks assistant messages on demand: long-press a message in Chat and choose **Listen**. The app plays supported gateway `tts.speak` clips with the configured TTS provider and falls back to on-device speech when gateway audio is unavailable or unplayable. Playback stops on session switch or backgrounding.
 
 ## Requirements
 
@@ -50,6 +52,12 @@ creation has a token or password auth path.
 
 4. The official app connects automatically. If **Devices** shows a pending
    request, review its role and scopes before approving it.
+
+The Apple Watch companion does not have a separate OpenClaw pairing approval.
+Pair the Watch with the iPhone in Apple's Watch app, install OpenClaw from
+**Watch app -> My Watch -> Available Apps**, then open OpenClaw once on both
+devices. OpenClaw follows Apple Watch pairing and install changes immediately;
+the Gateway's device approval covers the iPhone node.
 
 The Control UI button requires an already paired session with `operator.admin`.
 As a terminal fallback, pick a discovered gateway in the iOS app (or enable
@@ -188,6 +196,15 @@ If mDNS is blocked, use a unicast DNS-SD zone (choose a domain; example: `opencl
 
 In Settings, enable **Manual Host** and enter the gateway host + port (default `18789`).
 
+## Multiple gateways
+
+The app keeps a registry of every gateway it has paired with, so you can switch between them without pairing again:
+
+- **Settings -> Gateway** shows a **Paired Gateways** list with the active gateway marked. Tap an entry to switch; the app tears down the current sessions and reconnects to the selected gateway. A quick-switch menu appears next to the connection row when more than one gateway is paired.
+- Credentials, TLS trust decisions, per-gateway preferences, and cached chat history are stored per gateway. Switching never mixes state between gateways, and push registration follows the active gateway.
+- Swipe a paired gateway (or use its context menu) to **Forget** it, which removes its credentials, device tokens, TLS pin, and cached chats.
+- Discovered gateways must be visible on the network to switch to them; manual gateways reconnect by saved host and port.
+
 ## Canvas + A2UI
 
 The iOS node renders a WKWebView canvas. Use `node.invoke` to drive it:
@@ -231,6 +248,12 @@ openclaw nodes invoke --node "iOS Node" --command canvas.snapshot --params '{"ma
 - `NODE_BACKGROUND_UNAVAILABLE`: bring the iOS app to the foreground (canvas/camera/screen commands require it).
 - `A2UI_HOST_UNAVAILABLE`: the bundled A2UI page was not reachable in the app WebView; keep the app foregrounded on the Screen tab and retry.
 - Pairing prompt never appears: run `openclaw devices list` and approve manually.
+- Watch shows no iPhone state: confirm the iPhone reports `watchPaired: true`
+  and `watchAppInstalled: true` in `watch.status`. If pairing is false, pair the
+  Watch in Apple's Watch app. If installation is false, install the companion
+  from **My Watch -> Available Apps**. After either change, open OpenClaw on the
+  Watch once; immediate reachability still requires both apps to be running,
+  while queued updates can arrive later in the background.
 - Reconnect fails after reinstall: the Keychain pairing token was cleared; re-pair the node.
 
 ## Related docs

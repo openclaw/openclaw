@@ -59,8 +59,26 @@ const browserActionsMocks = vi.hoisted(() => ({
     ],
   })),
   browserNavigate: vi.fn(async () => ({ ok: true })),
+  browserDownload: vi.fn(async () => ({
+    ok: true,
+    targetId: "tab-1",
+    download: {
+      path: "/tmp/openclaw/downloads/report.pdf",
+      suggestedFilename: "report.pdf",
+      url: "https://example.com/report.pdf",
+    },
+  })),
   browserPdfSave: vi.fn(async () => ({ ok: true, path: "/tmp/test.pdf" })),
   browserScreenshotAction: vi.fn(async () => ({ ok: true, path: "/tmp/test.png" })),
+  browserWaitForDownload: vi.fn(async () => ({
+    ok: true,
+    targetId: "tab-1",
+    download: {
+      path: "/tmp/openclaw/downloads/export.csv",
+      suggestedFilename: "export.csv",
+      url: "https://example.com/export.csv",
+    },
+  })),
 }));
 vi.mock("./browser/client-actions.js", () => browserActionsMocks);
 
@@ -324,8 +342,10 @@ function resetBrowserToolMocks() {
   browserToolActionsTesting.setDepsForTest({
     browserAct: browserActionsMocks.browserAct as never,
     browserConsoleMessages: browserActionsMocks.browserConsoleMessages as never,
+    browserDownload: browserActionsMocks.browserDownload as never,
     browserSnapshot: browserClientMocks.browserSnapshot as never,
     browserTabs: browserClientMocks.browserTabs as never,
+    browserWaitForDownload: browserActionsMocks.browserWaitForDownload as never,
     getRuntimeConfig: configMocks.loadConfig as never,
     imageResultFromFile: toolCommonMocks.imageResultFromFile as never,
   });
@@ -480,6 +500,126 @@ describe("browser tool description", () => {
     expect(tool.description).toContain("omit timeoutMs on act:type");
     expect(tool.description).toContain("existing-session profiles");
     expect(tool.description).toContain("browser-automation skill");
+  });
+});
+
+describe("browser tool download actions", () => {
+  registerBrowserToolAfterEachReset();
+
+  it("downloads a snapshot ref through the host client", async () => {
+    const tool = createBrowserTool({ agentSessionKey: "agent:main:main" });
+
+    const result = await tool.execute?.("call-1", {
+      action: "download",
+      target: "host",
+      profile: "openclaw",
+      ref: "e12",
+      path: "report.pdf",
+      targetId: "tab-1",
+      timeoutMs: "30000",
+    });
+
+    expect(browserActionsMocks.browserDownload).toHaveBeenCalledWith(undefined, {
+      ref: "e12",
+      path: "report.pdf",
+      targetId: "tab-1",
+      timeoutMs: 30_000,
+      profile: "openclaw",
+    });
+    expect(result?.details).toMatchObject({
+      download: { path: "/tmp/openclaw/downloads/report.pdf" },
+    });
+    expect(sessionTabRegistryMocks.touchSessionBrowserTab).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: "agent:main:main", targetId: "tab-1" }),
+    );
+  });
+
+  it("waits for the next host download without requiring a path", async () => {
+    const tool = createBrowserTool();
+
+    await tool.execute?.("call-1", {
+      action: "waitfordownload",
+      target: "host",
+      targetId: "tab-1",
+    });
+
+    expect(browserActionsMocks.browserWaitForDownload).toHaveBeenCalledWith(undefined, {
+      path: undefined,
+      targetId: "tab-1",
+      timeoutMs: undefined,
+      profile: undefined,
+    });
+  });
+
+  it("keeps requested download waits open across node and Gateway timeouts", async () => {
+    mockSingleBrowserProxyNode();
+    gatewayMocks.callGatewayTool.mockResolvedValueOnce({
+      ok: true,
+      payload: {
+        result: {
+          ok: true,
+          targetId: "tab-1",
+          download: { path: "/tmp/openclaw/downloads/export.csv" },
+        },
+      },
+    });
+    const tool = createBrowserTool();
+
+    await tool.execute?.("call-1", {
+      action: "waitfordownload",
+      target: "node",
+      path: "export.csv",
+      targetId: "tab-1",
+      timeoutMs: 30_000,
+    });
+
+    const { options, request } = lastNodeInvokeCall();
+    expect(options.timeoutMs).toBe(40_000);
+    expect(request.params?.path).toBe("/wait/download");
+    expect(request.params?.timeoutMs).toBe(35_000);
+    expect(request.params?.body).toEqual({
+      path: "export.csv",
+      targetId: "tab-1",
+      timeoutMs: 30_000,
+    });
+  });
+
+  it("keeps the default node download wait beyond the legacy proxy ceiling", async () => {
+    mockSingleBrowserProxyNode();
+    gatewayMocks.callGatewayTool.mockResolvedValueOnce({
+      ok: true,
+      payload: {
+        result: {
+          ok: true,
+          targetId: "tab-1",
+          download: { path: "/tmp/openclaw/downloads/report.pdf" },
+        },
+      },
+    });
+    const tool = createBrowserTool();
+
+    await tool.execute?.("call-1", {
+      action: "download",
+      target: "node",
+      ref: "e12",
+      path: "report.pdf",
+    });
+
+    const { options, request } = lastNodeInvokeCall();
+    expect(options.timeoutMs).toBe(130_000);
+    expect(request.params?.timeoutMs).toBe(125_000);
+    expect(request.params?.path).toBe("/download");
+    expect(request.params?.body).toMatchObject({ ref: "e12", path: "report.pdf" });
+  });
+
+  it.each([
+    [{ action: "download", ref: "e12" }, "path required"],
+    [{ action: "download", path: "report.pdf" }, "ref required"],
+  ])("rejects incomplete download input %#", async (input, message) => {
+    const tool = createBrowserTool();
+
+    await expect(tool.execute?.("call-1", { target: "host", ...input })).rejects.toThrow(message);
+    expect(browserActionsMocks.browserDownload).not.toHaveBeenCalled();
   });
 });
 
@@ -1896,6 +2036,48 @@ describe("browser tool act stale target recovery", () => {
     const secondOptions = mockCallArg<{ profile?: string }>(browserActionsMocks.browserAct, 1, 2);
     expect(secondOptions.profile).toBe("user");
     expect((result?.details as { ok?: unknown } | undefined)?.ok).toBe(true);
+  });
+
+  it("retries stale targetIds returned through the node browser proxy", async () => {
+    mockSingleBrowserProxyNode();
+    setResolvedBrowserProfiles({
+      user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+    });
+    gatewayMocks.callGatewayTool
+      .mockRejectedValueOnce(new Error("INVALID_REQUEST: Error: 404: tab not found"))
+      .mockResolvedValueOnce({
+        ok: true,
+        payload: { result: { tabs: [{ targetId: "only-tab" }] } },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        payload: { result: { ok: true, targetId: "only-tab" } },
+      });
+
+    const tool = createBrowserTool();
+    const result = await tool.execute?.("call-1", {
+      action: "act",
+      target: "node",
+      profile: "user",
+      request: {
+        kind: "wait",
+        targetId: "stale-tab",
+        timeMs: 1,
+      },
+    });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledTimes(3);
+    expect(nodeInvokeCall(0).request.params).toMatchObject({
+      path: "/act",
+      body: { kind: "wait", targetId: "stale-tab", timeMs: 1 },
+    });
+    expect(nodeInvokeCall(1).request.params?.path).toBe("/tabs");
+    expect(nodeInvokeCall(2).request.params).toMatchObject({
+      path: "/act",
+      body: { kind: "wait", timeMs: 1 },
+    });
+    expect(nodeInvokeCall(2).request.params?.body).not.toHaveProperty("targetId");
+    expect(result?.details).toMatchObject({ ok: true, targetId: "only-tab" });
   });
 
   it("does not retry mutating user-browser act requests without targetId", async () => {

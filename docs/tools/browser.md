@@ -118,17 +118,24 @@ channel config behavior. `plugins.entries.browser.enabled=true` and
 `tools.alsoAllow: ["browser"]` do not substitute for allowlist membership by
 themselves. Removing `plugins.allow` entirely also restores the default.
 
-## Profiles: `openclaw` vs `user`
+## Profiles: `openclaw`, `user`, `chrome`
 
 - `openclaw`: managed, isolated browser (no extension required).
 - `user`: built-in Chrome DevTools MCP attach profile for your **real
-  signed-in Chrome** session.
+  signed-in Chrome** session. Chrome shows a blocking "Allow remote debugging?"
+  prompt the first time OpenClaw attaches, so someone must be at the computer.
+- `chrome`: built-in [Chrome extension](/tools/chrome-extension) profile for
+  your **real signed-in Chrome** session. Works from a phone with nobody at the
+  desk because it drives tabs through the OpenClaw browser extension instead of
+  the remote-debugging port, so there is no "Allow remote debugging?" prompt.
 
 For agent browser tool calls:
 
 - Default: use the isolated `openclaw` browser.
-- Prefer `profile="user"` when existing logged-in sessions matter and the user
-  is at the computer to click/approve any attach prompt.
+- Prefer `profile="chrome"` (extension) when existing logged-in sessions matter
+  and the user is **away from the computer** (Telegram, WhatsApp, etc.).
+- Prefer `profile="user"` (Chrome MCP) when existing logged-in sessions matter
+  and the user is **at the computer** to approve the attach prompt.
 - `profile` is the explicit override when you want a specific browser mode.
 
 Set `browser.defaultProfile: "openclaw"` if you want managed mode by default.
@@ -310,6 +317,7 @@ main model can read the screenshot directly.
 - Default profile is `openclaw` (managed standalone). Use `defaultProfile: "user"` to opt into the signed-in user browser.
 - Auto-detect order: system default browser if Chromium-based; otherwise Chrome, Brave, Edge, Chromium, Chrome Canary.
 - `driver: "existing-session"` uses Chrome DevTools MCP instead of raw CDP. It can attach through Chrome MCP auto-connect, or through `cdpUrl` when you already have a DevTools endpoint for the running browser.
+- `driver: "extension"` drives your signed-in Chrome through the [OpenClaw Chrome extension](/tools/chrome-extension). The relay owns its loopback endpoint, so these profiles do not accept `cdpUrl`. This is the only signed-in-browser mode that works with nobody at the computer.
 - Set `browser.profiles.<name>.userDataDir` when an existing-session profile should attach to a non-default Chromium user profile (Brave, Edge, etc.). This path also accepts `~` for your OS home directory.
 
 </Accordion>

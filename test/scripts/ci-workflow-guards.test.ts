@@ -17,8 +17,16 @@ function readCiWorkflow() {
   return parse(readFileSync(".github/workflows/ci.yml", "utf8"));
 }
 
+function readAndroidReleaseWorkflow() {
+  return parse(readFileSync(".github/workflows/android-release.yml", "utf8"));
+}
+
 function readBuildArtifactsTestboxWorkflow() {
   return parse(readFileSync(".github/workflows/ci-build-artifacts-testbox.yml", "utf8"));
+}
+
+function readTestboxWorkflow() {
+  return parse(readFileSync(".github/workflows/ci-check-testbox.yml", "utf8"));
 }
 
 function readWorkflowSanityWorkflow() {
@@ -119,6 +127,37 @@ describe("ci workflow guards", () => {
     expect(readFileSync(".github/workflows/ci.yml", "utf8")).toContain(
       "OPENCLAW_CI_RUN_ANDROID: ${{ github.event_name == 'workflow_dispatch' && (inputs.release_gate || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}",
     );
+
+    for (const [jobName, job] of Object.entries(workflow.jobs)) {
+      const runsOn = (job as { "runs-on"?: unknown })["runs-on"];
+      if (typeof runsOn !== "string" || !runsOn.includes("blacksmith-")) {
+        continue;
+      }
+      expect(runsOn, `${jobName} must use GitHub-hosted capacity for release gates`).toContain(
+        "github.event_name == 'workflow_dispatch'",
+      );
+    }
+  });
+
+  it("keeps Testbox pull request validation off leased runner capacity", () => {
+    const workflow = readTestboxWorkflow();
+
+    expect(workflow.jobs.check["runs-on"]).toBe(
+      "${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}",
+    );
+    const beginStep = workflow.jobs.check.steps.find(
+      (step: { name?: string }) => step.name === "Begin Testbox",
+    );
+    const runStep = workflow.jobs.check.steps.find(
+      (step: { name?: string }) => step.name === "Run Testbox",
+    );
+    expect(beginStep).toMatchObject({
+      if: "github.event_name == 'workflow_dispatch'",
+      with: { testbox_id: "${{ inputs.testbox_id }}" },
+    });
+    expect(runStep).toMatchObject({
+      if: "github.event_name == 'workflow_dispatch' && always()",
+    });
   });
 
   it("pins every external GitHub Action reference to a full commit SHA", () => {
@@ -274,7 +313,7 @@ describe("ci workflow guards", () => {
       "github.event_name == 'pull_request'",
     );
     expect(workflow.jobs["checks-fast-core"].strategy["max-parallel"]).toBe(12);
-    expect(workflow.jobs["checks-node-core-test-nondist-shard"].strategy["max-parallel"]).toBe(24);
+    expect(workflow.jobs["checks-node-core-test-nondist-shard"].strategy["max-parallel"]).toBe(28);
     expect(workflow.jobs["checks-fast-plugin-contracts-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["checks-fast-channel-contracts-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["check-shard"].strategy["max-parallel"]).toBe(12);
@@ -285,18 +324,43 @@ describe("ci workflow guards", () => {
 
   it("installs the Android SDK platform used by Gradle", () => {
     const workflow = readCiWorkflow();
+    const releaseWorkflow = readAndroidReleaseWorkflow();
     const appCompileSdk = readAndroidCompileSdk("apps/android/app/build.gradle.kts");
     const benchmarkCompileSdk = readAndroidCompileSdk("apps/android/benchmark/build.gradle.kts");
-    const cacheStep = workflow.jobs.android.steps.find((step) => step.name === "Cache Android SDK");
-    const installStep = workflow.jobs.android.steps.find(
-      (step) => step.name === "Install Android SDK packages",
-    );
-    const packageId = `platforms;android-${appCompileSdk}`;
+    const sdkJobs = [workflow.jobs.android, releaseWorkflow.jobs.publish_signed_android_apk];
+    const packageId = `platforms;android-${appCompileSdk}.0`;
 
     expect(appCompileSdk).toBe(benchmarkCompileSdk);
-    expect(cacheStep.with.key).toContain(`platform-${appCompileSdk}-`);
-    expect(installStep.run).toContain(`"${packageId}"`);
-    expect(installStep.run).not.toContain(`${packageId}.0`);
+    for (const job of sdkJobs) {
+      const cacheStep = job.steps.find((step) => step.name === "Cache Android SDK");
+      const installStep = job.steps.find(
+        (step) => step.name === "Install Android SDK packages",
+      );
+
+      expect(cacheStep.with.key).toContain(`platform-${appCompileSdk}.0-`);
+      expect(installStep.run).toContain(`"${packageId}"`);
+    }
+  });
+
+  it("covers Android app variants, lint, and benchmark compilation", () => {
+    const workflow = readCiWorkflow();
+    const source = readFileSync(".github/workflows/ci.yml", "utf8");
+    const runStep = workflow.jobs.android.steps.find(
+      (step) => step.name === "Run Android ${{ matrix.task }}",
+    );
+
+    expect(source).toContain('{ check_name: "android-test-play", task: "test-play" }');
+    expect(source).toContain(
+      '{ check_name: "android-test-third-party", task: "test-third-party" }',
+    );
+    expect(source).toContain('{ check_name: "android-build-play", task: "build-play" }');
+    expect(runStep.run).toContain(":app:testPlayDebugUnitTest");
+    expect(runStep.run).toContain(":app:testThirdPartyDebugUnitTest");
+    expect(runStep.run).toContain(":app:assemblePlayDebug");
+    expect(runStep.run).toContain(":app:assembleThirdPartyDebug");
+    expect(runStep.run).toContain(":app:lintPlayDebug");
+    expect(runStep.run).toContain(":app:lintThirdPartyDebug");
+    expect(runStep.run).toContain(":benchmark:assembleDebug");
   });
 
   it("debounces canonical main pushes before Blacksmith admission", () => {
@@ -958,9 +1022,14 @@ describe("ci workflow guards", () => {
     const runStep = fastCoreJob.steps.find(
       (step) => step.name === "Run ${{ matrix.task }} (${{ matrix.runtime }})",
     );
-    const uploadStep = fastCoreJob.steps.find(
+    const smokeShardJob = workflow.jobs["qa-smoke-ci-shard"];
+    const smokeRunStep = smokeShardJob.steps.find(
+      (step) => step.name === "Run smoke profile shard",
+    );
+    const smokeUploadStep = smokeShardJob.steps.find(
       (step) => step.name === "Upload QA smoke profile evidence",
     );
+    const smokeAggregateJob = workflow.jobs["qa-smoke-ci"];
 
     const ciWorkflowText = readFileSync(".github/workflows/ci.yml", "utf8");
 
@@ -971,30 +1040,39 @@ describe("ci workflow guards", () => {
       expect(ciWorkflowText).not.toContain(`"${categoryId}"`);
     }
     expect(runStep.run).toContain("bundled-protocol)");
-    expect(runStep.run).toContain("qa-smoke-ci)");
+    expect(runStep.run).not.toContain("qa-smoke-ci)");
     expect(runStep.run).toContain("contracts-plugins-ci-routing)");
     expect(runStep.run).toContain("ci-routing)");
-    expect(ciWorkflowText).toContain('runner: "blacksmith-16vcpu-ubuntu-2404"');
     expect(fastCoreJob["runs-on"]).toContain("matrix.runner");
-    expect(runStep.run).toContain("--qa-profile smoke-ci");
-    expect(runStep.run).toContain("--concurrency 8");
-    expect(runStep.run).not.toContain("--category");
-    expect(runStep.run).not.toContain("--allow-failures");
-    expect(runStep.run).toContain("qa_exit_code=0");
-    expect(runStep.run).toContain('exit "$qa_exit_code"');
-    expect(runStep.run).toContain("scripts/package-openclaw-for-docker.mjs");
-    expect(runStep.run).toContain("OPENCLAW_CURRENT_PACKAGE_TGZ");
-    expect(runStep.run).toContain("--max-old-space-size=16384");
-    expect(runStep.run).not.toContain("scripts/build-all.mjs qaRuntime");
-    expect(runStep.run).not.toContain("OPENAI_API_KEY");
-    expect(runStep.run).toMatch(
-      /bundled-protocol\)\s+pnpm test:bundled\s+pnpm protocol:check\s+;;\s+qa-smoke-ci\)/,
-    );
-    expect(uploadStep.if).toBe("always() && matrix.task == 'qa-smoke-ci'");
-    expect(uploadStep.with).toMatchObject({
-      path: ".artifacts/qa-e2e/smoke-ci-profile/",
+    expect(smokeShardJob.name).toBe("QA Smoke CI (${{ matrix.name }})");
+    expect(smokeShardJob.strategy["max-parallel"]).toBe(3);
+    expect(smokeShardJob.strategy.matrix.include.map((entry) => entry.slug)).toEqual([
+      "matrix",
+      "telegram-1-of-2",
+      "telegram-2-of-2",
+    ]);
+    expect(smokeShardJob["runs-on"]).toContain("blacksmith-16vcpu-ubuntu-2404");
+    expect(smokeRunStep.run).toContain("createQaSmokeCiMatrix");
+    expect(smokeRunStep.run).toContain("--qa-profile smoke-ci");
+    expect(smokeRunStep.run).toContain("--concurrency 8");
+    expect(smokeRunStep.run).toContain('scenario_args+=(--scenario "$scenario_id")');
+    expect(smokeRunStep.run).not.toContain("--category");
+    expect(smokeRunStep.run).not.toContain("--allow-failures");
+    expect(smokeRunStep.run).toContain("qa_exit_code=0");
+    expect(smokeRunStep.run).toContain('exit "$qa_exit_code"');
+    expect(smokeRunStep.run).toContain("scripts/package-openclaw-for-docker.mjs");
+    expect(smokeRunStep.run).toContain("OPENCLAW_CURRENT_PACKAGE_TGZ");
+    expect(smokeRunStep.run).toContain("--max-old-space-size=16384");
+    expect(smokeRunStep.run).not.toContain("scripts/build-all.mjs qaRuntime");
+    expect(smokeRunStep.run).not.toContain("OPENAI_API_KEY");
+    expect(smokeUploadStep.if).toBe("always()");
+    expect(smokeUploadStep.with).toMatchObject({
+      path: ".artifacts/qa-e2e/smoke-ci-profile-${{ matrix.slug }}/",
       "if-no-files-found": "warn",
     });
+    expect(smokeAggregateJob.name).toBe("QA Smoke CI");
+    expect(smokeAggregateJob.needs).toEqual(["preflight", "qa-smoke-ci-shard"]);
+    expect(smokeAggregateJob["runs-on"]).toBe("ubuntu-24.04");
     expect(runStep.run.match(/test\/scripts\/ci-workflow-guards\.test\.ts/g)?.length).toBe(2);
   });
 

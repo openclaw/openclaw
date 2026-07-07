@@ -96,6 +96,7 @@ export const ChatSendParamsSchema = Type.Object(
     systemInputProvenance: Type.Optional(InputProvenanceSchema),
     systemProvenanceReceipt: Type.Optional(Type.String()),
     suppressCommandInterpretation: Type.Optional(Type.Boolean()),
+    expectedSessionRoutingContract: Type.Optional(NonEmptyString),
     idempotencyKey: NonEmptyString,
   },
   { additionalProperties: false },

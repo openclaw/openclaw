@@ -57,9 +57,9 @@ export interface CopilotSessionHolder {
  * fixtures may omit this field entirely and fall back to the flat
  * fields below for minimal-config wiring.
  */
-export type CopilotToolAttemptParams = Partial<EmbeddedRunAttemptParams>;
+type CopilotToolAttemptParams = Partial<EmbeddedRunAttemptParams>;
 
-export type CopilotToolCompletion = {
+type CopilotToolCompletion = {
   toolName: string;
   toolCallId: string;
   args: Record<string, unknown>;
@@ -135,13 +135,13 @@ export interface CopilotToolBridgeInput {
   }) => void | Promise<void>;
 }
 
-export interface CopilotToolBridge {
+interface CopilotToolBridge {
   cleanup?: () => void;
   sdkTools: SdkTool[];
   sourceTools: AnyAgentTool[];
 }
 
-export const SUPPORTED_TOOL_PROVIDERS: ReadonlySet<string> = new Set(["github-copilot"]);
+const SUPPORTED_TOOL_PROVIDERS: ReadonlySet<string> = new Set(["github-copilot"]);
 const BASE_COPILOT_CODING_TOOL_NAMES = new Set(["edit", "read", "write"]);
 const SHELL_COPILOT_CODING_TOOL_NAMES = new Set(["apply_patch", "exec", "process"]);
 

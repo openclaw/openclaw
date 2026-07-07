@@ -31,7 +31,7 @@ export type ExecApprovalRequest = {
   expiresAtMs: number;
 };
 
-export type ExecApprovalResolved = {
+type ExecApprovalResolved = {
   id: string;
   decision?: string | null;
   resolvedBy?: string | null;
@@ -200,7 +200,7 @@ export function parsePluginApprovalRequested(payload: unknown): ExecApprovalRequ
   };
 }
 
-export function pruneExecApprovalQueue(queue: ExecApprovalRequest[]): ExecApprovalRequest[] {
+function pruneExecApprovalQueue(queue: ExecApprovalRequest[]): ExecApprovalRequest[] {
   const now = Date.now();
   return queue.filter((entry) => entry.expiresAtMs > now);
 }
@@ -214,10 +214,7 @@ export function addExecApproval(
   return next;
 }
 
-export function removeExecApproval(
-  queue: ExecApprovalRequest[],
-  id: string,
-): ExecApprovalRequest[] {
+function removeExecApproval(queue: ExecApprovalRequest[], id: string): ExecApprovalRequest[] {
   return pruneExecApprovalQueue(queue).filter((entry) => entry.id !== id);
 }
 

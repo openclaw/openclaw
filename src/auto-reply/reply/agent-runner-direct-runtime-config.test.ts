@@ -135,7 +135,9 @@ function createReplyOperation(): ReplyOperation {
     abortByUser: vi.fn(),
     abortForRestart: vi.fn(),
     terminalRecovery: false,
+    acceptedSteeredInboundAudio: false,
     markTerminalRecovery: vi.fn(),
+    markAcceptedSteeredInboundAudio: vi.fn(),
   };
 }
 
@@ -271,6 +273,13 @@ describe("runReplyAgent runtime config", () => {
       requesterSenderE164: undefined,
     });
     expect(runPreflightCompactionIfNeededMock).toHaveBeenCalledTimes(1);
+    expect(runMemoryFlushIfNeededMock).toHaveBeenCalledTimes(1);
+    expect(runMemoryFlushIfNeededMock.mock.invocationCallOrder[0]).toBeLessThan(
+      runPreflightCompactionIfNeededMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    const memoryCall = requireMaintenanceCall(runMemoryFlushIfNeededMock, "runMemoryFlushIfNeeded");
+    expect(memoryCall.cfg).toBe(freshCfg);
+    expect(memoryCall.followupRun).toBe(followupRun);
     const preflightCall = requireMaintenanceCall(
       runPreflightCompactionIfNeededMock,
       "runPreflightCompactionIfNeeded",
@@ -289,8 +298,6 @@ describe("runReplyAgent runtime config", () => {
     followupRun.run.runtimePolicySessionKey = runtimePolicySessionKey;
     replyParams.sessionKey = "agent:main:main";
     replyParams.runtimePolicySessionKey = runtimePolicySessionKey;
-    runPreflightCompactionIfNeededMock.mockResolvedValue(undefined);
-    runMemoryFlushIfNeededMock.mockRejectedValue(sentinelError);
 
     await expect(runReplyAgent(replyParams)).rejects.toBe(sentinelError);
 
@@ -431,6 +438,82 @@ describe("runReplyAgent runtime config", () => {
       }),
     );
     expect(runAgentTurnWithFallbackMock).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the compacted session when preflight recovers an exhausted memory flush", async () => {
+    const { replyParams } = createDirectRuntimeReplyParams({
+      shouldFollowup: false,
+      isActive: false,
+    });
+    const sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      compactionCount: 4,
+    };
+    replyParams.sessionEntry = sessionEntry;
+    runMemoryFlushIfNeededMock.mockResolvedValue({
+      sessionEntry,
+      outcome: "exhausted",
+    });
+    runPreflightCompactionIfNeededMock.mockImplementation(
+      async (params: { sessionEntry?: typeof sessionEntry }) => {
+        expect(params.sessionEntry?.sessionId).toBe("session-1");
+        return { ...params.sessionEntry, compactionCount: 5 };
+      },
+    );
+
+    await expect(runReplyAgent(replyParams)).resolves.toEqual({ text: "main reply" });
+
+    expect(resetReplyRunSessionMock).not.toHaveBeenCalled();
+    expect(runAgentTurnWithFallbackMock).toHaveBeenCalledOnce();
+  });
+
+  it("rotates when preflight cannot recover an exhausted memory flush", async () => {
+    const { replyParams } = createDirectRuntimeReplyParams({
+      shouldFollowup: false,
+      isActive: false,
+    });
+    runMemoryFlushIfNeededMock.mockResolvedValue({
+      sessionEntry: { sessionId: "session-1", updatedAt: 1, compactionCount: 4 },
+      outcome: "exhausted",
+    });
+    runPreflightCompactionIfNeededMock.mockRejectedValue(
+      new Error("Preflight compaction required but failed: context_overflow"),
+    );
+
+    await expect(runReplyAgent(replyParams)).resolves.toEqual({ text: "main reply" });
+
+    expect(resetReplyRunSessionMock).toHaveBeenCalledOnce();
+    expect(resetReplyRunSessionMock.mock.calls[0]?.[0]).toMatchObject({
+      options: {
+        failureLabel: "memory flush exhaustion",
+        cleanupTranscripts: false,
+      },
+    });
+    expect(runAgentTurnWithFallbackMock).toHaveBeenCalledOnce();
+  });
+
+  it("surfaces unrelated preflight failures after an exhausted memory flush", async () => {
+    const { replyParams } = createDirectRuntimeReplyParams({
+      shouldFollowup: false,
+      isActive: false,
+    });
+    runMemoryFlushIfNeededMock.mockResolvedValue({
+      sessionEntry: { sessionId: "session-1", updatedAt: 1, compactionCount: 4 },
+      outcome: "exhausted",
+    });
+    runPreflightCompactionIfNeededMock.mockRejectedValue(
+      new Error("Preflight compaction required but failed: auth profile mismatch"),
+    );
+
+    const result = await runReplyAgent(replyParams);
+
+    if (!result || Array.isArray(result)) {
+      throw new Error("expected a single preflight compaction failure reply payload");
+    }
+    expect(result.text).toContain("auto-compaction could not recover");
+    expect(resetReplyRunSessionMock).not.toHaveBeenCalled();
+    expect(runAgentTurnWithFallbackMock).not.toHaveBeenCalled();
   });
 
   it("does not start the main turn after cancellation during memory flush", async () => {

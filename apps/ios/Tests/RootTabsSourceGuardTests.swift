@@ -291,17 +291,19 @@ struct RootTabsSourceGuardTests {
 
         #expect(!aboutDestination.contains("detailStatusCard("))
         #expect(aboutDestination.contains("detailListCard"))
-        #expect(aboutDestination.contains("self.detailRow(\"OpenClaw app version\""))
-        #expect(aboutDestination.contains("self.detailRow(\"Device\", value: DeviceInfoHelper.deviceFamily())"))
+        #expect(aboutDestination.contains("SettingsDetailRow(\"OpenClaw app version\""))
+        #expect(aboutDestination.contains("SettingsDetailRow(\"Device\", value: DeviceInfoHelper.deviceFamily())"))
         #expect(aboutDestination
-            .contains("self.detailRow(\"iOS\", value: DeviceInfoHelper.iOSVersionStringForDisplay())"))
-        #expect(!aboutDestination.contains("self.detailRow(\"Version\""))
-        #expect(!aboutDestination.contains("self.detailRow(\"Platform\""))
-        #expect(!aboutDestination.contains("self.detailRow(\"Model\""))
-        #expect(diagnosticsDestination.contains("self.detailRow(\"Device\", value: DeviceInfoHelper.deviceFamily())"))
+            .contains("SettingsDetailRow(\"iOS\", value: DeviceInfoHelper.iOSVersionStringForDisplay())"))
+        #expect(!aboutDestination.contains("SettingsDetailRow(\"Version\""))
+        #expect(!aboutDestination.contains("SettingsDetailRow(\"Platform\""))
+        #expect(!aboutDestination.contains("SettingsDetailRow(\"Model\""))
         #expect(diagnosticsDestination
-            .contains("self.detailRow(\"Platform\", value: DeviceInfoHelper.platformStringForDisplay())"))
-        #expect(diagnosticsDestination.contains("self.detailRow(\"Model\", value: DeviceInfoHelper.modelIdentifier())"))
+            .contains("SettingsDetailRow(\"Device\", value: DeviceInfoHelper.deviceFamily())"))
+        #expect(diagnosticsDestination
+            .contains("SettingsDetailRow(\"Platform\", value: DeviceInfoHelper.platformStringForDisplay())"))
+        #expect(diagnosticsDestination
+            .contains("SettingsDetailRow(\"Model\", value: DeviceInfoHelper.modelIdentifier())"))
     }
 
     @Test func `routed headers use shared adaptive layout`() throws {
@@ -630,7 +632,8 @@ struct RootTabsSourceGuardTests {
         #expect(activitySource.contains("struct IPadActivityScreen: View"))
         #expect(activitySource.contains("self.appModel.makeChatTransport()"))
         #expect(appModelSource.contains("return IOSGatewayChatTransport("))
-        #expect(appModelSource.contains("globalAgentId: self.chatAgentId"))
+        #expect(appModelSource.contains("globalAgentId: self.chatDeliveryAgentId"))
+        #expect(!appModelSource.contains("defaultAgentId: self.gatewayDefaultAgentId"))
         #expect(activitySource.contains("IPadSidebarScreenChrome("))
         #expect(!taskSource.contains("struct IPadActivityScreen"))
         #expect(!taskSource.contains("import OpenClawChatUI"))
@@ -789,6 +792,14 @@ struct RootTabsSourceGuardTests {
             settingsPendingSetupHandler.range(of: "self.scannerResultHandoff.cancel()"))
         let settingsSetupStaging = try #require(
             settingsPendingSetupHandler.range(of: "self.stagedGatewaySetupLink = link"))
+        let scannerMake = try Self.extract(
+            scannerSource,
+            from: "func makeUIViewController",
+            to: "func updateUIViewController")
+        let scannerLifecycle = try Self.extract(
+            scannerSource,
+            from: "final class QRScannerContainerViewController",
+            to: "final class Coordinator")
         let scannerDelivery = try Self.extract(
             scannerSource,
             from: "private func deliver(_ result: QRScannerResult",
@@ -796,6 +807,12 @@ struct RootTabsSourceGuardTests {
         let stopScanning = try #require(scannerDelivery.range(of: "scanner.stopScanning()"))
         let deliverResult = try #require(scannerDelivery.range(of: "self.parent.onResult(result)"))
         #expect(scannerSource.contains("static let defaultSettlingNanoseconds: UInt64 = 1_200_000_000"))
+        #expect(scannerSource.contains("QRScannerContainerViewController(coordinator: context.coordinator)"))
+        #expect(!scannerMake.contains("startScanning()"))
+        #expect(scannerLifecycle.contains("override func viewDidAppear"))
+        #expect(scannerLifecycle.contains("try self.scanner.startScanning()"))
+        #expect(scannerLifecycle.contains("override func viewWillDisappear"))
+        #expect(scannerLifecycle.contains("self.stopScannerCapture()"))
         let activeProblemToast = try Self.extract(
             rootSource,
             from: "private var activeGatewayProblemToast: GatewayConnectionProblem?",
@@ -889,7 +906,7 @@ struct RootTabsSourceGuardTests {
         #expect(rootSource.contains("self.appModel.gatewayProblemReportCount"))
         #expect(rootSource.contains("GatewayToastShakeEffect"))
 
-        #expect(actionsSource.contains("await self.gatewayController.connectLastKnown()"))
+        #expect(actionsSource.contains("await self.gatewayController.connectActiveGateway()"))
         #expect(actionsSource.contains("self.gatewayController.refreshActiveGatewayRegistrationFromSettings()"))
         #expect(actionsSource.contains("self.gatewayController.restartDiscovery()"))
         #expect(actionsSource.contains("await self.appModel.refreshGatewayOverviewIfConnected()"))
@@ -914,7 +931,7 @@ struct RootTabsSourceGuardTests {
         #expect(rootSource.contains("GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: instanceId)"))
         #expect(rootSource.contains("self.gatewayController.trustRotatedGatewayCertificate(from: problem)"))
         #expect(rootSource.contains("GatewayProblemPrimaryAction.openProtocolMismatchHelpIfNeeded(problem)"))
-        #expect(rootSource.contains("await self.gatewayController.connectLastKnown()"))
+        #expect(rootSource.contains("await self.gatewayController.connectActiveGateway()"))
 
         #expect(rootSource.contains("GatewayProblemDetailsSheet("))
         #expect(onboardingSetupOwnerGuard.lowerBound < consumedGatewaySetup.lowerBound)
@@ -1237,10 +1254,13 @@ struct RootTabsSourceGuardTests {
         let appModelSource = try String(contentsOf: Self.nodeAppModelSourceURL(), encoding: .utf8)
         let transportSource = try String(contentsOf: Self.iOSGatewayChatTransportSourceURL(), encoding: .utf8)
 
-        #expect(chatSource.matches(of: /self\.appModel\.makeChatTransport\(\)/).count == 2)
-        #expect(chatSource.contains("self.viewModelTransportAgentID != transportAgentID"))
+        #expect(chatSource.contains(
+            "self.appModel.makeChatTransport(outboxGatewayID: offlineStore?.gatewayID)"))
+        #expect(chatSource.contains("activeAgentId: self.appModel.chatDeliveryAgentId"))
+        #expect(chatSource.contains("Self.requiresViewModelRebuild("))
+        #expect(chatSource.contains("viewModel.syncSessionRoutingContract"))
         #expect(appModelSource.contains("return IOSGatewayChatTransport("))
-        #expect(appModelSource.contains("globalAgentId: self.chatAgentId"))
+        #expect(appModelSource.contains("globalAgentId: self.chatDeliveryAgentId"))
         #expect(appModelSource.contains("ifCurrentRoute: operatorRoute"))
         #expect(transportSource.matches(of: /ifCurrentRoute: expectedRoute/).count == 3)
         #expect(channelsSource.contains("\"clickclack\": SettingsChannelFallbackMetadata"))

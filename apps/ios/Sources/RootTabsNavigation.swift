@@ -46,6 +46,7 @@ extension RootTabs {
         case skillWorkshop
         case instances
         case sessions
+        case files
         case dreaming
         case usage
         case cron
@@ -69,6 +70,7 @@ extension RootTabs {
             case .skillWorkshop: "Skill Workshop"
             case .instances: "Instances"
             case .sessions: "Sessions"
+            case .files: "Files"
             case .dreaming: "Dreaming"
             case .usage: "Usage"
             case .cron: "Cron Jobs"
@@ -97,6 +99,7 @@ extension RootTabs {
             case .skillWorkshop: "hammer"
             case .instances: "dot.radiowaves.left.and.right"
             case .sessions: "doc.text"
+            case .files: "folder.fill"
             case .dreaming: "moon.stars"
             case .usage: "chart.bar.xaxis"
             case .cron: "timer"
@@ -117,7 +120,8 @@ extension RootTabs {
                 .agent
             case .settings, .gateway:
                 .settings
-            case .overview, .activity, .workboard, .skillWorkshop, .instances, .sessions, .dreaming,
+            case .overview, .activity, .workboard, .skillWorkshop, .instances, .sessions, .files,
+                 .dreaming,
                  .usage,
                  .cron, .terminal, .docs:
                 .control
@@ -129,6 +133,7 @@ extension RootTabs {
             case .gateway:
                 .gateway
             case .chat, .talk, .overview, .activity, .agents, .workboard, .skillWorkshop, .instances, .sessions,
+                 .files,
                  .dreaming,
                  .usage, .cron, .terminal, .settings, .docs:
                 nil
@@ -199,7 +204,8 @@ extension RootTabs {
         switch destination {
         case .chat, .talk, .agents, .gateway, .settings:
             true
-        case .overview, .activity, .workboard, .skillWorkshop, .instances, .sessions, .dreaming,
+        case .overview, .activity, .workboard, .skillWorkshop, .instances, .sessions, .files,
+             .dreaming,
              .usage,
              .cron, .terminal, .docs:
             false
@@ -237,13 +243,15 @@ extension RootTabs {
         if gatewayConnected {
             return .none
         }
+        // Saved gateway state survives independently of the onboarding markers.
+        // Explicit resets bypass this route through evaluateOnboardingPresentation(force:).
+        if hasExistingGatewayConfig {
+            return .none
+        }
         if shouldPresentOnLaunch || !hasConnectedOnce || !onboardingComplete {
             return .onboarding
         }
-        if !hasExistingGatewayConfig {
-            return .settings
-        }
-        return .none
+        return .settings
     }
 
     static func shouldPresentQuickSetup(
@@ -283,6 +291,7 @@ extension RootTabs {
                 .skillWorkshop,
                 .instances,
                 .sessions,
+                .files,
                 .dreaming,
                 .usage,
                 .cron,

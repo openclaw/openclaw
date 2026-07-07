@@ -267,6 +267,12 @@ const SLACK_DTS_INPUTS = [
 ];
 const SLACK_DTS_STAMP = "dist/plugin-sdk/extensions/slack/.boundary-dts.stamp";
 const SLACK_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/slack/api.d.ts"];
+const TELEGRAM_DTS_INPUTS = [
+  "extensions/telegram/api.ts",
+  "extensions/telegram/tsconfig.json",
+];
+const TELEGRAM_DTS_STAMP = "dist/plugin-sdk/extensions/telegram/.boundary-dts.stamp";
+const TELEGRAM_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/telegram/api.d.ts"];
 const WHATSAPP_DTS_INPUTS = [
   "extensions/whatsapp/api.ts",
   "extensions/whatsapp/src/qa-driver.runtime.ts",
@@ -748,6 +754,12 @@ async function main(argv = process.argv.slice(2)) {
         outputPaths: [SLACK_DTS_STAMP, ...SLACK_DTS_REQUIRED_OUTPUTS],
         includeFile: isRelevantTypeInput,
       }) && !hasMissingOutput(SLACK_DTS_REQUIRED_OUTPUTS);
+    const telegramDtsFresh =
+      isArtifactSetFresh({
+        inputPaths: TELEGRAM_DTS_INPUTS,
+        outputPaths: [TELEGRAM_DTS_STAMP, ...TELEGRAM_DTS_REQUIRED_OUTPUTS],
+        includeFile: isRelevantTypeInput,
+      }) && !hasMissingOutput(TELEGRAM_DTS_REQUIRED_OUTPUTS);
     const whatsappDtsFresh =
       isArtifactSetFresh({
         inputPaths: WHATSAPP_DTS_INPUTS,
@@ -913,6 +925,37 @@ async function main(argv = process.argv.slice(2)) {
         });
       } else {
         process.stdout.write("[whatsapp boundary dts] fresh; skipping\n");
+      }
+      if (!telegramDtsFresh) {
+        removeIncrementalStateForMissingOutput({
+          outputPaths: TELEGRAM_DTS_REQUIRED_OUTPUTS,
+          tsBuildInfoPath: "dist/plugin-sdk/extensions/telegram/.tsbuildinfo",
+        });
+        dependentSteps.push({
+          label: "telegram boundary dts",
+          args: [
+            runTsgoScript,
+            "-p",
+            "extensions/telegram/tsconfig.json",
+            "--declaration",
+            "true",
+            "--emitDeclarationOnly",
+            "true",
+            "--noEmit",
+            "false",
+            "--outDir",
+            "dist/plugin-sdk/extensions/telegram",
+            "--rootDir",
+            "extensions/telegram",
+            "--tsBuildInfoFile",
+            "dist/plugin-sdk/extensions/telegram/.tsbuildinfo",
+          ],
+          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
+          timeoutMs: 300_000,
+          stampPath: TELEGRAM_DTS_STAMP,
+        });
+      } else {
+        process.stdout.write("[telegram boundary dts] fresh; skipping\n");
       }
     }
 

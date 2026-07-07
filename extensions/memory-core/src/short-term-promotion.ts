@@ -2849,55 +2849,43 @@ export async function removeGroundedShortTermCandidates(params: {
   return { removed, storePath };
 }
 
+async function writeRawShortTermStoreForTest(
+  workspaceDir: string,
+  raw: unknown,
+  namespace: string,
+  metaKey: "recall" | "phase",
+): Promise<void> {
+  const record = asRecord(raw);
+  const entries = asRecord(record?.entries);
+  await Promise.all([
+    writeMemoryCoreWorkspaceEntries({
+      namespace,
+      workspaceDir,
+      entries: entries ? Object.entries(entries).map(([key, value]) => ({ key, value })) : [],
+    }),
+    writeMemoryCoreWorkspaceEntry({
+      namespace: SHORT_TERM_META_NAMESPACE,
+      workspaceDir,
+      key: metaKey,
+      value: {
+        updatedAt:
+          typeof record?.updatedAt === "string" && record.updatedAt.trim()
+            ? record.updatedAt
+            : new Date().toISOString(),
+      },
+    }),
+  ]);
+}
+
 export const testing = {
   parseLockOwnerPid,
   isProcessLikelyAlive,
   readRecallStore: readStore,
   readPhaseSignalStore,
-  writeRawRecallStore: async (workspaceDir: string, raw: unknown) => {
-    const record = asRecord(raw);
-    const entries = asRecord(record?.entries);
-    await Promise.all([
-      writeMemoryCoreWorkspaceEntries({
-        namespace: SHORT_TERM_RECALL_NAMESPACE,
-        workspaceDir,
-        entries: entries ? Object.entries(entries).map(([key, value]) => ({ key, value })) : [],
-      }),
-      writeMemoryCoreWorkspaceEntry({
-        namespace: SHORT_TERM_META_NAMESPACE,
-        workspaceDir,
-        key: "recall",
-        value: {
-          updatedAt:
-            typeof record?.updatedAt === "string" && record.updatedAt.trim()
-              ? record.updatedAt
-              : new Date().toISOString(),
-        },
-      }),
-    ]);
-  },
-  writeRawPhaseSignalStore: async (workspaceDir: string, raw: unknown) => {
-    const record = asRecord(raw);
-    const entries = asRecord(record?.entries);
-    await Promise.all([
-      writeMemoryCoreWorkspaceEntries({
-        namespace: SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
-        workspaceDir,
-        entries: entries ? Object.entries(entries).map(([key, value]) => ({ key, value })) : [],
-      }),
-      writeMemoryCoreWorkspaceEntry({
-        namespace: SHORT_TERM_META_NAMESPACE,
-        workspaceDir,
-        key: "phase",
-        value: {
-          updatedAt:
-            typeof record?.updatedAt === "string" && record.updatedAt.trim()
-              ? record.updatedAt
-              : new Date().toISOString(),
-        },
-      }),
-    ]);
-  },
+  writeRawRecallStore: (workspaceDir: string, raw: unknown) =>
+    writeRawShortTermStoreForTest(workspaceDir, raw, SHORT_TERM_RECALL_NAMESPACE, "recall"),
+  writeRawPhaseSignalStore: (workspaceDir: string, raw: unknown) =>
+    writeRawShortTermStoreForTest(workspaceDir, raw, SHORT_TERM_PHASE_SIGNAL_NAMESPACE, "phase"),
   writeShortTermLock: async (workspaceDir: string, entry: ShortTermLockEntry) => {
     await openMemoryCoreStateStore<ShortTermLockEntry>({
       namespace: SHORT_TERM_LOCK_NAMESPACE,

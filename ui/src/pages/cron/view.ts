@@ -1,8 +1,15 @@
 // Control UI view renders cron screen content.
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
+import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import type { ChannelUiMetaEntry, CronJob, CronRunLogEntry, CronStatus } from "../../api/types.ts";
+import type {
+  ChannelUiMetaEntry,
+  CronDelivery,
+  CronJob,
+  CronRunLogEntry,
+  CronStatus,
+} from "../../api/types.ts";
 import type {
   CronDeliveryStatus,
   CronJobsEnabledFilter,
@@ -13,6 +20,7 @@ import type {
   CronSortDir,
 } from "../../api/types.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
+import { icon } from "../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
@@ -30,7 +38,7 @@ import { formatCronSchedule, formatNextRun } from "../../lib/presenter.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
 import { normalizeStringEntries, uniqueStrings } from "../../lib/string-coerce.ts";
 
-export type CronProps = {
+type CronProps = {
   basePath: string;
   loading: boolean;
   jobsLoadingMore: boolean;
@@ -440,7 +448,7 @@ export function renderCron(props: CronProps) {
           <div class="cron-summary-label">${t("cron.summary.jobs")}</div>
           <div class="cron-summary-value">${props.status?.jobs ?? t("common.na")}</div>
         </div>
-        <div class="cron-summary-item cron-summary-item--wide">
+        <div class="cron-summary-item">
           <div class="cron-summary-label">${t("cron.summary.nextWake")}</div>
           <div class="cron-summary-value">${formatNextRun(props.status?.nextWakeAtMs ?? null)}</div>
         </div>
@@ -613,7 +621,11 @@ export function renderCron(props: CronProps) {
               `
             : html`
                 <div class="list" style="margin-top: 12px;">
-                  ${props.jobs.map((job) => renderJob(job, props))}
+                  ${repeat(
+                    props.jobs,
+                    (job) => job.id,
+                    (job) => renderJob(job, props),
+                  )}
                 </div>
               `}
           ${props.jobsHasMore
@@ -1609,122 +1621,142 @@ function renderFieldError(message?: string, id?: string) {
 
 function renderJob(job: CronJob, props: CronProps) {
   const isSelected = props.runsJobId === job.id;
-  const itemClass = `list-item list-item-clickable cron-job${isSelected ? " list-item-selected" : ""}`;
-  const modelLabel = getCronJobModelLabel(job);
+  const itemClass = [
+    "list-item",
+    "list-item-clickable",
+    "cron-job",
+    isSelected ? "list-item-selected" : "",
+    job.enabled ? "" : "cron-job--disabled",
+  ]
+    .filter(Boolean)
+    .join(" ");
   const selectAnd = (action: () => void) => {
     props.onLoadRuns(job.id);
     action();
   };
+  const scrollToRunHistory = () => {
+    requestAnimationFrame(() => {
+      const runHistory = document.querySelector("[data-run-history]");
+      if (runHistory instanceof HTMLElement && typeof runHistory.scrollIntoView === "function") {
+        runHistory.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    });
+  };
+  const menuItem = (label: string, action: () => void, options?: { danger?: boolean }) => html`
+    <button
+      class=${options?.danger ? "cron-job-menu__item danger" : "cron-job-menu__item"}
+      role="menuitem"
+      ?disabled=${props.busy}
+      @click=${(event: Event) => {
+        // Close the details-based menu before acting so it does not linger open.
+        (event.currentTarget as HTMLElement).closest("details")?.removeAttribute("open");
+        selectAnd(action);
+      }}
+    >
+      ${label}
+    </button>
+  `;
   return html`
     <div class=${itemClass} @click=${() => props.onLoadRuns(job.id)}>
-      <div class="cron-job-header">
-        <div class="list-main">
-          <div class="list-title">${job.name}</div>
-          <div class="list-sub">${formatCronSchedule(job)}</div>
-          ${job.agentId
-            ? html`<div class="muted cron-job-agent">
-                ${t("cron.jobDetail.agent")}: ${job.agentId}
-              </div>`
-            : nothing}
+      <div class="cron-job-row">
+        <div class="cron-job-main">
+          <div class="cron-job-title-line">
+            <span class="list-title">${job.name}</span>
+            ${renderJobStatusPill(job)}
+            ${job.enabled ? nothing : html`<span class="chip">${t("cron.jobList.disabled")}</span>`}
+          </div>
+          <div class="cron-job-meta-line">${renderJobMeta(job)}</div>
         </div>
-        <div class="list-meta">${renderJobState(job)}</div>
-      </div>
-      ${renderJobPayload(job)}
-      <div class="cron-job-footer">
-        <div class="chip-row cron-job-chips">
-          <span class=${`chip ${job.enabled ? "chip-ok" : "chip-danger"}`}>
-            ${job.enabled ? t("cron.jobList.enabled") : t("cron.jobList.disabled")}
-          </span>
-          <span class="chip">${job.sessionTarget}</span>
-          <span class="chip">${job.wakeMode}</span>
-          ${modelLabel
-            ? html`<span class="chip">${t("cron.form.model")}: ${modelLabel}</span>`
-            : nothing}
-        </div>
-        <div class="row cron-job-actions">
+        <div class="cron-job-actions" @click=${(event: Event) => event.stopPropagation()}>
           <button
-            class="btn"
+            class="btn btn--sm"
             ?disabled=${props.busy}
-            @click=${(event: Event) => {
-              event.stopPropagation();
-              selectAnd(() => props.onEdit(job));
-            }}
-          >
-            ${t("cron.jobList.edit")}
-          </button>
-          <button
-            class="btn"
-            ?disabled=${props.busy}
-            @click=${(event: Event) => {
-              event.stopPropagation();
-              selectAnd(() => props.onClone(job));
-            }}
-          >
-            ${t("cron.jobList.clone")}
-          </button>
-          <button
-            class="btn"
-            ?disabled=${props.busy}
-            @click=${(event: Event) => {
-              event.stopPropagation();
-              selectAnd(() => props.onToggle(job, !job.enabled));
-            }}
-          >
-            ${job.enabled ? t("cron.jobList.disable") : t("cron.jobList.enable")}
-          </button>
-          <button
-            class="btn"
-            ?disabled=${props.busy}
-            @click=${(event: Event) => {
-              event.stopPropagation();
-              selectAnd(() => props.onRun(job, "force"));
-            }}
+            @click=${() => selectAnd(() => props.onRun(job, "force"))}
           >
             ${t("cron.jobList.run")}
           </button>
           <button
-            class="btn"
+            class="btn btn--sm"
             ?disabled=${props.busy}
-            @click=${(event: Event) => {
-              event.stopPropagation();
-              selectAnd(() => props.onRun(job, "due"));
-            }}
+            @click=${() => selectAnd(() => props.onEdit(job))}
           >
-            Run if due
+            ${t("cron.jobList.edit")}
           </button>
-          <button
-            class="btn"
-            ?disabled=${props.busy}
-            @click=${(event: Event) => {
-              event.stopPropagation();
-              props.onLoadRuns(job.id);
-              requestAnimationFrame(() => {
-                const runHistory = document.querySelector("[data-run-history]");
-                if (
-                  runHistory instanceof HTMLElement &&
-                  typeof runHistory.scrollIntoView === "function"
-                ) {
-                  runHistory.scrollIntoView({ behavior: "smooth", block: "start" });
-                }
-              });
-            }}
-          >
-            ${t("cron.jobList.history")}
-          </button>
-          <button
-            class="btn danger"
-            ?disabled=${props.busy}
-            @click=${(event: Event) => {
-              event.stopPropagation();
-              selectAnd(() => props.onRemove(job));
-            }}
-          >
-            ${t("cron.jobList.remove")}
-          </button>
+          <details class="cron-job-menu">
+            <summary
+              class="btn btn--sm cron-job-menu__trigger"
+              role="button"
+              aria-haspopup="menu"
+              aria-label=${t("cron.jobList.moreActions")}
+              title=${t("cron.jobList.moreActions")}
+            >
+              ${icon("moreHorizontal")}
+            </summary>
+            <div class="cron-job-menu__panel" role="menu">
+              ${menuItem(t("cron.jobList.runIfDue"), () => props.onRun(job, "due"))}
+              ${menuItem(job.enabled ? t("cron.jobList.disable") : t("cron.jobList.enable"), () =>
+                props.onToggle(job, !job.enabled),
+              )}
+              ${menuItem(t("cron.jobList.clone"), () => props.onClone(job))}
+              ${menuItem(t("cron.jobList.history"), scrollToRunHistory)}
+              ${menuItem(t("cron.jobList.remove"), () => props.onRemove(job), { danger: true })}
+            </div>
+          </details>
         </div>
       </div>
+      ${renderJobDetails(job)}
     </div>
   `;
+}
+
+function renderJobMeta(job: CronJob) {
+  const nextRunAtMs = job.state?.nextRunAtMs;
+  const lastRunAtMs = job.state?.lastRunAtMs;
+  const payload = getCronJobPayload(job);
+  const configuredModel = payload?.kind === "agentTurn" ? payload.model?.trim() : undefined;
+  const segments = [html`<span>${formatCronSchedule(job)}</span>`];
+  if (job.agentId) {
+    segments.push(html`<span>${t("cron.jobDetail.agent")}: ${job.agentId}</span>`);
+  }
+  // Surface explicit model overrides at a glance; default-model jobs stay quiet here.
+  if (configuredModel) {
+    segments.push(html`<span>${t("cron.form.model")}: ${configuredModel}</span>`);
+  }
+  if (typeof nextRunAtMs === "number" && Number.isFinite(nextRunAtMs)) {
+    segments.push(
+      html`<span title=${formatMs(nextRunAtMs)}>
+        ${t("cron.jobState.next")} ${formatRelativeTimestamp(nextRunAtMs)}
+      </span>`,
+    );
+  }
+  if (typeof lastRunAtMs === "number" && Number.isFinite(lastRunAtMs)) {
+    segments.push(
+      html`<span title=${formatMs(lastRunAtMs)}>
+        ${t("cron.jobState.last")} ${formatRelativeTimestamp(lastRunAtMs)}
+      </span>`,
+    );
+  }
+  return segments;
+}
+
+function renderJobStatusPill(job: CronJob) {
+  const rawStatus = resolveCronJobLastRunStatus(job);
+  if (rawStatus !== "ok" && rawStatus !== "error" && rawStatus !== "skipped") {
+    return nothing;
+  }
+  const statusClass =
+    rawStatus === "ok"
+      ? "cron-job-status-ok"
+      : rawStatus === "error"
+        ? "cron-job-status-error"
+        : "cron-job-status-skipped";
+  const statusLabel =
+    rawStatus === "ok"
+      ? t("cron.runs.runStatusOk")
+      : rawStatus === "error"
+        ? t("cron.runs.runStatusError")
+        : t("cron.runs.runStatusSkipped");
+  return html`<span class=${`cron-job-status-pill ${statusClass}`}>${statusLabel}</span>`;
 }
 
 function getCronJobModelLabel(job: CronJob) {
@@ -1735,133 +1767,95 @@ function getCronJobModelLabel(job: CronJob) {
   return payload.model?.trim() || t("agents.default");
 }
 
-function renderJobPayload(job: CronJob) {
+function formatDeliveryTarget(delivery: CronDelivery) {
+  if (delivery.mode === "webhook") {
+    return delivery.to ? ` (${delivery.to})` : "";
+  }
+  if (delivery.channel || delivery.to) {
+    return ` (${delivery.channel ?? "last"}${delivery.to ? ` -> ${delivery.to}` : ""})`;
+  }
+  return "";
+}
+
+function renderJobDetails(job: CronJob) {
   const payload = getCronJobPayload(job);
   if (!payload) {
-    return html``;
+    return nothing;
   }
-  if (payload.kind === "systemEvent") {
-    return html`<div class="cron-job-detail">
-      <span class="cron-job-detail-label">${t("cron.jobDetail.system")}</span>
-      <span class="muted cron-job-detail-value">${payload.text}</span>
-    </div>`;
-  }
-
-  const delivery = job.delivery;
-  const deliveryTarget =
-    delivery?.mode === "webhook"
-      ? delivery.to
-        ? ` (${delivery.to})`
-        : ""
-      : delivery?.channel || delivery?.to
-        ? ` (${delivery.channel ?? "last"}${delivery.to ? ` -> ${delivery.to}` : ""})`
-        : "";
-
-  if (payload.kind === "command") {
-    return html`
-      <div class="cron-job-detail">
-        <div class="cron-job-detail-section">
-          <span class="cron-job-detail-label">${t("cron.jobDetail.command")}</span>
-          <code class="muted cron-job-detail-value">${payload.argv.join(" ")}</code>
-        </div>
-        ${payload.cwd
-          ? html`<div class="cron-job-detail-section">
-              <span class="cron-job-detail-label">${t("cron.jobDetail.cwd")}</span>
-              <span class="muted cron-job-detail-value">${payload.cwd}</span>
-            </div>`
-          : nothing}
-        ${delivery
-          ? html`<div class="cron-job-detail-section">
-              <span class="cron-job-detail-label">${t("cron.jobDetail.delivery")}</span>
-              <span class="muted cron-job-detail-value">${delivery.mode}${deliveryTarget}</span>
-            </div>`
-          : nothing}
-      </div>
-    `;
-  }
-
+  const label =
+    payload.kind === "systemEvent"
+      ? t("cron.jobDetail.system")
+      : payload.kind === "command"
+        ? t("cron.jobDetail.command")
+        : t("cron.jobDetail.prompt");
+  const preview =
+    payload.kind === "systemEvent"
+      ? payload.text
+      : payload.kind === "command"
+        ? payload.argv.join(" ")
+        : payload.message;
+  // Expanding/reading details must not re-route the run-history selection.
   return html`
-    <div class="cron-job-detail">
-      <div class="cron-job-detail-section">
-        <span class="cron-job-detail-label">${t("cron.jobDetail.prompt")}</span>
-        <div class="muted cron-job-detail-value chat-text" @click=${stopPropagationForInteractive}>
-          ${unsafeHTML(toSanitizedMarkdownHtml(payload.message))}
-        </div>
-      </div>
-      <div class="cron-job-detail-section">
-        <span class="cron-job-detail-label">${t("cron.form.model")}</span>
-        <span class="muted cron-job-detail-value">${getCronJobModelLabel(job)}</span>
-      </div>
-      ${delivery
-        ? html`<div class="cron-job-detail-section">
-            <span class="cron-job-detail-label">${t("cron.jobDetail.delivery")}</span>
-            <span class="muted cron-job-detail-value">${delivery.mode}${deliveryTarget}</span>
-          </div>`
-        : nothing}
-    </div>
+    <details class="cron-job-details" @click=${(event: Event) => event.stopPropagation()}>
+      <summary class="cron-job-details__summary">
+        ${icon("chevronRight")}
+        <span class="cron-job-detail-label">${label}</span>
+        <span class="cron-job-details__preview muted">${preview}</span>
+      </summary>
+      <div class="cron-job-detail">${renderJobPayloadBody(job, payload)}</div>
+    </details>
   `;
 }
 
-function stopPropagationForInteractive(event: MouseEvent) {
-  const target = event.target as HTMLElement | null;
-  if (target?.closest("a,button,input,textarea,select,summary,[role='button'],[role='link']")) {
-    event.stopPropagation();
+function renderJobPayloadBody(
+  job: CronJob,
+  payload: NonNullable<ReturnType<typeof getCronJobPayload>>,
+) {
+  const delivery = job.delivery;
+  const deliverySection = delivery
+    ? html`<div class="cron-job-detail-section">
+        <span class="cron-job-detail-label">${t("cron.jobDetail.delivery")}</span>
+        <span class="muted cron-job-detail-value">
+          ${delivery.mode}${formatDeliveryTarget(delivery)}
+        </span>
+      </div>`
+    : nothing;
+  const chips = html`
+    <div class="chip-row cron-job-detail-chips">
+      <span class="chip">${job.sessionTarget}</span>
+      <span class="chip">${job.wakeMode}</span>
+    </div>
+  `;
+  if (payload.kind === "systemEvent") {
+    return html`<span class="muted cron-job-detail-value">${payload.text}</span>${chips}`;
   }
-}
-
-function formatStateRelative(ms?: number) {
-  if (typeof ms !== "number" || !Number.isFinite(ms)) {
-    return t("common.na");
+  if (payload.kind === "command") {
+    return html`
+      <code class="muted cron-job-detail-value">${payload.argv.join(" ")}</code>
+      ${payload.cwd
+        ? html`<div class="cron-job-detail-section">
+            <span class="cron-job-detail-label">${t("cron.jobDetail.cwd")}</span>
+            <span class="muted cron-job-detail-value">${payload.cwd}</span>
+          </div>`
+        : nothing}
+      ${deliverySection}${chips}
+    `;
   }
-  return formatRelativeTimestamp(ms);
+  return html`
+    <div class="muted cron-job-detail-value chat-text">
+      ${unsafeHTML(toSanitizedMarkdownHtml(payload.message))}
+    </div>
+    <div class="cron-job-detail-section">
+      <span class="cron-job-detail-label">${t("cron.form.model")}</span>
+      <span class="muted cron-job-detail-value">${getCronJobModelLabel(job)}</span>
+    </div>
+    ${deliverySection}${chips}
+  `;
 }
 
 function formatRunNextLabel(nextRunAtMs: number, nowMs = Date.now()) {
   const rel = formatRelativeTimestamp(nextRunAtMs);
   return nextRunAtMs > nowMs ? t("cron.runEntry.next", { rel }) : t("cron.runEntry.due", { rel });
-}
-
-function renderJobState(job: CronJob) {
-  const rawStatus = resolveCronJobLastRunStatus(job);
-  const statusClass =
-    rawStatus === "ok"
-      ? "cron-job-status-ok"
-      : rawStatus === "error"
-        ? "cron-job-status-error"
-        : rawStatus === "skipped"
-          ? "cron-job-status-skipped"
-          : "cron-job-status-na";
-  const statusLabel =
-    rawStatus === "ok"
-      ? t("cron.runs.runStatusOk")
-      : rawStatus === "error"
-        ? t("cron.runs.runStatusError")
-        : rawStatus === "skipped"
-          ? t("cron.runs.runStatusSkipped")
-          : t("cron.runs.runStatusUnknown");
-  const nextRunAtMs = job.state?.nextRunAtMs;
-  const lastRunAtMs = job.state?.lastRunAtMs;
-
-  return html`
-    <div class="cron-job-state">
-      <div class="cron-job-state-row">
-        <span class="cron-job-state-key">${t("cron.jobState.status")}</span>
-        <span class=${`cron-job-status-pill ${statusClass}`}>${statusLabel}</span>
-      </div>
-      <div class="cron-job-state-row">
-        <span class="cron-job-state-key">${t("cron.jobState.next")}</span>
-        <span class="cron-job-state-value" title=${formatMs(nextRunAtMs)}>
-          ${formatStateRelative(nextRunAtMs)}
-        </span>
-      </div>
-      <div class="cron-job-state-row">
-        <span class="cron-job-state-key">${t("cron.jobState.last")}</span>
-        <span class="cron-job-state-value" title=${formatMs(lastRunAtMs)}>
-          ${formatStateRelative(lastRunAtMs)}
-        </span>
-      </div>
-    </div>
-  `;
 }
 
 function runStatusLabel(value: string): string {

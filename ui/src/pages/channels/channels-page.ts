@@ -37,7 +37,7 @@ function buildNostrProfileUrl(accountId: string, suffix = ""): string {
   return `/api/channels/nostr/${encodeURIComponent(accountId)}/profile${suffix}`;
 }
 
-export class ChannelsPage extends LitElement {
+class ChannelsPage extends LitElement {
   override createRenderRoot() {
     return this;
   }

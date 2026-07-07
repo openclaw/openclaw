@@ -1,6 +1,7 @@
 // Control UI module implements storage behavior.
 const SETTINGS_KEY_PREFIX = "openclaw.control.settings.v1:";
 const LEGACY_SETTINGS_KEY = "openclaw.control.settings.v1";
+const CURRENT_GATEWAY_SELECTION_KEY_PREFIX = "openclaw.control.currentGateway.v1:";
 const LOCAL_USER_IDENTITY_KEY = "openclaw.control.user.v1";
 const LEGACY_TOKEN_SESSION_KEY = "openclaw.control.token.v1";
 const TOKEN_SESSION_KEY_PREFIX = "openclaw.control.token.v1:";
@@ -13,6 +14,10 @@ type WindowWithControlUiBasePath = Window &
 
 function settingsKeyForGateway(gatewayUrl: string): string {
   return `${SETTINGS_KEY_PREFIX}${normalizeGatewayTokenScope(gatewayUrl)}`;
+}
+
+function currentGatewaySelectionKeyForPage(pageUrl: string): string {
+  return `${CURRENT_GATEWAY_SELECTION_KEY_PREFIX}${normalizeGatewayTokenScope(pageUrl)}`;
 }
 
 type ScopedSessionSelection = {
@@ -36,7 +41,9 @@ import { inferBasePathFromPathname, normalizeBasePath } from "../app-route-paths
 import { isSupportedLocale } from "../i18n/index.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { getSafeLocalStorage, getSafeSessionStorage } from "../local-storage.ts";
+import { normalizeChatSplitLayout, type ChatSplitLayout } from "../pages/chat/split-layout.ts";
 import { parseImportedCustomTheme, type ImportedCustomTheme } from "./custom-theme.ts";
+import { normalizeGatewayTokenScope } from "./gateway-scope.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
 import {
   hasLocalUserIdentity,
@@ -50,13 +57,22 @@ export type BorderRadiusStop = (typeof BORDER_RADIUS_STOPS)[number];
 export const TEXT_SCALE_STOPS = [90, 100, 110, 125, 140] as const;
 export type TextScaleStop = (typeof TEXT_SCALE_STOPS)[number];
 
-export const CHAT_AUTO_SCROLL_MODES = ["always", "near-bottom", "off"] as const;
+const CHAT_AUTO_SCROLL_MODES = ["always", "near-bottom", "off"] as const;
 export type ChatAutoScrollMode = (typeof CHAT_AUTO_SCROLL_MODES)[number];
 
 export function normalizeChatAutoScrollMode(value: unknown): ChatAutoScrollMode {
   return CHAT_AUTO_SCROLL_MODES.includes(value as ChatAutoScrollMode)
     ? (value as ChatAutoScrollMode)
     : "near-bottom";
+}
+
+const CHAT_SEND_SHORTCUTS = ["enter", "modifier-enter"] as const;
+export type ChatSendShortcut = (typeof CHAT_SEND_SHORTCUTS)[number];
+
+export function normalizeChatSendShortcut(value: unknown): ChatSendShortcut {
+  return CHAT_SEND_SHORTCUTS.includes(value as ChatSendShortcut)
+    ? (value as ChatSendShortcut)
+    : "enter";
 }
 
 function snapBorderRadius(value: number): BorderRadiusStop {
@@ -99,7 +115,10 @@ export type UiSettings = {
   chatShowToolCalls: boolean;
   chatPersistCommentary?: boolean;
   chatAutoScroll?: ChatAutoScrollMode;
+  chatSendShortcut?: ChatSendShortcut;
+  realtimeTalkInputDeviceId?: string;
   splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
+  chatSplitLayout?: ChatSplitLayout;
   navCollapsed: boolean; // Collapsible sidebar state
   navWidth: number; // Sidebar width when expanded (240–400px)
   sidebarPinnedRoutes: SidebarNavRoute[]; // Nav routes shown above the "More" section
@@ -125,7 +144,7 @@ export function setLastActiveSessionKey(host: LastActiveSessionHost, next: strin
   host.applySettings({ ...host.settings, lastActiveSessionKey: trimmed });
 }
 
-export type ApplicationStartupLocation = {
+type ApplicationStartupLocation = {
   pathname: string;
   search: string;
   hash: string;
@@ -137,7 +156,7 @@ type NativeControlAuth = {
   password?: string | null;
 };
 
-export type ApplicationStartupSettings = {
+type ApplicationStartupSettings = {
   settings: UiSettings;
   password: string | null;
   pendingGatewayUrl: string | null;
@@ -333,23 +352,93 @@ function getSessionStorage(): Storage | null {
   return getSafeSessionStorage();
 }
 
-function normalizeGatewayTokenScope(gatewayUrl: string): string {
-  const trimmed = normalizeOptionalString(gatewayUrl) ?? "";
-  if (!trimmed) {
-    return "default";
+type PersistedSettingsSource = {
+  gatewayUrl: string;
+  legacy: boolean;
+  parsed: PersistedUiSettings;
+};
+
+function parsePersistedSettings(raw: string | null): PersistedUiSettings | null {
+  if (!raw) {
+    return null;
   }
   try {
-    const base =
-      typeof location !== "undefined"
-        ? `${location.protocol}//${location.host}${location.pathname || "/"}`
-        : undefined;
-    const parsed = base ? new URL(trimmed, base) : new URL(trimmed);
-    const pathname =
-      parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/+$/, "") || parsed.pathname;
-    return `${parsed.protocol}//${parsed.host}${pathname}`;
+    return JSON.parse(raw) as PersistedUiSettings;
   } catch {
-    return trimmed;
+    return null;
   }
+}
+
+function settingsMatchGatewayTarget(
+  parsed: PersistedUiSettings,
+  targetUrl: string,
+  aliases: readonly string[] = [],
+): boolean {
+  const storedUrl = normalizeOptionalString(parsed.gatewayUrl);
+  if (!storedUrl) {
+    return false;
+  }
+  const storedScope = normalizeGatewayTokenScope(storedUrl);
+  return [targetUrl, ...aliases].some(
+    (candidate) => normalizeGatewayTokenScope(candidate) === storedScope,
+  );
+}
+
+function isClaimableLegacyGateway(storedUrl: string | undefined, pageUrl: string): boolean {
+  if (!storedUrl) {
+    return false;
+  }
+  try {
+    const stored = new URL(normalizeGatewayTokenScope(storedUrl));
+    const page = new URL(normalizeGatewayTokenScope(pageUrl));
+    return stored.host !== page.host || page.pathname === "/";
+  } catch {
+    return false;
+  }
+}
+
+function readSettingsForGateway(
+  storage: Storage | null,
+  targetUrl: string,
+  options: {
+    includeLegacy?: boolean;
+    legacyAliases?: readonly string[];
+    remoteLegacyPageUrl?: string;
+  } = {},
+): PersistedSettingsSource | null {
+  const scoped = parsePersistedSettings(storage?.getItem(settingsKeyForGateway(targetUrl)) ?? null);
+  if (
+    scoped &&
+    (!normalizeOptionalString(scoped.gatewayUrl) || settingsMatchGatewayTarget(scoped, targetUrl))
+  ) {
+    return {
+      gatewayUrl: normalizeOptionalString(scoped.gatewayUrl) ?? targetUrl,
+      legacy: false,
+      parsed: scoped,
+    };
+  }
+  if (!options.includeLegacy) {
+    return null;
+  }
+  for (const key of [`${SETTINGS_KEY_PREFIX}default`, LEGACY_SETTINGS_KEY]) {
+    const parsed = parsePersistedSettings(storage?.getItem(key) ?? null);
+    if (!parsed) {
+      continue;
+    }
+    const storedUrl = normalizeOptionalString(parsed.gatewayUrl);
+    const matchesTarget = settingsMatchGatewayTarget(parsed, targetUrl, options.legacyAliases);
+    const isRemote = options.remoteLegacyPageUrl
+      ? isClaimableLegacyGateway(storedUrl, options.remoteLegacyPageUrl)
+      : false;
+    if (matchesTarget || isRemote) {
+      return {
+        gatewayUrl: storedUrl ?? targetUrl,
+        legacy: true,
+        parsed,
+      };
+    }
+  }
+  return null;
 }
 
 function tokenSessionKeyForGateway(gatewayUrl: string): string {
@@ -388,11 +477,8 @@ export function loadGatewaySessionSelection(gatewayUrl: string): ScopedSessionSe
   const fallback = { sessionKey: "main", lastActiveSessionKey: "main" };
   try {
     const storage = getSafeLocalStorage();
-    const raw =
-      storage?.getItem(settingsKeyForGateway(gatewayUrl)) ?? storage?.getItem(LEGACY_SETTINGS_KEY);
-    return raw
-      ? resolveScopedSessionSelection(gatewayUrl, JSON.parse(raw) as PersistedUiSettings, fallback)
-      : fallback;
+    const source = readSettingsForGateway(storage, gatewayUrl, { includeLegacy: true });
+    return source ? resolveScopedSessionSelection(gatewayUrl, source.parsed, fallback) : fallback;
   } catch {
     return fallback;
   }
@@ -461,6 +547,7 @@ export function loadSettings(): UiSettings {
     chatShowToolCalls: true,
     chatPersistCommentary: false,
     chatAutoScroll: "near-bottom",
+    chatSendShortcut: "enter",
     splitRatio: 0.6,
     navCollapsed: false,
     navWidth: 220,
@@ -471,17 +558,25 @@ export function loadSettings(): UiSettings {
   };
 
   try {
-    // First check for legacy key (no scope), then check for scoped key
-    const scopedKey = settingsKeyForGateway(defaults.gatewayUrl);
-    const raw =
-      storage?.getItem(scopedKey) ??
-      storage?.getItem(SETTINGS_KEY_PREFIX + "default") ??
-      storage?.getItem(LEGACY_SETTINGS_KEY);
-    if (!raw) {
+    const selectedGatewayUrl = normalizeOptionalString(
+      storage?.getItem(currentGatewaySelectionKeyForPage(pageDerivedUrl)),
+    );
+    const selected = selectedGatewayUrl
+      ? readSettingsForGateway(storage, selectedGatewayUrl)
+      : null;
+    // Legacy state has no page owner. Only the current page target or a deliberate
+    // cross-origin remote can claim it; ambiguous same-origin sibling paths cannot.
+    const defaultSource = readSettingsForGateway(storage, defaultUrl, {
+      includeLegacy: true,
+      legacyAliases: [pageDerivedUrl],
+      remoteLegacyPageUrl: pageDerivedUrl,
+    });
+    const source = selected ?? defaultSource;
+    if (!source) {
       return defaults;
     }
-    const parsed = JSON.parse(raw) as PersistedUiSettings;
-    const parsedGatewayUrl = normalizeOptionalString(parsed.gatewayUrl) ?? defaults.gatewayUrl;
+    const parsed = source.parsed;
+    const parsedGatewayUrl = source.gatewayUrl;
     const gatewayUrl = parsedGatewayUrl === pageDerivedUrl ? defaultUrl : parsedGatewayUrl;
     const scopedSessionSelection = resolveScopedSessionSelection(gatewayUrl, parsed, defaults);
     const customTheme = parseImportedCustomTheme((parsed as { customTheme?: unknown }).customTheme);
@@ -510,12 +605,15 @@ export function loadSettings(): UiSettings {
           ? parsed.chatPersistCommentary
           : defaults.chatPersistCommentary,
       chatAutoScroll: normalizeChatAutoScrollMode(parsed.chatAutoScroll),
+      chatSendShortcut: normalizeChatSendShortcut(parsed.chatSendShortcut),
+      realtimeTalkInputDeviceId: normalizeOptionalString(parsed.realtimeTalkInputDeviceId),
       splitRatio:
         typeof parsed.splitRatio === "number" &&
         parsed.splitRatio >= 0.4 &&
         parsed.splitRatio <= 0.7
           ? parsed.splitRatio
           : defaults.splitRatio,
+      chatSplitLayout: normalizeChatSplitLayout(parsed.chatSplitLayout),
       navCollapsed:
         typeof parsed.navCollapsed === "boolean" ? parsed.navCollapsed : defaults.navCollapsed,
       navWidth:
@@ -538,8 +636,8 @@ export function loadSettings(): UiSettings {
       customTheme: customTheme ?? undefined,
       locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
     };
-    if ("token" in parsed) {
-      persistSettings(settings);
+    if (source.legacy || "token" in parsed) {
+      persistSettings(settings, { selectGateway: true });
     }
     return settings;
   } catch {
@@ -553,7 +651,7 @@ export function saveSettings(next: UiSettings) {
 
 export function patchSettings(patch: Partial<UiSettings>): UiSettings {
   const next = { ...loadSettings(), ...patch };
-  persistSettings(next);
+  persistSettings(next, { selectGateway: patch.gatewayUrl !== undefined });
   return next;
 }
 
@@ -585,20 +683,16 @@ export function saveLocalUserIdentity(next: LocalUserIdentity) {
   }
 }
 
-function persistSettings(next: UiSettings) {
+function persistSettings(next: UiSettings, options: { selectGateway?: boolean } = {}) {
   persistSessionToken(next.gatewayUrl, next.token);
   const storage = getSafeLocalStorage();
   const scope = normalizeGatewayTokenScope(next.gatewayUrl);
   const scopedKey = settingsKeyForGateway(next.gatewayUrl);
   let existingSessionsByGateway: Record<string, ScopedSessionSelection> = {};
   try {
-    // Try to migrate from legacy key or other scopes
-    const raw =
-      storage?.getItem(scopedKey) ??
-      storage?.getItem(SETTINGS_KEY_PREFIX + "default") ??
-      storage?.getItem("openclaw.control.settings.v1");
-    if (raw) {
-      const parsed = JSON.parse(raw) as PersistedUiSettings;
+    const source = readSettingsForGateway(storage, next.gatewayUrl, { includeLegacy: true });
+    if (source) {
+      const parsed = source.parsed;
       if (parsed.sessionsByGateway && typeof parsed.sessionsByGateway === "object") {
         existingSessionsByGateway = parsed.sessionsByGateway;
       }
@@ -626,7 +720,14 @@ function persistSettings(next: UiSettings) {
     chatShowToolCalls: next.chatShowToolCalls,
     chatPersistCommentary: next.chatPersistCommentary ?? false,
     chatAutoScroll: normalizeChatAutoScrollMode(next.chatAutoScroll),
+    ...(normalizeChatSendShortcut(next.chatSendShortcut) === "modifier-enter"
+      ? { chatSendShortcut: "modifier-enter" as const }
+      : {}),
+    ...(normalizeOptionalString(next.realtimeTalkInputDeviceId)
+      ? { realtimeTalkInputDeviceId: normalizeOptionalString(next.realtimeTalkInputDeviceId) }
+      : {}),
     splitRatio: next.splitRatio,
+    ...(next.chatSplitLayout ? { chatSplitLayout: next.chatSplitLayout } : {}),
     navCollapsed: next.navCollapsed,
     navWidth: next.navWidth,
     sidebarPinnedRoutes: next.sidebarPinnedRoutes,
@@ -639,8 +740,13 @@ function persistSettings(next: UiSettings) {
   };
   const serialized = JSON.stringify(persisted);
   try {
+    const { pageUrl } = deriveDefaultGatewayUrl();
+    const selectionKey = currentGatewaySelectionKeyForPage(pageUrl);
     storage?.setItem(scopedKey, serialized);
-    storage?.setItem(LEGACY_SETTINGS_KEY, serialized);
+    if (options.selectGateway || storage?.getItem(selectionKey) == null) {
+      storage?.setItem(selectionKey, next.gatewayUrl);
+    }
+    storage?.removeItem(LEGACY_SETTINGS_KEY);
   } catch {
     // best-effort — quota exceeded or security restrictions should not
     // prevent in-memory settings and visual updates from being applied

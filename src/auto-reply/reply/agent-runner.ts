@@ -10,6 +10,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { isLikelyContextOverflowError } from "../../agents/embedded-agent-helpers/errors.js";
 import {
   hasCommittedSourceReplyDeliveryEvidence,
   hasVisibleCommittedMessagingToolDeliveryEvidence,
@@ -1260,9 +1261,9 @@ export async function runReplyAgent(params: {
   };
 
   if (effectiveShouldSteer && isActive) {
-    const steerSessionId =
-      (sessionKey ? replyRunRegistry.resolveSessionId(sessionKey) : undefined) ??
-      followupRun.run.sessionId;
+    const activeReplyOperation =
+      providedReplyOperation ?? (sessionKey ? replyRunRegistry.get(sessionKey) : undefined);
+    const steerSessionId = activeReplyOperation?.sessionId ?? followupRun.run.sessionId;
     const steerOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
       steerSessionId,
       followupRun.prompt,
@@ -1275,6 +1276,9 @@ export async function runReplyAgent(params: {
       },
     );
     if (steerOutcome.queued) {
+      if (followupRun.currentInboundAudio === true) {
+        activeReplyOperation?.markAcceptedSteeredInboundAudio();
+      }
       await touchActiveSessionEntry();
       typing.cleanup();
       return undefined;
@@ -1602,32 +1606,13 @@ export async function runReplyAgent(params: {
         `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
       cleanupTranscripts: true,
     });
-  const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
   let preflightCompactionApplied;
 
   try {
     await typingSignals.signalRunStart();
 
-    activeSessionEntry = await traceAgentPhase("reply.preflight_compaction", () =>
-      runPreflightCompactionIfNeeded({
-        cfg,
-        followupRun,
-        promptForEstimate: followupRun.prompt,
-        defaultModel,
-        agentCfgContextTokens,
-        sessionEntry: activeSessionEntry,
-        sessionStore: activeSessionStore,
-        sessionKey,
-        runtimePolicySessionKey,
-        storePath,
-        isHeartbeat,
-        replyOperation,
-        onCompactionNotice: sendDirectCompactionNotice,
-      }),
-    );
-    preflightCompactionApplied =
-      (activeSessionEntry?.compactionCount ?? 0) > prePreflightCompactionCount;
-
+    // Preserve the one-flush-per-compaction-cycle gate: an earlier same-cycle
+    // flush is the checkpoint for this upcoming compaction, not a reason to rerun maintenance.
     const memoryFlushResult = await traceAgentPhase("reply.memory_flush", () =>
       runMemoryFlushIfNeeded({
         cfg,
@@ -1658,12 +1643,44 @@ export async function runReplyAgent(params: {
       throw replyOperation.abortSignal.reason ?? new Error("reply operation aborted");
     }
 
-    if (memoryFlushResult.outcome === "exhausted") {
+    const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
+    try {
+      activeSessionEntry = await traceAgentPhase("reply.preflight_compaction", () =>
+        runPreflightCompactionIfNeeded({
+          cfg,
+          followupRun,
+          promptForEstimate: followupRun.prompt,
+          defaultModel,
+          agentCfgContextTokens,
+          sessionEntry: activeSessionEntry,
+          sessionStore: activeSessionStore,
+          sessionKey,
+          runtimePolicySessionKey,
+          storePath,
+          isHeartbeat,
+          replyOperation,
+          onCompactionNotice: sendDirectCompactionNotice,
+        }),
+      );
+      preflightCompactionApplied =
+        (activeSessionEntry?.compactionCount ?? 0) > prePreflightCompactionCount;
+    } catch (err) {
+      const canRotateAfterPreflightFailure =
+        memoryFlushResult.outcome === "exhausted" &&
+        !replyOperation.abortSignal.aborted &&
+        isLikelyContextOverflowError(String(err));
+      if (!canRotateAfterPreflightFailure) {
+        throw err;
+      }
+      logVerbose(`Preflight compaction could not recover exhausted memory flush: ${String(err)}`);
+    }
+
+    if (memoryFlushResult.outcome === "exhausted" && !preflightCompactionApplied) {
       await resetSession({
         failureLabel: "memory flush exhaustion",
         buildLogMessage: (nextSessionId) =>
           `Memory flush exhausted. Rotating bloated session ${sessionKey} -> ${nextSessionId}.`,
-        // Rotate away from the bloated context, but preserve its transcript for recovery.
+        // Rotate only when compaction could not recover the bloated context.
         cleanupTranscripts: false,
       });
       if (activeSessionEntry?.sessionId) {

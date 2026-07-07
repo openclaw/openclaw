@@ -40,7 +40,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import { settleReplyDispatcher } from "../dispatch-dispatcher.js";
-import { getReplyPayloadMetadata } from "../reply-payload.js";
+import { copyReplyPayloadMetadata, getReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import { setReplyPayloadMetadata, type GetReplyOptions, type ReplyPayload } from "../types.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
@@ -191,6 +191,7 @@ const acpManagerRuntimeMocks = vi.hoisted(() => ({
   getAcpSessionManager: vi.fn(),
 }));
 const agentEventMocks = vi.hoisted(() => ({
+  emitAgentAuditEvent: vi.fn(),
   emitAgentEvent: vi.fn(),
   onAgentEvent: vi.fn<(listener: unknown) => () => void>(() => () => {}),
 }));
@@ -531,6 +532,7 @@ vi.mock("../../bindings/records.js", () => ({
     sessionBindingMocks.touch(...args),
 }));
 vi.mock("../../infra/agent-events.js", () => ({
+  emitAgentAuditEvent: (params: unknown) => agentEventMocks.emitAgentAuditEvent(params),
   emitAgentEvent: (params: unknown) => agentEventMocks.emitAgentEvent(params),
   onAgentEvent: (listener: unknown) => agentEventMocks.onAgentEvent(listener),
 }));
@@ -717,7 +719,9 @@ function createDispatcher(): ReplyDispatcher {
       beforeDeliver = previousBeforeDeliver
         ? async (payload, info) => {
             const previousPayload = await previousBeforeDeliver(payload, info);
-            return previousPayload ? hook(previousPayload, info) : null;
+            return previousPayload
+              ? hook(copyReplyPayloadMetadata(payload, previousPayload), info)
+              : null;
           }
         : hook;
     }),
@@ -1125,6 +1129,7 @@ describe("dispatchReplyFromConfig", () => {
     acpMocks.getAcpRuntimeBackend.mockReset();
     acpMocks.requireAcpRuntimeBackend.mockReset();
     agentEventMocks.emitAgentEvent.mockReset();
+    agentEventMocks.emitAgentAuditEvent.mockReset();
     agentEventMocks.onAgentEvent.mockReset();
     agentEventMocks.onAgentEvent.mockReturnValue(() => {});
     sessionBindingMocks.listBySession.mockReset();
@@ -1491,6 +1496,76 @@ describe("dispatchReplyFromConfig", () => {
     expect(transcriptMocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
   });
 
+  it("records stale-foreground suppressed CLI-owned finals without duplicating answer text", async () => {
+    setNoAbort();
+    const dispatcher = createReplyDispatcher({
+      deliver: vi.fn(async () => undefined),
+      beforeDeliver: (payload, info) => {
+        if (info.kind !== "final") {
+          return payload;
+        }
+        setReplyPayloadMetadata(payload, {
+          foregroundDeliverySuppression: { reason: "stale-foreground" },
+        });
+        return null;
+      },
+    });
+    transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        OriginatingChannel: "slack",
+        OriginatingTo: "channel:C123",
+        SessionKey: "agent:main:slack:channel:C123",
+        MessageSid: "slack-message-cli",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async (_ctx, opts) => {
+        (
+          opts as GetReplyOptions & {
+            onSessionPrepared?: (binding: {
+              sessionKey?: string;
+              sessionId: string;
+              storePath?: string;
+            }) => void;
+          }
+        ).onSessionPrepared?.({
+          sessionKey: "agent:main:slack:channel:c123",
+          sessionId: "prepared-session",
+          storePath: "/tmp/prepared-sessions.json",
+        });
+        return setReplyPayloadMetadata(
+          { text: "The CLI answer already lives in the transcript." },
+          { assistantTranscriptOwned: true },
+        );
+      },
+    });
+    await settleReplyDispatcher({ dispatcher });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledTimes(1);
+    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
+      sessionKey: "agent:main:slack:channel:C123",
+      agentId: "main",
+      expectedSessionId: "prepared-session",
+      text: "Channel final suppressed before delivery: stale foreground",
+      mediaUrls: undefined,
+      idempotencyKey: "channel-final-suppressed:slack-message-cli:0",
+      deliveryMirror: {
+        kind: "channel-final-suppressed",
+        reason: "stale-foreground",
+        sourceMessageId: "slack-message-cli",
+      },
+      storePath: "/tmp/prepared-sessions.json",
+      updateMode: "inline",
+      config: emptyConfig,
+      beforeMessageWrite: expect.any(Function),
+    });
+  });
+
   it("disables routed delivery mirrors for CLI-owned finals", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();
@@ -1523,6 +1598,43 @@ describe("dispatchReplyFromConfig", () => {
         mirror: false,
       }),
     );
+  });
+
+  it("uses accepted steered inbound audio for final TTS", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      SessionKey: "agent:main:whatsapp:direct:chat-1",
+      BodyForAgent: "text turn",
+    });
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      const operation = (
+        opts as
+          | {
+              replyOperation?: ReturnType<typeof createReplyOperation>;
+            }
+          | undefined
+      )?.replyOperation;
+      expect(operation?.acceptedSteeredInboundAudio).toBe(false);
+      operation?.markAcceptedSteeredInboundAudio();
+      return { text: "reply to steered audio" } satisfies ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: automaticDirectReplyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    const finalTtsCall = ttsMocks.maybeApplyTtsToPayload.mock.calls.find(
+      ([params]) => (params as { kind?: string }).kind === "final",
+    )?.[0] as { inboundAudio?: boolean } | undefined;
+    expect(finalTtsCall?.inboundAudio).toBe(true);
+    expect(firstFinalReplyPayload(dispatcher)?.mediaUrl).toBe("https://example.com/tts-synth.opus");
   });
 
   it("passes reply policy to routed block delivery", async () => {
@@ -5797,7 +5909,7 @@ describe("dispatchReplyFromConfig", () => {
             stream?: unknown;
           },
       )
-      .find((event) => event.runId === "run-acp-lifecycle-end");
+      .find((event) => event.runId === "run-acp-lifecycle-end" && event.data?.phase === "end");
     expect(lifecycleEvent?.sessionKey).toBe("agent:codex-acp:session-1");
     expect(lifecycleEvent?.stream).toBe("lifecycle");
     expect(lifecycleEvent?.data?.phase).toBe("end");
@@ -5863,7 +5975,7 @@ describe("dispatchReplyFromConfig", () => {
             stream?: unknown;
           },
       )
-      .find((event) => event.runId === "run-acp-lifecycle-error");
+      .find((event) => event.runId === "run-acp-lifecycle-error" && event.data?.phase === "error");
     expect(lifecycleEvent?.sessionKey).toBe("agent:codex-acp:session-1");
     expect(lifecycleEvent?.stream).toBe("lifecycle");
     expect(lifecycleEvent?.data?.phase).toBe("error");

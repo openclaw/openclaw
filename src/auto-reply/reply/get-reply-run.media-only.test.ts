@@ -40,6 +40,7 @@ const storeRuntimeLoads = vi.hoisted(() => vi.fn());
 const updateSessionStore = vi.hoisted(() => vi.fn());
 const loadSessionEntryMock = vi.hoisted(() => vi.fn());
 const updateAmbientTranscriptWatermarkMock = vi.hoisted(() => vi.fn().mockResolvedValue(null));
+const consumeSessionSkillSuggestionMock = vi.hoisted(() => vi.fn());
 
 vi.mock(import("../../config/sessions/session-accessor.js"), async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../config/sessions/session-accessor.js")>();
@@ -51,6 +52,10 @@ vi.mock(import("../../config/sessions/session-accessor.js"), async (importOrigin
 
 vi.mock("../../config/sessions/ambient-transcript-watermark.js", () => ({
   updateAmbientTranscriptWatermark: updateAmbientTranscriptWatermarkMock,
+}));
+
+vi.mock("../../config/sessions/skill-suggestions.js", () => ({
+  consumeSessionSkillSuggestion: consumeSessionSkillSuggestionMock,
 }));
 
 vi.mock("../../config/sessions/store.runtime.js", () => {
@@ -318,12 +323,13 @@ describe("runPreparedReply media-only handling", () => {
     storeRuntimeLoads.mockClear();
     updateSessionStore.mockReset();
     loadSessionEntryMock.mockReset();
+    consumeSessionSkillSuggestionMock.mockReset();
     updateAmbientTranscriptWatermarkMock.mockClear();
     vi.clearAllMocks();
     vi.mocked(buildDirectChatContext).mockReturnValue("");
     vi.mocked(buildGroupIntro).mockReturnValue("");
     vi.mocked(buildGroupChatContext).mockReturnValue("");
-    vi.mocked(buildInboundUserContextPrefix).mockReturnValue("");
+    vi.mocked(buildInboundUserContextPrefix).mockReset().mockReturnValue("");
     vi.mocked(resolveInboundUserContextPromptJoiner).mockReturnValue(undefined);
     replyRunTesting.resetReplyRunRegistry();
   });
@@ -1534,10 +1540,15 @@ describe("runPreparedReply media-only handling", () => {
         tokensUsed: 0,
         continuationTurns: 0,
       },
+      pendingSkillSuggestion: {
+        skillName: "github-pr-workflow",
+        detectedAt: 1,
+      },
     };
     const completeEntry: SessionEntry = {
       ...activeEntry,
       goal: { ...activeEntry.goal!, status: "complete" },
+      pendingSkillSuggestion: undefined,
     };
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
     vi.mocked(inboundMeta.formatActiveGoalContext).mockImplementation((entry) =>
@@ -1545,8 +1556,19 @@ describe("runPreparedReply media-only handling", () => {
     );
     vi.mocked(inboundMeta.buildInboundUserContextPrefix).mockImplementation(
       (_ctx, _envelope, entry) =>
-        entry?.goal?.status === "active" ? "Active goal: Finish the interrupted work" : "",
+        [
+          entry?.goal?.status === "active" ? "Active goal: Finish the interrupted work" : undefined,
+          entry?.pendingSkillSuggestion
+            ? 'A reusable workflow ("github-pr-workflow") was detected last turn — offer to save it as a skill via skill_workshop if the user agrees.'
+            : undefined,
+        ]
+          .filter(Boolean)
+          .join("\n\n"),
     );
+    consumeSessionSkillSuggestionMock.mockResolvedValueOnce({
+      entry: { ...activeEntry, pendingSkillSuggestion: undefined },
+      suggestion: activeEntry.pendingSkillSuggestion,
+    });
     loadSessionEntryMock.mockReturnValue(completeEntry);
     const activeRun = createReplyOperation({
       sessionId: "session-goal-interrupt",
@@ -1579,6 +1601,61 @@ describe("runPreparedReply media-only handling", () => {
     });
     const call = requireLastRunReplyAgentCall();
     expect(call.followupRun.currentInboundContext?.text ?? "").not.toContain("Active goal:");
+    expect(call.followupRun.currentInboundContext?.text).toContain(
+      'A reusable workflow ("github-pr-workflow") was detected last turn',
+    );
+  });
+
+  it("consumes a skill suggestion once for the next interactive turn", async () => {
+    const suggestion = { skillName: "github-pr-workflow", detectedAt: 1 };
+    const sessionEntry: SessionEntry = {
+      sessionId: "skill-suggestion-session",
+      updatedAt: 1,
+      pendingSkillSuggestion: suggestion,
+    };
+    const clearedEntry: SessionEntry = {
+      ...sessionEntry,
+      pendingSkillSuggestion: undefined,
+    };
+    const sessionStore = { "session-key": sessionEntry };
+    consumeSessionSkillSuggestionMock.mockResolvedValueOnce({
+      entry: clearedEntry,
+      suggestion,
+    });
+    vi.mocked(buildInboundUserContextPrefix).mockImplementation((_ctx, _envelope, entry) =>
+      entry?.pendingSkillSuggestion
+        ? 'A reusable workflow ("github-pr-workflow") was detected last turn — offer to save it as a skill via skill_workshop if the user agrees.'
+        : "",
+    );
+
+    await runPreparedReply(
+      baseParams({
+        isNewSession: false,
+        sessionEntry,
+        sessionStore,
+        storePath: "/tmp/openclaw-session-store.json",
+      }),
+    );
+
+    expect(consumeSessionSkillSuggestionMock).toHaveBeenCalledOnce();
+    expect(sessionStore["session-key"].pendingSkillSuggestion).toBeUndefined();
+    expect(requireLastRunReplyAgentCall().followupRun.currentInboundContext?.text).toContain(
+      'A reusable workflow ("github-pr-workflow") was detected last turn',
+    );
+
+    await runPreparedReply(
+      baseParams({
+        isNewSession: false,
+        sessionEntry,
+        sessionStore,
+        storePath: "/tmp/openclaw-session-store.json",
+      }),
+    );
+
+    expect(consumeSessionSkillSuggestionMock).toHaveBeenCalledOnce();
+    expect(
+      requireLastRunReplyAgentCall().followupRun.currentInboundContext?.text ?? "",
+    ).not.toContain("A reusable workflow");
   });
   it("treats reset-triggered followup mode as interrupt when the session lane is empty", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
@@ -2676,6 +2753,10 @@ describe("runPreparedReply media-only handling", () => {
         tokensUsed: 0,
         continuationTurns: 0,
       },
+      pendingSkillSuggestion: {
+        skillName: "github-pr-workflow",
+        detectedAt: 1,
+      },
     };
 
     await runPreparedReply(
@@ -2691,6 +2772,8 @@ describe("runPreparedReply media-only handling", () => {
       expect.anything(),
       undefined,
     );
+    expect(consumeSessionSkillSuggestionMock).not.toHaveBeenCalled();
+    expect(sessionEntry.pendingSkillSuggestion).toBeDefined();
   });
 
   it("uses persisted Discord chat metadata for system-event CLI static prompt identity", async () => {

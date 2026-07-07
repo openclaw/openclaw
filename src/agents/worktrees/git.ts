@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -10,7 +11,7 @@ export type GitResult = {
   code: number | null;
 };
 
-export type WorktreeListEntry = {
+type WorktreeListEntry = {
   path: string;
   lockedReason?: string;
 };
@@ -52,7 +53,7 @@ export async function requireGitRaw(cwd: string, args: string[]): Promise<string
   return result.stdout;
 }
 
-export function parseWorktreeList(output: string): WorktreeListEntry[] {
+function parseWorktreeList(output: string): WorktreeListEntry[] {
   const entries: WorktreeListEntry[] = [];
   let current: WorktreeListEntry | undefined;
   for (const field of output.split("\0")) {
@@ -84,6 +85,26 @@ export async function listGitWorktrees(repoRoot: string): Promise<WorktreeListEn
   return parseWorktreeList(
     await requireGitRaw(repoRoot, ["worktree", "list", "--porcelain", "-z"]),
   );
+}
+
+/**
+ * True when dir sits inside a git checkout: a .git entry on itself or any ancestor.
+ * Existence, not directory-ness, is the signal — linked worktrees keep a .git file.
+ * Mirrors `git rev-parse --show-toplevel` discovery without spawning git, so UI
+ * capability checks and create-preflights cannot diverge from the worktree service.
+ */
+export function insideGitCheckout(start: string): boolean {
+  let current = path.resolve(start);
+  for (;;) {
+    if (existsSync(path.join(current, ".git"))) {
+      return true;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return false;
+    }
+    current = parent;
+  }
 }
 
 export async function pathExists(target: string): Promise<boolean> {

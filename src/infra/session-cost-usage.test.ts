@@ -449,6 +449,80 @@ describe("session cost usage", () => {
     }
   });
 
+  it("preserves a provider-billed zero total when total provenance is explicit", async () => {
+    const root = await makeSessionCostRoot("cost-provider-billed-zero-origin");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-openrouter-billed-zero.jsonl");
+    const entry = {
+      type: "message",
+      timestamp: "2026-02-05T12:00:00.000Z",
+      message: {
+        role: "assistant",
+        provider: "openrouter",
+        model: "openai/gpt-5.5",
+        content: "provider-billed free route",
+        usage: {
+          input: 10_000,
+          output: 5_000,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 15_000,
+          cost: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            total: 0,
+            totalOrigin: "provider-billed",
+          },
+        },
+      },
+    };
+    await fs.writeFile(sessionFile, transcriptText("sess-openrouter-billed-zero", entry), "utf-8");
+
+    const config = {
+      models: {
+        providers: {
+          openrouter: {
+            models: [
+              {
+                id: "openai/gpt-5.5",
+                cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    clearGatewayModelPricingCacheState();
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: Date.UTC(2026, 1, 5, 23, 59, 59, 999),
+        config,
+      });
+      expect(summary.totals.totalTokens).toBe(15_000);
+      expect(summary.totals.totalCost).toBe(0);
+      expect(summary.totals.missingCostEntries).toBe(0);
+
+      await refreshCostUsageCache({ config, sessionFiles: [sessionFile] });
+      const cached = await loadCostUsageSummaryFromCache({
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: Date.UTC(2026, 1, 5, 23, 59, 59, 999),
+        config,
+        requestRefresh: false,
+      });
+      expect(cached.totals.totalCost).toBe(0);
+      expect(cached.totals.missingCostEntries).toBe(0);
+
+      const logs = await loadSessionLogs({ sessionFile, config });
+      expect(logs?.[0]?.tokens).toBe(15_000);
+      expect(logs?.[0]?.cost).toBe(0);
+    });
+  });
+
   it("uses top-level transcript provider and model when recomputing session-log cost", async () => {
     const root = await makeSessionCostRoot("cost-known-pricing-top-level-metadata");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
@@ -529,7 +603,7 @@ describe("session cost usage", () => {
       await refreshCostUsageCache({ sessionFiles: [sessionFile] });
       const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
       const cache = JSON.parse(await fs.readFile(cachePath, "utf-8")) as { version: number };
-      cache.version = 5;
+      cache.version = 6;
       await fs.writeFile(cachePath, `${JSON.stringify(cache)}\n`, "utf-8");
 
       // The pre-upgrade cache must be treated as stale (not served), forcing a rebuild
@@ -2917,6 +2991,45 @@ example
     expect(logs).toHaveLength(1);
     expect(logs?.[0]?.role).toBe("user");
     expect(logs?.[0]?.content).toBe("hello there");
+  });
+
+  it("normalizes malformed log timestamps with the transcript timestamp rules", async () => {
+    const root = await makeSessionCostRoot("logs-malformed-timestamp");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-malformed.jsonl");
+
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "message",
+          timestamp: "not-a-valid-date-string",
+          message: { role: "user", content: "bad timestamp entry" },
+        }),
+        JSON.stringify({
+          type: "message",
+          timestamp: "still-not-a-valid-date-string",
+          message: {
+            role: "assistant",
+            content: "nested timestamp entry",
+            timestamp: Date.parse("2026-02-21T17:46:00.000Z"),
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-02-21T17:47:00.000Z",
+          message: { role: "assistant", content: "valid timestamp entry" },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const logs = await loadSessionLogs({ sessionFile });
+    expect(logs).toHaveLength(3);
+    expect(logs?.[0]?.timestamp).toBe(0);
+    expect(logs?.[1]?.timestamp).toBe(Date.parse("2026-02-21T17:46:00.000Z"));
+    expect(logs?.[2]?.timestamp).toBe(Date.parse("2026-02-21T17:47:00.000Z"));
   });
 
   it("buckets hourly message counts into UTC quarter-hour slots", async () => {

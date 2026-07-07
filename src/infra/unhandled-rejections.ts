@@ -48,7 +48,13 @@ const FATAL_ERROR_CODES = new Set([
   "ERR_WORKER_INITIALIZATION_FAILED",
 ]);
 
-const CONFIG_ERROR_CODES = new Set(["INVALID_CONFIG", "MISSING_API_KEY", "MISSING_CREDENTIALS"]);
+const INVALID_CONFIG_ERROR_CODE = "INVALID_CONFIG";
+const CONFIG_ERROR_CODES = new Set([
+  INVALID_CONFIG_ERROR_CODE,
+  "MISSING_API_KEY",
+  "MISSING_CREDENTIALS",
+]);
+const EXIT_CONFIG_ERROR = 78;
 
 // Network error codes that indicate transient failures (shouldn't crash the gateway)
 const TRANSIENT_NETWORK_CODES = new Set([
@@ -507,12 +513,17 @@ export function isUncaughtExceptionHandled(error: unknown): boolean {
 }
 
 export function installUnhandledRejectionHandler(): void {
-  const exitWithTerminalRestore = (reason: string, error?: unknown, hookReason = reason) => {
+  const exitWithTerminalRestore = (
+    reason: string,
+    error?: unknown,
+    hookReason = reason,
+    exitCode = 1,
+  ) => {
     for (const message of runFatalErrorHooks({ reason: hookReason, error })) {
       console.error("[openclaw]", message);
     }
     restoreTerminalState(reason, { resumeStdinIfPaused: false });
-    process.exit(1);
+    process.exit(exitCode);
   };
 
   process.on("unhandledRejection", (reason, _promise) => {
@@ -535,7 +546,9 @@ export function installUnhandledRejectionHandler(): void {
 
     if (isConfigError(reason)) {
       console.error("[openclaw] CONFIGURATION ERROR - requires fix:", formatUncaughtError(reason));
-      exitWithTerminalRestore("configuration error", reason, "configuration_error");
+      const exitCode =
+        extractErrorCodeWithCause(reason) === INVALID_CONFIG_ERROR_CODE ? EXIT_CONFIG_ERROR : 1;
+      exitWithTerminalRestore("configuration error", reason, "configuration_error", exitCode);
       return;
     }
 

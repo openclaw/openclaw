@@ -16,16 +16,10 @@ export const WORKBOARD_STATUSES = [
 ] as const;
 
 export const WORKBOARD_PRIORITIES = ["low", "normal", "high", "urgent"] as const;
-export const WORKBOARD_EXECUTION_ENGINES = ["codex", "claude"] as const;
-export const WORKBOARD_EXECUTION_MODES = ["autonomous", "manual"] as const;
-export const WORKBOARD_EXECUTION_STATUSES = [
-  "idle",
-  "running",
-  "review",
-  "blocked",
-  "done",
-] as const;
-export const WORKBOARD_EVENT_KINDS = [
+const WORKBOARD_EXECUTION_ENGINES = ["codex", "claude"] as const;
+const WORKBOARD_EXECUTION_MODES = ["autonomous", "manual"] as const;
+const WORKBOARD_EXECUTION_STATUSES = ["idle", "running", "review", "blocked", "done"] as const;
+const WORKBOARD_EVENT_KINDS = [
   "created",
   "edited",
   "moved",
@@ -154,7 +148,7 @@ export type WorkboardStaleState = {
   reason: string;
 };
 
-export type WorkboardClaim = {
+type WorkboardClaim = {
   ownerId: string;
   token?: string;
   claimedAt: number;
@@ -279,7 +273,7 @@ export type WorkboardCard = {
   metadata?: WorkboardMetadata;
 };
 
-export type WorkboardLifecycleState =
+type WorkboardLifecycleState =
   | "unlinked"
   | "missing"
   | "idle"

@@ -113,6 +113,9 @@
       "@openclaw/slack/api.js": [
         "../dist/plugin-sdk/extensions/slack/api.d.ts"
       ],
+      "@openclaw/telegram/api.js": [
+        "../dist/plugin-sdk/extensions/telegram/api.d.ts"
+      ],
       "@openclaw/whatsapp/api.js": [
         "../dist/plugin-sdk/extensions/whatsapp/api.d.ts"
       ],

@@ -6,6 +6,7 @@
     <string name="trust_this_gateway">هل تثق بهذه البوابة؟</string>
     <string name="trust_and_continue">الثقة والمتابعة</string>
     <string name="cancel">إلغاء</string>
+    <string name="new_chat_in_worktree">دردشة جديدة في worktree</string>
     <string name="endpoint">نقطة النهاية</string>
     <string name="status">الحالة</string>
     <string name="connected_gateway_ready">بوابتك نشطة وجاهزة.</string>
@@ -20,8 +21,17 @@
     <string name="use_tls">استخدام TLS</string>
     <string name="token_optional">الرمز المميز (اختياري)</string>
     <string name="password">كلمة المرور</string>
+    <string name="custom_headers_optional">رؤوس مخصصة (اختياري)</string>
+    <string name="custom_headers_explainer">تُرسل مع كل اتصال بهذا الـ gateway، على سبيل المثال رؤوس رمز خدمة Cloudflare Access. تُخزَّن مشفّرة وتُطبَّق عند إعادة الاتصال التالية.</string>
+    <string name="custom_header_value">قيمة الرأس</string>
+    <string name="custom_header_reserved">تتم إدارة هذا الرأس بواسطة الاتصال ولا يمكن تجاوزه.</string>
+    <string name="add_custom_header">إضافة رأس</string>
+    <string name="remove_custom_header">إزالة %1$s</string>
     <string name="run_onboarding_again">تشغيل الإعداد الأولي مرة أخرى</string>
     <string name="resolved_endpoint">نقطة النهاية التي تم حلها</string>
     <string name="gateway_trust_first_seen">تحقق من بصمة الشهادة قبل الوثوق بهذه البوابة.\n\n%1$s</string>
     <string name="gateway_trust_changed">تم تغيير شهادة البوابة. تابع فقط إذا كنت تتوقع هذا التغيير.\n\nSHA-256 القديم:\n%1$s\n\nSHA-256 الجديد:\n%2$s</string>
+    <string name="switch_gateway">تبديل Gateway</string>
+    <string name="select_gateway">تحديد Gateway</string>
+    <string name="active_gateway">Gateway النشط</string>
 </resources>

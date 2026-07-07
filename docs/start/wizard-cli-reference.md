@@ -157,6 +157,10 @@ Plaintext `ws://` is accepted for loopback, private IP literals, `.local`, and T
 
 ## Auth and model options
 
+If a provider setup step fails in interactive onboarding (for example a CLI reuse option
+without a local sign-in), the wizard shows the error and returns to the provider picker
+instead of exiting. Explicit `--auth-choice` runs still fail fast for automation.
+
 <AccordionGroup>
   <Accordion title="Anthropic API key">
     Uses `ANTHROPIC_API_KEY` if present or prompts for a key, then saves it for daemon use.

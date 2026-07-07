@@ -6,6 +6,7 @@
     <string name="trust_this_gateway">Trust this gateway?</string>
     <string name="trust_and_continue">Trust and continue</string>
     <string name="cancel">Cancel</string>
+    <string name="new_chat_in_worktree">New chat in worktree</string>
     <string name="endpoint">Endpoint</string>
     <string name="status">Status</string>
     <string name="connected_gateway_ready">Your gateway is active and ready.</string>
@@ -20,8 +21,17 @@
     <string name="use_tls">Use TLS</string>
     <string name="token_optional">Token (optional)</string>
     <string name="password">Password</string>
+    <string name="custom_headers_optional">Custom headers (optional)</string>
+    <string name="custom_headers_explainer">Sent with every connection to this gateway, for example Cloudflare Access service token headers. Stored encrypted and applied on the next reconnect.</string>
+    <string name="custom_header_value">Header value</string>
+    <string name="custom_header_reserved">This header is managed by the connection and cannot be overridden.</string>
+    <string name="add_custom_header">Add header</string>
+    <string name="remove_custom_header">Remove %1$s</string>
     <string name="run_onboarding_again">Run onboarding again</string>
     <string name="resolved_endpoint">Resolved endpoint</string>
     <string name="gateway_trust_first_seen">Verify the certificate fingerprint before trusting this gateway.\n\n%1$s</string>
     <string name="gateway_trust_changed">The gateway certificate changed. Continue only if you expected this.\n\nOld SHA-256:\n%1$s\n\nNew SHA-256:\n%2$s</string>
+    <string name="switch_gateway">Switch gateway</string>
+    <string name="select_gateway">Select gateway</string>
+    <string name="active_gateway">Active gateway</string>
 </resources>

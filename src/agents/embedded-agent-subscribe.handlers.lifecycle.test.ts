@@ -2,12 +2,27 @@
 // lifecycle events, and deferred reply cleanup.
 import { describe, expect, it, vi } from "vitest";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
+import { createHookRunner } from "../plugins/hooks.js";
+import { createMockPluginRegistry, TEST_PLUGIN_AGENT_CTX } from "../plugins/hooks.test-helpers.js";
 import { handleAgentEnd, handleAgentStart } from "./embedded-agent-subscribe.handlers.lifecycle.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 
 const { emitAgentEventMock } = vi.hoisted(() => ({
   emitAgentEventMock: vi.fn(),
 }));
+const DEFAULT_BEFORE_AGENT_FINALIZE_TIMEOUT_MS = 15_000;
+const BEFORE_AGENT_FINALIZE_EVENT = {
+  runId: "run-1",
+  sessionId: "session-1",
+  sessionKey: "agent:main:session-1",
+  turnId: "turn-1",
+  provider: "openai",
+  model: "freeze-e2e",
+  cwd: "/repo",
+  transcriptPath: "/tmp/session.jsonl",
+  stopHookActive: false,
+  lastAssistantMessage: "done",
+};
 
 vi.mock("../infra/agent-events.js", () => ({
   emitAgentEvent: emitAgentEventMock,
@@ -18,6 +33,7 @@ function createContext(
   overrides?: {
     onAgentEvent?: (event: unknown) => void;
     onBeforeLifecycleTerminal?: () => void | Promise<void>;
+    onBeforeTerminalDelivery?: () => void | Promise<void>;
     onBlockReply?: ((payload: unknown) => void) | undefined;
     onBlockReplyFlush?: () => void | Promise<void>;
     resolveTerminalStopReason?: () => string | undefined;
@@ -35,6 +51,7 @@ function createContext(
       sessionKey: "agent:main:main",
       onAgentEvent: overrides?.onAgentEvent,
       onBeforeLifecycleTerminal: overrides?.onBeforeLifecycleTerminal,
+      onBeforeTerminalDelivery: overrides?.onBeforeTerminalDelivery,
       resolveTerminalStopReason: overrides?.resolveTerminalStopReason,
       ...(onBlockReply ? { onBlockReply } : {}),
       onBlockReplyFlush: overrides?.onBlockReplyFlush,
@@ -886,6 +903,59 @@ describe("handleAgentEnd", () => {
 
     resolveChannelFlush?.();
     await endPromise;
+  });
+
+  it("resolves compaction retry after a timed-out terminal hook finalizes the original answer", async () => {
+    vi.useFakeTimers();
+    try {
+      const logger = { error: vi.fn(), warn: vi.fn(), debug: vi.fn() };
+      const runner = createHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_agent_finalize",
+            handler: vi.fn(() => new Promise(() => {})),
+          },
+        ]),
+        { logger },
+      );
+      const onBeforeTerminalDelivery = vi.fn(async () => {
+        await runner.runBeforeAgentFinalize(BEFORE_AGENT_FINALIZE_EVENT, TEST_PLUGIN_AGENT_CTX);
+        return undefined;
+      });
+      const ctx = createContext(
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "done" }],
+          stopReason: "stop",
+        },
+        { onBeforeTerminalDelivery },
+      );
+      ctx.state.assistantTexts = ["done"];
+      ctx.state.pendingCompactionRetry = 1;
+
+      const endPromise = handleAgentEnd(ctx);
+      await Promise.resolve();
+
+      expect(onBeforeTerminalDelivery).toHaveBeenCalledTimes(1);
+      expect(ctx.resolveCompactionRetry).not.toHaveBeenCalled();
+      expect(ctx.flushBlockReplyBuffer).not.toHaveBeenCalledWith({ final: true });
+
+      await vi.advanceTimersByTimeAsync(DEFAULT_BEFORE_AGENT_FINALIZE_TIMEOUT_MS);
+      await endPromise;
+
+      expect(logger.error).toHaveBeenCalledWith(
+        "[hooks] before_agent_finalize handler from test-plugin failed: timed out after 15000ms",
+      );
+      expect(ctx.clearDeferredAssistantEvents).not.toHaveBeenCalled();
+      expect(ctx.clearDeferredBlockReplies).not.toHaveBeenCalled();
+      expect(ctx.flushDeferredAssistantEvents).toHaveBeenCalledTimes(1);
+      expect(ctx.flushDeferredBlockReplies).toHaveBeenCalledTimes(1);
+      expect(ctx.flushBlockReplyBuffer).toHaveBeenCalledWith({ final: true });
+      expect(ctx.resolveCompactionRetry).toHaveBeenCalledTimes(1);
+      expect(ctx.maybeResolveCompactionWait).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("runs the before-lifecycle callback before the lifecycle end event", async () => {

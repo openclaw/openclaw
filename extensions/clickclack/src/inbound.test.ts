@@ -1,6 +1,7 @@
 // Clickclack tests cover inbound plugin behavior.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import { buildAgentSessionKey, resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { describe, expect, it, vi } from "vitest";
 import { handleClickClackInbound } from "./inbound.js";
 import { setClickClackRuntime } from "./runtime.js";
@@ -34,28 +35,14 @@ function createRuntime(): PluginRuntime {
     },
     channel: {
       routing: {
-        resolveAgentRoute({
-          accountId,
-          peer,
-        }: Parameters<PluginRuntime["channel"]["routing"]["resolveAgentRoute"]>[0]) {
-          return {
-            agentId: "main",
-            channel: "clickclack",
-            accountId: accountId ?? "default",
-            sessionKey: `agent:main:clickclack:${peer?.kind ?? "channel"}:${peer?.id ?? "general"}`,
-            mainSessionKey: "agent:main:main",
-            lastRoutePolicy: "session",
-            matchedBy: "default",
-          };
-        },
-        buildAgentSessionKey({
-          agentId,
-          channel,
-          accountId,
-          peer,
-        }: Parameters<PluginRuntime["channel"]["routing"]["buildAgentSessionKey"]>[0]) {
-          return `agent:${agentId}:${channel}:${accountId ?? "default"}:${peer?.kind ?? "channel"}:${peer?.id ?? "general"}`;
-        },
+        resolveAgentRoute: vi.fn(
+          (params: Parameters<PluginRuntime["channel"]["routing"]["resolveAgentRoute"]>[0]) =>
+            resolveAgentRoute(params),
+        ),
+        buildAgentSessionKey: vi.fn(
+          (params: Parameters<PluginRuntime["channel"]["routing"]["buildAgentSessionKey"]>[0]) =>
+            buildAgentSessionKey(params),
+        ),
       },
     },
     llm: {
@@ -330,6 +317,87 @@ describe("handleClickClackInbound", () => {
     expect(dispatchReply).toHaveBeenCalledTimes(1);
     expect(dispatchReply.mock.calls[0]?.[0].ctxPayload.ChatType).toBe("direct");
     expect(dispatchReply.mock.calls[0]?.[0].ctxPayload.CommandAuthorized).toBe(true);
+  });
+
+  it("preserves session policy when an account overrides the routed agent", async () => {
+    const runtime = createRuntime();
+    setClickClackRuntime(runtime);
+    const cfg = {
+      session: {
+        dmScope: "per-channel-peer",
+        mainKey: "work",
+        identityLinks: { alice: ["clickclack:dm:usr_owner"] },
+      },
+      bindings: [
+        {
+          agentId: "binding-agent",
+          match: {
+            channel: "clickclack",
+            accountId: "default",
+            peer: { kind: "direct", id: "dm:usr_owner" },
+          },
+          session: { dmScope: "per-account-channel-peer" },
+        },
+      ],
+    } satisfies CoreConfig;
+
+    await handleClickClackInbound({
+      account: createAgentAccount({ agentId: "service-bot" }),
+      config: cfg,
+      message: createMessage({
+        channel_id: undefined,
+        direct_conversation_id: "dcn_1",
+      }),
+    });
+
+    const dispatchReply = vi.mocked(runtime.channel.inbound.dispatchReply);
+    expect(dispatchReply.mock.calls[0]?.[0].routeSessionKey).toBe(
+      "agent:service-bot:clickclack:direct:alice",
+    );
+    expect(runtime.channel.routing.buildAgentSessionKey).toHaveBeenCalledWith({
+      agentId: "service-bot",
+      mainKey: "work",
+      channel: "clickclack",
+      accountId: "default",
+      peer: { kind: "direct", id: "dm:usr_owner" },
+      dmScope: "per-channel-peer",
+      identityLinks: { alice: ["clickclack:dm:usr_owner"] },
+    });
+  });
+
+  it("preserves binding scope for a canonically equivalent account agent", async () => {
+    const runtime = createRuntime();
+    setClickClackRuntime(runtime);
+    const cfg = {
+      agents: { list: [{ id: "service-bot" }] },
+      session: { dmScope: "main" },
+      bindings: [
+        {
+          agentId: "service-bot",
+          match: {
+            channel: "clickclack",
+            accountId: "default",
+            peer: { kind: "direct", id: "dm:usr_owner" },
+          },
+          session: { dmScope: "per-account-channel-peer" },
+        },
+      ],
+    } satisfies CoreConfig;
+
+    await handleClickClackInbound({
+      account: createAgentAccount({ agentId: "SERVICE-BOT" }),
+      config: cfg,
+      message: createMessage({
+        channel_id: undefined,
+        direct_conversation_id: "dcn_1",
+      }),
+    });
+
+    const dispatchReply = vi.mocked(runtime.channel.inbound.dispatchReply);
+    expect(dispatchReply.mock.calls[0]?.[0]).toMatchObject({
+      agentId: "service-bot",
+      routeSessionKey: "agent:service-bot:clickclack:default:direct:dm:usr_owner",
+    });
   });
 
   it("does not dispatch agent turns from senders outside allowFrom", async () => {

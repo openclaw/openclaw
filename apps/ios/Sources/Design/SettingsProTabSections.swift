@@ -110,12 +110,17 @@ extension SettingsProTab {
 
     var gatewaySection: some View {
         Section("Gateway") {
-            NavigationLink(value: SettingsRoute.gateway) {
-                self.gatewayConnectionRow
+            HStack(spacing: 8) {
+                NavigationLink(value: SettingsRoute.gateway) {
+                    self.gatewayConnectionRow
+                }
+                if self.gatewayRegistry.entries.count > 1 {
+                    self.gatewayQuickSwitchMenu
+                }
             }
-            LabeledContent("Address", value: self.gatewayAddress)
-            LabeledContent("Server", value: self.gatewayServer)
-            LabeledContent("Agents", value: "\(self.appModel.gatewayAgents.count)")
+            SettingsDetailRow("Address", value: self.gatewayAddress)
+            SettingsDetailRow("Server", value: self.gatewayServer)
+            SettingsDetailRow("Agents", value: "\(self.appModel.gatewayAgents.count)")
             self.gatewayActions
         }
     }
@@ -272,11 +277,11 @@ extension SettingsProTab {
                 color: self.gatewayStatusColor)
 
             self.detailListCard {
-                self.detailRow("Address", value: self.gatewayAddress)
-                self.detailRow("Server", value: self.gatewayServer)
-                self.detailRow("Discovered", value: "\(self.gatewayController.gateways.count)")
-                self.detailRow("Default Agent", value: self.appModel.activeAgentName)
-                self.detailRow("Agents", value: "\(self.appModel.gatewayAgents.count)")
+                SettingsDetailRow("Address", value: self.gatewayAddress)
+                SettingsDetailRow("Server", value: self.gatewayServer)
+                SettingsDetailRow("Discovered", value: "\(self.gatewayController.gateways.count)")
+                SettingsDetailRow("Default Agent", value: self.appModel.activeAgentName)
+                SettingsDetailRow("Agents", value: "\(self.appModel.gatewayAgents.count)")
             }
 
             Section {
@@ -297,6 +302,7 @@ extension SettingsProTab {
             }
 
             self.manualGatewayCard
+            self.pairedGatewaysCard
             self.deviceIdentityCard
             self.agentSelectionCard
             self.gatewaySetupCard
@@ -304,6 +310,31 @@ extension SettingsProTab {
             self.gatewayAdvancedCard
         }
         .font(OpenClawType.body)
+    }
+
+    var gatewayQuickSwitchMenu: some View {
+        Menu {
+            ForEach(self.gatewayRegistry.entries) { entry in
+                Button {
+                    Task { await self.switchGateway(to: entry) }
+                } label: {
+                    Label {
+                        Text(entry.name)
+                            .font(OpenClawType.body)
+                    } icon: {
+                        Image(systemName: entry.stableID == self.gatewayRegistry.activeStableID
+                            ? "checkmark.circle.fill"
+                            : "circle")
+                    }
+                }
+                .disabled(entry.stableID == self.gatewayRegistry.activeStableID || self.connectingGatewayID != nil)
+            }
+        } label: {
+            Image(systemName: "arrow.triangle.2.circlepath")
+                .font(OpenClawType.subheadSemiBold)
+                .foregroundStyle(OpenClawBrand.accent)
+        }
+        .accessibilityLabel("Switch Gateway")
     }
 
     var approvalsDestination: some View {
@@ -457,10 +488,10 @@ extension SettingsProTab {
             self.diagnosticChecksCard
 
             self.detailListCard {
-                self.detailRow("Device", value: DeviceInfoHelper.deviceFamily())
-                self.detailRow("Platform", value: DeviceInfoHelper.platformStringForDisplay())
-                self.detailRow("App", value: DeviceInfoHelper.openClawVersionString())
-                self.detailRow("Model", value: DeviceInfoHelper.modelIdentifier())
+                SettingsDetailRow("Device", value: DeviceInfoHelper.deviceFamily())
+                SettingsDetailRow("Platform", value: DeviceInfoHelper.platformStringForDisplay())
+                SettingsDetailRow("App", value: DeviceInfoHelper.openClawVersionString())
+                SettingsDetailRow("Model", value: DeviceInfoHelper.modelIdentifier())
             }
 
             self.diagnosticsAdvancedCard
@@ -638,9 +669,9 @@ extension SettingsProTab {
 
             // Concise public details only; deep hardware identifiers live in Diagnostics.
             detailListCard {
-                self.detailRow("OpenClaw app version", value: DeviceInfoHelper.openClawVersionString())
-                self.detailRow("Device", value: DeviceInfoHelper.deviceFamily())
-                self.detailRow("iOS", value: DeviceInfoHelper.iOSVersionStringForDisplay())
+                SettingsDetailRow("OpenClaw app version", value: DeviceInfoHelper.openClawVersionString())
+                SettingsDetailRow("Device", value: DeviceInfoHelper.deviceFamily())
+                SettingsDetailRow("iOS", value: DeviceInfoHelper.iOSVersionStringForDisplay())
             }
 
             Section {
@@ -695,10 +726,7 @@ extension SettingsProTab {
 
     func toggleCard(title: String, isOn: Binding<Bool>) -> some View {
         Section {
-            Toggle(isOn: isOn) {
-                Text(title)
-                    .font(OpenClawType.body)
-            }
+            self.settingsToggle(title, isOn: isOn)
         }
     }
 
@@ -824,6 +852,82 @@ extension SettingsProTab {
         }
     }
 
+    var pairedGatewaysCard: some View {
+        Section {
+            if self.gatewayRegistry.entries.isEmpty {
+                Text("Pair a gateway to make it available here.")
+                    .font(OpenClawType.subhead)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(self.gatewayRegistry.entries) { entry in
+                    self.pairedGatewayRow(entry)
+                }
+            }
+        } header: {
+            Text("Paired Gateways")
+                .font(OpenClawType.subheadSemiBold)
+        } footer: {
+            Text("Switch gateways without pairing again.")
+                .font(OpenClawType.footnote)
+        }
+    }
+
+    func pairedGatewayRow(_ entry: GatewaySettingsStore.GatewayRegistryEntry) -> some View {
+        let isActive = entry.stableID == self.gatewayRegistry.activeStableID
+        return Button {
+            guard !isActive else { return }
+            Task { await self.switchGateway(to: entry) }
+        } label: {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(entry.name)
+                        .font(OpenClawType.subheadSemiBold)
+                        .foregroundStyle(.primary)
+                    Text(self.gatewayEndpointSummary(entry))
+                        .font(OpenClawType.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                if self.connectingGatewayID == entry.stableID {
+                    ProgressView()
+                        .controlSize(.small)
+                } else if isActive {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(OpenClawType.subheadSemiBold)
+                        .foregroundStyle(OpenClawBrand.accent)
+                        .accessibilityLabel("Active Gateway")
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(self.connectingGatewayID != nil)
+        .swipeActions {
+            Button(role: .destructive) {
+                self.pendingForgetGateway = entry
+            } label: {
+                Label {
+                    Text("Forget")
+                        .font(OpenClawType.captionSemiBold)
+                } icon: {
+                    Image(systemName: "trash")
+                }
+            }
+        }
+        .contextMenu {
+            Button(role: .destructive) {
+                self.pendingForgetGateway = entry
+            } label: {
+                Label {
+                    Text("Forget Gateway")
+                        .font(OpenClawType.body)
+                } icon: {
+                    Image(systemName: "trash")
+                }
+            }
+        }
+    }
+
     func discoveredGatewayRow(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
@@ -853,10 +957,7 @@ extension SettingsProTab {
 
     var manualGatewayCard: some View {
         Section("Manual Gateway") {
-            Toggle(isOn: self.manualGatewayEnabledBinding) {
-                Text("Use Manual Gateway")
-                    .font(OpenClawType.body)
-            }
+            self.settingsToggle("Use Manual Gateway", isOn: self.manualGatewayEnabledBinding)
             TextField("Host", text: self.manualHostBinding)
                 .font(OpenClawType.body)
                 .textInputAutocapitalization(.never)
@@ -864,10 +965,7 @@ extension SettingsProTab {
             TextField("Port", text: self.manualPortBinding)
                 .font(OpenClawType.body)
                 .keyboardType(.numberPad)
-            Toggle(isOn: self.$manualGatewayTLS) {
-                Text("Use TLS")
-                    .font(OpenClawType.body)
-            }
+            self.settingsToggle("Use TLS", isOn: self.$manualGatewayTLS)
             self.gatewayActionButton(
                 title: "Connect Manual",
                 icon: "network",
@@ -884,12 +982,17 @@ extension SettingsProTab {
 
     var gatewayAdvancedCard: some View {
         Section {
-            Toggle(isOn: self.$gatewayAutoConnect) {
-                Text("Auto-connect on launch")
-                    .font(OpenClawType.body)
-            }
+            self.settingsToggle("Auto-connect on launch", isOn: self.$gatewayAutoConnect)
             self.gatewaySecureField("Gateway Auth Token", text: self.gatewayTokenBinding)
             self.gatewaySecureField("Gateway Password", text: self.gatewayPasswordBinding)
+            if let headersStableID = self.gatewayCustomHeadersTargetStableID {
+                NavigationLink {
+                    GatewayCustomHeadersSettingsView(gatewayStableID: headersStableID)
+                } label: {
+                    Text("Custom Headers")
+                        .font(OpenClawType.body)
+                }
+            }
             Button(role: .destructive) {
                 self.showResetOnboardingAlert = true
             } label: {
@@ -942,8 +1045,8 @@ extension SettingsProTab {
             NavigationLink {
                 VoiceWakeWordsSettingsView()
             } label: {
-                self.simpleSettingsRow(
-                    title: "Wake Words",
+                SettingsDetailRow(
+                    "Wake Words",
                     value: VoiceWakePreferences.displayString(for: self.voiceWake.triggerWords))
             }
         }
@@ -979,23 +1082,20 @@ extension SettingsProTab {
                     }
                     .font(OpenClawType.body)
                 }
-                self.detailRow("Voice Mode", value: self.appModel.talkMode.gatewayTalkVoiceModeTitle)
-                self.detailRow("Active Voice", value: self.gatewayTalkActiveVoiceDetail)
+                SettingsDetailRow("Voice Mode", value: self.appModel.talkMode.gatewayTalkVoiceModeTitle)
+                SettingsDetailRow("Active Voice", value: self.gatewayTalkActiveVoiceDetail)
                 if let issue = self.gatewayTalkLastIssueDetail {
-                    self.detailRow("Last Voice Issue", value: issue)
+                    SettingsDetailRow("Last Voice Issue", value: issue)
                 }
-                self.detailRow("Transport", value: self.appModel.talkMode.gatewayTalkTransportLabel)
-                self.detailRow("API Key", value: self.talkApiKeyStatus)
+                SettingsDetailRow("Transport", value: self.appModel.talkMode.gatewayTalkTransportLabel)
+                SettingsDetailRow("API Key", value: self.talkApiKeyStatus)
             }
         }
     }
 
     var shareSettingsCard: some View {
         Section {
-            Toggle(isOn: self.$talkButtonEnabled) {
-                Text("Show Talk Control")
-                    .font(OpenClawType.body)
-            }
+            self.settingsToggle("Show Talk Control", isOn: self.$talkButtonEnabled)
             TextField("Default Share Instruction", text: self.$defaultShareInstruction, axis: .vertical)
                 .font(OpenClawType.body)
                 .lineLimit(2...5)
@@ -1027,7 +1127,7 @@ extension SettingsProTab {
             NavigationLink {
                 GatewayDiscoveryDebugLogView()
             } label: {
-                self.simpleSettingsRow(title: "Discovery Logs", value: self.gatewayController.discoveryStatusText)
+                SettingsDetailRow("Discovery Logs", value: self.gatewayController.discoveryStatusText)
             }
         }
     }
@@ -1036,7 +1136,7 @@ extension SettingsProTab {
         Section("Device") {
             TextField("Device Name", text: self.$displayName)
                 .font(OpenClawType.body)
-            self.detailRow("Instance ID", value: self.instanceId)
+            SettingsDetailRow("Instance ID", value: self.instanceId)
         }
     }
 
@@ -1045,21 +1145,23 @@ extension SettingsProTab {
         isOn: Binding<Bool>,
         onChange: ((Bool) -> Void)? = nil) -> some View
     {
-        Toggle(isOn: isOn) {
-            Text(title)
-                .font(OpenClawType.subhead)
+        // Native Toggle rows can ignore visible-row taps on iOS 26; reuse the shared indicator row.
+        Button {
+            isOn.wrappedValue.toggle()
+        } label: {
+            HStack {
+                Text(title)
+                    .font(OpenClawType.body)
+                Spacer(minLength: 8)
+                OpenClawToggleIndicator(isOn: isOn.wrappedValue)
+            }
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityValue(isOn.wrappedValue ? "On" : "Off")
         .onChange(of: isOn.wrappedValue) { _, enabled in
             onChange?(enabled)
-        }
-    }
-
-    func simpleSettingsRow(title: String, value: String) -> some View {
-        LabeledContent(title) {
-            Text(value)
-                .font(OpenClawType.subhead)
-                .lineLimit(1)
-                .truncationMode(.middle)
         }
     }
 }
