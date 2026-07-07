@@ -35,6 +35,17 @@
       }
     }
   },
+  "providerEndpoints": [
+    {
+      "endpointClass": "volcengine-native",
+      "baseUrls": [
+        "https://ark.cn-beijing.volces.com/api/v3",
+        "https://ark.cn-beijing.volces.com/api/coding/v3",
+        "https://ark.ap-southeast.bytepluses.com/api/v3",
+        "https://ark.ap-southeast.bytepluses.com/api/coding/v3"
+      ]
+    }
+  ],
   "modelCatalog": {
     "providers": {
       "volcengine": {

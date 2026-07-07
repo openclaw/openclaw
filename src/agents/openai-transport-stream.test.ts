@@ -7138,6 +7138,34 @@ describe("openai transport stream", () => {
     expect(params.reasoning_effort).toBe("medium");
   });
 
+  it("adds reasoning_effort for Volcengine Ark completions behind custom provider ids", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "doubao-seed-2-0-pro-260215",
+        name: "Doubao Seed 2.0 Pro",
+        api: "openai-completions",
+        provider: "model_square",
+        baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 256000,
+        maxTokens: 4096,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoning: "medium",
+      } as never,
+    ) as { reasoning_effort?: unknown; stream_options?: { include_usage?: boolean } };
+
+    expect(params.reasoning_effort).toBe("medium");
+    expect(params.stream_options).toEqual({ include_usage: true });
+  });
+
   it("uses provider-native reasoning effort values declared by model compat", () => {
     const baseModel = {
       id: "qwen/qwen3-32b",

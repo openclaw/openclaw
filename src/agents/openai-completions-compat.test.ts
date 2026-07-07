@@ -73,6 +73,20 @@ describe("resolveOpenAICompletionsCompatDefaults", () => {
     ).toBe(false);
   });
 
+  it("enables reasoning effort for Volcengine Ark native completions endpoints", () => {
+    const defaults = resolveOpenAICompletionsCompatDefaults({
+      provider: "model_square",
+      endpointClass: "volcengine-native",
+      knownProviderFamily: "model_square",
+      supportsNativeStreamingUsageCompat: true,
+      usesExplicitProxyLikeEndpoint: true,
+    });
+
+    expect(defaults.supportsReasoningEffort).toBe(true);
+    expect(defaults.supportsUsageInStreaming).toBe(true);
+    expect(defaults.thinkingFormat).toBe("openai");
+  });
+
   it("uses Together reasoning payload format for Together-family providers", () => {
     const defaults = resolveOpenAICompletionsCompatDefaults({
       provider: "together",
@@ -114,6 +128,18 @@ describe("detectOpenAICompletionsCompat", () => {
       id: "Qwen/Qwen3-Coder-Next-FP8",
     });
 
+    expect(detected.defaults.supportsUsageInStreaming).toBe(true);
+  });
+
+  it("detects Volcengine Ark native completions endpoints for custom provider ids", () => {
+    const detected = detectOpenAICompletionsCompat({
+      provider: "model_square",
+      baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+      id: "doubao-seed-2-0-pro-260215",
+    });
+
+    expect(detected.capabilities.endpointClass).toBe("volcengine-native");
+    expect(detected.defaults.supportsReasoningEffort).toBe(true);
     expect(detected.defaults.supportsUsageInStreaming).toBe(true);
   });
 });

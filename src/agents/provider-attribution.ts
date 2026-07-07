@@ -65,6 +65,7 @@ export type ProviderEndpointClass =
   | "openai-public"
   | "openai"
   | "opencode-native"
+  | "volcengine-native"
   | "azure-openai"
   | "openrouter"
   | "xai-native"
@@ -167,6 +168,7 @@ const MANIFEST_PROVIDER_ENDPOINT_CLASSES = new Set<ProviderEndpointClass>([
   "openai-public",
   "openai",
   "opencode-native",
+  "volcengine-native",
   "azure-openai",
   "openrouter",
   "xai-native",
@@ -714,6 +716,7 @@ export function resolveProviderRequestCapabilities(
     endpointClass === "openai-public" ||
     endpointClass === "openai" ||
     endpointClass === "opencode-native" ||
+    endpointClass === "volcengine-native" ||
     endpointClass === "azure-openai" ||
     endpointClass === "openrouter" ||
     endpointClass === "xai-native" ||
@@ -781,7 +784,9 @@ export function resolveProviderRequestCapabilities(
     // Native endpoint class is the real signal here. Users can point a generic
     // provider key at Moonshot or DashScope and still need streaming usage.
     supportsNativeStreamingUsageCompat:
-      endpointClass === "moonshot-native" || endpointClass === "modelstudio-native",
+      endpointClass === "moonshot-native" ||
+      endpointClass === "modelstudio-native" ||
+      endpointClass === "volcengine-native",
     supportsOpenAICompletionsStreamingUsageCompat:
       manifestProviderRequest?.supportsOpenAICompletionsStreamingUsageCompat === true,
     compatibilityFamily,

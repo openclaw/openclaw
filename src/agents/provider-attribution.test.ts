@@ -32,6 +32,15 @@ const providerEndpointPlugins = vi.hoisted(() => [
       { endpointClass: "github-copilot-native", hostSuffixes: [".githubcopilot.com"] },
       { endpointClass: "groq-native", hosts: ["api.groq.com"] },
       { endpointClass: "opencode-native", hostSuffixes: ["opencode.ai"] },
+      {
+        endpointClass: "volcengine-native",
+        baseUrls: [
+          "https://ark.cn-beijing.volces.com/api/v3",
+          "https://ark.cn-beijing.volces.com/api/coding/v3",
+          "https://ark.ap-southeast.bytepluses.com/api/v3",
+          "https://ark.ap-southeast.bytepluses.com/api/coding/v3",
+        ],
+      },
       { endpointClass: "openrouter", hostSuffixes: ["openrouter.ai"] },
       { endpointClass: "zai-native", hosts: ["api.z.ai"] },
       { endpointClass: "google-generative-ai", hosts: ["generativelanguage.googleapis.com"] },
@@ -518,6 +527,14 @@ describe("provider attribution", () => {
     expectRecordFields(resolveProviderEndpoint("https://opencode.ai/api"), {
       endpointClass: "opencode-native",
       hostname: "opencode.ai",
+    });
+    expectRecordFields(resolveProviderEndpoint("https://ark.cn-beijing.volces.com/api/v3"), {
+      endpointClass: "volcengine-native",
+      hostname: "ark.cn-beijing.volces.com",
+    });
+    expectRecordFields(resolveProviderEndpoint("https://ark.ap-southeast.bytepluses.com/api/v3"), {
+      endpointClass: "volcengine-native",
+      hostname: "ark.ap-southeast.bytepluses.com",
     });
     expectRecordFields(resolveProviderEndpoint("https://api.xiaomimimo.com/v1"), {
       endpointClass: "xiaomi-native",
@@ -1111,6 +1128,22 @@ describe("provider attribution", () => {
       }),
       {
         endpointClass: "modelstudio-native",
+        supportsNativeStreamingUsageCompat: true,
+      },
+    );
+
+    expectRecordFields(
+      resolveProviderRequestCapabilities({
+        provider: "model_square",
+        api: "openai-completions",
+        baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+        capability: "llm",
+        transport: "stream",
+      }),
+      {
+        endpointClass: "volcengine-native",
+        isKnownNativeEndpoint: true,
+        usesExplicitProxyLikeEndpoint: true,
         supportsNativeStreamingUsageCompat: true,
       },
     );

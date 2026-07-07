@@ -72,6 +72,7 @@ export function resolveOpenAICompletionsCompatDefaults(
   const isTogether =
     knownProviderFamily === "together" ||
     (isDefaultRoute && isDefaultRouteProvider(input.provider, "together"));
+  const isVolcengine = endpointClass === "volcengine-native";
   const isXiaomi =
     endpointClass === "xiaomi-native" ||
     (isDefaultRoute && isDefaultRouteProvider(input.provider, "xiaomi"));
@@ -103,7 +104,7 @@ export function resolveOpenAICompletionsCompatDefaults(
       !isTogether &&
       knownProviderFamily !== "mistral" &&
       endpointClass !== "xai-native" &&
-      !usesExplicitProxyLikeEndpoint,
+      (!usesExplicitProxyLikeEndpoint || isVolcengine),
     supportsUsageInStreaming:
       supportsOpenAICompletionsStreamingUsageCompat ||
       (!isNonStandard &&
