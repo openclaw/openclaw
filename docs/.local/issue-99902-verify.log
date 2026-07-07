@@ -1,0 +1,22 @@
+=== issue-99902 验证日志 ===
+2026-07-07T19:53
+
+测试环境: Linux x86_64, Node v25.9.0
+变更文件: src/hooks/gmail-watcher.ts
+变更内容: void startGmailWatch(runtimeConfig) → void ... .catch()
+
+=== 验证步骤 ===
+
+1. pnpm build
+   结果: 构建成功，无类型错误
+   output: "phase timings: total 158.2s"
+
+2. pnpm test:unit
+   结果: 11295 passed, 3 skipped
+   gmail-watcher 相关测试全部通过
+   3 个 failed 在 channel-setup.status.test.ts + search-setup.test.ts（预存问题，与本变更无关）
+
+=== 结论 ===
+
+变更正确，为 setInterval 中 fire-and-forget 的 startGmailWatch 调用添加了 .catch() 处理。
+若 Promise reject，错误会被记录到日志而非变成未处理拒绝。

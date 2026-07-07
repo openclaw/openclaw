@@ -366,7 +366,9 @@ export async function startGmailWatcher(
     if (shuttingDown) {
       return;
     }
-    void startGmailWatch(runtimeConfig);
+    void startGmailWatch(runtimeConfig).catch((err) => {
+      log.error(`gmail watch renew error: ${String(err)}`);
+    });
   }, renewMs);
 
   log.info(
