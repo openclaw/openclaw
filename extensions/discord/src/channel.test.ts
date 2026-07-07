@@ -83,6 +83,22 @@ function startDiscordAccount(cfg: OpenClawConfig, accountId = "default") {
   );
 }
 
+function prepareDiscordStartupMocks() {
+  probeDiscordMock.mockResolvedValue({
+    ok: true,
+    bot: { username: "Jarvis" },
+    application: {
+      intents: {
+        messageContent: "limited",
+        guildMembers: "disabled",
+        presence: "disabled",
+      },
+    },
+    elapsedMs: 1,
+  });
+  monitorDiscordProviderMock.mockResolvedValue(undefined);
+}
+
 function installDiscordRuntime(discord: Record<string, unknown>) {
   setDiscordRuntime({
     channel: {
@@ -691,19 +707,7 @@ describe("discordPlugin outbound", () => {
   });
 
   it("stagger starts later accounts in multi-bot setups", async () => {
-    probeDiscordMock.mockResolvedValue({
-      ok: true,
-      bot: { username: "Cherry" },
-      application: {
-        intents: {
-          messageContent: "limited",
-          guildMembers: "disabled",
-          presence: "disabled",
-        },
-      },
-      elapsedMs: 1,
-    });
-    monitorDiscordProviderMock.mockResolvedValue(undefined);
+    prepareDiscordStartupMocks();
 
     const cfg = {
       channels: {
@@ -731,19 +735,7 @@ describe("discordPlugin outbound", () => {
   });
 
   it("starts the configured default account before staggering secondary accounts", async () => {
-    probeDiscordMock.mockResolvedValue({
-      ok: true,
-      bot: { username: "Jarvis" },
-      application: {
-        intents: {
-          messageContent: "limited",
-          guildMembers: "disabled",
-          presence: "disabled",
-        },
-      },
-      elapsedMs: 1,
-    });
-    monitorDiscordProviderMock.mockResolvedValue(undefined);
+    prepareDiscordStartupMocks();
 
     const cfg = {
       channels: {
@@ -777,19 +769,7 @@ describe("discordPlugin outbound", () => {
   });
 
   it("does not promote a duplicate-token defaultAccount to the zero-delay startup slot", async () => {
-    probeDiscordMock.mockResolvedValue({
-      ok: true,
-      bot: { username: "Jarvis" },
-      application: {
-        intents: {
-          messageContent: "limited",
-          guildMembers: "disabled",
-          presence: "disabled",
-        },
-      },
-      elapsedMs: 1,
-    });
-    monitorDiscordProviderMock.mockResolvedValue(undefined);
+    prepareDiscordStartupMocks();
 
     const cfg = {
       channels: {
@@ -817,19 +797,7 @@ describe("discordPlugin outbound", () => {
   });
 
   it("does not assign startup slots to enabled but unconfigured accounts", async () => {
-    probeDiscordMock.mockResolvedValue({
-      ok: true,
-      bot: { username: "Jarvis" },
-      application: {
-        intents: {
-          messageContent: "limited",
-          guildMembers: "disabled",
-          presence: "disabled",
-        },
-      },
-      elapsedMs: 1,
-    });
-    monitorDiscordProviderMock.mockResolvedValue(undefined);
+    prepareDiscordStartupMocks();
 
     const cfg = {
       channels: {

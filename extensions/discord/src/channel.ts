@@ -24,8 +24,7 @@ import {
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveTargetsWithOptionalToken } from "openclaw/plugin-sdk/target-resolver-runtime";
 import {
-  isDiscordAccountEnabledForRuntime,
-  listDiscordAccountIds,
+  listEnabledDiscordAccounts,
   resolveDefaultDiscordAccountId,
   resolveDiscordAccount,
   resolveDiscordAccountAllowFrom,
@@ -224,15 +223,16 @@ const discordMessageActions = {
 };
 
 function resolveDiscordStartupAccountIds(cfg: OpenClawConfig): string[] {
-  const startupAccountIds = listDiscordAccountIds(cfg).filter((candidateId) => {
-    const candidate = resolveDiscordAccount({ cfg, accountId: candidateId });
-    return (
-      isDiscordAccountEnabledForRuntime(candidate, cfg) &&
-      (resolveConfiguredFromCredentialStatuses(candidate) ??
-        Boolean(normalizeOptionalString(candidate.token)))
-    );
-  });
+  const startupAccountIds = listEnabledDiscordAccounts(cfg)
+    .filter(
+      (candidate) =>
+        resolveConfiguredFromCredentialStatuses(candidate) ??
+        Boolean(normalizeOptionalString(candidate.token)),
+    )
+    .map((candidate) => candidate.accountId);
   const defaultAccountId = resolveDefaultDiscordAccountId(cfg);
+  // Promote only a gateway-eligible account; otherwise a disabled or unconfigured
+  // default would waste the immediate startup slot while a real bot waits.
   if (!startupAccountIds.includes(defaultAccountId)) {
     return startupAccountIds;
   }
