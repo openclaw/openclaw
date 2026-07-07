@@ -10,7 +10,11 @@ function normalizeMediaPathForExtension(mediaUrl: string): string {
   }
   try {
     const parsed = new URL(trimmed);
-    return normalizeLowercaseStringOrEmpty(parsed.pathname);
+    try {
+      return normalizeLowercaseStringOrEmpty(decodeURIComponent(parsed.pathname));
+    } catch {
+      return normalizeLowercaseStringOrEmpty(parsed.pathname);
+    }
   } catch {
     const withoutHash = trimmed.split("#", 1)[0] ?? trimmed;
     const withoutQuery = withoutHash.split("?", 1)[0] ?? withoutHash;
