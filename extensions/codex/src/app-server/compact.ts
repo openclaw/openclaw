@@ -8,10 +8,6 @@ import {
   type EmbeddedAgentCompactResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readCodexNotificationItem } from "./attempt-notifications.js";
-import {
-  defaultLeasedCodexAppServerClientFactory,
-  type CodexAppServerClientFactory,
-} from "./client-factory.js";
 import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import {
@@ -27,7 +23,11 @@ import {
   type CodexAppServerBindingStore,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
-import { releaseLeasedSharedCodexAppServerClient } from "./shared-client.js";
+import {
+  getLeasedSharedCodexAppServerClient,
+  releaseLeasedSharedCodexAppServerClient,
+  type CodexAppServerClientFactory,
+} from "./shared-client.js";
 
 const warnedIgnoredCompactionOverrides = new Set<string>();
 const codexNativeCompactionQueues = new Map<string, Promise<void>>();
@@ -530,18 +530,18 @@ async function compactCodexNativeThread(
     return { ok: false, compacted: false, reason: "auth profile mismatch for session binding" };
   }
   const shouldReleaseDefaultLease = !options.clientFactory;
-  const clientFactory = options.clientFactory ?? defaultLeasedCodexAppServerClientFactory;
+  const clientFactory = options.clientFactory ?? getLeasedSharedCodexAppServerClient;
   try {
     return await runExclusiveCodexNativeCompaction(
       binding.threadId,
       params.abortSignal,
       async () => {
-        const client = await clientFactory(
-          appServer.start,
-          requestedAuthProfileId ?? binding.authProfileId,
-          params.agentDir,
-          params.config,
-        );
+        const client = await clientFactory({
+          startOptions: appServer.start,
+          authProfileId: requestedAuthProfileId ?? binding.authProfileId,
+          agentDir: params.agentDir,
+          config: params.config,
+        });
         const completionWatch = watchCodexNativeCompactionCompletion({
           client,
           threadId: binding.threadId,

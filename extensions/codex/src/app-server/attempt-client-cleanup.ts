@@ -14,6 +14,32 @@ export const CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS = 5_000;
 /** Timeout for best-effort thread unsubscribe during cleanup. */
 export const CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS = 5_000;
 
+/** Raised when a thread subscription may be live on a client OpenClaw no longer controls. */
+export class CodexAppServerUnsafeSubscriptionError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "CodexAppServerUnsafeSubscriptionError";
+  }
+}
+
+export function isCodexAppServerUnsafeSubscriptionError(
+  error: unknown,
+): error is CodexAppServerUnsafeSubscriptionError {
+  return error instanceof CodexAppServerUnsafeSubscriptionError;
+}
+
+/** Asserts Codex resumed the exact thread this attempt subscribed to. */
+export function assertCodexThreadResumeSubscription(
+  requestedThreadId: string,
+  returnedThreadId: string,
+): void {
+  if (returnedThreadId !== requestedThreadId) {
+    throw new CodexAppServerUnsafeSubscriptionError(
+      `Codex thread/resume returned ${returnedThreadId} for ${requestedThreadId}`,
+    );
+  }
+}
+
 async function closeClientAndWaitIfAvailable(client: CodexAppServerClient): Promise<void> {
   const closeable = client as {
     close?: CodexAppServerClient["close"];
@@ -91,18 +117,20 @@ export async function unsubscribeCodexThreadBestEffort(
     threadId: string;
     timeoutMs: number;
   },
-): Promise<void> {
+): Promise<boolean> {
   try {
     await client.request(
       "thread/unsubscribe",
       { threadId: params.threadId },
       { timeoutMs: params.timeoutMs },
     );
+    return true;
   } catch (error) {
     embeddedAgentLog.debug("codex app-server thread unsubscribe cleanup failed", {
       threadId: params.threadId,
       error,
     });
+    return false;
   }
 }
 
