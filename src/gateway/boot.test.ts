@@ -183,13 +183,31 @@ describe("runBootOnce", () => {
     });
   });
 
-  it("returns failed when BOOT.md cannot be read", async () => {
+  it("skips when BOOT.md is not a regular file", async () => {
     await withBootWorkspace({ bootAsDirectory: true }, async (workspaceDir) => {
-      const result = await runBootOnce({ cfg: {}, deps: makeDeps(), workspaceDir });
-      expect(result.status).toBe("failed");
-      if (result.status === "failed") {
-        expect(result.reason.length).toBeGreaterThan(0);
-      }
+      await expect(runBootOnce({ cfg: {}, deps: makeDeps(), workspaceDir })).resolves.toEqual({
+        status: "skipped",
+        reason: "empty",
+      });
+      expect(agentCommand).not.toHaveBeenCalled();
+    });
+  });
+
+  it("skips when BOOT.md is a symlink", async () => {
+    if (process.platform === "win32") {
+      // Symlink support in unit tests is not guaranteed on Windows CI runners.
+      return;
+    }
+    await withBootWorkspace({ bootContent: "" }, async (workspaceDir) => {
+      const bootPath = path.join(workspaceDir, "BOOT.md");
+      const targetPath = path.join(workspaceDir, "REAL_BOOT.md");
+      await fs.writeFile(targetPath, "Say hello.", "utf-8");
+      await fs.rm(bootPath, { force: true });
+      await fs.symlink(targetPath, bootPath);
+      await expect(runBootOnce({ cfg: {}, deps: makeDeps(), workspaceDir })).resolves.toEqual({
+        status: "skipped",
+        reason: "empty",
+      });
       expect(agentCommand).not.toHaveBeenCalled();
     });
   });
