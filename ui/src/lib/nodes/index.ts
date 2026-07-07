@@ -118,7 +118,7 @@ export type ExecApprovalsSnapshot = FileExecApprovalsSnapshot | NativeExecApprov
 
 export type ExecApprovalsTarget = { kind: "gateway" } | { kind: "node"; nodeId: string };
 
-export type NodesState = {
+type NodesState = {
   client: GatewayRequestClient | null;
   connected: boolean;
   nodesLoading: boolean;
@@ -127,7 +127,7 @@ export type NodesState = {
   chatError?: string | null;
 };
 
-export type DevicesState = {
+type DevicesState = {
   client: GatewayRequestClient | null;
   connected: boolean;
   devicesLoading: boolean;

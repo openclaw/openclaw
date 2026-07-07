@@ -29,7 +29,7 @@ export interface SmokeRunOptions {
   targetPackageSpec?: string;
 }
 
-export interface SmokeLaneStatuses {
+interface SmokeLaneStatuses {
   freshAgent: string;
   freshGateway: string;
   freshMain: string;
@@ -41,7 +41,7 @@ export interface SmokeLaneStatuses {
   upgradeVersion: string;
 }
 
-export interface CommonSmokeSummary {
+interface CommonSmokeSummary {
   currentHead: string;
   freshMain: {
     agent: string;

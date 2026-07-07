@@ -90,7 +90,7 @@ function readPluginSdkEntrypointBudgetEnv(name, fallback, env = process.env) {
   return Object.freeze({ ...fallback, ...overrides });
 }
 
-export const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
+const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   core: 2,
   health: 1,
   lmstudio: 1,
