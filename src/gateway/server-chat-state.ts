@@ -20,6 +20,7 @@ export type ChatRunRegistration = {
 export type ChatRunEntry = ChatRunRegistration & {
   registeredAtMs: number;
   registeredSequence: number;
+  toolErrorSummary?: string;
 };
 
 export type ChatAbortMarker = number | { abortedAtMs: number; sequence: number };

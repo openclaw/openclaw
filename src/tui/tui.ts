@@ -1557,7 +1557,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     if (evt.event === "chat.side_result") {
       handleBtwEvent(evt.payload);
     }
-    if (evt.event === "agent") {
+    if (evt.event === "agent" || evt.event === "session.tool") {
       handleAgentEvent(evt.payload);
     }
     if (evt.event === "sessions.changed") {

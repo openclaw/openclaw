@@ -1101,10 +1101,11 @@ export class EmbeddedTuiBackend implements TuiBackend {
       data: evt.data,
     });
 
+    const eventToolErrorSummary = readToolValidationErrorSummary(evt.data?.toolErrorSummary);
     if (evt.stream === "assistant" || (evt.stream === "tool" && evt.data?.phase === "start")) {
       run.toolErrorSummary = undefined;
-    } else if (evt.stream === "tool" && evt.data?.phase === "result") {
-      run.toolErrorSummary = readToolValidationErrorSummary(evt.data.toolErrorSummary);
+    } else if (eventToolErrorSummary) {
+      run.toolErrorSummary = eventToolErrorSummary;
     }
 
     const assistantLiveChatInput =
@@ -1129,7 +1130,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
     const phase = lifecyclePhase;
     const aborted = evt.data?.aborted === true || run.controller.signal.aborted;
-    const toolErrorSummary = readToolValidationErrorSummary(evt.data?.toolErrorSummary);
+    const toolErrorSummary = eventToolErrorSummary;
     if (phase === "finishing") {
       run.finishing = true;
       run.markQueuedRunReady();

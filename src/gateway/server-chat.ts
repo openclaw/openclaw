@@ -4,7 +4,10 @@ import { performance } from "node:perf_hooks";
 import { buildAgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveToolSearchCodeDisplayTarget } from "../agents/tool-display-common.js";
-import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
+import {
+  createToolValidationErrorSummary,
+  readToolValidationErrorSummary,
+} from "../agents/tool-error-summary.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -311,6 +314,49 @@ function roundedChatSendTimingMs(value: number): number {
   return Math.max(0, Math.round(value * 1000) / 1000);
 }
 
+type TerminalLifecycleOptions = {
+  skipChatErrorFinal?: boolean;
+  suppressRestartRecoveryProjection?: boolean;
+  restartRecoveryState?: { suppress: boolean };
+};
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function readToolResultText(value: unknown): string | undefined {
+  const result = asRecord(value);
+  const content = Array.isArray(result?.content) ? result.content : [];
+  for (const item of content) {
+    const text = asRecord(item)?.text;
+    if (typeof text === "string" && text.trim()) {
+      return text;
+    }
+  }
+  return undefined;
+}
+
+function readPreparedToolValidationSummary(data: unknown): string | undefined {
+  const record = asRecord(data);
+  const preparedSummary = readToolValidationErrorSummary(record?.toolErrorSummary);
+  if (preparedSummary) {
+    return preparedSummary;
+  }
+  if (record?.phase !== "result" || record.isError !== true || typeof record.name !== "string") {
+    return undefined;
+  }
+  const resultText = readToolResultText(record.result);
+  if (
+    !resultText?.startsWith(`Validation failed for tool "${record.name}":`) ||
+    !resultText.includes("\n\nReceived arguments:")
+  ) {
+    return undefined;
+  }
+  return createToolValidationErrorSummary(record.name);
+}
+
 export function createAgentEventHandler({
   broadcast,
   broadcastToConnIds,
@@ -332,11 +378,6 @@ export function createAgentEventHandler({
   updateRunToolErrorSummary,
   resolveSessionActiveRunState,
 }: AgentEventHandlerOptions) {
-  type TerminalLifecycleOptions = {
-    skipChatErrorFinal?: boolean;
-    suppressRestartRecoveryProjection?: boolean;
-    restartRecoveryState?: { suppress: boolean };
-  };
   type PendingTerminalLifecycleError = {
     timer: NodeJS.Timeout;
     event: AgentEventPayload;
@@ -672,6 +713,8 @@ export function createAgentEventHandler({
             : terminalOutcome.reason === "cancelled" || terminalOutcome.reason === "aborted"
               ? "aborted"
               : "error";
+        const abortErrorMessage =
+          readToolValidationErrorSummary(evt.data?.toolErrorSummary) ?? chatLink?.toolErrorSummary;
         if (!(opts?.skipChatErrorFinal && terminalState === "error")) {
           emitChatTerminal(
             terminalSessionKey,
@@ -686,7 +729,7 @@ export function createAgentEventHandler({
               agentId: terminalAgentId,
               controlUiVisible: isControlUiVisible,
               firstAssistantTimingEntry: finished,
-              abortErrorMessage: readToolValidationErrorSummary(evt.data?.toolErrorSummary),
+              abortErrorMessage,
             },
           );
         }
@@ -1203,7 +1246,15 @@ export function createAgentEventHandler({
     const restartRecoveryAgentId = evt.agentId ?? sessionAgentId;
     const clientRunId = chatLink?.clientRunId ?? evt.runId;
     const eventRunId = chatLink?.clientRunId ?? evt.runId;
-    const eventForClients = chatLink ? { ...evt, runId: eventRunId } : evt;
+    const toolValidationSummary = readPreparedToolValidationSummary(evt.data);
+    const eventDataForClients =
+      toolValidationSummary && evt.data && typeof evt.data === "object"
+        ? { ...evt.data, toolErrorSummary: toolValidationSummary }
+        : evt.data;
+    const eventForClients = {
+      ...(chatLink ? { ...evt, runId: eventRunId } : evt),
+      data: eventDataForClients,
+    };
     const isAborted =
       isChatAbortMarkerCurrent(chatRunState.abortedRuns.get(clientRunId), chatLink) ||
       isChatAbortMarkerCurrent(chatRunState.abortedRuns.get(evt.runId), chatLink);
@@ -1228,6 +1279,16 @@ export function createAgentEventHandler({
         });
       }
       return;
+    }
+    if (toolValidationSummary) {
+      if (chatLink) {
+        chatLink.toolErrorSummary = toolValidationSummary;
+      }
+      updateRunToolErrorSummary?.({
+        runId: evt.runId,
+        clientRunId,
+        summary: toolValidationSummary,
+      });
     }
     if (lifecyclePhase !== null && lifecyclePhase !== "error") {
       clearPendingTerminalLifecycleError(evt.runId);
@@ -1287,17 +1348,25 @@ export function createAgentEventHandler({
     }
     agentRunSeq.set(evt.runId, evt.seq);
     if (evt.stream === "assistant") {
-      updateRunToolErrorSummary?.({ runId: evt.runId, clientRunId, summary: undefined });
+      if (chatLink) {
+        chatLink.toolErrorSummary = undefined;
+      }
+      updateRunToolErrorSummary?.({
+        runId: evt.runId,
+        clientRunId,
+        summary: undefined,
+      });
     }
     if (isToolEvent) {
       const toolPhase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
       if (toolPhase === "start") {
-        updateRunToolErrorSummary?.({ runId: evt.runId, clientRunId, summary: undefined });
-      } else if (toolPhase === "result") {
+        if (chatLink) {
+          chatLink.toolErrorSummary = undefined;
+        }
         updateRunToolErrorSummary?.({
           runId: evt.runId,
           clientRunId,
-          summary: readToolValidationErrorSummary(evt.data?.toolErrorSummary),
+          summary: undefined,
         });
       }
       // Flush pending assistant text before tool-start events so clients can

@@ -215,6 +215,75 @@ describe("agent event handler", () => {
     });
   });
 
+  it("derives safe validation diagnostics from sanitized tool result text", () => {
+    const updateRunToolErrorSummary = vi.fn();
+    const { handler } = createHarness({
+      updateRunToolErrorSummary,
+    });
+    registerAgentRunContext("run-validation-result", {
+      sessionKey: "session-1",
+      verboseLevel: "off",
+    });
+
+    handler({
+      runId: "run-validation-result",
+      seq: 1,
+      stream: "tool",
+      ts: 1_000,
+      data: {
+        phase: "result",
+        name: "edit",
+        toolCallId: "tool-edit-validation",
+        isError: true,
+        result: {
+          content: [
+            {
+              type: "text",
+              text: 'Validation failed for tool "edit":\n  - path: must be string\n\nReceived arguments:\n{"path":"secret.txt"}',
+            },
+          ],
+          details: {},
+        },
+      },
+    });
+
+    expect(updateRunToolErrorSummary).toHaveBeenCalledWith({
+      runId: "run-validation-result",
+      clientRunId: "run-validation-result",
+      summary: "edit tool validation failed: invalid arguments",
+    });
+  });
+
+  it("does not derive validation diagnostics from successful tool result text", () => {
+    const updateRunToolErrorSummary = vi.fn();
+    const { handler } = createHarness({
+      updateRunToolErrorSummary,
+    });
+
+    handler({
+      runId: "run-validation-result",
+      seq: 1,
+      stream: "tool",
+      ts: 1_000,
+      data: {
+        phase: "result",
+        name: "edit",
+        toolCallId: "tool-edit-output",
+        isError: false,
+        result: {
+          content: [
+            {
+              type: "text",
+              text: 'Validation failed for tool "edit":\nexample output\n\nReceived arguments:\n{}',
+            },
+          ],
+        },
+      },
+    });
+
+    expect(updateRunToolErrorSummary).not.toHaveBeenCalled();
+  });
+
   it.each([
     { stream: "assistant", data: { text: "Recovered" } },
     { stream: "tool", data: { phase: "start", name: "read" } },
@@ -2734,6 +2803,41 @@ describe("agent event handler", () => {
     expect(persistGatewaySessionLifecycleEventMock).not.toHaveBeenCalled();
   });
 
+  it("does not apply stale validation diagnostics from suppressed lifecycle events", () => {
+    registerAgentRunContext("shared-run", {
+      sessionKey: "session-recovery",
+      sessionId: "session-recovery",
+      lifecycleGeneration: "post-restart",
+    });
+    const updateRunToolErrorSummary = vi.fn();
+    const { chatRunState, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-recovery",
+      resolveActiveLifecycleGenerationForRun: () => "post-restart",
+      updateRunToolErrorSummary,
+    });
+    chatRunState.registry.add("shared-run", {
+      sessionKey: "session-recovery",
+      clientRunId: "shared-run",
+    });
+
+    handler({
+      runId: "shared-run",
+      lifecycleGeneration: "pre-restart",
+      seq: 1,
+      stream: "lifecycle",
+      sessionKey: "session-recovery",
+      sessionId: "session-recovery",
+      ts: 2_000,
+      data: {
+        phase: "finishing",
+        toolErrorSummary: "edit tool validation failed: invalid arguments",
+      },
+    });
+
+    expect(chatRunState.registry.peek("shared-run")?.toolErrorSummary).toBeUndefined();
+    expect(updateRunToolErrorSummary).not.toHaveBeenCalled();
+  });
+
   it("cancels a deferred old-generation error before a same-id retry", () => {
     vi.useFakeTimers();
     let activeLifecycleGeneration = "pre-restart";
@@ -2961,6 +3065,85 @@ describe("agent event handler", () => {
     });
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
     expect(chatRunState.registry.peek("provider-validation-loop")).toBeUndefined();
+  });
+
+  it("projects lifecycle aborts with the active run validation diagnostic", () => {
+    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
+    chatRunState.registry.add("provider-validation-loop", {
+      sessionKey: "session-validation-loop",
+      clientRunId: "client-validation-loop",
+    });
+
+    handler({
+      runId: "provider-validation-loop",
+      seq: 1,
+      stream: "tool",
+      ts: 1_000,
+      data: {
+        phase: "result",
+        name: "edit",
+        toolCallId: "tool-edit-validation",
+        isError: true,
+        result: {
+          content: [
+            {
+              type: "text",
+              text: 'Validation failed for tool "edit":\n  - path: must be string\n\nReceived arguments:\n{"path":"secret.txt"}',
+            },
+          ],
+        },
+      },
+    });
+
+    handler({
+      runId: "provider-validation-loop",
+      seq: 2,
+      stream: "lifecycle",
+      ts: 1_500,
+      data: { phase: "end", aborted: true, stopReason: "aborted" },
+    });
+
+    expect(chatBroadcastCalls(broadcast)[0][1]).toMatchObject({
+      runId: "client-validation-loop",
+      sessionKey: "session-validation-loop",
+      state: "aborted",
+      errorMessage: "edit tool validation failed: invalid arguments",
+    });
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    expect(chatRunState.registry.peek("provider-validation-loop")).toBeUndefined();
+  });
+
+  it("carries lifecycle validation diagnostics into later lifecycle aborts", () => {
+    const { broadcast, chatRunState, handler } = createHarness({ lifecycleErrorRetryGraceMs: 0 });
+    chatRunState.registry.add("provider-validation-loop", {
+      sessionKey: "session-validation-loop",
+      clientRunId: "client-validation-loop",
+    });
+
+    handler({
+      runId: "provider-validation-loop",
+      seq: 1,
+      stream: "lifecycle",
+      ts: 1_000,
+      data: {
+        phase: "finishing",
+        toolErrorSummary: "edit tool validation failed: invalid arguments",
+      },
+    });
+    handler({
+      runId: "provider-validation-loop",
+      seq: 2,
+      stream: "lifecycle",
+      ts: 1_500,
+      data: { phase: "error", aborted: true, stopReason: "aborted" },
+    });
+
+    expect(chatBroadcastCalls(broadcast)[0][1]).toMatchObject({
+      runId: "client-validation-loop",
+      sessionKey: "session-validation-loop",
+      state: "aborted",
+      errorMessage: "edit tool validation failed: invalid arguments",
+    });
   });
 
   it.each([
