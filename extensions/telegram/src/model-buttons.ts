@@ -6,9 +6,13 @@
  * - mdl_list_{prov}_{pg}  - show models for provider (page N, 1-indexed)
  * - mdl_sel_{provider/id} - select model (standard)
  * - mdl_sel/{model}       - select model (compact fallback when standard is >64 bytes)
+ * - mdl_idx_{prov}_{idx}  - select model by provider-local index (long model fallback)
  * - mdl_back              - back to providers list
  */
-import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import {
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+} from "openclaw/plugin-sdk/number-runtime";
 import { fitsTelegramCallbackData } from "./approval-callback-data.js";
 
 export type ButtonRow = Array<{ text: string; callback_data: string }>;
@@ -17,7 +21,12 @@ export type ParsedModelCallback =
   | { type: "providers" }
   | { type: "list"; provider: string; page: number }
   | { type: "select"; provider?: string; model: string }
+  | { type: "select-index"; provider: string; index: number }
   | { type: "back" };
+
+type ParsedModelSelectionCallback =
+  | Extract<ParsedModelCallback, { type: "select" }>
+  | Extract<ParsedModelCallback, { type: "select-index" }>;
 
 export type ProviderInfo = {
   id: string;
@@ -26,7 +35,8 @@ export type ProviderInfo = {
 
 export type ResolveModelSelectionResult =
   | { kind: "resolved"; provider: string; model: string }
-  | { kind: "ambiguous"; model: string; matchingProviders: string[] };
+  | { kind: "ambiguous"; model: string; matchingProviders: string[] }
+  | { kind: "unavailable"; provider: string; index: number };
 
 export type ModelsKeyboardParams = {
   provider: string;
@@ -47,6 +57,7 @@ const CALLBACK_PREFIX = {
   list: "mdl_list_",
   selectStandard: "mdl_sel_",
   selectCompact: "mdl_sel/",
+  selectIndex: "mdl_idx_",
 } as const;
 
 /**
@@ -70,6 +81,16 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
     const page = parseStrictPositiveInteger(pageStr);
     if (provider && page !== undefined) {
       return { type: "list", provider, page };
+    }
+  }
+
+  // mdl_idx_{provider}_{index}
+  const indexSelMatch = trimmed.match(/^mdl_idx_([a-z0-9_.-]+)_(\d+)$/i);
+  if (indexSelMatch) {
+    const [, provider, indexStr] = indexSelMatch;
+    const index = parseStrictNonNegativeInteger(indexStr);
+    if (provider && index !== undefined) {
+      return { type: "select-index", provider, index };
     }
   }
 
@@ -107,40 +128,68 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
 export function buildModelSelectionCallbackData(params: {
   provider: string;
   model: string;
+  index?: number;
 }): string | null {
   const fullCallbackData = `${CALLBACK_PREFIX.selectStandard}${params.provider}/${params.model}`;
   if (fitsTelegramCallbackData(fullCallbackData)) {
     return fullCallbackData;
   }
   const compactCallbackData = `${CALLBACK_PREFIX.selectCompact}${params.model}`;
-  return fitsTelegramCallbackData(compactCallbackData) ? compactCallbackData : null;
+  if (fitsTelegramCallbackData(compactCallbackData)) {
+    return compactCallbackData;
+  }
+  if (params.index === undefined) {
+    return null;
+  }
+  const indexedCallbackData = `${CALLBACK_PREFIX.selectIndex}${params.provider}_${params.index}`;
+  return fitsTelegramCallbackData(indexedCallbackData) ? indexedCallbackData : null;
 }
 
 export function resolveModelSelection(params: {
-  callback: Extract<ParsedModelCallback, { type: "select" }>;
+  callback: ParsedModelSelectionCallback;
   providers: readonly string[];
   byProvider: ReadonlyMap<string, ReadonlySet<string>>;
 }): ResolveModelSelectionResult {
-  if (params.callback.provider) {
+  const { callback } = params;
+  if (callback.type === "select-index") {
+    const models = [...(params.byProvider.get(callback.provider) ?? [])].toSorted((left, right) =>
+      left.localeCompare(right),
+    );
+    const model = models[callback.index];
+    if (model) {
+      return {
+        kind: "resolved",
+        provider: callback.provider,
+        model,
+      };
+    }
+    return {
+      kind: "unavailable",
+      provider: callback.provider,
+      index: callback.index,
+    };
+  }
+
+  if (callback.provider) {
     return {
       kind: "resolved",
-      provider: params.callback.provider,
-      model: params.callback.model,
+      provider: callback.provider,
+      model: callback.model,
     };
   }
   const matchingProviders = params.providers.filter((id) =>
-    params.byProvider.get(id)?.has(params.callback.model),
+    params.byProvider.get(id)?.has(callback.model),
   );
   if (matchingProviders.length === 1) {
     return {
       kind: "resolved",
       provider: matchingProviders[0],
-      model: params.callback.model,
+      model: callback.model,
     };
   }
   return {
     kind: "ambiguous",
-    model: params.callback.model,
+    model: callback.model,
     matchingProviders,
   };
 }
@@ -210,9 +259,14 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
   const endIndex = Math.min(startIndex + pageSize, models.length);
   const pageModels = models.slice(startIndex, endIndex);
 
-  for (const model of pageModels) {
-    const callbackData = buildModelSelectionCallbackData({ provider, model });
-    // Skip models that still exceed Telegram's callback_data limit.
+  for (const [pageIndex, model] of pageModels.entries()) {
+    // Telegram callback_data is capped at 64 bytes. The index fallback keeps
+    // very long model IDs selectable without embedding the whole ID.
+    const callbackData = buildModelSelectionCallbackData({
+      provider,
+      model,
+      index: startIndex + pageIndex,
+    });
     if (!callbackData) {
       continue;
     }

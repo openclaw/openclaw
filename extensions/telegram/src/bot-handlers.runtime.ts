@@ -2972,7 +2972,7 @@ export const registerTelegramHandlers = ({
         return;
       }
 
-      // Model selection callback handler (mdl_prov, mdl_list_*, mdl_sel_*, mdl_back)
+      // Model selection callback handler (mdl_prov, mdl_list_*, mdl_sel_*, mdl_idx_*, mdl_back)
       const modelCallback = parseModelCallbackData(data);
       if (modelCallback) {
         if (
@@ -3115,7 +3115,7 @@ export const registerTelegramHandlers = ({
           return;
         }
 
-        if (modelCallback.type === "select") {
+        if (modelCallback.type === "select" || modelCallback.type === "select-index") {
           const selection = resolveModelSelection({
             callback: modelCallback,
             providers,
@@ -3127,11 +3127,12 @@ export const registerTelegramHandlers = ({
               count: byProvider.get(p)?.size ?? 0,
             }));
             const buttons = buildTelegramModelsMenuButtons({ providers: providerInfos });
+            const unresolvedText =
+              selection.kind === "ambiguous"
+                ? `Could not resolve model "${selection.model}".`
+                : `Could not resolve model selection for "${selection.provider}".`;
             try {
-              await editMessageWithButtons(
-                `Could not resolve model "${selection.model}".\n\nSelect a provider:`,
-                buttons,
-              );
+              await editMessageWithButtons(`${unresolvedText}\n\nSelect a provider:`, buttons);
             } catch (err) {
               throw new TelegramRetryableCallbackError(err);
             }

@@ -33,6 +33,7 @@ describe("parseModelCallbackData", () => {
         "mdl_sel/anthropic/claude-3-7-sonnet",
         { type: "select", model: "anthropic/claude-3-7-sonnet" },
       ],
+      ["mdl_idx_openrouter_12", { type: "select-index", provider: "openrouter", index: 12 }],
       ["  mdl_prov  ", { type: "providers" }],
     ] as const;
     for (const [input, expected] of cases) {
@@ -50,6 +51,8 @@ describe("parseModelCallbackData", () => {
       "mdl_list_openai_9007199254740993",
       "mdl_sel_noslash",
       "mdl_sel/",
+      "mdl_idx_openai_-1",
+      "mdl_idx_openai_9007199254740993",
     ];
     for (const input of invalid) {
       expect(parseModelCallbackData(input), input).toBeNull();
@@ -111,6 +114,24 @@ describe("resolveModelSelection", () => {
       matchingProviders: [],
     });
   });
+
+  it("resolves index callbacks against the sorted provider model list", () => {
+    const result = resolveModelSelection({
+      callback: { type: "select-index", provider: "openai", index: 1 },
+      providers: ["openai"],
+      byProvider: new Map([["openai", new Set(["zeta-model", "alpha-model"])]]),
+    });
+    expect(result).toEqual({ kind: "resolved", provider: "openai", model: "zeta-model" });
+  });
+
+  it("returns unavailable result when an index callback is stale", () => {
+    const result = resolveModelSelection({
+      callback: { type: "select-index", provider: "openai", index: 3 },
+      providers: ["openai"],
+      byProvider: new Map([["openai", new Set(["gpt-5.4"])]]),
+    });
+    expect(result).toEqual({ kind: "unavailable", provider: "openai", index: 3 });
+  });
 });
 
 describe("buildModelSelectionCallbackData", () => {
@@ -127,6 +148,9 @@ describe("buildModelSelectionCallbackData", () => {
   it("returns null when even compact callback exceeds Telegram limit", () => {
     const tooLongModel = "x".repeat(80);
     expect(buildModelSelectionCallbackData({ provider: "openai", model: tooLongModel })).toBeNull();
+    expect(
+      buildModelSelectionCallbackData({ provider: "openai", model: tooLongModel, index: 0 }),
+    ).toBe("mdl_idx_openai_0");
   });
 });
 
@@ -495,7 +519,7 @@ describe("large model lists (OpenRouter-scale)", () => {
     }
   });
 
-  it("skips models that would exceed callback_data limit", () => {
+  it("uses index callbacks for models that would exceed callback_data limit", () => {
     const models = [
       "short-model",
       "this-is-an-extremely-long-model-name-that-definitely-exceeds-the-sixty-four-byte-limit",
@@ -508,10 +532,15 @@ describe("large model lists (OpenRouter-scale)", () => {
       totalPages: 1,
     });
 
-    // Should have 2 model buttons (skipping the long one) + back
+    // All 3 model buttons remain visible, followed by the back button.
     const modelButtons = result.filter((row) => !row[0]?.callback_data.startsWith("mdl_back"));
-    expect(modelButtons.length).toBe(2);
+    expect(modelButtons.length).toBe(3);
     expect(modelButtons[0]?.[0]?.text).toBe("short-model");
-    expect(modelButtons[1]?.[0]?.text).toBe("another-short");
+    expect(modelButtons[1]?.[0]?.text).toBe("…ely-exceeds-the-sixty-four-byte-limit");
+    expect(modelButtons[1]?.[0]?.callback_data).toBe("mdl_idx_openrouter_1");
+    expect(
+      Buffer.byteLength(modelButtons[1]?.[0]?.callback_data ?? "", "utf8"),
+    ).toBeLessThanOrEqual(64);
+    expect(modelButtons[2]?.[0]?.text).toBe("another-short");
   });
 });

@@ -5564,4 +5564,53 @@ describe("createTelegramBot", () => {
       ),
     ).toBe(false);
   });
+
+  it("resolves indexed model callbacks for long Telegram model IDs", async () => {
+    const longModel = "xentriom/gemma-4-12B-agentic-fable5-composer2.5-v2:latest";
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          model: "ollama/short-default",
+          models: {
+            [`ollama/${longModel}`]: {},
+          },
+        },
+      },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getOnHandler("callback_query");
+
+    await runTelegramMiddlewareChain({
+      finalHandler: callbackHandler,
+      ctx: {
+        update: { update_id: 891 },
+        callbackQuery: {
+          id: "cbq-model-index-1",
+          data: "mdl_idx_ollama_1",
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800,
+            message_id: 25,
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      },
+    });
+
+    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
+    const finalEditMessageText = editMessageTextSpy.mock.calls.at(-1)?.[2];
+    expect(typeof finalEditMessageText === "string" ? finalEditMessageText : "").toContain(
+      `Model changed to <b>ollama/${longModel}</b>`,
+    );
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-index-1");
+  });
 });
