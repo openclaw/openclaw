@@ -491,6 +491,27 @@ Set `messages.statusReactions.enabled: true` to let WhatsApp replace the ack rea
 
 Notes: `channels.whatsapp.ackReaction` still controls eligibility for direct messages and groups; the queued state uses the same effective emoji as plain ack reactions; WhatsApp has one bot reaction slot per message, so lifecycle updates replace the current reaction in place; `messages.removeAckAfterReply: true` clears the final status reaction after the configured done/error hold; tool emoji categories include `tool`, `coding`, `web`, `deploy`, `build`, and `concierge`.
 
+## Throttled progress messages
+
+WhatsApp cannot edit sent messages, so it cannot use Telegram-style progress drafts. For long-running WhatsApp turns, you can opt in to sparse text progress messages:
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      progressMessages: {
+        enabled: true,
+        initialDelayMs: 30000,
+        intervalMs: 45000,
+        maxMessages: 3,
+      },
+    },
+  },
+}
+```
+
+When enabled, OpenClaw waits `initialDelayMs` before sending the first progress message, sends at most one progress message per `intervalMs`, and stops after `maxMessages` or when the final reply starts. Per-account overrides are available at `channels.whatsapp.accounts.<id>.progressMessages`. This is disabled by default so existing WhatsApp conversations keep their current message cadence unless you opt in.
+
 ## Multi-account and credentials
 
 <AccordionGroup>

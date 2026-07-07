@@ -213,4 +213,57 @@ describe("WhatsApp prompt config Zod validation", () => {
       expect(result.data.accounts?.work?.pluginHooks?.messageReceived).toBe(false);
     }
   });
+
+  it("accepts channel-level progressMessages", () => {
+    const result = WhatsAppConfigSchema.safeParse({
+      progressMessages: {
+        enabled: true,
+        initialDelayMs: 30_000,
+        intervalMs: 45_000,
+        maxMessages: 3,
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.progressMessages).toEqual({
+        enabled: true,
+        initialDelayMs: 30_000,
+        intervalMs: 45_000,
+        maxMessages: 3,
+      });
+    }
+  });
+
+  it("accepts account-level progressMessages overrides", () => {
+    const result = WhatsAppConfigSchema.safeParse({
+      accounts: {
+        work: {
+          progressMessages: {
+            enabled: false,
+            intervalMs: 60_000,
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.accounts?.work?.progressMessages).toEqual({
+        enabled: false,
+        intervalMs: 60_000,
+      });
+    }
+  });
+
+  it("rejects extra properties in progressMessages", () => {
+    const result = WhatsAppConfigSchema.safeParse({
+      progressMessages: {
+        enabled: true,
+        label: "Working",
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
 });

@@ -57,6 +57,16 @@ const WhatsAppPluginHooksSchema = z
   .strict()
   .optional();
 
+const WhatsAppProgressMessagesSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    initialDelayMs: z.number().int().positive().optional(),
+    intervalMs: z.number().int().positive().optional(),
+    maxMessages: z.number().int().positive().optional(),
+  })
+  .strict()
+  .optional();
+
 function stripDeprecatedWhatsAppNoopKeys(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return value;
@@ -108,6 +118,7 @@ function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
     heartbeat: ChannelHeartbeatVisibilitySchema,
     healthMonitor: ChannelHealthMonitorSchema,
     pluginHooks: WhatsAppPluginHooksSchema,
+    progressMessages: WhatsAppProgressMessagesSchema,
   };
 }
 
