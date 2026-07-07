@@ -64,6 +64,8 @@ import { testing } from "../test-api.js";
 import { createParallelWebSearchProvider as createContractParallelWebSearchProvider } from "../web-search-contract-api.js";
 import { createParallelWebSearchProvider } from "./parallel-web-search-provider.js";
 
+const loneHighSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/;
+
 describe("parallel web search provider", () => {
   beforeEach(() => {
     endpointMockState.calls = [];
@@ -254,6 +256,9 @@ describe("parallel web search provider", () => {
     expect(testing.normalizeParallelObjective(undefined)).toBeUndefined();
     expect(testing.normalizeParallelObjective("")).toBeUndefined();
     expect((testing.normalizeParallelObjective("x".repeat(6000)) ?? "").length).toBe(5000);
+    const boundary = testing.normalizeParallelObjective(`${"x".repeat(4999)}\u{1f63e}tail`);
+    expect(boundary).toBe("x".repeat(4999));
+    expect(loneHighSurrogate.test(boundary ?? "")).toBe(false);
   });
 
   it("normalizes search_queries: trim, drop blanks, dedupe, cap length, cap count", () => {
@@ -270,6 +275,14 @@ describe("parallel web search provider", () => {
     expect(testing.normalizeParallelSearchQueries(undefined)).toEqual([]);
     expect(testing.normalizeParallelSearchQueries("openclaw github")).toEqual([]);
     expect(testing.normalizeParallelSearchQueries(["x".repeat(250)])).toEqual(["x".repeat(200)]);
+    expect(testing.normalizeParallelSearchQueries([`${"x".repeat(199)}\u{1f63e}tail`])).toEqual([
+      "x".repeat(199),
+    ]);
+    expect(
+      loneHighSurrogate.test(
+        testing.normalizeParallelSearchQueries([`${"x".repeat(199)}\u{1f63e}tail`])[0] ?? "",
+      ),
+    ).toBe(false);
     const six = ["a", "b", "c", "d", "e", "f"];
     expect(testing.normalizeParallelSearchQueries(six)).toEqual(["a", "b", "c", "d", "e"]);
   });
@@ -289,6 +302,9 @@ describe("parallel web search provider", () => {
     expect(testing.normalizeParallelClientModel("  gpt-5.5  ")).toBe("gpt-5.5");
     expect(testing.normalizeParallelClientModel(undefined)).toBeUndefined();
     expect((testing.normalizeParallelClientModel("a".repeat(200)) ?? "").length).toBe(100);
+    const boundary = testing.normalizeParallelClientModel(`${"m".repeat(99)}\u{1f63e}tail`);
+    expect(boundary).toBe("m".repeat(99));
+    expect(loneHighSurrogate.test(boundary ?? "")).toBe(false);
   });
 
   it("normalizes the Parallel /v1/search response shape", () => {
