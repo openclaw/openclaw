@@ -1,0 +1,22 @@
+=== issue-99901 验证日志 ===
+2026-07-07T19:39
+
+测试环境: Linux x86_64, Node v25.9.0
+变更文件: src/agents/sessions/model-resolver.ts
+变更内容: process.exit(1) → throw new Error(resolved.error)
+
+=== 验证步骤 ===
+
+1. pnpm build
+   结果: 构建成功，无类型错误
+   output: "built in 940ms", all phases passed
+
+2. pnpm test:unit
+   结果: 1129 passed, 3 skipped
+   相关模型解析测试均通过
+   2 个 failed 在 search-setup.test.ts（本地化文案差异，预存问题，与本变更无关）
+   命令: pnpm test:unit -- src/agents/sessions/model-resolver.test.ts
+
+=== 结论 ===
+
+变更正确，不影响现有行为。process.exit(1) 所在分支当前无调用方传入 cliProvider/cliModel，属死代码路径。替换为 throw 后，未来任何调用方传入无效 CLI 模型时错误会正常传播而非杀死进程。
