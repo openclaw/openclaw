@@ -1,37 +1,9 @@
 <resources>
     <string name="app_name">OpenClaw Node</string>
-    <string name="gateway_connection">गेटवे कनेक्शन</string>
-    <string name="connect_gateway">गेटवे कनेक्ट करें</string>
-    <string name="disconnect">डिस्कनेक्ट करें</string>
     <string name="trust_this_gateway">इस गेटवे पर भरोसा करें?</string>
     <string name="trust_and_continue">भरोसा करें और जारी रखें</string>
     <string name="cancel">रद्द करें</string>
     <string name="new_chat_in_worktree">worktree में नया चैट</string>
-    <string name="endpoint">एंडपॉइंट</string>
-    <string name="status">स्थिति</string>
-    <string name="connected_gateway_ready">आपका गेटवे सक्रिय और तैयार है।</string>
-    <string name="connect_gateway_get_started">शुरू करने के लिए अपने गेटवे से कनेक्ट करें।</string>
-    <string name="copy_report_for_claw">Claw के लिए रिपोर्ट कॉपी करें</string>
-    <string name="advanced_controls">उन्नत नियंत्रण</string>
-    <string name="connection_method">कनेक्शन विधि</string>
-    <string name="setup_code">सेटअप कोड</string>
-    <string name="manual">मैन्युअल</string>
-    <string name="paste_setup_code">सेटअप कोड पेस्ट करें</string>
-    <string name="host">होस्ट</string>
-    <string name="use_tls">TLS का उपयोग करें</string>
-    <string name="token_optional">टोकन (वैकल्पिक)</string>
-    <string name="password">पासवर्ड</string>
-    <string name="custom_headers_optional">कस्टम हेडर (वैकल्पिक)</string>
-    <string name="custom_headers_explainer">इस gateway से हर कनेक्शन के साथ भेजा जाता है, उदाहरण के लिए Cloudflare Access service token headers. एन्क्रिप्ट करके संग्रहीत किया जाता है और अगले reconnect पर लागू किया जाता है।</string>
-    <string name="custom_header_value">हेडर मान</string>
-    <string name="custom_header_reserved">यह हेडर कनेक्शन द्वारा प्रबंधित है और इसे ओवरराइड नहीं किया जा सकता।</string>
-    <string name="add_custom_header">हेडर जोड़ें</string>
-    <string name="remove_custom_header">%1$s हटाएँ</string>
-    <string name="run_onboarding_again">ऑनबोर्डिंग फिर से चलाएँ</string>
-    <string name="resolved_endpoint">रिज़ॉल्व किया गया एंडपॉइंट</string>
     <string name="gateway_trust_first_seen">इस गेटवे पर भरोसा करने से पहले प्रमाणपत्र फ़िंगरप्रिंट सत्यापित करें।\n\n%1$s</string>
     <string name="gateway_trust_changed">गेटवे प्रमाणपत्र बदल गया है। केवल तभी जारी रखें जब आपको इस बदलाव की अपेक्षा थी।\n\nपुराना SHA-256:\n%1$s\n\nनया SHA-256:\n%2$s</string>
-    <string name="switch_gateway">Gateway बदलें</string>
-    <string name="select_gateway">Gateway चुनें</string>
-    <string name="active_gateway">सक्रिय gateway</string>
 </resources>

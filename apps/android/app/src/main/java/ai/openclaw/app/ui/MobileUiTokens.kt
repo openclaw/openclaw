@@ -165,15 +165,6 @@ internal val mobileFontFamily =
     Font(resId = R.font.manrope_700_bold, weight = FontWeight.Bold),
   )
 
-internal val mobileDisplay =
-  TextStyle(
-    fontFamily = mobileFontFamily,
-    fontWeight = FontWeight.Bold,
-    fontSize = 34.sp,
-    lineHeight = 40.sp,
-    letterSpacing = (-0.8).sp,
-  )
-
 internal val mobileTitle1 =
   TextStyle(
     fontFamily = mobileFontFamily,
@@ -181,15 +172,6 @@ internal val mobileTitle1 =
     fontSize = 24.sp,
     lineHeight = 30.sp,
     letterSpacing = (-0.5).sp,
-  )
-
-internal val mobileTitle2 =
-  TextStyle(
-    fontFamily = mobileFontFamily,
-    fontWeight = FontWeight.SemiBold,
-    fontSize = 20.sp,
-    lineHeight = 26.sp,
-    letterSpacing = (-0.3).sp,
   )
 
 internal val mobileHeadline =
