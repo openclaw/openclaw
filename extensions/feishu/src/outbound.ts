@@ -40,6 +40,7 @@ import {
   sanitizeNativeFeishuCard,
 } from "./native-card.js";
 import { chunkTextForOutbound, type ChannelOutboundAdapter } from "./outbound-runtime-api.js";
+import { normalizeFeishuPostMarkdownNewlines } from "./post-markdown.js";
 import { buildFeishuPresentationCardElements } from "./presentation-card.js";
 import {
   sendCardFeishu,
@@ -49,6 +50,16 @@ import {
 } from "./send.js";
 
 const RENDERED_FEISHU_CARD = Symbol("openclaw.renderedFeishuCard");
+
+/**
+ * Feishu post markdown needs single newlines upgraded to paragraph breaks so
+ * Feishu does not collapse them into spaces. Perform that expansion before the
+ * generic outbound chunker measures the text, so each chunk stays under the
+ * 4000-character limit after normalization.
+ */
+function chunkTextForFeishuOutbound(text: string, limit: number): string[] {
+  return chunkTextForOutbound(normalizeFeishuPostMarkdownNewlines(text), limit);
+}
 
 function normalizePossibleLocalImagePath(text: string | undefined): string | null {
   const raw = text?.trim();
@@ -346,7 +357,7 @@ async function sendOutboundText(params: {
 
 export const feishuOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
-  chunker: chunkTextForOutbound,
+  chunker: chunkTextForFeishuOutbound,
   chunkerMode: "markdown",
   textChunkLimit: 4000,
   presentationCapabilities: {

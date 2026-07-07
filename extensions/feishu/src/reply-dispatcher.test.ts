@@ -456,6 +456,21 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
+  it("normalizes single newlines before chunking plain text replies", async () => {
+    useNonStreamingAutoAccount();
+    const { options } = createDispatcherHarness({
+      chatId: "oc_p2p_chat",
+      sendTarget: "user:ou_sender",
+    });
+
+    await options.deliver({ text: "line one\nline two" }, { kind: "final" });
+
+    expectMockArgFields(sendMessageFeishuMock, "message send params", {
+      to: "user:ou_sender",
+      text: "line one\n\nline two",
+    });
+  });
+
   it("streams auto mode plain final text when streaming is enabled", async () => {
     const { options } = createDispatcherHarness();
     await options.deliver({ text: "plain text" }, { kind: "final" });

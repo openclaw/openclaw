@@ -1713,3 +1713,19 @@ describe("feishuOutbound.sendMedia renderMode", () => {
     expect(sendMessageCall()?.accountId).toBe("main");
   });
 });
+
+describe("feishuOutbound chunker", () => {
+  it("normalizes single newlines before measuring chunk limits", () => {
+    const chunks = feishuOutbound.chunker!("a\nb\nc", 10);
+    expect(chunks).toEqual(["a\n\nb\n\nc"]);
+  });
+
+  it("respects the 4000-character limit after normalization", () => {
+    const line = "x".repeat(1000);
+    const text = [line, line, line, line, line].join("\n");
+    const chunks = feishuOutbound.chunker!(text, 4000);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(4000);
+    }
+  });
+});

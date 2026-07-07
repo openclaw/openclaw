@@ -13,6 +13,7 @@ import { requestFeishuApi } from "./comment-shared.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import { buildMentionedCardContent } from "./mention.js";
 import { resolveFeishuCardTemplate } from "./native-card.js";
+import { normalizeFeishuPostMarkdownNewlines } from "./post-markdown.js";
 import { parsePostContent } from "./post.js";
 import {
   assertFeishuMessageApiSuccess,
@@ -555,29 +556,6 @@ function buildFeishuPostMentionElements(mentions?: MentionTarget[]): FeishuPostM
     });
   }
   return elements;
-}
-
-/**
- * Feishu's `post` + `tag: md` rendering treats a single `\n` as a space.
- * Upgrade single newlines outside fenced code blocks to paragraph breaks (`\n\n`)
- * so paragraphs and line breaks are preserved instead of being mashed together.
- * Existing blank lines and code-block internals are left untouched.
- */
-function normalizeFeishuPostMarkdownNewlines(text: string): string {
-  const lines = text.split("\n");
-  const result: string[] = [];
-  let inCodeBlock = false;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    result.push(line);
-    if (/^\s*```/.test(line)) {
-      inCodeBlock = !inCodeBlock;
-    }
-    if (i < lines.length - 1 && !inCodeBlock && line !== "" && lines[i + 1] !== "") {
-      result.push("");
-    }
-  }
-  return result.join("\n");
 }
 
 export function buildFeishuPostMessagePayload(params: {

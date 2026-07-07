@@ -17,6 +17,7 @@ import { createFeishuClient } from "./client.js";
 import { resolveFeishuIdentityEmoji } from "./identity-header.js";
 import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
 import type { MentionTarget } from "./mention-target.types.js";
+import { normalizeFeishuPostMarkdownNewlines } from "./post-markdown.js";
 import {
   createReplyPrefixContext,
   type ClawdbotConfig,
@@ -495,9 +496,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     infoKind?: string;
     sendChunk: (params: { chunk: string; isFirst: boolean }) => Promise<void>;
   }) => {
-    const chunkSource = paramsLocal.useCard
+    // Normalize before chunking so the 4000-character limit is measured against
+    // the post text Feishu will actually receive (single newlines become \n\n).
+    const normalizedText = paramsLocal.useCard
       ? paramsLocal.text
-      : core.channel.text.convertMarkdownTables(paramsLocal.text, tableMode);
+      : normalizeFeishuPostMarkdownNewlines(paramsLocal.text);
+    const chunkSource = paramsLocal.useCard
+      ? normalizedText
+      : core.channel.text.convertMarkdownTables(normalizedText, tableMode);
     const chunkText = paramsLocal.useCard
       ? core.channel.text.chunkMarkdownTextWithMode
       : core.channel.text.chunkTextWithMode;
