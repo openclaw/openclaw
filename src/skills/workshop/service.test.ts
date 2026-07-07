@@ -358,6 +358,28 @@ describe("skill workshop proposals", () => {
     await expect(fs.readFile(skillFile, "utf8")).resolves.toContain("user-invocable: false");
   });
 
+  it("keeps dash-prefixed proposal body text outside frontmatter", async () => {
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Dash Prefixed Body",
+      description: "Keep body delimiters literal",
+      content: "---not frontmatter\nname: body text\n---not a delimiter\n",
+    });
+
+    expect(proposal.content).toContain(
+      "\n---\n\n---not frontmatter\nname: body text\n---not a delimiter\n",
+    );
+
+    await applySkillProposal({ workspaceDir, proposalId: proposal.record.id });
+
+    await expect(
+      fs.readFile(path.join(workspaceDir, "skills", "dash-prefixed-body", "SKILL.md"), "utf8"),
+    ).resolves.toBe(
+      '---\nname: "dash-prefixed-body"\ndescription: "Keep body delimiters literal"\n---\n\n---not frontmatter\nname: body text\n---not a delimiter\n',
+    );
+  });
+
   it("rejects create proposals when the target skill file already exists", async () => {
     const workspaceDir = await makeWorkspace();
     const skillFile = path.join(workspaceDir, "skills", "empty-skill", "SKILL.md");

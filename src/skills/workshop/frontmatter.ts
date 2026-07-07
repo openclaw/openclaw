@@ -64,18 +64,13 @@ export function readProposalFrontmatter(content: string): ProposalFrontmatter | 
 
 export function stripProposalFrontmatterForSkill(content: string): string {
   const normalized = normalizeNewlines(content);
-  if (!normalized.startsWith("---")) {
-    return normalized.endsWith("\n") ? normalized : `${normalized}\n`;
-  }
-  const endIndex = normalized.indexOf("\n---", 3);
-  if (endIndex === -1) {
+  const block = findLeadingFrontmatterBlock(normalized);
+  if (!block) {
     return normalized.endsWith("\n") ? normalized : `${normalized}\n`;
   }
 
-  const rawBlock = normalized.slice(4, endIndex);
-  const bodyStart = endIndex + "\n---".length;
-  const body = normalized.slice(bodyStart).replace(/^\n+/, "");
-  const keptLines = rawBlock
+  const body = block.body.replace(/^\n+/, "");
+  const keptLines = block.raw
     .split("\n")
     .filter((line) => {
       const key = line.match(/^([\w-]+):/)?.[1]?.toLowerCase();
@@ -90,24 +85,16 @@ export function stripProposalFrontmatterForSkill(content: string): string {
 
 function extractFrontmatterBlock(content: string): string | undefined {
   const normalized = normalizeNewlines(content);
-  if (!normalized.startsWith("---")) {
-    return undefined;
-  }
-  const endIndex = normalized.indexOf("\n---", 3);
-  if (endIndex === -1) {
-    return undefined;
-  }
-  return normalized.slice(4, endIndex);
+  return findLeadingFrontmatterBlock(normalized)?.raw;
 }
 
 function stripFrontmatterBlock(content: string): string {
   const normalized = normalizeNewlines(content);
-  const block = extractFrontmatterBlock(normalized);
-  if (block === undefined) {
+  const block = findLeadingFrontmatterBlock(normalized);
+  if (!block) {
     return normalized;
   }
-  const endIndex = normalized.indexOf("\n---", 3);
-  return normalized.slice(endIndex + "\n---".length).replace(/^\n+/, "");
+  return block.body.replace(/^\n+/, "");
 }
 
 function filterFrontmatterBlock(block: string, keysToDrop: readonly string[]): string {
@@ -134,4 +121,21 @@ function normalizeNewlines(content: string): string {
     .replace(/^\uFEFF/, "")
     .replace(/\r\n/g, "\n")
     .replace(/\r/g, "\n");
+}
+
+function findLeadingFrontmatterBlock(content: string): { raw: string; body: string } | undefined {
+  const lines = content.split("\n");
+  if (lines[0] !== "---") {
+    return undefined;
+  }
+
+  for (let i = 1; i < lines.length; i += 1) {
+    if (lines[i] === "---") {
+      return {
+        raw: lines.slice(1, i).join("\n"),
+        body: lines.slice(i + 1).join("\n"),
+      };
+    }
+  }
+  return undefined;
 }
