@@ -4,10 +4,15 @@ import path from "node:path";
 import { selectSessionTranscriptLeafControlledPath } from "../../config/sessions/transcript-tree.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+import { readRegularFile } from "../../infra/regular-file.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { HandleCommandsParams } from "./commands-types.js";
+
+// Reset-hook transcripts are JSONL files; cap reads so a runaway transcript
+// cannot OOM the reset hook path.
+const RESET_HOOK_TRANSCRIPT_MAX_BYTES = 16 * 1024 * 1024;
 
 const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-reply.runtime.js"));
 
@@ -45,6 +50,24 @@ function parseTranscriptMessages(content: string): unknown[] {
   });
 }
 
+async function readTranscriptForReset(sessionFilePath: string): Promise<string | null> {
+  try {
+    const { buffer } = await readRegularFile({
+      filePath: sessionFilePath,
+      maxBytes: RESET_HOOK_TRANSCRIPT_MAX_BYTES,
+    });
+    return buffer.toString("utf-8");
+  } catch (err) {
+    // Preserve the archived-transcript fallback for missing original files;
+    // only swallow non-ENOENT errors so unrelated read failures do not crash
+    // the reset hook.
+    if ((err as { code?: unknown })?.code === "ENOENT") {
+      throw err;
+    }
+    return null;
+  }
+}
+
 async function findLatestArchivedTranscript(sessionFile: string): Promise<string | undefined> {
   try {
     const dir = path.dirname(sessionFile);
@@ -70,12 +93,21 @@ async function loadBeforeResetTranscript(params: {
   }
 
   try {
+    const content = await readTranscriptForReset(sessionFile);
+    if (content === null) {
+      logVerbose(
+        `before_reset: failed to read session file ${sessionFile}; firing hook with empty messages`,
+      );
+      return { sessionFile, messages: [] };
+    }
     return {
       sessionFile,
-      messages: parseTranscriptMessages(await fs.readFile(sessionFile, "utf-8")),
+      messages: parseTranscriptMessages(content),
     };
   } catch (err: unknown) {
-    if ((err as { code?: unknown })?.code !== "ENOENT") {
+    if ((err as { code?: unknown })?.code === "ENOENT") {
+      // Original transcript is missing; fall through to archived transcript recovery.
+    } else {
       logVerbose(
         `before_reset: failed to read session file ${sessionFile}; firing hook with empty messages (${String(err)})`,
       );
@@ -92,9 +124,16 @@ async function loadBeforeResetTranscript(params: {
   }
 
   try {
+    const content = await readTranscriptForReset(archivedSessionFile);
+    if (content === null) {
+      logVerbose(
+        `before_reset: failed to read archived session file ${archivedSessionFile}; firing hook with empty messages`,
+      );
+      return { sessionFile: archivedSessionFile, messages: [] };
+    }
     return {
       sessionFile: archivedSessionFile,
-      messages: parseTranscriptMessages(await fs.readFile(archivedSessionFile, "utf-8")),
+      messages: parseTranscriptMessages(content),
     };
   } catch (err: unknown) {
     logVerbose(

@@ -4,9 +4,10 @@ import type { HookRunner } from "../../plugins/hooks.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const fsMocks = vi.hoisted(() => ({
-  readFile: vi.fn(),
   readdir: vi.fn(),
 }));
+
+const readRegularFileMock = vi.hoisted(() => vi.fn());
 
 const hookRunnerMocks = vi.hoisted(() => ({
   hasHooks: vi.fn<HookRunner["hasHooks"]>(),
@@ -19,13 +20,15 @@ vi.mock("node:fs/promises", async () => {
     ...actual,
     default: {
       ...actual,
-      readFile: fsMocks.readFile,
       readdir: fsMocks.readdir,
     },
-    readFile: fsMocks.readFile,
     readdir: fsMocks.readdir,
   };
 });
+
+vi.mock("../../infra/regular-file.js", () => ({
+  readRegularFile: readRegularFileMock,
+}));
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () =>
@@ -76,13 +79,13 @@ describe("emitResetCommandHooks", () => {
   }
 
   beforeEach(() => {
-    fsMocks.readFile.mockReset();
+    readRegularFileMock.mockReset();
     fsMocks.readdir.mockReset();
     hookRunnerMocks.hasHooks.mockReset();
     hookRunnerMocks.runBeforeReset.mockReset();
     hookRunnerMocks.hasHooks.mockImplementation((hookName) => hookName === "before_reset");
     hookRunnerMocks.runBeforeReset.mockResolvedValue(undefined);
-    fsMocks.readFile.mockResolvedValue("");
+    readRegularFileMock.mockResolvedValue({ buffer: Buffer.from("", "utf-8") });
     fsMocks.readdir.mockResolvedValue([]);
   });
 
@@ -115,15 +118,20 @@ describe("emitResetCommandHooks", () => {
   });
 
   it("recovers the archived transcript when the original reset transcript path is gone", async () => {
-    fsMocks.readFile.mockRejectedValueOnce(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
-    fsMocks.readdir.mockResolvedValueOnce(["prev-session.jsonl.reset.2026-02-16T22-26-33.000Z"]);
-    fsMocks.readFile.mockResolvedValueOnce(
-      `${JSON.stringify({
-        type: "message",
-        id: "m1",
-        message: { role: "user", content: "Recovered from archive" },
-      })}\n`,
+    readRegularFileMock.mockRejectedValueOnce(
+      Object.assign(new Error("ENOENT"), { code: "ENOENT" }),
     );
+    fsMocks.readdir.mockResolvedValueOnce(["prev-session.jsonl.reset.2026-02-16T22-26-33.000Z"]);
+    readRegularFileMock.mockResolvedValueOnce({
+      buffer: Buffer.from(
+        `${JSON.stringify({
+          type: "message",
+          id: "m1",
+          message: { role: "user", content: "Recovered from archive" },
+        })}\n`,
+        "utf-8",
+      ),
+    });
     const command = {
       surface: "telegram",
       senderId: "vac",
@@ -155,41 +163,44 @@ describe("emitResetCommandHooks", () => {
   });
 
   it("keeps leaf-controlled side branches out of before_reset hooks", async () => {
-    fsMocks.readFile.mockResolvedValueOnce(
-      [
-        {
-          type: "message",
-          id: "active-root",
-          parentId: null,
-          message: { role: "user", content: "active root" },
-        },
-        {
-          type: "message",
-          id: "side-entry",
-          parentId: "active-root",
-          message: { role: "assistant", content: "side delivery" },
-        },
-        {
-          type: "leaf",
-          id: "active-leaf",
-          parentId: "side-entry",
-          targetId: "active-root",
-        },
-        {
-          type: "message",
-          id: "active-tail",
-          parentId: "active-root",
-          message: { role: "assistant", content: "active tail" },
-        },
-        {
-          type: "metadata",
-          id: "opaque-after-active-tail",
-          parentId: "side-entry",
-        },
-      ]
-        .map((entry) => JSON.stringify(entry))
-        .join("\n"),
-    );
+    readRegularFileMock.mockResolvedValueOnce({
+      buffer: Buffer.from(
+        [
+          {
+            type: "message",
+            id: "active-root",
+            parentId: null,
+            message: { role: "user", content: "active root" },
+          },
+          {
+            type: "message",
+            id: "side-entry",
+            parentId: "active-root",
+            message: { role: "assistant", content: "side delivery" },
+          },
+          {
+            type: "leaf",
+            id: "active-leaf",
+            parentId: "side-entry",
+            targetId: "active-root",
+          },
+          {
+            type: "message",
+            id: "active-tail",
+            parentId: "active-root",
+            message: { role: "assistant", content: "active tail" },
+          },
+          {
+            type: "metadata",
+            id: "opaque-after-active-tail",
+            parentId: "side-entry",
+          },
+        ]
+          .map((entry) => JSON.stringify(entry))
+          .join("\n"),
+        "utf-8",
+      ),
+    });
 
     await emitResetCommandHooks({
       action: "new",
