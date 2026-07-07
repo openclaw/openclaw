@@ -19,6 +19,7 @@ describe("exec inline eval detection", () => {
   it.each([
     { argv: ["python3", "-c", "print('hi')"], expected: "python3 -c" },
     { argv: ["python3", "-cprint('hi')"], expected: "python3 -c" },
+    { argv: ["python3", "-Sc", "print('hi')"], expected: "python3 -c" },
     { argv: ["python3.13", "-c", "print('hi')"], expected: "python3.13 -c" },
     { argv: ["/usr/bin/pypy3.10", "-c", "print('hi')"], expected: "pypy3.10 -c" },
     { argv: ["/usr/bin/node", "--eval", "console.log('hi')"], expected: "node --eval" },
@@ -26,8 +27,10 @@ describe("exec inline eval detection", () => {
     { argv: ["bun", "-pconsole.log('hi')"], expected: "bun -p" },
     { argv: ["deno", "--print=1 + 1"], expected: "deno --print" },
     { argv: ["ruby", "-eputs 1"], expected: "ruby -e" },
+    { argv: ["ruby", "-we", "puts 1"], expected: "ruby -e" },
     { argv: ["perl", "-E", "say 1"], expected: "perl -e" },
     { argv: ["perl", "-Esay 1"], expected: "perl -e" },
+    { argv: ["perl", "-we", "say 1"], expected: "perl -e" },
     { argv: ["php", "-B", "system('id');"], expected: "php -B" },
     { argv: ["php", "-rsystem('id');"], expected: "php -r" },
     { argv: ["php", "-E", "system('id');"], expected: "php -E" },
@@ -80,6 +83,7 @@ describe("exec inline eval detection", () => {
     expect(detectInterpreterInlineEvalArgv(["node", "--evalish=console.log(1)"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["find", ".", "-execute", "id"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["ruby", "-EUTF-8", "script.rb"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["ruby", "-Itest", "script.rb"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["php", "-F", "filter.php"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["Rscript", "script.R"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["r2", "-e", "bin.cache=true", "program"])).toBeNull();
