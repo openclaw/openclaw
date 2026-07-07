@@ -137,4 +137,21 @@ describe("TranscriptsStore.readUtterancesFromSessionDir", () => {
       store.readUtterancesFromSessionDir(sessionDir, { maxUtterances: 10 }),
     ).rejects.toThrow("read failed");
   });
+
+  it("rejects when the full-file transcript contains malformed JSON", async () => {
+    const tmpDir = makeTempDir(tempRoots, "openclaw-transcript-test-");
+    const store = new TranscriptsStore(tmpDir);
+    const sessionDir = path.join(tmpDir, "2026-07-01", "session-malformed");
+    fs.mkdirSync(sessionDir, { recursive: true });
+    // First line is valid JSON, second line is not
+    fs.writeFileSync(
+      path.join(sessionDir, "transcript.jsonl"),
+      [JSON.stringify({ text: "hello", sessionId: "session-malformed" }), "{not valid json"].join(
+        "\n",
+      ) + "\n",
+    );
+
+    // No maxUtterances → hits the full-file read path (line 270)
+    await expect(store.readUtterancesFromSessionDir(sessionDir)).rejects.toThrow(SyntaxError);
+  });
 });

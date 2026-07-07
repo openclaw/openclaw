@@ -258,16 +258,16 @@ export class TranscriptsStore {
     let raw: string;
     try {
       raw = await fs.readFile(transcriptPath, "utf8");
+      return raw
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as TranscriptUtterance);
     } catch (err) {
       if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") {
         return [];
       }
       throw err;
     }
-    return raw
-      .split(/\r?\n/)
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as TranscriptUtterance);
   }
 
   /** Mark a transcript session as stopped when metadata exists. */
