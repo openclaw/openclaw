@@ -257,7 +257,9 @@ async function writePluginCatalogsForModelsJson(params: {
         break;
       } catch (e) {
         mkErr = e;
-        if (attempt >= 2) throw mkErr;
+        if (attempt >= 2) {
+          throw mkErr;
+        }
       }
     }
     await writeModelsFileAtomicForModelsJson(targetPath, contents);
