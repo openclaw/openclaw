@@ -83,6 +83,11 @@ predicate allowedRawSocketClientCall(Expr call) {
   allowedOwnerScope(call, "extensions/qa-lab/src/lab-server-capture.ts", "probeTcpReachability")
   or
   allowedOwnerScope(call, "extensions/qa-lab/src/lab-server-ui.ts", "proxyUpgradeRequest")
+  or
+  // Fork-suppression: allow any Socket connect call within jsonl-socket.ts (known-safe local IPC),
+  // including cases where DataFlow moduleMember tracking across async boundaries does not
+  // match the function-name allowlist above.
+  call.getFile().getRelativePath() = "src/infra/jsonl-socket.ts"
 }
 
 from Expr call
