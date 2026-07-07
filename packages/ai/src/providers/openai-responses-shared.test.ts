@@ -931,6 +931,76 @@ describe("processResponsesStream", () => {
     ]);
   });
 
+  it("maps function-call refusal deltas to provider refusal errors", async () => {
+    const output = createAssistantOutput();
+    const stream = new AssistantMessageEventStream();
+    const events: Array<Record<string, unknown>> = [];
+    const collect = (async () => {
+      for await (const event of stream) {
+        events.push(event as unknown as Record<string, unknown>);
+      }
+    })();
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.output_item.added",
+          item: {
+            type: "function_call",
+            id: "fc_blocked",
+            call_id: "call_blocked",
+            name: "write",
+            arguments: "",
+          },
+        },
+        {
+          type: "response.function_call_arguments.delta",
+          delta: '{"path":"forbidden.txt"}',
+        },
+        {
+          type: "response.refusal.delta",
+          delta: "Tool use is not allowed.",
+        },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "function_call",
+            id: "fc_blocked",
+            call_id: "call_blocked",
+            name: "write",
+            arguments: '{"path":"forbidden.txt"}',
+          },
+        },
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_refusal",
+            status: "completed",
+          },
+        },
+      ]),
+      output,
+      stream,
+      nativeOpenAIModel,
+    );
+    stream.end();
+    await collect;
+
+    expect(output.stopReason).toBe("error");
+    expect(output.content).toEqual([]);
+    expect(output.errorMessage).toBe("OpenAI refusal: Tool use is not allowed.");
+    expect(output.diagnostics).toEqual([
+      expect.objectContaining({
+        type: "provider_refusal",
+        details: {
+          provider: nativeOpenAIModel.provider,
+          explanation: "Tool use is not allowed.",
+        },
+      }),
+    ]);
+    expect(events.map((event) => event.type)).toEqual(["toolcall_start", "toolcall_delta"]);
+  });
+
   it("prices cache-write tokens separately from ordinary Responses input", async () => {
     const model = {
       ...gpt56SolModel,

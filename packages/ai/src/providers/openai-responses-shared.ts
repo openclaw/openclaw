@@ -46,6 +46,7 @@ import {
   resolveOpenAIReasoningEffortForModel,
   supportsOpenAIReasoningEffort,
 } from "./openai-reasoning-effort.js";
+import { applyOpenAIResponsesRefusal } from "./openai-responses-refusal.js";
 import {
   AZURE_RESPONSES_TEXT_CONTENT_PART_TYPE,
   OPENAI_RESPONSES_OUTPUT_TEXT_CONTENT_PART_TYPE,
@@ -673,6 +674,7 @@ export async function processResponsesStream<TApi extends Api>(
   // its public block is deferred so a collapsed item never leaves an
   // unbalanced text_start behind (#91959). null = no deferral in progress.
   let pendingMessageText: string | null = null;
+  let pendingFunctionCallRefusal: string | null = null;
   const blocks = output.content;
   const blockIndex = () => blocks.length - 1;
   const appendPendingMessageDelta = (delta: string) => {
@@ -693,6 +695,16 @@ export async function processResponsesStream<TApi extends Api>(
       partial: output,
     });
     pendingMessageText = null;
+  };
+  const removeCurrentToolCallBlock = () => {
+    if (currentBlock?.type !== "toolCall") {
+      return;
+    }
+    const index = blocks.indexOf(currentBlock);
+    if (index >= 0) {
+      blocks.splice(index, 1);
+    }
+    currentBlock = null;
   };
 
   const guardedStream = withFirstStreamEventTimeout(openaiStream, {
@@ -733,6 +745,7 @@ export async function processResponsesStream<TApi extends Api>(
         }
       } else if (item.type === "function_call") {
         currentItem = item;
+        pendingFunctionCallRefusal = null;
         currentBlock = {
           type: "toolCall",
           id: `${item.call_id}|${item.id}`,
@@ -861,6 +874,8 @@ export async function processResponsesStream<TApi extends Api>(
             });
           }
         }
+      } else if (currentItem?.type === "function_call" && currentBlock?.type === "toolCall") {
+        pendingFunctionCallRefusal = `${pendingFunctionCallRefusal ?? ""}${event.delta}`;
       }
     } else if (event.type === "response.function_call_arguments.delta") {
       if (currentItem?.type === "function_call" && currentBlock?.type === "toolCall") {
@@ -917,6 +932,7 @@ export async function processResponsesStream<TApi extends Api>(
           partial: output,
         });
         currentBlock = null;
+        pendingFunctionCallRefusal = null;
       } else if (
         item.type === "message" &&
         (currentBlock?.type === "text" || pendingMessageText !== null)
@@ -971,6 +987,13 @@ export async function processResponsesStream<TApi extends Api>(
         }
         currentBlock = null;
       } else if (item.type === "function_call") {
+        if (pendingFunctionCallRefusal !== null) {
+          removeCurrentToolCallBlock();
+          applyOpenAIResponsesRefusal(output, pendingFunctionCallRefusal, model.provider);
+          pendingFunctionCallRefusal = null;
+          currentBlock = null;
+          continue;
+        }
         const args =
           currentBlock?.type === "toolCall" && currentBlock.partialJson
             ? parseStreamingJson(currentBlock.partialJson)
@@ -1029,10 +1052,12 @@ export async function processResponsesStream<TApi extends Api>(
           : (response?.service_tier ?? options.serviceTier);
         options.applyServiceTierPricing(output.usage, serviceTier);
       }
-      // Map status to stop reason
-      output.stopReason = mapStopReason(response?.status);
-      if (output.content.some((b) => b.type === "toolCall") && output.stopReason === "stop") {
-        output.stopReason = "toolUse";
+      if (output.stopReason !== "aborted" && output.stopReason !== "error") {
+        // Map status to stop reason unless an earlier refusal already canonicalized the result.
+        output.stopReason = mapStopReason(response?.status);
+        if (output.content.some((b) => b.type === "toolCall") && output.stopReason === "stop") {
+          output.stopReason = "toolUse";
+        }
       }
     } else if (event.type === "error") {
       throw new Error(
