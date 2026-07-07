@@ -78,6 +78,27 @@ struct GatewayEndpointStoreTests {
         #expect(url.absoluteString == "http://127.0.0.1:18789/control/#token=launchd-token")
     }
 
+    @Test func `resolve gateway token skips unresolved env shorthand before launchd fallback`() {
+        let snapshot = self.makeLaunchAgentSnapshot(
+            env: ["OPENCLAW_GATEWAY_TOKEN": "launchd-token"],
+            token: "launchd-token",
+            password: nil)
+        let root: [String: Any] = [
+            "gateway": [
+                "auth": [
+                    "token": "$OPENCLAW_GATEWAY_TOKEN",
+                ],
+            ],
+        ]
+
+        let token = GatewayEndpointStore._testResolveGatewayToken(
+            isRemote: false,
+            root: root,
+            env: [:],
+            launchdSnapshot: snapshot)
+        #expect(token == "launchd-token")
+    }
+
     @Test func `resolve gateway token resolves env template from app environment`() {
         let snapshot = self.makeLaunchAgentSnapshot(
             env: ["OPENCLAW_GATEWAY_TOKEN": "launchd-token"],
@@ -97,6 +118,27 @@ struct GatewayEndpointStoreTests {
             env: ["CUSTOM_GATEWAY_TOKEN": "  custom-token  "],
             launchdSnapshot: snapshot)
         #expect(token == "custom-token")
+    }
+
+    @Test func `resolve gateway token keeps invalid env template as plaintext`() {
+        let snapshot = self.makeLaunchAgentSnapshot(
+            env: ["OPENCLAW_GATEWAY_TOKEN": "launchd-token"],
+            token: "launchd-token",
+            password: nil)
+        let root: [String: Any] = [
+            "gateway": [
+                "auth": [
+                    "token": "${custom_gateway_token}",
+                ],
+            ],
+        ]
+
+        let token = GatewayEndpointStore._testResolveGatewayToken(
+            isRemote: false,
+            root: root,
+            env: ["custom_gateway_token": "custom-token"],
+            launchdSnapshot: snapshot)
+        #expect(token == "${custom_gateway_token}")
     }
 
     @Test func `resolve gateway token omits unresolved env template without fallback`() throws {
@@ -190,6 +232,27 @@ struct GatewayEndpointStoreTests {
             "gateway": [
                 "auth": [
                     "password": "${OPENCLAW_GATEWAY_PASSWORD}",
+                ],
+            ],
+        ]
+
+        let password = GatewayEndpointStore._testResolveGatewayPassword(
+            isRemote: false,
+            root: root,
+            env: [:],
+            launchdSnapshot: snapshot)
+        #expect(password == "launchd-pass")
+    }
+
+    @Test func `resolve gateway password skips unresolved env shorthand before launchd fallback`() {
+        let snapshot = self.makeLaunchAgentSnapshot(
+            env: ["OPENCLAW_GATEWAY_PASSWORD": "launchd-pass"],
+            token: nil,
+            password: "launchd-pass")
+        let root: [String: Any] = [
+            "gateway": [
+                "auth": [
+                    "password": "$OPENCLAW_GATEWAY_PASSWORD",
                 ],
             ],
         ]

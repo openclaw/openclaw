@@ -213,29 +213,31 @@ actor GatewayEndpointStore {
     {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        guard self.isEnvTemplate(trimmed) else {
+        guard let envName = self.envSecretRefName(trimmed) else {
             return trimmed
         }
-        guard let envName = self.envTemplateName(trimmed) else { return nil }
         let value = env[envName]?.trimmingCharacters(in: .whitespacesAndNewlines)
         return value?.isEmpty == false ? value : nil
     }
 
-    private static func isEnvTemplate(_ value: String) -> Bool {
-        value.hasPrefix("${") && value.hasSuffix("}")
-    }
-
-    private static func envTemplateName(_ value: String) -> String? {
-        guard self.isEnvTemplate(value) else { return nil }
-        let nameStart = value.index(value.startIndex, offsetBy: 2)
-        let nameEnd = value.index(before: value.endIndex)
-        let name = value[nameStart..<nameEnd].trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty,
-              name.range(of: #"^[A-Za-z_][A-Za-z0-9_]*$"#, options: .regularExpression) != nil
-        else {
+    private static func envSecretRefName(_ value: String) -> String? {
+        let name: Substring
+        if value.hasPrefix("${"), value.hasSuffix("}") {
+            let nameStart = value.index(value.startIndex, offsetBy: 2)
+            let nameEnd = value.index(before: value.endIndex)
+            name = value[nameStart..<nameEnd]
+        } else if value.hasPrefix("$") {
+            let nameStart = value.index(after: value.startIndex)
+            name = value[nameStart..<value.endIndex]
+        } else {
             return nil
         }
-        return name
+        let candidate = String(name)
+        return self.isValidEnvSecretRefID(candidate) ? candidate : nil
+    }
+
+    private static func isValidEnvSecretRefID(_ value: String) -> Bool {
+        value.range(of: #"^[A-Z][A-Z0-9_]{0,127}$"#, options: .regularExpression) != nil
     }
 
     private static func warnEnvOverrideOnce(
