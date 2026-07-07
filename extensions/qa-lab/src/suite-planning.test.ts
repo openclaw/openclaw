@@ -9,6 +9,7 @@ import {
   collectQaSuiteGatewayConfigPatch,
   collectQaSuiteGatewayRuntimeOptions,
   collectQaSuitePluginIds,
+  collectQaSuiteTransportPolicy,
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
   resolveQaSuiteScenarioChannel,
@@ -320,6 +321,21 @@ describe("qa suite planning helpers", () => {
     expect(scenarioRequiresIsolatedQaSuiteWorker(makeQaSuiteTestScenario("plain"))).toBe(false);
   });
 
+  it("isolates and collects scenario-declared transport policy", () => {
+    const scenario = makeQaSuiteTestScenario("sender-policy", {
+      transportPolicy: {
+        requireGroupMention: true,
+        senderAllowlist: ["driver"],
+      },
+    });
+
+    expect(scenarioRequiresIsolatedQaSuiteWorker(scenario)).toBe(true);
+    expect(collectQaSuiteTransportPolicy([scenario])).toEqual({
+      requireGroupMention: true,
+      senderAllowlist: ["driver"],
+    });
+  });
+
   it("collects unique scenario-declared bundled plugins in encounter order", () => {
     const scenarios = [
       makeQaSuiteTestScenario("generic", { plugins: ["active-memory", "memory-wiki"] }),
@@ -466,6 +482,20 @@ describe("qa suite planning helpers", () => {
         concurrency: 1,
       }),
     ).toBe(false);
+  });
+
+  it("isolates serial runs when transport policy would leak into another scenario", () => {
+    expect(
+      shouldUseIsolatedQaSuiteScenarioWorkers({
+        scenarios: [
+          makeQaSuiteTestScenario("dm-baseline"),
+          makeQaSuiteTestScenario("sender-policy", {
+            transportPolicy: { senderAllowlist: ["driver"] },
+          }),
+        ],
+        concurrency: 1,
+      }),
+    ).toBe(true);
   });
 
   it("keeps concurrent runs on isolated workers", () => {
