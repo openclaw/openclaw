@@ -399,7 +399,7 @@ function formatGeneratedTypeScript(repoRoot: string, root: string): void {
   }
 }
 
-export async function rewriteTypeScriptImports(root: string): Promise<void> {
+async function rewriteTypeScriptImports(root: string): Promise<void> {
   const entries = await fs.readdir(root, { withFileTypes: true });
   await Promise.all(
     entries.map(async (entry) => {
@@ -417,7 +417,7 @@ export async function rewriteTypeScriptImports(root: string): Promise<void> {
   );
 }
 
-export function normalizeGeneratedTypeScript(text: string): string {
+function normalizeGeneratedTypeScript(text: string): string {
   return text
     .replace(/(from\s+["'])(\.{1,2}\/[^"']+?)(\.js)?(["'])/g, "$1$2.js$4")
     .replace('export * as v2 from "./v2.js";', 'export * as v2 from "./v2/index.js";')
