@@ -839,7 +839,7 @@ jobs:
           DOCKERHUB_MULTI_REFS: ${{ steps.refs.outputs.dockerhub_multi }}
         run: |
           set -euo pipefail
-          mkdir -p .trivy-out
+          mkdir -p trivy-out
           mapfile -t multi_refs <<< "${MULTI_REFS}"
           mapfile -t dockerhub_multi_refs <<< "${DOCKERHUB_MULTI_REFS}"
           scan_labels=()
@@ -904,9 +904,9 @@ jobs:
             image_ref="${scan_refs[$index]}"
             platform="${scan_platforms[$index]}"
             echo "Scanning ${label} Docker release image (${platform}): ${image_ref}"
-            trivy image --platform "$platform" --format spdx-json --output ".trivy-out/${label}.spdx.json" "$image_ref"
-            trivy image --platform "$platform" --format cyclonedx --output ".trivy-out/${label}.cyclonedx.json" "$image_ref"
-            trivy image --platform "$platform" --format sarif --severity HIGH,CRITICAL --ignore-unfixed --output ".trivy-out/${label}.sarif" "$image_ref"
+            trivy image --platform "$platform" --format spdx-json --output "trivy-out/${label}.spdx.json" "$image_ref"
+            trivy image --platform "$platform" --format cyclonedx --output "trivy-out/${label}.cyclonedx.json" "$image_ref"
+            trivy image --platform "$platform" --format sarif --severity HIGH,CRITICAL --ignore-unfixed --output "trivy-out/${label}.sarif" "$image_ref"
           done
           critical_status=0
           for index in "${!scan_refs[@]}"; do
@@ -919,109 +919,109 @@ jobs:
           exit "$critical_status"
 
       - name: Upload Trivy runtime amd64 SARIF to GitHub Code Scanning
-        if: always() && hashFiles('.trivy-out/runtime-amd64.sarif') != ''
+        if: always() && hashFiles('trivy-out/runtime-amd64.sarif') != ''
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
         with:
-          sarif_file: .trivy-out/runtime-amd64.sarif
+          sarif_file: trivy-out/runtime-amd64.sarif
           category: trivy-docker-release-runtime-amd64
           ref: ${{ steps.refs.outputs.source_ref }}
           sha: ${{ steps.refs.outputs.source_sha }}
 
       - name: Upload Trivy runtime arm64 SARIF to GitHub Code Scanning
-        if: always() && hashFiles('.trivy-out/runtime-arm64.sarif') != ''
+        if: always() && hashFiles('trivy-out/runtime-arm64.sarif') != ''
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
         with:
-          sarif_file: .trivy-out/runtime-arm64.sarif
+          sarif_file: trivy-out/runtime-arm64.sarif
           category: trivy-docker-release-runtime-arm64
           ref: ${{ steps.refs.outputs.source_ref }}
           sha: ${{ steps.refs.outputs.source_sha }}
 
       - name: Upload Trivy slim amd64 SARIF to GitHub Code Scanning
-        if: always() && hashFiles('.trivy-out/slim-amd64.sarif') != ''
+        if: always() && hashFiles('trivy-out/slim-amd64.sarif') != ''
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
         with:
-          sarif_file: .trivy-out/slim-amd64.sarif
+          sarif_file: trivy-out/slim-amd64.sarif
           category: trivy-docker-release-slim-amd64
           ref: ${{ steps.refs.outputs.source_ref }}
           sha: ${{ steps.refs.outputs.source_sha }}
 
       - name: Upload Trivy slim arm64 SARIF to GitHub Code Scanning
-        if: always() && hashFiles('.trivy-out/slim-arm64.sarif') != ''
+        if: always() && hashFiles('trivy-out/slim-arm64.sarif') != ''
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
         with:
-          sarif_file: .trivy-out/slim-arm64.sarif
+          sarif_file: trivy-out/slim-arm64.sarif
           category: trivy-docker-release-slim-arm64
           ref: ${{ steps.refs.outputs.source_ref }}
           sha: ${{ steps.refs.outputs.source_sha }}
 
       - name: Upload Trivy browser amd64 SARIF to GitHub Code Scanning
-        if: always() && hashFiles('.trivy-out/browser-amd64.sarif') != ''
+        if: always() && hashFiles('trivy-out/browser-amd64.sarif') != ''
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
         with:
-          sarif_file: .trivy-out/browser-amd64.sarif
+          sarif_file: trivy-out/browser-amd64.sarif
           category: trivy-docker-release-browser-amd64
           ref: ${{ steps.refs.outputs.source_ref }}
           sha: ${{ steps.refs.outputs.source_sha }}
 
       - name: Upload Trivy browser arm64 SARIF to GitHub Code Scanning
-        if: always() && hashFiles('.trivy-out/browser-arm64.sarif') != ''
+        if: always() && hashFiles('trivy-out/browser-arm64.sarif') != ''
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
         with:
-          sarif_file: .trivy-out/browser-arm64.sarif
+          sarif_file: trivy-out/browser-arm64.sarif
           category: trivy-docker-release-browser-arm64
           ref: ${{ steps.refs.outputs.source_ref }}
           sha: ${{ steps.refs.outputs.source_sha }}
 
       - name: Upload Trivy Docker Hub runtime amd64 SARIF to GitHub Code Scanning
-        if: always() && hashFiles('.trivy-out/dockerhub-runtime-amd64.sarif') != ''
+        if: always() && hashFiles('trivy-out/dockerhub-runtime-amd64.sarif') != ''
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
         with:
-          sarif_file: .trivy-out/dockerhub-runtime-amd64.sarif
+          sarif_file: trivy-out/dockerhub-runtime-amd64.sarif
           category: trivy-docker-release-dockerhub-runtime-amd64
           ref: ${{ steps.refs.outputs.source_ref }}
           sha: ${{ steps.refs.outputs.source_sha }}
 
       - name: Upload Trivy Docker Hub runtime arm64 SARIF to GitHub Code Scanning
-        if: always() && hashFiles('.trivy-out/dockerhub-runtime-arm64.sarif') != ''
+        if: always() && hashFiles('trivy-out/dockerhub-runtime-arm64.sarif') != ''
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
         with:
-          sarif_file: .trivy-out/dockerhub-runtime-arm64.sarif
+          sarif_file: trivy-out/dockerhub-runtime-arm64.sarif
           category: trivy-docker-release-dockerhub-runtime-arm64
           ref: ${{ steps.refs.outputs.source_ref }}
           sha: ${{ steps.refs.outputs.source_sha }}
 
       - name: Upload Trivy Docker Hub slim amd64 SARIF to GitHub Code Scanning
-        if: always() && hashFiles('.trivy-out/dockerhub-slim-amd64.sarif') != ''
+        if: always() && hashFiles('trivy-out/dockerhub-slim-amd64.sarif') != ''
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
         with:
-          sarif_file: .trivy-out/dockerhub-slim-amd64.sarif
+          sarif_file: trivy-out/dockerhub-slim-amd64.sarif
           category: trivy-docker-release-dockerhub-slim-amd64
           ref: ${{ steps.refs.outputs.source_ref }}
           sha: ${{ steps.refs.outputs.source_sha }}
 
       - name: Upload Trivy Docker Hub slim arm64 SARIF to GitHub Code Scanning
-        if: always() && hashFiles('.trivy-out/dockerhub-slim-arm64.sarif') != ''
+        if: always() && hashFiles('trivy-out/dockerhub-slim-arm64.sarif') != ''
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
         with:
-          sarif_file: .trivy-out/dockerhub-slim-arm64.sarif
+          sarif_file: trivy-out/dockerhub-slim-arm64.sarif
           category: trivy-docker-release-dockerhub-slim-arm64
           ref: ${{ steps.refs.outputs.source_ref }}
           sha: ${{ steps.refs.outputs.source_sha }}
 
       - name: Upload Trivy Docker Hub browser amd64 SARIF to GitHub Code Scanning
-        if: always() && hashFiles('.trivy-out/dockerhub-browser-amd64.sarif') != ''
+        if: always() && hashFiles('trivy-out/dockerhub-browser-amd64.sarif') != ''
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
         with:
-          sarif_file: .trivy-out/dockerhub-browser-amd64.sarif
+          sarif_file: trivy-out/dockerhub-browser-amd64.sarif
           category: trivy-docker-release-dockerhub-browser-amd64
           ref: ${{ steps.refs.outputs.source_ref }}
           sha: ${{ steps.refs.outputs.source_sha }}
 
       - name: Upload Trivy Docker Hub browser arm64 SARIF to GitHub Code Scanning
-        if: always() && hashFiles('.trivy-out/dockerhub-browser-arm64.sarif') != ''
+        if: always() && hashFiles('trivy-out/dockerhub-browser-arm64.sarif') != ''
         uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
         with:
-          sarif_file: .trivy-out/dockerhub-browser-arm64.sarif
+          sarif_file: trivy-out/dockerhub-browser-arm64.sarif
           category: trivy-docker-release-dockerhub-browser-arm64
           ref: ${{ steps.refs.outputs.source_ref }}
           sha: ${{ steps.refs.outputs.source_sha }}
@@ -1031,6 +1031,6 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: trivy-docker-release-security
-          path: .trivy-out/
+          path: trivy-out/
           if-no-files-found: error
           retention-days: 90

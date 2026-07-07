@@ -414,9 +414,11 @@ describe("Dockerfile", () => {
     expect(workflow).toContain("category: trivy-docker-release-dockerhub-runtime-arm64");
     expect(workflow).toContain("Upload Trivy Docker release artifacts");
     expect(workflow).toContain("trivy-docker-release-security");
+    expect(workflow).toContain("path: trivy-out/");
     expect(workflow).not.toContain("--severity HIGH,CRITICAL --exit-code 1");
+    expect(workflow).not.toContain(".trivy-out");
     expect(workflow).not.toContain(
-      'trivy image --format sarif --severity HIGH,CRITICAL --ignore-unfixed --output ".trivy-out/${label}.sarif" "$image_ref"\n            trivy image --severity CRITICAL',
+      'trivy image --format sarif --severity HIGH,CRITICAL --ignore-unfixed --output "trivy-out/${label}.sarif" "$image_ref"\n            trivy image --severity CRITICAL',
     );
     expect(workflow).not.toContain("break\n            fi");
   });
