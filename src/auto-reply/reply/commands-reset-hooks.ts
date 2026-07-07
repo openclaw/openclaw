@@ -38,6 +38,7 @@ async function loadBeforeResetTranscript(params: {
         sessionFile,
         sessionId,
         sessionKey: params.sessionKey,
+        storePath: params.storePath,
       },
       {
         mode: "full",

@@ -143,6 +143,37 @@ describe("emitResetCommandHooks", () => {
     expect(ctx.sessionId).toBe("prev-session");
   });
 
+  it("passes storePath into the transcript reader scope for custom-store sessions", async () => {
+    const command = {
+      surface: "telegram",
+      senderId: "vac",
+      channel: "telegram",
+      from: "telegram:vac",
+      to: "telegram:bot",
+      resetHookTriggered: false,
+    } as HandleCommandsParams["command"];
+
+    await emitResetCommandHooks({
+      action: "new",
+      ctx: {} as HandleCommandsParams["ctx"],
+      cfg: {} as HandleCommandsParams["cfg"],
+      command,
+      sessionKey: "agent:main:telegram:group:-1003826723328:topic:8428",
+      previousSessionEntry: {
+        sessionId: "prev-session",
+        sessionFile: "/custom/store/prev-session.jsonl",
+      } as HandleCommandsParams["previousSessionEntry"],
+      storePath: "/custom/store",
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+
+    await vi.waitFor(() => expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledTimes(1));
+    expect(readSessionMessagesAsyncMock).toHaveBeenCalledTimes(1);
+    const [scope] = readSessionMessagesAsyncMock.mock.calls[0] as [Record<string, unknown>];
+    expect(scope.storePath).toBe("/custom/store");
+    expect(scope.sessionFile).toBe("/custom/store/prev-session.jsonl");
+  });
+
   it("passes through messages returned by the transcript reader", async () => {
     readSessionMessagesAsyncMock.mockResolvedValueOnce([
       { role: "user", content: "active root" },
