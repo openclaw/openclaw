@@ -68,6 +68,7 @@ import {
   turnStartResult,
   userMessage,
 } from "./run-attempt-test-harness.js";
+import { resetCodexTestBindingStore } from "./session-binding.test-helpers.js";
 import { testing } from "./run-attempt.js";
 import {
   ensureCodexSandboxExecServerEnvironment,
@@ -1345,6 +1346,9 @@ describe("runCodexAppServerAttempt", () => {
 
   it("keeps leading delivery hints out of the Codex current user request", async () => {
     for (const [index, deliveryHint] of MESSAGE_TOOL_DELIVERY_HINTS.entries()) {
+      // Bindings are keyed by session identity, so the previous iteration's
+      // thread would otherwise resume against a harness that cannot serve it.
+      resetCodexTestBindingStore();
       const sessionFile = path.join(tempDir, `session-delivery-hint-${index}.jsonl`);
       const workspaceDir = path.join(tempDir, `workspace-delivery-hint-${index}`);
       const harness = createStartedThreadHarness();
