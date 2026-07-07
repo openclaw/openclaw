@@ -238,4 +238,53 @@ setTimeout(() => {}, 30_000);
     expect(stderr).toMatch(/EPIPE|write/i);
     expect(stderr).not.toContain("Unhandled 'error' event");
   });
+
+  it("reports target stdout stream failures without an unhandled stream error", async () => {
+    const spawnMockPath = await makeTempScript(
+      "mock-target-stdout-error.cjs",
+      String.raw`const childProcess = require("node:child_process");
+const { EventEmitter } = require("node:events");
+const { syncBuiltinESMExports } = require("node:module");
+const { PassThrough } = require("node:stream");
+
+childProcess.spawn = () => {
+  const child = new EventEmitter();
+  child.stdin = new PassThrough();
+  child.stdout = new PassThrough();
+  child.kill = () => {};
+
+  process.nextTick(() => {
+    child.stdout.emit("error", new Error("target stdout failed"));
+  });
+
+  return child;
+};
+syncBuiltinESMExports();
+`,
+    );
+
+    const payload = encodePayload({
+      targetCommand: `${process.execPath} unused-target.cjs`,
+      mcpServers: [],
+    });
+
+    const child = spawn(process.execPath, ["--require", spawnMockPath, proxyPath, "--payload", payload], {
+      stdio: ["pipe", "pipe", "pipe"],
+      cwd: process.cwd(),
+    });
+
+    let stderr = "";
+    child.stderr.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    child.stdin.end();
+
+    const exitCode = await new Promise<number | null>((resolve) => {
+      child.once("close", (code) => resolve(code));
+    });
+
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain("target stdout failed");
+    expect(stderr).not.toContain("Unhandled 'error' event");
+  });
 });

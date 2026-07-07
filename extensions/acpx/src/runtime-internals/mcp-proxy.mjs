@@ -118,6 +118,7 @@ function main() {
   };
 
   child.stdin.on("error", exitWithError);
+  child.stdout.on("error", exitWithError);
   process.stdout.on("error", exitWithError);
 
   input.on("line", (line) => {
