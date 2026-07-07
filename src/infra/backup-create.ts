@@ -170,6 +170,30 @@ function isTarEofRaceError(err: unknown): boolean {
 
 export type BackupTarRetryLogger = (message: string) => void;
 
+const RM_EBUSY_RETRY_MAX = 3;
+const RM_EBUSY_RETRY_MS = 100;
+
+/**
+ * Removes a temp archive file, retrying on EBUSY (Windows file-lock
+ * contention) so a leaked tar fd doesn't defeat the outer retry loop.
+ */
+async function removeTempArchive(tempArchivePath: string): Promise<void> {
+  for (let attempt = 1; attempt <= RM_EBUSY_RETRY_MAX; attempt += 1) {
+    try {
+      await fs.rm(tempArchivePath, { force: true });
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") return;
+      if (code === "EBUSY" && attempt < RM_EBUSY_RETRY_MAX) {
+        await sleep(RM_EBUSY_RETRY_MS);
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 async function writeTarArchiveWithRetry(params: {
   tempArchivePath: string;
   runTar: () => Promise<void>;
@@ -188,7 +212,7 @@ async function writeTarArchiveWithRetry(params: {
         break;
       }
       try {
-        await fs.rm(params.tempArchivePath, { force: true });
+        await removeTempArchive(params.tempArchivePath);
       } catch (cleanupErr) {
         const code = (cleanupErr as NodeJS.ErrnoException).code;
         if (code && code !== "ENOENT") {
