@@ -205,8 +205,8 @@ export async function readResponsePrefix(
     // Check Content-Length to avoid materializing an oversized body.
     const contentLength = response.headers?.get?.("content-length") ?? null;
     if (contentLength !== null) {
-      const cl = parseInt(contentLength, 10);
-      if (!isNaN(cl) && cl > maxBytes) {
+      const cl = Number.parseInt(contentLength, 10);
+      if (!Number.isNaN(cl) && cl > maxBytes) {
         return { buffer: Buffer.alloc(0), size: cl, truncated: true };
       }
     }
