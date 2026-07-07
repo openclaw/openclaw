@@ -362,9 +362,7 @@ describe("maintainContextEngineWithSafetyTimeout", () => {
     vi.useFakeTimers();
     const controller = new AbortController();
     const reason = new Error("shutdown");
-    const maintain = vi.fn<MaintainFn>(
-      (params) => new Promise<ContextEngineMaintenanceResult>(() => void params),
-    );
+    const maintain = vi.fn<MaintainFn>(() => new Promise<ContextEngineMaintenanceResult>(() => {}));
 
     const onCancel = vi.fn();
     const pending = maintainContextEngineWithSafetyTimeout(

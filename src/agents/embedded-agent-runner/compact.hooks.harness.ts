@@ -728,6 +728,22 @@ export async function loadCompactHooksHarness(): Promise<{
             abortSignal ? { abortSignal } : undefined,
           ),
       ),
+      // Mirror the real wrapper: bound the engine's maintain() with the (mocked)
+      // safety timeout. The signal is only the outer wait abort, never threaded
+      // into maintain()'s params.
+      maintainContextEngineWithSafetyTimeout: vi.fn(
+        (
+          contextEngine: { maintain: (params: Record<string, unknown>) => Promise<unknown> },
+          params: Record<string, unknown>,
+          timeoutMs?: number,
+          opts?: { abortSignal?: AbortSignal; onCancel?: () => void },
+        ) =>
+          compactWithSafetyTimeoutMock(() => contextEngine.maintain(params), timeoutMs, {
+            label: "Maintenance",
+            ...(opts?.abortSignal ? { abortSignal: opts.abortSignal } : {}),
+            ...(opts?.onCancel ? { onCancel: opts.onCancel } : {}),
+          }),
+      ),
     };
   });
 
