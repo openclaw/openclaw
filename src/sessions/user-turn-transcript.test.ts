@@ -604,6 +604,48 @@ describe("user turn transcript persistence", () => {
       expect(persistedMessages[0]).not.toHaveProperty("bareBody");
       expect(persistedMessages[0]).not.toHaveProperty("inboundDecorated");
     });
+
+    it("drops trusted bare body when before_message_write mutates content in place", async () => {
+      // Some hooks mutate the event message and return the same object instead
+      // of returning a spread copy. Capture the original content before running
+      // the hook so this redaction style also clears stale trusted fields.
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_message_write",
+            handler: (event) => {
+              const current = (event as { message: Record<string, unknown> }).message;
+              current.content = "[redacted in place by hook]";
+              return {
+                message: castAgentMessage(current),
+              };
+            },
+          },
+        ]),
+      );
+      const dir = createTempDir("openclaw-user-turn-redacted-in-place-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+
+      await appendUserTurnTranscriptMessage({
+        transcriptPath,
+        input: {
+          text: "secret prompt",
+          bareBody: "secret prompt",
+          inboundDecorated: true,
+        },
+        beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+      });
+
+      const persistedMessages = readTranscriptMessages(transcriptPath);
+      expect(persistedMessages).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "[redacted in place by hook]",
+        }),
+      ]);
+      expect(persistedMessages[0]).not.toHaveProperty("bareBody");
+      expect(persistedMessages[0]).not.toHaveProperty("inboundDecorated");
+    });
   });
 
   describe("persistUserTurnTranscript", () => {

@@ -390,6 +390,7 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
     (message as unknown as { provenance?: unknown }).provenance,
   );
   const senderIsOwner = readOpenClawMessageMeta(message)?.senderIsOwner;
+  const originalContent = (message as unknown as { content?: unknown }).content;
   const nextMessage = params.beforeMessageWrite({
     message,
     ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -421,7 +422,7 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   // to redact. Drop the trusted inbound fields whenever the hook rewrote the
   // content; hooks that want a trusted bare body must keep the content or
   // re-decorate it explicitly with a fresh safe body.
-  if (nextUserMessageRecord.content !== (message as unknown as { content?: unknown }).content) {
+  if (nextUserMessageRecord.content !== originalContent) {
     delete preserved.inboundDecorated;
     delete preserved.bareBody;
   }
