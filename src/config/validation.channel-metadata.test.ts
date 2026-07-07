@@ -15,7 +15,9 @@ const mockLoadPluginManifestRegistry = vi.hoisted(() =>
   ),
 );
 
-function createTelegramSchemaRegistry(): PluginManifestRegistry {
+function createTelegramSchemaRegistry(
+  options: { requiredDmPolicy?: boolean } = {},
+): PluginManifestRegistry {
   return {
     diagnostics: [],
     plugins: [
@@ -43,6 +45,7 @@ function createTelegramSchemaRegistry(): PluginManifestRegistry {
               // the channel. Keep this mock schema focused on the plugin-owned
               // default under test instead of rejecting unrelated core fields.
               additionalProperties: true,
+              ...(options.requiredDmPolicy ? { required: ["dmPolicy"] } : {}),
             },
             uiHints: {},
           },
@@ -253,8 +256,8 @@ vi.mock("./zod-schema.js", () => ({
   },
 }));
 
-function setupTelegramSchemaWithDefault() {
-  mockLoadPluginManifestRegistry.mockReturnValue(createTelegramSchemaRegistry());
+function setupTelegramSchemaWithDefault(options?: { requiredDmPolicy?: boolean ) {
+  mockLoadPluginManifestRegistry.mockReturnValue(createTelegramSchemaRegistry(options));
 }
 
 function setupPluginSchemaWithRequiredDefault() {
@@ -550,14 +553,13 @@ describe("validateConfigObjectWithPlugins DM policy warnings", () => {
 });
 
 describe("validateConfigObjectRawWithPlugins channel metadata", () => {
-  it("still injects channel AJV defaults even in raw mode — persistence safety is handled by io.ts", () => {
-    // Channel and plugin AJV validation always runs with applyDefaults: true
-    // (hardcoded) to avoid breaking schemas that mark defaulted fields as
-    // required.
-    //
-    // The actual protection against leaking these defaults to disk lives in
-    // writeConfigFile (io.ts), which uses persistCandidate (the pre-validation
-    // merge-patched value) instead of validated.config.
+  it("passes raw validation without injecting channel AJV defaults (restart-loop safety)", () => {
+    // Channel AJV validation runs with applyDefaults: true so schemas that mark
+    // defaulted fields as required still validate. The defaults are applied to a
+    // throwaway clone and replaceChannelConfig is gated on opts.applyDefaults, so
+    // raw mode does NOT inject defaults into the runtime/persisted config. This
+    // is what prevents an unrelated edit (e.g. a skill env change) from making
+    // every channel appear modified and restarting the gateway.
     setupTelegramSchemaWithDefault();
 
     const result = validateConfigObjectRawWithPlugins({
@@ -568,9 +570,28 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      // AJV defaults ARE injected into validated.config even in raw mode.
-      // This is intentional — see comment above.
-      expect(result.config.channels?.telegram?.dmPolicy).toBe("pairing");
+      // Defaults are NOT injected into validated.config in raw mode.
+      expect(result.config.channels?.telegram).toEqual({});
+    }
+  });
+
+  it("passes raw validation when a defaulted field is also required (feishu-style schema)", async () => {
+    // Regression: generated channel schemas (zod v4 toJSONSchema) mark .default()
+    // fields as required. Raw-mode validation must still pass for a channel that
+    // omits such fields, otherwise config.patch / writeConfigFile fail with
+    // "must have required property '<field>'".
+    setupTelegramSchemaWithDefault({ requiredDmPolicy: true });
+
+    const result = validateConfigObjectRawWithPlugins({
+      channels: {
+        telegram: {},
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      // The required default is satisfied via the validation clone; not persisted.
+      expect(result.config.channels?.telegram).toEqual({});
     }
   });
 
@@ -750,6 +771,28 @@ describe("validateConfigObjectRawWithPlugins plugin config defaults", () => {
     }
   });
 });
+
+it("does not strip existing plugin config defaults in raw mode", async () => {
+    setupPluginSchemaWithRequiredDefault();
+
+    const result = validateConfigObjectRawWithPlugins({
+      plugins: {
+        entries: {
+          opik: {
+            enabled: true,
+            config: { workspace: "default-workspace" },
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.plugins?.entries?.opik?.config).toEqual({
+        workspace: "default-workspace",
+      });
+    }
+  });
 
 describe("validateConfigObjectWithPlugins bundled allowlist compatibility", () => {
   it("accepts the shipped deprecated bundledDiscovery marker", () => {
