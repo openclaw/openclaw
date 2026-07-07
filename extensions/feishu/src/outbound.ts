@@ -50,16 +50,7 @@ import {
 } from "./send.js";
 
 const RENDERED_FEISHU_CARD = Symbol("openclaw.renderedFeishuCard");
-
-/**
- * Feishu post markdown needs single newlines upgraded to paragraph breaks so
- * Feishu does not collapse them into spaces. Perform that expansion before the
- * generic outbound chunker measures the text, so each chunk stays under the
- * 4000-character limit after normalization.
- */
-function chunkTextForFeishuOutbound(text: string, limit: number): string[] {
-  return chunkTextForOutbound(normalizeFeishuPostMarkdownNewlines(text), limit);
-}
+const FEISHU_TEXT_CHUNK_LIMIT = 4000;
 
 function normalizePossibleLocalImagePath(text: string | undefined): string | null {
   const raw = text?.trim();
@@ -352,14 +343,30 @@ async function sendOutboundText(params: {
     });
   }
 
-  return sendMessageFeishu({ cfg, to, text, accountId, replyToMessageId, replyInThread });
+  // Post-md newline expansion happens only after card/table routing has run on
+  // the original text. Rechunk the normalized text so no chunk exceeds Feishu's
+  // 4000-character post limit.
+  const normalizedText = normalizeFeishuPostMarkdownNewlines(text);
+  const chunks = chunkTextForOutbound(normalizedText, FEISHU_TEXT_CHUNK_LIMIT);
+  let lastResult: Awaited<ReturnType<typeof sendMessageFeishu>> | undefined;
+  for (const chunk of chunks) {
+    lastResult = await sendMessageFeishu({
+      cfg,
+      to,
+      text: chunk,
+      accountId,
+      replyToMessageId,
+      replyInThread,
+    });
+  }
+  return lastResult!;
 }
 
 export const feishuOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
-  chunker: chunkTextForFeishuOutbound,
+  chunker: chunkTextForOutbound,
   chunkerMode: "markdown",
-  textChunkLimit: 4000,
+  textChunkLimit: FEISHU_TEXT_CHUNK_LIMIT,
   presentationCapabilities: {
     supported: true,
     buttons: true,

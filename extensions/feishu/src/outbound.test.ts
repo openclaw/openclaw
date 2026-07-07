@@ -444,6 +444,52 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
   });
 });
 
+describe("feishuOutbound.sendText post-md normalization", () => {
+  beforeEach(() => {
+    resetOutboundMocks();
+  });
+
+  it("keeps markdown table routing on raw text before post normalization", async () => {
+    await sendText({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "| A | B |\n|---|---|\n| 1 | 2 |",
+      accountId: "main",
+    });
+
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalled();
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("normalizes single newlines when falling back to post text", async () => {
+    await sendText({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "line one\nline two",
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageCall()?.text).toBe("line one\n\nline two");
+  });
+
+  it("rechunks normalized post text so no chunk exceeds the 4000-character limit", async () => {
+    const line = "x".repeat(1000);
+    const text = [line, line, line, line, line].join("\n");
+    await sendText({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text,
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalled();
+    for (const call of sendMessageFeishuMock.mock.calls) {
+      expect((call[0] as { text: string }).text.length).toBeLessThanOrEqual(4000);
+    }
+  });
+});
+
 describe("feishuOutbound.sendPayload native cards", () => {
   beforeEach(() => {
     resetOutboundMocks();
@@ -1711,21 +1757,5 @@ describe("feishuOutbound.sendMedia renderMode", () => {
     expect(sendMessageCall()?.text).toBe("caption");
     expect(sendMessageCall()?.replyToMessageId).toBe("om_thread_1");
     expect(sendMessageCall()?.accountId).toBe("main");
-  });
-});
-
-describe("feishuOutbound chunker", () => {
-  it("normalizes single newlines before measuring chunk limits", () => {
-    const chunks = feishuOutbound.chunker!("a\nb\nc", 10);
-    expect(chunks).toEqual(["a\n\nb\n\nc"]);
-  });
-
-  it("respects the 4000-character limit after normalization", () => {
-    const line = "x".repeat(1000);
-    const text = [line, line, line, line, line].join("\n");
-    const chunks = feishuOutbound.chunker!(text, 4000);
-    for (const chunk of chunks) {
-      expect(chunk.length).toBeLessThanOrEqual(4000);
-    }
   });
 });
