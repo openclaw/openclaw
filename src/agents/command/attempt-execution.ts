@@ -6,6 +6,7 @@ import {
   normalizeOptionalLowercaseString,
   type FastMode,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { ACP_TURN_TIMEOUT_DETAIL_CODE } from "../../acp/control-plane/manager.turn-timeout.js";
 import { formatAcpErrorChain } from "../../acp/runtime/errors.js";
@@ -1023,7 +1024,11 @@ function resolveAcpLifecycleEndFields(
     resultStatus,
   );
   if (terminalReason === "timed_out") {
-    return { aborted: true, stopReason: "timeout", status: "timed_out" } as const;
+    return {
+      aborted: true,
+      stopReason: "timeout",
+      status: "timed_out",
+    } as const;
   }
   if (terminalReason === "cancelled") {
     return { aborted: true, stopReason: "stop", status: "cancelled" } as const;
@@ -1162,7 +1167,7 @@ function resolvePresentProxyEnvKeys(env: NodeJS.ProcessEnv = process.env): strin
 }
 
 function sanitizeAcpDiagnosticText(value: string): string {
-  return redactSensitiveText(value).replace(/\s+/g, " ").trim().slice(0, 240);
+  return truncateUtf16Safe(redactSensitiveText(value).replace(/\s+/g, " ").trim(), 240);
 }
 
 function acpRuntimeEventDiagnostics(event: AcpRuntimeEvent): Record<string, unknown> {
@@ -1303,7 +1308,11 @@ export function emitAcpLifecycleError(params: {
     params.terminalOutcome === "blocked"
       ? ({ livenessState: "blocked" } as const)
       : terminalReason === "timed_out"
-        ? ({ aborted: true, stopReason: "timeout", status: "timed_out" } as const)
+        ? ({
+            aborted: true,
+            stopReason: "timeout",
+            status: "timed_out",
+          } as const)
         : resolveAgentRunAbortLifecycleFields(params.abortSignal);
   const emit = params.auditOnly ? emitAgentAuditEvent : emitAgentEvent;
   emit({

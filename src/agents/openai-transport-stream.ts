@@ -48,6 +48,7 @@ import {
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import OpenAI, { AzureOpenAI } from "openai";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type {
@@ -133,7 +134,9 @@ const OPENAI_CODEX_RESPONSES_PROVIDERS = new Set(["openai"]);
 const log = createSubsystemLogger("openai-transport");
 const loggedOpenAIStrictToolDowngradeDiagnosticKeys = new Set<string>();
 
-type ReplayableResponseOutputMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };
+type ReplayableResponseOutputMessage = Omit<ResponseOutputMessage, "id"> & {
+  id?: string;
+};
 type OpenAIResponsesReasoningReplayMetadata = {
   v: 1;
   source: "openai-responses";
@@ -462,7 +465,7 @@ function stringifyRedactedPayload(value: unknown): string {
       return "<empty>";
     }
     const redacted = redactSensitiveText(encoded, { mode: "tools" });
-    return redacted.length > 8000 ? `${redacted.slice(0, 8000)}…<truncated>` : redacted;
+    return redacted.length > 8000 ? `${truncateUtf16Safe(redacted, 8000)}…<truncated>` : redacted;
   } catch {
     return "<unserializable>";
   }
@@ -470,7 +473,7 @@ function stringifyRedactedPayload(value: unknown): string {
 
 function stringifyRedactedEvent(value: unknown): string {
   const redacted = stringifyRedactedPayload(value);
-  return redacted.length > 2000 ? `${redacted.slice(0, 2000)}…<truncated>` : redacted;
+  return redacted.length > 2000 ? `${truncateUtf16Safe(redacted, 2000)}…<truncated>` : redacted;
 }
 
 type ResponsesFailedNoDetailsObservation = {
@@ -830,7 +833,10 @@ function isInvalidEncryptedContentError(error: unknown): boolean {
   );
 }
 
-function stripEncryptedContentFields(value: unknown): { value: unknown; changed: boolean } {
+function stripEncryptedContentFields(value: unknown): {
+  value: unknown;
+  changed: boolean;
+} {
   if (!value || typeof value !== "object") {
     return { value, changed: false };
   }
@@ -1061,7 +1067,11 @@ function parseTextSignature(
   }
   if (signature.startsWith("{")) {
     try {
-      const parsed = JSON.parse(signature) as { v?: unknown; id?: unknown; phase?: unknown };
+      const parsed = JSON.parse(signature) as {
+        v?: unknown;
+        id?: unknown;
+        phase?: unknown;
+      };
       if (parsed.v === 1) {
         const id = typeof parsed.id === "string" ? parsed.id : undefined;
         const phase =
@@ -1176,14 +1186,20 @@ function convertResponsesMessages(
       if (typeof msg.content === "string") {
         messages.push(
           buildResponsesInputMessage("user", [
-            { type: "input_text", text: sanitizeTransportPayloadText(msg.content) },
+            {
+              type: "input_text",
+              text: sanitizeTransportPayloadText(msg.content),
+            },
           ]),
         );
       } else {
         const content = (
           msg.content.map((item) =>
             item.type === "text"
-              ? { type: "input_text", text: sanitizeTransportPayloadText(item.text) }
+              ? {
+                  type: "input_text",
+                  text: sanitizeTransportPayloadText(item.text),
+                }
               : {
                   type: "input_image",
                   detail: "auto",
@@ -1464,8 +1480,16 @@ async function processResponsesStream(
     // block now and replay the withheld text as one delta.
     currentBlock = { type: "text", text: pendingMessageText };
     output.content.push(currentBlock);
-    stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
-    stream.push({ type: "text_delta", contentIndex: blockIndex(), delta: pendingMessageText });
+    stream.push({
+      type: "text_start",
+      contentIndex: blockIndex(),
+      partial: output,
+    });
+    stream.push({
+      type: "text_delta",
+      contentIndex: blockIndex(),
+      delta: pendingMessageText,
+    });
     pendingMessageText = null;
   };
   const appendCompletedResponseTextItem = (item: Record<string, unknown>) => {
@@ -1502,7 +1526,11 @@ async function processResponsesStream(
     };
     output.content.push(block);
     lastTextBlock = { block, index: blockIndex(), phase };
-    stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+    stream.push({
+      type: "text_start",
+      contentIndex: blockIndex(),
+      partial: output,
+    });
     stream.push({
       type: "text_end",
       contentIndex: blockIndex(),
@@ -1520,7 +1548,11 @@ async function processResponsesStream(
       partialJson: stringifyJsonLike(item.arguments, "{}"),
     };
     output.content.push(block);
-    stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
+    stream.push({
+      type: "toolcall_start",
+      contentIndex: blockIndex(),
+      partial: output,
+    });
     stream.push({
       type: "toolcall_end",
       contentIndex: blockIndex(),
@@ -1598,7 +1630,11 @@ async function processResponsesStream(
         currentItem = item;
         currentBlock = { type: "thinking", thinking: "" };
         output.content.push(currentBlock);
-        stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
+        stream.push({
+          type: "thinking_start",
+          contentIndex: blockIndex(),
+          partial: output,
+        });
       } else if (item.type === "message") {
         currentItem = item;
         if (lastTextBlock) {
@@ -1607,7 +1643,11 @@ async function processResponsesStream(
         } else {
           currentBlock = { type: "text", text: "" };
           output.content.push(currentBlock);
-          stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+          stream.push({
+            type: "text_start",
+            contentIndex: blockIndex(),
+            partial: output,
+          });
         }
       } else if (item.type === "function_call") {
         currentItem = item;
@@ -1619,7 +1659,11 @@ async function processResponsesStream(
           partialJson: stringifyJsonLike(item.arguments),
         };
         output.content.push(currentBlock);
-        stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
+        stream.push({
+          type: "toolcall_start",
+          contentIndex: blockIndex(),
+          partial: output,
+        });
       }
     } else if (type === "response.reasoning_summary_text.delta") {
       if (currentItem?.type === "reasoning" && currentBlock?.type === "thinking") {
@@ -1693,7 +1737,11 @@ async function processResponsesStream(
         const content = Array.isArray(item.content) ? item.content : [];
         const finalText = content
           .map((part) => {
-            const contentPart = part as { type?: string; text?: string; refusal?: string };
+            const contentPart = part as {
+              type?: string;
+              text?: string;
+              refusal?: string;
+            };
             return isResponsesTextContentPartType(contentPart.type)
               ? (contentPart.text ?? "")
               : (contentPart.refusal ?? "");
@@ -1734,7 +1782,11 @@ async function processResponsesStream(
             // text_end below.
             currentBlock = { type: "text", text: "" };
             output.content.push(currentBlock);
-            stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+            stream.push({
+              type: "text_start",
+              contentIndex: blockIndex(),
+              partial: output,
+            });
           }
           currentBlock.text = finalText;
           currentBlock.textSignature = encodeTextSignatureV1(stringifyUnknown(item.id), phase);
@@ -1776,7 +1828,10 @@ async function processResponsesStream(
             input_tokens?: number;
             output_tokens?: number;
             total_tokens?: number;
-            input_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
+            input_tokens_details?: {
+              cached_tokens?: number;
+              cache_write_tokens?: number;
+            };
             output_tokens_details?: { reasoning_tokens?: number };
             service_tier?: ResponseCreateParamsStreaming["service_tier"];
             status?: string;
@@ -2007,7 +2062,10 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
   return (model, context, options) => {
     const responsesOptions = options as OpenAIResponsesOptions | undefined;
     const eventStream = createAssistantMessageEventStream();
-    const stream = eventStream as unknown as { push(event: unknown): void; end(): void };
+    const stream = eventStream as unknown as {
+      push(event: unknown): void;
+      end(): void;
+    };
     void (async () => {
       const output: MutableAssistantOutput = {
         role: "assistant" as const,
@@ -2107,7 +2165,11 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
         if (output.stopReason === "aborted" || output.stopReason === "error") {
           throw new Error("An unknown error occurred");
         }
-        stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
+        stream.push({
+          type: "done",
+          reason: output.stopReason as never,
+          message: output as never,
+        });
         stream.end();
       } catch (error) {
         log.warn(
@@ -2115,7 +2177,11 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
             summarizeOpenAITransportError(error),
         );
         assignTransportErrorDetails(output, error, options?.signal);
-        stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
+        stream.push({
+          type: "error",
+          reason: output.stopReason as never,
+          error: output as never,
+        });
         stream.end();
       } finally {
         firstEventAbort?.dispose();
@@ -2373,7 +2439,9 @@ export function buildOpenAIResponsesParams(
     prompt_cache_key: promptCacheKey,
     prompt_cache_retention: getPromptCacheRetention(model.baseUrl, cacheRetention),
     ...(isCodexResponses
-      ? { instructions: resolveOpenAICodexResponsesInstructions(model, context) }
+      ? {
+          instructions: resolveOpenAICodexResponsesInstructions(model, context),
+        }
       : {}),
     ...(metadata ? { metadata } : {}),
   };
@@ -2464,7 +2532,10 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
   return (model, context, options) => {
     const responsesOptions = options as OpenAIResponsesOptions | undefined;
     const eventStream = createAssistantMessageEventStream();
-    const stream = eventStream as unknown as { push(event: unknown): void; end(): void };
+    const stream = eventStream as unknown as {
+      push(event: unknown): void;
+      end(): void;
+    };
     void (async () => {
       const output: MutableAssistantOutput = {
         role: "assistant" as const,
@@ -2560,7 +2631,11 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
         if (output.stopReason === "aborted" || output.stopReason === "error") {
           throw new Error("An unknown error occurred");
         }
-        stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
+        stream.push({
+          type: "done",
+          reason: output.stopReason as never,
+          message: output as never,
+        });
         stream.end();
       } catch (error) {
         log.warn(
@@ -2568,7 +2643,11 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
             summarizeOpenAITransportError(error),
         );
         assignTransportErrorDetails(output, error, options?.signal);
-        stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
+        stream.push({
+          type: "error",
+          reason: output.stopReason as never,
+          error: output as never,
+        });
         stream.end();
       } finally {
         firstEventAbort?.dispose();
@@ -2746,7 +2825,10 @@ function buildOpenAICompletionsClientConfig(
 export function createOpenAICompletionsTransportStreamFn(): StreamFn {
   return (model, context, options) => {
     const eventStream = createAssistantMessageEventStream();
-    const stream = eventStream as unknown as { push(event: unknown): void; end(): void };
+    const stream = eventStream as unknown as {
+      push(event: unknown): void;
+      end(): void;
+    };
     void (async () => {
       const output: MutableAssistantOutput = {
         role: "assistant" as const,
@@ -2913,7 +2995,11 @@ async function processOpenAICompletionsStream(
         ...(reasoningDelta.signature ? { thinkingSignature: reasoningDelta.signature } : {}),
       };
       output.content.push(currentBlock);
-      pushStreamEvent({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
+      pushStreamEvent({
+        type: "thinking_start",
+        contentIndex: blockIndex(),
+        partial: output,
+      });
     }
     currentBlock.thinking += reasoningDelta.text;
     pushStreamEvent({
@@ -2928,7 +3014,11 @@ async function processOpenAICompletionsStream(
       finishCurrentBlock();
       currentBlock = { type: "text", text: "" };
       output.content.push(currentBlock);
-      pushStreamEvent({ type: "text_start", contentIndex: blockIndex(), partial: output });
+      pushStreamEvent({
+        type: "text_start",
+        contentIndex: blockIndex(),
+        partial: output,
+      });
     }
     currentBlock.text += text;
     pushStreamEvent({
@@ -3133,7 +3223,11 @@ async function processOpenAICompletionsStream(
     }
     const choiceDelta =
       choice.delta ??
-      (choice as unknown as { message?: ChatCompletionChunk["choices"][number]["delta"] }).message;
+      (
+        choice as unknown as {
+          message?: ChatCompletionChunk["choices"][number]["delta"];
+        }
+      ).message;
     if (!choiceDelta) {
       emitReasoningUsageActivity(hasReasoningUsageActivity);
       await cooperativeScheduler.afterEvent();
@@ -3563,7 +3657,11 @@ function getCompletionsReasoningDeltas(
       }
       if (detail.type === "reasoning.text") {
         usedReasoningThinkingDetails = true;
-        pushDelta({ kind: "thinking", signature: "reasoning_details", text: detail.text });
+        pushDelta({
+          kind: "thinking",
+          signature: "reasoning_details",
+          text: detail.text,
+        });
         continue;
       }
       if (typeof detail.type === "string" && visibleTypes.has(detail.type)) {
@@ -4023,7 +4121,12 @@ function injectToolCallThoughtSignatures(
     if ((msg as { role?: string }).role !== "assistant") {
       continue;
     }
-    const source = msg as { api?: string; provider?: string; model?: string; content?: unknown };
+    const source = msg as {
+      api?: string;
+      provider?: string;
+      model?: string;
+      content?: unknown;
+    };
     if (!Array.isArray(source.content)) {
       continue;
     }
@@ -4207,7 +4310,10 @@ function getReasoningContentReplayModelIdCandidates(modelId: unknown): string[] 
 
 function shouldPreserveReasoningContentReplay(
   model: OpenAIModeModel,
-  compat: { requiresReasoningContentOnAssistantMessages: boolean; thinkingFormat: string },
+  compat: {
+    requiresReasoningContentOnAssistantMessages: boolean;
+    thinkingFormat: string;
+  },
 ): boolean {
   if (
     compat.requiresReasoningContentOnAssistantMessages ||
@@ -4247,7 +4353,10 @@ function shouldTrustReasoningContentReplayMetadata(model: OpenAIModeModel): bool
 // strip them for stock OpenAI before a follow-up request hits the wire.
 function sanitizeCompletionsReasoningReplayFields(
   messages: unknown,
-  options: { preserveOpenRouterReasoning: boolean; preserveReasoningContent: boolean },
+  options: {
+    preserveOpenRouterReasoning: boolean;
+    preserveReasoningContent: boolean;
+  },
 ): void {
   if (!Array.isArray(messages)) {
     return;

@@ -11,6 +11,7 @@ import {
   uniqueStrings,
   uniqueValues,
 } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
@@ -1131,7 +1132,7 @@ function compactDirectoryDescription(description: string): string {
   if (normalized.length <= 180) {
     return normalized;
   }
-  return `${normalized.slice(0, 177).trimEnd()}...`;
+  return `${truncateUtf16Safe(normalized, 177).trimEnd()}...`;
 }
 
 function formatToolDirectoryIdentifier(value: string | undefined): string | undefined {
@@ -1640,7 +1641,10 @@ function findEntryByExactId(
   const entry = catalog.entries.find((candidate) => candidate.id === needle);
   if (!entry) {
     throw new ToolInputError(
-      formatUnknownToolIdError(needle, catalog.entries, { ...errorOptions, exactIdOnly: true }),
+      formatUnknownToolIdError(needle, catalog.entries, {
+        ...errorOptions,
+        exactIdOnly: true,
+      }),
     );
   }
   return entry;
@@ -1981,7 +1985,11 @@ export function addClientToolsToToolCatalog(params: {
     entries: params.tools.map((tool) => toCatalogEntry(tool, "client")),
     append: true,
   });
-  return { tools: [], compacted: params.tools.length > 0, catalogToolCount: params.tools.length };
+  return {
+    tools: [],
+    compacted: params.tools.length > 0,
+    catalogToolCount: params.tools.length,
+  };
 }
 
 function toJsonSafe(value: unknown): unknown {
@@ -2289,7 +2297,14 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
         onUpdate?: AgentToolUpdateCallback,
       ): Promise<AgentToolResult<unknown>> =>
         jsonResult(
-          await runCodeMode({ toolCallId, ctx, code: readCode(args), config, signal, onUpdate }),
+          await runCodeMode({
+            toolCallId,
+            ctx,
+            code: readCode(args),
+            config,
+            signal,
+            onUpdate,
+          }),
         ),
     },
     {
@@ -2322,7 +2337,9 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       parameters: Type.Object({
         id: Type.String({ description: "Tool search result id or tool name." }),
         args: Type.Optional(
-          Type.Record(Type.String(), Type.Unknown(), { description: "Tool input." }),
+          Type.Record(Type.String(), Type.Unknown(), {
+            description: "Tool input.",
+          }),
         ),
       }),
       execute: async (

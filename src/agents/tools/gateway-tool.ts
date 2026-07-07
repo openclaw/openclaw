@@ -9,6 +9,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { parseConfigJson5, resolveConfigSnapshotHash } from "../../config/io.js";
@@ -466,7 +467,8 @@ export function createGatewayTool(opts?: {
           normalizeOptionalString(opts?.agentSessionKey) ??
           normalizeOptionalString(params.sessionKey);
         const delayMs = readNonNegativeIntegerParam(params, "delayMs");
-        const reason = normalizeOptionalString(params.reason)?.slice(0, 200);
+        const rawReason = normalizeOptionalString(params.reason);
+        const reason = rawReason ? truncateUtf16Safe(rawReason, 200) : undefined;
         const note = normalizeOptionalString(params.note);
         const continuationMessage = normalizeOptionalString(params.continuationMessage);
         // Extract channel + threadId for routing after restart.
@@ -559,7 +561,13 @@ export function createGatewayTool(opts?: {
         if (!baseHash) {
           throw new Error("Missing baseHash from config snapshot.");
         }
-        return { raw, baseHash, snapshotConfig, replacePaths, ...resolveGatewayWriteMeta() };
+        return {
+          raw,
+          baseHash,
+          snapshotConfig,
+          replacePaths,
+          ...resolveGatewayWriteMeta(),
+        };
       };
 
       if (action === "config.get") {
@@ -603,7 +611,10 @@ export function createGatewayTool(opts?: {
           note,
           restartDelayMs,
         });
-        return jsonResult({ ok: true, result: stripConfigWriteResultPayload(result) });
+        return jsonResult({
+          ok: true,
+          result: stripConfigWriteResultPayload(result),
+        });
       }
       if (action === "config.patch") {
         const { raw, baseHash, snapshotConfig, sessionKey, note, restartDelayMs, replacePaths } =
@@ -622,7 +633,10 @@ export function createGatewayTool(opts?: {
           restartDelayMs,
           ...(replacePaths ? { replacePaths } : {}),
         });
-        return jsonResult({ ok: true, result: stripConfigWriteResultPayload(result) });
+        return jsonResult({
+          ok: true,
+          result: stripConfigWriteResultPayload(result),
+        });
       }
       if (action === "update.run") {
         const { sessionKey, note, restartDelayMs } = resolveGatewayWriteMeta();
