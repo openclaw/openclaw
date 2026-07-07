@@ -518,10 +518,11 @@ async function sendErrorResult(
   frame: NodeInvokeRequestPayload,
   code: string,
   message: string,
+  cause?: string,
 ) {
   await sendInvokeResult(client, frame, {
     ok: false,
-    error: { code, message },
+    error: { code, message, cause },
   });
 }
 
@@ -530,7 +531,8 @@ async function sendInvalidRequestResult(
   frame: NodeInvokeRequestPayload,
   err: unknown,
 ) {
-  await sendErrorResult(client, frame, "INVALID_REQUEST", String(err));
+  const cause = err instanceof Error ? (err.cause as Error)?.message : undefined;
+  await sendErrorResult(client, frame, "INVALID_REQUEST", String(err), cause);
 }
 
 /** Handles one node-host command invocation payload and returns serialized results. */
@@ -706,8 +708,8 @@ function decodeParams<T>(raw?: string | null): T {
   }
   try {
     return JSON.parse(raw) as T;
-  } catch {
-    throw new Error("INVALID_REQUEST: paramsJSON malformed JSON");
+  } catch (err) {
+    throw new Error("INVALID_REQUEST: paramsJSON malformed JSON", { cause: err });
   }
 }
 
@@ -747,7 +749,7 @@ async function sendInvokeResult(
     ok: boolean;
     payload?: unknown;
     payloadJSON?: string | null;
-    error?: { code?: string; message?: string } | null;
+    error?: { code?: string; message?: string; cause?: string } | null;
   },
 ) {
   try {
@@ -763,7 +765,7 @@ export function buildNodeInvokeResultParams(
     ok: boolean;
     payload?: unknown;
     payloadJSON?: string | null;
-    error?: { code?: string; message?: string } | null;
+    error?: { code?: string; message?: string; cause?: string } | null;
   },
 ): {
   id: string;
@@ -771,7 +773,7 @@ export function buildNodeInvokeResultParams(
   ok: boolean;
   payload?: unknown;
   payloadJSON?: string;
-  error?: { code?: string; message?: string };
+  error?: { code?: string; message?: string; cause?: string };
 } {
   const params: {
     id: string;
@@ -779,7 +781,7 @@ export function buildNodeInvokeResultParams(
     ok: boolean;
     payload?: unknown;
     payloadJSON?: string;
-    error?: { code?: string; message?: string };
+    error?: { code?: string; message?: string; cause?: string };
   } = {
     id: frame.id,
     nodeId: frame.nodeId,

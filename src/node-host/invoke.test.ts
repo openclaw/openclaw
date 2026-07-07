@@ -149,6 +149,7 @@ describe("node host invoke", () => {
         error: expect.objectContaining({
           code: "INVALID_REQUEST",
           message: expect.stringContaining("paramsJSON malformed JSON"),
+          cause: expect.stringContaining("in JSON at position"),
         }),
       }),
     );
