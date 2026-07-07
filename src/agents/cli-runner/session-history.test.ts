@@ -699,6 +699,35 @@ describe("loadCliSessionReseedMessages", () => {
     }
   });
 
+  it("raw-reseeds consecutive ambient user rows", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
+    const sessionFile = createSessionTranscript({
+      rootDir: stateDir,
+      sessionId: "session-consecutive-ambient",
+      messages: ["#10 Sam: first ambient", "#11 Lee: second ambient", "#12 Pat: @bot what now?"],
+    });
+
+    try {
+      await withCliSessionState(stateDir, async () => {
+        const reseed = await loadCliSessionReseedMessages({
+          sessionId: "session-consecutive-ambient",
+          sessionFile,
+          sessionKey: "agent:main:main",
+          agentId: "main",
+          allowRawTranscriptReseed: true,
+          rawTranscriptReseedReason: "missing-transcript",
+        });
+
+        expect(reseed).toHaveLength(3);
+        expectMessageFields(reseed[0], { role: "user", content: "#10 Sam: first ambient" });
+        expectMessageFields(reseed[1], { role: "user", content: "#11 Lee: second ambient" });
+        expectMessageFields(reseed[2], { role: "user", content: "#12 Pat: @bot what now?" });
+      });
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not raw-reseed auth-boundary invalidations even when opted in", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
     const sessionFile = createSessionTranscript({

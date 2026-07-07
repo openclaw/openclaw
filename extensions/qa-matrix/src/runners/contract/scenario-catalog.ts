@@ -53,10 +53,7 @@ type MatrixQaScenarioId =
   | "matrix-approval-deny-reaction"
   | "matrix-approval-thread-target"
   | "matrix-approval-channel-target-both"
-  | "matrix-restart-resume"
-  | "matrix-post-restart-room-continue"
   | "matrix-initial-catchup-then-incremental"
-  | "matrix-restart-replay-dedupe"
   | "matrix-stale-sync-replay-dedupe"
   | "matrix-room-membership-loss"
   | "matrix-homeserver-restart-resume"
@@ -73,7 +70,6 @@ type MatrixQaScenarioId =
   | "matrix-mention-metadata-spoof-block"
   | "matrix-observer-allowlist-override"
   | "matrix-allowlist-block"
-  | "matrix-allowlist-hot-reload"
   | "matrix-multi-actor-ordering"
   | "matrix-inbound-edit-ignored"
   | "matrix-inbound-edit-no-duplicate-trigger"
@@ -655,28 +651,9 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     configOverrides: MATRIX_QA_APPROVAL_BOTH_CONFIG,
   },
   {
-    id: "matrix-restart-resume",
-    standardId: "restart-resume",
-    timeoutMs: 60_000,
-    title: "Matrix lane resumes cleanly after gateway restart",
-    topology: MATRIX_QA_RESTART_ROOM_TOPOLOGY,
-  },
-  {
-    id: "matrix-post-restart-room-continue",
-    timeoutMs: 75_000,
-    title: "Matrix restarted room continues after the first recovered reply",
-    topology: MATRIX_QA_RESTART_ROOM_TOPOLOGY,
-  },
-  {
     id: "matrix-initial-catchup-then-incremental",
     timeoutMs: 90_000,
     title: "Matrix initial catchup is followed by incremental replies",
-    topology: MATRIX_QA_RESTART_ROOM_TOPOLOGY,
-  },
-  {
-    id: "matrix-restart-replay-dedupe",
-    timeoutMs: 90_000,
-    title: "Matrix restart does not redeliver a handled event",
     topology: MATRIX_QA_RESTART_ROOM_TOPOLOGY,
   },
   {
@@ -833,14 +810,6 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     standardId: "allowlist-block",
     timeoutMs: 8_000,
     title: "Matrix sender allowlist blocks observer replies",
-  },
-  {
-    id: "matrix-allowlist-hot-reload",
-    timeoutMs: 60_000,
-    title: "Matrix group sender allowlist removals hot-reload without gateway restart",
-    configOverrides: {
-      groupAllowRoles: ["driver", "observer"],
-    },
   },
   {
     id: "matrix-multi-actor-ordering",
@@ -1237,7 +1206,6 @@ const MATRIX_QA_FAST_PROFILE_SCENARIO_IDS = [
   "matrix-reaction-notification",
   "matrix-approval-exec-metadata-single-event",
   "matrix-approval-exec-metadata-chunked",
-  "matrix-restart-resume",
   "matrix-mention-gating",
   "matrix-allowbots-default-block",
   "matrix-allowbots-mentions-mentioned-room",

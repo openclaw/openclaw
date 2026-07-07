@@ -1,5 +1,5 @@
 // Extracts provider diagnostic metadata from error objects and text.
-import crypto from "node:crypto";
+import { sha256HexPrefix } from "./crypto-digest.js";
 
 const HTTP_STATUS_MIN = 100;
 const HTTP_STATUS_MAX = 599;
@@ -85,11 +85,7 @@ function normalizeProviderRequestId(value: unknown): string | undefined {
 }
 
 function hashDiagnosticIdentifier(value: string): string {
-  return `sha256:${crypto
-    .createHash("sha256")
-    .update(value)
-    .digest("hex")
-    .slice(0, REQUEST_ID_HASH_PREFIX_LEN)}`;
+  return `sha256:${sha256HexPrefix(value, REQUEST_ID_HASH_PREFIX_LEN)}`;
 }
 
 function readDirectProviderRequestId(err: unknown): string | undefined {

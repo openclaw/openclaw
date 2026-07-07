@@ -37,6 +37,7 @@ function buildMatrixQaSummaryInput(
     artifactPaths: {
       observedEvents: "/tmp/observed.json",
       report: "/tmp/report.md",
+      routeStateManifest: "/tmp/route-state.json",
       summary: "/tmp/summary.json",
     },
     checks: [{ name: "Matrix harness ready", status: "pass" }],
@@ -52,6 +53,11 @@ function buildMatrixQaSummaryInput(
         },
       }),
       scenarios: [],
+    },
+    differentialProbe: {
+      profile: "matrix-qa-v1",
+      steps: [],
+      sync: { continuity: true, incrementalStatus: 200, initialStatus: 200 },
     },
     finishedAt: "2026-04-10T10:05:00.000Z",
     harness: {
@@ -78,6 +84,25 @@ function buildMatrixQaSummaryInput(
 }
 
 describe("matrix live qa runtime", () => {
+  it("preserves a failed differential probe check without a probe payload", () => {
+    const summary = liveTesting.buildMatrixQaSummary(
+      buildMatrixQaSummaryInput({
+        checks: [
+          { name: "Matrix harness ready", status: "pass" },
+          {
+            details: "missing-state response did not return M_NOT_FOUND",
+            name: "Matrix differential probe",
+            status: "fail",
+          },
+        ],
+        differentialProbe: undefined,
+      }),
+    );
+
+    expect(summary.differentialProbe).toBeUndefined();
+    expect(summary.counts).toEqual({ failed: 1, passed: 1, total: 2 });
+  });
+
   it("uses unique default artifact directories", () => {
     const repoRoot = "/repo";
     const firstOutputDir = liveTesting.resolveMatrixQaOutputDir({ repoRoot });
@@ -86,9 +111,9 @@ describe("matrix live qa runtime", () => {
     expect(path.dirname(firstOutputDir)).toBe(path.join(repoRoot, ".artifacts", "qa-e2e"));
     expect(path.basename(firstOutputDir)).toMatch(/^matrix-[a-z0-9]+-[a-f0-9]{8}$/u);
     expect(secondOutputDir).not.toBe(firstOutputDir);
-    expect(
-      liveTesting.resolveMatrixQaOutputDir({ outputDir: ".artifacts/custom", repoRoot }),
-    ).toBe(".artifacts/custom");
+    expect(liveTesting.resolveMatrixQaOutputDir({ outputDir: ".artifacts/custom", repoRoot })).toBe(
+      ".artifacts/custom",
+    );
   });
 
   it("prints Matrix QA progress by default for non-interactive runs", () => {
@@ -388,6 +413,7 @@ describe("matrix live qa runtime", () => {
       artifactPaths: {
         observedEvents: "/tmp/observed.json",
         report: "/tmp/report.md",
+        routeStateManifest: "/tmp/route-state.json",
         summary: "/tmp/summary.json",
       },
       checks: [{ name: "Matrix harness ready", status: "pass" }],
@@ -449,6 +475,11 @@ describe("matrix live qa runtime", () => {
             }),
           },
         ],
+      },
+      differentialProbe: {
+        profile: "matrix-qa-v1",
+        steps: [],
+        sync: { continuity: true, incrementalStatus: 200, initialStatus: 200 },
       },
       finishedAt: "2026-04-10T10:05:00.000Z",
       harness: {

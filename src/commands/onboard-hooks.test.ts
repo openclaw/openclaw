@@ -115,6 +115,7 @@ describe("onboard-hooks", () => {
       ? undefined
       : "missing requirements") as HookStatusEntry["blockedReason"],
     ...params,
+    unknownEvents: [],
     source: "openclaw-bundled" as const,
     pluginId: undefined,
     homepage: undefined,

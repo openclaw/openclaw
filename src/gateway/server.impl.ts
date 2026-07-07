@@ -54,13 +54,14 @@ import {
   pinActivePluginHttpRouteRegistry,
   pinActivePluginSessionExtensionRegistry,
 } from "../plugins/runtime.js";
-import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { getTotalQueueSize, isGatewayDraining } from "../process/command-queue.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeConfigSnapshot,
 } from "../secrets/runtime-state.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
 import type { RestartRecoveryCandidate } from "./chat-abort.js";
@@ -92,6 +93,7 @@ import {
   resumeGatewayRestartTraceFromHandoff,
 } from "./restart-trace.js";
 import { resolveGatewayPluginConfig } from "./runtime-plugin-config.js";
+import type { ChannelAutostartSuppression } from "./server-channels.js";
 import { resolveGatewayControlUiRootState } from "./server-control-ui-root.js";
 import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
@@ -106,6 +108,7 @@ import {
   getRequiredSharedGatewaySessionGeneration,
   type SharedGatewaySessionGenerationState,
 } from "./server-shared-auth-generation.js";
+import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 import { createGatewayEventLoopHealthMonitor } from "./server/event-loop-health.js";
 import {
@@ -123,13 +126,9 @@ import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-
 
 type LoadGatewayModelCatalog = typeof import("./server-model-catalog.js").loadGatewayModelCatalog;
 
-let gatewayModelCatalogModulePromise: Promise<typeof import("./server-model-catalog.js")> | null =
-  null;
-
-const loadGatewayModelCatalogModule = async () => {
-  gatewayModelCatalogModulePromise ??= import("./server-model-catalog.js");
-  return await gatewayModelCatalogModulePromise;
-};
+const loadGatewayModelCatalogModule = createLazyRuntimeModule(
+  () => import("./server-model-catalog.js"),
+);
 
 export async function resetModelCatalogCacheForTest(): Promise<void> {
   const { resetModelCatalogCacheForTest: resetModelCatalogCacheForTestLocal } =
@@ -151,23 +150,13 @@ type GatewayStartupChannelPlugin = {
   };
 };
 
-let gatewayStartupEarlyModulePromise: Promise<typeof import("./server-startup-early.js")> | null =
-  null;
-let gatewayStartupPostAttachModulePromise: Promise<
-  typeof import("./server-startup-post-attach.js")
-> | null = null;
+const loadGatewayStartupEarlyModule = createLazyRuntimeModule(
+  () => import("./server-startup-early.js"),
+);
 
-function loadGatewayStartupEarlyModule(): Promise<typeof import("./server-startup-early.js")> {
-  gatewayStartupEarlyModulePromise ??= import("./server-startup-early.js");
-  return gatewayStartupEarlyModulePromise;
-}
-
-function loadGatewayStartupPostAttachModule(): Promise<
-  typeof import("./server-startup-post-attach.js")
-> {
-  gatewayStartupPostAttachModulePromise ??= import("./server-startup-post-attach.js");
-  return gatewayStartupPostAttachModulePromise;
-}
+const loadGatewayStartupPostAttachModule = createLazyRuntimeModule(
+  () => import("./server-startup-post-attach.js"),
+);
 
 function listGatewayStartupChannelPlugins(): GatewayStartupChannelPlugin[] {
   return listLoadedChannelPlugins() as GatewayStartupChannelPlugin[];
@@ -187,40 +176,27 @@ const logDiscovery = log.child("discovery");
 const logTailscale = log.child("tailscale");
 const logChannels = log.child("channels");
 
-let cachedChannelRuntimePromise: Promise<PluginRuntime["channel"]> | null = null;
-
-function getChannelRuntime() {
-  cachedChannelRuntimePromise ??= import("../plugins/runtime/runtime-channel.js").then(
-    ({ createRuntimeChannel }) => createRuntimeChannel(),
-  );
-  return cachedChannelRuntimePromise;
-}
+const getChannelRuntime = createLazyRuntimeModule(() =>
+  import("../plugins/runtime/runtime-channel.js").then(({ createRuntimeChannel }) =>
+    createRuntimeChannel(),
+  ),
+);
 
 async function closeMcpLoopbackServerOnDemand(): Promise<void> {
   const { closeMcpLoopbackServer } = await import("./mcp-http.js");
   await closeMcpLoopbackServer();
 }
 
-let gatewayCloseModulePromise: Promise<typeof import("./server-close.runtime.js")> | null = null;
-
-function loadGatewayCloseModule(): Promise<typeof import("./server-close.runtime.js")> {
-  gatewayCloseModulePromise ??= import("./server-close.runtime.js");
-  return gatewayCloseModulePromise;
-}
+const loadGatewayCloseModule = createLazyRuntimeModule(() => import("./server-close.runtime.js"));
 
 const loadGatewayModelCatalog: LoadGatewayModelCatalog = async (...args) => {
   const mod = await loadGatewayModelCatalogModule();
   return mod.loadGatewayModelCatalog(...args);
 };
 
-let gatewayPluginBootstrapModulePromise: Promise<
-  typeof import("./server-plugin-bootstrap.js")
-> | null = null;
-
-const loadGatewayPluginBootstrapModule = async () => {
-  gatewayPluginBootstrapModulePromise ??= import("./server-plugin-bootstrap.js");
-  return await gatewayPluginBootstrapModulePromise;
-};
+const loadGatewayPluginBootstrapModule = createLazyRuntimeModule(
+  () => import("./server-plugin-bootstrap.js"),
+);
 
 const logHealth = log.child("health");
 const logCron = log.child("cron");
@@ -525,11 +501,8 @@ export type GatewayServerOptions = {
     runtime: import("../runtime.js").RuntimeEnv,
     prompter: import("../wizard/prompts.js").WizardPrompter,
   ) => Promise<void>;
-  /**
-   * Let post-listen sidecars (channels, plugin services) finish in the background.
-   * Defaults to false so gateway startup waits until sidecars are ready.
-   */
-  deferStartupSidecars?: boolean;
+  sidecarStartup?: GatewaySidecarStartupMode;
+  channelAutostartSuppression?: ChannelAutostartSuppression;
   /**
    * Optional startup timestamp used for concise readiness logging.
    */
@@ -596,12 +569,9 @@ export async function startGatewayServer(
   }
   const startupTrace = createGatewayStartupTrace();
   const startupConfigModulePromise = import("./server-startup-config.js");
-  let startupPluginsModulePromise: Promise<typeof import("./server-startup-plugins.js")> | null =
-    null;
-  const loadStartupPluginsModule = () => {
-    startupPluginsModulePromise ??= import("./server-startup-plugins.js");
-    return startupPluginsModulePromise;
-  };
+  const loadStartupPluginsModule = createLazyPromise(() => import("./server-startup-plugins.js"), {
+    cacheRejections: true,
+  });
   const { loadGatewayStartupConfigSnapshot } = await startupConfigModulePromise;
 
   const startupConfigLoad = await startupTrace.measure("config.snapshot", () =>
@@ -852,9 +822,15 @@ export async function startGatewayServer(
       log,
     }),
   );
+  const { createTerminalLaunchPolicy } = await import("./terminal/launch.js");
+  const terminalLaunchPolicy = createTerminalLaunchPolicy(cfgAtStart);
 
   const wizardRunner = opts.wizardRunner ?? runDefaultSetupWizard;
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
+  const crestodianSessions = new Map<
+    string,
+    import("./server-methods/crestodian.js").CrestodianChatSession
+  >();
 
   const deps = createDefaultDeps();
   let runtimeState: GatewayServerLiveState | null = null;
@@ -888,8 +864,9 @@ export async function startGatewayServer(
     startupTrace,
     deferStartupAccountStartsUntil: startupAccountStartsReady,
   });
-  const deferStartupSidecars = opts.deferStartupSidecars === true;
-  const isGatewayStartupPending = () => !startupSidecarsReady && !deferStartupSidecars;
+  channelManager.setAutostartSuppression(opts.channelAutostartSuppression ?? null);
+  const sidecarStartup = opts.sidecarStartup ?? "start";
+  const isGatewayStartupPending = () => !startupSidecarsReady && sidecarStartup === "start";
   const getReadiness = createReadinessChecker({
     channelManager,
     startedAt: serverStartedAt,
@@ -923,6 +900,7 @@ export async function startGatewayServer(
     addChatRun,
     removeChatRun,
     chatAbortControllers,
+    chatQueuedTurns,
     toolEventRecipients,
   } = await startupTrace.measure("runtime.state", () =>
     createGatewayRuntimeState({
@@ -939,6 +917,7 @@ export async function startGatewayServer(
       strictTransportSecurityHeader,
       resolvedAuth,
       rateLimiter: authRateLimiter,
+      isTerminalEnabled: terminalLaunchPolicy.isEnabled,
       gatewayTls,
       getResolvedAuth,
       hooksConfig: () => runtimeState?.hooksConfig ?? initialHooksConfig,
@@ -969,6 +948,18 @@ export async function startGatewayServer(
     broadcastVoiceWakeChanged,
     hasTalkNodeConnected,
   } = createGatewayNodeSessionRuntime({ broadcast });
+  const { TerminalSessionManager, DEFAULT_TERMINAL_DETACH_SECONDS } =
+    await import("./terminal/session-manager.js");
+  // One PTY store per gateway. Emits each session's bytes only to the owning
+  // connection so terminals stay private to the operator that opened them.
+  // Startup config is enough here: gateway.terminal.* changes restart the
+  // gateway (config-reload-plan), so the grace period never drifts at runtime.
+  const terminalSessions = new TerminalSessionManager({
+    emit: (connId, event, payload) => broadcastToConnIds(event, payload, new Set([connId])),
+    detachGraceMs:
+      (cfgAtStart.gateway?.terminal?.detachedSessionTimeoutSeconds ??
+        DEFAULT_TERMINAL_DETACH_SECONDS) * 1000,
+  });
   applyGatewayLaneConcurrency(cfgAtStart);
 
   runtimeState = createGatewayServerLiveState({
@@ -1036,6 +1027,7 @@ export async function startGatewayServer(
       ...optsResult,
       getRuntimeSnapshot,
       getEventLoopHealth: readinessEventLoopHealth.snapshot,
+      getConfigReloaderHotReloadStatus: () => runtimeState?.configReloader.hotReloadStatus?.(),
     });
   const stopRegisteredPostReadySidecars = async () => {
     const postReadySidecars = runtimeState.postReadySidecars;
@@ -1073,12 +1065,15 @@ export async function startGatewayServer(
       healthInterval: runtimeState.healthInterval,
       dedupeCleanup: runtimeState.dedupeCleanup,
       mediaCleanup: runtimeState.mediaCleanup,
+      worktreeCleanup: runtimeState.worktreeCleanup,
       agentUnsub: runtimeState.agentUnsub,
       heartbeatUnsub: runtimeState.heartbeatUnsub,
       transcriptUnsub: runtimeState.transcriptUnsub,
       lifecycleUnsub: runtimeState.lifecycleUnsub,
+      taskUnsub: runtimeState.taskUnsub,
       chatRunState,
       chatAbortControllers,
+      chatQueuedTurns,
       restartRecoveryCandidates,
       removeChatRun,
       agentRunSeq,
@@ -1151,6 +1146,7 @@ export async function startGatewayServer(
           logHealth,
           dedupe,
           chatAbortControllers,
+          chatQueuedTurns,
           restartRecoveryCandidates,
           chatRunState,
           chatRunBuffers,
@@ -1185,6 +1181,7 @@ export async function startGatewayServer(
       );
     const runtimeSubscriptions = await startupTrace.measure("runtime.subscriptions", () =>
       startGatewayEventSubscriptions({
+        log,
         broadcast,
         broadcastToConnIds,
         nodeSendToSession,
@@ -1222,6 +1219,7 @@ export async function startGatewayServer(
             clients,
             startChannel,
             stopChannel,
+            getChannelAutostartSuppression: channelManager.getAutostartSuppression,
             logChannels,
           }),
           coreGatewayHandlers: coreGatewayHandlersLocal,
@@ -1447,6 +1445,8 @@ export async function startGatewayServer(
           deps,
           runtimeState,
           getRuntimeConfig,
+          resolveTerminalLaunchPolicy: terminalLaunchPolicy.resolve,
+          isTerminalEnabled: terminalLaunchPolicy.isEnabled,
           execApprovalManager,
           pluginApprovalManager,
           loadGatewayModelCatalog,
@@ -1475,8 +1475,10 @@ export async function startGatewayServer(
             });
           },
           nodeRegistry,
+          terminalSessions,
           agentRunSeq,
           chatAbortControllers,
+          chatQueuedTurns,
           chatAbortedRuns: chatRunState.abortedRuns,
           chatRunBuffers: chatRunState.buffers,
           chatDeltaSentAt: chatRunState.deltaSentAt,
@@ -1499,6 +1501,7 @@ export async function startGatewayServer(
           registerToolEventRecipient: toolEventRecipients.add,
           dedupe,
           wizardSessions,
+          crestodianSessions,
           findRunningWizard,
           purgeWizardSession,
           getRuntimeSnapshot,
@@ -1589,13 +1592,10 @@ export async function startGatewayServer(
     const sessionDeliveryRecoveryMaxEnqueuedAt = Date.now();
     let postAttachRuntimeReturned = false;
     let scheduledServicesActivated = false;
-    let scheduledServicesModulePromise: Promise<
-      typeof import("./server-runtime-services.js")
-    > | null = null;
-    const loadScheduledServicesModule = () => {
-      scheduledServicesModulePromise ??= import("./server-runtime-services.js");
-      return scheduledServicesModulePromise;
-    };
+    const loadScheduledServicesModule = createLazyPromise(
+      () => import("./server-runtime-services.js"),
+      { cacheRejections: true },
+    );
     const activateScheduledServicesWhenReady = () => {
       if (
         closePreludeStarted ||
@@ -1717,15 +1717,16 @@ export async function startGatewayServer(
             },
             isClosing: () => closePreludeStarted,
             startupTrace,
-            deferSidecars: deferStartupSidecars,
-            logReadyOnSidecars: !deferStartupSidecars,
-            providerAuthPrewarm: { getConfig: getRuntimeConfig },
+            sidecarStartup,
+            providerAuthPrewarm: {
+              getConfig: getRuntimeConfig,
+            },
           }),
       ),
     ));
     startupTrace.detail("memory.ready", collectGatewayProcessMemoryUsageMb());
     startupTrace.mark("ready");
-    if (deferStartupSidecars) {
+    if (sidecarStartup === "defer") {
       log.info("gateway ready");
     }
     finishGatewayRestartTrace("restart.ready", collectGatewayProcessMemoryUsageMb());
@@ -1765,6 +1766,7 @@ export async function startGatewayServer(
       },
       startChannel,
       stopChannel,
+      getChannelAutostartSuppression: channelManager.getAutostartSuppression,
       stopPostReadySidecars: stopRegisteredPostReadySidecars,
       reloadPlugins: reloadAttachedGatewayPlugins,
       logHooks,
@@ -1774,6 +1776,13 @@ export async function startGatewayServer(
       onCronRestart: () => {
         gatewayCronStartHandled = true;
       },
+      reconcileTerminalSessions: (plan, nextConfig) => {
+        terminalLaunchPolicy.prepareConfig(nextConfig, { restartPending: plan.restartGateway });
+        terminalSessions.closeDisallowedAgents(
+          (agentId) => terminalLaunchPolicy.resolve(agentId).ok,
+        );
+      },
+      commitTerminalConfig: terminalLaunchPolicy.commitConfig,
       channelManager,
       activateRuntimeSecrets,
       resolveSharedGatewaySessionGenerationForConfig,
@@ -1805,12 +1814,14 @@ export async function startGatewayServer(
             if (maintenance.mediaCleanup) {
               clearInterval(maintenance.mediaCleanup);
             }
+            clearInterval(maintenance.worktreeCleanup);
             return;
           }
           runtimeState.tickInterval = maintenance.tickInterval;
           runtimeState.healthInterval = maintenance.healthInterval;
           runtimeState.dedupeCleanup = maintenance.dedupeCleanup;
           runtimeState.mediaCleanup = maintenance.mediaCleanup;
+          runtimeState.worktreeCleanup = maintenance.worktreeCleanup;
         },
         shouldStartCron: () => !closePreludeStarted && !gatewayCronStartHandled,
         markCronStartHandled: () => {
@@ -1837,6 +1848,8 @@ export async function startGatewayServer(
     close: async (optsLocal) => {
       try {
         markClosePreludeStarted();
+        // Kill any live operator shells before the socket layer tears down.
+        terminalSessions.disposeAll();
         await stopRegisteredGatewayLifetimeSidecars();
         await stopRegisteredPostReadySidecars();
         // Run gateway_stop plugin hook before shutdown

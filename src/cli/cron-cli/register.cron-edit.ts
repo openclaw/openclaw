@@ -39,11 +39,19 @@ const assignIf = (
   }
 };
 
-async function loadCronJobForEditSchedulePatch(
+function isUnknownCronGetMethodError(error: unknown): error is Error {
+  return (
+    error instanceof Error &&
+    error.name === "GatewayClientRequestError" &&
+    (error as Error & { gatewayCode?: unknown }).gatewayCode === "INVALID_REQUEST" &&
+    error.message.includes("unknown method: cron.get")
+  );
+}
+
+async function loadCronJobForEditViaList(
   opts: Record<string, unknown>,
   id: string,
 ): Promise<CronJob | undefined> {
-  // Schedule patches need the existing job; page defensively because gateway stores can be large.
   let offset = 0;
   for (let page = 0; page < CRON_EDIT_LOOKUP_MAX_PAGES; page += 1) {
     const listed = (await callGatewayFromCli("cron.list", opts, {
@@ -67,7 +75,20 @@ async function loadCronJobForEditSchedulePatch(
 }
 
 async function readCronJobForEdit(opts: Record<string, unknown>, id: string): Promise<CronJob> {
-  return (await callGatewayFromCli("cron.get", opts, { id })) as CronJob;
+  try {
+    return (await callGatewayFromCli("cron.get", opts, { id })) as CronJob;
+  } catch (error) {
+    if (!isUnknownCronGetMethodError(error)) {
+      throw error;
+    }
+    // Protocol-v4 gateways shipped before cron.get; keep remote edits working
+    // without paying the paginated lookup cost on current gateways.
+    const existing = await loadCronJobForEditViaList(opts, id);
+    if (!existing) {
+      throw new Error(`unknown cron job id: ${id}`, { cause: error });
+    }
+    return existing;
+  }
 }
 
 export function registerCronEditCommand(cron: Command) {
@@ -277,10 +298,7 @@ export function registerCronEditCommand(cron: Command) {
               patch.schedule = scheduleRequest.schedule;
             }
           } else if (scheduleRequest.kind === "patch-existing-cron") {
-            const existing = await loadCronJobForEditSchedulePatch(opts, String(id));
-            if (!existing) {
-              throw new Error(`unknown cron job id: ${id}`);
-            }
+            const existing = await readCronJobForEdit(opts, String(id));
             patch.schedule = applyExistingCronSchedulePatch(existing.schedule, scheduleRequest);
           }
 
@@ -384,8 +402,8 @@ export function registerCronEditCommand(cron: Command) {
             !Array.isArray(opts.tools) &&
             !opts.clearTools
           ) {
-            const existing = await loadCronJobForEditSchedulePatch(opts, String(id));
-            timeoutOnlyPayloadKind = existing?.payload.kind === "command" ? "command" : "agentTurn";
+            const existing = await readCronJobForEdit(opts, String(id));
+            timeoutOnlyPayloadKind = existing.payload.kind === "command" ? "command" : "agentTurn";
           }
           const hasAgentTurnPayloadField =
             typeof opts.message === "string" ||
@@ -482,11 +500,8 @@ export function registerCronEditCommand(cron: Command) {
                 : opts.announce || opts.deliver === true
                   ? "announce"
                   : "none";
-            } else if (
-              opts.bestEffortDeliver === true ||
-              ((hasAgentTurnPayloadField || hasCommandPayloadField) && hasBestEffort)
-            ) {
-              // Back-compat: best-effort true and payload edits historically implied announce mode.
+            } else if (opts.bestEffortDeliver === true) {
+              // Back-compat: enabling best-effort historically implied announce mode.
               delivery.mode = "announce";
             }
             if (opts.clearChannel) {

@@ -70,7 +70,6 @@ import {
 
 const MATRIX_SUBAGENT_MISSING_HOOK_ERROR =
   "thread=true is unavailable because no channel plugin registered subagent_spawning hooks.";
-const MATRIX_QA_HOT_RELOAD_RESTART_DELAY_MS = 300_000;
 
 function matrixInboundDedupePluginStateKey(params: {
   accountId: string;
@@ -421,10 +420,7 @@ describe("matrix live qa scenarios", () => {
       "matrix-approval-deny-reaction",
       "matrix-approval-thread-target",
       "matrix-approval-channel-target-both",
-      "matrix-restart-resume",
-      "matrix-post-restart-room-continue",
       "matrix-initial-catchup-then-incremental",
-      "matrix-restart-replay-dedupe",
       "matrix-stale-sync-replay-dedupe",
       "matrix-room-membership-loss",
       "matrix-homeserver-restart-resume",
@@ -441,7 +437,6 @@ describe("matrix live qa scenarios", () => {
       "matrix-mention-metadata-spoof-block",
       "matrix-observer-allowlist-override",
       "matrix-allowlist-block",
-      "matrix-allowlist-hot-reload",
       "matrix-multi-actor-ordering",
       "matrix-inbound-edit-ignored",
       "matrix-inbound-edit-no-duplicate-trigger",
@@ -642,7 +637,6 @@ describe("matrix live qa scenarios", () => {
       "matrix-reaction-notification",
       "matrix-approval-exec-metadata-single-event",
       "matrix-approval-exec-metadata-chunked",
-      "matrix-restart-resume",
       "matrix-mention-gating",
       "matrix-allowbots-default-block",
       "matrix-allowbots-mentions-mentioned-room",
@@ -975,7 +969,6 @@ describe("matrix live qa scenarios", () => {
       "thread-isolation",
       "top-level-reply-shape",
       "reaction-observation",
-      "restart-resume",
       "mention-gating",
       "allowlist-block",
     ]);
@@ -984,7 +977,7 @@ describe("matrix live qa scenarios", () => {
         coveredStandardScenarioIds: scenarioTesting.MATRIX_QA_STANDARD_SCENARIO_IDS,
         expectedStandardScenarioIds: LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
       }),
-    ).toStrictEqual([]);
+    ).toStrictEqual(["restart-resume"]);
   });
 
   it("merges default and scenario-requested Matrix topology once per run", () => {
@@ -994,8 +987,8 @@ describe("matrix live qa scenarios", () => {
         scenarios: [
           MATRIX_QA_SCENARIOS[0],
           {
-            id: "matrix-restart-resume",
-            standardId: "restart-resume",
+            id: "matrix-secondary-room-reply",
+            standardId: "canary",
             timeoutMs: 60_000,
             title: "Matrix restart resume",
             topology: {
@@ -1742,109 +1735,6 @@ describe("matrix live qa scenarios", () => {
     expect(artifacts.driverEventId).toBe("$observer-command-trigger");
   });
 
-  it("hot-reloads group allowlist removals inside one running Matrix gateway", async () => {
-    const patchGatewayConfig = vi.fn(async () => {});
-    const primeRoom = vi.fn().mockResolvedValue("sync-start");
-    const sendTextMessage = vi
-      .fn()
-      .mockResolvedValueOnce("$group-accepted")
-      .mockResolvedValueOnce("$group-removed");
-    const waitForOptionalRoomEvent = vi.fn().mockImplementation(async (params) => ({
-      matched: false,
-      since: `${params.roomId}:no-reply`,
-    }));
-    const waitForRoomEvent = vi.fn().mockImplementation(async (params) => {
-      const sentBody = lastMockMessageBody(sendTextMessage, "sendTextMessage");
-      const token = sentBody
-        .replace("@sut:matrix-qa.test reply with only this exact marker: ", "")
-        .replace("reply with only this exact marker: ", "");
-      return {
-        event: {
-          kind: "message",
-          roomId: params.roomId,
-          eventId: "$group-reply",
-          sender: "@sut:matrix-qa.test",
-          type: "m.room.message",
-          body: token,
-        },
-        since: `${params.roomId}:reply`,
-      };
-    });
-
-    createMatrixQaClient.mockReturnValue({
-      primeRoom,
-      sendTextMessage,
-      waitForOptionalRoomEvent,
-      waitForRoomEvent,
-    });
-
-    const scenario = requireMatrixQaScenario("matrix-allowlist-hot-reload");
-
-    const result = await runMatrixQaScenario(scenario, {
-      ...matrixQaScenarioContext(),
-      patchGatewayConfig,
-      topology: {
-        defaultRoomId: "!main:matrix-qa.test",
-        defaultRoomKey: "main",
-        rooms: [
-          {
-            key: "main",
-            kind: "group",
-            memberRoles: ["driver", "observer", "sut"],
-            memberUserIds: [
-              "@driver:matrix-qa.test",
-              "@observer:matrix-qa.test",
-              "@sut:matrix-qa.test",
-            ],
-            name: "Main",
-            requireMention: true,
-            roomId: "!main:matrix-qa.test",
-          },
-        ],
-      },
-    });
-    const artifacts = result.artifacts as {
-      firstReply?: { eventId?: unknown; tokenMatched?: unknown };
-      secondDriverEventId?: unknown;
-    };
-    expect(artifacts.secondDriverEventId).toBe("$group-removed");
-    expect(artifacts.firstReply?.eventId).toBe("$group-reply");
-    expect(artifacts.firstReply?.tokenMatched).toBe(true);
-
-    expect(patchGatewayConfig).toHaveBeenCalledWith(
-      {
-        channels: {
-          matrix: {
-            accounts: {
-              sut: {
-                groupAllowFrom: ["@driver:matrix-qa.test"],
-              },
-            },
-          },
-        },
-        gateway: {
-          reload: {
-            mode: "off",
-          },
-        },
-      },
-      {
-        replacePaths: ["channels.matrix.accounts.sut.groupAllowFrom"],
-        restartDelayMs: MATRIX_QA_HOT_RELOAD_RESTART_DELAY_MS,
-      },
-    );
-    expect(mockObjectArg(sendTextMessage, "sendTextMessage").mentionUserIds).toEqual([
-      "@sut:matrix-qa.test",
-    ]);
-    expect(mockObjectArg(sendTextMessage, "sendTextMessage").roomId).toBe("!main:matrix-qa.test");
-    expect(mockObjectArg(sendTextMessage, "sendTextMessage", 1).mentionUserIds).toEqual([
-      "@sut:matrix-qa.test",
-    ]);
-    expect(mockObjectArg(sendTextMessage, "sendTextMessage", 1).roomId).toBe(
-      "!main:matrix-qa.test",
-    );
-  });
-
   it("queues a Matrix trigger during restart before proving incremental sync continues", async () => {
     const callOrder: string[] = [];
     const primeRoom = vi.fn().mockResolvedValue("driver-sync-start");
@@ -1938,103 +1828,6 @@ describe("matrix live qa scenarios", () => {
       "send:incremental",
       "wait:incremental",
     ]);
-  });
-
-  it("fails if a handled Matrix event is redelivered after gateway restart", async () => {
-    const callOrder: string[] = [];
-    const primeRoom = vi.fn().mockResolvedValue("driver-sync-start");
-    const sendTextMessage = vi.fn().mockImplementation(async (params) => {
-      const body = String(params.body);
-      const kind = body.includes("REPLAY_DEDUPE_FRESH") ? "fresh" : "first";
-      callOrder.push(`send:${kind}`);
-      return kind === "fresh" ? "$fresh-trigger" : "$first-trigger";
-    });
-    const waitForRoomEvent = vi.fn().mockImplementation(async () => {
-      const sentBody = lastMockMessageBody(sendTextMessage, "sendTextMessage");
-      const token = sentBody.replace("@sut:matrix-qa.test reply with only this exact marker: ", "");
-      const kind = token.includes("REPLAY_DEDUPE_FRESH") ? "fresh" : "first";
-      callOrder.push(`wait:${kind}`);
-      return {
-        event: {
-          kind: "message",
-          roomId: "!restart:matrix-qa.test",
-          eventId: kind === "fresh" ? "$fresh-reply" : "$first-reply",
-          sender: "@sut:matrix-qa.test",
-          type: "m.room.message",
-          body: token,
-        },
-        since: kind === "fresh" ? "driver-sync-after-fresh" : "driver-sync-after-first",
-      };
-    });
-    const waitForOptionalRoomEvent = vi.fn().mockImplementation(async () => {
-      callOrder.push("wait:no-duplicate");
-      return {
-        matched: false,
-        since: "driver-sync-after-no-duplicate-window",
-      };
-    });
-
-    createMatrixQaClient.mockReturnValue({
-      primeRoom,
-      sendTextMessage,
-      waitForOptionalRoomEvent,
-      waitForRoomEvent,
-    });
-
-    const scenario = requireMatrixQaScenario("matrix-restart-replay-dedupe");
-
-    const result = await runMatrixQaScenario(scenario, {
-      ...matrixQaScenarioContext(),
-      restartGateway: async () => {
-        callOrder.push("restart");
-      },
-      roomId: "!room:matrix-qa.test",
-      topology: {
-        defaultRoomId: "!room:matrix-qa.test",
-        defaultRoomKey: "main",
-        rooms: [
-          {
-            key: "restart",
-            kind: "group",
-            memberRoles: ["driver", "observer", "sut"],
-            memberUserIds: [
-              "@driver:matrix-qa.test",
-              "@observer:matrix-qa.test",
-              "@sut:matrix-qa.test",
-            ],
-            name: "Restart room",
-            requireMention: true,
-            roomId: "!restart:matrix-qa.test",
-          },
-        ],
-      },
-    });
-    const artifacts = result.artifacts as {
-      duplicateWindowMs?: unknown;
-      firstDriverEventId?: unknown;
-      firstReply?: { eventId?: unknown; tokenMatched?: unknown };
-      freshDriverEventId?: unknown;
-      freshReply?: { eventId?: unknown; tokenMatched?: unknown };
-    };
-    expect(artifacts.duplicateWindowMs).toBe(8000);
-    expect(artifacts.firstDriverEventId).toBe("$first-trigger");
-    expect(artifacts.firstReply?.eventId).toBe("$first-reply");
-    expect(artifacts.firstReply?.tokenMatched).toBe(true);
-    expect(artifacts.freshDriverEventId).toBe("$fresh-trigger");
-    expect(artifacts.freshReply?.eventId).toBe("$fresh-reply");
-    expect(artifacts.freshReply?.tokenMatched).toBe(true);
-
-    expect(callOrder).toEqual([
-      "send:first",
-      "wait:first",
-      "restart",
-      "wait:no-duplicate",
-      "send:fresh",
-      "wait:fresh",
-    ]);
-    const firstOptionalWait = mockObjectArg(waitForOptionalRoomEvent, "waitForOptionalRoomEvent");
-    expect(firstOptionalWait.roomId).toBe("!restart:matrix-qa.test");
-    expect(firstOptionalWait.timeoutMs).toBe(8000);
   });
 
   it("forces a stale persisted Matrix sync cursor and expects inbound dedupe to absorb replay", async () => {

@@ -7,6 +7,7 @@ import type {
   ToolKind,
 } from "@agentclientprotocol/sdk";
 import { asRecord } from "@openclaw/acp-core/record-shared";
+import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import {
   hasNonEmptyString,
   normalizeLowercaseStringOrEmpty,
@@ -114,7 +115,7 @@ function normalizeToolLocationPath(value: string): string | undefined {
   ) {
     return undefined;
   }
-  if (/^https?:\/\//i.test(trimmed)) {
+  if (hasHttpUrlPrefix(trimmed)) {
     return undefined;
   }
   if (/^file:\/\//i.test(trimmed)) {

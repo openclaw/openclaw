@@ -38,15 +38,16 @@ describe("cdp helpers", () => {
 
   it("releases guarded CDP fetches after the response body is consumed", async () => {
     const release = vi.fn(async () => {});
-    const json = vi.fn(async () => {
+    const arrayBuffer = vi.fn(async () => {
       expect(release).not.toHaveBeenCalled();
-      return { ok: true };
+      return new TextEncoder().encode(JSON.stringify({ ok: true })).buffer;
     });
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
       response: {
         ok: true,
         status: 200,
-        json,
+        body: null,
+        arrayBuffer,
       },
       release,
     });
@@ -58,7 +59,20 @@ describe("cdp helpers", () => {
       }),
     ).resolves.toEqual({ ok: true });
 
-    expect(json).toHaveBeenCalledTimes(1);
+    expect(arrayBuffer).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects oversized CDP JSON responses before parsing", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(new Uint8Array(16 * 1024 * 1024 + 1)),
+      release,
+    });
+
+    await expect(fetchJson("http://127.0.0.1:9222/json/version")).rejects.toThrow(
+      "cdp-json: JSON response exceeds 16777216 bytes",
+    );
     expect(release).toHaveBeenCalledTimes(1);
   });
 
@@ -70,9 +84,18 @@ describe("cdp helpers", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("still enforces hostname allowlist for loopback CDP endpoints", async () => {
+  it("adds exact loopback hosts to the CDP hostname allowlist", async () => {
     await expect(
       assertCdpEndpointAllowed("http://127.0.0.1:9222/json/version", {
+        dangerouslyAllowPrivateNetwork: false,
+        hostnameAllowlist: ["*.corp.example"],
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("still enforces hostname allowlist for non-loopback CDP endpoints", async () => {
+    await expect(
+      assertCdpEndpointAllowed("http://172.29.128.1:9222/json/version", {
         dangerouslyAllowPrivateNetwork: false,
         hostnameAllowlist: ["*.corp.example"],
       }),
@@ -189,7 +212,7 @@ describe("cdp helpers", () => {
     expect(request?.url).toBe("http://127.0.0.1:9222/json/version");
     expect(request?.policy).toEqual({
       dangerouslyAllowPrivateNetwork: false,
-      hostnameAllowlist: ["*.corp.example"],
+      hostnameAllowlist: ["*.corp.example", "127.0.0.1"],
       allowedHostnames: ["127.0.0.1"],
     });
     expect(release).toHaveBeenCalledTimes(1);
@@ -314,6 +337,23 @@ describe("CDP reachability policy", () => {
     ).toEqual({
       allowedHostnames: ["metadata.internal", "172.29.128.1"],
     });
+  });
+
+  it("merges the selected remote profile CDP host without widening navigation", async () => {
+    const profile = createProfile({});
+    const browserPolicy = { hostnameAllowlist: ["browserless.example.com"] };
+
+    expect(resolveCdpReachabilityPolicy(profile, browserPolicy)).toEqual({
+      hostnameAllowlist: ["browserless.example.com", "172.29.128.1"],
+      allowedHostnames: ["172.29.128.1"],
+    });
+    expect(browserPolicy).toStrictEqual({ hostnameAllowlist: ["browserless.example.com"] });
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "http://172.29.128.1/",
+        ssrfPolicy: browserPolicy,
+      }),
+    ).rejects.toThrow(/not in allowlist/i);
   });
 
   it("keeps local managed loopback CDP control outside browser SSRF policy", () => {

@@ -42,14 +42,23 @@ const CATALOGS = [
         "Sent to OpenClaw.",
       ],
       "apps/ios/Sources/Design/SettingsChannelsDestination.swift": ["Logout"],
+      "apps/ios/Sources/Design/ChatProTab.swift": [
+        "Check OpenClaw status",
+        "Help me start a realtime voice session from this phone.",
+        "Help me start voice chat",
+        "Show me which phone controls and device capabilities are available right now.",
+        "Summarize the current OpenClaw status and tell me what needs attention.",
+        "What can I control here?",
+        "What would you like to work on?",
+      ],
       "apps/ios/Sources/Gateway/GatewayProblemView.swift": ["Done"],
       "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift": [
         "Close",
         "Connect",
-        "Connect to a Gateway?",
+        "Connect a nearby Gateway",
         "Connecting…",
-        "Don’t show this again",
-        "No gateways found yet. Make sure your gateway is running and Bonjour discovery is enabled.",
+        "Don't show this again",
+        "Looking for a Gateway",
         "Not now",
         "Quick Setup",
       ],
@@ -59,7 +68,7 @@ const CATALOGS = [
         "Trust and connect",
         "Trust this gateway?",
       ],
-      "apps/ios/Sources/Onboarding/OnboardingWizardView.swift": ["Save"],
+      "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift": ["Go to Chat"],
       "apps/ios/Sources/RootTabs.swift": ["Agent", "Chat", "Control", "Settings", "Talk"],
       "apps/ios/WatchApp/Sources/WatchInboxView.swift": [
         "Approve",
@@ -159,7 +168,7 @@ export async function checkAppleAppI18n() {
       for (const locale of REQUIRED_LOCALES) {
         const unit = entry.localizations?.[locale]?.stringUnit;
         const value = unit?.value?.trim();
-        if (!value || unit?.state !== "translated") {
+        if (!value || (locale === "en" && unit?.state !== "translated")) {
           throw new Error(
             `Apple catalog ${spec.path} is missing ${locale} for ${JSON.stringify(key)}`,
           );

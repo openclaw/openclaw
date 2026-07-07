@@ -11,6 +11,7 @@ import {
   resolveQaControlUiRoot,
   startQaGatewayChild,
 } from "./gateway-child.js";
+import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 const resolveQaNodeExecPathMock = vi.hoisted(() => vi.fn(async () => process.execPath));
@@ -22,7 +23,8 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/temp-path", () => ({
+vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/temp-path")>()),
   resolvePreferredOpenClawTmpDir: () => qaTempPathState.preferredTmpDir,
 }));
 
@@ -31,6 +33,7 @@ vi.mock("./node-exec.js", () => ({
 }));
 
 const cleanups: Array<() => Promise<void>> = [];
+const tempDirs = createTempDirHarness();
 
 afterEach(async () => {
   fetchWithSsrFGuardMock.mockReset();
@@ -39,6 +42,7 @@ afterEach(async () => {
   while (cleanups.length > 0) {
     await cleanups.pop()?.();
   }
+  await tempDirs.cleanup();
 });
 
 function createParams(baseEnv?: NodeJS.ProcessEnv) {
@@ -167,6 +171,7 @@ describe("buildQaRuntimeEnv", () => {
     });
 
     expect(env.OPENCLAW_TEST_FAST).toBe("1");
+    expect(env.OPENCLAW_SKIP_STARTUP_MODEL_PREWARM).toBe("1");
     expect(env.OPENCLAW_EMBEDDED_ABORT_SETTLE_TIMEOUT_MS).toBe("2000");
     expect(env.OPENCLAW_QA_PARENT_PID).toBe(String(process.pid));
     expect(env.OPENCLAW_QA_TEMP_ROOT).toBe("/tmp/openclaw-qa");
@@ -983,6 +988,9 @@ describe("buildQaRuntimeEnv", () => {
         child.signalCode = "SIGKILL";
         queueMicrotask(() => child.emit("exit"));
       }
+      if (signal === 0 && child.signalCode) {
+        throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+      }
       return true;
     });
 
@@ -1003,6 +1011,26 @@ describe("buildQaRuntimeEnv", () => {
     }
     expect([child.exitCode, child.signalCode]).not.toEqual([null, null]);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "fails closed when forced gateway process-group shutdown times out",
+    async () => {
+      const child = Object.assign(new EventEmitter(), {
+        pid: 12345,
+        exitCode: null as number | null,
+        signalCode: null as string | null,
+        kill: vi.fn(() => true),
+      });
+      vi.spyOn(process, "kill").mockImplementation(() => true);
+
+      await expect(
+        testing.stopQaGatewayChildProcessTree(child as never, {
+          gracefulTimeoutMs: 1,
+          forceTimeoutMs: 1,
+        }),
+      ).rejects.toThrow("qa gateway process tree remained alive after forced shutdown");
+    },
+  );
 
   it("force-kills Windows gateway process trees when graceful taskkill fails", () => {
     const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
@@ -1619,6 +1647,24 @@ describe("qa bundled plugin dir", () => {
         allowedPluginIds: ["../escape"],
       }),
     ).rejects.toThrow("invalid QA bundled plugin id: ../escape");
+  });
+
+  it("leaves external allowed plugins to configured load paths", async () => {
+    const repoRoot = await tempDirs.makeTempDir("qa-bundled-external-id-");
+    await writeFile(
+      path.join(repoRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", type: "module" }, null, 2),
+      "utf8",
+    );
+    const tempRoot = await tempDirs.makeTempDir("qa-bundled-external-target-");
+
+    const { bundledPluginsDir } = await testing.createQaBundledPluginsDir({
+      repoRoot,
+      tempRoot,
+      allowedPluginIds: ["external-fixture"],
+    });
+
+    await expect(readdir(bundledPluginsDir)).resolves.not.toContain("external-fixture");
   });
 
   it("stages source-only bundled plugins into a repo-like runtime root with node_modules", async () => {

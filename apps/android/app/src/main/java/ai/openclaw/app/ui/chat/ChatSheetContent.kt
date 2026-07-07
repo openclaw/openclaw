@@ -29,6 +29,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -57,22 +58,6 @@ internal fun resolvePendingAssistantAutoSend(
   return prompt
 }
 
-/** Dispatches a pending assistant prompt once and reports whether it was accepted. */
-internal suspend fun dispatchPendingAssistantAutoSend(
-  pendingPrompt: String?,
-  healthOk: Boolean,
-  pendingRunCount: Int,
-  dispatch: suspend (String) -> Boolean,
-): Boolean {
-  val prompt =
-    resolvePendingAssistantAutoSend(
-      pendingPrompt = pendingPrompt,
-      healthOk = healthOk,
-      pendingRunCount = pendingRunCount,
-    ) ?: return false
-  return dispatch(prompt)
-}
-
 /** Chooses the session key to load for initial chat hydration, if any. */
 internal fun resolveInitialChatLoadSessionKey(
   sessionKey: String,
@@ -98,33 +83,41 @@ fun ChatSheetContent(viewModel: MainViewModel) {
   val streamingAssistantText by viewModel.chatStreamingAssistantText.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
+  val chatCommands by viewModel.chatCommands.collectAsState()
   val chatDraft by viewModel.chatDraft.collectAsState()
   val pendingAssistantAutoSend by viewModel.pendingAssistantAutoSend.collectAsState()
+  val assistantAutoSendInFlight by viewModel.assistantAutoSendInFlight.collectAsState()
+  val outboxItems by viewModel.chatOutboxItems.collectAsState()
+  val messageSpeechState by viewModel.chatMessageSpeech.collectAsState()
+  val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
+  val gatewayOffline = !gatewayConnectionDisplay.isConnected
+
+  DisposableEffect(viewModel) {
+    onDispose(viewModel::stopChatMessageSpeech)
+  }
 
   LaunchedEffect(Unit) {
     val loadSessionKey = resolveInitialChatLoadSessionKey(sessionKey, mainSessionKey)
     if (loadSessionKey != null) {
       viewModel.loadChat(loadSessionKey)
     }
+    viewModel.refreshChatCommands()
   }
 
-  LaunchedEffect(pendingAssistantAutoSend, healthOk, pendingRunCount, thinkingLevel) {
+  LaunchedEffect(pendingAssistantAutoSend, assistantAutoSendInFlight, healthOk, pendingRunCount, thinkingLevel) {
     // Assistant-launch prompts should wait for a healthy idle chat so they do
     // not race an already-running turn.
-    val accepted =
-      dispatchPendingAssistantAutoSend(
+    if (!healthOk) return@LaunchedEffect
+    val prompt =
+      resolvePendingAssistantAutoSend(
         pendingPrompt = pendingAssistantAutoSend,
         healthOk = healthOk,
         pendingRunCount = pendingRunCount,
-      ) { prompt ->
-        viewModel.sendChatAwaitAcceptance(
-          message = prompt,
-          thinking = thinkingLevel,
-          attachments = emptyList(),
-        )
-      }
-    if (!accepted) return@LaunchedEffect
-    viewModel.clearPendingAssistantAutoSend()
+      ) ?: return@LaunchedEffect
+    viewModel.dispatchPendingAssistantAutoSend(
+      pendingPrompt = prompt,
+      thinking = thinkingLevel,
+    )
   }
 
   val context = LocalContext.current
@@ -172,13 +165,26 @@ fun ChatSheetContent(viewModel: MainViewModel) {
     }
 
     ChatMessageListCard(
+      sessionKey = sessionKey,
       messages = messages,
       historyLoading = historyLoading,
       pendingRunCount = pendingRunCount,
       pendingToolCalls = pendingToolCalls,
       streamingAssistantText = streamingAssistantText,
       healthOk = healthOk,
+      gatewayOffline = gatewayOffline,
       modifier = Modifier.weight(1f, fill = true),
+      outboxItems =
+        outboxItemsForSession(
+          items = outboxItems,
+          sessionKey = sessionKey,
+          mainSessionKey = mainSessionKey,
+        ),
+      onRetryOutbox = viewModel::retryChatOutboxCommand,
+      onDeleteOutbox = viewModel::deleteChatOutboxCommand,
+      onReplyMessage = viewModel::setChatReplyDraft,
+      speechState = messageSpeechState,
+      onToggleListen = viewModel::toggleChatMessageSpeech,
     )
 
     Row(modifier = Modifier.fillMaxWidth().imePadding()) {
@@ -187,6 +193,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
         healthOk = healthOk,
         thinkingLevel = thinkingLevel,
         pendingRunCount = pendingRunCount,
+        commands = chatCommands,
         attachments = attachments,
         onDraftApplied = viewModel::clearChatDraft,
         onPickImages = { pickImages.launch("image/*") },
@@ -195,6 +202,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
         onRefresh = {
           viewModel.refreshChat()
           viewModel.refreshChatSessions(limit = 200)
+          viewModel.refreshChatCommands()
         },
         onAbort = { viewModel.abortChat() },
         onSend = { text ->
@@ -207,8 +215,14 @@ fun ChatSheetContent(viewModel: MainViewModel) {
                 base64 = att.base64,
               )
             }
-          viewModel.sendChat(message = text, thinking = thinkingLevel, attachments = outgoing)
+          val pendingAttachments = attachments.toList()
           attachments.clear()
+          val accepted = viewModel.sendChatAwaitAcceptance(message = text, thinking = thinkingLevel, attachments = outgoing)
+          if (!accepted && attachments.isEmpty()) {
+            // Refused sends must not silently drop selected attachments either.
+            attachments.addAll(pendingAttachments)
+          }
+          accepted
         },
       )
     }

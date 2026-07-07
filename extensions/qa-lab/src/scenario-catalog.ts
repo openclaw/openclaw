@@ -109,10 +109,17 @@ const qaCoverageIdListSchema = z.array(qaCoverageIdSchema).min(1);
 
 const qaScenarioCoverageSchema = z
   .object({
-    primary: qaCoverageIdListSchema,
+    primary: qaCoverageIdListSchema.optional(),
     secondary: qaCoverageIdListSchema.optional(),
   })
   .superRefine((coverage, ctx) => {
+    if (!coverage.primary && !coverage.secondary) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "coverage must declare primary or secondary ids",
+      });
+      return;
+    }
     const seen = new Set<string>();
     const coverageEntries = [
       ["primary", coverage.primary],
@@ -134,7 +141,11 @@ const qaScenarioCoverageSchema = z
         });
       }
     }
-  });
+  })
+  .transform((coverage) => ({
+    primary: coverage.primary ?? [],
+    ...(coverage.secondary ? { secondary: coverage.secondary } : {}),
+  }));
 
 const qaScenarioGatewayRuntimeSchema = z.object({
   forwardHostHome: z.boolean().optional(),
@@ -159,7 +170,15 @@ const qaFlowTransportActionSchema = z.union([
     saveAs: z.string().trim().min(1).optional(),
   }),
   z.object({
+    sendNativeCommand: z.unknown(),
+    saveAs: z.string().trim().min(1).optional(),
+  }),
+  z.object({
     waitForOutbound: z.unknown(),
+    saveAs: z.string().trim().min(1).optional(),
+  }),
+  z.object({
+    waitForOutboundSequence: z.unknown(),
     saveAs: z.string().trim().min(1).optional(),
   }),
   z.object({
@@ -256,6 +275,7 @@ const qaSeedScenarioBodySchema = z.object({
   plugins: z.array(z.string().trim().min(1)).optional(),
   gatewayConfigPatch: z.record(z.string(), z.unknown()).optional(),
   gatewayRuntime: qaScenarioGatewayRuntimeSchema.optional(),
+  regressionRefs: z.array(z.string().trim().min(1)).optional(),
   docsRefs: z.array(z.string().trim().min(1)).optional(),
   codeRefs: z.array(z.string().trim().min(1)).optional(),
   execution: qaScenarioExecutionSchema.optional(),

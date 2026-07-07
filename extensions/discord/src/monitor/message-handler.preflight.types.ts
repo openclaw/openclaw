@@ -87,6 +87,7 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   channelAllowed: boolean;
 
   shouldRequireMention: boolean;
+  groupRequireMention: boolean;
   hasAnyMention: boolean;
   hasControlCommand: boolean;
   allowTextCommands: boolean;

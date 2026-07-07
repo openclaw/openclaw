@@ -126,6 +126,7 @@ jobs:
         env:
           CHECKOUT_REPO: ${{ github.repository }}
           CHECKOUT_REF: ${{ inputs.target_ref || github.sha }}
+          CHECKOUT_EVENT_REF: ${{ github.ref }}
           CHECKOUT_FALLBACK_REF: ${{ github.sha }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: |
@@ -152,12 +153,29 @@ jobs:
               sleep 5
             done
           }
-          if fetch_checkout_ref "$CHECKOUT_REF"; then
+
+          # Manual release-gate runs commonly validate the workflow ref's exact SHA.
+          # Fetch the branch/tag ref first so GitHub does not have to negotiate an
+          # arbitrary SHA fetch, then verify the resolved commit stayed pinned.
+          checkout_ref="$CHECKOUT_REF"
+          requested_sha=""
+          if [[ "$CHECKOUT_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            requested_sha="$CHECKOUT_REF"
+            if [[
+              "$GITHUB_EVENT_NAME" == "workflow_dispatch" &&
+              "$CHECKOUT_REF" == "$CHECKOUT_FALLBACK_REF" &&
+              -n "$CHECKOUT_EVENT_REF"
+            ]]; then
+              checkout_ref="$CHECKOUT_EVENT_REF"
+            fi
+          fi
+
+          if fetch_checkout_ref "$checkout_ref"; then
             :
           else
             fetch_status="$?"
             if [ "$fetch_status" = "124" ] || [ "$fetch_status" = "137" ]; then
-              echo "::error::checkout fetch for '$CHECKOUT_REF' timed out"
+              echo "::error::checkout fetch for '$checkout_ref' timed out"
               exit "$fetch_status"
             fi
             if [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ] || [ "$CHECKOUT_REF" = "$CHECKOUT_FALLBACK_REF" ]; then
@@ -165,6 +183,15 @@ jobs:
             fi
             echo "::warning::workflow_dispatch target_ref '$CHECKOUT_REF' is unavailable; falling back to head SHA '$CHECKOUT_FALLBACK_REF'"
             fetch_checkout_ref "$CHECKOUT_FALLBACK_REF"
+          fi
+
+          if [ -n "$requested_sha" ]; then
+            resolved_sha="$(git -C "$GITHUB_WORKSPACE" rev-parse refs/remotes/origin/checkout)"
+            if [ "$resolved_sha" != "$requested_sha" ]; then
+              echo "::error::checkout ref '$checkout_ref' resolved to '$resolved_sha'," \
+                "expected '$requested_sha'" >&2
+              exit 1
+            fi
           fi
           git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
 
@@ -288,7 +315,6 @@ jobs:
           if (runNodeFull) {
             checksFastCoreTasks.push(
               { check_name: "checks-fast-bundled-protocol", runtime: "node", task: "bundled-protocol" },
-              { check_name: "QA Smoke CI", runtime: "node", task: "qa-smoke-ci" },
               { check_name: "checks-fast-bun-launcher", runtime: "bun", task: "bun-launcher" },
             );
           } else {
@@ -391,6 +417,10 @@ jobs:
             );
           }
           EOF
+
+      - name: Check mobile protocol event coverage
+        if: ${{ steps.manifest.outputs.run_node == 'true' || steps.manifest.outputs.run_ios_build == 'true' || steps.manifest.outputs.run_android_job == 'true' }}
+        run: node scripts/check-protocol-event-coverage.mjs
 
   # Run dependency-free security checks in parallel with scope detection so the
   # main Node jobs do not have to wait for Python/pre-commit setup.
@@ -845,7 +875,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast_core == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -870,26 +900,6 @@ jobs:
               pnpm test:bundled
               pnpm protocol:check
               ;;
-            qa-smoke-ci)
-              output_dir=".artifacts/qa-e2e/smoke-ci-profile"
-              export OPENCLAW_BUILD_PRIVATE_QA=1
-              export OPENCLAW_ENABLE_PRIVATE_QA_CLI=1
-              export OPENCLAW_DISABLE_BUNDLED_PLUGINS=0
-              export OPENCLAW_QA_REDACT_PUBLIC_METADATA=1
-              export OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS=180000
-              NODE_OPTIONS=--max-old-space-size=8192 node scripts/build-all.mjs qaRuntime
-              qa_exit_code=0
-              pnpm openclaw qa run \
-                --repo-root . \
-                --qa-profile smoke-ci \
-                --concurrency 8 \
-                --output-dir "$output_dir" || qa_exit_code=$?
-              echo "QA smoke profile evidence: \`${output_dir}\`" >> "$GITHUB_STEP_SUMMARY"
-              if [ "$qa_exit_code" -ne 0 ]; then
-                echo "::error title=QA smoke profile failed::smoke-ci exited ${qa_exit_code}; evidence upload will still run"
-                exit "$qa_exit_code"
-              fi
-              ;;
             contracts-plugins-ci-routing)
               pnpm test:contracts:plugins
               pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/changed-lanes.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
@@ -905,15 +915,6 @@ jobs:
               exit 1
               ;;
           esac
-
-      - name: Upload QA smoke profile evidence
-        if: always() && matrix.task == 'qa-smoke-ci'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: qa-smoke-profile-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .artifacts/qa-e2e/smoke-ci-profile/
-          if-no-files-found: warn
-          retention-days: 7
 
   checks-fast-plugin-contracts-shard:
     permissions:

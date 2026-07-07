@@ -50,6 +50,7 @@ import {
   mockedWaitForDeferredTurnMaintenanceForSession,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
+  warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 import type { RunEmbeddedAgentParams } from "./run/params.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
@@ -73,6 +74,7 @@ function makeForwardingCase(internalEvents: AgentInternalEvent[]) {
       forceMessageTool: true,
       requireExplicitMessageTarget: true,
       chatType: "channel",
+      senderIsOwner: true,
       internalEvents,
       onAgentToolResult,
     },
@@ -84,6 +86,7 @@ function makeForwardingCase(internalEvents: AgentInternalEvent[]) {
       forceMessageTool: true,
       requireExplicitMessageTarget: true,
       chatType: "channel",
+      senderIsOwner: true,
       onAgentToolResult,
     },
   } satisfies {
@@ -250,6 +253,7 @@ async function waitForRunEvent(events: string[], expected: string): Promise<void
 describe("runEmbeddedAgent overflow compaction trigger routing", () => {
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
+    await warmRunOverflowCompactionHarness(runEmbeddedAgent);
   });
 
   beforeEach(() => {

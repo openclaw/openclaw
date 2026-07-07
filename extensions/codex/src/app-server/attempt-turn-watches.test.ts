@@ -25,6 +25,8 @@ describe("Codex app-server attempt turn watches", () => {
     let activeRequests = 0;
     let activeItems = 0;
     let activeCompletionBlockers = 0;
+    let activeFinalizationHooks = 0;
+    let canReleaseAssistantCompletionIdle = true;
     const interrupts: Array<Record<string, unknown>> = [];
     const timeouts: Array<Record<string, unknown>> = [];
     const events: Array<{ name: string; fields: Record<string, unknown> }> = [];
@@ -39,6 +41,8 @@ describe("Codex app-server attempt turn watches", () => {
       getActiveAppServerTurnRequests: () => activeRequests,
       getActiveTurnItemCount: () => activeItems,
       getActiveCompletionBlockerItemCount: () => activeCompletionBlockers,
+      getActiveFinalizationHookCount: () => activeFinalizationHooks,
+      canReleaseAssistantCompletionIdle: () => canReleaseAssistantCompletionIdle,
       turnCompletionIdleTimeoutMs: 10,
       turnAssistantCompletionIdleTimeoutMs: 10,
       turnAttemptIdleTimeoutMs: 10,
@@ -74,6 +78,12 @@ describe("Codex app-server attempt turn watches", () => {
       },
       set activeCompletionBlockers(value: number) {
         activeCompletionBlockers = value;
+      },
+      set activeFinalizationHooks(value: number) {
+        activeFinalizationHooks = value;
+      },
+      set canReleaseAssistantCompletionIdle(value: boolean) {
+        canReleaseAssistantCompletionIdle = value;
       },
       interrupts,
       timeouts,
@@ -198,6 +208,19 @@ describe("Codex app-server attempt turn watches", () => {
     expect(harness.events[0]?.name).toBe("turn.assistant_completion_idle_release");
   });
 
+  it("does not release when a later completed item supersedes the assistant", () => {
+    const harness = createController();
+
+    harness.controller.armAssistantCompletionIdleWatch({ method: "item/completed" });
+    harness.canReleaseAssistantCompletionIdle = false;
+    vi.advanceTimersByTime(10);
+
+    expect(harness.completed).toBe(false);
+    expect(harness.controller.isAssistantCompletionIdleWatchArmed()).toBe(false);
+    expect(harness.interrupts).toEqual([]);
+    expect(harness.events).toEqual([]);
+  });
+
   it("waits for active turn items before assistant idle release", () => {
     const harness = createController();
     harness.activeItems = 1;
@@ -208,6 +231,23 @@ describe("Codex app-server attempt turn watches", () => {
 
     harness.activeItems = 0;
     vi.advanceTimersByTime(1);
+
+    expect(harness.completed).toBe(true);
+  });
+
+  it("waits for active finalization hooks before assistant idle release", () => {
+    const harness = createController();
+
+    harness.controller.armAssistantCompletionIdleWatch();
+    harness.activeFinalizationHooks = 1;
+    vi.advanceTimersByTime(10);
+
+    expect(harness.completed).toBe(false);
+    expect(harness.interrupts).toEqual([]);
+
+    harness.activeFinalizationHooks = 0;
+    harness.controller.armAssistantCompletionIdleWatch();
+    vi.advanceTimersByTime(10);
 
     expect(harness.completed).toBe(true);
   });

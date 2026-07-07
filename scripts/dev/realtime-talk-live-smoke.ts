@@ -3,10 +3,6 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { GoogleGenAI, Modality } from "@google/genai";
-import { chromium, type Browser } from "playwright";
-import { createServer } from "vite";
-import { buildOpenAIRealtimeVoiceProvider } from "../../extensions/openai/realtime-voice-provider.ts";
 import { readBoundedResponseText } from "../lib/bounded-response.ts";
 import {
   parseStrictIntegerOption,
@@ -29,6 +25,10 @@ const GOOGLE_LIVE_WS_URL =
 type RealtimeSmokeCliOptions = {
   help: boolean;
 };
+
+// Keep live stacks behind their owning smoke paths so help and safety helpers stay lightweight.
+type Browser = import("playwright").Browser;
+type ViteDevServer = Awaited<ReturnType<(typeof import("vite"))["createServer"]>>;
 
 type SmokeResult = {
   name: string;
@@ -269,6 +269,8 @@ async function createOpenAIClientSecret(
 }
 
 async function smokeOpenAIBackendBridge(apiKey: string): Promise<SmokeResult> {
+  const { buildOpenAIRealtimeVoiceProvider } =
+    await import("../../extensions/openai/realtime-voice-provider.ts");
   const provider = buildOpenAIRealtimeVoiceProvider();
   const events: string[] = [];
   const bridge = provider.createBridge({
@@ -445,6 +447,7 @@ async function smokeOpenAIWebRtc(browser: Browser, apiKey: string): Promise<Smok
 }
 
 async function createGoogleLiveToken(apiKey: string): Promise<string> {
+  const { GoogleGenAI, Modality } = await import("@google/genai");
   const ai = new GoogleGenAI({
     apiKey,
     httpOptions: { apiVersion: "v1alpha" },
@@ -574,9 +577,10 @@ async function smokeGoogleLiveBrowserWs(browser: Browser, apiKey: string): Promi
 }
 
 async function smokeGatewayRelayBrowser(browser: Browser): Promise<SmokeResult> {
-  let server: Awaited<ReturnType<typeof createServer>> | undefined;
+  let server: ViteDevServer | undefined;
   const dir = await mkdtemp(path.join(tmpdir(), "openclaw-realtime-talk-"));
   try {
+    const { createServer } = await import("vite");
     const repoRoot = process.cwd().replaceAll("\\", "/");
     const relayModulePath = JSON.stringify(
       `/@fs/${repoRoot}/ui/src/ui/chat/realtime-talk-gateway-relay.ts`,
@@ -766,6 +770,7 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
     console.log(usage());
     return;
   }
+  const { chromium } = await import("playwright");
   const openAIKey = getEnv("OPENAI_API_KEY");
   const googleKey = getEnv("GEMINI_API_KEY") ?? getEnv("GOOGLE_API_KEY");
   const browser = await chromium.launch({

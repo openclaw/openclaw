@@ -32,12 +32,14 @@ describe("codex plugin", () => {
     expect(manifest.enabledByDefault).toBeUndefined();
   });
 
-  it("registers the codex provider, agent harness, and hosted web search", () => {
+  it("registers the codex provider, agent harness, native thread tool, and hosted web search", () => {
     const registerAgentHarness = vi.fn();
     const registerCommand = vi.fn();
     const registerMediaUnderstandingProvider = vi.fn();
     const registerMigrationProvider = vi.fn();
     const registerProvider = vi.fn();
+    const registerTool = vi.fn();
+    const registerToolMetadata = vi.fn();
     const registerWebSearchProvider = vi.fn();
     const on = vi.fn();
     const onConversationBindingResolved = vi.fn();
@@ -55,6 +57,8 @@ describe("codex plugin", () => {
         registerMediaUnderstandingProvider,
         registerMigrationProvider,
         registerProvider,
+        registerTool,
+        registerToolMetadata,
         registerWebSearchProvider,
         on,
         onConversationBindingResolved,
@@ -101,6 +105,10 @@ describe("codex plugin", () => {
       | undefined;
     expect(migrationRegistration?.id).toBe("codex");
     expect(migrationRegistration?.label).toBe("Codex");
+    expect(registerTool).toHaveBeenCalledWith(expect.any(Function), { name: "codex_threads" });
+    expect(registerToolMetadata).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "codex_threads", risk: "high" }),
+    );
     expect(inboundClaimRegistration?.[0]).toBe("inbound_claim");
     expect(typeof inboundClaimRegistration?.[1]).toBe("function");
     expect(typeof bindingResolvedRegistration?.[0]).toBe("function");

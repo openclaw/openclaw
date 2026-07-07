@@ -8,6 +8,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { applyVeniceConfig, VENICE_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildVeniceProvider } from "./provider-catalog.js";
 import { createVeniceDeepSeekV4Wrapper } from "./stream.js";
+import { fetchVeniceUsage } from "./usage.js";
 
 const PROVIDER_ID = "venice";
 const XAI_UNSUPPORTED_SCHEMA_KEYWORDS = [
@@ -67,5 +68,17 @@ export default defineSingleProviderPluginEntry({
     normalizeResolvedModel: ({ modelId, model }) =>
       isXaiBackedVeniceModel(modelId) ? applyXaiModelCompat(model) : undefined,
     wrapStreamFn: (ctx) => createVeniceDeepSeekV4Wrapper(ctx.streamFn, ctx.thinkingLevel),
+    resolveUsageAuth: async (ctx) => {
+      const apiKey = ctx.resolveApiKeyFromConfigAndStore({
+        envDirect: [ctx.env.VENICE_API_KEY],
+      });
+      return apiKey ? { token: apiKey } : null;
+    },
+    fetchUsageSnapshot: async (ctx) =>
+      await fetchVeniceUsage({
+        token: ctx.token,
+        timeoutMs: ctx.timeoutMs,
+        fetchFn: ctx.fetchFn,
+      }),
   },
 });

@@ -3,6 +3,7 @@
  * path for config defaults and thinking profiles.
  */
 import {
+  resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
   resolveClaudeThinkingProfile,
 } from "openclaw/plugin-sdk/provider-model-shared";
@@ -39,7 +40,7 @@ export function resolveThinkingProfile(params: {
         includeNativeMax: true,
       });
     case "claude-cli":
-      if (contractModelId.startsWith("claude-fable-5")) {
+      if (resolveClaudeFable5ModelIdentity({ id: contractModelId })) {
         return CLAUDE_CLI_OFF_THINKING_PROFILE;
       }
       return resolveClaudeThinkingProfile(contractModelId, undefined, {

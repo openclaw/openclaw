@@ -10,6 +10,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
+import { sleep } from "./lib/sleep.mjs";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 
 const DEFAULT_METHODS = ["health", "config.get"];
@@ -136,12 +137,6 @@ async function getFreePort() {
         reject(new Error("failed to allocate loopback port"));
       });
     });
-  });
-}
-
-async function sleep(ms) {
-  await new Promise((resolve) => {
-    setTimeout(resolve, ms);
   });
 }
 

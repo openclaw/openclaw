@@ -21,6 +21,7 @@ import {
 } from "./agent-tools.before-tool-call.js";
 import type { AgentMessage, AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolDefinition } from "./sessions/index.js";
+import { appendBoundedTextTail, SESSION_TOOL_STDERR_TAIL_BYTES } from "./sessions/tools/limits.js";
 import { asToolParamsRecord, jsonResult, ToolInputError } from "./tools/common.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -2093,6 +2094,10 @@ async function runCodeModeBridgeRequest(
   throw new ToolInputError("Unsupported tool_search_code bridge method.");
 }
 
+function appendToolSearchCodeStderrTail(current: string, chunk: string): string {
+  return appendBoundedTextTail(current, chunk, SESSION_TOOL_STDERR_TAIL_BYTES);
+}
+
 function runCodeModeChild(params: {
   code: string;
   config: ToolSearchConfig;
@@ -2108,7 +2113,7 @@ function runCodeModeChild(params: {
       env: {},
       stdio: ["ignore", "pipe", "pipe", "ipc"],
     });
-    const stderr: string[] = [];
+    let stderrTail = "";
     let settled = false;
     let timedOut = false;
     let exitRejectionTimer: ReturnType<typeof setTimeout> | undefined;
@@ -2147,7 +2152,7 @@ function runCodeModeChild(params: {
 
     child.stderr?.setEncoding("utf8");
     child.stderr?.on("data", (chunk: string) => {
-      stderr.push(chunk);
+      stderrTail = appendToolSearchCodeStderrTail(stderrTail, chunk);
     });
 
     child.on("error", (error) => {
@@ -2158,8 +2163,8 @@ function runCodeModeChild(params: {
         return;
       }
       const rejectOnExit = () => {
-        const suffix = stderr.join("").trim();
-        const detail = suffix ? `: ${suffix.slice(0, 500)}` : "";
+        const suffix = stderrTail.trim();
+        const detail = suffix ? `: ${suffix.slice(-500)}` : "";
         settle(() =>
           reject(
             new Error(
@@ -2351,5 +2356,6 @@ export const testing = {
   },
   applyToolSearchCatalog,
   addClientToolsToToolSearchCatalog,
+  appendToolSearchCodeStderrTail,
 };
 export { testing as __testing };

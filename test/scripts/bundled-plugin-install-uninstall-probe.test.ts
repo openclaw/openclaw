@@ -701,7 +701,7 @@ describe("bundled plugin install/uninstall probe", () => {
     let descendantPid: number | undefined;
     try {
       const commandResult = runtimeSmoke
-        .runCommand(process.execPath, [commandPath], { detached: undefined, timeoutMs: 1000 })
+        .runCommand(process.execPath, [commandPath], { detached: undefined, timeoutMs: 250 })
         .catch((error: unknown) => error);
       await waitForFile(descendantPidPath, 1000);
       descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
@@ -709,7 +709,7 @@ describe("bundled plugin install/uninstall probe", () => {
       if (!(error instanceof Error)) {
         throw new Error("expected runtime command to time out");
       }
-      expect(error.message).toMatch(/timed out after 1000ms/u);
+      expect(error.message).toMatch(/timed out after 250ms/u);
 
       await waitForDead(descendantPid, 2000);
     } finally {

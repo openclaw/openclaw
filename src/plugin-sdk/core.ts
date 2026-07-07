@@ -285,7 +285,10 @@ export async function ensureConfiguredAcpBindingReady(params: {
   return runtime.ensureConfiguredAcpBindingReady(params);
 }
 
-export { resolveTailnetHostWithRunner } from "../shared/tailscale-status.js";
+export {
+  resolveTailnetHostWithRunner,
+  resolveTailscaleServeGatewayUrlsWithRunner,
+} from "../shared/tailscale-status.js";
 export type {
   TailscaleStatusCommandResult,
   TailscaleStatusCommandRunner,

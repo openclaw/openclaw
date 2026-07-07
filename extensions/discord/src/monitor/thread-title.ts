@@ -39,6 +39,7 @@ export async function generateThreadTitle(params: {
     cfg: params.cfg,
     agentId: params.agentId,
     ...(params.modelRef ? { modelRef: params.modelRef } : {}),
+    useUtilityModel: true,
     allowMissingApiKeyModes: ["aws-sdk"],
   });
   if ("error" in prepared) {

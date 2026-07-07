@@ -1,4 +1,5 @@
 // Formats finalized message context into prompt-visible text.
+import { readStringAlias } from "../../utils/string-readers.js";
 import type { FinalizedMsgContext } from "../templating.js";
 
 /** Message context fields that can carry user-visible command text. */
@@ -14,13 +15,7 @@ export function resolveFirstContextText(
   ctx: FinalizedMsgContext,
   keys: readonly ContextTextKey[],
 ): string {
-  for (const key of keys) {
-    const value = ctx[key];
-    if (typeof value === "string") {
-      return value;
-    }
-  }
-  return "";
+  return readStringAlias(ctx, keys) ?? "";
 }
 
 /** Resolves normalized text for slash/bang command parsing. */

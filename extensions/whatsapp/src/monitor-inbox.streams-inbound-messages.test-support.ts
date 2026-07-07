@@ -32,6 +32,7 @@ import {
   waitForMessageCalls,
 } from "./monitor-inbox.test-harness.js";
 import type { InboxOnMessage } from "./monitor-inbox.test-harness.js";
+import { lookupInboundMessageMeta } from "./quoted-message.js";
 import { DEFAULT_WHATSAPP_SOCKET_TIMING } from "./socket-timing.js";
 
 const { imageOps, sleepWithAbortMock } = vi.hoisted(() => ({
@@ -1186,6 +1187,9 @@ describe("web monitor inbox", () => {
         remoteJid: "999@s.whatsapp.net",
       }),
     ).resolves.toBe(message);
+    expect(
+      lookupInboundMessageMeta(DEFAULT_ACCOUNT_ID, "999@s.whatsapp.net", "outbound-cached"),
+    ).toMatchObject({ fromMe: true, body: "pong" });
 
     await listener.close();
   });

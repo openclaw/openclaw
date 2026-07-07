@@ -2290,6 +2290,17 @@ describe("message tool description", () => {
     expect(target?.description).toContain("Telegram chat id/@username");
   });
 
+  it("describes userId as required directly for member-info, not via target", () => {
+    const tool = createMessageTool({
+      config: {} as never,
+    });
+    const properties = getToolProperties(tool);
+    const userId = properties.userId as { description?: string } | undefined;
+
+    expect(userId?.description).toMatch(/member-info/i);
+    expect(userId?.description).toMatch(/not.*`target`|does not accept.*target/i);
+  });
+
   it("hides iMessage group actions for DM targets", () => {
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "imessage", source: "test", plugin: imessagePlugin }]),

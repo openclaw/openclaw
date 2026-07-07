@@ -19,6 +19,7 @@ import type {
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { Model } from "../../../llm/types.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
+import { createLazyPromise } from "../../../shared/lazy-runtime.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers.js";
 import type {
   MessagingToolSend,
@@ -298,6 +299,15 @@ vi.mock("../../../plugins/plugin-metadata-snapshot.js", () => ({
   listPluginOriginsFromMetadataSnapshot: () => new Map(),
   loadPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
   resolvePluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
+}));
+
+vi.mock("../../../plugins/provider-hook-runtime.js", () => ({
+  ensureProviderRuntimePluginHandle: (params: Record<string, unknown>) =>
+    params.runtimeHandle ?? params,
+  prepareProviderExtraParams: () => undefined,
+  resolveProviderExtraParamsForTransport: () => undefined,
+  resolveProviderRuntimePluginHandle: (params: Record<string, unknown>) => params,
+  wrapProviderStreamFn: () => undefined,
 }));
 
 vi.mock("../../../trajectory/metadata.js", () => ({
@@ -924,18 +934,15 @@ function createCompletedAssistantStream(): TestAgentStream {
     },
   };
 }
-
-let runEmbeddedAttemptPromise:
-  | Promise<typeof import("./attempt.js").runEmbeddedAttempt>
-  | undefined;
 const ATTEMPT_SPAWN_WORKSPACE_TEST_SPECIFIER = "./attempt.ts?spawn-workspace-test";
 
-async function loadRunEmbeddedAttempt() {
-  runEmbeddedAttemptPromise ??= (
-    import(ATTEMPT_SPAWN_WORKSPACE_TEST_SPECIFIER) as Promise<typeof import("./attempt.js")>
-  ).then((mod) => mod.runEmbeddedAttempt);
-  return await runEmbeddedAttemptPromise;
-}
+const loadRunEmbeddedAttempt = createLazyPromise(
+  () =>
+    (import(ATTEMPT_SPAWN_WORKSPACE_TEST_SPECIFIER) as Promise<typeof import("./attempt.js")>).then(
+      (mod) => mod.runEmbeddedAttempt,
+    ),
+  { cacheRejections: true },
+);
 
 export async function preloadRunEmbeddedAttemptForTests(): Promise<void> {
   await loadRunEmbeddedAttempt();

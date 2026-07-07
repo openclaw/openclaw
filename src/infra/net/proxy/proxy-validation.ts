@@ -2,6 +2,7 @@
 // APNs destinations through an explicit HTTP(S) forward proxy.
 import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
+import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
 import { probeApnsHttp2ReachabilityViaProxy } from "../../push-apns-http2.js";
 import { fetchWithRuntimeDispatcher } from "../runtime-fetch.js";
@@ -115,20 +116,11 @@ function normalizeProxyUrl(value: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-function isHttpOrHttpsProxyUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
 function validateProxyUrl(value: string | undefined): string[] {
   if (!value) {
     return ["proxy validation requires proxy.proxyUrl, --proxy-url, or OPENCLAW_PROXY_URL"];
   }
-  if (!isHttpOrHttpsProxyUrl(value)) {
+  if (!isHttpUrl(value)) {
     return ["proxyUrl must use http:// or https://"];
   }
   return [];
@@ -297,15 +289,6 @@ function normalizeTimeoutMs(value: number | undefined): number {
   return Math.floor(value);
 }
 
-function isValidHttpTargetUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
 type ProxyValidationDeniedTarget = {
   url: string;
   expectedCanaryToken?: string;
@@ -392,7 +375,7 @@ async function runAllowedCheck(params: {
   timeoutMs: number;
   fetchCheck: ProxyValidationFetchCheck;
 }): Promise<ProxyValidationCheck> {
-  if (!isValidHttpTargetUrl(params.url)) {
+  if (!isHttpUrl(params.url)) {
     return {
       kind: "allowed",
       url: params.url,
@@ -435,7 +418,7 @@ async function runDeniedCheck(params: {
   timeoutMs: number;
   fetchCheck: ProxyValidationFetchCheck;
 }): Promise<ProxyValidationCheck> {
-  if (!isValidHttpTargetUrl(params.target.url)) {
+  if (!isHttpUrl(params.target.url)) {
     return {
       kind: "denied",
       url: params.target.url,

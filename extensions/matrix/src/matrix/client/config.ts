@@ -1,5 +1,6 @@
 // Matrix helper module supports config behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
@@ -40,21 +41,12 @@ type MatrixAuthClientDeps = {
   retryMinDelayMs?: number;
 };
 
-type MatrixCredentialsReadDeps = {
-  loadMatrixCredentials: typeof import("../credentials-read.js").loadMatrixCredentials;
-  credentialsMatchConfig: typeof import("../credentials-read.js").credentialsMatchConfig;
-};
-
-type MatrixCredentialsWriteRuntime = typeof import("../credentials-write.runtime.js");
-
-type MatrixSecretInputDeps = {
-  resolveConfiguredSecretInputString: typeof import("./config-secret-input.runtime.js").resolveConfiguredSecretInputString;
-};
-
-let matrixAuthClientDepsPromise: Promise<MatrixAuthClientDeps> | undefined;
-let matrixCredentialsReadDepsPromise: Promise<MatrixCredentialsReadDeps> | undefined;
-let matrixCredentialsWriteRuntimePromise: Promise<MatrixCredentialsWriteRuntime> | undefined;
-let matrixSecretInputDepsPromise: Promise<MatrixSecretInputDeps> | undefined;
+const loadDefaultMatrixAuthClientDeps = createLazyRuntimeModule(() =>
+  Promise.all([import("../sdk.js"), import("./logging.js")]).then(([sdkModule, loggingModule]) => ({
+    MatrixClient: sdkModule.MatrixClient,
+    ensureMatrixSdkLoggingConfigured: loggingModule.ensureMatrixSdkLoggingConfigured,
+  })),
+);
 let matrixAuthClientDepsForTest: MatrixAuthClientDeps | undefined;
 
 const MATRIX_AUTH_REQUEST_RETRY_RE =
@@ -72,36 +64,25 @@ async function loadMatrixAuthClientDeps(): Promise<MatrixAuthClientDeps> {
   if (matrixAuthClientDepsForTest) {
     return matrixAuthClientDepsForTest;
   }
-  matrixAuthClientDepsPromise ??= Promise.all([import("../sdk.js"), import("./logging.js")]).then(
-    ([sdkModule, loggingModule]) => ({
-      MatrixClient: sdkModule.MatrixClient,
-      ensureMatrixSdkLoggingConfigured: loggingModule.ensureMatrixSdkLoggingConfigured,
-    }),
-  );
-  return await matrixAuthClientDepsPromise;
+  return await loadDefaultMatrixAuthClientDeps();
 }
 
-async function loadMatrixCredentialsReadDeps(): Promise<MatrixCredentialsReadDeps> {
-  matrixCredentialsReadDepsPromise ??= import("../credentials-read.js").then(
-    (credentialsReadModule) => ({
-      loadMatrixCredentials: credentialsReadModule.loadMatrixCredentials,
-      credentialsMatchConfig: credentialsReadModule.credentialsMatchConfig,
-    }),
-  );
-  return await matrixCredentialsReadDepsPromise;
-}
+const loadMatrixCredentialsReadDeps = createLazyRuntimeModule(() =>
+  import("../credentials-read.js").then((credentialsReadModule) => ({
+    loadMatrixCredentials: credentialsReadModule.loadMatrixCredentials,
+    credentialsMatchConfig: credentialsReadModule.credentialsMatchConfig,
+  })),
+);
 
-async function loadMatrixCredentialsWriteRuntime(): Promise<MatrixCredentialsWriteRuntime> {
-  matrixCredentialsWriteRuntimePromise ??= import("../credentials-write.runtime.js");
-  return await matrixCredentialsWriteRuntimePromise;
-}
+const loadMatrixCredentialsWriteRuntime = createLazyRuntimeModule(
+  () => import("../credentials-write.runtime.js"),
+);
 
-async function loadMatrixSecretInputDeps(): Promise<MatrixSecretInputDeps> {
-  matrixSecretInputDepsPromise ??= import("./config-secret-input.runtime.js").then((runtime) => ({
+const loadMatrixSecretInputDeps = createLazyRuntimeModule(() =>
+  import("./config-secret-input.runtime.js").then((runtime) => ({
     resolveConfiguredSecretInputString: runtime.resolveConfiguredSecretInputString,
-  }));
-  return await matrixSecretInputDepsPromise;
-}
+  })),
+);
 
 function shouldRetryMatrixAuthRequest(err: unknown): boolean {
   return MATRIX_AUTH_REQUEST_RETRY_RE.test(formatErrorMessage(err));

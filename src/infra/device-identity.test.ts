@@ -7,6 +7,7 @@ import {
   deriveDeviceIdFromPublicKey,
   loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
+  loadOrCreateProcessDeviceIdentity,
   normalizeDevicePublicKeyBase64Url,
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
@@ -132,8 +133,10 @@ describe("device identity crypto helpers", () => {
 
       expect(loadDeviceIdentityIfPresent(identityPath)).toBeNull();
       const loaded = loadOrCreateDeviceIdentity(identityPath);
+      const processIdentity = loadOrCreateProcessDeviceIdentity(identityPath);
 
       expect(loaded.deviceId).not.toBe("stale-device-id");
+      expect(loadOrCreateProcessDeviceIdentity(identityPath)).toBe(processIdentity);
       expect(fs.readFileSync(identityPath, "utf8")).toBe(before);
     });
   });

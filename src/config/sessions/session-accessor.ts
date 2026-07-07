@@ -20,6 +20,7 @@ import type {
   SessionTranscriptUpdate,
   SessionTranscriptUpdateTarget,
 } from "../../sessions/transcript-events.js";
+import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { formatSessionArchiveTimestamp } from "./artifacts.js";
 import { extractGeneratedTranscriptSessionId } from "./generated-transcript-session-id.js";
@@ -317,6 +318,8 @@ export type SessionTranscriptTurnPersistOptions = {
    * the same write transaction as the transcript append and metadata touch.
    */
   expectedSessionId?: string;
+  /** Rejects the turn when lifecycle ownership changed without rotating the session id. */
+  expectedLifecycleRevision?: string;
   /** Message rows to append under one transcript write lock. */
   messages: readonly SessionTranscriptTurnMessageAppend[];
   /** Controls whether the update event includes the last appended message. */
@@ -405,11 +408,6 @@ export type SessionLifecycleTranscriptInfo = {
   transcriptArchived?: boolean;
 };
 
-export type SessionLifecycleRolloverResult = {
-  previousSessionTranscript: SessionLifecycleTranscriptInfo;
-  sessionEntry: SessionEntry;
-};
-
 export type ReplySessionInitializationSnapshot = {
   currentEntry?: SessionEntry;
   readEntry: (sessionKey: string) => SessionEntry | undefined;
@@ -441,14 +439,9 @@ type SessionEntryRetirement = {
   key: string;
 };
 
-let sessionArchiveRuntimePromise: Promise<
-  typeof import("../../gateway/session-archive.runtime.js")
-> | null = null;
-
-function loadSessionArchiveRuntime() {
-  sessionArchiveRuntimePromise ??= import("../../gateway/session-archive.runtime.js");
-  return sessionArchiveRuntimePromise;
-}
+const loadSessionArchiveRuntime = createLazyRuntimeModule(
+  () => import("../../gateway/session-archive.runtime.js"),
+);
 
 export type SessionEntryPatchOptions = {
   /** Entry to synthesize when a patch operation is allowed to create. */
@@ -680,6 +673,14 @@ export type DeleteSessionEntryLifecycleParams = {
   agentId?: string;
   /** Whether transcript artifacts should be archived/deleted with the entry. */
   archiveTranscript: boolean;
+  /** Optional exact row guard checked under the storage writer lock. */
+  expectedEntry?: SessionEntry;
+  /** Optional provider-run identity guard checked under the storage writer lock. */
+  expectedSessionId?: string;
+  /** Optional owner revision guard checked under the storage writer lock. */
+  expectedLifecycleRevision?: string;
+  /** Optional persisted revision guard checked under the storage writer lock. */
+  expectedUpdatedAt?: number;
   /** Explicit store target for file-backed stores and SQLite migration adapters. */
   storePath: string;
   /** Canonical key plus aliases that identify the logical entry. */
@@ -1755,54 +1756,6 @@ export async function persistSessionResetLifecycle(params: {
   return { replayedMessages };
 }
 
-/**
- * Persists a reply session rollover and returns stable previous-transcript
- * data for lifecycle hooks. Non-storage runtime cleanup remains with callers.
- */
-export async function persistSessionRolloverLifecycle(params: {
-  activeSessionKey: string;
-  agentId: string;
-  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
-  onArchiveError?: (error: unknown, sourcePath: string) => void;
-  onMaintenanceWarning?: (warning: SessionMaintenanceWarning) => void | Promise<void>;
-  previousEntry?: SessionEntry;
-  retiredEntry?: SessionEntryRetirement;
-  sessionEntry: SessionEntry;
-  sessionKey: string;
-  storePath: string;
-}): Promise<SessionLifecycleRolloverResult> {
-  await updateSessionStore(
-    params.storePath,
-    (store) => {
-      store[params.sessionKey] = {
-        ...store[params.sessionKey],
-        ...params.sessionEntry,
-      };
-      if (params.retiredEntry) {
-        store[params.retiredEntry.key] = params.retiredEntry.entry;
-      }
-      return store[params.sessionKey] ?? params.sessionEntry;
-    },
-    {
-      activeSessionKey: params.activeSessionKey,
-      maintenanceConfig: params.maintenanceConfig,
-      onWarn: params.onMaintenanceWarning,
-    },
-  );
-
-  const previousSessionTranscript = await archivePreviousSessionTranscript({
-    agentId: params.agentId,
-    onArchiveError: params.onArchiveError,
-    previousEntry: params.previousEntry,
-    storePath: params.storePath,
-  });
-
-  return {
-    previousSessionTranscript,
-    sessionEntry: params.sessionEntry,
-  };
-}
-
 /** Loads the reply-session initialization rows without exposing a mutable store. */
 export function loadReplySessionInitializationSnapshot(params: {
   storePath: string;
@@ -2506,7 +2459,11 @@ async function persistExpectedSessionTranscriptTurn(
       storePath: scope.storePath,
     },
     async (currentEntry) => {
-      if (currentEntry.sessionId !== expectedSessionId) {
+      if (
+        currentEntry.sessionId !== expectedSessionId ||
+        (options.expectedLifecycleRevision !== undefined &&
+          currentEntry.lifecycleRevision !== options.expectedLifecycleRevision)
+      ) {
         rejectedEntry = currentEntry;
         return null;
       }
@@ -2542,7 +2499,12 @@ async function persistExpectedSessionTranscriptTurn(
     { skipMaintenance: true },
   );
 
-  if (rejectedEntry || updated?.sessionId !== expectedSessionId) {
+  if (
+    rejectedEntry ||
+    updated?.sessionId !== expectedSessionId ||
+    (options.expectedLifecycleRevision !== undefined &&
+      updated.lifecycleRevision !== options.expectedLifecycleRevision)
+  ) {
     return {
       appendedCount: 0,
       messages: [],

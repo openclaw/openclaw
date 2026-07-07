@@ -10,7 +10,7 @@ sidebarTitle: "Context engine"
 
 A **context engine** controls how OpenClaw builds model context for each run: which messages to include, how to summarize older history, and how to manage context across subagent boundaries.
 
-OpenClaw ships with a built-in `legacy` engine and uses it by default - most users never need to change this. Install and select a plugin engine only when you want different assembly, compaction, or cross-session recall behavior.
+OpenClaw ships with a built-in `legacy` engine and uses it by default. Install and select a plugin engine only when you want different assembly, compaction, or cross-session recall behavior.
 
 ## Quick start
 
@@ -83,6 +83,8 @@ Every time OpenClaw runs a model prompt, the context engine participates at four
     Called after a run completes. The engine can persist state, trigger background compaction, or update indexes.
   </Accordion>
 </AccordionGroup>
+
+Engines can also implement an optional `maintain()` method for transcript maintenance (safe rewrites via `runtimeContext.rewriteTranscriptEntries()`) after bootstrap, a successful turn, or compaction. Set `info.turnMaintenanceMode: "background"` to run it as deferred work instead of blocking the reply.
 
 For the bundled non-ACP Codex harness, OpenClaw applies the same lifecycle by projecting assembled context into Codex developer instructions and the current turn prompt. Codex still owns its native thread history and native compactor.
 
@@ -210,6 +212,9 @@ Required members:
   preemptively compact. Either way, the messages you return are still what the
   model sees - `promptAuthority` only affects the precheck.
 </ParamField>
+<ParamField path="contextProjection" type="ContextEngineProjection">
+  Optional projection lifecycle for hosts with persistent backend threads (for example Codex app-server). `mode: "thread_bootstrap"` with a stable `epoch` asks the host to inject the assembled context once per epoch and reuse the backend thread until the epoch changes, instead of re-projecting every turn. Omit this field for normal per-turn projection.
+</ParamField>
 
 `compact` returns a `CompactResult`. When compaction rotates the active
 transcript, `result.sessionId` and `result.sessionFile` identify the successor
@@ -217,14 +222,15 @@ session that the next retry or turn must use.
 
 Optional members:
 
-| Member                         | Kind   | Purpose                                                                                                         |
-| ------------------------------ | ------ | --------------------------------------------------------------------------------------------------------------- |
-| `bootstrap(params)`            | Method | Initialize engine state for a session. Called once when the engine first sees a session (e.g., import history). |
-| `ingestBatch(params)`          | Method | Ingest a completed turn as a batch. Called after a run completes, with all messages from that turn at once.     |
-| `afterTurn(params)`            | Method | Post-run lifecycle work (persist state, trigger background compaction).                                         |
-| `prepareSubagentSpawn(params)` | Method | Set up shared state for a child session before it starts.                                                       |
-| `onSubagentEnded(params)`      | Method | Clean up after a subagent ends.                                                                                 |
-| `dispose()`                    | Method | Release resources. Called during gateway shutdown or plugin reload - not per-session.                           |
+| Member                         | Kind   | Purpose                                                                                                                                      |
+| ------------------------------ | ------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bootstrap(params)`            | Method | Initialize engine state for a session. Called once when the engine first sees a session (e.g., import history).                              |
+| `maintain(params)`             | Method | Transcript maintenance after bootstrap, a successful turn, or compaction. Use `runtimeContext.rewriteTranscriptEntries()` for safe rewrites. |
+| `ingestBatch(params)`          | Method | Ingest a completed turn as a batch. Called after a run completes, with all messages from that turn at once.                                  |
+| `afterTurn(params)`            | Method | Post-run lifecycle work (persist state, trigger background compaction).                                                                      |
+| `prepareSubagentSpawn(params)` | Method | Set up shared state for a child session before it starts.                                                                                    |
+| `onSubagentEnded(params)`      | Method | Clean up after a subagent ends.                                                                                                              |
+| `dispose()`                    | Method | Release resources. Called during gateway shutdown or plugin reload - not per-session.                                                        |
 
 ### Runtime settings
 

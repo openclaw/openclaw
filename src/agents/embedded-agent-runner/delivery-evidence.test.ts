@@ -1,5 +1,36 @@
 import { describe, expect, it } from "vitest";
-import { collectDeliveredMediaUrls } from "./delivery-evidence.js";
+import {
+  collectDeliveredMediaUrls,
+  hasVisibleOutboundDeliveryEvidence,
+} from "./delivery-evidence.js";
+
+describe("visible messaging-tool delivery evidence", () => {
+  it("keeps the coarse flag when detailed delivery metadata is unavailable", () => {
+    expect(hasVisibleOutboundDeliveryEvidence({ didSendViaMessagingTool: true })).toBe(true);
+  });
+
+  it("lets detailed metadata disprove a coarse send flag", () => {
+    expect(
+      hasVisibleOutboundDeliveryEvidence({
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["  "],
+        messagingToolSentMediaUrls: ["\t"],
+        messagingToolSentTargets: [{ text: "\n" }],
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps rich delivery evidence when accompanying text is blank", () => {
+    expect(
+      hasVisibleOutboundDeliveryEvidence({
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+        messagingToolSentTargets: [{ text: "  ", hasRichContent: true }],
+      }),
+    ).toBe(true);
+  });
+});
 
 describe("collectDeliveredMediaUrls attachment recursion", () => {
   it("collects media URLs across nested attachments", () => {

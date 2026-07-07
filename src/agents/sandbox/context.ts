@@ -4,7 +4,6 @@
  * Prepares workspace layout, backend handle, filesystem bridge, browser bridge, and registry state for one run.
  */
 import fs from "node:fs/promises";
-import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   ensureBrowserControlAuth,
@@ -16,18 +15,14 @@ import {
 } from "../../plugin-sdk/browser-profiles.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { SkillEligibilityContext } from "../../skills/types.js";
-import { resolveUserPath } from "../../utils.js";
-import { DEFAULT_AGENT_WORKSPACE_DIR } from "../workspace.js";
 import { getSandboxBackendWorkdirResolver, requireSandboxBackendFactory } from "./backend.js";
 import { ensureSandboxBrowser } from "./browser.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
-import { SANDBOX_STATE_DIR } from "./constants.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
 import { updateRegistry } from "./registry.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
-import { resolveSandboxScopeKey, resolveSandboxWorkspaceDir } from "./shared.js";
+import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
 import type { SandboxContext, SandboxDockerConfig, SandboxWorkspaceInfo } from "./types.js";
-import { resolveMaterializedSandboxSkillsWorkspaceDir } from "./workspace-mounts.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
 
 async function syncSandboxSkillsToWorkspace(params: {
@@ -83,23 +78,12 @@ async function ensureSandboxWorkspaceLayout(params: {
   workspaceDir: string;
 }> {
   const { cfg, rawSessionKey } = params;
-
-  const agentWorkspaceDir = resolveUserPath(
-    params.workspaceDir?.trim() || DEFAULT_AGENT_WORKSPACE_DIR,
-  );
-  const workspaceRoot = resolveUserPath(cfg.workspaceRoot);
-  const scopeKey = resolveSandboxScopeKey(cfg.scope, rawSessionKey);
-  const sandboxWorkspaceDir =
-    cfg.scope === "shared" ? workspaceRoot : resolveSandboxWorkspaceDir(workspaceRoot, scopeKey);
-  const workspaceDir = cfg.workspaceAccess === "rw" ? agentWorkspaceDir : sandboxWorkspaceDir;
-  const materializedSkillsRoot = resolveSandboxWorkspaceDir(
-    path.join(SANDBOX_STATE_DIR, "skills-workspaces"),
-    scopeKey,
-  );
-  const skillsWorkspaceDir =
-    cfg.workspaceAccess === "rw"
-      ? resolveMaterializedSandboxSkillsWorkspaceDir(materializedSkillsRoot)
-      : sandboxWorkspaceDir;
+  const { agentWorkspaceDir, sandboxWorkspaceDir, scopeKey, skillsWorkspaceDir, workspaceDir } =
+    resolveSandboxWorkspaceLayoutPaths({
+      cfg,
+      rawSessionKey,
+      workspaceDir: params.workspaceDir,
+    });
 
   let skillsEligibility: SkillEligibilityContext | undefined;
   if (cfg.workspaceAccess !== "rw") {

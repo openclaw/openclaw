@@ -30,6 +30,10 @@ function summarizeSessionRows(rows: Array<Record<string, unknown>> | undefined) 
   }));
 }
 
+function findEventByText(events: Array<Record<string, unknown>> | undefined, text: string) {
+  return (events ?? []).find((entry) => entry.text === text);
+}
+
 const NON_OWNER_PERMISSION_QUIET_WINDOW_MS = 1_000;
 
 function formatUnknownError(error: unknown): string {
@@ -275,7 +279,7 @@ async function main() {
         ),
       10_000,
     ).catch(() => undefined);
-    const userEvent = await waitFor(
+    let userEvent = await waitFor(
       "MCP user session.message event",
       async () => {
         const polledValue = await callTool<{
@@ -284,12 +288,11 @@ async function main() {
           name: "events_poll",
           arguments: { session_key: "agent:main:main", after_cursor: assistantCursor, limit: 50 },
         });
-        return (polledValue.structuredContent?.events ?? []).find(
-          (entry) => entry.text === channelMessage,
-        );
+        return findEventByText(polledValue.structuredContent?.events, channelMessage);
       },
       60_000,
     ).catch(() => undefined);
+    let finalPolledEvents: Array<Record<string, unknown>> | undefined;
     if (userEvent?.text !== channelMessage) {
       const polledLocal = await callTool<{
         structuredContent?: { events?: Array<Record<string, unknown>> };
@@ -297,12 +300,19 @@ async function main() {
         name: "events_poll",
         arguments: { session_key: "agent:main:main", after_cursor: assistantCursor, limit: 50 },
       });
+      finalPolledEvents = polledLocal.structuredContent?.events ?? [];
+      const finalUserEvent = findEventByText(finalPolledEvents, channelMessage);
+      if (finalUserEvent?.text === channelMessage) {
+        userEvent = finalUserEvent;
+      }
+    }
+    if (userEvent?.text !== channelMessage) {
       throw new Error(
         `expected user event after chat.send: ${JSON.stringify(
           {
             userEvent: userEvent ?? null,
             rawGatewayUserMessage: rawGatewayUserMessage ?? null,
-            mcpEventsAfterAssistant: polledLocal.structuredContent?.events ?? [],
+            mcpEventsAfterAssistant: finalPolledEvents ?? [],
             recentGatewayEvents: gateway.events.slice(-10).map((entry) => ({
               event: entry.event,
               sessionKey: entry.payload.sessionKey,

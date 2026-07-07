@@ -1097,6 +1097,7 @@ describe("preflightDiscordMessage", () => {
     const preflight = expectPreflightResult(result);
     expect(preflight.boundSessionKey).toBe(threadBinding.targetSessionKey);
     expect(preflight.shouldRequireMention).toBe(false);
+    expect(preflight.groupRequireMention).toBe(true);
   });
 
   it("drops bot messages without mention when allowBots=mentions", async () => {
@@ -1527,6 +1528,7 @@ describe("preflightDiscordMessage", () => {
     expect(preflight.threadParentId).toBe(parentId);
     expect(preflight.channelConfig?.allowed).toBe(true);
     expect(preflight.shouldRequireMention).toBe(false);
+    expect(preflight.groupRequireMention).toBe(false);
   });
 
   it("handles partial thread channel owner getters during mention preflight", async () => {

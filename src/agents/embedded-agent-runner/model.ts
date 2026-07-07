@@ -1908,6 +1908,12 @@ function buildMissingProviderModelRegistrationHint(params: {
   modelId: string;
   cfg?: OpenClawConfig;
 }): string | undefined {
+  // Legacy openai-codex refs can come from model selections, provider config,
+  // or persisted routes. All of them should be repaired by doctor rather than
+  // turned into a new models.providers[] registration.
+  if (normalizeProviderId(params.provider) === "openai-codex") {
+    return `"openai-codex" is a legacy provider ID. Run \`openclaw doctor --fix\` to migrate legacy model and provider config to the current OpenAI format. If the provider has no authenticated profile, run \`openclaw models status\` to check provider auth and re-authenticate if needed. See https://docs.openclaw.ai/concepts/model-providers.`;
+  }
   const configuredModels = params.cfg?.agents?.defaults?.models;
   if (!configuredModels) {
     return undefined;

@@ -6,7 +6,7 @@ read_when:
   - You need the Cohere API key env var or CLI auth choice
 ---
 
-[Cohere](https://cohere.com) provides OpenAI-compatible inference through its Compatibility API. OpenClaw ships the Cohere provider during its externalization transition and also publishes it as an official external plugin with the Command A model catalog.
+[Cohere](https://cohere.com) provides OpenAI-compatible inference through its Compatibility API. OpenClaw bundles the Cohere provider during its externalization transition and also publishes it as an official external plugin.
 
 | Property        | Value                                                |
 | --------------- | ---------------------------------------------------- |
@@ -18,10 +18,11 @@ read_when:
 | API             | OpenAI-compatible (`openai-completions`)             |
 | Base URL        | `https://api.cohere.ai/compatibility/v1`             |
 | Default model   | `cohere/command-a-03-2025`                           |
+| Context window  | 256,000 tokens                                       |
 
 ## Get started
 
-1. Cohere is included in current OpenClaw packages. If it is unavailable, install the external package and restart the Gateway:
+1. Cohere ships with current OpenClaw packages. If it is missing, install the external package and restart the Gateway:
 
 ```bash
 openclaw plugins install @openclaw/cohere-provider
@@ -43,7 +44,7 @@ openclaw onboard --non-interactive \
 openclaw models list --provider cohere
 ```
 
-The default model is set only when no primary model is already configured.
+Onboarding only sets Cohere as the primary model when no primary model is already configured.
 
 ## Environment-only setup
 
@@ -60,11 +61,11 @@ Make `COHERE_API_KEY` available to the Gateway process, then select the Cohere m
 ```
 
 <Note>
-If the Gateway runs as a daemon or in Docker, configure `COHERE_API_KEY` for that service. Exporting it only in an interactive shell does not make it available to an already-running Gateway.
+If the Gateway runs as a daemon or in Docker, set `COHERE_API_KEY` for that service. Exporting it only in an interactive shell does not make it available to an already-running Gateway.
 </Note>
 
 ## Related
 
 - [Model providers](/concepts/model-providers)
 - [Models CLI](/cli/models)
-- [Provider directory](/providers)
+- [Provider directory](/providers/index)

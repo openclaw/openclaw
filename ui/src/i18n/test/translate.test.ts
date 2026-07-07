@@ -204,6 +204,18 @@ describe("i18n", () => {
     }
   });
 
+  it("keeps mobile pairing copy localized in shipped locale bundles", () => {
+    const checkedKeys = flatten(en).filter(
+      (key) => key.startsWith("nodes.pairing.") && key !== "nodes.pairing.title",
+    );
+
+    for (const [locale, value] of Object.entries(shippedLocales)) {
+      for (const key of checkedKeys) {
+        expect(readString(value, key), `${locale}:${key}`).not.toBe(readString(en, key));
+      }
+    }
+  });
+
   it("keeps shipped locales structurally aligned with English", () => {
     const englishKeys = flatten(en);
     for (const [locale, value] of Object.entries(shippedLocales)) {

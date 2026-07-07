@@ -49,6 +49,7 @@ const rawSqliteAllowPathGroups = {
   "agent auth profile read-only bootstrap": ["src/agents/auth-profiles/sqlite.ts"],
   "read-only SQLite status probes": ["src/commands/status.scan.shared.ts"],
   "doctor legacy state migration": [
+    "src/commands/doctor/cron/migration-ledger.ts",
     "src/infra/state-migrations.ts",
     "src/infra/state-migrations.debug-proxy.ts",
   ],

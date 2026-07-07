@@ -455,6 +455,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           .mockResolvedValue(
             undefined,
           ) as unknown as PluginRuntime["agent"]["session"]["upsertSessionEntry"],
+        runWithWorkAdmission: vi.fn(
+          async (_params, run) => await run(new AbortController().signal),
+        ) as PluginRuntime["agent"]["session"]["runWithWorkAdmission"],
         saveSessionStore: vi
           .fn()
           .mockResolvedValue(
@@ -803,6 +806,11 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       getSessionMessages: vi.fn(),
       getSession: vi.fn(),
       deleteSession: vi.fn(),
+    },
+    worktrees: {
+      create: vi.fn(),
+      release: vi.fn(),
+      removeIfLossless: vi.fn(),
     },
     llm: {
       complete: vi.fn(),

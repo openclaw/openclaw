@@ -6,6 +6,7 @@ import type { Server } from "node:http";
 import type { RunningChrome } from "./chrome.js";
 import type { BrowserTab, BrowserTransport } from "./client.types.js";
 import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
+import type { ExtensionRelayHandle } from "./extension-relay/relay-server.js";
 
 export type { BrowserTab };
 
@@ -39,6 +40,8 @@ export type BrowserServerState = {
   port: number;
   resolved: ResolvedBrowserConfig;
   profiles: Map<string, ProfileRuntimeState>;
+  /** Running extension relay servers keyed by profile name (extension driver). */
+  extensionRelays?: Map<string, ExtensionRelayHandle>;
   stopTrackedTabCleanup?: () => void;
   stopUnhandledRejectionHandler?: () => void;
 };

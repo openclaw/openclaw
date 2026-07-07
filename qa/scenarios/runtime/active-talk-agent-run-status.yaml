@@ -1,0 +1,26 @@
+title: Active Talk agent-run control boundaries
+
+scenario:
+  id: active-talk-agent-run-status
+  surface: voice-and-realtime-talk
+  category: voice-and-realtime-talk.realtime-talk-sessions
+  coverage:
+    secondary:
+      - voice.active-talk-agent-run-status
+  objective: Verify a mock realtime Talk session wires status, steering, follow-up, and cancellation through the active-run control contract.
+  successCriteria:
+    - A registered mock realtime provider creates a browser-owned Talk session with consult and control tools.
+    - Status formatting reports the latest supplied non-control tool progress.
+    - Steering and follow-up invoke the injected queue boundary with the expected modes.
+    - Cancellation invokes the injected abort boundary for the resolved active session.
+  docsRefs:
+    - docs/nodes/talk.md
+    - docs/web/control-ui.md
+  codeRefs:
+    - src/gateway/server-methods/talk-client.ts
+    - src/talk/agent-run-control.ts
+    - test/e2e/qa-lab/voice/active-talk-agent-run-status.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/voice/active-talk-agent-run-status.e2e.test.ts
+    summary: Vitest QA Lab boundary coverage for mock realtime session creation and active Talk run-control dependencies.

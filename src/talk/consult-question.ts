@@ -4,6 +4,9 @@
  * These utilities connect Talk tool calls to spoken follow-up answers by
  * pulling human-readable questions/results out of provider-owned payloads.
  */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { readTrimmedStringAlias } from "../utils/string-readers.js";
+
 const REALTIME_VOICE_CONSULT_QUESTION_STOPWORDS = new Set([
   "a",
   "an",
@@ -57,19 +60,12 @@ export function readRealtimeVoiceConsultQuestion(
   keys: readonly string[] = DEFAULT_REALTIME_VOICE_CONSULT_QUESTION_KEYS,
 ): string | undefined {
   if (typeof args === "string") {
-    return args.trim() || undefined;
+    return normalizeOptionalString(args);
   }
   if (!args || typeof args !== "object" || Array.isArray(args)) {
     return undefined;
   }
-  const record = args as Record<string, unknown>;
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return undefined;
+  return readTrimmedStringAlias(args as Record<string, unknown>, keys);
 }
 
 /** Normalize consult questions for stable matching across punctuation/casing. */
@@ -140,13 +136,8 @@ export function readSpeakableRealtimeVoiceToolResult(
   }
   const record = result as Record<string, unknown>;
   const keys = options.keys ?? DEFAULT_REALTIME_VOICE_SPEAKABLE_RESULT_KEYS;
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) {
-      return limitSpeakableRealtimeVoiceToolResult(value, options.maxChars);
-    }
-  }
-  return undefined;
+  const value = readTrimmedStringAlias(record, keys);
+  return value ? limitSpeakableRealtimeVoiceToolResult(value, options.maxChars) : undefined;
 }
 
 function realtimeVoiceConsultQuestionTokens(value: string): Set<string> {

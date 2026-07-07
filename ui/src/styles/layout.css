@@ -37,11 +37,15 @@
 
 .shell--nav-collapsed {
   grid-template-columns: var(--shell-nav-rail-width) minmax(0, 1fr);
+  /* Keep --shell-nav-width in sync with the real column so fixed-position
+     consumers (e.g. the docked terminal panel) align to the collapsed rail. */
+  --shell-nav-width: var(--shell-nav-rail-width);
 }
 
 .shell--onboarding {
   grid-template-columns: 0 minmax(0, 1fr);
   grid-template-rows: 0 1fr;
+  --shell-nav-width: 0px;
 }
 
 .shell--onboarding .topbar {
@@ -258,53 +262,44 @@
   font-size: 13px;
 }
 
-.topbar-search {
+.topbar-icon-btn {
   display: inline-flex;
   align-items: center;
-  gap: 12px;
+  justify-content: center;
+  width: 38px;
   min-height: 38px;
-  padding: 0 14px;
   border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
   color: var(--muted);
-  font-size: 13px;
   cursor: pointer;
   transition:
     border-color var(--duration-fast) ease,
     background var(--duration-fast) ease,
     color var(--duration-fast) ease;
-  min-width: 200px;
 }
 
-.topbar-search:hover {
+.topbar-icon-btn:hover {
   border-color: color-mix(in srgb, var(--border-strong) 90%, transparent);
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
   color: var(--text);
 }
 
-.topbar-search:focus-visible {
+.topbar-icon-btn:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
 
-.topbar-search__label {
-  flex: 1;
-  text-align: left;
-}
-
-.topbar-search__kbd {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 2px 6px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg);
-  font-family: var(--mono);
-  font-size: 12px; /* was 11px */
-  line-height: 1;
-  color: var(--muted);
+/* Without explicit sizing/stroke the Lucide-style icon renders as a filled
+   blob at the browser's default svg size (e.g. the terminal toggle glyph). */
+.topbar-icon-btn svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .topbar-theme-mode {
@@ -362,67 +357,6 @@
   stroke-linejoin: round;
 }
 
-.topbar-theme-mode__btn[data-tooltip]::before,
-.topbar-theme-mode__btn[data-tooltip]::after {
-  position: absolute;
-  left: 50%;
-  pointer-events: none;
-  opacity: 0;
-  transition:
-    opacity var(--duration-fast) var(--ease-out),
-    transform var(--duration-fast) var(--ease-out);
-  z-index: 60;
-}
-
-.topbar-theme-mode__btn[data-tooltip]::before {
-  content: none;
-}
-
-.topbar-theme-mode__btn[data-tooltip]::after {
-  content: attr(data-tooltip);
-  top: calc(100% + 6px);
-  min-width: max-content;
-  max-width: min(220px, 60vw);
-  padding: 7px 9px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 84%, transparent);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--card) 94%, black 6%);
-  box-shadow:
-    0 10px 28px rgba(0, 0, 0, 0.24),
-    0 0 0 1px rgba(255, 255, 255, 0.04);
-  color: var(--text);
-  font-size: 12px; /* was 11px */
-  font-weight: 500;
-  line-height: 1.35;
-  text-align: center;
-  white-space: nowrap;
-  transform: translateY(-3px);
-}
-
-@media (hover: hover) {
-  .topbar-theme-mode__btn[data-tooltip]:hover::before,
-  .topbar-theme-mode__btn[data-tooltip]:hover::after {
-    opacity: 1;
-  }
-
-  .topbar-theme-mode__btn[data-tooltip]:hover::before,
-  .topbar-theme-mode__btn[data-tooltip]:hover::after {
-    transform: translateY(0);
-  }
-}
-
-.topbar-theme-mode__btn[data-tooltip]:focus-visible::before,
-.topbar-theme-mode__btn[data-tooltip]:focus-visible::after {
-  opacity: 1;
-  transform: translateY(0);
-}
-
-.topbar-theme-mode__btn[data-tooltip]::before,
-.topbar-theme-mode__btn[data-tooltip]::after {
-  content: none !important;
-  display: none !important;
-}
-
 /* ===========================================
    Navigation Sidebar
    =========================================== */
@@ -443,6 +377,7 @@
 }
 
 .sidebar {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -474,18 +409,8 @@
   flex: 0 0 var(--shell-nav-rail-width);
 }
 
-.sidebar-shell__header,
 .sidebar-shell__footer {
   flex-shrink: 0;
-}
-
-.sidebar-shell__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  min-height: 0;
-  padding: 0 8px 18px;
 }
 
 .sidebar-shell__body {
@@ -495,55 +420,40 @@
   flex-direction: column;
 }
 
+/* macOS app only: the native window hides its titlebar and injects
+   html.openclaw-native-macos plus --openclaw-native-titlebar-height (see
+   DashboardWindowController.installNativeChromeScript), leaving an empty
+   strip next to the traffic lights. The brand mark sits there instead of
+   spending a sidebar row; web builds never show it (breadcrumb has the name). */
+.sidebar-native-brand {
+  display: none;
+}
+
+@media (min-width: 700px) {
+  html.openclaw-native-macos .sidebar:not(.sidebar--collapsed) .sidebar-native-brand {
+    /* 84px clears the native traffic-light cluster (drag region starts at 78px). */
+    position: absolute;
+    top: 0;
+    left: 84px;
+    display: block;
+    width: 22px;
+    height: 22px;
+    margin-top: calc((var(--openclaw-native-titlebar-height, 50px) - 22px) / 2);
+    border-radius: 6px;
+    box-shadow: 0 4px 10px color-mix(in srgb, black 12%, transparent);
+  }
+}
+
 .sidebar-shell__footer {
   padding: 12px 0 0;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
 }
 
-.sidebar-brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-.sidebar-brand__logo {
-  width: 32px;
-  height: 32px;
-  flex-shrink: 0;
-  border-radius: var(--radius-md);
-  box-shadow: 0 8px 18px color-mix(in srgb, black 12%, transparent);
-}
-
-.sidebar-brand__copy {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.sidebar-brand__eyebrow {
-  font-size: 12px; /* was 10px */
-  line-height: 1.1;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  color: var(--muted);
-  text-transform: uppercase;
-}
-
-.sidebar-brand__title {
-  font-size: 15px;
-  line-height: 1.1;
-  font-weight: 700;
-  letter-spacing: -0.03em;
-  color: var(--text-strong);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .sidebar-nav {
-  flex: 1;
+  /* Nav stays pinned above the session list; the cap keeps sessions reachable
+     when an expanded More section outgrows a short window (nav then scrolls). */
+  flex: 0 0 auto;
+  max-height: 60%;
   overflow-y: auto;
   overflow-x: hidden;
   padding: 0;
@@ -551,42 +461,59 @@
 }
 
 .sidebar-sessions {
-  display: grid;
-  gap: 10px;
-  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* Sessions own the leftover height below the pinned nav and scroll inside. */
+  flex: 1 1 auto;
+  min-height: 0;
   padding: 0 8px;
-  margin-bottom: 16px;
+  margin-top: 10px;
 }
 
 .sidebar-new-session {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 8px;
   width: 100%;
-  min-height: 38px;
+  min-height: 34px;
   box-sizing: border-box;
-  padding: 0 10px;
-  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border) 70%);
+  padding: 0 9px;
+  border: none;
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--accent) 11%, var(--bg-elevated) 89%);
-  color: var(--text-strong);
+  background: transparent;
+  color: var(--accent);
   cursor: pointer;
   font: inherit;
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 600;
   line-height: 1.2;
   transition:
     background var(--duration-fast) ease,
-    border-color var(--duration-fast) ease,
-    color var(--duration-fast) ease,
-    transform var(--duration-fast) ease;
+    color var(--duration-fast) ease;
+}
+
+.sidebar-new-session-group {
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.sidebar-new-session-group > .sidebar-new-session:first-child {
+  flex: 1;
+}
+
+.sidebar-new-session--worktree {
+  width: 34px;
+  flex: 0 0 34px;
+  justify-content: center;
+  padding: 0;
 }
 
 .sidebar-new-session:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 18%, var(--bg-hover) 82%);
-  border-color: color-mix(in srgb, var(--accent) 44%, var(--border) 56%);
-  transform: translateY(-1px);
+  background: var(--accent-subtle);
+  color: var(--accent-hover);
 }
 
 .sidebar-new-session:disabled {
@@ -596,8 +523,8 @@
 
 .sidebar-new-session__icon,
 .sidebar-new-session__icon svg {
-  width: 14px;
-  height: 14px;
+  width: 15px;
+  height: 15px;
 }
 
 .sidebar-new-session__icon {
@@ -615,52 +542,172 @@
   stroke-linejoin: round;
 }
 
+/* min-height: 0 down this chain lets the recent list shrink and scroll instead
+   of pushing the sidebar footer out of view. */
 .sidebar-recent-sessions {
-  display: grid;
-  gap: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
   margin: 0 -8px;
+  min-height: 0;
 }
 
-.sidebar-recent-sessions__label {
+.sidebar-recent-sessions__group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+}
+
+.sidebar-recent-sessions__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  padding: 0 10px;
+  color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
+}
+
+.sidebar-recent-sessions__head .sidebar-recent-sessions__label-text {
+  flex: 1 1 auto;
+}
+
+.sidebar-session-sort {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.sidebar-session-sort:hover,
+.sidebar-session-sort[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
+  color: var(--text);
+}
+
+.sidebar-session-sort svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Agent scope chip: a borderless select in the Sessions group header, sized
+   as metadata rather than a form control. */
+.sidebar-agent-scope {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 55%;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.sidebar-agent-scope select {
+  appearance: none;
+  width: 100%;
+  min-width: 0;
+  padding: 2px 14px 2px 6px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.sidebar-agent-scope select:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
+  color: var(--text);
+}
+
+.sidebar-agent-scope select:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.sidebar-agent-scope__chevron {
+  position: absolute;
+  right: 2px;
+  display: inline-flex;
+  pointer-events: none;
+  opacity: 0.5;
+}
+
+.sidebar-agent-scope__chevron svg {
+  width: 10px;
+  height: 10px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sidebar-recent-sessions__label-text {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
+  opacity: 0.85;
+}
+
+.sidebar-recent-sessions__list {
+  display: grid;
+  gap: 2px;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.sidebar-recent-sessions__all {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  width: 100%;
-  padding: 0 10px;
-  min-height: 28px;
-  background: transparent;
-  border: none;
+  min-height: 30px;
+  padding: 0 9px;
   border-radius: var(--radius-md);
-  color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
-  cursor: pointer;
-  text-align: left;
-  transition:
-    color var(--duration-fast) ease,
-    background var(--duration-fast) ease;
-}
-
-.sidebar-recent-sessions__label:hover {
-  color: var(--text);
-  background: color-mix(in srgb, var(--bg-hover) 72%, transparent);
-}
-
-.sidebar-recent-sessions__label-text {
+  color: var(--muted);
   font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  text-decoration: none;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
 }
 
-.sidebar-recent-sessions__chevron {
+.sidebar-recent-sessions__all:hover {
+  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.sidebar-recent-sessions__all-icon {
   display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  opacity: 0.5;
-  transition: transform var(--duration-fast) ease;
+  opacity: 0.6;
 }
 
-.sidebar-recent-sessions__chevron svg {
+.sidebar-recent-sessions__all-icon svg {
   width: 12px;
   height: 12px;
   stroke: currentColor;
@@ -670,127 +717,15 @@
   stroke-linejoin: round;
 }
 
-.sidebar-recent-sessions--collapsed .sidebar-recent-sessions__chevron {
-  transform: rotate(-90deg);
-}
-
-.sidebar-recent-sessions--collapsed .sidebar-recent-sessions__list {
-  display: none;
-}
-
-.sidebar-recent-sessions__list {
-  display: grid;
-  gap: 4px;
-}
-
-/* UX-009 — Sidebar session search */
-.sidebar-session-search {
-  padding: 0 2px;
-}
-
-.sidebar-session-search__input {
-  width: 100%;
-  box-sizing: border-box;
-  padding: 5px 10px;
-  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--bg-elevated) 90%, transparent);
-  color: var(--text);
-  font: inherit;
-  font-size: 12px;
-  outline: none;
-  transition:
-    border-color var(--duration-fast) ease,
-    background var(--duration-fast) ease;
-}
-
-.sidebar-session-search__input::placeholder {
-  color: var(--muted);
-  opacity: 0.7;
-}
-
-.sidebar-session-search__input:focus-visible {
-  border-color: color-mix(in srgb, var(--accent) 60%, var(--border) 40%);
-  background: var(--bg-elevated);
-}
-
-.sidebar-recent-sessions__empty {
-  display: block;
-  padding: 6px 10px;
-  font-size: 12px;
-  color: var(--muted);
-  opacity: 0.7;
-}
-
-/* Animate non-matching session items out */
-.sidebar-recent-session--hidden {
-  opacity: 0;
-  max-height: 0;
-  overflow: hidden;
-  pointer-events: none;
-  transition:
-    opacity 120ms ease-out,
-    max-height 120ms ease-out;
-}
-
-.sidebar-session-select {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
-.sidebar-session-select--collapsed {
-  justify-items: center;
-  position: relative;
-}
-
-.sidebar-session-select .chat-controls__session-row {
-  min-height: 0;
-}
-
-.sidebar-session-select .chat-controls__session-notice {
-  min-height: 0;
-}
-
-.sidebar-session-select .chat-session-picker {
-  width: 100%;
-  max-width: 100%;
-  max-height: min(480px, calc(100vh - 120px));
-}
-
-.sidebar-session-select--collapsed .chat-controls__session-trigger {
-  width: 44px;
-  min-height: 44px;
-  justify-content: center;
-  padding: 0;
-  border-radius: var(--radius-lg);
-}
-
-.sidebar-session-select--collapsed .chat-controls__session-trigger-label,
-.sidebar-session-select--collapsed .chat-controls__session-trigger-icon {
-  display: none;
-}
-
-.sidebar-session-select--collapsed .chat-session-picker {
-  position: absolute;
-  top: 0;
-  left: calc(100% + 8px);
-  width: min(360px, calc(100vw - 96px));
-  max-width: min(360px, calc(100vw - 96px));
-  z-index: var(--z-dropdown);
-}
-
 .sidebar-recent-session {
-  display: grid;
-  grid-template-columns: 8px minmax(0, 1fr) auto;
+  display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 40px;
-  padding: 7px 9px;
+  min-width: 0;
+  min-height: 34px;
+  padding-right: 4px;
   border: 1px solid transparent;
   border-radius: var(--radius-md);
   color: var(--muted);
-  text-decoration: none;
   transition:
     background var(--duration-fast) ease,
     border-color var(--duration-fast) ease,
@@ -799,59 +734,48 @@
 
 .sidebar-recent-session:hover {
   background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
-  border-color: color-mix(in srgb, var(--border) 70%, transparent);
   color: var(--text);
-  text-decoration: none;
 }
 
 .sidebar-recent-session--active {
   background: color-mix(in srgb, var(--accent-subtle) 68%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 16%, transparent);
   color: var(--text-strong);
 }
 
-.sidebar-recent-session__dot {
-  width: 6px;
-  height: 6px;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--muted) 46%, transparent);
-}
-
-.sidebar-recent-session--active .sidebar-recent-session__dot {
-  background: var(--accent);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 12%, transparent);
-}
-
-.sidebar-recent-session__body {
-  display: grid;
-  gap: 2px;
+.sidebar-recent-session__link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
   min-width: 0;
+  padding: 5px 4px 5px 9px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.sidebar-recent-session__link:hover {
+  text-decoration: none;
 }
 
 .sidebar-recent-session__name {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 500;
+  color: var(--text);
 }
 
-.sidebar-recent-session__meta {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px; /* was 11px */
-  color: var(--muted);
+.sidebar-recent-session--active .sidebar-recent-session__name {
+  font-weight: 500;
+  color: var(--text-strong);
 }
 
-.sidebar-recent-session__live {
-  width: 7px;
-  height: 7px;
-  border-radius: var(--radius-full);
-  background: var(--ok);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 12%, transparent);
+.sidebar-recent-session__aside {
+  padding-right: 2px;
 }
 
 .sidebar-nav::-webkit-scrollbar {
@@ -906,8 +830,8 @@
 
 .nav-section {
   display: grid;
-  gap: 6px;
-  margin-bottom: 16px;
+  gap: 4px;
+  margin-bottom: 10px;
 }
 
 .nav-section:last-child {
@@ -916,7 +840,7 @@
 
 .nav-section__items {
   display: grid;
-  gap: 4px;
+  gap: 2px;
 }
 
 .nav-section--collapsed .nav-section__items {
@@ -948,10 +872,11 @@
 }
 
 .nav-section__label-text {
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.07em;
   text-transform: uppercase;
+  opacity: 0.85;
 }
 
 .nav-section__chevron {
@@ -976,13 +901,221 @@
   transform: rotate(-90deg);
 }
 
+/* "More" holds every nav route the user has not pinned. */
+.nav-section--more {
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
+}
+
+/* Button variant of .nav-item (e.g. "Customize sidebar"). */
+.nav-item--action {
+  width: 100%;
+  font: inherit;
+  text-align: left;
+}
+
+.sidebar-customize-menu {
+  position: fixed;
+  z-index: 120;
+  min-width: 224px;
+  max-width: 264px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: 0 18px 40px color-mix(in srgb, black 26%, transparent);
+}
+
+.sidebar-customize-menu__title {
+  padding: 6px 10px 8px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.sidebar-customize-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 30px;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar-customize-menu__item:hover {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.sidebar-customize-menu__check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.sidebar-customize-menu__check svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sidebar-customize-menu__text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-customize-menu__separator {
+  margin: 6px 4px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+.sidebar-session-menu {
+  position: fixed;
+  z-index: 121;
+  min-width: 224px;
+  max-width: 264px;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: 0 18px 40px color-mix(in srgb, black 26%, transparent);
+}
+
+.sidebar-session-sort-menu {
+  position: fixed;
+  z-index: 121;
+  min-width: 176px;
+  max-width: 220px;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: 0 18px 40px color-mix(in srgb, black 26%, transparent);
+}
+
+.sidebar-session-menu__item,
+.sidebar-session-sort-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 30px;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar-session-menu__item:hover:not(:disabled),
+.sidebar-session-menu__item:focus-visible,
+.sidebar-session-sort-menu__item:hover,
+.sidebar-session-sort-menu__item:focus-visible {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.sidebar-session-menu__item:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.sidebar-session-menu__item--destructive {
+  color: var(--danger);
+}
+
+.sidebar-session-menu__icon,
+.sidebar-session-menu__check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+.sidebar-session-menu__check {
+  color: var(--accent);
+}
+
+.sidebar-session-menu__icon svg,
+.sidebar-session-menu__check svg,
+.sidebar-session-menu__chevron svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sidebar-session-menu__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-session-menu__chevron {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.sidebar-session-menu__separator {
+  margin: 6px 4px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+.sidebar-session-menu__submenu-host {
+  position: relative;
+}
+
+.sidebar-session-menu__submenu {
+  position: absolute;
+  top: -6px;
+  left: calc(100% + 4px);
+  max-height: min(360px, calc(100vh - 24px));
+  overflow-y: auto;
+}
+
+.sidebar-session-menu__submenu--left {
+  right: calc(100% + 4px);
+  left: auto;
+}
+
 .nav-item {
   position: relative;
   display: flex;
   align-items: center;
   justify-content: flex-start;
   gap: 8px;
-  min-height: 40px;
+  min-height: 32px;
   padding: 0 9px;
   border-radius: var(--radius-md);
   border: 1px solid transparent;
@@ -1021,8 +1154,8 @@
 }
 
 .nav-item__text {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 500;
   white-space: nowrap;
 }
 
@@ -1041,10 +1174,7 @@
 .nav-item--active {
   color: var(--text-strong);
   background: color-mix(in srgb, var(--accent-subtle) 88%, var(--bg-elevated) 12%);
-  border-color: color-mix(in srgb, var(--accent) 18%, transparent);
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, white 10%, transparent),
-    0 12px 24px color-mix(in srgb, black 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 .nav-item.active .nav-item__icon,
@@ -1057,28 +1187,27 @@
   padding: 12px 8px 10px;
 }
 
-.sidebar--collapsed .sidebar-shell__header {
-  justify-content: center;
-  align-items: center;
-  gap: 0;
-  padding: 0 2px 16px;
-}
-
 .sidebar--collapsed .sidebar-nav {
   padding: 0;
 }
 
 .sidebar--collapsed .sidebar-sessions {
-  justify-items: center;
+  align-items: center;
   padding: 0;
-  margin-bottom: 14px;
+  margin-top: 14px;
 }
 
 .sidebar--collapsed .sidebar-new-session {
+  justify-content: center;
   width: 44px;
   min-height: 44px;
   padding: 0;
   border-radius: var(--radius-lg);
+}
+
+.sidebar--collapsed .sidebar-new-session-group {
+  flex-direction: column;
+  gap: 4px;
 }
 
 .sidebar--collapsed .nav-section {
@@ -1112,6 +1241,9 @@
   display: none;
 }
 
+/* Rail active state stays flat: it inherits the accent-subtle background from
+   .nav-item--active and only adds the accent bar. Gradients/drop shadows made
+   the rail look like a floating card, especially in light mode. */
 .sidebar--collapsed .nav-item--active::before,
 .sidebar--collapsed .nav-item.active::before {
   content: "";
@@ -1122,123 +1254,112 @@
   width: 3px;
   border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--accent) 86%, transparent);
-  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 34%, transparent);
 }
 
-.sidebar--collapsed .nav-item.active,
-.sidebar--collapsed .nav-item--active {
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--accent) 14%, var(--bg-elevated) 86%) 0%,
-    color-mix(in srgb, var(--accent) 8%, var(--bg) 92%) 100%
-  );
-  border-color: color-mix(in srgb, var(--accent) 18%, var(--border) 82%);
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, white 8%, transparent),
-    0 10px 20px color-mix(in srgb, black 18%, transparent);
-}
-
-.sidebar--collapsed .nav-collapse-toggle {
-  width: 42px;
-  height: 42px;
-  border-color: color-mix(in srgb, var(--border) 82%, transparent);
-  background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, white 8%, transparent),
-    0 8px 18px color-mix(in srgb, black 16%, transparent);
-}
-
-.sidebar--collapsed .sidebar-brand__logo {
-  width: 34px;
-  height: 34px;
-  border-radius: var(--radius-md);
-  box-shadow:
-    0 10px 20px color-mix(in srgb, black 20%, transparent),
-    inset 0 1px 0 color-mix(in srgb, white 10%, transparent);
-}
-
-.sidebar-utility-group {
-  display: grid;
-  gap: 8px;
-}
-
-.sidebar-utility-link {
-  min-height: 42px;
-}
-
-.sidebar-version {
+/* Single compact icon row: status dot, then utility icons right-aligned.
+   The footer signals connectivity only; gateway version lives in Settings. */
+.sidebar-footer-bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  min-height: 40px;
-  padding: 0 12px;
-  border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
-  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  gap: 2px;
+  min-height: 34px;
+  padding: 0 10px;
 }
 
-.sidebar-version__label {
-  font-size: 12px; /* was 11px */
-  font-weight: 600;
+.sidebar-footer-bar__spacer {
+  flex: 1 1 auto;
+}
+
+.sidebar-footer-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
   color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  cursor: pointer;
+  text-decoration: none;
+  transition:
+    color var(--duration-fast) ease,
+    background var(--duration-fast) ease;
 }
 
-.sidebar-version__text {
-  font-size: 12px;
+.sidebar-footer-icon:hover:not(:disabled),
+.sidebar-footer-icon:focus-visible {
   color: var(--text);
-  font-weight: 600;
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  text-decoration: none;
 }
 
-.sidebar-version__dot {
-  width: 8px;
-  height: 8px;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--accent) 78%, white 22%);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 14%, transparent);
-  opacity: 1;
-  margin: 0 auto;
+.sidebar-footer-icon:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
+  outline-offset: 1px;
 }
 
-.sidebar-version__status {
+.sidebar-footer-icon:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.sidebar-footer-icon--active {
+  color: var(--accent);
+}
+
+.sidebar-footer-icon svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sidebar-status__dot {
   width: 8px;
   height: 8px;
   border-radius: var(--radius-full);
   flex-shrink: 0;
-  margin-left: auto;
 }
 
-.sidebar-version__status.sidebar-connection-status--online {
+.sidebar-status__dot.sidebar-connection-status--online {
   background: var(--ok);
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 14%, transparent);
 }
 
-.sidebar-version__status.sidebar-connection-status--offline {
+.sidebar-status__dot.sidebar-connection-status--offline {
   background: var(--danger);
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 14%, transparent);
 }
 
+.sidebar-pair-mobile svg * {
+  stroke: currentColor;
+  fill: none;
+}
+
 .sidebar--collapsed .sidebar-shell__footer {
-  padding: 8px 0 2px;
+  padding: 8px 0 6px;
 }
 
-.sidebar--collapsed .sidebar-utility-group {
-  justify-items: center;
+/* Rail mode stacks the footer icons vertically. */
+.sidebar--collapsed .sidebar-footer-bar {
+  flex-direction: column-reverse;
   gap: 6px;
-}
-
-.sidebar--collapsed .sidebar-version {
-  width: 44px;
-  min-height: 44px;
   padding: 0;
-  justify-content: center;
-  border-radius: var(--radius-lg);
 }
 
-.sidebar--collapsed .sidebar-version__status {
-  margin-left: 0;
+/* The online ring extends 4px past the dot, so extra margins keep it clear of
+   the icons above and the rail's bottom edge. */
+.sidebar--collapsed .sidebar-status__dot {
+  margin: 4px 0 6px;
+}
+
+.sidebar--collapsed .sidebar-footer-bar__spacer {
+  display: none;
 }
 
 /* Mode switch in sidebar — hidden on desktop, shown on mobile */
@@ -1293,14 +1414,18 @@
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  /* Reserve space for the docked operator terminal so it reshapes the content
+     area (shrinks it) instead of overlaying the chat. The terminal panel sets
+     these vars; they are 0 when it is closed. */
+  margin-bottom: var(--oc-terminal-reserve-bottom, 0);
+  margin-right: var(--oc-terminal-reserve-right, 0);
+  transition:
+    margin-bottom 0.16s ease,
+    margin-right 0.16s ease;
 }
 
 .content > * + * {
   margin-top: 20px;
-}
-
-:root[data-theme-mode="light"] .content {
-  background: var(--bg-content);
 }
 
 .content--chat {
@@ -1316,6 +1441,13 @@
   margin-top: 0;
 }
 
+.content--chat > openclaw-router-outlet {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
 .content--workboard {
   display: flex;
   flex-direction: column;
@@ -1325,6 +1457,22 @@
 
 .content--workboard > * + * {
   margin-top: 14px;
+}
+
+.content--workboard > openclaw-router-outlet,
+.content--workboard openclaw-workboard-page {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.content--workboard openclaw-workboard-page {
+  gap: 14px;
+}
+
+:root[data-theme-mode="light"] .content {
+  background: var(--bg-content);
 }
 
 /* Content header */
@@ -1342,6 +1490,10 @@
     max-height var(--shell-focus-duration) var(--shell-focus-ease),
     padding var(--shell-focus-duration) var(--shell-focus-ease);
   max-height: 80px;
+}
+
+.content-header--page + * {
+  margin-top: 20px;
 }
 
 .content--chat .content-header.content-header--chat-hidden {
@@ -1617,4 +1769,18 @@
 
 .chat-controls-dropdown {
   display: none;
+}
+
+/* Terminal-only document (`?view=terminal`, mobile WebViews): centered notice
+   when the gateway refuses or lacks the terminal surface. */
+.terminal-view-unavailable {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
+  background: var(--bg);
 }

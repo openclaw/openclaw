@@ -168,4 +168,19 @@ describe("execCommand", () => {
     const result = await resultPromise;
     expect(result.killed).toBe(true);
   });
+
+  it("does not crash when stdout or stderr emit an error event", async () => {
+    const child = createStubChild();
+    const wait = createDeferred<number | null>();
+    spawnMock.mockReturnValue(child);
+    waitForChildProcessMock.mockReturnValue(wait.promise);
+    const { execCommand } = await import("./exec.js");
+
+    const resultPromise = execCommand("cmd", [], "/tmp");
+    child.stdout.emit("error", new Error("EPIPE"));
+    child.stderr.emit("error", new Error("EIO"));
+    wait.resolve(0);
+
+    await expect(resultPromise).resolves.toMatchObject({ code: 0 });
+  });
 });

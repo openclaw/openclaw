@@ -52,6 +52,11 @@ describe("browser remote profile tab ops via Playwright", () => {
 
     const tabs = await remote.listTabs();
     expect(tabs.map((t) => t.targetId)).toEqual(["T1"]);
+    expect(listPagesViaPlaywright).toHaveBeenCalledWith({
+      cdpUrl: "https://1.1.1.1:9222/chrome?token=abc",
+      ssrfPolicy: { allowPrivateNetwork: true },
+      timeoutMs: 3000,
+    });
 
     const opened = await remote.openTab("http://127.0.0.1:3000");
     expect(opened.targetId).toBe("T2");

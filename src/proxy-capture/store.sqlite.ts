@@ -1,11 +1,11 @@
 // Proxy capture SQLite store persists capture metadata and replayable exchanges.
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { normalizeNullableString as normalizeObservedValue } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { sha256Hex } from "../infra/crypto-digest.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
@@ -50,8 +50,7 @@ function isInMemoryDatabasePath(dbPath: string): boolean {
   const fragmentIndex = dbPath.indexOf("#");
   const uriWithoutFragment = fragmentIndex === -1 ? dbPath : dbPath.slice(0, fragmentIndex);
   const queryIndex = uriWithoutFragment.indexOf("?");
-  const uriPath =
-    queryIndex === -1 ? uriWithoutFragment : uriWithoutFragment.slice(0, queryIndex);
+  const uriPath = queryIndex === -1 ? uriWithoutFragment : uriWithoutFragment.slice(0, queryIndex);
   try {
     if (decodeURIComponent(uriPath.slice("file:".length)) === ":memory:") {
       return true;
@@ -281,7 +280,7 @@ class DebugProxyCaptureStoreImpl {
   }
 
   persistPayload(data: Buffer, contentType?: string): CaptureBlobRecord | SharedCaptureBlobRecord {
-    const sha256 = createHash("sha256").update(data).digest("hex");
+    const sha256 = sha256Hex(data);
     const blobId = sha256.slice(0, 24);
     if (this.pathBased) {
       fs.mkdirSync(this.pathBased.blobDir, {
@@ -743,10 +742,12 @@ class DebugProxyCaptureStoreImpl {
           )
           .get(...sessionIds) as { count: number }
       ).count ?? 0;
-    this.db.prepare(`DELETE FROM capture_events WHERE session_id IN (${placeholders})`).run(
-      ...sessionIds,
-    );
-    this.db.prepare(`DELETE FROM capture_sessions WHERE id IN (${placeholders})`).run(...sessionIds);
+    this.db
+      .prepare(`DELETE FROM capture_events WHERE session_id IN (${placeholders})`)
+      .run(...sessionIds);
+    this.db
+      .prepare(`DELETE FROM capture_sessions WHERE id IN (${placeholders})`)
+      .run(...sessionIds);
     const candidateBlobIds = blobRows
       .map((row) => row.blobId?.trim())
       .filter((blobId): blobId is string => Boolean(blobId));
@@ -783,10 +784,7 @@ class DebugProxyCaptureStoreImpl {
 }
 
 export type DebugProxyCaptureStore = Omit<DebugProxyCaptureStoreImpl, "persistPayload"> & {
-  persistPayload(
-    data: Buffer,
-    contentType?: string,
-  ): CaptureBlobRecord | SharedCaptureBlobRecord;
+  persistPayload(data: Buffer, contentType?: string): CaptureBlobRecord | SharedCaptureBlobRecord;
 };
 
 export type LegacyDebugProxyCaptureStore = Omit<DebugProxyCaptureStoreImpl, "persistPayload"> & {
@@ -860,7 +858,10 @@ export function closeDebugProxyCaptureStore(): void {
 
 // Lease API keeps one cached capture-store wrapper alive across related
 // operations, then releases it without closing the shared state database.
-export function acquireDebugProxyCaptureStore(dbPath: string, blobDir: string): {
+export function acquireDebugProxyCaptureStore(
+  dbPath: string,
+  blobDir: string,
+): {
   store: LegacyDebugProxyCaptureStore;
   release: () => void;
 };
@@ -905,10 +906,7 @@ export function acquireDebugProxyCaptureStore(
 
 export function persistEventPayload(
   store: {
-    persistPayload(
-      data: Buffer,
-      contentType?: string,
-    ): CaptureBlobRecord | SharedCaptureBlobRecord;
+    persistPayload(data: Buffer, contentType?: string): CaptureBlobRecord | SharedCaptureBlobRecord;
   },
   params: { data?: Buffer | string | null; contentType?: string; previewLimit?: number },
 ): { dataText?: string; dataBlobId?: string; dataSha256?: string } {

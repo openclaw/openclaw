@@ -150,6 +150,8 @@ export async function sendMessageWhatsApp(
       messageText?: string;
     };
     preserveLeadingWhitespace?: boolean;
+    /** Report each accepted internal platform send before the next fallible send. */
+    onDeliveryResult?: (result: { messageId: string; toJid: string }) => Promise<void> | void;
   },
 ): Promise<{ messageId: string; toJid: string }> {
   let text = options.preserveLeadingWhitespace ? body : normalizeWhatsAppPayloadText(body);
@@ -244,15 +246,20 @@ export async function sendMessageWhatsApp(
     const result = sendOptions
       ? await active.sendMessage(to, text, mediaBuffer, mediaType, sendOptions)
       : await active.sendMessage(to, text, mediaBuffer, mediaType);
-    if (visibleTextAfterVoice) {
-      if (sendOptions) {
-        await active.sendMessage(to, visibleTextAfterVoice, undefined, undefined, sendOptions);
-      } else {
-        await active.sendMessage(to, visibleTextAfterVoice, undefined, undefined);
-      }
-    }
     const messageId = (result as { messageId?: string })?.messageId ?? "unknown";
     const sentRemoteJid = resolveActualSentRemoteJid(result, jid);
+    if (visibleTextAfterVoice) {
+      // Voice captions require a second platform send. Persist the accepted voice
+      // first so a caption failure cannot make recovery replay the voice note.
+      await options.onDeliveryResult?.({ messageId, toJid: sentRemoteJid });
+      const captionResult = sendOptions
+        ? await active.sendMessage(to, visibleTextAfterVoice, undefined, undefined, sendOptions)
+        : await active.sendMessage(to, visibleTextAfterVoice, undefined, undefined);
+      await options.onDeliveryResult?.({
+        messageId: (captionResult as { messageId?: string })?.messageId ?? "unknown",
+        toJid: resolveActualSentRemoteJid(captionResult, jid),
+      });
+    }
     if (messageId && messageId !== "unknown" && text) {
       registerWhatsAppApprovalReactionTargetForOutboundMessage({
         accountId: resolvedAccountId,

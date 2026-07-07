@@ -434,6 +434,17 @@ describe("resolveContextTokensForModel", () => {
     },
   );
 
+  it("does not give fable-5 context window to claude-fable-50 (prefix boundary check)", () => {
+    const result = resolveContextTokensForModel({
+      provider: "anthropic",
+      model: "claude-fable-50",
+      fallbackContextTokens: 200_000,
+      allowAsyncLoad: false,
+    });
+
+    expect(result).toBe(200_000);
+  });
+
   it.each([
     ["anthropic", "claude-fable-5"],
     ["anthropic-vertex", "claude-fable-5"],

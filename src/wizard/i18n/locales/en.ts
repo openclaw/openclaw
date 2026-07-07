@@ -335,9 +335,14 @@ export const en = {
       homebrewRecommendedTitle: "Homebrew recommended",
       installDeps: "Install missing skill dependencies",
       installFailed: "Install failed: {name}{code}{detail}",
+      installSkipped: "Skipped: {name} (manual prerequisite required)",
       installed: "Installed {name}",
       installedWithWarnings: "Installed {name} (with warnings)",
       installing: "Installing {name}...",
+      manualPrereqsDoctorHint:
+        "Install those tools first, then run `openclaw doctor` to review skills + requirements.",
+      manualPrereqsIntro: "Skipped optional skill installs that need local tools first:",
+      manualPrereqsTitle: "Manual skill prerequisites",
       nodeManager: "Preferred node manager for skill installs",
       setEnv: "Set {env} for {name}?",
       skipDepsHint: "Continue without installing dependencies",
@@ -476,6 +481,7 @@ export const en = {
       tokenHelpCopyToken: "3) Copy the token (looks like 123456:ABC...)",
       tokenHelpNewBot: "2) Run /newbot (or /mybots)",
       tokenHelpOpenBotFather: "1) Open Telegram and chat with @BotFather",
+      tokenHelpWebApp: "Prefer a UI? BotFather's web app: {url} (create a bot, copy its token)",
       tokenInputPrompt: "Enter Telegram bot token",
       tokenKeepPrompt: "Telegram token already configured. Keep it?",
       userIdHelpGetUpdates:

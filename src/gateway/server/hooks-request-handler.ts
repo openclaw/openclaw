@@ -57,6 +57,7 @@ type HookDispatchers = {
 type HookReplayEntry = {
   ts: number;
   runId: string;
+  sessionKey: string;
 };
 
 type HookReplayScope = {
@@ -147,7 +148,10 @@ export function createHooksRequestHandler(
     return `${tokenFingerprint}:${scopeFingerprint}:${idempotencyFingerprint}`;
   };
 
-  const resolveCachedHookRunId = (key: string | undefined, now: number): string | undefined => {
+  const resolveCachedHookReplay = (
+    key: string | undefined,
+    now: number,
+  ): HookReplayEntry | undefined => {
     if (!key) {
       return undefined;
     }
@@ -158,15 +162,19 @@ export function createHooksRequestHandler(
     }
     hookReplayCache.delete(key);
     hookReplayCache.set(key, cached);
-    return cached.runId;
+    return cached;
   };
 
-  const rememberHookRunId = (key: string | undefined, runId: string, now: number) => {
+  const rememberHookReplay = (
+    key: string | undefined,
+    entry: { runId: string; sessionKey: string },
+    now: number,
+  ) => {
     if (!key) {
       return;
     }
     hookReplayCache.delete(key);
-    hookReplayCache.set(key, { ts: now, runId });
+    hookReplayCache.set(key, { ts: now, runId: entry.runId, sessionKey: entry.sessionKey });
     pruneHookReplayCache(now);
   };
 
@@ -331,10 +339,15 @@ export function createHooksRequestHandler(
               timeoutSeconds: normalized.value.timeoutSeconds ?? null,
             },
           });
-      const cachedRunId = resolveCachedHookRunId(replayKey, now);
-      if (cachedRunId) {
+      const cachedReplay = resolveCachedHookReplay(replayKey, now);
+      if (cachedReplay) {
         // Keep the replayed shape consistent with a fresh async response.
-        sendJson(res, 200, { ok: true, status: "accepted", runId: cachedRunId });
+        sendJson(res, 200, {
+          ok: true,
+          status: "accepted",
+          runId: cachedReplay.runId,
+          sessionKey: cachedReplay.sessionKey,
+        });
         return true;
       }
       const dispatchSessionKey = resolveDispatchSessionKeyOrRespond(
@@ -347,10 +360,10 @@ export function createHooksRequestHandler(
       // Pre-allocate the runId and cache it BEFORE awaiting dispatch so a
       // concurrent retry with the same idempotency key hits the cache rather
       // than triggering a second agent run during a long blocking wait. For
-      // waitForResult requests replayKey is undefined and rememberHookRunId
+      // waitForResult requests replayKey is undefined and rememberHookReplay
       // is a no-op (blocking already bypasses the cache).
       const preRunId = randomUUID();
-      rememberHookRunId(replayKey, preRunId, now);
+      rememberHookReplay(replayKey, { runId: preRunId, sessionKey: dispatchSessionKey }, now);
       let dispatchResult: Awaited<ReturnType<typeof dispatchAgentHook>>;
       try {
         dispatchResult = await dispatchAgentHook({
@@ -466,9 +479,13 @@ export function createHooksRequestHandler(
               timeoutSeconds: mapped.action.timeoutSeconds ?? null,
             },
           });
-          const cachedRunId = resolveCachedHookRunId(replayKey, now);
-          if (cachedRunId) {
-            sendJson(res, 200, { ok: true, runId: cachedRunId });
+          const cachedReplay = resolveCachedHookReplay(replayKey, now);
+          if (cachedReplay) {
+            sendJson(res, 200, {
+              ok: true,
+              runId: cachedReplay.runId,
+              sessionKey: cachedReplay.sessionKey,
+            });
             return true;
           }
           // Mappings are external-event-triggered and intentionally non-blocking
@@ -476,7 +493,11 @@ export function createHooksRequestHandler(
           // Pre-allocate the runId and cache it BEFORE awaiting dispatch so a
           // concurrent retry with the same idempotency key hits the cache.
           const preRunId = randomUUID();
-          rememberHookRunId(replayKey, preRunId, now);
+          rememberHookReplay(
+            replayKey,
+            { runId: preRunId, sessionKey: dispatchSessionKey },
+            now,
+          );
           let mappedDispatchResult: Awaited<ReturnType<typeof dispatchAgentHook>>;
           try {
             mappedDispatchResult = await dispatchAgentHook({

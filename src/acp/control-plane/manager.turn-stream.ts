@@ -83,16 +83,10 @@ async function notifyTerminalResult(params: {
   if (!params.eventGate.open) {
     return;
   }
-  if (params.result.status === "completed") {
+  if (params.result.status === "completed" || params.result.status === "cancelled") {
     await params.onEvent?.({
       type: "done",
-      ...(params.result.stopReason ? { stopReason: params.result.stopReason } : {}),
-    });
-    return;
-  }
-  if (params.result.status === "cancelled") {
-    await params.onEvent?.({
-      type: "done",
+      status: params.result.status,
       ...(params.result.stopReason ? { stopReason: params.result.stopReason } : {}),
     });
     return;

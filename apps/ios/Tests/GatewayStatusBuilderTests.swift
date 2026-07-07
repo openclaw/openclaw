@@ -41,4 +41,16 @@ import Testing
         #expect(ChatProTab.gatewayPillTitle(state: .connected, isGatewayUsable: true) == "Connected")
         #expect(ChatProTab.gatewayPillTitle(state: .connected, isGatewayUsable: false) == "Unavailable")
     }
+
+    @Test func `chat agent badge rejects placeholder question mark`() {
+        #expect(ChatProTab.normalizedBadgeEmoji(" 🦞 ") == "🦞")
+        #expect(ChatProTab.normalizedBadgeEmoji("?") == nil)
+        #expect(ChatProTab.normalizedBadgeEmoji("   ") == nil)
+        #expect(ChatProTab.normalizedBadgeEmoji(nil) == nil)
+    }
+
+    @Test func `chat starter prompts stay stable and actionable`() {
+        #expect(ChatProTab.emptyAssistantPrompts.map(\.id) == ["summarize-status", "show-controls", "start-voice"])
+        #expect(ChatProTab.emptyAssistantPrompts.allSatisfy { !$0.title.isEmpty && !$0.prompt.isEmpty })
+    }
 }

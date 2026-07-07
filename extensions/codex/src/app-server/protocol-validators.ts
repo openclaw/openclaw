@@ -2,6 +2,7 @@
  * Runtime validators for Codex app-server protocol payloads, including schema
  * normalization for generated JSON Schema before TypeBox compilation.
  */
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
 import dynamicToolCallParamsSchema from "./protocol-generated/json/DynamicToolCallParams.json" with { type: "json" };
 import errorNotificationSchema from "./protocol-generated/json/v2/ErrorNotification.json" with { type: "json" };
@@ -38,10 +39,6 @@ function compileCodexSchema<T>(schema: unknown): CodexValidator<T> {
     check: (value): value is T => validator.Check(value),
     errors: (value) => [...validator.Errors(value)] as ValidationError[],
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 const schemaMapKeywords = new Set([

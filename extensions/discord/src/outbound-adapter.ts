@@ -2,10 +2,12 @@
 import type { OutboundIdentity } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
 import {
+  attachChannelToResult,
   type ChannelOutboundAdapter,
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
@@ -26,6 +28,7 @@ import {
   type DiscordSendFn,
   type DiscordVoiceSendFn,
 } from "./outbound-send-context.js";
+import { resolveDiscordReplyReference } from "./reply-reference.js";
 
 export const DISCORD_TEXT_CHUNK_LIMIT = 2000;
 const DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_BLOCK_RE =
@@ -42,14 +45,9 @@ function stripDiscordInternalRuntimeScaffolding(text: string): string {
     .replace(DISCORD_INTERNAL_RUNTIME_SCAFFOLDING_TAG_RE, "");
 }
 
-type DiscordThreadBindingsModule = typeof import("./monitor/thread-bindings.js");
-
-let discordThreadBindingsPromise: Promise<DiscordThreadBindingsModule> | undefined;
-
-function loadDiscordThreadBindings(): Promise<DiscordThreadBindingsModule> {
-  discordThreadBindingsPromise ??= import("./monitor/thread-bindings.js");
-  return discordThreadBindingsPromise;
-}
+const loadDiscordThreadBindings = createLazyRuntimeModule(
+  () => import("./monitor/thread-bindings.js"),
+);
 
 function resolveDiscordWebhookIdentity(params: {
   identity?: OutboundIdentity;
@@ -174,10 +172,13 @@ export const discordOutbound: ChannelOutboundAdapter = {
       accountId,
       deps,
       replyToId,
+      replyToIdSource,
+      replyToMode,
       threadId,
       identity,
       silent,
       formatting,
+      onDeliveryResult,
     }) => {
       if (!silent) {
         const webhookResult = await maybeSendDiscordWebhookText({
@@ -201,11 +202,20 @@ export const discordOutbound: ChannelOutboundAdapter = {
         fn: async () =>
           await send(resolveDiscordOutboundTarget({ to, threadId }), text, {
             verbose: false,
-            replyTo: replyToId ?? undefined,
+            reply: resolveDiscordReplyReference({
+              replyToId,
+              replyToIdSource,
+              replyToMode,
+            }),
             accountId: accountId ?? undefined,
             silent: silent ?? undefined,
             cfg,
             ...resolveDiscordFormattingOptions({ formatting }),
+            onDeliveryResult: onDeliveryResult
+              ? async (result) => {
+                  await onDeliveryResult(attachChannelToResult("discord", result));
+                }
+              : undefined,
           }),
       });
     },
@@ -221,15 +231,23 @@ export const discordOutbound: ChannelOutboundAdapter = {
       accountId,
       deps,
       replyToId,
+      replyToIdSource,
+      replyToMode,
       threadId,
       silent,
       formatting,
+      onDeliveryResult,
     }) => {
       const send =
         resolveOutboundSendDep<DiscordSendFn>(deps, "discord") ??
         (await loadDiscordSendRuntime()).sendMessageDiscord;
       const target = resolveDiscordOutboundTarget({ to, threadId });
       const formattingOptions = resolveDiscordFormattingOptions({ formatting });
+      const reply = resolveDiscordReplyReference({
+        replyToId,
+        replyToIdSource,
+        replyToMode,
+      });
       if (audioAsVoice && mediaUrl) {
         const sendVoice =
           resolveOutboundSendDep<DiscordVoiceSendFn>(deps, "discordVoice") ??
@@ -240,7 +258,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
           fn: async () =>
             await sendVoice(target, mediaUrl, {
               cfg,
-              replyTo: replyToId ?? undefined,
+              reply,
               accountId: accountId ?? undefined,
               silent: silent ?? undefined,
             }),
@@ -253,11 +271,16 @@ export const discordOutbound: ChannelOutboundAdapter = {
           fn: async () =>
             await send(target, text, {
               verbose: false,
-              replyTo: replyToId ?? undefined,
+              reply,
               accountId: accountId ?? undefined,
               silent: silent ?? undefined,
               cfg,
               ...formattingOptions,
+              onDeliveryResult: onDeliveryResult
+                ? async (result) => {
+                    await onDeliveryResult(attachChannelToResult("discord", result));
+                  }
+                : undefined,
             }),
         });
         return await withDiscordDeliveryRetry({
@@ -267,6 +290,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
             await send(target, "", {
               verbose: false,
               mediaUrl,
+              reply: reply?.scope === "all" ? reply : undefined,
               mediaAccess,
               mediaLocalRoots,
               mediaReadFile,
@@ -274,6 +298,11 @@ export const discordOutbound: ChannelOutboundAdapter = {
               silent: silent ?? undefined,
               cfg,
               ...formattingOptions,
+              onDeliveryResult: onDeliveryResult
+                ? async (result) => {
+                    await onDeliveryResult(attachChannelToResult("discord", result));
+                  }
+                : undefined,
             }),
         });
       }
@@ -287,11 +316,16 @@ export const discordOutbound: ChannelOutboundAdapter = {
             mediaAccess,
             mediaLocalRoots,
             mediaReadFile,
-            replyTo: replyToId ?? undefined,
+            reply,
             accountId: accountId ?? undefined,
             silent: silent ?? undefined,
             cfg,
             ...formattingOptions,
+            onDeliveryResult: onDeliveryResult
+              ? async (result) => {
+                  await onDeliveryResult(attachChannelToResult("discord", result));
+                }
+              : undefined,
           }),
       });
     },

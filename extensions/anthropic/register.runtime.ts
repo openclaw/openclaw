@@ -10,8 +10,6 @@ import type {
   ProviderAuthMethodNonInteractiveContext,
   ProviderResolveDynamicModelContext,
   ProviderNormalizeResolvedModelContext,
-  ProviderResolveUsageAuthContext,
-  ProviderResolvedUsageAuth,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -37,7 +35,6 @@ import {
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import * as claudeCliAuth from "./cli-auth-seam.js";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
@@ -55,6 +52,7 @@ import {
 } from "./config-defaults.js";
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { wrapAnthropicProviderStream } from "./stream-wrappers.js";
+import { fetchAnthropicUsage, resolveAnthropicUsageAuth } from "./usage.js";
 
 const PROVIDER_ID = "anthropic";
 type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
@@ -716,22 +714,6 @@ async function runAnthropicCliMigrationNonInteractive(ctx: {
   };
 }
 
-async function resolveAnthropicUsageAuth(
-  ctx: ProviderResolveUsageAuthContext,
-): Promise<ProviderResolvedUsageAuth> {
-  const oauthToken = await ctx.resolveOAuthToken();
-  if (oauthToken) {
-    return oauthToken;
-  }
-
-  const apiKey = ctx.resolveApiKeyFromConfigAndStore();
-  if (apiKey && validateAnthropicSetupToken(apiKey) === undefined) {
-    return { token: apiKey };
-  }
-
-  return { handled: true };
-}
-
 /** Build the full Anthropic provider descriptor used by runtime registration. */
 export function buildAnthropicProvider(): ProviderPlugin {
   const providerId = "anthropic";
@@ -857,8 +839,7 @@ export function buildAnthropicProvider(): ProviderPlugin {
     },
     wrapStreamFn: wrapAnthropicProviderStream,
     resolveUsageAuth: resolveAnthropicUsageAuth,
-    fetchUsageSnapshot: async (ctx) =>
-      await fetchClaudeUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
+    fetchUsageSnapshot: fetchAnthropicUsage,
     isCacheTtlEligible: () => true,
     buildAuthDoctorHint: (ctx) =>
       buildAnthropicAuthDoctorHint({

@@ -289,12 +289,10 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(instructions).toContain("## Skill Workshop");
-    expect(instructions).toContain(
-      "Use `skill_workshop` when the user wants to create, update, revise, list, inspect, apply, reject, or quarantine a reusable skill, Skill Workshop proposal, playbook, workflow, procedure, or durable instruction.",
-    );
-    expect(instructions).toContain(
-      "Use `action=apply`, `action=reject`, or `action=quarantine` only after the user explicitly asks to approve/use/apply, reject, or quarantine a specific proposal.",
-    );
+    expect(instructions).toContain("Route durable skill work");
+    expect(instructions).toContain("through the `skill_workshop` tool");
+    expect(instructions).toContain("Generated skills are pending proposals.");
+    expect(instructions).toContain("only when the user explicitly asks");
   });
 
   it("keeps developer instructions compact when no dynamic tools are deferred", () => {

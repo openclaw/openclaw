@@ -7,6 +7,7 @@ import { parse } from "yaml";
 const CHECKOUT_V6 = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10";
 const CACHE_V5 = "actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae";
 const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
+const DOWNLOAD_ARTIFACT_V8 = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
 const OPENGREP_PR_DIFF_WORKFLOW = ".github/workflows/opengrep-precise.yml";
 const OPENGREP_FULL_WORKFLOW = ".github/workflows/opengrep-precise-full.yml";
 const CONTROL_UI_LOCALE_REFRESH_WORKFLOW = ".github/workflows/control-ui-locale-refresh.yml";
@@ -14,6 +15,10 @@ const NATIVE_APP_LOCALE_REFRESH_WORKFLOW = ".github/workflows/native-app-locale-
 
 function readCiWorkflow() {
   return parse(readFileSync(".github/workflows/ci.yml", "utf8"));
+}
+
+function readBuildArtifactsTestboxWorkflow() {
+  return parse(readFileSync(".github/workflows/ci-build-artifacts-testbox.yml", "utf8"));
 }
 
 function readWorkflowSanityWorkflow() {
@@ -120,16 +125,20 @@ describe("ci workflow guards", () => {
     expect(findUnpinnedExternalActions()).toEqual([]);
   });
 
-  it("keeps locale refresh bots from cancelling active refresh matrices", () => {
+  it("keeps locale refresh matrices alive and commits each aggregate once", () => {
     const controlUiWorkflow = parse(readFileSync(CONTROL_UI_LOCALE_REFRESH_WORKFLOW, "utf8"));
-    const source = readFileSync(NATIVE_APP_LOCALE_REFRESH_WORKFLOW, "utf8");
-    const workflow = parse(source);
+    const workflow = parse(readFileSync(NATIVE_APP_LOCALE_REFRESH_WORKFLOW, "utf8"));
     const refresh = workflow.jobs.refresh;
-    const commitStep = refresh.steps.find(
-      (step: { name?: string }) => step.name === "Commit and push locale artifact",
-    );
+    const nativeFinalize = workflow.jobs.finalize;
+    const controlUiFinalize = controlUiWorkflow.jobs.finalize;
     const refreshStep = refresh.steps.find(
       (step: { name?: string }) => step.name === "Refresh native locale artifact",
+    );
+    const nativeArtifactStep = refresh.steps.find(
+      (step: { name?: string }) => step.name === "Prepare locale artifact",
+    );
+    const nativeInventoryStep = nativeFinalize.steps.find(
+      (step: { name?: string }) => step.name === "Refresh shared native inventory",
     );
     const controlUiRefreshStep = controlUiWorkflow.jobs.refresh.steps.find(
       (step: { name?: string }) => step.name === "Refresh control UI locale files",
@@ -152,6 +161,11 @@ describe("ci workflow guards", () => {
       "${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY }}",
     );
     expect(refreshStep.env.OPENAI_API_KEY).toBe("${{ secrets.OPENAI_API_KEY }}");
+    expect(nativeArtifactStep.run).toContain("git add -A apps/.i18n/native");
+    expect(nativeArtifactStep.run).not.toContain("native-source.json");
+    expect(nativeInventoryStep.run).toBe(
+      "node --import tsx scripts/native-app-i18n.ts sync --write",
+    );
     expect(controlUiRefreshStep.run).toContain("run_refresh anthropic");
     expect(controlUiRefreshStep.run).toContain("retrying with OpenAI");
     expect(controlUiRefreshStep.run).toContain("run_openai_refresh");
@@ -161,10 +175,38 @@ describe("ci workflow guards", () => {
     );
     expect(controlUiRefreshStep.env.OPENAI_API_KEY).toBe("${{ secrets.OPENAI_API_KEY }}");
     expect(controlUiRefreshStep.env.OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL).toBe("0");
-    expect(commitStep.run).toContain("for attempt in 1 2 3 4 5");
-    expect(commitStep.run).toContain('git fetch origin "${TARGET_BRANCH}"');
-    expect(commitStep.run).toContain('git rebase --autostash "origin/${TARGET_BRANCH}"');
-    expect(commitStep.run).toContain('git push origin HEAD:"${TARGET_BRANCH}"');
+
+    for (const [refreshJob, finalizeJob, artifactPattern, commitMessage] of [
+      [refresh, nativeFinalize, "native-locale-*", "chore(i18n): refresh native locales"],
+      [
+        controlUiWorkflow.jobs.refresh,
+        controlUiFinalize,
+        "control-ui-locale-*",
+        "chore(ui): refresh control ui locales",
+      ],
+    ] as const) {
+      const uploadStep = refreshJob.steps.find(
+        (step: { name?: string }) => step.name === "Upload locale artifact",
+      );
+      const downloadStep = finalizeJob.steps.find(
+        (step: { name?: string }) => step.name === "Download locale artifacts",
+      );
+      const commitStep = finalizeJob.steps.find(
+        (step: { name?: string }) => step.name === "Commit and push aggregate locale refresh",
+      );
+
+      expect(finalizeJob.needs).toBe("refresh");
+      expect(finalizeJob.if).toBe("needs.refresh.result == 'success'");
+      expect(uploadStep.uses).toBe(UPLOAD_ARTIFACT_V7);
+      expect(downloadStep.uses).toBe(DOWNLOAD_ARTIFACT_V8);
+      expect(downloadStep.with.pattern).toBe(artifactPattern);
+      expect(downloadStep.with["merge-multiple"]).toBe(true);
+      expect(commitStep.run).toContain(`git commit --no-verify -m "${commitMessage}"`);
+      expect(commitStep.run).toContain("for attempt in 1 2 3 4 5");
+      expect(commitStep.run).toContain('git fetch origin "${TARGET_BRANCH}"');
+      expect(commitStep.run).toContain('git rebase "origin/${TARGET_BRANCH}"');
+      expect(commitStep.run).toContain('git push origin HEAD:"${TARGET_BRANCH}"');
+    }
   });
 
   it("fails OpenGrep SARIF artifact uploads when reports are missing", () => {
@@ -287,10 +329,19 @@ describe("ci workflow guards", () => {
 
   it("uses bundled Node shards and telemetry-backed runner sizes", () => {
     const workflow = readCiWorkflow();
+    const buildArtifactsTestbox = readBuildArtifactsTestboxWorkflow();
     const source = readFileSync(".github/workflows/ci.yml", "utf8");
 
     expect(source).toContain("createNodeTestShardBundles");
     expect(workflow.jobs["build-artifacts"]["runs-on"]).toContain("blacksmith-16vcpu-ubuntu-2404");
+    expect(buildArtifactsTestbox.jobs["build-artifacts"]["runs-on"]).toBe(
+      "blacksmith-16vcpu-ubuntu-2404",
+    );
+    expect(
+      buildArtifactsTestbox.jobs["build-artifacts"].steps.find(
+        (step: { name?: string }) => step.name === "Build dist on cache miss",
+      ).env.NODE_OPTIONS,
+    ).toBe("--max-old-space-size=16384");
     expect(workflow.jobs["checks-node-core-test-nondist-shard"]["runs-on"]).toContain(
       "blacksmith-4vcpu-ubuntu-2404",
     );
@@ -570,6 +621,22 @@ describe("ci workflow guards", () => {
     expect(workflow).toContain("check-shrinkwrap");
     expect(shrinkwrapGuards).toContain("pnpm deps:shrinkwrap:check");
     expect(preflightGuards).toContain("pnpm deps:patches:check");
+  });
+
+  it("runs mobile protocol coverage for Node and native-only changes", () => {
+    const workflow = readCiWorkflow();
+    const coverageStep = workflow.jobs.preflight.steps.find(
+      (step) => step.name === "Check mobile protocol event coverage",
+    );
+    const checkShardRun = workflow.jobs["check-shard"].steps.find(
+      (step) => step.name === "Run check shard",
+    ).run;
+
+    expect(coverageStep.run).toBe("node scripts/check-protocol-event-coverage.mjs");
+    expect(coverageStep.if).toContain("steps.manifest.outputs.run_node == 'true'");
+    expect(coverageStep.if).toContain("steps.manifest.outputs.run_ios_build == 'true'");
+    expect(coverageStep.if).toContain("steps.manifest.outputs.run_android_job == 'true'");
+    expect(checkShardRun).not.toContain("check:protocol-coverage");
   });
 
   it("does not rebuild Control UI after build:ci-artifacts", () => {
@@ -891,10 +958,6 @@ describe("ci workflow guards", () => {
     const runStep = fastCoreJob.steps.find(
       (step) => step.name === "Run ${{ matrix.task }} (${{ matrix.runtime }})",
     );
-    const uploadStep = fastCoreJob.steps.find(
-      (step) => step.name === "Upload QA smoke profile evidence",
-    );
-
     const ciWorkflowText = readFileSync(".github/workflows/ci.yml", "utf8");
 
     expect(preflightStep.run).not.toContain("qa-smoke-profile");
@@ -904,28 +967,13 @@ describe("ci workflow guards", () => {
       expect(ciWorkflowText).not.toContain(`"${categoryId}"`);
     }
     expect(runStep.run).toContain("bundled-protocol)");
-    expect(runStep.run).toContain("qa-smoke-ci)");
+    expect(runStep.run).not.toContain("qa-smoke-ci)");
     expect(runStep.run).toContain("contracts-plugins-ci-routing)");
     expect(runStep.run).toContain("ci-routing)");
-    expect(ciWorkflowText).toContain(
-      '{ check_name: "QA Smoke CI", runtime: "node", task: "qa-smoke-ci" }',
-    );
-    expect(runStep.run).toContain("--qa-profile smoke-ci");
-    expect(runStep.run).toContain("--concurrency 8");
-    expect(runStep.run).not.toContain("--category");
-    expect(runStep.run).not.toContain("--allow-failures");
-    expect(runStep.run).toContain("qa_exit_code=0");
-    expect(runStep.run).toContain('exit "$qa_exit_code"');
-    expect(runStep.run).toContain("scripts/build-all.mjs qaRuntime");
-    expect(runStep.run).not.toContain("OPENAI_API_KEY");
-    expect(runStep.run).toMatch(
-      /bundled-protocol\)\s+pnpm test:bundled\s+pnpm protocol:check\s+;;\s+qa-smoke-ci\)/,
-    );
-    expect(uploadStep.if).toBe("always() && matrix.task == 'qa-smoke-ci'");
-    expect(uploadStep.with).toMatchObject({
-      path: ".artifacts/qa-e2e/smoke-ci-profile/",
-      "if-no-files-found": "warn",
-    });
+    expect(fastCoreJob["runs-on"]).toContain("matrix.runner");
+    expect(ciWorkflowText).not.toContain('check_name: "QA Smoke CI"');
+    expect(ciWorkflowText).not.toContain("--qa-profile smoke-ci");
+    expect(ciWorkflowText).not.toContain("Upload QA smoke profile evidence");
     expect(runStep.run.match(/test\/scripts\/ci-workflow-guards\.test\.ts/g)?.length).toBe(2);
   });
 

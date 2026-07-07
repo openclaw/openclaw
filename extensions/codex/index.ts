@@ -16,6 +16,7 @@ import {
   handleCodexConversationInboundClaim,
 } from "./src/conversation-binding.js";
 import { buildCodexMigrationProvider } from "./src/migration/provider.js";
+import { createCodexThreadsTool } from "./src/native-thread-tool.js";
 import {
   createCodexCliSessionNodeHostCommands,
   createCodexCliSessionNodeInvokePolicies,
@@ -51,6 +52,22 @@ export default definePluginEntry({
       createCodexWebSearchProvider({ resolvePluginConfig: resolveCurrentPluginConfig }),
     );
     api.registerMigrationProvider(buildCodexMigrationProvider({ runtime: api.runtime }));
+    api.registerTool(
+      (context) =>
+        createCodexThreadsTool({
+          context,
+          runtime: api.runtime,
+          getPluginConfig: resolveCurrentPluginConfig,
+        }),
+      { name: "codex_threads" },
+    );
+    api.registerToolMetadata({
+      toolName: "codex_threads",
+      displayName: "Codex Threads",
+      description: "Manage native Codex threads in the shared user Codex home.",
+      risk: "high",
+      tags: ["codex", "sessions"],
+    });
     for (const command of createCodexCliSessionNodeHostCommands()) {
       api.registerNodeHostCommand(command);
     }

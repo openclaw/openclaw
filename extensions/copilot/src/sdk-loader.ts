@@ -10,7 +10,7 @@ export function resolveCopilotSdkFallbackDir(env: NodeJS.ProcessEnv = process.en
   return path.join(resolveStateDir(env), "npm-runtime", "copilot");
 }
 
-export const COPILOT_SDK_SPEC = "@github/copilot-sdk@1.0.0-beta.9";
+export const COPILOT_SDK_SPEC = "@github/copilot-sdk@1.0.5";
 
 let cached: Promise<typeof Sdk> | undefined;
 

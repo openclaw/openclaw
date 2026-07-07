@@ -282,6 +282,10 @@ async function stopTailscaleTunnel(mode: "serve" | "funnel", path: string): Prom
       clearTimeout(timeout);
       resolve();
     });
+    proc.on("error", () => {
+      clearTimeout(timeout);
+      resolve();
+    });
   });
 }
 

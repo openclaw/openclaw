@@ -22,8 +22,6 @@ type LocalGatewayRequestContextParams = {
   getRuntimeConfig: () => OpenClawConfig;
 };
 
-type LocalGatewayScopeParams = LocalGatewayRequestContextParams;
-
 function cronUnavailable(): never {
   throw new Error("Cron is unavailable in local embedded agent gateway context.");
 }
@@ -38,6 +36,7 @@ const unavailableCron: CronServiceContract = {
   listPage: async () => cronUnavailable(),
   add: async () => cronUnavailable(),
   update: async () => cronUnavailable(),
+  updateWithPrecondition: async () => cronUnavailable(),
   remove: async () => cronUnavailable(),
   run: async () => cronUnavailable(),
   enqueueRun: async () => cronUnavailable(),
@@ -77,6 +76,8 @@ export function createLocalGatewayRequestContext(
     cron: unavailableCron,
     cronStorePath: "",
     getRuntimeConfig: params.getRuntimeConfig,
+    resolveTerminalLaunchPolicy: () => ({ ok: false, block: { kind: "disabled" } }),
+    isTerminalEnabled: () => false,
     loadGatewayModelCatalog: async () =>
       loadManifestModelCatalog({ config: params.getRuntimeConfig() }),
     getHealthCache: () => null,
@@ -97,6 +98,7 @@ export function createLocalGatewayRequestContext(
     nodeRegistry: new NodeRegistry(),
     agentRunSeq: new Map(),
     chatAbortControllers: new Map(),
+    chatQueuedTurns: new Map(),
     chatAbortedRuns: new Map(),
     chatRunBuffers,
     chatDeltaSentAt,
@@ -134,6 +136,7 @@ export function createLocalGatewayRequestContext(
     registerToolEventRecipient: () => {},
     dedupe: new Map(),
     wizardSessions: new Map(),
+    crestodianSessions: new Map(),
     findRunningWizard: () => null,
     purgeWizardSession: () => {},
     getRuntimeSnapshot: () => ({}) as ChannelRuntimeSnapshot,
@@ -154,7 +157,10 @@ export function createLocalGatewayRequestContext(
 }
 
 /** Runs code inside a local gateway request scope unless an outer scope already exists. */
-export function withLocalGatewayRequestScope<T>(params: LocalGatewayScopeParams, run: () => T): T {
+export function withLocalGatewayRequestScope<T>(
+  params: LocalGatewayRequestContextParams,
+  run: () => T,
+): T {
   const existing = getPluginRuntimeGatewayRequestScope();
   if (existing?.context) {
     return run();

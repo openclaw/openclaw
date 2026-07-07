@@ -37,6 +37,7 @@
 import * as crypto from "node:crypto";
 import type { FileHandle } from "node:fs/promises";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { MediaSource, OpenedLocalFile } from "../messaging/media-source.js";
 import { openLocalFile } from "../messaging/media-source.js";
@@ -630,10 +631,4 @@ async function runWithConcurrency(
     const batch = tasks.slice(i, i + maxConcurrent);
     await Promise.all(batch.map((task) => task()));
   }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }

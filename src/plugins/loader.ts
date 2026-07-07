@@ -462,7 +462,7 @@ type PluginRegistrySnapshot = {
     channelSetups: PluginRegistry["channelSetups"];
     providers: PluginRegistry["providers"];
     modelCatalogProviders: PluginRegistry["modelCatalogProviders"];
-    cliBackends: NonNullable<PluginRegistry["cliBackends"]>;
+    cliBackends: PluginRegistry["cliBackends"];
     textTransforms: PluginRegistry["textTransforms"];
     embeddingProviders: PluginRegistry["embeddingProviders"];
     speechProviders: PluginRegistry["speechProviders"];
@@ -478,25 +478,25 @@ type PluginRegistrySnapshot = {
     migrationProviders: PluginRegistry["migrationProviders"];
     codexAppServerExtensionFactories: PluginRegistry["codexAppServerExtensionFactories"];
     agentToolResultMiddlewares: PluginRegistry["agentToolResultMiddlewares"];
-    trustedToolPolicies: NonNullable<PluginRegistry["trustedToolPolicies"]>;
+    trustedToolPolicies: PluginRegistry["trustedToolPolicies"];
     memoryEmbeddingProviders: PluginRegistry["memoryEmbeddingProviders"];
     agentHarnesses: PluginRegistry["agentHarnesses"];
     httpRoutes: PluginRegistry["httpRoutes"];
     cliRegistrars: PluginRegistry["cliRegistrars"];
-    reloads: NonNullable<PluginRegistry["reloads"]>;
-    nodeHostCommands: NonNullable<PluginRegistry["nodeHostCommands"]>;
-    nodeInvokePolicies: NonNullable<PluginRegistry["nodeInvokePolicies"]>;
-    securityAuditCollectors: NonNullable<PluginRegistry["securityAuditCollectors"]>;
+    reloads: PluginRegistry["reloads"];
+    nodeHostCommands: PluginRegistry["nodeHostCommands"];
+    nodeInvokePolicies: PluginRegistry["nodeInvokePolicies"];
+    securityAuditCollectors: PluginRegistry["securityAuditCollectors"];
     services: PluginRegistry["services"];
     commands: PluginRegistry["commands"];
-    interactiveHandlers: NonNullable<PluginRegistry["interactiveHandlers"]>;
-    sessionActions: NonNullable<PluginRegistry["sessionActions"]>;
+    interactiveHandlers: PluginRegistry["interactiveHandlers"];
+    sessionActions: PluginRegistry["sessionActions"];
     conversationBindingResolvedHandlers: PluginRegistry["conversationBindingResolvedHandlers"];
     diagnostics: PluginRegistry["diagnostics"];
   };
   gatewayHandlers: PluginRegistry["gatewayHandlers"];
   gatewayMethodDescriptors: PluginRegistry["gatewayMethodDescriptors"];
-  coreGatewayMethodNames: NonNullable<PluginRegistry["coreGatewayMethodNames"]>;
+  coreGatewayMethodNames: PluginRegistry["coreGatewayMethodNames"];
 };
 
 function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapshot {
@@ -509,7 +509,7 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapsho
       channelSetups: [...registry.channelSetups],
       providers: [...registry.providers],
       modelCatalogProviders: [...registry.modelCatalogProviders],
-      cliBackends: [...(registry.cliBackends ?? [])],
+      cliBackends: [...registry.cliBackends],
       textTransforms: [...registry.textTransforms],
       embeddingProviders: [...registry.embeddingProviders],
       speechProviders: [...registry.speechProviders],
@@ -525,25 +525,25 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapsho
       migrationProviders: [...registry.migrationProviders],
       codexAppServerExtensionFactories: [...registry.codexAppServerExtensionFactories],
       agentToolResultMiddlewares: [...registry.agentToolResultMiddlewares],
-      trustedToolPolicies: [...(registry.trustedToolPolicies ?? [])],
+      trustedToolPolicies: [...registry.trustedToolPolicies],
       memoryEmbeddingProviders: [...registry.memoryEmbeddingProviders],
       agentHarnesses: [...registry.agentHarnesses],
       httpRoutes: [...registry.httpRoutes],
       cliRegistrars: [...registry.cliRegistrars],
-      reloads: [...(registry.reloads ?? [])],
-      nodeHostCommands: [...(registry.nodeHostCommands ?? [])],
-      nodeInvokePolicies: [...(registry.nodeInvokePolicies ?? [])],
-      securityAuditCollectors: [...(registry.securityAuditCollectors ?? [])],
+      reloads: [...registry.reloads],
+      nodeHostCommands: [...registry.nodeHostCommands],
+      nodeInvokePolicies: [...registry.nodeInvokePolicies],
+      securityAuditCollectors: [...registry.securityAuditCollectors],
       services: [...registry.services],
       commands: [...registry.commands],
-      interactiveHandlers: [...(registry.interactiveHandlers ?? [])],
-      sessionActions: [...(registry.sessionActions ?? [])],
+      interactiveHandlers: [...registry.interactiveHandlers],
+      sessionActions: [...registry.sessionActions],
       conversationBindingResolvedHandlers: [...registry.conversationBindingResolvedHandlers],
       diagnostics: [...registry.diagnostics],
     },
     gatewayHandlers: { ...registry.gatewayHandlers },
     gatewayMethodDescriptors: [...registry.gatewayMethodDescriptors],
-    coreGatewayMethodNames: [...(registry.coreGatewayMethodNames ?? [])],
+    coreGatewayMethodNames: [...registry.coreGatewayMethodNames],
   };
 }
 
@@ -1511,7 +1511,7 @@ function getCompatibleActivePluginRegistry(
     return pluginLoadOptionsMatchCacheKey(
       {
         ...candidate,
-        coreGatewayMethodNames: activeRegistry.coreGatewayMethodNames ?? [],
+        coreGatewayMethodNames: activeRegistry.coreGatewayMethodNames,
       },
       activeCacheKey,
     );

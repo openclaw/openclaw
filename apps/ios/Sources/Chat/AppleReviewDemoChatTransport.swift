@@ -63,6 +63,7 @@ struct LocalChatFixture {
                 name: "Main",
                 identity: ["emoji": AnyCodable("OC")],
                 workspace: "Apple Review Demo",
+                workspacegit: false,
                 model: ["provider": AnyCodable("demo"), "model": AnyCodable("local-demo")],
                 agentruntime: ["kind": AnyCodable("local")],
                 thinkinglevels: nil,
@@ -80,15 +81,16 @@ struct LocalChatFixture {
         modelID: "gpt-5.5",
         modelName: "GPT-5.5",
         responsePrefix: "OpenClaw is connected to your gateway.",
-        seedMessages: [
-            "Ready when you are. I can check a project, coordinate an agent, or prepare the next step.",
-        ],
+        seedMessages: ProcessInfo.processInfo.arguments.contains("--openclaw-empty-chat-fixture")
+            ? []
+            : ["Ready when you are. I can check a project, coordinate an agent, or prepare the next step."],
         agents: [
             AgentSummary(
                 id: "main",
                 name: "Molty",
                 identity: ["emoji": AnyCodable("M")],
                 workspace: "OpenClaw",
+                workspacegit: false,
                 model: ["provider": AnyCodable("openai"), "model": AnyCodable("gpt-5.5")],
                 agentruntime: ["kind": AnyCodable("gateway")],
                 thinkinglevels: nil,
@@ -99,6 +101,7 @@ struct LocalChatFixture {
                 name: "Research",
                 identity: ["emoji": AnyCodable("RS")],
                 workspace: "OpenClaw",
+                workspacegit: false,
                 model: ["provider": AnyCodable("openai"), "model": AnyCodable("gpt-5.5")],
                 agentruntime: ["kind": AnyCodable("gateway")],
                 thinkinglevels: nil,
@@ -109,6 +112,7 @@ struct LocalChatFixture {
                 name: "Automation",
                 identity: ["emoji": AnyCodable("AU")],
                 workspace: "OpenClaw",
+                workspacegit: false,
                 model: ["provider": AnyCodable("openai"), "model": AnyCodable("gpt-5.5")],
                 agentruntime: ["kind": AnyCodable("gateway")],
                 thinkinglevels: nil,
@@ -129,7 +133,8 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
     func createSession(
         key: String,
         label _: String?,
-        parentSessionKey _: String?) async throws -> OpenClawChatCreateSessionResponse
+        parentSessionKey _: String?,
+        worktree _: Bool?) async throws -> OpenClawChatCreateSessionResponse
     {
         try await self.store.createSession(key: key)
     }
@@ -201,9 +206,14 @@ struct AppleReviewDemoChatTransport: OpenClawChatTransport {
     func createSession(
         key: String,
         label: String?,
-        parentSessionKey: String?) async throws -> OpenClawChatCreateSessionResponse
+        parentSessionKey: String?,
+        worktree: Bool?) async throws -> OpenClawChatCreateSessionResponse
     {
-        try await self.transport.createSession(key: key, label: label, parentSessionKey: parentSessionKey)
+        try await self.transport.createSession(
+            key: key,
+            label: label,
+            parentSessionKey: parentSessionKey,
+            worktree: worktree)
     }
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
@@ -298,7 +308,12 @@ private actor LocalFixtureChatStore {
 
     func sendMessage(sessionKey _: String, message: String, runId: String) throws -> OpenClawChatSendResponse {
         let now = Date().timeIntervalSince1970 * 1000
-        self.messages.append(Self.message(role: "user", text: message, timestamp: now))
+        self.messages.append(
+            Self.message(
+                role: "user",
+                text: message,
+                timestamp: now,
+                idempotencyKey: "\(runId):user"))
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         let subject = trimmed.isEmpty ? "that request" : "\"\(trimmed)\""
         self.messages.append(
@@ -377,7 +392,12 @@ private actor LocalFixtureChatStore {
         }
     }
 
-    private static func message(role: String, text: String, timestamp: Double) -> OpenClawChatMessage {
+    private static func message(
+        role: String,
+        text: String,
+        timestamp: Double,
+        idempotencyKey: String? = nil) -> OpenClawChatMessage
+    {
         OpenClawChatMessage(
             role: role,
             content: [
@@ -388,7 +408,9 @@ private actor LocalFixtureChatStore {
                     fileName: nil,
                     content: nil),
             ],
-            timestamp: timestamp)
+            timestamp: timestamp,
+            idempotencyKey: idempotencyKey,
+            stopReason: role == "assistant" ? "stop" : nil)
     }
 
     private static func normalizedSessionKey(_ value: String, fallback: String) -> String {

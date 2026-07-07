@@ -94,6 +94,11 @@ type ChannelHealthMonitorConfig = HealthMonitorConfig & {
   accounts?: Record<string, HealthMonitorConfig>;
 };
 
+export type ChannelAutostartSuppression = {
+  reason: "crash-loop-breaker";
+  message: string;
+};
+
 type GatewayStartupTrace = {
   measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
 };
@@ -208,10 +213,11 @@ type ChannelManagerOptions = {
   deferStartupAccountStartsUntil?: Promise<void>;
 };
 
-type StartChannelOptions = {
+export type StartChannelOptions = {
   preserveRestartAttempts?: boolean;
   preserveManualStop?: boolean;
   deferAccountStartUntil?: Promise<void>;
+  manual?: boolean;
 };
 
 type StopChannelOptions = {
@@ -236,8 +242,14 @@ async function waitForDeferredAccountStart(
 export type ChannelManager = {
   getRuntimeSnapshot: () => ChannelRuntimeSnapshot;
   startChannels: () => Promise<void>;
-  startChannel: (channel: ChannelId, accountId?: string) => Promise<void>;
+  startChannel: (
+    channel: ChannelId,
+    accountId?: string,
+    opts?: StartChannelOptions,
+  ) => Promise<void>;
   stopChannel: (channel: ChannelId, accountId?: string, opts?: StopChannelOptions) => Promise<void>;
+  setAutostartSuppression: (suppression: ChannelAutostartSuppression | null) => void;
+  getAutostartSuppression: () => ChannelAutostartSuppression | null;
   markChannelLoggedOut: (channelId: ChannelId, cleared: boolean, accountId?: string) => void;
   isManuallyStopped: (channelId: ChannelId, accountId: string) => boolean;
   resetRestartAttempts: (channelId: ChannelId, accountId: string) => void;
@@ -263,6 +275,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   const manuallyStopped = new Set<string>();
   const recoveryStopTimedOut = new Set<string>();
   const recoveryStartRequested = new Set<string>();
+  let autostartSuppression: ChannelAutostartSuppression | null = null;
 
   const restartKey = (channelId: ChannelId, accountId: string) => `${channelId}:${accountId}`;
   const ensureChannelLog = (channelId: ChannelId): SubsystemLogger => {
@@ -441,6 +454,21 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       evictStaleChannelAccountState(channelId, store, accountIds);
     }
     if (accountIds.length === 0) {
+      return;
+    }
+    if (autostartSuppression && optsValue.manual !== true) {
+      // Safe mode must block every automatic channel start surface; otherwise
+      // config reloads can undo the crash-loop breaker while operators inspect.
+      const suffix = accountId ? ` account ${accountId}` : "";
+      ensureChannelLog(channelId).warn?.(
+        `channel autostart suppressed by crash-loop breaker; refusing automatic start for ${channelId}${suffix}. Use channels.start to override.`,
+      );
+      for (const id of accountIds) {
+        setStoppedRuntime(channelId, id, {
+          restartPending: false,
+          lastError: autostartSuppression.message,
+        });
+      }
       return;
     }
 
@@ -681,6 +709,20 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 recoveryStartRequested.delete(rKey);
                 return;
               }
+              if (getRuntime(channelId, id).terminalDisconnect) {
+                // Authentication/session termination wins over pending recovery.
+                // Leaving recovery state behind would restart a channel that needs user action.
+                recoveryStopTimedOut.delete(rKey);
+                recoveryStartRequested.delete(rKey);
+                restartAttempts.delete(rKey);
+                setRuntime(channelId, id, {
+                  accountId: id,
+                  restartPending: false,
+                  reconnectAttempts: 0,
+                });
+                log.info?.(`[${id}] auto-restart skipped, terminal disconnect`);
+                return;
+              }
               if (recoveryStopTimedOut.has(rKey)) {
                 recoveryStopTimedOut.delete(rKey);
                 if (!recoveryStartRequested.delete(rKey)) {
@@ -798,8 +840,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     }
   };
 
-  const startChannel = async (channelId: ChannelId, accountId?: string) => {
-    await startChannelInternal(channelId, accountId);
+  const startChannel = async (
+    channelId: ChannelId,
+    accountId?: string,
+    optsValue: StartChannelOptions = {},
+  ) => {
+    await startChannelInternal(channelId, accountId, optsValue);
   };
 
   const stopChannel = async (
@@ -1012,6 +1058,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     startChannels,
     startChannel,
     stopChannel,
+    setAutostartSuppression: (suppression) => {
+      autostartSuppression = suppression;
+    },
+    getAutostartSuppression: () => autostartSuppression,
     markChannelLoggedOut,
     isManuallyStopped: isManuallyStoppedFlag,
     resetRestartAttempts: resetRestartAttemptsForTest,

@@ -599,6 +599,22 @@ function inferGlobalRootFromPackageRoot(pkgRoot?: string | null): string | null 
   return path.basename(globalRoot) === "node_modules" ? globalRoot : null;
 }
 
+function resolvePackageRootFromGlobalRoot(params: {
+  globalRoot: string;
+  packageName?: string;
+}): string {
+  const packageName = params.packageName?.trim() || PRIMARY_PACKAGE_NAME;
+  const parts = packageName.split("/");
+  const hasSafeSegments =
+    parts.length > 0 &&
+    parts.length <= 2 &&
+    parts.every(
+      (part) => part.length > 0 && part !== "." && part !== ".." && !part.includes("\\"),
+    ) &&
+    (parts.length === 1 || parts[0]?.startsWith("@"));
+  return path.join(params.globalRoot, ...(hasSafeSegments ? parts : [PRIMARY_PACKAGE_NAME]));
+}
+
 function isDirectNpmNodeModulesRoot(globalRoot: string | null): boolean {
   return (
     globalRoot !== null &&
@@ -753,6 +769,7 @@ export async function resolveGlobalInstallTarget(params: {
   timeoutMs: number;
   pkgRoot?: string | null;
   honorPackageRoot?: boolean;
+  packageName?: string;
 }): Promise<ResolvedGlobalInstallTarget> {
   const honoredPackageRootGlobalRoot = params.honorPackageRoot
     ? inferGlobalRootFromPackageRoot(params.pkgRoot)
@@ -787,7 +804,12 @@ export async function resolveGlobalInstallTarget(params: {
   return {
     ...command,
     globalRoot: targetGlobalRoot,
-    packageRoot: targetGlobalRoot ? path.join(targetGlobalRoot, PRIMARY_PACKAGE_NAME) : null,
+    packageRoot: targetGlobalRoot
+      ? resolvePackageRootFromGlobalRoot({
+          globalRoot: targetGlobalRoot,
+          packageName: params.packageName,
+        })
+      : null,
     ...(honoredPackageRootGlobalRoot &&
     targetGlobalRoot === honoredPackageRootGlobalRoot &&
     honoredDirectNpmRoot

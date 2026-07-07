@@ -178,7 +178,9 @@ describe("POST /hooks/agent waitForResult contract", () => {
       ok: true,
       status: "accepted",
       runId: first.body.runId,
+      sessionKey: first.body.sessionKey,
     });
+    expect(typeof first.body.sessionKey).toBe("string");
     expect(dispatchAgentHook).toHaveBeenCalledTimes(1);
   });
 });

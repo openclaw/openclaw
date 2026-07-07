@@ -1,6 +1,7 @@
 // Control Ui Mock Dev script supports OpenClaw repository automation.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import qrcode from "qrcode";
 import { createServer, type Plugin, type ViteDevServer } from "vite";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
 import {
@@ -9,6 +10,7 @@ import {
   type ControlUiMockGatewayScenario,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
 import {
+  resolveExternalPackageAliasesForVite,
   resolveSourcePackageAliasesForVite,
   resolveTsconfigPathAliasesForVite,
 } from "../ui/vite.config.ts";
@@ -204,8 +206,20 @@ function searchPrefixes(term: string): string[] {
   return Array.from({ length: term.length }, (_value, index) => term.slice(0, index + 1));
 }
 
-function createChatPickerScenario(): ControlUiMockGatewayScenario {
+async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario> {
   const baseTime = Date.parse("2026-05-22T09:00:00.000Z");
+  const devicePairSetupCode = Buffer.from(
+    JSON.stringify({
+      url: "wss://gateway.example.test",
+      bootstrapToken: "mock-bootstrap-token",
+    }),
+    "utf8",
+  ).toString("base64url");
+  const devicePairQrDataUrl = await qrcode.toDataURL(devicePairSetupCode, {
+    errorCorrectionLevel: "M",
+    margin: 2,
+    width: 360,
+  });
   const workspaceFiles = [
     {
       missing: false,
@@ -325,7 +339,7 @@ function createChatPickerScenario(): ControlUiMockGatewayScenario {
       "export default function controlUiViteConfig() {\n  return { server: { strictPort: true } };\n}\n",
     ],
     [
-      "ui/src/ui/e2e/chat-flow.e2e.test.ts",
+      "ui/src/e2e/chat-flow.e2e.test.ts",
       "it('keeps the session workspace useful while browsing files', async () => {\n  await page.getByText('Project files').waitFor();\n});\n",
     ],
   ]);
@@ -433,6 +447,15 @@ function createChatPickerScenario(): ControlUiMockGatewayScenario {
     defaultAgentId: "openclaw-mock",
     historyMessages: buildScrollableChatHistory(baseTime),
     methodResponses: {
+      "device.pair.list": { paired: [], pending: [] },
+      "device.pair.setupCode": {
+        auth: "token",
+        gatewayUrl: "wss://gateway.example.test",
+        qrDataUrl: devicePairQrDataUrl,
+        setupCode: devicePairSetupCode,
+        urlSource: "mock",
+      },
+      "node.list": { nodes: [] },
       "agents.files.get": {
         cases: workspaceFileCases,
       },
@@ -488,7 +511,7 @@ function createChatPickerScenario(): ControlUiMockGatewayScenario {
                   {
                     kind: "file",
                     name: "chat-flow.e2e.test.ts",
-                    path: "ui/src/ui/e2e/chat-flow.e2e.test.ts",
+                    path: "ui/src/e2e/chat-flow.e2e.test.ts",
                     size: 24950,
                     updatedAtMs: baseTime - 25_000,
                   },
@@ -591,7 +614,7 @@ async function waitForShutdown(): Promise<void> {
 }
 
 const options = parseArgs(process.argv.slice(2));
-const scenario = createChatPickerScenario();
+const scenario = await createChatPickerScenario();
 const server = await createServer({
   base: "/",
   cacheDir: path.join(repoRoot, ".artifacts", "control-ui-mock-vite"),
@@ -607,7 +630,11 @@ const server = await createServer({
   plugins: [createMockGatewayPlugin(scenario)],
   publicDir: path.join(uiRoot, "public"),
   resolve: {
-    alias: [...resolveSourcePackageAliasesForVite(), ...resolveTsconfigPathAliasesForVite()],
+    alias: [
+      ...resolveExternalPackageAliasesForVite(),
+      ...resolveSourcePackageAliasesForVite(),
+      ...resolveTsconfigPathAliasesForVite(),
+    ],
   },
   root: uiRoot,
   server: {

@@ -7,6 +7,7 @@ import EventKit
 import Foundation
 import Network
 import Observation
+import OpenClawChatUI
 import OpenClawKit
 import os
 import Photos
@@ -31,10 +32,16 @@ enum GatewayTLSFingerprintProbeResult: Equatable {
 typealias GatewayTCPReachabilityProbe = @Sendable (String, Int, Double, String) async -> Bool
 typealias GatewayTLSFingerprintProbeFunction = @Sendable (URL) async -> GatewayTLSFingerprintProbeResult
 typealias GatewayServiceEndpointResolver = @Sendable (NWEndpoint) async -> (host: String, port: Int)?
+typealias GatewayForceReconnectReset = @MainActor (NodeAppModel) async -> Void
+typealias GatewayTLSFingerprintPersist = @Sendable (_ fingerprint: String, _ stableID: String) -> Bool
 
 private enum GatewayTLSFingerprintProbeBudget {
     static let tcpConnectTimeoutSeconds = 3.0
     static let tlsHandshakeTimeoutSeconds = 10.0
+}
+
+private enum GatewaySetupRouteProbeBudget {
+    static let tcpConnectTimeoutSeconds = 2.0
 }
 
 private func defaultGatewayTCPReachabilityProbe(
@@ -61,91 +68,16 @@ private func defaultGatewayTLSFingerprintProbe(url: URL) async -> GatewayTLSFing
 @MainActor
 @Observable
 final class GatewayConnectionController {
-    struct ManualAuthOverride: Equatable {
-        struct SetupAuth {
-            let token: String
-            let bootstrapToken: String
-            let password: String
-
-            var hasBootstrapToken: Bool {
-                !self.bootstrapToken.isEmpty
-            }
-
-            var shouldApplyTokenField: Bool {
-                !self.token.isEmpty || self.hasBootstrapToken
-            }
-
-            var shouldApplyPasswordField: Bool {
-                !self.password.isEmpty || self.hasBootstrapToken
-            }
-
-            var manualAuthOverride: ManualAuthOverride? {
-                ManualAuthOverride.normalized(
-                    token: self.token,
-                    bootstrapToken: self.bootstrapToken,
-                    password: self.password)
-            }
+    static func resolvedManualPort(host: String, port: Int) -> Int? {
+        if port > 0 {
+            return port <= 65535 ? port : nil
         }
-
-        let token: String?
-        let bootstrapToken: String?
-        let password: String?
-
-        static func explicit(
-            token: String?,
-            bootstrapToken: String?,
-            password: String?) -> ManualAuthOverride
-        {
-            let trimmedToken = token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let trimmedBootstrapToken = bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let trimmedPassword = password?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return ManualAuthOverride(
-                token: trimmedToken.isEmpty ? nil : trimmedToken,
-                bootstrapToken: trimmedBootstrapToken.isEmpty ? nil : trimmedBootstrapToken,
-                password: trimmedPassword.isEmpty ? nil : trimmedPassword)
+        let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !trimmedHost.isEmpty else { return nil }
+        if trimmedHost.hasSuffix(".ts.net") || trimmedHost.hasSuffix(".ts.net.") {
+            return 443
         }
-
-        static func normalized(
-            token: String?,
-            bootstrapToken: String?,
-            password: String?) -> ManualAuthOverride?
-        {
-            let override = ManualAuthOverride.explicit(
-                token: token,
-                bootstrapToken: bootstrapToken,
-                password: password)
-            guard override.token != nil || override.bootstrapToken != nil || override.password != nil
-            else { return nil }
-            return override
-        }
-
-        static func currentManualInput(
-            token: String?,
-            pendingOverride: ManualAuthOverride?,
-            password: String?) -> ManualAuthOverride?
-        {
-            guard let pendingOverride else {
-                return ManualAuthOverride.normalized(token: token, bootstrapToken: nil, password: password)
-            }
-            return ManualAuthOverride.explicit(
-                token: token,
-                bootstrapToken: pendingOverride.bootstrapToken,
-                password: password)
-        }
-
-        static func setupAuth(from link: GatewayConnectDeepLink) -> SetupAuth {
-            SetupAuth(
-                token: link.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
-                bootstrapToken: link.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
-                password: link.password?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
-        }
-    }
-
-    private struct PendingTrustConnect {
-        let url: URL
-        let stableID: String
-        let isManual: Bool
-        let authOverride: ManualAuthOverride?
+        return 18789
     }
 
     struct TrustPrompt: Identifiable, Equatable {
@@ -161,6 +93,13 @@ final class GatewayConnectionController {
         }
     }
 
+    struct AutoConnectSuppressionLease {
+        fileprivate let generation: UInt64
+        fileprivate let previousAutoReconnectEnabled: Bool
+        fileprivate let restoresAutoReconnect: Bool
+        fileprivate let suspendedConfig: GatewayConnectConfig?
+    }
+
     private(set) var gateways: [GatewayDiscoveryModel.DiscoveredGateway] = []
     private(set) var discoveryStatusText: String = "Idle"
     private(set) var discoveryDebugLog: [GatewayDiscoveryModel.DebugLogEntry] = []
@@ -173,16 +112,26 @@ final class GatewayConnectionController {
     private var currentScenePhase: ScenePhase = .inactive
     private var didAutoConnect = false
     private var pendingServiceResolvers: [String: GatewayServiceResolver] = [:]
-    private var pendingTrustConnect: PendingTrustConnect?
+    private var pendingTrustConnect: GatewayPendingTrustConnect?
+    private var trustProbeGeneration: UInt64 = 0
+    private var connectAttemptGeneration: UInt64 = 0
+    private var autoConnectSuppressionGeneration: UInt64?
+    private var autoConnectSuppressionBaseline: (
+        autoReconnectEnabled: Bool,
+        restoresAutoReconnect: Bool,
+        suspendedConfig: GatewayConnectConfig?)?
+    @ObservationIgnored private var pendingAutoConnectTask: Task<Void, Never>?
+    @ObservationIgnored private var pendingAutoConnectGeneration: UInt64?
+    @ObservationIgnored private var pendingAutoConnectSuppressionGeneration: UInt64?
+    @ObservationIgnored private var pendingForgetCleanups: [
+        String: (id: UUID, task: Task<Void, Never>)
+    ] = [:]
+    private var pendingConnectionStableID: String?
     private let tcpReachabilityProbe: GatewayTCPReachabilityProbe
     private let tlsFingerprintProbe: GatewayTLSFingerprintProbeFunction
     private let serviceEndpointResolver: GatewayServiceEndpointResolver?
-
-    private struct SavedManualEndpoint: Equatable {
-        let host: String
-        let port: Int
-        let useTLS: Bool
-    }
+    private let forceReconnectReset: GatewayForceReconnectReset
+    private let persistTLSFingerprint: GatewayTLSFingerprintPersist
 
     init(
         appModel: NodeAppModel,
@@ -190,7 +139,13 @@ final class GatewayConnectionController {
         deferDiscoveryUntilLocalNetworkRequest: Bool = false,
         tcpReachabilityProbe: @escaping GatewayTCPReachabilityProbe = defaultGatewayTCPReachabilityProbe,
         tlsFingerprintProbe: @escaping GatewayTLSFingerprintProbeFunction = defaultGatewayTLSFingerprintProbe,
-        serviceEndpointResolver: GatewayServiceEndpointResolver? = nil)
+        serviceEndpointResolver: GatewayServiceEndpointResolver? = nil,
+        forceReconnectReset: @escaping GatewayForceReconnectReset = { appModel in
+            await appModel.resetGatewaySessionsForForcedReconnect()
+        },
+        persistTLSFingerprint: @escaping GatewayTLSFingerprintPersist = { fingerprint, stableID in
+            GatewayTLSStore.replaceFingerprint(fingerprint, stableID: stableID)
+        })
     {
         self.discoveryEnabled = startDiscovery
         self.appModel = appModel
@@ -198,8 +153,11 @@ final class GatewayConnectionController {
         self.tcpReachabilityProbe = tcpReachabilityProbe
         self.tlsFingerprintProbe = tlsFingerprintProbe
         self.serviceEndpointResolver = serviceEndpointResolver
+        self.forceReconnectReset = forceReconnectReset
+        self.persistTLSFingerprint = persistTLSFingerprint
 
         GatewaySettingsStore.bootstrapPersistence()
+        Self.migrateLegacyDeviceAuth()
         let defaults = UserDefaults.standard
         self.discovery.setDebugLoggingEnabled(defaults.bool(forKey: "gateway.discovery.debugLogs"))
 
@@ -215,10 +173,29 @@ final class GatewayConnectionController {
         self.discovery.setDebugLoggingEnabled(enabled)
     }
 
-    func requestLocalNetworkAccess(reason: String) {
+    func selectReachableSetupLink(_ link: GatewayConnectDeepLink) async -> GatewayConnectDeepLink {
+        let endpoints = link.connectionEndpoints
+        guard endpoints.count > 1 else { return link }
+        // Probe before persisting: a setup code may carry LAN and Tailnet routes,
+        // but only the route reachable from the phone should become its saved endpoint.
+        self.requestLocalNetworkAccess(reason: "setup_route_probe")
+        for (index, endpoint) in endpoints.enumerated() {
+            let reachable = await self.tcpReachabilityProbe(
+                endpoint.host,
+                endpoint.port,
+                GatewaySetupRouteProbeBudget.tcpConnectTimeoutSeconds,
+                "ai.openclaw.gateway.setup-route-\(index)")
+            if reachable {
+                return link.selectingEndpoint(endpoint)
+            }
+        }
+        return link
+    }
+
+    func requestLocalNetworkAccess(reason: String, allowAutoReconnect: Bool = true) {
         guard self.discoveryEnabled else {
             self.discovery.stop()
-            self.updateFromDiscovery()
+            self.updateFromDiscovery(allowAutoConnect: allowAutoReconnect)
             return
         }
 
@@ -227,7 +204,8 @@ final class GatewayConnectionController {
 
         guard self.currentScenePhase != .background else { return }
         self.discovery.start()
-        self.updateFromDiscovery()
+        self.updateFromDiscovery(allowAutoConnect: allowAutoReconnect)
+        guard allowAutoReconnect else { return }
         self.attemptAutoReconnectIfNeeded()
     }
 
@@ -277,27 +255,32 @@ final class GatewayConnectionController {
         _ gateway: GatewayDiscoveryModel.DiscoveredGateway,
         forceReconnect: Bool = false) async -> String?
     {
-        self.requestLocalNetworkAccess(reason: "connect_discovered_gateway")
+        let connectAttempt = self.beginConnectAttempt()
+        self.pendingConnectionStableID = gateway.stableID
+        defer { self.finishConnectAttempt(connectAttempt.suppressionLease) }
+        await self.waitForPendingForgetCleanup(stableID: gateway.stableID)
+        guard self.connectAttemptGeneration == connectAttempt.suppressionLease.generation else { return nil }
+        self.requestLocalNetworkAccess(reason: "connect_discovered_gateway", allowAutoReconnect: false)
         let instanceId = UserDefaults.standard.string(forKey: "node.instanceId")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if instanceId.isEmpty {
             return "Missing instanceId (node.instanceId). Try restarting the app."
         }
-        let token = GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
-        let bootstrapToken = GatewaySettingsStore.loadGatewayBootstrapToken(instanceId: instanceId)
-        let password = GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
-
         // Resolve the service endpoint (SRV/A/AAAA). TXT is unauthenticated; do not route via TXT.
         let target = if let serviceEndpointResolver {
             await serviceEndpointResolver(gateway.endpoint)
         } else {
             await self.resolveServiceEndpoint(gateway.endpoint)
         }
+        guard self.connectAttemptGeneration == connectAttempt.suppressionLease.generation else { return nil }
         guard let target else {
             return "Failed to resolve the discovered gateway endpoint."
         }
 
         let stableID = gateway.stableID
+        let credentials = GatewaySettingsStore.loadGatewayCredentials(
+            instanceId: instanceId,
+            gatewayStableID: stableID)
         // Discovery is a LAN operation; refuse unauthenticated plaintext connects.
         let tlsRequired = true
         let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
@@ -310,18 +293,23 @@ final class GatewayConnectionController {
             guard let url = self.buildGatewayURL(host: target.host, port: target.port, useTLS: true)
             else { return "Failed to build TLS URL for trust verification." }
             self.appModel?.beginGatewayPreconnectVerification(statusText: "Verifying gateway TLS fingerprint…")
-            switch await self.probeTLSFingerprint(
+            guard let probeResult = await self.probeTLSFingerprint(
                 host: target.host,
                 port: target.port,
                 url: url,
                 queueLabel: "gateway.tls.discovered")
-            {
+            else { return nil }
+            guard self.connectAttemptGeneration == connectAttempt.suppressionLease.generation else { return nil }
+            switch probeResult {
             case let .fingerprint(fp):
-                self.pendingTrustConnect = PendingTrustConnect(
+                self.pendingTrustConnect = GatewayPendingTrustConnect(
                     url: url,
                     stableID: stableID,
                     isManual: false,
-                    authOverride: nil)
+                    authOverride: nil,
+                    allowStoredDeviceAuth: true,
+                    suppressionLease: connectAttempt.suppressionLease,
+                    gatewayGeneration: connectAttempt.gatewayGeneration)
                 self.pendingTrustPrompt = TrustPrompt(
                     stableID: stableID,
                     gatewayName: gateway.name,
@@ -350,16 +338,29 @@ final class GatewayConnectionController {
             port: target.port,
             useTLS: tlsParams?.required == true)
         else { return "Failed to build discovered gateway URL." }
-        GatewaySettingsStore.saveLastGatewayConnectionDiscovered(stableID: stableID, useTLS: true)
+        let registryEntry = GatewaySettingsStore.GatewayRegistryEntry(
+            stableID: stableID,
+            kind: .discovered,
+            name: gateway.name,
+            host: nil,
+            port: nil,
+            useTLS: true,
+            lastConnectedAtMs: nil)
+        guard self.persistActiveGateway(registryEntry) else {
+            return "Could not save the paired gateway."
+        }
         self.didAutoConnect = true
         self.startAutoConnect(
             url: url,
             gatewayStableID: stableID,
             tls: tlsParams,
-            token: token,
-            bootstrapToken: bootstrapToken,
-            password: password,
-            forceReconnect: forceReconnect)
+            token: credentials.token,
+            bootstrapToken: credentials.bootstrapToken,
+            password: credentials.password,
+            allowStoredDeviceAuth: !credentials.suppressStoredDeviceAuth,
+            forceReconnect: forceReconnect,
+            suppressionGeneration: connectAttempt.suppressionLease.generation,
+            expectedGeneration: connectAttempt.gatewayGeneration)
         return nil
     }
 
@@ -374,38 +375,54 @@ final class GatewayConnectionController {
         authOverride: ManualAuthOverride? = nil,
         forceReconnect: Bool = false) async
     {
-        self.requestLocalNetworkAccess(reason: "connect_manual")
-        let instanceId = GatewaySettingsStore.currentInstanceID()
-        let token =
-            authOverride.map(\.token) ?? GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
-        let bootstrapToken =
-            authOverride.map(\.bootstrapToken) ?? GatewaySettingsStore.loadGatewayBootstrapToken(instanceId: instanceId)
-        let password =
-            authOverride.map(\.password) ?? GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
-        let pendingAuthOverride = authOverride ?? ManualAuthOverride.normalized(
-            token: token,
-            bootstrapToken: bootstrapToken,
-            password: password)
+        let connectAttempt = self.beginConnectAttempt()
+        defer { self.finishConnectAttempt(connectAttempt.suppressionLease) }
+        self.requestLocalNetworkAccess(reason: "connect_manual", allowAutoReconnect: false)
         let resolvedUseTLS = self.resolveManualUseTLS(host: host, useTLS: useTLS)
-        guard let resolvedPort = self.resolveManualPort(host: host, port: port, useTLS: resolvedUseTLS)
+        guard let resolvedPort = Self.resolvedManualPort(host: host, port: port)
         else { return }
         let stableID = self.manualStableID(host: host, port: resolvedPort)
+        self.pendingConnectionStableID = stableID
+        await self.waitForPendingForgetCleanup(stableID: stableID)
+        guard self.connectAttemptGeneration == connectAttempt.suppressionLease.generation else { return }
+        let instanceId = GatewaySettingsStore.currentInstanceID()
+        let storedCredentials = GatewaySettingsStore.loadGatewayCredentials(
+            instanceId: instanceId,
+            gatewayStableID: stableID)
+        let token = authOverride.map(\.token) ?? storedCredentials.token
+        let bootstrapToken = authOverride.map(\.bootstrapToken) ?? storedCredentials.bootstrapToken
+        let password = authOverride.map(\.password) ?? storedCredentials.password
+        let suppressStoredDeviceAuth =
+            authOverride?.suppressStoredDeviceAuth ?? storedCredentials.suppressStoredDeviceAuth
+        let pendingAuthOverride = authOverride ?? (storedCredentials.hasCredentials
+            ? ManualAuthOverride.explicit(
+                token: token,
+                bootstrapToken: bootstrapToken,
+                password: password,
+                targetStableID: stableID,
+                suppressStoredDeviceAuth: suppressStoredDeviceAuth)
+            : nil)
         let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
         if resolvedUseTLS, stored == nil {
             guard let url = self.buildGatewayURL(host: host, port: resolvedPort, useTLS: true) else { return }
             self.appModel?.beginGatewayPreconnectVerification(statusText: "Verifying gateway TLS fingerprint…")
-            switch await self.probeTLSFingerprint(
+            guard let probeResult = await self.probeTLSFingerprint(
                 host: host,
                 port: resolvedPort,
                 url: url,
                 queueLabel: "gateway.tls.manual")
-            {
+            else { return }
+            guard self.connectAttemptGeneration == connectAttempt.suppressionLease.generation else { return }
+            switch probeResult {
             case let .fingerprint(fp):
-                self.pendingTrustConnect = PendingTrustConnect(
+                self.pendingTrustConnect = GatewayPendingTrustConnect(
                     url: url,
                     stableID: stableID,
                     isManual: true,
-                    authOverride: pendingAuthOverride)
+                    authOverride: pendingAuthOverride,
+                    allowStoredDeviceAuth: !suppressStoredDeviceAuth,
+                    suppressionLease: connectAttempt.suppressionLease,
+                    gatewayGeneration: connectAttempt.gatewayGeneration)
                 self.pendingTrustPrompt = TrustPrompt(
                     stableID: stableID,
                     gatewayName: "\(host):\(resolvedPort)",
@@ -432,11 +449,15 @@ final class GatewayConnectionController {
             port: resolvedPort,
             useTLS: tlsParams?.required == true)
         else { return }
-        GatewaySettingsStore.saveLastGatewayConnectionManual(
+        let registryEntry = GatewaySettingsStore.GatewayRegistryEntry(
+            stableID: stableID,
+            kind: .manual,
+            name: "\(host):\(resolvedPort)",
             host: host,
             port: resolvedPort,
             useTLS: resolvedUseTLS && tlsParams != nil,
-            stableID: stableID)
+            lastConnectedAtMs: nil)
+        guard self.persistActiveGateway(registryEntry) else { return }
         self.didAutoConnect = true
         self.startAutoConnect(
             url: url,
@@ -445,22 +466,168 @@ final class GatewayConnectionController {
             token: token,
             bootstrapToken: bootstrapToken,
             password: password,
-            forceReconnect: forceReconnect)
+            allowStoredDeviceAuth: !suppressStoredDeviceAuth,
+            forceReconnect: forceReconnect,
+            suppressionGeneration: connectAttempt.suppressionLease.generation,
+            expectedGeneration: connectAttempt.gatewayGeneration)
     }
 
-    func connectLastKnown() async {
-        self.requestLocalNetworkAccess(reason: "connect_last_known")
-        guard let last = GatewaySettingsStore.loadLastGatewayConnection() else { return }
-        switch last {
-        case let .manual(host, port, useTLS, _):
-            await self.connectManual(host: host, port: port, useTLS: useTLS, forceReconnect: true)
-        case let .discovered(stableID, _):
-            guard let gateway = self.gateways.first(where: { $0.stableID == stableID }) else {
-                _ = await self.connectSavedManualEndpointFallback()
+    func connectActiveGateway() async {
+        self.requestLocalNetworkAccess(reason: "connect_active_gateway", allowAutoReconnect: false)
+        guard let active = GatewaySettingsStore.activeGatewayEntry() else { return }
+        switch active.kind {
+        case .manual:
+            guard let host = active.host, let port = active.port else { return }
+            await self.connectManual(host: host, port: port, useTLS: active.useTLS, forceReconnect: true)
+        case .discovered:
+            if let gateway = self.gateways.first(where: { $0.stableID == active.stableID }) {
+                _ = await self.connectDiscoveredGateway(gateway, forceReconnect: true)
                 return
             }
-            _ = await self.connectDiscoveredGateway(gateway, forceReconnect: true)
+            guard let fallback = self.mostRecentlyConnectedManualGateway() else { return }
+            guard let host = fallback.host, let port = fallback.port else { return }
+            await self.connectManual(host: host, port: port, useTLS: fallback.useTLS, forceReconnect: true)
         }
+    }
+
+    /// Returns `nil` after initiating a switch, or a user-facing discovery failure.
+    func switchToGateway(stableID: String) async -> String? {
+        let stableID = stableID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let entry = GatewaySettingsStore.loadGatewayRegistry().entries.first(where: {
+            $0.stableID == stableID
+        }) else {
+            return "This paired gateway is no longer available."
+        }
+        switch entry.kind {
+        case .manual:
+            guard let host = entry.host, let port = entry.port else {
+                return "This paired gateway has an invalid saved endpoint."
+            }
+            // Switching intentionally persists the user's selection at initiation, matching connect flows.
+            guard GatewaySettingsStore.setActiveGateway(stableID: stableID) else {
+                return "Could not save the active gateway selection."
+            }
+            await self.connectManual(
+                host: host,
+                port: port,
+                useTLS: entry.useTLS,
+                forceReconnect: true)
+            return nil
+        case .discovered:
+            guard let gateway = self.gateways.first(where: { $0.stableID == stableID }) else {
+                return "\(entry.name) is not currently discoverable on this network."
+            }
+            guard GatewaySettingsStore.setActiveGateway(stableID: stableID) else {
+                return "Could not save the active gateway selection."
+            }
+            return await self.connectDiscoveredGateway(gateway, forceReconnect: true)
+        }
+    }
+
+    @discardableResult
+    func forgetGateway(stableID: String) -> Bool {
+        let stableID = stableID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !stableID.isEmpty else { return false }
+        if self.pendingForgetCleanups[stableID] != nil {
+            return true
+        }
+        guard GatewaySettingsStore.removeGatewayRegistryEntry(stableID: stableID) else {
+            return false
+        }
+        if self.pendingConnectionStableID == stableID {
+            let cancellationLease = self.cancelPendingConnectionAttempts()
+            self.releaseAutoConnectSuppression(after: cancellationLease)
+        }
+        let wasConnected = self.appModel?.activeGatewayConnectConfig?.effectiveStableID == stableID ||
+            self.appModel?.connectedGatewayID == stableID
+        let shouldDisconnect = wasConnected
+        if shouldDisconnect {
+            let hasDifferentPendingTarget = self.pendingConnectionStableID.map { $0 != stableID } ?? false
+            self.appModel?.disconnectForgottenGateway(
+                preservingPendingConnectAttempt: hasDifferentPendingTarget)
+        }
+        let instanceID = GatewaySettingsStore.currentInstanceID()
+        self.clearLegacyManualGatewayDefaults(matching: stableID)
+        GatewaySettingsStore.clearLegacyGatewaySelectors(stableID: stableID)
+        GatewaySettingsStore.deleteGatewayCredentials(instanceId: instanceID, stableID: stableID)
+        _ = GatewaySettingsStore.clearGatewayCustomHeaders(gatewayStableID: stableID)
+        _ = GatewayTLSStore.clearFingerprint(stableID: stableID)
+        GatewaySettingsStore.saveGatewayClientIdOverride(stableID: stableID, clientId: nil)
+        GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: nil)
+        let shareRelayGatewayID = ShareGatewayRelaySettings.loadConfig()?.gatewayStableID?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if shareRelayGatewayID == stableID {
+            ShareGatewayRelaySettings.clearConfig()
+        }
+
+        Self.clearDeviceAuthTokens(gatewayID: stableID)
+        let cleanupID = UUID()
+        let cleanupTask = Task { @MainActor [weak appModel] in
+            if let appModel {
+                if shouldDisconnect {
+                    await appModel.waitForGatewaySessionResetIfNeeded()
+                    // A handshake racing teardown can persist a token after the first cleanup.
+                    Self.clearDeviceAuthTokens(gatewayID: stableID)
+                }
+                await appModel.purgeChatTranscriptCache(gatewayID: stableID)
+            } else if let databaseURL = NodeAppModel.chatTranscriptCacheDatabaseURL(gatewayID: stableID) {
+                OpenClawChatSQLiteTranscriptCache.removeDatabaseFiles(at: databaseURL)
+            }
+        }
+        self.pendingForgetCleanups[stableID] = (cleanupID, cleanupTask)
+        Task { @MainActor [weak self] in
+            await cleanupTask.value
+            guard self?.pendingForgetCleanups[stableID]?.id == cleanupID else { return }
+            self?.pendingForgetCleanups[stableID] = nil
+        }
+        return true
+    }
+
+    private func waitForPendingForgetCleanup(stableID: String) async {
+        guard let pending = self.pendingForgetCleanups[stableID] else { return }
+        await pending.task.value
+        if self.pendingForgetCleanups[stableID]?.id == pending.id {
+            self.pendingForgetCleanups[stableID] = nil
+        }
+    }
+
+    private func persistActiveGateway(_ entry: GatewaySettingsStore.GatewayRegistryEntry) -> Bool {
+        guard GatewaySettingsStore.upsertGatewayRegistryEntry(entry, activate: true) else {
+            self.appModel?.gatewayStatusText = "Could not save paired gateway"
+            return false
+        }
+        return true
+    }
+
+    private static func clearDeviceAuthTokens(gatewayID: String) {
+        let primaryIdentity = DeviceIdentityStore.loadOrCreate()
+        DeviceAuthStore.clearToken(deviceId: primaryIdentity.deviceId, role: "node", gatewayID: gatewayID)
+        DeviceAuthStore.clearToken(deviceId: primaryIdentity.deviceId, role: "operator", gatewayID: gatewayID)
+        let shareIdentity = DeviceIdentityStore.loadOrCreate(profile: .shareExtension)
+        DeviceAuthStore.clearToken(
+            deviceId: shareIdentity.deviceId,
+            role: "node",
+            gatewayID: gatewayID,
+            profile: .shareExtension)
+        DeviceAuthStore.clearToken(
+            deviceId: shareIdentity.deviceId,
+            role: "operator",
+            gatewayID: gatewayID,
+            profile: .shareExtension)
+    }
+
+    private func clearLegacyManualGatewayDefaults(matching stableID: String) {
+        let defaults = UserDefaults.standard
+        let host = defaults.string(forKey: "gateway.manual.host")?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let port = Self.resolvedManualPort(
+            host: host,
+            port: defaults.integer(forKey: "gateway.manual.port"))
+        guard !host.isEmpty, let port, self.manualStableID(host: host, port: port) == stableID else { return }
+        defaults.set(false, forKey: "gateway.manual.enabled")
+        defaults.removeObject(forKey: "gateway.manual.host")
+        defaults.removeObject(forKey: "gateway.manual.port")
+        defaults.removeObject(forKey: "gateway.manual.tls")
     }
 
     /// Rebuild connect options from current local settings (caps/commands/permissions)
@@ -475,8 +642,12 @@ final class GatewayConnectionController {
         guard let appModel else { return }
         guard let cfg = appModel.activeGatewayConnectConfig else { return }
         guard appModel.gatewayAutoReconnectEnabled else { return }
+        let generation = appModel.gatewayConnectGeneration
 
-        let nodeOptions = await self.makeConnectOptions(stableID: cfg.stableID)
+        let nodeOptions = await self.makeConnectOptions(
+            stableID: cfg.stableID,
+            deviceAuthGatewayID: cfg.nodeOptions.deviceAuthGatewayID,
+            allowStoredDeviceAuth: cfg.nodeOptions.allowStoredDeviceAuth)
         let refreshedConfig = GatewayConnectConfig(
             url: cfg.url,
             stableID: cfg.stableID,
@@ -485,12 +656,81 @@ final class GatewayConnectionController {
             bootstrapToken: cfg.bootstrapToken,
             password: cfg.password,
             nodeOptions: nodeOptions)
-        appModel.applyGatewayConnectConfig(refreshedConfig)
+        appModel.applyGatewayConnectConfig(refreshedConfig, expectedGeneration: generation)
     }
 
     func clearPendingTrustPrompt() {
+        // Invalidate an in-flight probe so its late result cannot restore a stale prompt.
+        self.trustProbeGeneration &+= 1
         self.pendingTrustPrompt = nil
         self.pendingTrustConnect = nil
+        self.pendingConnectionStableID = nil
+    }
+
+    @discardableResult
+    func cancelPendingConnectionAttempts(
+        suspendCurrentGateway: Bool = false) -> AutoConnectSuppressionLease
+    {
+        let lease = self.beginAutoConnectSuppression(restoresAutoReconnect: suspendCurrentGateway)
+        _ = self.reserveGatewayConnectAttempt()
+        if suspendCurrentGateway {
+            self.appModel?.suspendGatewayForTargetReview()
+        }
+        return lease
+    }
+
+    private func beginAutoConnectSuppression(restoresAutoReconnect: Bool) -> AutoConnectSuppressionLease {
+        let baseline = if self.autoConnectSuppressionGeneration != nil,
+                          let baseline = self.autoConnectSuppressionBaseline
+        {
+            (
+                autoReconnectEnabled: baseline.autoReconnectEnabled,
+                restoresAutoReconnect: baseline.restoresAutoReconnect || restoresAutoReconnect,
+                suspendedConfig: baseline.suspendedConfig ??
+                    (restoresAutoReconnect ? self.appModel?.activeGatewayConnectConfig : nil))
+        } else {
+            (
+                autoReconnectEnabled: self.appModel?.gatewayAutoReconnectEnabled ?? false,
+                restoresAutoReconnect: restoresAutoReconnect,
+                suspendedConfig: restoresAutoReconnect ? self.appModel?.activeGatewayConnectConfig : nil)
+        }
+        self.connectAttemptGeneration &+= 1
+        self.autoConnectSuppressionGeneration = self.connectAttemptGeneration
+        self.autoConnectSuppressionBaseline = baseline
+        self.clearPendingTrustPrompt()
+        return AutoConnectSuppressionLease(
+            generation: self.connectAttemptGeneration,
+            previousAutoReconnectEnabled: baseline.autoReconnectEnabled,
+            restoresAutoReconnect: baseline.restoresAutoReconnect,
+            suspendedConfig: baseline.suspendedConfig)
+    }
+
+    func resumeAutoConnect(after lease: AutoConnectSuppressionLease) {
+        // A dismissed older target must not release suppression owned by its replacement.
+        guard self.autoConnectSuppressionGeneration == lease.generation else { return }
+        self.clearAutoConnectSuppression(generation: lease.generation)
+        if lease.restoresAutoReconnect {
+            let currentPreference = UserDefaults.standard.bool(forKey: "gateway.autoconnect")
+            if lease.previousAutoReconnectEnabled,
+               currentPreference,
+               let suspendedConfig = lease.suspendedConfig
+            {
+                self.appModel?.resumeGatewayAfterTargetReview(suspendedConfig)
+                return
+            }
+            self.appModel?.gatewayAutoReconnectEnabled = lease.previousAutoReconnectEnabled && currentPreference
+        }
+        self.attemptAutoReconnectIfNeeded()
+    }
+
+    func releaseAutoConnectSuppression(after lease: AutoConnectSuppressionLease) {
+        self.clearAutoConnectSuppression(generation: lease.generation)
+    }
+
+    private func clearAutoConnectSuppression(generation: UInt64) {
+        guard self.autoConnectSuppressionGeneration == generation else { return }
+        self.autoConnectSuppressionGeneration = nil
+        self.autoConnectSuppressionBaseline = nil
     }
 
     func acceptPendingTrustPrompt() async {
@@ -499,27 +739,33 @@ final class GatewayConnectionController {
               pending.stableID == prompt.stableID
         else { return }
 
-        GatewayTLSStore.saveFingerprint(prompt.fingerprintSha256, stableID: pending.stableID)
-        self.clearPendingTrustPrompt()
-
-        if pending.isManual {
-            GatewaySettingsStore.saveLastGatewayConnectionManual(
-                host: prompt.host,
-                port: prompt.port,
-                useTLS: true,
-                stableID: pending.stableID)
-        } else {
-            GatewaySettingsStore.saveLastGatewayConnectionDiscovered(stableID: pending.stableID, useTLS: true)
+        guard self.persistTLSFingerprint(prompt.fingerprintSha256, pending.stableID) else {
+            self.appModel?.gatewayStatusText = "Could not save gateway certificate"
+            return
         }
 
         let instanceId = GatewaySettingsStore.currentInstanceID()
-        let token =
-            pending.authOverride.map(\.token) ?? GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
-        let bootstrapToken =
-            pending.authOverride.map(\.bootstrapToken) ?? GatewaySettingsStore.loadGatewayBootstrapToken(
-                instanceId: instanceId)
-        let password =
-            pending.authOverride.map(\.password) ?? GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
+        let registryEntry = GatewaySettingsStore.GatewayRegistryEntry(
+            stableID: pending.stableID,
+            kind: pending.isManual ? .manual : .discovered,
+            name: prompt.gatewayName,
+            host: pending.isManual ? prompt.host : nil,
+            port: pending.isManual ? prompt.port : nil,
+            useTLS: true,
+            lastConnectedAtMs: nil)
+        guard self.persistActiveGateway(registryEntry) else {
+            _ = GatewayTLSStore.clearFingerprint(stableID: pending.stableID)
+            return
+        }
+        self.clearPendingTrustPrompt()
+        let storedCredentials = GatewaySettingsStore.loadGatewayCredentials(
+            instanceId: instanceId,
+            gatewayStableID: pending.stableID)
+        let token = pending.authOverride.map(\.token) ?? storedCredentials.token
+        let bootstrapToken = pending.authOverride.map(\.bootstrapToken) ?? storedCredentials.bootstrapToken
+        let password = pending.authOverride.map(\.password) ?? storedCredentials.password
+        let suppressStoredDeviceAuth =
+            pending.authOverride?.suppressStoredDeviceAuth ?? storedCredentials.suppressStoredDeviceAuth
         let tlsParams = GatewayTLSParams(
             required: true,
             expectedFingerprint: prompt.fingerprintSha256,
@@ -527,18 +773,28 @@ final class GatewayConnectionController {
             storeKey: pending.stableID)
 
         self.didAutoConnect = true
-        self.startAutoConnect(
+        let didStart = self.startAutoConnect(
             url: pending.url,
             gatewayStableID: pending.stableID,
             tls: tlsParams,
             token: token,
             bootstrapToken: bootstrapToken,
-            password: password)
+            password: password,
+            allowStoredDeviceAuth: pending.allowStoredDeviceAuth && !suppressStoredDeviceAuth,
+            suppressionGeneration: pending.suppressionLease.generation,
+            expectedGeneration: pending.gatewayGeneration)
+        if !didStart {
+            self.clearAutoConnectSuppression(generation: pending.suppressionLease.generation)
+        }
     }
 
     func declinePendingTrustPrompt() {
+        let lease = self.pendingTrustConnect?.suppressionLease
         self.clearPendingTrustPrompt()
         self.appModel?.gatewayStatusText = "Offline"
+        if let lease {
+            self.resumeAutoConnect(after: lease)
+        }
     }
 
     @discardableResult
@@ -551,7 +807,7 @@ final class GatewayConnectionController {
             return false
         }
 
-        guard GatewayTLSStore.replaceFingerprint(fingerprint, stableID: stableID) else {
+        guard self.persistTLSFingerprint(fingerprint, stableID) else {
             self.appModel?.gatewayStatusText = "Could not update gateway certificate"
             return false
         }
@@ -577,18 +833,20 @@ final class GatewayConnectionController {
                 nodeOptions: cfg.nodeOptions)
             appModel.applyGatewayConnectConfig(refreshedConfig)
         } else {
-            await self.connectLastKnown()
+            await self.connectActiveGateway()
         }
         return true
     }
 
-    private func updateFromDiscovery() {
+    private func updateFromDiscovery(allowAutoConnect: Bool = true) {
         let newGateways = self.discovery.gateways
         self.gateways = newGateways
         self.discoveryStatusText = self.discovery.statusText
         self.discoveryDebugLog = self.discovery.debugLog
         self.updateLastDiscoveredGateway(from: newGateways)
-        self.maybeAutoConnect()
+        if allowAutoConnect {
+            self.maybeAutoConnect()
+        }
     }
 
     private func observeDiscovery() {
@@ -606,65 +864,45 @@ final class GatewayConnectionController {
     }
 
     private func maybeAutoConnect() {
+        guard self.autoConnectSuppressionGeneration == nil else { return }
         guard !self.didAutoConnect else { return }
         guard let appModel = self.appModel else { return }
         guard appModel.gatewayServerName == nil else { return }
 
         let defaults = UserDefaults.standard
         guard defaults.bool(forKey: "gateway.autoconnect") else { return }
-        let manualEnabled = defaults.bool(forKey: "gateway.manual.enabled")
 
         let instanceId = defaults.string(forKey: "node.instanceId")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !instanceId.isEmpty else { return }
 
-        let token = GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
-        let bootstrapToken = GatewaySettingsStore.loadGatewayBootstrapToken(instanceId: instanceId)
-        let password = GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
-
-        if manualEnabled {
-            let manualHost = defaults.string(forKey: "gateway.manual.host")?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !manualHost.isEmpty else { return }
-
-            let manualPort = defaults.integer(forKey: "gateway.manual.port")
-            let manualTLS = defaults.bool(forKey: "gateway.manual.tls")
-            let resolvedUseTLS = self.resolveManualUseTLS(host: manualHost, useTLS: manualTLS)
-            guard let resolvedPort = self.resolveManualPort(
-                host: manualHost,
-                port: manualPort,
-                useTLS: resolvedUseTLS)
-            else { return }
-
-            let stableID = self.manualStableID(host: manualHost, port: resolvedPort)
-            let tlsParams = self.resolveManualTLSParams(
-                stableID: stableID,
-                tlsEnabled: resolvedUseTLS)
-
-            guard let url = self.buildGatewayURL(
-                host: manualHost,
-                port: resolvedPort,
-                useTLS: tlsParams?.required == true)
-            else { return }
-
-            self.didAutoConnect = true
-            self.startAutoConnect(
-                url: url,
-                gatewayStableID: stableID,
-                tls: tlsParams,
-                token: token,
-                bootstrapToken: bootstrapToken,
-                password: password)
+        if let active = GatewaySettingsStore.activeGatewayEntry() {
+            if self.startActiveGatewayAutoConnect(active, instanceId: instanceId) {
+                return
+            }
+            if active.kind == .discovered,
+               let target = self.gateways.first(where: { $0.stableID == active.stableID }),
+               GatewayTLSStore.loadFingerprint(stableID: target.stableID) != nil
+            {
+                self.didAutoConnect = true
+                Task { [weak self] in
+                    guard let self else { return }
+                    _ = await self.connectDiscoveredGateway(target)
+                }
+                return
+            }
+            if active.kind == .discovered,
+               let fallback = self.mostRecentlyConnectedManualGateway(),
+               self.startActiveGatewayAutoConnect(fallback, instanceId: instanceId)
+            {
+                _ = GatewaySettingsStore.setActiveGateway(stableID: fallback.stableID)
+                return
+            }
             return
         }
 
-        if let lastKnown = GatewaySettingsStore.loadLastGatewayConnection(),
-           self.startLastKnownAutoConnect(
-               lastKnown,
-               token: token,
-               bootstrapToken: bootstrapToken,
-               password: password)
-        {
+        if defaults.bool(forKey: "gateway.manual.enabled") {
+            self.startConfiguredManualAutoConnect(defaults: defaults, instanceId: instanceId)
             return
         }
 
@@ -700,40 +938,69 @@ final class GatewayConnectionController {
             }
             return
         }
-
-        _ = self.startSavedManualEndpointFallback()
     }
 
-    private func startLastKnownAutoConnect(
-        _ lastKnown: GatewaySettingsStore.LastGatewayConnection,
-        token: String?,
-        bootstrapToken: String?,
-        password: String?) -> Bool
+    private func startConfiguredManualAutoConnect(defaults: UserDefaults, instanceId: String) {
+        let host = defaults.string(forKey: "gateway.manual.host")?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !host.isEmpty else { return }
+
+        let configuredPort = defaults.integer(forKey: "gateway.manual.port")
+        let configuredTLS = defaults.bool(forKey: "gateway.manual.tls")
+        let useTLS = self.resolveManualUseTLS(host: host, useTLS: configuredTLS)
+        guard let port = Self.resolvedManualPort(host: host, port: configuredPort) else { return }
+
+        let stableID = self.manualStableID(host: host, port: port)
+        let tlsParams = self.resolveManualTLSParams(stableID: stableID, tlsEnabled: useTLS)
+        // Manual TLS auto-connect cannot present first-use trust UI, so it requires an existing pin.
+        guard !useTLS || tlsParams?.expectedFingerprint != nil else { return }
+        guard let url = self.buildGatewayURL(host: host, port: port, useTLS: tlsParams?.required == true)
+        else { return }
+
+        let credentials = GatewaySettingsStore.loadGatewayCredentials(
+            instanceId: instanceId,
+            gatewayStableID: stableID)
+        self.didAutoConnect = true
+        self.startAutoConnect(
+            url: url,
+            gatewayStableID: stableID,
+            tls: tlsParams,
+            token: credentials.token,
+            bootstrapToken: credentials.bootstrapToken,
+            password: credentials.password,
+            allowStoredDeviceAuth: !credentials.suppressStoredDeviceAuth)
+    }
+
+    private func startActiveGatewayAutoConnect(
+        _ active: GatewaySettingsStore.GatewayRegistryEntry,
+        instanceId: String) -> Bool
     {
-        switch lastKnown {
-        case let .manual(host, port, useTLS, stableID):
+        switch active.kind {
+        case .manual:
+            guard let host = active.host, let port = active.port else { return false }
+            let stableID = active.stableID
+            let useTLS = active.useTLS
             let resolvedUseTLS = self.resolveManualUseTLS(host: host, useTLS: useTLS)
-            let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
-            let tlsParams = stored.map { fp in
-                GatewayTLSParams(required: true, expectedFingerprint: fp, allowTOFU: false, storeKey: stableID)
-            }
+            let tlsParams = self.resolveManualTLSParams(stableID: stableID, tlsEnabled: resolvedUseTLS)
+            guard !resolvedUseTLS || tlsParams?.expectedFingerprint != nil else { return false }
             guard let url = self.buildGatewayURL(
                 host: host,
                 port: port,
-                useTLS: resolvedUseTLS && tlsParams != nil)
+                useTLS: tlsParams?.required == true)
             else { return false }
 
-            // Security: autoconnect only to previously trusted gateways (stored TLS pin).
-            guard tlsParams != nil else { return false }
-
+            let credentials = GatewaySettingsStore.loadGatewayCredentials(
+                instanceId: instanceId,
+                gatewayStableID: stableID)
             self.didAutoConnect = true
             self.startAutoConnect(
                 url: url,
                 gatewayStableID: stableID,
                 tls: tlsParams,
-                token: token,
-                bootstrapToken: bootstrapToken,
-                password: password)
+                token: credentials.token,
+                bootstrapToken: credentials.bootstrapToken,
+                password: credentials.password,
+                allowStoredDeviceAuth: !credentials.suppressStoredDeviceAuth)
             return true
         case .discovered:
             return false
@@ -743,6 +1010,7 @@ final class GatewayConnectionController {
     private func attemptAutoReconnectIfNeeded() {
         guard let appModel = self.appModel else { return }
         guard appModel.gatewayAutoReconnectEnabled else { return }
+        guard self.autoConnectSuppressionGeneration == nil else { return }
         // Avoid starting duplicate connect loops while a prior config is active.
         guard appModel.activeGatewayConnectConfig == nil else { return }
         guard UserDefaults.standard.bool(forKey: "gateway.autoconnect") else { return }
@@ -750,44 +1018,15 @@ final class GatewayConnectionController {
         self.maybeAutoConnect()
     }
 
-    private func savedManualEndpointFallback(defaults: UserDefaults = .standard) -> SavedManualEndpoint? {
-        guard defaults.bool(forKey: "gateway.autoconnect") else { return nil }
-        guard defaults.bool(forKey: "gateway.manual.enabled") else { return nil }
-        let host = defaults.string(forKey: "gateway.manual.host")?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !host.isEmpty else { return nil }
-
-        let configuredPort = defaults.integer(forKey: "gateway.manual.port")
-        let configuredUseTLS = defaults.bool(forKey: "gateway.manual.tls")
-        let resolvedUseTLS = self.resolveManualUseTLS(host: host, useTLS: configuredUseTLS)
-        guard let resolvedPort = self.resolveManualPort(
-            host: host,
-            port: configuredPort,
-            useTLS: resolvedUseTLS)
-        else { return nil }
-
-        return SavedManualEndpoint(host: host, port: resolvedPort, useTLS: resolvedUseTLS)
-    }
-
-    private func startSavedManualEndpointFallback() -> Bool {
-        guard let endpoint = self.savedManualEndpointFallback() else { return false }
-        self.didAutoConnect = true
-        Task { [weak self] in
-            await self?.connectManual(
-                host: endpoint.host,
-                port: endpoint.port,
-                useTLS: endpoint.useTLS)
-        }
-        return true
-    }
-
-    private func connectSavedManualEndpointFallback() async -> Bool {
-        guard let endpoint = self.savedManualEndpointFallback() else { return false }
-        await self.connectManual(
-            host: endpoint.host,
-            port: endpoint.port,
-            useTLS: endpoint.useTLS)
-        return true
+    private func mostRecentlyConnectedManualGateway() -> GatewaySettingsStore.GatewayRegistryEntry? {
+        GatewaySettingsStore.loadGatewayRegistry().entries
+            .filter { $0.kind == .manual }
+            .max { lhs, rhs in
+                let lhsConnected = lhs.lastConnectedAtMs ?? Int.min
+                let rhsConnected = rhs.lastConnectedAtMs ?? Int.min
+                if lhsConnected != rhsConnected { return lhsConnected < rhsConnected }
+                return lhs.stableID > rhs.stableID
+            }
     }
 
     private func updateLastDiscoveredGateway(from gateways: [GatewayDiscoveryModel.DiscoveredGateway]) {
@@ -805,6 +1044,7 @@ final class GatewayConnectionController {
         GatewaySettingsStore.saveLastDiscoveredGatewayStableID(first.stableID)
     }
 
+    @discardableResult
     private func startAutoConnect(
         url: URL,
         gatewayStableID: String,
@@ -812,16 +1052,58 @@ final class GatewayConnectionController {
         token: String?,
         bootstrapToken: String?,
         password: String?,
-        forceReconnect: Bool = false)
+        allowStoredDeviceAuth: Bool = true,
+        forceReconnect: Bool = false,
+        suppressionGeneration: UInt64? = nil,
+        expectedGeneration: UInt64? = nil) -> Bool
     {
-        guard let appModel else { return }
+        guard let appModel else { return false }
+        if let expectedGeneration {
+            guard expectedGeneration == appModel.gatewayConnectGeneration else { return false }
+        }
+        let previousTask = self.pendingAutoConnectTask
+        previousTask?.cancel()
+        // Advancing again at handoff rejects work that captured the reservation generation while
+        // endpoint resolution or trust verification was suspended.
+        let generation = appModel.beginGatewayConnectAttempt()
+        self.pendingAutoConnectGeneration = generation
+        self.pendingConnectionStableID = gatewayStableID
+        // An explicit target owns suppression until its queued handoff exits. Otherwise a
+        // foreground reconnect can replace it while reset or permission work is suspended.
+        self.pendingAutoConnectSuppressionGeneration = suppressionGeneration
         appModel.gatewayStatusText = "Connecting…"
-        Task { [weak self, weak appModel] in
+        let task = Task { [weak self, weak appModel] in
             guard let self, let appModel else { return }
-            if forceReconnect {
-                await appModel.resetGatewaySessionsForForcedReconnect()
+            defer {
+                if self.pendingAutoConnectGeneration == generation {
+                    self.pendingAutoConnectTask = nil
+                    self.pendingAutoConnectGeneration = nil
+                    self.pendingAutoConnectSuppressionGeneration = nil
+                    if self.pendingConnectionStableID == gatewayStableID {
+                        self.pendingConnectionStableID = nil
+                    }
+                }
+                if let suppressionGeneration,
+                   self.autoConnectSuppressionGeneration == suppressionGeneration
+                {
+                    self.clearAutoConnectSuppression(generation: suppressionGeneration)
+                }
             }
-            let nodeOptions = await self.makeConnectOptions(stableID: gatewayStableID)
+            await previousTask?.value
+            await appModel.waitForGatewaySessionResetIfNeeded()
+            guard !Task.isCancelled, generation == appModel.gatewayConnectGeneration else { return }
+            if forceReconnect {
+                await self.forceReconnectReset(appModel)
+                guard !Task.isCancelled, generation == appModel.gatewayConnectGeneration else { return }
+            }
+            let nodeOptions = await self.makeConnectOptions(
+                stableID: gatewayStableID,
+                deviceAuthGatewayID: GatewaySettingsStore.authenticationOwnerID(routeStableID: gatewayStableID),
+                allowStoredDeviceAuth: allowStoredDeviceAuth)
+            // Permission reads above can suspend long enough for a model-owned reconnect reset
+            // to start, so close the reset barrier again immediately before the synchronous apply.
+            await appModel.waitForGatewaySessionResetIfNeeded()
+            guard !Task.isCancelled, generation == appModel.gatewayConnectGeneration else { return }
             let cfg = GatewayConnectConfig(
                 url: url,
                 stableID: gatewayStableID,
@@ -830,8 +1112,13 @@ final class GatewayConnectionController {
                 bootstrapToken: bootstrapToken,
                 password: password,
                 nodeOptions: nodeOptions)
-            appModel.applyGatewayConnectConfig(cfg, forceReconnect: forceReconnect)
+            appModel.applyGatewayConnectConfig(
+                cfg,
+                forceReconnect: forceReconnect,
+                expectedGeneration: generation)
         }
+        self.pendingAutoConnectTask = task
+        return true
     }
 
     private func resolveDiscoveredTLSParams(
@@ -880,8 +1167,10 @@ final class GatewayConnectionController {
         host: String,
         port: Int,
         url: URL,
-        queueLabel: String) async -> GatewayTLSFingerprintProbeResult
+        queueLabel: String) async -> GatewayTLSFingerprintProbeResult?
     {
+        self.trustProbeGeneration &+= 1
+        let generation = self.trustProbeGeneration
         self.pendingTrustConnect = nil
         self.pendingTrustPrompt = nil
         let reachable = await self.tcpReachabilityProbe(
@@ -889,10 +1178,75 @@ final class GatewayConnectionController {
             port,
             GatewayTLSFingerprintProbeBudget.tcpConnectTimeoutSeconds,
             queueLabel)
+        guard self.trustProbeGeneration == generation else { return nil }
         guard reachable else {
             return .failure(.endpointUnreachable)
         }
-        return await self.tlsFingerprintProbe(url)
+        let result = await self.tlsFingerprintProbe(url)
+        guard self.trustProbeGeneration == generation else { return nil }
+        return result
+    }
+
+    private func beginConnectAttempt()
+        -> (suppressionLease: AutoConnectSuppressionLease, gatewayGeneration: UInt64?)
+    {
+        let suppressionLease = self.beginAutoConnectSuppression(restoresAutoReconnect: false)
+        // Allocate both tokens before any resolution or trust work. A new explicit target must
+        // invalidate queued config construction from the previous target immediately.
+        let gatewayGeneration = self.reserveGatewayConnectAttempt()
+        return (suppressionLease, gatewayGeneration)
+    }
+
+    private func reserveGatewayConnectAttempt() -> UInt64? {
+        let previousTask = self.pendingAutoConnectTask
+        previousTask?.cancel()
+        self.pendingConnectionStableID = nil
+        guard let appModel else { return nil }
+        let generation = appModel.beginGatewayConnectAttempt()
+        let activeConfig = appModel.activeGatewayConnectConfig
+        let shouldRestoreActiveConfig = appModel.gatewayAutoReconnectEnabled &&
+            !appModel.gatewayPairingPaused &&
+            appModel.lastGatewayProblem?.pauseReconnect != true &&
+            (previousTask != nil || appModel.hasGatewaySessionResetInFlight)
+        self.pendingAutoConnectSuppressionGeneration = nil
+        self.pendingAutoConnectGeneration = generation
+        // The barrier owns any superseded teardown until it finishes. If the replacement never
+        // reaches handoff, restore the still-current route after that teardown completes.
+        let barrier = Task { [weak self, weak appModel] in
+            guard let self, let appModel else { return }
+            defer {
+                if self.pendingAutoConnectGeneration == generation {
+                    self.pendingAutoConnectTask = nil
+                    self.pendingAutoConnectGeneration = nil
+                }
+            }
+            await previousTask?.value
+            await appModel.waitForGatewaySessionResetIfNeeded()
+            guard !Task.isCancelled,
+                  generation == appModel.gatewayConnectGeneration,
+                  shouldRestoreActiveConfig,
+                  let activeConfig,
+                  appModel.gatewayAutoReconnectEnabled,
+                  !appModel.gatewayPairingPaused,
+                  appModel.lastGatewayProblem?.pauseReconnect != true,
+                  appModel.activeGatewayConnectConfig?.hasSameConnectionInputs(as: activeConfig) == true
+            else { return }
+            appModel.applyGatewayConnectConfig(activeConfig, expectedGeneration: generation)
+        }
+        self.pendingAutoConnectTask = barrier
+        return generation
+    }
+
+    private func finishConnectAttempt(_ lease: AutoConnectSuppressionLease) {
+        guard self.connectAttemptGeneration == lease.generation else { return }
+        guard self.pendingTrustPrompt == nil else { return }
+        guard self.pendingAutoConnectSuppressionGeneration != lease.generation else { return }
+        self.pendingConnectionStableID = nil
+        if lease.restoresAutoReconnect {
+            self.resumeAutoConnect(after: lease)
+        } else {
+            self.releaseAutoConnectSuppression(after: lease)
+        }
     }
 
     private func tlsProbeFailureMessage(
@@ -930,6 +1284,217 @@ final class GatewayConnectionController {
 }
 
 extension GatewayConnectionController {
+    private static func migrateLegacyDeviceAuth() {
+        let migrationGatewayID = self.legacyDeviceAuthMigrationGatewayID()
+        let relay = ShareGatewayRelaySettings.loadConfig()
+        let instanceID = GatewaySettingsStore.currentInstanceID()
+        if let migrationGatewayID, let relay {
+            _ = GatewaySettingsStore.migrateProvenRelayCredentials(
+                instanceId: instanceID,
+                gatewayStableID: migrationGatewayID,
+                token: relay.token,
+                password: relay.password)
+        } else {
+            GatewaySettingsStore.discardUnscopedGatewayCredentials(instanceId: instanceID)
+        }
+        let primaryIdentity = DeviceIdentityStore.loadOrCreate()
+        let shareIdentity = DeviceIdentityStore.loadOrCreate(profile: .shareExtension)
+        // The extension connects independently, so the host's last route cannot prove who
+        // issued its legacy token. Require one extension re-pair instead of guessing an owner.
+        DeviceAuthStore.discardUnscopedTokens(
+            deviceId: shareIdentity.deviceId,
+            profile: .shareExtension)
+        guard let migrationGatewayID else {
+            // No cross-gateway fallback: ambiguous legacy tokens require one explicit re-pair.
+            DeviceAuthStore.discardUnscopedTokens(deviceId: primaryIdentity.deviceId)
+            return
+        }
+
+        let credentials = GatewaySettingsStore.loadGatewayCredentials(
+            instanceId: instanceID,
+            gatewayStableID: migrationGatewayID)
+        let hasProvenOperatorCredentials = credentials.token != nil || credentials.password != nil
+        if hasProvenOperatorCredentials {
+            // Shared credentials recover the independently authenticated operator session.
+            // Without them, migrate neither role so reconnect enters the normal re-pair flow.
+            DeviceAuthStore.migrateUnscopedToken(
+                deviceId: primaryIdentity.deviceId,
+                role: "node",
+                toGatewayID: migrationGatewayID)
+        }
+        DeviceAuthStore.discardUnscopedTokens(deviceId: primaryIdentity.deviceId)
+        guard let relay else { return }
+        let relayStableID = relay.gatewayStableID?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard relayStableID.isEmpty else { return }
+        ShareGatewayRelaySettings.saveConfig(ShareGatewayRelayConfig(
+            gatewayURLString: relay.gatewayURLString,
+            gatewayStableID: migrationGatewayID,
+            token: relay.token,
+            password: relay.password,
+            sessionKey: relay.sessionKey,
+            deliveryChannel: relay.deliveryChannel,
+            deliveryTo: relay.deliveryTo))
+    }
+
+    private static func legacyDeviceAuthMigrationGatewayID() -> String? {
+        guard let relay = ShareGatewayRelaySettings.loadConfig() else { return nil }
+        if let stableID = relay.gatewayStableID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !stableID.isEmpty
+        {
+            return stableID
+        }
+        guard let active = GatewaySettingsStore.activeGatewayEntry(),
+              active.kind == .manual,
+              let host = active.host,
+              let port = active.port,
+              let relayURL = URL(string: relay.gatewayURLString),
+              relayURL.host?.caseInsensitiveCompare(host) == .orderedSame
+        else { return nil }
+        let relayPort = relayURL.port ?? (relayURL.scheme?.lowercased() == "wss" ? 443 : 80)
+        let relayUsesTLS = relayURL.scheme?.lowercased() == "wss"
+        guard relayPort == port, relayUsesTLS == active.useTLS else { return nil }
+        return active.stableID
+    }
+
+    struct ManualAuthOverride: Equatable {
+        struct SetupAuth {
+            let token: String
+            let bootstrapToken: String
+            let password: String
+            let targetStableID: String
+
+            var hasBootstrapToken: Bool {
+                !self.bootstrapToken.isEmpty
+            }
+
+            var manualAuthOverride: ManualAuthOverride {
+                // Setup-link credentials are endpoint-scoped. An explicit empty override prevents
+                // a new host from falling back to credentials stored for the previous gateway.
+                ManualAuthOverride.explicit(
+                    token: self.token,
+                    bootstrapToken: self.bootstrapToken,
+                    password: self.password,
+                    targetStableID: self.targetStableID,
+                    suppressStoredDeviceAuth: true)
+            }
+        }
+
+        let token: String?
+        let bootstrapToken: String?
+        let password: String?
+        let targetStableID: String?
+        let suppressStoredDeviceAuth: Bool
+
+        static func explicit(
+            token: String?,
+            bootstrapToken: String?,
+            password: String?,
+            targetStableID: String? = nil,
+            suppressStoredDeviceAuth: Bool) -> ManualAuthOverride
+        {
+            let trimmedToken = token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let trimmedBootstrapToken = bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let trimmedPassword = password?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return ManualAuthOverride(
+                token: trimmedToken.isEmpty ? nil : trimmedToken,
+                bootstrapToken: trimmedBootstrapToken.isEmpty ? nil : trimmedBootstrapToken,
+                password: trimmedPassword.isEmpty ? nil : trimmedPassword,
+                targetStableID: targetStableID,
+                suppressStoredDeviceAuth: suppressStoredDeviceAuth)
+        }
+
+        static func normalized(
+            token: String?,
+            bootstrapToken: String?,
+            password: String?) -> ManualAuthOverride?
+        {
+            let override = ManualAuthOverride.explicit(
+                token: token,
+                bootstrapToken: bootstrapToken,
+                password: password,
+                suppressStoredDeviceAuth: false)
+            guard override.token != nil || override.bootstrapToken != nil || override.password != nil
+            else { return nil }
+            return override
+        }
+
+        static func persisted(instanceId: String, targetStableID: String) -> ManualAuthOverride? {
+            let authenticationOwnerID = GatewaySettingsStore.authenticationOwnerID(
+                routeStableID: targetStableID)
+            guard let metadata = GatewaySettingsStore.loadGatewayCredentialMetadata(
+                instanceId: instanceId,
+                gatewayStableID: authenticationOwnerID)
+            else { return nil }
+            let credentials = GatewaySettingsStore.loadGatewayCredentials(
+                instanceId: instanceId,
+                gatewayStableID: targetStableID)
+            return ManualAuthOverride.explicit(
+                token: credentials.token,
+                bootstrapToken: credentials.bootstrapToken,
+                password: credentials.password,
+                targetStableID: targetStableID,
+                suppressStoredDeviceAuth: metadata.suppressStoredDeviceAuth)
+        }
+
+        static func currentManualInput(
+            token: String?,
+            pendingOverride: ManualAuthOverride?,
+            password: String?,
+            targetStableID: String? = nil) -> ManualAuthOverride?
+        {
+            guard let pendingOverride else {
+                return ManualAuthOverride.normalized(token: token, bootstrapToken: nil, password: password)
+            }
+            if let pendingTarget = pendingOverride.targetStableID, pendingTarget != targetStableID {
+                let normalizedInput = ManualAuthOverride.explicit(
+                    token: token,
+                    bootstrapToken: nil,
+                    password: password,
+                    targetStableID: targetStableID,
+                    suppressStoredDeviceAuth: true)
+                // Setup-link fields retain their source provenance. When the endpoint changes,
+                // carry only values the user replaced instead of forwarding source credentials.
+                return ManualAuthOverride.explicit(
+                    token: normalizedInput.token == pendingOverride.token ? nil : normalizedInput.token,
+                    bootstrapToken: nil,
+                    password: normalizedInput.password == pendingOverride.password ? nil : normalizedInput.password,
+                    targetStableID: targetStableID,
+                    suppressStoredDeviceAuth: true)
+            }
+            return ManualAuthOverride.explicit(
+                token: token,
+                bootstrapToken: pendingOverride.bootstrapToken,
+                password: password,
+                targetStableID: pendingOverride.targetStableID,
+                suppressStoredDeviceAuth: pendingOverride.suppressStoredDeviceAuth)
+        }
+
+        static func manualStableID(host: String, port: Int) -> String {
+            "manual|\(host.lowercased())|\(port)"
+        }
+
+        static func setupAuth(from link: GatewayConnectDeepLink) -> SetupAuth {
+            SetupAuth(
+                token: link.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+                bootstrapToken: link.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+                password: link.password?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+                targetStableID: self.manualStableID(host: link.host, port: link.port))
+        }
+    }
+}
+
+private struct GatewayPendingTrustConnect {
+    let url: URL
+    let stableID: String
+    let isManual: Bool
+    let authOverride: GatewayConnectionController.ManualAuthOverride?
+    let allowStoredDeviceAuth: Bool
+    let suppressionLease: GatewayConnectionController.AutoConnectSuppressionLease
+    let gatewayGeneration: UInt64?
+}
+
+extension GatewayConnectionController {
     private func buildGatewayURL(host: String, port: Int, useTLS: Bool) -> URL? {
         let scheme = useTLS ? "wss" : "ws"
         var components = URLComponents()
@@ -947,17 +1512,15 @@ extension GatewayConnectionController {
         !LoopbackHost.isLocalNetworkHost(host)
     }
 
-    private func shouldForceTLS(host: String) -> Bool {
-        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if trimmed.isEmpty { return false }
-        return trimmed.hasSuffix(".ts.net") || trimmed.hasSuffix(".ts.net.")
-    }
-
     private func manualStableID(host: String, port: Int) -> String {
-        "manual|\(host.lowercased())|\(port)"
+        ManualAuthOverride.manualStableID(host: host, port: port)
     }
 
-    private func makeConnectOptions(stableID: String?) async -> GatewayConnectOptions {
+    private func makeConnectOptions(
+        stableID: String?,
+        deviceAuthGatewayID: String?,
+        allowStoredDeviceAuth: Bool = true) async -> GatewayConnectOptions
+    {
         let defaults = UserDefaults.standard
         let displayName = self.resolvedDisplayName(defaults: defaults)
         let resolvedClientId = self.resolvedClientId(defaults: defaults, stableID: stableID)
@@ -971,7 +1534,9 @@ extension GatewayConnectionController {
             permissions: permissions,
             clientId: resolvedClientId,
             clientMode: "node",
-            clientDisplayName: displayName)
+            clientDisplayName: displayName,
+            allowStoredDeviceAuth: allowStoredDeviceAuth,
+            deviceAuthGatewayID: deviceAuthGatewayID)
     }
 
     private func resolvedClientId(defaults: UserDefaults, stableID: String?) -> String {
@@ -986,18 +1551,6 @@ extension GatewayConnectionController {
             return manualClientId!
         }
         return "openclaw-ios"
-    }
-
-    private func resolveManualPort(host: String, port: Int, useTLS: Bool) -> Int? {
-        if port > 0 {
-            return port <= 65535 ? port : nil
-        }
-        let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedHost.isEmpty else { return nil }
-        if useTLS, self.shouldForceTLS(host: trimmedHost) {
-            return 443
-        }
-        return 18789
     }
 
     private func resolvedDisplayName(defaults: UserDefaults) -> String {
@@ -1121,8 +1674,7 @@ extension GatewayConnectionController {
             status: locationStatus)
         permissions["screenRecording"] = RPScreenRecorder.shared().isAvailable
 
-        let photoStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
-        permissions["photos"] = photoStatus == .authorized || photoStatus == .limited
+        permissions["photos"] = PhotoLibraryAccess.canRead(PhotoLibraryAccess.authorizationStatus())
         let contactsStatus = CNContactStore.authorizationStatus(for: .contacts)
         permissions["contacts"] = contactsStatus == .authorized || contactsStatus == .limited
 
@@ -1196,8 +1748,16 @@ extension GatewayConnectionController {
         self.maybeAutoConnect()
     }
 
+    func _test_triggerAutoReconnect() {
+        self.attemptAutoReconnectIfNeeded()
+    }
+
     func _test_didAutoConnect() -> Bool {
         self.didAutoConnect
+    }
+
+    func _test_isAutoConnectSuppressed() -> Bool {
+        self.autoConnectSuppressionGeneration != nil
     }
 
     func _test_resolveDiscoveredTLSParams(
@@ -1210,16 +1770,8 @@ extension GatewayConnectionController {
         self.resolveManualUseTLS(host: host, useTLS: useTLS)
     }
 
-    func _test_resolveManualPort(host: String, port: Int, useTLS: Bool) -> Int? {
-        self.resolveManualPort(host: host, port: port, useTLS: useTLS)
-    }
-
-    func _test_savedManualEndpointFallback(
-        defaults: UserDefaults = .standard) -> (host: String, port: Int, useTLS: Bool)?
-    {
-        self.savedManualEndpointFallback(defaults: defaults).map { endpoint in
-            (host: endpoint.host, port: endpoint.port, useTLS: endpoint.useTLS)
-        }
+    func _test_resolveManualPort(host: String, port: Int, useTLS _: Bool) -> Int? {
+        Self.resolvedManualPort(host: host, port: port)
     }
 }
 #endif

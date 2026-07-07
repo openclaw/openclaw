@@ -8,12 +8,6 @@ import {
 import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-// Scope refs feed provider discovery and model catalog lookups. Keep the
-// ordering deterministic so prompt/cache inputs do not drift across runs.
-function dedupeCatalogScopeRefs(values: Array<string | undefined>): string[] {
-  return normalizeUniqueSingleOrTrimmedStringList(values);
-}
-
 // Accept provider/model refs in addition to separate provider fields so aliases
 // and user-entered model refs discover the owning provider catalog.
 function providerFromModelRef(value: string | undefined): string | undefined {
@@ -52,9 +46,10 @@ export function resolveModelCatalogScope(params: {
   const modelRefs = providerConfigDeclaresModel(providerConfig, model)
     ? [provider && model ? `${provider}/${model}` : model]
     : [provider && model ? `${provider}/${model}` : model, model];
+  // Scope ordering feeds deterministic discovery and prompt/cache inputs.
   return {
-    providerRefs: dedupeCatalogScopeRefs([provider, providerConfig?.api]),
-    modelRefs: dedupeCatalogScopeRefs(modelRefs),
+    providerRefs: normalizeUniqueSingleOrTrimmedStringList([provider, providerConfig?.api]),
+    modelRefs: normalizeUniqueSingleOrTrimmedStringList(modelRefs),
   };
 }
 
@@ -63,7 +58,7 @@ export function resolveProviderDiscoveryProviderIdsForCatalogScope(params: {
   providerRefs?: readonly string[];
   modelRefs?: readonly string[];
 }): string[] | undefined {
-  const providerIds = dedupeCatalogScopeRefs([
+  const providerIds = normalizeUniqueSingleOrTrimmedStringList([
     ...(params.providerRefs ?? []),
     ...(params.modelRefs ?? []).map(providerFromModelRef),
   ]);

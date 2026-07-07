@@ -4,13 +4,23 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import { maybeApplyTtsToPayload } from "../../../../packages/speech-core/src/tts.ts";
+import { setRuntimeConfigSnapshot } from "../../../../src/config/config.ts";
 import { buildWebchatAudioContentBlocksFromReplyPayloads } from "../../../../src/gateway/server-methods/chat-webchat-media.ts";
+import {
+  installGatewayTestHooks,
+  setTestPluginRegistry,
+  testState,
+  withGatewayServer,
+} from "../../../../src/gateway/test-helpers.ts";
 import { createPluginRecord } from "../../../../src/plugins/loader-records.ts";
 import { createPluginRegistry } from "../../../../src/plugins/registry.ts";
-import {
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "../../../../src/plugins/runtime.ts";
+import { getActivePluginRegistry } from "../../../../src/plugins/runtime.ts";
+import { resetPluginRuntimeStateForTest } from "../../../../src/plugins/runtime.ts";
+import { getSpeechProvider } from "../../../../src/tts/provider-registry.ts";
+
+installGatewayTestHooks({ scope: "suite" });
+
+const CONTROL_UI_E2E_TOKEN = "test-gateway-token-1234567890";
 
 const noopLogger = {
   info() {},
@@ -50,7 +60,7 @@ function installMockTtsProvider() {
       };
     },
   });
-  setActivePluginRegistry(registry.registry);
+  setTestPluginRegistry(registry.registry);
   return synthesizeCalls;
 }
 
@@ -76,6 +86,12 @@ describe("QA WebChat auto TTS", () => {
           },
         },
       } satisfies OpenClawConfig;
+      setRuntimeConfigSnapshot(cfg, cfg);
+
+      expect(getActivePluginRegistry()?.speechProviders.map((entry) => entry.provider.id)).toEqual([
+        "mock",
+      ]);
+      expect(getSpeechProvider("mock", cfg)?.id).toBe("mock");
 
       const blockResult = await maybeApplyTtsToPayload({
         payload: { text },
@@ -132,6 +148,41 @@ describe("QA WebChat auto TTS", () => {
         },
       });
       expect(untrustedBlocks).toHaveLength(0);
+
+      const source = trustedBlocks[0]?.type === "attachment" ? trustedBlocks[0].attachment.url : "";
+      testState.gatewayAuth = { mode: "token", token: CONTROL_UI_E2E_TOKEN };
+      await withGatewayServer(
+        async ({ port }) => {
+          const route = `http://127.0.0.1:${port}/__openclaw__/assistant-media`;
+          const sourceParam = encodeURIComponent(source);
+          const metadata = await fetch(`${route}?meta=1&source=${sourceParam}`, {
+            headers: { Authorization: `Bearer ${CONTROL_UI_E2E_TOKEN}` },
+          });
+          expect(metadata.status).toBe(200);
+          const ticket = (await metadata.json()) as {
+            available?: boolean;
+            mediaTicket?: string;
+          };
+          expect(ticket.available).toBe(true);
+          expect(ticket.mediaTicket).toMatch(/^v1\./);
+
+          const withoutTicket = await fetch(`${route}?source=${sourceParam}`);
+          expect(withoutTicket.status).toBe(401);
+
+          const ticketed = await fetch(
+            `${route}?source=${sourceParam}&mediaTicket=${encodeURIComponent(ticket.mediaTicket ?? "")}`,
+          );
+          expect(ticketed.status).toBe(200);
+          expect(ticketed.headers.get("content-type")).toContain("audio/ogg");
+          expect(Buffer.from(await ticketed.arrayBuffer())).toEqual(Buffer.from("voice"));
+        },
+        {
+          serverOptions: {
+            auth: { mode: "token", token: CONTROL_UI_E2E_TOKEN },
+            controlUiEnabled: true,
+          },
+        },
+      );
     } finally {
       if (mediaPath) {
         fs.rmSync(path.dirname(mediaPath), { recursive: true, force: true });

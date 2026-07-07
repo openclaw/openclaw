@@ -30,6 +30,11 @@ import {
   emitAgentPatchSummaryEvent,
 } from "../infra/agent-events.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
+import {
+  parseInteractiveParam,
+  parseJsonMessageParam,
+} from "../infra/outbound/message-action-params.js";
+import { hasReplyPayloadContent } from "../interactive/payload.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { truncateUtf16Safe } from "../utils.js";
@@ -78,6 +83,10 @@ import {
 import { inferToolMetaFromArgs } from "./embedded-agent-utils.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import type { AgentEvent } from "./runtime/index.js";
+import {
+  createToolValidationErrorSummary,
+  summarizeToolValidationError,
+} from "./tool-error-summary.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 import { readToolResultDetails } from "./tool-result-error.js";
@@ -554,6 +563,21 @@ function readMessagingText(record: Record<string, unknown>): string | undefined 
   return undefined;
 }
 
+function hasMessagingRichContent(record: Record<string, unknown>): boolean {
+  const payload = {
+    presentation: record.presentation,
+    interactive: record.interactive,
+    channelData: record.channelData,
+  };
+  try {
+    parseJsonMessageParam(payload, "presentation");
+    parseInteractiveParam(payload);
+  } catch {
+    return false;
+  }
+  return hasReplyPayloadContent(payload);
+}
+
 function queuePendingToolMedia(
   ctx: ToolHandlerContext,
   mediaReply: { mediaUrls: string[]; audioAsVoice?: boolean; trustedLocalMedia?: boolean },
@@ -788,10 +812,14 @@ export function handleToolExecutionStart(
     toolCallId: string;
     args: unknown;
     replaySafe?: boolean;
+    hideFromChannelProgress?: boolean;
   },
 ): void | Promise<void> {
   const continueAfterBlockReplyFlush = (): void | Promise<void> => {
-    const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.();
+    const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.({
+      reason: "tool_start",
+      assistantMessageIndex: ctx.state.assistantMessageIndex,
+    });
     if (isPromiseLike<void>(onBlockReplyFlushResult)) {
       return onBlockReplyFlushResult.then(() => {
         continueToolExecutionStart();
@@ -804,6 +832,7 @@ export function handleToolExecutionStart(
   const continueToolExecutionStart = () => {
     const rawToolName = evt.toolName;
     const toolName = normalizeToolName(rawToolName);
+    const hideFromChannelProgress = evt.hideFromChannelProgress === true;
     const toolCallId = evt.toolCallId;
     const args = evt.args;
     const runId = ctx.params.runId;
@@ -911,6 +940,7 @@ export function handleToolExecutionStart(
         name: toolName,
         toolCallId,
         args: sanitizeToolArgs(args) as Record<string, unknown>,
+        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
     });
     const itemData: AgentItemEventData = {
@@ -923,6 +953,7 @@ export function handleToolExecutionStart(
       meta,
       toolCallId,
       startedAt,
+      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     };
     emitTrackedItemEvent(ctx, itemData);
     // Best-effort typing signal; do not block tool summaries on slow emitters.
@@ -933,6 +964,7 @@ export function handleToolExecutionStart(
         name: toolName,
         toolCallId,
         args: sanitizeToolArgs(args) as Record<string, unknown>,
+        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
     });
 
@@ -1026,10 +1058,12 @@ export function handleToolExecutionUpdate(
     toolName: string;
     toolCallId: string;
     partialResult?: unknown;
+    hideFromChannelProgress?: boolean;
   },
 ) {
   const toolName = normalizeToolName(evt.toolName);
   const toolCallId = evt.toolCallId;
+  const hideFromChannelProgress = evt.hideFromChannelProgress === true;
   const partial = evt.partialResult;
   const sanitized = sanitizeToolResult(partial);
   const isExecTool = isExecToolName(toolName);
@@ -1048,6 +1082,7 @@ export function handleToolExecutionUpdate(
         name: toolName,
         toolCallId,
         partialResult: liveResult,
+        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
     });
   }
@@ -1059,6 +1094,7 @@ export function handleToolExecutionUpdate(
     status: "running",
     name: toolName,
     toolCallId,
+    ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     ...(toolProgress
       ? { progressText: toolProgress.text }
       : { meta: ctx.state.toolMetaById.get(toolCallId)?.meta }),
@@ -1071,6 +1107,7 @@ export function handleToolExecutionUpdate(
         phase: "update",
         name: toolName,
         toolCallId,
+        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
     });
   }
@@ -1118,6 +1155,7 @@ export async function handleToolExecutionEnd(
 ) {
   const rawToolName = evt.toolName;
   const toolName = normalizeToolName(rawToolName);
+  const hideFromChannelProgress = evt.hideFromChannelProgress === true;
   const toolCallId = evt.toolCallId;
   const runId = ctx.params.runId;
   const isError = evt.isError;
@@ -1190,11 +1228,16 @@ export async function handleToolExecutionEnd(
   if (isToolError) {
     const errorMessage = extractToolErrorMessage(sanitizedResult);
     const errorCode = extractToolErrorCode(sanitizedResult);
+    const validationErrorSummary =
+      evt.executionStarted === false && evt.errorKind === "argument-validation"
+        ? createToolValidationErrorSummary(toolName)
+        : undefined;
     ctx.state.lastToolError = {
       toolName,
       meta,
       ...(errorCode ? { errorCode } : {}),
       error: errorMessage,
+      ...(validationErrorSummary ? { validationErrorSummary } : {}),
       timedOut: isToolResultTimedOut(sanitizedResult) || undefined,
       middlewareError: isMiddlewareToolResultError(sanitizedResult) || undefined,
       mutatingAction: attemptedMutatingAction,
@@ -1218,6 +1261,9 @@ export async function handleToolExecutionEnd(
       ctx.state.lastToolError = undefined;
     }
   }
+  const toolErrorSummary = ctx.state.lastToolError
+    ? summarizeToolValidationError(ctx.state.lastToolError)
+    : undefined;
   if (asyncStarted) {
     ctx.state.hadDeterministicSideEffect = true;
   }
@@ -1245,6 +1291,7 @@ export async function handleToolExecutionEnd(
     });
   const messageText = isMessagingSend ? readMessagingText(startArgs) : undefined;
   const argumentMediaUrls = isMessagingSend ? collectMessagingMediaUrlsFromRecord(startArgs) : [];
+  const hasRichContent = isMessagingSend && hasMessagingRichContent(startArgs);
   const messageTarget = hasMessagingTargetEvidence
     ? extractMessagingToolSend(toolName, messagingArgs, {
         config: ctx.params.config,
@@ -1277,6 +1324,7 @@ export async function handleToolExecutionEnd(
       ...confirmedTarget,
       ...(messageText ? { text: messageText } : {}),
       ...(committedMediaUrls.length > 0 ? { mediaUrls: committedMediaUrls.slice() } : {}),
+      ...(hasRichContent ? { hasRichContent: true as const } : {}),
     });
     ctx.trimMessagingToolSent();
   }
@@ -1330,6 +1378,8 @@ export async function handleToolExecutionEnd(
       meta,
       isError: isToolError,
       result: eventResult,
+      ...(toolErrorSummary ? { toolErrorSummary } : {}),
+      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     },
   });
   const endedAt = Date.now();
@@ -1345,6 +1395,7 @@ export async function handleToolExecutionEnd(
     toolCallId,
     startedAt: startData?.startTime,
     endedAt,
+    ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     ...(isToolError && extractToolErrorMessage(sanitizedResult)
       ? { error: extractToolErrorMessage(sanitizedResult) }
       : {}),
@@ -1358,6 +1409,8 @@ export async function handleToolExecutionEnd(
       toolCallId,
       meta,
       isError: isToolError,
+      ...(toolErrorSummary ? { toolErrorSummary } : {}),
+      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     },
   });
 

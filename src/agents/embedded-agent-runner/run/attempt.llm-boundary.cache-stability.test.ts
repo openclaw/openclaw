@@ -1,3 +1,4 @@
+import { streamOpenAICompletions, streamOpenAIResponses } from "@openclaw/ai/internal/openai";
 /**
  * Cache-stability gate for the prompt-cache bust fix (issue #3658).
  *
@@ -20,8 +21,6 @@
 import { describe, expect, it } from "vitest";
 import { stripInboundMetadata } from "../../../auto-reply/reply/strip-inbound-meta.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
-import { streamOpenAICompletions } from "../../../llm/providers/openai-completions.js";
-import { streamOpenAIResponses } from "../../../llm/providers/openai-responses.js";
 import type { Context, Model } from "../../../llm/types.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt.llm-boundary.js";
 

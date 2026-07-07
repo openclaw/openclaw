@@ -10,7 +10,7 @@ const MEMORY_MULTIMODAL_SPECS = {
   },
   audio: {
     labelPrefix: "Audio file",
-    extensions: [".mp3", ".wav", ".ogg", ".opus", ".m4a", ".aac", ".flac"],
+    extensions: [".mp3", ".wav", ".ogg", ".opus", ".m4a", ".m2a", ".aac", ".flac"],
   },
 } as const;
 

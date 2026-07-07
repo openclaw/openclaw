@@ -1,5 +1,4 @@
 // Discord tests cover message handler.process plugin behavior.
-import { MessageFlags } from "discord-api-types/v10";
 import { DEFAULT_EMOJIS, DEFAULT_TIMING } from "openclaw/plugin-sdk/channel-feedback";
 import {
   recordChannelBotPairLoopAndCheckSuppression,
@@ -534,6 +533,7 @@ function getLastDispatchCtx():
       ChatType?: string;
       CommandBody?: string;
       From?: string;
+      GroupRequireMention?: boolean;
       MediaTranscribedIndexes?: number[];
       MessageSid?: string;
       MessageSidFull?: string;
@@ -557,6 +557,7 @@ function getLastDispatchCtx():
           ChatType?: string;
           CommandBody?: string;
           From?: string;
+          GroupRequireMention?: boolean;
           MediaTranscribedIndexes?: number[];
           MessageSid?: string;
           MessageSidFull?: string;
@@ -729,19 +730,6 @@ function createMockDraftStreamForTest() {
   const draftStream = createMockDraftStream();
   createDiscordDraftStream.mockReturnValueOnce(draftStream);
   return draftStream;
-}
-
-function expectPreviewEditContent(content: string) {
-  const call = firstMockCall(editMessageDiscord, "preview edit");
-  expect(call[0]).toBe("c1");
-  expect(call[1]).toBe("preview-1");
-  expect(call[2]).toEqual({ content, flags: MessageFlags.SuppressEmbeds });
-  requireRecord(requireRecord(call[3], "preview edit options").rest, "preview edit REST client");
-}
-
-function expectSinglePreviewEdit() {
-  expectPreviewEditContent("Hello\nWorld");
-  expect(deliverDiscordReply).not.toHaveBeenCalled();
 }
 
 function expectProgressSummaryEdit(...parts: string[]) {
@@ -1267,6 +1255,70 @@ describe("processDiscordMessage ack reactions", () => {
       removeAckAfterReply: true,
     });
   });
+
+  it.each([
+    {
+      outcome: "done",
+      timingKey: "doneHoldMs",
+      configuredHoldMs: 2_000,
+      terminalEmoji: DEFAULT_EMOJIS.done,
+    },
+    {
+      outcome: "error",
+      timingKey: "errorHoldMs",
+      configuredHoldMs: 4_000,
+      terminalEmoji: DEFAULT_EMOJIS.error,
+    },
+  ] as const)(
+    "uses configured statusReactions.timing.$timingKey for $outcome cleanup",
+    async ({ outcome, timingKey, configuredHoldMs, terminalEmoji }) => {
+      vi.useFakeTimers();
+      dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+        if (outcome === "done") {
+          await params?.replyOptions?.onReasoningStream?.();
+          return createNoQueuedDispatchResult();
+        }
+        return {
+          queuedFinal: false,
+          counts: { final: 0, tool: 0, block: 0 },
+          failedCounts: { final: 1 },
+        };
+      });
+
+      const ctx = await createAutomaticSourceDeliveryContext({
+        cfg: {
+          messages: {
+            ackReaction: "👀",
+            removeAckAfterReply: true,
+            statusReactions: {
+              timing: { [timingKey]: configuredHoldMs, debounceMs: 0 },
+            },
+          },
+          session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+        },
+      });
+
+      await runProcessDiscordMessage(ctx);
+      expect(getReactionEmojis()).toContain(terminalEmoji);
+
+      await vi.advanceTimersByTimeAsync(configuredHoldMs - 1);
+      expect(sendMocks.removeReactionDiscord).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        terminalEmoji,
+        expect.anything(),
+      );
+
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.runAllTimersAsync();
+      expect(sendMocks.removeReactionDiscord).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        terminalEmoji,
+        expect.anything(),
+      );
+    },
+  );
 });
 
 describe("processDiscordMessage session routing", () => {
@@ -1616,7 +1668,45 @@ describe("processDiscordMessage session routing", () => {
     expect(emojis).toContain(DEFAULT_EMOJIS.done);
   });
 
-  it("suppresses Discord reactions for room events even when status reactions are explicit", async () => {
+  it("suppresses Discord reactions for room events when ack scope does not force all messages", async () => {
+    vi.useFakeTimers();
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onReasoningStream?.();
+      await new Promise((resolve) => {
+        setTimeout(resolve, 1_000);
+      });
+      return createNoQueuedDispatchResult();
+    });
+    const ctx = await createBaseContext({
+      shouldRequireMention: false,
+      effectiveWasMentioned: false,
+      inboundEventKind: "room_event",
+      ackReactionScope: "group-all",
+      cfg: {
+        messages: {
+          ackReaction: "👀",
+          ackReactionScope: "group-all",
+          statusReactions: {
+            enabled: true,
+            timing: { debounceMs: 0 },
+          },
+        },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+      },
+      route: BASE_CHANNEL_ROUTE,
+    });
+
+    const runPromise = runProcessDiscordMessage(ctx);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.runAllTimersAsync();
+    await runPromise;
+
+    expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(getReactionEmojis()).toEqual([]);
+    expect(sendMocks.removeReactionDiscord).not.toHaveBeenCalled();
+  });
+
+  it("sends Discord ack reactions for room events when ack scope is all", async () => {
     vi.useFakeTimers();
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.replyOptions?.onReasoningStream?.();
@@ -1650,7 +1740,7 @@ describe("processDiscordMessage session routing", () => {
     await runPromise;
 
     expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(getReactionEmojis()).toEqual([]);
+    expect(getReactionEmojis()).toEqual(["👀"]);
     expect(sendMocks.removeReactionDiscord).not.toHaveBeenCalled();
   });
 
@@ -1733,6 +1823,7 @@ describe("processDiscordMessage session routing", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(guildHistories.get("c1")).toEqual([]);
+    expect(getLastDispatchCtx()?.GroupRequireMention).toBe(false);
   });
 
   it("clears Discord room event history after a queued core send succeeds", async () => {
@@ -1987,9 +2078,10 @@ describe("processDiscordMessage draft streaming", () => {
     });
   }
 
-  it("finalizes via preview edit when final fits one chunk", async () => {
+  it("sends a fresh final message when final fits one chunk", async () => {
     await runSingleChunkFinalScenario({ streamMode: "partial", maxLinesPerMessage: 5 });
-    expectSinglePreviewEdit();
+    expect(editMessageDiscord).not.toHaveBeenCalled();
+    expectFreshFinalText("Hello\nWorld");
   });
 
   it("delivers a fresh message instead of a preview edit when the final reply resolves a mention alias", async () => {
@@ -2007,8 +2099,6 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    // Discord only fires mention notifications on create, never on edits, so the
-    // streamed preview must be abandoned and the mention delivered fresh.
     expect(editMessageDiscord).not.toHaveBeenCalled();
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
   });
@@ -2029,7 +2119,7 @@ describe("processDiscordMessage draft streaming", () => {
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
   });
 
-  it("still finalizes via preview edit when an unaliased handle stays plain text", async () => {
+  it("sends a fresh final message when an unaliased handle stays plain text", async () => {
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.dispatcher.sendFinalReply({ text: "On it @Sentinel" });
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
@@ -2041,13 +2131,14 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(editMessageDiscord).toHaveBeenCalledTimes(1);
-    expect(deliverDiscordReply).not.toHaveBeenCalled();
+    expect(editMessageDiscord).not.toHaveBeenCalled();
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
   });
 
-  it("still finalizes via preview edit for broadcast mentions like @everyone", async () => {
+  it("sends a fresh final message for broadcast mentions like @everyone", async () => {
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.dispatcher.sendFinalReply({ text: "heads up @everyone" });
+      await params?.dispatcher.waitForIdle();
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
 
@@ -2057,13 +2148,16 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(editMessageDiscord).toHaveBeenCalledTimes(1);
-    expect(deliverDiscordReply).not.toHaveBeenCalled();
+    expect(editMessageDiscord).not.toHaveBeenCalled();
+    expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
+      allowedMentions: { parse: ["users", "roles"] },
+    });
   });
 
-  it("still finalizes via preview edit when a targeted mention is mixed with @everyone", async () => {
+  it("sends a fresh final message when a targeted mention is mixed with @everyone", async () => {
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.dispatcher.sendFinalReply({ text: "heads up @Sentinel @everyone" });
+      await params?.dispatcher.waitForIdle();
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
 
@@ -2076,14 +2170,16 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    // Mixed targeted + broadcast must not escalate into a create that pings @everyone.
-    expect(editMessageDiscord).toHaveBeenCalledTimes(1);
-    expect(deliverDiscordReply).not.toHaveBeenCalled();
+    expect(editMessageDiscord).not.toHaveBeenCalled();
+    expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
+      allowedMentions: { parse: ["users", "roles"] },
+    });
   });
 
   it("accepts streaming=true alias for partial preview mode", async () => {
     await runSingleChunkFinalScenario({ streaming: true, maxLinesPerMessage: 5 });
-    expectSinglePreviewEdit();
+    expect(editMessageDiscord).not.toHaveBeenCalled();
+    expectFreshFinalText("Hello\nWorld");
   });
 
   it("defaults unset Discord preview streaming to progress mode without drafting text-only turns", async () => {
@@ -2377,8 +2473,9 @@ describe("processDiscordMessage draft streaming", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
-  it("uses root discord maxLinesPerMessage for preview finalization when runtime config omits it", async () => {
+  it("uses root discord maxLinesPerMessage for fresh final delivery when runtime config omits it", async () => {
     const longReply = Array.from({ length: 20 }, (_value, index) => `Line ${index + 1}`).join("\n");
+    const draftStream = createMockDraftStreamForTest();
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.dispatcher.sendFinalReply({ text: longReply });
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
@@ -2399,8 +2496,10 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expectPreviewEditContent(longReply);
-    expect(deliverDiscordReply).not.toHaveBeenCalled();
+    expect(editMessageDiscord).not.toHaveBeenCalled();
+    expectFreshFinalText(longReply);
+    expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to standard delivery for explicit reply-tag finals", async () => {
@@ -2447,7 +2546,7 @@ describe("processDiscordMessage draft streaming", () => {
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps the preview and sends media-only for TTS supplement finals", async () => {
+  it("sends a fresh visible TTS supplement final and clears the preview", async () => {
     const draftStream = createMockDraftStreamForTest();
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.dispatcher.sendFinalReply({
@@ -2466,15 +2565,16 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.flush).toHaveBeenCalledTimes(1);
-    expect(draftStream.discardPending).not.toHaveBeenCalled();
-    expect(draftStream.clear).not.toHaveBeenCalled();
-    expectPreviewEditContent("Spoken answer");
+    expect(draftStream.flush).not.toHaveBeenCalled();
+    expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    expect(editMessageDiscord).not.toHaveBeenCalled();
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
     expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
       replyToId: "m1",
       replies: [
         {
+          text: "Spoken answer",
           mediaUrl: "https://example.com/tts.mp3",
           audioAsVoice: true,
           spokenText: "Spoken answer",
@@ -2484,9 +2584,8 @@ describe("processDiscordMessage draft streaming", () => {
     });
   });
 
-  it("falls back with visible text when TTS supplement preview finalization fails", async () => {
+  it("sends fresh visible text for TTS supplement finals", async () => {
     const draftStream = createMockDraftStreamForTest();
-    editMessageDiscord.mockRejectedValueOnce(new Error("edit failed"));
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.dispatcher.sendFinalReply({
         mediaUrl: "https://example.com/tts.mp3",
@@ -2503,9 +2602,10 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.flush).toHaveBeenCalledTimes(1);
+    expect(draftStream.flush).not.toHaveBeenCalled();
     expect(draftStream.discardPending).toHaveBeenCalled();
     expect(draftStream.clear).toHaveBeenCalled();
+    expect(editMessageDiscord).not.toHaveBeenCalled();
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
     expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
       replies: [
@@ -2595,10 +2695,11 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expectPreviewEditContent("delivery survived");
-    expect(draftStream.clear).not.toHaveBeenCalled();
-    expect(draftStream.messageId()).toBe("preview-1");
-    expect(deliverDiscordReply).not.toHaveBeenCalled();
+    expect(editMessageDiscord).not.toHaveBeenCalled();
+    expectFreshFinalText("delivery survived");
+    expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
   });
 
   it("drops earlier tool warning finals when recovered replies arrive", async () => {
@@ -2616,10 +2717,11 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expectPreviewEditContent("delivery recovered");
-    expect(draftStream.clear).not.toHaveBeenCalled();
-    expect(draftStream.messageId()).toBe("preview-1");
-    expect(deliverDiscordReply).not.toHaveBeenCalled();
+    expect(editMessageDiscord).not.toHaveBeenCalled();
+    expectFreshFinalText("delivery recovered");
+    expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
   });
 
   it("suppresses pure tool warning finals when no recovered reply is available", async () => {
@@ -2682,9 +2784,11 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expectPreviewEditContent("Done.");
-    expect(draftStream.clear).not.toHaveBeenCalled();
-    expect(deliverDiscordReply).not.toHaveBeenCalled();
+    expect(editMessageDiscord).not.toHaveBeenCalled();
+    expectFreshFinalText("Done.");
+    expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
   });
 
   it("renders reasoning block payloads as a 🧠 blockquote", async () => {

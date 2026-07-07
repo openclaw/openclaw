@@ -92,6 +92,27 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
     expect(ctx?.ctxPayload.InboundEventKind).toBe("room_event");
   });
 
+  it("keeps explicit bot mentions as user requests in always-on room-event groups", async () => {
+    const ctx = await buildTelegramMessageContextForTest({
+      cfg: { messages: { groupChat: { unmentionedInbound: "room_event", mentionPatterns: [] } } },
+      message: {
+        ...buildForumMessage(),
+        text: "@bot status",
+        entities: [{ type: "mention", offset: 0, length: "@bot".length }],
+      },
+      resolveGroupActivation: () => false,
+      resolveGroupRequireMention: () => false,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { requireMention: false },
+        topicConfig: undefined,
+      }),
+    });
+
+    expect(ctx?.ctxPayload.InboundEventKind).toBe("user_request");
+    expect(ctx?.ctxPayload.WasMentioned).toBe(true);
+    expect(ctx?.ctxPayload.ExplicitlyMentionedBot).toBe(true);
+  });
+
   it("keeps ambient abort phrases as user requests", async () => {
     const ctx = await buildTelegramMessageContextForTest({
       cfg: { messages: { groupChat: { unmentionedInbound: "room_event", mentionPatterns: [] } } },
@@ -149,7 +170,8 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
     });
 
     expect(ctx?.ctxPayload.InboundEventKind).toBe("user_request");
-    expect(ctx?.ctxPayload.Body).toContain("side chatter");
+    expect(JSON.stringify(ctx?.ctxPayload.UntrustedStructuredContext)).toContain("side chatter");
+    expect(ctx?.ctxPayload.Body).not.toContain("side chatter");
   });
 
   it("keeps room events as context with default group history mode", async () => {
@@ -194,7 +216,8 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
     });
 
     expect(ctx?.ctxPayload.InboundEventKind).toBe("user_request");
-    expect(ctx?.ctxPayload.Body).toContain("side chatter");
+    expect(JSON.stringify(ctx?.ctxPayload.UntrustedStructuredContext)).toContain("side chatter");
+    expect(ctx?.ctxPayload.Body).not.toContain("side chatter");
     expect(ctx?.ctxPayload.InboundHistory).toEqual([
       expect.objectContaining({ body: "side chatter" }),
     ]);
@@ -318,7 +341,15 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
     });
 
     expect(userRequest?.ctxPayload.InboundEventKind).toBe("user_request");
-    expect(userRequest?.ctxPayload.Body).toContain("after watermark");
+    expect(JSON.stringify(userRequest?.ctxPayload.UntrustedStructuredContext)).toContain(
+      "after watermark",
+    );
+    expect(JSON.stringify(userRequest?.ctxPayload.UntrustedStructuredContext)).not.toContain(
+      "before self marker",
+    );
+    expect(JSON.stringify(userRequest?.ctxPayload.UntrustedStructuredContext)).not.toContain(
+      "self marker body",
+    );
     expect(userRequest?.ctxPayload.Body).not.toContain("before self marker");
     expect(userRequest?.ctxPayload.Body).not.toContain("self marker body");
     expect(userRequest?.ctxPayload.InboundHistory).toEqual([
@@ -339,9 +370,16 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
     });
 
     expect(roomEvent?.ctxPayload.InboundEventKind).toBe("room_event");
-    expect(roomEvent?.ctxPayload.Body).toContain("before self marker");
-    expect(roomEvent?.ctxPayload.Body).toContain("self marker body");
-    expect(roomEvent?.ctxPayload.Body).toContain("after watermark");
+    expect(JSON.stringify(roomEvent?.ctxPayload.UntrustedStructuredContext)).toContain(
+      "before self marker",
+    );
+    expect(JSON.stringify(roomEvent?.ctxPayload.UntrustedStructuredContext)).toContain(
+      "self marker body",
+    );
+    expect(JSON.stringify(roomEvent?.ctxPayload.UntrustedStructuredContext)).toContain(
+      "after watermark",
+    );
+    expect(roomEvent?.ctxPayload.Body).not.toContain("before self marker");
     expect(roomEvent?.ctxPayload.InboundHistory).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ body: "before self marker" }),

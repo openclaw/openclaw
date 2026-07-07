@@ -318,6 +318,52 @@ describe("handleAgentEnd", () => {
     });
   });
 
+  it("carries a sanitized tool-error summary on aborted terminals", async () => {
+    emitAgentEventMock.mockClear();
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
+    ctx.state.terminalAborted = true;
+    ctx.state.lastToolError = {
+      toolName: "edit",
+      validationErrorSummary: "edit tool validation failed: invalid arguments",
+      error:
+        'Validation failed for tool "edit":\n  - edits: must have required properties edits\n\nReceived arguments:\n{\n  "path": "secret.txt"\n}',
+    };
+
+    await handleAgentEnd(ctx);
+
+    expect(emitAgentEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-1",
+        stream: "lifecycle",
+        data: expect.objectContaining({
+          phase: "end",
+          aborted: true,
+          toolErrorSummary: "edit tool validation failed: invalid arguments",
+        }),
+      }),
+    );
+    // The echoed model arguments must never ride the lifecycle event.
+    expect(JSON.stringify(onAgentEvent.mock.calls)).not.toContain("Received arguments");
+  });
+
+  it("does not expose arbitrary tool errors on aborted terminals", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
+    ctx.state.terminalAborted = true;
+    ctx.state.lastToolError = {
+      toolName: "browser",
+      error: "tab not found: secret-token",
+    };
+
+    await handleAgentEnd(ctx);
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: expect.not.objectContaining({ toolErrorSummary: expect.anything() }),
+    });
+  });
+
   it("keeps normal lifecycle end events explicitly non-aborted", async () => {
     const onAgentEvent = vi.fn();
     const ctx = createContext(undefined, { onAgentEvent });

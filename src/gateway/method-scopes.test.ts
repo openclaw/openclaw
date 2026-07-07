@@ -42,6 +42,7 @@ describe("method scope resolution", () => {
   it.each([
     ["sessions.resolve", ["operator.read"]],
     ["tasks.list", ["operator.read"]],
+    ["audit.list", ["operator.read"]],
     ["tasks.get", ["operator.read"]],
     ["config.schema.lookup", ["operator.read"]],
     ["sessions.create", ["operator.write"]],
@@ -52,6 +53,8 @@ describe("method scope resolution", () => {
     ["sessions.messages.subscribe", ["operator.read"]],
     ["sessions.messages.unsubscribe", ["operator.read"]],
     ["environments.list", ["operator.read"]],
+    ["worktrees.list", ["operator.read"]],
+    ["worktrees.create", ["operator.admin"]],
     ["environments.status", ["operator.read"]],
     ["diagnostics.stability", ["operator.read"]],
     ["node.pair.approve", ["operator.pairing"]],
@@ -176,6 +179,68 @@ describe("method scope resolution", () => {
         actionId: "approve",
       }),
     ).toEqual({ allowed: false, missingScope: "operator.approvals" });
+  });
+
+  it("resolves sessions.patch to write scope for chat-organization fields only", () => {
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.patch", {
+        key: "agent:main:ios-1",
+        label: "Trip planning",
+        pinned: true,
+        archived: false,
+      }),
+    ).toEqual(["operator.write"]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.patch", {
+        key: "agent:main:ios-1",
+        agentId: "main",
+        category: "Travel",
+        unread: true,
+      }),
+    ).toEqual(["operator.write"]);
+    expect(isGatewayMethodClassified("sessions.patch")).toBe(true);
+  });
+
+  it.each([
+    ["model", { key: "agent:main:ios-1", model: "anthropic/claude-sonnet-5" }],
+    ["sendPolicy", { key: "agent:main:ios-1", sendPolicy: "deny" }],
+    ["inheritedToolAllow", { key: "agent:main:ios-1", inheritedToolAllow: ["exec"] }],
+    ["spawnedBy", { key: "agent:main:ios-1", spawnedBy: "agent:main:main" }],
+    ["mixed with safe fields", { key: "agent:main:ios-1", label: "x", execHost: "node-1" }],
+    ["unknown fields", { key: "agent:main:ios-1", futureField: true }],
+  ])("keeps sessions.patch admin-only when params include %s", (_name, params) => {
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.patch", params)).toEqual([
+      "operator.admin",
+    ]);
+    expect(authorizeOperatorScopesForMethod("sessions.patch", ["operator.write"], params)).toEqual({
+      allowed: false,
+      missingScope: "operator.admin",
+    });
+    expect(authorizeOperatorScopesForMethod("sessions.patch", ["operator.admin"], params)).toEqual({
+      allowed: true,
+    });
+  });
+
+  it("authorizes write-scoped sessions.patch for chat-organization fields and denies read scope", () => {
+    const params = { key: "agent:main:ios-1", label: "Trip planning", pinned: true };
+    expect(authorizeOperatorScopesForMethod("sessions.patch", ["operator.write"], params)).toEqual({
+      allowed: true,
+    });
+    expect(authorizeOperatorScopesForMethod("sessions.patch", ["operator.read"], params)).toEqual({
+      allowed: false,
+      missingScope: "operator.write",
+    });
+  });
+
+  it("lets malformed sessions.patch params through to handler validation at write scope", () => {
+    // Malformed params cannot mutate anything; the handler rejects them with a
+    // precise validation error instead of a misleading missing-scope error.
+    expect(authorizeOperatorScopesForMethod("sessions.patch", ["operator.write"])).toEqual({
+      allowed: true,
+    });
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.patch")).toEqual([
+      "operator.write",
+    ]);
   });
 
   it("falls back to broad operator scopes when a dynamic session action is not locally registered", () => {

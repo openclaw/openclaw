@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   allowedSessionStoreRuntimeFileBackedCompatExports,
   collectSessionStoreRuntimeFileBackedCompatExports,
+  compareSessionAccessorDebt,
   findGatewaySessionCreateLifecycleViolations,
   findEmbeddedAgentSessionTargetViolations,
   findMemoryHostSessionCorpusBoundaryViolations,
@@ -11,6 +12,7 @@ import {
   findSessionLifecycleCleanupBoundaryViolations,
   findSessionStoreRuntimeFileBackedCompatExportViolations,
   findTranscriptWriterBoundaryViolations,
+  formatSessionAccessorDebtImprovements,
   migratedBundledPluginSessionAccessorFiles,
   migratedEmbeddedAgentSessionTargetFiles,
   migratedMemoryHostSessionCorpusFiles,
@@ -572,5 +574,57 @@ describe("session accessor boundary guard", () => {
         });
       `),
     ).toEqual([]);
+  });
+});
+
+describe("session accessor debt ratchet", () => {
+  it("flags unmigrated files whose legacy call-site count exceeds the baseline", () => {
+    expect(
+      compareSessionAccessorDebt(
+        {
+          sessionAccessorRead: { "src/a.ts": 3 },
+          sessionAccessorWrite: { "src/new.ts": 1 },
+        },
+        {
+          sessionAccessorRead: { "src/a.ts": 2 },
+          sessionAccessorWrite: {},
+        },
+      ),
+    ).toEqual({
+      regressions: [
+        { concern: "sessionAccessorRead", path: "src/a.ts", currentCount: 3, baselineCount: 2 },
+        { concern: "sessionAccessorWrite", path: "src/new.ts", currentCount: 1, baselineCount: 0 },
+      ],
+      improvements: [],
+    });
+  });
+
+  it("passes when counts match the baseline", () => {
+    expect(
+      compareSessionAccessorDebt(
+        { sessionAccessorRead: { "src/a.ts": 2 } },
+        { sessionAccessorRead: { "src/a.ts": 2 } },
+      ),
+    ).toEqual({ regressions: [], improvements: [] });
+  });
+
+  it("fails with a regen instruction when counts drop below the baseline", () => {
+    const debt = compareSessionAccessorDebt(
+      { sessionAccessorRead: { "src/a.ts": 1 } },
+      { sessionAccessorRead: { "src/a.ts": 2, "src/gone.ts": 3 } },
+    );
+    expect(debt).toEqual({
+      regressions: [],
+      improvements: [
+        { concern: "sessionAccessorRead", path: "src/a.ts", currentCount: 1, baselineCount: 2 },
+        { concern: "sessionAccessorRead", path: "src/gone.ts", currentCount: 0, baselineCount: 3 },
+      ],
+    });
+    expect(formatSessionAccessorDebtImprovements(debt.improvements)).toEqual([
+      "Legacy session accessor debt dropped below scripts/lib/session-accessor-debt-baseline.json:",
+      "- src/a.ts [sessionAccessorRead]: 1 legacy call site(s), stale baseline allows 2",
+      "- src/gone.ts [sessionAccessorRead]: 0 legacy call site(s), stale baseline allows 3",
+      "Run `pnpm lint:tmp:session-accessor-boundary:gen` to ratchet the baseline down and commit it.",
+    ]);
   });
 });

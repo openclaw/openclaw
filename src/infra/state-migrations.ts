@@ -2087,14 +2087,30 @@ function configHealthRow(entry: LegacyConfigHealthEntry): {
   };
 }
 
-function configHealthComparable(entry: LegacyConfigHealthEntry): string {
-  const row = configHealthRow(entry);
-  return JSON.stringify({
-    config_path: row.config_path,
-    last_known_good_json: row.last_known_good_json,
-    last_promoted_good_json: row.last_promoted_good_json,
-    last_observed_suspicious_signature: row.last_observed_suspicious_signature,
-  });
+function retireLegacyConfigHealthSource(params: {
+  sourcePath: string;
+  changes: string[];
+  warnings: string[];
+}): void {
+  const archivedPath = `${params.sourcePath}.migrated`;
+  if (!fileExists(archivedPath)) {
+    archiveLegacyImportSource({
+      sourcePath: params.sourcePath,
+      label: "config health state",
+      changes: params.changes,
+      warnings: params.warnings,
+    });
+    return;
+  }
+
+  // Released macOS builds can recreate this source after it was archived.
+  // Once reconciled into SQLite, retaining it causes every run to warn again.
+  try {
+    fs.rmSync(params.sourcePath, { force: true });
+    params.changes.push("Removed regenerated config health legacy source");
+  } catch (err) {
+    params.warnings.push(`Failed removing regenerated config health legacy source: ${String(err)}`);
+  }
 }
 
 function migrateLegacyConfigHealth(params: {
@@ -2117,9 +2133,10 @@ function migrateLegacyConfigHealth(params: {
   }
 
   let importedCount = 0;
-  let shouldArchive = entries.length === 0;
+  let reconciledCount = 0;
+  let shouldArchive = false;
   try {
-    runOpenClawStateWriteTransaction(
+    const result = runOpenClawStateWriteTransaction(
       ({ db }) => {
         const stateDb = getNodeSqliteKysely<LegacyConfigHealthImportDatabase>(db);
         const existing = executeSqliteQuerySync(
@@ -2133,29 +2150,37 @@ function migrateLegacyConfigHealth(params: {
               "last_observed_suspicious_signature",
             ]),
         ).rows;
-        const existingByPath = new Map(
-          existing.map(
-            (row) =>
-              [
-                row.config_path,
-                JSON.stringify({
-                  config_path: row.config_path,
-                  last_known_good_json: row.last_known_good_json,
-                  last_promoted_good_json: row.last_promoted_good_json,
-                  last_observed_suspicious_signature: row.last_observed_suspicious_signature,
-                }),
-              ] as const,
-          ),
-        );
+        const existingByPath = new Map(existing.map((row) => [row.config_path, row] as const));
         const entriesToInsert: LegacyConfigHealthEntry[] = [];
-        let conflictCount = 0;
+        let transactionReconciledCount = 0;
         for (const entry of entries) {
-          const existingEntryJson = existingByPath.get(entry.configPath);
-          if (existingEntryJson === undefined) {
+          const existingEntry = existingByPath.get(entry.configPath);
+          if (!existingEntry) {
             entriesToInsert.push(entry);
-          } else if (existingEntryJson !== configHealthComparable(entry)) {
-            conflictCount += 1;
+            continue;
           }
+
+          const lastKnownGoodJson = existingEntry.last_known_good_json ?? entry.lastKnownGoodJson;
+          const lastPromotedGoodJson =
+            existingEntry.last_promoted_good_json ?? entry.lastPromotedGoodJson;
+          if (
+            lastKnownGoodJson === existingEntry.last_known_good_json &&
+            lastPromotedGoodJson === existingEntry.last_promoted_good_json
+          ) {
+            continue;
+          }
+          executeSqliteQuerySync(
+            db,
+            stateDb
+              .updateTable("config_health_entries")
+              .set({
+                last_known_good_json: lastKnownGoodJson,
+                last_promoted_good_json: lastPromotedGoodJson,
+                updated_at_ms: Date.now(),
+              })
+              .where("config_path", "=", entry.configPath),
+          );
+          transactionReconciledCount += 1;
         }
         if (entriesToInsert.length > 0) {
           executeSqliteQuerySync(
@@ -2164,17 +2189,17 @@ function migrateLegacyConfigHealth(params: {
               .insertInto("config_health_entries")
               .values(entriesToInsert.map(configHealthRow)),
           );
-          importedCount = entriesToInsert.length;
         }
-        shouldArchive = conflictCount === 0;
-        if (conflictCount > 0) {
-          warnings.push(
-            `Left legacy config health state in place because ${conflictCount} ${conflictCount === 1 ? "entry conflicts" : "entries conflict"} with shared SQLite state: ${params.detected.sourcePath}`,
-          );
-        }
+        return {
+          importedCount: entriesToInsert.length,
+          reconciledCount: transactionReconciledCount,
+        };
       },
       { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } },
     );
+    importedCount = result.importedCount;
+    reconciledCount = result.reconciledCount;
+    shouldArchive = true;
   } catch (err) {
     warnings.push(`Failed migrating legacy config health state: ${String(err)}`);
   }
@@ -2183,10 +2208,14 @@ function migrateLegacyConfigHealth(params: {
       `Migrated ${importedCount} config health ${importedCount === 1 ? "entry" : "entries"} → shared SQLite state`,
     );
   }
+  if (reconciledCount > 0) {
+    changes.push(
+      `Reconciled ${reconciledCount} config health ${reconciledCount === 1 ? "entry" : "entries"} → shared SQLite state`,
+    );
+  }
   if (shouldArchive) {
-    archiveLegacyImportSource({
+    retireLegacyConfigHealthSource({
       sourcePath: params.detected.sourcePath,
-      label: "config health state",
       changes,
       warnings,
     });

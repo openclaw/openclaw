@@ -36,6 +36,11 @@
       - any-glob-to-any-file:
           - "extensions/googlechat/**"
           - "docs/channels/googlechat.md"
+"plugin: logbook":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/logbook/**"
+          - "docs/plugins/logbook.md"
 "plugin: google-meet":
   - changed-files:
       - any-glob-to-any-file:
@@ -359,6 +364,11 @@
       - any-glob-to-any-file:
           - "extensions/cerebras/**"
           - "docs/providers/cerebras.md"
+"extensions: clawrouter":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/clawrouter/**"
+          - "docs/providers/clawrouter.md"
 "extensions: deepseek":
   - changed-files:
       - any-glob-to-any-file:
@@ -438,6 +448,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/kimi-coding/**"
+"extensions: longcat":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/longcat/**"
+          - "docs/providers/longcat.md"
 "extensions: minimax":
   - changed-files:
       - any-glob-to-any-file:

@@ -46,16 +46,16 @@ function createPayloadCapturingBaseStream(captured: {
   };
 }
 
-function runComposedAnthropicProviderStream(apiKey: string) {
+function runComposedAnthropicProviderStream(apiKey: string, modelId = "claude-sonnet-4-6") {
   const captured: { headers?: Record<string, string>; payload?: Record<string, unknown> } = {};
   const wrapped = wrapAnthropicProviderStream({
     streamFn: createPayloadCapturingBaseStream(captured),
-    modelId: "claude-sonnet-4-6",
+    modelId,
     extraParams: { context1m: true, serviceTier: "auto" },
   } as never);
 
   void wrapped?.(
-    { provider: "anthropic", api: "anthropic-messages", id: "claude-sonnet-4-6" } as never,
+    { provider: "anthropic", api: "anthropic-messages", id: modelId } as never,
     {} as never,
     { apiKey } as never,
   );
@@ -154,6 +154,17 @@ describe("anthropic stream wrappers", () => {
 
     expect(captured.headers?.["anthropic-beta"]).toContain(OAUTH_BETA);
     expect(captured.headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
+  });
+
+  it("uses Fable 5 identity boundaries for context1m beta wrapper activation", () => {
+    const fable5 = runComposedAnthropicProviderStream("sk-ant-oat01-oauth-token", "claude-fable-5");
+    const fable50 = runComposedAnthropicProviderStream(
+      "sk-ant-oat01-oauth-token",
+      "claude-fable-50",
+    );
+
+    expect(fable5.headers?.["anthropic-beta"]).toBe(OAUTH_BETA_HEADER);
+    expect(fable50.headers?.["anthropic-beta"]).toBeUndefined();
   });
 
   it("preserves OAuth-required betas when legacy context-1m is the only configured beta", () => {

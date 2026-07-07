@@ -232,6 +232,26 @@ describe("ensureOpenClawCliOnPath", () => {
     },
   );
 
+  it("skips project-local bins when the working directory was deleted", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-deleted-cwd");
+    const localBinDir = path.join(tmp, "node_modules", ".bin");
+    setDir(localBinDir);
+    setExe(path.join(localBinDir, "openclaw"));
+    resetBootstrapEnv();
+    process.env.OPENCLAW_ALLOW_PROJECT_LOCAL_BIN = "1";
+    const cwdSpy = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw new Error("ENOENT: uv_cwd");
+    });
+
+    try {
+      ensureOpenClawCliOnPath({ execPath: appCli, homeDir: tmp, platform: "darwin" });
+    } finally {
+      cwdSpy.mockRestore();
+    }
+
+    expect((process.env.PATH ?? "").split(path.delimiter)).not.toContain(localBinDir);
+  });
+
   it("prepends XDG_BIN_HOME ahead of other user bin fallbacks", () => {
     const { tmp, appCli } = setupAppCliRoot("case-xdg-bin-home");
     const xdgBinHome = path.join(tmp, "xdg-bin");

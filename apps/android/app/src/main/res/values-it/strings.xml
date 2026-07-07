@@ -6,6 +6,7 @@
     <string name="trust_this_gateway">Considerare attendibile questo gateway?</string>
     <string name="trust_and_continue">Considera attendibile e continua</string>
     <string name="cancel">Annulla</string>
+    <string name="new_chat_in_worktree">Nuova chat nel worktree</string>
     <string name="endpoint">Endpoint</string>
     <string name="status">Stato</string>
     <string name="connected_gateway_ready">Il tuo gateway è attivo e pronto.</string>
@@ -20,18 +21,14 @@
     <string name="use_tls">Usa TLS</string>
     <string name="token_optional">Token (opzionale)</string>
     <string name="password">Password</string>
+    <string name="custom_headers_optional">Intestazioni personalizzate (facoltativo)</string>
+    <string name="custom_headers_explainer">Inviate con ogni connessione a questo gateway, ad esempio le intestazioni dei token del servizio Cloudflare Access. Archiviate crittografate e applicate alla prossima riconnessione.</string>
+    <string name="custom_header_value">Valore dell\'intestazione</string>
+    <string name="custom_header_reserved">Questa intestazione è gestita dalla connessione e non può essere sovrascritta.</string>
+    <string name="add_custom_header">Aggiungi intestazione</string>
+    <string name="remove_custom_header">Rimuovi %1$s</string>
     <string name="run_onboarding_again">Esegui di nuovo l’onboarding</string>
     <string name="resolved_endpoint">Endpoint risolto</string>
-    <string name="gateway_setup">Configurazione gateway</string>
-    <string name="connect_to_gateway">Connettiti al tuo Gateway</string>
-    <string name="scan_setup_code">Scansiona codice di configurazione</string>
-    <string name="use_gateway_qr">Usa il QR del tuo Gateway o il codice di configurazione</string>
-    <string name="nearby_gateway">Gateway nelle vicinanze</string>
-    <string name="enter_gateway_url">Inserisci URL del gateway</string>
-    <string name="connect_manual_url">Connetti usando un URL manuale</string>
-    <string name="permissions">Autorizzazioni</string>
-    <string name="done">Fine</string>
     <string name="gateway_trust_first_seen">Verifica l’impronta digitale del certificato prima di considerare attendibile questo gateway.\n\n%1$s</string>
     <string name="gateway_trust_changed">Il certificato del gateway è cambiato. Continua solo se ti aspettavi questa modifica.\n\nSHA-256 precedente:\n%1$s\n\nNuovo SHA-256:\n%2$s</string>
-    <string name="gateway_recovery">Ripristino del gateway</string>
 </resources>

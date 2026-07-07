@@ -1,6 +1,7 @@
 // Feishu plugin module implements bot behavior.
 import {
   buildChannelInboundEventContext,
+  formatInboundMediaUnavailableText,
   toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/channel-outbound";
@@ -38,6 +39,7 @@ import {
   parseMessageContent,
   resolveFeishuGroupSession,
   resolveFeishuMediaList,
+  resolveFeishuMediaFailurePresentation,
 } from "./bot-content.js";
 import {
   evaluateSupplementalContextVisibility,
@@ -317,8 +319,9 @@ export function parseFeishuMessageEvent(
   };
 
   // Detect mention forward request: message mentions bot + at least one other user
-  if (isMentionForwardRequest(event, botOpenId)) {
-    const mentionTargets = extractMentionTargets(event, botOpenId);
+  const mentionForwardBotOpenId = botOpenId?.trim();
+  if (mentionForwardBotOpenId && isMentionForwardRequest(event, mentionForwardBotOpenId)) {
+    const mentionTargets = extractMentionTargets(event, mentionForwardBotOpenId);
     if (mentionTargets.length > 0) {
       ctx.mentionTargets = mentionTargets;
     }
@@ -1018,7 +1021,7 @@ export async function handleFeishuMessage(params: {
 
     // Resolve media from message
     const mediaMaxBytes = (feishuCfg?.mediaMaxMb ?? 30) * 1024 * 1024; // 30MB default
-    const mediaList = await resolveFeishuMediaList({
+    const mediaResolution = await resolveFeishuMediaList({
       cfg,
       messageId: ctx.messageId,
       messageType: event.message.message_type,
@@ -1027,6 +1030,19 @@ export async function handleFeishuMessage(params: {
       log,
       accountId: account.accountId,
     });
+    const mediaList = mediaResolution.media;
+    const mediaFailurePresentation = resolveFeishuMediaFailurePresentation(
+      event.message.content,
+      event.message.message_type,
+    );
+    const mediaFailureContent =
+      mediaResolution.unavailableCount > 0
+        ? formatInboundMediaUnavailableText({
+            body: mediaFailurePresentation.unavailableBody ?? ctx.content,
+            mediaPlaceholder: mediaFailurePresentation.mediaPlaceholder,
+            notice: `[feishu ${mediaResolution.unavailableCount > 1 ? `${mediaResolution.unavailableCount} attachments` : "attachment"} unavailable]`,
+          })
+        : ctx.content;
     // Fetch quoted/replied message content before the empty-message guard
     // so a reply with only @bot (no text, no media) is not dropped when
     // the quoted message carries meaningful content.
@@ -1075,7 +1091,7 @@ export async function handleFeishuMessage(params: {
     // be empty" errors. Logging the skip avoids silent loss without polluting
     // the agent session. Quoted content is checked too so a reply-only @bot
     // with quoted context is not dropped.
-    if (!ctx.content.trim() && mediaList.length === 0 && !quotedContent?.trim()) {
+    if (!mediaFailureContent.trim() && mediaList.length === 0 && !quotedContent?.trim()) {
       log(
         `feishu[${account.accountId}]: skipping empty message (no text, no media, no quoted) from ${ctx.senderOpenId}`,
       );
@@ -1096,13 +1112,14 @@ export async function handleFeishuMessage(params: {
     const inboundMedia = toInboundMediaFacts(mediaList, {
       transcribed: (_media, index) => index === preflightAudioIndex,
     });
-    const agentFacingContent = audioTranscript ?? ctx.content;
+    const agentFacingContent = audioTranscript ?? mediaFailureContent;
+    const commandFacingContent = audioTranscript ?? ctx.content;
     const agentFacingCtx =
-      audioTranscript === undefined
+      agentFacingContent === ctx.content
         ? ctx
         : {
             ...ctx,
-            content: audioTranscript,
+            content: agentFacingContent,
           };
     const effectiveCommandProbeBody =
       audioTranscript === undefined
@@ -1434,13 +1451,14 @@ export async function handleFeishuMessage(params: {
           body: combinedBody,
           bodyForAgent: messageBody,
           inboundHistory,
-          rawBody: agentFacingContent,
-          commandBody: agentFacingContent,
+          rawBody: commandFacingContent,
+          commandBody: commandFacingContent,
         },
         access: {
           mentions: {
             canDetectMention: isGroup,
             wasMentioned,
+            requireMention,
           },
           commands: {
             authorized: commandAuthorized,

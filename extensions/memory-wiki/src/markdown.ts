@@ -1,6 +1,7 @@
 // Memory Wiki plugin module implements markdown behavior.
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { fromMarkdown } from "mdast-util-from-markdown";
 import {
   asFiniteNumber,
   normalizeLowercaseStringOrEmpty,
@@ -408,13 +409,41 @@ function normalizeMarkdownLinkTarget(sourceRelativePath: string, target: string)
   return path.posix.normalize(path.posix.join(path.posix.dirname(sourceRelativePath), target));
 }
 
-function extractWikiLinks(markdown: string, sourceRelativePath: string): string[] {
-  // Strip fenced code blocks and inline code before link extraction to avoid
-  // false positives from [[...]] patterns in code (bash tests, Scala generics).
-  const searchable = markdown
-    .replace(/(^|\n)(`{3,})[^\n]*\n[\s\S]*?\n\2(?=\n|$)/g, "\n")
-    .replace(/`[^`]+`/g, "``")
-    .replace(RELATED_BLOCK_PATTERN, "");
+type MarkdownAstNode = {
+  type?: string;
+  position?: {
+    start?: { offset?: number };
+    end?: { offset?: number };
+  };
+  children?: MarkdownAstNode[];
+};
+
+function maskMarkdownCode(markdown: string): string {
+  const masked = markdown.split("");
+  const visit = (node: MarkdownAstNode): void => {
+    if (node.type === "code" || node.type === "inlineCode") {
+      const start = node.position?.start?.offset;
+      const end = node.position?.end?.offset;
+      if (start !== undefined && end !== undefined) {
+        for (let index = start; index < end; index++) {
+          if (masked[index] !== "\n" && masked[index] !== "\r") {
+            masked[index] = " ";
+          }
+        }
+      }
+      return;
+    }
+    for (const child of node.children ?? []) {
+      visit(child);
+    }
+  };
+  visit(fromMarkdown(markdown) as MarkdownAstNode);
+  return masked.join("");
+}
+
+export function extractWikiLinks(markdown: string, sourceRelativePath: string): string[] {
+  const withoutRelatedBlock = markdown.replace(RELATED_BLOCK_PATTERN, "");
+  const searchable = maskMarkdownCode(withoutRelatedBlock);
   const links: string[] = [];
   for (const match of searchable.matchAll(OBSIDIAN_LINK_PATTERN)) {
     const target = match[1]?.trim();

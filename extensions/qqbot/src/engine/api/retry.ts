@@ -10,6 +10,7 @@
  * parameterized by `RetryPolicy` and optional `PersistentRetryPolicy`.
  */
 
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import type { EngineLogger } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 
@@ -144,12 +145,6 @@ async function persistentRetryLoop<T>(
     `[qqbot:retry] Persistent retry timed out after ${policy.timeoutMs / 1000}s (${attempt} attempts)`,
   );
   throw lastError ?? new Error(`Persistent retry timed out (${policy.timeoutMs / 1000}s)`);
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 // ============ Pre-built Retry Policies ============

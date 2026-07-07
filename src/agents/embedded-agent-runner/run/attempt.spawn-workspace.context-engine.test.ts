@@ -18,6 +18,7 @@ import {
   resetSubagentRegistryForTests,
 } from "../../subagent-registry.js";
 import type { SubagentRunRecord } from "../../subagent-registry.types.js";
+import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import {
   type AttemptContextEngine,
   buildLoopPromptCacheInfo,
@@ -3160,5 +3161,96 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
     expect(afterTurn).toHaveBeenCalledTimes(1);
     expect(sumToolResultTextChars(afterTurnMessages)).toBeGreaterThan(4_000);
     expect(JSON.stringify(afterTurnMessages)).not.toContain("truncated");
+  });
+
+  it("routes aggregate prompt-history truncation to compact-then-truncate before prompt submission", async () => {
+    let sawPrompt = false;
+    const sessionMessages: AgentMessage[] = [{ role: "user", content: "seed", timestamp: 1 }];
+    for (let index = 0; index < 5; index += 1) {
+      sessionMessages.push({
+        ...makeAgentAssistantMessage({
+          content: [{ type: "toolCall", id: `aggregate_${index}`, name: "read", arguments: {} }],
+          timestamp: 2 + index * 2,
+        }),
+      });
+      sessionMessages.push({
+        role: "toolResult",
+        toolCallId: `aggregate_${index}`,
+        toolName: "read",
+        content: [{ type: "text", text: `${index}: ${"aggregate output ".repeat(900)}` }],
+        isError: false,
+        timestamp: 3 + index * 2,
+      } as AgentMessage);
+    }
+    sessionMessages.push(
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "old turn done" }],
+        timestamp: 20,
+      }),
+    );
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      sessionMessages,
+      attemptOverrides: {
+        contextTokenBudget: 1_000,
+      },
+      sessionPrompt: async (session) => {
+        sawPrompt = true;
+        session.messages = [...session.messages, doneMessage];
+      },
+    });
+
+    expect(sawPrompt).toBe(false);
+    expect(result.promptErrorSource).toBe("precheck");
+    expect(result.preflightRecovery).toEqual({ route: "compact_then_truncate" });
+    expect(hoisted.preemptiveCompactionCalls).toHaveLength(0);
+  });
+
+  it("routes protected trailing aggregate pressure to compact-then-truncate", async () => {
+    let sawPrompt = false;
+    const sessionMessages: AgentMessage[] = [
+      { role: "user", content: "seed", timestamp: 1 },
+      makeAgentAssistantMessage({
+        content: Array.from({ length: 5 }, (_, index) => ({
+          type: "toolCall",
+          id: `fresh_${index}`,
+          name: "read",
+          arguments: {},
+        })),
+        timestamp: 2,
+      }),
+    ];
+    for (let index = 0; index < 5; index += 1) {
+      sessionMessages.push({
+        role: "toolResult",
+        toolCallId: `fresh_${index}`,
+        toolName: "read",
+        content: [{ type: "text", text: `${index}: ${"fresh output ".repeat(90)}` }],
+        isError: false,
+        timestamp: 3 + index,
+      } as AgentMessage);
+    }
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      sessionMessages,
+      attemptOverrides: {
+        contextTokenBudget: 1_000,
+      },
+      sessionPrompt: async (session) => {
+        sawPrompt = true;
+        session.messages = [...session.messages, doneMessage];
+      },
+    });
+
+    expect(sawPrompt).toBe(false);
+    expect(result.promptErrorSource).toBe("precheck");
+    expect(result.preflightRecovery).toEqual({ route: "compact_then_truncate" });
+    expect(hoisted.preemptiveCompactionCalls).toHaveLength(0);
   });
 });

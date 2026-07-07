@@ -321,13 +321,16 @@ describe("voice-call outbound helpers", () => {
       storePath: "/tmp/voice-call.json",
     };
 
-    await expect(speak(ctx as never, "call-1", "hello")).resolves.toEqual({ success: true });
+    await expect(
+      speak(ctx as never, "call-1", "hello", { listenAfterPlayback: true }),
+    ).resolves.toEqual({ success: true });
     expect(transitionStateMock).toHaveBeenCalledWith(call, "speaking");
     expect(playTts).toHaveBeenCalledWith({
       callId: "call-1",
       providerCallId: "provider-1",
       text: "hello",
       voice: "alloy",
+      listenAfterPlayback: true,
     });
     expect(addTranscriptEntryMock).toHaveBeenCalledWith(call, "bot", "hello");
 

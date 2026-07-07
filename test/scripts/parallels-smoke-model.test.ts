@@ -363,20 +363,24 @@ describe("Parallels smoke model selection", () => {
 
   it("rejects short flags as Parallels smoke option values", () => {
     const cases = [
-      [TS_PATHS.linux, "--mode", "-h"],
-      [TS_PATHS.macos, "--vm", "-h"],
-      [TS_PATHS.windows, "--model", "-h"],
-      [TS_PATHS.npmUpdate, "--target-tarball", "-h"],
-    ];
+      [parseLinuxSmokeArgs, "--mode", "-h"],
+      [parseMacosSmokeArgs, "--vm", "-h"],
+      [parseWindowsSmokeArgs, "--model", "-h"],
+      [parseNpmUpdateSmokeArgs, "--target-tarball", "-h"],
+    ] as const;
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const exit = vi.spyOn(process, "exit").mockImplementation((code) => {
+      throw new Error(`process.exit(${code})`);
+    });
 
-    for (const [scriptPath, flag, value] of cases) {
-      const result = spawnNodeEvalSync(
-        `process.argv = ["node", "${scriptPath}", "${flag}", "${value}"]; await import("./${scriptPath}");`,
-        { env: process.env, imports: ["tsx"] },
-      );
-
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(`error: ${flag} requires a value`);
+    try {
+      for (const [parseArgs, flag, value] of cases) {
+        expect(() => parseArgs([flag, value])).toThrow("process.exit(1)");
+        expect(stderr).toHaveBeenLastCalledWith(`error: ${flag} requires a value\n`);
+      }
+    } finally {
+      exit.mockRestore();
+      stderr.mockRestore();
     }
   });
 
@@ -1399,9 +1403,10 @@ if (isPrlctl) {
     const script = readFileSync(TS_PATHS.npmUpdateScripts, "utf8");
 
     expect(script).not.toContain("ConvertFrom-Json -AsHashtable");
-    expect(script).toContain("function Get-OpenClawJsonProperty");
-    expect(script).toContain("function Remove-OpenClawJsonProperty");
-    expect(script).toContain("Remove-OpenClawJsonProperty $entries $pluginId");
+    expect(script).not.toContain("ConvertTo-Json -Depth 100");
+    expect(script).toContain('replace(/^\\\\uFEFF/u, "")');
+    expect(script).toContain("$nodeScript | Set-Content -Path $nodeScriptPath -Encoding UTF8");
+    expect(script).toContain("& node.exe $nodeScriptPath $configPath");
   });
 
   it("keeps aggregate update guest scripts isolated from the npm-update orchestrator", () => {
@@ -1567,7 +1572,7 @@ if (isPrlctl) {
             READY_FILE: readyFile,
           },
           quiet: true,
-          timeoutMs: 1_000,
+          timeoutMs: 250,
         });
 
         expect(result.status).toBe(124);

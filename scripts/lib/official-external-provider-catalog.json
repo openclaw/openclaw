@@ -151,6 +151,14 @@
           "id": "cerebras",
           "label": "Cerebras"
         },
+        "providerEndpoints": [
+          {
+            "endpointClass": "cerebras-native",
+            "hosts": [
+              "api.cerebras.ai"
+            ]
+          }
+        ],
         "providers": [
           {
             "id": "cerebras",
@@ -200,6 +208,14 @@
           "id": "chutes",
           "label": "Chutes"
         },
+        "providerEndpoints": [
+          {
+            "endpointClass": "chutes-native",
+            "hosts": [
+              "llm.chutes.ai"
+            ]
+          }
+        ],
         "providers": [
           {
             "id": "chutes",
@@ -400,6 +416,14 @@
           "id": "deepinfra",
           "label": "DeepInfra"
         },
+        "providerEndpoints": [
+          {
+            "endpointClass": "deepinfra-native",
+            "hosts": [
+              "api.deepinfra.com"
+            ]
+          }
+        ],
         "providers": [
           {
             "id": "deepinfra",
@@ -467,6 +491,14 @@
           "id": "deepseek",
           "label": "DeepSeek"
         },
+        "providerEndpoints": [
+          {
+            "endpointClass": "deepseek-native",
+            "hosts": [
+              "api.deepseek.com"
+            ]
+          }
+        ],
         "providers": [
           {
             "id": "deepseek",
@@ -516,6 +548,14 @@
           "id": "gmi",
           "label": "GMI Cloud"
         },
+        "providerEndpoints": [
+          {
+            "endpointClass": "gmi-native",
+            "hosts": [
+              "api.gmi-serving.com"
+            ]
+          }
+        ],
         "providers": [
           {
             "id": "gmi",
@@ -550,6 +590,49 @@
       }
     },
     {
+      "name": "@openclaw/longcat-provider",
+      "description": "OpenClaw LongCat provider plugin",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "longcat",
+          "label": "LongCat"
+        },
+        "providers": [
+          {
+            "id": "longcat",
+            "aliases": ["meituan-longcat"],
+            "name": "LongCat",
+            "docs": "/providers/longcat",
+            "categories": ["cloud", "llm"],
+            "envVars": ["LONGCAT_API_KEY"],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "longcat-api-key",
+                "choiceLabel": "LongCat API key",
+                "groupId": "longcat",
+                "groupLabel": "LongCat",
+                "groupHint": "OpenAI-compatible LongCat API",
+                "optionKey": "longcatApiKey",
+                "cliFlag": "--longcat-api-key",
+                "cliOption": "--longcat-api-key <key>",
+                "cliDescription": "LongCat API key",
+                "onboardingScopes": ["text-inference"]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/longcat-provider",
+          "npmSpec": "@openclaw/longcat-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.8"
+        }
+      }
+    },
+    {
       "name": "@openclaw/groq-provider",
       "description": "OpenClaw Groq media-understanding provider.",
       "source": "official",
@@ -559,6 +642,14 @@
           "id": "groq",
           "label": "Groq"
         },
+        "providerEndpoints": [
+          {
+            "endpointClass": "groq-native",
+            "hosts": [
+              "api.groq.com"
+            ]
+          }
+        ],
         "providers": [
           {
             "id": "groq",
@@ -806,6 +897,23 @@
           "id": "qwen",
           "label": "Qwen Cloud"
         },
+        "providerEndpoints": [
+          {
+            "endpointClass": "modelstudio-native",
+            "baseUrls": [
+              "https://coding-intl.dashscope.aliyuncs.com/v1",
+              "https://coding.dashscope.aliyuncs.com/v1",
+              "https://dashscope.aliyuncs.com/compatible-mode/v1",
+              "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+            ]
+          },
+          {
+            "endpointClass": "qwen-portal-native",
+            "baseUrls": [
+              "https://portal.qwen.ai/v1"
+            ]
+          }
+        ],
         "providers": [
           {
             "id": "qwen",
@@ -1018,6 +1126,15 @@
           "id": "moonshot",
           "label": "Moonshot"
         },
+        "providerEndpoints": [
+          {
+            "endpointClass": "moonshot-native",
+            "baseUrls": [
+              "https://api.moonshot.ai/v1",
+              "https://api.moonshot.cn/v1"
+            ]
+          }
+        ],
         "providers": [
           {
             "id": "moonshot",
@@ -1147,6 +1264,36 @@
                 ]
               }
             ]
+          },
+          {
+            "id": "tencent-tokenplan",
+            "name": "Tencent TokenPlan",
+            "docs": "/providers/tencent",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "TOKENPLAN_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "tokenplan-api-key",
+                "choiceLabel": "Tencent TokenPlan",
+                "choiceHint": "Hy via Tencent TokenPlan Gateway",
+                "groupId": "tencent",
+                "groupLabel": "Tencent Cloud",
+                "groupHint": "Tencent TokenPlan",
+                "optionKey": "tokenplanApiKey",
+                "cliFlag": "--tokenplan-api-key",
+                "cliOption": "--tokenplan-api-key <key>",
+                "cliDescription": "Tencent TokenPlan API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
           }
         ],
         "install": {
@@ -1267,6 +1414,14 @@
           "id": "zai",
           "label": "Z.AI"
         },
+        "providerEndpoints": [
+          {
+            "endpointClass": "zai-native",
+            "hosts": [
+              "api.z.ai"
+            ]
+          }
+        ],
         "providers": [
           {
             "id": "zai",

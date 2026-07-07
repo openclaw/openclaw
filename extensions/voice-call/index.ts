@@ -3,6 +3,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import {
   definePluginEntry,
@@ -371,10 +372,7 @@ export default definePluginEntry({
     };
 
     const describeHistoricalCall = async (rt: VoiceCallRuntime, callId: string) => {
-      const history = await rt.manager.getCallHistory(100);
-      const call = history
-        .toReversed()
-        .find((candidate) => candidate.callId === callId || candidate.providerCallId === callId);
+      const call = await rt.manager.getCallFromMemoryOrStore(callId);
       if (!call) {
         return undefined;
       }
@@ -657,7 +655,7 @@ export default definePluginEntry({
             });
             return;
           }
-          const call = rt.manager.getCall(raw) || rt.manager.getCallByProviderCallId(raw);
+          const call = await rt.manager.getCallFromMemoryOrStore(raw);
           if (!call) {
             respond(true, { found: false });
             return;
@@ -710,11 +708,6 @@ export default definePluginEntry({
       parameters: VoiceCallToolSchema,
       async execute(_toolCallId, params) {
         const rawParams = asParamRecord(params);
-        const json = (payload: unknown) => ({
-          content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
-          details: payload,
-        });
-
         try {
           const rt = await ensureRuntime();
 
@@ -794,8 +787,7 @@ export default definePluginEntry({
                 if (!callId) {
                   throw new Error("callId required");
                 }
-                const call =
-                  rt.manager.getCall(callId) || rt.manager.getCallByProviderCallId(callId);
+                const call = await rt.manager.getCallFromMemoryOrStore(callId);
                 return json(
                   call ? { found: true, call: toVoiceCallStatus(call) } : { found: false },
                 );
@@ -809,7 +801,7 @@ export default definePluginEntry({
             if (!sid) {
               throw new Error("sid required for status");
             }
-            const call = rt.manager.getCall(sid) || rt.manager.getCallByProviderCallId(sid);
+            const call = await rt.manager.getCallFromMemoryOrStore(sid);
             return json(call ? { found: true, call: toVoiceCallStatus(call) } : { found: false });
           }
 

@@ -9,19 +9,17 @@ read_when:
 ---
 
 An **agent harness** is the low level executor for one prepared OpenClaw agent
-turn. It is not a model provider, not a channel, and not a tool registry.
-For the user-facing mental model, see [Agent runtimes](/concepts/agent-runtimes).
+turn. It is not a model provider, not a channel, and not a tool registry. For
+the user-facing mental model, see [Agent runtimes](/concepts/agent-runtimes).
 
 Use this surface only for bundled or trusted native plugins. The contract is
-still experimental because the parameter types intentionally mirror the current
-embedded runner.
+still experimental because the parameter types intentionally mirror the
+current embedded runner.
 
 ## When to use a harness
 
 Register an agent harness when a model family has its own native session
-runtime and the normal OpenClaw provider transport is the wrong abstraction.
-
-Examples:
+runtime and the normal OpenClaw provider transport is the wrong abstraction:
 
 - a native coding-agent server that owns threads and compaction
 - a local CLI or daemon that must stream native plan/reasoning/tool events
@@ -43,25 +41,26 @@ Before a harness is selected, OpenClaw has already resolved:
 - channel reply callbacks and streaming callbacks
 - model fallback and live model switching policy
 
-That split is intentional. A harness runs a prepared attempt; it does not pick
-providers, replace channel delivery, or silently switch models.
+A harness runs a prepared attempt; it does not pick providers, replace channel
+delivery, or silently switch models.
 
 The prepared attempt also includes `params.runtimePlan`, an OpenClaw-owned
-policy bundle for runtime decisions that must stay shared across OpenClaw and native
-harnesses:
+policy bundle for runtime decisions that must stay shared across OpenClaw and
+native harnesses:
 
-- `runtimePlan.tools.normalize(...)` and
-  `runtimePlan.tools.logDiagnostics(...)` for provider-aware tool schema policy
+- `runtimePlan.tools.normalize(...)` and `runtimePlan.tools.logDiagnostics(...)`
+  for provider-aware tool schema policy
 - `runtimePlan.transcript.resolvePolicy(...)` for transcript sanitization and
   tool-call repair policy
 - `runtimePlan.delivery.isSilentPayload(...)` for shared `NO_REPLY` and media
   delivery suppression
-- `runtimePlan.outcome.classifyRunResult(...)` for model fallback classification
+- `runtimePlan.outcome.classifyRunResult(...)` for model fallback
+  classification
 - `runtimePlan.observability` for resolved provider/model/harness metadata
 
-Harnesses may use the plan for decisions that need to match OpenClaw behavior, but
-should still treat it as host-owned attempt state. Do not mutate it or use it to
-switch providers/models inside a turn.
+Harnesses may use the plan for decisions that need to match OpenClaw behavior,
+but treat it as host-owned attempt state: do not mutate it or use it to switch
+providers/models inside a turn.
 
 ## Register a harness
 
@@ -109,20 +108,21 @@ OpenClaw chooses a harness after provider/model resolution:
    provider/model.
 4. If no registered harness matches, OpenClaw uses its embedded runtime.
 
-Plugin harness failures surface as run failures. In `auto` mode, embedded fallback is
-only used when no registered plugin harness supports the resolved
+Plugin harness failures surface as run failures. In `auto` mode, embedded
+fallback only applies when no registered plugin harness supports the resolved
 provider/model. Once a plugin harness has claimed a run, OpenClaw does not
-replay that same turn through another runtime because that can change
+replay that same turn through another runtime, because that can change
 auth/runtime semantics or duplicate side effects.
 
 Whole-session and whole-agent runtime pins are ignored by selection. That
 includes stale session `agentHarnessId` values, `agents.defaults.agentRuntime`,
 `agents.list[].agentRuntime`, and `OPENCLAW_AGENT_RUNTIME`. `/status` shows the
 effective runtime selected from the provider/model route.
-If the selected harness is surprising, enable `agents/harness` debug logging and
-inspect the gateway's structured `agent harness selected` record. It includes
-the selected harness id, selection reason, runtime/fallback policy, and, in
-`auto` mode, each plugin candidate's support result.
+
+If the selected harness is surprising, enable `agents/harness` debug logging
+and inspect the gateway's structured `agent harness selected` record: it
+includes the selected harness id, selection reason, runtime/fallback policy,
+and, in `auto` mode, each plugin candidate's support result.
 
 The bundled Codex plugin registers `codex` as its harness id. Core treats that
 as an ordinary plugin harness id; Codex-specific aliases belong in the plugin
@@ -146,32 +146,32 @@ The bundled Codex plugin follows this pattern:
   harness talk to the native app-server protocol
 
 The Codex plugin is additive. Plain `openai/gpt-*` agent refs on the official
-OpenAI provider select the Codex harness by default. Older `codex/gpt-*` refs
-still select the Codex provider and harness for compatibility.
+OpenAI API endpoint (`api.openai.com`) select the Codex harness by default;
+custom OpenAI-compatible base URLs keep their configured provider behavior
+instead. Older `codex/gpt-*` refs still select the Codex provider and harness
+for compatibility.
 
 For operator setup, model prefix examples, and Codex-only configs, see
 [Codex Harness](/plugins/codex-harness).
 
 OpenClaw requires Codex app-server `0.125.0` or newer. The Codex plugin checks
-the app-server initialize handshake and blocks older or unversioned servers so
-OpenClaw only runs against the protocol surface it has been tested with. The
-`0.125.0` floor includes the native MCP hook payload support that landed in
-Codex `0.124.0`, while pinning OpenClaw to the newer tested stable line.
+the app-server initialize handshake and blocks older or unversioned servers,
+so OpenClaw only runs against the protocol surface it has tested.
 
 ### Tool-result middleware
 
-Bundled plugins and explicitly enabled installed plugins with matching manifest
-contracts can attach runtime-neutral tool-result middleware through
+Bundled plugins and explicitly enabled installed plugins with matching
+manifest contracts can attach runtime-neutral tool-result middleware through
 `api.registerAgentToolResultMiddleware(...)` when their manifest declares the
 targeted runtime ids in `contracts.agentToolResultMiddleware`. This trusted
-seam is for async tool-result transforms that must run before OpenClaw or Codex
-feeds tool output back into the model.
+seam is for async tool-result transforms that must run before OpenClaw or
+Codex feeds tool output back into the model.
 
 Legacy bundled plugins can still use
 `api.registerCodexAppServerExtensionFactory(...)` for Codex app-server-only
-middleware, but new result transforms should use the runtime-neutral API.
-The embedded-runner-only `api.registerEmbeddedExtensionFactory(...)` hook has been removed;
-embedded tool-result transforms must use runtime-neutral middleware.
+middleware, but new result transforms should use the runtime-neutral API. The
+embedded-runner-only `api.registerEmbeddedExtensionFactory(...)` hook has been
+removed; embedded tool-result transforms must use runtime-neutral middleware.
 
 ### Terminal outcome classification
 
@@ -181,18 +181,18 @@ Native harnesses that own their own protocol projection can use
 visible assistant text. The helper returns `empty`, `reasoning-only`, or
 `planning-only` so OpenClaw's fallback policy can decide whether to retry on a
 different model. `planning-only` requires the harness's explicit `planText`
-field; OpenClaw does not infer it from assistant prose. The helper intentionally
-leaves prompt errors, in-flight turns, and intentional silent replies such as
-`NO_REPLY` unclassified.
+field; OpenClaw does not infer it from assistant prose. The helper
+intentionally leaves prompt errors, in-flight turns, and intentional silent
+replies such as `NO_REPLY` unclassified.
 
 ### Agent-end side effects
 
 Native harnesses must call `runAgentEndSideEffects(...)` from
 `openclaw/plugin-sdk/agent-harness-runtime` after they finalize an attempt. It
-dispatches the portable `agent_end` hook and OpenClaw's research capture without
-delaying interactive replies. Use `awaitAgentEndSideEffects(...)` for local,
-non-interactive runs where the attempt must not resolve until those side effects
-finish. Both helpers accept the same `{ event, ctx }` payload as
+dispatches the portable `agent_end` hook and OpenClaw's research capture
+without delaying interactive replies. Use `awaitAgentEndSideEffects(...)` for
+local, non-interactive runs where the attempt must not resolve until those
+side effects finish. Both helpers accept the same `{ event, ctx }` payload as
 `runAgentHarnessAgentEndHook(...)`; their failures do not alter the completed
 attempt result.
 
@@ -226,20 +226,21 @@ aliases for the native harness.
 When this mode runs, Codex owns the native thread id, resume behavior,
 compaction, and app-server execution. OpenClaw still owns the chat channel,
 visible transcript mirror, tool policy, approvals, media delivery, and session
-selection. Use provider/model `agentRuntime.id: "codex"` when you need to prove
-that only the Codex app-server path can claim the run. Explicit plugin runtimes
-fail closed; Codex app-server selection failures and runtime failures are not
-retried through another runtime.
+selection. Use provider/model `agentRuntime.id: "codex"` when you need to
+prove that only the Codex app-server path can claim the run. Explicit plugin
+runtimes fail closed; Codex app-server selection failures and runtime failures
+are not retried through another runtime.
 
 ## Runtime strictness
 
 By default, OpenClaw uses `auto` provider/model runtime policy: registered
 plugin harnesses can claim a provider/model pair, and the embedded runtime
-handles the turn when none match. OpenAI agent refs on the official OpenAI provider default to Codex.
-Use an explicit provider/model plugin runtime such as
-`agentRuntime.id: "codex"` when missing harness selection should fail instead
-of routing through the embedded runtime. Selected plugin harness failures always
-fail hard. This does not block an explicit provider/model `agentRuntime.id: "openclaw"`.
+handles the turn when none match. OpenAI agent refs on the official OpenAI
+provider default to Codex. Use an explicit provider/model plugin runtime such
+as `agentRuntime.id: "codex"` when missing harness selection should fail
+instead of routing through the embedded runtime. Selected plugin harness
+failures always fail hard. This does not block an explicit provider/model
+`agentRuntime.id: "openclaw"`.
 
 For Codex-only embedded runs:
 
@@ -327,9 +328,10 @@ image, video, music, TTS, PDF, or other provider-specific model routing.
 
 ## Native sessions and transcript mirror
 
-A harness may keep a native session id, thread id, or daemon-side resume token.
-Keep that binding explicitly associated with the OpenClaw session, and keep
-mirroring user-visible assistant/tool output into the OpenClaw transcript.
+A harness may keep a native session id, thread id, or daemon-side resume
+token. Keep that binding explicitly associated with the OpenClaw session, and
+keep mirroring user-visible assistant/tool output into the OpenClaw
+transcript.
 
 The OpenClaw transcript remains the compatibility layer for:
 
@@ -338,22 +340,23 @@ The OpenClaw transcript remains the compatibility layer for:
 - switching back to the built-in OpenClaw harness on a later turn
 - generic `/new`, `/reset`, and session deletion behavior
 
-If your harness stores a sidecar binding, implement `reset(...)` so OpenClaw can
-clear it when the owning OpenClaw session is reset.
+If your harness stores a sidecar binding, implement `reset(...)` so OpenClaw
+can clear it when the owning OpenClaw session is reset.
 
 ## Tool and media results
 
-Core constructs the OpenClaw tool list and passes it into the prepared attempt.
-When a harness executes a dynamic tool call, return the tool result back through
-the harness result shape instead of sending channel media yourself.
+Core constructs the OpenClaw tool list and passes it into the prepared
+attempt. When a harness executes a dynamic tool call, return the tool result
+back through the harness result shape instead of sending channel media
+yourself.
 
-This keeps text, image, video, music, TTS, approval, and messaging-tool outputs
-on the same delivery path as OpenClaw-backed runs.
+This keeps text, image, video, music, TTS, approval, and messaging-tool
+outputs on the same delivery path as OpenClaw-backed runs.
 
 ## Current limitations
 
-- The public import path is generic, but some attempt/result type aliases still
-  carry legacy names for compatibility.
+- The public import path is generic, but some attempt/result type aliases
+  still carry legacy names for compatibility.
 - Third-party harness installation is experimental. Prefer provider plugins
   until you need a native session runtime.
 - Harness switching is supported across turns. Do not switch harnesses in the

@@ -78,6 +78,31 @@ export function resolveRequiredOperatorScopeForMethod(method: string): OperatorS
   return resolveScopedMethod(method);
 }
 
+/**
+ * sessions.patch fields a write-scoped operator may mutate: user-level chat
+ * organization only. Any other field (model, sendPolicy, tool inheritance,
+ * exec routing, ...) keeps requiring operator.admin — fail closed on unknowns.
+ */
+const SESSIONS_PATCH_WRITE_SCOPE_FIELDS: ReadonlySet<string> = new Set([
+  "key",
+  "agentId",
+  "label",
+  "category",
+  "pinned",
+  "archived",
+  "unread",
+]);
+
+function resolveSessionsPatchRequiredScopes(params: unknown): OperatorScope[] {
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    // Malformed params cannot mutate anything; let the handler return the
+    // precise validation error instead of a misleading missing-scope error.
+    return [WRITE_SCOPE];
+  }
+  const safeOnly = Object.keys(params).every((key) => SESSIONS_PATCH_WRITE_SCOPE_FIELDS.has(key));
+  return safeOnly ? [WRITE_SCOPE] : [ADMIN_SCOPE];
+}
+
 function resolveSessionActionRegisteredScopes(params: unknown): OperatorScope[] | undefined {
   if (!params || typeof params !== "object" || Array.isArray(params)) {
     return undefined;
@@ -127,7 +152,19 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
   if (method === "plugins.sessionAction") {
     return resolveSessionActionLeastPrivilegeScopes(params);
   }
+  if (method === "sessions.patch") {
+    return resolveSessionsPatchRequiredScopes(params);
+  }
   return [WRITE_SCOPE];
+}
+
+function findMissingOperatorScope(
+  requiredScopes: readonly OperatorScope[],
+  scopes: readonly string[],
+): OperatorScope | undefined {
+  return requiredScopes.find((scope) => {
+    return !scopes.includes(scope) && !(scope === READ_SCOPE && scopes.includes(WRITE_SCOPE));
+  });
 }
 
 /** Returns the narrowest known operator scopes needed to call a gateway method. */
@@ -156,6 +193,13 @@ export function authorizeOperatorScopesForMethod(
     return { allowed: true };
   }
   if (isDynamicOperatorGatewayMethod(method)) {
+    if (method === "sessions.patch") {
+      const missingScope = findMissingOperatorScope(
+        resolveSessionsPatchRequiredScopes(params),
+        scopes,
+      );
+      return missingScope ? { allowed: false, missingScope } : { allowed: true };
+    }
     const registeredScopes = resolveSessionActionRegisteredScopes(params);
     if (!registeredScopes && params && typeof params === "object" && !Array.isArray(params)) {
       const pluginId = normalizeSessionActionParam((params as { pluginId?: unknown }).pluginId);
@@ -168,10 +212,7 @@ export function authorizeOperatorScopesForMethod(
           : { allowed: false, missingScope: WRITE_SCOPE };
       }
     }
-    const requiredScopes = registeredScopes ?? [WRITE_SCOPE];
-    const missingScope = requiredScopes.find((scope) => {
-      return !scopes.includes(scope) && !(scope === READ_SCOPE && scopes.includes(WRITE_SCOPE));
-    });
+    const missingScope = findMissingOperatorScope(registeredScopes ?? [WRITE_SCOPE], scopes);
     return missingScope ? { allowed: false, missingScope } : { allowed: true };
   }
   const requiredScope = resolveRequiredOperatorScopeForMethod(method) ?? ADMIN_SCOPE;

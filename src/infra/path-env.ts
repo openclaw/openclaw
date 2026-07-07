@@ -8,6 +8,7 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import { resolveBrewPathDirs } from "./brew.js";
 import { isTruthyEnvValue } from "./env.js";
+import { tryProcessCwd } from "./safe-cwd.js";
 
 type EnsureOpenClawPathOpts = {
   /** Executable whose directory should stay first for shebang-compatible child processes. */
@@ -80,7 +81,7 @@ function candidateBinDirs(
   existingPathParts: ReadonlySet<string>,
 ): { prepend: string[]; append: string[] } {
   const execPath = opts.execPath ?? process.execPath;
-  const cwd = opts.cwd ?? process.cwd();
+  const cwd = opts.cwd ?? tryProcessCwd();
   const homeDir = opts.homeDir ?? os.homedir();
   const platform = opts.platform ?? process.platform;
 
@@ -114,7 +115,7 @@ function candidateBinDirs(
   const allowProjectLocalBin =
     opts.allowProjectLocalBin === true ||
     isTruthyEnvValue(process.env.OPENCLAW_ALLOW_PROJECT_LOCAL_BIN);
-  if (allowProjectLocalBin) {
+  if (allowProjectLocalBin && cwd) {
     const localBinDir = path.join(cwd, "node_modules", ".bin");
     if (isExecutable(path.join(localBinDir, "openclaw"))) {
       append.push(localBinDir);

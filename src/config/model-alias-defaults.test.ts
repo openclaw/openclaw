@@ -1,13 +1,50 @@
 // Verifies default model alias config values and overrides.
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import { applyModelDefaults } from "./defaults.js";
+import { applyModelDefaults as applyModelDefaultsWithPolicy } from "./defaults.js";
 import type { OpenClawConfig } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
+const emptyManifestRegistry = { plugins: [] } satisfies Pick<PluginManifestRegistry, "plugins">;
+
+function applyModelDefaults(
+  cfg: OpenClawConfig,
+  options?: Parameters<typeof applyModelDefaultsWithPolicy>[1],
+) {
+  return applyModelDefaultsWithPolicy(cfg, options ?? { manifestRegistry: emptyManifestRegistry });
+}
+
 describe("applyModelDefaults", () => {
+  beforeAll(() => {
+    vi.stubEnv(
+      "OPENCLAW_BUNDLED_PLUGINS_DIR",
+      path.resolve(import.meta.dirname, "../../extensions"),
+    );
+    // Provider public artifacts are process-stable. Keep their one-time load out of assertions.
+    applyModelDefaults({
+      models: {
+        providers: {
+          google: {
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+            models: [],
+          },
+        },
+      },
+    });
+    applyModelDefaults({
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            models: [],
+          },
+        },
+      },
+    });
+  });
+
   beforeEach(() => {
     vi.stubEnv(
       "OPENCLAW_BUNDLED_PLUGINS_DIR",

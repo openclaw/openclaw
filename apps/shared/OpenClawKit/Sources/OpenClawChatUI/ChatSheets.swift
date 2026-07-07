@@ -15,13 +15,13 @@ struct ChatSessionsSheet: View {
                 } label: {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(session.displayName ?? session.key)
-                            .font(.system(.body, design: .monospaced))
+                            .font(OpenClawChatTypography.mono(size: 17, relativeTo: .body))
                             .lineLimit(1)
                         if let updatedAt = session.updatedAt, updatedAt > 0 {
                             Text(Date(timeIntervalSince1970: updatedAt / 1000).formatted(
                                 date: .abbreviated,
                                 time: .shortened))
-                                .font(.caption)
+                                .font(OpenClawChatTypography.caption)
                                 .foregroundStyle(.secondary)
                         }
                     }

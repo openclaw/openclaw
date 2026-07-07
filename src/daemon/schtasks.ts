@@ -1099,7 +1099,7 @@ async function shouldFallbackScheduledTaskLaunch(params: {
   scriptPath: string;
 }): Promise<boolean> {
   const readLaunchObservation = async (): Promise<{
-    state: "running" | "not-yet-run" | "other";
+    state: "running" | "not-yet-run" | "stopped-success" | "other";
     signature: string;
   }> => {
     const runtime = await readScheduledTaskRuntime(params.env).catch(() => null);
@@ -1115,6 +1115,14 @@ async function shouldFallbackScheduledTaskLaunch(params: {
     if (normalizedResult && NOT_YET_RUN_RESULT_CODES.has(normalizedResult)) {
       return {
         state: "not-yet-run",
+        signature: [runtime?.state, runtime?.lastRunTime, runtime?.lastRunResult, runtime?.detail]
+          .filter(Boolean)
+          .join("|"),
+      };
+    }
+    if (normalizedResult === "0x0") {
+      return {
+        state: "stopped-success",
         signature: [runtime?.state, runtime?.lastRunTime, runtime?.lastRunResult, runtime?.detail]
           .filter(Boolean)
           .join("|"),
@@ -1186,8 +1194,8 @@ async function shouldFallbackScheduledTaskLaunch(params: {
     });
   };
 
-  const initial = await readLaunchObservation();
-  if (initial.state !== "not-yet-run") {
+  let previous = await readLaunchObservation();
+  if (previous.state !== "not-yet-run" && previous.state !== "stopped-success") {
     return false;
   }
 
@@ -1195,14 +1203,27 @@ async function shouldFallbackScheduledTaskLaunch(params: {
   while (Date.now() < deadline) {
     await sleep(SCHEDULED_TASK_FALLBACK_POLL_MS);
     const current = await readLaunchObservation();
-    if (current.state !== "not-yet-run") {
+    if (current.state !== "not-yet-run" && current.state !== "stopped-success") {
       return false;
     }
-    if (current.signature !== initial.signature) {
+    if (
+      current.state === "not-yet-run" &&
+      previous.state === "not-yet-run" &&
+      current.signature !== previous.signature
+    ) {
+      return false;
+    }
+    // A queued task may finish cleanly before its process/listener becomes observable.
+    // Keep that transition inside this bounded poll; the reverse means a new run is starting.
+    if (previous.state === "stopped-success" && current.state === "not-yet-run") {
+      return false;
+    }
+    previous = current;
+    if (await hasLaunchEvidence()) {
       return false;
     }
   }
-  return !(await hasLaunchEvidence());
+  return true;
 }
 
 async function runScheduledTaskOrThrow(params: {
@@ -1368,6 +1389,106 @@ export async function uninstallScheduledTask({
 function isTaskNotRunning(res: { stdout: string; stderr: string; code: number }): boolean {
   const detail = normalizeLowercaseStringOrEmpty(res.stderr || res.stdout);
   return detail.includes("not running");
+}
+
+function parseScheduledTaskXmlEnabled(output: string): boolean | null {
+  const normalized = output.replace(/^\uFEFF/u, "").replaceAll(String.fromCharCode(0), "");
+  const settings = /<Settings(?:\s[^>]*)?>([\s\S]*?)<\/Settings>/iu.exec(normalized)?.[1];
+  if (settings === undefined) {
+    return null;
+  }
+  const enabled = /<Enabled>\s*(true|false)\s*<\/Enabled>/iu.exec(settings)?.[1];
+  // Task Scheduler's schema defaults a missing Settings.Enabled value to true.
+  return enabled === undefined ? true : enabled.toLowerCase() === "true";
+}
+
+function probeScheduledTaskExists(taskName: string): boolean | null {
+  const encodedTaskName = Buffer.from(taskName, "utf8").toString("base64");
+  const script = [
+    "$ErrorActionPreference='Stop'",
+    `$taskName=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedTaskName}'))`,
+    "try { $service=New-Object -ComObject 'Schedule.Service'; $service.Connect(); $null=$service.GetFolder('\\').GetTask($taskName); exit 0 } catch { $exception=$_.Exception; while($null -ne $exception.InnerException){$exception=$exception.InnerException}; [Console]::Out.Write($exception.HResult); exit 1 }",
+  ].join("; ");
+  const probe = spawnSync(
+    getWindowsPowerShellExePath(),
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-EncodedCommand",
+      Buffer.from(script, "utf16le").toString("base64"),
+    ],
+    { encoding: "utf8", timeout: 5_000, windowsHide: true },
+  );
+  if (probe.error) {
+    return null;
+  }
+  if (probe.status === 0) {
+    return true;
+  }
+  const hresult = Number.parseInt(probe.stdout.trim(), 10);
+  // Task Scheduler COM reports missing task and missing task-folder paths as
+  // locale-independent HRESULT_FROM_WIN32 values. Every other failure stays fatal.
+  return hresult === -2147024894 || hresult === -2147024893 ? false : null;
+}
+
+async function changeScheduledTaskEnabledState(params: {
+  env: GatewayServiceEnv;
+  enabled: boolean;
+}): Promise<boolean> {
+  const taskName = resolveTaskName(params.env);
+  if (!params.enabled) {
+    const query = await execSchtasks(["/Query", "/TN", taskName, "/XML"]);
+    if (query.code !== 0) {
+      const taskExists = probeScheduledTaskExists(taskName);
+      if (taskExists === false) {
+        return false;
+      }
+      const detail = (query.stderr || query.stdout).trim() || "unknown error";
+      throw new Error(`schtasks XML query failed: ${detail}`);
+    }
+    const enabled = parseScheduledTaskXmlEnabled(query.stdout);
+    if (enabled === null) {
+      throw new Error("schtasks XML query did not expose the task enabled state");
+    }
+    if (!enabled) {
+      return false;
+    }
+  }
+
+  const action = params.enabled ? "/ENABLE" : "/DISABLE";
+  const result = await execSchtasks(["/Change", "/TN", taskName, action]);
+  if (result.code !== 0) {
+    const detail = (result.stderr || result.stdout).trim() || "unknown error";
+    const changeError = new Error(
+      `schtasks ${params.enabled ? "enable" : "disable"} failed: ${detail}`,
+    );
+    if (!params.enabled) {
+      // The task was proven enabled before /DISABLE. A timeout or non-zero exit
+      // can still follow a committed change, so restore that known prior state.
+      const restore = await execSchtasks(["/Change", "/TN", taskName, "/ENABLE"]);
+      if (restore.code !== 0) {
+        const restoreDetail = (restore.stderr || restore.stdout).trim() || "unknown error";
+        throw new AggregateError(
+          [changeError, new Error(`schtasks enable failed: ${restoreDetail}`)],
+          "Scheduled Task disable failed and its enabled state could not be restored",
+        );
+      }
+    }
+    throw changeError;
+  }
+  return true;
+}
+
+export async function suspendScheduledTaskAutoStartForUpdate(
+  env: GatewayServiceEnv = process.env as GatewayServiceEnv,
+): Promise<boolean> {
+  return await changeScheduledTaskEnabledState({ env, enabled: false });
+}
+
+export async function resumeScheduledTaskAutoStartAfterUpdate(
+  env: GatewayServiceEnv = process.env as GatewayServiceEnv,
+): Promise<boolean> {
+  return await changeScheduledTaskEnabledState({ env, enabled: true });
 }
 
 export async function stopScheduledTask({ stdout, env }: GatewayServiceControlArgs): Promise<void> {

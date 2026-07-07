@@ -8,7 +8,7 @@ extension AgentProTab {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Text("Scheduler")
-                        .font(.headline)
+                        .font(OpenClawType.headline)
                     Spacer()
                     ProValuePill(
                         value: self.overview?.cronStatus?.enabled == true ? "on" : "off",
@@ -23,7 +23,7 @@ extension AgentProTab {
                 }
                 if let cronActionStatusText {
                     Text(cronActionStatusText)
-                        .font(.caption2)
+                        .font(OpenClawType.caption2)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
@@ -83,14 +83,14 @@ extension AgentProTab {
                 color: job.enabled ? OpenClawBrand.accent : .secondary)
             VStack(alignment: .leading, spacing: 4) {
                 Text(job.name)
-                    .font(.subheadline.weight(.semibold))
+                    .font(OpenClawType.subheadSemiBold)
                     .lineLimit(1)
                 Text(self.cronJobDetail(job))
-                    .font(.caption)
+                    .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
                 Text(self.cronScheduleSummary(job))
-                    .font(.caption2)
+                    .font(OpenClawType.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 HStack(spacing: 8) {
@@ -98,6 +98,7 @@ extension AgentProTab {
                         Task { await self.runCronJob(job) }
                     } label: {
                         Label("Run", systemImage: "play.fill")
+                            .font(OpenClawType.captionSemiBold)
                     }
                     .disabled(busy || !self.liveGatewayConnected)
 
@@ -105,6 +106,7 @@ extension AgentProTab {
                         Task { await self.setCronJob(job, enabled: !job.enabled) }
                     } label: {
                         Label(job.enabled ? "Pause" : "Enable", systemImage: job.enabled ? "pause.fill" : "checkmark")
+                            .font(OpenClawType.captionSemiBold)
                     }
                     .disabled(busy || !self.liveGatewayConnected)
                 }
@@ -118,7 +120,7 @@ extension AgentProTab {
                     .controlSize(.small)
             } else {
                 Text(self.cronJobState(job))
-                    .font(.caption2.weight(.semibold))
+                    .font(OpenClawType.caption2SemiBold)
                     .foregroundStyle(job.enabled ? OpenClawBrand.accent : .secondary)
                     .lineLimit(1)
             }

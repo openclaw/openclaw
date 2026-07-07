@@ -165,6 +165,7 @@ export function buildThreadingToolContext(params: {
         To: originTo,
         ChatType: sessionCtx.ChatType,
         CurrentMessageId: currentMessageId,
+        ReplyToMode: sessionCtx.ReplyToMode,
         ReplyToId: sessionCtx.ReplyToId,
         ReplyToIdFull: sessionCtx.ReplyToIdFull,
         ThreadLabel: sessionCtx.ThreadLabel,

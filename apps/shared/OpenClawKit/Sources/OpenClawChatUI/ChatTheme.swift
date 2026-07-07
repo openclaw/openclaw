@@ -168,7 +168,8 @@ enum OpenClawChatTheme {
         #if os(macOS)
         Color(nsColor: self.assistantBubbleDynamicNSColor)
         #else
-        self.adaptiveColor(light: .secondarySystemBackground, dark: IOSPalette.darkPanelRaised)
+        // iMessage-style grey receiver bubble: clearly visible on the white chat surface.
+        self.adaptiveColor(light: .systemGray5, dark: IOSPalette.darkPanelRaised)
         #endif
     }
 

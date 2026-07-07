@@ -169,7 +169,7 @@ export function applyModelDefaults(
       const normalizedProvider = normalizeProviderConfigForConfigDefaults({
         provider: providerId,
         providerConfig: provider,
-        manifestRegistry: options.manifestRegistry,
+        manifestRegistry,
       });
       const models = normalizedProvider.models;
       if (!Array.isArray(models) || models.length === 0) {

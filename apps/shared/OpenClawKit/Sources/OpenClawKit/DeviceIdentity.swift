@@ -3,12 +3,15 @@ import Foundation
 
 public enum GatewayDeviceIdentityProfile: String, Sendable {
     case primary
+    case node
     case shareExtension
 
     var identityFileName: String {
         switch self {
         case .primary:
             "device.json"
+        case .node:
+            "node-device.json"
         case .shareExtension:
             "share-device.json"
         }
@@ -18,6 +21,8 @@ public enum GatewayDeviceIdentityProfile: String, Sendable {
         switch self {
         case .primary:
             "device-auth.json"
+        case .node:
+            "node-device-auth.json"
         case .shareExtension:
             "share-device-auth.json"
         }

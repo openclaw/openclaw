@@ -1,5 +1,4 @@
 // ClawHub lifecycle helpers fetch skill registry metadata and package details.
-import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -26,6 +25,7 @@ import {
   type ClawHubSkillSearchResult,
   type ClawHubSkillVerificationResponse,
 } from "../../infra/clawhub.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { pathExists } from "../../infra/fs-safe.js";
 import { withExtractedArchiveRoot } from "../../infra/install-flow.js";
@@ -525,7 +525,7 @@ async function readInstalledSkillFileLock(
       const content = await fs.readFile(candidate);
       return {
         path: marker,
-        sha256: createHash("sha256").update(content).digest("hex"),
+        sha256: sha256Hex(content),
       };
     } catch {
       continue;

@@ -13,7 +13,23 @@ import org.robolectric.RuntimeEnvironment
 @RunWith(RobolectricTestRunner::class)
 class SecurePrefsTest {
   @Test
-  fun loadLocationMode_migratesLegacyAlwaysValue() {
+  fun backgroundSettingsResolutionRequiresBothPermissionLevels() {
+    assertEquals(
+      LocationMode.Always,
+      locationModeAfterBackgroundSettings(LocationMode.Off, foregroundGranted = true, backgroundGranted = true),
+    )
+    assertEquals(
+      LocationMode.Off,
+      locationModeAfterBackgroundSettings(LocationMode.Off, foregroundGranted = true, backgroundGranted = false),
+    )
+    assertEquals(
+      LocationMode.WhileUsing,
+      locationModeAfterBackgroundSettings(LocationMode.Always, foregroundGranted = true, backgroundGranted = false),
+    )
+  }
+
+  @Test
+  fun loadLocationMode_enforcesFlavorAvailabilityForAlwaysValue() {
     val context = RuntimeEnvironment.getApplication()
     val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
     plainPrefs
@@ -24,8 +40,10 @@ class SecurePrefsTest {
 
     val prefs = SecurePrefs(context)
 
-    assertEquals(LocationMode.WhileUsing, prefs.locationMode.value)
-    assertEquals("whileUsing", plainPrefs.getString("location.enabledMode", null))
+    val expected =
+      if (SensitiveFeatureConfig.backgroundLocationEnabled) LocationMode.Always else LocationMode.WhileUsing
+    assertEquals(expected, prefs.locationMode.value)
+    assertEquals(expected.rawValue, plainPrefs.getString("location.enabledMode", null))
   }
 
   @Test
@@ -75,6 +93,37 @@ class SecurePrefsTest {
 
     assertTrue(prefs.installedAppsSharingEnabled.value)
     assertTrue(plainPrefs.getBoolean("device.apps.sharing.enabled", false))
+  }
+
+  @Test
+  fun cameraSharing_defaultsOffAndPersistsOptIn() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs.edit().clear().commit()
+    val prefs = SecurePrefs(context)
+
+    assertFalse(prefs.cameraEnabled.value)
+    assertFalse(plainPrefs.getBoolean("camera.enabled", true))
+
+    prefs.setCameraEnabled(true)
+
+    assertTrue(prefs.cameraEnabled.value)
+    assertTrue(plainPrefs.getBoolean("camera.enabled", false))
+  }
+
+  @Test
+  fun cameraSharing_migratesExistingInstallsToPreviousDefault() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs
+      .edit()
+      .clear()
+      .putString("node.instanceId", "existing-node")
+      .commit()
+    val prefs = SecurePrefs(context)
+
+    assertTrue(prefs.cameraEnabled.value)
+    assertTrue(plainPrefs.getBoolean("camera.enabled", false))
   }
 
   @Test
@@ -135,5 +184,114 @@ class SecurePrefsTest {
     assertNull(prefs.loadGatewayToken())
     assertNull(prefs.loadGatewayBootstrapToken())
     assertNull(prefs.loadGatewayPassword())
+  }
+
+  @Test
+  fun modelFavorites_togglePersistsPinOrder() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs.edit().clear().commit()
+    val prefs = SecurePrefs(context)
+
+    prefs.toggleModelFavorite(" anthropic/claude-opus-4 ")
+    prefs.toggleModelFavorite("openai/gpt-5")
+    prefs.toggleModelFavorite("anthropic/claude-opus-4")
+    prefs.toggleModelFavorite("anthropic/claude-opus-4")
+    prefs.toggleModelFavorite("  ")
+
+    assertEquals(
+      listOf("openai/gpt-5", "anthropic/claude-opus-4"),
+      prefs.modelFavorites.value,
+    )
+    assertEquals(prefs.modelFavorites.value, SecurePrefs(context).modelFavorites.value)
+  }
+
+  @Test
+  fun modelRecents_dedupesToFrontAndCapsAtFive() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs.edit().clear().commit()
+    val prefs = SecurePrefs(context)
+
+    (1..6).forEach { index -> prefs.recordModelRecent("provider/model-$index") }
+    prefs.recordModelRecent(" provider/model-3 ")
+    prefs.recordModelRecent(" ")
+
+    assertEquals(
+      listOf(
+        "provider/model-3",
+        "provider/model-6",
+        "provider/model-5",
+        "provider/model-4",
+        "provider/model-2",
+      ),
+      prefs.modelRecents.value,
+    )
+    assertEquals(prefs.modelRecents.value, SecurePrefs(context).modelRecents.value)
+  }
+
+  @Test
+  fun gatewayCustomHeaders_roundTripStaysScopedPerGateway() {
+    val context = RuntimeEnvironment.getApplication()
+    val securePrefs = context.getSharedPreferences("openclaw.node.secure.test.headers", Context.MODE_PRIVATE)
+    securePrefs.edit().clear().commit()
+    val prefs = SecurePrefs(context, securePrefsOverride = securePrefs)
+    val stableId = "manual|gw.example.com|443"
+
+    assertTrue(prefs.loadGatewayCustomHeaders(stableId).isEmpty())
+    prefs.saveGatewayCustomHeaders(
+      stableId,
+      mapOf("CF-Access-Client-Id" to "client-id", "CF-Access-Client-Secret" to "client-secret"),
+    )
+    assertEquals(
+      mapOf("CF-Access-Client-Id" to "client-id", "CF-Access-Client-Secret" to "client-secret"),
+      prefs.loadGatewayCustomHeaders(stableId),
+    )
+    // Headers are per-gateway credentials; another endpoint never observes them.
+    assertTrue(prefs.loadGatewayCustomHeaders("manual|other.example.com|443").isEmpty())
+
+    prefs.saveGatewayCustomHeaders(stableId, emptyMap())
+    assertTrue(prefs.loadGatewayCustomHeaders(stableId).isEmpty())
+    assertFalse(securePrefs.contains("gateway.customHeaders.$stableId"))
+  }
+
+  @Test
+  fun gatewayCustomHeaders_dropsReservedAndUnsafeEntries() {
+    val context = RuntimeEnvironment.getApplication()
+    val securePrefs = context.getSharedPreferences("openclaw.node.secure.test.headers2", Context.MODE_PRIVATE)
+    securePrefs.edit().clear().commit()
+    val prefs = SecurePrefs(context, securePrefsOverride = securePrefs)
+    val stableId = "manual|gw.example.com|443"
+
+    prefs.saveGatewayCustomHeaders(
+      stableId,
+      mapOf(
+        "Host" to "smuggled.example",
+        "Sec-WebSocket-Protocol" to "override",
+        "X Bad" to "space",
+        "X:Bad" to "colon",
+        "X-Bad-é" to "unicode",
+        "X-Split" to "a\r\nEvil: b",
+        "X-Allowed" to "yes",
+      ),
+    )
+    assertEquals(mapOf("X-Allowed" to "yes"), prefs.loadGatewayCustomHeaders(stableId))
+  }
+
+  @Test
+  fun gatewayCustomHeaders_explicitClearRemovesOnlyCustomHeaderCredentials() {
+    val context = RuntimeEnvironment.getApplication()
+    val securePrefs = context.getSharedPreferences("openclaw.node.secure.test.headers3", Context.MODE_PRIVATE)
+    securePrefs.edit().clear().commit()
+    val prefs = SecurePrefs(context, securePrefsOverride = securePrefs)
+    prefs.saveGatewayCustomHeaders("manual|one.example|443", mapOf("X-One" to "secret-one"))
+    prefs.saveGatewayCustomHeaders("manual|two.example|443", mapOf("X-Two" to "secret-two"))
+    prefs.putString("unrelated.secret", "keep")
+
+    prefs.clearGatewayCustomHeaders()
+
+    assertTrue(prefs.loadGatewayCustomHeaders("manual|one.example|443").isEmpty())
+    assertTrue(prefs.loadGatewayCustomHeaders("manual|two.example|443").isEmpty())
+    assertEquals("keep", prefs.getString("unrelated.secret"))
   }
 }

@@ -1,23 +1,54 @@
+import {
+  ANTHROPIC_OMITTED_REASONING_TEXT,
+  ANTHROPIC_SERVER_SIDE_FALLBACK_BETA,
+  CLAUDE_FABLE_5_FALLBACK_MODEL_COST,
+  applyAnthropicFallbackBoundary,
+  buildAnthropicServerSideFallbacks,
+  applyAnthropicRefusal,
+  findActiveAnthropicToolTurnAssistantIndex,
+  omitFoundryBearerCredentialHeaders,
+  projectAnthropicTools,
+  reconcileAnthropicToolChoice,
+  requiresClaudeAdaptiveThinking,
+  resolveClaudeNativeThinkingLevelMap,
+  resolveOriginalAnthropicToolName,
+  readAnthropicFallbackBoundary,
+  readAnthropicPromptUsageSnapshot,
+  readAnthropicUsageTokenCount,
+  readLastAnthropicIterationUsage,
+  supportsClaudeAdaptiveThinking,
+  supportsClaudeNativeMaxEffort,
+  supportsClaudeNativeXhighEffort,
+  usesClaudeFable5MessagesContract,
+  usesFoundryBearerAuth,
+  type AnthropicOptions,
+  type AnthropicPromptUsageSnapshot,
+  type AnthropicProjectedToolChoice,
+  type AnthropicThinkingDisplay,
+  type AnthropicToolProjection,
+} from "@openclaw/ai/internal/anthropic";
+import {
+  calculateCost,
+  clampThinkingLevel,
+  createDeferredEventBuffer,
+  getEnvApiKey,
+  notifyLlmRequestActivity,
+  parseStreamingJson,
+} from "@openclaw/ai/internal/runtime";
+import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultBlockText,
+  extractToolResultText,
+} from "@openclaw/ai/internal/shared";
 /**
  * Native Anthropic Messages streaming transport.
  * Converts OpenClaw contexts/tools into Anthropic payloads, streams SSE events
  * back into runtime output blocks, and applies provider request policy.
  */
-import { readResponseTextSnippet } from "@openclaw/media-core/read-response-with-limit";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { createAbortError as createNamedAbortError } from "../infra/abort-signal.js";
 import { toErrorObject } from "../infra/errors.js";
-import { getEnvApiKey } from "../llm/env-api-keys.js";
-import { calculateCost, clampThinkingLevel } from "../llm/model-utils.js";
-import {
-  ANTHROPIC_OMITTED_REASONING_TEXT,
-  findActiveAnthropicToolTurnAssistantIndex,
-} from "../llm/providers/anthropic-thinking-replay.js";
-import type { AnthropicOptions, AnthropicThinkingDisplay } from "../llm/providers/anthropic.js";
-import {
-  describeToolResultMediaPlaceholder,
-  extractToolResultBlockText,
-  extractToolResultText,
-} from "../llm/providers/tool-result-text.js";
+import { readResponseTextSnippet } from "../infra/http-body.js";
 import type {
   AssistantMessageDiagnostic,
   Context,
@@ -25,34 +56,12 @@ import type {
   SimpleStreamOptions,
   ThinkingLevel,
 } from "../llm/types.js";
-import { parseStreamingJson } from "../llm/utils/json-parse.js";
-import {
-  omitFoundryBearerCredentialHeaders,
-  usesFoundryBearerAuth,
-} from "../shared/anthropic-auth-headers.js";
-import {
-  resolveClaudeNativeThinkingLevelMap,
-  requiresClaudeAdaptiveThinking,
-  supportsClaudeAdaptiveThinking,
-  supportsClaudeNativeMaxEffort,
-  supportsClaudeNativeXhighEffort,
-  usesClaudeFable5MessagesContract,
-} from "../shared/anthropic-model-contract.js";
-import { applyAnthropicRefusal } from "../shared/anthropic-refusal.js";
+import "../llm/ai-transport-host.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
-import { createDeferredEventBuffer } from "../shared/deferred-event-buffer.js";
-import { notifyLlmRequestActivity } from "../shared/llm-request-activity.js";
 import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
 } from "./anthropic-payload-policy.js";
-import {
-  projectAnthropicTools,
-  reconcileAnthropicToolChoice,
-  resolveOriginalAnthropicToolName,
-  type AnthropicProjectedToolChoice,
-  type AnthropicToolProjection,
-} from "./anthropic-tool-projection.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
@@ -70,11 +79,16 @@ import {
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
+import type { ContextUsage } from "./usage.js";
 
 const CLAUDE_CODE_VERSION = "2.1.75";
+const CLAUDE_CODE_BILLING_SYSTEM_BLOCK = `x-anthropic-billing-header: cc_version=${CLAUDE_CODE_VERSION}; cc_entrypoint=sdk-cli;`;
 const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const ANTHROPIC_MESSAGES_ERROR_BODY_MAX_CHARS = 400;
 const ANTHROPIC_MESSAGES_ERROR_BODY_READ_IDLE_TIMEOUT_MS = 10_000;
+// Mirror the fetch sanitizer cap here because compatible routes such as Kimi
+// bypass that layer; without a parser-local guard, partial frames grow forever.
+const ANTHROPIC_MESSAGES_SSE_PENDING_BUFFER_MAX_CHARS = 16 * 1024 * 1024;
 const CLAUDE_CODE_TOOLS = [
   "Read",
   "Write",
@@ -151,6 +165,7 @@ type MutableAssistantOutput = {
     output: number;
     cacheRead: number;
     cacheWrite: number;
+    contextUsage?: ContextUsage;
     totalTokens: number;
     cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
   };
@@ -276,6 +291,15 @@ function isDirectAnthropicModel(model: Pick<AnthropicTransportModel, "provider" 
 
 function isKimiAnthropicProvider(provider: string | undefined): boolean {
   return /^kimi(?:-|$)/.test(normalizeLowercaseStringOrEmpty(provider ?? ""));
+}
+
+/**
+ * Server-side refusal fallback is a first-party Claude API beta: proxies and
+ * Bedrock/Vertex/Foundry reject the `fallbacks` param, and OAuth (Claude Code
+ * identity) requests are excluded until the beta is verified there.
+ */
+function useAnthropicServerSideFallback(model: AnthropicTransportModel): boolean {
+  return usesClaudeFable5MessagesContract(model) && isDirectAnthropicModel(model);
 }
 
 function supportsReasoningContentReplay(
@@ -634,12 +658,10 @@ function createAbortError(signal: AbortSignal): Error {
   if (reason instanceof Error) {
     return reason;
   }
-  const error =
-    reason === undefined
-      ? new Error("Request was aborted")
-      : new Error("Request was aborted", { cause: reason });
-  error.name = "AbortError";
-  return error;
+  return createNamedAbortError(
+    "Request was aborted",
+    reason === undefined ? undefined : { cause: reason },
+  );
 }
 
 function readAnthropicSseChunk(
@@ -700,6 +722,15 @@ function parseAnthropicSseEventData(data: string): Record<string, unknown> {
   }
 }
 
+function assertAnthropicSsePendingBufferWithinLimit(pendingChars: number): void {
+  if (pendingChars <= ANTHROPIC_MESSAGES_SSE_PENDING_BUFFER_MAX_CHARS) {
+    return;
+  }
+  throw new Error(
+    `Anthropic Messages SSE response exceeded max pending buffer size (${ANTHROPIC_MESSAGES_SSE_PENDING_BUFFER_MAX_CHARS} chars) without event boundary`,
+  );
+}
+
 async function* parseAnthropicSseBody(
   body: ReadableStream<Uint8Array>,
   signal?: AbortSignal,
@@ -718,6 +749,7 @@ async function* parseAnthropicSseBody(
       buffer = `${buffer}${decoder.decode(value, { stream: true })}`.replaceAll("\r\n", "\n");
       let frameEnd = buffer.indexOf("\n\n");
       while (frameEnd >= 0) {
+        assertAnthropicSsePendingBufferWithinLimit(frameEnd);
         const frame = buffer.slice(0, frameEnd);
         buffer = buffer.slice(frameEnd + 2);
         const data = frame
@@ -730,8 +762,11 @@ async function* parseAnthropicSseBody(
         }
         frameEnd = buffer.indexOf("\n\n");
       }
+      assertAnthropicSsePendingBufferWithinLimit(buffer.length);
     }
-    const tail = `${buffer}${decoder.decode()}`.replaceAll("\r\n", "\n").trim();
+    const tailBuffer = `${buffer}${decoder.decode()}`.replaceAll("\r\n", "\n");
+    assertAnthropicSsePendingBufferWithinLimit(tailBuffer.length);
+    const tail = tailBuffer.trim();
     if (tail) {
       const data = tail
         .split("\n")
@@ -903,6 +938,9 @@ function createAnthropicTransportClient(params: {
       isOAuthToken: true,
     };
   }
+  if (useAnthropicServerSideFallback(model)) {
+    betaFeatures.push(ANTHROPIC_SERVER_SIDE_FALLBACK_BETA);
+  }
   const betaHeader = buildAnthropicBetaHeader(model, betaFeatures, { oauth: false });
   return {
     client: createAnthropicMessagesClient({
@@ -961,8 +999,19 @@ function buildAnthropicParams(
     max_tokens: maxTokens,
     stream: true,
   };
+  // Fable safety classifiers can decline benign-adjacent work; server-side
+  // fallback re-serves the same call on claude-opus-4-8 instead of failing
+  // the turn. Requires the matching beta header from the transport client.
+  if (!isOAuthToken && useAnthropicServerSideFallback(model)) {
+    params.fallbacks = buildAnthropicServerSideFallbacks();
+  }
   if (isOAuthToken) {
     params.system = [
+      // Anthropic requires this first block to route Claude subscription OAuth billing.
+      {
+        type: "text",
+        text: CLAUDE_CODE_BILLING_SYSTEM_BLOCK,
+      },
       {
         type: "text",
         text: "You are Claude Code, Anthropic's official CLI for Claude.",
@@ -1126,6 +1175,10 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           )
         : undefined;
       const eventSink = refusalBuffer ?? stream;
+      // Fallback-served turns bill at the serving model's rates; a boundary
+      // swaps this to the fallback model's cost table.
+      let costModel = model;
+      let messageStartPromptUsage: AnthropicPromptUsageSnapshot | undefined;
       try {
         const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? "";
         if (!apiKey) {
@@ -1283,20 +1336,46 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             const usage = message?.usage ?? {};
             output.responseId = typeof message?.id === "string" ? message.id : undefined;
             output.responseModel = typeof message?.model === "string" ? message.model : undefined;
-            output.usage.input = typeof usage.input_tokens === "number" ? usage.input_tokens : 0;
-            output.usage.output = typeof usage.output_tokens === "number" ? usage.output_tokens : 0;
-            output.usage.cacheRead =
-              typeof usage.cache_read_input_tokens === "number" ? usage.cache_read_input_tokens : 0;
-            output.usage.cacheWrite =
-              typeof usage.cache_creation_input_tokens === "number"
-                ? usage.cache_creation_input_tokens
-                : 0;
+            const promptUsage = readAnthropicPromptUsageSnapshot(usage);
+            const messageStartPromptTokens = promptUsage
+              ? promptUsage.input + promptUsage.cacheRead + promptUsage.cacheWrite
+              : 0;
+            messageStartPromptUsage = messageStartPromptTokens > 0 ? promptUsage : undefined;
+            const inputTokens = readAnthropicUsageTokenCount(usage.input_tokens);
+            if (inputTokens !== undefined) {
+              output.usage.input = inputTokens;
+            }
+            const outputTokens = readAnthropicUsageTokenCount(usage.output_tokens);
+            if (outputTokens !== undefined) {
+              output.usage.output = outputTokens;
+            }
+            const cacheReadTokens =
+              usage.cache_read_input_tokens == null
+                ? 0
+                : readAnthropicUsageTokenCount(usage.cache_read_input_tokens);
+            if (cacheReadTokens !== undefined) {
+              output.usage.cacheRead = cacheReadTokens;
+            }
+            const cacheWriteTokens =
+              usage.cache_creation_input_tokens == null
+                ? 0
+                : readAnthropicUsageTokenCount(usage.cache_creation_input_tokens);
+            if (cacheWriteTokens !== undefined) {
+              output.usage.cacheWrite = cacheWriteTokens;
+            }
             output.usage.totalTokens =
               output.usage.input +
               output.usage.output +
               output.usage.cacheRead +
               output.usage.cacheWrite;
-            calculateCost(model, output.usage);
+            if (messageStartPromptUsage && outputTokens !== undefined) {
+              output.usage.contextUsage = {
+                state: "available",
+                promptTokens: messageStartPromptTokens,
+                totalTokens: messageStartPromptTokens + output.usage.output,
+              };
+            }
+            calculateCost(costModel, output.usage);
             // Defer start until after message_start so that pre-stream SSE errors
             // (e.g. invalid thinking signatures) arrive before any non-error event
             // is yielded, keeping yieldedOutput=false in pumpStreamWithRecovery
@@ -1311,6 +1390,56 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           if (event.type === "content_block_start") {
             const contentBlock = event.content_block as Record<string, unknown> | undefined;
             const index = typeof event.index === "number" ? event.index : -1;
+            const fallbackBoundary = refusalBuffer
+              ? readAnthropicFallbackBoundary(contentBlock)
+              : null;
+            if (fallbackBoundary) {
+              // Server-side fallback boundary: pre-boundary thinking/tool
+              // blocks must not replay or execute, and the buffered preview
+              // events reference them, so rebuild the deferred timeline from
+              // the surviving text prefix the fallback model continued from.
+              refusalBuffer?.discard();
+              pendingTextEnds.length = 0;
+              blockIndexes.clear();
+              applyAnthropicFallbackBoundary({
+                output,
+                boundary: fallbackBoundary,
+                provider: model.provider,
+              });
+              // Cost intentionally mirrors top-level usage (serving attempt at
+              // serving-model rates). A mid-stream decline's billed partial is
+              // only in usage.iterations and is not folded in here.
+              costModel = { ...model, cost: CLAUDE_FABLE_5_FALLBACK_MODEL_COST };
+              calculateCost(costModel, output.usage);
+              eventSink.push({ type: "start", partial: output as never });
+              for (let i = 0; i < output.content.length; i += 1) {
+                const block = output.content[i];
+                if (block.type !== "text") {
+                  continue;
+                }
+                delete block.index;
+                eventSink.push({
+                  type: "text_start",
+                  contentIndex: i,
+                  partial: output as never,
+                });
+                if (block.text) {
+                  eventSink.push({
+                    type: "text_delta",
+                    contentIndex: i,
+                    delta: block.text,
+                    partial: output as never,
+                  });
+                }
+                pendingTextEnds.push({
+                  type: "text_end",
+                  contentIndex: i,
+                  content: block.text,
+                  partial: output as never,
+                });
+              }
+              continue;
+            }
             if (contentBlock?.type === "text") {
               const text =
                 typeof contentBlock.text === "string"
@@ -1579,24 +1708,57 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 output.stopReason = mapStopReason(delta.stop_reason);
               }
             }
-            if (typeof usage?.input_tokens === "number") {
-              output.usage.input = usage.input_tokens;
+            const inputTokens = readAnthropicUsageTokenCount(usage?.input_tokens);
+            if (inputTokens !== undefined) {
+              output.usage.input = inputTokens;
             }
-            if (typeof usage?.output_tokens === "number") {
-              output.usage.output = usage.output_tokens;
+            const outputTokens = readAnthropicUsageTokenCount(usage?.output_tokens);
+            if (outputTokens !== undefined) {
+              output.usage.output = outputTokens;
             }
-            if (typeof usage?.cache_read_input_tokens === "number") {
-              output.usage.cacheRead = usage.cache_read_input_tokens;
+            // Match the SDK stream accumulator: null means no update, not a zero counter.
+            const cacheReadTokens = readAnthropicUsageTokenCount(usage?.cache_read_input_tokens);
+            if (cacheReadTokens !== undefined) {
+              output.usage.cacheRead = cacheReadTokens;
             }
-            if (typeof usage?.cache_creation_input_tokens === "number") {
-              output.usage.cacheWrite = usage.cache_creation_input_tokens;
+            const cacheWriteTokens = readAnthropicUsageTokenCount(
+              usage?.cache_creation_input_tokens,
+            );
+            if (cacheWriteTokens !== undefined) {
+              output.usage.cacheWrite = cacheWriteTokens;
             }
             output.usage.totalTokens =
               output.usage.input +
               output.usage.output +
               output.usage.cacheRead +
               output.usage.cacheWrite;
-            calculateCost(model, output.usage);
+            const iterationUsage = readLastAnthropicIterationUsage(usage ?? {});
+            if (iterationUsage.state === "valid") {
+              output.usage.contextUsage = {
+                state: "available",
+                promptTokens: iterationUsage.usage.contextPromptTokens,
+                totalTokens: iterationUsage.usage.totalTokens,
+              };
+            } else if (iterationUsage.state === "invalid") {
+              output.usage.contextUsage = { state: "unavailable" };
+            } else if (
+              outputTokens !== undefined &&
+              (messageStartPromptUsage !== undefined ||
+                (inputTokens !== undefined &&
+                  cacheReadTokens !== undefined &&
+                  cacheWriteTokens !== undefined))
+            ) {
+              const promptTokens =
+                output.usage.input + output.usage.cacheRead + output.usage.cacheWrite;
+              output.usage.contextUsage = {
+                state: "available",
+                promptTokens,
+                totalTokens: promptTokens + output.usage.output,
+              };
+            } else {
+              output.usage.contextUsage = { state: "unavailable" };
+            }
+            calculateCost(costModel, output.usage);
             // Gate on the turn CONTAINING a tool call, not the provider's stop_reason
             // label: Bedrock/Vertex-proxied routes (e.g. pioneer) report "end_turn" on
             // tool-using turns. No-op for direct Anthropic (already "toolUse" here).

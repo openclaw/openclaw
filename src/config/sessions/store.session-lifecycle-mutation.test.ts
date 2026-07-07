@@ -108,4 +108,100 @@ describe("session store lifecycle mutations", () => {
     expect(store["agent:main:keep"]?.sessionId).toBe("keep-session");
     expect(fs.existsSync(transcriptPath)).toBe(false);
   });
+
+  it("keeps a row that changed before guarded deletion acquired the writer lock", async () => {
+    const sessionKey = "agent:main:delete";
+    await saveSessionStore(
+      storePath,
+      {
+        [sessionKey]: {
+          label: "new revision",
+          sessionId: "delete-session",
+          updatedAt: 2,
+        },
+      },
+      { skipMaintenance: true },
+    );
+
+    const result = await deleteSessionEntryLifecycle({
+      archiveTranscript: false,
+      expectedSessionId: "delete-session",
+      expectedUpdatedAt: 1,
+      storePath,
+      target: {
+        canonicalKey: sessionKey,
+        storeKeys: [sessionKey],
+      },
+    });
+
+    expect(result).toMatchObject({ deleted: false, expectedEntryMismatch: true });
+    expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toMatchObject({
+      label: "new revision",
+      updatedAt: 2,
+    });
+  });
+
+  it("does not cache alias promotion when guarded deletion is rejected", async () => {
+    const canonicalKey = "agent:main:room";
+    const aliasKey = "Agent:Main:Room";
+    await saveSessionStore(
+      storePath,
+      {
+        [canonicalKey]: {
+          label: "canonical",
+          sessionId: "canonical-session",
+          updatedAt: 1,
+        },
+        [aliasKey]: {
+          label: "fresh alias",
+          sessionId: "alias-session",
+          updatedAt: 2,
+        },
+      },
+      { skipMaintenance: true },
+    );
+
+    const result = await deleteSessionEntryLifecycle({
+      archiveTranscript: false,
+      expectedSessionId: "stale-session",
+      storePath,
+      target: {
+        canonicalKey,
+        storeKeys: [canonicalKey, aliasKey],
+      },
+    });
+
+    expect(result).toMatchObject({ deleted: false, expectedEntryMismatch: true });
+    expect(loadSessionStore(storePath)).toMatchObject({
+      [canonicalKey]: { label: "canonical", sessionId: "canonical-session" },
+      [aliasKey]: { label: "fresh alias", sessionId: "alias-session" },
+    });
+  });
+
+  it("deletes only the exact row snapshot supplied after lifecycle cleanup", async () => {
+    const sessionKey = "agent:main:delete";
+    const expectedEntry = {
+      label: "cleanup-owned revision",
+      lifecycleRevision: "run-revision",
+      sessionId: "delete-session",
+      updatedAt: 2,
+    } satisfies SessionEntry;
+    await saveSessionStore(storePath, { [sessionKey]: expectedEntry }, { skipMaintenance: true });
+
+    const result = await deleteSessionEntryLifecycle({
+      archiveTranscript: false,
+      expectedEntry,
+      expectedLifecycleRevision: expectedEntry.lifecycleRevision,
+      expectedSessionId: expectedEntry.sessionId,
+      expectedUpdatedAt: expectedEntry.updatedAt,
+      storePath,
+      target: {
+        canonicalKey: sessionKey,
+        storeKeys: [sessionKey],
+      },
+    });
+
+    expect(result.deleted).toBe(true);
+    expect(loadSessionStore(storePath, { skipCache: true })[sessionKey]).toBeUndefined();
+  });
 });

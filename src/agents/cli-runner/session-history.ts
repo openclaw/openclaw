@@ -59,6 +59,7 @@ type HistoryEntry = {
 type RawTranscriptReseedReason =
   | "auth-profile"
   | "auth-epoch"
+  | "message-policy"
   | "system-prompt"
   | "cwd"
   | "mcp"
@@ -69,6 +70,7 @@ type RawTranscriptReseedReason =
 const RAW_TRANSCRIPT_RESEED_ALLOWED_REASONS = new Set<RawTranscriptReseedReason>([
   "missing-transcript",
   "orphaned-tool-use",
+  "message-policy",
   "system-prompt",
   "cwd",
   "mcp",

@@ -386,9 +386,10 @@ describe("respawnGatewayProcessForUpdate", () => {
     );
   });
 
-  it("treats Linux OpenClaw gateway service markers as supervised for update restarts", () => {
+  it("exits to a managed supervisor for updates even when respawn is disabled", () => {
     clearSupervisorHints();
     setPlatform("linux");
+    process.env.OPENCLAW_NO_RESPAWN = "1";
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
     process.env.OPENCLAW_SERVICE_KIND = "gateway";
 

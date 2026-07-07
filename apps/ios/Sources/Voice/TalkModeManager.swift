@@ -114,6 +114,7 @@ final class TalkModeManager: NSObject {
     private var realtimeRelayStartInFlight = false
     private var prefetchedRealtimeSession: TalkRealtimeClientSession?
     private var realtimePrefetchTask: Task<Void, Never>?
+    private var realtimePrefetchGeneration: UInt64 = 0
 
     private var lastHeard: Date?
     private var lastTranscript: String = ""
@@ -335,6 +336,7 @@ final class TalkModeManager: NSObject {
             if self.isEnabled, !self.isSpeaking {
                 self.statusText = "Offline"
             }
+            self.realtimePrefetchGeneration &+= 1
             self.realtimePrefetchTask?.cancel()
             self.realtimePrefetchTask = nil
             self.prefetchedRealtimeSession = nil
@@ -1383,7 +1385,10 @@ final class TalkModeManager: NSObject {
         }
     }
 
-    func prefetchRealtimeSessionIfReady(reason: String) async {
+    func prefetchRealtimeSessionIfReady(
+        reason: String,
+        shouldApply: @escaping @MainActor @Sendable () -> Bool = { true }) async
+    {
         guard self.gatewayConnected,
               self.realtimeSession == nil,
               self.realtimeRelaySession == nil,
@@ -1395,15 +1400,27 @@ final class TalkModeManager: NSObject {
         guard self.realtimePrefetchTask == nil else { return }
 
         GatewayDiagnostics.log("talk.timeline realtime prefetch scheduled reason=\(reason)")
+        self.realtimePrefetchGeneration &+= 1
+        let prefetchGeneration = self.realtimePrefetchGeneration
         self.realtimePrefetchTask = Task { @MainActor [weak self] in
             guard let self else { return }
+            defer {
+                if self.realtimePrefetchGeneration == prefetchGeneration {
+                    self.realtimePrefetchTask = nil
+                }
+            }
             let startedAt = Self.nowSeconds()
             do {
+                guard !Task.isCancelled, shouldApply(), let gateway = self.gateway else { return }
+                guard let route = await gateway.currentRoute() else { return }
+                guard !Task.isCancelled, shouldApply() else { return }
                 let session = try await self.createRealtimeClientSession(
+                    gateway: gateway,
+                    route: route,
                     provider: self.realtimeProvider,
                     model: self.realtimeModelId,
                     voice: self.realtimeVoiceId)
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled, shouldApply() else { return }
                 self.prefetchedRealtimeSession = session
                 GatewayDiagnostics.log(
                     "talk.timeline realtime prefetch ready elapsedMs=\(Self.elapsedMs(since: startedAt)) "
@@ -1414,24 +1431,24 @@ final class TalkModeManager: NSObject {
                     "talk.timeline realtime prefetch failed elapsedMs=\(Self.elapsedMs(since: startedAt)) "
                         + "error=\(error.localizedDescription)")
             }
-            self.realtimePrefetchTask = nil
         }
     }
 
     private func createRealtimeClientSession(
+        gateway: GatewayNodeSession,
+        route: GatewayNodeSessionRoute,
         provider: String?,
         model: String?,
         voice: String?) async throws -> TalkRealtimeClientSession
     {
-        guard let gateway else {
-            throw NSError(domain: "TalkMode", code: 8, userInfo: [
-                NSLocalizedDescriptionKey: "Gateway not connected",
-            ])
-        }
         let params = TalkRealtimeClientCreateParams(provider: provider, model: model, voice: voice)
         let data = try JSONEncoder().encode(params)
         let json = String(data: data, encoding: .utf8)
-        let res = try await gateway.request(method: "talk.client.create", paramsJSON: json, timeoutSeconds: 12)
+        let res = try await gateway.request(
+            method: "talk.client.create",
+            paramsJSON: json,
+            timeoutSeconds: 12,
+            ifCurrentRoute: route)
         return try JSONDecoder().decode(TalkRealtimeClientSession.self, from: res)
     }
 
@@ -2826,12 +2843,12 @@ extension TalkModeManager {
                 + "permission=\(self.gatewayTalkPermissionState.statusLabel)")
     }
 
-    func reloadConfig() async {
+    func reloadConfig(shouldApply: @MainActor @Sendable () -> Bool = { true }) async {
         guard let gateway else { return }
         self.pcmFormatUnavailable = false
         self.prefetchedRealtimeSession = nil
         do {
-            guard let loaded = try await loadTalkConfig(from: gateway) else { return }
+            guard let loaded = try await loadTalkConfig(from: gateway), shouldApply() else { return }
             let parsed = TalkModeGatewayConfigParser.parse(
                 config: loaded.config,
                 defaultProvider: Self.defaultTalkProvider,
@@ -2844,6 +2861,7 @@ extension TalkModeManager {
             }
             self.applyLoadedTalkConfig(parsed, redactedFallbackMissingScope: loaded.redactedFallbackMissingScope)
         } catch {
+            guard shouldApply() else { return }
             self.applyTalkConfigLoadFailure(error)
         }
     }

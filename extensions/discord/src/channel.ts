@@ -95,7 +95,7 @@ const discordMessageAdapter = createChannelMessageAdapterFromOutbound({
     },
     finalizer: {
       capabilities: {
-        finalEdit: true,
+        finalEdit: false,
         normalFallback: true,
         discardPending: true,
       },

@@ -3,7 +3,12 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { classifyFailoverReason, isAuthErrorMessage } from "../agents/embedded-agent-helpers.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
-import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
+import {
+  asString,
+  extractTextFromMessage,
+  isCommandMessage,
+  sanitizeRenderableText,
+} from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 import type {
   AgentEvent,
@@ -36,6 +41,20 @@ type EventHandlerBtwPresenter = {
   showResult: (params: { question: string; text: string; isError?: boolean }) => void;
   clear: () => void;
 };
+
+const MAX_ABORT_DIAGNOSTIC_LENGTH = 160;
+
+function formatAbortDiagnostic(value: string | undefined): string | undefined {
+  const diagnostic = sanitizeRenderableText(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!diagnostic) {
+    return undefined;
+  }
+  return diagnostic.length > MAX_ABORT_DIAGNOSTIC_LENGTH
+    ? `${diagnostic.slice(0, MAX_ABORT_DIAGNOSTIC_LENGTH - 1)}…`
+    : diagnostic;
+}
 
 type EventHandlerContext = {
   chatLog: EventHandlerChatLog;
@@ -717,7 +736,8 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (evt.state === "aborted") {
       forgetLocalBtwRunId?.(evt.runId);
       const wasActiveRun = state.activeChatRunId === evt.runId;
-      chatLog.addSystem("run aborted");
+      const diagnostic = formatAbortDiagnostic(evt.errorMessage);
+      chatLog.addSystem(diagnostic ? `run aborted: ${diagnostic}` : "run aborted");
       terminateRun({ runId: evt.runId, wasActiveRun, status: "aborted" });
       maybeRefreshHistoryForRun(evt.runId);
     }

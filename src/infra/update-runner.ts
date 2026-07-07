@@ -24,11 +24,12 @@ import {
   channelToNpmTag,
   DEFAULT_PACKAGE_CHANNEL,
   DEV_BRANCH,
+  EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
   isBetaTag,
   isStableTag,
   type UpdateChannel,
 } from "./update-channels.js";
-import { compareSemverStrings } from "./update-check.js";
+import { compareSemverStrings, resolveExtendedStablePackage } from "./update-check.js";
 import {
   cleanupGlobalRenameDirs,
   createGlobalInstallEnv,
@@ -832,6 +833,17 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
   }
 
   if (gitRoot && pkgRoot && (await pathsReferToSameLocation(gitRoot, pkgRoot))) {
+    const channel: UpdateChannel = opts.channel ?? "dev";
+    if (channel === "extended-stable") {
+      return {
+        status: "error",
+        mode: "git",
+        root: gitRoot,
+        reason: "unsupported_git_channel",
+        steps: [],
+        durationMs: Date.now() - startedAt,
+      };
+    }
     // Get current SHA (not a visible step, no progress)
     const beforeShaResult = await runCommand(["git", "-C", gitRoot, "rev-parse", "HEAD"], {
       cwd: gitRoot,
@@ -839,7 +851,6 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     });
     const beforeSha = beforeShaResult.stdout.trim() || null;
     const beforeVersion = await readPackageVersion(gitRoot);
-    const channel: UpdateChannel = opts.channel ?? "dev";
     const devTargetRef = channel === "dev" ? normalizeDevTargetRef(opts.devTargetRef) : null;
     const branch = await readBranchName(runCommand, gitRoot, timeoutMs);
     const needsCheckoutMain = channel === "dev" && !devTargetRef && branch !== DEV_BRANCH;
@@ -1658,25 +1669,63 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
   const beforeVersion = await readPackageVersion(pkgRoot);
   const globalManager = await detectGlobalInstallManagerForRoot(runCommand, pkgRoot, timeoutMs);
   if (globalManager) {
+    const channel = opts.channel ?? DEFAULT_PACKAGE_CHANNEL;
+    if (channel === "extended-stable" && opts.tag !== undefined) {
+      return {
+        status: "error",
+        mode: globalManager,
+        root: pkgRoot,
+        reason: EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
+        before: { version: beforeVersion },
+        steps: [],
+        durationMs: Date.now() - startedAt,
+      };
+    }
+    const packageName = (await readPackageName(pkgRoot)) ?? DEFAULT_PACKAGE_NAME;
     const installTarget = await resolveGlobalInstallTarget({
       manager: globalManager,
       runCommand,
       timeoutMs,
       pkgRoot,
+      packageName,
     });
-    const packageName = (await readPackageName(pkgRoot)) ?? DEFAULT_PACKAGE_NAME;
     await cleanupGlobalRenameDirs({
       globalRoot: path.dirname(pkgRoot),
       packageName,
     });
-    const channel = opts.channel ?? DEFAULT_PACKAGE_CHANNEL;
-    const tag = normalizeTag(opts.tag ?? channelToNpmTag(channel));
+    const extendedStable =
+      channel === "extended-stable"
+        ? await resolveExtendedStablePackage({
+            installKind: "package",
+            timeoutMs,
+            packageName,
+          })
+        : null;
+    if (extendedStable?.status === "failed") {
+      return {
+        status: "error",
+        mode: globalManager,
+        root: pkgRoot,
+        reason: extendedStable.reason,
+        before: { version: beforeVersion },
+        steps: [],
+        durationMs: Date.now() - startedAt,
+      };
+    }
+    const tag = normalizeTag(
+      extendedStable?.status === "resolved"
+        ? extendedStable.version
+        : (opts.tag ?? channelToNpmTag(channel)),
+    );
     const globalInstallEnv = await createGlobalInstallEnv();
-    const spec = resolveGlobalInstallSpec({
-      packageName,
-      tag,
-      env: globalInstallEnv,
-    });
+    const spec =
+      extendedStable?.status === "resolved"
+        ? extendedStable.packageSpec
+        : resolveGlobalInstallSpec({
+            packageName,
+            tag,
+            env: globalInstallEnv,
+          });
     const packageUpdate = await runGlobalPackageUpdateSteps({
       installTarget,
       installSpec: spec,

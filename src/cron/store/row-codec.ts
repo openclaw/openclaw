@@ -140,6 +140,10 @@ function bindCronJobRow(storeKey: string, job: CronJob, sortOrder: number): Cron
   return {
     store_key: storeKey,
     job_id: job.id,
+    declaration_key: job.declarationKey ?? null,
+    display_name: job.displayName ?? null,
+    owner_agent_id: job.owner?.agentId ?? null,
+    owner_session_key: job.owner?.sessionKey ?? null,
     name: job.name,
     description: job.description ?? null,
     enabled: job.enabled ? 1 : 0,
@@ -244,6 +248,16 @@ function rowToCronJob(row: CronJobRow): CronJob | null {
   const createdAtMs = normalizeNumber(row.created_at_ms) ?? Date.now();
   return {
     id: row.job_id,
+    ...(row.declaration_key ? { declarationKey: row.declaration_key } : {}),
+    ...(row.display_name ? { displayName: row.display_name } : {}),
+    ...(row.owner_agent_id || row.owner_session_key
+      ? {
+          owner: {
+            ...(row.owner_agent_id ? { agentId: row.owner_agent_id } : {}),
+            ...(row.owner_session_key ? { sessionKey: row.owner_session_key } : {}),
+          },
+        }
+      : {}),
     name: row.name,
     ...(row.description ? { description: row.description } : {}),
     enabled: row.enabled !== 0,

@@ -1,4 +1,5 @@
 // Provider OAuth runtime helpers expose shared browser/OAuth flows for provider plugins.
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import {
   positiveSecondsToSafeMilliseconds,
   resolveExpiresAtMsFromDurationMs,
@@ -394,7 +395,7 @@ export function withOAuthLoginAbort<T>(
       (error: unknown) => {
         // Preserve Error rejections but wrap non-Error provider/prompt values for lint-safe callers.
         cleanup();
-        reject(toLintErrorObject(error, "Non-Error rejection"));
+        reject(toErrorObject(error, "Non-Error rejection"));
       },
     );
   });
@@ -412,18 +413,4 @@ export function buildOAuthRequestSignal(options: {
     return timeoutSignal;
   }
   return AbortSignal.any([options.signal, timeoutSignal]);
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

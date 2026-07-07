@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { resolveGlobalSingleton } from "./global-singleton.js";
 
 /** Pending exclusive store write plus the promise hooks for its caller. */
 export type StoreWriterTask = {
@@ -30,7 +31,12 @@ type ActiveStoreWriter = {
   storePath: string;
 };
 
-const activeStoreWriters = new AsyncLocalStorage<ActiveStoreWriter>();
+// Queue maps are often global singletons shared by separately bundled runtime
+// chunks. Their reentrancy context must cross the same module boundary.
+const activeStoreWriters = resolveGlobalSingleton(
+  Symbol.for("openclaw.activeStoreWriters"),
+  () => new AsyncLocalStorage<ActiveStoreWriter>(),
+);
 
 function isActiveStoreWriter(queues: StoreWriterQueues, storePath: string): boolean {
   let active = activeStoreWriters.getStore();

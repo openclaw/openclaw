@@ -2,15 +2,111 @@
 import type { Command } from "commander";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { OpenClawConfig } from "./config-contracts.js";
 import {
   loadBundledPluginPublicSurfaceModuleSync,
   tryLoadActivatedBundledPluginPublicSurfaceModuleSync,
 } from "./facade-runtime.js";
 import { resolvePrivateQaBundledPluginsEnv } from "./private-qa-bundled-env.js";
+import type {
+  QaBusEditMessageInput,
+  QaBusInboundMessageInput,
+  QaBusMessage,
+  QaBusOutboundMessageInput,
+} from "./qa-channel-protocol.js";
 
-/** CLI registration exported by a QA runner plugin runtime surface. */
+type QaRunnerAdapterOptions = {
+  repoRoot?: string;
+  sutAccountId?: string;
+  credentialSource?: string;
+  credentialRole?: string;
+};
+
+type QaRunnerMessageRecorder = {
+  addInboundMessage: (input: QaBusInboundMessageInput) => QaBusMessage | Promise<QaBusMessage>;
+  addOutboundMessage: (input: QaBusOutboundMessageInput) => QaBusMessage | Promise<QaBusMessage>;
+  editMessage: (input: QaBusEditMessageInput) => QaBusMessage | Promise<QaBusMessage>;
+};
+
+type QaRunnerTransportAdapterDefinition = {
+  id: string;
+  label: string;
+  accountId: string;
+  requiredPluginIds: readonly string[];
+  supportedActions: readonly ("delete" | "edit" | "react" | "thread-create")[];
+  assertTransportHealthy?: () => void;
+  resetTransport?: () => void | Promise<void>;
+  sendInbound: (input: QaBusInboundMessageInput) => Promise<QaBusMessage>;
+  sendNativeCommand?: (
+    input: Omit<QaBusInboundMessageInput, "nativeCommand" | "text"> & { command: string },
+  ) => Promise<void>;
+  waitForOutboundSequence?: (input: {
+    conversationId?: string;
+    finalSettleMs?: number;
+    finalTextIncludes: string;
+    minimumPreviewEvents?: number;
+    sinceCursor?: number;
+    threadId?: string;
+    timeoutMs?: number;
+  }) => Promise<{
+    events: Array<{ cursor: number; kind: "sent" | "edited" | "deleted"; message: QaBusMessage }>;
+    final: QaBusMessage;
+  }>;
+  createGatewayConfig: (params: {
+    baseUrl: string;
+  }) => Pick<OpenClawConfig, "channels" | "messages">;
+  waitReady: (params: {
+    gateway: {
+      call: (
+        method: string,
+        params?: unknown,
+        options?: { timeoutMs?: number },
+      ) => Promise<unknown>;
+    };
+    timeoutMs?: number;
+    pollIntervalMs?: number;
+  }) => Promise<void>;
+  buildAgentDelivery: (params: { target: string }) => {
+    channel: string;
+    to?: string;
+    replyChannel: string;
+    replyTo: string;
+  };
+  createRuntimeEnvPatch?: () => NodeJS.ProcessEnv;
+  handleAction: (params: {
+    action: "delete" | "edit" | "react" | "thread-create";
+    args: Record<string, unknown>;
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  }) => Promise<unknown>;
+  createReportNotes: (params: {
+    providerMode: "mock-openai" | "aimock" | "live-frontier";
+    primaryModel: string;
+    alternateModel: string;
+    fastMode: boolean;
+    concurrency: number;
+    isolatedWorkers?: boolean;
+  }) => string[];
+  cleanup?: () => Promise<void>;
+};
+
+type QaRunnerTransportFactory = {
+  id: string;
+  scenarioIds?: readonly string[];
+  matches: (context: { channelId: string; driver: string }) => boolean;
+  create: (context: {
+    adapterOptions?: QaRunnerAdapterOptions;
+    channelId: string;
+    driver: string;
+    messages: QaRunnerMessageRecorder;
+    outputDir: string;
+  }) => Promise<QaRunnerTransportAdapterDefinition>;
+};
+
+/** CLI registration and optional transport adapter factory exported by a QA runner plugin. */
 export type QaRunnerCliRegistration = {
   commandName: string;
+  adapterFactory?: QaRunnerTransportFactory;
   register(qa: Command): void;
 };
 
@@ -185,6 +281,17 @@ export function listQaRunnerCliContributions(): readonly QaRunnerCliContribution
       if (!registration) {
         throw new Error(
           `QA runner plugin "${plugin.id}" declared "${runner.commandName}" in openclaw.plugin.json but did not export a matching CLI registration`,
+        );
+      }
+      const adapterFactory = registration.adapterFactory;
+      if (
+        adapterFactory &&
+        (adapterFactory.id !== runner.commandName ||
+          typeof adapterFactory.matches !== "function" ||
+          typeof adapterFactory.create !== "function")
+      ) {
+        throw new Error(
+          `QA runner plugin "${plugin.id}" exported an invalid transport factory for "${runner.commandName}"`,
         );
       }
       contributions.set(runner.commandName, {

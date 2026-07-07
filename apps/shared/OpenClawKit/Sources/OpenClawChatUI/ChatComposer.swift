@@ -64,6 +64,15 @@ private struct CleanChatComposerSurface: ViewModifier {
     }
 }
 
+#if !os(macOS)
+private struct SlashPanelHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+#endif
+
 @MainActor
 struct OpenClawChatComposer: View {
     @Bindable var viewModel: OpenClawChatViewModel
@@ -75,11 +84,15 @@ struct OpenClawChatComposer: View {
     let assistantAvatarTint: Color?
     let composerChrome: OpenClawChatView.ComposerChrome
     let isComposerEnabled: Bool
+    let isAttachmentInputEnabled: Bool
     let messagePlaceholder: String?
     let talkControl: OpenClawChatTalkControl?
 
     #if !os(macOS)
     @State private var pickerItems: [PhotosPickerItem] = []
+    @State private var isSlashPopoverPresented = false
+    @State private var suppressNextSlashPopoverUpdate = false
+    @State private var slashPanelHeight: CGFloat = 0
     @FocusState private var isFocused: Bool
     #else
     @State private var shouldFocusTextView = false
@@ -143,7 +156,11 @@ struct OpenClawChatComposer: View {
         .onChange(of: self.isComposerEnabled) { _, isEnabled in
                 if !isEnabled {
                     self.isFocused = false
+                    self.setSlashPanelPresented(false)
                 }
+            }
+            .onAppear {
+                self.viewModel.loadSlashCommandsIfNeeded()
             }
         #endif
     }
@@ -154,10 +171,15 @@ struct OpenClawChatComposer: View {
                 HStack(spacing: 5) {
                     if self.showsSessionSwitcher {
                         self.sessionPicker
-                        self.thinkingPicker
+                        if self.viewModel.showsThinkingPicker {
+                            self.thinkingPicker
+                        }
                     }
                     if self.viewModel.showsModelPicker {
                         self.modelPicker
+                        if self.viewModel.modelSelectionID != OpenClawChatViewModel.defaultModelSelectionID {
+                            self.modelPinButton
+                        }
                     }
                 }
             }
@@ -180,7 +202,9 @@ struct OpenClawChatComposer: View {
                 set: { next in self.viewModel.selectThinkingLevel(next) }))
         {
             ForEach(self.viewModel.thinkingLevelOptions) { option in
-                Text(option.label).tag(option.id)
+                Text(option.label)
+                    .font(OpenClawChatTypography.captionSemiBold)
+                    .tag(option.id)
             }
         }
         .labelsHidden()
@@ -190,15 +214,45 @@ struct OpenClawChatComposer: View {
     }
 
     private var modelPicker: some View {
-        Picker(
+        // Sections come from an O(n) recompute over the catalog; bind once per body eval.
+        let sections = self.viewModel.modelPickerSections
+        return Picker(
             "Model",
             selection: Binding(
                 get: { self.viewModel.modelSelectionID },
                 set: { next in self.viewModel.selectModel(next) }))
         {
-            Text(self.viewModel.defaultModelLabel).tag(OpenClawChatViewModel.defaultModelSelectionID)
-            ForEach(self.viewModel.modelChoices) { model in
-                Text(model.displayLabel).tag(model.selectionID)
+            Text(self.viewModel.defaultModelLabel)
+                .font(OpenClawChatTypography.captionSemiBold)
+                .tag(OpenClawChatViewModel.defaultModelSelectionID)
+            if sections.pinned.isEmpty, sections.recent.isEmpty {
+                // No pins/recents yet: keep the pre-feature flat list without section chrome.
+                self.modelOptions(sections.remaining)
+            } else {
+                if !sections.pinned.isEmpty {
+                    Section {
+                        self.modelOptions(sections.pinned)
+                    } header: {
+                        Text("Pinned")
+                            .font(OpenClawChatTypography.captionSemiBold)
+                    }
+                }
+                if !sections.recent.isEmpty {
+                    Section {
+                        self.modelOptions(sections.recent)
+                    } header: {
+                        Text("Recent")
+                            .font(OpenClawChatTypography.captionSemiBold)
+                    }
+                }
+                if !sections.remaining.isEmpty {
+                    Section {
+                        self.modelOptions(sections.remaining)
+                    } header: {
+                        Text("Models")
+                            .font(OpenClawChatTypography.captionSemiBold)
+                    }
+                }
             }
         }
         .labelsHidden()
@@ -206,6 +260,25 @@ struct OpenClawChatComposer: View {
         .controlSize(.small)
         .frame(maxWidth: 240, alignment: .leading)
         .help("Model")
+    }
+
+    private func modelOptions(_ models: [OpenClawChatModelChoice]) -> some View {
+        ForEach(models) { model in
+            Text(model.displayLabel)
+                .font(OpenClawChatTypography.captionSemiBold)
+                .tag(model.selectionID)
+        }
+    }
+
+    private var modelPinButton: some View {
+        Button {
+            self.viewModel.toggleSelectedModelPinned()
+        } label: {
+            Image(systemName: self.viewModel.isSelectedModelPinned ? "star.fill" : "star")
+                .font(.system(size: 12, weight: .semibold))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(self.viewModel.isSelectedModelPinned ? "Unpin model" : "Pin model")
     }
 
     private var sessionPicker: some View {
@@ -217,7 +290,7 @@ struct OpenClawChatComposer: View {
         {
             ForEach(self.viewModel.sessionChoices, id: \.key) { session in
                 Text(session.displayName ?? session.key)
-                    .font(.system(.caption, design: .monospaced))
+                    .font(OpenClawChatTypography.mono(size: 12, relativeTo: .caption))
                     .tag(session.key)
             }
         }
@@ -242,7 +315,7 @@ struct OpenClawChatComposer: View {
             .accessibilityIdentifier("chat-attachment-picker")
             .buttonStyle(.plain)
             .controlSize(.small)
-            .disabled(!self.isComposerEnabled)
+            .disabled(!self.isAttachmentInputEnabled)
         } else {
             Button {
                 self.pickFilesMac()
@@ -253,7 +326,7 @@ struct OpenClawChatComposer: View {
             .accessibilityLabel("Attachments")
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .disabled(!self.isComposerEnabled)
+            .disabled(!self.isAttachmentInputEnabled)
         }
         #else
         if self.composerChrome == .clean {
@@ -265,7 +338,7 @@ struct OpenClawChatComposer: View {
             .accessibilityIdentifier("chat-attachment-picker")
             .buttonStyle(.plain)
             .controlSize(.small)
-            .disabled(!self.isComposerEnabled)
+            .disabled(!self.isAttachmentInputEnabled)
             .onChange(of: self.pickerItems) { _, newItems in
                 Task { await self.loadPhotosPickerItems(newItems) }
             }
@@ -277,7 +350,7 @@ struct OpenClawChatComposer: View {
             .accessibilityLabel("Attachments")
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .disabled(!self.isComposerEnabled)
+            .disabled(!self.isAttachmentInputEnabled)
             .onChange(of: self.pickerItems) { _, newItems in
                 Task { await self.loadPhotosPickerItems(newItems) }
             }
@@ -287,7 +360,7 @@ struct OpenClawChatComposer: View {
 
     private var compactAttachmentLabel: some View {
         Image(systemName: "paperclip")
-            .font(.system(size: 15, weight: .semibold))
+            .font(OpenClawChatTypography.display(size: 15, weight: .semibold, relativeTo: .subheadline))
             .foregroundStyle(.secondary)
             .frame(width: self.cleanControlHeight, height: self.cleanControlHeight)
             .contentShape(Rectangle())
@@ -312,6 +385,7 @@ struct OpenClawChatComposer: View {
                         }
 
                         Text(att.fileName)
+                            .font(OpenClawChatTypography.caption)
                             .lineLimit(1)
 
                         Button {
@@ -332,6 +406,31 @@ struct OpenClawChatComposer: View {
 
     @ViewBuilder
     private var editor: some View {
+        #if os(macOS)
+        self.editorContent
+        #else
+        self.editorContent
+            .overlay(alignment: .top) {
+                if self.isSlashPopoverPresented {
+                    self.slashCommandPanel
+                        .background(
+                            GeometryReader { geo in
+                                Color.clear.preference(
+                                    key: SlashPanelHeightKey.self,
+                                    value: geo.size.height)
+                            })
+                        .offset(y: -(self.slashPanelHeight + 8))
+                        .transition(.opacity)
+                }
+            }
+            .onPreferenceChange(SlashPanelHeightKey.self) { newHeight in
+                self.slashPanelHeight = newHeight
+            }
+        #endif
+    }
+
+    @ViewBuilder
+    private var editorContent: some View {
         if self.composerChrome == .clean {
             self.cleanEditor
         } else {
@@ -372,25 +471,23 @@ struct OpenClawChatComposer: View {
 
     private var cleanEditor: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .center, spacing: 2) {
+            // Bottom-aligned so the paperclip and send/mic stay on the last
+            // text line when the field grows to multiple lines, like iMessage.
+            HStack(alignment: .bottom, spacing: 8) {
                 self.attachmentPicker
+                    .frame(width: self.cleanIconControlSize, height: self.cleanEditorMinHeight)
 
                 self.editorOverlay
                     .padding(.vertical, self.cleanEditorTextPadding)
+                    .padding(.horizontal, 14)
                     .frame(minHeight: self.cleanEditorMinHeight)
+                    .modifier(CleanChatComposerSurface(cornerRadius: self.cleanEditorCornerRadius))
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("chat-composer-surface")
 
-                if let talkControl {
-                    self.compactTalkButton(talkControl)
-                }
-
-                self.sendButton
-                    .frame(width: self.cleanControlHeight, height: self.cleanControlHeight)
+                self.cleanTrailingControl
+                    .frame(height: self.cleanEditorMinHeight, alignment: .bottom)
             }
-            .padding(.horizontal, 4)
-            .frame(minHeight: self.cleanEditorMinHeight)
-            .modifier(CleanChatComposerSurface(cornerRadius: self.cleanEditorCornerRadius))
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("chat-composer-surface")
 
             if self.showsConnectionPill {
                 self.connectionPill
@@ -401,15 +498,27 @@ struct OpenClawChatComposer: View {
         .padding(.vertical, 4)
     }
 
+    /// iMessage-style trailing control: the talk (mic) affordance while the
+    /// draft is empty, swapping to the send button once the user types.
+    @ViewBuilder
+    private var cleanTrailingControl: some View {
+        if !self.viewModel.hasDraftToSend, self.viewModel.pendingRunCount == 0, let talkControl {
+            self.compactTalkButton(talkControl)
+        } else {
+            self.sendButton
+                .frame(width: self.cleanControlHeight, height: self.cleanControlHeight)
+        }
+    }
+
     private func talkButton(_ talkControl: OpenClawChatTalkControl) -> some View {
         Button {
             talkControl.toggle(self.viewModel.sessionKey)
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: talkControl.isEnabled ? "stop.fill" : "waveform")
-                    .font(.caption.weight(.semibold))
+                    .font(OpenClawChatTypography.captionSemiBold)
                 Text(talkControl.isEnabled ? "Stop" : "Talk")
-                    .font(.caption.weight(.semibold))
+                    .font(OpenClawChatTypography.captionSemiBold)
                     .lineLimit(1)
             }
             .foregroundStyle(talkControl.isEnabled ? .white : .primary)
@@ -437,20 +546,17 @@ struct OpenClawChatComposer: View {
             talkControl.toggle(self.viewModel.sessionKey)
         } label: {
             Image(systemName: talkControl.isEnabled ? "stop.fill" : "waveform")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(talkControl.isEnabled ? .white : .secondary)
+                .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .subheadline))
+                .foregroundStyle(.white)
                 .frame(width: self.cleanIconControlSize, height: self.cleanIconControlSize)
+                // Prominent filled circle so the mic reads as the primary action,
+                // mirroring the send button it swaps with once a draft exists.
                 .background {
-                    if talkControl.isEnabled {
-                        Circle()
-                            .fill(self.talkButtonFill(talkControl))
-                    }
-                }
-                .overlay {
-                    if talkControl.isEnabled {
-                        Circle()
-                            .strokeBorder(self.talkButtonStroke(talkControl), lineWidth: 1)
-                    }
+                    Circle()
+                        .fill(talkControl.isEnabled
+                            ? self.talkButtonFill(talkControl)
+                            : AnyShapeStyle(OpenClawChatTheme.accent))
+                        .opacity(talkControl.isGatewayConnected || talkControl.isEnabled ? 1 : 0.4)
                 }
                 .frame(width: self.cleanControlHeight, height: self.cleanControlHeight)
                 .contentShape(Rectangle())
@@ -500,7 +606,7 @@ struct OpenClawChatComposer: View {
                 .fill(self.connectionOK ? .green : .orange)
                 .frame(width: 7, height: 7)
             Text(self.connectionStatusText)
-                .font(.caption2)
+                .font(OpenClawChatTypography.caption2)
                 .foregroundStyle(.secondary)
         }
         .padding(.horizontal, self.composerChrome == .clean ? 0 : 8)
@@ -523,7 +629,7 @@ struct OpenClawChatComposer: View {
         ZStack(alignment: self.editorOverlayAlignment) {
             if self.viewModel.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text(self.placeholderText)
-                    .font(.body)
+                    .font(OpenClawChatTypography.body)
                     .foregroundStyle(.tertiary)
                     .padding(.horizontal, self.cleanFieldTextInset)
                     .padding(.vertical, self.composerChrome == .clean ? 0 : 4)
@@ -538,7 +644,7 @@ struct OpenClawChatComposer: View {
                     self.sendDraftIfEnabled()
                 },
                 onPasteImageAttachment: { data, fileName, mimeType in
-                    guard self.isComposerEnabled else { return }
+                    guard self.isAttachmentInputEnabled else { return }
                     self.viewModel.addImageAttachment(data: data, fileName: fileName, mimeType: mimeType)
                 })
                 .frame(minHeight: self.textMinHeight, idealHeight: self.textMinHeight, maxHeight: self.textMaxHeight)
@@ -549,22 +655,194 @@ struct OpenClawChatComposer: View {
                 "",
                 text: self.$viewModel.input,
                 axis: .vertical)
-                .font(.body)
+                .font(OpenClawChatTypography.body)
                 .textFieldStyle(.plain)
                 .lineLimit(1...4)
                 .fixedSize(horizontal: false, vertical: true)
-                .submitLabel(.send)
-                .onSubmit {
-                    self.sendDraftIfEnabled()
-                }
+                // iMessage-style: return inserts a newline; sending is the
+                // circle button's job, so keep the standard return key.
+                .submitLabel(.return)
                 .padding(.horizontal, self.cleanFieldTextInset)
                 .padding(.vertical, self.composerChrome == .clean ? 0 : 6)
                 .focused(self.$isFocused)
                 .disabled(!self.isComposerEnabled)
                 .accessibilityIdentifier("chat-message-input")
+                .onChange(of: self.viewModel.input) { _, _ in
+                    self.updateSlashPopoverPresentation()
+                }
+                .onChange(of: self.isFocused) { _, focused in
+                    if focused {
+                        self.updateSlashPopoverPresentation()
+                    } else {
+                        self.setSlashPanelPresented(false)
+                    }
+                }
             #endif
         }
     }
+
+    #if !os(macOS)
+    private var slashQuery: String? {
+        let text = self.viewModel.input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text.hasPrefix("/"), !text.hasPrefix("//") else { return nil }
+        let body = String(text.dropFirst())
+        guard !body.isEmpty else { return "" }
+        let lower = body.lowercased()
+        if lower == "skill" || lower.hasPrefix("skill ") {
+            return body
+        }
+        if body.contains(where: \.isWhitespace) {
+            return nil
+        }
+        return body
+    }
+
+    private var slashCommandPanel: some View {
+        let query = self.slashQuery ?? ""
+        let matches = self.viewModel.slashCommandMatches(
+            query: query,
+            filter: .all)
+        return VStack(alignment: .leading, spacing: 0) {
+            if self.viewModel.isLoadingSlashCommands, self.viewModel.slashCommands.isEmpty {
+                HStack(spacing: 10) {
+                    ProgressView()
+                    Text("Loading commands")
+                        .font(OpenClawChatTypography.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, minHeight: 96)
+            } else if let error = self.viewModel.slashCommandsErrorText,
+                      self.viewModel.slashCommands.isEmpty
+            {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Commands unavailable")
+                        .font(OpenClawChatTypography.footnoteSemiBold)
+                    Text(error)
+                        .font(OpenClawChatTypography.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                    Button {
+                        self.viewModel.refreshSlashCommands()
+                    } label: {
+                        Text("Retry")
+                            .font(OpenClawChatTypography.captionSemiBold)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else if matches.isEmpty {
+                Text("No matching commands")
+                    .font(OpenClawChatTypography.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 96)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        ForEach(matches) { command in
+                            Button {
+                                self.selectSlashCommand(command)
+                            } label: {
+                                self.slashCommandRow(command)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(command.displayInvocation)
+                        }
+                    }
+                    .padding(8)
+                }
+                .frame(maxHeight: .infinity)
+                .overlay(alignment: .bottom) {
+                    if matches.count > 4 {
+                        self.slashCommandScrollAffordance
+                    }
+                }
+            }
+        }
+        .frame(height: 340)
+        .background(
+            .regularMaterial,
+            in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color.secondary.opacity(0.15), lineWidth: 0.5))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
+    }
+
+    private func slashCommandRow(_ command: OpenClawChatCommandChoice) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(command.displayInvocation)
+                    .font(OpenClawChatTypography.mono(
+                        size: 15,
+                        weight: .semibold,
+                        relativeTo: .subheadline))
+                    .lineLimit(1)
+                if !command.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text(command.description)
+                        .font(OpenClawChatTypography.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
+    }
+
+    private var slashCommandScrollAffordance: some View {
+        VStack(spacing: 0) {
+            Rectangle()
+                .fill(.regularMaterial)
+                .mask(
+                    LinearGradient(
+                        colors: [.clear, .black],
+                        startPoint: .top,
+                        endPoint: .bottom))
+                .frame(height: 34)
+
+            Image(systemName: "chevron.compact.down")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
+                .padding(.bottom, 6)
+                .background(.regularMaterial)
+        }
+        .allowsHitTesting(false)
+    }
+
+    private func selectSlashCommand(_ command: OpenClawChatCommandChoice) {
+        self.suppressNextSlashPopoverUpdate = true
+        self.viewModel.applySlashCommandSelection(command)
+        self.setSlashPanelPresented(false)
+        self.isFocused = true
+    }
+
+    private func setSlashPanelPresented(_ presented: Bool) {
+        withAnimation(.easeInOut(duration: 0.18)) {
+            self.isSlashPopoverPresented = presented
+        }
+    }
+
+    private func updateSlashPopoverPresentation() {
+        if self.suppressNextSlashPopoverUpdate {
+            self.suppressNextSlashPopoverUpdate = false
+            return
+        }
+        let shouldShow = self.isComposerEnabled && self.isFocused && self.slashQuery != nil
+        if shouldShow {
+            self.viewModel.loadSlashCommandsIfNeeded()
+        }
+        if shouldShow != self.isSlashPopoverPresented {
+            self.setSlashPanelPresented(shouldShow)
+        }
+    }
+    #endif
 
     private var sendButton: some View {
         Group {
@@ -576,7 +854,7 @@ struct OpenClawChatComposer: View {
                         ProgressView().controlSize(.mini)
                     } else {
                         Image(systemName: "stop.fill")
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(OpenClawChatTypography.display(size: 13, weight: .semibold, relativeTo: .caption))
                     }
                 }
                 .buttonStyle(.plain)
@@ -597,7 +875,7 @@ struct OpenClawChatComposer: View {
                         ProgressView().controlSize(.mini)
                     } else {
                         Image(systemName: "arrow.up")
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(OpenClawChatTypography.display(size: 13, weight: .semibold, relativeTo: .caption))
                     }
                 }
                 .buttonStyle(.plain)
@@ -731,7 +1009,9 @@ struct OpenClawChatComposer: View {
     }
 
     private var canSendMessage: Bool {
-        self.isComposerEnabled && self.viewModel.canSend
+        self.isComposerEnabled
+            && self.viewModel.canSend
+            && (self.isAttachmentInputEnabled || self.viewModel.attachments.isEmpty)
     }
 
     private var connectionStatusText: String {
@@ -749,7 +1029,7 @@ struct OpenClawChatComposer: View {
 
     #if os(macOS)
     private func pickFilesMac() {
-        guard self.isComposerEnabled else { return }
+        guard self.isAttachmentInputEnabled else { return }
         let panel = NSOpenPanel()
         panel.title = "Select image attachments"
         panel.allowsMultipleSelection = true
@@ -762,7 +1042,7 @@ struct OpenClawChatComposer: View {
     }
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
-        guard self.isComposerEnabled else { return false }
+        guard self.isAttachmentInputEnabled else { return false }
         let fileProviders = providers.filter { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }
         guard !fileProviders.isEmpty else { return false }
         for item in fileProviders {
@@ -779,7 +1059,7 @@ struct OpenClawChatComposer: View {
     }
     #else
     private func loadPhotosPickerItems(_ items: [PhotosPickerItem]) async {
-        guard self.isComposerEnabled else {
+        guard self.isAttachmentInputEnabled else {
             self.pickerItems = []
             return
         }
@@ -800,7 +1080,7 @@ struct OpenClawChatComposer: View {
     #endif
 
     private func sendDraftIfEnabled() {
-        guard self.isComposerEnabled else { return }
+        guard self.canSendMessage else { return }
         self.viewModel.send()
     }
 }

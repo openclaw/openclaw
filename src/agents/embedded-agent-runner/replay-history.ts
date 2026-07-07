@@ -431,6 +431,7 @@ function normalizeAssistantUsageSnapshot(usage: unknown) {
     output,
     cacheRead,
     cacheWrite,
+    ...(normalized.contextUsage ? { contextUsage: { ...normalized.contextUsage } } : {}),
     totalTokens,
     ...(cost ? { cost } : {}),
   };
@@ -489,6 +490,25 @@ function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[]
       message.usage && typeof message.usage === "object"
         ? (message.usage as { cost?: unknown }).cost
         : undefined;
+    const rawContextUsage =
+      message.usage && typeof message.usage === "object"
+        ? (message.usage as { contextUsage?: unknown }).contextUsage
+        : undefined;
+    const normalizedContextUsage = normalizedUsage.contextUsage;
+    const contextUsageMatches =
+      normalizedContextUsage === undefined
+        ? rawContextUsage === undefined
+        : normalizedContextUsage.state === "unavailable"
+          ? rawContextUsage !== null &&
+            typeof rawContextUsage === "object" &&
+            (rawContextUsage as { state?: unknown }).state === "unavailable"
+          : rawContextUsage !== null &&
+            typeof rawContextUsage === "object" &&
+            (rawContextUsage as { state?: unknown }).state === "available" &&
+            (rawContextUsage as { promptTokens?: unknown }).promptTokens ===
+              normalizedContextUsage.promptTokens &&
+            (rawContextUsage as { totalTokens?: unknown }).totalTokens ===
+              normalizedContextUsage.totalTokens;
     const normalizedCost = normalizedUsage.cost;
     if (
       message.usage &&
@@ -498,6 +518,7 @@ function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[]
       (message.usage as { cacheRead?: unknown }).cacheRead === normalizedUsage.cacheRead &&
       (message.usage as { cacheWrite?: unknown }).cacheWrite === normalizedUsage.cacheWrite &&
       (message.usage as { totalTokens?: unknown }).totalTokens === normalizedUsage.totalTokens &&
+      contextUsageMatches &&
       ((normalizedCost &&
         usageCost &&
         typeof usageCost === "object" &&

@@ -222,6 +222,9 @@ type ContextEnginePromptCacheUsage = {
   output?: number;
   cacheRead?: number;
   cacheWrite?: number;
+  contextUsage?:
+    | { state: "available"; promptTokens: number; totalTokens: number }
+    | { state: "unavailable" };
   total?: number;
 };
 

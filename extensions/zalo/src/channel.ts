@@ -304,6 +304,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
           sendText: (nextCtx) => zaloRawSendResultAdapter.sendText!(nextCtx),
           sendMedia: (nextCtx) => zaloRawSendResultAdapter.sendMedia!(nextCtx),
           emptyResult: createEmptyChannelResult("zalo"),
+          onResult: ctx.onDeliveryResult,
         }),
       ...zaloRawSendResultAdapter,
     },

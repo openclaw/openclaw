@@ -131,7 +131,10 @@ async function resolveCodexAppServerClientStartContext(
   options?: IsolatedCodexAppServerClientOptions,
 ): Promise<ResolvedCodexAppServerClientStartContext> {
   const agentDir = options?.agentDir ?? resolveDefaultAgentDir(options?.config ?? {});
-  const usesNativeAuth = options?.authProfileId === null;
+  const requestedStartOptions =
+    options?.startOptions ?? resolveCodexAppServerRuntimeOptions().start;
+  const usesNativeAuth =
+    options?.authProfileId === null || requestedStartOptions.homeScope === "user";
   const requestedAuthProfileId =
     options?.authProfileId === null ? undefined : options?.authProfileId;
   const authProfileStore =
@@ -151,8 +154,6 @@ async function resolveCodexAppServerClientStartContext(
         config: options?.config,
         ...(authProfileStore ? { authProfileStore } : {}),
       });
-  const requestedStartOptions =
-    options?.startOptions ?? resolveCodexAppServerRuntimeOptions().start;
   const managedStartOptions = await resolveManagedCodexAppServerStartOptions(requestedStartOptions);
   const startOptions = await bridgeCodexAppServerStartOptions({
     startOptions: managedStartOptions,

@@ -345,9 +345,9 @@ export class CodexAppServerClient {
   async closeAndWait(options?: {
     exitTimeoutMs?: number;
     forceKillDelayMs?: number;
-  }): Promise<void> {
+  }): Promise<boolean> {
     this.markClosed(new Error("codex app-server client is closed"));
-    await closeCodexAppServerTransportAndWait(this.child, options);
+    return await closeCodexAppServerTransportAndWait(this.child, options);
   }
 
   private writeMessage(message: RpcRequest | RpcResponse, onError?: (error: Error) => void): void {
@@ -468,10 +468,17 @@ export class CodexAppServerClient {
       }
       this.writeMessage({ id: request.id, result: defaultServerRequestResponse(request) });
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      embeddedAgentLog.warn("codex app-server server request handler failed", {
+        id: request.id,
+        method: request.method,
+        error,
+      });
       this.writeMessage({
         id: request.id,
         error: {
-          message: error instanceof Error ? error.message : String(error),
+          code: -32603,
+          message,
         },
       });
     }
