@@ -484,4 +484,35 @@ describe("ssrfPolicyFromHttpBaseUrlAllowedOrigin — SDK boundary safety", () =>
       }),
     ).rejects.toThrow(SsrFBlockedError);
   });
+
+  it("explicit localhost origin resolving to 127.0.0.1 is still allowed", async () => {
+    // When the trusted origin IS localhost itself (not a rebinding), the loopback
+    // resolution must be permitted so local-dev provider setups keep working.
+    const baseUrl = "http://localhost:11434/v1";
+    const policy = ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl);
+    const policyForUrl = resolveSsrFPolicyForUrl(new URL(baseUrl), policy);
+
+    // Must resolve without throwing — loopback allowed because hostname === "localhost"
+    await expect(
+      resolvePinnedHostnameWithPolicy("localhost", {
+        policy: policyForUrl,
+        lookupFn: createLookupFn([{ address: "127.0.0.1", family: 4 }]),
+      }),
+    ).resolves.toBeDefined();
+  });
+
+  it("explicit 127.0.0.1 origin resolving to loopback is still allowed", async () => {
+    // A plugin that explicitly targets 127.0.0.1 directly as its base URL
+    // must not be blocked — the operator chose loopback intentionally.
+    const baseUrl = "http://127.0.0.1:11434/v1";
+    const policy = ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl);
+    const policyForUrl = resolveSsrFPolicyForUrl(new URL(baseUrl), policy);
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("127.0.0.1", {
+        policy: policyForUrl,
+        lookupFn: createLookupFn([{ address: "127.0.0.1", family: 4 }]),
+      }),
+    ).resolves.toBeDefined();
+  });
 });
