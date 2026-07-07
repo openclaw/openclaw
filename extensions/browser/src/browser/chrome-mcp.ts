@@ -1381,7 +1381,7 @@ export async function closeChromeMcpSession(profileName: string): Promise<boolea
 }
 
 /** Close every cached Chrome MCP session. */
-export async function stopAllChromeMcpSessions(): Promise<void> {
+async function stopAllChromeMcpSessions(): Promise<void> {
   const names = uniqueStrings([...sessions.keys()].map((key) => JSON.parse(key)[0] as string));
   for (const name of names) {
     await closeChromeMcpSession(name).catch(() => {});
@@ -1389,7 +1389,7 @@ export async function stopAllChromeMcpSessions(): Promise<void> {
 }
 
 /** List raw Chrome MCP pages for a profile. */
-export async function listChromeMcpPages(
+async function listChromeMcpPages(
   profileName: string,
   profileOptions?: string | ChromeMcpProfileOptions,
   options: ChromeMcpCallOptions = {},
