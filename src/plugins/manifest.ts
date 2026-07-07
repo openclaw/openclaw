@@ -1627,7 +1627,7 @@ export function normalizeManifestChannelCommandDefaults(
     : undefined;
 }
 
-export function resolvePluginManifestPath(rootDir: string): string {
+function resolvePluginManifestPath(rootDir: string): string {
   for (const filename of PLUGIN_MANIFEST_FILENAMES) {
     const candidate = path.join(rootDir, filename);
     if (fs.existsSync(candidate)) {

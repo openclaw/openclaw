@@ -95,7 +95,7 @@ function shouldApplyVitestCapabilityAliasOverrides(params: {
   return Boolean(params.env?.VITEST && params.pluginSdkResolution === "dist");
 }
 
-export function buildBundledCapabilityRuntimeConfig(
+function buildBundledCapabilityRuntimeConfig(
   pluginIds: readonly string[],
   env?: PluginLoadOptions["env"],
 ): PluginLoadOptions["config"] {

@@ -1045,7 +1045,7 @@ export function loadSessionEntry(sessionKey: string, opts?: { agentId?: string; 
   };
 }
 
-export function resolveFreshestSessionStoreMatchFromStoreKeys(
+function resolveFreshestSessionStoreMatchFromStoreKeys(
   store: Record<string, SessionEntry>,
   storeKeys: string[],
 ): { key: string; entry: SessionEntry } | undefined {
@@ -1570,7 +1570,7 @@ export function resolveGatewaySessionStoreTarget(params: {
 
 export { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
 
-export function resolveGatewaySessionThinkingDefault(params: {
+function resolveGatewaySessionThinkingDefault(params: {
   cfg: OpenClawConfig;
   provider: string;
   model: string;
