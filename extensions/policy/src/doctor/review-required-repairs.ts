@@ -13,6 +13,12 @@ type PolicyCheckId = (typeof POLICY_CHECK_IDS)[number];
 const REVIEW_REQUIRED_REPAIR_CHECK_IDS = new Set<PolicyCheckId>([
   CHECK_IDS.policyGatewayNonLoopbackBind,
   CHECK_IDS.policyGatewayNodeCommandDenied,
+  CHECK_IDS.policyAgentsWorkspaceAccessDenied,
+  CHECK_IDS.policyToolsProfileUnapproved,
+  CHECK_IDS.policyToolsFsWorkspaceOnlyRequired,
+  CHECK_IDS.policyToolsExecSecurityUnapproved,
+  CHECK_IDS.policyToolsExecAskUnapproved,
+  CHECK_IDS.policyToolsExecHostUnapproved,
 ]);
 
 export function previewPolicyReviewRequiredRepair(
@@ -70,6 +76,43 @@ function previewForFinding(
       return previewGatewayLoopbackBind(finding);
     case CHECK_IDS.policyGatewayNodeCommandDenied:
       return previewGatewayNodeDenyCommand(finding);
+    case CHECK_IDS.policyAgentsWorkspaceAccessDenied:
+      return previewAgentWorkspaceAccess(finding);
+    case CHECK_IDS.policyToolsProfileUnapproved:
+      return previewConfigPathSet(
+        finding,
+        "/tools/profile",
+        "set tools.profile to an approved policy value",
+        "approved value",
+      );
+    case CHECK_IDS.policyToolsFsWorkspaceOnlyRequired:
+      return previewConfigPathSet(
+        finding,
+        "/tools/fs/workspaceOnly",
+        "set tools.fs.workspaceOnly=true",
+        "true",
+      );
+    case CHECK_IDS.policyToolsExecSecurityUnapproved:
+      return previewConfigPathSet(
+        finding,
+        "/tools/exec/security",
+        "set tools.exec.security to an approved policy value",
+        "approved value",
+      );
+    case CHECK_IDS.policyToolsExecAskUnapproved:
+      return previewConfigPathSet(
+        finding,
+        "/tools/exec/ask",
+        "set tools.exec.ask to an approved policy value",
+        "approved value",
+      );
+    case CHECK_IDS.policyToolsExecHostUnapproved:
+      return previewConfigPathSet(
+        finding,
+        "/tools/exec/host",
+        "set tools.exec.host to an approved policy value",
+        "approved value",
+      );
     default:
       return [];
   }
@@ -119,6 +162,63 @@ function previewGatewayNodeDenyCommand(
       },
     },
   ];
+}
+
+function previewAgentWorkspaceAccess(
+  finding: HealthFinding,
+): readonly { readonly change: string; readonly effect: HealthRepairEffect }[] {
+  const target = configTargetFromOcPath(finding.ocPath);
+  if (
+    target === undefined ||
+    !finding.ocPath.includes("/agents/") ||
+    !finding.ocPath.includes("/sandbox/") ||
+    !(finding.ocPath.endsWith("/workspaceAccess") || finding.ocPath.endsWith("/mode"))
+  ) {
+    return [];
+  }
+  return [
+    {
+      change:
+        "Review required: set agent sandbox workspace access to an allowed policy value for policy conformance.",
+      effect: {
+        kind: "config",
+        action: "would-set-after-review",
+        target: `${target} -> allowed value`,
+        dryRunSafe: true,
+      },
+    },
+  ];
+}
+
+function previewConfigPathSet(
+  finding: HealthFinding,
+  suffix: string,
+  changeText: string,
+  targetValue: string,
+): readonly { readonly change: string; readonly effect: HealthRepairEffect }[] {
+  const target = configTargetFromOcPath(finding.ocPath);
+  if (target === undefined || !finding.ocPath.endsWith(suffix)) {
+    return [];
+  }
+  return [
+    {
+      change: `Review required: ${changeText} for policy conformance.`,
+      effect: {
+        kind: "config",
+        action: "would-set-after-review",
+        target: `${target} -> ${targetValue}`,
+        dryRunSafe: true,
+      },
+    },
+  ];
+}
+
+function configTargetFromOcPath(ocPath: string | undefined): string | undefined {
+  const prefix = "oc://openclaw.config/";
+  if (ocPath === undefined || !ocPath.startsWith(prefix)) {
+    return undefined;
+  }
+  return ocPath.slice(prefix.length).replaceAll("/", ".");
 }
 
 function uniqueStrings(values: readonly string[]): readonly string[] {
