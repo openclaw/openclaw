@@ -143,6 +143,7 @@ function createReplyOperation(): ReplyOperation {
     terminalRecovery: false,
     acceptedSteeredInboundAudio: false,
     markTerminalRecovery: vi.fn(),
+    abortForStuckRecovery: vi.fn(),
     markAcceptedSteeredInboundAudio: vi.fn(),
   };
 }
