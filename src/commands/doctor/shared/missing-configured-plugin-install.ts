@@ -64,6 +64,7 @@ import {
 } from "../../../plugins/official-external-plugin-catalog.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
+import { buildPluginDependencyStatus } from "../../../plugins/status-dependencies-core.js";
 import {
   isClawHubTrustSkippedOutcome,
   updateNpmInstalledPlugins,
@@ -662,6 +663,33 @@ function collectInstalledPluginIdsWithRepairablePackageDiagnostics(params: {
   return pluginIds;
 }
 
+/**
+ * Managed installs can end up with a package payload whose declared required
+ * dependencies are absent from the dependency tree (for example an interrupted
+ * npm install); the plugin then loads at startup but dies at import time.
+ * Maps each record-backed installed plugin to its missing required packages.
+ */
+function collectInstalledPluginMissingRequiredDependencies(params: {
+  snapshot: PluginMetadataSnapshot;
+  installRecords: Record<string, PluginInstallRecord>;
+}): Map<string, string[]> {
+  const missingByPluginId = new Map<string, string[]>();
+  for (const plugin of params.snapshot.plugins) {
+    if (!Object.hasOwn(params.installRecords, plugin.id)) {
+      continue;
+    }
+    const dependencyStatus = buildPluginDependencyStatus({
+      rootDir: plugin.rootDir,
+      dependencies: plugin.packageDependencies,
+      optionalDependencies: plugin.packageOptionalDependencies,
+    });
+    if (dependencyStatus.hasDependencies && !dependencyStatus.requiredInstalled) {
+      missingByPluginId.set(plugin.id, dependencyStatus.missing);
+    }
+  }
+  return missingByPluginId;
+}
+
 function resolveInstalledRuntimePackageVersion(params: {
   pluginId: string;
   snapshot: PluginMetadataSnapshot;
@@ -1012,6 +1040,7 @@ export type ConfiguredPluginInstallHealthIssue =
       pluginId: string;
       installPath?: string;
       installSpec?: string;
+      missingDependencies?: string[];
     }
   | {
       kind: "stale-version-bound-runtime";
@@ -1398,6 +1427,7 @@ function missingRecordedPluginIssueKind(params: {
   pluginId: string;
   staleVersionBoundRuntimePluginIds: ReadonlySet<string>;
   repairablePackageDiagnosticPluginIds: ReadonlySet<string>;
+  missingRequiredDependencyPluginIds: ReadonlySet<string>;
   staleDescriptorPluginIds: ReadonlySet<string>;
 }):
   | "missing-installed-payload"
@@ -1407,7 +1437,10 @@ function missingRecordedPluginIssueKind(params: {
   if (params.staleVersionBoundRuntimePluginIds.has(params.pluginId)) {
     return "stale-version-bound-runtime";
   }
-  if (params.repairablePackageDiagnosticPluginIds.has(params.pluginId)) {
+  if (
+    params.repairablePackageDiagnosticPluginIds.has(params.pluginId) ||
+    params.missingRequiredDependencyPluginIds.has(params.pluginId)
+  ) {
     return "repairable-installed-plugin";
   }
   if (params.staleDescriptorPluginIds.has(params.pluginId)) {
@@ -1474,6 +1507,11 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
       snapshot,
       installRecords: records,
     });
+  const missingRequiredDependenciesByPluginId = collectInstalledPluginMissingRequiredDependencies({
+    snapshot,
+    installRecords: records,
+  });
+  const missingRequiredDependencyPluginIds = new Set(missingRequiredDependenciesByPluginId.keys());
   const staleVersionBoundRuntimePluginIds =
     collectInstalledPluginIdsWithStaleVersionBoundRuntimePackages({
       snapshot,
@@ -1483,6 +1521,7 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
     });
   const repairableInstalledPluginIds = new Set([
     ...repairablePackageDiagnosticPluginIds,
+    ...missingRequiredDependencyPluginIds,
     ...staleVersionBoundRuntimePluginIds,
   ]);
   const officialReplacementInstallCandidates = collectOfficialReplacementInstallCandidates({
@@ -1541,6 +1580,7 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
       pluginId,
       staleVersionBoundRuntimePluginIds,
       repairablePackageDiagnosticPluginIds,
+      missingRequiredDependencyPluginIds,
       staleDescriptorPluginIds,
     });
     const installPath = resolveRecordInstallPath(record, env);
@@ -1549,6 +1589,18 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
         kind,
         pluginId,
         ...(installPath ? { installPath } : {}),
+      });
+      reportedPluginIds.add(pluginId);
+      continue;
+    }
+    if (kind === "repairable-installed-plugin") {
+      const missingDependencies = missingRequiredDependenciesByPluginId.get(pluginId);
+      issues.push({
+        kind,
+        pluginId,
+        ...(installPath ? { installPath } : {}),
+        ...(record?.spec ? { installSpec: record.spec } : {}),
+        ...(missingDependencies?.length ? { missingDependencies } : {}),
       });
       reportedPluginIds.add(pluginId);
       continue;
@@ -1634,11 +1686,13 @@ export async function detectConfiguredPluginInstallHealthIssues(params: {
           ...(installSpec ? { installSpec } : {}),
         });
       } else {
+        const missingDependencies = missingRequiredDependenciesByPluginId.get(candidate.pluginId);
         issues.push({
           kind: "repairable-installed-plugin",
           pluginId: candidate.pluginId,
           ...(installPath ? { installPath } : {}),
           ...(installSpec ? { installSpec } : {}),
+          ...(missingDependencies?.length ? { missingDependencies } : {}),
         });
       }
       continue;
@@ -1689,7 +1743,9 @@ export function configuredPluginInstallIssueToHealthFinding(
       return {
         checkId: CONFIGURED_PLUGIN_INSTALLS_CHECK_ID,
         severity: "warning",
-        message: `Configured plugin ${issue.pluginId} has a repairable package install problem.`,
+        message: issue.missingDependencies?.length
+          ? `Configured plugin ${issue.pluginId} is installed but required dependencies are missing from its dependency tree: ${issue.missingDependencies.join(", ")}.`
+          : `Configured plugin ${issue.pluginId} has a repairable package install problem.`,
         target,
         ...(issue.installPath ? { path: issue.installPath } : {}),
         fixHint: "Run `openclaw doctor --fix` to repair the configured plugin package.",
@@ -1920,6 +1976,12 @@ async function repairMissingPluginInstalls(params: {
       snapshot,
       installRecords: records,
     });
+  const installedPluginIdsWithMissingRequiredDependencies = new Set(
+    collectInstalledPluginMissingRequiredDependencies({
+      snapshot,
+      installRecords: records,
+    }).keys(),
+  );
   const installedPluginIdsWithStaleVersionBoundRuntimePackages =
     collectInstalledPluginIdsWithStaleVersionBoundRuntimePackages({
       snapshot,
@@ -1929,6 +1991,7 @@ async function repairMissingPluginInstalls(params: {
     });
   const installedPluginIdsWithRepairablePackages = new Set([
     ...installedPluginIdsWithRepairablePackageDiagnostics,
+    ...installedPluginIdsWithMissingRequiredDependencies,
     ...installedPluginIdsWithStaleVersionBoundRuntimePackages,
   ]);
   const officialReplacementInstallCandidates = collectOfficialReplacementInstallCandidates({
@@ -2041,7 +2104,8 @@ async function repairMissingPluginInstalls(params: {
         changes.push(
           installedPluginIdsWithStaleVersionBoundRuntimePackages.has(outcome.pluginId)
             ? `Refreshed stale configured plugin "${outcome.pluginId}".`
-            : installedPluginIdsWithRepairablePackageDiagnostics.has(outcome.pluginId)
+            : installedPluginIdsWithRepairablePackageDiagnostics.has(outcome.pluginId) ||
+                installedPluginIdsWithMissingRequiredDependencies.has(outcome.pluginId)
               ? `Repaired broken installed plugin "${outcome.pluginId}".`
               : `Repaired missing configured plugin "${outcome.pluginId}".`,
         );
