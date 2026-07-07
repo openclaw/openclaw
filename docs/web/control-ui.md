@@ -287,9 +287,11 @@ stays visible with a floating amber "Gateway connection lost — Reconnecting…
 bar while the client retries automatically with backoff (800 ms up to 15 s). Live updates and
 actions pause until the connection returns; **Retry now** in the pill forces an immediate attempt.
 
-The login gate only appears when there is no established session yet (first open, page reload
-before connect) or when the Gateway actively rejects the credentials (bad token/password, revoked
-pairing) — states that need your input rather than waiting.
+When this browser already holds credentials (a configured token/password or an approved device
+token), first opens and reloads show a small animated OpenClaw mark while the connection is
+established instead of flashing the login gate. The login gate only appears when no credentials
+are stored yet or when the Gateway actively rejects them (bad token/password, revoked pairing) —
+states that need your input rather than waiting.
 
 ## PWA install and web push
 

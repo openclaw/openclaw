@@ -1,4 +1,48 @@
 /* ===========================================
+   Connect Splash (first connect with stored credentials)
+   =========================================== */
+
+.connect-splash {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  height: 100dvh;
+  max-height: 100%;
+  background: var(--bg);
+  /* Stay invisible past fast handshakes so a quick connect paints nothing. */
+  opacity: 0;
+  animation: fade-in 0.3s var(--ease-out) 0.2s forwards;
+}
+
+.connect-splash__logo {
+  width: 44px;
+  height: 44px;
+  animation: connect-splash-wiggle 1.8s ease-in-out infinite;
+}
+
+@keyframes connect-splash-wiggle {
+  0%,
+  100% {
+    transform: rotate(-6deg);
+  }
+  50% {
+    transform: rotate(6deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .connect-splash {
+    opacity: 1;
+    animation: none;
+  }
+
+  .connect-splash__logo {
+    animation: none;
+  }
+}
+
+/* ===========================================
    Login Gate
    =========================================== */
 
@@ -327,25 +371,22 @@
   pointer-events: none;
 }
 
+/* Neutral elevated surface; the amber status dot is the only color accent so
+   the pill reads as quiet system status, not a warning callout. */
 .connection-banner__pill {
   pointer-events: auto;
   display: inline-flex;
-  align-items: center;
-  gap: 10px;
+  align-items: stretch;
   min-width: 0;
   max-width: 100%;
-  padding: 6px 6px 6px 14px;
   border-radius: var(--radius-full);
-  border: 1px solid color-mix(in srgb, var(--warn) 36%, var(--border));
-  background: color-mix(
-    in srgb,
-    var(--warn) 10%,
-    color-mix(in srgb, var(--bg-elevated) 86%, transparent)
-  );
-  backdrop-filter: blur(12px) saturate(1.4);
-  -webkit-backdrop-filter: blur(12px) saturate(1.4);
-  box-shadow: var(--shadow-md);
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
+  backdrop-filter: blur(12px) saturate(1.2);
+  -webkit-backdrop-filter: blur(12px) saturate(1.2);
+  box-shadow: var(--shadow-lg);
   font-size: 13px;
+  line-height: 1;
   animation: connection-banner-enter 0.25s var(--ease-out);
 }
 
@@ -366,35 +407,30 @@
   }
 }
 
-.connection-banner__spinner {
-  display: inline-flex;
-  align-items: center;
-  color: var(--warn);
-}
-
-.connection-banner__spinner svg {
-  width: 14px;
-  height: 14px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 2;
-  stroke-linecap: round;
-  animation: connection-banner-spin 1s linear infinite;
-}
-
-@keyframes connection-banner-spin {
-  to {
-    transform: rotate(360deg);
-  }
+.connection-banner__dot {
+  width: 7px;
+  height: 7px;
+  align-self: center;
+  margin-left: 14px;
+  border-radius: var(--radius-full);
+  background: var(--warn);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--warn) 55%, transparent);
+  animation: pulse-subtle 2s ease-in-out infinite;
+  flex-shrink: 0;
 }
 
 .connection-banner__title {
+  align-self: center;
+  margin-left: 9px;
+  padding: 10px 0;
   color: var(--text-strong);
-  font-weight: 600;
+  font-weight: 500;
   white-space: nowrap;
 }
 
 .connection-banner__state {
+  align-self: center;
+  margin-left: 7px;
   color: var(--muted);
   white-space: nowrap;
 }
@@ -412,19 +448,30 @@
   white-space: nowrap;
 }
 
-.connection-banner .connection-banner__retry {
-  border-radius: var(--radius-full);
-  border-color: color-mix(in srgb, var(--warn) 42%, var(--border));
+/* Text action behind a hairline divider so the pill stays a single surface
+   instead of a capsule-inside-a-capsule. */
+.connection-banner__retry {
+  margin-left: 12px;
+  padding: 0 14px;
+  border: none;
+  border-left: 1px solid var(--border);
+  border-radius: 0 var(--radius-full) var(--radius-full) 0;
   background: transparent;
-  color: var(--text-strong);
-  font-size: 12px;
-  padding: 4px 12px;
+  color: var(--accent);
+  font-size: 12.5px;
+  font-weight: 500;
   white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-out);
 }
 
-.connection-banner .connection-banner__retry:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--warn) 60%, var(--border));
-  background: color-mix(in srgb, var(--warn) 14%, transparent);
+.connection-banner__retry:hover {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.connection-banner__retry:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
 @media (max-width: 640px) {
@@ -629,7 +676,6 @@
   background: var(--danger-subtle);
   color: var(--danger);
 }
-
 
 /* ===========================================
    Status Dot - With glow for emphasis

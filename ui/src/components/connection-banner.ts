@@ -3,7 +3,6 @@
 import { LitElement, html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
-import { icons } from "./icons.ts";
 import { redactLoginFailureError } from "./login-gate.ts";
 
 export type ConnectionBannerProps = {
@@ -17,11 +16,11 @@ function renderConnectionBanner(props: ConnectionBannerProps) {
   return html`
     <div class="connection-banner" role="status" aria-live="polite">
       <div class="connection-banner__pill" title=${detail ? `${hint}\n${detail}` : hint}>
-        <span class="connection-banner__spinner" aria-hidden="true">${icons.loader}</span>
-        <strong class="connection-banner__title">${t("connection.lostTitle")}</strong>
+        <span class="connection-banner__dot" aria-hidden="true"></span>
+        <span class="connection-banner__title">${t("connection.lostTitle")}</span>
         <span class="connection-banner__state">${t("connection.reconnecting")}</span>
         <span class="connection-banner__sr-hint">${hint}</span>
-        <button class="btn btn--sm connection-banner__retry" type="button" @click=${props.onRetry}>
+        <button class="connection-banner__retry" type="button" @click=${props.onRetry}>
           ${t("connection.retryNow")}
         </button>
       </div>
