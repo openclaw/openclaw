@@ -60,6 +60,9 @@ import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
 export { collectBundledExtensionManifestErrors } from "./lib/bundled-extension-manifest.ts";
 export { packageNameFromSpecifier } from "./lib/plugin-package-dependencies.mjs";
 
+export const RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV =
+  "OPENCLAW_RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR";
+
 type PackFile = { path: string };
 type PackResult = { files?: PackFile[]; filename?: string; unpackedSize?: number };
 type ReleaseCheckCommandInvocation = {
@@ -406,24 +409,59 @@ export function resolvePackedTarballPath(packDestination: string, results: PackR
   return resolve(packDestination, filename);
 }
 
-function installPackedTarball(prefixDir: string, tarballPath: string, cwd: string): void {
-  execNpm(
-    [
-      "install",
-      "-g",
-      "--prefix",
-      prefixDir,
-      "--ignore-scripts",
-      "--no-audit",
-      "--no-fund",
-      tarballPath,
-    ],
-    {
-      cwd,
-      encoding: "utf8",
-      stdio: "inherit",
-    },
-  );
+export function resolveReleaseCheckLocalPackageTarballs(
+  tarballDir: string | undefined = process.env[RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV],
+): string[] {
+  if (!tarballDir) {
+    return [];
+  }
+  const resolvedDir = resolve(tarballDir);
+  if (!existsSync(resolvedDir) || !statSync(resolvedDir).isDirectory()) {
+    throw new Error(
+      `release-check: ${RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV} must name a directory.`,
+    );
+  }
+  const tarballs = readdirSync(resolvedDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".tgz"))
+    .map((entry) => resolve(resolvedDir, entry.name))
+    .toSorted((left, right) => left.localeCompare(right));
+  if (tarballs.length !== 1) {
+    throw new Error(
+      `release-check: ${RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV} contains ${tarballs.length} tarballs; expected exactly one.`,
+    );
+  }
+  return tarballs;
+}
+
+export function createPackedTarballInstallArgs(
+  prefixDir: string,
+  tarballPath: string,
+  localPackageTarballs: string[] = [],
+): string[] {
+  return [
+    "install",
+    "-g",
+    "--prefix",
+    prefixDir,
+    "--ignore-scripts",
+    "--no-audit",
+    "--no-fund",
+    tarballPath,
+    ...localPackageTarballs,
+  ];
+}
+
+function installPackedTarball(
+  prefixDir: string,
+  tarballPath: string,
+  cwd: string,
+  localPackageTarballs: string[] = [],
+): void {
+  execNpm(createPackedTarballInstallArgs(prefixDir, tarballPath, localPackageTarballs), {
+    cwd,
+    encoding: "utf8",
+    stdio: "inherit",
+  });
 }
 
 function resolveGlobalRoot(prefixDir: string, cwd: string): string {
@@ -816,7 +854,12 @@ function runPackedBundledChannelEntrySmoke(): void {
     const packResults = runPack(packDir);
     const tarballPath = resolvePackedTarballPath(packDir, packResults);
     const prefixDir = join(tmpRoot, "prefix");
-    installPackedTarball(prefixDir, tarballPath, tmpRoot);
+    installPackedTarball(
+      prefixDir,
+      tarballPath,
+      tmpRoot,
+      resolveReleaseCheckLocalPackageTarballs(),
+    );
 
     const packageRoot = join(resolveGlobalRoot(prefixDir, tmpRoot), "openclaw");
     verifyPackedInstalledPackage({
