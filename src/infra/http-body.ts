@@ -203,12 +203,24 @@ export async function readResponsePrefix(
     }
     // No ReadableStream reader available (e.g., synthetic Response).
     // Check Content-Length to avoid materializing an oversized body.
+    // Fail closed when Content-Length is missing or invalid — calling
+    // arrayBuffer() without a known bound risks an unbounded allocation.
     const contentLength = response.headers?.get?.("content-length") ?? null;
     if (contentLength !== null) {
       const cl = Number.parseInt(contentLength, 10);
-      if (!Number.isNaN(cl) && cl > maxBytes) {
+      if (Number.isNaN(cl)) {
+        throw new Error(
+          "Cannot safely read response body: no ReadableStream reader and Content-Length is invalid",
+        );
+      }
+      if (cl > maxBytes) {
         return { buffer: Buffer.alloc(0), size: cl, truncated: true };
       }
+      // Content-Length is valid and within limit — safe to read.
+    } else {
+      throw new Error(
+        "Cannot safely read response body: no ReadableStream reader and Content-Length is missing",
+      );
     }
     const fallback = Buffer.from(await response.arrayBuffer());
     if (fallback.length > maxBytes) {

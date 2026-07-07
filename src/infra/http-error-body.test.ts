@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { readResponseBodySnippet } from "./http-error-body.js";
 
-function bodyLessResponse(text: string): Response {
+function bodyLessResponse(text: string, opts?: { contentLength?: string }): Response {
   return {
     body: {} as ReadableStream,
-    text: async () => text,
+    headers: {
+      get: (name: string) => (name === "content-length" ? (opts?.contentLength ?? null) : null),
+    },
     arrayBuffer: async () => new TextEncoder().encode(text).buffer,
   } as unknown as Response;
 }
@@ -12,7 +14,7 @@ function bodyLessResponse(text: string): Response {
 describe("readResponseBodySnippet", () => {
   it("returns full text when under both limits (body-less path)", async () => {
     const text = "short text";
-    const result = await readResponseBodySnippet(bodyLessResponse(text), {
+    const result = await readResponseBodySnippet(bodyLessResponse(text, { contentLength: "10" }), {
       maxBytes: 1024,
       maxChars: 50,
     });
@@ -21,7 +23,7 @@ describe("readResponseBodySnippet", () => {
 
   it("truncates by maxChars when under maxBytes (body-less path)", async () => {
     const text = "abcdefghij";
-    const result = await readResponseBodySnippet(bodyLessResponse(text), {
+    const result = await readResponseBodySnippet(bodyLessResponse(text, { contentLength: "10" }), {
       maxBytes: 1024,
       maxChars: 5,
     });
@@ -30,7 +32,7 @@ describe("readResponseBodySnippet", () => {
 
   it("truncates by maxBytes in the body-less path", async () => {
     const text = "a".repeat(200);
-    const result = await readResponseBodySnippet(bodyLessResponse(text), {
+    const result = await readResponseBodySnippet(bodyLessResponse(text, { contentLength: "50" }), {
       maxBytes: 50,
       maxChars: 500,
     });
@@ -41,7 +43,7 @@ describe("readResponseBodySnippet", () => {
 
   it("enforces maxBytes before maxChars in the body-less path", async () => {
     const text = "a".repeat(500);
-    const result = await readResponseBodySnippet(bodyLessResponse(text), {
+    const result = await readResponseBodySnippet(bodyLessResponse(text, { contentLength: "30" }), {
       maxBytes: 30,
       maxChars: 500,
     });
@@ -53,12 +55,12 @@ describe("readResponseBodySnippet", () => {
     // U+1F600 (😀) is 4 bytes in UTF-8: F0 9F 98 80
     const text = "ab😀cd";
     // 2 ASCII bytes (ab) + cut before the 4-byte emoji
-    // Without stream flag, incomplete multi-byte produces U+FFFD
-    const result = await readResponseBodySnippet(bodyLessResponse(text), {
+    // With stream:true, incomplete multi-byte sequence is dropped
+    const result = await readResponseBodySnippet(bodyLessResponse(text, { contentLength: "3" }), {
       maxBytes: 3,
       maxChars: 100,
     });
-    expect(result).toBe("ab�");
+    expect(result).toBe("ab");
   });
 
   it("stream path still enforces maxBytes", async () => {
@@ -83,15 +85,15 @@ describe("readResponseBodySnippet", () => {
   });
 
   it("returns empty string when maxBytes is 0 (body-less path)", async () => {
-    const result = await readResponseBodySnippet(bodyLessResponse("some text"), {
-      maxBytes: 0,
-      maxChars: 100,
-    });
+    const result = await readResponseBodySnippet(
+      bodyLessResponse("some text", { contentLength: "9" }),
+      { maxBytes: 0, maxChars: 100 },
+    );
     expect(result).toBe("");
   });
 
   it("returns empty string for empty response body", async () => {
-    const result = await readResponseBodySnippet(bodyLessResponse(""), {
+    const result = await readResponseBodySnippet(bodyLessResponse("", { contentLength: "0" }), {
       maxBytes: 1024,
       maxChars: 50,
     });
@@ -127,6 +129,41 @@ describe("readResponseBodySnippet", () => {
     } as unknown as Response;
     const result = await readResponseBodySnippet(nullBodyResponse, {
       maxBytes: 1024,
+      maxChars: 50,
+    });
+    expect(arrayBufferCalled).toBe(false);
+    expect(result).toBe("");
+  });
+
+  it("fails closed when Content-Length is missing (no-reader path)", async () => {
+    let arrayBufferCalled = false;
+    const response = {
+      body: {} as ReadableStream,
+      arrayBuffer: async () => {
+        arrayBufferCalled = true;
+        return new ArrayBuffer(0);
+      },
+    } as unknown as Response;
+    const result = await readResponseBodySnippet(response, {
+      maxBytes: 100,
+      maxChars: 50,
+    });
+    expect(arrayBufferCalled).toBe(false);
+    expect(result).toBe("");
+  });
+
+  it("fails closed when Content-Length is invalid (no-reader path)", async () => {
+    let arrayBufferCalled = false;
+    const response = {
+      body: {} as ReadableStream,
+      headers: { get: () => "not-a-number" },
+      arrayBuffer: async () => {
+        arrayBufferCalled = true;
+        return new ArrayBuffer(0);
+      },
+    } as unknown as Response;
+    const result = await readResponseBodySnippet(response, {
+      maxBytes: 100,
       maxChars: 50,
     });
     expect(arrayBufferCalled).toBe(false);

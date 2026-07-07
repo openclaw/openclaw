@@ -11,7 +11,7 @@ export async function readResponseBodySnippet(
       if (buffer.length === 0) {
         return "";
       }
-      return new TextDecoder().decode(buffer).slice(0, limits.maxChars);
+      return new TextDecoder().decode(buffer, { stream: true }).slice(0, limits.maxChars);
     }
 
     const reader = body.getReader();
