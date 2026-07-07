@@ -1,4 +1,5 @@
 // Proxy capture runtime tests cover session creation and capture lifecycle.
+import { Buffer } from "node:buffer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
@@ -8,6 +9,7 @@ import {
   captureWsEvent,
   finalizeDebugProxyCapture,
   initializeDebugProxyCapture,
+  readCapturedResponseBodyBounded,
   type DebugProxyCaptureRuntimeDeps,
 } from "./runtime.js";
 
@@ -575,5 +577,43 @@ describe("debug proxy runtime", () => {
     expect(response?.status).toBe(204);
     expect(response?.contentType).toBeUndefined();
     expect(JSON.parse(String(response?.metaJson))).toMatchObject({ bodyCapture: "unavailable" });
+  });
+});
+
+describe("readCapturedResponseBodyBounded", () => {
+  it("skips body read when content-length exceeds cap", async () => {
+    const large = Buffer.alloc(5 * 1024 * 1024, 0x61);
+    const response = new Response(large, {
+      headers: { "content-length": String(large.length) },
+    });
+    const { buffer, truncated } = await readCapturedResponseBodyBounded(response, 1024);
+    expect(truncated).toBe(true);
+    expect(buffer.length).toBe(0);
+  });
+
+  it("reads body when content-length is within cap", async () => {
+    const body = Buffer.from("small");
+    const response = new Response(body, {
+      headers: { "content-length": String(body.length) },
+    });
+    const { buffer, truncated } = await readCapturedResponseBodyBounded(response, 1024);
+    expect(truncated).toBe(false);
+    expect(buffer.equals(body)).toBe(true);
+  });
+
+  it("reads body when content-length is missing (within cap)", async () => {
+    const body = Buffer.from("no length header");
+    const response = new Response(body);
+    const { buffer, truncated } = await readCapturedResponseBodyBounded(response, 4096);
+    expect(truncated).toBe(false);
+    expect(buffer.equals(body)).toBe(true);
+  });
+
+  it("handles stream body (regression guard)", async () => {
+    const data = new Uint8Array(100).fill(97);
+    const response = new Response(new Blob([data]).stream());
+    const { buffer, truncated } = await readCapturedResponseBodyBounded(response, 200);
+    expect(truncated).toBe(false);
+    expect(buffer.length).toBe(100);
   });
 });

@@ -40,14 +40,21 @@ const MAX_CAPTURED_RESPONSE_BODY_BYTES = 16 * 1024 * 1024;
 // settles (it only resolves once BOTH branches cancel). Awaiting it would hang
 // the capture pipeline and retain the buffered prefix forever, so we cancel
 // fire-and-forget, mirroring src/agents/tools/web-shared.ts#readResponseText.
-async function readCapturedResponseBodyBounded(
+export async function readCapturedResponseBodyBounded(
   response: Response,
   maxBytes: number,
 ): Promise<{ buffer: Buffer; truncated: boolean }> {
   const clone = response.clone();
   const body = (clone as unknown as { body?: ReadableStream<Uint8Array> | null }).body;
   if (!body || typeof body.getReader !== "function") {
-    // Non-streaming clone (e.g. test doubles): bounded arrayBuffer fallback.
+    // Non-streaming clone (e.g. test doubles): guard against an oversized
+    // body before allocating through arrayBuffer(). The stream path above
+    // cancels on overflow; this path must pre-check content-length then
+    // still verify the full read stayed within the cap.
+    const declaredLength = Number(clone.headers.get("content-length"));
+    if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+      return { buffer: Buffer.alloc(0), truncated: true };
+    }
     const bytes = Buffer.from(await clone.arrayBuffer());
     return bytes.length > maxBytes
       ? { buffer: Buffer.alloc(0), truncated: true }
