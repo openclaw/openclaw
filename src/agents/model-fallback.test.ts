@@ -1927,18 +1927,18 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
-  it("re-throws LiveSessionModelSwitchError on last candidate so the outer loop can retry (#101676)", async () => {
+  it("re-throws LiveSessionModelSwitchError when the switch target is not a configured candidate (#101676)", async () => {
     const cfg = makeCfg();
     const switchError = new LiveSessionModelSwitchError({
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
+      provider: "openrouter",
+      model: "deepseek-chat",
     });
     const run = vi.fn().mockRejectedValue(switchError);
 
-    // With no fallbacks, the single candidate is also the last one.
-    // The LiveSessionModelSwitchError should propagate out so the outer
-    // retry loop (agent-command.ts) can restart with the switched model.
-    // The outer loop has its own MAX_LIVE_SWITCH_RETRIES bound (#101676).
+    // With no fallbacks (fallbacksOverride: []), the single candidate is
+    // anthropic/claude-sonnet-4-6.  The switch target (openrouter/deepseek-chat)
+    // is NOT in the candidate list, so the error should propagate out so the
+    // outer retry loop can restart with the user-requested model (#101676).
     const err = await runWithModelFallback({
       cfg,
       provider: "anthropic",
@@ -1947,8 +1947,8 @@ describe("runWithModelFallback", () => {
       fallbacksOverride: [],
     }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(LiveSessionModelSwitchError);
-    expect((err as LiveSessionModelSwitchError).provider).toBe("anthropic");
-    expect((err as LiveSessionModelSwitchError).model).toBe("claude-sonnet-4-6");
+    expect((err as LiveSessionModelSwitchError).provider).toBe("openrouter");
+    expect((err as LiveSessionModelSwitchError).model).toBe("deepseek-chat");
     expect(run).toHaveBeenCalledTimes(1);
   });
 
@@ -2022,26 +2022,32 @@ describe("runWithModelFallback", () => {
     ]);
   });
 
-  it("re-throws stale live-session switch errors to the outer retry loop (#101676)", async () => {
+  it("keeps stale same-candidate live-session switch errors in fallback rotation (#58496 family)", async () => {
     const cfg = makeCfg();
     const switchError = new LiveSessionModelSwitchError({
       provider: "openai",
       model: "gpt-4.1-mini",
     });
-    const run = vi.fn().mockRejectedValue(switchError);
+    const run = vi.fn().mockRejectedValueOnce(switchError).mockResolvedValueOnce("ok");
 
-    // A stale live-session model switch targeting the current candidate
-    // should be re-thrown so the outer retry loop can process it.  Even
-    // though this is a same/earlier target, the outer loop handles it
-    // with bounded retries (MAX_LIVE_SWITCH_RETRIES).
-    const err = await runWithModelFallback({
+    // The switch targets the current primary candidate, not a new model
+    // outside the fallback chain.  This stale switch must stay in fallback
+    // rotation so configured fallback candidates can still run.
+    const result = await runWithModelFallback({
       cfg,
       provider: "openai",
       model: "gpt-4.1-mini",
       run,
-    }).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(LiveSessionModelSwitchError);
-    expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    expect(result.result).toBe("ok");
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("claude-haiku-3-5");
+    expect(result.attempts[0]?.reason).toBe("unknown");
+    expect(run.mock.calls).toEqual([
+      ["openai", "gpt-4.1-mini", { isFinalFallbackAttempt: false }],
+      ["anthropic", "claude-haiku-3-5", { isFinalFallbackAttempt: true }],
+    ]);
   });
 
   it("re-throws LiveSessionModelSwitchError on last candidate when switch target is not in candidates (#101676)", async () => {
