@@ -264,6 +264,11 @@ openclaw browser set device "iPhone 14"
 
 Notes:
 
+- The agent-facing `browser` tool exposes `action=download` (required `ref` and
+  `path`) and `action=waitfordownload` (optional `path`). Both return the saved
+  download URL, suggested filename, and guarded local path. Explicit download
+  interception is available for managed Playwright profiles; existing-session
+  profiles return an unsupported-operation error.
 - `upload` and `dialog` are **arming** calls; run them before the click/press that triggers the chooser/dialog. If an action opens a modal, the action response includes `blockedByDialog` and `browserState.dialogs.pending`; pass that `dialogId` to respond directly. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
 - `click`/`type`/etc require a `ref` from `snapshot` (numeric `12`, role ref `e12`, or actionable ARIA ref `ax12`). CSS selectors are intentionally not supported for actions. Use `click-coords` when the visible viewport position is the only reliable target.
 - Download and trace paths are constrained to OpenClaw temp roots: `/tmp/openclaw{,/downloads}` (fallback: `${os.tmpdir()}/openclaw/...`).
