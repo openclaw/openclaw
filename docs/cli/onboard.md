@@ -69,6 +69,10 @@ does not replace the configured model or save the attempted credential.
 
 On a configured install, running `openclaw onboard` again verifies the current
 default model first, so the same flow acts as a verification and repair pass.
+If that check fails, the configured model is never replaced automatically —
+onboarding stops and asks how to continue. The check runs outside your
+workspace, so a model provided by a workspace plugin can fail here while still
+working in the agent.
 Use `openclaw onboard --classic` for provider-specific auth, channels, skills,
 remote Gateway setup, imports, or full Gateway controls. For conversational
 setup and repair, run `openclaw crestodian`; `openclaw onboard --modern` opens

@@ -243,6 +243,8 @@ export const en = {
       detectedTitle: "AI found",
       detecting: "Looking for AI you already use…",
       enterApiKey: "Enter API key — {label}",
+      existingModelKept:
+        "Your configured default model was kept unchanged. Choose how to continue below — retry it, connect another provider, or exit. The check runs outside your workspace, so a workspace-plugin model can fail here while still working in the agent.",
       escapeHatches:
         "For the full step-by-step wizard, run `openclaw onboard --classic`. You can open plain-language setup help anytime with `openclaw crestodian`.",
       failureAuth: "Authentication failed. Sign in again or check the key.",

@@ -240,6 +240,8 @@ export const zh_TW = {
       detectedTitle: "找到的 AI",
       detecting: "正在尋找你已使用的 AI…",
       enterApiKey: "輸入 API key — {label}",
+      existingModelKept:
+        "已設定的預設模型保持不變。請在下方選擇如何繼續——重試、連接其他提供商，或離開。此檢查在工作區之外執行，因此工作區外掛提供的模型可能在這裡失敗，但在 agent 中仍可正常運作。",
       escapeHatches:
         "如需完整的分步精靈，請執行 `openclaw onboard --classic`。你也可以隨時執行 `openclaw crestodian`，用自然語言取得設定協助。",
       failureAuth: "認證失敗。請重新登入或檢查 key。",

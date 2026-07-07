@@ -76,8 +76,10 @@ Plain `openclaw onboard` follows this path:
    it for reachability.
 
 Re-running the command on a configured installation tests the current default
-model first, making the guided flow a verification and repair pass. Run
-`openclaw channels add` or `openclaw configure` for later additions.
+model first, making the guided flow a verification and repair pass. A failing
+check never replaces the configured model automatically; onboarding stops and
+asks how to continue. Run `openclaw channels add` or `openclaw configure` for
+later additions.
 
 ## Classic wizard: QuickStart vs Advanced
 

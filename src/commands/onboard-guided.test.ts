@@ -155,6 +155,52 @@ describe("runGuidedOnboarding", () => {
     expect(fileLog).toContain("after activation");
   });
 
+  it("never replaces a configured model by fallthrough when its check fails", async () => {
+    const existingModel = {
+      kind: "existing-model",
+      label: "Current model",
+      detail: "already configured",
+      modelRef: "acme/workspace-model",
+      recommended: true,
+      credentials: true,
+    } as const;
+    const select = vi.fn(async () => "action:skip") as unknown as WizardPrompter["select"];
+    const prompter = createWizardPrompter({
+      text: vi.fn(async () => "/tmp/work"),
+      select,
+      confirm: vi.fn(async () => false),
+    });
+    const activate = vi.fn(async () => ({
+      ok: false as const,
+      status: "unavailable" as const,
+      error: "provider not loaded",
+    })) as GuidedOnboardingDeps["activate"];
+    const applySetup = vi.fn<NonNullable<GuidedOnboardingDeps["applySetup"]>>(async () => ({
+      configPath: "/tmp/config",
+      lines: ["Workspace"],
+    }));
+    const deps = setupDeps({
+      prompter,
+      detect: vi.fn(async () =>
+        detection({
+          candidates: [existingModel, candidate("claude-cli", "Claude Code")],
+        }),
+      ),
+      activate,
+      applySetup,
+    });
+
+    await runGuidedOnboarding({ acceptRisk: true }, makeRuntime(), deps);
+
+    // Only the existing model was auto-tested; the other credentialed candidate
+    // must not run (and persist) without the user choosing it.
+    expect(activate).toHaveBeenCalledTimes(1);
+    expect(activate).toHaveBeenCalledWith(expect.objectContaining({ kind: "existing-model" }));
+    const notes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
+    expect(notes).toContain("kept unchanged");
+    expect(select).toHaveBeenCalled();
+  });
+
   it("falls through after an auth failure and surfaces both outcomes", async () => {
     const prompter = createWizardPrompter({
       text: vi.fn(async () => "/tmp/work"),

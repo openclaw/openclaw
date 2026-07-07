@@ -329,6 +329,14 @@ async function runGuidedOnboardingFlow(
       result = { kind: "complete", lines: activationLines(attempt.result) };
       break;
     }
+    // The verification probe runs outside the configured workspace (setup never
+    // executes workspace plugins), so a failing current model can be a false
+    // negative. Never let the ladder silently replace a configured default —
+    // stop and let the user decide in the manual stage.
+    if (candidate.kind === "existing-model") {
+      await prompter.note(t("wizard.guided.existingModelKept"), t("wizard.guided.aiAccessTitle"));
+      break;
+    }
   }
   result ??= await runManualStage({
     detection,
