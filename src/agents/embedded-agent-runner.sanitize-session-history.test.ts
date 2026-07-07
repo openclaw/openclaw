@@ -659,6 +659,7 @@ describe("sanitizeSessionHistory", () => {
               cacheRead: 0.25,
               cacheWrite: 0,
               total: 4,
+              totalOrigin: "provider-billed",
             },
           },
         },
@@ -678,6 +679,7 @@ describe("sanitizeSessionHistory", () => {
         cacheRead: 0.25,
         cacheWrite: 0,
         total: 4,
+        totalOrigin: "provider-billed",
       },
     });
   });

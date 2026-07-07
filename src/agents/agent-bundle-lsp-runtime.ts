@@ -51,7 +51,7 @@ type LspServerCapabilities = {
 };
 
 /** Materialized LSP tools plus session capabilities and cleanup handle. */
-export type BundleLspToolRuntime = {
+type BundleLspToolRuntime = {
   tools: AnyAgentTool[];
   sessions: Array<{ serverName: string; capabilities: LspServerCapabilities }>;
   dispose: () => Promise<void>;

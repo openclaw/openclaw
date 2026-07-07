@@ -4,7 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../../api/types.ts";
 import { DEFAULT_CRON_FORM } from "../../lib/cron/index.ts";
 import { createDefaultDraft, renderCronQuickCreate } from "./quick-create.ts";
-import { renderCron, type CronProps } from "./view.ts";
+import { renderCron } from "./view.ts";
+
+type CronProps = Parameters<typeof renderCron>[0];
 
 function createJob(id: string): CronJob {
   return {

@@ -33,7 +33,7 @@ internal class ScriptedGateway(
   init {
     // Benign defaults so bootstrap/health/commands side requests never fail a scenario.
     respondWith("health", "{}")
-    respondWith("commands.list", """{"commands":[]}""")
+    respondWith("chat.metadata", """{"commands":[],"models":[]}""")
     respondWith("sessions.list", """{"sessions":[]}""")
   }
 

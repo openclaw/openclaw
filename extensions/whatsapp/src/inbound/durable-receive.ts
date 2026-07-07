@@ -29,7 +29,7 @@ export type WhatsAppDurableInboundMetadata = {
   readReceipt?: WhatsAppReadReceiptTarget;
 };
 
-export type WhatsAppDurableInboundCompletedMetadata = {
+type WhatsAppDurableInboundCompletedMetadata = {
   readReceipt?: WhatsAppReadReceiptTarget;
 };
 

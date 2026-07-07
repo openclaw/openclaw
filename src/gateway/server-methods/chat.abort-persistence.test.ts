@@ -1256,3 +1256,51 @@ describe("chat abort transcript persistence", () => {
     expect(persisted).toBeUndefined();
   });
 });
+
+describe("chat.abort session identity matching", () => {
+  it("matches an active run by stored sessionId when sessionKey differs", async () => {
+    const storedSessionId = "sess-stored-abc";
+    setMockSessionEntry("", storedSessionId);
+    const runId = "embedded-run-1";
+    const active = createActiveRun("agent:main:embedded-key", { sessionId: storedSessionId });
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([[runId, active]]),
+    });
+    const respond = vi.fn();
+
+    await invokeChatAbortHandler({
+      handler: chatHandlers["chat.abort"],
+      context,
+      request: { sessionKey: "main" },
+      respond,
+    });
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    expectAbortPayload(payload, { runIds: [runId] });
+    expect(active.controller.signal.aborted).toBe(true);
+    expect(sessionEntryState.loadCalls).toContainEqual({ sessionKey: "main", opts: undefined });
+  });
+
+  it("does not match a run whose sessionId differs from the stored entry", async () => {
+    setMockSessionEntry("", "sess-stored-xyz");
+    const runId = "embedded-run-2";
+    const active = createActiveRun("agent:main:other-key", { sessionId: "sess-different" });
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([[runId, active]]),
+    });
+    const respond = vi.fn();
+
+    await invokeChatAbortHandler({
+      handler: chatHandlers["chat.abort"],
+      context,
+      request: { sessionKey: "main" },
+      respond,
+    });
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    expect(payload).toEqual({ ok: true, aborted: false, runIds: [] });
+    expect(active.controller.signal.aborted).toBe(false);
+  });
+});

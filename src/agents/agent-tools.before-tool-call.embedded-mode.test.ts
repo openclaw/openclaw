@@ -124,6 +124,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     expect(result).toEqual({
       blocked: true,
       kind: "failure",
+      disposition: "failed",
       deniedReason: "plugin-approval",
       reason: "Plugin approval required (gateway unavailable)",
       params: { command: "ls" },
@@ -238,6 +239,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     expect(result).toEqual({
       blocked: true,
       kind: "failure",
+      disposition: "blocked",
       deniedReason: "plugin-approval",
       reason: "Review before running",
       params: { command: "ls" },

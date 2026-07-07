@@ -1,7 +1,7 @@
 // Session goal state tracks objective progress and token budgets in the session store.
 import crypto from "node:crypto";
 import { formatTokenCount } from "../../utils/token-format.js";
-import { getSessionEntry, patchSessionEntry } from "./store.js";
+import { loadSessionEntry, patchSessionEntry } from "./session-accessor.js";
 import { resolveFreshSessionTotalTokens } from "./types.js";
 import type { SessionEntry, SessionGoal, SessionGoalStatus } from "./types.js";
 
@@ -162,7 +162,7 @@ export async function getSessionGoal(
   if (options.persist === false) {
     // Status rendering should not write incidental budget/baseline adoption unless callers opt in.
     const entry =
-      getSessionEntry({ sessionKey: options.sessionKey, storePath: options.storePath }) ??
+      loadSessionEntry({ sessionKey: options.sessionKey, storePath: options.storePath }) ??
       options.fallbackEntry;
     const projected = entry
       ? resolveSessionGoalDisplayState(entry, now, { adoptFreshBaseline: false })
@@ -170,11 +170,9 @@ export async function getSessionGoal(
     return projected ? { status: "found", goal: projected } : { status: "missing" };
   }
   let goal: SessionGoal | undefined;
-  const result = await patchSessionEntry({
-    sessionKey: options.sessionKey,
-    storePath: options.storePath,
-    fallbackEntry: options.fallbackEntry,
-    update: (entry) => {
+  const result = await patchSessionEntry(
+    { sessionKey: options.sessionKey, storePath: options.storePath },
+    (entry) => {
       const accounted = accountGoalUsage(entry, now);
       goal = accounted ? cloneGoal(accounted) : undefined;
       if (!accounted || goalsEqual(accounted, entry.goal)) {
@@ -182,7 +180,8 @@ export async function getSessionGoal(
       }
       return { goal: accounted };
     },
-  });
+    { fallbackEntry: options.fallbackEntry },
+  );
   if (!result || !goal) {
     return { status: "missing" };
   }
@@ -196,11 +195,9 @@ export async function createSessionGoal(options: CreateSessionGoalOptions): Prom
   }
   const now = nowMs(options.now);
   let created: SessionGoal | undefined;
-  const result = await patchSessionEntry({
-    sessionKey: options.sessionKey,
-    storePath: options.storePath,
-    fallbackEntry: options.fallbackEntry,
-    update: (entry) => {
+  const result = await patchSessionEntry(
+    { sessionKey: options.sessionKey, storePath: options.storePath },
+    (entry) => {
       if (entry.goal) {
         throw new Error("goal already exists");
       }
@@ -221,7 +218,8 @@ export async function createSessionGoal(options: CreateSessionGoalOptions): Prom
       };
       return { goal: created };
     },
-  });
+    { fallbackEntry: options.fallbackEntry },
+  );
   if (!result || !created) {
     throw new Error("session not found");
   }
@@ -234,10 +232,9 @@ export async function updateSessionGoalStatus(
   const now = nowMs(options.now);
   let updated: SessionGoal | undefined;
   let foundSession = false;
-  const result = await patchSessionEntry({
-    sessionKey: options.sessionKey,
-    storePath: options.storePath,
-    update: (entry) => {
+  const result = await patchSessionEntry(
+    { sessionKey: options.sessionKey, storePath: options.storePath },
+    (entry) => {
       foundSession = true;
       const accounted = accountGoalUsage(entry, now);
       if (!accounted) {
@@ -280,7 +277,7 @@ export async function updateSessionGoalStatus(
       updated = next;
       return { goal: updated };
     },
-  });
+  );
   if (!result || !updated) {
     throw new Error(foundSession ? "goal not found" : "session not found");
   }
@@ -297,10 +294,9 @@ export async function updateSessionGoalObjective(
   const now = nowMs(options.now);
   let updated: SessionGoal | undefined;
   let foundSession = false;
-  const result = await patchSessionEntry({
-    sessionKey: options.sessionKey,
-    storePath: options.storePath,
-    update: (entry) => {
+  const result = await patchSessionEntry(
+    { sessionKey: options.sessionKey, storePath: options.storePath },
+    (entry) => {
       foundSession = true;
       const accounted = accountGoalUsage(entry, now);
       if (!accounted) {
@@ -313,7 +309,7 @@ export async function updateSessionGoalObjective(
       updated = { ...accounted, objective, updatedAt: now };
       return { goal: updated };
     },
-  });
+  );
   if (!result || !updated) {
     throw new Error(foundSession ? "goal not found" : "session not found");
   }
@@ -322,16 +318,15 @@ export async function updateSessionGoalObjective(
 
 export async function clearSessionGoal(options: SessionGoalStoreOptions): Promise<boolean> {
   let removed = false;
-  const result = await patchSessionEntry({
-    sessionKey: options.sessionKey,
-    storePath: options.storePath,
-    update: (entry) => {
+  const result = await patchSessionEntry(
+    { sessionKey: options.sessionKey, storePath: options.storePath },
+    (entry) => {
       if (!entry.goal) {
         return null;
       }
       removed = true;
       return { goal: undefined };
     },
-  });
+  );
   return Boolean(result && removed);
 }

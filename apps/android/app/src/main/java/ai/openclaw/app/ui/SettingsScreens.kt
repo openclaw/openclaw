@@ -18,11 +18,13 @@ import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NotificationPackageFilterMode
 import ai.openclaw.app.SensitiveFeatureConfig
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gatewayTalkSetupDescription
 import ai.openclaw.app.gatewayTalkSetupStatusText
 import ai.openclaw.app.hasPhotoReadPermission
 import ai.openclaw.app.isReady
 import ai.openclaw.app.loadAndroidLicenseNotices
+import ai.openclaw.app.locationModeAfterBackgroundSettings
 import ai.openclaw.app.node.DeviceNotificationListenerService
 import ai.openclaw.app.photoReadPermissionsForRequest
 import ai.openclaw.app.ui.design.ClawDetailRow
@@ -41,6 +43,7 @@ import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawTextBadge
 import ai.openclaw.app.ui.design.ClawTextField
 import ai.openclaw.app.ui.design.ClawTheme
+import ai.openclaw.app.ui.design.OpenClawMascot
 import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -82,10 +85,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.filled.ScreenShare
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.GraphicEq
@@ -120,6 +125,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -858,28 +864,98 @@ private fun PhoneCapabilitiesScreen(
   val canvasDebugStatusEnabled by viewModel.canvasDebugStatusEnabled.collectAsState()
   val installedAppsSharingEnabled by viewModel.installedAppsSharingEnabled.collectAsState()
   val photosAvailable = remember { SensitiveFeatureConfig.photosEnabled }
+  val backgroundLocationAvailable = remember { SensitiveFeatureConfig.backgroundLocationEnabled }
   val photoPermissions = remember { photoReadPermissionsForRequest() }
   var photosGranted by remember { mutableStateOf(photosAvailable && hasPhotoReadPermission(context)) }
+  var pendingLocationModeRaw by rememberSaveable { mutableStateOf<String?>(null) }
+  var pendingAlwaysPreviousModeRaw by rememberSaveable { mutableStateOf<String?>(null) }
+  var awaitingBackgroundSettings by rememberSaveable { mutableStateOf(false) }
+  var showBackgroundLocationExplanation by rememberSaveable { mutableStateOf(false) }
+  var pendingPreciseLocation by rememberSaveable { mutableStateOf(false) }
+  val backgroundPermissionLabel =
+    remember(context) {
+      context.packageManager.backgroundPermissionOptionLabel.toString().trim().ifEmpty {
+        "Allow all the time"
+      }
+    }
   val cameraPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
       viewModel.setCameraEnabled(granted)
     }
   val locationPermissionLauncher =
-    rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
-      val granted = grants[Manifest.permission.ACCESS_FINE_LOCATION] == true || grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true
-      viewModel.setLocationMode(if (granted) LocationMode.WhileUsing else LocationMode.Off)
-      viewModel.setLocationPreciseEnabled(grants[Manifest.permission.ACCESS_FINE_LOCATION] == true)
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { _ ->
+      val foregroundGranted = hasLocationPermission(context)
+      val fineGranted = hasPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
+      if (pendingPreciseLocation) {
+        pendingPreciseLocation = false
+        viewModel.setLocationPreciseEnabled(fineGranted)
+        if (foregroundGranted && locationMode == LocationMode.Off) {
+          viewModel.setLocationMode(LocationMode.WhileUsing)
+        }
+        return@rememberLauncherForActivityResult
+      }
+
+      val requestedMode = LocationMode.fromRawValue(pendingLocationModeRaw)
+      pendingLocationModeRaw = null
+      when (requestedMode) {
+        LocationMode.WhileUsing ->
+          viewModel.setLocationMode(
+            if (foregroundGranted) LocationMode.WhileUsing else LocationMode.Off,
+          )
+        LocationMode.Always -> {
+          if (foregroundGranted) {
+            viewModel.setLocationMode(LocationMode.WhileUsing)
+            showBackgroundLocationExplanation = true
+          } else {
+            viewModel.setLocationMode(LocationMode.Off)
+            pendingAlwaysPreviousModeRaw = null
+          }
+        }
+        LocationMode.Off -> Unit
+      }
+      viewModel.setLocationPreciseEnabled(fineGranted)
     }
   val photoPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
       photosGranted = photosAvailable && hasPhotoReadPermission(context)
     }
 
-  DisposableEffect(lifecycleOwner, context, photosAvailable) {
+  DisposableEffect(
+    lifecycleOwner,
+    context,
+    photosAvailable,
+    backgroundLocationAvailable,
+    locationMode,
+    awaitingBackgroundSettings,
+    pendingAlwaysPreviousModeRaw,
+  ) {
     val observer =
       LifecycleEventObserver { _, event ->
         if (event == Lifecycle.Event.ON_RESUME) {
           photosGranted = photosAvailable && hasPhotoReadPermission(context)
+          val foregroundGranted = hasLocationPermission(context)
+          val backgroundGranted = hasBackgroundLocationPermission(context)
+          if (awaitingBackgroundSettings && pendingAlwaysPreviousModeRaw != null) {
+            val previousMode = LocationMode.fromRawValue(pendingAlwaysPreviousModeRaw)
+            viewModel.setLocationMode(
+              locationModeAfterBackgroundSettings(
+                previousMode = previousMode,
+                foregroundGranted = foregroundGranted,
+                backgroundGranted = backgroundGranted,
+              ),
+            )
+            awaitingBackgroundSettings = false
+            pendingAlwaysPreviousModeRaw = null
+          } else if (
+            locationMode == LocationMode.Always &&
+            (!backgroundLocationAvailable || !foregroundGranted || !backgroundGranted)
+          ) {
+            viewModel.setLocationMode(
+              if (foregroundGranted) LocationMode.WhileUsing else LocationMode.Off,
+            )
+          } else if (locationMode == LocationMode.WhileUsing && !foregroundGranted) {
+            viewModel.setLocationMode(LocationMode.Off)
+          }
         }
       }
     lifecycleOwner.lifecycle.addObserver(observer)
@@ -899,14 +975,40 @@ private fun PhoneCapabilitiesScreen(
   }
 
   fun setLocationAccess(mode: LocationMode) {
-    if (mode == LocationMode.Off) {
-      viewModel.setLocationMode(LocationMode.Off)
-      return
-    }
-    if (hasLocationPermission(context)) {
-      viewModel.setLocationMode(LocationMode.WhileUsing)
-    } else {
-      locationPermissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+    when (mode) {
+      LocationMode.Off -> viewModel.setLocationMode(LocationMode.Off)
+      LocationMode.WhileUsing -> {
+        if (hasLocationPermission(context)) {
+          viewModel.setLocationMode(LocationMode.WhileUsing)
+        } else {
+          pendingLocationModeRaw = mode.rawValue
+          locationPermissionLauncher.launch(
+            arrayOf(
+              Manifest.permission.ACCESS_FINE_LOCATION,
+              Manifest.permission.ACCESS_COARSE_LOCATION,
+            ),
+          )
+        }
+      }
+      LocationMode.Always -> {
+        if (!backgroundLocationAvailable) return
+        if (hasLocationPermission(context) && hasBackgroundLocationPermission(context)) {
+          viewModel.setLocationMode(LocationMode.Always)
+          return
+        }
+        pendingAlwaysPreviousModeRaw = locationMode.rawValue
+        if (hasLocationPermission(context)) {
+          showBackgroundLocationExplanation = true
+        } else {
+          pendingLocationModeRaw = mode.rawValue
+          locationPermissionLauncher.launch(
+            arrayOf(
+              Manifest.permission.ACCESS_FINE_LOCATION,
+              Manifest.permission.ACCESS_COARSE_LOCATION,
+            ),
+          )
+        }
+      }
     }
   }
 
@@ -917,9 +1019,17 @@ private fun PhoneCapabilitiesScreen(
     }
     if (hasPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)) {
       viewModel.setLocationPreciseEnabled(true)
-      viewModel.setLocationMode(LocationMode.WhileUsing)
+      if (locationMode == LocationMode.Off) {
+        viewModel.setLocationMode(LocationMode.WhileUsing)
+      }
     } else {
-      locationPermissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+      pendingPreciseLocation = true
+      locationPermissionLauncher.launch(
+        arrayOf(
+          Manifest.permission.ACCESS_FINE_LOCATION,
+          Manifest.permission.ACCESS_COARSE_LOCATION,
+        ),
+      )
     }
   }
 
@@ -963,12 +1073,61 @@ private fun PhoneCapabilitiesScreen(
       Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(text = "Location", style = ClawTheme.type.section, color = ClawTheme.colors.text)
         ClawSegmentedControl(
-          options = listOf("Off", "While Using"),
-          selected = if (locationMode == LocationMode.WhileUsing) "While Using" else "Off",
-          onSelect = { selected -> setLocationAccess(if (selected == "While Using") LocationMode.WhileUsing else LocationMode.Off) },
+          options = locationModeLabels(backgroundLocationAvailable),
+          selected = locationMode.displayLabel,
+          onSelect = { selected -> setLocationAccess(locationModeForLabel(selected)) },
         )
+        if (backgroundLocationAvailable) {
+          Text(
+            text = "Always allows requested location checks while OpenClaw is in the background; Android shows this in the persistent node notification.",
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted,
+          )
+        }
       }
     }
+  }
+
+  if (showBackgroundLocationExplanation) {
+    fun cancelBackgroundLocationRequest() {
+      val previousMode = LocationMode.fromRawValue(pendingAlwaysPreviousModeRaw)
+      viewModel.setLocationMode(
+        locationModeAfterBackgroundSettings(
+          previousMode = previousMode,
+          foregroundGranted = hasLocationPermission(context),
+          backgroundGranted = hasBackgroundLocationPermission(context),
+        ),
+      )
+      pendingAlwaysPreviousModeRaw = null
+      showBackgroundLocationExplanation = false
+    }
+
+    AlertDialog(
+      onDismissRequest = ::cancelBackgroundLocationRequest,
+      title = { Text("Allow background location?") },
+      text = {
+        Text(
+          "OpenClaw only checks location when your paired Gateway requests it. " +
+            "On the next Android screen, choose $backgroundPermissionLabel to allow checks while the app is in the background.",
+        )
+      },
+      confirmButton = {
+        TextButton(
+          onClick = {
+            showBackgroundLocationExplanation = false
+            awaitingBackgroundSettings = true
+            openAppPermissionSettings(context)
+          },
+        ) {
+          Text("Open Settings")
+        }
+      },
+      dismissButton = {
+        TextButton(onClick = ::cancelBackgroundLocationRequest) {
+          Text("Not Now")
+        }
+      },
+    )
   }
 }
 
@@ -984,6 +1143,8 @@ private fun GatewaySettingsScreen(
   val manualHost by viewModel.manualHost.collectAsState()
   val manualPort by viewModel.manualPort.collectAsState()
   val manualTls by viewModel.manualTls.collectAsState()
+  val pairedGateways by viewModel.pairedGateways.collectAsState()
+  val activeGatewayStableId by viewModel.activeGatewayStableId.collectAsState()
   var setupCode by remember { mutableStateOf("") }
   var hostInput by remember(manualHost) { mutableStateOf(manualHost.ifBlank { "127.0.0.1" }) }
   var portInput by remember(manualPort) { mutableStateOf(manualPort.toString()) }
@@ -994,6 +1155,7 @@ private fun GatewaySettingsScreen(
   var validationText by remember { mutableStateOf<String?>(null) }
   var showSetupCodeHelp by remember { mutableStateOf(false) }
   var pendingSetupResetPlan by remember { mutableStateOf<GatewayConnectPlan?>(null) }
+  var pendingForgetStableId by remember { mutableStateOf<String?>(null) }
 
   fun saveAndConnect(plan: GatewayConnectPlan) {
     validationText = null
@@ -1030,6 +1192,29 @@ private fun GatewaySettingsScreen(
     )
   }
 
+  pendingForgetStableId?.let { stableId ->
+    val entry = pairedGateways.firstOrNull { it.stableId == stableId }
+    AlertDialog(
+      onDismissRequest = { pendingForgetStableId = null },
+      title = { Text("Forget gateway?") },
+      text = { Text("Remove ${entry?.name ?: "this gateway"} and its saved credentials from this phone?") },
+      confirmButton = {
+        TextButton(
+          onClick = {
+            pendingForgetStableId = null
+            viewModel.forgetGateway(stableId)
+          },
+        ) {
+          Text("Forget")
+        }
+      },
+      dismissButton = {
+        TextButton(onClick = { pendingForgetStableId = null }) { Text("Cancel") }
+      },
+      containerColor = ClawTheme.colors.surface,
+    )
+  }
+
   SettingsDetailFrame(title = "Gateway", subtitle = "Connection between this phone and OpenClaw.", icon = Icons.Default.Cloud, onBack = onBack) {
     SettingsMetricPanel(
       rows =
@@ -1049,17 +1234,61 @@ private fun GatewaySettingsScreen(
       ClawSecondaryButton(text = "Disconnect", onClick = viewModel::disconnect, modifier = Modifier.weight(1f))
     }
     ClawPanel {
+      Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(text = "Gateways", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        if (pairedGateways.isEmpty()) {
+          Text(text = "No paired gateways.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+        } else {
+          pairedGateways.forEachIndexed { index, entry ->
+            if (index > 0) HorizontalDivider(color = ClawTheme.colors.border)
+            ClawListItem(
+              title = entry.name,
+              subtitle =
+                when (entry.kind) {
+                  GatewayRegistryEntryKind.MANUAL -> "${entry.host}:${entry.port}"
+                  GatewayRegistryEntryKind.DISCOVERED -> entry.stableId
+                },
+              leading = {
+                if (entry.stableId == activeGatewayStableId) {
+                  ClawIconBadge(Icons.Default.Check)
+                } else {
+                  ClawIconBadge(Icons.Default.Cloud)
+                }
+              },
+              trailing = {
+                TextButton(onClick = { pendingForgetStableId = entry.stableId }) {
+                  Text("Forget")
+                }
+              },
+              onClick =
+                if (entry.stableId == activeGatewayStableId) {
+                  null
+                } else {
+                  { viewModel.switchToGateway(entry.stableId) }
+                },
+            )
+          }
+        }
+        ClawSecondaryButton(
+          text = "Add gateway",
+          onClick = viewModel::pairNewGateway,
+          modifier = Modifier.fillMaxWidth(),
+          icon = Icons.Default.QrCode2,
+        )
+      }
+    }
+    ClawPanel {
       Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(text = "Pair New Gateway", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        Text(text = "Gateway setup", style = ClawTheme.type.section, color = ClawTheme.colors.text)
         Text(
-          text = "Clear this phone's saved gateway access and scan a fresh setup code.",
+          text = "Scan or paste a setup code to add another gateway.",
           style = ClawTheme.type.body,
           color = ClawTheme.colors.textMuted,
           maxLines = 2,
           overflow = TextOverflow.Ellipsis,
         )
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-          ClawSecondaryButton(text = "Pair New Gateway", onClick = viewModel::pairNewGateway, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.QrCode2)
+          ClawSecondaryButton(text = "Add gateway", onClick = viewModel::pairNewGateway, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.QrCode2)
           ClawSecondaryButton(text = "Setup Code", onClick = { showSetupCodeHelp = !showSetupCodeHelp }, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.Info)
         }
         if (showSetupCodeHelp) {
@@ -1161,6 +1390,28 @@ internal fun appearanceThemeOptions(): List<String> = AppearanceThemeMode.entrie
 
 internal fun appearanceThemeModeForLabel(label: String): AppearanceThemeMode = AppearanceThemeMode.fromDisplayLabel(label)
 
+internal fun locationModeLabels(backgroundLocationAvailable: Boolean): List<String> =
+  if (backgroundLocationAvailable) {
+    listOf("Off", "While Using", "Always")
+  } else {
+    listOf("Off", "While Using")
+  }
+
+internal fun locationModeForLabel(label: String): LocationMode =
+  when (label) {
+    "While Using" -> LocationMode.WhileUsing
+    "Always" -> LocationMode.Always
+    else -> LocationMode.Off
+  }
+
+private val LocationMode.displayLabel: String
+  get() =
+    when (this) {
+      LocationMode.Off -> "Off"
+      LocationMode.WhileUsing -> "While Using"
+      LocationMode.Always -> "Always"
+    }
+
 /** Converts raw gateway connection text into stable settings metric labels. */
 internal fun gatewayStatusLabel(
   statusText: String,
@@ -1197,6 +1448,7 @@ private fun AboutSettingsScreen(
   val currentGatewayVersion = updateAvailable?.currentVersion?.takeIf { it.isNotBlank() } ?: gatewayVersion
 
   SettingsDetailFrame(title = "About", subtitle = "OpenClaw for Android.", icon = Icons.Default.Info, onBack = onBack) {
+    AboutHeroPanel()
     SettingsMetricPanel(
       rows =
         listOf(
@@ -1222,6 +1474,66 @@ private fun AboutSettingsScreen(
     ClawPanel {
       Text(text = aboutUpdateText(latestVersion = latestVersion), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
     }
+    AboutLinksPanel()
+    Text(
+      text = "© 2026 OpenClaw Foundation — MIT License.",
+      style = ClawTheme.type.caption,
+      color = ClawTheme.colors.textSubtle,
+      modifier = Modifier.fillMaxWidth(),
+      textAlign = TextAlign.Center,
+    )
+  }
+}
+
+@Composable
+private fun AboutHeroPanel() {
+  ClawPanel {
+    Column(
+      modifier = Modifier.fillMaxWidth(),
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      OpenClawMascot(contentDescription = "OpenClaw logo", modifier = Modifier.size(96.dp))
+      Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(text = "OpenClaw", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        Text(text = "Personal AI on your devices", style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+      }
+    }
+  }
+}
+
+/** External project links; static first-party URLs matching the iOS and macOS About screens. */
+private data class AboutLink(
+  val title: String,
+  val subtitle: String,
+  val url: String,
+)
+
+private val aboutLinks =
+  listOf(
+    AboutLink("Website", "openclaw.ai", "https://openclaw.ai"),
+    AboutLink("Docs", "docs.openclaw.ai", "https://docs.openclaw.ai"),
+    AboutLink("GitHub", "github.com/openclaw/openclaw", "https://github.com/openclaw/openclaw"),
+    AboutLink("Discord", "discord.gg/clawd", "https://discord.gg/clawd"),
+  )
+
+@Composable
+private fun AboutLinksPanel() {
+  val uriHandler = LocalUriHandler.current
+  ClawListPanel(items = aboutLinks) { link ->
+    ClawListItem(
+      title = link.title,
+      subtitle = link.subtitle,
+      onClick = { uriHandler.openUri(link.url) },
+      trailing = {
+        Icon(
+          imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+          contentDescription = null,
+          tint = ClawTheme.colors.textSubtle,
+          modifier = Modifier.size(16.dp),
+        )
+      },
+    )
   }
 }
 
@@ -1972,6 +2284,8 @@ private fun hasPermission(
 private fun hasLocationPermission(context: Context): Boolean =
   hasPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ||
     hasPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION)
+
+private fun hasBackgroundLocationPermission(context: Context): Boolean = hasPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION)
 
 private fun openNotificationListenerSettings(context: Context) {
   val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

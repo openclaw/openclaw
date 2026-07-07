@@ -96,6 +96,17 @@ type FrameRow = {
   idle: number;
 };
 
+type BatchRow = {
+  id: number;
+  day: string;
+  start_ms: number;
+  end_ms: number;
+  status: LogbookBatchStatus;
+  error: string | null;
+  frame_count: number;
+  model: string | null;
+};
+
 type CardRow = {
   id: number;
   day: string;
@@ -122,6 +133,19 @@ function toFrame(row: FrameRow): LogbookFrame {
     height: row.height ?? undefined,
     byteSize: row.byte_size,
     idle: row.idle === 1,
+  };
+}
+
+function toBatch(row: BatchRow): LogbookBatch {
+  return {
+    id: row.id,
+    day: row.day,
+    startMs: row.start_ms,
+    endMs: row.end_ms,
+    status: row.status,
+    error: row.error ?? undefined,
+    frameCount: row.frame_count,
+    model: row.model ?? undefined,
   };
 }
 
@@ -312,31 +336,8 @@ export class LogbookStore {
         `SELECT id, day, start_ms, end_ms, status, error, frame_count, model
          FROM batches ORDER BY id DESC LIMIT 1`,
       )
-      .get() as
-      | {
-          id: number;
-          day: string;
-          start_ms: number;
-          end_ms: number;
-          status: LogbookBatchStatus;
-          error: string | null;
-          frame_count: number;
-          model: string | null;
-        }
-      | undefined;
-    if (!row) {
-      return null;
-    }
-    return {
-      id: row.id,
-      day: row.day,
-      startMs: row.start_ms,
-      endMs: row.end_ms,
-      status: row.status,
-      error: row.error ?? undefined,
-      frameCount: row.frame_count,
-      model: row.model ?? undefined,
-    };
+      .get() as BatchRow | undefined;
+    return row ? toBatch(row) : null;
   }
 
   /** Requeues batches stuck in `running` after a crash so frames are not orphaned. */
@@ -362,31 +363,8 @@ export class LogbookStore {
         `SELECT id, day, start_ms, end_ms, status, error, frame_count, model
          FROM batches WHERE status = 'pending' ORDER BY start_ms ASC LIMIT 1`,
       )
-      .get() as
-      | {
-          id: number;
-          day: string;
-          start_ms: number;
-          end_ms: number;
-          status: LogbookBatchStatus;
-          error: string | null;
-          frame_count: number;
-          model: string | null;
-        }
-      | undefined;
-    if (!row) {
-      return null;
-    }
-    return {
-      id: row.id,
-      day: row.day,
-      startMs: row.start_ms,
-      endMs: row.end_ms,
-      status: row.status,
-      error: row.error ?? undefined,
-      frameCount: row.frame_count,
-      model: row.model ?? undefined,
-    };
+      .get() as BatchRow | undefined;
+    return row ? toBatch(row) : null;
   }
 
   batchFrames(batchId: number): LogbookFrame[] {

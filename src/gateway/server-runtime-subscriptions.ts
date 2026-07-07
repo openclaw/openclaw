@@ -1,12 +1,16 @@
 // Gateway event subscription wiring for agent, heartbeat, transcript, and lifecycle broadcasts.
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { createAgentEventAuditRecorder } from "../audit/agent-event-audit.js";
+import { isAuditLedgerEnabled } from "../audit/audit-config.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
+import { clearAgentRunContext, onAgentAuditEvent, onAgentEvent } from "../infra/agent-events.js";
+import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
+import type { TaskRegistryObserverEvent } from "../tasks/task-registry.store.js";
 import {
   type ChatAbortControllerEntry,
   removeChatAbortControllerEntry,
@@ -19,6 +23,7 @@ import type {
   ToolEventRecipientRegistry,
 } from "./server-chat-state.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
+import { mapTaskSummary, type TaskEventPayload } from "./server-methods/task-summary.js";
 
 function dispatchEventHandler<TEvent>(params: {
   loadHandler: () => Promise<(event: TEvent) => unknown>;
@@ -54,6 +59,18 @@ export function startGatewayEventSubscriptions(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   restartRecoveryCandidates: Map<string, RestartRecoveryCandidate>;
 }) {
+  // audit.enabled=false stops ledger writes entirely; reads over existing
+  // records keep working. Resolved once at gateway startup like the other
+  // runtime subscriptions.
+  const auditRecorder = isAuditLedgerEnabled(getRuntimeConfig())
+    ? createAgentEventAuditRecorder()
+    : undefined;
+  const unsubscribePrivateAuditEvents = auditRecorder
+    ? onAgentAuditEvent(auditRecorder.record)
+    : undefined;
+  const unsubscribeToolAuditEvents = auditRecorder
+    ? onTrustedToolExecutionEvent(auditRecorder.recordTool)
+    : undefined;
   const getAgentEventHandler = createLazyPromise(
     () => {
       // Lazy-load heavy chat modules only after the first agent event reaches the gateway.
@@ -218,7 +235,8 @@ export function startGatewayEventSubscriptions(params: {
     return lifecycleEventHandlerPromise;
   };
 
-  const agentUnsub = onAgentEvent((evt) => {
+  const unsubscribeAgentEvents = onAgentEvent((evt) => {
+    auditRecorder?.record(evt);
     const lifecyclePhase =
       evt.stream === "lifecycle" && typeof evt.data?.phase === "string"
         ? evt.data.phase
@@ -269,6 +287,12 @@ export function startGatewayEventSubscriptions(params: {
       context: { runId: evt.runId, stream: evt.stream },
     });
   });
+  const agentUnsub = async () => {
+    unsubscribeAgentEvents();
+    unsubscribePrivateAuditEvents?.();
+    unsubscribeToolAuditEvents?.();
+    await auditRecorder?.stop();
+  };
 
   const heartbeatUnsub = onHeartbeatEvent((evt) => {
     params.broadcast("heartbeat", evt, { dropIfSlow: true });
@@ -294,10 +318,53 @@ export function startGatewayEventSubscriptions(params: {
     });
   });
 
+  let taskObserverDisposed = false;
+  const taskObservers = {
+    onEvent: (event: TaskRegistryObserverEvent) => {
+      let payload: TaskEventPayload;
+      switch (event.kind) {
+        case "upserted":
+          payload = { action: "upserted", task: mapTaskSummary(event.task) };
+          break;
+        case "deleted":
+          payload = { action: "deleted", taskId: event.taskId };
+          break;
+        case "restored":
+          payload = { action: "restored" };
+          break;
+      }
+      params.broadcast("task", payload, { dropIfSlow: true });
+    },
+  };
+  const taskObserverRuntimePromise = import("../tasks/task-registry.store.js").then((module) => {
+    if (!taskObserverDisposed) {
+      module.configureTaskRegistryRuntime({ observers: taskObservers });
+    }
+    return module;
+  });
+  void taskObserverRuntimePromise.catch((error: unknown) => {
+    params.log.warn("Task registry observer registration failed", { error });
+  });
+  // The observer slot is a process-wide singleton. Cleanup returns its promise
+  // so shutdown can await it, and only clears the slot when it still holds
+  // this subscription's observer — a replacement gateway may have registered
+  // its own observer before a stale deferred dispose runs.
+  const taskUnsub = () => {
+    taskObserverDisposed = true;
+    return taskObserverRuntimePromise
+      .then((module) => {
+        if (module.getTaskRegistryObservers() === taskObservers) {
+          module.configureTaskRegistryRuntime({ observers: null });
+        }
+      })
+      .catch(() => undefined);
+  };
+
   return {
     agentUnsub,
     heartbeatUnsub,
     transcriptUnsub,
     lifecycleUnsub,
+    taskUnsub,
   };
 }

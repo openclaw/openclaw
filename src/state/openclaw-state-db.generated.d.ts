@@ -80,6 +80,26 @@ export interface ApnsRegistrations {
   updated_at_ms: number;
 }
 
+export interface AuditEvents {
+  action: string;
+  actor_id: string;
+  actor_type: string;
+  agent_id: string;
+  error_code: string | null;
+  event_id: string;
+  kind: string;
+  occurred_at: number;
+  run_id: string;
+  sequence: Generated<number>;
+  session_id: string | null;
+  session_key: string | null;
+  source_id: string;
+  source_sequence: number;
+  status: string;
+  tool_call_id: string | null;
+  tool_name: string | null;
+}
+
 export interface AuthProfileState {
   state_json: string;
   store_key: string;
@@ -183,6 +203,24 @@ export interface ChannelPairingRequests {
   last_seen_at: string;
   meta_json: string | null;
   request_id: string;
+}
+
+export interface ClawhubPromotionClaims {
+  claimed_at_ms: number;
+  ends_at_ms: number;
+  model_keys_json: string;
+  provider: string | null;
+  slug: string;
+}
+
+export interface ClawhubPromotionsFeedState {
+  etag: string | null;
+  feed_sequence: number | null;
+  last_checked_at_ms: number | null;
+  notified_slugs_json: Generated<string>;
+  payload_json: string | null;
+  state_key: string;
+  updated_at_ms: number;
 }
 
 export interface CommandLogEntries {
@@ -779,6 +817,25 @@ export interface SchemaMeta {
   updated_at: number;
 }
 
+export interface SkillCuratorState {
+  id: Generated<number>;
+  last_attempt_at_ms: number;
+  last_error: string | null;
+  last_result_json: string;
+  last_success_at_ms: number | null;
+}
+
+export interface SkillLifecycle {
+  archived_reason: string | null;
+  created_at_ms: number;
+  pinned: Generated<number>;
+  skill_file: string;
+  skill_key: string;
+  skill_name: string;
+  state: string;
+  state_changed_at_ms: number;
+}
+
 export interface SkillUploads {
   actual_sha256: string | null;
   archive_blob: Uint8Array;
@@ -794,6 +851,17 @@ export interface SkillUploads {
   size_bytes: number;
   slug: string;
   upload_id: string;
+}
+
+export interface SkillUsage {
+  first_used_at_ms: number;
+  last_agent_id: string | null;
+  last_used_at_ms: number;
+  skill_file: string;
+  skill_key: string;
+  skill_name: string;
+  skill_source: string;
+  use_count: number;
 }
 
 export interface StateLeases {
@@ -991,6 +1059,7 @@ export interface DB {
   agent_model_catalogs: AgentModelCatalogs;
   android_notification_recent_packages: AndroidNotificationRecentPackages;
   apns_registrations: ApnsRegistrations;
+  audit_events: AuditEvents;
   auth_profile_state: AuthProfileState;
   auth_profile_stores: AuthProfileStores;
   backup_runs: BackupRuns;
@@ -1000,6 +1069,8 @@ export interface DB {
   channel_ingress_events: ChannelIngressEvents;
   channel_pairing_allow_entries: ChannelPairingAllowEntries;
   channel_pairing_requests: ChannelPairingRequests;
+  clawhub_promotion_claims: ClawhubPromotionClaims;
+  clawhub_promotions_feed_state: ClawhubPromotionsFeedState;
   command_log_entries: CommandLogEntries;
   commitments: Commitments;
   config_health_entries: ConfigHealthEntries;
@@ -1037,7 +1108,10 @@ export interface DB {
   plugin_state_entries: PluginStateEntries;
   sandbox_registry_entries: SandboxRegistryEntries;
   schema_meta: SchemaMeta;
+  skill_curator_state: SkillCuratorState;
+  skill_lifecycle: SkillLifecycle;
   skill_uploads: SkillUploads;
+  skill_usage: SkillUsage;
   state_leases: StateLeases;
   subagent_runs: SubagentRuns;
   task_delivery_state: TaskDeliveryState;

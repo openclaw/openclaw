@@ -107,6 +107,50 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
 }
 
 describe("renderUsage", () => {
+  it("keeps selected session labels on UTF-16 boundaries", () => {
+    const container = document.createElement("div");
+    const label = `${"a".repeat(19)}🚀${"b".repeat(28)}🚀tail`;
+    const session = {
+      key: "agent:main:emoji",
+      label,
+      agentId: "main",
+      updatedAt: Date.now(),
+      usage: {
+        input: 1,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 1,
+        totalCost: 0,
+        inputCost: 0,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 0,
+      },
+    } satisfies UsageProps["data"]["sessions"][number];
+
+    render(
+      renderUsage(
+        createUsageProps({
+          data: { ...createUsageProps().data, sessions: [session] },
+          filters: {
+            ...createUsageProps().filters,
+            selectedSessions: [session.key],
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".filter-chip-label")?.textContent).toContain(
+      `${"a".repeat(19)}…`,
+    );
+    expect(container.querySelector(".session-detail-title")?.textContent?.trim()).toBe(
+      `${"a".repeat(19)}🚀${"b".repeat(28)}…`,
+    );
+  });
+
   it("omits the duplicate inner page heading because the shell owns tab headings", () => {
     const container = document.createElement("div");
 
@@ -189,6 +233,77 @@ describe("renderUsage", () => {
     expect(card?.textContent).toContain("75% left");
     expect(card?.textContent).toContain("$64.50");
     expect(card?.textContent).toContain("$5.00 / $20.00");
+  });
+
+  it("renders provider-reported cost history and attribution", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderUsage(
+        createUsageProps({
+          data: {
+            ...createUsageProps().data,
+            providerUsage: [
+              {
+                provider: "openai",
+                displayName: "OpenAI",
+                plan: "Admin API",
+                windows: [],
+                costHistory: {
+                  unit: "USD",
+                  periodDays: 30,
+                  daily: [
+                    {
+                      date: new Date().toISOString().slice(0, 10),
+                      amount: 12.5,
+                      requests: 42,
+                      inputTokens: 1_000,
+                      cacheReadTokens: 400,
+                      cacheWriteTokens: 0,
+                      outputTokens: 250,
+                      totalTokens: 1_250,
+                    },
+                    {
+                      date: "2026-01-01",
+                      amount: 0,
+                      requests: 1,
+                      inputTokens: 50,
+                      cacheReadTokens: 0,
+                      cacheWriteTokens: 0,
+                      outputTokens: 10,
+                      totalTokens: 60,
+                    },
+                  ],
+                  models: [
+                    {
+                      name: "gpt-5.5",
+                      requests: 42,
+                      inputTokens: 1_000,
+                      cacheReadTokens: 400,
+                      cacheWriteTokens: 0,
+                      outputTokens: 250,
+                      totalTokens: 1_250,
+                    },
+                  ],
+                  categories: [{ name: "Responses", amount: 12.5 }],
+                },
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+
+    const card = container.querySelector(".provider-usage-card");
+    expect(card?.textContent).toContain("$12.50");
+    expect(card?.textContent).toContain("43 requests");
+    expect(card?.textContent).toContain("gpt-5.5");
+    expect(card?.textContent).toContain("Responses");
+    const bars = card?.querySelectorAll<HTMLElement>(".provider-cost-chart span");
+    expect(bars).toHaveLength(2);
+    expect(bars?.[0]?.style.height).toBe("100%");
+    expect(bars?.[1]?.style.height).toBe("0%");
   });
 
   it("filters visible sessions when an agent scope is selected", () => {

@@ -330,6 +330,10 @@ fall back to generic credential resolution for usage/status surfaces. Return
 must suppress generic API-key/OAuth fallback, and return `null` or `undefined`
 when the provider did not handle usage auth.
 
+Declare organization or billing credentials in manifest
+`providerUsageAuthEnvVars`. This lets generic discovery and secret-scrubbing
+surfaces recognize them without making them inference auth candidates.
+
 ### Provider example
 
 ```ts

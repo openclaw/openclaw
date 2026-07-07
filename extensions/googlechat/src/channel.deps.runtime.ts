@@ -26,5 +26,6 @@ export {
   isGoogleChatSpaceTarget,
   isGoogleChatUserTarget,
   normalizeGoogleChatTarget,
+  resolveGoogleChatOutboundSessionRoute,
   resolveGoogleChatOutboundSpace,
 } from "./targets.js";

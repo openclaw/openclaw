@@ -104,7 +104,7 @@ function resolveIsolatedCronPromptCacheKey(params: {
 }
 
 /** Detects single-line cron prompts that look like shell commands or command invocations. */
-export function isCommandStyleCronMessage(message: string): boolean {
+function isCommandStyleCronMessage(message: string): boolean {
   const trimmed = message.trim();
   if (!trimmed || trimmed.includes("\n")) {
     return false;

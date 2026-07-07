@@ -15,7 +15,7 @@ function stripAnsi(text: string): string {
   return text.replace(OSC8_LINK_RE, "").replace(SGR_RE, "");
 }
 
-export type OverviewLogTailProps = {
+type OverviewLogTailProps = {
   lines: string[];
   onRefreshLogs: () => void;
 };

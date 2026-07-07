@@ -45,17 +45,19 @@ private class InMemoryDeviceAuthStore : DeviceAuthTokenStore {
   private val tokens = mutableMapOf<String, DeviceAuthEntry>()
 
   override fun loadEntry(
+    gatewayId: String,
     deviceId: String,
     role: String,
-  ): DeviceAuthEntry? = tokens["${deviceId.trim()}|${role.trim()}"]
+  ): DeviceAuthEntry? = tokens["${gatewayId.trim()}|${deviceId.trim()}|${role.trim()}"]
 
   override fun saveToken(
+    gatewayId: String,
     deviceId: String,
     role: String,
     token: String,
     scopes: List<String>,
   ) {
-    tokens["${deviceId.trim()}|${role.trim()}"] =
+    tokens["${gatewayId.trim()}|${deviceId.trim()}|${role.trim()}"] =
       DeviceAuthEntry(
         token = token.trim(),
         role = role.trim(),
@@ -65,10 +67,11 @@ private class InMemoryDeviceAuthStore : DeviceAuthTokenStore {
   }
 
   override fun clearToken(
+    gatewayId: String,
     deviceId: String,
     role: String,
   ) {
-    tokens.remove("${deviceId.trim()}|${role.trim()}")
+    tokens.remove("${gatewayId.trim()}|${deviceId.trim()}|${role.trim()}")
   }
 }
 
@@ -365,7 +368,7 @@ class GatewaySessionInvokeTest {
 
       try {
         val deviceId = DeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
-        harness.deviceAuthStore.saveToken(deviceId, "node", "device-token")
+        harness.deviceAuthStore.saveToken(gatewayIdForPort(server.port), deviceId, "node", "device-token")
 
         connectNodeSession(
           session = harness.session,
@@ -410,6 +413,7 @@ class GatewaySessionInvokeTest {
       try {
         val deviceId = DeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
         harness.deviceAuthStore.saveToken(
+          gatewayId = gatewayIdForPort(server.port),
           deviceId = deviceId,
           role = "operator",
           token = "operator-device-token",
@@ -548,7 +552,7 @@ class GatewaySessionInvokeTest {
 
       try {
         val deviceId = DeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
-        harness.deviceAuthStore.saveToken(deviceId, "node", "stored-device-token")
+        harness.deviceAuthStore.saveToken(gatewayIdForPort(server.port), deviceId, "node", "stored-device-token")
 
         connectNodeSession(
           session = harness.session,
@@ -606,8 +610,8 @@ class GatewaySessionInvokeTest {
         awaitConnectedOrThrow(connected, lastDisconnect, server)
 
         val deviceId = DeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
-        assertEquals("shared-node-token", harness.deviceAuthStore.loadToken(deviceId, "node"))
-        assertNull(harness.deviceAuthStore.loadToken(deviceId, "operator"))
+        assertEquals("shared-node-token", harness.deviceAuthStore.loadToken(gatewayIdForPort(server.port), deviceId, "node"))
+        assertNull(harness.deviceAuthStore.loadToken(gatewayIdForPort(server.port), deviceId, "operator"))
       } finally {
         shutdownHarness(harness, server)
       }
@@ -651,8 +655,8 @@ class GatewaySessionInvokeTest {
         awaitConnectedOrThrow(connected, lastDisconnect, server)
 
         val deviceId = DeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
-        val nodeEntry = harness.deviceAuthStore.loadEntry(deviceId, "node")
-        val operatorEntry = harness.deviceAuthStore.loadEntry(deviceId, "operator")
+        val nodeEntry = harness.deviceAuthStore.loadEntry(gatewayIdForPort(server.port), deviceId, "node")
+        val operatorEntry = harness.deviceAuthStore.loadEntry(gatewayIdForPort(server.port), deviceId, "operator")
         assertEquals("bootstrap-node-token", nodeEntry?.token)
         assertEquals(emptyList<String>(), nodeEntry?.scopes)
         assertEquals("bootstrap-operator-token", operatorEntry?.token)
@@ -703,8 +707,8 @@ class GatewaySessionInvokeTest {
         awaitConnectedOrThrow(connected, lastDisconnect, server)
 
         val deviceId = DeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
-        assertEquals("shared-node-token", harness.deviceAuthStore.loadToken(deviceId, "node"))
-        assertNull(harness.deviceAuthStore.loadToken(deviceId, "operator"))
+        assertEquals("shared-node-token", harness.deviceAuthStore.loadToken(gatewayIdForPort(server.port), deviceId, "node"))
+        assertNull(harness.deviceAuthStore.loadToken(gatewayIdForPort(server.port), deviceId, "operator"))
       } finally {
         shutdownHarness(harness, server)
       }
@@ -1076,7 +1080,7 @@ class GatewaySessionInvokeTest {
     session.connect(
       endpoint =
         GatewayEndpoint(
-          stableId = "manual|127.0.0.1|$port",
+          stableId = gatewayIdForPort(port),
           name = "test",
           host = "127.0.0.1",
           port = port,
@@ -1107,6 +1111,8 @@ class GatewaySessionInvokeTest {
       tls = null,
     )
   }
+
+  private fun gatewayIdForPort(port: Int): String = "manual|127.0.0.1|$port"
 
   private suspend fun awaitConnectedOrThrow(
     connected: CompletableDeferred<Unit>,

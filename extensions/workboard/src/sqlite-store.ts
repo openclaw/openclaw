@@ -35,7 +35,7 @@ const WORKBOARD_SQLITE_FILE_MODE = 0o600;
 
 type Row = Record<string, unknown>;
 
-export type WorkboardSqliteStores = {
+type WorkboardSqliteStores = {
   cards: WorkboardKeyedStore;
   boards: WorkboardKeyedStore<PersistedWorkboardBoard>;
   subscriptions: WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>;

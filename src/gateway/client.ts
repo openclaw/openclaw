@@ -119,6 +119,7 @@ export function isGatewayConnectAssemblyError(value: unknown): value is Error {
 
 export type GatewayClientOptions = {
   url?: string;
+  origin?: string;
   connectChallengeTimeoutMs?: number;
   /** @deprecated Use connectChallengeTimeoutMs. */
   connectDelayMs?: number;

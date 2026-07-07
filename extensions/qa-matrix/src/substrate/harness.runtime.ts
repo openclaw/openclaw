@@ -40,7 +40,7 @@ type MatrixQaHarnessFiles = {
   registrationToken: string;
 };
 
-type MatrixQaHarness = MatrixQaHarnessFiles & {
+export type MatrixQaHarness = MatrixQaHarnessFiles & {
   baseUrl: string;
   recording: MatrixQaRecordingProxy;
   restartService(): Promise<void>;

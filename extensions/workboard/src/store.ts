@@ -102,7 +102,7 @@ function addWorkboardDurationMs(now: number, durationMs: number): number {
   return resolveExpiresAtMsFromDurationMs(durationMs, { nowMs: now }) ?? MAX_DATE_TIMESTAMP_MS;
 }
 
-export type WorkboardCardInput = {
+type WorkboardCardInput = {
   title?: unknown;
   notes?: unknown;
   status?: unknown;
@@ -131,63 +131,63 @@ export type WorkboardCardInput = {
   parents?: unknown;
 };
 
-export type WorkboardCardPatch = Partial<WorkboardCardInput>;
-export type WorkboardCommentInput = { body?: unknown };
-export type WorkboardLinkInput = {
+type WorkboardCardPatch = Partial<WorkboardCardInput>;
+type WorkboardCommentInput = { body?: unknown };
+type WorkboardLinkInput = {
   type?: unknown;
   targetCardId?: unknown;
   title?: unknown;
   url?: unknown;
 };
-export type WorkboardLinkedCreateInput = WorkboardCardInput & {
+type WorkboardLinkedCreateInput = WorkboardCardInput & {
   parents?: unknown;
 };
-export type WorkboardProofInput = {
+type WorkboardProofInput = {
   status?: unknown;
   label?: unknown;
   command?: unknown;
   url?: unknown;
   note?: unknown;
 };
-export type WorkboardArtifactInput = {
+type WorkboardArtifactInput = {
   label?: unknown;
   url?: unknown;
   path?: unknown;
   mimeType?: unknown;
 };
-export type WorkboardAttachmentInput = {
+type WorkboardAttachmentInput = {
   fileName?: unknown;
   contentBase64?: unknown;
   mimeType?: unknown;
   note?: unknown;
 };
-export type WorkboardWorkerLogInput = {
+type WorkboardWorkerLogInput = {
   level?: unknown;
   message?: unknown;
   sessionKey?: unknown;
   runId?: unknown;
 };
-export type WorkboardProtocolViolationInput = {
+type WorkboardProtocolViolationInput = {
   detail?: unknown;
   sessionKey?: unknown;
   runId?: unknown;
 };
-export type WorkboardClaimInput = {
+type WorkboardClaimInput = {
   ownerId?: unknown;
   token?: unknown;
   ttlSeconds?: unknown;
 };
-export type WorkboardHeartbeatInput = {
+type WorkboardHeartbeatInput = {
   token?: unknown;
   ownerId?: unknown;
   note?: unknown;
 };
-export type WorkboardBulkInput = {
+type WorkboardBulkInput = {
   ids?: unknown;
   patch?: unknown;
   archived?: unknown;
 };
-export type WorkboardCompleteInput = {
+type WorkboardCompleteInput = {
   ownerId?: unknown;
   token?: unknown;
   summary?: unknown;
@@ -195,7 +195,7 @@ export type WorkboardCompleteInput = {
   artifacts?: unknown;
   createdCardIds?: unknown;
 };
-export type WorkboardBlockInput = {
+type WorkboardBlockInput = {
   ownerId?: unknown;
   token?: unknown;
   reason?: unknown;
@@ -207,13 +207,13 @@ export type WorkboardDispatchResult = {
   orchestrated: WorkboardCard[];
   count: number;
 };
-export type WorkboardListOptions = {
+type WorkboardListOptions = {
   boardId?: unknown;
 };
-export type WorkboardDispatchOptions = WorkboardListOptions & {
+type WorkboardDispatchOptions = WorkboardListOptions & {
   now?: unknown;
 };
-export type WorkboardBoardSummary = {
+type WorkboardBoardSummary = {
   id: string;
   name?: string;
   description?: string;
@@ -228,25 +228,25 @@ export type WorkboardBoardSummary = {
   updatedAt?: number;
   archivedAt?: number;
 };
-export type WorkboardStatsResult = WorkboardBoardSummary & {
+type WorkboardStatsResult = WorkboardBoardSummary & {
   byAgent: Record<string, number>;
   oldestReadyAgeMs?: number;
 };
-export type WorkboardPromoteInput = {
+type WorkboardPromoteInput = {
   force?: unknown;
   reason?: unknown;
 };
-export type WorkboardReassignInput = {
+type WorkboardReassignInput = {
   agentId?: unknown;
   status?: unknown;
   resetFailures?: unknown;
   reason?: unknown;
 };
-export type WorkboardReclaimInput = {
+type WorkboardReclaimInput = {
   status?: unknown;
   reason?: unknown;
 };
-export type WorkboardBoardInput = {
+type WorkboardBoardInput = {
   id?: unknown;
   name?: unknown;
   description?: unknown;
@@ -256,18 +256,18 @@ export type WorkboardBoardInput = {
   orchestration?: unknown;
   archived?: unknown;
 };
-export type WorkboardSpecifyInput = WorkboardCardPatch & {
+type WorkboardSpecifyInput = WorkboardCardPatch & {
   summary?: unknown;
 };
-export type WorkboardDecomposeChildInput = WorkboardLinkedCreateInput & {
+type WorkboardDecomposeChildInput = WorkboardLinkedCreateInput & {
   idempotencyKey?: unknown;
 };
-export type WorkboardDecomposeInput = {
+type WorkboardDecomposeInput = {
   summary?: unknown;
   children?: unknown;
   completeParent?: unknown;
 };
-export type WorkboardNotificationSubscribeInput = {
+type WorkboardNotificationSubscribeInput = {
   boardId?: unknown;
   cardId?: unknown;
   sessionKey?: unknown;
@@ -275,20 +275,20 @@ export type WorkboardNotificationSubscribeInput = {
   target?: unknown;
   eventKinds?: unknown;
 };
-export type WorkboardNotificationListOptions = {
+type WorkboardNotificationListOptions = {
   boardId?: unknown;
   cardId?: unknown;
 };
-export type WorkboardNotificationEventsInput = WorkboardNotificationListOptions & {
+type WorkboardNotificationEventsInput = WorkboardNotificationListOptions & {
   subscriptionId?: unknown;
   limit?: unknown;
 };
-export type WorkboardMutationScope = {
+type WorkboardMutationScope = {
   ownerId?: unknown;
   token?: unknown;
 };
 
-export type WorkboardDiagnosticsResult = {
+type WorkboardDiagnosticsResult = {
   diagnostics: Array<{
     card: WorkboardCard;
     diagnostics: WorkboardDiagnostic[];

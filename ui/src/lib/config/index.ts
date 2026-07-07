@@ -76,7 +76,7 @@ export type RuntimeConfigCapability = {
   dispose: () => void;
 };
 
-export type LoadConfigOptions = {
+type LoadConfigOptions = {
   discardPendingChanges?: boolean;
 };
 
@@ -492,7 +492,7 @@ export async function applyConfig(state: ConfigState): Promise<boolean> {
   });
 }
 
-export async function patchConfig(
+async function patchConfig(
   state: ConfigGatewayState,
   options: ConfigPatchOptions,
 ): Promise<boolean> {
@@ -521,7 +521,7 @@ export async function patchConfig(
   }
 }
 
-export async function lookupConfigSchemaPath(
+async function lookupConfigSchemaPath(
   state: { client: ConfigGatewayClient | null; connected: boolean },
   path: string,
 ): Promise<unknown> {
@@ -659,7 +659,7 @@ export function resetConfigPendingChanges(state: ConfigState) {
   autoAllowlistedPluginIdsByState.delete(state);
 }
 
-export function removeConfigFormValue(state: ConfigState, path: Array<string | number>) {
+function removeConfigFormValue(state: ConfigState, path: Array<string | number>) {
   mutateConfigForm(state, (draft) => removePathValue(draft, path));
 }
 

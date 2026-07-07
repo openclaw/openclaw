@@ -114,6 +114,11 @@ describe("anthropic stream wrappers", () => {
     expect(captured.payload?.service_tier).toBeUndefined();
   });
 
+  it("skips unsupported service_tier for Claude Sonnet 5", () => {
+    const captured = runComposedAnthropicProviderStream("sk-ant-api-123", "claude-sonnet-5");
+    expect(captured.payload?.service_tier).toBeUndefined();
+  });
+
   it("composes the anthropic provider stream chain from extra params", () => {
     const captured = runComposedAnthropicProviderStream("sk-ant-api-123");
     expect(captured.headers?.["anthropic-beta"]).not.toContain(CONTEXT_1M_BETA);
