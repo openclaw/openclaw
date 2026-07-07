@@ -7,6 +7,7 @@ import {
   type CompactEmbeddedAgentSessionParams,
   type EmbeddedAgentCompactResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { resolveAgentDir, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { readCodexNotificationItem } from "./attempt-notifications.js";
 import { resolveCodexBindingAppServerConnection } from "./binding-connection.js";
@@ -30,7 +31,12 @@ import {
   type CodexAppServerClientFactory,
 } from "./shared-client.js";
 
-const warnedIgnoredCompactionOverrides = new Set<string>();
+const MAX_WARNED_IGNORED_COMPACTION_OVERRIDE_KEYS = 4096;
+// Zero TTL preserves warning suppression until LRU eviction, after which a key can re-warn.
+const warnedIgnoredCompactionOverrides = createDedupeCache({
+  ttlMs: 0,
+  maxSize: MAX_WARNED_IGNORED_COMPACTION_OVERRIDE_KEYS,
+});
 const codexNativeCompactionQueues = new Map<string, Promise<void>>();
 const CODEX_NATIVE_COMPACTION_INTERRUPT_GRACE_MS = 30_000;
 const CODEX_NO_ACTIVE_TURN_ERROR_CODE = -32_600;
@@ -378,10 +384,9 @@ function warnIfIgnoringOpenClawCompactionOverrides(
     return;
   }
   const warningKey = ignoredConfig.join("\0");
-  if (warnedIgnoredCompactionOverrides.has(warningKey)) {
+  if (warnedIgnoredCompactionOverrides.check(warningKey)) {
     return;
   }
-  warnedIgnoredCompactionOverrides.add(warningKey);
   embeddedAgentLog.warn(
     "ignoring OpenClaw compaction overrides for Codex app-server compaction; Codex uses native server-side compaction",
     {
