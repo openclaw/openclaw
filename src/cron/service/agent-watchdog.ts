@@ -50,6 +50,7 @@ export type CronAgentWatchdog = {
   start: () => void;
   noteLaneWait: () => void;
   noteLaneAdmitted: () => void;
+  noteLaneState: (info?: { waiting?: boolean }) => void;
   noteRunnerStarted: (info?: CronAgentExecutionStarted) => void;
   notePhase: (info: CronAgentExecutionPhaseUpdate) => void;
   activeExecution: () => CronAgentExecutionStarted | undefined;
@@ -157,6 +158,11 @@ export function createCronAgentWatchdog(params: {
         observedLaneWait = false;
       }
     },
+    noteLaneState: (info?: { waiting?: boolean }) => {
+      if (state === "waiting_for_runner") {
+        observedLaneWait = info?.waiting !== false;
+      }
+    },
     noteRunnerStarted: (info?: CronAgentExecutionStarted) => {
       if (state === "disposed" || state === "timed_out") {
         return;
@@ -185,6 +191,56 @@ export function createCronAgentWatchdog(params: {
       clearSetupTimeout();
       clearPreExecutionTimeout();
     },
+  };
+}
+
+/** Race marker resolved by a timeout guard when the watchdog fires. */
+export const CRON_AGENT_TIMEOUT_MARKER: unique symbol = Symbol("cron-agent-timeout");
+
+/** Abort-on-timeout guard around one isolated agent run, shared by cron timer and hook dispatch. */
+export type CronAgentTimeoutGuard = {
+  abortController: AbortController;
+  watchdog: CronAgentWatchdog;
+  timeoutPromise: Promise<typeof CRON_AGENT_TIMEOUT_MARKER>;
+  timeoutReason: () => string | undefined;
+  dispose: () => void;
+};
+
+/**
+ * Couples a watchdog to an AbortController and a raceable timeout promise.
+ * The timeout error keeps the `TimeoutError` name because downstream abort
+ * classification distinguishes timeouts from operator cancels by it.
+ */
+export function createCronAgentTimeoutGuard(params: {
+  jobTimeoutMs: number;
+  deferUntilRunner: boolean;
+  abortController?: AbortController;
+}): CronAgentTimeoutGuard {
+  const abortController = params.abortController ?? new AbortController();
+  let timeoutReason: string | undefined;
+  let resolveTimeout: ((value: typeof CRON_AGENT_TIMEOUT_MARKER) => void) | undefined;
+  const timeoutPromise = new Promise<typeof CRON_AGENT_TIMEOUT_MARKER>((resolve) => {
+    resolveTimeout = resolve;
+  });
+  const watchdog = createCronAgentWatchdog({
+    deferUntilRunner: params.deferUntilRunner,
+    jobTimeoutMs: params.jobTimeoutMs,
+    triggerTimeout: (reason) => {
+      timeoutReason = reason;
+      if (!abortController.signal.aborted) {
+        const timeoutError = new Error(reason);
+        timeoutError.name = "TimeoutError";
+        abortController.abort(timeoutError);
+      }
+      resolveTimeout?.(CRON_AGENT_TIMEOUT_MARKER);
+    },
+  });
+  return {
+    abortController,
+    watchdog,
+    timeoutPromise,
+    timeoutReason: () => timeoutReason,
+    dispose: watchdog.dispose,
   };
 }
 

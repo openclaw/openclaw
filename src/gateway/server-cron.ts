@@ -1,8 +1,6 @@
 // Gateway cron runtime service runs scheduled agent turns, heartbeat wakeups,
 // plugin hooks, notifications, and cron lifecycle cleanup.
-import { retireSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { abortAndDrainEmbeddedAgentRun } from "../agents/embedded-agent.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -61,6 +59,7 @@ import {
   dispatchGatewayCronFinishedNotifications,
   sendGatewayCronFailureAlert,
 } from "./server-cron-notifications.js";
+import { cleanupTimedOutIsolatedAgentRun } from "./timed-out-agent-run-cleanup.js";
 
 export type GatewayCronState = {
   cron: CronServiceContract;
@@ -596,37 +595,12 @@ export function buildGatewayCronService(params: {
       }
     },
     cleanupTimedOutAgentRun: async ({ job, execution }) => {
-      if (!execution?.sessionId) {
-        return;
-      }
-      const result = await abortAndDrainEmbeddedAgentRun({
-        sessionId: execution.sessionId,
-        sessionKey: execution.sessionKey,
-        settleMs: 15_000,
-        forceClear: true,
+      await cleanupTimedOutIsolatedAgentRun({
+        execution,
         reason: "cron_timeout",
+        retireReason: "cron-timeout-cleanup",
+        warn: (meta, message) => cronLogger.warn({ jobId: job.id, ...meta }, `cron: ${message}`),
       });
-      cronLogger.warn(
-        {
-          jobId: job.id,
-          sessionId: execution.sessionId,
-          sessionKey: execution.sessionKey,
-          aborted: result.aborted,
-          drained: result.drained,
-          forceCleared: result.forceCleared,
-        },
-        "cron: cleaned up timed-out agent run",
-      );
-      await retireSessionMcpRuntime({
-        sessionId: execution.sessionId,
-        reason: "cron-timeout-cleanup",
-        onError: (error, sid) => {
-          cronLogger.warn(
-            { jobId: job.id, sessionId: sid },
-            `cron: failed to retire MCP runtime for timed-out session: ${String(error)}`,
-          );
-        },
-      }).catch(() => {});
     },
     onIsolatedAgentSetupTimeout: ({ job, error, timeoutMs }) => {
       cronLogger.warn(

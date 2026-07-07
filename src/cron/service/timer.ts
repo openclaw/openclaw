@@ -49,8 +49,9 @@ import type {
 } from "../types.js";
 import {
   cleanupTimedOutCronAgentRun,
-  createCronAgentWatchdog,
+  createCronAgentTimeoutGuard,
   CRON_AGENT_SETUP_WATCHDOG_MS,
+  CRON_AGENT_TIMEOUT_MARKER,
 } from "./agent-watchdog.js";
 import {
   abortErrorMessage,
@@ -253,42 +254,20 @@ export async function executeJobCoreWithTimeout(
       return createOperatorCancellationOutcome(activeExecution);
     }
 
-    let timeoutReason: string | undefined;
-    const timeoutMarker = Symbol("cron-timeout");
-    let resolveTimeout: ((value: typeof timeoutMarker) => void) | undefined;
-    const timeoutPromise = new Promise<typeof timeoutMarker>((resolve) => {
-      resolveTimeout = resolve;
-    });
-
     // Detached agent runs report setup phases separately; defer the wall-clock
     // timeout until the runner starts so cold setup gets a clearer failure reason.
     const deferTimeoutUntilExecutionStart =
       job.sessionTarget !== "main" && job.payload.kind === "agentTurn";
-    const triggerTimeout = (reason: string) => {
-      timeoutReason = reason;
-      if (!runAbortController.signal.aborted) {
-        const timeoutError = new Error(reason);
-        timeoutError.name = "TimeoutError";
-        runAbortController.abort(timeoutError);
-      }
-      resolveTimeout?.(timeoutMarker);
-    };
-    const watchdog = createCronAgentWatchdog({
-      deferUntilRunner: deferTimeoutUntilExecutionStart,
+    const guard = createCronAgentTimeoutGuard({
       jobTimeoutMs,
-      triggerTimeout,
+      deferUntilRunner: deferTimeoutUntilExecutionStart,
+      abortController: runAbortController,
     });
-    const noteLaneState = (info?: { waiting?: boolean }) => {
-      if (info?.waiting === false) {
-        watchdog.noteLaneAdmitted();
-        return;
-      }
-      watchdog.noteLaneWait();
-    };
+    const { watchdog } = guard;
     const corePromise = executeJobCore(state, job, runAbortController.signal, {
       onExecutionStarted: deferTimeoutUntilExecutionStart ? watchdog.noteRunnerStarted : undefined,
       onExecutionPhase: deferTimeoutUntilExecutionStart ? watchdog.notePhase : undefined,
-      onLaneWait: deferTimeoutUntilExecutionStart ? noteLaneState : undefined,
+      onLaneWait: deferTimeoutUntilExecutionStart ? watchdog.noteLaneState : undefined,
     });
     trackActiveCronTaskRunSettlement(corePromise);
     watchdog.start();
@@ -301,18 +280,22 @@ export async function executeJobCoreWithTimeout(
       }
     });
     try {
-      const first = await Promise.race([corePromise, timeoutPromise, operatorCancellationPromise]);
+      const first = await Promise.race([
+        corePromise,
+        guard.timeoutPromise,
+        operatorCancellationPromise,
+      ]);
       if (first === operatorCancellationMarker) {
         startActiveCronTaskRunSettlementGrace();
         return createOperatorCancellationOutcome(watchdog.activeExecution());
       }
-      if (first !== timeoutMarker) {
+      if (first !== CRON_AGENT_TIMEOUT_MARKER) {
         return first;
       }
       startActiveCronTaskRunSettlementGrace();
       const activeExecution = watchdog.activeExecution();
       await cleanupTimedOutCronAgentRun(state, job, jobTimeoutMs, activeExecution);
-      const error = timeoutReason ?? timeoutErrorMessage(activeExecution);
+      const error = guard.timeoutReason() ?? timeoutErrorMessage(activeExecution);
       const observedLaneWait = watchdog.observedLaneWait();
       const isolatedAgentSetupTimeout =
         job.sessionTarget === "isolated" && isSetupTimeoutErrorText(error) && !observedLaneWait
@@ -332,7 +315,7 @@ export async function executeJobCoreWithTimeout(
         ...(isolatedAgentSetupTimeout ? { isolatedAgentSetupTimeout } : {}),
       };
     } finally {
-      watchdog.dispose();
+      guard.dispose();
     }
   } finally {
     releaseCronTaskRun?.();

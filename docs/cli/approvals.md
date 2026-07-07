@@ -115,6 +115,16 @@ openclaw approvals allowlist add --agent "*" "/usr/bin/uname"
 openclaw approvals allowlist remove "~/Projects/**/bin/rg"
 ```
 
+Path entries match the executable **realpath** (symlink retargeting must not keep
+approvals). When you add a literal path that is a symlink on the local host — for
+example `/opt/homebrew/bin/rg`, which Homebrew symlinks into `Cellar/` — the CLI
+stores the resolved realpath and says so. Glob patterns and bare command names are
+stored as typed. For `--gateway` and `--node` targets the CLI cannot inspect the
+target filesystem, so add the realpath yourself if the path is a symlink there.
+`allowlist remove` accepts the stored pattern or a symlink path, resolved at remove
+time — if the symlink was retargeted since you added it (for example by a package
+upgrade), remove the old realpath shown by `openclaw approvals get` instead.
+
 ## Common options
 
 `get`, `set`, and `allowlist add|remove` all support:

@@ -1,8 +1,13 @@
 // Verifies exec approval allowlist pattern parsing and matching.
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import { matchesExecAllowlistPattern } from "./exec-allowlist-pattern.js";
+import {
+  matchesExecAllowlistPattern,
+  normalizeExecAllowlistPatternForAdd,
+} from "./exec-allowlist-pattern.js";
 
 describe("matchesExecAllowlistPattern", () => {
   it.each([
@@ -101,6 +106,76 @@ describe("matchesExecAllowlistPattern", () => {
         false,
       );
       expect(matchesExecAllowlistPattern("C:/Tools/**", "C:/Tools/bin/../runner.exe")).toBe(true);
+    },
+  );
+});
+
+describe("normalizeExecAllowlistPatternForAdd", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-allowlist-add-"));
+  afterAll(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("keeps bare command names and glob patterns unchanged", () => {
+    expect(normalizeExecAllowlistPatternForAdd("rg")).toEqual({
+      kind: "unchanged",
+      pattern: "rg",
+    });
+    expect(normalizeExecAllowlistPatternForAdd("/opt/homebrew/bin/*")).toEqual({
+      kind: "unchanged",
+      pattern: "/opt/homebrew/bin/*",
+    });
+    expect(normalizeExecAllowlistPatternForAdd("~/Projects/**/bin/rg")).toEqual({
+      kind: "unchanged",
+      pattern: "~/Projects/**/bin/rg",
+    });
+  });
+
+  it("reports literal paths that do not resolve locally as unverified", () => {
+    const missing = path.join(tempDir, "does-not-exist", "tool");
+    expect(normalizeExecAllowlistPatternForAdd(missing)).toEqual({
+      kind: "unverified-path",
+      pattern: missing,
+    });
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "resolves symlinked binaries to their realpath so the entry matches at exec time",
+    () => {
+      const cellarDir = fs.mkdtempSync(path.join(tempDir, "cellar-"));
+      const binDir = fs.mkdtempSync(path.join(tempDir, "bin-"));
+      const realBinary = path.join(cellarDir, "rg");
+      fs.writeFileSync(realBinary, "#!/bin/sh\n", { mode: 0o755 });
+      const symlinkPath = path.join(binDir, "rg");
+      fs.symlinkSync(realBinary, symlinkPath);
+
+      const normalized = normalizeExecAllowlistPatternForAdd(symlinkPath);
+      expect(normalized).toEqual({
+        kind: "resolved-symlink",
+        pattern: fs.realpathSync(realBinary),
+      });
+      // The stored pattern must match the trust realpath the allowlist uses.
+      expect(matchesExecAllowlistPattern(normalized.pattern, fs.realpathSync(realBinary))).toBe(
+        true,
+      );
+      // Remote-target writes must not translate against the local filesystem.
+      expect(
+        normalizeExecAllowlistPatternForAdd(symlinkPath, { resolveLocalRealpath: false }),
+      ).toEqual({ kind: "unverified-path", pattern: symlinkPath });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "keeps regular file paths unchanged when the realpath already matches",
+    () => {
+      const plainDir = fs.mkdtempSync(path.join(tempDir, "plain-"));
+      const realDir = fs.realpathSync(plainDir);
+      const binary = path.join(realDir, "tool");
+      fs.writeFileSync(binary, "#!/bin/sh\n", { mode: 0o755 });
+      expect(normalizeExecAllowlistPatternForAdd(binary)).toEqual({
+        kind: "unchanged",
+        pattern: binary,
+      });
     },
   );
 });
