@@ -8,6 +8,26 @@ function agentItemEvent(data: Record<string, unknown>) {
 }
 
 describe("normalizeGatewayEvent terminal tool item status", () => {
+  it("preserves zero sequence and timestamp values in generated ids", () => {
+    expect(
+      normalizeGatewayEvent({
+        event: "agent",
+        seq: 0,
+        payload: {
+          runId: "r1",
+          sessionKey: "main",
+          stream: "lifecycle",
+          ts: 0,
+          data: { phase: "start" },
+        },
+      }),
+    ).toMatchObject({
+      id: "0:agent:r1:main:0",
+      ts: 0,
+      type: "run.started",
+    });
+  });
+
   it("classifies a failed terminal tool item as tool.call.failed", () => {
     expect(normalizeGatewayEvent(agentItemEvent({ phase: "end", status: "failed" })).type).toBe(
       "tool.call.failed",
