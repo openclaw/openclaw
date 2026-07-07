@@ -194,15 +194,16 @@ describe("runFixedCommandWithTimeout", () => {
         stdout: PassThrough;
         stderr: PassThrough;
         exitCode: number | null;
-        kill: ReturnType<typeof vi.fn>;
+        kill: (signal?: NodeJS.Signals) => boolean;
       };
       proc.stdout = new PassThrough();
       proc.stderr = new PassThrough();
       proc.exitCode = null;
-      proc.kill = vi.fn(() => {
+      const killMock = vi.fn((_signal?: NodeJS.Signals) => {
         proc.exitCode = 143;
         return true;
       });
+      proc.kill = killMock;
       const spawnMock = vi.fn(() => proc);
 
       const resultPromise = runFixedCommandWithTimeout({
@@ -218,7 +219,7 @@ describe("runFixedCommandWithTimeout", () => {
         stdout: "",
         stderr: `${streamName} stream failed: EPIPE`,
       });
-      expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
+      expect(killMock).toHaveBeenCalledWith("SIGTERM");
     }
   });
 });
