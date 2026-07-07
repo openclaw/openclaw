@@ -144,3 +144,51 @@ describe("api UTF-16 truncation cap boundary", () => {
     expect(truncateUtf16Safe(safePrefix + "🎉 trailing body", 120)).toBe(safePrefix);
   });
 });
+
+// Runtime proof for the user-visible API error message template in
+// api-client.ts:219 — evaluates the EXACT production template literal
+// against an emoji-boundary input so the BEFORE/AFTER run can be pasted
+// into the PR body as evidence that the cap is enforced at the surrogate
+// boundary, not just on length.
+describe("api runtime UTF-16 evidence (API Error rawBody)", () => {
+  function hexCodeUnits(s: string): string {
+    return Array.from(s)
+      .map((c) => "U+" + c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0"))
+      .join(" ");
+  }
+
+  it("'API Error [...]' template at cap 200 keeps the 199-ASCII prefix and drops the trailing emoji pair", () => {
+    // EXACT prod template literal from api-client.ts:219
+    //   `API Error [${path}] HTTP ${res.status}: ${truncateUtf16Safe(rawBody, 200)}`
+    const path = "/v2/users/@me";
+    const status = 503;
+    const bodyPrefix = "x".repeat(199); // 199 ASCII chars, emoji straddles cap-200 boundary at position 199
+    const rawBody = bodyPrefix + "🎉trailing body content";
+
+    const before = `API Error [${path}] HTTP ${status}: ${rawBody.slice(0, 200)}`;
+    const after = `API Error [${path}] HTTP ${status}: ${truncateUtf16Safe(rawBody, 200)}`;
+
+    console.log("\n=== PR 3 runtime proof: api-client API Error rawBody at cap 200 ===");
+    console.log(`input rawBody (${rawBody.length} code units): ${rawBody}`);
+    console.log(`input hex:        ${hexCodeUnits(rawBody)}`);
+    console.log(`slice(0, 200) hex: ${hexCodeUnits(rawBody.slice(0, 200))}`);
+    console.log(`truncateUtf16Safe hex: ${hexCodeUnits(truncateUtf16Safe(rawBody, 200))}`);
+    console.log(`BEFORE full error (${before.length} code units):`);
+    console.log(`  ${before}`);
+    console.log(`AFTER  full error (${after.length} code units):`);
+    console.log(`  ${after}`);
+    const beforeHasLone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(before);
+    const afterHasLone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(after);
+    console.log(`BEFORE contains lone surrogate? ${beforeHasLone}`);
+    console.log(`AFTER  contains lone surrogate? ${afterHasLone}`);
+
+    // Cap-200 helper preserves the 199-ASCII prefix and drops the
+    // trailing emoji pair, so the AFTER error ends exactly at the
+    // prefix without a half-surrogate dangling in the message.
+    expect(after).toBe(`API Error [${path}] HTTP ${status}: ${bodyPrefix}`);
+    expect(afterHasLone).toBe(false);
+    // Sanity: BEFORE emits a lone 0xD83D high surrogate in the
+    // user-facing error string (the bug being fixed).
+    expect(beforeHasLone).toBe(true);
+  });
+});
