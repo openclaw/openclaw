@@ -10,6 +10,11 @@
           - "extensions/file-transfer/**"
           - "docs/nodes/index.md"
           - "docs/plugins/sdk-runtime.md"
+"plugin: computer-use":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/computer-use/**"
+          - "docs/plugins/computer-use.md"
 "plugin: pixverse":
   - changed-files:
       - any-glob-to-any-file:

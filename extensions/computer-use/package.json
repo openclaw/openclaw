@@ -1,0 +1,18 @@
+{
+  "name": "@openclaw/plugin-computer-use",
+  "version": "0.0.1",
+  "private": true,
+  "description": "OpenClaw macOS node computer-use plugin",
+  "type": "module",
+  "dependencies": {
+    "typebox": "1.3.3"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

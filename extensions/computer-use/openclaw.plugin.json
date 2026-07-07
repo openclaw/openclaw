@@ -1,0 +1,67 @@
+{
+  "id": "computer-use",
+  "name": "Computer Use",
+  "description": "Control a paired macOS node through screenshots and single computer input actions.",
+  "version": "0.0.1",
+  "activation": {
+    "onStartup": false,
+    "onCommands": ["computer"]
+  },
+  "contracts": {
+    "tools": ["computer"],
+    "computerUseProviders": ["computer-use"]
+  },
+  "computerUseProviderMetadata": {
+    "computer-use": {
+      "platform": "darwin",
+      "permissions": ["accessibility", "screen-recording"],
+      "hostProtocol": "openclaw.node.computer.v1"
+    }
+  },
+  "commandAliases": [
+    {
+      "name": "computer"
+    }
+  ],
+  "skills": ["skills/computer-use"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "defaultArmDurationMs": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 900000
+      },
+      "returnScreenshotAfterAction": {
+        "type": "boolean",
+        "default": true
+      },
+      "screenshotMaxWidth": {
+        "type": "integer",
+        "minimum": 1,
+        "default": 1280
+      },
+      "allowActions": {
+        "type": "array",
+        "uniqueItems": true,
+        "items": {
+          "type": "string",
+          "enum": [
+            "move",
+            "click",
+            "mouseDown",
+            "mouseUp",
+            "drag",
+            "scroll",
+            "key",
+            "keyDown",
+            "keyUp",
+            "type",
+            "hold"
+          ]
+        }
+      }
+    }
+  }
+}

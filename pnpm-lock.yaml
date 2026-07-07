@@ -578,6 +578,16 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/computer-use:
+    dependencies:
+      typebox:
+        specifier: 1.3.3
+        version: 1.3.3
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/copilot:
     dependencies:
       '@github/copilot-sdk':
@@ -751,6 +761,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/featherless:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/feishu:
     dependencies:
       '@larksuiteoapi/node-sdk':
@@ -778,12 +794,6 @@ importers:
       typebox:
         specifier: 1.3.3
         version: 1.3.3
-    devDependencies:
-      '@openclaw/plugin-sdk':
-        specifier: workspace:*
-        version: link:../../packages/plugin-sdk
-
-  extensions/featherless:
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -975,12 +985,6 @@ importers:
 
   extensions/lmstudio: {}
 
-  extensions/longcat:
-    devDependencies:
-      '@openclaw/plugin-sdk':
-        specifier: workspace:*
-        version: link:../../packages/plugin-sdk
-
   extensions/lobster:
     dependencies:
       '@clawdbot/lobster':
@@ -1002,6 +1006,12 @@ importers:
       openclaw:
         specifier: workspace:*
         version: link:../..
+
+  extensions/longcat:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
 
   extensions/matrix:
     dependencies:
