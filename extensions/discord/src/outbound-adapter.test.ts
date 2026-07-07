@@ -39,6 +39,24 @@ function mockObjectArg(
   return value as Record<string, unknown>;
 }
 
+function hasLoneSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        return true;
+      }
+      index += 1;
+      continue;
+    }
+    if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
 beforeAll(async () => {
   ({ normalizeDiscordOutboundTarget } = await import("./normalize.js"));
   ({ discordOutbound } = await import("./outbound-adapter.js"));
@@ -237,6 +255,31 @@ describe("discordOutbound", () => {
       messageId: "msg-webhook-1",
       channelId: "thread-1",
     });
+  });
+
+  it("keeps webhook persona usernames on a UTF-16 boundary", async () => {
+    mockDiscordBoundThreadManager(hoisted);
+
+    await discordOutbound.sendText?.({
+      cfg: {},
+      to: "channel:parent-1",
+      text: "hello from persona",
+      accountId: "default",
+      threadId: "thread-1",
+      identity: {
+        name: `${"a".repeat(79)}\u{1f63e}tail`,
+      },
+    });
+
+    const options = mockObjectArg(
+      hoisted.sendWebhookMessageDiscordMock,
+      "sendWebhookMessageDiscord",
+      0,
+      1,
+    );
+    const username = String(options.username);
+    expect(username).toHaveLength(79);
+    expect(hasLoneSurrogate(username)).toBe(false);
   });
 
   it("falls back to bot send for silent delivery on bound threads", async () => {

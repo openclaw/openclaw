@@ -79,6 +79,24 @@ function objectArgAt(
   return value as Record<string, unknown>;
 }
 
+function hasLoneSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        return true;
+      }
+      index += 1;
+      continue;
+    }
+    if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
 describe("deliverDiscordReply", () => {
   const runtime = {} as RuntimeEnv;
   const cfg = {
@@ -571,5 +589,40 @@ describe("deliverDiscordReply", () => {
     const session = recordField(params.session, "session");
     expect(session.key).toBe("agent:main:subagent:child");
     expect(session.agentId).toBe("main");
+  });
+
+  it("keeps bound thread persona names on a UTF-16 boundary", async () => {
+    const threadBindings = {
+      listBySessionKey: vi.fn(() => [
+        {
+          accountId: "default",
+          channelId: "parent-1",
+          threadId: "thread-1",
+          targetSessionKey: "agent:main:subagent:child",
+          agentId: "main",
+          label: `${"a".repeat(76)}\u{1f63e}tail`,
+          webhookId: "wh_1",
+          webhookToken: "tok_1",
+        },
+      ]),
+    };
+
+    await deliverDiscordReply({
+      replies: [{ text: "Hello from subagent" }],
+      target: "channel:thread-1",
+      token: "token",
+      accountId: "default",
+      runtime,
+      cfg,
+      textLimit: 2000,
+      sessionKey: "agent:main:subagent:child",
+      threadBindings,
+      kind: "final",
+    });
+
+    const identity = recordField(firstDeliverParams().identity, "identity");
+    const name = String(identity.name);
+    expect(name).toHaveLength(79);
+    expect(hasLoneSurrogate(name)).toBe(false);
   });
 });
