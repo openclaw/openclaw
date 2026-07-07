@@ -1,4 +1,5 @@
 // Openrouter provider module implements model/runtime integration.
+import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
 import type {
   MusicGenerationProvider,
   MusicGenerationRequest,
@@ -46,7 +47,7 @@ function imageToContentPart(image: MusicGenerationSourceImage): {
   const url =
     normalizeOptionalString(image.url) ??
     (image.buffer
-      ? `data:${normalizeOptionalString(image.mimeType) ?? "image/png"};base64,${image.buffer.toString("base64")}`
+      ? toImageDataUrl({ ...image, buffer: image.buffer, defaultMimeType: "image/png" })
       : undefined);
   if (!url) {
     throw new Error("OpenRouter music generation reference image is missing data.");

@@ -99,10 +99,13 @@ vi.mock("../agents/agent-model-discovery.js", async () => {
   const actual = await vi.importActual<typeof import("../agents/agent-model-discovery.js")>(
     "../agents/agent-model-discovery.js",
   );
+  const modelSessions = await vi.importActual<typeof import("../agents/sessions/index.js")>(
+    "../agents/sessions/index.js",
+  );
 
   const createActualRegistry = (...args: Parameters<typeof actual.discoverModels>) => {
     const modelsFile = path.join(args[1], "models.json");
-    const Registry = actual.ModelRegistry as unknown as {
+    const Registry = modelSessions.ModelRegistry as unknown as {
       create?: (
         authStorage: unknown,
         modelsFile: string,

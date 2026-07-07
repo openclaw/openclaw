@@ -37,15 +37,26 @@ describe("sessionsCompactCommand", () => {
     await sessionsCompactCommand({ key: "agent:main:main" }, runtime);
 
     expect(runtime.exit).not.toHaveBeenCalled();
+    expect(callGatewayCli.mock.calls[0]?.[1]).toMatchObject({ timeout: null });
     const logged = joinedArgs(runtime.log);
     expect(logged).toContain("243868");
     expect(logged).toContain("34941");
   });
 
+  it("preserves an explicit client timeout override", async () => {
+    callGatewayCli.mockResolvedValue({
+      ok: true,
+      key: "agent:main:main",
+      compacted: true,
+    });
+    const runtime = createRuntime();
+
+    await sessionsCompactCommand({ key: "agent:main:main", timeout: "120000" }, runtime);
+
+    expect(callGatewayCli.mock.calls[0]?.[1]).toMatchObject({ timeout: "120000" });
+  });
+
   it("reports an asynchronously started Codex compaction as pending, not a no-op", async () => {
-    // Codex app-server `thread/compact/start` returns ok:true / compacted:false
-    // with a pending marker; completion is delivered later, so this is a started
-    // compaction, NOT "no compaction needed".
     callGatewayCli.mockResolvedValue({
       ok: true,
       key: "agent:main:main",
@@ -63,6 +74,31 @@ describe("sessionsCompactCommand", () => {
     const logged = joinedArgs(runtime.log);
     expect(logged).toContain("pending");
     expect(logged).not.toContain("No compaction needed");
+  });
+
+  it("reports a terminal Codex compaction as completed", async () => {
+    callGatewayCli.mockResolvedValue({
+      ok: true,
+      key: "agent:main:main",
+      compacted: true,
+      result: {
+        tokensBefore: 1200,
+        details: {
+          backend: "codex-app-server",
+          signal: "thread/compact/start",
+          pending: false,
+          completed: true,
+        },
+      },
+    });
+    const runtime = createRuntime();
+
+    await sessionsCompactCommand({ key: "agent:main:main" }, runtime);
+
+    expect(runtime.exit).not.toHaveBeenCalled();
+    const logged = joinedArgs(runtime.log);
+    expect(logged).toContain("Compacted session");
+    expect(logged).not.toContain("pending");
   });
 
   it("exits non-zero when the gateway reports ok:false (no silent no-op)", async () => {

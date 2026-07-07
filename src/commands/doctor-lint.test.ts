@@ -77,6 +77,39 @@ describe("runDoctorLintCli", () => {
     }
   });
 
+  it("does not expose deep mode to extension health check context", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {},
+      path: "/tmp/openclaw.json",
+    });
+    const detect = vi.fn(async (_ctx: unknown) => []);
+    registerHealthCheck({
+      id: "test/deep-context",
+      kind: "plugin",
+      description: "test extension context",
+      detect,
+    });
+
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      await runDoctorLintCli(runtime, {
+        deep: true,
+        onlyIds: ["test/deep-context"],
+      });
+
+      expect(detect).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mode: "lint",
+        }),
+      );
+      expect(detect.mock.calls[0]?.[0]).not.toHaveProperty("deep");
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
   it("emits structured JSON for invalid config snapshots", async () => {
     mocks.readConfigFileSnapshot.mockResolvedValue({
       exists: true,
@@ -122,7 +155,7 @@ describe("runDoctorLintCli", () => {
     try {
       const exitCode = await runDoctorLintCli(runtime, {
         json: true,
-        onlyIds: ["core/doctor/session-locks"],
+        onlyIds: ["core/doctor/not-a-check"],
       });
 
       expect(exitCode).toBe(1);
@@ -134,7 +167,7 @@ describe("runDoctorLintCli", () => {
           {
             checkId: "core/doctor/lint-selection",
             severity: "error",
-            path: "core/doctor/session-locks",
+            path: "core/doctor/not-a-check",
           },
         ],
       });
@@ -209,6 +242,7 @@ describe("runDoctorLintCli", () => {
             checkId: "plugin/example/lint",
             severity: "info",
             message: "plugin finding",
+            fixHint: "Review the plugin finding.",
           },
         ];
       },
@@ -221,14 +255,56 @@ describe("runDoctorLintCli", () => {
         onlyIds: ["core/doctor/final-config-validation", "plugin/example/lint"],
       });
 
+      expect(exitCode).toBe(0);
+      const payload = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+      expect(payload.ok).toBe(true);
+      expect(payload.checksRun).toBe(2);
+      expect(payload.findings).toEqual([]);
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
+  it("fails informational findings when severity-min is explicit", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {},
+      path: "/tmp/openclaw.json",
+    });
+    registerHealthCheck({
+      id: "plugin/example/lint",
+      kind: "plugin",
+      description: "example plugin lint check",
+      async detect() {
+        return [
+          {
+            checkId: "plugin/example/lint",
+            severity: "info",
+            message: "plugin finding",
+            fixHint: "Review the plugin finding.",
+          },
+        ];
+      },
+    });
+
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      const exitCode = await runDoctorLintCli(runtime, {
+        json: true,
+        severityMin: "info",
+        onlyIds: ["plugin/example/lint"],
+      });
+
       expect(exitCode).toBe(1);
       const payload = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
-      expect(payload.checksRun).toBe(2);
+      expect(payload.ok).toBe(false);
       expect(payload.findings).toEqual([
         {
           checkId: "plugin/example/lint",
           severity: "info",
           message: "plugin finding",
+          fixHint: "Review the plugin finding.",
         },
       ]);
     } finally {

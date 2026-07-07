@@ -70,9 +70,21 @@ const loadAgentsHandlers = lazyHandlerModule(
   () => import("./server-methods/agents.js"),
   (module) => module.agentsHandlers,
 );
+const loadAgentsWorkspaceHandlers = lazyHandlerModule(
+  () => import("./server-methods/agents-workspace.js"),
+  (module) => module.agentsWorkspaceHandlers,
+);
 const loadArtifactsHandlers = lazyHandlerModule(
   () => import("./server-methods/artifacts.js"),
   (module) => module.artifactsHandlers,
+);
+const loadAuditHandlers = lazyHandlerModule(
+  () => import("./server-methods/audit.js"),
+  (module) => module.auditHandlers,
+);
+const loadAttachHandlers = lazyHandlerModule(
+  () => import("./server-methods/attach.js"),
+  (module) => module.attachHandlers,
 );
 const loadChannelsHandlers = lazyHandlerModule(
   () => import("./server-methods/channels.js"),
@@ -94,6 +106,10 @@ const loadConnectHandlers = lazyHandlerModule(
   () => import("./server-methods/connect.js"),
   (module) => module.connectHandlers,
 );
+const loadControlUiHandlers = lazyHandlerModule(
+  () => import("./server-methods/control-ui.js"),
+  (module) => module.controlUiHandlers,
+);
 const loadCronHandlers = lazyHandlerModule(
   () => import("./server-methods/cron.js"),
   (module) => module.cronHandlers,
@@ -101,6 +117,10 @@ const loadCronHandlers = lazyHandlerModule(
 const loadDeviceHandlers = lazyHandlerModule(
   () => import("./server-methods/devices.js"),
   (module) => module.deviceHandlers,
+);
+const loadDevicePairSetupHandlers = lazyHandlerModule(
+  () => import("./server-methods/device-pair-setup.js"),
+  (module) => module.devicePairSetupHandlers,
 );
 const loadDiagnosticsHandlers = lazyHandlerModule(
   () => import("./server-methods/diagnostics.js"),
@@ -114,6 +134,10 @@ const loadEnvironmentsHandlers = lazyHandlerModule(
   () => import("./server-methods/environments.js"),
   (module) => module.environmentsHandlers,
 );
+const loadWorktreesHandlers = lazyHandlerModule(
+  () => import("./server-methods/worktrees.js"),
+  (module) => module.worktreesHandlers,
+);
 const loadExecApprovalsHandlers = lazyHandlerModule(
   () => import("./server-methods/exec-approvals.js"),
   (module) => module.execApprovalsHandlers,
@@ -125,6 +149,10 @@ const loadHealthHandlers = lazyHandlerModule(
 const loadLogsHandlers = lazyHandlerModule(
   () => import("./server-methods/logs.js"),
   (module) => module.logsHandlers,
+);
+const loadTerminalHandlers = lazyHandlerModule(
+  () => import("./server-methods/terminal.js"),
+  (module) => module.terminalHandlers,
 );
 const loadModelsAuthStatusHandlers = lazyHandlerModule(
   () => import("./server-methods/models-auth-status.js"),
@@ -222,6 +250,10 @@ const loadWebHandlers = lazyHandlerModule(
   () => import("./server-methods/web.js"),
   (module) => module.webHandlers,
 );
+const loadCrestodianHandlers = lazyHandlerModule(
+  () => import("./server-methods/crestodian.js"),
+  (module) => module.crestodianHandlers,
+);
 const loadWizardHandlers = lazyHandlerModule(
   () => import("./server-methods/wizard.js"),
   (module) => module.wizardHandlers,
@@ -272,8 +304,24 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadConnectHandlers,
   }),
   ...createLazyCoreHandlers({
+    methods: ["attach.grant", "attach.revoke"],
+    loadHandlers: loadAttachHandlers,
+  }),
+  ...createLazyCoreHandlers({
     methods: ["logs.tail"],
     loadHandlers: loadLogsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
+      "terminal.open",
+      "terminal.input",
+      "terminal.resize",
+      "terminal.close",
+      "terminal.attach",
+      "terminal.list",
+      "terminal.text",
+    ],
+    loadHandlers: loadTerminalHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["voicewake.get", "voicewake.set"],
@@ -333,8 +381,16 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadDeviceHandlers,
   }),
   ...createLazyCoreHandlers({
+    methods: ["device.pair.setupCode"],
+    loadHandlers: loadDevicePairSetupHandlers,
+  }),
+  ...createLazyCoreHandlers({
     methods: ["diagnostics.stability"],
     loadHandlers: loadDiagnosticsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["controlUi.githubPreview"],
+    loadHandlers: loadControlUiHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [
@@ -352,6 +408,16 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["environments.list", "environments.status"],
     loadHandlers: loadEnvironmentsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
+      "worktrees.list",
+      "worktrees.create",
+      "worktrees.remove",
+      "worktrees.restore",
+      "worktrees.gc",
+    ],
+    loadHandlers: loadWorktreesHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [
@@ -404,6 +470,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadWizardHandlers,
   }),
   ...createLazyCoreHandlers({
+    methods: ["crestodian.chat", "crestodian.setup.detect", "crestodian.setup.activate"],
+    loadHandlers: loadCrestodianHandlers,
+  }),
+  ...createLazyCoreHandlers({
     methods: [
       "talk.session.create",
       "talk.session.join",
@@ -424,6 +494,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "talk.mode",
     ],
     loadHandlers: loadTalkHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["audit.list"],
+    loadHandlers: loadAuditHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["tasks.list", "tasks.get", "tasks.cancel"],
@@ -447,6 +521,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "tts.enable",
       "tts.disable",
       "tts.convert",
+      "tts.speak",
       "tts.setProvider",
       "tts.personas",
       "tts.setPersona",
@@ -467,6 +542,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "skills.skillCard",
       "skills.install",
       "skills.update",
+      "skills.curator.status",
+      "skills.curator.pin",
+      "skills.curator.unpin",
+      "skills.curator.restore",
       "skills.proposals.list",
       "skills.proposals.inspect",
       "skills.proposals.create",
@@ -513,6 +592,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "last-heartbeat",
       "set-heartbeats",
       "system-presence",
+      "system.info",
       "system-event",
     ],
     loadHandlers: loadSystemHandlers,
@@ -590,6 +670,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadAgentsHandlers,
   }),
   ...createLazyCoreHandlers({
+    methods: ["agents.workspace.list", "agents.workspace.get"],
+    loadHandlers: loadAgentsWorkspaceHandlers,
+  }),
+  ...createLazyCoreHandlers({
     methods: ["artifacts.list", "artifacts.get", "artifacts.download"],
     loadHandlers: loadArtifactsHandlers,
   }),
@@ -644,8 +728,14 @@ export async function handleGatewayRequest(
   opts: GatewayRequestOptions & { extraHandlers?: GatewayRequestHandlers },
 ): Promise<void> {
   const { req, respond, client, isWebchatConnect, context } = opts;
+  // Prefer the caller-attached registry when it owns the requested method so plugin dispatch
+  // metadata newer than global runtime state still authorizes and dispatches correctly. When the
+  // attached snapshot does not own the method, rebuild from the live plugin registry so plugin RPC
+  // methods registered after the startup snapshot stay reachable (#94127).
   const methodRegistry =
-    opts.methodRegistry ?? createRequestGatewayMethodRegistry(opts.extraHandlers);
+    opts.methodRegistry?.getHandler(req.method) !== undefined
+      ? opts.methodRegistry
+      : createRequestGatewayMethodRegistry(opts.extraHandlers);
   const authError = authorizeGatewayMethod(req.method, client, req.params, methodRegistry);
   if (authError) {
     respond(false, undefined, authError);

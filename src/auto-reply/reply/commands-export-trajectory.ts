@@ -15,6 +15,7 @@ import {
   deliverPrivateCommandReply,
   readCommandDeliveryTarget,
   readCommandMessageThreadId,
+  resolveCommandExecApprovalRoute,
   resolvePrivateCommandApprovalRouteExpiresAtMs,
   resolvePrivateCommandRouteTargets,
   type PrivateCommandRouteTarget,
@@ -172,7 +173,6 @@ async function requestTrajectoryExportApproval(
       sessionKey: params.sessionKey,
       config: params.cfg,
     });
-  const messageThreadId = readCommandMessageThreadId(params);
   try {
     const execTool = deps.createExecTool({
       host: "gateway",
@@ -190,16 +190,10 @@ async function requestTrajectoryExportApproval(
       sessionStore: params.cfg.session?.store,
       mainKey: params.cfg.session?.mainKey,
       sessionScope: params.cfg.session?.scope,
-      messageProvider: options.privateApprovalTarget?.channel ?? params.command.channel,
-      currentChannelId: options.privateApprovalTarget?.to ?? readCommandDeliveryTarget(params),
-      currentThreadTs: options.privateApprovalTarget
-        ? options.privateApprovalTarget.threadId == null
-          ? undefined
-          : String(options.privateApprovalTarget.threadId)
-        : messageThreadId,
-      accountId: options.privateApprovalTarget
-        ? (options.privateApprovalTarget.accountId ?? undefined)
-        : (params.ctx.AccountId ?? undefined),
+      ...resolveCommandExecApprovalRoute({
+        commandParams: params,
+        privateApprovalTarget: options.privateApprovalTarget,
+      }),
       notifyOnExit: params.cfg.tools?.exec?.notifyOnExit,
       notifyOnExitEmptySuccess: params.cfg.tools?.exec?.notifyOnExitEmptySuccess,
     });

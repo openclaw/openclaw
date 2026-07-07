@@ -149,6 +149,7 @@ describe("readGatewayServiceState", () => {
       expect.objectContaining({
         OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-maintenance.service",
       }),
+      { timeoutMs: undefined },
     );
   });
 });

@@ -149,4 +149,47 @@ describe("loadGatewayTlsRuntime", () => {
     expect(result.keyPath).toBe(keyPath);
     expect(result.error).toContain("gateway tls: failed to load cert");
   });
+
+  it("falls back to default paths when certPath and keyPath are empty strings", async () => {
+    const result = await loadGatewayTlsRuntime({
+      enabled: true,
+      certPath: "",
+      keyPath: "",
+      autoGenerate: false,
+    });
+
+    // Empty paths must not reach downstream — they must be replaced with defaults.
+    expect(result.certPath).toBeTruthy();
+    expect(result.certPath).not.toBe("");
+    expect(result.keyPath).toBeTruthy();
+    expect(result.keyPath).not.toBe("");
+  });
+
+  it("falls back to default paths when certPath and keyPath are whitespace-only", async () => {
+    const result = await loadGatewayTlsRuntime({
+      enabled: true,
+      certPath: "   ",
+      keyPath: "\t",
+      autoGenerate: false,
+    });
+
+    expect(result.certPath).toBeTruthy();
+    expect(result.certPath).not.toBe("   ");
+    expect(result.keyPath).toBeTruthy();
+    expect(result.keyPath).not.toBe("\t");
+  });
+
+  it("does not fall back for non-empty paths with leading/trailing spaces", async () => {
+    const result = await loadGatewayTlsRuntime({
+      enabled: true,
+      certPath: "  /etc/ssl/cert.pem  ",
+      keyPath: "  /etc/ssl/private/server.key  ",
+      autoGenerate: false,
+    });
+
+    // Non-empty paths are passed through verbatim; resolveUserPath owns
+    // normalization (it trims), so they must not fall back to default names.
+    expect(result.certPath).not.toContain("gateway-cert.pem");
+    expect(result.keyPath).not.toContain("gateway-key.pem");
+  });
 });

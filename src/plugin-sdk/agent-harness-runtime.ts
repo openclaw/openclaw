@@ -27,7 +27,14 @@ import { truncateUtf16Safe } from "../utils.js";
 /** Default truncation limit for user-facing tool progress output. */
 export const TOOL_PROGRESS_OUTPUT_MAX_CHARS = 8_000;
 
+export { FAST_MODE_AUTO_PROGRESS_KIND } from "../auto-reply/reply-payload.js";
+export {
+  isDeliveredMessageToolOnlySourceReplyResult,
+  isDeliveredMessagingToolResult,
+} from "../agents/embedded-agent-message-tool-source-reply.js";
+export { formatFastModeAutoProgressText, resolveFastModeForElapsed } from "../shared/fast-mode.js";
 export type { AgentMessage } from "../agents/runtime/index.js";
+export type { FastModeAutoProgressState } from "../shared/fast-mode.js";
 export type {
   AgentHarness,
   AgentHarnessAttemptParams,
@@ -42,6 +49,12 @@ export type {
   AgentHarnessSupport,
   AgentHarnessSupportContext,
 } from "../agents/harness/types.js";
+export type {
+  AgentHarnessUserInputAnswers,
+  AgentHarnessUserInputOption,
+  AgentHarnessUserInputPromptOptions,
+  AgentHarnessUserInputQuestion,
+} from "../agents/harness/user-input-bridge.js";
 export type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -106,6 +119,7 @@ export { formatApprovalDisplayPath } from "../infra/approval-display-paths.js";
 export { buildAgentHookContextChannelFields } from "../plugins/hook-agent-context.js";
 export { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 export { runAgentCleanupStep } from "../agents/run-cleanup-timeout.js";
+export { resolveAgentRunAbortLifecycleFields } from "../agents/run-termination.js";
 export { log as embeddedAgentLog } from "../agents/embedded-agent-runner/logger.js";
 export { buildAgentRuntimePlan } from "../agents/runtime-plan/build.js";
 export {
@@ -131,11 +145,18 @@ export { isMessagingTool, isMessagingToolSendAction } from "../agents/embedded-a
 export {
   extractMessagingToolSend,
   extractMessagingToolSendResult,
+  extractToolErrorMessage,
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
   isToolResultError,
   sanitizeToolResult,
 } from "../agents/embedded-agent-subscribe.tools.js";
+export {
+  formatToolExecutionErrorMessage,
+  resolveToolExecutionErrorKind,
+  resolveToolResultFailureKind,
+  type ToolResultFailureKind,
+} from "../agents/tool-result-error.js";
 export { normalizeUsage } from "../agents/usage.js";
 export { resolveOpenClawAgentDir } from "./agent-dir-compat.js";
 export {
@@ -148,6 +169,13 @@ export { supportsModelTools } from "../agents/model-tool-support.js";
 export { isAgentToolReplaySafe } from "../agents/tool-replay-safety.js";
 export { getChannelAgentToolMeta } from "../agents/channel-tool-metadata.js";
 export {
+  buildAgentHarnessUserInputAnswers,
+  deliverAgentHarnessUserInputPrompt,
+  emptyAgentHarnessUserInputAnswers,
+  formatAgentHarnessUserInputPrompt,
+  normalizeAgentHarnessUserInputAnswer,
+} from "../agents/harness/user-input-bridge.js";
+export {
   buildSkillWorkshopPromptSection,
   SKILL_WORKSHOP_TOOL_NAME,
 } from "../agents/skill-workshop-prompt.js";
@@ -159,6 +187,10 @@ export {
   resolveEmbeddedAttemptToolConstructionPlan,
 } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 export { getPluginToolMeta } from "../plugins/tools.js";
+export {
+  attachModelProviderRequestTransport,
+  getModelProviderRequestTransport,
+} from "../agents/provider-request-config.js";
 export {
   abortAndDrainEmbeddedAgentRun as abortAndDrainAgentHarnessRun,
   abortEmbeddedAgentRun as abortAgentHarnessRun,
@@ -265,12 +297,23 @@ export {
   resolveSessionWriteLockOptions,
   type SessionWriteLockAcquireTimeoutConfig,
 } from "../agents/session-write-lock.js";
+/**
+ * @deprecated Use appendSessionTranscriptMessageByIdentity from
+ * openclaw/plugin-sdk/session-transcript-runtime so transcript writes target a
+ * session identity instead of an active JSONL transcript file.
+ */
 export { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
+/**
+ * @deprecated Use publishSessionTranscriptUpdateByIdentity from
+ * openclaw/plugin-sdk/session-transcript-runtime so transcript updates target
+ * a session identity instead of an active JSONL transcript file.
+ */
 export { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 export {
   consumeAdjustedParamsForToolCall,
   consumePreExecutionBlockedToolCall,
   finalizeToolTerminalPresentation,
+  getBeforeToolCallFailureDisposition,
   getBeforeToolCallPolicyDiagnosticState,
   hasBeforeToolCallPolicy,
   isToolWrappedWithBeforeToolCallHook,
@@ -279,6 +322,7 @@ export {
   setBeforeToolCallDiagnosticsEnabled,
   wrapToolWithBeforeToolCallHook,
   type BeforeToolCallPolicyDiagnosticState,
+  type BeforeToolCallFailureDisposition,
   type DeferredPluginToolApproval,
 } from "../agents/agent-tools.before-tool-call.js";
 export { isReplaySafeToolCall } from "../agents/tool-mutation.js";
@@ -325,6 +369,10 @@ export {
   runAgentHarnessAfterToolCallHook,
   runAgentHarnessBeforeMessageWriteHook,
 } from "../agents/harness/hook-helpers.js";
+export {
+  awaitAgentEndSideEffects,
+  runAgentEndSideEffects,
+} from "../agents/harness/agent-end-side-effects.js";
 export {
   awaitAgentHarnessAgentEndHook,
   getAgentHarnessHookRunner,

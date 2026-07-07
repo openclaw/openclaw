@@ -1,7 +1,12 @@
 // Agent Core module implements jsonl storage behavior.
-import type { FileSystem, JsonlSessionMetadata, SessionTreeEntry } from "../types.js";
+import type {
+  FileError,
+  FileSystem,
+  JsonlSessionMetadata,
+  Result,
+  SessionTreeEntry,
+} from "../types.js";
 import { SessionError, toError } from "../types.js";
-import { getFileSystemResultOrThrow } from "./repo-utils.js";
 import {
   appendParentIdAfterEntry,
   BaseSessionStorage,
@@ -21,6 +26,17 @@ interface SessionHeader {
   timestamp: string;
   cwd: string;
   parentSession?: string;
+}
+
+function getFileSystemResultOrThrow<TValue>(
+  result: Result<TValue, FileError>,
+  message: string,
+): TValue {
+  if (!result.ok) {
+    const code = result.error.code === "not_found" ? "not_found" : "storage";
+    throw new SessionError(code, `${message}: ${result.error.message}`, result.error);
+  }
+  return result.value;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

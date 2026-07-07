@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { collectDeprecatedInternalConfigApiViolations } from "./lib/deprecated-config-api-guard.mjs";
 import { buildDeprecatedPluginSdkModuleSpecifiers } from "./lib/deprecated-plugin-sdk-usage.mjs";
+import { escapeRegExp } from "./lib/regexp.mjs";
 
 const repoRoot = process.cwd();
 
@@ -54,10 +55,6 @@ function* walk(dir, rule) {
       yield entryPath;
     }
   }
-}
-
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
 function collectIdentifierRuleViolations(rule) {

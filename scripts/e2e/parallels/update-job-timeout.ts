@@ -1,4 +1,6 @@
 // Update Job Timeout script supports OpenClaw repository automation.
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+
 interface TimedUpdateJobOptions {
   abortSettleMs?: number;
   append(this: void, chunk: string): void;
@@ -21,6 +23,8 @@ export async function runTimedUpdateJob({
   let timedOut = false;
   const controller = new AbortController();
   const timeoutMessage = `${label} update timed out after ${timeoutDescription}`;
+  const resolvedAbortSettleMs = resolveTimerTimeoutMs(abortSettleMs, 0, 0);
+  const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
   let timeout: NodeJS.Timeout | undefined;
   const runOutcome = Promise.resolve()
     .then(() => run({ signal: controller.signal }))
@@ -34,13 +38,13 @@ export async function runTimedUpdateJob({
       append(`${timeoutMessage}\n`);
       controller.abort(new Error(timeoutMessage));
       resolve("timeout");
-    }, timeoutMs);
+    }, resolvedTimeoutMs);
   });
 
   try {
     const outcome = await Promise.race([runOutcome, timeoutPromise]);
     if (outcome === "timeout") {
-      await waitForAbortSettle(runOutcome, abortSettleMs);
+      await waitForAbortSettle(runOutcome, resolvedAbortSettleMs);
       await writeLog();
       return 1;
     }

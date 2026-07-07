@@ -131,6 +131,59 @@ describe("plugin gateway gauntlet helpers", () => {
     });
   });
 
+  it("rejects duplicate repeatable selectors", () => {
+    expect(() => parseArgs(["--plugin", "telegram", "--plugin", "telegram"])).toThrow(
+      "Duplicate --plugin value: telegram",
+    );
+    expect(() =>
+      parseArgs([
+        "--qa-scenario",
+        "channel-chat-baseline",
+        "--qa-scenario",
+        "channel-chat-baseline",
+      ]),
+    ).toThrow("Duplicate --qa-scenario value: channel-chat-baseline");
+
+    vi.stubEnv("OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_IDS", "telegram,discord");
+    expect(() => parseArgs(["--plugin", "telegram"])).toThrow("Duplicate --plugin value: telegram");
+  });
+
+  it("rejects duplicate single-value controls", () => {
+    expect(() =>
+      parseArgs(["--output-dir", ".artifacts/one", "--output-dir", ".artifacts/two"]),
+    ).toThrow("--output-dir was provided more than once");
+    expect(() => parseArgs(["--shard-total", "2", "--shard-total", "3"])).toThrow(
+      "--shard-total was provided more than once",
+    );
+  });
+
+  it("rejects valued flags followed by another option", () => {
+    for (const flag of [
+      "--repo-root",
+      "--output-dir",
+      "--plugin",
+      "--shard-total",
+      "--shard-index",
+      "--limit",
+      "--qa-scenario",
+      "--qa-plugin-chunk-size",
+      "--cpu-core-warn",
+      "--hot-wall-warn-ms",
+      "--max-rss-warn-mb",
+      "--wall-anomaly-multiplier",
+      "--rss-anomaly-multiplier",
+      "--qa-cpu-regression-multiplier",
+      "--qa-wall-regression-multiplier",
+      "--command-timeout-ms",
+      "--build-timeout-ms",
+      "--qa-timeout-ms",
+    ]) {
+      for (const value of ["--skip-qa", "-h"]) {
+        expect(() => parseArgs([flag, value])).toThrow(`Missing value for ${flag}`);
+      }
+    }
+  });
+
   it("discovers bundled plugin manifests into lifecycle matrix rows", async () => {
     await writeManifest(
       "alpha",
@@ -554,6 +607,26 @@ describe("plugin gateway gauntlet helpers", () => {
     await expect(fs.readFile(row.logPath, "utf8")).resolves.toContain("[spawn error] ENOENT");
   });
 
+  it("clamps oversized measured command timers before scheduling", async () => {
+    const logDir = path.join(repoRoot, "logs");
+    const row = await runMeasuredCommandLive({
+      cwd: repoRoot,
+      env: process.env,
+      logDir,
+      command: process.execPath,
+      args: ["-e", "setTimeout(() => process.exit(0), 25)"],
+      label: "oversized-timeout",
+      phase: "probe",
+      timeoutKillGraceMs: Number.MAX_SAFE_INTEGER,
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+      timeMode: "none",
+    });
+
+    expect(row.status).toBe(0);
+    expect(row.timedOut).toBe(false);
+    await expect(fs.readFile(row.logPath, "utf8")).resolves.not.toContain("ETIMEDOUT");
+  });
+
   it.runIf(process.platform !== "win32")(
     "kills timed-out measured command process groups when the leader exits first",
     async () => {
@@ -588,7 +661,7 @@ setInterval(() => {}, 1000);
           label: "timeout-leader-exits",
           phase: "probe",
           timeoutKillGraceMs: 25,
-          timeoutMs: 1_000,
+          timeoutMs: 250,
           timeMode: "none",
         });
 
@@ -877,11 +950,11 @@ const promise = runMeasuredCommandLive({
   )}, ${JSON.stringify(leaderExitedPath)}],
   label: "timeout-parent-termination",
   phase: "probe",
-  timeoutKillGraceMs: 1_000,
-  timeoutMs: 100,
+  timeoutKillGraceMs: 250,
+  timeoutMs: 200,
   timeMode: "none",
 });
-for (let attempt = 0; attempt < 100 && !fs.existsSync(${JSON.stringify(
+for (let attempt = 0; attempt < 200 && !fs.existsSync(${JSON.stringify(
           leaderExitedPath,
         )}); attempt += 1) {
   await delay(25);
@@ -889,7 +962,7 @@ for (let attempt = 0; attempt < 100 && !fs.existsSync(${JSON.stringify(
 if (!fs.existsSync(${JSON.stringify(leaderExitedPath)})) {
   process.exit(2);
 }
-await delay(100);
+await delay(50);
 process.kill(process.pid, "SIGTERM");
 await promise;
 process.exit(7);
@@ -1294,8 +1367,17 @@ process.exit(7);
     expect(result.stdout).toContain("failures=0");
   });
 
-  it("probes plugin-owned slash help while the plugin is installed", async () => {
-    const outputDir = path.join(repoRoot, "artifacts");
+  it.each([
+    ["probes plugin-owned slash help while the plugin is installed", "default", [], 0],
+    ["skips plugin-owned slash help when requested", "skip", ["--skip-slash-help"], 0],
+    [
+      "rejects slash-only probes without the install lifecycle",
+      "slash-only",
+      ["--skip-lifecycle"],
+      1,
+    ],
+  ] as const)("%s", async (_title, mode, extraArgs, expectedStatus) => {
+    const outputDir = path.join(repoRoot, `artifacts-${mode}`);
     await writeManifest(
       "workboard",
       "openclaw.plugin.json",
@@ -1349,6 +1431,7 @@ process.exit(7);
         outputDir,
         "--skip-prebuild",
         "--skip-qa",
+        ...extraArgs,
         "--plugin",
         "workboard",
       ],
@@ -1358,95 +1441,49 @@ process.exit(7);
       },
     );
 
-    expect(result.status, result.stderr).toBe(0);
+    expect(result.status, result.stderr).toBe(expectedStatus);
     const summary = JSON.parse(
       await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
     );
-    expect(summary.failures).toEqual([]);
-    const slashHelpRow = summary.rows.find(
-      (row: { label?: string; logPath?: string }) => row.label === "workboard-slash-help:workboard",
-    );
-    expect(summary.rows).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          label: "workboard-slash-help:workboard",
-          phase: "slash:help",
-          pluginId: "workboard",
-          status: 0,
-        }),
-      ]),
-    );
-    const slashHelpLogPath = slashHelpRow?.logPath;
-    expect(slashHelpLogPath).toEqual(expect.any(String));
-    await expect(fs.readFile(slashHelpLogPath as string, "utf8")).resolves.toContain(
-      "Usage: openclaw workboard",
-    );
+    if (mode === "default") {
+      expect(summary.failures).toEqual([]);
+      const slashHelpRow = summary.rows.find(
+        (row: { label?: string; logPath?: string }) =>
+          row.label === "workboard-slash-help:workboard",
+      );
+      expect(summary.rows).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            label: "workboard-slash-help:workboard",
+            phase: "slash:help",
+            pluginId: "workboard",
+            status: 0,
+          }),
+        ]),
+      );
+      const slashHelpLogPath = slashHelpRow?.logPath;
+      expect(slashHelpLogPath).toEqual(expect.any(String));
+      await expect(fs.readFile(slashHelpLogPath as string, "utf8")).resolves.toContain(
+        "Usage: openclaw workboard",
+      );
+      return;
+    }
 
-    const skipOutputDir = path.join(repoRoot, "artifacts-skip");
-    const skipResult = spawnSync(
-      process.execPath,
-      [
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
-        "--repo-root",
-        repoRoot,
-        "--output-dir",
-        skipOutputDir,
-        "--skip-prebuild",
-        "--skip-qa",
-        "--skip-slash-help",
-        "--plugin",
-        "workboard",
-      ],
-      {
-        cwd: path.resolve("."),
-        encoding: "utf8",
-      },
-    );
+    if (mode === "skip") {
+      expect(summary.failures).toEqual([]);
+      expect(summary.rows).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            phase: "slash:help",
+            pluginId: "workboard",
+          }),
+        ]),
+      );
+      return;
+    }
 
-    expect(skipResult.status, skipResult.stderr).toBe(0);
-    const skipSummary = JSON.parse(
-      await fs.readFile(path.join(skipOutputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
-    );
-    expect(skipSummary.failures).toEqual([]);
-    expect(skipSummary.rows).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          phase: "slash:help",
-          pluginId: "workboard",
-        }),
-      ]),
-    );
-
-    const slashOnlyOutputDir = path.join(repoRoot, "artifacts-slash-only");
-    const slashOnlyResult = spawnSync(
-      process.execPath,
-      [
-        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
-        "--repo-root",
-        repoRoot,
-        "--output-dir",
-        slashOnlyOutputDir,
-        "--skip-prebuild",
-        "--skip-lifecycle",
-        "--skip-qa",
-        "--plugin",
-        "workboard",
-      ],
-      {
-        cwd: path.resolve("."),
-        encoding: "utf8",
-      },
-    );
-
-    expect(slashOnlyResult.status, slashOnlyResult.stderr).toBe(1);
-    const slashOnlySummary = JSON.parse(
-      await fs.readFile(
-        path.join(slashOnlyOutputDir, "plugin-gateway-gauntlet-summary.json"),
-        "utf8",
-      ),
-    );
-    expect(slashOnlySummary.guardFailures).toEqual([]);
-    expect(slashOnlySummary.failures).toEqual([
+    expect(summary.guardFailures).toEqual([]);
+    expect(summary.failures).toEqual([
       expect.objectContaining({
         label: "workboard-slash-workboard",
         phase: "slash:help",

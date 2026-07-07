@@ -40,6 +40,10 @@ const hasFlag = (flag: string) => argv.includes(flag);
 const BOOLEAN_FLAGS = new Set(["--dangerous", "--help", "-h", "--json"]);
 const VALUE_FLAGS = new Set(["--node", "--token", "--url", "--wait-seconds"]);
 
+function isMissingOptionValue(value: string | undefined): boolean {
+  return !value || BOOLEAN_FLAGS.has(value) || VALUE_FLAGS.has(value) || value.startsWith("--");
+}
+
 function failCli(message: string): never {
   writeStderrLine(message);
   process.exit(1);
@@ -53,7 +57,7 @@ function validateArgs(): void {
     }
     if (VALUE_FLAGS.has(arg)) {
       const value = argv[index + 1];
-      if (!value || value.startsWith("--")) {
+      if (isMissingOptionValue(value)) {
         failCli(`${arg} requires a value`);
       }
       index += 1;
@@ -63,11 +67,11 @@ function validateArgs(): void {
   }
 }
 
+validateArgs();
 if (hasFlag("--help") || hasFlag("-h")) {
   writeStdoutLine(usage());
   process.exit(0);
 }
-validateArgs();
 
 type NodeListPayload = {
   ts?: number;

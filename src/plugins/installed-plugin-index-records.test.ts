@@ -594,6 +594,12 @@ describe("plugin index install records store", () => {
           clawpackManifestSha256:
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
           clawpackSize: 4096,
+          clawhubTrustDisposition: "review-required",
+          clawhubTrustScanStatus: "suspicious",
+          clawhubTrustReasons: ["payload_strings"],
+          clawhubTrustPending: true,
+          clawhubTrustCheckedAt: "2026-05-14T18:00:00.000Z",
+          clawhubTrustAcknowledgedAt: "2026-05-14T18:00:03.000Z",
         },
       },
       { stateDir, candidates: [candidate] },
@@ -612,6 +618,12 @@ describe("plugin index install records store", () => {
       clawpackSpecVersion: 1,
       clawpackManifestSha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       clawpackSize: 4096,
+      clawhubTrustDisposition: "review-required",
+      clawhubTrustScanStatus: "suspicious",
+      clawhubTrustReasons: ["payload_strings"],
+      clawhubTrustPending: true,
+      clawhubTrustCheckedAt: "2026-05-14T18:00:00.000Z",
+      clawhubTrustAcknowledgedAt: "2026-05-14T18:00:03.000Z",
     });
   });
 

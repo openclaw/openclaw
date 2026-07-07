@@ -4,8 +4,9 @@ import {
   markdownToTelegramChunks,
   markdownToTelegramHtml,
   markdownToTelegramRichHtml,
+  materializeTelegramRichHtmlLineBreaks,
+  normalizeTelegramOutboundRichHtml,
   renderTelegramHtmlText,
-  sanitizeTelegramRichHtml,
   splitTelegramHtmlChunks,
   telegramHtmlToPlainTextFallback,
 } from "./format.js";
@@ -28,6 +29,11 @@ describe("markdownToTelegramHtml", () => {
         "escapes unsupported raw HTML",
         "<script>nope</script>",
         "&lt;script&gt;nope&lt;/script&gt;",
+      ],
+      [
+        "escapes literal reasoning-looking tags",
+        "Before <think>literal tag text after",
+        "Before &lt;think&gt;literal tag text after",
       ],
       ["escapes unsafe characters", "a & b < c", "a &amp; b &lt; c"],
       ["renders paragraphs with blank lines", "first\n\nsecond", "first\n\nsecond"],
@@ -88,6 +94,78 @@ describe("markdownToTelegramHtml", () => {
     expect(markdownToTelegramRichHtml("<sup>1</sup>")).toBe("<sup>1</sup>");
   });
 
+  it("renders bold spans that close before CJK punctuation in rich markdown", () => {
+    expect(markdownToTelegramRichHtml("边界：**社区显示：**Fable 与 **有效**。")).toBe(
+      "边界：<b>社区显示：</b>Fable 与 <b>有效</b>。",
+    );
+  });
+
+  it("materializes inline and paragraph newlines as <br> for rich messages", () => {
+    // The exact reported symptom: literal "• " bullets (not Markdown list markers)
+    // joined by soft breaks, which Bot API 10.1 rich messages collapse without <br>.
+    expect(
+      materializeTelegramRichHtmlLineBreaks(
+        "Start here:\n\n• Florist - Red Bird\n• Tomberlin - Seventeen",
+      ),
+    ).toBe("Start here:<br><br>• Florist - Red Bird<br>• Tomberlin - Seventeen");
+    expect(materializeTelegramRichHtmlLineBreaks("Line one\nLine two")).toBe(
+      "Line one<br>Line two",
+    );
+    // Soft breaks inside an inline-styled block (blockquote) also collapse.
+    expect(materializeTelegramRichHtmlLineBreaks("<blockquote>one\ntwo</blockquote>")).toBe(
+      "<blockquote>one<br>two</blockquote>",
+    );
+    expect(
+      materializeTelegramRichHtmlLineBreaks('<b>one</b>\n<a href="https://example.com">two</a>'),
+    ).toBe('<b>one</b><br><a href="https://example.com">two</a>');
+  });
+
+  it("keeps newlines literal inside code, pre, and math", () => {
+    expect(materializeTelegramRichHtmlLineBreaks("<pre><code>first\nsecond\n</code></pre>")).toBe(
+      "<pre><code>first\nsecond\n</code></pre>",
+    );
+    expect(materializeTelegramRichHtmlLineBreaks("<code>a\nb</code>")).toBe("<code>a\nb</code>");
+    expect(materializeTelegramRichHtmlLineBreaks("<tg-math-block>x\ny</tg-math-block>")).toBe(
+      "<tg-math-block>x\ny</tg-math-block>",
+    );
+  });
+
+  it("preserves structural newlines that only separate block tags", () => {
+    // Block tags already break; a stray <br> would add a blank line or land as an
+    // invalid container child. Mixed text hugging a block keeps its boundary \n too.
+    const blocks = "<h2>Plan</h2>\n<table><tbody><tr><td>A</td></tr></tbody></table>";
+    expect(materializeTelegramRichHtmlLineBreaks(blocks)).toBe(blocks);
+    expect(
+      materializeTelegramRichHtmlLineBreaks(
+        'A\n\n<figure><img src="https://x/a.jpg"/></figure>\n\nB',
+      ),
+    ).toBe('A\n\n<figure><img src="https://x/a.jpg"/></figure>\n\nB');
+  });
+
+  it("does not let a self-closing literal tag swallow later line breaks", () => {
+    expect(materializeTelegramRichHtmlLineBreaks("<tg-math/>\na\nb")).toBe("<tg-math/><br>a<br>b");
+  });
+
+  it("does not inject <br> into pretty-printed rich containers", () => {
+    // Explicit rich HTML can arrive pretty-printed; newlines between or inside
+    // table/figure/details container children are layout, not prose, and the
+    // block-counting set omits thead/tbody/td/th/caption/figcaption/summary.
+    const table =
+      "<table>\n<thead>\n<tr><th>H</th></tr>\n</thead>\n<tbody>\n<tr><td>A</td></tr>\n</tbody>\n</table>";
+    expect(materializeTelegramRichHtmlLineBreaks(table)).toBe(table);
+    const figure =
+      '<figure>\n<img src="https://x/a.jpg"/>\n<figcaption>\nCap\n</figcaption>\n</figure>';
+    expect(materializeTelegramRichHtmlLineBreaks(figure)).toBe(figure);
+    const details = "<details>\n<summary>\nMore\n</summary>\nBody\n</details>";
+    expect(materializeTelegramRichHtmlLineBreaks(details)).toBe(details);
+  });
+
+  it("keeps existing <br> tags intact without doubling adjacent newlines", () => {
+    expect(materializeTelegramRichHtmlLineBreaks("a<br>b\nc")).toBe("a<br>b<br>c");
+    // A newline hugging an existing <br> stays literal — the break already exists.
+    expect(materializeTelegramRichHtmlLineBreaks("line1<br>\nline2")).toBe("line1<br>\nline2");
+  });
+
   it("preserves rich table, details, quote, checklist, anchor, and math HTML", () => {
     const input = [
       '<a name="top"></a>',
@@ -127,11 +205,51 @@ describe("markdownToTelegramHtml", () => {
     );
   });
 
-  it("preserves supported raw rich HTML tables during sanitization", () => {
+  it("normalizes supported raw rich HTML tables during sanitization", () => {
     const input =
-      '<table bordered><caption>Scores</caption><tbody><tr><td>A</td><td align="right">1</td></tr></tbody></table>';
+      '<table class="model"><tr data-row="head"><td>Rank</td><td>Model</td><td>Score</td></tr><tr><td>4</td><td>Claude Opus</td><td>78.16%</td></tr></table>';
 
-    expect(sanitizeTelegramRichHtml(input)).toBe(input);
+    expect(normalizeTelegramOutboundRichHtml(input).html).toBe(
+      "<table bordered striped><thead><tr><th>Rank</th><th>Model</th><th>Score</th></tr></thead><tbody><tr><td>4</td><td>Claude Opus</td><td>78.16%</td></tr></tbody></table>",
+    );
+  });
+
+  it("preserves raw rich HTML table captions and alignment during normalization", () => {
+    const input =
+      '<table bordered><caption>Scores</caption><tbody><tr><td align="right">Rank</td><td>Model</td></tr><tr><td align="right">4</td><td>Claude Opus</td></tr></tbody></table>';
+
+    expect(normalizeTelegramOutboundRichHtml(input).html).toBe(
+      '<table bordered striped><caption>Scores</caption><thead><tr><th align="right">Rank</th><th>Model</th></tr></thead><tbody><tr><td align="right">4</td><td>Claude Opus</td></tr></tbody></table>',
+    );
+  });
+
+  it("preserves raw rich HTML table colspans during normalization", () => {
+    const input =
+      '<table><tr><th>Name</th><th colspan="2" align="right">Total</th></tr><tr><td>A</td><td>1</td><td>2</td></tr></table>';
+
+    expect(normalizeTelegramOutboundRichHtml(input).html).toBe(
+      '<table bordered striped><thead><tr><th>Name</th><th align="right" colspan="2">Total</th></tr></thead><tbody><tr><td>A</td><td>1</td><td>2</td></tr></tbody></table>',
+    );
+  });
+
+  it("keeps canonical rich tables idempotent during outbound normalization", () => {
+    const html = markdownToTelegramRichHtml(
+      "| Feature | Link |\n| --- | --- |\n| **API** | [docs](https://example.com) |",
+    );
+
+    expect(normalizeTelegramOutboundRichHtml(html).html).toBe(html.trim());
+  });
+
+  it("materializes literal rich HTML newline escapes outside code", () => {
+    expect(normalizeTelegramOutboundRichHtml("Alpha\\tBeta\\nGamma").html).toBe(
+      "Alpha\tBeta<br>Gamma",
+    );
+  });
+
+  it("keeps literal rich HTML newline escapes inside code and pre", () => {
+    const html = "<code>Alpha\\nBeta\\tGamma</code><pre>One\\nTwo\\tThree</pre>";
+
+    expect(normalizeTelegramOutboundRichHtml(html).html).toBe(html);
   });
 
   it("isolates rich media tags as blocks", () => {
@@ -187,7 +305,7 @@ describe("markdownToTelegramHtml", () => {
         `| ${Array.from({ length: columns }, (_, index) => String(index + 1)).join(" | ")} |`,
       ].join("\n");
 
-    expect(markdownToTelegramRichHtml(table(20))).toContain("<table>");
+    expect(markdownToTelegramRichHtml(table(20))).toContain("<table bordered striped>");
     expect(markdownToTelegramRichHtml(table(21))).toContain("<pre><code>");
     expect(markdownToTelegramRichHtml(table(2), { tableMode: "code" })).toContain("<pre><code>");
     expect(markdownToTelegramRichHtml(table(2), { tableMode: "code" })).not.toContain("<table>");
@@ -196,19 +314,28 @@ describe("markdownToTelegramHtml", () => {
   it("falls back over-wide raw rich HTML tables", () => {
     const cells = Array.from({ length: 21 }, (_, index) => `<td>C${index + 1}</td>`).join("");
     const html = `<table><caption>Wide</caption><tbody><tr>${cells}</tr></tbody></table>`;
-    const sanitized = sanitizeTelegramRichHtml(html);
+    const sanitized = normalizeTelegramOutboundRichHtml(html);
 
-    expect(sanitized).toContain("<pre><code>Wide");
-    expect(sanitized).toContain("C21");
-    expect(sanitized).not.toContain("<table>");
+    expect(sanitized.html).toContain("<pre><code>Wide");
+    expect(sanitized.html).toContain("C21");
+    expect(sanitized.html).not.toContain("<table>");
+    expect(sanitized.degradationReasons).toEqual(["table-ascii"]);
+  });
+
+  it("falls back malformed raw rich HTML tables", () => {
+    const sanitized = normalizeTelegramOutboundRichHtml("<table><caption>Broken</caption></table>");
+
+    expect(sanitized.html).toContain("<pre><code>Broken</code></pre>");
+    expect(sanitized.degradationReasons).toEqual(["table-ascii"]);
   });
 
   it("clamps raw rich HTML table colspans before fallback", () => {
     const html = '<table><tbody><tr><td colspan="1000000000">x</td></tr></tbody></table>';
-    const sanitized = sanitizeTelegramRichHtml(html);
+    const sanitized = normalizeTelegramOutboundRichHtml(html);
 
-    expect(sanitized).toContain("<pre><code>");
-    expect(sanitized.length).toBeLessThan(300);
+    expect(sanitized.html).toContain("<pre><code>");
+    expect(sanitized.html.length).toBeLessThan(300);
+    expect(sanitized.degradationReasons).toEqual(["table-ascii"]);
   });
 
   it("renders block-mode tables as code in legacy Telegram HTML", () => {
@@ -226,6 +353,19 @@ describe("markdownToTelegramHtml", () => {
 
     expect(html).toContain("<td><b>API</b></td>");
     expect(html).toContain('<td><a href="https://example.com">docs</a></td>');
+  });
+
+  it("preserves markdown table column alignment in rich tables", () => {
+    const html = markdownToTelegramRichHtml(
+      "| Feature | Status | Count |\n| :--- | :---: | ---: |\n| Rich tables | Fixed | 2 |",
+    );
+
+    expect(html).toContain('<th align="left">Feature</th>');
+    expect(html).toContain('<th align="center">Status</th>');
+    expect(html).toContain('<th align="right">Count</th>');
+    expect(html).toContain('<td align="left">Rich tables</td>');
+    expect(html).toContain('<td align="center">Fixed</td>');
+    expect(html).toContain('<td align="right">2</td>');
   });
 
   it("does not auto-linkify bare URLs when entity detection is skipped", () => {
@@ -472,6 +612,27 @@ describe("markdownToTelegramHtml", () => {
         "<table><thead><tr><th>Name</th><th>Age</th></tr></thead><tbody><tr><td>Alice</td><td>30</td></tr></tbody></table>",
       ),
     ).toBe("Name | Age\nAlice | 30");
+  });
+
+  it("does not decode surrogate numeric entities into Telegram HTML fallback text", () => {
+    const cases = [
+      ["hex high surrogate", "x &#xD800; y", "x &#xD800; y"],
+      ["decimal high surrogate", "x &#55296; y", "x &#55296; y"],
+      ["hex low surrogate", "x &#xDFFF; y", "x &#xDFFF; y"],
+    ] as const;
+
+    for (const [name, input, expected] of cases) {
+      const output = telegramHtmlToPlainTextFallback(input);
+      expect(output, name).toBe(expected);
+      expect(containsLoneSurrogate(output), name).toBe(false);
+    }
+  });
+
+  it("continues to decode valid astral numeric entities in Telegram HTML fallback text", () => {
+    const output = telegramHtmlToPlainTextFallback("x &#x1F600; &#128512; y");
+
+    expect(output).toBe("x 😀 😀 y");
+    expect(containsLoneSurrogate(output)).toBe(false);
   });
 
   it("fails loudly when tag overhead leaves no room for text", () => {

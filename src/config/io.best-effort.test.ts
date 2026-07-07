@@ -1,6 +1,14 @@
 // Covers best-effort config IO reads and warning behavior.
 import fs from "node:fs/promises";
-import { describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { setBundledPluginsDirOverrideForTest } from "../plugins/bundled-dir.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   readBestEffortConfig,
@@ -8,12 +16,41 @@ import {
   readConfigFileSnapshot,
   readSourceConfigBestEffort,
 } from "./config.js";
+import { applyProviderConfigDefaultsForConfig } from "./provider-policy.js";
 import { withTempHome, writeOpenClawConfig } from "./test-helpers.js";
 
+type ConfigHealthDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
+
+function readConfigHealthRow(env: NodeJS.ProcessEnv, configPath: string) {
+  const { db } = openOpenClawStateDatabase({ env });
+  const healthDb = getNodeSqliteKysely<ConfigHealthDatabase>(db);
+  return executeSqliteQueryTakeFirstSync(
+    db,
+    healthDb
+      .selectFrom("config_health_entries")
+      .select(["config_path", "last_known_good_json"])
+      .where("config_path", "=", configPath),
+  );
+}
+
 describe("readBestEffortConfig", () => {
+  beforeAll(() => {
+    setBundledPluginsDirOverrideForTest(path.resolve(import.meta.dirname, "../../extensions"));
+    // Materialized reads use the process-stable provider policy cache.
+    applyProviderConfigDefaultsForConfig({ provider: "anthropic", config: {}, env: {} });
+  });
+
+  afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
+  });
+
+  afterAll(() => {
+    setBundledPluginsDirOverrideForTest(undefined);
+  });
+
   it("can read snapshots without updating config observation state", async () => {
     await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
+      const configPath = await writeOpenClawConfig(home, {
         gateway: { mode: "local" },
       });
 
@@ -24,7 +61,11 @@ describe("readBestEffortConfig", () => {
 
       await readConfigFileSnapshot();
 
-      await expect(fs.stat(healthPath)).resolves.toMatchObject({ isFile: expect.any(Function) });
+      await expect(fs.stat(healthPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(readConfigHealthRow({ ...process.env, HOME: home }, configPath)).toMatchObject({
+        config_path: configPath,
+        last_known_good_json: expect.any(String),
+      });
     });
   });
 

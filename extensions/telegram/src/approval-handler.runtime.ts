@@ -36,14 +36,14 @@ type TelegramPendingDelivery = {
   buttons: ReturnType<typeof resolveTelegramInlineButtons>;
 };
 
-export type TelegramExecApprovalHandlerDeps = {
+type TelegramExecApprovalHandlerDeps = {
   nowMs?: () => number;
   sendTyping?: typeof sendTypingTelegram;
   sendMessage?: typeof sendMessageTelegram;
   editReplyMarkup?: typeof editMessageReplyMarkupTelegram;
 };
 
-export type TelegramApprovalHandlerContext = {
+type TelegramApprovalHandlerContext = {
   token: string;
   deps?: TelegramExecApprovalHandlerDeps;
 };

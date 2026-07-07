@@ -18,7 +18,7 @@ export type SignalRpcError = {
   data?: unknown;
 };
 
-export type SignalRpcResponse<T> = {
+type SignalRpcResponse<T> = {
   jsonrpc?: string;
   result?: T;
   error?: SignalRpcError;

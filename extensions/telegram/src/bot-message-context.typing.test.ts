@@ -82,4 +82,87 @@ describe("buildTelegramMessageContext typing", () => {
 
     expect(sendChatActionHandler.sendChatAction).not.toHaveBeenCalled();
   });
+
+  it("sends forum topic typing after accepted user-request classification and before context construction", async () => {
+    const buildInboundContext = vi.fn(
+      (params: Parameters<typeof buildChannelInboundEventContext>[0]) =>
+        buildChannelInboundEventContext(params as never),
+    );
+    const sendChatActionHandler = createSendChatActionHandler();
+
+    const ctx = await buildTelegramMessageContextForTest({
+      message: {
+        chat: { id: -1001234567890, type: "supergroup", title: "Forum", is_forum: true },
+        from: { id: 42, first_name: "Pat" },
+        message_thread_id: 99,
+        text: "hello topic",
+      },
+      resolveGroupRequireMention: () => false,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { requireMention: false },
+        topicConfig: undefined,
+      }),
+      sendChatActionHandler,
+      sessionRuntime: {
+        buildChannelInboundEventContext:
+          buildInboundContext as unknown as typeof buildChannelInboundEventContext,
+      },
+    });
+
+    expect(ctx?.ctxPayload.InboundEventKind).toBe("user_request");
+    expect(ctx?.initialTypingCueSent).toBe(true);
+    expect(sendChatActionHandler.sendChatAction).toHaveBeenCalledWith(-1001234567890, "typing", {
+      message_thread_id: 99,
+    });
+    expect(sendChatActionHandler.sendChatAction.mock.invocationCallOrder[0]).toBeLessThan(
+      buildInboundContext.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("does not send forum topic typing for room events", async () => {
+    const sendChatActionHandler = createSendChatActionHandler();
+
+    const ctx = await buildTelegramMessageContextForTest({
+      cfg: { messages: { groupChat: { unmentionedInbound: "room_event", mentionPatterns: [] } } },
+      message: {
+        chat: { id: -1001234567890, type: "supergroup", title: "Forum", is_forum: true },
+        from: { id: 42, first_name: "Pat" },
+        message_thread_id: 99,
+        text: "ambient chatter",
+      },
+      resolveGroupRequireMention: () => false,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { requireMention: false },
+        topicConfig: undefined,
+      }),
+      sendChatActionHandler,
+    });
+
+    expect(ctx?.ctxPayload.InboundEventKind).toBe("room_event");
+    expect(ctx?.initialTypingCueSent).toBe(false);
+    expect(sendChatActionHandler.sendChatAction).not.toHaveBeenCalled();
+  });
+
+  it("does not send forum topic typing for unaddressed require-mention messages", async () => {
+    const sendChatActionHandler = createSendChatActionHandler();
+
+    await expect(
+      buildTelegramMessageContextForTest({
+        message: {
+          chat: { id: -1001234567890, type: "supergroup", title: "Forum", is_forum: true },
+          from: { id: 42, first_name: "Pat" },
+          message_thread_id: 99,
+          text: "ambient chatter",
+        },
+        resolveGroupRequireMention: () => true,
+        resolveTelegramGroupConfig: () => ({
+          groupConfig: { requireMention: true },
+          topicConfig: undefined,
+        }),
+        sendChatActionHandler,
+      }),
+    ).resolves.toBeNull();
+
+    expect(sendChatActionHandler.sendChatAction).not.toHaveBeenCalled();
+  });
 });

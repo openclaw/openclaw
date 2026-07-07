@@ -9,8 +9,6 @@ import {
   type MSTeamsSsoFetch,
   handleSigninTokenExchangeInvoke,
   handleSigninVerifyStateInvoke,
-  parseSigninTokenExchangeValue,
-  parseSigninVerifyStateValue,
 } from "./sso.js";
 
 function createMemorySsoTokenStore(): MSTeamsSsoTokenStore {
@@ -67,29 +65,6 @@ function createFakeFetch(handlers: Array<(url: string, init?: unknown) => unknow
   };
   return { fetchImpl, calls };
 }
-
-describe("msteams signin invoke value parsers", () => {
-  it("parses signin/tokenExchange values", () => {
-    expect(
-      parseSigninTokenExchangeValue({
-        id: "flow-1",
-        connectionName: "Graph",
-        token: "eyJ...",
-      }),
-    ).toEqual({ id: "flow-1", connectionName: "Graph", token: "eyJ..." });
-  });
-
-  it("rejects non-object signin/tokenExchange values", () => {
-    expect(parseSigninTokenExchangeValue(null)).toBeNull();
-    expect(parseSigninTokenExchangeValue("nope")).toBeNull();
-  });
-
-  it("parses signin/verifyState values", () => {
-    expect(parseSigninVerifyStateValue({ state: "123456" })).toEqual({ state: "123456" });
-    expect(parseSigninVerifyStateValue({})).toEqual({ state: undefined });
-    expect(parseSigninVerifyStateValue(null)).toBeNull();
-  });
-});
 
 describe("handleSigninTokenExchangeInvoke", () => {
   it("exchanges the Teams token and persists the result", async () => {

@@ -6,9 +6,11 @@ import { performance } from "node:perf_hooks";
 
 const DEFAULT_CHECK_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_OUTPUT_MAX_BYTES = 512 * 1024;
-const TIMEOUT_KILL_GRACE_MS = 5_000;
+// Boundary checks are disposable subprocesses; bound descendant cleanup after timeout.
+const TIMEOUT_KILL_GRACE_MS = 250;
 const PROCESS_GROUP_EXIT_POLL_MS = 25;
-const POST_FORCE_KILL_WAIT_MS = 1_000;
+const POST_FORCE_KILL_WAIT_MS = 250;
+const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 
 /** Ordered list of supplemental boundary checks used by CI sharding. */
 export const BOUNDARY_CHECKS = [
@@ -94,6 +96,14 @@ export function resolvePositiveInteger(value, fallback, label = "value") {
     throw new Error(`${label} must be a positive integer; got: ${value}`);
   }
   return parsed;
+}
+
+function resolveTimerTimeoutMs(valueMs) {
+  const value = Number(valueMs);
+  if (!Number.isFinite(value)) {
+    return MAX_TIMER_TIMEOUT_MS;
+  }
+  return Math.min(Math.max(Math.floor(value), 1), MAX_TIMER_TIMEOUT_MS);
 }
 
 /**
@@ -359,6 +369,7 @@ export function runSingleCheck(
   },
 ) {
   return new Promise((resolve) => {
+    const resolvedCheckTimeoutMs = resolveTimerTimeoutMs(checkTimeoutMs);
     const startedAt = performance.now();
     const child = spawn(check.command, check.args, {
       cwd,
@@ -398,7 +409,7 @@ export function runSingleCheck(
     const timeout = setTimeout(() => {
       timedOut = true;
       output.append(
-        `\n[boundary-check] ${check.label} timed out after ${formatDuration(checkTimeoutMs)}; terminating process group\n`,
+        `\n[boundary-check] ${check.label} timed out after ${formatDuration(resolvedCheckTimeoutMs)}; terminating process group\n`,
       );
       terminateChild(child, "SIGTERM");
       forceKillTimer = setTimeout(() => {
@@ -408,7 +419,7 @@ export function runSingleCheck(
         terminateChild(child, "SIGKILL");
       }, TIMEOUT_KILL_GRACE_MS);
       forceKillTimer.unref?.();
-    }, checkTimeoutMs);
+    }, resolvedCheckTimeoutMs);
     timeout.unref?.();
 
     child.stdout.setEncoding("utf8");
@@ -558,7 +569,7 @@ export function parseCliArgs(args, env = process.env) {
     }
     if (arg === "--shard") {
       const value = args[index + 1];
-      if (!value || value.startsWith("--")) {
+      if (!value || value.startsWith("-")) {
         throw new Error("--shard requires a value");
       }
       shardSpec = value;

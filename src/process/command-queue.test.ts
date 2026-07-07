@@ -1,4 +1,5 @@
 // Command queue tests cover bounded command execution and queue ordering.
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { CommandLane } from "./lanes.js";
@@ -24,7 +25,6 @@ type CommandQueueModule = typeof import("./command-queue.js");
 let clearCommandLane: CommandQueueModule["clearCommandLane"];
 let CommandLaneClearedError: CommandQueueModule["CommandLaneClearedError"];
 let CommandLaneTaskTimeoutError: CommandQueueModule["CommandLaneTaskTimeoutError"];
-let enqueueCommand: CommandQueueModule["enqueueCommand"];
 let enqueueCommandInLane: CommandQueueModule["enqueueCommandInLane"];
 let GatewayDrainingError: CommandQueueModule["GatewayDrainingError"];
 let getActiveTaskCount: CommandQueueModule["getActiveTaskCount"];
@@ -68,7 +68,7 @@ function enqueueBlockedMainTask<T = void>(
   release: () => void;
 } {
   const deferred = createDeferred();
-  const task = enqueueCommand(async () => {
+  const task = enqueueCommandInLane(CommandLane.Main, async () => {
     await deferred.promise;
     return (await onRelease?.()) as T;
   });
@@ -97,7 +97,6 @@ describe("command queue", () => {
       clearCommandLane,
       CommandLaneClearedError,
       CommandLaneTaskTimeoutError,
-      enqueueCommand,
       enqueueCommandInLane,
       GatewayDrainingError,
       getActiveTaskCount,
@@ -151,9 +150,9 @@ describe("command queue", () => {
     };
 
     const results = await Promise.all([
-      enqueueCommand(makeTask(1)),
-      enqueueCommand(makeTask(2)),
-      enqueueCommand(makeTask(3)),
+      enqueueCommandInLane(CommandLane.Main, makeTask(1)),
+      enqueueCommandInLane(CommandLane.Main, makeTask(2)),
+      enqueueCommandInLane(CommandLane.Main, makeTask(3)),
     ]);
 
     expect(results).toEqual([1, 2, 3]);
@@ -270,7 +269,7 @@ describe("command queue", () => {
   });
 
   it("logs enqueue depth after push", async () => {
-    const task = enqueueCommand(async () => {});
+    const task = enqueueCommandInLane(CommandLane.Main, async () => {});
 
     expect(diagnosticMocks.logLaneEnqueue).toHaveBeenCalledTimes(1);
     expect(mockCallArg(diagnosticMocks.logLaneEnqueue, "logLaneEnqueue", 1)).toBe(1);
@@ -285,11 +284,11 @@ describe("command queue", () => {
     vi.useFakeTimers();
     try {
       const blocker = createDeferred();
-      const first = enqueueCommand(async () => {
+      const first = enqueueCommandInLane(CommandLane.Main, async () => {
         await blocker.promise;
       });
 
-      const second = enqueueCommand(async () => {}, {
+      const second = enqueueCommandInLane(CommandLane.Main, async () => {}, {
         warnAfterMs: 5,
         onWait: (ms, ahead) => {
           waited = ms;
@@ -499,6 +498,34 @@ describe("command queue", () => {
         activeCount: 0,
         queuedCount: 0,
       });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clamps oversized task timeouts before arming lane timers", async () => {
+    const lane = `timeout-clamp-lane-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    vi.useFakeTimers();
+    try {
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const blocker = createDeferred();
+      const task = enqueueCommandInLane(
+        lane,
+        async () => {
+          await blocker.promise;
+        },
+        { taskTimeoutMs: MAX_TIMER_TIMEOUT_MS + 1 },
+      );
+
+      await Promise.resolve();
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+
+      blocker.resolve();
+      await task;
+      setTimeoutSpy.mockRestore();
     } finally {
       vi.useRealTimers();
     }
@@ -755,7 +782,7 @@ describe("command queue", () => {
     const { task: first, release } = enqueueBlockedMainTask(async () => "first");
 
     // Second task is queued behind the first.
-    const second = enqueueCommand(async () => "second");
+    const second = enqueueCommandInLane(CommandLane.Main, async () => "second");
 
     const removed = clearCommandLane();
     expect(removed).toBe(1); // only the queued (not active) entry
@@ -793,9 +820,9 @@ describe("command queue", () => {
 
   it("rejects new enqueues with GatewayDrainingError after markGatewayDraining", async () => {
     markGatewayDraining();
-    await expect(enqueueCommand(async () => "blocked")).rejects.toBeInstanceOf(
-      GatewayDrainingError,
-    );
+    await expect(
+      enqueueCommandInLane(CommandLane.Main, async () => "blocked"),
+    ).rejects.toBeInstanceOf(GatewayDrainingError);
   });
 
   it("does not affect already-active tasks after markGatewayDraining", async () => {
@@ -808,7 +835,7 @@ describe("command queue", () => {
   it("resetAllLanes clears gateway draining flag and re-allows enqueue", async () => {
     markGatewayDraining();
     resetAllLanes();
-    await expect(enqueueCommand(async () => "ok")).resolves.toBe("ok");
+    await expect(enqueueCommandInLane(CommandLane.Main, async () => "ok")).resolves.toBe("ok");
   });
 
   it("migrates legacy queue state missing activeTaskWaiters without crashing", async () => {

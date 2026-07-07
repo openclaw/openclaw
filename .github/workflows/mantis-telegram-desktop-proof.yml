@@ -556,7 +556,7 @@ jobs:
           name: mantis-telegram-desktop-proof-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.inspect.outputs.output_dir }}
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error
 
       - name: Create Mantis GitHub App token
         id: mantis_app_token

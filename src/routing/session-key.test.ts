@@ -1,5 +1,6 @@
 // Routing session key tests cover route-derived session key behavior.
 import { describe, expect, it } from "vitest";
+import { resolveSessionStoreAgentId } from "../gateway/session-store-key.js";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import {
   getSubagentDepth,
@@ -108,8 +109,11 @@ describe("getSubagentDepth", () => {
     { key: "main", expected: 0 },
     { key: undefined, expected: 0 },
     { key: "agent:main:subagent:parent:subagent:child", expected: 2 },
+    { key: "subagent:worker", expected: 1 },
+    { key: "subagent:parent:subagent:child", expected: 2 },
   ] as const)("returns $expected for session key %j", ({ key, expected }) => {
     expect(getSubagentDepth(key)).toBe(expected);
+
   });
 });
 
@@ -129,13 +133,29 @@ describe("isCronSessionKey", () => {
 
 describe("deriveSessionChatTypeFromKey", () => {
   it.each([
+    { key: "agent:main:direct:user1", expected: "direct" },
     { key: "agent:main:discord:direct:user1", expected: "direct" },
     { key: "agent:main:telegram:group:g1", expected: "group" },
     { key: "agent:main:discord:channel:c1", expected: "channel" },
     { key: "agent:main:discord:guild-123:channel-456", expected: "channel" },
+    { key: "agent:main:channel:legacy-room", expected: "channel" },
+    { key: "agent:main:channel:!room:example.org", expected: "channel" },
+    { key: "agent:main:channel:direct:user", expected: "channel" },
+    { key: "agent:main:group:room:part", expected: "group" },
+    { key: "agent:main:group:dm:user", expected: "group" },
     { key: "agent:main:whatsapp:123@g.us", expected: "group" },
     { key: "agent:main:telegram:dm:123456", expected: "direct" },
     { key: "telegram:dm:123456", expected: "direct" },
+    { key: "agent:main:matrix:channel:!Room:example.org", expected: "channel" },
+    { key: "agent:main:matrix:channel:!room:[2001:db8::1]", expected: "channel" },
+    { key: "agent:voice:agent:other:matrix:channel:!room:example.org", expected: "unknown" },
+    { key: "agent:main:direct", expected: "unknown" },
+    { key: "agent:main:demo:acct:channel", expected: "unknown" },
+    { key: "agent:main:telegram:group:direct:user", expected: "unknown" },
+    { key: "agent:main:direct:group:room", expected: "unknown" },
+    { key: "agent:main:dm:account:group:room", expected: "unknown" },
+    { key: "agent:main:demo::channel:room", expected: "unknown" },
+    { key: "agent::demo:direct:user", expected: "unknown" },
     { key: "agent:main:main", expected: "unknown" },
     { key: "agent:main", expected: "unknown" },
     { key: "", expected: "unknown" },
@@ -143,7 +163,7 @@ describe("deriveSessionChatTypeFromKey", () => {
     expect(deriveSessionChatTypeFromKey(key)).toBe(expected);
   });
 
-  it("uses plugin-owned legacy chat-type hooks after generic token parsing", () => {
+  it("uses plugin-owned legacy chat-type hooks after canonical parsing", () => {
     expect(
       deriveSessionChatTypeFromKey("legacy-room:abc", [
         (sessionKey) => (sessionKey.startsWith("legacy-room:") ? "channel" : undefined),
@@ -195,6 +215,16 @@ describe("session key canonicalization", () => {
           agentId: "main",
           rest: "hook:webhook:42",
         }),
+    },
+    {
+      name: "preserves empty segments inside opaque agent-scoped tails",
+      run: () => {
+        expect(parseAgentSessionKey("agent:voice:room::part")).toEqual({
+          agentId: "voice",
+          rest: "room::part",
+        });
+        expect(resolveSessionStoreAgentId({}, "agent:voice:room::part")).toBe("voice");
+      },
     },
     {
       name: "does not double-prefix already-qualified agent keys",

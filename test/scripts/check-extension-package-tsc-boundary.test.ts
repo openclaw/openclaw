@@ -432,6 +432,19 @@ describe("check-extension-package-tsc-boundary", () => {
     expect(elapsedMs).toBeGreaterThanOrEqual(0);
   }, 30_000);
 
+  it("clamps oversized async node step timers before scheduling", async () => {
+    await expect(
+      runNodeStepAsync(
+        "slow-success",
+        ["--eval", "setTimeout(() => process.exit(0), 25);"],
+        Number.MAX_SAFE_INTEGER,
+      ),
+    ).resolves.toMatchObject({
+      stderr: "",
+      stdout: "",
+    });
+  });
+
   it("keeps async node step failure output bounded", async () => {
     const child = new EventEmitter() as EventEmitter & {
       kill: (signal?: NodeJS.Signals | number) => boolean;

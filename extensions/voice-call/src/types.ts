@@ -106,6 +106,10 @@ const NormalizedEventSchema = z.discriminatedUnion("type", [
     text: z.string(),
   }),
   BaseEventSchema.extend({
+    type: z.literal("call.assistant-speech"),
+    transcript: z.string(),
+  }),
+  BaseEventSchema.extend({
     type: z.literal("call.speech"),
     transcript: z.string(),
     isFinal: z.boolean(),
@@ -258,6 +262,8 @@ export type PlayTtsInput = {
   text: string;
   voice?: string;
   locale?: string;
+  /** Keep collecting speech after playback when the provider owns the listening XML. */
+  listenAfterPlayback?: boolean;
 };
 
 export type SendDtmfInput = {

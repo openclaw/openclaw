@@ -198,10 +198,11 @@ plugins.
     | `/think <level\|default>` | Set the thinking level or clear the session override. Aliases: `/thinking`, `/t` |
     | `/verbose on\|off\|full` | Toggle verbose output. Alias: `/v` |
     | `/trace on\|off` | Toggle plugin trace output for the current session |
-    | `/fast [status\|on\|off\|default]` | Show, set, or clear fast mode |
+    | `/fast [status\|auto\|on\|off\|default]` | Show, set, or clear fast mode |
     | `/reasoning [on\|off\|stream]` | Toggle reasoning visibility. Alias: `/reason` |
     | `/elevated [on\|off\|ask\|full]` | Toggle elevated mode. Alias: `/elev` |
     | `/exec host=<auto\|sandbox\|gateway\|node> security=<deny\|allowlist\|full> ask=<off\|on-miss\|always> node=<id>` | Show or set exec defaults |
+    | `/login [codex\|openai\|openai-codex]` | Pair Codex/OpenAI login from a private chat or Web UI session. Owner/admin only |
     | `/model [name\|#\|status]` | Show or set the model |
     | `/models [provider] [page] [limit=<n>\|all]` | List configured/auth-available providers or models |
     | `/queue <mode>` | Manage active-run queue behavior. See [Queue](/concepts/queue) and [Queue steering](/concepts/queue-steering) |
@@ -211,7 +212,7 @@ plugins.
       <Accordion title="verbose / trace / fast / reasoning safety">
         - `/verbose` is for debugging — keep it **off** in normal use.
         - `/trace` reveals only plugin-owned trace/debug lines; normal verbose chatter stays off.
-        - `/fast on|off` persists a session override; use the Sessions UI `inherit` option to clear it.
+        - `/fast auto|on|off` persists a session override; use the Sessions UI `inherit` option to clear it.
         - `/fast` is provider-specific: OpenAI/Codex map it to `service_tier=priority`; direct Anthropic requests map it to `service_tier=auto` or `standard_only`.
         - `/reasoning`, `/verbose`, and `/trace` are risky in group settings — they may reveal internal reasoning or plugin diagnostics. Keep them off in group chats.
 
@@ -233,20 +234,21 @@ plugins.
     | `/commands` | Show the generated command catalog |
     | `/tools [compact\|verbose]` | Show what the current agent can use right now |
     | `/status` | Show execution/runtime status, Gateway and system uptime, plugin health, plus provider usage/quota |
-    | `/status plugins` | Show detailed plugin health: load errors, quarantines, channel failures, dependency issues, compatibility notices |
-    | `/goal [status\|start\|pause\|resume\|complete\|block\|clear] ...` | Manage the current session's durable [goal](/tools/goal) |
+    | `/status plugins` | Show detailed plugin health: load errors, quarantines, channel plugin failures, dependency issues, compatibility notices. Requires `commands.plugins: true` |
+    | `/goal [status\|start\|edit\|pause\|resume\|complete\|block\|clear] ...` | Manage the current session's durable [goal](/tools/goal) |
     | `/diagnostics [note]` | Owner-only support-report flow. Asks for exec approval every time |
     | `/crestodian <request>` | Run the Crestodian setup and repair helper from an owner DM |
     | `/tasks` | List active/recent background tasks for the current session |
     | `/context [list\|detail\|map\|json]` | Explain how context is assembled |
     | `/whoami` | Show your sender id. Alias: `/id` |
-    | `/usage off\|tokens\|full\|cost` | Control the per-response usage footer or print a local cost summary |
+    | `/usage off\|tokens\|full\|reset\|cost` | Control the per-response usage footer (`reset`/`inherit`/`clear`/`default` clears the session override to re-inherit the configured default) or print a local cost summary |
   </Accordion>
 
   <Accordion title="Skills, allowlists, approvals">
     | Command | Description |
     | --- | --- |
     | `/skill <name> [input]` | Run a skill by name |
+    | `/learn [request]` | Draft one reviewable skill from the current conversation or named sources through [Skill Workshop](/tools/skill-workshop) |
     | `/allowlist [list\|add\|remove] ...` | Manage allowlist entries. Text-only |
     | `/approve <id> <decision>` | Resolve exec or plugin approval prompts |
     | `/btw <question>` | Ask a side question without changing session context. Alias: `/side`. See [BTW](/tools/btw) |
@@ -256,7 +258,7 @@ plugins.
     | Command | Description |
     | --- | --- |
     | `/subagents list\|log\|info` | Inspect sub-agent runs for the current session |
-    | `/acp spawn\|cancel\|steer\|close\|sessions\|status\|set-mode\|set\|cwd\|permissions\|timeout\|model\|reset-options\|doctor\|install\|help` | Manage ACP sessions and runtime options |
+    | `/acp spawn\|cancel\|steer\|close\|sessions\|status\|set-mode\|set\|cwd\|permissions\|timeout\|model\|reset-options\|doctor\|install\|help` | Manage ACP sessions and runtime options. Runtime controls require external owner or internal Gateway admin identity |
     | `/focus <target>` | Bind the current Discord thread or Telegram topic to a session target |
     | `/unfocus` | Remove the current thread binding |
     | `/agents` | List thread-bound agents for the current session |
@@ -301,14 +303,14 @@ must be in the same identity group.
 
 ### Bundled plugin commands
 
-| Command                                                                                      | Description                                                                       |
-| -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `/dreaming [on\|off\|status\|help]`                                                          | Toggle memory dreaming. See [Dreaming](/concepts/dreaming)                        |
-| `/pair [qr\|status\|pending\|approve\|cleanup\|notify]`                                      | Manage device pairing. See [Pairing](/channels/pairing)                           |
-| `/phone status\|arm ...\|disarm`                                                             | Temporarily arm high-risk phone node commands                                     |
-| `/voice status\|list\|set <voiceId>`                                                         | Manage Talk voice config. Discord native name: `/talkvoice`                       |
-| `/card ...`                                                                                  | Send LINE rich card presets. See [LINE](/channels/line)                           |
-| `/codex status\|models\|threads\|resume\|compact\|review\|diagnostics\|account\|mcp\|skills` | Control the Codex app-server harness. See [Codex harness](/plugins/codex-harness) |
+| Command                                                 | Description                                                                                                                                                                                    |
+| ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/dreaming [on\|off\|status\|help]`                     | Toggle memory dreaming (owner or Gateway admin). See [Dreaming](/concepts/dreaming)                                                                                                            |
+| `/pair [qr\|status\|pending\|approve\|cleanup\|notify]` | Manage device pairing. See [Pairing](/channels/pairing)                                                                                                                                        |
+| `/phone status\|arm ...\|disarm`                        | Temporarily arm high-risk phone node commands                                                                                                                                                  |
+| `/voice status\|list\|set <voiceId>`                    | Manage Talk voice config. Discord native name: `/talkvoice`                                                                                                                                    |
+| `/card ...`                                             | Send LINE rich card presets. See [LINE](/channels/line)                                                                                                                                        |
+| `/codex <action> ...`                                   | Bind, steer, and inspect the Codex app-server harness (status, threads, resume, model, fast, permissions, compact, review, mcp, skills, and more). See [Codex harness](/plugins/codex-harness) |
 
 QQBot-only: `/bot-ping`, `/bot-version`, `/bot-help`, `/bot-upgrade`, `/bot-logs`
 
@@ -339,7 +341,7 @@ User-invocable skills are exposed as slash commands:
   </Accordion>
 </AccordionGroup>
 
-## `/tools` — what the agent can use now
+## `/tools`: what the agent can use now
 
 `/tools` answers a runtime question: **what this agent can use right now in this
 conversation** — not a static config catalog.
@@ -353,7 +355,7 @@ Results are session-scoped. Changing agent, channel, thread, sender
 authorization, or model can change the output. For profile and override editing,
 use the Control UI Tools panel or config surfaces.
 
-## `/model` — model selection
+## `/model`: model selection
 
 ```text
 /model             # show model picker
@@ -369,7 +371,7 @@ On Discord, `/model` and `/models` open an interactive picker with provider and
 model dropdowns. The picker respects `agents.defaults.models`, including
 `provider/*` entries.
 
-## `/config` — on-disk config writes
+## `/config`: on-disk config writes
 
 <Note>
   Owner-only. Disabled by default — enable with `commands.config: true`.
@@ -386,7 +388,7 @@ model dropdowns. The picker respects `agents.defaults.models`, including
 Config is validated before write. Invalid changes are rejected. `/config`
 updates persist across restarts.
 
-## `/mcp` — MCP server config
+## `/mcp`: MCP server config
 
 <Note>
   Owner-only. Disabled by default — enable with `commands.mcp: true`.
@@ -401,7 +403,7 @@ updates persist across restarts.
 
 `/mcp` stores config in OpenClaw config, not embedded-agent project settings.
 
-## `/debug` — runtime-only overrides
+## `/debug`: runtime-only overrides
 
 <Note>
   Owner-only. Disabled by default — enable with `commands.debug: true`.
@@ -416,7 +418,7 @@ updates persist across restarts.
 /debug reset
 ```
 
-## `/plugins` — plugin management
+## `/plugins`: plugin management
 
 <Note>
   Owner-only for writes. Disabled by default — enable with `commands.plugins: true`.
@@ -435,7 +437,7 @@ updates persist across restarts.
 plugin runtime for new agent turns. `/plugins install` restarts managed
 Gateways automatically because plugin source modules changed.
 
-## `/trace` — plugin trace output
+## `/trace`: plugin trace output
 
 ```text
 /trace          # show current trace state
@@ -447,7 +449,7 @@ Gateways automatically because plugin source modules changed.
 mode. It does not replace `/debug` (runtime overrides) or `/verbose` (normal
 tool output).
 
-## `/btw` — side questions
+## `/btw`: side questions
 
 `/btw` is a quick side question about the current session context. Alias: `/side`.
 
@@ -473,6 +475,7 @@ See [BTW side questions](/tools/btw) for the full behavior.
     - **Native Discord commands:** `agent:<agentId>:discord:slash:<userId>`
     - **Native Slack commands:** `agent:<agentId>:slack:slash:<userId>` (prefix configurable via `channels.slack.slashCommand.sessionPrefix`)
     - **Native Telegram commands:** `telegram:slash:<userId>` (targets the chat session via `CommandTargetSessionKey`)
+    - **`/login codex`** sends device pairing codes only through private chat or Web UI response paths. Telegram group/topic invocations ask the owner to DM the bot instead.
     - **`/stop`** targets the active chat session to abort the current run.
 
   </Accordion>

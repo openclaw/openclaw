@@ -29,6 +29,34 @@ function escapeQmdExactFilePattern(fileName: string): string {
   return fileName.replace(/[\\*?[\]{}()!+@]/g, "\\$&");
 }
 
+const WINDOWS_COMMAND_EXTENSION_RE =
+  /^((?:[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+[\\/]).*?\.(?:bat|cmd|cjs|exe|js|mjs|ps1))(?:\s+|$)/i;
+
+function resolveQmdCommand(rawCommand: string): string {
+  const trimmedCommand = rawCommand.trim();
+  const windowsCommand = resolveWindowsAbsoluteCommand(trimmedCommand);
+  if (windowsCommand) {
+    return windowsCommand;
+  }
+
+  const parsedCommand = splitShellArgs(trimmedCommand);
+  return parsedCommand?.[0] || trimmedCommand.split(/\s+/)[0] || "qmd";
+}
+
+function resolveWindowsAbsoluteCommand(rawCommand: string): string | undefined {
+  if (!path.win32.isAbsolute(rawCommand)) {
+    return undefined;
+  }
+
+  const extensionMatch = WINDOWS_COMMAND_EXTENSION_RE.exec(rawCommand);
+  if (extensionMatch) {
+    return extensionMatch[1];
+  }
+
+  const firstWhitespace = rawCommand.search(/\s/);
+  return firstWhitespace === -1 ? rawCommand : rawCommand.slice(0, firstWhitespace);
+}
+
 export type ResolvedMemoryBackendConfig = {
   backend: MemoryBackend;
   citations: MemoryCitationsMode;
@@ -439,8 +467,7 @@ export function resolveMemoryBackendConfig(params: {
   ];
 
   const rawCommand = qmdCfg?.command?.trim() || "qmd";
-  const parsedCommand = splitShellArgs(rawCommand);
-  const command = parsedCommand?.[0] || rawCommand.split(/\s+/)[0] || "qmd";
+  const command = resolveQmdCommand(rawCommand);
   const resolved: ResolvedQmdConfig = {
     command,
     mcporter: resolveMcporterConfig(qmdCfg?.mcporter),

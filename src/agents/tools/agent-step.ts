@@ -11,8 +11,6 @@ import { retireSessionMcpRuntimeForSessionKey } from "../agent-bundle-mcp-tools.
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import { waitForAgentRunAndReadUpdatedAssistantReply } from "../run-wait.js";
 
-export { readLatestAssistantReply } from "../run-wait.js";
-
 type GatewayCaller = typeof callGateway;
 type AgentCommandRunner = typeof import("../../commands/agent.js").agentCommandFromIngress;
 

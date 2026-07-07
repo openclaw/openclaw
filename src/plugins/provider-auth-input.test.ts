@@ -7,6 +7,7 @@ import {
   maybeApplyApiKeyFromOption,
   normalizeApiKeyInput,
   normalizeTokenProviderInput,
+  validateApiKeyInput,
 } from "./provider-auth-input.js";
 
 const acceptAnyApiKeyInput = () => undefined;
@@ -240,6 +241,19 @@ describe("normalizeApiKeyInput", () => {
   });
 });
 
+describe("validateApiKeyInput", () => {
+  it.each([
+    "openclaw onboard --auth-choice zai-coding-global",
+    "openclaw onboard --auth-choice=zai-coding-global",
+    "openclaw onboard --non-interactive --auth-choice zai-coding-global --zai-api-key $ZAI_API_KEY",
+    "openclaw onboard --non-interactive --auth-choice=zai-coding-global --zai-api-key $ZAI_API_KEY",
+  ])("rejects pasted OpenClaw onboarding command %p", (value) => {
+    expect(validateApiKeyInput(value)).toBe(
+      "Paste the API key value, not an OpenClaw onboarding command.",
+    );
+  });
+});
+
 describe("maybeApplyApiKeyFromOption", () => {
   it.each(["demo-provider", "  DeMo-PrOvIdEr  "])(
     "stores normalized token when provider %p matches",
@@ -263,6 +277,23 @@ describe("maybeApplyApiKeyFromOption", () => {
     });
 
     expect(result).toBeUndefined();
+    expect(setCredential).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed command-shaped option keys before storing them", async () => {
+    const setCredential = vi.fn(async () => undefined);
+
+    await expect(
+      maybeApplyApiKeyFromOption({
+        token:
+          "openclaw onboard --non-interactive --auth-choice=zai-coding-global --zai-api-key $ZAI_API_KEY",
+        tokenProvider: "zai",
+        expectedProviders: ["zai"],
+        normalize: normalizeApiKeyInput,
+        validate: validateApiKeyInput,
+        setCredential,
+      }),
+    ).rejects.toThrow("Paste the API key value, not an OpenClaw onboarding command.");
     expect(setCredential).not.toHaveBeenCalled();
   });
 });

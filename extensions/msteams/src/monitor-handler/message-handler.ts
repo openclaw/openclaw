@@ -20,11 +20,13 @@ import {
   createChannelHistoryWindow,
   type HistoryEntry,
 } from "openclaw/plugin-sdk/reply-history";
+import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { serializeMSTeamsAdaptiveCardActionValue } from "../adaptive-card-submit.js";
 import {
-  buildMSTeamsAttachmentPlaceholder,
   buildMSTeamsMediaPayload,
-  type MSTeamsAttachmentLike,
+  resolveMSTeamsInboundAttachmentPresentation,
   summarizeMSTeamsHtmlAttachments,
+  type MSTeamsAttachmentLike,
 } from "../attachments.js";
 import { isRecord } from "../attachments/shared.js";
 import { tryNormalizeBotFrameworkServiceUrl } from "../bot-framework-service-url.js";
@@ -99,7 +101,7 @@ import {
   wasMSTeamsMessageSentWithPersistence,
 } from "../sent-message-cache.js";
 import { resolveMSTeamsSenderAccess } from "./access.js";
-import { resolveMSTeamsInboundMedia } from "./inbound-media.js";
+import { resolveMSTeamsInboundMedia, resolveMSTeamsInboundMediaBody } from "./inbound-media.js";
 import { resolveMSTeamsRouteSessionKey } from "./thread-session.js";
 
 function formatMSTeamsSenderReason(params: {
@@ -229,10 +231,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const rawText = params.rawText;
     const text = params.text;
     const attachments = params.attachments;
-    const attachmentPlaceholder = buildMSTeamsAttachmentPlaceholder(attachments, {
+    const attachmentPresentation = resolveMSTeamsInboundAttachmentPresentation(attachments, {
       maxInlineBytes: mediaMaxBytes,
       maxInlineTotalBytes: mediaMaxBytes,
     });
+    const attachmentPlaceholder = attachmentPresentation.placeholder;
     const rawBody = text || attachmentPlaceholder;
     const quoteInfo = extractMSTeamsQuoteInfo(attachments);
     let quoteSenderId: string | undefined;
@@ -247,8 +250,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const htmlSummary = summarizeMSTeamsHtmlAttachments(attachments);
 
     log.info("received message", {
-      rawText: rawText.slice(0, 50),
-      text: text.slice(0, 50),
+      rawText: truncateUtf16Safe(rawText, 50),
+      text: truncateUtf16Safe(text, 50),
       attachments: attachments.length,
       attachmentTypes,
       from: from?.id,
@@ -502,7 +505,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       replyToId: activity.replyToId,
     });
 
-    const preview = rawBody.replace(/\s+/g, " ").slice(0, 160);
+    const preview = sliceUtf16Safe(rawBody.replace(/\s+/g, " "), 0, 160);
     const inboundLabel = isDirectMessage
       ? `Teams DM from ${senderName}`
       : `Teams message in ${conversationType} from ${senderName}`;
@@ -619,6 +622,16 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     });
 
     const mediaPayload = buildMSTeamsMediaPayload(mediaList);
+    const materializedMediaPlaceholder = resolveMSTeamsInboundAttachmentPresentation(
+      mediaList.map((media) => ({ contentType: media.contentType, name: media.path })),
+    ).placeholder;
+    const agentBody = resolveMSTeamsInboundMediaBody({
+      body: rawBody,
+      mediaPlaceholder: attachmentPlaceholder,
+      materializedMediaPlaceholder,
+      expectedMediaCount: attachmentPresentation.expectedMediaCount,
+      mediaCount: mediaList.length,
+    });
 
     // Fetch thread history when the message is a reply inside a Teams channel thread.
     // This is a best-effort enhancement; errors are logged and do not block the reply.
@@ -715,7 +728,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       timestamp,
       previousTimestamp,
       envelope: envelopeOptions,
-      body: rawBody,
+      body: agentBody,
     });
     let combinedBody = body;
     const isRoomish = !isDirectMessage;
@@ -758,8 +771,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         : true;
     // Prepend thread history to the agent body so the agent has full thread context.
     const bodyForAgent = threadContext
-      ? `[Thread history]\n${threadContext}\n[/Thread history]\n\n${rawBody}`
-      : rawBody;
+      ? `[Thread history]\n${threadContext}\n[/Thread history]\n\n${agentBody}`
+      : agentBody;
 
     // For Teams *channel* messages (not group chats / DMs), preserve the
     // `teamId/channelId` pair on NativeChannelId so downstream action handlers
@@ -1012,7 +1025,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       : [];
     const rawText = activity.text?.trim() ?? "";
     const htmlText = extractTextFromHtmlAttachments(attachments);
-    const text = stripMSTeamsMentionTags(rawText || htmlText);
+    const valueText =
+      rawText || htmlText ? "" : serializeMSTeamsAdaptiveCardActionValue(activity.value);
+    const text = stripMSTeamsMentionTags(rawText || htmlText || valueText || "");
     const wasMentioned = wasMSTeamsBotMentioned(activity);
     const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "");
     const replyToId = activity.replyToId ?? undefined;

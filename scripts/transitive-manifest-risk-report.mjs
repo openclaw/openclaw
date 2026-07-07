@@ -7,6 +7,7 @@ import path from "node:path";
 import process from "node:process";
 import YAML from "yaml";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
+import { escapeRegExp } from "./lib/regexp.mjs";
 import { parseReportCliArgs, writeReportArtifact } from "./lib/report-cli-helpers.mjs";
 import {
   collectAllResolvedPackagesFromLockfile,
@@ -130,10 +131,6 @@ function splitMinimumReleaseAgeExcludeSelector(selector) {
       .map((entry) => entry.trim())
       .filter(Boolean),
   };
-}
-
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
 function packagePatternMatches(pattern, packageName) {
@@ -606,7 +603,7 @@ export function renderTransitiveManifestRiskMarkdownReport(report) {
   return `${lines.join("\n")}\n`;
 }
 
-export async function runTransitiveManifestRiskReport({
+async function runTransitiveManifestRiskReport({
   rootDir = process.cwd(),
   fetchImpl = fetch,
   now = new Date(),

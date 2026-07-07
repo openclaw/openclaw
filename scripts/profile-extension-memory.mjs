@@ -3,6 +3,7 @@
 // Profiles peak RSS for built bundled plugin entrypoints and emits a JSON
 // report suitable for extension memory budget review.
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -14,6 +15,7 @@ import { formatErrorMessage } from "./lib/error-format.mjs";
 const DEFAULT_CONCURRENCY = 6;
 const DEFAULT_TIMEOUT_MS = 90_000;
 const DEFAULT_COMBINED_TIMEOUT_MS = 180_000;
+const DEFAULT_CHILD_SHUTDOWN_GRACE_MS = 1_000;
 const DEFAULT_TOP = 10;
 const OUTPUT_CAPTURE_MAX_CHARS = 128 * 1024;
 const STDERR_PREVIEW_MAX_CHARS = 8 * 1024;
@@ -23,10 +25,17 @@ const PARENT_SIGNAL_EXIT_CODES = new Map([
   ["SIGINT", 130],
   ["SIGTERM", 143],
 ]);
-const activeCaseChildren = new Set();
+const activeCaseChildren = new Map();
 const parentSignalHandlers = new Map();
 let parentSignalHandlersInstalled = false;
 let parentSignalShutdownStarted = false;
+
+function defaultJsonReportPath() {
+  return path.join(
+    os.tmpdir(),
+    `openclaw-extension-memory-${process.pid}-${Date.now()}-${randomUUID()}.json`,
+  );
+}
 
 function printHelp() {
   console.log(`Usage: node scripts/profile-extension-memory.mjs [options]
@@ -87,7 +96,7 @@ export function parseArgs(argv) {
       case "--extension":
       case "-e": {
         const next = args[index + 1];
-        if (!next) {
+        if (!next || next.startsWith("-")) {
           throw new Error(`${arg} requires a value`);
         }
         options.extensions.push(next);
@@ -112,7 +121,7 @@ export function parseArgs(argv) {
         break;
       case "--json": {
         const next = args[index + 1];
-        if (!next) {
+        if (!next || next.startsWith("-")) {
           throw new Error(`${arg} requires a value`);
         }
         options.jsonPath = path.resolve(next);
@@ -195,6 +204,7 @@ export async function runCase({
   name,
   body,
   timeoutMs,
+  shutdownGraceMs = DEFAULT_CHILD_SHUTDOWN_GRACE_MS,
   spawnImpl = spawn,
 }) {
   return await new Promise((resolve) => {
@@ -208,7 +218,7 @@ export async function runCase({
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
-    trackActiveCaseChild(child);
+    trackActiveCaseChild(child, shutdownGraceMs);
 
     let stdout = createOutputCapture();
     let stderr = createOutputCapture();
@@ -257,7 +267,7 @@ export async function runCase({
     child.on("close", (code, signal) => {
       void (async () => {
         if (timedOut) {
-          await waitForChildProcessTreeExit(child, 1_000);
+          await waitForChildProcessTreeExit(child, shutdownGraceMs);
         }
         const stderrText = formatCapturedOutput(stderr);
         settle({
@@ -313,8 +323,8 @@ function childProcessTreeIsAlive(child) {
   }
 }
 
-function trackActiveCaseChild(child) {
-  activeCaseChildren.add(child);
+function trackActiveCaseChild(child, shutdownGraceMs) {
+  activeCaseChildren.set(child, shutdownGraceMs);
   installParentSignalHandlers();
 }
 
@@ -357,7 +367,7 @@ function removeInstalledParentSignalHandlers() {
 
 function handleParentSignal(signal) {
   if (parentSignalShutdownStarted) {
-    for (const child of activeCaseChildren) {
+    for (const child of activeCaseChildren.keys()) {
       signalChildProcessTree(child, "SIGKILL");
     }
     return;
@@ -367,17 +377,21 @@ function handleParentSignal(signal) {
 }
 
 async function cleanupActiveCaseChildrenForParentSignal(signal) {
-  const children = [...activeCaseChildren];
-  for (const child of children) {
+  const children = [...activeCaseChildren.entries()];
+  for (const [child] of children) {
     signalChildProcessTree(child, signal);
   }
-  await Promise.all(children.map((child) => waitForChildProcessTreeExit(child, 1_000)));
-  for (const child of children) {
+  await Promise.all(
+    children.map(([child, shutdownGraceMs]) => waitForChildProcessTreeExit(child, shutdownGraceMs)),
+  );
+  for (const [child] of children) {
     if (childProcessTreeIsAlive(child)) {
       signalChildProcessTree(child, "SIGKILL");
     }
   }
-  await Promise.all(children.map((child) => waitForChildProcessTreeExit(child, 1_000)));
+  await Promise.all(
+    children.map(([child, shutdownGraceMs]) => waitForChildProcessTreeExit(child, shutdownGraceMs)),
+  );
   removeInstalledParentSignalHandlers();
   process.exit(PARENT_SIGNAL_EXIT_CODES.get(signal) ?? 1);
 }
@@ -429,7 +443,7 @@ async function main() {
 
   const tmpHome = mkdtempSync(path.join(os.tmpdir(), "openclaw-extension-memory-"));
   const hookPath = path.join(tmpHome, "measure-rss.mjs");
-  const jsonPath = options.jsonPath ?? path.join(os.tmpdir(), "openclaw-extension-memory.json");
+  const jsonPath = options.jsonPath ?? defaultJsonReportPath();
 
   writeFileSync(
     hookPath,

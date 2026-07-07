@@ -37,6 +37,7 @@ import {
   extractFileOpsFromMessage,
   type FileOperations,
   formatFileOperations,
+  getCompactionContentBlockText,
   serializeConversation,
 } from "./utils.js";
 
@@ -147,6 +148,9 @@ export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
 
 /** Calculate total context tokens from provider usage. */
 export function calculateContextTokens(usage: Usage): number {
+  if (usage.contextUsage?.state === "available") {
+    return usage.contextUsage.totalTokens;
+  }
   return usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
 }
 function getAssistantUsage(msg: AgentMessage): Usage | undefined {
@@ -183,7 +187,7 @@ export interface ContextUsageEstimate {
   tokens: number;
   /** Tokens reported by the most recent assistant usage block. */
   usageTokens: number;
-  /** Estimated tokens after the most recent assistant usage block. */
+  /** Estimated tokens not covered by usable provider usage. */
   trailingTokens: number;
   /** Index of the message that provided usage, or null when none exists. */
   lastUsageIndex: number | null;
@@ -194,7 +198,7 @@ function getLastAssistantUsageInfo(
 ): { usage: Usage; index: number } | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
     const usage = getAssistantUsage(messages[i]);
-    if (usage) {
+    if (usage && usage.contextUsage?.state !== "unavailable") {
       return { usage, index: i };
     }
   }
@@ -244,6 +248,22 @@ export function shouldCompact(
   return contextTokens > contextWindow - settings.reserveTokens;
 }
 
+const IMAGE_BLOCK_CHARS = 4800;
+
+function countContentBlockChars(
+  content: Array<{ type: string; content?: unknown; text?: string }>,
+): number {
+  let chars = 0;
+  for (const block of content) {
+    if (block.type === "image") {
+      chars += IMAGE_BLOCK_CHARS;
+    } else {
+      chars += getCompactionContentBlockText(block).length;
+    }
+  }
+  return chars;
+}
+
 /** Estimate token count for one message using a conservative character heuristic. */
 export function estimateTokens(message: AgentMessage): number {
   let chars = 0;
@@ -257,11 +277,7 @@ export function estimateTokens(message: AgentMessage): number {
       if (typeof content === "string") {
         chars = content.length;
       } else if (Array.isArray(content)) {
-        for (const block of content) {
-          if (block.type === "text" && block.text) {
-            chars += block.text.length;
-          }
-        }
+        chars = countContentBlockChars(content);
       }
       return Math.ceil(chars / 4);
     }
@@ -283,14 +299,7 @@ export function estimateTokens(message: AgentMessage): number {
       if (typeof harnessMessage.content === "string") {
         chars = harnessMessage.content.length;
       } else {
-        for (const block of harnessMessage.content) {
-          if (block.type === "text" && block.text) {
-            chars += block.text.length;
-          }
-          if (block.type === "image") {
-            chars += 4800;
-          }
-        }
+        chars = countContentBlockChars(harnessMessage.content);
       }
       return Math.ceil(chars / 4);
     }
@@ -372,7 +381,7 @@ export function findTurnStartIndex(
 }
 
 /** Cut point selected for compaction. */
-export interface CutPointResult {
+interface CutPointResult {
   /** Index of the first entry retained after compaction. */
   firstKeptEntryIndex: number;
   /** Index of the turn-start entry when the cut splits a turn, otherwise -1. */
@@ -404,6 +413,7 @@ export function findCutPoint(
     const messageTokens = estimateTokens(entry.message);
     accumulatedTokens += messageTokens;
     if (accumulatedTokens >= keepRecentTokens) {
+      cutIndex = cutPoints[cutPoints.length - 1];
       for (const cutPoint of cutPoints) {
         if (cutPoint >= i) {
           cutIndex = cutPoint;
@@ -434,7 +444,7 @@ export function findCutPoint(
   };
 }
 
-export const SUMMARIZATION_SYSTEM_PROMPT = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI coding assistant, then produce a structured summary following the exact format specified.
+export const SUMMARIZATION_SYSTEM_PROMPT = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.
 
 Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.`;
 
@@ -541,6 +551,63 @@ async function completeSummarization(
   return await resolveAgentCoreCompleteFn(runtime)(model, context, options);
 }
 
+/** Runs one summarization completion and maps abort/error stops to CompactionError. */
+async function runSummarizationCompletion(params: {
+  promptText: string;
+  model: Model;
+  maxTokens: number;
+  apiKey: string | undefined;
+  headers?: Record<string, string>;
+  signal?: AbortSignal;
+  thinkingLevel?: ThinkingLevel;
+  streamFn?: StreamFn;
+  runtime?: AgentCoreCompletionRuntimeDeps;
+  errorLabel: string;
+}): Promise<Result<string, CompactionError>> {
+  const summarizationMessages = [
+    {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: params.promptText }],
+      timestamp: Date.now(),
+    },
+  ];
+
+  const response = await completeSummarization(
+    params.model,
+    { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
+    createSummarizationOptions(
+      params.model,
+      params.maxTokens,
+      params.apiKey,
+      params.headers,
+      params.signal,
+      params.thinkingLevel,
+    ),
+    params.streamFn,
+    params.runtime,
+  );
+  if (response.stopReason === "aborted") {
+    return err(
+      new CompactionError("aborted", response.errorMessage || `${params.errorLabel} aborted`),
+    );
+  }
+  if (response.stopReason === "error") {
+    return err(
+      new CompactionError(
+        "summarization_failed",
+        `${params.errorLabel} failed: ${response.errorMessage || "Unknown error"}`,
+      ),
+    );
+  }
+
+  return ok(
+    response.content
+      .filter((c): c is { type: "text"; text: string } => c.type === "text")
+      .map((c) => c.text)
+      .join("\n"),
+  );
+}
+
 /** Generate or update a conversation summary for compaction. */
 export async function generateSummary(
   currentMessages: AgentMessage[],
@@ -571,39 +638,18 @@ export async function generateSummary(
   }
   promptText += basePrompt;
 
-  const summarizationMessages = [
-    {
-      role: "user" as const,
-      content: [{ type: "text" as const, text: promptText }],
-      timestamp: Date.now(),
-    },
-  ];
-
-  const response = await completeSummarization(
+  return await runSummarizationCompletion({
+    promptText,
     model,
-    { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
-    createSummarizationOptions(model, maxTokens, apiKey, headers, signal, thinkingLevel),
+    maxTokens,
+    apiKey,
+    headers,
+    signal,
+    thinkingLevel,
     streamFn,
     runtime,
-  );
-  if (response.stopReason === "aborted") {
-    return err(new CompactionError("aborted", response.errorMessage || "Summarization aborted"));
-  }
-  if (response.stopReason === "error") {
-    return err(
-      new CompactionError(
-        "summarization_failed",
-        `Summarization failed: ${response.errorMessage || "Unknown error"}`,
-      ),
-    );
-  }
-
-  const textContent = response.content
-    .filter((c): c is { type: "text"; text: string } => c.type === "text")
-    .map((c) => c.text)
-    .join("\n");
-
-  return ok(textContent);
+    errorLabel: "Summarization",
+  });
 }
 
 /** Prepared inputs for a compaction run. */
@@ -757,9 +803,9 @@ export async function compact(
   let summary: string;
 
   if (isSplitTurn && turnPrefixMessages.length > 0) {
-    const [historyResult, turnPrefixResult] = await Promise.all([
+    const historyResult =
       messagesToSummarize.length > 0
-        ? generateSummary(
+        ? await generateSummary(
             messagesToSummarize,
             model,
             settings.reserveTokens,
@@ -772,22 +818,21 @@ export async function compact(
             streamFn,
             runtime,
           )
-        : Promise.resolve(ok<string, CompactionError>("No prior history.")),
-      generateTurnPrefixSummary(
-        turnPrefixMessages,
-        model,
-        settings.reserveTokens,
-        apiKey,
-        headers,
-        signal,
-        thinkingLevel,
-        streamFn,
-        runtime,
-      ),
-    ]);
+        : ok<string, CompactionError>("No prior history.");
     if (!historyResult.ok) {
       return err(historyResult.error);
     }
+    const turnPrefixResult = await generateTurnPrefixSummary(
+      turnPrefixMessages,
+      model,
+      settings.reserveTokens,
+      apiKey,
+      headers,
+      signal,
+      thinkingLevel,
+      streamFn,
+      runtime,
+    );
     if (!turnPrefixResult.ok) {
       return err(turnPrefixResult.error);
     }
@@ -840,39 +885,16 @@ async function generateTurnPrefixSummary(
   const llmMessages = convertToLlm(messages);
   const conversationText = serializeConversation(llmMessages);
   const promptText = `<conversation>\n${conversationText}\n</conversation>\n\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`;
-  const summarizationMessages = [
-    {
-      role: "user" as const,
-      content: [{ type: "text" as const, text: promptText }],
-      timestamp: Date.now(),
-    },
-  ];
-
-  const response = await completeSummarization(
+  return await runSummarizationCompletion({
+    promptText,
     model,
-    { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages },
-    createSummarizationOptions(model, maxTokens, apiKey, headers, signal, thinkingLevel),
+    maxTokens,
+    apiKey,
+    headers,
+    signal,
+    thinkingLevel,
     streamFn,
     runtime,
-  );
-  if (response.stopReason === "aborted") {
-    return err(
-      new CompactionError("aborted", response.errorMessage || "Turn prefix summarization aborted"),
-    );
-  }
-  if (response.stopReason === "error") {
-    return err(
-      new CompactionError(
-        "summarization_failed",
-        `Turn prefix summarization failed: ${response.errorMessage || "Unknown error"}`,
-      ),
-    );
-  }
-
-  return ok(
-    response.content
-      .filter((c): c is { type: "text"; text: string } => c.type === "text")
-      .map((c) => c.text)
-      .join("\n"),
-  );
+    errorLabel: "Turn prefix summarization",
+  });
 }

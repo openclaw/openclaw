@@ -28,6 +28,7 @@ import {
   parseProfile,
   resolveDockerE2ePlan,
 } from "./lib/docker-e2e-plan.mjs";
+import { sleep } from "./lib/sleep.mjs";
 
 const SCRIPT_ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ROOT_DIR = path.resolve(process.env.OPENCLAW_DOCKER_E2E_REPO_ROOT || SCRIPT_ROOT_DIR);
@@ -46,13 +47,14 @@ export const LOG_TAIL_MAX_BYTES = 1024 * 1024;
 const SHELL_TIMEOUT_KILL_GRACE_MS = 10_000;
 const SHELL_POST_FORCE_KILL_WAIT_MS = 1_000;
 const SHELL_PROCESS_GROUP_EXIT_POLL_MS = 25;
+const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const DEFAULT_TIMINGS_FILE = path.join(ROOT_DIR, ".artifacts/docker-tests/lane-timings.json");
 const DEFAULT_GITHUB_WORKFLOW = "openclaw-live-and-e2e-checks-reusable.yml";
 const IS_MAIN = process.argv[1]
   ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
   : false;
 
-export function dockerAllUsage() {
+function dockerAllUsage() {
   return [
     "Usage: node scripts/test-docker-all.mjs [--plan-json]",
     "",
@@ -135,6 +137,24 @@ function parseBool(raw, fallback) {
   return !/^(?:0|false|no)$/i.test(raw);
 }
 
+function numericTimerValueMs(valueMs) {
+  const value = Number(valueMs);
+  return Number.isFinite(value) ? Math.floor(value) : undefined;
+}
+
+function resolveTimerTimeoutMs(valueMs, fallbackMs = MAX_TIMER_TIMEOUT_MS) {
+  const value = numericTimerValueMs(valueMs) ?? numericTimerValueMs(fallbackMs);
+  return Math.min(Math.max(value ?? MAX_TIMER_TIMEOUT_MS, 1), MAX_TIMER_TIMEOUT_MS);
+}
+
+function resolveOptionalTimerTimeoutMs(valueMs) {
+  const value = numericTimerValueMs(valueMs);
+  if (value === undefined || value <= 0) {
+    return undefined;
+  }
+  return resolveTimerTimeoutMs(value);
+}
+
 function resourceLimitsSummary(resourceLimits) {
   return Object.entries(resourceLimits)
     .map(([resource, limit]) => `${resource}=${String(limit)}`)
@@ -205,12 +225,6 @@ function orderLanes(poolLanes, timingStore) {
     .map((poolLane, index) => ({ index, poolLane, seconds: timingSeconds(timingStore, poolLane) }))
     .toSorted((a, b) => b.seconds - a.seconds || a.index - b.index)
     .map(({ poolLane }) => poolLane);
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 function utcStampForPath() {
@@ -424,7 +438,7 @@ async function writeTimingStore(timingStore, results) {
   console.log(`==> Docker lane timings: ${timingStore.file}`);
 }
 
-async function writeRunSummary(logDir, summary) {
+export async function writeRunSummary(logDir, summary) {
   const file = path.join(logDir, "summary.json");
   const payload = {
     ...summary,
@@ -567,14 +581,20 @@ export function runShellCommand({
     return activeChildrenShutdownPromise.then(() => shellCommandSkippedForShutdown());
   }
   return new Promise((resolve) => {
-    const pipeOutput = Boolean(logFile || noOutputTimeoutMs > 0);
+    const resolvedTimeoutMs = resolveOptionalTimerTimeoutMs(timeoutMs);
+    const resolvedNoOutputTimeoutMs = resolveOptionalTimerTimeoutMs(noOutputTimeoutMs);
+    const resolvedTimeoutKillGraceMs = resolveTimerTimeoutMs(
+      timeoutKillGraceMs,
+      SHELL_TIMEOUT_KILL_GRACE_MS,
+    );
+    const pipeOutput = Boolean(logFile || resolvedNoOutputTimeoutMs);
     const child = spawn("bash", ["-c", command], {
       cwd: ROOT_DIR,
       detached: process.platform !== "win32",
       env,
       stdio: pipeOutput ? ["ignore", "pipe", "pipe"] : "inherit",
     });
-    activeChildren.add(child);
+    activeChildren.set(child, resolvedTimeoutKillGraceMs);
     let timedOut = false;
     let noOutputTimedOut = false;
     let killTimer;
@@ -593,27 +613,27 @@ export function runShellCommand({
         console.error(`==> [${label}] ${message}; sending SIGTERM`);
       }
       terminateChild(child, "SIGTERM");
-      killAt = Date.now() + timeoutKillGraceMs;
-      killTimer = setTimeout(() => terminateChild(child, "SIGKILL"), timeoutKillGraceMs);
+      killAt = Date.now() + resolvedTimeoutKillGraceMs;
+      killTimer = setTimeout(() => terminateChild(child, "SIGKILL"), resolvedTimeoutKillGraceMs);
       killTimer.unref?.();
     };
     const resetNoOutputTimer = () => {
-      if (!noOutputTimeoutMs || noOutputTimeoutMs <= 0 || timedOut) {
+      if (!resolvedNoOutputTimeoutMs || timedOut) {
         return;
       }
       if (noOutputTimer) {
         clearTimeout(noOutputTimer);
       }
       noOutputTimer = setTimeout(() => {
-        terminateForTimeout(`no output for ${noOutputTimeoutMs}ms`, { noOutput: true });
-      }, noOutputTimeoutMs);
+        terminateForTimeout(`no output for ${resolvedNoOutputTimeoutMs}ms`, { noOutput: true });
+      }, resolvedNoOutputTimeoutMs);
       noOutputTimer.unref?.();
     };
     const timeoutTimer =
-      timeoutMs > 0
+      resolvedTimeoutMs !== undefined
         ? setTimeout(() => {
-            terminateForTimeout(`timeout after ${timeoutMs}ms`);
-          }, timeoutMs)
+            terminateForTimeout(`timeout after ${resolvedTimeoutMs}ms`);
+          }, resolvedTimeoutMs)
         : undefined;
     timeoutTimer?.unref?.();
 
@@ -661,10 +681,10 @@ export function runShellCommand({
         resolve({ signal, status: exitCode, timedOut, noOutputTimedOut });
       };
       if (timedOut) {
-        void finishTimedOutShellProcessTree(child, { killAt, timeoutKillGraceMs }).then(
-          finish,
-          finish,
-        );
+        void finishTimedOutShellProcessTree(child, {
+          killAt,
+          timeoutKillGraceMs: resolvedTimeoutKillGraceMs,
+        }).then(finish, finish);
         return;
       }
       finish();
@@ -691,13 +711,18 @@ export function runShellCaptureCommand({
     return activeChildrenShutdownPromise.then(() => shellCaptureSkippedForShutdown(label));
   }
   return new Promise((resolve) => {
+    const resolvedTimeoutMs = resolveOptionalTimerTimeoutMs(timeoutMs);
+    const resolvedTimeoutKillGraceMs = resolveTimerTimeoutMs(
+      timeoutKillGraceMs,
+      SHELL_TIMEOUT_KILL_GRACE_MS,
+    );
     const child = spawn("bash", ["-c", command], {
       cwd: ROOT_DIR,
       detached: process.platform !== "win32",
       env,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    activeChildren.add(child);
+    activeChildren.set(child, resolvedTimeoutKillGraceMs);
     let stdout = "";
     let stderr = "";
     let stdoutTruncated = false;
@@ -706,14 +731,17 @@ export function runShellCaptureCommand({
     let killTimer;
     let killAt;
     const timeoutTimer =
-      timeoutMs > 0
+      resolvedTimeoutMs !== undefined
         ? setTimeout(() => {
             timedOut = true;
             terminateChild(child, "SIGTERM");
-            killAt = Date.now() + timeoutKillGraceMs;
-            killTimer = setTimeout(() => terminateChild(child, "SIGKILL"), timeoutKillGraceMs);
+            killAt = Date.now() + resolvedTimeoutKillGraceMs;
+            killTimer = setTimeout(
+              () => terminateChild(child, "SIGKILL"),
+              resolvedTimeoutKillGraceMs,
+            );
             killTimer.unref?.();
-          }, timeoutMs)
+          }, resolvedTimeoutMs)
         : undefined;
     timeoutTimer?.unref?.();
     child.stdout.on("data", (chunk) => {
@@ -749,10 +777,10 @@ export function runShellCaptureCommand({
         });
       };
       if (timedOut) {
-        void finishTimedOutShellProcessTree(child, { killAt, timeoutKillGraceMs }).then(
-          finish,
-          finish,
-        );
+        void finishTimedOutShellProcessTree(child, {
+          killAt,
+          timeoutKillGraceMs: resolvedTimeoutKillGraceMs,
+        }).then(finish, finish);
         return;
       }
       finish();
@@ -845,6 +873,25 @@ async function runCleanupSmoke(baseEnv, logDir, command, startedAtMs) {
     targetable: false,
     timedOut: result.timedOut,
   };
+}
+
+export async function runCleanupSmokePhase(baseEnv, logDir, phases) {
+  const command = "pnpm test:docker:cleanup";
+  const startedAtMs = Date.now();
+  let failure;
+  try {
+    await runPhase(phases, CLEANUP_SMOKE_NAME, {}, async () => {
+      failure = await runCleanupSmoke(baseEnv, logDir, command, startedAtMs);
+      if (failure) {
+        throw new Error(
+          `Run cleanup smoke after parallel lanes failed with status ${failure.status}`,
+        );
+      }
+    });
+  } catch (error) {
+    failure ??= await recordCleanupSmokeFailure(error, baseEnv, logDir, command, startedAtMs);
+  }
+  return failure;
 }
 
 async function runForegroundGroup(entries, env) {
@@ -1267,7 +1314,7 @@ async function printFailureSummary(failures, tailLines) {
   }
 }
 
-const activeChildren = new Set();
+const activeChildren = new Map();
 let activeChildrenShutdownPromise;
 
 function shellCommandSkippedForShutdown() {
@@ -1345,7 +1392,7 @@ function terminateChild(child, signal) {
 }
 
 function terminateActiveChildren(signal) {
-  for (const child of activeChildren) {
+  for (const child of activeChildren.keys()) {
     terminateChild(child, signal);
   }
 }
@@ -1355,13 +1402,13 @@ async function shutdownActiveChildren(signal, exitCode) {
     terminateActiveChildren("SIGKILL");
     return activeChildrenShutdownPromise;
   }
-  const children = [...activeChildren];
+  const children = [...activeChildren.entries()];
   terminateActiveChildren(signal);
   activeChildrenShutdownPromise = Promise.all(
-    children.map((child) =>
+    children.map(([child, timeoutKillGraceMs]) =>
       finishTimedOutShellProcessTree(child, {
-        killAt: Date.now() + SHELL_TIMEOUT_KILL_GRACE_MS,
-        timeoutKillGraceMs: SHELL_TIMEOUT_KILL_GRACE_MS,
+        killAt: Date.now() + timeoutKillGraceMs,
+        timeoutKillGraceMs,
       }),
     ),
   ).finally(() => {
@@ -1686,32 +1733,7 @@ async function main() {
   }
 
   if (profile === DEFAULT_PROFILE && selectedLaneNames.length === 0) {
-    const cleanupSmokeCommand = "pnpm test:docker:cleanup";
-    const cleanupStartedAtMs = Date.now();
-    let cleanupFailure;
-    try {
-      await runPhase(phases, CLEANUP_SMOKE_NAME, {}, async () => {
-        cleanupFailure = await runCleanupSmoke(
-          baseEnv,
-          logDir,
-          cleanupSmokeCommand,
-          cleanupStartedAtMs,
-        );
-        if (cleanupFailure) {
-          throw new Error(
-            `Run cleanup smoke after parallel lanes failed with status ${cleanupFailure.status}`,
-          );
-        }
-      });
-    } catch (error) {
-      cleanupFailure ??= await recordCleanupSmokeFailure(
-        error,
-        baseEnv,
-        logDir,
-        cleanupSmokeCommand,
-        cleanupStartedAtMs,
-      );
-    }
+    const cleanupFailure = await runCleanupSmokePhase(baseEnv, logDir, phases);
     if (cleanupFailure) {
       failures.push(cleanupFailure);
     }

@@ -6,12 +6,18 @@ import { resolveAccountBase } from "./resolve.js";
 interface GroupConfig {
   requireMention: boolean;
   ignoreOtherMentions: boolean;
+  commandLevel: QQBotGroupCommandLevel;
   name: string;
   prompt?: string;
   historyLimit: number;
 }
 
+export type QQBotGroupCommandLevel = "all" | "safety" | "strict";
+
 export const DEFAULT_GROUP_HISTORY_LIMIT = 50;
+// Omitted commandLevel preserves shipped QQBot group behavior. Operators opt in to
+// the fail-closed safety/strict modes per group or wildcard group config.
+export const DEFAULT_GROUP_COMMAND_LEVEL: QQBotGroupCommandLevel = "all";
 
 export const DEFAULT_GROUP_PROMPT =
   "If the sender is a bot, respond only when they explicitly @mention you to ask a question or request assistance with a specific task; keep your replies concise and clear, avoiding the urge to race other bots to answer or engage in lengthy, unproductive exchanges. In group chats, prioritize responding to messages from human users; bots should maintain a collaborative rather than competitive dynamic to ensure the conversation remains orderly and does not result in message flooding.";
@@ -19,6 +25,7 @@ export const DEFAULT_GROUP_PROMPT =
 const DEFAULT_GROUP_CONFIG: Readonly<Omit<GroupConfig, "prompt">> = {
   requireMention: true,
   ignoreOtherMentions: false,
+  commandLevel: DEFAULT_GROUP_COMMAND_LEVEL,
   name: "",
   historyLimit: DEFAULT_GROUP_HISTORY_LIMIT,
 };
@@ -49,6 +56,14 @@ function readBoolean(obj: Record<string, unknown>, key: string): boolean | undef
 function readString(obj: Record<string, unknown>, key: string): string | undefined {
   const v = obj[key];
   return typeof v === "string" && v.length > 0 ? v : undefined;
+}
+
+function readCommandLevel(
+  obj: Record<string, unknown>,
+  key: string,
+): QQBotGroupCommandLevel | undefined {
+  const v = readString(obj, key);
+  return v === "all" || v === "safety" || v === "strict" ? v : undefined;
 }
 
 function readHistoryLimit(obj: Record<string, unknown>, key: string): number | undefined {
@@ -82,6 +97,10 @@ export function resolveGroupConfig(
       readBoolean(specific, "ignoreOtherMentions") ??
       readBoolean(wildcard, "ignoreOtherMentions") ??
       DEFAULT_GROUP_CONFIG.ignoreOtherMentions,
+    commandLevel:
+      readCommandLevel(specific, "commandLevel") ??
+      readCommandLevel(wildcard, "commandLevel") ??
+      DEFAULT_GROUP_CONFIG.commandLevel,
     name: readString(specific, "name") ?? readString(wildcard, "name") ?? DEFAULT_GROUP_CONFIG.name,
     prompt: readString(specific, "prompt") ?? readString(wildcard, "prompt"),
     historyLimit:
@@ -89,6 +108,71 @@ export function resolveGroupConfig(
       readHistoryLimit(wildcard, "historyLimit") ??
       DEFAULT_GROUP_CONFIG.historyLimit,
   };
+}
+
+export function resolveGroupCommandLevelFromAccountConfig(
+  accountConfig: Record<string, unknown> | undefined,
+  groupOpenid?: string | null,
+): QQBotGroupCommandLevel {
+  const groups = asRecord(accountConfig?.groups);
+  const wildcard = asRecord(groups?.["*"]) ?? {};
+  const specific = groupOpenid ? (asRecord(groups?.[groupOpenid]) ?? {}) : {};
+  return (
+    readCommandLevel(specific, "commandLevel") ??
+    readCommandLevel(wildcard, "commandLevel") ??
+    DEFAULT_GROUP_CONFIG.commandLevel
+  );
+}
+
+export function resolveHistoryLimit(
+  cfg: Record<string, unknown>,
+  groupOpenid?: string | null,
+  accountId?: string | null,
+): number {
+  return resolveGroupConfig(cfg, groupOpenid, accountId).historyLimit;
+}
+
+export function resolveRequireMention(
+  cfg: Record<string, unknown>,
+  groupOpenid?: string | null,
+  accountId?: string | null,
+): boolean {
+  return resolveGroupConfig(cfg, groupOpenid, accountId).requireMention;
+}
+
+export function resolveIgnoreOtherMentions(
+  cfg: Record<string, unknown>,
+  groupOpenid?: string | null,
+  accountId?: string | null,
+): boolean {
+  return resolveGroupConfig(cfg, groupOpenid, accountId).ignoreOtherMentions;
+}
+
+/**
+ * Resolve the behaviour prompt (PE) for a group. Falls back to the built-in
+ * default when neither specific nor wildcard configuration provides one.
+ */
+export function resolveGroupPrompt(
+  cfg: Record<string, unknown>,
+  groupOpenid?: string | null,
+  accountId?: string | null,
+): string {
+  return resolveGroupConfig(cfg, groupOpenid, accountId).prompt ?? DEFAULT_GROUP_PROMPT;
+}
+
+/**
+ * Resolve the display name for a group.
+ *
+ * When no name is configured, the first 8 characters of the openid are used
+ * as a short identifier so log lines stay compact.
+ */
+export function resolveGroupName(
+  cfg: Record<string, unknown>,
+  groupOpenid: string,
+  accountId?: string | null,
+): string {
+  const name = resolveGroupConfig(cfg, groupOpenid, accountId).name;
+  return name || groupOpenid.slice(0, 8);
 }
 
 // ============ GroupSettings (aggregate) ============

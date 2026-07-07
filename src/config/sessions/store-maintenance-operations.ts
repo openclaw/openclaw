@@ -6,10 +6,10 @@ import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
   getActiveSessionMaintenanceWarning,
-  pruneQuotaSuspensions,
+  pruneStaleModelRunEntries,
   pruneStaleEntries,
+  shouldRunModelRunPrune,
   shouldRunSessionEntryMaintenance,
-  type QuotaSuspensionMaintenanceResult,
   type ResolvedSessionMaintenanceConfig,
   type SessionMaintenanceWarning,
 } from "./store-maintenance.js";
@@ -19,6 +19,7 @@ export type SessionMaintenanceApplyReport = {
   mode: ResolvedSessionMaintenanceConfig["mode"];
   beforeCount: number;
   afterCount: number;
+  modelRunPruned: number;
   pruned: number;
   capped: number;
   diskBudget: SessionDiskBudgetSweepResult | null;
@@ -135,6 +136,7 @@ async function applyWarnOnlyMaintenance(params: {
     mode: params.maintenance.mode,
     beforeCount: params.beforeCount,
     afterCount: Object.keys(params.operation.store).length,
+    modelRunPruned: 0,
     pruned: 0,
     capped: 0,
     diskBudget,
@@ -197,6 +199,18 @@ async function applyEnforcedMaintenance(params: {
     params.operation.activeSessionKey,
   ]);
   const removedSessionFiles = new Map<string, string | undefined>();
+  const modelRunPruned = shouldRunModelRunPrune({
+    maintenance: params.maintenance,
+    entryCount: params.beforeCount,
+    force: params.forceMaintenance,
+  })
+    ? pruneStaleModelRunEntries(params.operation.store, params.maintenance.modelRunPruneAfterMs, {
+        onPruned: ({ entry }) => {
+          rememberRemovedSessionFile(removedSessionFiles, entry);
+        },
+        preserveKeys: preserveSessionKeys,
+      })
+    : 0;
   const pruned = pruneStaleEntries(params.operation.store, params.maintenance.pruneAfterMs, {
     onPruned: ({ entry }) => {
       rememberRemovedSessionFile(removedSessionFiles, entry);
@@ -242,12 +256,14 @@ async function applyEnforcedMaintenance(params: {
     mode: params.maintenance.mode,
     beforeCount: params.beforeCount,
     afterCount: Object.keys(params.operation.store).length,
+    modelRunPruned,
     pruned,
     capped,
     diskBudget,
   });
   return {
-    changedStore: pruned > 0 || capped > 0 || (diskBudget?.removedEntries ?? 0) > 0,
+    changedStore:
+      modelRunPruned > 0 || pruned > 0 || capped > 0 || (diskBudget?.removedEntries ?? 0) > 0,
   };
 }
 
@@ -285,19 +301,4 @@ export async function applyFileBackedSessionStoreMaintenance(
     beforeCount,
     forceMaintenance,
   });
-}
-
-/**
- * Applies quota-suspension TTL maintenance to a store image.
- *
- * SQLite should implement this as a row transaction that returns the resumed
- * lane records and clear count before callers resume in-process quota lanes.
- */
-export function applyQuotaSuspensionTtlMaintenance(params: {
-  store: Record<string, SessionEntry>;
-  now: number;
-  ttlMs?: number;
-  log?: boolean;
-}): QuotaSuspensionMaintenanceResult {
-  return pruneQuotaSuspensions(params);
 }

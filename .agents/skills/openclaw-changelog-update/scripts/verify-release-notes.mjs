@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 
 const repo = "openclaw/openclaw";
+const commitAssociationQueryBatchSize = 20;
 const excludedHandles = new Set(["openclaw", "clawsweeper", "claude", "codex", "steipete"]);
 const nonEditorialTypes = new Set([
   "build",
@@ -18,7 +19,7 @@ const nonEditorialTypes = new Set([
 const nonEditorialTitlePattern =
   /(?:^|[\s:([{\-])(docs?|documentation|tests?|testing|qa|quality assurance|refactor(?:ing)?|ci|continuous integration|build|chore|style|lint|format)(?:$|[\s:)\]}\-])/i;
 const editorialTitlePattern =
-  /^\s*(?:\[[^\]]+\]\s*)?(?:#\d+:\s*)?(?:add|allow|block|enable|expose|fail|fix|harden|honor|improve|keep|migrate|move|persist|preserve|prevent|propagate|rate[- ]?limit|restore|revert|ship|support|treat|validate)\b|^\s*#\d+:/i;
+  /^\s*(?:\[[^\]]+\]\s*)?(?:#\d+:\s*)?(?:add|allow|block|enable|expose|fail|fix|harden|honor|improve|keep|migrate|move|persist|polish|preserve|prevent|propagate|rate[- ]?limit|restore|revert|ship|support|treat|validate)\b|^\s*#\d+:/i;
 const genericDirectCommitTerms = new Set([
   "add",
   "allow",
@@ -208,7 +209,7 @@ function sectionFor(changelog, version) {
 function referencesIn(text) {
   const references = [];
   for (const match of text.matchAll(
-    /(?<![A-Za-z0-9_.-])(?:(?<owner>[A-Za-z0-9_.-]+)\/(?<name>[A-Za-z0-9_.-]+))?#(?<number>\d+)/g,
+    /(?<![A-Za-z0-9_.&-])(?:(?<owner>[A-Za-z0-9_.-]+)\/(?<name>[A-Za-z0-9_.-]+))?#(?<number>\d+)/g,
   )) {
     const qualifiedRepository = match.groups?.owner
       ? `${match.groups.owner}/${match.groups.name}`.toLowerCase()
@@ -618,13 +619,25 @@ function graphql(query) {
   let lastError;
   for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
-      return githubApi(["graphql", "-f", `query=${query}`]).data;
+      const response = githubApi(["graphql", "-f", `query=${query}`]);
+      if (response?.data && typeof response.data === "object") {
+        return response.data;
+      }
+      const errors = Array.isArray(response?.errors)
+        ? response.errors.map((error) => error?.message).filter(Boolean)
+        : [];
+      const detail = [...errors, response?.message].filter(Boolean).join("\n");
+      throw new Error(
+        detail
+          ? `GitHub GraphQL response did not include data:\n${detail}`
+          : "GitHub GraphQL response did not include data.",
+      );
     } catch (error) {
       lastError = error;
       const message = [error?.message, error?.stdout, error?.stderr].filter(Boolean).join("\n");
       // Historical ranges batch hundreds of objects; only retry transient transport failures.
       if (
-        !/(?:operation timed out|ECONNRESET|ETIMEDOUT|EAI_AGAIN|TLS handshake timeout|stream error: .*CANCEL|unexpected end of JSON input|upstream connect error|connection termination|error connecting to api\.github\.com|Unexpected token '<')/i.test(
+        !/(?:operation timed out|ECONNRESET|ETIMEDOUT|EAI_AGAIN|TLS handshake timeout|stream error: .*CANCEL|unexpected end of JSON input|upstream connect error|connection termination|connection reset by peer|error connecting to api\.github\.com|Unexpected token '<'|something went wrong|temporarily unavailable|internal server error|rate limit)/i.test(
           message,
         )
       ) {
@@ -643,9 +656,12 @@ function resolveAssociatedPullRequests(commitHashes, targetTimestamp) {
     const pullRequests = pullRequestsByCommit.get(commitHash) ?? [];
     const seen = new Set(pullRequests);
     for (const pullRequest of connection?.nodes ?? []) {
+      // GitHub's mergedAt can trail the merge commit timestamp by a second.
+      // Keep an exact merge-commit association so a release ending there does not drop its PR.
+      const isExactMergeCommit = pullRequest.mergeCommit?.oid === commitHash;
       if (
         pullRequest.mergedAt &&
-        mergedByTarget(pullRequest.mergedAt, targetTimestamp) &&
+        (isExactMergeCommit || mergedByTarget(pullRequest.mergedAt, targetTimestamp)) &&
         !seen.has(pullRequest.number)
       ) {
         pullRequests.push(pullRequest.number);
@@ -657,8 +673,8 @@ function resolveAssociatedPullRequests(commitHashes, targetTimestamp) {
       pending.push({ commitHash, cursor: connection.pageInfo.endCursor });
     }
   }
-  for (let index = 0; index < commitHashes.length; index += 40) {
-    const chunk = commitHashes.slice(index, index + 40);
+  for (let index = 0; index < commitHashes.length; index += commitAssociationQueryBatchSize) {
+    const chunk = commitHashes.slice(index, index + commitAssociationQueryBatchSize);
     const fields = chunk
       .map(
         (hash, offset) =>
@@ -669,6 +685,7 @@ function resolveAssociatedPullRequests(commitHashes, targetTimestamp) {
                   nodes {
                     number
                     mergedAt
+                    mergeCommit { oid }
                   }
                   pageInfo { hasNextPage endCursor }
                 }
@@ -694,6 +711,7 @@ function resolveAssociatedPullRequests(commitHashes, targetTimestamp) {
                   nodes {
                     number
                     mergedAt
+                    mergeCommit { oid }
                   }
                   pageInfo { hasNextPage endCursor }
                 }
@@ -1178,7 +1196,7 @@ function ledgerFor(
     (entry) =>
       entry.type === "PullRequest" &&
       entry.mergedAt &&
-      mergedByTarget(entry.mergedAt, targetTimestamp) &&
+      (sourcePullRequests.has(entry.number) || mergedByTarget(entry.mergedAt, targetTimestamp)) &&
       recordedPullRequests.has(entry.number) &&
       !revertedReferences.has(entry.number),
   );
@@ -1501,7 +1519,7 @@ function main() {
     return (
       node?.__typename !== "PullRequest" ||
       !node.mergedAt ||
-      !mergedByTarget(node.mergedAt, source.targetTimestamp)
+      (!source.pullRequests.has(number) && !mergedByTarget(node.mergedAt, source.targetTimestamp))
     );
   });
   if (!options.writeLedger && invalidRecordedPullRequests.length > 0) {

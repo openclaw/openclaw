@@ -152,26 +152,13 @@ async function tryHandleWithPluginAction(params: {
     mediaAccess: params.ctx.mediaAccess,
     mediaReadFile: params.ctx.mediaReadFile,
   });
-  const handled = await dispatchChannelMessageAction({
-    channel: params.ctx.channel,
-    action: params.action,
-    cfg: params.ctx.cfg,
-    params: params.ctx.params,
-    mediaAccess,
-    mediaLocalRoots: mediaAccess.localRoots,
-    mediaReadFile: mediaAccess.readFile,
-    accountId: params.ctx.accountId ?? undefined,
-    requesterAccountId: params.ctx.requesterAccountId,
-    requesterSenderId: params.ctx.requesterSenderId,
-    senderIsOwner: params.ctx.senderIsOwner,
-    sessionKey: params.ctx.sessionKey,
-    sessionId: params.ctx.sessionId,
-    inboundEventKind: params.ctx.inboundEventKind,
-    agentId: params.ctx.agentId,
-    gateway: params.ctx.gateway,
-    toolContext: params.ctx.toolContext,
-    dryRun: params.ctx.dryRun,
-  });
+  const handled = await dispatchChannelMessageAction(
+    createChannelActionContext({
+      ctx: params.ctx,
+      action: params.action,
+      mediaAccess,
+    }),
+  );
   if (!handled) {
     return null;
   }

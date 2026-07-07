@@ -42,18 +42,13 @@ type ResolvePnpmCommandOptions = {
   platform?: NodeJS.Platform;
 };
 
-function resolveEnvValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
-  const key = Object.keys(env).find((candidate) => candidate.toLowerCase() === name.toLowerCase());
-  return key === undefined ? undefined : env[key];
-}
-
 export function resolveCodexProtocolPnpmCommand(
   args: string[],
   options: ResolvePnpmCommandOptions = {},
 ): PnpmCommand {
   const env = options.env ?? process.env;
   const command = resolvePnpmRunner({
-    comSpec: options.comSpec ?? resolveEnvValue(env, "ComSpec"),
+    comSpec: options.comSpec,
     env,
     npmExecPath: options.npmExecPath ?? env.npm_execpath,
     nodeExecPath: options.execPath ?? process.execPath,
@@ -163,6 +158,7 @@ export async function generateExperimentalCodexAppServerProtocolSource(
   repoRoot = process.cwd(),
 ): Promise<GeneratedCodexAppServerProtocolSource> {
   const { codexRepo } = await resolveCodexAppServerProtocolSource(repoRoot);
+  await validateCodexProtocolSourceVersion({ codexRepo, repoRoot });
   const root = await fs.mkdtemp(path.join(repoRoot, ".tmp-codex-app-server-protocol-"));
   const generatedRoot = path.join(root, "generated");
   const typescriptRoot = path.join(root, "typescript");
@@ -190,6 +186,41 @@ export async function generateExperimentalCodexAppServerProtocolSource(
     jsonRoot,
     cleanup,
   };
+}
+
+export function readCargoWorkspacePackageVersion(manifest: string): string | undefined {
+  const header = /^\s*\[workspace\.package\]\s*(?:#.*)?$/m.exec(manifest);
+  if (!header) {
+    return undefined;
+  }
+  const remainder = manifest.slice(header.index + header[0].length);
+  const nextSection = /^\s*\[/m.exec(remainder);
+  const workspacePackage = remainder.slice(0, nextSection?.index ?? remainder.length);
+  return /^\s*version\s*=\s*"([^"]+)"\s*(?:#.*)?$/m.exec(workspacePackage)?.[1];
+}
+
+export async function validateCodexProtocolSourceVersion(params: {
+  codexRepo: string;
+  repoRoot: string;
+}): Promise<void> {
+  const packageManifest = JSON.parse(
+    await fs.readFile(path.join(params.repoRoot, "extensions/codex/package.json"), "utf8"),
+  ) as { dependencies?: Record<string, unknown> };
+  const expectedVersion = packageManifest.dependencies?.["@openai/codex"];
+  if (typeof expectedVersion !== "string" || expectedVersion.length === 0) {
+    throw new Error("extensions/codex/package.json must pin @openai/codex to an exact version");
+  }
+
+  const cargoManifest = await fs.readFile(
+    path.join(params.codexRepo, "codex-rs/Cargo.toml"),
+    "utf8",
+  );
+  const sourceVersion = readCargoWorkspacePackageVersion(cargoManifest);
+  if (sourceVersion !== expectedVersion) {
+    throw new Error(
+      `Codex protocol source version ${sourceVersion ?? "<unknown>"} does not match @openai/codex ${expectedVersion}. Check out rust-v${expectedVersion} in ${params.codexRepo}.`,
+    );
+  }
 }
 
 async function collectCodexRepoCandidates(repoRoot: string): Promise<string[]> {
@@ -331,6 +362,9 @@ function runCargoProtocolGenerator(codexRepo: string, args: string[]): void {
     cwd: codexRepo,
     stdio: "inherit",
   });
+  if (result.error) {
+    throw new Error(`Failed to start cargo: ${result.error.message}`, { cause: result.error });
+  }
   if (result.status !== 0) {
     throw new Error(`cargo ${args.join(" ")} failed with exit code ${result.status ?? "unknown"}`);
   }
@@ -351,6 +385,11 @@ function formatGeneratedTypeScript(repoRoot: string, root: string): void {
     stdio: "inherit",
     windowsVerbatimArguments: command.windowsVerbatimArguments,
   });
+  if (result.error) {
+    throw new Error(`Failed to start protocol formatter: ${result.error.message}`, {
+      cause: result.error,
+    });
+  }
   if (result.status !== 0) {
     throw new Error(
       `pnpm exec oxfmt --write --threads=1 ${root} failed with exit code ${

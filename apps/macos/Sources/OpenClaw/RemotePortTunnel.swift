@@ -49,18 +49,23 @@ final class RemotePortTunnel: @unchecked Sendable {
     }
 
     deinit {
-        Self.cleanupStderr(self.stderrHandle)
-        let pid = self.process.processIdentifier
-        self.process.terminate()
-        Task { await PortGuardian.shared.removeRecord(pid: pid) }
+        self.teardown(waitUntilExit: false)
     }
 
     func terminate() {
+        self.teardown(waitUntilExit: true)
+    }
+
+    /// deinit cannot block on waitUntilExit; explicit terminate() must, so callers
+    /// can rebind the tunnel's local port immediately after it returns.
+    private func teardown(waitUntilExit: Bool) {
         Self.cleanupStderr(self.stderrHandle)
         let pid = self.process.processIdentifier
         if self.process.isRunning {
             self.process.terminate()
-            self.process.waitUntilExit()
+            if waitUntilExit {
+                self.process.waitUntilExit()
+            }
         }
         Task { await PortGuardian.shared.removeRecord(pid: pid) }
     }
@@ -79,6 +84,10 @@ final class RemotePortTunnel: @unchecked Sendable {
                 userInfo: [NSLocalizedDescriptionKey: "Remote mode is not configured"])
         }
 
+        // Reap orphans from crashed instances before picking a port, otherwise a dead
+        // session's tunnel squats the preferred port and forces an ephemeral one.
+        await PortGuardian.shared.reapOrphanedTunnels()
+
         let localPort = try await Self.findPort(
             preferred: preferredLocalPort,
             allowRandom: allowRandomLocalPort)
@@ -96,16 +105,10 @@ final class RemotePortTunnel: @unchecked Sendable {
                 "ssh tunnel using default remote port " +
                     "host=\(sshHost, privacy: .public) port=\(remotePort, privacy: .public)")
         }
-        let options: [String] = [
-            "-o", "BatchMode=yes",
-            "-o", "ExitOnForwardFailure=yes",
-            "-o", "ServerAliveInterval=15",
-            "-o", "ServerAliveCountMax=3",
-            "-o", "TCPKeepAlive=yes",
-            "-n",
-            "-N",
-            "-L", "\(localPort):127.0.0.1:\(resolvedRemotePort)",
-        ] + CommandResolver.strictHostKeyCheckingSSHOptions + CommandResolver.updateHostKeysSSHOptions
+        let options = Self.sshOptions(
+            localPort: localPort,
+            remotePort: resolvedRemotePort,
+            hostKeyPolicy: settings.sshHostKeyPolicy)
         let identity = settings.identity.trimmingCharacters(in: .whitespacesAndNewlines)
         let args = CommandResolver.sshArguments(
             target: parsed,
@@ -115,6 +118,7 @@ final class RemotePortTunnel: @unchecked Sendable {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         process.arguments = args
+        process.environment = CommandResolver.sshEnvironment()
 
         let pipe = Pipe()
         process.standardError = pipe
@@ -148,14 +152,13 @@ final class RemotePortTunnel: @unchecked Sendable {
             stderrHandle: stderrHandle,
             stderrCapture: stderrCapture)
 
-        // Track tunnel so we can clean up stale listeners on restart.
-        Task {
-            await PortGuardian.shared.record(
-                port: Int(localPort),
-                pid: process.processIdentifier,
-                command: process.executableURL?.path ?? "ssh",
-                mode: CommandResolver.connectionSettings().mode)
-        }
+        // Record before returning: a crash inside this window would otherwise leave
+        // an untracked (unreapable) orphan.
+        await PortGuardian.shared.record(
+            port: Int(localPort),
+            pid: process.processIdentifier,
+            command: process.executableURL?.path ?? "ssh",
+            mode: CommandResolver.connectionSettings().mode)
 
         return RemotePortTunnel(process: process, localPort: localPort, stderrHandle: stderrHandle)
     }
@@ -190,7 +193,10 @@ final class RemotePortTunnel: @unchecked Sendable {
         throw NSError(domain: "RemotePortTunnel", code: 4, userInfo: [NSLocalizedDescriptionKey: msg])
     }
 
-    private static func resolveRemotePortOverride(defaultRemotePort: Int, for sshHost: String) -> Int? {
+    /// Shared with MacChatTranscriptCache: the offline cache identity must key
+    /// on the same remote gateway port this tunnel actually forwards to, or two
+    /// gateways behind one SSH target would share cached transcripts.
+    static func resolveRemotePortOverride(defaultRemotePort: Int, for sshHost: String) -> Int? {
         let root = OpenClawConfigFile.loadDict()
         if let port = GatewayRemoteConfig.resolveRemotePort(root: root) {
             return port
@@ -224,6 +230,28 @@ final class RemotePortTunnel: @unchecked Sendable {
             return nil
         }
         return port
+    }
+
+    private static func sshOptions(
+        localPort: UInt16,
+        remotePort: Int,
+        hostKeyPolicy: CommandResolver.SSHHostKeyPolicy) -> [String]
+    {
+        [
+            "-o", "BatchMode=yes",
+            // The app tracks this exact child PID, so aliases must not hand the tunnel to a shared master.
+            "-o", "ControlMaster=no",
+            "-o", "ControlPath=none",
+            "-o", "ControlPersist=no",
+            "-o", "ForkAfterAuthentication=no",
+            "-o", "ExitOnForwardFailure=yes",
+            "-o", "ServerAliveInterval=15",
+            "-o", "ServerAliveCountMax=3",
+            "-o", "TCPKeepAlive=yes",
+            "-n",
+            "-N",
+            "-L", "\(localPort):127.0.0.1:\(remotePort)",
+        ] + hostKeyPolicy.hostKeyOptions
     }
 
     private static func findPort(preferred: UInt16?, allowRandom: Bool) async throws -> UInt16 {
@@ -343,10 +371,6 @@ final class RemotePortTunnel: @unchecked Sendable {
         try? handle.close()
     }
 
-    private static func drainStderr(_ handle: FileHandle) -> String {
-        self.drainStderr(handle, captured: "")
-    }
-
     private static func drainStderr(_ handle: FileHandle, captured: String) -> String {
         handle.readabilityHandler = nil
         defer { try? handle.close() }
@@ -377,8 +401,16 @@ final class RemotePortTunnel: @unchecked Sendable {
         self.resolveRemotePortOverride(defaultRemotePort: defaultRemotePort, for: sshHost)
     }
 
+    static func _testSSHOptions(
+        localPort: UInt16,
+        remotePort: Int,
+        hostKeyPolicy: CommandResolver.SSHHostKeyPolicy = .strict) -> [String]
+    {
+        self.sshOptions(localPort: localPort, remotePort: remotePort, hostKeyPolicy: hostKeyPolicy)
+    }
+
     static func _testDrainStderr(_ handle: FileHandle) -> String {
-        self.drainStderr(handle)
+        self.drainStderr(handle, captured: "")
     }
 
     #endif

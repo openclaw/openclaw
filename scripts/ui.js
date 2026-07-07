@@ -6,13 +6,14 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
-import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
+import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
 const uiDir = path.join(repoRoot, "ui");
 
 const WINDOWS_CMD_EXE_EXTENSIONS = new Set([".cmd", ".bat"]);
+const FORWARDED_SIGNAL_KILL_GRACE_MS = 250;
 
 function usage() {
   // keep this tiny; it's invoked from npm scripts too
@@ -35,7 +36,6 @@ export function shouldUseCmdExeForCommand(cmd, platform = process.platform) {
  */
 export function resolveSpawnCall(cmd, args, envOverride, params = {}) {
   const platform = params.platform ?? process.platform;
-  const comSpec = params.comSpec ?? process.env.ComSpec ?? "cmd.exe";
   const options = {
     cwd: params.cwd ?? uiDir,
     stdio: "inherit",
@@ -44,6 +44,7 @@ export function resolveSpawnCall(cmd, args, envOverride, params = {}) {
   };
 
   if (shouldUseCmdExeForCommand(cmd, platform)) {
+    const comSpec = params.comSpec ?? resolveWindowsCmdExePath(options.env);
     return {
       command: comSpec,
       args: ["/d", "/s", "/c", buildCmdExeCommandLine(cmd, args)],
@@ -74,7 +75,7 @@ export function resolvePnpmSpawnCall(pnpmArgs, envOverride, params = {}) {
     pnpmArgs,
     nodeExecPath: params.nodeExecPath ?? process.execPath,
     npmExecPath: params.npmExecPath ?? env.npm_execpath,
-    comSpec: params.comSpec ?? env.ComSpec,
+    comSpec: params.comSpec,
     platform,
   });
   return {
@@ -140,7 +141,7 @@ function runSpawnCall(spawnCall, label) {
           forwardedSignalDrainTimer = setInterval(waitForForwardedSignalChildren, 25);
           forceKillTimer = setTimeout(() => {
             signalProcessTree(child, "SIGKILL", forwardedSignalPids);
-          }, 5_000);
+          }, FORWARDED_SIGNAL_KILL_GRACE_MS);
           forceKillTimer.unref?.();
         }
       },
@@ -332,7 +333,7 @@ export function main(argv = process.argv.slice(2)) {
   runPnpm(["run", script, ...rest]);
 }
 
-export function resolveDirectExecutionPath(entry, realpath = fs.realpathSync.native) {
+function resolveDirectExecutionPath(entry, realpath = fs.realpathSync.native) {
   const resolved = path.resolve(entry);
   try {
     return realpath(resolved);

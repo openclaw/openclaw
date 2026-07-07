@@ -169,12 +169,8 @@ import { COPILOT_INTEGRATION_ID, buildCopilotIdeHeaders } from "../copilot-dynam
 import { getModelProviderLocalService } from "../provider-local-service.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import { buildForwardCompatTemplate } from "./model.forward-compat.test-support.js";
-import {
-  buildInlineProviderModels,
-  resolveModel,
-  resolveModelAsync,
-  resolveModelWithRegistry,
-} from "./model.js";
+import { buildInlineProviderModels } from "./model.inline-provider.js";
+import { resolveModel, resolveModelAsync, resolveModelWithRegistry } from "./model.js";
 import {
   buildOpenAICodexForwardCompatExpectation,
   makeModel,
@@ -1245,6 +1241,39 @@ describe("resolveModel", () => {
       workspaceDir: expect.any(String),
       includeRuntimeDiscovery: true,
     });
+  });
+
+  it("leaves maxTokens undefined when no configured or catalog value is available (regression: #98295)", () => {
+    // Regression for https://github.com/openclaw/openclaw/issues/98295.
+    // A custom provider entry without maxTokens (and no matching bundled
+    // static catalog row) must not synthesize an oversized output cap from
+    // DEFAULT_CONTEXT_TOKENS. Leaving maxTokens undefined lets the transport
+    // omit `max_completion_tokens` so the provider applies its own default,
+    // avoiding HTTP 400 (Param Incorrect) from strict OpenAI-compatible
+    // servers whose completion-token ceiling is below the synthesized value.
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce(undefined);
+    const cfg = {
+      models: {
+        providers: {
+          xiaomi: {
+            baseUrl: "https://api.xiaomimimo.com/v1",
+            models: [
+              {
+                id: "mimo-v2.5-pro",
+                name: "mimo-v2.5-pro",
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("xiaomi", "mimo-v2.5-pro", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result);
+
+    expect(model.id).toBe("mimo-v2.5-pro");
+    expect(model.baseUrl).toBe("https://api.xiaomimimo.com/v1");
+    expect(model.maxTokens).toBeUndefined();
   });
 
   it("inherits bundled static transport for configured provider fallback models", () => {
@@ -2833,6 +2862,92 @@ describe("resolveModel", () => {
 
     expect(result.error).toBe(
       'Unknown model: microsoft-foundry/Kimi-K2.6-1. Found agents.defaults.models["microsoft-foundry/Kimi-K2.6-1"], but no matching models.providers["microsoft-foundry"].models[] entry. Add { "id": "Kimi-K2.6-1", "name": "Kimi-K2.6-1" } to models.providers["microsoft-foundry"].models[] to register this provider model. For custom or proxy providers, also set api and baseUrl so requests route to the intended endpoint. See https://docs.openclaw.ai/concepts/model-providers.',
+    );
+  });
+
+  it.each([
+    {
+      name: "agent model entry",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/gpt-5.4": {},
+            },
+          },
+        },
+      },
+    },
+    {
+      name: "legacy provider config",
+      cfg: {
+        models: {
+          providers: {
+            "openai-codex": {
+              models: [{ id: "gpt-5.3-codex", name: "GPT-5.3 Codex" }],
+            },
+          },
+        },
+      },
+    },
+  ])("suggests running doctor for openai-codex from $name", async ({ cfg }) => {
+    const result = await resolveModelAsync(
+      "openai-codex",
+      "gpt-5.4",
+      "/tmp/agent",
+      cfg as unknown as OpenClawConfig,
+      {
+        runtimeHooks: createRuntimeHooks(),
+        skipAgentDiscovery: true,
+      },
+    );
+
+    expect(result.error).toBe(
+      'Unknown model: openai-codex/gpt-5.4. "openai-codex" is a legacy provider ID. Run `openclaw doctor --fix` to migrate legacy model and provider config to the current OpenAI format. If the provider has no authenticated profile, run `openclaw models status` to check provider auth and re-authenticate if needed. See https://docs.openclaw.ai/concepts/model-providers.',
+    );
+  });
+
+  it("suggests adding config entry when a non-bundled provider model is missing", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "custom-provider/some-model": {},
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = await resolveModelAsync("custom-provider", "some-model", "/tmp/agent", cfg, {
+      runtimeHooks: createRuntimeHooks(),
+      skipAgentDiscovery: true,
+    });
+
+    expect(result.error).toBe(
+      'Unknown model: custom-provider/some-model. Found agents.defaults.models["custom-provider/some-model"], but no matching models.providers["custom-provider"].models[] entry. Add { "id": "some-model", "name": "some-model" } to models.providers["custom-provider"].models[] to register this provider model. For custom or proxy providers, also set api and baseUrl so requests route to the intended endpoint. See https://docs.openclaw.ai/concepts/model-providers.',
+    );
+  });
+
+  it("points runtime-bound model entries at the runtime catalog instead of provider registration", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.3-codex": {
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = await resolveModelAsync("openai", "gpt-5.3-codex", "/tmp/agent", cfg, {
+      runtimeHooks: createRuntimeHooks(),
+      skipAgentDiscovery: true,
+    });
+
+    expect(result.error).toBe(
+      'Unknown model: openai/gpt-5.3-codex. Found agents.defaults.models["openai/gpt-5.3-codex"] bound to the "codex" agent runtime. Models served by an agent runtime come from that runtime and its linked account, not from models.providers["openai"].models[] — registering it there will not make it usable. Confirm "gpt-5.3-codex" is still offered by the "codex" runtime and switch agents.defaults.model.primary to a currently available model (run `openclaw models list --provider openai` to list them). See https://docs.openclaw.ai/concepts/model-providers.',
     );
   });
 

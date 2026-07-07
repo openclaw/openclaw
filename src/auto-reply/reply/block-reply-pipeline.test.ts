@@ -1,4 +1,5 @@
 /** Tests block reply pipeline buffering, dedupe, and final flush behavior. */
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import {
@@ -100,6 +101,26 @@ describe("createBlockReplyContentKey", () => {
 });
 
 describe("createBlockReplyPipeline dedup with threading", () => {
+  it("does not count reasoning or commentary as a terminal reply", async () => {
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async () => {},
+      timeoutMs: 5000,
+    });
+
+    pipeline.enqueue({ text: "reasoning", isReasoning: true });
+    pipeline.enqueue({ text: "commentary", isCommentary: true });
+    pipeline.enqueue({ audioAsVoice: true });
+    await pipeline.flush({ force: true });
+
+    expect(pipeline.didStream()).toBe(true);
+    expect(pipeline.didStreamTerminalReply?.()).toBe(false);
+
+    pipeline.enqueue({ text: "final answer" });
+    await pipeline.flush({ force: true });
+
+    expect(pipeline.didStreamTerminalReply?.()).toBe(true);
+  });
+
   it("keeps separate deliveries for same text with different replyToId", async () => {
     const sent: Array<{ text?: string; replyToId?: string }> = [];
     const pipeline = createBlockReplyPipeline({
@@ -448,5 +469,31 @@ describe("createBlockReplyPipeline content coverage dedup", () => {
     await pipeline.flush({ force: true });
 
     expect(pipeline.hasSentPayload({ text: "summary" })).toBe(false);
+  });
+
+  it("clamps oversized delivery timeouts before arming timers", async () => {
+    vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const observedTimeouts: number[] = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (_payload, options) => {
+        observedTimeouts.push(options?.timeoutMs ?? 0);
+        await waitForAbort(options?.abortSignal);
+      },
+      timeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
+    });
+
+    pipeline.enqueue({ text: "slow block" });
+    const flushing = pipeline.flush({ force: true });
+    await Promise.resolve();
+
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    expect(observedTimeouts).toEqual([MAX_TIMER_TIMEOUT_MS]);
+
+    await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
+    await flushing;
+
+    expect(pipeline.isAborted()).toBe(true);
+    setTimeoutSpy.mockRestore();
   });
 });

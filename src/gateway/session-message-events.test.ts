@@ -8,7 +8,10 @@ import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vite
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import * as transcriptEvents from "../sessions/transcript-events.js";
-import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import {
+  emitInternalSessionTranscriptUpdate,
+  emitSessionTranscriptUpdate,
+} from "../sessions/transcript-events.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectOk,
@@ -515,6 +518,44 @@ describe("session.message websocket events", () => {
       expectRecordFields(messageEvent.payload, {
         sessionKey: "agent:main:main",
         messageId: "msg-single-frame",
+        messageSeq: 1,
+      });
+    });
+  });
+
+  test("broadcasts identity-only transcript updates to live session listeners", async () => {
+    const storePath = await createSessionStoreFile();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+
+    await withOperatorSessionSubscriber(async (ws) => {
+      const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:main");
+      emitInternalSessionTranscriptUpdate({
+        target: {
+          agentId: "main",
+          sessionId: "sess-main",
+          sessionKey: "agent:main:main",
+        },
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "identity frame" }],
+          timestamp: Date.now(),
+        },
+        messageId: "msg-identity-frame",
+        messageSeq: 1,
+      });
+
+      const messageEvent = await messageEventPromise;
+      expectRecordFields(messageEvent.payload, {
+        sessionKey: "agent:main:main",
+        messageId: "msg-identity-frame",
         messageSeq: 1,
       });
     });

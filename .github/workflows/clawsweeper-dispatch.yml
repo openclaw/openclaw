@@ -81,9 +81,27 @@ jobs:
           repositories: clawsweeper
           permission-contents: write
 
+      - name: Pre-filter ClawSweeper comment
+        id: comment_filter
+        if: ${{ github.event_name == 'issue_comment' }}
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          if grep -Eiq '(^|[[:space:]])@(clawsweeper|openclaw-clawsweeper)\b(\[bot\])?|(^|[[:space:]])/(clawsweeper|review|autoclose|auto([[:space:]]+|-)?merge)\b' <<< "$COMMENT_BODY"; then
+            echo "is_command=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_command=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Create target comment token
         id: target_token
-        if: ${{ github.event_name == 'issue_comment' && env.HAS_CLAWSWEEPER_APP_PRIVATE_KEY == 'true' }}
+        if: >-
+          ${{
+            github.event_name == 'issue_comment' &&
+            steps.comment_filter.outputs.is_command == 'true' &&
+            env.HAS_CLAWSWEEPER_APP_PRIVATE_KEY == 'true'
+          }}
         uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
         with:
           client-id: ${{ env.CLAWSWEEPER_APP_CLIENT_ID }}
@@ -213,7 +231,11 @@ jobs:
           fi
 
       - name: Acknowledge and dispatch ClawSweeper comment
-        if: ${{ github.event_name == 'issue_comment' }}
+        if: >-
+          ${{
+            github.event_name == 'issue_comment' &&
+            steps.comment_filter.outputs.is_command == 'true'
+          }}
         env:
           DISPATCH_TOKEN: ${{ steps.token.outputs.token }}
           TARGET_TOKEN: ${{ steps.target_token.outputs.token }}
@@ -232,10 +254,6 @@ jobs:
           . "$RUNNER_TEMP/github-api-backoff.sh"
           body_file="$RUNNER_TEMP/clawsweeper-comment-body.txt"
           printf '%s\n' "$COMMENT_BODY" > "$body_file"
-          if ! grep -Eiq '(^|[[:space:]])@(clawsweeper|openclaw-clawsweeper)\b(\[bot\])?|(^|[[:space:]])/(clawsweeper|review|automerge|autoclose)\b' "$body_file"; then
-            echo "No ClawSweeper command found in comment."
-            exit 0
-          fi
           if [ -n "$TARGET_TOKEN" ]; then
             err="$(mktemp)"
             if GH_TOKEN="$TARGET_TOKEN" gh_api_with_retry -X POST \

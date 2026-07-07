@@ -24,7 +24,13 @@ describe("package-root-args", () => {
     expect(() => parsePackageRootArg(["--package-root", "--other"], ENV_NAME)).toThrow(
       "--package-root requires a value",
     );
+    expect(() => parsePackageRootArg(["--package-root", "-h"], ENV_NAME)).toThrow(
+      "--package-root requires a value",
+    );
     expect(() => parsePackageRootArg(["--package-root="], ENV_NAME)).toThrow(
+      "--package-root requires a value",
+    );
+    expect(() => parsePackageRootArg(["--package-root=-h"], ENV_NAME)).toThrow(
       "--package-root requires a value",
     );
   });

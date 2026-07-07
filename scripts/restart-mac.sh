@@ -14,6 +14,7 @@ LAUNCH_AGENT="${HOME}/Library/LaunchAgents/ai.openclaw.mac.plist"
 LOCK_KEY="$(printf '%s' "${ROOT_DIR}" | shasum -a 256 | cut -c1-8)"
 LOCK_DIR="${TMPDIR:-/tmp}/openclaw-restart-${LOCK_KEY}"
 LOCK_PID_FILE="${LOCK_DIR}/pid"
+LOCK_HELD=0
 WAIT_FOR_LOCK=0
 LOG_PATH="${OPENCLAW_RESTART_LOG:-${TMPDIR:-/tmp}/openclaw-restart-${LOCK_KEY}.log}"
 NO_SIGN=0
@@ -38,7 +39,14 @@ run_step() {
 }
 
 cleanup() {
-  if [[ -d "${LOCK_DIR}" ]]; then
+  if [[ "${LOCK_HELD}" != "1" || ! -d "${LOCK_DIR}" ]]; then
+    return 0
+  fi
+  local owner_pid=""
+  if [[ -f "${LOCK_PID_FILE}" ]]; then
+    owner_pid="$(cat "${LOCK_PID_FILE}" 2>/dev/null || true)"
+  fi
+  if [[ -z "${owner_pid}" || "${owner_pid}" == "$$" ]]; then
     rm -rf "${LOCK_DIR}"
   fi
 }
@@ -46,6 +54,7 @@ cleanup() {
 acquire_lock() {
   while true; do
     if mkdir "${LOCK_DIR}" 2>/dev/null; then
+      LOCK_HELD=1
       echo "$$" > "${LOCK_PID_FILE}"
       return 0
     fi

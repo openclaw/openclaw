@@ -424,7 +424,12 @@ function parseTwilioListPayload<T>(
   if (!text.trim()) {
     return [];
   }
-  const parsed: unknown = JSON.parse(text);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return [];
+  }
   if (!parsed || typeof parsed !== "object") {
     return [];
   }
@@ -482,7 +487,12 @@ export async function retrieveTwilioMessagingService(params: {
   if (!response.ok) {
     throw new TwilioSmsApiError(response.status, response.text, "messaging-service lookup");
   }
-  const parsed: unknown = JSON.parse(response.text);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(response.text);
+  } catch {
+    throw new Error("Twilio Messaging Service lookup returned malformed JSON.");
+  }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("Twilio Messaging Service lookup returned malformed JSON.");
   }

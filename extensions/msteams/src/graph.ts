@@ -4,13 +4,13 @@ import { fetchWithSsrFGuard, type MSTeamsConfig } from "../runtime-api.js";
 import { GRAPH_ROOT } from "./attachments/shared.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import { createMSTeamsHttpError } from "./http-error.js";
+import { responseWithRelease } from "./response-with-release.js";
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { readAccessToken } from "./token-response.js";
 import { resolveDelegatedAccessToken, resolveMSTeamsCredentials } from "./token.js";
 import { buildUserAgent } from "./user-agent.js";
 
 const GRAPH_BETA = "https://graph.microsoft.com/beta";
-const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
 
 export type GraphUser = {
   id?: string;
@@ -30,50 +30,6 @@ type GraphChannel = {
 };
 
 export type GraphResponse<T> = { value?: T[] };
-
-function responseWithRelease(response: Response, release: () => Promise<void>): Response {
-  let released = false;
-  const releaseOnce = async () => {
-    if (released) {
-      return;
-    }
-    released = true;
-    await release();
-  };
-
-  if (!response.body || NULL_BODY_STATUSES.has(response.status)) {
-    void releaseOnce();
-    return response;
-  }
-
-  const reader = response.body.getReader();
-  const body = new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      try {
-        const next = await reader.read();
-        if (next.done) {
-          controller.close();
-          await releaseOnce();
-          return;
-        }
-        controller.enqueue(next.value);
-      } catch (error) {
-        await releaseOnce();
-        throw error;
-      }
-    },
-    async cancel(reason) {
-      void reader.cancel(reason).catch(() => undefined);
-      await releaseOnce();
-    },
-  });
-
-  return new Response(body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
-}
 
 export function normalizeQuery(value?: string | null): string {
   return value?.trim() ?? "";

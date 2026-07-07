@@ -28,7 +28,6 @@ function sessionKeyMatchesTranscriptPath(params: {
   const target = resolveGatewaySessionStoreTarget({
     cfg: params.cfg,
     key: params.key,
-    scanLegacyKeys: false,
     store: params.store,
   });
   const sessionAgentId = normalizeAgentId(target.agentId);

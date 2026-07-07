@@ -97,5 +97,5 @@ jobs:
         with:
           name: opengrep-pr-diff-sarif
           path: .opengrep-out/precise.sarif
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30

@@ -25,6 +25,7 @@ import {
 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "../src/infra/errors.ts";
+import { ALWAYS_ALLOWED_RUNTIME_DIR_NAMES } from "../src/plugin-sdk/facade-activation-contract.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
 import { readBoundedResponseText } from "./lib/bounded-response.ts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
@@ -35,7 +36,7 @@ import {
 } from "./lib/plugin-package-dependencies.mjs";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mjs";
 import { parseReleaseVersion, resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
-import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
+import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 type InstalledPackageJson = {
   version?: string;
@@ -408,11 +409,32 @@ export function collectInstalledPackageErrors(params: {
     }
   }
 
+  errors.push(...collectInstalledBundledExtensionManifestErrors(params.packageRoot));
+  errors.push(...collectInstalledAlwaysAllowedRuntimeFacadeErrors(params.packageRoot));
   errors.push(...collectInstalledContextEngineRuntimeErrors(params.packageRoot));
   errors.push(...collectInstalledPluginSdkZodArtifactErrors(params.packageRoot));
   errors.push(...collectInstalledPluginSdkDeclarationErrors(params.packageRoot));
   errors.push(...collectInstalledRootDependencyManifestErrors(params.packageRoot));
 
+  return errors;
+}
+
+export function collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot: string): string[] {
+  const errors: string[] = [];
+  const activationRuntimePath = "dist/facade-activation-check.runtime.js";
+  if (!existsSync(join(packageRoot, activationRuntimePath))) {
+    errors.push(
+      `installed package is missing required facade activation runtime: ${activationRuntimePath}`,
+    );
+  }
+  for (const dirName of ALWAYS_ALLOWED_RUNTIME_DIR_NAMES) {
+    const relativePath = `dist/extensions/${dirName}/runtime-api.js`;
+    if (!existsSync(join(packageRoot, relativePath))) {
+      errors.push(
+        `installed package allows bundled runtime facade ${dirName}/runtime-api.js but is missing required runtime sidecar: ${relativePath}.`,
+      );
+    }
+  }
   return errors;
 }
 
@@ -439,6 +461,10 @@ export function collectInstalledBundledRuntimeSidecarPaths(packageRoot: string):
     const match = /^dist\/extensions\/([^/]+)\//u.exec(relativePath);
     return match !== null && installedExtensionIds.has(match[1]);
   });
+}
+
+export function collectInstalledBundledExtensionManifestErrors(packageRoot: string): string[] {
+  return readBundledExtensionPackageJsons(packageRoot).errors;
 }
 
 export function normalizeInstalledBinaryVersion(output: string): string {
@@ -618,7 +644,7 @@ export function collectInstalledPluginSdkZodArtifactErrors(packageRoot: string):
   return [];
 }
 
-export function collectInstalledPluginSdkDeclarationErrors(packageRoot: string): string[] {
+function collectInstalledPluginSdkDeclarationErrors(packageRoot: string): string[] {
   const pluginSdkDistRoot = join(packageRoot, "dist", "plugin-sdk");
   const errors: string[] = [];
   const forbiddenPrivateWorkspaceSpecifiers = ["@openclaw/llm-core"];
@@ -853,7 +879,7 @@ export function resolveInstalledBinaryCommandInvocation(
   const binaryPath = resolveInstalledBinaryPath(prefixDir, platform);
   if (platform === "win32") {
     return {
-      command: params.comSpec ?? process.env.ComSpec ?? "cmd.exe",
+      command: params.comSpec ?? resolveWindowsCmdExePath(),
       args: ["/d", "/s", "/c", buildCmdExeCommandLine(binaryPath, args)],
       windowsVerbatimArguments: true,
     };

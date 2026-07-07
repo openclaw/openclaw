@@ -12,7 +12,7 @@ const {
   formatDoctorNonInteractiveHintMock,
   isRestartEnabledMock,
   callGatewayToolMock,
-  removeRestartSentinelFileMock,
+  clearRestartSentinelMock,
   scheduleGatewaySigusr1RestartMock,
   writeRestartSentinelMock,
 } = vi.hoisted(() => ({
@@ -30,8 +30,8 @@ const {
     () =>
       "Recommended follow-up: run openclaw doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
   ),
-  writeRestartSentinelMock: vi.fn(async (_payload: RestartSentinelPayload) => "/tmp/restart"),
-  removeRestartSentinelFileMock: vi.fn(async (_path: string | null | undefined) => undefined),
+  writeRestartSentinelMock: vi.fn(async (_payload: RestartSentinelPayload) => undefined),
+  clearRestartSentinelMock: vi.fn(async () => undefined),
   scheduleGatewaySigusr1RestartMock: vi.fn((_opts?: ScheduleGatewayRestartArgs) => ({
     ok: true,
     pid: 123,
@@ -59,7 +59,7 @@ vi.mock("../../infra/restart-sentinel.js", async () => {
   return {
     ...actual,
     formatDoctorNonInteractiveHint: formatDoctorNonInteractiveHintMock,
-    removeRestartSentinelFile: removeRestartSentinelFileMock,
+    clearRestartSentinel: clearRestartSentinelMock,
     writeRestartSentinel: writeRestartSentinelMock,
   };
 });
@@ -115,8 +115,8 @@ describe("gateway tool restart continuation", () => {
       "Recommended follow-up: run openclaw doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
     );
     writeRestartSentinelMock.mockReset();
-    writeRestartSentinelMock.mockResolvedValue("/tmp/restart");
-    removeRestartSentinelFileMock.mockClear();
+    writeRestartSentinelMock.mockResolvedValue(undefined);
+    clearRestartSentinelMock.mockClear();
     scheduleGatewaySigusr1RestartMock.mockReset();
     scheduleGatewaySigusr1RestartMock.mockReturnValue({
       ok: true,
@@ -222,6 +222,20 @@ describe("gateway tool restart continuation", () => {
       emitHooksQueued: true,
       continuationQueued: true,
     });
+  });
+
+  it("keeps the bounded restart reason UTF-16 well-formed", async () => {
+    const tool = createGatewayTool({
+      agentSessionKey: "agent:main:main",
+      config: {},
+    });
+
+    await tool.execute?.("tool-call-utf16", {
+      action: "restart",
+      reason: `${"x".repeat(199)}🚀tail`,
+    });
+
+    expect(requireScheduledRestartArgs().reason).toBe("x".repeat(199));
   });
 
   it("uses the runtime session, not model-supplied params, for scheduler ownership and sentinel routing (#86742)", async () => {
@@ -354,7 +368,7 @@ describe("gateway tool restart continuation", () => {
     await scheduledArgs.emitHooks?.beforeEmit?.();
     await scheduledArgs.emitHooks?.afterEmitRejected?.();
 
-    expect(removeRestartSentinelFileMock).toHaveBeenCalledWith("/tmp/restart");
+    expect(clearRestartSentinelMock).toHaveBeenCalledOnce();
   });
 
   it("uses the runtime session for update.run continuation routing (#86742)", async () => {

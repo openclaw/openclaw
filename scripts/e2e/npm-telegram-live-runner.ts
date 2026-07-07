@@ -1,6 +1,7 @@
 // Telegram package Docker harness.
 // Runs QA live transport code against the package candidate installed in Docker.
 
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -38,6 +39,17 @@ function resolveCredentialSource(env: NodeJS.ProcessEnv) {
 
 function resolveCredentialRole(env: NodeJS.ProcessEnv) {
   return env.OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE ?? env.OPENCLAW_QA_CREDENTIAL_ROLE;
+}
+
+function createRunId() {
+  return `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
+}
+
+function resolvePackageTelegramOutputDir(env: NodeJS.ProcessEnv, repoRoot: string) {
+  return (
+    env.OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR?.trim() ||
+    path.join(repoRoot, ".artifacts", "qa-e2e", `npm-telegram-live-${createRunId()}`)
+  );
 }
 
 const DEFAULT_RTT_CHECK_ID = "telegram-mentioned-message-reply";
@@ -107,9 +119,7 @@ async function main() {
   const sutOpenClawCommand = await resolveTrustedOpenClawCommand(rawSutOpenClawCommand);
 
   const repoRoot = path.resolve(process.env.OPENCLAW_NPM_TELEGRAM_REPO_ROOT ?? process.cwd());
-  const outputDir =
-    process.env.OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR?.trim() ||
-    path.join(repoRoot, ".artifacts", "qa-e2e", `npm-telegram-live-${Date.now().toString(36)}`);
+  const outputDir = resolvePackageTelegramOutputDir(process.env, repoRoot);
   const scenarioIds = splitCsv(process.env.OPENCLAW_NPM_TELEGRAM_SCENARIOS);
   const result = await runTelegramQaLive({
     env: process.env,
@@ -154,6 +164,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 
 export const testing = {
   parsePositiveIntegerEnv,
+  resolvePackageTelegramOutputDir,
   resolveCredentialRole,
   resolveCredentialSource,
   resolveRttOptions,

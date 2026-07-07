@@ -13,6 +13,7 @@ import {
   resetSkillsRefreshStateForTest,
 } from "../runtime/refresh-state.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
+import { renderProposalMarkdown } from "./frontmatter.js";
 import {
   applySkillProposal,
   inspectSkillProposal,
@@ -25,11 +26,7 @@ import {
   resolvePendingSkillProposal,
   reviseSkillProposal,
 } from "./service.js";
-import {
-  readSkillProposalManifest,
-  resolveProposalDraftPath,
-  updateSkillProposalRecord,
-} from "./store.js";
+import { readSkillProposalManifest, updateSkillProposalRecord } from "./store.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
@@ -54,6 +51,17 @@ async function makeWorkspace(): Promise<string> {
 }
 
 describe("skill workshop proposals", () => {
+  it("renders proposal markdown with a terminal newline", () => {
+    expect(
+      renderProposalMarkdown({
+        name: "example",
+        description: "Example proposal",
+        content: "# Example",
+        date: "2026-07-05T00:00:00.000Z",
+      }).endsWith("\n"),
+    ).toBe(true);
+  });
+
   it("creates a pending proposal under the workshop and applies it as an active workspace skill", async () => {
     const workspaceDir = await makeWorkspace();
     const proposal = await proposeCreateSkill({
@@ -97,9 +105,7 @@ describe("skill workshop proposals", () => {
     expect(proposal.record.target.skillFile).toBe(
       path.join(workspaceDir, "skills", "weather-helper", "SKILL.md"),
     );
-    await expect(
-      fs.readFile(resolveProposalDraftPath(proposal.record.id), "utf8"),
-    ).resolves.toContain("date: ");
+    expect(proposal.content).toContain("date: ");
 
     const listed = await listSkillProposals();
     expect(listed.proposals).toHaveLength(1);

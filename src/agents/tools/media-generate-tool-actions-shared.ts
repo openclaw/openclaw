@@ -143,6 +143,40 @@ export function createMediaGenerateTaskStatusActions<Task>(params: {
   };
 }
 
+/** Builds duplicate-guard status output for a media generation task type. */
+export function createMediaGenerateDuplicateGuardResult<Task>(params: {
+  sessionKey?: string;
+  prompt?: string;
+  requestKey?: string;
+  findDuplicateTask: (
+    sessionKey?: string,
+    params?: { prompt?: string; requestKey?: string },
+  ) => Task | undefined;
+  buildStatusText: TaskStatusTextBuilder<Task>;
+  buildStatusDetails: (task: Task) => Record<string, unknown>;
+}): MediaGenerateActionResult | undefined {
+  const blockingTask = params.findDuplicateTask(params.sessionKey, {
+    prompt: params.prompt,
+    requestKey: params.requestKey,
+  });
+  if (!blockingTask) {
+    return undefined;
+  }
+  return {
+    content: [
+      {
+        type: "text",
+        text: params.buildStatusText(blockingTask, { duplicateGuard: true }),
+      },
+    ],
+    details: {
+      action: "status",
+      duplicateGuard: true,
+      ...params.buildStatusDetails(blockingTask),
+    },
+  };
+}
+
 function createMediaGenerateStatusActionResult<Task>(params: {
   sessionKey?: string;
   inactiveText: string;

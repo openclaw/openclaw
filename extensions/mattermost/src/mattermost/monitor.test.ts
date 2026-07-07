@@ -371,6 +371,7 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
   it("suppresses reasoning-prefixed finals before preview finalization", async () => {
     const draftStream = createDraftStreamMock();
     const deliverFinal = vi.fn(async () => {});
+    const recordThreadParticipation = vi.fn();
 
     await deliverMattermostReplyWithDraftPreview({
       payload: { text: "  \n > Reasoning:\n> _hidden_" } as never,
@@ -382,6 +383,7 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
       resolvePreviewFinalText: (text) => text?.trim(),
       previewState: { finalizedViaPreviewPost: false },
       logVerboseMessage: vi.fn(),
+      recordThreadParticipation,
       deliverPayload: deliverFinal,
     });
 
@@ -390,6 +392,36 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     expect(draftStream.discardPending).not.toHaveBeenCalled();
     expect(draftStream.clear).not.toHaveBeenCalled();
     expect(updateMattermostPostSpy).not.toHaveBeenCalled();
+    // No visible reply was sent, so the thread must not be marked as participated.
+    expect(recordThreadParticipation).not.toHaveBeenCalled();
+  });
+
+  it("records thread participation when a same-thread final finalizes the preview in place", async () => {
+    const draftStream = createDraftStreamMock();
+    const deliverFinal = vi.fn(async () => {});
+    const recordThreadParticipation = vi.fn();
+
+    await deliverMattermostReplyWithDraftPreview({
+      payload: { text: "All good" } as never,
+      info: { kind: "final" },
+      kind: "channel",
+      client: createMattermostClientMock(),
+      draftStream,
+      effectiveReplyToId: "thread-root-1",
+      resolvePreviewFinalText: (text) => text?.trim(),
+      previewState: { finalizedViaPreviewPost: false },
+      logVerboseMessage: vi.fn(),
+      recordThreadParticipation,
+      deliverPayload: deliverFinal,
+    });
+
+    // Default streaming finalizes by editing the preview post, bypassing deliverPayload —
+    // participation must still be recorded (regression: PR #95552 review P1).
+    expect(updateMattermostPostSpy).toHaveBeenCalledWith(expect.anything(), "preview-post-1", {
+      message: "All good",
+    });
+    expect(deliverFinal).not.toHaveBeenCalled();
+    expect(recordThreadParticipation).toHaveBeenCalledTimes(1);
   });
 
   it("deletes the preview after a successful normal final send", async () => {

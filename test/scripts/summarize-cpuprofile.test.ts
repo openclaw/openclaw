@@ -24,6 +24,9 @@ describe("scripts/perf/summarize-cpuprofile.mjs", () => {
 
   it("prints help without treating it as a profile path", () => {
     expect(shouldPrintHelp(["--help"])).toBe(true);
+    expect(shouldPrintHelp(["--limit", "-h", "a.cpuprofile"])).toBe(false);
+    expect(shouldPrintHelp(["--limit", "--", "--help"])).toBe(false);
+    expect(shouldPrintHelp(["--limit=1e3", "--help"])).toBe(false);
     expect(shouldPrintHelp(["--", "--help"])).toBe(false);
 
     const result = spawnSync(
@@ -43,12 +46,27 @@ describe("scripts/perf/summarize-cpuprofile.mjs", () => {
   it("rejects malformed limit flags instead of falling back", () => {
     for (const args of [
       ["--limit", "3frames", "a.cpuprofile"],
+      ["--limit", "-h", "a.cpuprofile"],
+      ["--limit", "--", "--help"],
       ["--limit", "0", "a.cpuprofile"],
       ["--limit=1e3", "a.cpuprofile"],
       ["--limit"],
     ]) {
       expect(() => parseArgs(args)).toThrow("--limit must be a positive integer");
     }
+
+    const result = spawnSync(
+      process.execPath,
+      ["scripts/perf/summarize-cpuprofile.mjs", "--limit", "-h", "a.cpuprofile"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("--limit must be a positive integer");
   });
 
   it("rejects unknown options instead of treating them as profile paths", () => {

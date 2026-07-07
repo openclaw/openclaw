@@ -117,8 +117,9 @@ function boundedToolNames(names: readonly string[]): {
   };
 }
 
-function sanitizeAuditField(value: string): string {
-  const sanitized = Array.from(value.trim(), (char) => {
+/** Escapes control characters as visible sequences for single-line audit/log output. */
+export function escapeControlCharsVisible(value: string): string {
+  return Array.from(value, (char) => {
     if (char === "\n") {
       return "\\n";
     }
@@ -134,6 +135,10 @@ function sanitizeAuditField(value: string): string {
     }
     return char;
   }).join("");
+}
+
+function sanitizeAuditField(value: string): string {
+  const sanitized = escapeControlCharsVisible(value.trim());
   if (!sanitized) {
     return "(unknown)";
   }

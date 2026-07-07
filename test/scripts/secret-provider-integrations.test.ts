@@ -5,10 +5,15 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 
 const tempDirs: string[] = [];
 const harnessPath = path.resolve("test/scripts/fixtures/secret-provider-integrations-harness.mjs");
 const proofScriptPath = path.resolve("scripts/e2e/secret-provider-integrations.mjs");
+
+function expectedTaskkillPath(): string {
+  return resolveWindowsTaskkillPath();
+}
 
 function makeTempDir(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-secret-provider-proof-"));
@@ -27,6 +32,22 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<voi
     });
   }
   throw new Error("condition was not met before timeout");
+}
+
+// writeFileSync is not atomic for concurrent readers: the pid file can exist
+// before its payload is flushed, so wait for non-empty content or the parse
+// races into NaN under parallel-suite load.
+async function waitForPidFile(pidPath: string, timeoutMs = 10_000): Promise<number> {
+  let content = "";
+  await waitFor(() => {
+    try {
+      content = fs.readFileSync(pidPath, "utf8").trim();
+    } catch {
+      return false;
+    }
+    return content.length > 0;
+  }, timeoutMs);
+  return Number.parseInt(content, 10);
 }
 
 async function waitForChildClose(child: ReturnType<typeof spawn>, timeoutMs = 5_000) {
@@ -292,6 +313,30 @@ describe("secret provider integration proof harness", () => {
     }
   });
 
+  it("clamps oversized command timeout env values before scheduling timers", async () => {
+    const previousTimeout = process.env.OPENCLAW_SECRET_PROOF_COMMAND_MS;
+    process.env.OPENCLAW_SECRET_PROOF_COMMAND_MS = String(Number.MAX_SAFE_INTEGER);
+    try {
+      const proof = await import(
+        `${pathToFileURL(proofScriptPath).href}?case=command-timeout-clamp-${Date.now()}`
+      );
+
+      await expect(
+        proof.runCommand(process.execPath, [
+          "--input-type=module",
+          "--eval",
+          "setTimeout(() => process.exit(0), 25);",
+        ]),
+      ).resolves.toMatchObject({ code: 0 });
+    } finally {
+      if (previousTimeout === undefined) {
+        delete process.env.OPENCLAW_SECRET_PROOF_COMMAND_MS;
+      } else {
+        process.env.OPENCLAW_SECRET_PROOF_COMMAND_MS = previousTimeout;
+      }
+    }
+  });
+
   it("parses JSON command output without swallowing brace-heavy diagnostics", async () => {
     const proof = await import(`${pathToFileURL(proofScriptPath).href}?case=json-${Date.now()}`);
 
@@ -449,11 +494,11 @@ describe("secret provider integration proof harness", () => {
               OPENCLAW_ENTRY: fakeOpenClaw,
             },
           },
-          { timeoutKillGraceMs: 50, timeoutMs: 2_000 },
+          { timeoutKillGraceMs: 50, timeoutMs: 500 },
         );
         result.catch(() => {});
-        await waitFor(() => fs.existsSync(readyPath) && fs.existsSync(descendantPidPath));
-        descendantPid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
+        await waitFor(() => fs.existsSync(readyPath));
+        descendantPid = await waitForPidFile(descendantPidPath);
         expect(Number.isInteger(descendantPid)).toBe(true);
         expect(isProcessAlive(descendantPid)).toBe(true);
 
@@ -571,6 +616,119 @@ describe("secret provider integration proof harness", () => {
     }
   });
 
+  it("signals Windows command process trees with graceful taskkill first", async () => {
+    const proof = await import(
+      `${pathToFileURL(proofScriptPath).href}?case=windows-command-${Date.now()}`
+    );
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
+
+    proof.terminateProcessTree(child, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      1,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T"],
+      {
+        stdio: "ignore",
+      },
+    );
+
+    proof.terminateProcessTree(child, "SIGKILL", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("force-kills Windows command trees when graceful taskkill fails", async () => {
+    const proof = await import(
+      `${pathToFileURL(proofScriptPath).href}?case=windows-command-fallback-${Date.now()}`
+    );
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const runTaskkill = vi
+      .fn()
+      .mockReturnValueOnce({ error: undefined, status: 1 })
+      .mockReturnValueOnce({ error: undefined, status: 0 });
+
+    proof.terminateProcessTree(child, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      1,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("signals Windows PTY process trees with taskkill", async () => {
+    const proof = await import(
+      `${pathToFileURL(proofScriptPath).href}?case=windows-pty-${Date.now()}`
+    );
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
+
+    proof.signalPtyProcessTree(child, "SIGHUP", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      1,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T"],
+      {
+        stdio: "ignore",
+      },
+    );
+
+    proof.signalPtyProcessTree(child, "SIGKILL", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
   it.runIf(process.platform !== "win32")("kills timed-out command process groups", async () => {
     const root = makeTempDir();
     const markerPath = path.join(root, "command-descendant-marker.txt");
@@ -598,6 +756,7 @@ describe("secret provider integration proof harness", () => {
 
     await expect(
       proof.runCommand(process.execPath, [scriptPath], {
+        timeoutKillGraceMs: 50,
         timeoutMs: 150,
       }),
     ).rejects.toThrow(/command timed out/u);
@@ -650,8 +809,7 @@ describe("secret provider integration proof harness", () => {
           timeoutMs: 150,
         });
 
-        await waitFor(() => fs.existsSync(descendantPidPath));
-        descendantPid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
+        descendantPid = await waitForPidFile(descendantPidPath);
         expect(Number.isInteger(descendantPid)).toBe(true);
         expect(isProcessAlive(descendantPid)).toBe(true);
 
@@ -696,8 +854,7 @@ describe("secret provider integration proof harness", () => {
       });
 
       try {
-        await waitFor(() => fs.existsSync(descendantPidPath));
-        descendantPid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
+        descendantPid = await waitForPidFile(descendantPidPath);
         expect(Number.isInteger(descendantPid)).toBe(true);
         expect(isProcessAlive(descendantPid)).toBe(true);
 
@@ -779,7 +936,7 @@ describe("secret provider integration proof harness", () => {
           `const proof = await import(${JSON.stringify(
             `${pathToFileURL(proofScriptPath).href}?case=parent-signal-${Date.now()}`,
           )});`,
-          `await proof.runCommand(process.execPath, [${JSON.stringify(scriptPath)}], { timeoutMs: 30_000 });`,
+          `await proof.runCommand(process.execPath, [${JSON.stringify(scriptPath)}], { timeoutKillGraceMs: 50, timeoutMs: 30_000 });`,
           "",
         ].join("\n"),
       );
@@ -789,8 +946,8 @@ describe("secret provider integration proof harness", () => {
           cwd: process.cwd(),
           stdio: ["ignore", "ignore", "pipe"],
         });
-        await waitFor(() => fs.existsSync(readyPath) && fs.existsSync(descendantPidPath));
-        descendantPid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);
+        await waitFor(() => fs.existsSync(readyPath));
+        descendantPid = await waitForPidFile(descendantPidPath);
         expect(Number.isInteger(descendantPid)).toBe(true);
         expect(isProcessAlive(descendantPid)).toBe(true);
 

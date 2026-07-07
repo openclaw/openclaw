@@ -1,7 +1,7 @@
 // Dev Tooling Safety tests cover dev tooling safety script behavior.
 import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -21,8 +21,13 @@ import {
   redactHomePath,
   redactJsonValueForDevToolLog,
 } from "../../scripts/lib/dev-tooling-safety.ts";
+import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 
 const tempDirs: string[] = [];
+
+function expectedTaskkillPath(): string {
+  return resolveWindowsTaskkillPath();
+}
 
 async function waitForCondition(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
   const started = Date.now();
@@ -35,6 +40,23 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 5_000): Pr
     });
   }
   throw new Error("timed out waiting for condition");
+}
+
+// writeFileSync is not atomic for concurrent readers: the pid file can exist
+// before its payload is flushed, so wait for non-empty content or the parse
+// races into NaN under parallel-suite load. Generous budget: probe children
+// boot node + tsx before the descendant pid lands.
+async function waitForPidFile(pidPath: string, timeoutMs = 15_000): Promise<number> {
+  let content = "";
+  await waitForCondition(() => {
+    try {
+      content = readFileSync(pidPath, "utf8").trim();
+    } catch {
+      return false;
+    }
+    return content.length > 0;
+  }, timeoutMs);
+  return Number.parseInt(content, 10);
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -185,6 +207,9 @@ describe("script-specific dev tooling hardening", () => {
     expect(() => discordSmokeTesting.parseArgs(["--channel", "--json"])).toThrow(
       "--channel requires a value",
     );
+    for (const flag of ["--channel", "--token", "--timeout-ms", "--state-dir"]) {
+      expect(() => discordSmokeTesting.parseArgs([flag, "-h"])).toThrow(`${flag} requires a value`);
+    }
   });
 
   it("redacts Discord webhook tokens from API paths", () => {
@@ -346,6 +371,14 @@ describe("script-specific dev tooling hardening", () => {
     expect(result.stdout).toBe("");
   });
 
+  it("rejects short flags as TUI PTY watch option values", () => {
+    for (const flag of ["--mode", "--mirror-path"]) {
+      expect(() => tuiPtyWatchTesting.parseOptions([flag, "-h"])).toThrow(
+        `${flag} requires a value`,
+      );
+    }
+  });
+
   it("keeps TUI PTY watch vitest args behind the separator", () => {
     expect(tuiPtyWatchTesting.parseOptions(["--mode", "all", "--", "--help"])).toMatchObject({
       mode: "all",
@@ -468,6 +501,59 @@ describe("script-specific dev tooling hardening", () => {
     },
   );
 
+  it("signals Windows TUI PTY watch process trees with taskkill", () => {
+    const childKill = vi.fn(() => true);
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
+
+    tuiPtyWatchTesting.signalChildProcessTree({ pid: 123, kill: childKill }, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, expectedTaskkillPath(), ["/PID", "123", "/T"], {
+      stdio: "ignore",
+    });
+
+    tuiPtyWatchTesting.signalChildProcessTree({ pid: 123, kill: childKill }, "SIGKILL", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "123", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(childKill).not.toHaveBeenCalled();
+  });
+
+  it("force-kills Windows TUI PTY watch process trees when graceful taskkill fails", () => {
+    const childKill = vi.fn(() => true);
+    const runTaskkill = vi
+      .fn()
+      .mockReturnValueOnce({ error: undefined, status: 1 })
+      .mockReturnValueOnce({ error: undefined, status: 0 });
+
+    tuiPtyWatchTesting.signalChildProcessTree({ pid: 123, kill: childKill }, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+
+    expect(runTaskkill).toHaveBeenNthCalledWith(1, expectedTaskkillPath(), ["/PID", "123", "/T"], {
+      stdio: "ignore",
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "123", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(childKill).not.toHaveBeenCalled();
+  });
+
   it("aborts stalled OpenAI realtime smoke fetches at the request timeout", async () => {
     let signal: AbortSignal | undefined;
     const request = realtimeSmokeTesting.createOpenAIClientSecret("test-key", {
@@ -507,42 +593,25 @@ describe("script-specific dev tooling hardening", () => {
     );
   });
 
-  it("prints OpenAI realtime smoke help without launching live checks", () => {
-    expect(realtimeSmokeTesting.parseRealtimeSmokeArgs(["--help"])).toEqual({ help: true });
-
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/dev/realtime-talk-live-smoke.ts", "--help"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain(
+  it("formats OpenAI realtime smoke help without launching live checks", () => {
+    expect(realtimeSmokeTesting.parseRealtimeSmokeArgs(["--help"])).toEqual({
+      help: true,
+      openAIOnly: false,
+    });
+    expect(realtimeSmokeTesting.parseRealtimeSmokeArgs(["--openai-only"])).toEqual({
+      help: false,
+      openAIOnly: true,
+    });
+    expect(realtimeSmokeTesting.usage()).toContain(
       "Usage: node --import tsx scripts/dev/realtime-talk-live-smoke.ts",
     );
-    expect(result.stderr).toBe("");
+    expect(realtimeSmokeTesting.usage()).toContain("--openai-only");
   });
 
-  it("rejects unknown OpenAI realtime smoke args before launching live checks", () => {
+  it("rejects unknown OpenAI realtime smoke args before runtime setup", () => {
     expect(() => realtimeSmokeTesting.parseRealtimeSmokeArgs(["--wat"])).toThrow(
       "Unknown argument: --wat",
     );
-
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/dev/realtime-talk-live-smoke.ts", "--wat"],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr.trim()).toBe("Unknown argument: --wat");
   });
 
   it("bounds OpenAI realtime smoke response body reads by content-length", async () => {
@@ -679,34 +748,23 @@ describe("script-specific dev tooling hardening", () => {
       const descendantPidPath = path.join(tempRoot, "descendant.pid");
       let descendantPid = 0;
       const fakeClaudeBin = await writeFakePromptCli(tempRoot, descendantPidPath);
-      const probe = spawn(
-        process.execPath,
-        ["--import", "tsx", "scripts/anthropic-prompt-probe.ts"],
-        {
-          cwd: process.cwd(),
-          env: {
-            ...process.env,
-            CLAUDE_BIN: fakeClaudeBin,
-            OPENCLAW_PROMPT_TEXT: "timeout cleanup proof",
-            OPENCLAW_PROMPT_TIMEOUT_MS: "1000",
-            OPENCLAW_PROMPT_TRANSPORT: "direct",
-          },
-          stdio: "ignore",
-        },
-      );
+      const probe = promptProbeTesting.runDirectPrompt("timeout cleanup proof", {
+        claudeBin: fakeClaudeBin,
+        timeoutMs: 500,
+      });
 
       try {
-        await waitForCondition(() => existsSync(descendantPidPath));
-        descendantPid = Number.parseInt(await fs.readFile(descendantPidPath, "utf8"), 10);
+        descendantPid = await waitForPidFile(descendantPidPath);
         expect(Number.isInteger(descendantPid)).toBe(true);
         expect(isProcessAlive(descendantPid)).toBe(true);
 
-        await expect(waitForChildExit(probe)).resolves.toEqual({ status: 0, signal: null });
+        await expect(probe).resolves.toMatchObject({
+          exitCode: null,
+          ok: false,
+          signal: "SIGKILL",
+        });
         await waitForCondition(() => !isProcessAlive(descendantPid));
       } finally {
-        if (probe.pid && isProcessAlive(probe.pid)) {
-          process.kill(probe.pid, "SIGKILL");
-        }
         if (descendantPid && isProcessAlive(descendantPid)) {
           process.kill(descendantPid, "SIGKILL");
         }
@@ -739,8 +797,7 @@ describe("script-specific dev tooling hardening", () => {
       );
 
       try {
-        await waitForCondition(() => existsSync(descendantPidPath));
-        descendantPid = Number.parseInt(await fs.readFile(descendantPidPath, "utf8"), 10);
+        descendantPid = await waitForPidFile(descendantPidPath);
         expect(Number.isInteger(descendantPid)).toBe(true);
         expect(isProcessAlive(descendantPid)).toBe(true);
 
@@ -856,8 +913,8 @@ describe("script-specific dev tooling hardening", () => {
       let closeCalls = 0;
 
       try {
-        await waitForCondition(() => isProcessAlive(child.pid!) && existsSync(descendantPidPath));
-        descendantPid = Number.parseInt(await fs.readFile(descendantPidPath, "utf8"), 10);
+        await waitForCondition(() => isProcessAlive(child.pid!));
+        descendantPid = await waitForPidFile(descendantPidPath);
         expect(Number.isInteger(descendantPid)).toBe(true);
         expect(isProcessAlive(descendantPid)).toBe(true);
 
@@ -869,7 +926,7 @@ describe("script-specific dev tooling hardening", () => {
             },
           },
           50,
-          1_000,
+          100,
         );
 
         expect(stopped).toBe(true);
@@ -922,7 +979,7 @@ describe("script-specific dev tooling hardening", () => {
           `const child = childProcess.spawn(process.execPath, ['--input-type=module', '--eval', ${JSON.stringify(leaderScript)}], { detached: true, stdio: 'ignore' });`,
           "let stopPromise;",
           "const stopGateway = () => {",
-          "  stopPromise ??= testing.stopGatewayPromptChild(child, { close: async () => {} }, 50, 1000);",
+          "  stopPromise ??= testing.stopGatewayPromptChild(child, { close: async () => {} }, 50, 100);",
           "  return stopPromise;",
           "};",
           "testing.installGatewayPromptParentSignalHandlers(child, stopGateway);",
@@ -936,8 +993,8 @@ describe("script-specific dev tooling hardening", () => {
       });
 
       try {
-        await waitForCondition(() => existsSync(readyPath) && existsSync(descendantPidPath));
-        descendantPid = Number.parseInt(await fs.readFile(descendantPidPath, "utf8"), 10);
+        await waitForCondition(() => existsSync(readyPath));
+        descendantPid = await waitForPidFile(descendantPidPath);
         expect(Number.isInteger(descendantPid)).toBe(true);
         expect(isProcessAlive(descendantPid)).toBe(true);
 

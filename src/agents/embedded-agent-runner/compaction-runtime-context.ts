@@ -70,6 +70,7 @@ export function resolveEmbeddedCompactionTarget(params: {
   provider: string | undefined;
   runtimeProvider?: string;
   contextProvider?: string;
+  nativeHarnessCompaction?: boolean;
   model: string | undefined;
   authProfileId: string | undefined;
 } {
@@ -99,6 +100,7 @@ export function resolveEmbeddedCompactionTarget(params: {
     return {
       runtimeProvider: routedRuntimeProvider,
       contextProvider: useCodexHarnessRuntime ? routedRuntimeProvider : undefined,
+      ...(useCodexHarnessRuntime ? { nativeHarnessCompaction: true } : {}),
     };
   };
   if (!override) {

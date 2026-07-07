@@ -14,6 +14,7 @@ import { extractDeliveryInfo } from "../config/sessions/delivery-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import type {
   PluginAttachmentChannelHints,
@@ -31,17 +32,10 @@ export const attachmentProbeFs = {
 const MAX_ATTACHMENT_FILES = 10;
 
 type SendMessage = typeof import("../infra/outbound/message.js").sendMessage;
-let sendMessagePromise: Promise<SendMessage> | undefined;
 
-async function loadSendMessage(): Promise<SendMessage> {
-  sendMessagePromise ??= import("../infra/outbound/message.js").then(
-    (module) => module.sendMessage,
-  );
-  return sendMessagePromise;
-}
-
-type GetChannelPlugin = typeof import("../channels/plugins/index.js").getChannelPlugin;
-let getChannelPluginPromise: Promise<GetChannelPlugin> | undefined;
+const loadSendMessage = createLazyRuntimeModule(() =>
+  import("../infra/outbound/message.js").then((module) => module.sendMessage),
+);
 
 type AttachmentDeliveryChannelPlugin = {
   outbound?: {
@@ -49,12 +43,9 @@ type AttachmentDeliveryChannelPlugin = {
   };
 };
 
-async function loadGetChannelPlugin(): Promise<GetChannelPlugin> {
-  getChannelPluginPromise ??= import("../channels/plugins/index.js").then(
-    (module) => module.getChannelPlugin,
-  );
-  return getChannelPluginPromise;
-}
+const loadGetChannelPlugin = createLazyRuntimeModule(() =>
+  import("../channels/plugins/index.js").then((module) => module.getChannelPlugin),
+);
 
 type ResolvedAttachmentDelivery = {
   parseMode?: "HTML";

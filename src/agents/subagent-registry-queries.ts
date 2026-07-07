@@ -5,6 +5,7 @@
  */
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 import { hasSubagentRunEnded, isLiveUnendedSubagentRun } from "./subagent-run-liveness.js";
 
 function resolveControllerSessionKey(entry: SubagentRunRecord): string {
@@ -76,7 +77,7 @@ function rememberLatestRunEntry(
   entry: SubagentRunRecord,
 ): void {
   const existing = map.get(key);
-  if (!existing || entry.createdAt > existing.createdAt) {
+  if (!existing || compareSubagentRunGeneration(entry, existing) > 0) {
     map.set(key, entry);
   }
 }
@@ -88,7 +89,7 @@ function rememberLatestRunPair(
   entry: SubagentRunRecord,
 ): void {
   const existing = map.get(key);
-  if (!existing || entry.createdAt > existing.entry.createdAt) {
+  if (!existing || compareSubagentRunGeneration(entry, existing.entry) > 0) {
     map.set(key, { runId, entry });
   }
 }
@@ -126,12 +127,18 @@ export function buildSubagentRunReadIndexFromRuns(params: {
       inMemoryDisplayByChildSessionKey.set(childSessionKey, display);
     }
     if (hasSubagentRunEnded(entry)) {
-      if (!display.latestInMemoryEnded || entry.createdAt > display.latestInMemoryEnded.createdAt) {
+      if (
+        !display.latestInMemoryEnded ||
+        compareSubagentRunGeneration(entry, display.latestInMemoryEnded) > 0
+      ) {
         display.latestInMemoryEnded = entry;
       }
       continue;
     }
-    if (!display.latestInMemoryActive || entry.createdAt > display.latestInMemoryActive.createdAt) {
+    if (
+      !display.latestInMemoryActive ||
+      compareSubagentRunGeneration(entry, display.latestInMemoryActive) > 0
+    ) {
       display.latestInMemoryActive = entry;
     }
   }
@@ -181,7 +188,8 @@ export function buildSubagentRunReadIndexFromRuns(params: {
       if (latestInMemoryEnded || latestInMemoryActive) {
         if (
           latestInMemoryEnded &&
-          (!latestInMemoryActive || latestInMemoryEnded.createdAt > latestInMemoryActive.createdAt)
+          (!latestInMemoryActive ||
+            compareSubagentRunGeneration(latestInMemoryEnded, latestInMemoryActive) > 0)
         ) {
           return latestInMemoryEnded;
         }
@@ -258,7 +266,7 @@ function findLatestRunForChildSession(
     if (entry.childSessionKey !== key) {
       continue;
     }
-    if (!latest || entry.createdAt > latest.createdAt) {
+    if (!latest || compareSubagentRunGeneration(entry, latest) > 0) {
       latest = entry;
     }
   }
@@ -291,12 +299,12 @@ export function getSubagentRunByChildSessionKeyFromRuns(
       continue;
     }
     if (isLiveUnendedSubagentRun(entry)) {
-      if (!latestActive || entry.createdAt > latestActive.createdAt) {
+      if (!latestActive || compareSubagentRunGeneration(entry, latestActive) > 0) {
         latestActive = entry;
       }
       continue;
     }
-    if (!latestEnded || entry.createdAt > latestEnded.createdAt) {
+    if (!latestEnded || compareSubagentRunGeneration(entry, latestEnded) > 0) {
       latestEnded = entry;
     }
   }
@@ -363,7 +371,7 @@ export function countActiveRunsForSessionFromRuns(
       continue;
     }
     const existing = latestByChildSessionKey.get(entry.childSessionKey);
-    if (!existing || entry.createdAt > existing.createdAt) {
+    if (!existing || compareSubagentRunGeneration(entry, existing) > 0) {
       latestByChildSessionKey.set(entry.childSessionKey, entry);
     }
   }
@@ -403,7 +411,7 @@ function forEachDescendantRun(
       }
       const childKey = entry.childSessionKey.trim();
       const existing = latestByChildSessionKey.get(childKey);
-      if (!existing || entry.createdAt > existing[1].createdAt) {
+      if (!existing || compareSubagentRunGeneration(entry, existing[1]) > 0) {
         latestByChildSessionKey.set(childKey, [runId, entry]);
       }
     }

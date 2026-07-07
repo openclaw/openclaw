@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveWindowsTaskkillPath } from "../../../../scripts/lib/windows-taskkill.mjs";
 import { createTempDirTracker } from "../../../helpers/temp-dir.js";
 import {
   assertInspectLoaded,
@@ -12,6 +13,10 @@ import {
 } from "./plugin-lifecycle-probe-runtime.js";
 
 const tempDirs = createTempDirTracker();
+
+function expectedTaskkillPath(): string {
+  return resolveWindowsTaskkillPath();
+}
 
 function makeTempDir(): string {
   return tempDirs.make("openclaw-plugin-lifecycle-probe-");
@@ -132,6 +137,60 @@ describe("plugin lifecycle matrix probe", () => {
       await vi.advanceTimersByTimeAsync(100);
       expect(child.signals).toEqual(["SIGTERM"]);
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("force-kills timed Windows commands with taskkill when graceful taskkill fails", async () => {
+    vi.useFakeTimers();
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      const child = Object.assign(new FakeCommandChild(), { pid: 12345 });
+      const taskkillImpl = vi
+        .fn()
+        .mockReturnValueOnce({ status: 1 })
+        .mockImplementationOnce(() => {
+          queueMicrotask(() => child.emit("exit", null, "SIGTERM"));
+          return { status: 0 };
+        });
+      const runPromise = probeTesting.runCommand("fake-command", ["install"], {
+        spawnImpl: (() => child) as unknown as typeof import("node:child_process").spawn,
+        taskkillImpl,
+        timeoutKillGraceMs: 100,
+        timeoutMs: 10,
+      });
+      const runError = runPromise.catch((error: unknown) => error);
+
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(taskkillImpl).toHaveBeenNthCalledWith(
+        1,
+        expectedTaskkillPath(),
+        ["/PID", "12345", "/T"],
+        {
+          stdio: "ignore",
+          windowsHide: true,
+        },
+      );
+      expect(taskkillImpl).toHaveBeenNthCalledWith(
+        2,
+        expectedTaskkillPath(),
+        ["/PID", "12345", "/T", "/F"],
+        {
+          stdio: "ignore",
+          windowsHide: true,
+        },
+      );
+      expect(child.signals).toEqual([]);
+
+      const error = await runError;
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe("fake-command install timed out after 10ms");
+    } finally {
+      if (platformDescriptor) {
+        Object.defineProperty(process, "platform", platformDescriptor);
+      }
       vi.useRealTimers();
     }
   });

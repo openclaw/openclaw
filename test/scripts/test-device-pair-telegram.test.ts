@@ -21,6 +21,24 @@ describe("scripts/dev/test-device-pair-telegram.ts", () => {
     });
   });
 
+  it("rejects option tokens as device-pair Telegram values", () => {
+    for (const flag of ["--chat", "-c", "--account", "-a"]) {
+      expect(() => parseDevicePairTelegramArgs([flag, "-h"])).toThrow(
+        `${flag} requires a value`,
+      );
+    }
+    expect(() => parseDevicePairTelegramArgs(["--chat", "--help"])).toThrow(
+      "--chat requires a value",
+    );
+  });
+
+  it("allows negative Telegram chat ids", () => {
+    expect(parseDevicePairTelegramArgs(["--chat", "-100123"])).toMatchObject({
+      chatId: "-100123",
+      help: false,
+    });
+  });
+
   it("rejects unknown args before loading OpenClaw plugins", async () => {
     const cfg = { channels: { telegram: { enabled: true } } };
     const loadOpenClawPlugins = vi.fn();

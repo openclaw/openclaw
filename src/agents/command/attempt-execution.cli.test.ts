@@ -7,11 +7,13 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { saveAuthProfileStore } from "../auth-profiles/store.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
 import {
+  persistAcpTurnTranscript,
   persistCliTurnTranscript,
   runAgentAttempt as runAgentAttemptImpl,
 } from "./attempt-execution.js";
@@ -210,6 +212,69 @@ describe("CLI attempt execution", () => {
   let tmpDir: string;
   let storePath: string;
   let homeEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
+
+  async function runOpenClawEmbeddedAttemptForTest(overrides?: {
+    opts?: Partial<RunAgentAttemptParams["opts"]>;
+    runId?: string;
+    body?: string;
+    transcriptBody?: string;
+    providerOverride?: string;
+    modelOverride?: string;
+    isFallbackRetry?: boolean;
+    fallbackRuntimeState?: RunAgentAttemptParams["fallbackRuntimeState"];
+    userTurnTranscriptRecorder?: RunAgentAttemptParams["userTurnTranscriptRecorder"];
+  }) {
+    const runId = overrides?.runId ?? "run-embedded-live-stream-gate";
+    const sessionKey = `agent:main:direct:${runId}`;
+    const sessionEntry: SessionEntry = {
+      sessionId: `session-${runId}`,
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      meta: { durationMs: 1 },
+    } satisfies EmbeddedAgentRunResult);
+    const providerOverride = overrides?.providerOverride ?? "openai";
+
+    await runAgentAttempt({
+      providerOverride,
+      originalProvider: "openai",
+      modelOverride: overrides?.modelOverride ?? "gpt-5.4",
+      cfg: {} as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, `${runId}.jsonl`),
+      workspaceDir: tmpDir,
+      body: overrides?.body ?? "stream gate",
+      transcriptBody: overrides?.transcriptBody,
+      isFallbackRetry: overrides?.isFallbackRetry ?? false,
+      fallbackRuntimeState: overrides?.fallbackRuntimeState,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId,
+      opts: {
+        message: "stream gate",
+        ...overrides?.opts,
+      } as RunAgentAttemptParams["opts"],
+      runContext: {} as RunAgentAttemptParams["runContext"],
+      spawnedBy: undefined,
+      messageChannel: "telegram",
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: providerOverride,
+      sessionStore,
+      storePath,
+      sessionHasHistory: false,
+      userTurnTranscriptRecorder: overrides?.userTurnTranscriptRecorder,
+    });
+
+    return firstEmbeddedAgentArg(runEmbeddedAgentMock.mock.calls.length - 1);
+  }
 
   beforeEach(async () => {
     homeEnvSnapshot = captureEnv(["HOME"]);
@@ -1264,6 +1329,92 @@ describe("CLI attempt execution", () => {
     expect(sessionStore[sessionKey]?.updatedAt).toBe(persisted[sessionKey]?.updatedAt);
   });
 
+  it("mirrors only the CLI reply when the shared recorder already persisted the user turn", async () => {
+    const sessionKey = "agent:main:direct:cli-recorder-owned-user";
+    const sessionFile = path.join(tmpDir, "session-cli-recorder-owned-user.jsonl");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-cli-recorder-owned-user",
+      sessionFile,
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      sessionId: sessionEntry.sessionId,
+      cwd: tmpDir,
+      config: {},
+      message: {
+        role: "user",
+        content: "canonical current ask",
+        timestamp: Date.now(),
+      },
+    });
+
+    await persistCliTurnTranscript({
+      body: "canonical current ask",
+      result: makeCliResult("hello from cli"),
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      sessionCwd: tmpDir,
+      config: {},
+      skipUserTurn: true,
+    });
+
+    const messages = await readSessionMessages(sessionFile);
+    expect(messages.filter((message) => message.role === "user")).toHaveLength(1);
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: "hello from cli" }],
+      }),
+    );
+  });
+
+  it("persists a media-only ACP user turn when the reply is empty", async () => {
+    const sessionKey = "agent:main:direct:acp-media-only";
+    const sessionFile = path.join(tmpDir, "session-acp-media-only.jsonl");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-acp-media-only",
+      sessionFile,
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+    await persistAcpTurnTranscript({
+      body: "[media attached: media://inbound/image-1]",
+      transcriptBody: "",
+      userInput: {
+        text: "",
+        media: [{ path: "/media/inbound/image-1.png", contentType: "image/png" }],
+        mediaOnlyText: "[User sent media without caption]",
+      },
+      finalText: "",
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      sessionCwd: tmpDir,
+      config: {},
+    });
+
+    expect(await readSessionMessages(sessionFile)).toContainEqual(
+      expect.objectContaining({
+        role: "user",
+        content: "[User sent media without caption]",
+        MediaPath: "/media/inbound/image-1.png",
+        MediaType: "image/png",
+      }),
+    );
+  });
+
   it("does not append a CLI transcript after the session is deleted", async () => {
     const sessionKey = "agent:main:subagent:cli-transcript-deleted";
     const staleSessionFile = path.join(tmpDir, "session-cli-stale.jsonl");
@@ -1636,6 +1787,11 @@ describe("CLI attempt execution", () => {
       } as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {
         currentChannelId: "channel:voice-room",
+        chatId: "voice-room",
+        channelContext: {
+          sender: { id: "sender-voice", unionId: "sender-union" },
+          chat: { id: "voice-room" },
+        },
         senderId: "sender-voice",
       } as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
@@ -1656,6 +1812,11 @@ describe("CLI attempt execution", () => {
       messageChannel: "discord",
       messageProvider: "discord-voice",
       currentChannelId: "channel:voice-room",
+      chatId: "voice-room",
+      channelContext: {
+        sender: { id: "sender-voice", unionId: "sender-union" },
+        chat: { id: "voice-room" },
+      },
       senderId: "sender-voice",
     });
   });
@@ -1892,7 +2053,16 @@ describe("CLI attempt execution", () => {
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
     runCliAgentMock.mockResolvedValueOnce(makeCliResult("timestamped cli"));
-
+    const userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+      input: { text: "canonical timestamp question" },
+      target: {
+        transcriptPath: path.join(tmpDir, "session.jsonl"),
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+        agentId: "main",
+        cwd: tmpDir,
+      },
+    });
     await runAgentAttempt({
       providerOverride: "claude-cli",
       originalProvider: "claude-cli",
@@ -1905,6 +2075,7 @@ describe("CLI attempt execution", () => {
       sessionFile: path.join(tmpDir, "session.jsonl"),
       workspaceDir: tmpDir,
       body: "what time is it?",
+      transcriptBody: "canonical timestamp question",
       isFallbackRetry: false,
       resolvedThinkLevel: "medium",
       timeoutMs: 1_000,
@@ -1921,10 +2092,15 @@ describe("CLI attempt execution", () => {
       sessionStore,
       storePath,
       sessionHasHistory: false,
+      userTurnTranscriptRecorder,
     });
 
     expectMockArgFields(runCliAgentMock, {
       prompt: "[Wed 2024-06-05 15:30 UTC] what time is it?",
+      transcriptPrompt: "canonical timestamp question",
+      imagePrompt: "what time is it?",
+      userTurnTranscriptRecorder,
+      suppressNextUserMessagePersistence: false,
     });
   });
 
@@ -1937,6 +2113,9 @@ describe("CLI attempt execution", () => {
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
     runCliAgentMock.mockResolvedValueOnce(makeCliResult("canonical cli"));
+    const fallbackRuntimeState: NonNullable<RunAgentAttemptParams["fallbackRuntimeState"]> = {};
+    const images = [{ type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" }];
+    const imageOrder = ["inline" as const];
 
     await runAgentAttempt({
       providerOverride: "anthropic",
@@ -1958,11 +2137,11 @@ describe("CLI attempt execution", () => {
       sessionFile: path.join(tmpDir, "session.jsonl"),
       workspaceDir: tmpDir,
       body: "route this",
-      isFallbackRetry: false,
+      isFallbackRetry: true,
       resolvedThinkLevel: "medium",
       timeoutMs: 1_000,
       runId: "run-canonical-claude-cli",
-      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
+      opts: { images, imageOrder } as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
       messageChannel: "telegram",
@@ -1974,13 +2153,26 @@ describe("CLI attempt execution", () => {
       sessionStore,
       storePath,
       sessionHasHistory: false,
+      fallbackRuntimeState,
     });
 
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
     expectMockArgFields(runCliAgentMock, {
       provider: "claude-cli",
       model: "claude-opus-4-7",
+      imagePrompt: "route this",
+      images,
+      imageOrder,
     });
+    expect(fallbackRuntimeState.originRuntime).toBe("cli");
+
+    const fallbackArg = await runOpenClawEmbeddedAttemptForTest({
+      runId: "run-canonical-claude-cli-fallback",
+      isFallbackRetry: true,
+      fallbackRuntimeState,
+      opts: { images },
+    });
+    expect(fallbackArg.images).toEqual(images);
   });
 
   it("routes provider-qualified Anthropic shorthand through the configured Claude CLI runtime", async () => {
@@ -2080,7 +2272,14 @@ describe("CLI attempt execution", () => {
       timeoutMs: 1_000,
       runId: "run-canonical-codex-cli",
       opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
-      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      runContext: {
+        chatId: "chat-embedded",
+        channelContext: {
+          sender: { id: "sender-embedded", unionId: "embedded-union" },
+          chat: { id: "chat-embedded" },
+        },
+        senderId: "sender-embedded",
+      } as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
       messageChannel: "telegram",
       skillsSnapshot: undefined,
@@ -2097,7 +2296,114 @@ describe("CLI attempt execution", () => {
     expectMockArgFields(runEmbeddedAgentMock, {
       provider: "openai",
       model: "gpt-5.4",
+      chatId: "chat-embedded",
+      channelContext: {
+        sender: { id: "sender-embedded", unionId: "embedded-union" },
+        chat: { id: "chat-embedded" },
+      },
+      senderId: "sender-embedded",
     });
+  });
+
+  it("keeps live stream output for visible subagent lane runs", async () => {
+    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+      opts: { lane: "subagent" },
+      runId: "visible-subagent-stream",
+    });
+
+    expect(embeddedArg.suppressLiveStreamOutput).toBe(false);
+  });
+
+  it("forwards Gateway plugin runtime binding to embedded runs", async () => {
+    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+      opts: { allowGatewaySubagentBinding: true },
+      runId: "gateway-plugin-runtime-binding",
+    });
+
+    expect(embeddedArg.allowGatewaySubagentBinding).toBe(true);
+  });
+
+  it("suppresses live stream output for hidden internal runs", async () => {
+    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+      opts: { lane: "subagent", sessionEffects: "internal" },
+      runId: "internal-subagent-stream",
+    });
+
+    expect(embeddedArg.suppressLiveStreamOutput).toBe(true);
+  });
+
+  it("forwards canonical transcript text without replacing embedded image content", async () => {
+    const recorder = createUserTurnTranscriptRecorder({
+      target: {
+        transcriptPath: path.join(tmpDir, "embedded-image-turn.jsonl"),
+        sessionId: "session-embedded-image-turn",
+        sessionKey: "agent:main:direct:embedded-image-turn",
+        agentId: "main",
+        cwd: tmpDir,
+      },
+    });
+    const images = [{ type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" }];
+    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+      runId: "embedded-image-turn",
+      body: "runtime image prompt",
+      transcriptBody: "canonical image caption",
+      opts: { images },
+      userTurnTranscriptRecorder: recorder,
+    });
+
+    expect(embeddedArg).toMatchObject({
+      prompt: "runtime image prompt",
+      transcriptPrompt: "canonical image caption",
+      images,
+      userTurnTranscriptRecorder: recorder,
+      suppressNextUserMessagePersistence: false,
+    });
+  });
+
+  it.each([
+    { originRuntime: undefined, retry: false, expectedImages: true },
+    { originRuntime: "cli" as const, retry: true, expectedImages: true },
+    { originRuntime: "embedded" as const, retry: true, expectedImages: false },
+  ])(
+    "forwards embedded images for originRuntime=$originRuntime retry=$retry",
+    async ({ originRuntime, retry, expectedImages }) => {
+      const images = [{ type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" }];
+      const imageOrder = ["inline" as const];
+      const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+        runId: `embedded-image-fallback-${originRuntime ?? "unset"}-${retry}`,
+        isFallbackRetry: retry,
+        fallbackRuntimeState: originRuntime === undefined ? undefined : { originRuntime },
+        opts: { images, imageOrder },
+      });
+
+      expect(embeddedArg.images).toEqual(expectedImages ? images : undefined);
+      expect(embeddedArg.imageOrder).toEqual(expectedImages ? imageOrder : undefined);
+    },
+  );
+
+  it("records raw CLI-shaped model runs as embedded origins", async () => {
+    const images = [{ type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" }];
+    const fallbackRuntimeState: NonNullable<RunAgentAttemptParams["fallbackRuntimeState"]> = {};
+
+    const firstArg = await runOpenClawEmbeddedAttemptForTest({
+      runId: "raw-cli-shaped-origin",
+      providerOverride: "claude-cli",
+      modelOverride: "claude-opus-4-7",
+      fallbackRuntimeState,
+      opts: { modelRun: true, images },
+    });
+    expect(fallbackRuntimeState.originRuntime).toBe("embedded");
+    expect(firstArg.images).toEqual(images);
+
+    const retryArg = await runOpenClawEmbeddedAttemptForTest({
+      runId: "raw-cli-shaped-origin-retry",
+      providerOverride: "claude-cli",
+      modelOverride: "claude-opus-4-7",
+      isFallbackRetry: true,
+      fallbackRuntimeState,
+      opts: { modelRun: true, images },
+    });
+    expect(retryArg.images).toBeUndefined();
   });
 
   it("forwards selected auth profiles through metadata-scoped provider aliases", async () => {

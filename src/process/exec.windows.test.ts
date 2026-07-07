@@ -7,6 +7,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import {
   resetWindowsInstallRootsForTests,
   getWindowsInstallRoots,
+  getWindowsSystem32ExePath,
 } from "../infra/windows-install-roots.js";
 import { withMockedWindowsPlatform, withRestoredMocks } from "../test-utils/vitest-spies.js";
 
@@ -496,12 +497,71 @@ describe("windows command wrapper behavior", () => {
         expect(child.kill).not.toHaveBeenCalled();
         expect(spawnMock).toHaveBeenCalledTimes(2);
         const taskkillCall = requireSpawnCall(1);
-        expect(taskkillCall[0]).toBe("taskkill");
+        expect(taskkillCall[0]).toBe(getWindowsSystem32ExePath("taskkill.exe"));
         expect(taskkillCall[1]).toEqual(["/PID", "1234", "/T", "/F"]);
         expect(taskkillCall[2]).toEqual({
           stdio: "ignore",
           windowsHide: true,
         });
+
+        child.emit("close", null, "SIGKILL");
+        const result = await resultPromise;
+        expect(result.termination).toBe("timeout");
+        expect(result.code).toBe(124);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("falls back to direct child kill when forced Windows taskkill emits a spawn error", async () => {
+    vi.useFakeTimers();
+    const child = createMockChild({ autoClose: false });
+    child.exitCode = null;
+    const taskkillChild = createMockChild({ autoClose: false });
+
+    spawnMock.mockImplementationOnce(() => child).mockImplementationOnce(() => taskkillChild);
+
+    try {
+      await withMockedWindowsPlatform(async () => {
+        const resultPromise = runCommandWithTimeout(["node", "idle.js"], { timeoutMs: 80 });
+
+        await vi.advanceTimersByTimeAsync(81);
+        taskkillChild.emit("error", Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" }));
+
+        expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+
+        child.emit("close", null, "SIGKILL");
+        const result = await resultPromise;
+        expect(result.termination).toBe("timeout");
+        expect(result.code).toBe(124);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("falls back to direct child kill when graceful Windows taskkill emits a spawn error", async () => {
+    vi.useFakeTimers();
+    const child = createMockChild({ autoClose: false });
+    child.exitCode = null;
+    const taskkillChild = createMockChild({ autoClose: false });
+
+    spawnMock.mockImplementationOnce(() => child).mockImplementationOnce(() => taskkillChild);
+
+    try {
+      await withMockedWindowsPlatform(async () => {
+        const resultPromise = runCommandWithTimeout(["node", "idle.js"], {
+          killProcessTree: true,
+          timeoutMs: 80,
+        });
+
+        await vi.advanceTimersByTimeAsync(81);
+        taskkillChild.emit("error", Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" }));
+
+        expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+        await vi.advanceTimersByTimeAsync(300);
+        expect(spawnMock).toHaveBeenCalledTimes(2);
 
         child.emit("close", null, "SIGKILL");
         const result = await resultPromise;

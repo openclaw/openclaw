@@ -5,7 +5,11 @@ import { Readable } from "node:stream";
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 import { mediaKindFromMime } from "openclaw/plugin-sdk/media-mime";
-import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS, runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
+import {
+  MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
+  runFfmpeg,
+  runFfprobe,
+} from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer, saveMediaStream, type SavedMedia } from "openclaw/plugin-sdk/media-store";
 import { readRegularFile, writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -413,7 +417,7 @@ export type SendMediaResult = {
  * Upload an image to Feishu and get an image_key for sending.
  * Supports: JPEG, PNG, WEBP, GIF, TIFF, BMP, ICO
  */
-export async function uploadImageFeishu(params: {
+async function uploadImageFeishu(params: {
   cfg: ClawdbotConfig;
   image: Buffer | string; // Buffer or file path
   imageType?: "message" | "avatar";
@@ -466,12 +470,12 @@ export function sanitizeFileNameForUpload(fileName: string): string {
  * Upload a file to Feishu and get a file_key for sending.
  * Max file size: 30MB
  */
-export async function uploadFileFeishu(params: {
+async function uploadFileFeishu(params: {
   cfg: ClawdbotConfig;
   file: Buffer | string; // Buffer or file path
   fileName: string;
   fileType: "opus" | "mp4" | "pdf" | "doc" | "xls" | "ppt" | "stream";
-  duration?: number; // Required for audio/video files, in milliseconds
+  duration?: number; // Audio/video duration, in milliseconds.
   accountId?: string;
 }): Promise<UploadFileResult> {
   const { cfg, file, fileName, fileType, duration, accountId } = params;
@@ -492,7 +496,7 @@ export async function uploadFileFeishu(params: {
           file_type: fileType,
           file_name: safeFileName,
           file: fileData,
-          ...(duration !== undefined && { duration }),
+          ...(duration !== undefined ? { duration } : {}),
         },
       }),
     "Feishu file upload failed",
@@ -510,7 +514,7 @@ export async function uploadFileFeishu(params: {
 /**
  * Send an image message using an image_key
  */
-export async function sendImageFeishu(params: {
+async function sendImageFeishu(params: {
   cfg: ClawdbotConfig;
   to: string;
   imageKey: string;
@@ -564,7 +568,7 @@ export async function sendImageFeishu(params: {
 /**
  * Send a file message using a file_key
  */
-export async function sendFileFeishu(params: {
+async function sendFileFeishu(params: {
   cfg: ClawdbotConfig;
   to: string;
   fileKey: string;
@@ -621,7 +625,7 @@ export async function sendFileFeishu(params: {
 /**
  * Helper to detect file type from extension
  */
-export function detectFileType(
+function detectFileType(
   fileName: string,
 ): "opus" | "mp4" | "pdf" | "doc" | "xls" | "ppt" | "stream" {
   const ext = normalizeLowercaseStringOrEmpty(path.extname(fileName));
@@ -818,6 +822,52 @@ async function prepareFeishuVoiceMedia(params: {
   }
 }
 
+async function probeMediaDurationMs(params: {
+  buffer: Buffer;
+  fileName: string;
+  contentType?: string;
+}): Promise<number | undefined> {
+  try {
+    return await withTempWorkspace(
+      { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "feishu-media-probe-" },
+      async (workspace) => {
+        const ext = normalizeLowercaseStringOrEmpty(path.extname(params.fileName));
+        const inferredExt =
+          ext && ext.length <= 12
+            ? ext
+            : mediaKindFromMime(params.contentType) === "video"
+              ? ".mp4"
+              : ".ogg";
+        const inputPath = await workspace.write(`input${inferredExt}`, params.buffer);
+        const stdout = await runFfprobe(
+          ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", inputPath],
+          { timeoutMs: 5_000 },
+        );
+        const seconds = Number.parseFloat(stdout.trim());
+        if (!Number.isFinite(seconds) || seconds <= 0) {
+          return undefined;
+        }
+        return Math.max(1, Math.round(seconds * 1000));
+      },
+    );
+  } catch (err) {
+    console.warn("[feishu] failed to probe media duration; upload will omit it:", err);
+    return undefined;
+  }
+}
+
+async function maybeProbeUploadDurationMs(params: {
+  buffer: Buffer;
+  fileName: string;
+  contentType?: string;
+  msgType: "file" | "audio" | "media";
+}): Promise<number | undefined> {
+  if (params.msgType !== "audio" && params.msgType !== "media") {
+    return undefined;
+  }
+  return await probeMediaDurationMs(params);
+}
+
 /**
  * Upload and send media (image or file) from URL, local path, or buffer.
  * When mediaUrl is a local path, mediaLocalRoots (from core outbound context)
@@ -903,11 +953,18 @@ export async function sendMediaFeishu(params: {
       ...(voiceIntentDegradedToFile ? { voiceIntentDegradedToFile: true } : {}),
     };
   }
+  const durationMs = await maybeProbeUploadDurationMs({
+    buffer,
+    fileName: name,
+    contentType,
+    msgType: routing.msgType,
+  });
   const { fileKey } = await uploadFileFeishu({
     cfg,
     file: buffer,
     fileName: name,
     fileType: routing.fileType ?? "stream",
+    ...(durationMs !== undefined ? { duration: durationMs } : {}),
     accountId,
   });
   const result = await sendFileFeishu({

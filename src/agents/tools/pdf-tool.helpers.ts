@@ -65,6 +65,9 @@ export function parsePageRange(range: string, maxPages: number): number[] {
         pages.add(i);
       }
     } else {
+      if (!/^\d+$/.test(part)) {
+        throw new Error(`Invalid page number: "${part}"`);
+      }
       const num = Number(part);
       if (!Number.isFinite(num) || num < 1) {
         throw new Error(`Invalid page number: "${part}"`);
@@ -74,7 +77,11 @@ export function parsePageRange(range: string, maxPages: number): number[] {
       }
     }
   }
-  return Array.from(pages).toSorted((a, b) => a - b);
+  const parsedPages = Array.from(pages).toSorted((a, b) => a - b);
+  if (parsedPages.length === 0) {
+    throw new Error(`No PDF pages matched requested range "${range}"`);
+  }
+  return parsedPages;
 }
 
 /** Converts a provider assistant message into PDF text or throws a model-labelled failure. */

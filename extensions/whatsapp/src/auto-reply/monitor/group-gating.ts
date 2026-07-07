@@ -78,12 +78,19 @@ function shouldWarnForGroupDrop(warnKey: string): boolean {
   return true;
 }
 
-function isOwnerSender(baseMentionConfig: MentionConfig, msg: AdmittedWebInboundMessage) {
-  const sender = normalizeE164(getSenderIdentity(msg).e164 ?? "");
+function isOwnerSender(
+  baseMentionConfig: MentionConfig,
+  msg: AdmittedWebInboundMessage,
+  authDir?: string,
+) {
+  const sender = normalizeE164(getSenderIdentity(msg, authDir).e164 ?? "");
   if (!sender) {
     return false;
   }
-  const owners = resolveOwnerList(baseMentionConfig, getSelfIdentity(msg).e164 ?? undefined);
+  const owners = resolveOwnerList(
+    baseMentionConfig,
+    getSelfIdentity(msg, authDir).e164 ?? undefined,
+  );
   return owners.includes(sender);
 }
 
@@ -180,14 +187,20 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
   const mentionMsg: AdmittedWebInboundMessage =
     params.mentionText !== undefined
       ? { ...params.msg, payload: { ...params.msg.payload, body: params.mentionText } }
-      : params.msg;
+      : {
+          ...params.msg,
+          payload: {
+            ...params.msg.payload,
+            body: params.msg.payload.commandBody ?? params.msg.payload.body,
+          },
+        };
   const commandBody = stripMentionsForCommand(
     mentionMsg.payload.body,
     mentionConfig.mentionRegexes,
     self.e164,
   );
   const activationCommand = parseActivationCommand(commandBody);
-  const owner = isOwnerSender(baseMentionConfig, params.msg);
+  const owner = isOwnerSender(baseMentionConfig, params.msg, params.authDir);
   const shouldBypassMention = owner && hasControlCommand(commandBody, params.cfg);
 
   if (activationCommand.hasCommand && !owner) {
@@ -243,7 +256,9 @@ export async function applyGroupGating(params: ApplyGroupGatingParams) {
     },
   });
   const effectiveWasMentioned = mentionDecision.effectiveWasMentioned || shouldBypassMention;
-  params.msg.wasMentioned = effectiveWasMentioned;
+  // Carry the session activation and mention result together. Dispatch needs
+  // both facts to distinguish an always-on group from a blocked unmentioned turn.
+  params.msg.groupMention = { wasMentioned: effectiveWasMentioned, requireMention };
   if (!shouldBypassMention && requireMention && mentionDecision.shouldSkip) {
     if (params.deferMissingMention === true) {
       params.logVerbose(

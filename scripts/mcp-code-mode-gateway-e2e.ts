@@ -11,6 +11,7 @@ import { stageQaMockAuthProfiles } from "../extensions/qa-lab/src/providers/shar
 import { buildQaGatewayConfig } from "../extensions/qa-lab/src/qa-gateway-config.js";
 import { resetConfigRuntimeState } from "../src/config/config.js";
 import { startGatewayServer } from "../src/gateway/server.js";
+import { deleteTestEnvValue, setTestEnvValue } from "../src/test-utils/env.js";
 import { writeProbeMcpServer } from "./e2e/lib/mcp-code-mode-probe-server.ts";
 import {
   type McpCodeModeMentions,
@@ -87,9 +88,9 @@ async function readSessionLogMentions(stateDir: string): Promise<Record<string, 
 
 function restoreEnvValue(key: string, value: string | undefined): void {
   if (value === undefined) {
-    delete process.env[key];
+    deleteTestEnvValue(key);
   } else {
-    process.env[key] = value;
+    setTestEnvValue(key, value);
   }
 }
 
@@ -203,9 +204,9 @@ export async function main() {
       serverPath,
     });
 
-    process.env.OPENCLAW_STATE_DIR = stateDir;
-    process.env.OPENCLAW_CONFIG_PATH = configPath;
-    process.env.OPENCLAW_TEST_FAST = "1";
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+    setTestEnvValue("OPENCLAW_TEST_FAST", "1");
     resetConfigRuntimeState();
 
     server = await startGatewayServer(gatewayPort, {

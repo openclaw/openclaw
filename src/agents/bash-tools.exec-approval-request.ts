@@ -24,23 +24,19 @@ import {
   POSIX_SHELL_WRAPPERS,
   resolveShellWrapperTransportArgv,
 } from "../infra/shell-wrapper-resolution.js";
+import { createLazyPromise } from "../shared/lazy-runtime.js";
 import {
   DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS,
   DEFAULT_APPROVAL_TIMEOUT_MS,
 } from "./bash-tools.exec-runtime.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
-type ExecApprovalCommandSpansRuntime =
-  typeof import("./bash-tools.exec-approval-request.runtime.js");
-
-let execApprovalCommandSpansRuntimePromise: Promise<ExecApprovalCommandSpansRuntime> | null = null;
 const POSIX_COMMAND_HIGHLIGHT_SHELLS: ReadonlySet<string> = POSIX_SHELL_WRAPPERS;
 
-function loadExecApprovalCommandSpansRuntime(): Promise<ExecApprovalCommandSpansRuntime> {
-  execApprovalCommandSpansRuntimePromise ??=
-    import("./bash-tools.exec-approval-request.runtime.js");
-  return execApprovalCommandSpansRuntimePromise;
-}
+const loadExecApprovalCommandSpansRuntime = createLazyPromise(
+  () => import("./bash-tools.exec-approval-request.runtime.js"),
+  { cacheRejections: true },
+);
 
 /** Gateway payload fields used to register or wait for an exec approval decision. */
 type RequestExecApprovalDecisionParams = {
@@ -64,6 +60,7 @@ type RequestExecApprovalDecisionParams = {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+  approvalReviewerDeviceIds?: string[];
   requireDeliveryRoute?: boolean;
   suppressDelivery?: boolean;
 };
@@ -99,6 +96,7 @@ function buildExecApprovalRequestToolParams(
     turnSourceTo: params.turnSourceTo,
     turnSourceAccountId: params.turnSourceAccountId,
     turnSourceThreadId: params.turnSourceThreadId,
+    approvalReviewerDeviceIds: params.approvalReviewerDeviceIds,
     requireDeliveryRoute: params.requireDeliveryRoute,
     suppressDelivery: params.suppressDelivery,
     timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
@@ -205,6 +203,7 @@ type HostExecApprovalParams = {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+  approvalReviewerDeviceIds?: string[];
   requireDeliveryRoute?: boolean;
   suppressDelivery?: boolean;
 };
@@ -313,6 +312,7 @@ async function buildHostApprovalDecisionParams(
     resolvedPath: params.resolvedPath,
     requireDeliveryRoute: params.requireDeliveryRoute,
     suppressDelivery: params.suppressDelivery,
+    approvalReviewerDeviceIds: params.approvalReviewerDeviceIds,
     ...buildExecApprovalTurnSourceContext(params),
   };
 }

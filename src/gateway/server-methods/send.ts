@@ -5,6 +5,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import {
   ErrorCodes,
   errorShape,
@@ -15,7 +16,6 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
-import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
 import {
@@ -49,6 +49,7 @@ import {
   normalizeSessionKeyPreservingOpaquePeerIds,
   parseThreadSessionSuffix,
 } from "../../sessions/session-key-utils.js";
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import { formatForLog } from "../ws-log.js";
@@ -177,17 +178,16 @@ async function resolveRequestedChannel(params: {
     }
 > {
   const channelInput = readStringValue(params.requestChannel);
-  const normalizedChannel = channelInput ? normalizeChannelId(channelInput) : null;
+  const normalizedChannel = channelInput ? normalizeMessageChannel(channelInput) : undefined;
+  if (params.rejectWebchatAsInternalOnly && normalizedChannel === INTERNAL_MESSAGE_CHANNEL) {
+    return {
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "unsupported channel: webchat (internal-only). Use `chat.send` for WebChat UI messages or choose a deliverable channel.",
+      ),
+    };
+  }
   if (channelInput && !normalizedChannel) {
-    const normalizedInput = normalizeOptionalLowercaseString(channelInput) ?? "";
-    if (params.rejectWebchatAsInternalOnly && normalizedInput === "webchat") {
-      return {
-        error: errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "unsupported channel: webchat (internal-only). Use `chat.send` for WebChat UI messages or choose a deliverable channel.",
-        ),
-      };
-    }
     return {
       error: errorShape(ErrorCodes.INVALID_REQUEST, params.unsupportedMessage(channelInput)),
     };
@@ -411,7 +411,7 @@ async function mirrorDeliveredSourceReplyToTranscriptBestEffort(params: {
   }
 }
 
-const sourceReplyTranscriptMirrorQueues = new Map<string, Promise<void>>();
+const sourceReplyTranscriptMirrorQueue = new KeyedAsyncQueue();
 
 function resolveSourceReplyTranscriptMirrorQueueKey(
   mirror: Parameters<typeof mirrorDeliveredSourceReplyToTranscript>[0],
@@ -425,22 +425,11 @@ function scheduleDeliveredSourceReplyTranscriptMirror(params: {
   mirror: Parameters<typeof mirrorDeliveredSourceReplyToTranscript>[0];
 }): Promise<void> {
   const queueKey = resolveSourceReplyTranscriptMirrorQueueKey(params.mirror);
-  const previous = sourceReplyTranscriptMirrorQueues.get(queueKey);
   // Queue per session so current-conversation source replies are visible before
   // a following turn can read the transcript.
-  const queued = (async () => {
-    await previous?.catch(() => undefined);
-    await mirrorDeliveredSourceReplyToTranscriptBestEffort(params);
-  })();
-  sourceReplyTranscriptMirrorQueues.set(queueKey, queued);
-  void queued
-    .finally(() => {
-      if (sourceReplyTranscriptMirrorQueues.get(queueKey) === queued) {
-        sourceReplyTranscriptMirrorQueues.delete(queueKey);
-      }
-    })
-    .catch(() => undefined);
-  return queued;
+  return sourceReplyTranscriptMirrorQueue.enqueue(queueKey, () =>
+    mirrorDeliveredSourceReplyToTranscriptBestEffort(params),
+  );
 }
 
 export const sendHandlers: GatewayRequestHandlers = {

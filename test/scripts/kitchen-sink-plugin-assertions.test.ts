@@ -14,7 +14,10 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs";
+const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
 const SWEEP_SCRIPT = "scripts/e2e/lib/kitchen-sink-plugin/sweep.sh";
+// The shim waits for an explicit log-ready marker; this only bounds a broken fixture process.
+const FIXTURE_READY_WAIT_ATTEMPTS = process.env.CI ? 2_000 : 1_000;
 const REQUIRED_FULL_DIAGNOSTIC_CANARIES = [
   "agent tool result middleware must be a function",
   "trusted tool policy registration requires id, description, and evaluate()",
@@ -225,11 +228,40 @@ function runScanLogs({
 }
 
 function runSweepShell(script: string, env: NodeJS.ProcessEnv = {}) {
-  return spawnSync("/bin/bash", ["-c", script], {
+  return spawnSync(BASH_BIN, ["-c", toBashScript(script)], {
     cwd: process.cwd(),
     encoding: "utf8",
-    env: { ...process.env, ...env },
+    env: { ...process.env, ...toBashEnv(env) },
   });
+}
+
+function toBashScript(script: string) {
+  if (process.platform === "win32") {
+    return `export PATH="/usr/bin:/bin:$PATH"\n${script}`;
+  }
+  return script;
+}
+
+function toBashEnv(env: NodeJS.ProcessEnv) {
+  if (process.platform !== "win32") {
+    return env;
+  }
+
+  return Object.fromEntries(
+    Object.entries(env).map(([key, value]) => [
+      key,
+      typeof value === "string" ? toGitBashPath(value) : value,
+    ]),
+  );
+}
+
+function toGitBashPath(value: string) {
+  const match = /^([A-Za-z]):[\\/](.*)$/u.exec(value);
+  if (!match) {
+    return value;
+  }
+
+  return `/${match[1].toLowerCase()}/${match[2].replaceAll("\\", "/")}`;
 }
 
 describe("kitchen-sink plugin assertions", () => {
@@ -812,6 +844,8 @@ exit "$status"
     const scratchRoot = path.join(parent, "scratch");
     const fixtureDir = path.join(scratchRoot, "clawhub-fixture");
     const nodeShim = path.join(fakeBin, "node");
+    const sleepShim = path.join(fakeBin, "sleep");
+    const fixtureReadyPath = path.join(parent, "fixture-log-ready");
     try {
       mkdirSync(fakeBin, { recursive: true });
       mkdirSync(fixtureDir, { recursive: true });
@@ -822,11 +856,25 @@ exit "$status"
           "printf 'DO_NOT_DUMP_CLAWHUB_PREFIX\\n'",
           "head -c 2048 /dev/zero | tr '\\0' x",
           "printf '\\nFIXTURE_TAIL_MARKER\\n'",
-          "sleep 30",
+          ': >"$FIXTURE_READY_PATH"',
+          "/bin/sleep 30",
           "",
         ].join("\n"),
       );
       chmodSync(nodeShim, 0o755);
+      writeFileSync(
+        sleepShim,
+        [
+          "#!/usr/bin/env bash",
+          'for _ in $(seq 1 "$FIXTURE_READY_WAIT_ATTEMPTS"); do',
+          '  [[ -f "$FIXTURE_READY_PATH" ]] && exit 0',
+          "  /bin/sleep 0.01",
+          "done",
+          "exit 1",
+          "",
+        ].join("\n"),
+      );
+      chmodSync(sleepShim, 0o755);
 
       const result = runSweepShell(
         `
@@ -834,7 +882,7 @@ set -euo pipefail
 export PATH="$FAKE_BIN:$PATH"
 export KITCHEN_SINK_SWEEP_SOURCE_ONLY=1
 export KITCHEN_SINK_TMP_DIR="$SCRATCH_ROOT"
-export OPENCLAW_CLAWHUB_FIXTURE_WAIT_ATTEMPTS=5
+export OPENCLAW_CLAWHUB_FIXTURE_WAIT_ATTEMPTS=1
 export OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES=64
 source scripts/e2e/lib/kitchen-sink-plugin/sweep.sh
 set +e
@@ -847,6 +895,8 @@ exit "$status"
         {
           FAKE_BIN: fakeBin,
           FIXTURE_DIR: fixtureDir,
+          FIXTURE_READY_PATH: fixtureReadyPath,
+          FIXTURE_READY_WAIT_ATTEMPTS: String(FIXTURE_READY_WAIT_ATTEMPTS),
           SCRATCH_ROOT: scratchRoot,
         },
       );

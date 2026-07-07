@@ -69,6 +69,23 @@ describe("push APNs registration store", () => {
     expect(loaded && "token" in loaded).toBe(false);
   });
 
+  it("stores sandbox relay registrations", async () => {
+    const baseDir = await makeTempDir();
+    const saved = await registerApnsRegistration({
+      nodeId: "ios-node-relay-sandbox",
+      transport: "relay",
+      relayHandle: "relay-handle-123",
+      sendGrant: "send-grant-123",
+      installationId: "install-123",
+      topic: "ai.openclaw.ios",
+      environment: "sandbox",
+      distribution: "official",
+      baseDir,
+    });
+
+    await expect(loadApnsRegistration("ios-node-relay-sandbox", baseDir)).resolves.toEqual(saved);
+  });
+
   it("normalizes legacy direct records from disk and ignores invalid entries", async () => {
     const baseDir = await makeTempDir();
     const statePath = path.join(baseDir, "push", "apns-registrations.json");
@@ -216,7 +233,7 @@ describe("push APNs registration store", () => {
         distribution: "official",
         baseDir,
       }),
-    ).rejects.toThrow("relay registrations must use production environment");
+    ).rejects.toThrow("relay registrations must use valid APNs environment");
     await expect(
       registerApnsRegistration({
         nodeId: "ios-node-relay",

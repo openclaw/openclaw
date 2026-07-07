@@ -1,6 +1,6 @@
 // Regression: upstream commit 7d1575b5df (#60310, 2026-04-04) introduced
 // activeJobIds + markCronJobActive/clearCronJobActive but only wired the pair
-// into runDueJob and executeJob. The manual-run path (cron.run() →
+// into the scheduled due-job path. The manual-run path (cron.run() →
 // prepareManualRun + finishPreparedManualRun in src/cron/service/ops.ts) was
 // left without the mark/clear pair, so task-registry.maintenance.ts
 // hasBackingSession (cron branch under isRuntimeAuthoritative()=true)
@@ -182,7 +182,7 @@ describe("cron activeJobIds — manual-run mark/clear", () => {
     }
   });
 
-  it("requests one setup-timeout restart when concurrent manual runs both stall before runner start", async () => {
+  it("sends one setup-timeout notification when concurrent manual runs both stall before runner start", async () => {
     vi.useFakeTimers();
     const now = Date.parse("2025-12-13T17:00:00.000Z");
     vi.setSystemTime(now);

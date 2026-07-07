@@ -19,8 +19,8 @@ import {
 import { redactSensitiveText } from "./redact.js";
 
 export const DIAGNOSTIC_STABILITY_BUNDLE_VERSION = 1;
-export const DEFAULT_DIAGNOSTIC_STABILITY_BUNDLE_LIMIT = MAX_DIAGNOSTIC_STABILITY_LIMIT;
-export const DEFAULT_DIAGNOSTIC_STABILITY_BUNDLE_RETENTION = 20;
+const DEFAULT_DIAGNOSTIC_STABILITY_BUNDLE_LIMIT = MAX_DIAGNOSTIC_STABILITY_LIMIT;
+const DEFAULT_DIAGNOSTIC_STABILITY_BUNDLE_RETENTION = 20;
 export const MAX_DIAGNOSTIC_STABILITY_BUNDLE_BYTES = 5 * 1024 * 1024;
 
 const SAFE_REASON_CODE = /^[A-Za-z0-9_.:-]{1,120}$/u;
@@ -696,6 +696,7 @@ function readStabilityEventRecord(
   assignOptionalCodeString(sanitized, "outcome", record.outcome, `${label}.outcome`);
   assignOptionalCodeString(sanitized, "level", record.level, `${label}.level`);
   assignOptionalCodeString(sanitized, "phase", record.phase, `${label}.phase`);
+  assignOptionalCodeString(sanitized, "approvalId", record.approvalId, `${label}.approvalId`);
   assignOptionalCodeString(sanitized, "detector", record.detector, `${label}.detector`);
   assignOptionalCodeString(sanitized, "toolName", record.toolName, `${label}.toolName`);
   assignOptionalCodeString(
@@ -1214,7 +1215,7 @@ function isMemoryPressureReason(reason: string): reason is DiagnosticMemoryPress
   return reason === "rss_threshold" || reason === "heap_threshold" || reason === "rss_growth";
 }
 
-export function listDiagnosticStabilityBundleFilesSync(
+function listDiagnosticStabilityBundleFilesSync(
   options: DiagnosticStabilityBundleLocationOptions = {},
 ): DiagnosticStabilityBundleFile[] {
   const dir = resolveDiagnosticStabilityBundleDir(options);

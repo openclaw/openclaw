@@ -30,12 +30,11 @@ export const SLACK_WRITE_RETRY_OPTIONS: RetryOptions = {
  * Returns `undefined` when no proxy env var is configured or when Slack hosts
  * are excluded by `NO_PROXY`.
  */
-function resolveSlackProxyAgent(): Agent | undefined {
+function resolveSlackProxyAgent(targetUrl: string): Agent | undefined {
   try {
     return createNodeProxyAgent({
       mode: "env",
-      targetUrl: "https://slack.com/",
-      protocol: "https",
+      targetUrl,
     });
   } catch {
     // Malformed proxy URL; degrade gracefully to direct connection.
@@ -43,19 +42,32 @@ function resolveSlackProxyAgent(): Agent | undefined {
   }
 }
 
+function resolveSlackApiUrlFromEnv(): string | undefined {
+  return process.env.SLACK_API_URL?.trim() || undefined;
+}
+
+function applySlackApiUrlAndProxyOptions(options: WebClientOptions): void {
+  const slackApiUrl = options.slackApiUrl ?? resolveSlackApiUrlFromEnv();
+  const proxyTargetUrl = slackApiUrl ?? "https://slack.com/";
+  options.agent ??= resolveSlackProxyAgent(proxyTargetUrl);
+  if (slackApiUrl !== undefined) {
+    options.slackApiUrl = slackApiUrl;
+  } else {
+    delete options.slackApiUrl;
+  }
+}
+
 export function resolveSlackWebClientOptions(options: WebClientOptions = {}): WebClientOptions {
-  return {
-    ...options,
-    agent: options.agent ?? resolveSlackProxyAgent(),
-    retryConfig: options.retryConfig ?? SLACK_DEFAULT_RETRY_OPTIONS,
-  };
+  const resolved: WebClientOptions = Object.assign({}, options);
+  applySlackApiUrlAndProxyOptions(resolved);
+  resolved.retryConfig ??= SLACK_DEFAULT_RETRY_OPTIONS;
+  return resolved;
 }
 
 export function resolveSlackWriteClientOptions(options: WebClientOptions = {}): WebClientOptions {
-  return {
-    ...options,
-    agent: options.agent ?? resolveSlackProxyAgent(),
-    retryConfig: options.retryConfig ?? SLACK_WRITE_RETRY_OPTIONS,
-    maxRequestConcurrency: options.maxRequestConcurrency ?? 1,
-  };
+  const resolved: WebClientOptions = Object.assign({}, options);
+  applySlackApiUrlAndProxyOptions(resolved);
+  resolved.retryConfig ??= SLACK_WRITE_RETRY_OPTIONS;
+  resolved.maxRequestConcurrency ??= 1;
+  return resolved;
 }

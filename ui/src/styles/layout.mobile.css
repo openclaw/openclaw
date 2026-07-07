@@ -98,6 +98,10 @@
     grid-template-areas:
       "topbar"
       "content";
+    /* The nav collapses to an overlay drawer here, so it no longer reserves a
+       column. Zero the width the docked terminal reads or it would leave a
+       258px gap and waste most of a phone viewport. */
+    --shell-nav-width: 0px;
   }
 
   .shell-nav,
@@ -117,14 +121,6 @@
     transition:
       transform var(--shell-focus-duration) var(--shell-focus-ease),
       opacity var(--shell-focus-duration) var(--shell-focus-ease);
-  }
-
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .shell-nav {
-    width: var(--shell-nav-rail-width);
-    transform: translateX(0);
-    opacity: 1;
-    pointer-events: auto;
-    box-shadow: none;
   }
 
   .shell--nav-drawer-open .shell-nav,
@@ -151,11 +147,6 @@
     pointer-events: auto;
   }
 
-  /* Show the hamburger toggle at the same breakpoint where the drawer takes over. */
-  .topbar-nav-toggle {
-    display: inline-flex;
-  }
-
   .sidebar,
   .sidebar--collapsed {
     width: 100%;
@@ -172,37 +163,12 @@
     border-radius: 0;
   }
 
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar-shell,
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar--collapsed .sidebar-shell {
-    padding: 12px 8px 10px;
-  }
-
-  .sidebar-shell__header {
-    min-height: 0;
-    padding: 0 4px 16px;
-  }
-
-  .sidebar-shell__header .nav-collapse-toggle {
-    display: none;
-  }
-
-  .shell--nav-drawer-open .sidebar-shell__header .nav-collapse-toggle {
-    display: flex;
-    width: 44px;
-    min-width: 44px;
-    height: 44px;
-  }
-
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar-shell__header {
-    justify-content: center;
-    align-items: center;
-    gap: 0;
-    padding: 0 2px 16px;
-  }
-
   .sidebar-nav,
   .sidebar--collapsed .sidebar-nav {
-    flex: 1 1 auto;
+    /* Match the desktop pinned-nav layout so the session list keeps the
+       remaining drawer height. */
+    flex: 0 0 auto;
+    max-height: 60%;
     display: block;
     padding: 0;
     overflow-x: hidden;
@@ -238,15 +204,6 @@
     width: auto;
   }
 
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar--collapsed .nav-item {
-    justify-content: center;
-    width: 44px;
-    min-height: 44px;
-    padding: 0;
-    margin: 0 auto;
-    border-radius: var(--radius-lg);
-  }
-
   .sidebar--collapsed .nav-item--active::before,
   .sidebar--collapsed .nav-item.active::before {
     content: none;
@@ -257,47 +214,13 @@
     display: inline-flex;
   }
 
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar--collapsed .nav-item__text,
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar--collapsed .nav-item__external-icon {
-    display: none;
-  }
-
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar--collapsed .nav-item--active::before,
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar--collapsed .nav-item.active::before {
-    content: "";
-    position: absolute;
-    left: 8px;
-    top: 10px;
-    bottom: 10px;
-    width: 3px;
-    border-radius: var(--radius-full);
-    background: color-mix(in srgb, var(--accent) 86%, transparent);
-    box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 34%, transparent);
-  }
-
   .sidebar--collapsed .sidebar-shell__footer {
     padding: 12px 8px 0;
   }
 
-  .sidebar--collapsed .sidebar-version {
-    width: auto;
-    min-height: 40px;
-    padding: 0 12px;
-  }
-
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar--collapsed .sidebar-shell__footer {
-    padding: 8px 0 2px;
-  }
-
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar--collapsed .sidebar-version {
-    width: 44px;
-    min-height: 44px;
-    padding: 0;
-    justify-content: center;
-  }
-
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .sidebar-mode-switch {
-    display: none;
+  .sidebar--collapsed .sidebar-footer-bar {
+    flex-direction: row;
+    padding: 0 10px;
   }
 }
 
@@ -322,9 +245,9 @@
   .topnav-shell__actions {
     min-width: 0;
     flex: 1 1 auto;
-    justify-content: space-between;
+    justify-content: flex-end;
     gap: 10px;
-    align-items: stretch;
+    align-items: center;
   }
 
   .topnav-shell__content {
@@ -332,59 +255,9 @@
     width: 100%;
   }
 
-  .topbar-nav-toggle {
-    display: inline-flex;
-  }
-
-  .topbar-status {
-    gap: 6px;
-    width: auto;
-    flex-wrap: nowrap;
-  }
-
-  .topbar-search {
-    min-width: 0;
-    flex: 1;
-  }
-
-  .topbar-theme-mode {
-    display: none;
-  }
-
-  .sidebar-mode-switch {
-    display: block;
-  }
-
-  .sidebar-mode-switch .topbar-theme-mode {
-    display: inline-flex;
-    width: 100%;
-    justify-content: center;
-  }
-
-  .topbar-status .pill {
-    padding: 4px 8px;
-    font-size: 12px; /* was 11px */
-    gap: 4px;
-  }
-
-  .topbar-status .pill .mono {
-    display: none;
-  }
-
-  .topbar-status .pill span:nth-child(2) {
-    display: none;
-  }
-
   .shell-nav,
   .shell--nav-collapsed .shell-nav {
     width: min(92vw, 320px);
-  }
-
-  .shell--nav-collapsed:not(.shell--nav-drawer-open) .shell-nav {
-    width: min(92vw, 320px);
-    transform: translateX(-100%);
-    opacity: 0;
-    pointer-events: none;
   }
 
   .sidebar-shell,
@@ -512,30 +385,6 @@
     min-height: 44px;
     padding: 10px 12px;
     font-size: 14px;
-  }
-
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-session-picker {
-    position: static;
-    width: 100%;
-    max-height: min(52vh, 420px);
-    margin-top: 8px;
-    box-shadow: none;
-  }
-
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-session-picker__search input {
-    min-height: 44px;
-    font-size: 14px;
-  }
-
-  .chat-mobile-controls-wrapper
-    .chat-controls-dropdown
-    .chat-session-picker
-    .chat-session-picker__icon-button.btn--icon {
-    flex: 0 0 44px;
-    width: 44px;
-    min-width: 44px;
-    height: 44px;
-    padding: 0;
   }
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__model {
@@ -699,17 +548,6 @@
     border-radius: var(--radius-md);
   }
 
-  .chat-compose {
-    gap: 8px;
-  }
-
-  .chat-compose__field textarea {
-    min-height: 60px;
-    padding: 8px 10px;
-    border-radius: var(--radius-md);
-    font-size: 14px;
-  }
-
   .agent-chat__input {
     margin: 0 8px calc(10px + var(--safe-area-bottom));
   }
@@ -747,31 +585,27 @@
     max-height: 380px;
   }
 
-  /* Reset the desktop fill-height chain on mobile — single page scroll is
-     more usable on small viewports than a tiny pinned log panel.
-     Selectors are intentionally double-classed so they outrank the
-     desktop rules in components.css / config-quick.css, which are
-     imported AFTER this file (see ui/src/styles.css). */
-  .card--fill-height.card--fill-height .log-stream {
-    flex: none;
-    min-height: 200px;
-    max-height: 380px;
-  }
-
-  .content.content--logs {
+  .content:has(openclaw-logs-page) {
     display: block;
     overflow-y: auto;
   }
 
-  .content.content--logs .settings-workspace {
+  .content:has(openclaw-logs-page) > openclaw-router-outlet,
+  .content openclaw-logs-page,
+  .content .settings-workspace--fill-height,
+  .content .settings-workspace--fill-height > .settings-workspace__body,
+  .content .settings-workspace--fill-height .logs-card {
     display: block;
     height: auto;
+    min-height: 0;
     flex: initial;
+    overflow-y: visible;
   }
 
-  .content.content--logs .settings-workspace__body {
-    display: block;
-    flex: initial;
+  .content .settings-workspace--fill-height .log-stream {
+    flex: none;
+    min-height: 200px;
+    max-height: 380px;
   }
 
   .log-row {
@@ -816,12 +650,6 @@
     border-radius: var(--radius-md);
     font-size: 12px; /* was 11px */
   }
-
-  .theme-orb__trigger {
-    width: 26px;
-    height: 26px;
-    font-size: 13px;
-  }
 }
 
 /* Small mobile */
@@ -864,26 +692,9 @@
     padding: 8px 10px;
   }
 
-  .chat-compose__field textarea {
-    min-height: 52px;
-    padding: 8px 10px;
-    font-size: 13px;
-  }
-
   .btn {
     padding: 6px 10px;
     font-size: 12px; /* was 11px */
-  }
-
-  .topbar-status .pill {
-    padding: 3px 6px;
-    font-size: 12px; /* was 10px */
-  }
-
-  .theme-orb__trigger {
-    width: 24px;
-    height: 24px;
-    font-size: 12px;
   }
 }
 
@@ -891,32 +702,18 @@
    Sessions table – responsive column hiding
    =========================================== */
 
-/* nth-child is 1-based and includes the checkbox column (col 1). */
+/* nth-child is 1-based and includes the checkbox column (col 1). The optional
+   Group column in category mode shifts later indexes; grouping is a desktop
+   workflow, so the hide rules target the default 8-column roster. */
 
-/* ≤1400px: hide Verbose (col 12) and Reasoning (col 13) */
-@media (max-width: 1400px) {
+/* ≤900px: hide Runtime (col 5); tighten padding */
+@media (max-width: 900px) {
   .data-table.sessions-table {
-    min-width: 1120px;
+    min-width: 700px;
   }
 
-  .sessions-table th:nth-child(12),
-  .sessions-table td:nth-child(12),
-  .sessions-table th:nth-child(13),
-  .sessions-table td:nth-child(13) {
-    display: none;
-  }
-}
-
-/* ≤1100px: also hide Fast (col 11) and Kind (col 4) */
-@media (max-width: 1100px) {
-  .data-table.sessions-table {
-    min-width: 930px;
-  }
-
-  .sessions-table th:nth-child(4),
-  .sessions-table td:nth-child(4),
-  .sessions-table th:nth-child(11),
-  .sessions-table td:nth-child(11) {
+  .sessions-table th:nth-child(5),
+  .sessions-table td:nth-child(5) {
     display: none;
   }
 
@@ -926,28 +723,14 @@
   }
 }
 
-/* ≤900px: also hide Thinking (col 10) and Label (col 3) */
-@media (max-width: 900px) {
-  .data-table.sessions-table {
-    min-width: 720px;
-  }
-
-  .sessions-table th:nth-child(3),
-  .sessions-table td:nth-child(3),
-  .sessions-table th:nth-child(10),
-  .sessions-table td:nth-child(10) {
-    display: none;
-  }
-}
-
-/* ≤768px: also hide Tokens (col 8); tighten padding; stack pagination */
+/* ≤768px: also hide Tokens (col 7); tighten padding; stack pagination */
 @media (max-width: 768px) {
   .data-table.sessions-table {
-    min-width: 560px;
+    min-width: 540px;
   }
 
-  .sessions-table th:nth-child(8),
-  .sessions-table td:nth-child(8) {
+  .sessions-table th:nth-child(7),
+  .sessions-table td:nth-child(7) {
     display: none;
   }
 
@@ -985,15 +768,6 @@
     max-width: 200px;
   }
 
-  .session-compaction-col {
-    width: 96px;
-    min-width: 86px;
-  }
-
-  .session-compaction-trigger {
-    padding: 6px 7px;
-  }
-
   .session-details-panel {
     padding: 12px;
   }
@@ -1026,16 +800,16 @@
   }
 }
 
-/* ≤500px: hide Runtime (col 6) and Updated (col 7); keep live status visible */
+/* ≤500px: also hide Kind (col 3) and Updated (col 6); keep live status visible */
 @media (max-width: 500px) {
   .data-table.sessions-table {
-    min-width: 340px;
+    min-width: 320px;
   }
 
+  .sessions-table th:nth-child(3),
+  .sessions-table td:nth-child(3),
   .sessions-table th:nth-child(6),
-  .sessions-table td:nth-child(6),
-  .sessions-table th:nth-child(7),
-  .sessions-table td:nth-child(7) {
+  .sessions-table td:nth-child(6) {
     display: none;
   }
 
@@ -1066,11 +840,6 @@
 
   .sessions-table .session-goal-chip__objective {
     display: none;
-  }
-
-  .sessions-table .session-compaction-col {
-    width: 84px;
-    min-width: 84px;
   }
 
   .data-table th,

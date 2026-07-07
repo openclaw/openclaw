@@ -9,8 +9,9 @@ import {
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "../daemon/constants.js";
-import { resolveRestartSentinelPath } from "./restart-sentinel.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { SUPERVISOR_HINT_ENV_VARS, type RespawnSupervisor } from "./supervisor-markers.js";
+import type { UpdateChannel } from "./update-channels.js";
 import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
   type ControlPlaneUpdateSentinelMetaFile,
@@ -18,7 +19,9 @@ import {
 import { MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX } from "./update-managed-service-handoff-cleanup.js";
 import type { UpdateRestartSentinelMeta } from "./update-restart-sentinel-payload.js";
 
-const PARENT_EXIT_GRACE_MS = 60_000;
+// The Gateway may spend its full restart-drain budget before entering the
+// bounded shutdown phase. Keep the helper alive through both phases. (#99666)
+const PARENT_EXIT_SHUTDOWN_RESERVE_MS = 30_000;
 const SYSTEMD_RUN_CANDIDATE_PATHS = ["/usr/bin/systemd-run", "/bin/systemd-run"] as const;
 const SERVICE_IDENTITY_ENV_VARS = new Set<string>([
   "OPENCLAW_LAUNCHD_LABEL",
@@ -96,26 +99,6 @@ function readJsonFile(filePath) {
   }
 }
 
-function writeJsonFile(filePath, value) {
-  const dir = path.dirname(filePath);
-  const tempPath = path.join(
-    dir,
-    "." + path.basename(filePath) + "." + process.pid + "." + Date.now() + ".tmp",
-  );
-  try {
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    fs.writeFileSync(tempPath, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });
-    fs.renameSync(tempPath, filePath);
-  } catch (err) {
-    appendLog("failed to write update sentinel failure: " + (err && err.stack ? err.stack : String(err)));
-    try {
-      fs.rmSync(tempPath, { force: true });
-    } catch {
-      // Best effort only.
-    }
-  }
-}
-
 function isPendingUpdatePayload(payload) {
   const reason = payload && payload.stats && payload.stats.reason;
   return (
@@ -124,6 +107,170 @@ function isPendingUpdatePayload(payload) {
     payload.status === "skipped" &&
     (reason === "managed-service-handoff-started" || reason === "restart-health-pending")
   );
+}
+
+function openStateDatabase() {
+  if (!params.stateDatabasePath || typeof params.stateDatabasePath !== "string") {
+    return null;
+  }
+  try {
+    const sqlite = require("node:sqlite");
+    fs.mkdirSync(path.dirname(params.stateDatabasePath), { recursive: true, mode: 0o700 });
+    const db = new sqlite.DatabaseSync(params.stateDatabasePath);
+    db.exec([
+      "CREATE TABLE IF NOT EXISTS gateway_restart_sentinel (",
+      "sentinel_key TEXT NOT NULL PRIMARY KEY,",
+      "version INTEGER NOT NULL,",
+      "kind TEXT NOT NULL,",
+      "status TEXT NOT NULL,",
+      "ts INTEGER NOT NULL,",
+      "session_key TEXT,",
+      "thread_id TEXT,",
+      "delivery_channel TEXT,",
+      "delivery_to TEXT,",
+      "delivery_account_id TEXT,",
+      "message TEXT,",
+      "continuation_json TEXT,",
+      "doctor_hint TEXT,",
+      "stats_json TEXT,",
+      "payload_json TEXT NOT NULL,",
+      "updated_at_ms INTEGER NOT NULL",
+      ");",
+      "CREATE INDEX IF NOT EXISTS idx_gateway_restart_sentinel_ts",
+      "ON gateway_restart_sentinel(ts DESC, sentinel_key);",
+    ].join(" "));
+    ensureGatewayRestartSentinelColumns(db);
+    hardenStateDatabaseFiles();
+    return db;
+  } catch (err) {
+    appendLog("failed to open restart sentinel database: " + (err && err.stack ? err.stack : String(err)));
+    return null;
+  }
+}
+
+function tableHasColumn(db, tableName, columnName) {
+  try {
+    return db.prepare("PRAGMA table_info(" + tableName + ")").all().some((row) => row && row.name === columnName);
+  } catch {
+    return false;
+  }
+}
+
+function ensureColumn(db, tableName, columnSql) {
+  const columnName = columnSql.trim().split(/\s+/, 1)[0];
+  if (!columnName || tableHasColumn(db, tableName, columnName)) {
+    return;
+  }
+  db.exec("ALTER TABLE " + tableName + " ADD COLUMN " + columnSql + ";");
+}
+
+function ensureGatewayRestartSentinelColumns(db) {
+  ensureColumn(db, "gateway_restart_sentinel", "delivery_channel TEXT");
+  ensureColumn(db, "gateway_restart_sentinel", "delivery_to TEXT");
+  ensureColumn(db, "gateway_restart_sentinel", "delivery_account_id TEXT");
+  ensureColumn(db, "gateway_restart_sentinel", "message TEXT");
+  ensureColumn(db, "gateway_restart_sentinel", "continuation_json TEXT");
+  ensureColumn(db, "gateway_restart_sentinel", "doctor_hint TEXT");
+  ensureColumn(db, "gateway_restart_sentinel", "stats_json TEXT");
+}
+
+function hardenStateDatabaseFiles() {
+  if (!params.stateDatabasePath || typeof params.stateDatabasePath !== "string") {
+    return;
+  }
+  for (const filePath of [
+    params.stateDatabasePath,
+    params.stateDatabasePath + "-wal",
+    params.stateDatabasePath + "-shm",
+  ]) {
+    try {
+      if (fs.existsSync(filePath)) {
+        fs.chmodSync(filePath, 0o600);
+      }
+    } catch {
+      // Best effort only.
+    }
+  }
+}
+
+function readRestartSentinelPayload() {
+  const db = openStateDatabase();
+  if (!db) {
+    return null;
+  }
+  try {
+    const row = db
+      .prepare("SELECT version, payload_json FROM gateway_restart_sentinel WHERE sentinel_key = ?")
+      .get("current");
+    if (!row || row.version !== 1 || typeof row.payload_json !== "string") {
+      return null;
+    }
+    return JSON.parse(row.payload_json);
+  } catch {
+    return null;
+  } finally {
+    hardenStateDatabaseFiles();
+    try {
+      db.close();
+    } catch {}
+  }
+}
+
+function writeRestartSentinelPayload(payload) {
+  const db = openStateDatabase();
+  if (!db) {
+    return;
+  }
+  try {
+    const updatedAtMs = Date.now();
+    db.prepare(
+      [
+        "INSERT INTO gateway_restart_sentinel (",
+        "sentinel_key, version, kind, status, ts, session_key, thread_id,",
+        "delivery_channel, delivery_to, delivery_account_id, message, continuation_json,",
+        "doctor_hint, stats_json, payload_json, updated_at_ms",
+        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "ON CONFLICT(sentinel_key) DO UPDATE SET",
+        "version = excluded.version, kind = excluded.kind, status = excluded.status,",
+        "ts = excluded.ts, session_key = excluded.session_key, thread_id = excluded.thread_id,",
+        "delivery_channel = excluded.delivery_channel, delivery_to = excluded.delivery_to,",
+        "delivery_account_id = excluded.delivery_account_id, message = excluded.message,",
+        "continuation_json = excluded.continuation_json, doctor_hint = excluded.doctor_hint,",
+        "stats_json = excluded.stats_json, payload_json = excluded.payload_json,",
+        "updated_at_ms = excluded.updated_at_ms",
+      ].join(" "),
+    ).run(
+      "current",
+      1,
+      payload.kind,
+      payload.status,
+      payload.ts,
+      payload.sessionKey || null,
+      payload.threadId || null,
+      payload.deliveryContext && typeof payload.deliveryContext.channel === "string"
+        ? payload.deliveryContext.channel
+        : null,
+      payload.deliveryContext && typeof payload.deliveryContext.to === "string"
+        ? payload.deliveryContext.to
+        : null,
+      payload.deliveryContext && typeof payload.deliveryContext.accountId === "string"
+        ? payload.deliveryContext.accountId
+        : null,
+      payload.message || null,
+      payload.continuation ? JSON.stringify(payload.continuation) : null,
+      payload.doctorHint || null,
+      payload.stats ? JSON.stringify(payload.stats) : null,
+      JSON.stringify(payload),
+      updatedAtMs,
+    );
+  } catch (err) {
+    appendLog("failed to write update sentinel failure: " + (err && err.stack ? err.stack : String(err)));
+  } finally {
+    hardenStateDatabaseFiles();
+    try {
+      db.close();
+    } catch {}
+  }
 }
 
 function buildFallbackFailurePayload(reason) {
@@ -157,11 +304,7 @@ function buildFallbackFailurePayload(reason) {
 }
 
 function markUpdateSentinelFailureIfPending(reason) {
-  if (!params.sentinelPath) {
-    return;
-  }
-  const current = readJsonFile(params.sentinelPath);
-  let payload = current && current.version === 1 ? current.payload : null;
+  let payload = readRestartSentinelPayload();
   if (payload && (payload.kind !== "update" || !isPendingUpdatePayload(payload))) {
     return;
   }
@@ -176,7 +319,7 @@ function markUpdateSentinelFailureIfPending(reason) {
   } else {
     payload = buildFallbackFailurePayload(reason);
   }
-  writeJsonFile(params.sentinelPath, { version: 1, payload });
+  writeRestartSentinelPayload(payload);
 }
 
 function runServiceCommand(command, args) {
@@ -230,11 +373,14 @@ function startGatewayServiceBestEffort() {
 }
 
 (async () => {
-  const deadline = Date.now() + params.parentExitTimeoutMs;
-  while (isPidAlive(params.parentPid) && Date.now() < deadline) {
+  const deadline =
+    typeof params.parentExitTimeoutMs === "number"
+      ? Date.now() + params.parentExitTimeoutMs
+      : null;
+  while (isPidAlive(params.parentPid) && (deadline === null || Date.now() < deadline)) {
     await sleep(250);
   }
-  if (isPidAlive(params.parentPid)) {
+  if (deadline !== null && isPidAlive(params.parentPid)) {
     appendLog("gateway parent pid " + params.parentPid + " did not exit before handoff timeout");
     markUpdateSentinelFailureIfPending("managed-service-handoff-parent-timeout");
     cleanupSensitiveFiles();
@@ -325,7 +471,7 @@ function isNodeLikeRuntime(execPath: string | undefined): boolean {
 
 function resolveUpdateCliArgv(params: {
   timeoutMs?: number;
-  channel?: "stable" | "beta" | "dev";
+  channel?: UpdateChannel;
   execPath?: string;
   argv1?: string;
 }): string[] {
@@ -350,7 +496,7 @@ function resolveUpdateCliArgv(params: {
 
 export function formatManagedServiceUpdateCommand(params?: {
   timeoutMs?: number;
-  channel?: "stable" | "beta" | "dev";
+  channel?: UpdateChannel;
 }): string {
   const args = ["openclaw", "update", "--yes"];
   if (params?.channel) {
@@ -514,7 +660,8 @@ async function resolveHandoffSpawn(params: {
 export async function startManagedServiceUpdateHandoff(params: {
   root: string;
   timeoutMs?: number;
-  channel?: "stable" | "beta" | "dev";
+  restartDrainTimeoutMs: number | undefined;
+  channel?: UpdateChannel;
   restartDelayMs?: number;
   meta: UpdateRestartSentinelMeta;
   handoffId?: string;
@@ -546,14 +693,20 @@ export async function startManagedServiceUpdateHandoff(params: {
   };
   const helperParams = {
     parentPid: params.parentPid ?? process.pid,
-    parentExitTimeoutMs: Math.max(0, params.restartDelayMs ?? 0) + PARENT_EXIT_GRACE_MS,
+    // An undefined drain timeout is the configured indefinite-wait contract.
+    parentExitTimeoutMs:
+      params.restartDrainTimeoutMs === undefined
+        ? null
+        : Math.max(0, params.restartDelayMs ?? 0) +
+          Math.max(0, params.restartDrainTimeoutMs) +
+          PARENT_EXIT_SHUTDOWN_RESERVE_MS,
     cwd: handoffCwd,
     commandArgv,
     commandLabel,
     handoffId: params.handoffId,
     logPath,
     metaPath,
-    sentinelPath: resolveRestartSentinelPath(),
+    stateDatabasePath: resolveOpenClawStateSqlitePath(params.env ?? process.env),
     sensitivePaths: [scriptPath, paramsPath, metaPath],
     serviceRecovery: resolveGatewayServiceRecovery(params.supervisor, params.env ?? process.env),
   };

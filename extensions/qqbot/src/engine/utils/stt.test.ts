@@ -1,8 +1,8 @@
 // Qqbot tests cover stt plugin behavior.
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ssrfRuntimeMocks = vi.hoisted(() => ({
   fetchWithSsrFGuard: vi.fn(),
@@ -38,6 +38,36 @@ function cancelTrackedResponse(
   return {
     response: new Response(stream, init),
     wasCanceled: () => canceled,
+  };
+}
+
+function largeTranscriptionJsonResponse(params: { chunkCount: number; chunkSize: number }): {
+  response: Response;
+  getReadCount: () => number;
+} {
+  let chunkIndex = 0;
+  const encoder = new TextEncoder();
+  const chunks = [
+    '{"text":"',
+    ...Array.from({ length: params.chunkCount }, () => "a".repeat(params.chunkSize)),
+    '"}',
+  ];
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (chunkIndex >= chunks.length) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(encoder.encode(chunks[chunkIndex]));
+      chunkIndex += 1;
+    },
+  });
+  return {
+    response: new Response(stream, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+    getReadCount: () => chunkIndex,
   };
 }
 
@@ -177,13 +207,52 @@ describe("engine/utils/stt", () => {
     });
   });
 
-  it("bounds STT error bodies without using response.text()", async () => {
+  it("bounds successful STT JSON responses before parsing", async () => {
+    await withTempDir("openclaw-qqbot-stt-success-limit-", async (tmpDir) => {
+      const audioPath = path.join(tmpDir, "voice.wav");
+      fs.writeFileSync(audioPath, Buffer.from([1, 2, 3, 4]));
+
+      const release = vi.fn(async () => {});
+      const streamed = largeTranscriptionJsonResponse({
+        chunkCount: 18,
+        chunkSize: 1024 * 1024,
+      });
+      ssrfRuntimeMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+        response: streamed.response,
+        release,
+      });
+
+      let error: unknown;
+      try {
+        await transcribeAudio(audioPath, {
+          channels: {
+            qqbot: {
+              stt: {
+                baseUrl: "https://api.example.test/v1/",
+                apiKey: "secret",
+                model: "whisper-1",
+              },
+            },
+          },
+        });
+      } catch (caught) {
+        error = caught;
+      }
+
+      expect(String(error)).toContain("qqbot.stt: JSON response exceeds 16777216 bytes");
+      expect(streamed.getReadCount()).toBeLessThan(20);
+      expect(release).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("bounds STT error bodies on a UTF-16 boundary without using response.text()", async () => {
     await withTempDir("openclaw-qqbot-stt-error-", async (tmpDir) => {
       const audioPath = path.join(tmpDir, "voice.wav");
       fs.writeFileSync(audioPath, Buffer.from([1, 2, 3, 4]));
 
       const release = vi.fn(async () => {});
-      const tracked = cancelTrackedResponse(`${"stt provider unavailable ".repeat(1024)}tail`, {
+      const safePrefix = "x".repeat(299);
+      const tracked = cancelTrackedResponse(`${safePrefix}🎉${"tail".repeat(4096)}`, {
         status: 503,
         statusText: "Service Unavailable",
         headers: { "content-type": "text/plain" },
@@ -211,8 +280,7 @@ describe("engine/utils/stt", () => {
         error = caught;
       }
 
-      expect(String(error)).toContain("STT failed (HTTP 503): stt provider unavailable");
-      expect(String(error)).not.toContain("tail");
+      expect((error as Error).message).toBe(`STT failed (HTTP 503): ${safePrefix}`);
       expect(tracked.wasCanceled()).toBe(true);
       expect(textSpy).not.toHaveBeenCalled();
       expect(release).toHaveBeenCalledTimes(1);

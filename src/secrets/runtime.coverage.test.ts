@@ -137,6 +137,12 @@ const COVERAGE_WEB_SEARCH_PROVIDERS = new Map(
       order: 70,
     }),
     createCoverageWebSearchProvider({
+      pluginId: "parallel",
+      id: "parallel",
+      envVar: "PARALLEL_API_KEY",
+      order: 75,
+    }),
+    createCoverageWebSearchProvider({
       pluginId: "tavily",
       id: "tavily",
       envVar: "TAVILY_API_KEY",
@@ -557,6 +563,12 @@ function applyConfigForOpenClawTarget(
   if (entry.id === "channels.slack.accounts.*.signingSecret") {
     setPathCreateStrict(config, ["channels", "slack", "accounts", wildcardToken, "mode"], "http");
   }
+  if (entry.id === "channels.slack.relay.authToken") {
+    setPathCreateStrict(config, ["channels", "slack", "mode"], "relay");
+  }
+  if (entry.id === "channels.slack.accounts.*.relay.authToken") {
+    setPathCreateStrict(config, ["channels", "slack", "accounts", wildcardToken, "mode"], "relay");
+  }
   if (entry.id === "channels.zalo.webhookSecret") {
     setPathCreateStrict(config, ["channels", "zalo", "webhookUrl"], "https://example.com/hook");
   }
@@ -603,6 +615,9 @@ function applyConfigForOpenClawTarget(
   if (entry.id === "plugins.entries.google.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "gemini");
   }
+  if (entry.id === "plugins.entries.parallel.config.webSearch.apiKey") {
+    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "parallel");
+  }
   if (entry.id === "plugins.entries.xai.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "grok");
   }
@@ -617,6 +632,9 @@ function applyConfigForOpenClawTarget(
   }
   if (entry.id === "plugins.entries.minimax.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "minimax");
+  }
+  if (entry.id === "plugins.entries.parallel.config.webSearch.apiKey") {
+    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "parallel");
   }
   if (entry.id === "plugins.entries.tavily.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "tavily");
@@ -857,6 +875,14 @@ describe("secrets runtime target coverage", () => {
     );
     if (googleChatBatch) {
       await expectOpenClawCoverageBatchResolved("openclaw.json core", googleChatBatch);
+    }
+    const webProviderBatch = OPENCLAW_PLUGIN_COVERAGE_BATCHES.find((batch) =>
+      batch.some((entry) => entry.id.includes(".config.webSearch.")),
+    );
+    if (webProviderBatch) {
+      // Warm the shared plugin snapshot once; individual target assertions then
+      // measure resolution work instead of one-time manifest discovery.
+      await expectOpenClawCoverageBatchResolved("openclaw.json plugins", webProviderBatch);
     }
   });
 

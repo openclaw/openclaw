@@ -4,6 +4,7 @@ import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heart
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { QuarantinedCronConfigJob } from "../store.js";
 import type {
+  CronTriggerEvaluationResult,
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
   CronFailureNotificationDelivery,
@@ -41,6 +42,7 @@ export type CronEvent = {
   sessionKey?: string;
   runId?: string;
   nextRunAtMs?: number;
+  triggerFired?: boolean;
 } & CronRunTelemetry;
 
 /** Logger contract consumed by cron service internals. */
@@ -67,6 +69,12 @@ export type CronServiceDeps = {
   cronEnabled: boolean;
   /** CronConfig for session retention settings. */
   cronConfig?: CronConfig;
+  evaluateCronTrigger?: (params: {
+    job: CronJob;
+    script: string;
+    state: unknown;
+    abortSignal?: AbortSignal;
+  }) => Promise<CronTriggerEvaluationResult>;
   /** Default agent id for jobs without an agent id. */
   defaultAgentId?: string;
   /** Resolve session store path for a given agent id. */
@@ -196,8 +204,11 @@ export type CronServiceState = {
   running: boolean;
   stopped: boolean;
   restartRecoveryPending: boolean;
+  /** Prevents maintenance reads from advancing deferred startup catch-up slots.
+   * Entries are removed when the deferred job runs or becomes irrelevant. */
+  pendingCatchupDeferralJobIds: Set<string>;
   activeManualRunJobIds: Set<string>;
-  manualSetupTimeoutRestartNotified: boolean;
+  manualSetupTimeoutNotified: boolean;
   /** Serializes mutating service operations so store writes and timers stay ordered. */
   op: Promise<unknown>;
   warnedDisabled: boolean;
@@ -220,8 +231,9 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     running: false,
     stopped: false,
     restartRecoveryPending: false,
+    pendingCatchupDeferralJobIds: new Set<string>(),
     activeManualRunJobIds: new Set<string>(),
-    manualSetupTimeoutRestartNotified: false,
+    manualSetupTimeoutNotified: false,
     op: Promise.resolve(),
     warnedDisabled: false,
     warnedInvalidPersistedJobKeys: new Set<string>(),
@@ -265,7 +277,12 @@ export type CronRunResult =
 export type CronRemoveResult = { ok: true; removed: boolean } | { ok: false; removed: false };
 
 /** Created cron job returned by service mutation calls. */
-export type CronAddResult = CronJob;
+export type CronDeclarativeAddResult = CronJob & {
+  created: boolean;
+  updated?: boolean;
+  job: CronJob;
+};
+export type CronAddResult = CronJob | CronDeclarativeAddResult;
 /** Updated cron job returned by service mutation calls. */
 export type CronUpdateResult = CronJob;
 
@@ -273,5 +290,12 @@ export type CronUpdateResult = CronJob;
 export type CronListResult = CronJob[];
 /** Normalized create input accepted by the cron service. */
 export type CronAddInput = CronJobCreate;
+/** Caller-specific declaration-key visibility and explicit enablement metadata. */
+export type CronAddOptions = {
+  matchesExisting?: (job: CronJob) => boolean;
+  enabledExplicit?: boolean;
+};
 /** Normalized patch input accepted by cron service updates. */
 export type CronUpdateInput = CronJobPatch;
+/** Cron-store-locked guard evaluated against the current job before an update applies. */
+export type CronUpdatePrecondition = (job: CronJob, nowMs: number) => void | Promise<void>;

@@ -11,25 +11,17 @@ import { formatConfigIssueLines } from "../config/issue-format.js";
 import type { ConfigFileSnapshot, LegacyConfigIssue } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveHomeDir } from "../utils.js";
 import { noteIncludeConfinementWarning } from "./doctor-config-analysis.js";
 import { findDoctorLegacyConfigIssues } from "./doctor/shared/legacy-config-issues.js";
+import { resolveStateMigrationConfigInput } from "./doctor/shared/legacy-config-state-migration-input.js";
 
-type DoctorStateMigrationsModule = typeof import("./doctor-state-migrations.js");
-type DoctorCronModule = typeof import("./doctor/cron/index.js");
+const loadDoctorStateMigrations = createLazyRuntimeModule(
+  () => import("./doctor-state-migrations.js"),
+);
 
-let doctorStateMigrationsPromise: Promise<DoctorStateMigrationsModule> | null = null;
-let doctorCronPromise: Promise<DoctorCronModule> | null = null;
-
-function loadDoctorStateMigrations(): Promise<DoctorStateMigrationsModule> {
-  doctorStateMigrationsPromise ??= import("./doctor-state-migrations.js");
-  return doctorStateMigrationsPromise;
-}
-
-function loadDoctorCron(): Promise<DoctorCronModule> {
-  doctorCronPromise ??= import("./doctor/cron/index.js");
-  return doctorCronPromise;
-}
+const loadDoctorCron = createLazyRuntimeModule(() => import("./doctor/cron/index.js"));
 
 async function maybeMigrateLegacyConfig(): Promise<string[]> {
   const changes: string[] = [];
@@ -189,24 +181,44 @@ export async function runDoctorConfigPreflight(
   }
 
   const baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
+  const stateMigrationInput = resolveStateMigrationConfigInput({ snapshot, baseConfig });
   const configStateMigrationsAllowed =
     stateMigrations !== undefined &&
     stateMigrationsAllowed &&
     (options.beforeStateMigrations === undefined ||
       (await options.beforeStateMigrations(snapshot)));
   if (stateMigrations && configStateMigrationsAllowed) {
-    const { autoMigrateLegacyState, autoMigrateLegacyTaskStateSidecars } = stateMigrations;
-    if (snapshot.valid) {
-      const { repairLegacyCronStoreWithoutPrompt } = await loadDoctorCron();
-      const cronResult = await repairLegacyCronStoreWithoutPrompt({ cfg: baseConfig });
-      noteStateMigrationResult(cronResult);
-      noteStateMigrationResult(
-        await autoMigrateLegacyState({
-          cfg: baseConfig,
-          env: process.env,
-          recoverCorruptTargetStore: options.recoverCorruptTargetStore,
-        }),
-      );
+    const {
+      autoMigrateLegacyState,
+      autoMigrateLegacyPluginDoctorState,
+      autoMigrateLegacyTaskStateSidecars,
+    } = stateMigrations;
+    if (stateMigrationInput) {
+      if (stateMigrationInput.cfg) {
+        const { repairLegacyCronStoreWithoutPrompt } = await loadDoctorCron();
+        const cronResult = await repairLegacyCronStoreWithoutPrompt({
+          cfg: stateMigrationInput.cfg,
+        });
+        noteStateMigrationResult(cronResult);
+        noteStateMigrationResult(
+          await autoMigrateLegacyState({
+            cfg: stateMigrationInput.cfg,
+            ...(stateMigrationInput.pluginDoctorConfig
+              ? { pluginDoctorConfig: stateMigrationInput.pluginDoctorConfig }
+              : {}),
+            env: process.env,
+            recoverCorruptTargetStore: options.recoverCorruptTargetStore,
+          }),
+        );
+      } else if (stateMigrationInput.pluginDoctorConfig) {
+        noteStateMigrationResult(
+          await autoMigrateLegacyPluginDoctorState({
+            config: stateMigrationInput.pluginDoctorConfig,
+            env: process.env,
+          }),
+        );
+        noteStateMigrationResult(await autoMigrateLegacyTaskStateSidecars({ env: process.env }));
+      }
     } else {
       noteStateMigrationResult(await autoMigrateLegacyTaskStateSidecars({ env: process.env }));
     }

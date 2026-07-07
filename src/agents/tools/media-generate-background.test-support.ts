@@ -5,6 +5,7 @@ import { expect, vi } from "vitest";
 type MockWithReset = {
   mockReset(): void;
   mockResolvedValue?(value: unknown): void;
+  mockReturnValue?(value: unknown): void;
 };
 
 export const taskExecutorMocks = {
@@ -16,6 +17,7 @@ export const taskExecutorMocks = {
 
 export const announceDeliveryMocks = {
   deliverSubagentAnnouncement: vi.fn(),
+  loadRequesterSessionEntry: vi.fn(() => ({ entry: undefined })),
 };
 
 export const taskDeliveryRuntimeMocks = {
@@ -35,6 +37,7 @@ type TaskDeliveryBackgroundMocks = {
 
 type AnnouncementBackgroundMocks = {
   deliverSubagentAnnouncement: MockWithReset;
+  loadRequesterSessionEntry: MockWithReset;
 };
 
 type MediaBackgroundResetMocks = {
@@ -141,6 +144,8 @@ export function resetMediaBackgroundMocks({
     result: { messageId: "msg-1" },
   });
   announceDeliveryMocksLocal.deliverSubagentAnnouncement.mockReset();
+  announceDeliveryMocksLocal.loadRequesterSessionEntry.mockReset();
+  announceDeliveryMocksLocal.loadRequesterSessionEntry.mockReturnValue?.({ entry: undefined });
 }
 
 export function expectQueuedTaskRun({

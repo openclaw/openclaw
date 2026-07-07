@@ -1,14 +1,12 @@
 // Memory Core plugin module implements manager vector write behavior.
 import type { SQLInputValue } from "node:sqlite";
+import { vectorToBlob } from "./vector-blob.js";
 
 type VectorWriteDb = {
   prepare: (sql: string) => {
     run: (...params: SQLInputValue[]) => unknown;
   };
 };
-
-const vectorToBlob = (embedding: number[]): Buffer =>
-  Buffer.from(new Float32Array(embedding).buffer);
 
 export function replaceMemoryVectorRow(params: {
   db: VectorWriteDb;

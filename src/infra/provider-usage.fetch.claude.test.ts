@@ -49,6 +49,33 @@ function makeOrgAResponse() {
   return makeResponse(200, [{ uuid: "org-a" }]);
 }
 
+function makeOversizedJsonResponse(status: number): {
+  response: Response;
+  state: { canceled: boolean; enqueuedBytes: number };
+} {
+  const state = { canceled: false, enqueuedBytes: 0 };
+  const chunkSize = 1024 * 1024;
+  let emitted = 0;
+  const response = new Response(
+    new ReadableStream({
+      pull(controller) {
+        if (emitted >= 64) {
+          controller.close();
+          return;
+        }
+        emitted += 1;
+        state.enqueuedBytes += chunkSize;
+        controller.enqueue(new Uint8Array(chunkSize));
+      },
+      cancel() {
+        state.canceled = true;
+      },
+    }),
+    { status, headers: { "Content-Type": "application/json" } },
+  );
+  return { response, state };
+}
+
 describe("fetchClaudeUsage", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -75,6 +102,45 @@ describe("fetchClaudeUsage", () => {
       { label: "5h", usedPercent: 18, resetAt: new Date(fiveHourReset).getTime() },
       { label: "Week", usedPercent: 54, resetAt: new Date(weekReset).getTime() },
       { label: "Sonnet", usedPercent: 67 },
+    ]);
+  });
+
+  it("parses model-scoped limits and extra usage billing", async () => {
+    const reset = "2026-01-12T00:00:00Z";
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        limits: [
+          {
+            kind: "weekly_scoped",
+            percent: 27,
+            resets_at: reset,
+            is_active: true,
+            scope: { model: { id: "claude-fable", display_name: "Fable" } },
+          },
+          {
+            percent: 80,
+            is_active: false,
+            scope: { model: { display_name: "Inactive" } },
+          },
+        ],
+        extra_usage: {
+          is_enabled: true,
+          monthly_limit: 100000,
+          used_credits: 4132,
+          utilization: 4.132,
+          currency: "usd",
+        },
+      }),
+    );
+
+    const result = await fetchClaudeUsage("token", 5000, mockFetch);
+
+    expect(result.windows).toEqual([
+      { label: "Fable", usedPercent: 27, resetAt: new Date(reset).getTime() },
+      { label: "Extra usage", usedPercent: 4.132 },
+    ]);
+    expect(result.billing).toEqual([
+      { type: "budget", used: 41.32, limit: 1000, unit: "USD", period: "month" },
     ]);
   });
 
@@ -127,6 +193,18 @@ describe("fetchClaudeUsage", () => {
     const result = await fetchClaudeUsage("token", 5000, mockFetch);
     expect(result.error).toBe("HTTP 502");
     expect(result.windows).toHaveLength(0);
+  });
+
+  it("bounds oversized oauth error bodies and cancels the stream", async () => {
+    const oversized = makeOversizedJsonResponse(403);
+    const mockFetch = createProviderUsageFetch(async () => oversized.response);
+
+    const result = await fetchClaudeUsage("token", 5000, mockFetch);
+
+    expect(result.error).toBe("HTTP 403");
+    expect(result.windows).toHaveLength(0);
+    expect(oversized.state.canceled).toBe(true);
+    expect(oversized.state.enqueuedBytes).toBeLessThan(64 * 1024 * 1024);
   });
 
   it("returns a stable error for malformed successful oauth usage JSON", async () => {

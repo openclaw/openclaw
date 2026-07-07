@@ -1,11 +1,12 @@
 // Prepares declaration and entry-shim artifacts that prove plugin package
 // boundary imports resolve through public package surfaces.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path, { resolve } from "node:path";
 import { isLocalCheckEnabled } from "./lib/local-heavy-check-runtime.mjs";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { pluginSdkEntrypoints, publicPluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mjs";
+import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const runTsgoScript = path.join(repoRoot, "scripts/run-tsgo.mjs");
@@ -16,14 +17,15 @@ const ROOT_SHIMS_MAX_OLD_SPACE_SIZE =
   process.env.OPENCLAW_ROOT_SHIMS_MAX_OLD_SPACE_SIZE?.trim() || "8192";
 const ROOT_SHIMS_NODE_OPTIONS =
   `${process.env.NODE_OPTIONS ?? ""} --max-old-space-size=${ROOT_SHIMS_MAX_OLD_SPACE_SIZE}`.trim();
-const NODE_STEP_ABORT_KILL_GRACE_MS = 1_000;
+const DEFAULT_NODE_STEP_ABORT_KILL_GRACE_MS = 1_000;
+const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const NODE_STEP_PARENT_SIGNALS = ["SIGHUP", "SIGINT", "SIGTERM"];
 const NODE_STEP_PARENT_SIGNAL_EXIT_CODES = new Map([
   ["SIGHUP", 129],
   ["SIGINT", 130],
   ["SIGTERM", 143],
 ]);
-const ACTIVE_NODE_STEP_KILLERS = new Set();
+const ACTIVE_NODE_STEP_KILLERS = new Map();
 let nodeStepParentSignalForwardersInstalled = false;
 let exitingAfterParentSignal = false;
 let parentSignalExitCode = 1;
@@ -50,11 +52,38 @@ function listPackageDtsOutputsFromExports({ packageDir, outputPrefix }) {
     .toSorted((a, b) => a.localeCompare(b));
 }
 
+function listSourceDtsOutputs({ sourceDir, outputPrefix }) {
+  const outputs = [];
+
+  function visit(relativeDir) {
+    const absoluteDir = path.join(repoRoot, sourceDir, relativeDir);
+    for (const entry of fs.readdirSync(absoluteDir, { withFileTypes: true })) {
+      const relativePath = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        visit(relativePath);
+        continue;
+      }
+      if (
+        !entry.name.endsWith(".ts") ||
+        entry.name.endsWith(".test.ts") ||
+        entry.name.endsWith(".test-helpers.ts")
+      ) {
+        continue;
+      }
+      outputs.push(`${outputPrefix}/${relativePath.replace(/\.ts$/u, ".d.ts")}`);
+    }
+  }
+
+  visit("");
+  return outputs.toSorted((a, b) => a.localeCompare(b));
+}
+
 const PLUGIN_SDK_TYPE_INPUTS = [
   "tsconfig.json",
   "src/plugin-sdk",
   "src/plugins/types.ts",
   "src/auto-reply",
+  "packages/ai/src",
   "packages/llm-core/src",
   "packages/markdown-core/src",
   "packages/media-core/src",
@@ -75,7 +104,12 @@ const ACP_CORE_REQUIRED_DTS_OUTPUTS = listPackageDtsOutputsFromExports({
   packageDir: "acp-core",
   outputPrefix: "dist/plugin-sdk/packages/acp-core/src",
 });
+const AI_REQUIRED_DTS_OUTPUTS = listSourceDtsOutputs({
+  sourceDir: "packages/ai/src",
+  outputPrefix: "dist/plugin-sdk/packages/ai/src",
+});
 const ROOT_DTS_REQUIRED_OUTPUTS = [
+  ...AI_REQUIRED_DTS_OUTPUTS,
   "dist/plugin-sdk/packages/memory-host-sdk/src/engine-embeddings.d.ts",
   "dist/plugin-sdk/packages/memory-host-sdk/src/secret.d.ts",
   "dist/plugin-sdk/packages/memory-host-sdk/src/status.d.ts",
@@ -107,7 +141,6 @@ const ROOT_DTS_REQUIRED_OUTPUTS = [
   "dist/plugin-sdk/packages/media-core/src/media-source-url.d.ts",
   "dist/plugin-sdk/packages/media-core/src/mime.d.ts",
   "dist/plugin-sdk/packages/media-core/src/read-byte-stream-with-limit.d.ts",
-  "dist/plugin-sdk/packages/media-core/src/read-response-with-limit.d.ts",
   ...ACP_CORE_REQUIRED_DTS_OUTPUTS,
   "dist/plugin-sdk/packages/terminal-core/src/ansi.d.ts",
   "dist/plugin-sdk/packages/terminal-core/src/decorative-emoji.d.ts",
@@ -145,7 +178,12 @@ const ACP_CORE_REQUIRED_PACKAGE_DTS_OUTPUTS = listPackageDtsOutputsFromExports({
   packageDir: "acp-core",
   outputPrefix: "packages/plugin-sdk/dist/packages/acp-core/src",
 });
+const AI_REQUIRED_PACKAGE_DTS_OUTPUTS = listSourceDtsOutputs({
+  sourceDir: "packages/ai/src",
+  outputPrefix: "packages/plugin-sdk/dist/packages/ai/src",
+});
 const PACKAGE_DTS_REQUIRED_OUTPUTS = [
+  ...AI_REQUIRED_PACKAGE_DTS_OUTPUTS,
   "packages/plugin-sdk/dist/packages/markdown-core/src/code-spans.d.ts",
   "packages/plugin-sdk/dist/packages/markdown-core/src/fences.d.ts",
   "packages/plugin-sdk/dist/packages/markdown-core/src/frontmatter.d.ts",
@@ -169,7 +207,6 @@ const PACKAGE_DTS_REQUIRED_OUTPUTS = [
   "packages/plugin-sdk/dist/packages/media-core/src/media-source-url.d.ts",
   "packages/plugin-sdk/dist/packages/media-core/src/mime.d.ts",
   "packages/plugin-sdk/dist/packages/media-core/src/read-byte-stream-with-limit.d.ts",
-  "packages/plugin-sdk/dist/packages/media-core/src/read-response-with-limit.d.ts",
   ...ACP_CORE_REQUIRED_PACKAGE_DTS_OUTPUTS,
   "packages/plugin-sdk/dist/packages/model-catalog-core/src/configured-model-refs.d.ts",
   "packages/plugin-sdk/dist/packages/model-catalog-core/src/model-catalog-normalize.d.ts",
@@ -179,6 +216,7 @@ const PACKAGE_DTS_REQUIRED_OUTPUTS = [
   "packages/plugin-sdk/dist/packages/model-catalog-core/src/provider-model-id-normalization.d.ts",
   "packages/plugin-sdk/dist/packages/model-catalog-core/src/provider-model-id-normalize.d.ts",
   "packages/plugin-sdk/dist/packages/normalization-core/src/index.d.ts",
+  "packages/plugin-sdk/dist/packages/normalization-core/src/boolean-coercion.d.ts",
   "packages/plugin-sdk/dist/packages/normalization-core/src/number-coercion.d.ts",
   "packages/plugin-sdk/dist/packages/normalization-core/src/record-coerce.d.ts",
   "packages/plugin-sdk/dist/packages/normalization-core/src/string-coerce.d.ts",
@@ -229,6 +267,12 @@ const SLACK_DTS_INPUTS = [
 ];
 const SLACK_DTS_STAMP = "dist/plugin-sdk/extensions/slack/.boundary-dts.stamp";
 const SLACK_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/slack/api.d.ts"];
+const TELEGRAM_DTS_INPUTS = [
+  "extensions/telegram/api.ts",
+  "extensions/telegram/tsconfig.json",
+];
+const TELEGRAM_DTS_STAMP = "dist/plugin-sdk/extensions/telegram/.boundary-dts.stamp";
+const TELEGRAM_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/telegram/api.d.ts"];
 const WHATSAPP_DTS_INPUTS = [
   "extensions/whatsapp/api.ts",
   "extensions/whatsapp/src/qa-driver.runtime.ts",
@@ -399,8 +443,16 @@ function abortSiblingSteps(abortController) {
   }
 }
 
-function signalNodeStep(child, signal) {
-  if (process.platform !== "win32" && typeof child.pid === "number") {
+export function signalNodeStep(
+  child,
+  signal,
+  {
+    platform = process.platform,
+    runTaskkill = spawnSync,
+    useProcessGroup = platform !== "win32",
+  } = {},
+) {
+  if (useProcessGroup && typeof child.pid === "number") {
     try {
       process.kill(-child.pid, signal);
       return;
@@ -408,13 +460,36 @@ function signalNodeStep(child, signal) {
       // The child process group can already be gone by the time cleanup runs.
     }
   }
+  if (platform === "win32" && typeof child.pid === "number") {
+    const args = ["/PID", String(child.pid), "/T"];
+    if (signal === "SIGKILL") {
+      args.push("/F");
+    }
+    const taskkillPath = resolveWindowsTaskkillPath();
+    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
+    if (!result?.error && result?.status === 0) {
+      return;
+    }
+    if (signal !== "SIGKILL") {
+      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
+      if (!forceResult?.error && forceResult?.status === 0) {
+        return;
+      }
+    }
+  }
   child.kill(signal);
 }
 
 function signalActiveNodeSteps(signal) {
-  for (const killNodeStep of ACTIVE_NODE_STEP_KILLERS) {
+  for (const killNodeStep of ACTIVE_NODE_STEP_KILLERS.keys()) {
     killNodeStep(signal);
   }
+}
+
+function activeNodeStepKillGraceMs() {
+  return ACTIVE_NODE_STEP_KILLERS.size > 0
+    ? Math.max(...ACTIVE_NODE_STEP_KILLERS.values())
+    : DEFAULT_NODE_STEP_ABORT_KILL_GRACE_MS;
 }
 
 function installNodeStepParentSignalForwarders() {
@@ -434,7 +509,7 @@ function installNodeStepParentSignalForwarders() {
       signalActiveNodeSteps(signal);
       parentSignalExitTimer ??= setTimeout(
         () => process.exit(parentSignalExitCode),
-        NODE_STEP_ABORT_KILL_GRACE_MS,
+        activeNodeStepKillGraceMs(),
       );
     });
   }
@@ -443,10 +518,23 @@ function installNodeStepParentSignalForwarders() {
   });
 }
 
+function resolveNodeStepTimerTimeoutMs(valueMs) {
+  const value = Number(valueMs);
+  if (!Number.isFinite(value)) {
+    return MAX_TIMER_TIMEOUT_MS;
+  }
+  return Math.min(Math.max(Math.floor(value), 1), MAX_TIMER_TIMEOUT_MS);
+}
+
 /**
  * Runs one artifact step with timeout, abort propagation, and prefixed output.
  */
 export function runNodeStep(label, args, timeoutMs, params = {}) {
+  const resolvedTimeoutMs = resolveNodeStepTimerTimeoutMs(timeoutMs);
+  const abortKillGraceMs = Math.max(
+    0,
+    Math.floor(params.abortKillGraceMs ?? DEFAULT_NODE_STEP_ABORT_KILL_GRACE_MS),
+  );
   const abortController = params.abortController;
   const spawnImpl = params.spawnImpl ?? spawn;
   installNodeStepParentSignalForwarders();
@@ -464,9 +552,10 @@ export function runNodeStep(label, args, timeoutMs, params = {}) {
     let killDeadlineAt = 0;
     const stdoutWriter = createPrefixedOutputWriter(label, process.stdout);
     const stderrWriter = createPrefixedOutputWriter(label, process.stderr);
-    const killNodeStep = (signal) => signalNodeStep(child, signal);
+    const useProcessGroup = process.platform !== "win32";
+    const killNodeStep = (signal) => signalNodeStep(child, signal, { useProcessGroup });
     const processGroupAlive = () => {
-      if (process.platform === "win32" || !child.pid) {
+      if (!useProcessGroup || !child.pid) {
         return false;
       }
       try {
@@ -498,18 +587,18 @@ export function runNodeStep(label, args, timeoutMs, params = {}) {
         await waitForProcessGroupExit(100);
       }
     };
-    ACTIVE_NODE_STEP_KILLERS.add(killNodeStep);
+    ACTIVE_NODE_STEP_KILLERS.set(killNodeStep, abortKillGraceMs);
     const abortStep = () => {
       if (settled || canceled) {
         return;
       }
       canceled = true;
       killNodeStep("SIGTERM");
-      killDeadlineAt = Date.now() + NODE_STEP_ABORT_KILL_GRACE_MS;
+      killDeadlineAt = Date.now() + abortKillGraceMs;
       killTimer = setTimeout(() => {
         killTimer = undefined;
         killNodeStep("SIGKILL");
-      }, NODE_STEP_ABORT_KILL_GRACE_MS);
+      }, abortKillGraceMs);
       killTimer.unref?.();
     };
     function cleanup() {
@@ -528,8 +617,8 @@ export function runNodeStep(label, args, timeoutMs, params = {}) {
       stdoutWriter.flush();
       stderrWriter.flush();
       abortSiblingSteps(abortController);
-      rejectPromise(new Error(`${label} timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
+      rejectPromise(new Error(`${label} timed out after ${resolvedTimeoutMs}ms`));
+    }, resolvedTimeoutMs);
     abortController?.signal.addEventListener("abort", abortStep, { once: true });
 
     child.stdout.setEncoding("utf8");
@@ -594,7 +683,11 @@ export async function runNodeStepsInParallel(steps) {
   const abortController = new AbortController();
   const results = await Promise.allSettled(
     steps.map((step) =>
-      runNodeStep(step.label, step.args, step.timeoutMs, { abortController, env: step.env }),
+      runNodeStep(step.label, step.args, step.timeoutMs, {
+        abortController,
+        abortKillGraceMs: step.abortKillGraceMs,
+        env: step.env,
+      }),
     ),
   );
   const firstFailure = results.find((result) => result.status === "rejected");
@@ -661,6 +754,12 @@ async function main(argv = process.argv.slice(2)) {
         outputPaths: [SLACK_DTS_STAMP, ...SLACK_DTS_REQUIRED_OUTPUTS],
         includeFile: isRelevantTypeInput,
       }) && !hasMissingOutput(SLACK_DTS_REQUIRED_OUTPUTS);
+    const telegramDtsFresh =
+      isArtifactSetFresh({
+        inputPaths: TELEGRAM_DTS_INPUTS,
+        outputPaths: [TELEGRAM_DTS_STAMP, ...TELEGRAM_DTS_REQUIRED_OUTPUTS],
+        includeFile: isRelevantTypeInput,
+      }) && !hasMissingOutput(TELEGRAM_DTS_REQUIRED_OUTPUTS);
     const whatsappDtsFresh =
       isArtifactSetFresh({
         inputPaths: WHATSAPP_DTS_INPUTS,
@@ -826,6 +925,37 @@ async function main(argv = process.argv.slice(2)) {
         });
       } else {
         process.stdout.write("[whatsapp boundary dts] fresh; skipping\n");
+      }
+      if (!telegramDtsFresh) {
+        removeIncrementalStateForMissingOutput({
+          outputPaths: TELEGRAM_DTS_REQUIRED_OUTPUTS,
+          tsBuildInfoPath: "dist/plugin-sdk/extensions/telegram/.tsbuildinfo",
+        });
+        dependentSteps.push({
+          label: "telegram boundary dts",
+          args: [
+            runTsgoScript,
+            "-p",
+            "extensions/telegram/tsconfig.json",
+            "--declaration",
+            "true",
+            "--emitDeclarationOnly",
+            "true",
+            "--noEmit",
+            "false",
+            "--outDir",
+            "dist/plugin-sdk/extensions/telegram",
+            "--rootDir",
+            "extensions/telegram",
+            "--tsBuildInfoFile",
+            "dist/plugin-sdk/extensions/telegram/.tsbuildinfo",
+          ],
+          env: { OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1" },
+          timeoutMs: 300_000,
+          stampPath: TELEGRAM_DTS_STAMP,
+        });
+      } else {
+        process.stdout.write("[telegram boundary dts] fresh; skipping\n");
       }
     }
 

@@ -26,9 +26,66 @@ const minimalAddParams = {
   payload: { kind: "systemEvent", text: "tick" },
 } as const;
 
+const agentToolCallerScope = {
+  kind: "agentTool",
+  agentId: "ops",
+} as const;
+
 describe("cron protocol validators", () => {
   it("accepts minimal add params", () => {
     expect(validateCronAddParams(minimalAddParams)).toBe(true);
+  });
+
+  it("accepts trigger add, patch, and clear shapes", () => {
+    expect(
+      validateCronAddParams({
+        ...minimalAddParams,
+        trigger: { script: "json({ fire: true })", once: true },
+      }),
+    ).toBe(true);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: { trigger: { script: "json({ fire: false })" } },
+      }),
+    ).toBe(true);
+    expect(validateCronUpdateParams({ id: "job-1", patch: { trigger: null } })).toBe(true);
+  });
+
+  it("rejects invalid trigger scripts and additional properties", () => {
+    expect(validateCronAddParams({ ...minimalAddParams, trigger: { script: "" } })).toBe(false);
+    expect(
+      validateCronAddParams({
+        ...minimalAddParams,
+        trigger: { script: "json({ fire: true })", unexpected: true },
+      }),
+    ).toBe(false);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: { trigger: { script: "json({ fire: true })", unexpected: true } },
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects public caller scope on cron admin params", () => {
+    expect(validateCronListParams({ callerScope: agentToolCallerScope })).toBe(false);
+    expect(validateCronGetParams({ id: "job-1", callerScope: agentToolCallerScope })).toBe(false);
+    expect(validateCronAddParams({ ...minimalAddParams, callerScope: agentToolCallerScope })).toBe(
+      false,
+    );
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: { enabled: false },
+        callerScope: agentToolCallerScope,
+      }),
+    ).toBe(false);
+    expect(validateCronRemoveParams({ jobId: "job-1", callerScope: agentToolCallerScope })).toBe(
+      false,
+    );
+    expect(validateCronRunParams({ id: "job-1", callerScope: agentToolCallerScope })).toBe(false);
+    expect(validateCronRunsParams({ id: "job-1", callerScope: agentToolCallerScope })).toBe(false);
   });
 
   it("accepts current and custom session targets", () => {

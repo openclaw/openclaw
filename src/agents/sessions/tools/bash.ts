@@ -8,6 +8,7 @@ import { existsSync } from "node:fs";
 import { Container, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { Type } from "typebox";
+import { toErrorObject } from "../../../infra/errors.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { truncateToVisualLines } from "../../modes/interactive/components/visual-truncate.js";
 import { theme } from "../../modes/interactive/theme/theme.js";
@@ -18,7 +19,7 @@ import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/type
 import type { BashOperations } from "./bash-operations.js";
 import { OutputAccumulator } from "./output-accumulator.js";
 import { getTextOutput, invalidArgText, str } from "./render-utils.js";
-import type { BashToolDetails } from "./tool-contracts.js";
+import { formatFullOutputFooter, type BashToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize } from "./truncate.js";
 
@@ -121,7 +122,7 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
             if (signal) {
               signal.removeEventListener("abort", onAbort);
             }
-            reject(toLintErrorObject(err, "Non-Error rejection"));
+            reject(toErrorObject(err, "Non-Error rejection"));
           });
       });
     },
@@ -253,7 +254,7 @@ function rebuildBashResultRenderComponent(
   if (truncation?.truncated || fullOutputPath) {
     const warnings: string[] = [];
     if (fullOutputPath) {
-      warnings.push(`Full output: ${fullOutputPath}`);
+      warnings.push(formatFullOutputFooter(fullOutputPath));
     }
     if (truncation?.truncated) {
       if (truncation.truncatedBy === "lines") {
@@ -303,6 +304,7 @@ export function createBashToolDefinition(
       const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
       const spawnContext = resolveSpawnContext(resolvedCommand, cwd, spawnHook);
       const output = new OutputAccumulator({ tempFilePrefix: "openclaw-bash" });
+      let acceptingOutput = true;
       let updateTimer: NodeJS.Timeout | undefined;
       let updateDirty = false;
       let lastUpdateAt = 0;
@@ -352,11 +354,15 @@ export function createBashToolDefinition(
       }
 
       const handleData = (data: Buffer) => {
+        if (!acceptingOutput) {
+          return;
+        }
         output.append(data);
         scheduleOutputUpdate();
       };
 
       const finishOutput = async () => {
+        acceptingOutput = false;
         output.finish();
         clearUpdateTimer();
         emitOutputUpdate();
@@ -373,16 +379,20 @@ export function createBashToolDefinition(
         let text = snapshot.content || emptyText;
         let details: BashToolDetails | undefined;
         if (truncation.truncated) {
-          details = { truncation, fullOutputPath: snapshot.fullOutputPath };
+          const fullOutputPath = snapshot.fullOutputPath;
+          if (!fullOutputPath) {
+            throw new Error("Missing full output path for truncated bash output");
+          }
+          details = { truncation, fullOutputPath };
           const startLine = truncation.totalLines - truncation.outputLines + 1;
           const endLine = truncation.totalLines;
           if (truncation.lastLinePartial) {
             const lastLineSize = formatSize(output.getLastLineBytes());
-            text += `\n\n[Showing last ${formatSize(truncation.outputBytes)} of line ${endLine} (line is ${lastLineSize}). Full output: ${snapshot.fullOutputPath}]`;
+            text += `\n\n[Showing last ${formatSize(truncation.outputBytes)} of line ${endLine} (line is ${lastLineSize}). ${formatFullOutputFooter(fullOutputPath)}]`;
           } else if (truncation.truncatedBy === "lines") {
-            text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}. Full output: ${snapshot.fullOutputPath}]`;
+            text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}. ${formatFullOutputFooter(fullOutputPath)}]`;
           } else {
-            text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(DEFAULT_MAX_BYTES)} limit). Full output: ${snapshot.fullOutputPath}]`;
+            text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(DEFAULT_MAX_BYTES)} limit). ${formatFullOutputFooter(fullOutputPath)}]`;
           }
         }
         return { text, details };
@@ -472,18 +482,4 @@ export function createBashTool(
   options?: BashToolOptions,
 ): AgentTool<typeof bashSchema> {
   return wrapToolDefinition(createBashToolDefinition(cwd, options));
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

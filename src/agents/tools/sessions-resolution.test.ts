@@ -3,11 +3,11 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
+import { looksLikeSessionId } from "../../sessions/session-id.js";
 const callGatewayMock = vi.fn();
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
-let looksLikeSessionId: typeof import("./sessions-resolution.js").looksLikeSessionId;
 let looksLikeSessionKey: typeof import("./sessions-resolution.js").looksLikeSessionKey;
 let resolveCurrentSessionClientAlias: typeof import("./sessions-resolution.js").resolveCurrentSessionClientAlias;
 let resolveDisplaySessionKey: typeof import("./sessions-resolution.js").resolveDisplaySessionKey;
@@ -19,7 +19,6 @@ let shouldResolveSessionIdInput: typeof import("./sessions-resolution.js").shoul
 
 beforeAll(async () => {
   ({
-    looksLikeSessionId,
     looksLikeSessionKey,
     resolveCurrentSessionClientAlias,
     resolveDisplaySessionKey,

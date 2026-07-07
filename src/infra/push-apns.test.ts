@@ -106,15 +106,17 @@ function createRelayApnsSendFixture(params: {
   nodeId: string;
   relayHandle?: string;
   tokenDebugSuffix?: string;
+  environment?: "sandbox" | "production";
   sendResult: {
     ok: boolean;
     status: number;
-    environment: "production";
+    environment: "sandbox" | "production";
     apnsId?: string;
     reason?: string;
     tokenSuffix?: string;
   };
 }) {
+  const environment = params.environment ?? "production";
   return {
     send: vi.fn().mockResolvedValue(params.sendResult),
     registration: {
@@ -124,7 +126,7 @@ function createRelayApnsSendFixture(params: {
       sendGrant: "send-grant-123",
       installationId: "install-123",
       topic: "ai.openclaw.ios",
-      environment: "production" as const,
+      environment,
       distribution: "official" as const,
       updatedAtMs: 1,
       tokenDebugSuffix: params.tokenDebugSuffix,
@@ -496,6 +498,7 @@ describe("push APNs send semantics", () => {
       registration,
       nodeId: "ios-node-approval-alert",
       approvalId: "approval-123",
+      gatewayDeviceId: "gateway-device-123",
       auth,
       requestSender: send,
     });
@@ -517,6 +520,7 @@ describe("push APNs send semantics", () => {
     expectRecordFields(openclawPayload, {
       kind: "exec.approval.requested",
       approvalId: "approval-123",
+      gatewayDeviceId: "gateway-device-123",
     });
     expect(typeof openclawPayload.ts).toBe("number");
     expectNoProperties(openclawPayload, [
@@ -546,6 +550,7 @@ describe("push APNs send semantics", () => {
       registration,
       nodeId: "ios-node-approval-cleanup",
       approvalId: "approval-123",
+      gatewayDeviceId: "gateway-device-123",
       auth,
       requestSender: send,
     });
@@ -561,6 +566,7 @@ describe("push APNs send semantics", () => {
     expectRecordFields(openclawPayload, {
       kind: "exec.approval.resolved",
       approvalId: "approval-123",
+      gatewayDeviceId: "gateway-device-123",
     });
     expect(typeof openclawPayload.ts).toBe("number");
     expect(result.ok).toBe(true);
@@ -788,6 +794,7 @@ describe("push APNs send semantics", () => {
       registration,
       nodeId: "ios-node-relay-approval-alert",
       approvalId: "approval-relay-1",
+      gatewayDeviceId: "gateway-device-relay",
       relayConfig,
       relayGatewayIdentity: gatewayIdentity,
       relayRequestSender: send,
@@ -807,6 +814,7 @@ describe("push APNs send semantics", () => {
     expectRecordFields(openclawPayload, {
       kind: "exec.approval.requested",
       approvalId: "approval-relay-1",
+      gatewayDeviceId: "gateway-device-relay",
     });
     expect(typeof openclawPayload.ts).toBe("number");
     expectNoProperties(openclawPayload, [
@@ -822,5 +830,28 @@ describe("push APNs send semantics", () => {
       environment: "production",
       transport: "relay",
     });
+  });
+
+  it("keeps bounded non-JSON error reasons UTF-16 well-formed", async () => {
+    const { send, registration, auth } = createDirectApnsSendFixture({
+      nodeId: "ios-node-utf16-reason",
+      environment: "sandbox",
+      sendResult: {
+        status: 400,
+        apnsId: "apns-utf16-reason-id",
+        body: `${"x".repeat(199)}🚀tail`,
+      },
+    });
+
+    const result = await sendApnsAlert({
+      registration,
+      nodeId: "ios-node-utf16-reason",
+      title: "Wake",
+      body: "Ping",
+      auth,
+      requestSender: send,
+    });
+
+    expect(requireRecord(result, "APNs result").reason).toBe("x".repeat(199));
   });
 });

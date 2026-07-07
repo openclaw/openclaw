@@ -75,6 +75,7 @@ export function bindPayloadColumns(
   | "payload_thinking"
   | "payload_timeout_seconds"
   | "payload_tools_allow_json"
+  | "payload_tools_allow_is_default"
 > {
   if (payload.kind === "systemEvent") {
     return {
@@ -88,6 +89,7 @@ export function bindPayloadColumns(
       payload_external_content_source_json: null,
       payload_light_context: null,
       payload_tools_allow_json: null,
+      payload_tools_allow_is_default: null,
     };
   }
   if (payload.kind === "command") {
@@ -103,6 +105,7 @@ export function bindPayloadColumns(
       payload_external_content_source_json: null,
       payload_light_context: null,
       payload_tools_allow_json: null,
+      payload_tools_allow_is_default: null,
     };
   }
   return {
@@ -116,6 +119,9 @@ export function bindPayloadColumns(
     payload_external_content_source_json: serializeJson(payload.externalContentSource),
     payload_light_context: booleanToInteger(payload.lightContext),
     payload_tools_allow_json: serializeJson(payload.toolsAllow),
+    payload_tools_allow_is_default: payload.toolsAllow
+      ? booleanToInteger(payload.toolsAllowIsDefault)
+      : null,
   };
 }
 
@@ -144,6 +150,10 @@ export function payloadFromRow(row: CronJobRow): CronPayload | null {
     const toolsAllow = row.payload_tools_allow_json
       ? parseJsonArray(row.payload_tools_allow_json)
       : undefined;
+    const toolsAllowIsDefault =
+      row.payload_tools_allow_is_default != null
+        ? integerToBoolean(row.payload_tools_allow_is_default)
+        : undefined;
     return {
       kind: "agentTurn",
       message: row.payload_message,
@@ -155,6 +165,7 @@ export function payloadFromRow(row: CronJobRow): CronPayload | null {
       ...(externalContentSource ? { externalContentSource } : {}),
       ...(lightContext != null ? { lightContext } : {}),
       ...(toolsAllow ? { toolsAllow } : {}),
+      ...(toolsAllow && toolsAllowIsDefault ? { toolsAllowIsDefault: true } : {}),
     };
   }
   if (row.payload_kind === "command") {

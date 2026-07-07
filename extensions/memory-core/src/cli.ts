@@ -1,5 +1,6 @@
 // Memory Core plugin module implements cli behavior.
 import type { Command } from "commander";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   formatDocsLink,
   formatHelpExamples,
@@ -23,14 +24,7 @@ import {
   DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES,
 } from "./short-term-promotion.js";
 
-type MemoryCliRuntime = typeof import("./cli.runtime.js");
-
-let memoryCliRuntimePromise: Promise<MemoryCliRuntime> | null = null;
-
-async function loadMemoryCliRuntime(): Promise<MemoryCliRuntime> {
-  memoryCliRuntimePromise ??= import("./cli.runtime.js");
-  return await memoryCliRuntimePromise;
-}
+const loadMemoryCliRuntime = createLazyRuntimeModule(() => import("./cli.runtime.js"));
 
 const DECIMAL_NUMBER_RE = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/;
 

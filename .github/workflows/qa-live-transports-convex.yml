@@ -226,7 +226,7 @@ jobs:
           name: qa-parity-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/qa-e2e/
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error
 
   run_live_runtime_token_efficiency:
     name: Run live runtime token-efficiency lane
@@ -315,7 +315,7 @@ jobs:
           name: qa-live-runtime-token-efficiency-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_lane.outputs.output_dir }}
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error
 
   run_live_matrix:
     name: Run Matrix live QA lane
@@ -391,7 +391,7 @@ jobs:
           name: qa-live-matrix-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_lane.outputs.output_dir }}
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error
 
   run_live_matrix_sharded:
     name: Run Matrix live QA lane (${{ matrix.profile }})
@@ -475,7 +475,7 @@ jobs:
           name: qa-live-matrix-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_lane.outputs.output_dir }}
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error
 
   run_live_telegram:
     name: Run Telegram live QA lane with Convex leases
@@ -497,7 +497,8 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
-      - name: Validate required QA credential env
+      - &qa_live_required_credentials_step
+        name: Validate required QA credential env
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
@@ -570,7 +571,7 @@ jobs:
           name: qa-live-telegram-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_lane.outputs.output_dir }}
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error
 
   run_live_discord:
     name: Run Discord live QA lane with Convex leases
@@ -592,27 +593,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
-      - name: Validate required QA credential env
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
-          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          require_var() {
-            local key="$1"
-            if [[ -z "${!key:-}" ]]; then
-              echo "Missing required ${key}." >&2
-              exit 1
-            fi
-          }
-
-          require_var OPENAI_API_KEY
-          require_var OPENCLAW_QA_CONVEX_SITE_URL
-          require_var OPENCLAW_QA_CONVEX_SECRET_CI
-
+      - *qa_live_required_credentials_step
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=12288
@@ -665,7 +646,7 @@ jobs:
           name: qa-live-discord-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_lane.outputs.output_dir }}
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error
 
   run_live_whatsapp:
     name: Run WhatsApp live QA lane with Convex leases
@@ -690,27 +671,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
-      - name: Validate required QA credential env
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
-          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          require_var() {
-            local key="$1"
-            if [[ -z "${!key:-}" ]]; then
-              echo "Missing required ${key}." >&2
-              exit 1
-            fi
-          }
-
-          require_var OPENAI_API_KEY
-          require_var OPENCLAW_QA_CONVEX_SITE_URL
-          require_var OPENCLAW_QA_CONVEX_SECRET_CI
-
+      - *qa_live_required_credentials_step
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=12288
@@ -763,7 +724,7 @@ jobs:
           name: qa-live-whatsapp-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_lane.outputs.output_dir }}
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error
 
   run_live_slack:
     name: Run Slack live QA lane with Convex leases
@@ -785,27 +746,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
-      - name: Validate required QA credential env
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
-          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          require_var() {
-            local key="$1"
-            if [[ -z "${!key:-}" ]]; then
-              echo "Missing required ${key}." >&2
-              exit 1
-            fi
-          }
-
-          require_var OPENAI_API_KEY
-          require_var OPENCLAW_QA_CONVEX_SITE_URL
-          require_var OPENCLAW_QA_CONVEX_SECRET_CI
-
+      - *qa_live_required_credentials_step
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=12288
@@ -859,4 +800,4 @@ jobs:
           name: qa-live-slack-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_lane.outputs.output_dir }}
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error

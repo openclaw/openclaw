@@ -15,9 +15,6 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const tempDirs: string[] = [];
 const scriptPath = "scripts/e2e/lib/plugin-lifecycle-matrix/measure.mjs";
-const hasTimeoutCommand =
-  process.platform === "linux" &&
-  spawnSync("bash", ["-lc", "command -v timeout >/dev/null 2>&1"]).status === 0;
 
 function makeTempDir(): string {
   const dir = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-lifecycle-measure-"));
@@ -253,6 +250,41 @@ describe("plugin lifecycle resource sampler", () => {
     },
   );
 
+  it.runIf(process.platform === "linux")("clamps oversized timer env values", () => {
+    const dir = makeTempDir();
+    const summary = path.join(dir, "summary.tsv");
+    const oversizedTimerMs = "2147000001";
+    const result = spawnSync(
+      "node",
+      [
+        scriptPath,
+        summary,
+        "oversized-timers",
+        "--",
+        "node",
+        "-e",
+        "setTimeout(() => process.exit(0), 25)",
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_PLUGIN_LIFECYCLE_METRIC_POLL_MS: oversizedTimerMs,
+          OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: oversizedTimerMs,
+          OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: oversizedTimerMs,
+        },
+        timeout: 5000,
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).not.toContain("TimeoutOverflowWarning");
+    expect(readFileSync(summary, "utf8")).toMatch(
+      /^oversized-timers\t\d+\t[\d.]+\t\d+\t[\d.]+\t$/mu,
+    );
+  });
+
   it.runIf(process.platform === "linux")(
     "kills stubborn descendants after the timeout grace period",
     () => {
@@ -282,8 +314,8 @@ describe("plugin lifecycle resource sampler", () => {
             encoding: "utf8",
             env: {
               ...process.env,
-              OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "150",
-              OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: "100",
+              OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "250",
+              OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: "50",
               PID_FILE: pidFile,
             },
             timeout: 5000,
@@ -305,49 +337,51 @@ describe("plugin lifecycle resource sampler", () => {
     },
   );
 
-  it.runIf(hasTimeoutCommand)("forwards external termination to the measured process group", () => {
-    const dir = makeTempDir();
-    const summary = path.join(dir, "summary.tsv");
-    const pidFile = path.join(dir, "descendant.pid");
-    let descendantPid;
+  it.runIf(process.platform === "linux")(
+    "forwards external termination to the measured process group",
+    async () => {
+      const dir = makeTempDir();
+      const summary = path.join(dir, "summary.tsv");
+      const pidFile = path.join(dir, "descendant.pid");
+      let descendantPid;
 
-    try {
-      const result = spawnSync(
-        "timeout",
-        [
-          "--kill-after=1s",
-          "0.2s",
-          "node",
-          scriptPath,
-          summary,
-          "external-stop",
-          "--",
-          "bash",
-          "-lc",
-          'bash -c \'trap "" TERM; printf "%s\\n" "$$" >"$PID_FILE"; while :; do sleep 1; done\' & wait',
-        ],
-        {
-          cwd: process.cwd(),
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "5000",
-            OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: "100",
-            PID_FILE: pidFile,
+      try {
+        const result = spawn(
+          process.execPath,
+          [
+            scriptPath,
+            summary,
+            "external-stop",
+            "--",
+            "bash",
+            "-lc",
+            'bash -c \'trap "" TERM; printf "%s\\n" "$$" >"$PID_FILE"; while :; do sleep 1; done\' & wait',
+          ],
+          {
+            cwd: process.cwd(),
+            env: {
+              ...process.env,
+              OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "5000",
+              OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: "200",
+              PID_FILE: pidFile,
+            },
+            stdio: "ignore",
           },
-          timeout: 5000,
-        },
-      );
+        );
 
-      descendantPid = Number.parseInt(readFileSync(pidFile, "utf8"), 10);
-      expect(result.status).toBe(124);
-      expect(waitForPidExit(descendantPid, 1000)).toBe(true);
-    } finally {
-      if (descendantPid > 0 && pidExists(descendantPid)) {
-        process.kill(descendantPid, "SIGKILL");
+        expect(waitForPath(pidFile, 2000)).toBe(true);
+        descendantPid = Number.parseInt(readFileSync(pidFile, "utf8"), 10);
+        result.kill("SIGTERM");
+        const close = await waitForChildClose(result, 5000);
+        expect(close.signal).toBe("SIGTERM");
+        expect(waitForPidExit(descendantPid, 1000)).toBe(true);
+      } finally {
+        if (descendantPid > 0 && pidExists(descendantPid)) {
+          process.kill(descendantPid, "SIGKILL");
+        }
       }
-    }
-  });
+    },
+  );
 
   it.runIf(process.platform === "linux")(
     "exits promptly when externally terminated phases stop during grace",

@@ -29,7 +29,8 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, win32 as pathWin32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isLocalBuildMetadataDistPath } from "./lib/local-build-metadata-paths.mjs";
-import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
+import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
+import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const PUBLISHED_INSTALLER_BASE_URL = "https://openclaw.ai";
@@ -58,6 +59,7 @@ export const CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS = parsePositiveIntegerEnv(
 );
 export const CROSS_OS_COMMAND_CAPTURE_TAIL_BYTES = 16 * 1024 * 1024;
 const CROSS_OS_AGENT_LOG_FALLBACK_TAIL_BYTES = 2 * 1024 * 1024;
+const CROSS_OS_NPM_DEBUG_LOG_TAIL_BYTES = 256 * 1024;
 const CROSS_OS_PROCESS_TREE_KILL_AFTER_MS = parsePositiveIntegerEnv(
   "OPENCLAW_CROSS_OS_PROCESS_TREE_KILL_AFTER_MS",
   15_000,
@@ -203,6 +205,23 @@ export function resolveNpmPackTarballFileName(value, label = "npm pack") {
     throw new Error(`${label} did not report a safe .tgz filename.`);
   }
   return filename;
+}
+
+export function resolvePackDestinationTarball(value, packDestination, label = "package pack") {
+  const filename = typeof value === "string" ? value.trim() : "";
+  const fileName = basename(filename);
+  const destinationDir = resolve(packDestination);
+  const tarballPath = resolve(destinationDir, filename);
+  if (
+    !filename.endsWith(".tgz") ||
+    filename.includes("\0") ||
+    !fileName ||
+    fileName !== pathWin32.basename(filename) ||
+    dirname(tarballPath) !== destinationDir
+  ) {
+    throw new Error(`${label} did not report a safe .tgz filename.`);
+  }
+  return { fileName, path: tarballPath };
 }
 
 if (isMainModule()) {
@@ -678,29 +697,89 @@ async function prepareCandidate(params) {
   logPhase("prepare", "package-dist-inventory");
   await writePackageDistInventoryForCandidate({
     sourceDir: params.sourceDir,
-    logPath: join(params.logsDir, "npm-pack-dry-run.log"),
+    logPath: join(params.logsDir, "pnpm-pack-dry-run.log"),
   });
-  logPhase("prepare", "npm-pack");
-  const packResult = await runCommand(
-    npmCommand(),
-    ["pack", "--ignore-scripts", "--json", "--pack-destination", packDir],
-    {
-      cwd: params.sourceDir,
-      logPath: join(params.logsDir, "npm-pack.log"),
-      timeoutMs: 10 * 60 * 1000,
-    },
-  );
-  writeFileSync(packJsonPath, packResult.stdout, "utf8");
-  const parsedPack = JSON.parse(packResult.stdout);
-  const lastPack = Array.isArray(parsedPack) ? parsedPack.at(-1) : null;
-  const packFilename = resolveNpmPackTarballFileName(lastPack?.filename);
+  const packCommand = resolvePackageCandidatePackCommand(params.sourceDir, packDir);
+  logPhase("prepare", packCommand.phase);
+  const packResult = await runCommand(packCommand.command, packCommand.args, {
+    cwd: params.sourceDir,
+    logPath: join(params.logsDir, packCommand.logFileName),
+    timeoutMs: 15 * 60 * 1000,
+  });
+  const packedCandidate = resolvePackedCandidateFromOutput({
+    output: packResult.stdout,
+    packDir,
+    packageJson,
+    packCommand,
+  });
+  writeFileSync(packJsonPath, packedCandidate.packJson, "utf8");
 
   return {
     sourceDir: params.sourceDir,
     sourceSha,
-    candidateVersion: String(lastPack.version ?? packageJson.version ?? "").trim(),
-    candidateTgz: join(packDir, packFilename),
-    candidateFileName: packFilename,
+    candidateVersion: packedCandidate.version,
+    candidateTgz: packedCandidate.path,
+    candidateFileName: packedCandidate.fileName,
+  };
+}
+
+export function resolvePackageCandidatePackCommand(sourceDir, packDir) {
+  const packageHelper = join(sourceDir, "scripts", "package-openclaw-for-docker.mjs");
+  if (existsSync(packageHelper)) {
+    return {
+      args: [packageHelper, "--skip-build", "--output-dir", packDir],
+      command: process.execPath,
+      kind: "docker-helper",
+      logFileName: "package-candidate.log",
+      phase: "package-candidate",
+    };
+  }
+
+  return {
+    args: ["pack", "--config.ignore-scripts=true", "--json", "--pack-destination", packDir],
+    command: pnpmCommand(),
+    kind: "pnpm-pack",
+    logFileName: "pnpm-pack.log",
+    phase: "pnpm-pack",
+  };
+}
+
+function resolvePackedCandidateFromOutput(params) {
+  if (params.packCommand.kind === "docker-helper") {
+    const packOutputLines = params.output.trim().split(/\r?\n/u).filter(Boolean);
+    const packedTarball = resolvePackDestinationTarball(
+      packOutputLines.at(-1),
+      params.packDir,
+      "package-openclaw-for-docker",
+    );
+    return {
+      fileName: packedTarball.fileName,
+      packJson: `${JSON.stringify(
+        {
+          filename: packedTarball.fileName,
+          path: packedTarball.path,
+          version: params.packageJson.version,
+        },
+        null,
+        2,
+      )}\n`,
+      path: packedTarball.path,
+      version: String(params.packageJson.version ?? "").trim(),
+    };
+  }
+
+  const parsedPack = JSON.parse(params.output);
+  const lastPack = Array.isArray(parsedPack) ? parsedPack.at(-1) : parsedPack;
+  const packedTarball = resolvePackDestinationTarball(
+    lastPack?.filename,
+    params.packDir,
+    "pnpm pack",
+  );
+  return {
+    fileName: packedTarball.fileName,
+    packJson: params.output,
+    path: packedTarball.path,
+    version: String(lastPack?.version ?? params.packageJson.version ?? "").trim(),
   };
 }
 
@@ -810,8 +889,8 @@ function isPackagedDistPath(relativePath) {
 export async function writePackageDistInventoryForCandidate(params) {
   assertNoLegacyPluginDependencyStagingDebris(params.sourceDir);
   const dryRun = await runCommand(
-    npmCommand(),
-    ["pack", "--dry-run", "--ignore-scripts", "--json"],
+    pnpmCommand(),
+    ["pack", "--dry-run", "--config.ignore-scripts=true", "--json"],
     {
       cwd: params.sourceDir,
       logPath: params.logPath,
@@ -819,11 +898,11 @@ export async function writePackageDistInventoryForCandidate(params) {
     },
   );
   const parsedPack = JSON.parse(dryRun.stdout);
-  const lastPack = Array.isArray(parsedPack) ? parsedPack.at(-1) : null;
+  const lastPack = Array.isArray(parsedPack) ? parsedPack.at(-1) : parsedPack;
   const files = Array.isArray(lastPack?.files) ? lastPack.files : [];
   if (files.length === 0) {
     throw new Error(
-      "npm pack --dry-run did not report package files for dist inventory generation.",
+      "pnpm pack --dry-run did not report package files for dist inventory generation.",
     );
   }
   const inventory = files
@@ -1779,13 +1858,12 @@ export function resolveCommandSpawnInvocation(
   args,
   options = {
     platform: process.platform,
-    comSpec: process.env.ComSpec,
   },
 ) {
   const platform = options.platform ?? process.platform;
   if (platform === "win32" && /\.(cmd|bat)$/iu.test(command)) {
     return {
-      command: options.comSpec ?? process.env.ComSpec ?? "cmd.exe",
+      command: options.comSpec ?? resolveWindowsCmdExePath(options.env ?? process.env),
       args: ["/d", "/s", "/c", buildCmdExeCommandLine(command, args)],
       shell: false,
       windowsVerbatimArguments: true,
@@ -1799,7 +1877,6 @@ export function resolveInstalledCliInvocation(
   args = [],
   options = {
     platform: process.platform,
-    comSpec: process.env.ComSpec,
   },
 ) {
   const platform = options.platform ?? process.platform;
@@ -1822,6 +1899,7 @@ export function resolveInstalledCliInvocation(
   }
   return resolveCommandSpawnInvocation(normalizedCliPath, args, {
     comSpec: options.comSpec,
+    env: options.env,
     platform,
   });
 }
@@ -2028,7 +2106,7 @@ async function verifyFreshShellCommand(params) {
 
 async function runInstalledCli(params) {
   const invocation = resolveInstalledCliInvocation(params.cliPath, params.args, {
-    comSpec: params.env?.ComSpec ?? params.env?.COMSPEC,
+    env: params.env,
     platform: process.platform,
   });
   return runCommandInvocation(invocation, {
@@ -2119,7 +2197,7 @@ async function startManualGatewayFromInstalledCli(params) {
     params.cliPath,
     ["gateway", "run", "--bind", "loopback", "--port", String(params.lane.gatewayPort), "--force"],
     {
-      comSpec: params.env?.ComSpec ?? params.env?.COMSPEC,
+      env: params.env,
       platform: process.platform,
     },
   );
@@ -2907,16 +2985,109 @@ async function installPackageSpec(params) {
     npm_config_prefix: params.lane.prefixDir,
   };
   rmSync(installedPackageRoot(params.lane.prefixDir), { force: true, recursive: true });
-  await runCommand(
-    npmCommand(),
-    buildNpmGlobalInstallArgs(params.packageSpec, { ignoreScripts: params.ignoreScripts }),
-    {
-      cwd: params.lane.homeDir,
-      env: installEnv,
-      logPath: params.logPath,
-      timeoutMs: params.timeoutMs ?? installTimeoutMs(),
-    },
+  try {
+    await runCommand(
+      npmCommand(),
+      buildNpmGlobalInstallArgs(params.packageSpec, { ignoreScripts: params.ignoreScripts }),
+      {
+        cwd: params.lane.homeDir,
+        env: installEnv,
+        logPath: params.logPath,
+        timeoutMs: params.timeoutMs ?? installTimeoutMs(),
+      },
+    );
+  } catch (error) {
+    const debugTail = appendLatestNpmDebugLogTail(params.lane.homeDir, params.logPath, installEnv);
+    if (!debugTail) {
+      throw error;
+    }
+    throw new Error(`${formatError(error)}\n\nnpm debug log tail:\n${debugTail}`, { cause: error });
+  }
+}
+
+export function appendLatestNpmDebugLogTail(
+  homeDir,
+  logPath,
+  env = process.env,
+  platform = process.platform,
+) {
+  try {
+    const candidates = resolveNpmDebugLogDirs(homeDir, env, platform)
+      .flatMap(findNpmDebugLogs)
+      .toSorted((left, right) => left.mtimeMs - right.mtimeMs);
+    const latest = candidates.at(-1);
+    if (!latest) {
+      return "";
+    }
+
+    const tail = readLogTextWindow(latest.path, { maxBytes: CROSS_OS_NPM_DEBUG_LOG_TAIL_BYTES });
+    if (!tail.trim()) {
+      return "";
+    }
+
+    appendFileSync(
+      logPath,
+      `\n${new Date().toISOString()} npm-debug-log path=${latest.path}\n${tail}\n`,
+      "utf8",
+    );
+    return tail;
+  } catch {
+    return "";
+  }
+}
+
+export function resolveNpmDebugLogDirs(homeDir, env = process.env, platform = process.platform) {
+  const configuredLogsDir = resolveNpmConfiguredPath(
+    homeDir,
+    env.npm_config_logs_dir ?? env.NPM_CONFIG_LOGS_DIR,
+    platform,
   );
+  const configuredCache = resolveNpmConfiguredPath(
+    homeDir,
+    env.npm_config_cache ?? env.NPM_CONFIG_CACHE,
+    platform,
+  );
+  const localAppData = (env.LOCALAPPDATA ?? "").trim();
+  const logDirs = [
+    configuredLogsDir,
+    configuredCache ? normalizeNpmCacheLogDir(configuredCache) : "",
+    platform === "win32" && localAppData ? join(localAppData, "npm-cache", "_logs") : "",
+    join(homeDir, ".npm", "_logs"),
+  ].filter(Boolean);
+  return [...new Set(logDirs)];
+}
+
+function resolveNpmConfiguredPath(homeDir, value, platform) {
+  const raw = String(value ?? "").trim();
+  if (!raw) {
+    return "";
+  }
+  return platform === "win32" ? pathWin32.resolve(homeDir, raw) : resolve(homeDir, raw);
+}
+
+function normalizeNpmCacheLogDir(logDir) {
+  return logDir.endsWith("/_logs") || logDir.endsWith("\\_logs") ? logDir : join(logDir, "_logs");
+}
+
+function findNpmDebugLogs(logsDir) {
+  if (!existsSync(logsDir)) {
+    return [];
+  }
+
+  return readdirSync(logsDir)
+    .flatMap((fileName) => {
+      if (!fileName.endsWith("-debug-0.log")) {
+        return [];
+      }
+      const path = join(logsDir, fileName);
+      try {
+        const stat = statSync(path);
+        return stat.isFile() ? [{ path, mtimeMs: stat.mtimeMs }] : [];
+      } catch {
+        return [];
+      }
+    })
+    .toSorted((left, right) => left.mtimeMs - right.mtimeMs);
 }
 
 export function buildNpmGlobalInstallArgs(packageSpec, options = {}) {
@@ -3623,11 +3794,15 @@ async function stopGateway(gateway) {
       return;
     }
     if (process.platform === "win32") {
-      await runCommand("taskkill", ["/PID", String(gateway.child.pid), "/T", "/F"], {
-        logPath: gateway.logPath,
-        check: false,
-        timeoutMs: 30_000,
-      });
+      await runCommand(
+        resolveWindowsTaskkillPath(),
+        ["/PID", String(gateway.child.pid), "/T", "/F"],
+        {
+          logPath: gateway.logPath,
+          check: false,
+          timeoutMs: 30_000,
+        },
+      );
       const exited = await waitForChildExit(gateway.child, 10_000);
       if (!exited) {
         gateway.child.stdout?.destroy();
@@ -3892,7 +4067,7 @@ function appendBoundedCommandOutput(current, chunk, maxBytes) {
 
 export async function runCommand(command, args, options) {
   const invocation = resolveCommandSpawnInvocation(command, args, {
-    comSpec: options.env?.ComSpec ?? options.env?.COMSPEC,
+    env: options.env,
     platform: process.platform,
   });
   return runCommandInvocation(invocation, options);
@@ -3967,10 +4142,14 @@ async function runCommandInvocation(invocation, options) {
     const requestKill = () => {
       if (process.platform === "win32" && child.pid) {
         try {
-          const killer = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
-            stdio: "ignore",
-            windowsHide: true,
-          });
+          const killer = spawn(
+            resolveWindowsTaskkillPath(),
+            ["/PID", String(child.pid), "/T", "/F"],
+            {
+              stdio: "ignore",
+              windowsHide: true,
+            },
+          );
           killer.on("error", () => {
             child.kill();
           });
@@ -4025,16 +4204,23 @@ async function runCommandInvocation(invocation, options) {
     });
 
     child.on("error", (error) => {
+      if (forwardedSignalExitCode !== undefined) {
+        activeChildTree.killChildTree("SIGKILL");
+      }
       activeChildTree.unregister();
       finalize(() => rejectPromise(error));
     });
 
     child.on("close", (exitCode) => {
-      activeChildTree.unregister();
       if (forwardedSignalExitCode !== undefined) {
+        // The leader can exit on SIGTERM while descendants remain in its group.
+        // Kill the group before unregistering so signal forwarding cannot leave them running.
+        activeChildTree.killChildTree("SIGKILL");
+        activeChildTree.unregister();
         finalize(exitForwardedSignalWhenChildTreesDone);
         return;
       }
+      activeChildTree.unregister();
       finalize(() => {
         const result = {
           exitCode: exitCode ?? 1,

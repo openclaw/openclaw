@@ -78,6 +78,9 @@ type DiscoveredModel = {
 type AgentDiscoveryModule = typeof import("./agent-model-discovery.js");
 
 let modelCatalogPromise: Promise<ModelCatalogEntry[]> | null = null;
+let loadedModelCatalogSnapshot: ModelCatalogEntry[] | undefined;
+let loadedModelCatalogGeneration = -1;
+let modelCatalogGeneration = 0;
 let hasLoggedModelCatalogError = false;
 let hasLoggedReadOnlyStaticCatalogError = false;
 type ManifestModelCatalogCacheEntry = {
@@ -127,6 +130,7 @@ function loadProviderApiKeyResolver() {
 
 export function resetModelCatalogCache() {
   modelCatalogPromise = null;
+  modelCatalogGeneration += 1;
   manifestModelCatalogCache = new WeakMap();
   hasLoggedModelCatalogError = false;
   hasLoggedReadOnlyStaticCatalogError = false;
@@ -134,6 +138,8 @@ export function resetModelCatalogCache() {
 
 export function resetModelCatalogCacheForTest() {
   resetModelCatalogCache();
+  loadedModelCatalogSnapshot = undefined;
+  loadedModelCatalogGeneration = -1;
   importAgentDiscovery = defaultImportAgentDiscovery;
 }
 
@@ -542,9 +548,15 @@ function loadReadOnlyStaticModelCatalog(params?: {
 export async function loadModelCatalog(params?: {
   config?: OpenClawConfig;
   useCache?: boolean;
+  cacheOnly?: boolean;
   readOnly?: boolean;
   metadataSnapshot?: PluginMetadataSnapshot;
 }): Promise<ModelCatalogEntry[]> {
+  if (params?.cacheOnly === true) {
+    return loadedModelCatalogGeneration === modelCatalogGeneration
+      ? (loadedModelCatalogSnapshot ?? [])
+      : [];
+  }
   const readOnly = params?.readOnly === true;
   if (readOnly) {
     try {
@@ -557,6 +569,7 @@ export async function loadModelCatalog(params?: {
   }
   if (!readOnly && params?.useCache === false) {
     modelCatalogPromise = null;
+    modelCatalogGeneration += 1;
   }
   const useSharedCache = !readOnly && !params?.metadataSnapshot;
   if (useSharedCache && modelCatalogPromise) {
@@ -811,8 +824,20 @@ export async function loadModelCatalog(params?: {
     return loadCatalog();
   }
 
-  modelCatalogPromise = loadCatalog();
-  return modelCatalogPromise;
+  const loadGeneration = modelCatalogGeneration;
+  const publishedPromise = loadCatalog().then((catalog) => {
+    if (
+      catalog.length > 0 &&
+      modelCatalogGeneration === loadGeneration &&
+      modelCatalogPromise === publishedPromise
+    ) {
+      loadedModelCatalogSnapshot = catalog;
+      loadedModelCatalogGeneration = loadGeneration;
+    }
+    return catalog;
+  });
+  modelCatalogPromise = publishedPromise;
+  return publishedPromise;
 }
 
 /**

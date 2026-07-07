@@ -171,4 +171,4 @@ jobs:
           name: mantis-discord-smoke-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/qa-e2e/mantis/
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error

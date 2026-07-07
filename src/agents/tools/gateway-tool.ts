@@ -9,6 +9,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { parseConfigJson5, resolveConfigSnapshotHash } from "../../config/io.js";
@@ -19,8 +20,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import {
   buildRestartSuccessContinuation,
+  clearRestartSentinel,
   formatDoctorNonInteractiveHint,
-  removeRestartSentinelFile,
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
@@ -466,7 +467,8 @@ export function createGatewayTool(opts?: {
           normalizeOptionalString(opts?.agentSessionKey) ??
           normalizeOptionalString(params.sessionKey);
         const delayMs = readNonNegativeIntegerParam(params, "delayMs");
-        const reason = normalizeOptionalString(params.reason)?.slice(0, 200);
+        const rawReason = normalizeOptionalString(params.reason);
+        const reason = rawReason ? truncateUtf16Safe(rawReason, 200) : undefined;
         const note = normalizeOptionalString(params.note);
         const continuationMessage = normalizeOptionalString(params.continuationMessage);
         // Extract channel + threadId for routing after restart.
@@ -493,7 +495,7 @@ export function createGatewayTool(opts?: {
         log.info(
           `gateway tool: restart requested (delayMs=${delayMs ?? "default"}, reason=${reason ?? "none"})`,
         );
-        let sentinelPath: string | null = null;
+        let sentinelWritten = false;
         const scheduled = scheduleGatewaySigusr1Restart({
           delayMs,
           reason,
@@ -502,10 +504,13 @@ export function createGatewayTool(opts?: {
           sessionKey,
           emitHooks: {
             beforeEmit: async () => {
-              sentinelPath = await writeRestartSentinel(payload);
+              await writeRestartSentinel(payload);
+              sentinelWritten = true;
             },
             afterEmitRejected: async () => {
-              await removeRestartSentinelFile(sentinelPath);
+              if (sentinelWritten) {
+                await clearRestartSentinel();
+              }
             },
           },
         });

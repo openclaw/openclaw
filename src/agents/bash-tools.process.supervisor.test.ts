@@ -9,7 +9,6 @@ const { supervisorMock } = vi.hoisted(() => ({
     spawn: vi.fn(),
     cancel: vi.fn(),
     cancelScope: vi.fn(),
-    reconcileOrphans: vi.fn(),
     getRecord: vi.fn(),
   },
 }));
@@ -87,7 +86,6 @@ describe("process tool supervisor cancellation", () => {
     supervisorMock.spawn.mockClear();
     supervisorMock.cancel.mockClear();
     supervisorMock.cancelScope.mockClear();
-    supervisorMock.reconcileOrphans.mockClear();
     supervisorMock.getRecord.mockClear();
     killProcessTreeMock.mockClear();
   });

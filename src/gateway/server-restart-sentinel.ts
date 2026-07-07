@@ -12,19 +12,18 @@ import { dispatchAssembledChannelTurn } from "../channels/turn/kernel.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { parseSessionThreadInfo } from "../config/sessions/thread-info.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "../infra/outbound/delivery-queue.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import {
+  clearRestartSentinel,
   finalizeUpdateRestartSentinelRunningVersion,
   formatRestartSentinelMessage,
   readRestartSentinel,
-  removeRestartSentinelFile,
   type RestartSentinelContinuation,
   type RestartSentinelPayload,
-  resolveRestartSentinelPath,
   summarizeRestartSentinel,
 } from "../infra/restart-sentinel.js";
 import {
@@ -353,7 +352,7 @@ async function deliverQueuedSessionDelivery(params: {
     },
   });
   if (dispatchError) {
-    throw toLintErrorObject(dispatchError, "Non-Error thrown");
+    throw toErrorObject(dispatchError, "Non-Error thrown");
   }
 }
 
@@ -449,7 +448,6 @@ async function loadRestartSentinelStartupTask(params: {
   if (!sentinel) {
     return null;
   }
-  const sentinelPath = resolveRestartSentinelPath();
   const payload = sentinel.payload;
   if (payload.kind === "update") {
     recordLatestUpdateRestartSentinel(payload);
@@ -494,7 +492,7 @@ async function loadRestartSentinelStartupTask(params: {
           continuationKind: payload.continuation.kind,
         });
       }
-      await removeRestartSentinelFile(sentinelPath);
+      await clearRestartSentinel();
       return { status: "ran" as const };
     }
 
@@ -588,7 +586,7 @@ async function loadRestartSentinelStartupTask(params: {
       );
     }
 
-    await removeRestartSentinelFile(sentinelPath);
+    await clearRestartSentinel();
     const routedAgentTurnContinuation =
       payload.continuation?.kind === "agentTurn" && continuationRoute !== undefined;
     if (!routedAgentTurnContinuation) {
@@ -669,18 +667,4 @@ export function getLatestUpdateRestartSentinel(): RestartSentinelPayload | null 
 
 export function recordLatestUpdateRestartSentinel(payload: RestartSentinelPayload): void {
   latestUpdateRestartSentinel = cloneRestartSentinelPayload(payload);
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

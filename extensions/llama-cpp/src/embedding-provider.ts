@@ -23,11 +23,11 @@ type LlamaCppLocalOptions = {
   contextSize?: number | "auto";
 };
 
-export type LlamaCppEmbeddingProviderRuntimeOptions = {
+type LlamaCppEmbeddingProviderRuntimeOptions = {
   nodeLlamaCppImportUrl?: string;
 };
 
-export const LLAMA_CPP_EMBEDDING_PROVIDER_ID = "local";
+const LLAMA_CPP_EMBEDDING_PROVIDER_ID = "local";
 export const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL =
   "hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf";
 const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_CACHE_FILE_NAME =
@@ -155,7 +155,7 @@ export function formatLlamaCppSetupError(err: unknown): string {
 
 const requireFromPlugin = createRequire(import.meta.url);
 
-export function resolveNodeLlamaCppImportUrl(): string {
+function resolveNodeLlamaCppImportUrl(): string {
   return pathToFileURL(requireFromPlugin.resolve("node-llama-cpp")).href;
 }
 
@@ -180,17 +180,6 @@ function adaptMemoryEmbeddingProvider(provider: MemoryEmbeddingProvider): Embedd
     },
     close: provider.close,
   };
-}
-
-export async function createLlamaCppEmbeddingProvider(
-  options: EmbeddingProviderCreateOptions,
-  runtimeOptions: LlamaCppEmbeddingProviderRuntimeOptions = {},
-): Promise<EmbeddingProvider> {
-  const result = await createLlamaCppEmbeddingProviderResult(options, runtimeOptions);
-  if (!result.provider) {
-    throw new Error("llama.cpp local embedding provider was unavailable");
-  }
-  return result.provider;
 }
 
 export async function createLlamaCppMemoryEmbeddingProvider(

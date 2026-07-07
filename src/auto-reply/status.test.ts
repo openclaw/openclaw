@@ -1732,7 +1732,7 @@ describe("buildStatusMessage", () => {
     });
 
     const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Session selected: google/gemini-3.1-flash-lite");
+    expect(normalized).toContain("Model: google/gemini-3.1-flash-lite");
     expect(normalized).not.toContain("Fallbacks:");
   });
 
@@ -1765,7 +1765,7 @@ describe("buildStatusMessage", () => {
     expect(normalizeTestText(text)).toContain("Model: google-antigravity/claude-sonnet-4-6");
   });
 
-  it("warns when the session-selected model differs from the configured default", () => {
+  it("renders session-selected model overrides compactly", () => {
     const text = buildStatusMessage({
       agent: {
         model: "zhipu/glm-4.5-air",
@@ -1785,14 +1785,14 @@ describe("buildStatusMessage", () => {
     });
 
     const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Configured default: zhipu/glm-4.5-air");
-    expect(normalized).toContain("Session selected: deepseek/deepseek-v4-flash");
-    expect(normalized).toContain("Reason: session override");
-    expect(normalized).toContain(
-      "This session is pinned to deepseek/deepseek-v4-flash; config primary zhipu/glm-4.5-air will apply to new/unpinned sessions.",
-    );
-    expect(normalized).toContain("Clear with: /model default");
-    expect(normalized).toContain(
+    expect(normalized).toContain("Model: deepseek/deepseek-v4-flash");
+    expect(normalized).toContain("pinned session; config primary zhipu/glm-4.5-air");
+    expect(normalized).toContain("clear /model default");
+    expect(normalized).not.toContain("Configured default:");
+    expect(normalized).not.toContain("Session selected:");
+    expect(normalized).not.toContain("Reason: session override");
+    expect(normalized).not.toContain("This session is pinned");
+    expect(normalized).not.toContain(
       "Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-behavior",
     );
   });
@@ -2704,7 +2704,7 @@ describe("buildHelpMessage", () => {
   });
 
   it("includes /fast in help output", () => {
-    expect(buildHelpMessage()).toContain("/fast status|on|off|default");
+    expect(buildHelpMessage()).toContain("/fast status|auto|on|off|default");
   });
 
   it("includes raw trace mode in help output", () => {

@@ -24,9 +24,11 @@ describe("label-open-issues helpers", () => {
     });
 
     expect(() => testing.parseArgs(["--model", "--dry-run"])).toThrow("Missing --model value");
+    expect(() => testing.parseArgs(["--model", "-h"])).toThrow("Missing --model value");
     expect(() => testing.parseArgs(["--limit", "--dry-run"])).toThrow(
       "Missing/invalid --limit value",
     );
+    expect(() => testing.parseArgs(["--limit", "-h"])).toThrow("Missing/invalid --limit value");
     expect(() => testing.parseArgs(["--wat"])).toThrow("Unknown argument: --wat");
   });
 

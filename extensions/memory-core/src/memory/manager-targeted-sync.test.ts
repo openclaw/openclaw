@@ -1,5 +1,7 @@
 // Memory Core tests cover manager targeted sync plugin behavior.
+import type { MemorySessionSyncTarget } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
+import { enqueueMemoryTargetedSessionSync } from "./manager-sync-control.js";
 import {
   clearMemorySyncedSessionFiles,
   markMemoryTargetSessionFilesDirty,
@@ -83,5 +85,42 @@ describe("memory targeted session sync", () => {
 
     expect(result).toEqual({ handled: true, sessionsDirty: true });
     expect(sessionsDirtyFiles.size).toBe(0);
+  });
+
+  it("queues identity session targets while a sync is already running", async () => {
+    let resolveSyncing: (() => void) | undefined;
+    const syncing = new Promise<void>((resolve) => {
+      resolveSyncing = resolve;
+    });
+    const queuedSessionFiles = new Set<string>();
+    const queuedSessions = new Map<string, MemorySessionSyncTarget>();
+    let queuedSessionSync: Promise<void> | null = null;
+    const sync = vi.fn(async () => {});
+
+    const queued = enqueueMemoryTargetedSessionSync(
+      {
+        isClosed: () => false,
+        getSyncing: () => syncing,
+        getQueuedSessionFiles: () => queuedSessionFiles,
+        getQueuedSessions: () => queuedSessions,
+        getQueuedSessionSync: () => queuedSessionSync,
+        setQueuedSessionSync: (value) => {
+          queuedSessionSync = value;
+        },
+        sync,
+      },
+      {
+        sessions: [{ agentId: "main", sessionId: "targeted", sessionKey: "agent:main:targeted" }],
+      },
+    );
+
+    resolveSyncing?.();
+    await queued;
+
+    expect(sync).toHaveBeenCalledWith({
+      reason: "queued-sessions",
+      sessions: [{ agentId: "main", sessionId: "targeted", sessionKey: "agent:main:targeted" }],
+      sessionFiles: [],
+    });
   });
 });

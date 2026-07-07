@@ -166,6 +166,56 @@ describe("resolveMemoryBackendConfig", () => {
     expect(requireQmdConfig(resolved).command).toBe("/Applications/QMD Tools/qmd");
   });
 
+  it("preserves unquoted Windows absolute qmd command paths", () => {
+    const command = String.raw`C:\Users\penny\AppData\Roaming\npm\node_modules\@tobilu\qmd\dist\cli\qmd.js`;
+    const cfg = {
+      agents: { defaults: { workspace: String.raw`C:\Users\penny\.openclaw\workspace` } },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          command,
+        },
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+
+    expect(requireQmdConfig(resolved).command).toBe(command);
+  });
+
+  it("preserves Windows wrapper command paths before extra args", () => {
+    const cfg = {
+      agents: { defaults: { workspace: String.raw`C:\Users\penny\.openclaw\workspace` } },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          command: String.raw`C:\Program Files\qmd\qmd.cmd --json`,
+        },
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+
+    expect(requireQmdConfig(resolved).command).toBe(String.raw`C:\Program Files\qmd\qmd.cmd`);
+  });
+
+  it("preserves unquoted UNC qmd command paths", () => {
+    const command = String.raw`\\fileserver\tools\qmd\dist\cli\qmd.js`;
+    const cfg = {
+      agents: { defaults: { workspace: String.raw`C:\Users\penny\.openclaw\workspace` } },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          command,
+        },
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+
+    expect(requireQmdConfig(resolved).command).toBe(command);
+  });
+
   it("resolves custom paths relative to workspace", () => {
     const cfg = {
       agents: {

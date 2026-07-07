@@ -18,6 +18,9 @@ const loadPluginMetadataRegistrySnapshotMock = vi.fn();
 const loadPluginManifestRegistryForPluginRegistryMock = vi.fn();
 const loadPluginRegistrySnapshotWithMetadataMock = vi.fn();
 const loadPluginManifestRegistryForInstalledIndexMock = vi.fn();
+const isPluginMetadataSnapshotCompatibleMock = vi.fn<
+  typeof import("./plugin-metadata-snapshot.js").isPluginMetadataSnapshotCompatible
+>(() => true);
 const loadPluginMetadataSnapshotMock = vi.fn((rawParams: unknown = {}) => {
   const params = rawParams as { index?: unknown };
   const manifestRegistry = loadPluginManifestRegistryForInstalledIndexMock(params) ?? {
@@ -80,6 +83,7 @@ vi.mock("./manifest-registry-installed.js", () => ({
 }));
 
 vi.mock("./plugin-metadata-snapshot.js", () => ({
+  isPluginMetadataSnapshotCompatible: isPluginMetadataSnapshotCompatibleMock,
   loadPluginMetadataSnapshot: (...args: unknown[]) => loadPluginMetadataSnapshotMock(...args),
   resolvePluginMetadataSnapshot: (params?: { pluginMetadataSnapshot?: unknown }) =>
     params?.pluginMetadataSnapshot ?? loadPluginMetadataSnapshotMock(params),
@@ -398,6 +402,8 @@ describe("plugin status reports", () => {
     loadPluginManifestRegistryForPluginRegistryMock.mockReset();
     loadPluginRegistrySnapshotWithMetadataMock.mockReset();
     loadPluginManifestRegistryForInstalledIndexMock.mockReset();
+    isPluginMetadataSnapshotCompatibleMock.mockReset();
+    isPluginMetadataSnapshotCompatibleMock.mockReturnValue(true);
     loadPluginMetadataSnapshotMock.mockClear();
     applyPluginAutoEnableMock.mockReset();
     resolveBundledProviderCompatPluginIdsMock.mockReset();
