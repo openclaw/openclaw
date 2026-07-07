@@ -6,6 +6,24 @@ import {
 } from "openclaw/plugin-sdk/channel-core";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
+function currentSessionIsFeishuGroupForTarget(params: {
+  currentSessionKey?: string;
+  target: string;
+}): boolean {
+  const sessionKey = normalizeLowercaseStringOrEmpty(params.currentSessionKey);
+  const target = normalizeLowercaseStringOrEmpty(params.target);
+  if (!sessionKey || !target) {
+    return false;
+  }
+  const marker = `feishu:group:${target}`;
+  const markerIndex = sessionKey.startsWith(marker) ? 0 : sessionKey.indexOf(`:${marker}`) + 1;
+  if (markerIndex < 1 && !sessionKey.startsWith(marker)) {
+    return false;
+  }
+  const suffix = sessionKey.slice(markerIndex + marker.length);
+  return suffix === "" || suffix.startsWith(":");
+}
+
 export function resolveFeishuOutboundSessionRoute(params: ChannelOutboundSessionRouteParams) {
   let trimmed = stripChannelTargetPrefix(params.target, "feishu", "lark");
   if (!trimmed) {
@@ -30,6 +48,14 @@ export function resolveFeishuOutboundSessionRoute(params: ChannelOutboundSession
     const idLower = normalizeLowercaseStringOrEmpty(trimmed);
     if (idLower.startsWith("ou_") || idLower.startsWith("on_")) {
       isGroup = false;
+    } else if (
+      (params.resolvedTarget?.kind === "group" && params.resolvedTarget.source === "directory") ||
+      currentSessionIsFeishuGroupForTarget({
+        currentSessionKey: params.currentSessionKey,
+        target: trimmed,
+      })
+    ) {
+      isGroup = true;
     }
   }
 

@@ -181,6 +181,33 @@ describe("feishuPlugin.pairing.notifyApproval", () => {
 });
 
 describe("feishuPlugin messaging", () => {
+  const cfg = {} as OpenClawConfig;
+
+  async function resolveRoute(params: {
+    target: string;
+    currentSessionKey?: string;
+    resolvedTarget?: {
+      kind: "user" | "group" | "channel";
+      to: string;
+      source: "directory" | "normalized";
+      display?: string;
+    };
+  }) {
+    const resolver = feishuPlugin.messaging?.resolveOutboundSessionRoute;
+    if (!resolver) {
+      throw new Error("expected Feishu outbound session route resolver");
+    }
+    return await resolver({
+      cfg,
+      channel: "feishu",
+      agentId: "main",
+      accountId: undefined,
+      target: params.target,
+      currentSessionKey: params.currentSessionKey,
+      resolvedTarget: params.resolvedTarget,
+    });
+  }
+
   it("owns sender/topic session inheritance candidates", () => {
     expect(
       feishuPlugin.messaging?.resolveSessionConversation?.({
@@ -212,6 +239,88 @@ describe("feishuPlugin messaging", () => {
       baseConversationId: "oc_group_chat",
       parentConversationCandidates: ["oc_group_chat:topic:om_topic_root", "oc_group_chat"],
     });
+  });
+
+  it("keeps ambiguous bare oc_ outbound targets direct without group context", async () => {
+    const route = await resolveRoute({ target: "oc_group_chat" });
+
+    expect(route?.chatType).toBe("direct");
+    expect(route?.sessionKey).toBe("agent:main:main");
+    expect(route?.to).toBe("oc_group_chat");
+  });
+
+  it("preserves known Feishu group identity for delivery-mirror replies to bare oc_ targets", async () => {
+    const route = await resolveRoute({
+      target: "oc_group_chat",
+      currentSessionKey: "agent:main:feishu:group:oc_group_chat",
+    });
+
+    expect(route?.chatType).toBe("group");
+    expect(route?.sessionKey).toBe("agent:main:feishu:group:oc_group_chat");
+    expect(route?.from).toBe("feishu:group:oc_group_chat");
+    expect(route?.to).toBe("oc_group_chat");
+  });
+
+  it("preserves known Feishu group identity for topic delivery-mirror replies", async () => {
+    const route = await resolveRoute({
+      target: "oc_group_chat",
+      currentSessionKey: "agent:main:feishu:group:oc_group_chat:topic:om_root:sender:ou_user",
+    });
+
+    expect(route?.chatType).toBe("group");
+    expect(route?.sessionKey).toBe("agent:main:feishu:group:oc_group_chat");
+  });
+
+  it("preserves legacy Feishu group session context for bare oc_ targets", async () => {
+    const route = await resolveRoute({
+      target: "oc_group_chat",
+      currentSessionKey: "feishu:group:oc_group_chat",
+    });
+
+    expect(route?.chatType).toBe("group");
+    expect(route?.sessionKey).toBe("agent:main:feishu:group:oc_group_chat");
+  });
+
+  it("does not borrow group identity from an unrelated Feishu group session", async () => {
+    const route = await resolveRoute({
+      target: "oc_other_chat",
+      currentSessionKey: "agent:main:feishu:group:oc_group_chat",
+    });
+
+    expect(route?.chatType).toBe("direct");
+    expect(route?.sessionKey).toBe("agent:main:main");
+  });
+
+  it("uses resolved directory group identity for bare oc_ outbound targets", async () => {
+    const route = await resolveRoute({
+      target: "oc_group_chat",
+      resolvedTarget: { kind: "group", to: "oc_group_chat", source: "directory" },
+    });
+
+    expect(route?.chatType).toBe("group");
+    expect(route?.sessionKey).toBe("agent:main:feishu:group:oc_group_chat");
+  });
+
+  it("keeps bare Feishu open IDs direct when shared routing supplies a group fallback", async () => {
+    const route = await resolveRoute({
+      target: "ou_user",
+      resolvedTarget: { kind: "group", to: "ou_user", source: "normalized" },
+    });
+
+    expect(route?.chatType).toBe("direct");
+    expect(route?.sessionKey).toBe("agent:main:main");
+    expect(route?.from).toBe("feishu:ou_user");
+  });
+
+  it("keeps bare Feishu user IDs direct when shared routing supplies a group fallback", async () => {
+    const route = await resolveRoute({
+      target: "user_123",
+      resolvedTarget: { kind: "group", to: "user_123", source: "normalized" },
+    });
+
+    expect(route?.chatType).toBe("direct");
+    expect(route?.sessionKey).toBe("agent:main:main");
+    expect(route?.from).toBe("feishu:user_123");
   });
 });
 
