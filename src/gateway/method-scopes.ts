@@ -68,11 +68,6 @@ export function isNodeRoleMethod(method: string): boolean {
   return isCoreNodeGatewayMethod(method);
 }
 
-/** Returns true when a method requires admin operator scope. */
-export function isAdminOnlyMethod(method: string): boolean {
-  return resolveScopedMethod(method) === ADMIN_SCOPE;
-}
-
 /** Resolves the required static operator scope for a gateway method, if one exists. */
 export function resolveRequiredOperatorScopeForMethod(method: string): OperatorScope | undefined {
   return resolveScopedMethod(method);

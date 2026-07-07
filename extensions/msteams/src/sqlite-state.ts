@@ -47,9 +47,7 @@ export function toPluginJsonValue<T>(value: T): T {
   return JSON.parse(serialized) as T;
 }
 
-export function resolveMSTeamsSqliteStateDir(
-  options: MSTeamsSqliteStateOptions | undefined,
-): string {
+function resolveMSTeamsSqliteStateDir(options: MSTeamsSqliteStateOptions | undefined): string {
   return (
     resolveStateDirOverride(options) ??
     getMSTeamsRuntime().state.resolveStateDir(options?.env ?? process.env, options?.homedir)

@@ -540,7 +540,7 @@ async function findRecentWorkspaceAttestationPath(
   return null;
 }
 
-export async function hasRecentWorkspaceAttestation(
+async function hasRecentWorkspaceAttestation(
   attestationPath: string,
   opts?: { trustUnknown?: boolean },
 ): Promise<boolean> {

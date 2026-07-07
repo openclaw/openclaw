@@ -2175,11 +2175,13 @@ describe("diagnostics-otel service", () => {
 
   test("bounds plugin-emitted log attributes and omits source paths", async () => {
     const service = createDiagnosticsOtelService();
-    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { logs: true });
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { logs: true, captureContent: true });
     await service.start(ctx);
 
+    const boundaryMessage = `${"x".repeat(4095)}🚀tail`;
+    const boundaryAttribute = `${"y".repeat(4095)}🚀tail`;
     const attributes = Object.create(null) as Record<string, string>;
-    attributes.good = "y".repeat(6000);
+    attributes.good = boundaryAttribute;
     attributes["bad key"] = "drop-me";
     attributes[PROTO_KEY] = "pollute";
     attributes["constructor"] = "pollute";
@@ -2189,7 +2191,7 @@ describe("diagnostics-otel service", () => {
     emitDiagnosticEvent({
       type: "log.record",
       level: "INFO",
-      message: "x".repeat(6000),
+      message: boundaryMessage,
       attributes,
       code: {
         filepath: "/Users/alice/openclaw/src/private.ts",
@@ -2204,11 +2206,10 @@ describe("diagnostics-otel service", () => {
       attributes: Record<string, unknown>;
       body: string;
     };
-    expect(emitCall.body.length).toBeLessThanOrEqual(4200);
-    expect(String(emitCall.attributes["openclaw.good"])).toMatch(/^y+/);
+    expect(emitCall.body).toBe(`${"x".repeat(4095)}...(truncated)`);
+    expect(emitCall.attributes["openclaw.good"]).toBe(`${"y".repeat(4095)}...(truncated)`);
     expect(emitCall.attributes["code.lineno"]).toBe(42);
     expect(emitCall.attributes["code.function"]).toBe("handler");
-    expect(String(emitCall.attributes["openclaw.good"]).length).toBeLessThanOrEqual(4200);
     expect(Object.hasOwn(emitCall.attributes, `openclaw.${PROTO_KEY}`)).toBe(false);
     expect(Object.hasOwn(emitCall.attributes, "openclaw.constructor")).toBe(false);
     expect(Object.hasOwn(emitCall.attributes, "openclaw.prototype")).toBe(false);

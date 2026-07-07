@@ -142,7 +142,7 @@ function buildMultiCollectionProbeCacheContextInput(
   return JSON.stringify(buildRuntimeCacheContextRecord(params));
 }
 
-export function buildQmdCollectionValidationCacheContextHash(
+function buildQmdCollectionValidationCacheContextHash(
   params: QmdRuntimeCollectionValidationCacheContext,
 ): string {
   return hashText(buildCollectionValidationCacheContextInput(params));

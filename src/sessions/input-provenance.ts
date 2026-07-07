@@ -22,7 +22,7 @@ export type InputProvenance = {
 };
 
 export const INTER_SESSION_PROMPT_PREFIX_BASE = "[Inter-session message]";
-export const AGENT_MEDIATED_COMPLETION_SOURCE_TOOLS = [
+const AGENT_MEDIATED_COMPLETION_SOURCE_TOOLS = [
   "agent_harness_task",
   "image_generate",
   "music_generate",

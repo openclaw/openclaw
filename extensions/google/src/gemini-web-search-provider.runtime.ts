@@ -169,7 +169,7 @@ function resolveGeminiTimeRangeFilter(
   };
 }
 
-export function resolveGeminiRuntimeApiKey(gemini?: GeminiConfig): string | undefined {
+function resolveGeminiRuntimeApiKey(gemini?: GeminiConfig): string | undefined {
   return (
     readConfiguredSecretString(gemini?.apiKey, "tools.web.search.gemini.apiKey") ??
     readProviderEnvValue(["GEMINI_API_KEY"]) ??
