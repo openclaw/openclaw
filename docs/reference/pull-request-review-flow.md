@@ -58,14 +58,8 @@ on the PR:
 `@clawsweeper review` and `/review` are also routed to ClawSweeper. Be patient:
 asking again before the requested changes are present just adds queue noise.
 
-If ClawSweeper leaves review conversations, handle them like normal review
-feedback:
-
-- push the code change or update the PR description;
-- add evidence when it asks for proof;
-- resolve addressed review conversations;
-- reply and leave a conversation open only when you need maintainer judgment;
-- ask for another re-review only after the PR is current.
+If ClawSweeper leaves review conversations, treat them like normal review
+feedback and use the follow-up flow below.
 
 If a human contributor or maintainer has taken over the PR and is actively
 working on it, do not summon ClawSweeper or otherwise work on the PR at the same
@@ -74,24 +68,23 @@ whether the author was asked for proof or other work.
 
 ## Improve a PR during review
 
-1. Open a focused PR.
-2. Fill in the PR template with the problem, the change, user impact, and
-   evidence.
-3. CI runs.
-4. Barnacle may label, comment, or close obvious queue-management cases.
-5. ClawSweeper reviews the PR automatically the first time, or after a review
-   request.
-6. Read ClawSweeper's `Rank-up moves:` and `Proof guidance:` as the action list
+Once Barnacle, ClawSweeper, or a maintainer responds, use the feedback as the
+next-step checklist for that PR.
+
+1. Read ClawSweeper's `Rank-up moves:` and `Proof guidance:` as the action list
    for that PR. Ratings and labels are review signals, not fixed merge targets.
-7. Update the branch and PR description, resolve addressed bot issues, and ask
-   for a re-review when ready. A few update and review cycles between the
-   author, maintainer, and ClawSweeper are normal.
-8. Keep discussion on the PR when possible. Move to `#clawtributors` on Discord
+2. Push the requested code or docs change, and update the PR description when
+   the problem, solution, user impact, or evidence changed.
+3. Add the requested proof, using evidence that matches the change.
+4. Resolve addressed review conversations yourself. Reply and leave a
+   conversation open only when you need maintainer or reviewer judgment.
+5. Ask for a re-review only after the branch, PR description, and evidence are
+   current. A few update and review cycles between the author, maintainer, and
+   ClawSweeper are normal.
+6. Keep discussion on the PR when possible. Move to `#clawtributors` on Discord
    only when the PR needs maintainer coordination, automation appears blocked,
    or the next decision is hard to settle in GitHub comments. Include the PR
    link, current status, and the specific question or remaining evidence.
-9. A maintainer reviews the PR, CI, bot feedback, and evidence, and can
-   eventually merge the PR.
 
 Keep the PR body current. Comments are useful for discussion, but the PR
 description is the durable summary maintainers and automation come back to.
