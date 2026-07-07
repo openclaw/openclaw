@@ -11,20 +11,20 @@ const NON_HARD_TIMEOUTS = [
     label: "soft queue timeout",
     data: { timeoutPhase: "queue" },
   },
-  {
-    label: "restart-cancelled provider run",
-    data: {
-      providerStarted: true,
-      stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
-    },
-  },
 ] as const;
 
 let runSequence = 0;
 
-async function resolveOuterTimeoutRace(data: Readonly<Record<string, unknown>>) {
+async function resolveOuterTimeoutRace(
+  data: Readonly<Record<string, unknown>>,
+  options?: { ignoreCachedSnapshot?: boolean },
+) {
   const runId = `run-timeout-fallback-${runSequence++}`;
-  const waitPromise = waitForAgentJob({ runId, timeoutMs: 5_000 });
+  const waitPromise = waitForAgentJob({
+    runId,
+    timeoutMs: 5_000,
+    ignoreCachedSnapshot: options?.ignoreCachedSnapshot,
+  });
 
   emitAgentEvent({
     runId,
@@ -74,4 +74,57 @@ describe("waitForAgentJob timeout fallback", () => {
       await expect(resolveOuterTimeoutRace(scenario.data)).resolves.toBeNull();
     });
   }
+
+  it("keeps restart cancellation as an error instead of a hard timeout", async () => {
+    await expect(
+      resolveOuterTimeoutRace({
+        providerStarted: true,
+        stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
+      }),
+    ).resolves.toMatchObject({
+      status: "error",
+      stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
+      startedAt: 1_000,
+      endedAt: 1_100,
+    });
+  });
+
+  it("ignores a hard timeout that predates a fresh wait", async () => {
+    const runId = `run-timeout-fallback-${runSequence++}`;
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_000 },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        startedAt: 1_000,
+        endedAt: 1_100,
+        aborted: true,
+        timeoutPhase: "provider",
+      },
+    });
+
+    const waitPromise = waitForAgentJob({
+      runId,
+      timeoutMs: 5_000,
+      ignoreCachedSnapshot: true,
+    });
+    await vi.advanceTimersByTimeAsync(6_000);
+
+    await expect(waitPromise).resolves.toBeNull();
+  });
+
+  it("lets a fresh wait consume a hard timeout it observes", async () => {
+    await expect(
+      resolveOuterTimeoutRace({ timeoutPhase: "provider" }, { ignoreCachedSnapshot: true }),
+    ).resolves.toMatchObject({
+      status: "timeout",
+      timeoutPhase: "provider",
+      endedAt: 1_100,
+    });
+  });
 });
