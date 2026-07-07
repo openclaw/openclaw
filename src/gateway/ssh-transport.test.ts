@@ -56,6 +56,30 @@ describe("startGatewayRemoteSshTunnel", () => {
     expect(result?.url).toBe("ws://127.0.0.1:19089");
   });
 
+  it("passes configured OpenSSH host-key policy to managed tunnels", async () => {
+    const config = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "ws://127.0.0.1:19089",
+          transport: "ssh",
+          sshTarget: "user@gateway.example",
+          sshHostKeyPolicy: "openssh",
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    await startGatewayRemoteSshTunnel({
+      config,
+      url: "ws://127.0.0.1:19089",
+      urlSource: "config gateway.remote.url",
+    });
+
+    expect(mocks.startSshPortForward).toHaveBeenCalledWith(
+      expect.objectContaining({ hostKeyPolicy: "openssh" }),
+    );
+  });
+
   it("ignores configured remote SSH ports outside the valid TCP range", async () => {
     const config = {
       gateway: {

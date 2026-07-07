@@ -34,6 +34,8 @@ export type SshTunnel = {
   stop: () => Promise<void>;
 };
 
+export type SshHostKeyPolicy = "strict" | "openssh";
+
 // Reject hosts that would corrupt the SSH HostName field or enable argument
 // injection: a leading '-' becomes an ssh option, and a stray leading/trailing
 // ':' (e.g. sliced from "host::22") produces an invalid HostName.
@@ -126,6 +128,7 @@ async function waitForLocalListener(port: number, timeoutMs: number): Promise<vo
 export async function startSshPortForward(opts: {
   target: string;
   identity?: string;
+  hostKeyPolicy?: SshHostKeyPolicy;
   localPortPreferred: number;
   remotePort: number;
   timeoutMs: number;
@@ -158,16 +161,15 @@ export async function startSshPortForward(opts: {
     "-o",
     "BatchMode=yes",
     "-o",
-    "StrictHostKeyChecking=yes",
-    "-o",
-    "UpdateHostKeys=yes",
-    "-o",
     "ConnectTimeout=5",
     "-o",
     "ServerAliveInterval=15",
     "-o",
     "ServerAliveCountMax=3",
   ];
+  if (opts.hostKeyPolicy !== "openssh") {
+    args.push("-o", "StrictHostKeyChecking=yes", "-o", "UpdateHostKeys=yes");
+  }
   if (opts.identity?.trim()) {
     args.push("-i", opts.identity.trim());
   }

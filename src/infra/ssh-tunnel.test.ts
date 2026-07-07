@@ -184,6 +184,25 @@ describe("startSshPortForward", () => {
     expect(mocks.ensurePortAvailable).toHaveBeenCalledWith(43210, "127.0.0.1");
   });
 
+  it("delegates host-key checking to OpenSSH config when requested", async () => {
+    mocks.ensurePortAvailable.mockResolvedValueOnce();
+    spawnFakeSshListening();
+
+    const tunnel = await startSshPortForward({
+      target: "me@example.com:2222",
+      localPortPreferred: 43210,
+      remotePort: 18789,
+      timeoutMs: 1000,
+      hostKeyPolicy: "openssh",
+    });
+    const args = mocks.spawn.mock.calls[0]?.[1] as string[];
+
+    expect(args).not.toContain("StrictHostKeyChecking=yes");
+    expect(args).not.toContain("UpdateHostKeys=yes");
+
+    await tunnel.stop();
+  });
+
   it("falls back to an ephemeral port when the preferred port is in use", async () => {
     // ensurePortAvailable raises the domain PortInUseError (no errno `code`),
     // which the catch must treat as "busy" and route to pickEphemeralPort.

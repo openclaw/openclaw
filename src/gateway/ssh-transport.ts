@@ -110,6 +110,7 @@ export async function startGatewayRemoteSshTunnel(params: {
   const tunnel = await startSshPortForward({
     target,
     identity,
+    hostKeyPolicy: remote?.sshHostKeyPolicy,
     localPortPreferred,
     remotePort,
     timeoutMs: DEFAULT_SSH_TUNNEL_TIMEOUT_MS,
