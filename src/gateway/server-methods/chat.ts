@@ -3460,12 +3460,18 @@ export const chatHandlers: GatewayRequestHandlers = {
         return;
       }
       if (res.aborted) {
-        abortSessionRunTargetWithOutcome({ key: canonicalAbortSessionKey });
-        clearSessionQueues([canonicalAbortSessionKey]);
-        const stopCfg = context.getRuntimeConfig();
-        if (stopCfg) {
+        const { entry } = loadSessionEntry(canonicalAbortSessionKey, {
+          ...(abortAgentId ? { agentId: abortAgentId } : {}),
+          clone: false,
+        });
+        abortSessionRunTargetWithOutcome({
+          key: canonicalAbortSessionKey,
+          sessionId: entry?.sessionId,
+        });
+        clearSessionQueues([canonicalAbortSessionKey, entry?.sessionId]);
+        if (abortCfg) {
           stopSubagentsForRequester({
-            cfg: stopCfg,
+            cfg: abortCfg,
             requesterSessionKey: canonicalAbortSessionKey,
           });
         }
