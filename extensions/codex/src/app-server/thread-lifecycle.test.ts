@@ -6,7 +6,10 @@ import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
 import { fingerprintCodexAppServerNetworkProxyConfigPatch } from "./config.js";
-import { testCodexAppServerBindingStore } from "./session-binding.test-helpers.js";
+import {
+  resetCodexTestBindingStore,
+  testCodexAppServerBindingStore,
+} from "./session-binding.test-helpers.js";
 import { createCodexTestModel } from "./test-support.js";
 import {
   buildDeveloperInstructions,
@@ -1194,6 +1197,9 @@ describe("Codex app-server model provider selection", () => {
 describe("Codex app-server thread lifecycle timing", () => {
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-thread-lifecycle-"));
+    // Bindings are keyed by session identity, not tempDir, so sibling tests
+    // would otherwise leak resumable threads into fresh-start expectations.
+    resetCodexTestBindingStore();
   });
 
   afterEach(async () => {
@@ -1403,13 +1409,23 @@ describe("resolveReasoningEffort (#71946)", () => {
       expect(resolveReasoningEffort("minimal", " gpt-5.4-mini ")).toBe("low");
     });
 
+    it.each(["gpt-5.5-pro", "gpt-5.4-pro"] as const)(
+      "uses the %s minimum effort when metadata is unavailable",
+      (modelId) => {
+        expect(resolveReasoningEffort("minimal", modelId)).toBe("medium");
+        expect(resolveReasoningEffort("low", modelId)).toBe("medium");
+        expect(resolveReasoningEffort("medium", modelId)).toBe("medium");
+        expect(resolveReasoningEffort("max", modelId)).toBe("xhigh");
+      },
+    );
+
     it("honors stricter app-server reasoning metadata", () => {
       const supported = ["medium", "high", "xhigh"];
 
-      expect(resolveReasoningEffort("minimal", "gpt-5.4-pro", supported)).toBe("medium");
-      expect(resolveReasoningEffort("low", "gpt-5.4-pro", supported)).toBe("medium");
-      expect(resolveReasoningEffort("medium", "gpt-5.4-pro", supported)).toBe("medium");
-      expect(resolveReasoningEffort("max", "gpt-5.4-pro", supported)).toBe("xhigh");
+      expect(resolveReasoningEffort("minimal", "gpt-5.5-pro", supported)).toBe("medium");
+      expect(resolveReasoningEffort("low", "gpt-5.5-pro", supported)).toBe("medium");
+      expect(resolveReasoningEffort("medium", "gpt-5.5-pro", supported)).toBe("medium");
+      expect(resolveReasoningEffort("max", "gpt-5.5-pro", supported)).toBe("xhigh");
     });
   });
 

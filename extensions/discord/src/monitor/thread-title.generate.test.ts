@@ -22,6 +22,24 @@ function firstCompletionArgs(): Parameters<
   return firstCall[0];
 }
 
+function hasLoneSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        return true;
+      }
+      index += 1;
+      continue;
+    }
+    if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
 beforeAll(async () => {
   ({ generateThreadTitle } = await import("./thread-title.js"));
 });
@@ -198,6 +216,24 @@ describe("generateThreadTitle", () => {
     expect(completionArgs.options?.signal).toBeInstanceOf(AbortSignal);
     expect(completionArgs.options).not.toHaveProperty("temperature");
     expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 60_000);
+  });
+
+  it("keeps truncated prompt fields on UTF-16 boundaries", async () => {
+    await generateThreadTitle({
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
+      agentId: "main",
+      messageText: `${"m".repeat(599)}😀tail`,
+      channelName: `${"n".repeat(119)}😀tail`,
+      channelDescription: `${"d".repeat(319)}😀tail`,
+    });
+
+    const message = firstCompletionArgs().context.messages.at(0);
+    const content = typeof message?.content === "string" ? message.content : "";
+
+    expect(hasLoneSurrogate(content)).toBe(false);
+    expect(content).toContain(`${"m".repeat(599)}...`);
+    expect(content).toContain(`${"n".repeat(119)}...`);
+    expect(content).toContain(`${"d".repeat(319)}...`);
   });
 
   it("clamps completion budget to the selected model output cap", async () => {

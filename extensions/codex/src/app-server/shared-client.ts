@@ -6,11 +6,11 @@ import { resolveDefaultAgentDir, type AuthProfileStore } from "openclaw/plugin-s
 import {
   applyCodexAppServerAuthProfile,
   bridgeCodexAppServerStartOptions,
-  refreshCodexAppServerAuthTokens,
   resolveCodexAppServerAuthProfileIdForAgent,
   resolveCodexAppServerAuthProfileStore,
   resolveCodexAppServerFallbackApiKeyCacheKey,
 } from "./auth-bridge.js";
+import { ensureCodexAppServerClientRuntime } from "./client-runtime.js";
 import { CodexAppServerClient, isUnsupportedCodexAppServerVersionError } from "./client.js";
 import {
   codexAppServerStartOptionsKey,
@@ -49,7 +49,7 @@ function getSharedCodexAppServerClientState(): SharedCodexAppServerClientState {
   return globalState[SHARED_CODEX_APP_SERVER_CLIENT_STATE];
 }
 
-type CodexAppServerClientOptions = {
+export type CodexAppServerClientOptions = {
   startOptions?: CodexAppServerStartOptions;
   timeoutMs?: number;
   authProfileId?: string | null;
@@ -58,6 +58,11 @@ type CodexAppServerClientOptions = {
   onStartedClient?: (client: CodexAppServerClient) => void;
   abandonSignal?: AbortSignal;
 };
+
+/** Factory used by attempt startup and side turns to acquire a leased client. */
+export type CodexAppServerClientFactory = (
+  options?: CodexAppServerClientOptions,
+) => Promise<CodexAppServerClient>;
 
 type IsolatedCodexAppServerClientOptions = CodexAppServerClientOptions & {
   authProfileStore?: AuthProfileStore;
@@ -194,14 +199,10 @@ async function acquireSharedCodexAppServerClient(
         config: options?.config,
         onStartedClient: (startedClient) => {
           entry.client = startedClient;
-          startedClient.setActiveSharedLeaseCountProviderForUnscopedNotifications(
-            () => entry.activeLeases,
-          );
           options?.onStartedClient?.(startedClient);
         },
       });
       entry.client = client;
-      client.setActiveSharedLeaseCountProviderForUnscopedNotifications(() => entry.activeLeases);
       client.addCloseHandler((closedClient) => clearSharedClientEntryIfCurrent(key, closedClient));
       return client;
     })());
@@ -211,7 +212,13 @@ async function acquireSharedCodexAppServerClient(
       options?.timeoutMs ?? 0,
       "codex app-server initialize timed out",
     );
-    client.setActiveSharedLeaseCountProviderForUnscopedNotifications(() => entry.activeLeases);
+    // Later leases of the same keyed client may carry fresher config; the
+    // runtime install itself stays one-per-physical-client.
+    ensureCodexAppServerClientRuntime(client, {
+      agentDir,
+      authProfileId: usesNativeAuth ? undefined : authProfileId,
+      config: options?.config,
+    });
     const release = leaseOptions?.leased ? retainSharedClientEntry(entry) : undefined;
     return release ? { client, release } : { client };
   } catch (error) {
@@ -269,21 +276,12 @@ async function startInitializedCodexAppServerClient(params: {
       throw error;
     }
 
-    if (params.authProfileId) {
-      // Profile-backed Codex auth is ephemeral. Keep the host refresh callback
-      // available whether the profile came from a scoped store or persisted state.
-      client.addRequestHandler(async (request) => {
-        if (request.method !== "account/chatgptAuthTokens/refresh") {
-          return undefined;
-        }
-        return await refreshCodexAppServerAuthTokens({
-          agentDir: params.agentDir,
-          authProfileId: params.authProfileId!,
-          ...(params.authProfileStore ? { authProfileStore: params.authProfileStore } : {}),
-          config: params.config,
-        });
-      });
-    }
+    ensureCodexAppServerClientRuntime(client, {
+      agentDir: params.agentDir,
+      authProfileId: params.authProfileId ?? undefined,
+      ...(params.authProfileStore ? { authProfileStore: params.authProfileStore } : {}),
+      config: params.config,
+    });
 
     try {
       await applyCodexAppServerAuthProfile({

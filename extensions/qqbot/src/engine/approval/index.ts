@@ -6,6 +6,7 @@
  * - Parse INTERACTION_CREATE button data
  */
 
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ChatScope, InlineKeyboard, KeyboardButton } from "../types.js";
 
 // ============ Types ============
@@ -61,7 +62,7 @@ export function buildExecApprovalText(request: ExecApprovalRequest): string {
   const lines: string[] = ["\u{1f510} \u547d\u4ee4\u6267\u884c\u5ba1\u6279", ""];
   const cmd = request.request.commandPreview ?? request.request.command ?? "";
   if (cmd) {
-    lines.push(`\`\`\`\n${cmd.slice(0, 300)}\n\`\`\``);
+    lines.push(`\`\`\`\n${truncateUtf16Safe(cmd, 300)}\n\`\`\``);
   }
   if (request.request.cwd) {
     lines.push(`\u{1f4c1} \u76ee\u5f55: ${request.request.cwd}`);

@@ -63,6 +63,7 @@ export const ru: TranslationMap = {
     docs: "Документация",
     theme: "Тема",
     colorMode: "Цветовой режим",
+    colorModeOption: "Цветовой режим: {mode}",
     resources: "Ресурсы",
     search: "Поиск",
     save: "Сохранить",

@@ -707,15 +707,17 @@ class OpenClawShell extends LitElement {
           .basePath=${context.basePath}
           .agentLabel=${this.agentLabel}
           .overviewHref=${pathForRoute("overview", context.basePath)}
-          .searchDisabled=${false}
           .navDrawerOpen=${navDrawerOpen}
-          .themeMode=${context.theme.mode}
+          .navCollapsed=${navCollapsed}
           .onboarding=${this.onboarding}
-          .onOpenPalette=${this.openPalette}
           .terminalAvailable=${this.terminalAvailable}
           .onToggleTerminal=${() =>
             window.dispatchEvent(new CustomEvent("openclaw:terminal-toggle"))}
           .onToggleDrawer=${(trigger: HTMLElement) => this.toggleNavDrawer(trigger)}
+          .onToggleCollapse=${() =>
+            context.navigation.update({
+              navCollapsed: !navCollapsed,
+            })}
           .onNavigate=${(routeId: string, options?: ApplicationNavigationOptions) =>
             this.navigate(routeId, options)}
         ></openclaw-app-topbar>
@@ -733,10 +735,7 @@ class OpenClawShell extends LitElement {
             .sidebarPinnedRoutes=${this.sidebarPinnedRoutes}
             .sidebarMoreExpanded=${this.sidebarMoreExpanded}
             .themeMode=${context.theme.mode}
-            .onToggleCollapse=${() =>
-              context.navigation.update({
-                navCollapsed: !navCollapsed,
-              })}
+            .onOpenPalette=${this.openPalette}
             .onToggleMore=${() =>
               context.navigation.update({
                 sidebarMoreExpanded: !context.navigation.snapshot.sidebarMoreExpanded,

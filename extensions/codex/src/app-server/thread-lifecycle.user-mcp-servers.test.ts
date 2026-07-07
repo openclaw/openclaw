@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import {
   readCodexAppServerBinding,
+  resetCodexTestBindingStore,
   testCodexAppServerBindingStore,
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
@@ -103,6 +104,9 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
 
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-80814-"));
+    // Bindings are keyed by session identity, not tempDir, so sibling tests
+    // would otherwise leak resumable threads into fresh-start expectations.
+    resetCodexTestBindingStore();
   });
 
   afterEach(async () => {

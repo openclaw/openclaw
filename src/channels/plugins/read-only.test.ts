@@ -908,26 +908,30 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       channelId: "external-chat",
       manifestChannelConfig: true,
     });
-    const plugins = listReadOnlyChannelPluginsForConfig(
-      {
-        channels: {
-          "external-chat": { token: "configured" },
+    const cfg = {
+      channels: {
+        "external-chat": {
+          defaultAccount: "Ops Team",
+          accounts: {
+            "Ops Team": { token: "configured" },
+            chat: { token: "chat-token" },
+          },
         },
-        plugins: {
-          load: { paths: [pluginDir] },
-          allow: ["external-chat-plugin"],
-        },
-      } as never,
-      {
-        env: { ...process.env },
-        includePersistedAuthState: false,
-        includeSetupFallbackPlugins: true,
       },
-    );
+      plugins: {
+        load: { paths: [pluginDir] },
+        allow: ["external-chat-plugin"],
+      },
+    } as never;
+    const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
+      env: { ...process.env },
+      includePersistedAuthState: false,
+      includeSetupFallbackPlugins: true,
+    });
 
-    expect(plugins.find((entry) => entry.id === "external-chat")?.meta.blurb).toBe(
-      "manifest config",
-    );
+    const plugin = plugins.find((entry) => entry.id === "external-chat");
+    expect(plugin?.meta.blurb).toBe("manifest config");
+    expect(plugin?.config.defaultAccountId?.(cfg)).toBe("ops-team");
     expect(fs.existsSync(setupMarker)).toBe(false);
     expect(fs.existsSync(fullMarker)).toBe(false);
   });

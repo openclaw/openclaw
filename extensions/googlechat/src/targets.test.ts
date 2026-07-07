@@ -8,9 +8,12 @@ import {
 } from "./approval-card-actions.js";
 import { resolveGoogleChatGroupRequireMention } from "./group-policy.js";
 import {
+  isGoogleChatGroupSpace,
   isGoogleChatSpaceTarget,
   isGoogleChatUserTarget,
   normalizeGoogleChatTarget,
+  resolveGoogleChatOutboundSessionRoute,
+  resolveGoogleChatSpaceChatType,
 } from "./targets.js";
 
 const mocks = vi.hoisted(() => ({
@@ -153,6 +156,84 @@ describe("target helpers", () => {
     expect(isGoogleChatUserTarget("users/abc")).toBe(true);
     expect(isGoogleChatSpaceTarget("spaces/abc")).toBe(true);
     expect(isGoogleChatUserTarget("spaces/abc")).toBe(false);
+  });
+
+  it("uses current space types before deprecated metadata", () => {
+    expect(resolveGoogleChatSpaceChatType({ spaceType: "DIRECT_MESSAGE", type: "ROOM" })).toBe(
+      "direct",
+    );
+    expect(resolveGoogleChatSpaceChatType({ spaceType: "SPACE", type: "DM" })).toBe("group");
+    expect(resolveGoogleChatSpaceChatType({ singleUserBotDm: true })).toBe("direct");
+    expect(resolveGoogleChatSpaceChatType({ type: "ROOM" })).toBe("group");
+    expect(resolveGoogleChatSpaceChatType({})).toBeUndefined();
+    expect(isGoogleChatGroupSpace({})).toBe(true);
+  });
+});
+
+describe("outbound session routing", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    { spaceType: "DIRECT_MESSAGE", chatType: "direct", peerKind: "direct" },
+    { spaceType: "SPACE", chatType: "group", peerKind: "group" },
+  ] as const)("classifies API space type $spaceType", async ({ spaceType, chatType, peerKind }) => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ name: "spaces/AAA", spaceType }), { status: 200 }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const route = await resolveGoogleChatOutboundSessionRoute({
+      cfg: {},
+      agentId: "main",
+      target: "googlechat:spaces/AAA",
+    });
+
+    expect(route).toMatchObject({
+      peer: { kind: peerKind, id: "spaces/AAA" },
+      chatType,
+      from: "googlechat:spaces/AAA",
+      to: "spaces/AAA",
+    });
+    expect(fetchMock).toHaveBeenCalledWith("https://chat.googleapis.com/v1/spaces/AAA", {
+      method: "GET",
+      headers: {
+        Authorization: "Bearer token",
+        "Content-Type": "application/json",
+      },
+    });
+  });
+
+  it("rejects an unclassified space response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(new Response(JSON.stringify({ name: "spaces/AAA" }), { status: 200 })),
+    );
+
+    await expect(
+      resolveGoogleChatOutboundSessionRoute({
+        cfg: {},
+        agentId: "main",
+        target: "spaces/AAA",
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("keeps session-route classification failures non-fatal", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("read unavailable")));
+
+    await expect(
+      resolveGoogleChatOutboundSessionRoute({
+        cfg: {},
+        agentId: "main",
+        target: "spaces/AAA",
+      }),
+    ).resolves.toBeNull();
   });
 });
 

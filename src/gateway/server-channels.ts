@@ -36,6 +36,7 @@ const CHANNEL_RESTART_POLICY: BackoffPolicy = {
   jitter: 0.1,
 };
 const MAX_RESTART_ATTEMPTS = 10;
+const CHANNEL_STABLE_RUN_MS = CHANNEL_RESTART_POLICY.maxMs;
 const CHANNEL_STOP_ABORT_TIMEOUT_MS = 5_000;
 const CHANNEL_STARTUP_CONCURRENCY = 4;
 
@@ -623,6 +624,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           } catch (error) {
             log.error?.(`[${id}] native approval bootstrap failed: ${formatErrorMessage(error)}`);
           }
+          let channelRunDurationMs: number | undefined;
           setRuntime(channelId, id, {
             accountId: id,
             enabled: true,
@@ -647,21 +649,31 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               if (abort.signal.aborted || manuallyStopped.has(rKey)) {
                 return;
               }
-              const runStartAccount = () =>
-                startAccount({
-                  cfg,
-                  accountId: id,
-                  account,
-                  runtime,
-                  abortSignal: abort.signal,
-                  log,
-                  getStatus: () => getRuntime(channelId, id),
-                  setStatus: (next) =>
-                    isCurrentTask()
-                      ? setRuntimeFromTaskStatus(channelId, id, next, abort.signal)
-                      : getRuntime(channelId, id),
-                  ...(channelRuntimeForTask ? { channelRuntime: channelRuntimeForTask } : {}),
-                });
+              const runStartAccount = () => {
+                const startedAt = Date.now();
+                const recordDuration = () => {
+                  channelRunDurationMs = Date.now() - startedAt;
+                };
+                try {
+                  return startAccount({
+                    cfg,
+                    accountId: id,
+                    account,
+                    runtime,
+                    abortSignal: abort.signal,
+                    log,
+                    getStatus: () => getRuntime(channelId, id),
+                    setStatus: (next) =>
+                      isCurrentTask()
+                        ? setRuntimeFromTaskStatus(channelId, id, next, abort.signal)
+                        : getRuntime(channelId, id),
+                    ...(channelRuntimeForTask ? { channelRuntime: channelRuntimeForTask } : {}),
+                  }).finally(recordDuration);
+                } catch (error) {
+                  recordDuration();
+                  throw error;
+                }
+              };
               const routeRegistry = getPluginHttpRouteRegistry?.();
               startAccountTask = routeRegistry
                 ? withPluginHttpRouteRegistry(routeRegistry, runStartAccount)
@@ -760,6 +772,14 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                   // abort or startup failure — runtime state was recorded by startChannelInternal
                 }
                 return;
+              }
+              // Only plugin task lifetime counts. Deferred handoff and cleanup must not
+              // make a short crash look stable and erase crash-loop attempts.
+              if (
+                channelRunDurationMs !== undefined &&
+                channelRunDurationMs >= CHANNEL_STABLE_RUN_MS
+              ) {
+                restartAttempts.delete(rKey);
               }
               const attempt = (restartAttempts.get(rKey) ?? 0) + 1;
               restartAttempts.set(rKey, attempt);

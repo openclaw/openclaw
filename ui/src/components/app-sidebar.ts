@@ -94,6 +94,11 @@ type SidebarSessionSortMode = "created" | "updated";
 
 const SIDEBAR_SESSION_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:grouping";
 
+// Command palette shortcut hint (see command-palette.ts keydown handling).
+const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
+  ? "⌘K"
+  : "Ctrl K";
+
 function loadStoredSidebarSessionsGrouping(): SidebarSessionsGrouping {
   return normalizeSidebarSessionsGrouping(
     getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_GROUPING_STORAGE_KEY),
@@ -136,7 +141,7 @@ export class AppSidebar extends LitElement {
     DEFAULT_SIDEBAR_PINNED_ROUTES;
   @property({ attribute: false }) sidebarMoreExpanded = false;
   @property({ attribute: false }) themeMode: ThemeMode = "system";
-  @property({ attribute: false }) onToggleCollapse?: () => void;
+  @property({ attribute: false }) onOpenPalette?: () => void;
   @property({ attribute: false }) onToggleMore?: () => void;
   @property({ attribute: false }) onUpdatePinnedRoutes?: (routes: SidebarNavRoute[]) => void;
   @property({ attribute: false }) onPairMobile?: () => void;
@@ -1518,6 +1523,30 @@ export class AppSidebar extends LitElement {
     `;
   }
 
+  /** Command palette entry point; the palette itself is owned by the shell. */
+  private renderSearch() {
+    const row = html`
+      <button
+        type="button"
+        class="sidebar-search"
+        ?disabled=${!this.onOpenPalette}
+        aria-label=${t("chat.openCommandPalette")}
+        @click=${() => this.onOpenPalette?.()}
+      >
+        <span class="sidebar-search__icon" aria-hidden="true">${icons.search}</span>
+        ${this.collapsed
+          ? nothing
+          : html`
+              <span class="sidebar-search__label">${t("common.search")}</span>
+              <kbd class="sidebar-search__kbd">${PALETTE_SHORTCUT}</kbd>
+            `}
+      </button>
+    `;
+    return this.collapsed
+      ? html`<openclaw-tooltip .content=${t("chat.commandPaletteTitle")}>${row}</openclaw-tooltip>`
+      : row;
+  }
+
   private renderMoreSection() {
     if (this.collapsed) {
       return nothing;
@@ -1593,6 +1622,7 @@ export class AppSidebar extends LitElement {
         />
         <div class="sidebar-shell">
           <div class="sidebar-shell__body">
+            ${this.renderSearch()}
             <nav class="sidebar-nav" @contextmenu=${this.openCustomizeMenuFromContext}>
               ${this.collapsed ? this.renderRoute("chat") : nothing}
               <div class="nav-section__items">
@@ -1668,17 +1698,6 @@ export class AppSidebar extends LitElement {
               <span class="sidebar-mode-switch">
                 <openclaw-theme-mode-toggle .mode=${this.themeMode}></openclaw-theme-mode-toggle>
               </span>
-              <openclaw-tooltip .content=${this.collapsed ? t("nav.expand") : t("nav.collapse")}>
-                <button
-                  class="sidebar-footer-icon sidebar-collapse-toggle"
-                  type="button"
-                  aria-label=${this.collapsed ? t("nav.expand") : t("nav.collapse")}
-                  aria-expanded=${String(!this.collapsed)}
-                  @click=${() => this.onToggleCollapse?.()}
-                >
-                  ${this.collapsed ? icons.panelLeftOpen : icons.panelLeftClose}
-                </button>
-              </openclaw-tooltip>
             </div>
           </div>
         </div>

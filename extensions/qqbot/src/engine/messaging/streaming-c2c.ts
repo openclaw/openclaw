@@ -15,6 +15,7 @@
  *    it is treated as a new message.
  */
 
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getNextMsgSeq } from "../api/routes.js";
 import type { GatewayAccount } from "../types.js";
 import {
@@ -543,7 +544,7 @@ export class StreamingController {
    */
   async onDeliver(payload: { text?: string }): Promise<void> {
     const rawLen = payload.text?.length ?? 0;
-    const preview = (payload.text ?? "").slice(0, 60).replace(/\n/g, "\\n");
+    const preview = truncateUtf16Safe(payload.text ?? "", 60).replace(/\n/g, "\\n");
     this.logDebug(
       `onDeliver: rawLen=${rawLen}, phase=${this.phase}, streamMsgId=${this.streamMsgId}, sentIndex=${this.sentIndex}, sentChunks=${this.sentStreamChunkCount}, firstCB=${this.firstCallbackSource}, preview="${preview}"`,
     );
@@ -790,7 +791,7 @@ export class StreamingController {
         }
 
         this.logInfo(
-          `processMediaTags: found <${found.tagName}> at offset ${this.sentIndex}, textBefore="${found.textBefore.slice(0, 40)}"`,
+          `processMediaTags: found <${found.tagName}> at offset ${this.sentIndex}, textBefore="${truncateUtf16Safe(found.textBefore, 40)}"`,
         );
 
         // ---- 1.1 终结当前流式会话（如果有的话） ----
@@ -813,7 +814,7 @@ export class StreamingController {
         if (found.mediaPath && this.deps.mediaContext) {
           const item: SendQueueItem = { type: found.itemType, content: found.mediaPath };
           this.logDebug(
-            `processMediaTags: sending ${found.itemType}: ${found.mediaPath.slice(0, 80)}`,
+            `processMediaTags: sending ${found.itemType}: ${truncateUtf16Safe(found.mediaPath, 80)}`,
           );
           await sendMediaQueue([item], this.deps.mediaContext);
           this.sentMediaCount++;

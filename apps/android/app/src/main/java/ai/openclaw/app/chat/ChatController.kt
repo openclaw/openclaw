@@ -280,15 +280,6 @@ class ChatController internal constructor(
     scope.launch { publishOutbox() }
   }
 
-  /** Purges cached transcripts and queued sends after old-scope writes finish. */
-  internal suspend fun clearTranscriptCache() {
-    val cache = transcriptCache ?: return
-    cacheMutationMutex.withLock {
-      cache.clearAll()
-      commandOutbox?.clearAll()
-    }
-  }
-
   /** Purges cached transcripts and queued sends for one retired authentication scope. */
   internal suspend fun clearGatewayCache(gatewayId: String) {
     cacheMutationMutex.withLock {
@@ -467,6 +458,9 @@ class ChatController internal constructor(
         buildJsonObject {
           put("key", JsonPrimitive(sessionKey))
           put("deleteTranscript", JsonPrimitive(true))
+          // archive-then-delete: the bounded operator session lacks admin, and
+          // the gateway grants write-scope deletes only for archived sessions.
+          put("archivedOnly", JsonPrimitive(true))
         }
       requestGateway("sessions.delete", params.toString())
       fallBackFromRetiredActiveSession(sessionKey)
