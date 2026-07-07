@@ -1,137 +1,120 @@
-// Regression tests for stdout/stderr stream errors in SSH sandbox commands.
-import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { PassThrough } from "node:stream";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-type MockSpawnChild = EventEmitter & {
-  stdout?: EventEmitter & { setEncoding?: (enc: string) => void };
-  stderr?: EventEmitter & { setEncoding?: (enc: string) => void };
-  stdin?: EventEmitter & { end?: (chunk?: unknown) => void };
-  kill?: (signal?: string) => void;
+const spawnMock = vi.hoisted(() => vi.fn());
+
+type MockChildProcess = EventEmitter & {
+  stdin: PassThrough;
+  stdout: PassThrough;
+  stderr: PassThrough;
+  kill: ReturnType<typeof vi.fn>;
 };
 
-function createMockSpawnChild() {
-  const child = new EventEmitter() as MockSpawnChild;
-  const stdout = new EventEmitter() as MockSpawnChild["stdout"];
-  stdout!.setEncoding = vi.fn();
-  const stderr = new EventEmitter() as MockSpawnChild["stderr"];
-  stderr!.setEncoding = vi.fn();
-  const stdin = new EventEmitter() as MockSpawnChild["stdin"];
-  stdin!.end = vi.fn();
-  child.stdout = stdout;
-  child.stderr = stderr;
-  child.stdin = stdin;
-  const kill = vi.fn(() => true);
-  child.kill = kill;
-  kill.mockImplementation(() => {
-    (child as { killed?: boolean }).killed = true;
-    return true;
-  });
-  return { child, stdout, stderr, stdin };
+function createMockChildProcess(): MockChildProcess {
+  const child = new EventEmitter() as MockChildProcess;
+  child.stdin = new PassThrough();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.kill = vi.fn(() => true);
+  return child;
 }
 
 vi.mock("node:child_process", async () => {
-  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
-  const spawnLocal = vi.fn(
-    (_command: string, _args: readonly string[], _options: SpawnOptions): ChildProcess => {
-      const { child } = createMockSpawnChild();
-      return child as unknown as ChildProcess;
-    },
-  );
-  return mockNodeBuiltinModule(
-    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
-    {
-      spawn: spawnLocal as unknown as typeof import("node:child_process").spawn,
-    },
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return {
+    ...actual,
+    spawn: spawnMock,
+  };
+});
+
+const spawnMocked = vi.mocked(spawn);
+const tempDirs: string[] = [];
+
+let runSshSandboxCommand: typeof import("./ssh.js").runSshSandboxCommand;
+let uploadDirectoryToSshTarget: typeof import("./ssh.js").uploadDirectoryToSshTarget;
+
+beforeEach(async () => {
+  vi.resetModules();
+  vi.clearAllMocks();
+  ({ runSshSandboxCommand, uploadDirectoryToSshTarget } = await import("./ssh.js"));
+});
+
+afterEach(async () => {
+  await Promise.all(
+    tempDirs.splice(0).map(async (dir) => {
+      await fs.rm(dir, { recursive: true, force: true });
+    }),
   );
 });
 
-const spawnMock = vi.mocked(spawn);
-
-let runSshSandboxCommand: typeof import("./ssh.js").runSshSandboxCommand;
-
-function fakeSession() {
+function fakeSession(): import("./ssh.js").SshSandboxSession {
   return {
+    command: "ssh",
     configPath: "/tmp/ssh-config",
     host: "host",
-    user: "user",
-    port: 22,
-    privateKeyPath: "/tmp/key",
-    remoteHost: "remote",
-  } as unknown as import("./ssh.js").SshSandboxSession;
+  };
 }
 
-describe("ssh sandbox stream errors", () => {
-  beforeAll(async () => {
-    ({ runSshSandboxCommand } = await import("./ssh.js"));
-  });
-
-  it("rejects when stdout emits an error", async () => {
-    let capturedChild: MockSpawnChild | undefined;
-    spawnMock.mockImplementationOnce(
-      (_command: string, _args: readonly string[], _options: SpawnOptions): ChildProcess => {
-        const { child, stdout } = createMockSpawnChild();
-        capturedChild = child;
-        process.nextTick(() => {
-          stdout?.emit("error", new Error("stdout read failed"));
-        });
-        return child as unknown as ChildProcess;
-      },
-    );
-
-    await expect(
-      runSshSandboxCommand({
+describe("SSH sandbox stream errors", () => {
+  it.each(["stdout", "stderr", "stdin"] as const)(
+    "rejects and terminates once when command %s fails",
+    async (streamName) => {
+      const child = createMockChildProcess();
+      spawnMocked.mockReturnValueOnce(child as unknown as ChildProcess);
+      const expected = `${streamName} failed`;
+      const result = runSshSandboxCommand({
         session: fakeSession(),
         remoteCommand: "echo hi",
-        allowFailure: false,
-      }),
-    ).rejects.toThrow("stdout read failed");
-    expect(capturedChild?.kill).toHaveBeenCalled();
-  });
+      });
 
-  it("rejects when stderr emits an error", async () => {
-    let capturedChild: MockSpawnChild | undefined;
-    spawnMock.mockImplementationOnce(
-      (_command: string, _args: readonly string[], _options: SpawnOptions): ChildProcess => {
-        const { child, stderr } = createMockSpawnChild();
-        capturedChild = child;
-        process.nextTick(() => {
-          stderr?.emit("error", new Error("stderr read failed"));
-        });
-        return child as unknown as ChildProcess;
-      },
-    );
+      child[streamName].emit("error", new Error(expected));
 
-    await expect(
-      runSshSandboxCommand({
+      await expect(result).rejects.toThrow(expected);
+      expect(child.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+
+      child.emit("close", 0);
+      child[streamName].emit("error", new Error("late stream error"));
+      expect(child.kill).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["tar.stdout", "tar.stderr", "ssh.stdin", "ssh.stdout", "ssh.stderr"] as const)(
+    "rejects and terminates both upload children once when %s fails",
+    async (stream) => {
+      const localDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ssh-stream-test-"));
+      tempDirs.push(localDir);
+      const tar = createMockChildProcess();
+      const ssh = createMockChildProcess();
+      spawnMocked
+        .mockReturnValueOnce(tar as unknown as ChildProcess)
+        .mockReturnValueOnce(ssh as unknown as ChildProcess);
+      const expected = `${stream} failed`;
+      const result = uploadDirectoryToSshTarget({
         session: fakeSession(),
-        remoteCommand: "echo hi",
-        allowFailure: false,
-      }),
-    ).rejects.toThrow("stderr read failed");
-    expect(capturedChild?.kill).toHaveBeenCalled();
-  });
+        localDir,
+        remoteDir: "/remote/workspace",
+      });
+      const rejection = expect(result).rejects.toThrow(expected);
+      await vi.waitFor(() => expect(spawnMocked).toHaveBeenCalledTimes(2));
+      const [childName, streamName] = stream.split(".") as ["tar" | "ssh", keyof MockChildProcess];
+      const failedStream = { tar, ssh }[childName][streamName] as PassThrough;
 
-  it("rejects when stdin emits an error", async () => {
-    let capturedChild: MockSpawnChild | undefined;
-    spawnMock.mockImplementationOnce(
-      (_command: string, _args: readonly string[], _options: SpawnOptions): ChildProcess => {
-        const { child, stdin } = createMockSpawnChild();
-        capturedChild = child;
-        process.nextTick(() => {
-          stdin?.emit("error", new Error("stdin write failed"));
-        });
-        return child as unknown as ChildProcess;
-      },
-    );
+      failedStream.emit("error", new Error(expected));
 
-    await expect(
-      runSshSandboxCommand({
-        session: fakeSession(),
-        remoteCommand: "echo hi",
-        allowFailure: false,
-      }),
-    ).rejects.toThrow("stdin write failed");
-    expect(capturedChild?.kill).toHaveBeenCalled();
-  });
+      await rejection;
+      expect(tar.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+      expect(ssh.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+
+      tar.emit("close", 0);
+      ssh.emit("close", 0);
+      failedStream.emit("error", new Error("late stream error"));
+      expect(tar.kill).toHaveBeenCalledOnce();
+      expect(ssh.kill).toHaveBeenCalledOnce();
+    },
+  );
 });
