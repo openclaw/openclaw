@@ -443,7 +443,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 89,
+      "line": 75,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/AndroidScreenshotModeScreen.kt",
       "source": "OpenClaw",
       "surface": "android",
@@ -451,7 +451,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 96,
+      "line": 82,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/AndroidScreenshotModeScreen.kt",
       "source": "Connected",
       "surface": "android",
@@ -459,7 +459,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 121,
+      "line": 107,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/AndroidScreenshotModeScreen.kt",
       "source": "Gateway paired",
       "surface": "android",
@@ -467,7 +467,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 121,
+      "line": 107,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/AndroidScreenshotModeScreen.kt",
       "source": "Mac Studio - Tailnet",
       "surface": "android",
@@ -475,7 +475,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 122,
+      "line": 108,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/AndroidScreenshotModeScreen.kt",
       "source": "Node",
       "surface": "android",
@@ -483,7 +483,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 123,
+      "line": 109,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/AndroidScreenshotModeScreen.kt",
       "source": "Transport",
       "surface": "android",
@@ -491,7 +491,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 124,
+      "line": 110,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/AndroidScreenshotModeScreen.kt",
       "source": "Capabilities",
       "surface": "android",
@@ -499,7 +499,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 127,
+      "line": 113,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/AndroidScreenshotModeScreen.kt",
       "source": "Ready",
       "surface": "android",
@@ -507,7 +507,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 139,
+      "line": 125,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/AndroidScreenshotModeScreen.kt",
       "source": "Hi Molty, are you there?",
       "surface": "android",
@@ -515,7 +515,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 139,
+      "line": 125,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/AndroidScreenshotModeScreen.kt",
       "source": "You",
       "surface": "android",
@@ -523,7 +523,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 141,
+      "line": 127,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/AndroidScreenshotModeScreen.kt",
       "source": "Molty",
       "surface": "android",
@@ -531,7 +531,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 142,
+      "line": 128,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/AndroidScreenshotModeScreen.kt",
       "source": "Always. Lurking in the shadows, exfoliating.",
       "surface": "android",
@@ -539,7 +539,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 177,
+      "line": 156,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/AndroidScreenshotModeScreen.kt",
       "source": "Listening on device",
       "surface": "android",
@@ -547,7 +547,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 177,
+      "line": 156,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/AndroidScreenshotModeScreen.kt",
       "source": "Talk mode",
       "surface": "android",
@@ -555,7 +555,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 178,
+      "line": 157,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/AndroidScreenshotModeScreen.kt",
       "source": "Wake phrase",
       "surface": "android",
@@ -563,7 +563,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 179,
+      "line": 158,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/AndroidScreenshotModeScreen.kt",
       "source": "Latency",
       "surface": "android",
@@ -571,7 +571,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 185,
+      "line": 164,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/AndroidScreenshotModeScreen.kt",
       "source": "Screen tools",
       "surface": "android",
@@ -579,7 +579,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 185,
+      "line": 164,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/AndroidScreenshotModeScreen.kt",
       "source": "Shared with your gateway",
       "surface": "android",
@@ -587,7 +587,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 186,
+      "line": 165,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/AndroidScreenshotModeScreen.kt",
       "source": "Canvas",
       "surface": "android",
@@ -595,7 +595,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 197,
+      "line": 176,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/AndroidScreenshotModeScreen.kt",
       "source": "Live context",
       "surface": "android",
@@ -603,7 +603,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 198,
+      "line": 177,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/AndroidScreenshotModeScreen.kt",
       "source": "Camera",
       "surface": "android",
@@ -611,7 +611,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 199,
+      "line": 178,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/AndroidScreenshotModeScreen.kt",
       "source": "Screen",
       "surface": "android",
@@ -619,7 +619,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 200,
+      "line": 179,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/AndroidScreenshotModeScreen.kt",
       "source": "Location",
       "surface": "android",
@@ -627,7 +627,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 208,
+      "line": 187,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/AndroidScreenshotModeScreen.kt",
       "source": "Security",
       "surface": "android",
@@ -635,7 +635,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 212,
+      "line": 191,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/AndroidScreenshotModeScreen.kt",
       "source": "Notifications",
       "surface": "android",
@@ -643,7 +643,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 418,
+      "line": 397,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/AndroidScreenshotModeScreen.kt",
       "source": "Connect",
       "surface": "android",
@@ -651,7 +651,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 419,
+      "line": 398,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/AndroidScreenshotModeScreen.kt",
       "source": "Chat",
       "surface": "android",
@@ -659,7 +659,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 420,
+      "line": 399,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/AndroidScreenshotModeScreen.kt",
       "source": "Talk",
       "surface": "android",
@@ -667,7 +667,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 421,
+      "line": 400,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/AndroidScreenshotModeScreen.kt",
       "source": "Device tools",
       "surface": "android",
@@ -675,7 +675,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 422,
+      "line": 401,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/AndroidScreenshotModeScreen.kt",
       "source": "Settings",
       "surface": "android",
