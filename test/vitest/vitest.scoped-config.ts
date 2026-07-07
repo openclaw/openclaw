@@ -160,7 +160,6 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
     "unit-security",
     "unit-src",
     "unit-support",
-    "unit-ui",
     "utils",
     "wizard",
   ].map((name, index) => [name, index + 10]),

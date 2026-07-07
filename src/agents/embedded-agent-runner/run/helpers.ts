@@ -8,9 +8,10 @@ import { extractAssistantTextForPhase } from "../../../shared/chat-message-conte
 import { resolveAgentConfig } from "../../agent-scope-config.js";
 import { extractAssistantVisibleText } from "../../embedded-agent-utils.js";
 import {
-  derivePromptTokens,
+  deriveContextPromptTokens,
   hasNonzeroUsage,
   normalizeUsage,
+  type ContextUsage,
   type NormalizedUsage,
 } from "../../usage.js";
 import type { EmbeddedAgentMeta } from "../types.js";
@@ -21,6 +22,7 @@ type UsageSnapshot = {
   output?: number;
   cacheRead?: number;
   cacheWrite?: number;
+  contextUsage?: ContextUsage;
   total?: number;
 };
 
@@ -219,7 +221,9 @@ export function buildUsageAgentMetaFields(params: {
     : hasNonzeroUsage(params.lastRunPromptUsage)
       ? params.lastRunPromptUsage
       : toLastCallUsage(params.usageAccumulator);
-  const promptTokens = derivePromptTokens(params.lastRunPromptUsage);
+  const promptTokens = deriveContextPromptTokens({
+    lastCallUsage: params.lastRunPromptUsage,
+  });
   return {
     usage,
     lastCallUsage,

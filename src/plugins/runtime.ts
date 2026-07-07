@@ -63,10 +63,10 @@ function registryHasPluginHostCleanupWork(registry: PluginRegistry | null): bool
   }
   return (
     registry.plugins.some((plugin) => plugin.status === "loaded") ||
-    (registry.sessionExtensions?.length ?? 0) > 0 ||
-    (registry.runtimeLifecycles?.length ?? 0) > 0 ||
-    (registry.agentEventSubscriptions?.length ?? 0) > 0 ||
-    (registry.sessionSchedulerJobs?.length ?? 0) > 0
+    registry.sessionExtensions.length > 0 ||
+    registry.runtimeLifecycles.length > 0 ||
+    registry.agentEventSubscriptions.length > 0 ||
+    registry.sessionSchedulerJobs.length > 0
   );
 }
 
@@ -349,6 +349,17 @@ export function getActivePluginGatewayCommandRegistry(): PluginRegistry | null {
     return activeRegistry;
   }
   return pinnedChannelRegistry ?? pinnedHttpRouteRegistry ?? activeRegistry;
+}
+
+export function getActivePluginGatewayNodePolicyRegistry(): PluginRegistry | null {
+  // Node allowlists and invoke guards are Gateway security policy. Agent-scoped
+  // registry swaps must not add commands or shadow the pinned startup policy.
+  return (
+    (state.channel.pinned ? asPluginRegistry(state.channel.registry) : null) ??
+    (state.httpRoute.pinned ? asPluginRegistry(state.httpRoute.registry) : null) ??
+    (state.sessionExtension.pinned ? asPluginRegistry(state.sessionExtension.registry) : null) ??
+    asPluginRegistry(state.activeRegistry)
+  );
 }
 
 export function requireActivePluginChannelRegistry(): PluginRegistry {

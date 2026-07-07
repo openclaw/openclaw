@@ -4,7 +4,46 @@
  * Handles Chat Completions, Responses, Azure variants, tool-call replay, reasoning events, and
  * provider-specific payload policy before converting SDK streams into OpenClaw assistant events.
  */
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
+import {
+  clampOpenAIPromptCacheKey,
+  convertMessages,
+  findOpenAIStrictToolProjectionDiagnostics,
+  isOpenAICompatibleAzureResponsesBaseUrl,
+  isOpenAIGpt54MiniModel,
+  isOpenAIGpt55Model,
+  isResponsesTextContentPartType,
+  isResponsesTextDeltaEventType,
+  mapOpenAIStopReason,
+  normalizeOpenAIReasoningEffort,
+  normalizeOpenAIStrictToolParameters,
+  projectOpenAITools,
+  reconcileOpenAICompletionsToolChoice,
+  reconcileOpenAIResponsesToolChoice,
+  resolveAzureDeploymentNameFromMap,
+  resolveOpenAIProjectedToolsStrictToolFlag,
+  resolveOpenAIReasoningEffortForModel,
+  resolveResponsesMessageSnapshotCollapse,
+  type OpenAIApiReasoningEffort,
+  type OpenAICompletionsToolChoice,
+  type OpenAIReasoningEffort,
+  type OpenAIToolProjection,
+} from "@openclaw/ai/internal/openai";
+import {
+  calculateCost,
+  createFirstStreamEventAbortController,
+  createReasoningTagTextPartitioner,
+  getEnvApiKey,
+  getFirstStreamEventTimeoutHandler,
+  getFirstStreamEventTimeoutMs,
+  parseStreamingJson,
+  withFirstStreamEventTimeout,
+} from "@openclaw/ai/internal/runtime";
+import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultText,
+  stripSystemPromptCacheBoundary,
+} from "@openclaw/ai/internal/shared";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import OpenAI, { AzureOpenAI } from "openai";
@@ -21,31 +60,19 @@ import type {
   ResponseReasoningItem,
 } from "openai/resources/responses/responses.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
-import { getEnvApiKey } from "../llm/env-api-keys.js";
-import { calculateCost } from "../llm/model-utils.js";
-import { resolveAzureDeploymentNameFromMap } from "../llm/providers/azure-deployment-map.js";
-import { convertMessages } from "../llm/providers/openai-completions.js";
-import { clampOpenAIPromptCacheKey } from "../llm/providers/openai-prompt-cache.js";
-import { mapOpenAIStopReason } from "../llm/providers/openai-stop-reason.js";
-import {
-  describeToolResultMediaPlaceholder,
-  extractToolResultText,
-} from "../llm/providers/tool-result-text.js";
+import { sha256Hex, sha256HexPrefix } from "../infra/crypto-digest.js";
 import type { Api, Context, Model } from "../llm/types.js";
+import "../llm/ai-transport-host.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
-import { parseStreamingJson } from "../llm/utils/json-parse.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  isGoogleGemini3FlashModel,
+  isGoogleGemini3ProModel,
+} from "../plugin-sdk/provider-stream-shared.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
-import { isOpenAICompatibleAzureResponsesBaseUrl } from "../shared/azure-openai-responses-client-compat.js";
-import {
-  isResponsesTextContentPartType,
-  isResponsesTextDeltaEventType,
-  resolveResponsesMessageSnapshotCollapse,
-} from "../shared/openai-responses-stream-compat.js";
-import { createReasoningTagTextPartitioner } from "../shared/text/reasoning-tag-text-partitioner.js";
 import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../utils/cjk-chars.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
@@ -65,31 +92,11 @@ import {
 } from "./openai-completions-string-content.js";
 import { resolveOpenAIReasoningEffortMap } from "./openai-reasoning-compat.js";
 import {
-  isOpenAIGpt54MiniModel,
-  isOpenAIGpt55Model,
-  normalizeOpenAIReasoningEffort,
-  resolveOpenAIReasoningEffortForModel,
-  type OpenAIApiReasoningEffort,
-  type OpenAIReasoningEffort,
-} from "./openai-reasoning-effort.js";
-import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
 } from "./openai-responses-payload-policy.js";
 import { resolveReplayableResponsesMessageId } from "./openai-responses-replay.js";
 import { resolveOpenAIStrictToolSetting } from "./openai-strict-tool-setting.js";
-import {
-  projectOpenAITools,
-  reconcileOpenAICompletionsToolChoice,
-  reconcileOpenAIResponsesToolChoice,
-  type OpenAICompletionsToolChoice,
-  type OpenAIToolProjection,
-} from "./openai-tool-projection.js";
-import {
-  findOpenAIStrictToolProjectionDiagnostics,
-  normalizeOpenAIStrictToolParameters,
-  resolveOpenAIProjectedToolsStrictToolFlag,
-} from "./openai-tool-schema.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { resolveProviderRequestPolicyConfig } from "./provider-request-config.js";
 import {
@@ -98,13 +105,6 @@ import {
 } from "./provider-transport-fetch.js";
 import { sanitizeResponsesImagePayload } from "./responses-image-payload-sanitizer.js";
 import type { StreamFn } from "./runtime/index.js";
-import {
-  createFirstStreamEventAbortController,
-  getFirstStreamEventTimeoutHandler,
-  getFirstStreamEventTimeoutMs,
-  withFirstStreamEventTimeout,
-} from "./stream-first-event-timeout.js";
-import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 import {
   assignTransportErrorDetails,
@@ -1023,7 +1023,7 @@ export function resolveAzureOpenAIApiVersion(env = process.env): string {
 }
 
 function shortHash(value: string): string {
-  return createHash("sha256").update(value).digest("hex").slice(0, 16);
+  return sha256HexPrefix(value, 16);
 }
 
 function normalizeResponsesReplayItemId(
@@ -1385,20 +1385,18 @@ function buildOpenAIStrictToolDowngradeDiagnosticKey(
   diagnostics: ReturnType<typeof findOpenAIStrictToolProjectionDiagnostics>,
   context: { transport: "responses" | "completions"; model: OpenAIModeModel },
 ): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify({
-        transport: context.transport,
-        provider: context.model.provider ?? null,
-        model: context.model.id ?? null,
-        diagnostics: diagnostics.map((entry) => ({
-          toolIndex: entry.toolIndex,
-          toolName: entry.toolName ?? null,
-          violations: entry.violations,
-        })),
-      }),
-    )
-    .digest("hex");
+  return sha256Hex(
+    JSON.stringify({
+      transport: context.transport,
+      provider: context.model.provider ?? null,
+      model: context.model.id ?? null,
+      diagnostics: diagnostics.map((entry) => ({
+        toolIndex: entry.toolIndex,
+        toolName: entry.toolName ?? null,
+        violations: entry.violations,
+      })),
+    }),
+  );
 }
 
 function shouldLogOpenAIStrictToolDowngradeDiagnostic(
@@ -3978,7 +3976,7 @@ function isGoogleOpenAICompatModel(model: OpenAIModeModel): boolean {
 }
 
 function requiresGoogleCompatToolCallThoughtSignature(model: OpenAIModeModel): boolean {
-  return model.id.toLowerCase().includes("gemini-3");
+  return isGoogleGemini3ProModel(model.id) || isGoogleGemini3FlashModel(model.id);
 }
 
 const GOOGLE_COMPAT_THOUGHT_SIGNATURE_ELLIPSIS_RE = /[\u2026]|\.\.\./;

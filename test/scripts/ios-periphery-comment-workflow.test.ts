@@ -147,6 +147,7 @@ async function runCommenter(
   archiveData: Buffer,
   options: {
     existingComments?: ExistingComment[];
+    commentErrorStatus?: number;
     liveHeadSha?: string;
     liveHeadShaAfter?: string;
     runHeadSha?: string;
@@ -187,9 +188,19 @@ async function runCommenter(
       issues: {
         listComments() {},
         async createComment(params: { body: string }) {
+          if (options.commentErrorStatus) {
+            throw Object.assign(new Error("comment write failed"), {
+              status: options.commentErrorStatus,
+            });
+          }
           createdBodies.push(params.body);
         },
         async updateComment(params: { body: string }) {
+          if (options.commentErrorStatus) {
+            throw Object.assign(new Error("comment write failed"), {
+              status: options.commentErrorStatus,
+            });
+          }
           updatedBodies.push(params.body);
         },
       },
@@ -922,6 +933,37 @@ describe("iOS Periphery comment workflow", () => {
 
     expect(result.createdBodies).toHaveLength(1);
     expect(result.createdBodies[0]?.length).toBeLessThanOrEqual(60_000);
+  });
+
+  it("warns without failing when workflow_run token cannot write comments", async () => {
+    const archive = makeZip({
+      "periphery.json": JSON.stringify([
+        {
+          kind: "function",
+          location: "Sources/Test.swift:12",
+          name: "unused",
+        },
+      ]),
+      "periphery.status": "1\n",
+    });
+    const result = await runCommenter(
+      {
+        expired: false,
+        id: 77,
+        name: ARTIFACT_NAME,
+        size_in_bytes: archive.length,
+      },
+      archive,
+      {
+        commentErrorStatus: 403,
+      },
+    );
+
+    expect(result.createdBodies).toEqual([]);
+    expect(result.updatedBodies).toEqual([]);
+    expect(result.core.warnings).toContain(
+      "Skipping Periphery PR comment for #123; GitHub token cannot write issue comments for this workflow_run.",
+    );
   });
 
   it("does not overwrite a marker comment owned by another bot", async () => {

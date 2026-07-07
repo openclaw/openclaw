@@ -51,6 +51,7 @@ import {
   type GatewayClientMode,
   type GatewayClientName,
 } from "../../utils/message-channel.js";
+import { readTrimmedStringAlias } from "../../utils/string-readers.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
@@ -526,12 +527,7 @@ function collectMessageAttachmentMediaHints(value: unknown): string[] {
 }
 
 function hasExplicitSingularTargetParam(params: Record<string, unknown>): boolean {
-  for (const key of ["target", "to", "channelId"]) {
-    if (normalizeOptionalString(params[key])) {
-      return true;
-    }
-  }
-  return false;
+  return readTrimmedStringAlias(params, ["target", "to", "channelId"]) !== undefined;
 }
 
 function hasExplicitTargetParam(params: Record<string, unknown>): boolean {
@@ -1383,6 +1379,23 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
   if (!plugin?.actions?.handleAction) {
     throw new Error(`Channel ${channel} is unavailable for message actions (plugin not loaded).`);
   }
+
+  // Plugin actions bypass send/poll, so inherit thread metadata before either
+  // gateway or local dispatch to keep both execution modes on the same topic.
+  const targetForThreading =
+    normalizeOptionalString(params.to) ?? normalizeOptionalString(params.channelId) ?? "";
+  if (targetForThreading) {
+    resolveAndApplyOutboundThreadId(params, {
+      cfg,
+      to: targetForThreading,
+      accountId,
+      toolContext: input.toolContext,
+      resolveAutoThreadId: plugin.threading?.resolveAutoThreadId,
+      resolveReplyTransport: plugin.threading?.resolveReplyTransport,
+      replyToIsExplicit: Boolean(readStringParam(params, "replyTo")),
+    });
+  }
+
   const gatewayPluginAction = await runGatewayPluginMessageActionOrNull({
     cfg,
     params,

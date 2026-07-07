@@ -372,7 +372,7 @@ export async function handleQaInbound(params: {
         if (!text.trim()) {
           return;
         }
-        await preview.deliver(text, info.kind);
+        await preview.deliver(text, info?.kind ?? "final");
       },
       onError: (error) => {
         void preview.clear().catch((clearError: unknown) => {

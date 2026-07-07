@@ -74,14 +74,30 @@ import {
   releaseCodexSandboxExecServerEnvironment,
 } from "./sandbox-exec-server.js";
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
-import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
+import {
+  readCodexAppServerBinding,
+  registerCodexTestSessionIdentity,
+  testCodexAppServerBindingStore,
+  writeCodexAppServerBinding,
+} from "./session-binding.test-helpers.js";
 import * as sharedClientModule from "./shared-client.js";
 import { createCodexTestModel } from "./test-support.js";
 import {
   buildTurnStartParams,
   codexDynamicToolsFingerprint,
-  startOrResumeThread,
+  startOrResumeThread as startOrResumeThreadImpl,
 } from "./thread-lifecycle.js";
+
+function startOrResumeThread(
+  params: Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore">,
+) {
+  registerCodexTestSessionIdentity(
+    params.params.sessionFile,
+    params.params.sessionId,
+    params.params.sessionKey,
+  );
+  return startOrResumeThreadImpl({ ...params, bindingStore: testCodexAppServerBindingStore });
+}
 
 function flushDiagnosticEvents() {
   return waitForDiagnosticEventsDrained();
@@ -138,6 +154,7 @@ async function writeExistingBinding(
     cwd: workspaceDir,
     model: "gpt-5.4-codex",
     modelProvider: "openai",
+    historyCoveredThrough: new Date().toISOString(),
     webSearchThreadConfigFingerprint: DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,
     ...overrides,
   });
@@ -1468,6 +1485,7 @@ describe("runCodexAppServerAttempt", () => {
 
     expect(result.promptError).toBeNull();
     expect(result.assistantTexts).toEqual(["Nested done."]);
+    expect(result.assistantTranscriptOwned).toBe(true);
   });
 
   it("delivers completed assistant text when an orphan native tool call lacks a matching result", async () => {
@@ -1594,11 +1612,12 @@ describe("runCodexAppServerAttempt", () => {
     expect(dynamicToolNames).toEqual(["message"]);
   });
 
-  it("keeps searchable OpenClaw dynamic tools when code-mode-only is enabled", () => {
+  it("keeps OpenClaw control-path tools direct when code-mode-only is enabled", () => {
     const tools = [
       createRuntimeDynamicTool("message"),
       createRuntimeDynamicTool("web_search"),
       createRuntimeDynamicTool("heartbeat_respond"),
+      createRuntimeDynamicTool("agents_list"),
       createRuntimeDynamicTool("sessions_spawn"),
       createRuntimeDynamicTool("sessions_yield"),
     ];
@@ -1612,6 +1631,7 @@ describe("runCodexAppServerAttempt", () => {
     const message = specs.find((tool) => tool.name === "message");
     const webSearch = specs.find((tool) => tool.name === "web_search");
     const heartbeat = specs.find((tool) => tool.name === "heartbeat_respond");
+    const agentsList = specs.find((tool) => tool.name === "agents_list");
     const sessionsSpawn = specs.find((tool) => tool.name === "sessions_spawn");
     const sessionsYield = specs.find((tool) => tool.name === "sessions_yield");
 
@@ -1621,13 +1641,15 @@ describe("runCodexAppServerAttempt", () => {
     expect(webSearch?.deferLoading).toBe(true);
     expect(heartbeat?.namespace).toBe(CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE);
     expect(heartbeat?.deferLoading).toBe(true);
-    expect(sessionsSpawn?.namespace).toBe(CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE);
-    expect(sessionsSpawn?.deferLoading).toBe(true);
+    expect(agentsList).not.toHaveProperty("namespace");
+    expect(agentsList).not.toHaveProperty("deferLoading");
+    expect(sessionsSpawn).not.toHaveProperty("namespace");
+    expect(sessionsSpawn).not.toHaveProperty("deferLoading");
     expect(sessionsYield).not.toHaveProperty("namespace");
     expect(sessionsYield).not.toHaveProperty("deferLoading");
   });
 
-  it("registers heartbeat response durably without advertising it on normal turns", async () => {
+  it("keeps the heartbeat schema deferred and stable across normal and heartbeat turns", async () => {
     testing.setOpenClawCodingToolsFactoryForTests((options) => [
       createRuntimeDynamicTool("message"),
       ...(options?.enableHeartbeatTool === true
@@ -1640,11 +1662,9 @@ describe("runCodexAppServerAttempt", () => {
       const params = createParams(sessionFile, workspaceDir);
       params.disableTools = false;
       params.runtimePlan = createCodexRuntimePlanFixture();
+      params.sourceReplyDeliveryMode = "message_tool_only";
       if (trigger) {
         params.trigger = trigger;
-      }
-      if (trigger === "heartbeat") {
-        params.sourceReplyDeliveryMode = "message_tool_only";
       }
       return params;
     };
@@ -1661,30 +1681,76 @@ describe("runCodexAppServerAttempt", () => {
     const normalInstructions = testing.buildDeveloperInstructions(createRunParams(), {
       dynamicTools: normalBridge.availableSpecs,
     });
+    const heartbeatParams = createRunParams("heartbeat");
+    const heartbeatBridge = createCodexToolBridgeForTest(
+      heartbeatParams,
+      [createRuntimeDynamicTool("message"), createRuntimeDynamicTool("heartbeat_respond")],
+      registeredTools,
+    );
+    const heartbeatInstructions = testing.buildDeveloperInstructions(heartbeatParams, {
+      dynamicTools: heartbeatBridge.availableSpecs,
+    });
+    const nextNormalParams = createRunParams();
+    const nextNormalBridge = createCodexToolBridgeForTest(
+      nextNormalParams,
+      [createRuntimeDynamicTool("message")],
+      registeredTools,
+    );
     const registeredToolNames = specNames(normalBridge.specs);
 
     expect(registeredToolNames).toContain("message");
     expect(registeredToolNames).toContain("heartbeat_respond");
-    expect(normalInstructions).toContain(
-      "Deferred searchable OpenClaw dynamic tools available: message.",
-    );
     expect(normalInstructions).not.toContain(
       "Deferred searchable OpenClaw dynamic tools available: heartbeat_respond",
     );
-
-    const heartbeatBridge = createCodexToolBridgeForTest(
-      createRunParams("heartbeat"),
-      [createRuntimeDynamicTool("message"), createRuntimeDynamicTool("heartbeat_respond")],
-      registeredTools,
+    expect(heartbeatInstructions).toContain(
+      "Deferred searchable OpenClaw dynamic tools available: heartbeat_respond.",
     );
-    const nextNormalBridge = createCodexToolBridgeForTest(
-      createRunParams(),
-      [createRuntimeDynamicTool("message")],
-      registeredTools,
+    for (const bridge of [normalBridge, heartbeatBridge, nextNormalBridge]) {
+      const heartbeat = flattenSpecsWithNamespace(bridge.specs).find(
+        (tool) => tool.name === "heartbeat_respond",
+      );
+      expect(heartbeat?.namespace).toBe(CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE);
+      expect(heartbeat?.deferLoading).toBe(true);
+    }
+    expect(codexDynamicToolsFingerprint(heartbeatBridge.specs)).toBe(
+      codexDynamicToolsFingerprint(normalBridge.specs),
+    );
+    expect(codexDynamicToolsFingerprint(nextNormalBridge.specs)).toBe(
+      codexDynamicToolsFingerprint(normalBridge.specs),
     );
 
-    expect(specNames(heartbeatBridge.specs)).toEqual(registeredToolNames);
-    expect(specNames(nextNormalBridge.specs)).toEqual(registeredToolNames);
+    let startedThreadId: string | undefined;
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        startedThreadId = "thread-stable-heartbeat";
+        return threadStartResult(startedThreadId);
+      }
+      if (method === "thread/resume") {
+        return threadStartResult(startedThreadId);
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const turns = [
+      { params: createRunParams(), bridge: normalBridge },
+      { params: heartbeatParams, bridge: heartbeatBridge },
+      { params: nextNormalParams, bridge: nextNormalBridge },
+    ];
+    for (const turn of turns) {
+      await startOrResumeThread({
+        client: { request } as never,
+        params: turn.params,
+        cwd: workspaceDir,
+        dynamicTools: turn.bridge.specs,
+        appServer: createThreadLifecycleAppServerOptions(),
+      });
+    }
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/start",
+      "thread/resume",
+      "thread/resume",
+    ]);
   });
 
   it("keeps message in the registered schema when disabled for an internal turn", async () => {
@@ -2297,7 +2363,7 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
     const binding = await readCodexAppServerBinding(sessionFile);
-    const bindingUpdatedAt = Date.parse(binding?.updatedAt ?? "");
+    const bindingUpdatedAt = Date.parse(binding?.historyCoveredThrough ?? "");
     if (!Number.isFinite(bindingUpdatedAt)) {
       throw new Error("expected valid Codex binding timestamp");
     }
@@ -2333,12 +2399,115 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toContain("is the previous message trustworthy?");
   });
 
+  it("keeps resumed native web-search outcomes unknown without raw events", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+    const harness = createResumeHarness();
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const stopDiagnostics = onInternalDiagnosticEvent((event) => {
+      if ("toolCallId" in event && event.toolCallId === "resumed-search") {
+        diagnosticEvents.push(event);
+      }
+    });
+
+    try {
+      const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+      await harness.waitForMethod("turn/start");
+      const item = {
+        id: "resumed-search",
+        type: "webSearch",
+        query: "sensitive resumed query",
+        action: { type: "search", query: "sensitive resumed query", queries: null },
+      };
+      await harness.notify({
+        method: "item/started",
+        params: { threadId: "thread-existing", turnId: "turn-1", item },
+      });
+      await harness.notify({
+        method: "item/completed",
+        params: { threadId: "thread-existing", turnId: "turn-1", item },
+      });
+      await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+      await run;
+      await flushDiagnosticEvents();
+    } finally {
+      stopDiagnostics();
+    }
+
+    expect(diagnosticEvents.map((event) => event.type)).toEqual([
+      "tool.execution.started",
+      "tool.execution.error",
+    ]);
+    expect(diagnosticEvents.at(-1)).toMatchObject({
+      terminalReason: "failed",
+      errorCode: "tool_outcome_unknown",
+    });
+    expect(JSON.stringify(diagnosticEvents)).not.toContain("sensitive resumed query");
+  });
+
+  it("uses retained raw web-search status on resumed threads", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+    const harness = createResumeHarness();
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const stopDiagnostics = onInternalDiagnosticEvent((event) => {
+      if ("toolCallId" in event && event.toolCallId === "resumed-search-with-raw") {
+        diagnosticEvents.push(event);
+      }
+    });
+
+    try {
+      const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+      await harness.waitForMethod("turn/start");
+      const item = {
+        id: "resumed-search-with-raw",
+        type: "webSearch",
+        query: "sensitive warm-resume query",
+        action: { type: "search", query: "sensitive warm-resume query", queries: null },
+      };
+      await harness.notify({
+        method: "item/started",
+        params: { threadId: "thread-existing", turnId: "turn-1", item },
+      });
+      await harness.notify({
+        method: "item/completed",
+        params: { threadId: "thread-existing", turnId: "turn-1", item },
+      });
+      await harness.notify({
+        method: "rawResponseItem/completed",
+        params: {
+          threadId: "thread-existing",
+          turnId: "turn-1",
+          item: {
+            id: item.id,
+            type: "web_search_call",
+            status: "completed",
+            action: item.action,
+          },
+        },
+      });
+      await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+      await run;
+      await flushDiagnosticEvents();
+    } finally {
+      stopDiagnostics();
+    }
+
+    expect(diagnosticEvents.map((event) => event.type)).toEqual([
+      "tool.execution.started",
+      "tool.execution.completed",
+    ]);
+    expect(JSON.stringify(diagnosticEvents)).not.toContain("sensitive warm-resume query");
+  });
+
   it("projects only newer visible history when a resumed Codex binding is stale", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
     const binding = await readCodexAppServerBinding(sessionFile);
-    const bindingUpdatedAt = Date.parse(binding?.updatedAt ?? "");
+    const bindingUpdatedAt = Date.parse(binding?.historyCoveredThrough ?? "");
     if (!Number.isFinite(bindingUpdatedAt)) {
       throw new Error("expected valid Codex binding timestamp");
     }
@@ -2387,15 +2556,19 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
     const binding = await readCodexAppServerBinding(sessionFile);
-    const bindingUpdatedAt = Date.parse(binding?.updatedAt ?? "");
+    const bindingUpdatedAt = Date.parse(binding?.historyCoveredThrough ?? "");
     if (!Number.isFinite(bindingUpdatedAt)) {
       throw new Error("expected valid Codex binding timestamp");
     }
     const sessionManager = SessionManager.open(sessionFile);
     const codexMirrorUserMessage = {
       ...userMessage("codex mirrored user echo", bindingUpdatedAt + 1_000),
-      idempotencyKey: "codex-app-server:user-1",
-    } as ReturnType<typeof userMessage> & { idempotencyKey: string };
+      idempotencyKey: "client-run:user",
+      __openclaw: { mirrorIdentity: "turn-1:prompt", mirrorOrigin: "codex-app-server" },
+    } as ReturnType<typeof userMessage> & {
+      idempotencyKey: string;
+      __openclaw: { mirrorIdentity: string; mirrorOrigin: string };
+    };
     sessionManager.appendMessage(codexMirrorUserMessage);
     const codexMirrorAssistantMessage = {
       ...assistantMessage("codex mirrored assistant echo", bindingUpdatedAt + 2_000),
@@ -2430,13 +2603,14 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
     const originalBindingUpdatedAt = Date.now() - 60_000;
-    const bindingPath = `${sessionFile}.codex-app-server.json`;
-    const bindingPayload = JSON.parse(await fs.readFile(bindingPath, "utf8")) as Record<
-      string,
-      unknown
-    >;
-    bindingPayload.updatedAt = new Date(originalBindingUpdatedAt).toISOString();
-    await fs.writeFile(bindingPath, `${JSON.stringify(bindingPayload, null, 2)}\n`);
+    const originalBinding = await readCodexAppServerBinding(sessionFile);
+    if (!originalBinding) {
+      throw new Error("expected Codex binding");
+    }
+    await writeCodexAppServerBinding(sessionFile, {
+      ...originalBinding,
+      historyCoveredThrough: new Date(originalBindingUpdatedAt).toISOString(),
+    });
     const sessionManager = SessionManager.open(sessionFile);
     const firstHarness = createResumeHarness();
     const firstRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
@@ -2445,7 +2619,9 @@ describe("runCodexAppServerAttempt", () => {
     await firstHarness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await firstRun;
     const completedBinding = await readCodexAppServerBinding(sessionFile);
-    expect(Date.parse(completedBinding?.updatedAt ?? "")).toBeGreaterThan(originalBindingUpdatedAt);
+    expect(Date.parse(completedBinding?.historyCoveredThrough ?? "")).toBeGreaterThan(
+      originalBindingUpdatedAt,
+    );
 
     const secondHarness = createResumeHarness();
     const secondParams = createParams(sessionFile, workspaceDir);
@@ -2469,13 +2645,14 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
     const oldBindingUpdatedAt = Date.now() - 60_000;
-    const bindingPath = `${sessionFile}.codex-app-server.json`;
-    const bindingPayload = JSON.parse(await fs.readFile(bindingPath, "utf8")) as Record<
-      string,
-      unknown
-    >;
-    bindingPayload.updatedAt = new Date(oldBindingUpdatedAt).toISOString();
-    await fs.writeFile(bindingPath, `${JSON.stringify(bindingPayload, null, 2)}\n`);
+    const oldBinding = await readCodexAppServerBinding(sessionFile);
+    if (!oldBinding) {
+      throw new Error("expected Codex binding");
+    }
+    await writeCodexAppServerBinding(sessionFile, {
+      ...oldBinding,
+      historyCoveredThrough: new Date(oldBindingUpdatedAt).toISOString(),
+    });
     const sessionManager = SessionManager.open(sessionFile);
     sessionManager.appendMessage(
       userMessage("we were discussing the Sonnet leak screenshots", oldBindingUpdatedAt + 1_000),
@@ -4967,7 +5144,7 @@ describe("runCodexAppServerAttempt", () => {
     const agentDir = path.join(tempDir, "agent");
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
     const binding = await readCodexAppServerBinding(sessionFile);
-    const bindingUpdatedAt = Date.parse(binding?.updatedAt ?? "");
+    const bindingUpdatedAt = Date.parse(binding?.historyCoveredThrough ?? "");
     if (!Number.isFinite(bindingUpdatedAt)) {
       throw new Error("expected valid Codex binding timestamp");
     }
@@ -5606,41 +5783,6 @@ describe("runCodexAppServerAttempt", () => {
     expect(turnRequestParams?.model).toBe("local-model");
     expect(collaborationMode?.settings?.model).toBe("local-model");
     expect(turnRequestParams?.approvalsReviewer).toBe("user");
-  });
-
-  it("keeps managed web_search for provider-qualified Codex model overrides", async () => {
-    testing.setOpenClawCodingToolsFactoryForTests(() => [createRuntimeDynamicTool("web_search")]);
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const { requests, waitForMethod, completeTurn } = createStartedThreadHarness(async (method) => {
-      if (method === "modelProvider/capabilities/read") {
-        return { webSearch: true };
-      }
-      return undefined;
-    });
-    const params = createParams(sessionFile, workspaceDir);
-    params.disableTools = false;
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    params.modelId = "lmstudio/local-model";
-
-    const run = runCodexAppServerAttempt(params);
-    await waitForMethod("turn/start");
-    await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
-
-    expect(requests.map((request) => request.method)).not.toContain(
-      "modelProvider/capabilities/read",
-    );
-    const startRequest = requests.find((request) => request.method === "thread/start");
-    const startRequestParams = startRequest?.params as Record<string, unknown> | undefined;
-    const startConfig = startRequestParams?.config as Record<string, unknown> | undefined;
-    const dynamicToolNames = specNames(
-      (startRequestParams?.dynamicTools as CodexDynamicToolSpec[] | undefined) ?? [],
-    );
-    expect(startRequestParams?.model).toBe("local-model");
-    expect(startRequestParams?.modelProvider).toBe("lmstudio");
-    expect(startConfig?.web_search).toBe("disabled");
-    expect(dynamicToolNames).toContain("web_search");
   });
 
   it("uses bound local model providers when disabling Guardian on resumed threads", async () => {

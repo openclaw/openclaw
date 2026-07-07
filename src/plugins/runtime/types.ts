@@ -18,6 +18,13 @@ export type SubagentRunParams = {
   lightContext?: boolean;
   deliver?: boolean;
   idempotencyKey?: string;
+  cwd?: string;
+};
+
+export type PluginManagedWorktree = {
+  id: string;
+  path: string;
+  branch: string;
 };
 
 export type SubagentRunResult = {
@@ -94,6 +101,17 @@ export type PluginRuntime = PluginRuntimeCore & {
   nodes: {
     list: (params?: RuntimeNodeListParams) => Promise<RuntimeNodeListResult>;
     invoke: (params: RuntimeNodeInvokeParams) => Promise<unknown>;
+  };
+  worktrees: {
+    create: (params: {
+      repoRoot: string;
+      name: string;
+      baseRef?: string;
+      ownerKind: "workboard";
+      ownerId: string;
+    }) => Promise<PluginManagedWorktree>;
+    release: (params: { path: string }) => Promise<void>;
+    removeIfLossless: (params: { path: string }) => Promise<boolean>;
   };
   channel: PluginRuntimeChannel;
 };

@@ -29,11 +29,19 @@ import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
 import { parseFeishuCommentTarget } from "./comment-target.js";
 import { deliverCommentThreadText } from "./drive.js";
 import { resolveFeishuIdentityHeaderTitle } from "./identity-header.js";
-import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
+import {
+  sendMediaFeishu,
+  shouldSuppressFeishuTextForVoiceMedia,
+  type SendMediaResult,
+} from "./media.js";
+import {
+  readNativeFeishuCardJson,
+  resolveFeishuCardTemplate,
+  sanitizeNativeFeishuCard,
+} from "./native-card.js";
 import { chunkTextForOutbound, type ChannelOutboundAdapter } from "./outbound-runtime-api.js";
 import { buildFeishuPresentationCardElements } from "./presentation-card.js";
 import {
-  resolveFeishuCardTemplate,
   sendCardFeishu,
   sendMarkdownCardFeishu,
   sendMessageFeishu,
@@ -95,159 +103,6 @@ function markRenderedFeishuCard(card: Record<string, unknown>): Record<string, u
   return card;
 }
 
-function escapeFeishuCardMarkdownText(text: string): string {
-  return text.replace(/[&<>]/g, (char) => {
-    switch (char) {
-      case "&":
-        return "&amp;";
-      case "<":
-        return "&lt;";
-      case ">":
-        return "&gt;";
-      default:
-        return char;
-    }
-  });
-}
-
-function resolveSafeFeishuButtonUrl(url: unknown): string | undefined {
-  const trimmed = typeof url === "string" ? url.trim() : "";
-  if (!trimmed) {
-    return undefined;
-  }
-  try {
-    const parsed = new URL(trimmed);
-    return parsed.protocol === "https:" || parsed.protocol === "http:" ? trimmed : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function sanitizeNativeFeishuButtonBehavior(
-  behavior: unknown,
-): Record<string, unknown> | undefined {
-  if (!isRecord(behavior)) {
-    return undefined;
-  }
-  if (behavior.type === "open_url") {
-    const safeUrl =
-      resolveSafeFeishuButtonUrl(behavior.default_url) ?? resolveSafeFeishuButtonUrl(behavior.url);
-    return safeUrl ? { type: "open_url", default_url: safeUrl } : undefined;
-  }
-  if (behavior.type === "callback" && isRecord(behavior.value) && behavior.value.oc === "ocf1") {
-    return { type: "callback", value: behavior.value };
-  }
-  return undefined;
-}
-
-function sanitizeNativeFeishuCardButton(button: unknown): Record<string, unknown> | undefined {
-  if (!isRecord(button)) {
-    return undefined;
-  }
-  const text =
-    isRecord(button.text) && typeof button.text.content === "string"
-      ? button.text.content
-      : undefined;
-  if (!text?.trim()) {
-    return undefined;
-  }
-  const style =
-    button.type === "danger"
-      ? "danger"
-      : button.type === "primary" || button.type === "success"
-        ? "primary"
-        : undefined;
-  const behaviors = Array.isArray(button.behaviors)
-    ? button.behaviors
-        .map((behavior) => sanitizeNativeFeishuButtonBehavior(behavior))
-        .filter((behavior): behavior is Record<string, unknown> => Boolean(behavior))
-    : [];
-  const rootSafeUrl = resolveSafeFeishuButtonUrl(button.url);
-  if (rootSafeUrl) {
-    behaviors.push({ type: "open_url", default_url: rootSafeUrl });
-  }
-  if (isRecord(button.value) && button.value.oc === "ocf1") {
-    behaviors.push({ type: "callback", value: button.value });
-  }
-  if (behaviors.length === 0) {
-    return undefined;
-  }
-  const rendered: Record<string, unknown> = {
-    tag: "button",
-    text: { tag: "plain_text", content: text },
-    type:
-      style === "danger"
-        ? "danger"
-        : style === "primary" || style === "success"
-          ? "primary"
-          : "default",
-    behaviors,
-  };
-  return rendered;
-}
-
-function sanitizeNativeFeishuCardElements(element: unknown): Record<string, unknown>[] {
-  if (!isRecord(element) || typeof element.tag !== "string") {
-    return [];
-  }
-  if (element.tag === "hr") {
-    return [{ tag: "hr" }];
-  }
-  if (element.tag === "markdown" && typeof element.content === "string") {
-    return [
-      {
-        tag: "markdown",
-        content: escapeFeishuCardMarkdownText(element.content),
-      },
-    ];
-  }
-  if (element.tag === "button") {
-    const button = sanitizeNativeFeishuCardButton(element);
-    return button ? [button] : [];
-  }
-  if (element.tag === "action" && Array.isArray(element.actions)) {
-    return element.actions
-      .map((action) => sanitizeNativeFeishuCardButton(action))
-      .filter((action): action is Record<string, unknown> => Boolean(action));
-  }
-  return [];
-}
-
-function sanitizeNativeFeishuCard(
-  card: Record<string, unknown>,
-): Record<string, unknown> | undefined {
-  const body = isRecord(card.body) ? card.body : undefined;
-  const rawElements = Array.isArray(body?.elements) ? body.elements : [];
-  const elements = rawElements
-    .flatMap((element) => sanitizeNativeFeishuCardElements(element))
-    .filter((element): element is Record<string, unknown> => Boolean(element));
-  if (elements.length === 0) {
-    return undefined;
-  }
-
-  const header = isRecord(card.header) ? card.header : undefined;
-  const title =
-    isRecord(header?.title) && typeof header.title.content === "string"
-      ? header.title.content
-      : undefined;
-  return markRenderedFeishuCard({
-    schema: "2.0",
-    config: { width_mode: "fill" },
-    ...(title?.trim()
-      ? {
-          header: {
-            title: { tag: "plain_text", content: title },
-            template:
-              resolveFeishuCardTemplate(
-                typeof header?.template === "string" ? header.template : undefined,
-              ) ?? "blue",
-          },
-        }
-      : {}),
-    body: { elements },
-  });
-}
-
 function readNativeFeishuCard(payload: { channelData?: Record<string, unknown> }) {
   const feishuData = payload.channelData?.feishu;
   if (!isRecord(feishuData)) {
@@ -260,7 +115,8 @@ function readNativeFeishuCard(payload: { channelData?: Record<string, unknown> }
   if ((card as { [RENDERED_FEISHU_CARD]?: true })[RENDERED_FEISHU_CARD] === true) {
     return card;
   }
-  return sanitizeNativeFeishuCard(card);
+  const sanitizedCard = sanitizeNativeFeishuCard(card);
+  return sanitizedCard ? markRenderedFeishuCard(sanitizedCard) : undefined;
 }
 
 function buildFeishuPayloadCard(params: {
@@ -273,18 +129,22 @@ function buildFeishuPayloadCard(params: {
     return nativeCard;
   }
 
+  const rawText = params.text ?? params.payload.text;
+  const textCard = readNativeFeishuCardJson(rawText);
   const interactive = normalizeInteractiveReply(params.payload.interactive);
   const presentation =
     normalizeMessagePresentation(params.payload.presentation) ??
     (interactive ? interactiveReplyToPresentation(interactive) : undefined);
   if (!presentation && !interactive) {
-    return undefined;
+    return textCard ? markRenderedFeishuCard(textCard) : undefined;
   }
 
-  const text = resolveInteractiveTextFallback({
-    text: params.text ?? params.payload.text,
-    interactive,
-  });
+  const text = textCard
+    ? undefined
+    : resolveInteractiveTextFallback({
+        text: rawText,
+        interactive,
+      });
   const elements = presentation
     ? buildFeishuPresentationCardElements({ presentation, fallbackText: text })
     : [
@@ -536,8 +396,14 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           const interactive = normalizeInteractiveReply(ctx.payload.interactive);
           return interactive ? interactiveReplyToPresentation(interactive) : undefined;
         })();
+      // Structured content replaces raw card JSON; document comments should
+      // render only the usable text fallback instead of exposing both forms.
+      const fallbackSourceText =
+        normalizedPresentation && readNativeFeishuCardJson(ctx.payload.text)
+          ? undefined
+          : ctx.payload.text;
       const presentationFallbackText = renderMessagePresentationFallbackText({
-        text: ctx.payload.text,
+        text: fallbackSourceText,
         presentation: normalizedPresentation,
       });
       // Direct delivery retains blocks; core-rendered delivery carries the fact.
@@ -568,9 +434,15 @@ export const feishuOutbound: ChannelOutboundAdapter = {
     const mediaUrls = normalizeStringEntries(resolvePayloadMediaUrls(ctx.payload));
     return attachChannelToResult(
       "feishu",
-      await sendPayloadMediaSequenceAndFinalize({
+      await sendPayloadMediaSequenceAndFinalize<
+        SendMediaResult,
+        Awaited<ReturnType<typeof sendCardFeishu>>
+      >({
         text: ctx.payload.text ?? "",
         mediaUrls,
+        onResult: async (deliveryResult) => {
+          await ctx.onDeliveryResult?.(attachChannelToResult("feishu", deliveryResult));
+        },
         send: async ({ mediaUrl }) =>
           await sendMediaFeishu({
             cfg: ctx.cfg,
@@ -643,6 +515,18 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         });
       }
 
+      const card = readNativeFeishuCardJson(text);
+      if (card) {
+        return await sendCardFeishu({
+          cfg,
+          to,
+          card: markRenderedFeishuCard(card),
+          accountId: accountId ?? undefined,
+          replyToMessageId,
+          replyInThread,
+        });
+      }
+
       const account = resolveFeishuAccount({ cfg, accountId: accountId ?? undefined });
       const renderMode = account.config?.renderMode ?? "auto";
       const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
@@ -682,6 +566,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       mediaLocalRoots,
       replyToId,
       threadId,
+      onDeliveryResult,
     }) => {
       const { replyToMessageId, replyInThread } = resolveFeishuMediaReplyMode({
         replyToId,
@@ -706,10 +591,14 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           mediaUrl,
           audioAsVoice,
         });
+      const reportDelivery = async (result: Awaited<ReturnType<typeof sendOutboundText>>) => {
+        await onDeliveryResult?.(attachChannelToResult("feishu", result));
+      };
+      let textSent = false;
 
       // Send text first if provided, except for Feishu native voice bubbles.
       if (text?.trim() && !suppressTextForVoiceMedia) {
-        await sendOutboundText({
+        const textResult = await sendOutboundText({
           cfg,
           to,
           text,
@@ -717,12 +606,15 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           replyToMessageId,
           replyInThread,
         });
+        textSent = true;
+        await reportDelivery(textResult);
       }
 
       // Upload and send media if URL or local path provided
       if (mediaUrl) {
+        let mediaResult: Awaited<ReturnType<typeof sendMediaFeishu>>;
         try {
-          const result = await sendMediaFeishu({
+          mediaResult = await sendMediaFeishu({
             cfg,
             to,
             mediaUrl,
@@ -732,23 +624,14 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             replyInThread,
             ...(audioAsVoice === true ? { audioAsVoice: true } : {}),
           });
-          if (result.voiceIntentDegradedToFile && text?.trim()) {
-            await sendOutboundText({
-              cfg,
-              to,
-              text,
-              accountId: accountId ?? undefined,
-              replyToMessageId,
-              replyInThread,
-            });
-          }
-          return result;
         } catch (err) {
           // Log the error for debugging
           console.error(`[feishu] sendMediaFeishu failed:`, err);
           // Fallback to URL link if upload fails
-          const fallbackText = [text?.trim(), `📎 ${mediaUrl}`].filter(Boolean).join("\n\n");
-          return await sendOutboundText({
+          const fallbackText = [textSent ? undefined : text?.trim(), `📎 ${mediaUrl}`]
+            .filter(Boolean)
+            .join("\n\n");
+          const fallbackResult = await sendOutboundText({
             cfg,
             to,
             text: fallbackText,
@@ -756,7 +639,25 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             replyToMessageId,
             replyInThread,
           });
+          await reportDelivery(fallbackResult);
+          return fallbackResult;
         }
+
+        // Upload fallback applies only to the platform send. Persistence and
+        // follow-up failures must not resend an attachment already accepted by Feishu.
+        await onDeliveryResult?.(attachChannelToResult("feishu", mediaResult));
+        if (mediaResult.voiceIntentDegradedToFile && text?.trim()) {
+          const textResult = await sendOutboundText({
+            cfg,
+            to,
+            text,
+            accountId: accountId ?? undefined,
+            replyToMessageId,
+            replyInThread,
+          });
+          await reportDelivery(textResult);
+        }
+        return mediaResult;
       }
 
       // No media URL, just return text result

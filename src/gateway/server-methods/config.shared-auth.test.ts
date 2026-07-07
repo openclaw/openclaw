@@ -4,6 +4,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   createConfigHandlerHarness,
   createConfigWriteSnapshot,
@@ -141,6 +143,19 @@ function hotReloadConfig(): OpenClawConfig {
   };
 }
 
+function installBrowserReloadRegistry(): void {
+  const registry = createTestRegistry([]);
+  registry.reloads = [
+    {
+      pluginId: "browser",
+      pluginName: "Browser",
+      registration: { restartPrefixes: ["browser"], hotPrefixes: ["browser.profiles"] },
+      source: "test",
+    },
+  ];
+  setActivePluginRegistry(registry);
+}
+
 function mockPreviousConfig(config: OpenClawConfig): void {
   readConfigFileSnapshotForWriteMock.mockResolvedValue(createConfigWriteSnapshot(config));
 }
@@ -171,6 +186,7 @@ function expectNoDirectRestart(): void {
 
 afterEach(() => {
   vi.clearAllMocks();
+  resetPluginRuntimeStateForTest();
 });
 
 beforeEach(() => {
@@ -380,6 +396,34 @@ describe("config shared auth disconnects", () => {
     expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
     const payload = restartSentinelMocks.writeRestartSentinel.mock.calls.at(-1)?.[0];
     expect(payload?.stats?.requiresRestart).toBe(false);
+  });
+
+  it("does not schedule a direct restart for hot-mode browser profile config.patch writes", async () => {
+    installBrowserReloadRegistry();
+    mockPreviousConfig({
+      ...hotReloadConfig(),
+      browser: {
+        profiles: {
+          sandbox: {
+            cdpUrl: "http://127.0.0.1:9222",
+            color: "#0066CC",
+          },
+        },
+      },
+    });
+
+    await runConfigPatch({
+      browser: {
+        profiles: {
+          sandbox: {
+            cdpUrl: "http://127.0.0.1:9223",
+            color: "#0066CC",
+          },
+        },
+      },
+    });
+
+    expectNoDirectRestart();
   });
 
   it("does not add an agent continuation from generic control-plane sessionKey params", async () => {

@@ -1,9 +1,11 @@
+import { ensureSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 /**
  * Prepares CLI backend run context: backend config, prompts, bootstrap context,
  * MCP, auth epoch, and reusable session metadata.
  */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getRuntimeConfig } from "../../config/config.js";
+import type { CliBackendConfig } from "../../config/types.agent-defaults.js";
 import {
   assertContextEngineHostSupport,
   buildGenericCliContextEngineHostSupport,
@@ -17,6 +19,7 @@ import {
   resolveMcpLoopbackBearerToken,
 } from "../../gateway/mcp-http.loopback-runtime.js";
 import { resolveMcpLoopbackScopedTools } from "../../gateway/mcp-http.runtime.js";
+import { buildCrestodianToolsMcpServerConfig } from "../../mcp/openclaw-tools-serve-config.js";
 import { isClaudeCliProvider } from "../../plugin-sdk/anthropic-cli.js";
 import type {
   CliBackendAuthEpochMode,
@@ -30,6 +33,7 @@ import { resolveSkillsPromptForRun } from "../../skills/loading/workspace.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
+import { resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
 import { resolveApiKeyForProfile } from "../auth-profiles/oauth.js";
@@ -46,6 +50,7 @@ import {
   makeBootstrapWarn as makeBootstrapWarnImpl,
   resolveBootstrapContextForRun as resolveBootstrapContextForRunImpl,
 } from "../bootstrap-files.js";
+import { isPrimaryBootstrapRun, resolveWorkspaceBootstrapRouting } from "../bootstrap-routing.js";
 import { CLI_AUTH_EPOCH_VERSION, resolveCliAuthEpoch } from "../cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
@@ -76,10 +81,13 @@ import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-promp
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import { ensureSandboxWorkspaceForSession } from "../sandbox.js";
-import { ensureSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
+import {
+  DEFAULT_BOOTSTRAP_FILENAME,
+  isWorkspaceBootstrapPending as isWorkspaceBootstrapPendingImpl,
+} from "../workspace.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { buildCliAgentSystemPrompt, normalizeCliModel } from "./helpers.js";
@@ -94,6 +102,7 @@ import {
 import type { CliReusableSession, PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 const prepareDeps = {
+  isWorkspaceBootstrapPending: isWorkspaceBootstrapPendingImpl,
   makeBootstrapWarn: makeBootstrapWarnImpl,
   resolveBootstrapContextForRun: resolveBootstrapContextForRunImpl,
   getActiveMcpLoopbackRuntime,
@@ -109,6 +118,56 @@ const prepareDeps = {
   claudeCliSessionTranscriptHasOrphanedToolUse,
   resolveApiKeyForProfile,
 };
+
+function resolveReusableCliSessionId(reusableCliSession: CliReusableSession): string | undefined {
+  return reusableCliSession.mode === "reuse" || reusableCliSession.mode === "reuse-with-drift"
+    ? reusableCliSession.sessionId
+    : undefined;
+}
+
+function resolveCliSessionInvalidatedReason(
+  reusableCliSession: CliReusableSession,
+): Extract<CliReusableSession, { mode: "invalidate" }>["invalidatedReason"] | undefined {
+  return reusableCliSession.mode === "invalidate"
+    ? reusableCliSession.invalidatedReason
+    : undefined;
+}
+
+function canTransportSystemPrompt(backend: CliBackendConfig): boolean {
+  return (
+    backend.systemPromptWhen !== "never" &&
+    Boolean(
+      backend.systemPromptArg || backend.systemPromptFileArg || backend.systemPromptFileConfigKey,
+    )
+  );
+}
+
+function buildCliSessionDriftUserContext(
+  reusableCliSession: CliReusableSession,
+): string | undefined {
+  if (reusableCliSession.mode !== "reuse-with-drift") {
+    return undefined;
+  }
+  return `OpenClaw resumed this CLI session after prompt content changed. Follow the current turn's instructions; changed=${reusableCliSession.drift.reasons.join(",")}.`;
+}
+
+function prependCliSessionDriftUserContext(
+  context: RunCliAgentParams["currentInboundContext"],
+  reusableCliSession: CliReusableSession,
+): RunCliAgentParams["currentInboundContext"] {
+  const note = buildCliSessionDriftUserContext(reusableCliSession);
+  if (!note) {
+    return context;
+  }
+  if (!context) {
+    return { text: note };
+  }
+  return {
+    ...context,
+    text: [note, context.text].join("\n\n"),
+    ...(context.resumableText ? { resumableText: [note, context.resumableText].join("\n\n") } : {}),
+  };
+}
 
 async function resolveCliSkillsPrompt(params: {
   agentId: string;
@@ -187,7 +246,8 @@ const CLAUDE_CLI_CONTEXT_MODEL_ALIASES: Record<string, string> = {
   "opus-4-7": "claude-opus-4-7",
   "opus-4.6": "claude-opus-4-6",
   "opus-4-6": "claude-opus-4-6",
-  sonnet: "claude-sonnet-4-6",
+  sonnet: "claude-sonnet-5",
+  "sonnet-5": "claude-sonnet-5",
   "sonnet-4.6": "claude-sonnet-4-6",
   "sonnet-4-6": "claude-sonnet-4-6",
 };
@@ -347,25 +407,35 @@ export async function prepareCliRunContext(
     }
   }
   const extraSystemPrompt = params.extraSystemPrompt?.trim() ?? "";
-  // Use the static portion (excluding per-message inbound metadata) for session reuse hashing.
-  // Per-message metadata (timestamps, message IDs) changes every turn and must not trigger session resets.
-  const extraSystemPromptHash =
-    params.extraSystemPromptStatic !== undefined
-      ? hashCliSessionText(params.extraSystemPromptStatic.trim() || undefined)
+  const bindingFacts = params.cliSessionBindingFacts;
+  const bindingExtraSystemPromptStatic =
+    bindingFacts?.extraSystemPromptStatic ?? params.extraSystemPromptStatic;
+  const baseExtraSystemPromptHash =
+    bindingExtraSystemPromptStatic !== undefined
+      ? hashCliSessionText(bindingExtraSystemPromptStatic.trim() || undefined)
       : hashCliSessionText(extraSystemPrompt);
   const requireExplicitMessageTarget =
     params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey);
-  const messageToolPolicyHash =
-    params.sourceReplyDeliveryMode !== undefined ||
-    params.requireExplicitMessageTarget !== undefined ||
-    requireExplicitMessageTarget
-      ? hashCliSessionText(
-          JSON.stringify({
-            sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-            requireExplicitMessageTarget,
-          }),
-        )
-      : undefined;
+  const hasCliSessionBindingFacts = bindingFacts !== undefined;
+  const bindingRequireExplicitMessageTarget =
+    bindingFacts?.requireExplicitMessageTarget ?? requireExplicitMessageTarget;
+  const bindingSourceReplyDeliveryMode = hasCliSessionBindingFacts
+    ? bindingFacts.sourceReplyDeliveryMode
+    : params.sourceReplyDeliveryMode;
+  const hasBindingMessageToolPolicy =
+    bindingSourceReplyDeliveryMode !== undefined ||
+    (hasCliSessionBindingFacts
+      ? bindingFacts.requireExplicitMessageTarget !== undefined ||
+        bindingRequireExplicitMessageTarget
+      : params.requireExplicitMessageTarget !== undefined || bindingRequireExplicitMessageTarget);
+  const messageToolPolicyHash = hasBindingMessageToolPolicy
+    ? hashCliSessionText(
+        JSON.stringify({
+          sourceReplyDeliveryMode: bindingSourceReplyDeliveryMode,
+          requireExplicitMessageTarget: bindingRequireExplicitMessageTarget,
+        }),
+      )
+    : undefined;
 
   const modelId = (params.model ?? "default").trim() || "default";
   const normalizedModel = normalizeCliModel(modelId, backendResolved.config);
@@ -392,7 +462,7 @@ export async function prepareCliRunContext(
     : undefined;
 
   const sessionLabel = params.sessionKey ?? params.sessionId;
-  const { bootstrapFiles, contextFiles } = isSideQuestion
+  const { bootstrapFiles, contextFiles: resolvedContextFiles } = isSideQuestion
     ? { bootstrapFiles: [], contextFiles: [] }
     : await prepareDeps.resolveBootstrapContextForRun({
         workspaceDir,
@@ -408,11 +478,43 @@ export async function prepareCliRunContext(
           warn: (message) => cliBackendLog.warn(message),
         }),
       });
+  // Mirror the embedded runner's bootstrap routing for backends that transport
+  // OpenClaw's system prompt. Only a declared native-tool backend can complete
+  // the file-based ritual; other backends receive limited guidance.
+  const canonicalWorkspace = resolveUserPath(
+    resolveAgentWorkspaceDir(params.config ?? {}, workspaceResolution.agentId),
+  );
+  const hasBootstrapFileAccess =
+    backendResolved.nativeToolMode === "always-on" && params.disableTools !== true;
+  const bootstrapRouting =
+    isSideQuestion || !canTransportSystemPrompt(backendResolved.config)
+      ? undefined
+      : await resolveWorkspaceBootstrapRouting({
+          isWorkspaceBootstrapPending: prepareDeps.isWorkspaceBootstrapPending,
+          bootstrapFiles,
+          bootstrapFilesProvideAccess: false,
+          bootstrapContextRunKind: params.bootstrapContextRunKind,
+          trigger: params.trigger,
+          sessionKey: params.sessionKey,
+          isPrimaryRun: isPrimaryBootstrapRun(params.sessionKey),
+          isCanonicalWorkspace: canonicalWorkspace === resolvedWorkspace,
+          effectiveWorkspace: workspaceDir,
+          resolvedWorkspace,
+          hasBootstrapFileAccess,
+        });
+  const bootstrapMode = bootstrapRouting?.bootstrapMode ?? "none";
+  const includeBootstrapInSystemContext = bootstrapRouting?.includeBootstrapInSystemContext ?? true;
+  const contextFiles = includeBootstrapInSystemContext
+    ? resolvedContextFiles
+    : resolvedContextFiles.filter((file) => !/(^|[\\/])BOOTSTRAP\.md$/iu.test(file.path.trim()));
+  const bootstrapFilesForInjectionStats = includeBootstrapInSystemContext
+    ? bootstrapFiles
+    : bootstrapFiles.filter((file) => file.name !== DEFAULT_BOOTSTRAP_FILENAME);
   const bootstrapMaxChars = resolveBootstrapMaxChars(params.config, sessionAgentId);
   const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config, sessionAgentId);
   const bootstrapAnalysis = analyzeBootstrapBudget({
     files: buildBootstrapInjectionStats({
-      bootstrapFiles,
+      bootstrapFiles: bootstrapFilesForInjectionStats,
       injectedFiles: contextFiles,
     }),
     bootstrapMaxChars,
@@ -425,8 +527,24 @@ export async function prepareCliRunContext(
     seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
     previousSignature: params.bootstrapPromptWarningSignature,
   });
+  // Bootstrap guidance changes resumable system context. Hash the pending mode
+  // so entering or leaving bootstrap refreshes first-only CLI system prompts.
+  const extraSystemPromptHash =
+    bootstrapMode === "none"
+      ? baseExtraSystemPromptHash
+      : hashCliSessionText(JSON.stringify([baseExtraSystemPromptHash ?? null, bootstrapMode]));
+  // Ring-zero Crestodian runs replace the bundle MCP surface entirely: no
+  // loopback server, no plugin/user servers. The generated MCP config carries
+  // only the crestodian stdio server, so the CLI harness sees exactly one
+  // OpenClaw tool (its own native tools stay under the harness's policy).
+  const crestodianMcpConfig = params.crestodianTool
+    ? buildCrestodianToolsMcpServerConfig(params.crestodianTool)
+    : undefined;
   const bundleMcpEnabled =
-    !isSideQuestion && backendResolved.bundleMcp && params.disableTools !== true;
+    !isSideQuestion &&
+    !crestodianMcpConfig &&
+    backendResolved.bundleMcp &&
+    params.disableTools !== true;
   let mcpLoopbackRuntime = bundleMcpEnabled ? prepareDeps.getActiveMcpLoopbackRuntime() : undefined;
   if (bundleMcpEnabled && !mcpLoopbackRuntime) {
     try {
@@ -450,11 +568,12 @@ export async function prepareCliRunContext(
     undefined;
   try {
     const preparedBackend = await prepareCliBundleMcpConfig({
-      enabled: bundleMcpEnabled,
+      enabled: bundleMcpEnabled || crestodianMcpConfig !== undefined,
       mode: backendResolved.bundleMcpMode,
       backend: backendResolved.config,
       workspaceDir,
       config: params.config,
+      ...(crestodianMcpConfig ? { exclusiveConfig: crestodianMcpConfig } : {}),
       additionalConfig: mcpLoopbackRuntime
         ? prepareDeps.createMcpLoopbackServerConfig(mcpLoopbackRuntime.port)
         : undefined,
@@ -591,14 +710,16 @@ export async function prepareCliRunContext(
             sessionKey: params.sessionKey ?? "",
             messageProvider: params.messageChannel ?? params.messageProvider,
             currentChannelId: params.currentChannelId,
-            currentThreadTs: params.currentThreadTs,
-            currentMessageId: params.currentMessageId,
-            currentInboundAudio: params.currentInboundAudio,
+            // CLI binding hashes must use session-stable prompt facts. Per-sender
+            // and per-message scope stays in the runtime MCP env/list-call path.
+            currentThreadTs: undefined,
+            currentMessageId: undefined,
+            currentInboundAudio: undefined,
             accountId: params.agentAccountId,
-            inboundEventKind: params.currentInboundEventKind,
-            sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-            requireExplicitMessageTarget,
-            senderIsOwner: params.senderIsOwner,
+            inboundEventKind: undefined,
+            sourceReplyDeliveryMode: bindingSourceReplyDeliveryMode,
+            requireExplicitMessageTarget: bindingRequireExplicitMessageTarget,
+            senderIsOwner: undefined,
           }).tools
         : [];
     const promptToolNamesHash =
@@ -606,7 +727,7 @@ export async function prepareCliRunContext(
         ? hashCliSessionText(JSON.stringify(promptTools.map((tool) => tool.name).toSorted()))
         : undefined;
     const reusableCliSessionCandidate: CliReusableSession = isSideQuestion
-      ? {}
+      ? { mode: "none" }
       : params.cliSessionBinding
         ? resolveCliSessionReuse({
             binding: params.cliSessionBinding,
@@ -621,9 +742,15 @@ export async function prepareCliRunContext(
             mcpResumeHash: preparedBackendFinal.mcpResumeHash,
           })
         : params.cliSessionId
-          ? { sessionId: params.cliSessionId }
-          : {};
-    const candidateClaudeCliSessionId = reusableCliSessionCandidate.sessionId?.trim() || undefined;
+          ? { mode: "reuse", sessionId: params.cliSessionId }
+          : { mode: "none" };
+    const backendReusableCliSession: CliReusableSession =
+      reusableCliSessionCandidate.mode === "reuse-with-drift" &&
+      !canTransportSystemPrompt(preparedBackendFinal.backend)
+        ? { mode: "invalidate", invalidatedReason: "system-prompt" }
+        : reusableCliSessionCandidate;
+    const candidateClaudeCliSessionId =
+      resolveReusableCliSessionId(backendReusableCliSession)?.trim() || undefined;
     const hasClaudeCliCandidate =
       candidateClaudeCliSessionId !== undefined && isClaudeCliProvider(params.provider);
     const claudeCliTranscriptMissing =
@@ -639,18 +766,20 @@ export async function prepareCliRunContext(
         sessionId: candidateClaudeCliSessionId,
         workspaceDir: cwd,
       }));
-    const claudeCliInvalidatedReason: CliReusableSession["invalidatedReason"] | undefined =
+    const claudeCliInvalidatedReason: "missing-transcript" | "orphaned-tool-use" | undefined =
       claudeCliTranscriptMissing
         ? "missing-transcript"
         : claudeCliTranscriptOrphanedToolUse
           ? "orphaned-tool-use"
           : undefined;
     const reusableCliSession: CliReusableSession = claudeCliInvalidatedReason
-      ? { invalidatedReason: claudeCliInvalidatedReason }
-      : reusableCliSessionCandidate;
-    if (reusableCliSession.invalidatedReason) {
+      ? { mode: "invalidate", invalidatedReason: claudeCliInvalidatedReason }
+      : backendReusableCliSession;
+    const reusableCliSessionId = resolveReusableCliSessionId(reusableCliSession);
+    const invalidatedReason = resolveCliSessionInvalidatedReason(reusableCliSession);
+    if (invalidatedReason) {
       cliBackendLog.info(
-        `cli session reset: provider=${params.provider} reason=${reusableCliSession.invalidatedReason}`,
+        `cli session reset: provider=${params.provider} reason=${invalidatedReason}`,
       );
     }
     let openClawHistoryMessages: unknown[] | undefined;
@@ -708,8 +837,8 @@ export async function prepareCliRunContext(
           config: params.config,
           defaultThinkLevel: params.thinkLevel,
           extraSystemPrompt,
-          sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-          requireExplicitMessageTarget,
+          sourceReplyDeliveryMode: bindingSourceReplyDeliveryMode,
+          requireExplicitMessageTarget: bindingRequireExplicitMessageTarget,
           silentReplyPromptMode: params.silentReplyPromptMode,
           runtimeChannel,
           runtimeChatType: params.sessionEntry?.chatType,
@@ -721,6 +850,7 @@ export async function prepareCliRunContext(
           skillsPrompt: systemPromptSkillsPrompt,
           tools: promptTools,
           contextFiles,
+          bootstrapMode,
           modelDisplay,
           agentId: sessionAgentId,
           sessionKey: params.sessionKey,
@@ -792,15 +922,19 @@ export async function prepareCliRunContext(
     }
     let historyPromptCurrentTurn = preparedPrompt;
     if (!isSideQuestion) {
+      const currentInboundContext = prependCliSessionDriftUserContext(
+        params.currentInboundContext,
+        reusableCliSession,
+      );
       const fullCurrentInboundPrompt = buildCurrentInboundPrompt({
-        context: params.currentInboundContext,
+        context: currentInboundContext,
         prompt: preparedPrompt,
       });
       const runCurrentInboundPrompt = buildCurrentInboundPrompt({
-        context: params.currentInboundContext,
+        context: currentInboundContext,
         prompt: preparedPrompt,
         preferResumableText:
-          params.currentInboundEventKind === "room_event" && Boolean(reusableCliSession.sessionId),
+          params.currentInboundEventKind === "room_event" && Boolean(reusableCliSessionId),
       });
       historyPromptCurrentTurn = annotateInterSessionPromptText(
         fullCurrentInboundPrompt,
@@ -813,11 +947,9 @@ export async function prepareCliRunContext(
     }
     const allowRawTranscriptReseed =
       backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true;
-    const rawTranscriptReseedReason = reusableCliSession.sessionId
-      ? "session-expired"
-      : reusableCliSession.invalidatedReason;
+    const rawTranscriptReseedReason = reusableCliSessionId ? "session-expired" : invalidatedReason;
     const shouldPrepareOpenClawHistoryPrompt =
-      !isSideQuestion && (!reusableCliSession.sessionId || allowRawTranscriptReseed);
+      !isSideQuestion && (!reusableCliSessionId || allowRawTranscriptReseed);
     const openClawHistoryPrompt = shouldPrepareOpenClawHistoryPrompt
       ? buildCliSessionHistoryPrompt({
           messages: await loadCliSessionReseedMessages({
@@ -868,7 +1000,7 @@ export async function prepareCliRunContext(
       }),
       sandbox: { mode: "off", sandboxed: false },
       systemPrompt,
-      bootstrapFiles,
+      bootstrapFiles: bootstrapFilesForInjectionStats,
       injectedFiles: contextFiles,
       skillsPrompt: systemPromptSkillsPrompt,
       tools: promptTools,

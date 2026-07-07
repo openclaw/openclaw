@@ -289,11 +289,16 @@ describe("runBrowserProxyCommand", () => {
     await result;
   });
 
-  it("keeps non-timeout browser errors intact", async () => {
-    dispatcherMocks.dispatch.mockResolvedValue({
-      status: 500,
-      body: { error: "tab not found" },
-    });
+  it.each([
+    { status: 500, body: { error: "tab not found" }, expected: "500: tab not found" },
+    {
+      status: 404,
+      body: { error: 'tab not found: browser tab "abc"' },
+      expected: "404: tab not found",
+    },
+    { status: 503, body: { error: "" }, expected: "HTTP 503" },
+  ])("preserves browser response status in errors: $expected", async (response) => {
+    dispatcherMocks.dispatch.mockResolvedValue(response);
 
     await expect(
       runBrowserProxyCommand(
@@ -304,7 +309,7 @@ describe("runBrowserProxyCommand", () => {
           timeoutMs: 50,
         }),
       ),
-    ).rejects.toThrow("tab not found");
+    ).rejects.toThrow(response.expected);
   });
 
   it("rejects unauthorized query.profile when allowProfiles is configured", async () => {

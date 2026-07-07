@@ -1,6 +1,6 @@
 // Control UI HTTP tests cover static asset serving, bootstrap config, avatar and
 // assistant media routes, pairing helpers, and session-generation metadata.
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
@@ -49,6 +49,7 @@ describe("handleControlUiHttpRequest", () => {
       chatMessageMaxWidth?: string;
       seamColor?: string;
       timeFormat?: "auto" | "12" | "24";
+      terminalEnabled: boolean;
     };
   }
 
@@ -340,7 +341,7 @@ describe("handleControlUiHttpRequest", () => {
   it("sets security headers for Control UI responses", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
-        const { res, setHeader } = makeMockHttpResponse();
+        const { res, end, setHeader } = makeMockHttpResponse();
         const handled = await handleControlUiHttpRequest(
           { url: "/", method: "GET" } as IncomingMessage,
           res,
@@ -350,7 +351,9 @@ describe("handleControlUiHttpRequest", () => {
         );
         expect(handled).toBe(true);
         expect(setHeader).toHaveBeenCalledWith("X-Frame-Options", "DENY");
-        const csp = setHeader.mock.calls.find((call) => call[0] === "Content-Security-Policy")?.[1];
+        const csp = setHeader.mock.calls.findLast(
+          (call) => call[0] === "Content-Security-Policy",
+        )?.[1];
         expect(typeof csp).toBe("string");
         expect(String(csp)).toContain("frame-ancestors 'none'");
         expect(String(csp)).toContain("script-src 'self'");
@@ -359,6 +362,59 @@ describe("handleControlUiHttpRequest", () => {
         );
         expect(String(csp)).not.toContain("https://*.tweakcn.com");
         expect(String(csp)).not.toContain("script-src 'self' 'unsafe-inline'");
+        expect(responseBody(end)).toContain('data-openclaw-terminal-enabled="false"');
+      },
+    });
+  });
+
+  it("marks terminal-enabled documents and allows the terminal WASM runtime", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { res, end, setHeader } = makeMockHttpResponse();
+        const handled = await handleControlUiHttpRequest(
+          { url: "/", method: "GET" } as IncomingMessage,
+          res,
+          {
+            root: { kind: "resolved", path: tmp },
+            config: { gateway: { terminal: { enabled: true } } },
+          },
+        );
+        expect(handled).toBe(true);
+        const csp = setHeader.mock.calls.findLast(
+          (call) => call[0] === "Content-Security-Policy",
+        )?.[1];
+        expect(String(csp)).toContain("script-src 'self' 'wasm-unsafe-eval'");
+        expect(responseBody(end)).toContain('data-openclaw-terminal-enabled="true"');
+      },
+    });
+  });
+
+  it("uses effective terminal availability instead of raw restart-pending config", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { res, end, setHeader } = makeMockHttpResponse();
+        await handleControlUiHttpRequest({ url: "/", method: "GET" } as IncomingMessage, res, {
+          root: { kind: "resolved", path: tmp },
+          config: { gateway: { terminal: { enabled: true } } },
+          terminalEnabled: false,
+        });
+        const csp = setHeader.mock.calls.findLast(
+          (call) => call[0] === "Content-Security-Policy",
+        )?.[1];
+        expect(String(csp)).not.toContain("'wasm-unsafe-eval'");
+        expect(responseBody(end)).toContain('data-openclaw-terminal-enabled="false"');
+
+        const bootstrap = makeMockHttpResponse();
+        await handleControlUiHttpRequest(
+          { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+          bootstrap.res,
+          {
+            root: { kind: "resolved", path: tmp },
+            config: { gateway: { terminal: { enabled: false } } },
+            terminalEnabled: true,
+          },
+        );
+        expect(parseBootstrapPayload(bootstrap.end).terminalEnabled).toBe(true);
       },
     });
   });
@@ -376,13 +432,69 @@ describe("handleControlUiHttpRequest", () => {
         });
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
+        expect(res["setHeader"]).toHaveBeenCalledWith(
+          "Content-Disposition",
+          `inline; filename="photo.png"; filename*=UTF-8''photo.png`,
+        );
+      },
+    });
+  });
+
+  it.each([
+    { filename: "voice.ogg", disposition: "inline" },
+    { filename: "clip.mp4", disposition: "inline" },
+    { filename: "report.pdf", disposition: "attachment" },
+    {
+      filename: "invoice---123e4567-e89b-12d3-a456-426614174000.pdf",
+      disposition: "attachment",
+    },
+    { filename: "archive.bin", disposition: "attachment" },
+  ])("serves $filename with $disposition disposition", async ({ filename, disposition }) => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-disposition-",
+      fn: async (tmpRoot) => {
+        const filePath = path.join(tmpRoot, filename);
+        await fs.writeFile(filePath, Buffer.from("fixture"));
+        const { res, handled } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(res["setHeader"]).toHaveBeenCalledWith(
+          "Content-Disposition",
+          `${disposition}; filename="${filename}"; filename*=UTF-8''${filename}`,
+        );
+      },
+    });
+  });
+
+  it("encodes Unicode and RFC 8187 delimiter characters in assistant media filenames", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-filename-",
+      fn: async (tmpRoot) => {
+        const filename = `测试 100% 'draft' (1).pdf`;
+        const filePath = path.join(tmpRoot, filename);
+        await fs.writeFile(filePath, Buffer.from("fixture"));
+        const { res, handled } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(res["setHeader"]).toHaveBeenCalledWith(
+          "Content-Disposition",
+          `attachment; filename="__ 100_ 'draft' (1).pdf"; filename*=UTF-8''%E6%B5%8B%E8%AF%95%20100%25%20%27draft%27%20%281%29.pdf`,
+        );
       },
     });
   });
 
   it("serves assistant media from canonical inbound media refs", async () => {
     const stateDir = resolveStateDir();
-    const id = `ui-media-ref-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
+    const id = `report---${randomUUID()}.pdf`;
     const filePath = path.join(stateDir, "media", "inbound", id);
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
@@ -395,6 +507,10 @@ describe("handleControlUiHttpRequest", () => {
       });
       expect(handled).toBe(true);
       expect(res.statusCode).toBe(200);
+      expect(res["setHeader"]).toHaveBeenCalledWith(
+        "Content-Disposition",
+        `attachment; filename="report.pdf"; filename*=UTF-8''report.pdf`,
+      );
     } finally {
       await fs.rm(filePath, { force: true });
     }
@@ -783,7 +899,9 @@ describe("handleControlUiHttpRequest", () => {
           },
         );
         expect(handled).toBe(true);
-        expect(end).toHaveBeenCalledWith(html);
+        expect(end).toHaveBeenCalledWith(
+          html.replace("<html", '<html data-openclaw-terminal-enabled="false"'),
+        );
       },
     });
   });
@@ -840,6 +958,7 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.chatMessageMaxWidth).toBe("min(1280px, 82%)");
         expect(parsed.seamColor).toBe("#1A2b3C");
         expect(parsed.timeFormat).toBe("24");
+        expect(parsed.terminalEnabled).toBe(false);
         expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
       },
     });
