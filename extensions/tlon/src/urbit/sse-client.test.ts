@@ -194,6 +194,44 @@ describe("UrbitSSEClient", () => {
       );
     });
 
+    it("guards JSON.parse against oversized SSE payload to prevent OOM", () => {
+      const errors: string[] = [];
+      const logger = { error: (msg: string) => errors.push(msg) };
+      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", { logger });
+
+      const cap = 16 * 1024 * 1024;
+      // Valid JSON 1 KiB above the 16 MiB cap — size check fires before parse.
+      const prefix = '{"json":{"ok":true,"x":"';
+      const suffix = '"}}';
+      const jsonOverhead = Buffer.byteLength(prefix + suffix, "utf8");
+      const padLen = cap + 1024 - jsonOverhead;
+      const hugeJson = prefix + "A".repeat(padLen) + suffix;
+
+      client.processEvent(`id: 1\ndata: ${hugeJson}`);
+
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toBe(
+        "Error parsing SSE event: Error: Tlon Urbit SSE payload exceeds 16 MiB limit",
+      );
+    });
+
+    it("accepts SSE payload at the 16 MiB boundary", () => {
+      const cap = 16 * 1024 * 1024;
+      // Allocate valid JSON whose byteLength exactly equals cap.
+      const prefix = '{"json":{"ok":true,"x":"';
+      const suffix = '"}}';
+      const jsonOverhead = Buffer.byteLength(prefix + suffix, "utf8");
+      const padLen = cap - jsonOverhead;
+      const hugeJson = prefix + "A".repeat(padLen) + suffix;
+
+      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
+      const handler = vi.fn();
+      client.eventHandlers.set(1, { event: handler });
+
+      client.processEvent(`id: 1\ndata: ${hugeJson}`);
+      expect(handler).toHaveBeenCalledWith({ ok: true, x: "A".repeat(padLen) });
+    });
+
     it("ignores malformed event ids when deciding whether to ack", async () => {
       const mockUrbitFetch = vi.mocked(urbitFetch);
       mockUrbitFetch.mockResolvedValue({

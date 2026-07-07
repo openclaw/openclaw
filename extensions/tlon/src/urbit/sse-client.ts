@@ -26,7 +26,12 @@ type UrbitSseOptions = {
   logger?: UrbitSseLogger;
 };
 
+const MAX_SSE_PAYLOAD_BYTES = 16 * 1024 * 1024;
+
 function parseUrbitSsePayload(data: string): { id?: number; json?: unknown; response?: string } {
+  if (Buffer.byteLength(data, "utf8") > MAX_SSE_PAYLOAD_BYTES) {
+    throw new Error("Tlon Urbit SSE payload exceeds 16 MiB limit");
+  }
   try {
     return JSON.parse(data) as { id?: number; json?: unknown; response?: string };
   } catch (cause) {
