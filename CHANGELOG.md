@@ -2,6 +2,29 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.6.33
+
+### Highlights
+
+- **Monthly extended-stable npm delivery:** Maintainers can prepare and validate a trailing-month release on a dedicated `extended-stable` channel without changing the existing `latest` channel. (#99352) Thanks @kevinslin.
+
+### Changes
+
+- **Release validation:** Add guarded branch, version, and npm preflight checks for monthly extended-stable candidates, including a non-publishing GitHub Actions rehearsal mode. (#99352) Thanks @kevinslin.
+
+### Fixes
+
+- **ClawHub plugin publication:** Preserve the legacy `bundle-plugin` family for four official plugins and use the corrected ClawHub CLI pin, allowing those packages to be republished without an incompatible family migration. (#98249) Thanks @Patrick-Erichsen.
+
+### Complete contribution record
+
+This audited record covers the complete v2026.6.11..HEAD history: 2 merged PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
+
+#### Pull requests
+
+- **PR #98249** Preserve legacy ClawHub family for selected plugins. Thanks @Patrick-Erichsen.
+- **PR #99352** feat(release): add monthly npm extended-stable publication. Thanks @kevinslin.
+
 ## 2026.6.11
 
 ### Highlights
