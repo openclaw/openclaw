@@ -464,7 +464,7 @@ class UsagePage extends LitElement {
         agents:
           this.context.agents.state.agentsList?.agents.map((entry) => entry.id).filter(Boolean) ??
           [],
-        sessionsLimitReached: (this.usageResult?.sessions.length ?? 0) >= 1000,
+        sessionsLimitReached: (this.usageResult?.sessions?.length ?? 0) >= 1000,
         totals: this.usageResult?.totals ?? null,
         aggregates: this.usageResult?.aggregates ?? null,
         costDaily: this.usageCostSummary?.daily ?? [],
