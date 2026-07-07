@@ -50,12 +50,10 @@ import { resolveNpmRunner } from "./npm-runner.mjs";
 import {
   collectInstalledPackageErrors,
   normalizeInstalledBinaryVersion,
-  resolveInstalledBinaryCommandInvocation,
-  resolveInstalledBinaryPath,
 } from "./openclaw-npm-postpublish-verify.ts";
 import { listStaticExtensionAssetOutputs } from "./runtime-postbuild.mjs";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
-import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
+import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 export { collectBundledExtensionManifestErrors } from "./lib/bundled-extension-manifest.ts";
 export { packageNameFromSpecifier } from "./lib/plugin-package-dependencies.mjs";
@@ -440,7 +438,6 @@ export function createPackedTarballInstallArgs(
 ): string[] {
   return [
     "install",
-    "-g",
     "--prefix",
     prefixDir,
     "--ignore-scripts",
@@ -464,12 +461,30 @@ function installPackedTarball(
   });
 }
 
-function resolveGlobalRoot(prefixDir: string, cwd: string): string {
-  return execNpm(["root", "-g", "--prefix", prefixDir], {
-    cwd,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
+export function resolvePackedInstalledBinaryPath(
+  prefixDir: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  return join(
+    prefixDir,
+    "node_modules",
+    ".bin",
+    platform === "win32" ? "openclaw.cmd" : "openclaw",
+  );
+}
+
+function resolvePackedInstalledBinaryCommandInvocation(
+  prefixDir: string,
+  args: string[],
+): ReleaseCheckCommandInvocation {
+  const binaryPath = resolvePackedInstalledBinaryPath(prefixDir);
+  return process.platform === "win32"
+    ? {
+        command: resolveWindowsCmdExePath(),
+        args: ["/d", "/s", "/c", buildCmdExeCommandLine(binaryPath, args)],
+        windowsVerbatimArguments: true,
+      }
+    : { command: binaryPath, args };
 }
 
 export function createPackedBundledPluginPostinstallEnv(
@@ -594,7 +609,7 @@ function verifyPackedInstalledPackage(params: {
   prefixDir: string;
   tmpRoot: string;
 }): void {
-  const invocation = resolveInstalledBinaryCommandInvocation(params.prefixDir, ["--version"]);
+  const invocation = resolvePackedInstalledBinaryCommandInvocation(params.prefixDir, ["--version"]);
   const installedBinaryVersion = runReleaseCheckCommand(
     {
       command: invocation.command,
@@ -800,7 +815,7 @@ function runPackedCliSmoke(params: {
   homeDir: string;
   stateDir: string;
 }): void {
-  const binaryPath = resolveInstalledBinaryPath(params.prefixDir);
+  const binaryPath = resolvePackedInstalledBinaryPath(params.prefixDir);
   const env = createPackedCliSmokeEnv(process.env, {
     HOME: params.homeDir,
     OPENCLAW_STATE_DIR: params.stateDir,
@@ -861,7 +876,7 @@ function runPackedBundledChannelEntrySmoke(): void {
       resolveReleaseCheckLocalPackageTarballs(),
     );
 
-    const packageRoot = join(resolveGlobalRoot(prefixDir, tmpRoot), "openclaw");
+    const packageRoot = join(prefixDir, "node_modules", "openclaw");
     verifyPackedInstalledPackage({
       expectedVersion,
       packageRoot,

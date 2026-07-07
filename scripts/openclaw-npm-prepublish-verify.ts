@@ -11,9 +11,9 @@ import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-s
 import {
   collectInstalledPackageErrors,
   normalizeInstalledBinaryVersion,
-  resolveInstalledBinaryCommandInvocation,
 } from "./openclaw-npm-postpublish-verify.ts";
 import { resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
+import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 type InstalledPackageJson = {
   version?: string;
@@ -93,7 +93,6 @@ function main(argv = process.argv.slice(2)): void {
     npmExec(
       [
         "install",
-        "-g",
         "--prefix",
         prefixDir,
         ...args.dependencyTarballPaths.map((dependency) => realpathSync(dependency)),
@@ -103,8 +102,7 @@ function main(argv = process.argv.slice(2)): void {
       ],
       workingDir,
     );
-    const globalRoot = npmExec(["root", "-g", "--prefix", prefixDir], workingDir);
-    const packageRoot = join(globalRoot, "openclaw");
+    const packageRoot = join(prefixDir, "node_modules", "openclaw");
     const pkg = JSON.parse(
       readFileSync(join(packageRoot, "package.json"), "utf8"),
     ) as InstalledPackageJson;
@@ -114,7 +112,20 @@ function main(argv = process.argv.slice(2)): void {
       installedVersion: pkg.version?.trim() ?? "",
       packageRoot,
     });
-    const binaryInvocation = resolveInstalledBinaryCommandInvocation(prefixDir, ["--version"]);
+    const binaryPath = join(
+      prefixDir,
+      "node_modules",
+      ".bin",
+      process.platform === "win32" ? "openclaw.cmd" : "openclaw",
+    );
+    const binaryInvocation =
+      process.platform === "win32"
+        ? {
+            command: resolveWindowsCmdExePath(),
+            args: ["/d", "/s", "/c", buildCmdExeCommandLine(binaryPath, ["--version"])],
+            windowsVerbatimArguments: true,
+          }
+        : { command: binaryPath, args: ["--version"] };
     const installedBinaryVersion = runNpmVerifyCommand(binaryInvocation, workingDir);
     if (normalizeInstalledBinaryVersion(installedBinaryVersion) !== resolvedExpectedVersion) {
       errors.push(

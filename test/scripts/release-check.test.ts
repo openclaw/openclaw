@@ -23,7 +23,6 @@ describe("release-check", () => {
       createPackedTarballInstallArgs("/tmp/prefix", "/tmp/openclaw.tgz", ["/tmp/openclaw-ai.tgz"]),
     ).toEqual([
       "install",
-      "-g",
       "--prefix",
       "/tmp/prefix",
       "--ignore-scripts",
