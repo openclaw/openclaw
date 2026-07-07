@@ -13,7 +13,11 @@ import type {
 } from "openai/resources/chat/completions.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
-import { calculateCost, clampThinkingLevel } from "../model-utils.js";
+import {
+  applyProviderReportedUsageCost,
+  calculateCost,
+  clampThinkingLevel,
+} from "../model-utils.js";
 import type {
   AssistantMessage,
   CacheRetention,
@@ -1276,6 +1280,7 @@ function parseChunkUsage(
     completion_tokens?: number;
     prompt_cache_hit_tokens?: number;
     prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
+    cost?: unknown;
   },
   model: Model<"openai-completions">,
 ): AssistantMessage["usage"] {
@@ -1304,6 +1309,7 @@ function parseChunkUsage(
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
   calculateCost(model, usage);
+  applyProviderReportedUsageCost(usage, rawUsage.cost);
   return usage;
 }
 
