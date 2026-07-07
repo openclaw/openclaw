@@ -1600,6 +1600,8 @@ export const es: TranslationMap = {
       splitDown: "Dividir hacia abajo",
       closePane: "Cerrar panel",
       sessionSelect: "Sesión del panel",
+      dropSplit: "Dividir",
+      dropOpenHere: "Abrir aquí",
     },
     sidebar: {
       allSessions: "Todas las sesiones",

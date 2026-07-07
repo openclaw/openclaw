@@ -1,4 +1,5 @@
 // Qqbot plugin module implements inbound attachments behavior.
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { AudioConvertPort } from "../adapter/audio.port.js";
 import { downloadFile } from "../utils/file-utils.js";
 import { getQQBotMediaDir } from "../utils/platform.js";
@@ -331,7 +332,7 @@ async function processVoiceAttachment(
   try {
     const transcript = await transcribeAudio(audioPath, cfg as Record<string, unknown>);
     if (transcript) {
-      log?.debug?.(`STT transcript: ${transcript.slice(0, 100)}...`);
+      log?.debug?.(`STT transcript: ${truncateUtf16Safe(transcript, 100)}...`);
       return { localPath, type: "voice", transcript, transcriptSource: "stt", meta };
     }
     if (asrReferText) {

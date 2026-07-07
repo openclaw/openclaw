@@ -25,7 +25,7 @@ describe("parseCommand", () => {
 describe("getSlashCommands", () => {
   beforeAll(() => {
     // Provider thinking policies are process-stable; warm the fallback before timing assertions.
-    getSlashCommands({ provider: "anthropic", model: "claude-sonnet-4-6", thinkingLevels: [] });
+    getSlashCommands({ provider: "minimax", model: "MiniMax-M3", thinkingLevels: [] });
   });
 
   it("provides level completions for built-in toggles", () => {
@@ -78,8 +78,8 @@ describe("getSlashCommands", () => {
 
   it("falls back to provider-resolved levels when thinkingLevels is empty (#76482)", () => {
     const commands = getSlashCommands({
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
+      provider: "minimax",
+      model: "MiniMax-M3",
       thinkingLevels: [], // empty from lightweight session row
     });
     const think = commands.find((command) => command.name === "think");
@@ -89,7 +89,10 @@ describe("getSlashCommands", () => {
     if (!Array.isArray(completions)) {
       throw new Error("expected synchronous thinking-level completions");
     }
-    expect(completions.length).toBeGreaterThan(0);
+    expect(completions).toEqual([
+      { value: "off", label: "off" },
+      { value: "adaptive", label: "adaptive" },
+    ]);
   });
 
   it("merges dynamic gateway commands", () => {

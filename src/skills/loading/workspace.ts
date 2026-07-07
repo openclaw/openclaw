@@ -8,6 +8,7 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import { resolveSandboxPath } from "../../agents/sandbox-paths.js";
+import { canonicalizePath } from "../../agents/utils/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { walkDirectorySync } from "../../infra/fs-safe.js";
 import { resolveOsHomeDir } from "../../infra/home-dir.js";
@@ -26,8 +27,10 @@ import type {
   SkillEligibilityContext,
   SkillEntry,
   SkillSnapshot,
+  SkillUsagePath,
 } from "../types.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
+import { getArchivedSkillFiles } from "../workshop/curator.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { resolveBundledAllowlist, shouldIncludeSkill } from "./config.js";
 import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "./frontmatter.js";
@@ -35,6 +38,7 @@ import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "./local-loader.
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
 import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
+import { resolveSkillTelemetrySource } from "./source.js";
 import { resolveAllowedSkillSymlinkTargetRealPaths, tryRealpath } from "./symlink-targets.js";
 
 const fsp = fs.promises;
@@ -64,8 +68,8 @@ function resolveNativeUserHomeDir(): string | undefined {
 }
 
 function resolveCompactHomePrefixes(): string[] {
-  const homes = [resolveUserHomeDir(), resolveNativeUserHomeDir()].filter(
-    (home): home is string => Boolean(home),
+  const homes = [resolveUserHomeDir(), resolveNativeUserHomeDir()].filter((home): home is string =>
+    Boolean(home),
   );
   const resolvedHomes = homes.map((home) => path.resolve(home));
   const realHomes = resolvedHomes
@@ -111,15 +115,15 @@ function resolvePromptTildeRoots(): string[] {
     return [];
   }
   const realNativeHome = tryRealpath(resolvedNativeHome);
-  return uniqueStrings([
-    resolvedNativeHome,
-    ...(realNativeHome ? [realNativeHome] : []),
-  ]);
+  return uniqueStrings([resolvedNativeHome, ...(realNativeHome ? [realNativeHome] : [])]);
 }
 
 function isContainerStateHomeWherePromptTildeEscapes(home: string): boolean {
   const configDir = path.resolve(resolveConfigDir());
-  return home === "/data" && (configDir === "/data/.openclaw" || isPathInside("/data/.openclaw", configDir));
+  return (
+    home === "/data" &&
+    (configDir === "/data/.openclaw" || isPathInside("/data/.openclaw", configDir))
+  );
 }
 
 function shouldPreservePromptSkillPath(
@@ -887,6 +891,7 @@ function loadSkillEntries(
     bundledSkillsDir?: string;
     pluginSkillsDir?: string;
     workspaceOnly?: boolean;
+    includeArchived?: boolean;
   },
 ): SkillEntry[] {
   const limits = resolveSkillsLimits(opts?.config, opts?.agentId);
@@ -1214,24 +1219,31 @@ function loadSkillEntries(
   });
 
   const merged = new Map<string, LoadedSkillRecord>();
+  const archivedSkillFiles = opts?.includeArchived ? null : getArchivedSkillFiles();
+  const mergeRecord = (record: LoadedSkillRecord) => {
+    if (archivedSkillFiles?.has(canonicalizePath(record.skill.filePath))) {
+      return;
+    }
+    merged.set(record.skill.name, record);
+  };
   // Precedence: extra < bundled < managed < agents-skills-personal < agents-skills-project < workspace
   for (const record of extraSkills) {
-    merged.set(record.skill.name, record);
+    mergeRecord(record);
   }
   for (const record of bundledSkills) {
-    merged.set(record.skill.name, record);
+    mergeRecord(record);
   }
   for (const record of managedSkills) {
-    merged.set(record.skill.name, record);
+    mergeRecord(record);
   }
   for (const record of personalAgentsSkills) {
-    merged.set(record.skill.name, record);
+    mergeRecord(record);
   }
   for (const record of projectAgentsSkills) {
-    merged.set(record.skill.name, record);
+    mergeRecord(record);
   }
   for (const record of workspaceSkills) {
-    merged.set(record.skill.name, record);
+    mergeRecord(record);
   }
 
   const skillEntries: SkillEntry[] = Array.from(merged.values())
@@ -1270,6 +1282,12 @@ function loadSkillEntries(
       return entry;
     });
   return skillEntries;
+}
+
+function filterArchivedSkillEntries(entries: SkillEntry[]): SkillEntry[] {
+  // One discovery-level query covers prompts, commands, runtime entries, and sandbox sync.
+  const archivedSkillFiles = getArchivedSkillFiles();
+  return entries.filter((entry) => !archivedSkillFiles.has(canonicalizePath(entry.skill.filePath)));
 }
 
 function escapeXml(str: string): string {
@@ -1468,7 +1486,9 @@ function resolveWorkspaceSkillPromptState(
   if (effectiveSkillFilter !== undefined && effectiveSkillFilter.length === 0) {
     return { eligible: [], prompt: "", resolvedSkills: [] };
   }
-  const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
+  const skillEntries = opts?.entries
+    ? filterArchivedSkillEntries(opts.entries)
+    : loadSkillEntries(workspaceDir, opts);
   const eligible = filterSkillEntries(
     skillEntries,
     opts?.config,
@@ -1535,6 +1555,7 @@ export function loadWorkspaceSkillEntries(
     agentId?: string;
     eligibility?: SkillEligibilityContext;
     workspaceOnly?: boolean;
+    includeArchived?: boolean;
   },
 ): SkillEntry[] {
   const entries = loadSkillEntries(workspaceDir, opts);
@@ -1635,14 +1656,14 @@ export async function syncSkillsToWorkspace(params: {
   managedSkillsDir?: string;
   bundledSkillsDir?: string;
   pluginSkillsDir?: string;
-}) {
+}): Promise<SkillUsagePath[]> {
   const sourceDir = resolveUserPath(params.sourceWorkspaceDir);
   const targetDir = resolveUserPath(params.targetWorkspaceDir);
   if (sourceDir === targetDir) {
-    return;
+    return [];
   }
 
-  await serializeByKey(`syncSkills:${targetDir}`, async () => {
+  return await serializeByKey(`syncSkills:${targetDir}`, async () => {
     const targetSkillsDir = path.join(targetDir, "skills");
 
     const entries = loadWorkspaceSkillEntries(sourceDir, {
@@ -1658,6 +1679,7 @@ export async function syncSkillsToWorkspace(params: {
     await prepareSyncedSkillsDirectory(targetSkillsDir);
 
     const usedDirNames = new Set<string>();
+    const skillUsagePaths: SkillUsagePath[] = [];
     for (const entry of entries) {
       let dest: string | null;
       try {
@@ -1678,7 +1700,8 @@ export async function syncSkillsToWorkspace(params: {
         continue;
       }
       try {
-        await fsp.cp(entry.syncSourceDir ?? entry.skill.baseDir, dest, {
+        const syncSourceDir = entry.syncSourceDir ?? entry.skill.baseDir;
+        await fsp.cp(syncSourceDir, dest, {
           recursive: true,
           force: true,
           filter: (src) => {
@@ -1686,11 +1709,18 @@ export async function syncSkillsToWorkspace(params: {
             return !(name === ".git" || name === "node_modules");
           },
         });
+        skillUsagePaths.push({
+          readPath: path.join(dest, path.relative(entry.skill.baseDir, entry.skill.filePath)),
+          skillFile: canonicalizePath(entry.skill.filePath),
+          skillName: entry.skill.name,
+          skillSource: resolveSkillTelemetrySource(entry.skill),
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : JSON.stringify(error);
         skillsLogger.warn(`Failed to copy ${entry.skill.name} to sandbox: ${message}`);
       }
     }
+    return skillUsagePaths;
   });
 }
 

@@ -1,6 +1,7 @@
 // Tests retry backoff timing and cancellation behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
+import { getRetryAttemptErrors } from "./retry-attempt-errors.js";
 import { resolveRetryConfig, retryAsync } from "./retry.js";
 
 const randomMocks = vi.hoisted(() => ({
@@ -142,6 +143,21 @@ describe("retryAsync", () => {
     await expect(retryAsync(fn, { attempts: 3, shouldRetry })).rejects.toThrow("boom");
     expect(fn).toHaveBeenCalledTimes(1);
     expect(shouldRetry).toHaveBeenCalledWith(err, 1);
+  });
+
+  it("retains every failed attempt without replacing the terminal error", async () => {
+    const firstError = new Error("first");
+    const terminalError = new Error("terminal");
+    const fn = vi.fn().mockRejectedValueOnce(firstError).mockRejectedValueOnce(terminalError);
+
+    const failure = await retryAsync(fn, {
+      attempts: 2,
+      minDelayMs: 0,
+      maxDelayMs: 0,
+    }).catch((err: unknown) => err);
+
+    expect(failure).toBe(terminalError);
+    expect(getRetryAttemptErrors(failure)).toEqual([firstError, terminalError]);
   });
 
   it("calls onRetry with retry metadata before retrying", async () => {

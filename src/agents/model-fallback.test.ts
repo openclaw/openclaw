@@ -2,10 +2,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  TRANSCRIPT_NOT_CONTINUABLE_ERROR_CODE,
-  TranscriptNotContinuableError,
-} from "../../packages/agent-core/src/errors.js";
+import { TranscriptNotContinuableError } from "../../packages/agent-core/src/errors.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
