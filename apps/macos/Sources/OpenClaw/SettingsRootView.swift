@@ -3,6 +3,8 @@ import Observation
 import SwiftUI
 
 struct SettingsRootView: View {
+    private static let lobsterColor = Color(red: 1, green: 0.29, blue: 0.24)
+
     @Bindable var state: AppState
     private let permissionMonitor = PermissionMonitor.shared
     @State private var monitoringPermissions = false
@@ -29,12 +31,21 @@ struct SettingsRootView: View {
                     Section(group.title) {
                         ForEach(group.tabs) { tab in
                             Label(tab.title, systemImage: tab.systemImage)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 4)
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                        .stroke(
+                                            tab == self.selectedTab ? Self.lobsterColor : .clear,
+                                            lineWidth: 3)
+                                }
                                 .tag(tab as SettingsTab?)
                         }
                     }
                 }
             }
             .listStyle(.sidebar)
+            .tint(Self.lobsterColor)
             .navigationSplitViewColumnWidth(SettingsLayout.sidebarWidth)
         } detail: {
             self.detailContainer
@@ -201,7 +212,9 @@ struct SettingsRootView: View {
     }
 
     private func validTab(for requested: SettingsTab) -> SettingsTab {
-        if requested == .debug, !self.state.debugPaneEnabled { return .general }
+        if requested == .debug, !self.state.debugPaneEnabled {
+            return .general
+        }
         return requested
     }
 
