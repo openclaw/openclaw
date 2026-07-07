@@ -63,6 +63,7 @@ export const vi: TranslationMap = {
     docs: "Tài liệu",
     theme: "Giao diện",
     colorMode: "Chế độ màu",
+    colorModeOption: "Color mode: {mode}",
     resources: "Tài nguyên",
     search: "Tìm kiếm",
     save: "Lưu",

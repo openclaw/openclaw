@@ -63,6 +63,7 @@ export const id: TranslationMap = {
     docs: "Dokumen",
     theme: "Tema",
     colorMode: "Mode warna",
+    colorModeOption: "Color mode: {mode}",
     resources: "Sumber daya",
     search: "Cari",
     save: "Simpan",

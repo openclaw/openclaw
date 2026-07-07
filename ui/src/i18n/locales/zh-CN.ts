@@ -63,6 +63,7 @@ export const zh_CN: TranslationMap = {
     docs: "文档",
     theme: "主题",
     colorMode: "颜色模式",
+    colorModeOption: "Color mode: {mode}",
     resources: "资源",
     search: "搜索",
     save: "保存",

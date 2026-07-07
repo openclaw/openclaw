@@ -63,6 +63,7 @@ export const tr: TranslationMap = {
     docs: "Dokümanlar",
     theme: "Tema",
     colorMode: "Renk modu",
+    colorModeOption: "Color mode: {mode}",
     resources: "Kaynaklar",
     search: "Ara",
     save: "Kaydet",

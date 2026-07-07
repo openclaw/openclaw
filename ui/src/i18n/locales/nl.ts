@@ -63,6 +63,7 @@ export const nl: TranslationMap = {
     docs: "Docs",
     theme: "Thema",
     colorMode: "Kleurmodus",
+    colorModeOption: "Color mode: {mode}",
     resources: "Bronnen",
     search: "Zoeken",
     save: "Opslaan",
