@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { authFiles } from "./auth-files.test-support.js";
 import {
+  clearStalePhoneCodePairingAuthIfNeeded,
   getWebAuthAgeMs,
   hasWebCredsSync,
   logoutWeb,
@@ -150,6 +151,21 @@ describe("auth-store", () => {
       authAgeMs: expect.any(Number),
       selfId: { e164: "+15551234567", jid: "15551234567@s.whatsapp.net", lid: null },
     });
+  });
+
+  it("does not treat partial phone-code pairing creds as linked", async () => {
+    writeAuthFiles({ "creds.json": JSON.stringify({
+      registered: false,
+      pairingCode: "12345678",
+      me: { id: "15551234567@s.whatsapp.net" },
+    }) });
+    expect(hasWebCredsSync(authDir)).toBe(true);
+    await expect(webAuthExists(authDir)).resolves.toBe(false);
+    await expect(readWebAuthState(authDir)).resolves.toBe("not-linked");
+    await expect(clearStalePhoneCodePairingAuthIfNeeded({
+      authDir, isLegacyAuthDir: false, runtime: createRuntimeSpies(),
+    })).resolves.toBe(true);
+    expect(fsSync.existsSync(authDir)).toBe(false);
   });
 
   it.runIf(supportsSymlinks).each(["file", "directory"])(

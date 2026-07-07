@@ -17,4 +17,4 @@ export {
   webAuthExists,
 } from "./auth-store.js";
 export { monitorWebChannel } from "./auto-reply/monitor.js";
-export { loginWeb } from "./login.js";
+export { loginWeb, loginWebWithPhoneCode } from "./login.js";

@@ -253,14 +253,24 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
       },
       approvalCapability: whatsappApprovalCapability,
       auth: {
-        login: async ({ cfg, accountId, runtime, verbose }) => {
+        supportedLoginMethodKinds: ["phone-number"],
+        login: async ({ cfg, accountId, runtime, verbose, loginMethod }) => {
           const resolvedAccountId =
             accountId?.trim() ||
             whatsappPlugin.config.defaultAccountId?.(cfg) ||
             DEFAULT_ACCOUNT_ID;
-          await (
-            await loadWhatsAppChannelRuntime()
-          ).loginWeb(Boolean(verbose), undefined, runtime, resolvedAccountId);
+          const runtimeApi = await loadWhatsAppChannelRuntime();
+          if (loginMethod?.kind === "phone-number") {
+            await runtimeApi.loginWebWithPhoneCode(
+              Boolean(verbose),
+              loginMethod.phoneNumber,
+              undefined,
+              runtime,
+              resolvedAccountId,
+            );
+            return;
+          }
+          await runtimeApi.loginWeb(Boolean(verbose), undefined, runtime, resolvedAccountId);
         },
       },
       heartbeat: {

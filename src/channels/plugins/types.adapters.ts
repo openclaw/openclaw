@@ -226,6 +226,13 @@ export type ChannelGatewayContext<ResolvedAccount = unknown> = {
 export type ChannelGatewayContextV2<ResolvedAccount = unknown> =
   ChannelGatewayContext<ResolvedAccount> & { scheduler: PluginServiceSchedulerV1 };
 
+export type ChannelLoginMethod = {
+  kind: "phone-number";
+  phoneNumber: string;
+};
+
+export type ChannelLoginMethodKind = ChannelLoginMethod["kind"];
+
 export type ChannelGatewayAdapter<ResolvedAccount = unknown> = {
   apiVersion?: 1;
   startAccount?: (ctx: ChannelGatewayContext<ResolvedAccount>) => Promise<unknown>;
@@ -278,12 +285,14 @@ export type ChannelGatewayAdapterV2<ResolvedAccount = unknown> = Omit<
 };
 
 export type ChannelAuthAdapter = {
+  supportedLoginMethodKinds?: readonly ChannelLoginMethodKind[];
   login?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
     runtime: RuntimeEnv;
     verbose?: boolean;
     channelInput?: string | null;
+    loginMethod?: ChannelLoginMethod;
   }) => Promise<void>;
 };
 

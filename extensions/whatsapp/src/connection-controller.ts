@@ -53,6 +53,7 @@ export const WHATSAPP_WATCHDOG_TIMEOUT_ERROR = "watchdog-timeout";
 
 type TimerHandle = ReturnType<typeof setInterval>;
 type WaSocket = Awaited<ReturnType<typeof createWaSocket>>;
+type LoginSocketPrepareReason = "initial" | "post-pairing" | "timeout" | "logged-out";
 
 export type ManagedWhatsAppListener = ActiveWebListener & {
   onClose?: Promise<WebListenerCloseReason>;
@@ -230,6 +231,8 @@ export async function waitForWhatsAppLoginResult(params: {
   waitForConnection?: typeof waitForWaConnection;
   socketTiming?: WhatsAppSocketTimingOptions;
   onQr?: (qr: string) => void;
+  beforeCreateLoginSocket?: () => void;
+  prepareLoginSocket?: (sock: WaSocket, context: { reason: LoginSocketPrepareReason }) => Promise<void>;
   onSocketReplaced?: (sock: WaSocket) => void;
   beforeCredentialPersistence?: () => Promise<void>;
   onCredentialPersistenceError?: (error: unknown) => void;
@@ -241,9 +244,11 @@ export async function waitForWhatsAppLoginResult(params: {
   const wait = params.waitForConnection ?? waitForWaConnection;
   let currentSock = params.sock;
   const restartedStatuses = new Set<number>();
+  let prepareReason: LoginSocketPrepareReason = "initial";
 
   const replaceLoginSocket = async (): Promise<WhatsAppLoginWaitResult | null> => {
     try {
+      params.beforeCreateLoginSocket?.();
       currentSock = await createWaSocket(false, params.verbose, {
         authDir: params.authDir,
         ...params.socketTiming,
@@ -266,6 +271,7 @@ export async function waitForWhatsAppLoginResult(params: {
 
   while (true) {
     try {
+      await params.prepareLoginSocket?.(currentSock, { reason: prepareReason });
       await waitForLoginSocket({
         wait: async () => await wait(currentSock, { timeout: "none" }),
         credentialPersistenceFailure: params.credentialPersistenceFailure,
@@ -301,6 +307,7 @@ export async function waitForWhatsAppLoginResult(params: {
         !restartedStatuses.has(statusCode)
       ) {
         restartedStatuses.add(statusCode);
+        prepareReason = statusCode === POST_PAIRING_RESTART_STATUS ? "post-pairing" : "timeout";
         params.runtime.log(
           info(
             statusCode === TIMED_OUT_STATUS
@@ -343,6 +350,7 @@ export async function waitForWhatsAppLoginResult(params: {
           }
         }
         restartedStatuses.add(LOGGED_OUT_STATUS);
+        prepareReason = "logged-out";
       } else {
         return {
           outcome: "failed",

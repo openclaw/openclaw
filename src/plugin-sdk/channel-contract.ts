@@ -38,6 +38,8 @@ export type {
   ChannelDoctorLegacyConfigRule,
   ChannelDoctorSequenceResult,
   ChannelGatewayContext,
+  ChannelLoginMethod,
+  ChannelLoginMethodKind,
   ChannelGatewayContextV2,
   ChannelGatewayAdapterV2,
   ChannelOutboundAdapter,

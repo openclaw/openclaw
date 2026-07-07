@@ -29,14 +29,14 @@ You want this:
 ```mermaid
 flowchart TB
     A["<b>Your Phone (personal)<br></b><br>Your WhatsApp<br>+1-555-YOU"] -- message --> B["<b>Second Phone (assistant)<br></b><br>Assistant WA<br>+1-555-ASSIST"]
-    B -- linked via QR --> C["<b>Your Mac (openclaw)<br></b><br>AI agent"]
+    B -- linked device --> C["<b>Your Mac (openclaw)<br></b><br>AI agent"]
 ```
 
 If you link your personal WhatsApp to OpenClaw, every message to you becomes "agent input". That's rarely what you want.
 
 ## 5-minute quick start
 
-1. Pair WhatsApp Web (shows QR; scan with the assistant phone):
+1. Pair WhatsApp Web (scan the QR, or use `--phone-number +1555...` to enter a pairing code on the assistant phone):
 
 ```bash
 openclaw channels login
