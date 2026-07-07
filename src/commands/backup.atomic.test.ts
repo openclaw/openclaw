@@ -86,6 +86,56 @@ describe("backupCreateCommand atomic archive write", () => {
     }
   });
 
+  it("cleans intermediate retry temp archives after cleanup races", async () => {
+    const { archiveDir, outputPath, runtime } = await prepareAtomicBackupScenario({
+      archivePrefix: "openclaw-backup-retry-cleanup-",
+    });
+    const realRm = fs.rm.bind(fs);
+    const rmAttempts = new Map<string, number>();
+    const attemptFiles: string[] = [];
+    const rmSpy = vi.spyOn(fs, "rm").mockImplementation((async (
+      targetPath: Parameters<typeof fs.rm>[0],
+      options?: Parameters<typeof fs.rm>[1],
+    ) => {
+      const key = String(targetPath);
+      const attempt = (rmAttempts.get(key) ?? 0) + 1;
+      rmAttempts.set(key, attempt);
+      if ((key === attemptFiles[0] || key === attemptFiles[1]) && attempt === 1) {
+        throw Object.assign(new Error("resource busy"), { code: "EBUSY" });
+      }
+      await realRm(targetPath, options);
+    }) as typeof fs.rm);
+    try {
+      let tarAttempt = 0;
+      tarCreateMock.mockImplementation(async ({ file }: { file: string }) => {
+        tarAttempt += 1;
+        attemptFiles.push(file);
+        await fs.writeFile(file, `archive-attempt-${tarAttempt}`, "utf8");
+        if (tarAttempt < 3) {
+          throw Object.assign(new Error("did not encounter expected EOF"), {
+            path: path.join(tempHome.home, ".openclaw", "state.txt"),
+          });
+        }
+      });
+
+      const result = await backupCreateCommand(runtime, {
+        output: outputPath,
+      });
+
+      expect(result.archivePath).toBe(outputPath);
+      expect(attemptFiles).toStrictEqual([
+        attemptFiles[0],
+        `${attemptFiles[0]}.retry-2`,
+        `${attemptFiles[0]}.retry-3`,
+      ]);
+      expect(rmAttempts.get(attemptFiles[1])).toBeGreaterThanOrEqual(2);
+      expect((await fs.readdir(archiveDir)).toSorted()).toStrictEqual([path.basename(outputPath)]);
+    } finally {
+      rmSpy.mockRestore();
+      await fs.rm(archiveDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not overwrite an archive created after readiness checks complete", async () => {
     const { archiveDir, outputPath, runtime } = await prepareAtomicBackupScenario({
       archivePrefix: "openclaw-backup-race-",
