@@ -1266,7 +1266,6 @@ export async function onTimer(state: CronServiceState) {
           preserveAcrossGenerationAdvance: job.sessionTarget === "main",
         });
         emit(state, { jobId: job.id, action: "started", job, runAtMs: startedAt });
-        const jobTimeoutMs = resolveCronJobTimeoutMs(job);
         const taskRunId = tryCreateCronTaskRun({ state, job, startedAt });
 
         const result = await executeJobCoreWithTimeout(state, job, {
