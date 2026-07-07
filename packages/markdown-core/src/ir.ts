@@ -143,6 +143,79 @@ export type MarkdownParseOptions = {
   tableMode?: MarkdownTableMode;
 };
 
+/**
+ * Returns true if a code point is in a CJK character range (Unicode).
+ * CJK punctuation and ideographs should not block emphasis flanking
+ * the way ASCII punctuation does — CJK text has no inter-word spaces,
+ * so `**标签：**正文` must parse as bold.
+ */
+function isCjkCodePoint(cp: number): boolean {
+  return (
+    (cp >= 0x1100 && cp <= 0x11ff) || // Hangul Jamo
+    (cp >= 0x2e80 && cp <= 0xa4cf) || // CJK Radicals .. Yi
+    (cp >= 0xa960 && cp <= 0xa97f) || // Hangul Jamo Extended-A
+    (cp >= 0xac00 && cp <= 0xd7af) || // Hangul Syllables
+    (cp >= 0xf900 && cp <= 0xfaff) || // CJK Compat Ideographs
+    (cp >= 0xfe30 && cp <= 0xfe4f) || // CJK Compat Forms
+    (cp >= 0xff01 && cp <= 0xff60) || // Fullwidth Forms
+    (cp >= 0xffe0 && cp <= 0xffe6) || // Fullwidth Signs
+    (cp >= 0x20000 && cp <= 0x2ffff) || // CJK Ext B+
+    (cp >= 0x30000 && cp <= 0x3ffff) // CJK Ext G+
+  );
+}
+
+/**
+ * Returns true if the code point is whitespace per markdown-it's
+ * classification (Unicode-aware).  CJK-adjacent delimiters separated
+ * by a Unicode space such as U+3000 (ideographic space) must follow
+ * standard whitespace flanking rules, not the CJK relaxation.
+ */
+function isWhiteSpaceCp(cp: number): boolean {
+  // Markdown-it classifies U+2000‒U+200A, U+205F, U+3000, and common
+  // ASCII spaces as whitespace.  /\s/u covers all of these.
+  return cp <= 0x20 || /\s/u.test(String.fromCodePoint(cp));
+}
+
+/**
+ * Patch a markdown-it instance so emphasis (`*`) flanking treats
+ * CJK characters as word characters instead of punctuation.
+ * Without this, `**标签：**正文` renders as literal asterisks.
+ */
+function patchCjkFriendlyScanDelims(md: MarkdownIt): void {
+  const State = md.inline.State;
+  // Extend State to add CJK-friendly emphasis flanking.
+  // CJK characters adjacent to `*` emphasis markers should behave like
+  // word characters, not punctuation — CJK text has no inter-word spaces.
+  class CjkFriendlyState extends State {
+    override scanDelims(start: number, canSplitWord: boolean) {
+      const result = super.scanDelims(start, canSplitWord);
+      if (!canSplitWord) {
+        return result;
+      }
+      const max = this.posMax;
+      let pos = start;
+      while (pos < max && this.src.charCodeAt(pos) === this.src.charCodeAt(start)) {
+        pos++;
+      }
+      const lastCp = start > 0 ? (this.src.codePointAt(start - 1) ?? 32) : 32;
+      const nextCp = pos < max ? (this.src.codePointAt(pos) ?? 32) : 32;
+      // Preserve standard whitespace flanking: a delimiter next to
+      // whitespace must not open/close, regardless of CJK adjacency.
+      const lastIsWhiteSpace = start <= 0 || isWhiteSpaceCp(lastCp);
+      const nextIsWhiteSpace = pos >= max || isWhiteSpaceCp(nextCp);
+      if (lastIsWhiteSpace || nextIsWhiteSpace) {
+        return result;
+      }
+      if (isCjkCodePoint(lastCp) || isCjkCodePoint(nextCp)) {
+        result.can_open = true;
+        result.can_close = true;
+      }
+      return result;
+    }
+  }
+  md.inline.State = CjkFriendlyState;
+}
+
 function createMarkdownIt(options: MarkdownParseOptions): MarkdownIt {
   const md = new MarkdownIt({
     html: false,
@@ -151,6 +224,7 @@ function createMarkdownIt(options: MarkdownParseOptions): MarkdownIt {
     typographer: false,
   });
   md.enable("strikethrough");
+  patchCjkFriendlyScanDelims(md);
   if (options.tableMode && options.tableMode !== "off") {
     md.enable("table");
   } else {
