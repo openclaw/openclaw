@@ -35,6 +35,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -49,6 +50,16 @@ import java.util.concurrent.atomic.AtomicLong
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class GatewayBootstrapAuthTest {
+  @Before
+  fun clearPlainPrefs() {
+    RuntimeEnvironment
+      .getApplication()
+      .getSharedPreferences("openclaw.node", android.content.Context.MODE_PRIVATE)
+      .edit()
+      .clear()
+      .commit()
+  }
+
   @Test
   fun standaloneStatusPreservesLiveOperatorConnection() {
     val runtime = createTestRuntime(RuntimeEnvironment.getApplication())
