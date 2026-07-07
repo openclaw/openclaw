@@ -1714,6 +1714,8 @@ export const de: TranslationMap = {
       sessionSearch: "Sitzungen suchen",
       clearSessionSearch: "Sitzungssuche löschen",
       loadMoreSessions: "Weitere Sitzungen laden",
+      currentSession: "aktuelle Sitzung",
+      sessionLoadedListPosition: "Sitzung {position} von {total} in der geladenen Liste",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },

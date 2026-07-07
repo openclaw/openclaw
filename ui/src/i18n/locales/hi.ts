@@ -1683,6 +1683,8 @@ export const hi: TranslationMap = {
       sessionSearch: "सत्र खोजें",
       clearSessionSearch: "सत्र खोज साफ़ करें",
       loadMoreSessions: "और सत्र लोड करें",
+      currentSession: "वर्तमान सत्र",
+      sessionLoadedListPosition: "लोड की गई सूची में {total} में से सत्र {position}",
       model: "चैट मॉडल",
       thinkingLevel: "चैट सोच स्तर",
     },

@@ -1713,6 +1713,8 @@ export const es: TranslationMap = {
       sessionSearch: "Buscar sesiones",
       clearSessionSearch: "Borrar búsqueda de sesiones",
       loadMoreSessions: "Cargar más sesiones",
+      currentSession: "sesión actual",
+      sessionLoadedListPosition: "sesión {position} de {total} en la lista cargada",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },

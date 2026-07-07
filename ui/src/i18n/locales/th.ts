@@ -1664,6 +1664,8 @@ export const th: TranslationMap = {
       sessionSearch: "ค้นหาเซสชัน",
       clearSessionSearch: "ล้างการค้นหาเซสชัน",
       loadMoreSessions: "โหลดเซสชันเพิ่มเติม",
+      currentSession: "เซสชันปัจจุบัน",
+      sessionLoadedListPosition: "เซสชัน {position} จาก {total} ในรายการที่โหลดแล้ว",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },

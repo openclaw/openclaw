@@ -1660,6 +1660,8 @@ export const zh_TW: TranslationMap = {
       sessionSearch: "搜尋工作階段",
       clearSessionSearch: "清除工作階段搜尋",
       loadMoreSessions: "載入更多工作階段",
+      currentSession: "目前工作階段",
+      sessionLoadedListPosition: "已載入清單中的第 {position} 個工作階段，共 {total} 個",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },

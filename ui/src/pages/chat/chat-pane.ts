@@ -84,6 +84,14 @@ import { clearChatMessagesFromCache } from "./session-message-cache.ts";
 
 type ChatPageContext = ApplicationContext;
 type PaneSessionChangeOptions = { replace?: boolean };
+export type PaneSessionSelectOption = {
+  ariaLabel: string;
+  key: string;
+  label: string;
+  position: number;
+  selected: boolean;
+  visibleLabel: string;
+};
 
 const CHAT_OPEN_DETAILS_SELECTOR =
   ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__talk-select[open], .agent-chat__attach-menu[open]";
@@ -94,6 +102,42 @@ const NEW_SESSION_LIST_LOADING_MESSAGE =
   "Session list is still refreshing. Try New Chat again in a moment.";
 const NEW_SESSION_CREATE_FAILED_MESSAGE =
   "New Chat could not create a new session. Try again in a moment.";
+
+export function createPaneSessionSelectOptions(params: {
+  sessionKey: string;
+  sessions: GatewaySessionRow[];
+}): PaneSessionSelectOption[] {
+  const currentSession = params.sessions.find((row) => row.key === params.sessionKey);
+  const optionKeys = currentSession
+    ? params.sessions.map((row) => row.key)
+    : [params.sessionKey, ...params.sessions.map((row) => row.key)];
+  const total = optionKeys.length;
+  return optionKeys.map((key, index) => {
+    const row = params.sessions.find((session) => session.key === key);
+    const label = resolveSessionDisplayName(key, row);
+    const position = index + 1;
+    const selected = key === params.sessionKey;
+    const loadedListPosition = t("chat.selectors.sessionLoadedListPosition", {
+      position: String(position),
+      total: String(total),
+    });
+    const ariaLabel = [
+      label,
+      selected ? t("chat.selectors.currentSession") : null,
+      loadedListPosition,
+    ]
+      .filter(Boolean)
+      .join(", ");
+    return {
+      ariaLabel,
+      key,
+      label,
+      position,
+      selected,
+      visibleLabel: `${position}. ${label}`,
+    };
+  });
+}
 
 export class ChatPane extends LitElement {
   @consume({ context: applicationContext, subscribe: false })
@@ -679,8 +723,10 @@ export class ChatPane extends LitElement {
       return null;
     }
     const sessions = state.sessionsResult?.sessions ?? [];
-    const currentSession = sessions.find((row) => row.key === state.sessionKey);
-    const options = currentSession ? sessions : [{ key: state.sessionKey }, ...sessions];
+    const options = createPaneSessionSelectOptions({
+      sessionKey: state.sessionKey,
+      sessions,
+    });
     return html`
       <div class="chat-pane__header ${this.active ? "chat-pane--active" : ""}">
         <label class="chat-pane__session-label">
@@ -697,12 +743,14 @@ export class ChatPane extends LitElement {
             }}
           >
             ${options.map(
-              (row) => html`
-                <option value=${row.key}>
-                  ${resolveSessionDisplayName(
-                    row.key,
-                    sessions.find((session) => session.key === row.key),
-                  )}
+              (option) => html`
+                <option
+                  value=${option.key}
+                  aria-label=${option.ariaLabel}
+                  data-chat-session-picker-option="true"
+                  data-chat-session-picker-position=${String(option.position)}
+                >
+                  ${option.visibleLabel}
                 </option>
               `,
             )}

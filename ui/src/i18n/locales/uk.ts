@@ -1703,6 +1703,8 @@ export const uk: TranslationMap = {
       sessionSearch: "Пошук сеансів",
       clearSessionSearch: "Очистити пошук сеансів",
       loadMoreSessions: "Завантажити більше сеансів",
+      currentSession: "поточний сеанс",
+      sessionLoadedListPosition: "сеанс {position} із {total} у завантаженому списку",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },

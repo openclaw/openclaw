@@ -1700,6 +1700,8 @@ export const fa: TranslationMap = {
       sessionSearch: "جستجوی نشست‌ها",
       clearSessionSearch: "پاک کردن جستجوی نشست",
       loadMoreSessions: "بارگذاری نشست‌های بیشتر",
+      currentSession: "جلسه فعلی",
+      sessionLoadedListPosition: "جلسه {position} از {total} در فهرست بارگذاری‌شده",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },

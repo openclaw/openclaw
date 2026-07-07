@@ -1691,6 +1691,8 @@ export const vi: TranslationMap = {
       sessionSearch: "Tìm kiếm phiên",
       clearSessionSearch: "Xóa tìm kiếm phiên",
       loadMoreSessions: "Tải thêm phiên",
+      currentSession: "phiên hiện tại",
+      sessionLoadedListPosition: "phiên {position} trong tổng số {total} trong danh sách đã tải",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },

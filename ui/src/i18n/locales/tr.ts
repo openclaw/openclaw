@@ -1707,6 +1707,8 @@ export const tr: TranslationMap = {
       sessionSearch: "Oturumlarda ara",
       clearSessionSearch: "Oturum aramasını temizle",
       loadMoreSessions: "Daha fazla oturum yükle",
+      currentSession: "geçerli oturum",
+      sessionLoadedListPosition: "yüklenen listedeki {total} oturumdan {position}. oturum",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },

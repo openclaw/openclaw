@@ -1658,6 +1658,8 @@ export const zh_CN: TranslationMap = {
       sessionSearch: "搜索会话",
       clearSessionSearch: "清除会话搜索",
       loadMoreSessions: "加载更多会话",
+      currentSession: "当前会话",
+      sessionLoadedListPosition: "已加载列表中的第 {position} 个会话，共 {total} 个",
       model: "聊天模型",
       thinkingLevel: "聊天思考级别",
     },
