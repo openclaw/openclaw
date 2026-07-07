@@ -11139,7 +11139,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 747,
+      "line": 744,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Controls whether location can be shared with gateway tools.",
       "surface": "apple",
@@ -11147,7 +11147,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 759,
+      "line": 756,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Location",
       "surface": "apple",
@@ -11155,7 +11155,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 760,
+      "line": 757,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Off",
       "surface": "apple",
@@ -11163,7 +11163,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 763,
+      "line": 760,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "While Using",
       "surface": "apple",
@@ -11171,7 +11171,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 766,
+      "line": 763,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Always",
       "surface": "apple",
@@ -11179,7 +11179,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 789,
+      "line": 786,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Default Agent",
       "surface": "apple",
@@ -11187,7 +11187,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 790,
+      "line": 787,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Default",
       "surface": "apple",
@@ -11195,7 +11195,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 800,
+      "line": 797,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Used for new Chat and Talk sessions.",
       "surface": "apple",
@@ -11203,7 +11203,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 807,
+      "line": 804,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Paste setup code",
       "surface": "apple",
@@ -11211,7 +11211,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 813,
+      "line": 810,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Scan QR",
       "surface": "apple",
@@ -11219,7 +11219,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 823,
+      "line": 820,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Connect",
       "surface": "apple",
@@ -11227,7 +11227,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 832,
+      "line": 829,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Setup Code",
       "surface": "apple",
@@ -11235,7 +11235,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 845,
+      "line": 842,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Discovered Gateways",
       "surface": "apple",
@@ -11243,7 +11243,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 847,
+      "line": 844,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "No gateways found yet. Use manual setup if Bonjour is blocked.",
       "surface": "apple",
@@ -11251,7 +11251,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 861,
+      "line": 858,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Pair a gateway to make it available here.",
       "surface": "apple",
@@ -11259,7 +11259,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 870,
+      "line": 867,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Paired Gateways",
       "surface": "apple",
@@ -11267,7 +11267,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 873,
+      "line": 870,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Switch gateways without pairing again.",
       "surface": "apple",
@@ -11275,7 +11275,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 901,
+      "line": 898,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Active Gateway",
       "surface": "apple",
@@ -11283,7 +11283,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 913,
+      "line": 910,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Forget",
       "surface": "apple",
@@ -11291,7 +11291,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 925,
+      "line": 922,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Forget Gateway",
       "surface": "apple",
@@ -11299,7 +11299,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 962,
+      "line": 959,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Manual Gateway",
       "surface": "apple",
@@ -11307,7 +11307,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 964,
+      "line": 960,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Use Manual Gateway",
       "surface": "apple",
@@ -11315,7 +11315,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 967,
+      "line": 961,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Host",
       "surface": "apple",
@@ -11323,7 +11323,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 971,
+      "line": 965,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Port",
       "surface": "apple",
@@ -11331,7 +11331,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 975,
+      "line": 968,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Use TLS",
       "surface": "apple",
@@ -11339,7 +11339,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 979,
+      "line": 970,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Connect Manual",
       "surface": "apple",
@@ -11347,7 +11347,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 995,
+      "line": 985,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Auto-connect on launch",
       "surface": "apple",
@@ -11355,7 +11355,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 998,
+      "line": 986,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Gateway Auth Token",
       "surface": "apple",
@@ -11363,7 +11363,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 999,
+      "line": 987,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Gateway Password",
       "surface": "apple",
@@ -11371,7 +11371,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1004,
+      "line": 992,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Custom Headers",
       "surface": "apple",
@@ -11379,7 +11379,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1011,
+      "line": 999,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Reset Onboarding",
       "surface": "apple",
@@ -11387,7 +11387,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1038,
+      "line": 1026,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Voice Wake",
       "surface": "apple",
@@ -11395,7 +11395,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1041,
+      "line": 1029,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Talk Mode",
       "surface": "apple",
@@ -11403,7 +11403,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1049,
+      "line": 1037,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Speech Language",
       "surface": "apple",
@@ -11411,7 +11411,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1056,
+      "line": 1044,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Speakerphone",
       "surface": "apple",
@@ -11419,7 +11419,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1060,
+      "line": 1048,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Wake Words",
       "surface": "apple",
@@ -11427,7 +11427,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1081,
+      "line": 1069,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Voice",
       "surface": "apple",
@@ -11435,7 +11435,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1082,
+      "line": 1070,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Provider",
       "surface": "apple",
@@ -11443,7 +11443,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1089,
+      "line": 1077,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Realtime Voice",
       "surface": "apple",
@@ -11451,7 +11451,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1090,
+      "line": 1078,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Gateway Default",
       "surface": "apple",
@@ -11459,7 +11459,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1097,
+      "line": 1085,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Voice Mode",
       "surface": "apple",
@@ -11467,7 +11467,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1098,
+      "line": 1086,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Active Voice",
       "surface": "apple",
@@ -11475,7 +11475,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1100,
+      "line": 1088,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Last Voice Issue",
       "surface": "apple",
@@ -11483,7 +11483,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1102,
+      "line": 1090,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Transport",
       "surface": "apple",
@@ -11491,7 +11491,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1103,
+      "line": 1091,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "API Key",
       "surface": "apple",
@@ -11499,7 +11499,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1111,
+      "line": 1098,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Show Talk Control",
       "surface": "apple",
@@ -11507,7 +11507,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1114,
+      "line": 1099,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Default Share Instruction",
       "surface": "apple",
@@ -11515,7 +11515,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1121,
+      "line": 1106,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Run Share Self-Test",
       "surface": "apple",
@@ -11523,7 +11523,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1138,
+      "line": 1123,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Discovery Debug Logs",
       "surface": "apple",
@@ -11531,7 +11531,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1141,
+      "line": 1126,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Debug Screen Status",
       "surface": "apple",
@@ -11539,7 +11539,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1145,
+      "line": 1130,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Discovery Logs",
       "surface": "apple",
@@ -11547,7 +11547,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1151,
+      "line": 1136,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Device",
       "surface": "apple",
@@ -11555,7 +11555,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1152,
+      "line": 1137,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Device Name",
       "surface": "apple",
@@ -11563,11 +11563,19 @@
     },
     {
       "kind": "ui-call",
-      "line": 1154,
+      "line": 1139,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
       "source": "Instance ID",
       "surface": "apple",
       "id": "native.apple.b7c2d54bc3894446"
+    },
+    {
+      "kind": "conditional-branch",
+      "line": 1162,
+      "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
+      "source": "On",
+      "surface": "apple",
+      "id": "native.apple.0fca0d66e1fc4fa0"
     },
     {
       "kind": "conditional-branch",
