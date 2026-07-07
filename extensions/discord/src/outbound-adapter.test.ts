@@ -162,35 +162,35 @@ describe("discordOutbound", () => {
     expect(options.chunkMode).toBe("newline");
   });
 
-  it.each([500, 429])("retries transient Discord text send status %i", async (status) => {
-    hoisted.sendMessageDiscordMock
-      .mockRejectedValueOnce(Object.assign(new Error(`discord ${status}`), { status }))
-      .mockResolvedValueOnce({
-        messageId: "msg-retry-ok",
-        channelId: "ch-1",
-      });
+  it.each([500, 429])(
+    "does not replay an injected Discord delivery after status %i",
+    async (status) => {
+      hoisted.sendMessageDiscordMock
+        .mockRejectedValueOnce(Object.assign(new Error(`discord ${status}`), { status }))
+        .mockResolvedValueOnce({
+          messageId: "msg-retry-ok",
+          channelId: "ch-1",
+        });
 
-    const result = await discordOutbound.sendText?.({
-      cfg: {
-        channels: {
-          discord: {
-            token: "test-token",
-            retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+      await expect(
+        discordOutbound.sendText?.({
+          cfg: {
+            channels: {
+              discord: {
+                token: "test-token",
+                retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+              },
+            },
           },
-        },
-      },
-      to: "channel:123456",
-      text: "retry me",
-      accountId: "default",
-    });
+          to: "channel:123456",
+          text: "do not replay me",
+          accountId: "default",
+        }),
+      ).rejects.toThrow(`discord ${status}`);
 
-    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledTimes(2);
-    expect(result).toEqual({
-      channel: "discord",
-      messageId: "msg-retry-ok",
-      channelId: "ch-1",
-    });
-  });
+      expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("uses webhook persona delivery for bound thread text replies", async () => {
     mockDiscordBoundThreadManager(hoisted);

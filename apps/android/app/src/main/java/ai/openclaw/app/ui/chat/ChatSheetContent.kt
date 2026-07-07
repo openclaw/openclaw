@@ -2,7 +2,6 @@ package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.chat.ChatSessionEntry
-import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.ui.mobileAccent
 import ai.openclaw.app.ui.mobileAccentBorderStrong
 import ai.openclaw.app.ui.mobileBorderStrong
@@ -80,6 +79,11 @@ fun ChatSheetContent(viewModel: MainViewModel) {
   val sessionKey by viewModel.chatSessionKey.collectAsState()
   val mainSessionKey by viewModel.mainSessionKey.collectAsState()
   val thinkingLevel by viewModel.chatThinkingLevel.collectAsState()
+  val selectedModelRef by viewModel.chatSelectedModelRef.collectAsState()
+  // Gate from the controller's agent-scoped catalog — the same source the send gate reads —
+  // so the visible control can never disagree with what sends actually carry.
+  val modelCatalog by viewModel.chatModelCatalog.collectAsState()
+  val thinkingSupported = thinkingSupportedForSelection(selectedModelRef, modelCatalog)
   val streamingAssistantText by viewModel.chatStreamingAssistantText.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
@@ -91,6 +95,11 @@ fun ChatSheetContent(viewModel: MainViewModel) {
   val messageSpeechState by viewModel.chatMessageSpeech.collectAsState()
   val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
   val gatewayOffline = !gatewayConnectionDisplay.isConnected
+  val micEnabled by viewModel.micEnabled.collectAsState()
+  val micIsListening by viewModel.micIsListening.collectAsState()
+  val micCooldown by viewModel.micCooldown.collectAsState()
+  val talkModeEnabled by viewModel.talkModeEnabled.collectAsState()
+  val talkModeListening by viewModel.talkModeListening.collectAsState()
 
   DisposableEffect(viewModel) {
     onDispose(viewModel::stopChatMessageSpeech)
@@ -124,7 +133,15 @@ fun ChatSheetContent(viewModel: MainViewModel) {
   val resolver = context.contentResolver
   val scope = rememberCoroutineScope()
 
-  val attachments = remember { mutableStateListOf<PendingImageAttachment>() }
+  val attachments = remember { mutableStateListOf<PendingAttachment>() }
+  val micCaptureActive = micEnabled || micIsListening || micCooldown || talkModeEnabled || talkModeListening
+  val voiceNoteRecorder =
+    rememberVoiceNoteRecorderController(
+      viewModel = viewModel,
+      onFinished = attachments::add,
+    )
+  val voiceNoteState by voiceNoteRecorder.state.collectAsState()
+  val voiceNoteElapsedMs by voiceNoteRecorder.elapsedMs.collectAsState()
 
   val pickImages =
     rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
@@ -192,12 +209,19 @@ fun ChatSheetContent(viewModel: MainViewModel) {
         draftText = chatDraft,
         healthOk = healthOk,
         thinkingLevel = thinkingLevel,
+        thinkingSupported = thinkingSupported,
         pendingRunCount = pendingRunCount,
         commands = chatCommands,
         attachments = attachments,
         onDraftApplied = viewModel::clearChatDraft,
         onPickImages = { pickImages.launch("image/*") },
         onRemoveAttachment = { id -> attachments.removeAll { it.id == id } },
+        voiceNoteState = voiceNoteState,
+        voiceNoteElapsedMs = voiceNoteElapsedMs,
+        recordVoiceNoteEnabled = pendingRunCount == 0 && !micCaptureActive,
+        onStartVoiceNote = { scope.launch { voiceNoteRecorder.start() } },
+        onCancelVoiceNote = voiceNoteRecorder::cancel,
+        onFinishVoiceNote = voiceNoteRecorder::finish,
         onSetThinkingLevel = { level -> viewModel.setChatThinkingLevel(level) },
         onRefresh = {
           viewModel.refreshChat()
@@ -206,15 +230,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
         },
         onAbort = { viewModel.abortChat() },
         onSend = { text ->
-          val outgoing =
-            attachments.map { att ->
-              OutgoingAttachment(
-                type = "image",
-                mimeType = att.mimeType,
-                fileName = att.fileName,
-                base64 = att.base64,
-              )
-            }
+          val outgoing = attachments.map(PendingAttachment::toOutgoingAttachment)
           val pendingAttachments = attachments.toList()
           attachments.clear()
           val accepted = viewModel.sendChatAwaitAcceptance(message = text, thinking = thinkingLevel, attachments = outgoing)
@@ -286,13 +302,3 @@ private fun ChatErrorRail(errorText: String) {
     }
   }
 }
-
-/**
- * Image selected in the composer and held in memory until the next chat.send call.
- */
-data class PendingImageAttachment(
-  val id: String,
-  val fileName: String,
-  val mimeType: String,
-  val base64: String,
-)

@@ -468,6 +468,13 @@ async function runSetupWizardOnce(
   nextConfig = gateway.nextConfig;
   const settings = gateway.settings;
 
+  // Persist auth + gateway decisions now: channel/search/skills steps can pair
+  // devices or install plugins, and a crash or cancel there must not force the
+  // user to redo provider setup from scratch.
+  nextConfig = await writeSetupConfigFile(nextConfig, {
+    allowConfigSizeDrop: false,
+  });
+
   prompter.disableBackNavigation?.();
   if (opts.skipChannels ?? opts.skipProviders) {
     await prompter.note(t("wizard.setup.skipChannels"), t("wizard.setup.channelsTitle"));

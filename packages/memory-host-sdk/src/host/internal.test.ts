@@ -14,10 +14,7 @@ import {
   normalizeExtraMemoryPaths,
   remapChunkLines,
 } from "./internal.js";
-import {
-  DEFAULT_MEMORY_MULTIMODAL_MAX_FILE_BYTES,
-  type MemoryMultimodalSettings,
-} from "./multimodal.js";
+import { normalizeMemoryMultimodalSettings, type MemoryMultimodalSettings } from "./multimodal.js";
 
 type FileEntry = NonNullable<Awaited<ReturnType<typeof buildFileEntry>>>;
 type MultimodalIndexingChunk = NonNullable<
@@ -75,11 +72,7 @@ function expectEmbeddingInput(
   return chunk.embeddingInput;
 }
 
-const multimodal: MemoryMultimodalSettings = {
-  enabled: true,
-  modalities: ["image", "audio"],
-  maxFileBytes: DEFAULT_MEMORY_MULTIMODAL_MAX_FILE_BYTES,
-};
+const multimodal: MemoryMultimodalSettings = normalizeMemoryMultimodalSettings({ enabled: true });
 
 describe("memory host SDK package internals", () => {
   const getTmpDir = setupTempDirLifecycle("memory-package-");

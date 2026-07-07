@@ -84,39 +84,41 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         self.key
     }
 
-    public let key: String
-    public let kind: String?
-    public let displayName: String?
-    public let label: String?
-    public let category: String?
-    public let pinned: Bool?
-    public let archived: Bool?
-    public let unread: Bool?
-    public let surface: String?
-    public let subject: String?
-    public let room: String?
-    public let space: String?
-    public let updatedAt: Double?
-    public let lastReadAt: Double?
-    public let lastActivityAt: Double?
-    public let sessionId: String?
+    public var key: String
+    public var kind: String?
+    public var displayName: String?
+    public var label: String?
+    public var category: String?
+    public var pinned: Bool?
+    public var pinnedAt: Double?
+    public var archived: Bool?
+    public var archivedAt: Double?
+    public var unread: Bool?
+    public var surface: String?
+    public var subject: String?
+    public var room: String?
+    public var space: String?
+    public var updatedAt: Double?
+    public var lastReadAt: Double?
+    public var lastActivityAt: Double?
+    public var sessionId: String?
 
-    public let systemSent: Bool?
-    public let abortedLastRun: Bool?
-    public let thinkingLevel: String?
-    public let verboseLevel: String?
+    public var systemSent: Bool?
+    public var abortedLastRun: Bool?
+    public var thinkingLevel: String?
+    public var verboseLevel: String?
 
-    public let inputTokens: Int?
-    public let outputTokens: Int?
-    public let totalTokens: Int?
-    public let totalTokensFresh: Bool?
+    public var inputTokens: Int?
+    public var outputTokens: Int?
+    public var totalTokens: Int?
+    public var totalTokensFresh: Bool?
 
-    public let modelProvider: String?
-    public let model: String?
-    public let contextTokens: Int?
-    public let thinkingLevels: [OpenClawChatThinkingLevelOption]?
-    public let thinkingOptions: [String]?
-    public let thinkingDefault: String?
+    public var modelProvider: String?
+    public var model: String?
+    public var contextTokens: Int?
+    public var thinkingLevels: [OpenClawChatThinkingLevelOption]?
+    public var thinkingOptions: [String]?
+    public var thinkingDefault: String?
 
     public init(
         key: String,
@@ -145,7 +147,9 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         label: String? = nil,
         category: String? = nil,
         pinned: Bool? = nil,
+        pinnedAt: Double? = nil,
         archived: Bool? = nil,
+        archivedAt: Double? = nil,
         unread: Bool? = nil,
         lastReadAt: Double? = nil,
         lastActivityAt: Double? = nil)
@@ -156,7 +160,9 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         self.label = label
         self.category = category
         self.pinned = pinned
+        self.pinnedAt = pinnedAt
         self.archived = archived
+        self.archivedAt = archivedAt
         self.unread = unread
         self.surface = surface
         self.subject = subject
@@ -180,6 +186,53 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         self.thinkingLevels = thinkingLevels
         self.thinkingOptions = thinkingOptions
         self.thinkingDefault = thinkingDefault
+    }
+
+    public var isPinned: Bool {
+        self.pinned == true
+    }
+
+    public var isArchived: Bool {
+        self.archived == true
+    }
+}
+
+/// Client-side session list policy shared by every session list surface.
+/// Ordering mirrors the gateway (`pinnedAt` desc, `updatedAt` desc, key) so
+/// cached/offline lists render in the same order as server responses.
+public enum OpenClawChatSessionListOrganizer {
+    public static func organize(_ sessions: [OpenClawChatSessionEntry]) -> [OpenClawChatSessionEntry] {
+        sessions.sorted { lhs, rhs in
+            let lhsPinnedAt = lhs.pinnedAt ?? (lhs.isPinned ? .greatestFiniteMagnitude : 0)
+            let rhsPinnedAt = rhs.pinnedAt ?? (rhs.isPinned ? .greatestFiniteMagnitude : 0)
+            if lhsPinnedAt != rhsPinnedAt {
+                return lhsPinnedAt > rhsPinnedAt
+            }
+            let lhsUpdatedAt = lhs.updatedAt ?? 0
+            let rhsUpdatedAt = rhs.updatedAt ?? 0
+            if lhsUpdatedAt != rhsUpdatedAt {
+                return lhsUpdatedAt > rhsUpdatedAt
+            }
+            return lhs.key < rhs.key
+        }
+    }
+
+    /// Local fallback for the server-side `sessions.list` search when the
+    /// gateway is unreachable and only cached entries are available.
+    public static func filter(
+        _ sessions: [OpenClawChatSessionEntry],
+        search: String) -> [OpenClawChatSessionEntry]
+    {
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return sessions }
+        return sessions.filter { session in
+            for field in [session.displayName, session.label, session.subject, session.sessionId, session.key] {
+                if let field, field.lowercased().contains(query) {
+                    return true
+                }
+            }
+            return false
+        }
     }
 }
 

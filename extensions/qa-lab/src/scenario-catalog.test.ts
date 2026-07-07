@@ -771,7 +771,6 @@ describe("qa scenario catalog", () => {
       "group-message-tool-unavailable-fallback",
       "qa-channel-reconnect-dedupe",
       "reaction-edit-delete",
-      "thread-follow-up",
       "image-generation-roundtrip",
       "image-understanding-attachment",
       "native-image-generation",
@@ -797,6 +796,28 @@ describe("qa scenario catalog", () => {
     }
   });
 
+  it("routes canonical thread relation flows through Crabline Matrix", () => {
+    for (const scenarioId of ["thread-follow-up", "thread-isolation"]) {
+      const scenario = readQaScenarioById(scenarioId);
+      const config = readQaScenarioExecutionConfig(scenarioId) as
+        | { requiredChannelDriver?: string }
+        | undefined;
+
+      expect(scenario.execution.channel, scenarioId).toBe("matrix");
+      expect(config?.requiredChannelDriver, scenarioId).toBeUndefined();
+    }
+  });
+
+  it("keeps Matrix subagent thread spawn explicitly selectable", () => {
+    const scenario = readQaScenarioById("subagent-thread-spawn");
+    const config = readQaScenarioExecutionConfig("subagent-thread-spawn") as
+      | { requiredChannelDriver?: string }
+      | undefined;
+
+    expect(scenario.execution.channel).toBe("matrix");
+    expect(config?.requiredChannelDriver).toBe("live");
+  });
+
   it("routes native command session targeting through Crabline Telegram", () => {
     const scenario = readQaScenarioById("native-command-session-target");
     const config = readQaScenarioExecutionConfig("native-command-session-target") as
@@ -811,8 +832,10 @@ describe("qa scenario catalog", () => {
     expect(config?.requiredProviderMode).toBe("mock-openai");
   });
 
-  it("marks channel-owned access gates with their required channel driver", () => {
+  it("marks channel-owned scenarios that require the live driver", () => {
     const liveScenarioIds = [
+      "slack-restart-resume",
+      "whatsapp-restart-resume",
       "whatsapp-access-control-dm-disabled",
       "whatsapp-access-control-dm-open",
       "whatsapp-access-control-group-disabled",
@@ -827,6 +850,12 @@ describe("qa scenario catalog", () => {
         | undefined;
       expect(config?.requiredChannelDriver, scenarioId).toBe("live");
     }
+  });
+
+  it("isolates channel baseline silence assertions from shared transport state", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("channel-chat-baseline"));
+
+    expect(scenario.execution.suiteIsolation).toBe("isolated");
   });
 
   it("adds a dreaming shadow trial report scenario", () => {

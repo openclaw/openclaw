@@ -99,11 +99,7 @@ export type {
   SqliteWalMaintenance,
   SqliteWalMaintenanceOptions,
 } from "../../../../src/infra/sqlite-wal.js";
-export {
-  installProcessWarningFilter,
-  shouldIgnoreWarning,
-} from "../../../../src/infra/warning-filter.js";
-export type { ProcessWarning } from "../../../../src/infra/warning-filter.js";
+export { installProcessWarningFilter } from "../../../../src/infra/warning-filter.js";
 export { redactSensitiveText } from "../../../../src/logging/redact.js";
 export { createSubsystemLogger } from "../../../../src/logging/subsystem.js";
 export { detectMime } from "@openclaw/media-core/mime";

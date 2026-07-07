@@ -7,6 +7,7 @@ import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.parseChatSendAck
 import ai.openclaw.app.parseGatewayModels
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
+import ai.openclaw.app.ui.chat.thinkingSupportedForSelection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -30,6 +31,9 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+
+// Bounds one-shot search list fetches like the primary session list.
+internal const val SESSION_LIST_FETCH_LIMIT = 200
 
 // Capture before suspend points; both fields must still match before gateway data reaches UI state.
 internal data class ChatCacheScope(
@@ -276,15 +280,6 @@ class ChatController internal constructor(
     scope.launch { publishOutbox() }
   }
 
-  /** Purges cached transcripts and queued sends after old-scope writes finish. */
-  internal suspend fun clearTranscriptCache() {
-    val cache = transcriptCache ?: return
-    cacheMutationMutex.withLock {
-      cache.clearAll()
-      commandOutbox?.clearAll()
-    }
-  }
-
   /** Purges cached transcripts and queued sends for one retired authentication scope. */
   internal suspend fun clearGatewayCache(gatewayId: String) {
     cacheMutationMutex.withLock {
@@ -386,6 +381,76 @@ class ChatController internal constructor(
     }
   }
 
+  /** Renames a session group everywhere: every member session moves to the new category. */
+  suspend fun renameSessionGroup(
+    from: String,
+    to: String,
+  ) {
+    val fromName = from.trim().takeIf { it.isNotEmpty() } ?: return
+    val toName = to.trim().takeIf { it.isNotEmpty() } ?: return
+    patchSessionGroupMembers(group = fromName, category = toName)
+  }
+
+  /** Deletes a session group: member sessions are kept and move back to Ungrouped. */
+  suspend fun dissolveSessionGroup(group: String) {
+    val groupName = group.trim().takeIf { it.isNotEmpty() } ?: return
+    patchSessionGroupMembers(group = groupName, category = null)
+  }
+
+  private suspend fun patchSessionGroupMembers(
+    group: String,
+    category: String?,
+  ) {
+    try {
+      var firstError: Throwable? = null
+      for (member in listSessionGroupMembers(group)) {
+        try {
+          val params =
+            buildJsonObject {
+              put("key", JsonPrimitive(member.key))
+              put("category", category?.let(::JsonPrimitive) ?: JsonNull)
+            }
+          requestGateway("sessions.patch", params.toString())
+        } catch (err: CancellationException) {
+          throw err
+        } catch (err: Throwable) {
+          // Best-effort: one failed member patch must not strand the rest of the group.
+          if (firstError == null) firstError = err
+        }
+      }
+      firstError?.let { updateErrorText(it.message) }
+      fetchSessionsForCurrentWindow()
+    } catch (err: CancellationException) {
+      throw err
+    } catch (err: Throwable) {
+      updateErrorText(err.message)
+    }
+  }
+
+  /**
+   * Enumerates every session assigned to the group. The UI session list is windowed
+   * (limited, archived either-or), so group mutations must not derive membership from
+   * it. An absent limit is capped at 100 rows server-side, so both queries send an
+   * explicit high bound; sessions.list filters archived rows either-or, hence two calls.
+   */
+  private suspend fun listSessionGroupMembers(group: String): List<ChatSessionEntry> {
+    val members = LinkedHashMap<String, ChatSessionEntry>()
+    for (archived in listOf(false, true)) {
+      val params =
+        buildJsonObject {
+          put("includeGlobal", JsonPrimitive(true))
+          put("includeUnknown", JsonPrimitive(false))
+          put("limit", JsonPrimitive(GROUP_MEMBER_FETCH_LIMIT))
+          if (archived) put("archived", JsonPrimitive(true))
+        }
+      val rows = parseSessions(requestGateway("sessions.list", params.toString())).sessions
+      for (row in rows) {
+        if (row.category?.trim() == group && !members.containsKey(row.key)) members[row.key] = row
+      }
+    }
+    return members.values.toList()
+  }
+
   suspend fun deleteSession(key: String) {
     val sessionKey = key.trim().takeIf { it.isNotEmpty() } ?: return
     try {
@@ -393,6 +458,9 @@ class ChatController internal constructor(
         buildJsonObject {
           put("key", JsonPrimitive(sessionKey))
           put("deleteTranscript", JsonPrimitive(true))
+          // archive-then-delete: the bounded operator session lacks admin, and
+          // the gateway grants write-scope deletes only for archived sessions.
+          put("archivedOnly", JsonPrimitive(true))
         }
       requestGateway("sessions.delete", params.toString())
       fallBackFromRetiredActiveSession(sessionKey)
@@ -426,6 +494,39 @@ class ChatController internal constructor(
     } catch (err: Throwable) {
       updateErrorText(err.message)
       null
+    }
+  }
+
+  /**
+   * One-shot session list for the search UI; does not touch the live list
+   * state. Falls back to locally filtering the cached active list when the
+   * gateway is unreachable; archived rows exist only server-side, so archived
+   * search is empty offline.
+   */
+  suspend fun fetchSessionList(
+    search: String?,
+    archived: Boolean,
+  ): List<ChatSessionEntry> {
+    val query = search?.trim()?.takeIf { it.isNotEmpty() }
+    return try {
+      val params =
+        buildJsonObject {
+          put("includeGlobal", JsonPrimitive(true))
+          put("includeUnknown", JsonPrimitive(false))
+          put("limit", JsonPrimitive(SESSION_LIST_FETCH_LIMIT))
+          if (query != null) put("search", JsonPrimitive(query))
+          if (archived) put("archived", JsonPrimitive(true))
+        }
+      parseSessions(requestGateway("sessions.list", params.toString())).sessions
+    } catch (err: CancellationException) {
+      // A superseded search owns the results now; never repaint stale fallback rows.
+      throw err
+    } catch (_: Throwable) {
+      when {
+        archived -> emptyList()
+        query == null -> _sessions.value
+        else -> filterSessionEntries(_sessions.value, query)
+      }
     }
   }
 
@@ -657,6 +758,15 @@ class ChatController internal constructor(
     val pendingSelection = pendingModelSelections[sessionKey]
     if (pendingSelection != null && !pendingSelection.await()) return false
     if (_sessionKey.value != sessionKey) return false
+    // agent-command.ts throws for explicit unsupported levels, so hidden controls must send off.
+    // Applied at enqueue time too so durable rows never persist a level the selected model
+    // rejects; reconnect flushes with a cleared catalog fail open, matching pre-gating behavior.
+    val thinking =
+      if (thinkingSupportedForSelection(_selectedModelRef.value, _modelCatalog.value)) {
+        normalizeThinking(thinkingLevel)
+      } else {
+        "off"
+      }
     if (!_healthOk.value) {
       // Offline capture: text-only commands become durable outbox rows and flush on reconnect.
       // Attachments stay blocked (text-only v1) so large payloads never sit in the database.
@@ -664,12 +774,11 @@ class ChatController internal constructor(
         updateErrorText("Gateway health not OK; cannot send")
         return false
       }
-      return enqueueOfflineCommand(text = trimmed, thinkingLevel = normalizeThinking(thinkingLevel))
+      return enqueueOfflineCommand(text = trimmed, thinkingLevel = thinking)
     }
 
     val runId = UUID.randomUUID().toString()
     val text = if (trimmed.isEmpty() && attachments.isNotEmpty()) "See attached." else trimmed
-    val thinking = normalizeThinking(thinkingLevel)
 
     // Optimistic user message keeps the composer responsive while chat.send and history refresh complete.
     val userContent =
@@ -682,6 +791,7 @@ class ChatController internal constructor(
               mimeType = att.mimeType,
               fileName = att.fileName,
               base64 = att.base64,
+              durationMs = att.durationMs,
             ),
           )
         }
@@ -1478,14 +1588,25 @@ class ChatController internal constructor(
     gatewayId: String,
   ): OutboxSendResult =
     try {
+      val queuedSessionKey = normalizeRequestedSessionKey(item.sessionKey)
+      // Android only knows the active session's selected model. Unknown queued sessions fail
+      // open, preserving the thinking level captured when they were enqueued.
+      val thinking =
+        if (
+          queuedSessionKey == _sessionKey.value &&
+          !thinkingSupportedForSelection(_selectedModelRef.value, _modelCatalog.value)
+        ) {
+          "off"
+        } else {
+          item.thinkingLevel
+        }
       val params =
         buildJsonObject {
           // Rows enqueued under the pre-hello "main" alias must flush to the canonical main
           // session the gateway announced, matching how the UI attributes those rows.
-          put("sessionKey", JsonPrimitive(normalizeRequestedSessionKey(item.sessionKey)))
+          put("sessionKey", JsonPrimitive(queuedSessionKey))
           put("message", JsonPrimitive(item.text))
-          // Enqueue-time thinking level: a later selector change must not alter queued sends.
-          put("thinking", JsonPrimitive(item.thinkingLevel))
+          put("thinking", JsonPrimitive(thinking))
           put("timeoutMs", JsonPrimitive(30_000))
           // The row id is the idempotency key, so gateway-side dedupe makes redelivery of an
           // acked-but-crashed item harmless.
@@ -2185,6 +2306,9 @@ private enum class ChatMetadataLoadState {
 
 private const val NEW_CHAT_SESSION_LABEL = "New chat"
 
+// Group mutations enumerate whole stores; far past any realistic session count.
+private const val GROUP_MEMBER_FETCH_LIMIT = 10_000
+
 internal fun nextNewChatSessionLabel(sessions: List<ChatSessionEntry>): String {
   val baseLabel = NEW_CHAT_SESSION_LABEL
   val existingLabels =
@@ -2221,29 +2345,60 @@ internal fun parseChatMessageContent(el: JsonElement): ChatMessageContent? {
         text = obj["text"].asStringOrNull() ?: obj["content"].asStringOrNull(),
       )
 
-    "image" ->
+    "image", "audio" ->
       ChatMessageContent(
-        type = "image",
+        type = obj["type"].asStringOrNull() ?: "image",
         mimeType = obj["mimeType"].asStringOrNull(),
         fileName = obj["fileName"].asStringOrNull(),
         base64 = obj["content"].asStringOrNull()?.takeIf { it.isNotBlank() },
       )
+
+    "attachment" -> {
+      val attachment = obj["attachment"].asObjectOrNull() ?: return null
+      val mimeType = attachment["mimeType"].asStringOrNull()
+      if (attachment["kind"].asStringOrNull() != "audio" && mimeType?.startsWith("audio/") != true) return null
+      ChatMessageContent(
+        type = "audio",
+        mimeType = mimeType,
+        fileName = attachment["label"].asStringOrNull(),
+      )
+    }
 
     else -> null
   }
 }
 
 internal fun parseChatMessageContents(obj: JsonObject): List<ChatMessageContent> {
-  obj["content"].asArrayOrNull()?.let { content ->
-    return content.mapNotNull(::parseChatMessageContent)
+  val content =
+    obj["content"].asArrayOrNull()?.mapNotNull(::parseChatMessageContent)
+      ?: obj["content"].asStringOrNull()?.let { listOf(ChatMessageContent(type = "text", text = it)) }
+      ?: obj["text"].asStringOrNull()?.let { listOf(ChatMessageContent(type = "text", text = it)) }
+      ?: emptyList()
+  val transcriptAudio = parseTranscriptAudioContents(obj)
+  if (transcriptAudio.isEmpty()) return content
+  return content +
+    transcriptAudio.filterNot { audio ->
+      content.any { it.mimeType == audio.mimeType && it.fileName == audio.fileName }
+    }
+}
+
+private fun parseTranscriptAudioContents(obj: JsonObject): List<ChatMessageContent> {
+  val paths =
+    obj["MediaPaths"].asArrayOrNull()?.mapNotNull { it.asStringOrNull() }
+      ?: obj["MediaPath"].asStringOrNull()?.let { listOf(it) }
+      ?: return emptyList()
+  val types =
+    obj["MediaTypes"].asArrayOrNull()?.map { it.asStringOrNull().orEmpty() }
+      ?: obj["MediaType"].asStringOrNull()?.let { listOf(it) }
+      ?: emptyList()
+  return paths.mapIndexedNotNull { index, path ->
+    val mimeType = types.getOrNull(index)?.takeIf { it.startsWith("audio/") } ?: return@mapIndexedNotNull null
+    ChatMessageContent(
+      type = "audio",
+      mimeType = mimeType,
+      fileName = path.substringAfterLast('/').takeIf(String::isNotBlank),
+    )
   }
-  obj["content"].asStringOrNull()?.let { text ->
-    return listOf(ChatMessageContent(type = "text", text = text))
-  }
-  obj["text"].asStringOrNull()?.let { text ->
-    return listOf(ChatMessageContent(type = "text", text = text))
-  }
-  return emptyList()
 }
 
 private fun parseCreatedSessionKey(
@@ -2330,21 +2485,48 @@ internal fun reconcileMessageIds(
 ): List<ChatMessage> {
   if (previous.isEmpty() || incoming.isEmpty()) return incoming
 
-  val idsByKey = LinkedHashMap<String, ArrayDeque<String>>()
+  val messagesByKey = LinkedHashMap<String, ArrayDeque<ChatMessage>>()
   for (message in previous) {
     val key = messageIdentityKey(message) ?: continue
-    idsByKey.getOrPut(key) { ArrayDeque() }.addLast(message.id)
+    messagesByKey.getOrPut(key) { ArrayDeque() }.addLast(message)
   }
 
   return incoming.map { message ->
     val key = messageIdentityKey(message) ?: return@map message
-    val ids = idsByKey[key] ?: return@map message
-    val reusedId = ids.removeFirstOrNull() ?: return@map message
-    if (ids.isEmpty()) {
-      idsByKey.remove(key)
+    val matches = messagesByKey[key] ?: return@map message
+    val previousMessage = matches.removeFirstOrNull() ?: return@map message
+    if (matches.isEmpty()) {
+      messagesByKey.remove(key)
     }
-    if (reusedId == message.id) return@map message
-    message.copy(id = reusedId)
+    message.copy(
+      id = previousMessage.id,
+      content = preserveOptimisticAudioDuration(previous = previousMessage, incoming = message),
+    )
+  }
+}
+
+private fun preserveOptimisticAudioDuration(
+  previous: ChatMessage,
+  incoming: ChatMessage,
+): List<ChatMessageContent> {
+  val idempotencyKey = incoming.idempotencyKey?.trim().orEmpty()
+  if (idempotencyKey.isEmpty() || idempotencyKey != previous.idempotencyKey?.trim()) return incoming.content
+
+  val remainingAudio =
+    previous.content
+      .filter { it.mimeType?.startsWith("audio/") == true && it.durationMs != null }
+      .toMutableList()
+  if (remainingAudio.isEmpty()) return incoming.content
+
+  return incoming.content.map { part ->
+    if (part.durationMs != null || part.mimeType?.startsWith("audio/") != true) return@map part
+    if (remainingAudio.isEmpty()) return@map part
+    val exactIndex =
+      remainingAudio.indexOfFirst {
+        it.mimeType == part.mimeType && it.fileName == part.fileName
+      }
+    val match = remainingAudio.removeAt(if (exactIndex >= 0) exactIndex else 0)
+    part.copy(durationMs = match.durationMs)
   }
 }
 

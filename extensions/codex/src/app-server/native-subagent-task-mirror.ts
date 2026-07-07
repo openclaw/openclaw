@@ -33,8 +33,9 @@ export type CodexNativeSubagentTaskMirrorParams = {
 
 /** Projects Codex thread and collab-agent notifications into task lifecycle updates. */
 export class CodexNativeSubagentTaskMirror {
-  private readonly mirroredThreadIds = new Set<string>();
-  private readonly failedMirrorThreadIds = new Set<string>();
+  // "failed" remembers a rejected task-run creation so later status events for
+  // that thread stay silent; unknown threads still pass through by design.
+  private readonly mirrorStateByThreadId = new Map<string, "mirrored" | "failed">();
   private readonly terminalRunIds = new Set<string>();
   private readonly authoritativeRunIds = new Set<string>();
   private readonly expectedAuthoritativeRunIds = new Set<string>();
@@ -90,10 +91,10 @@ export class CodexNativeSubagentTaskMirror {
       return;
     }
     const threadId = thread.id.trim();
-    if (!threadId || this.mirroredThreadIds.has(threadId)) {
+    if (!threadId || this.mirrorStateByThreadId.get(threadId) === "mirrored") {
       return;
     }
-    this.mirroredThreadIds.add(threadId);
+    this.mirrorStateByThreadId.set(threadId, "mirrored");
     const runId = codexNativeSubagentRunId(threadId);
     const label =
       trimOptional(spawn.agent_nickname) ??
@@ -119,11 +120,9 @@ export class CodexNativeSubagentTaskMirror {
       progressSummary: "Codex native subagent started.",
     });
     if (!taskRecord) {
-      this.mirroredThreadIds.delete(threadId);
-      this.failedMirrorThreadIds.add(threadId);
+      this.mirrorStateByThreadId.set(threadId, "failed");
       return;
     }
-    this.failedMirrorThreadIds.delete(threadId);
     this.terminalRunIds.delete(runId);
     this.authoritativeRunIds.delete(runId);
     this.applyStatus(threadId, thread.status);
@@ -138,7 +137,7 @@ export class CodexNativeSubagentTaskMirror {
   }
 
   private applyStatus(threadId: string, status: CodexThreadStatus | null | undefined): void {
-    if (!this.mirroredThreadIds.has(threadId) && this.failedMirrorThreadIds.has(threadId)) {
+    if (this.mirrorStateByThreadId.get(threadId) === "failed") {
       return;
     }
     const statusType = status?.type;
@@ -247,10 +246,10 @@ export class CodexNativeSubagentTaskMirror {
 
   private createTaskFromCollabSpawnItem(threadId: string, item: JsonObject): void {
     const normalizedThreadId = threadId.trim();
-    if (!normalizedThreadId || this.mirroredThreadIds.has(normalizedThreadId)) {
+    if (!normalizedThreadId || this.mirrorStateByThreadId.get(normalizedThreadId) === "mirrored") {
       return;
     }
-    this.mirroredThreadIds.add(normalizedThreadId);
+    this.mirrorStateByThreadId.set(normalizedThreadId, "mirrored");
     const prompt = trimOptional(readString(item, "prompt"));
     const runId = codexNativeSubagentRunId(normalizedThreadId);
     const createdAt = this.now();
@@ -268,11 +267,9 @@ export class CodexNativeSubagentTaskMirror {
       progressSummary: "Codex native subagent spawned.",
     });
     if (!taskRecord) {
-      this.mirroredThreadIds.delete(normalizedThreadId);
-      this.failedMirrorThreadIds.add(normalizedThreadId);
+      this.mirrorStateByThreadId.set(normalizedThreadId, "failed");
       return;
     }
-    this.failedMirrorThreadIds.delete(normalizedThreadId);
     this.terminalRunIds.delete(runId);
     this.authoritativeRunIds.delete(runId);
   }
@@ -282,7 +279,7 @@ export class CodexNativeSubagentTaskMirror {
     status: string | undefined,
     message: string | null | undefined,
   ): void {
-    if (!this.mirroredThreadIds.has(threadId) && this.failedMirrorThreadIds.has(threadId)) {
+    if (this.mirrorStateByThreadId.get(threadId) === "failed") {
       return;
     }
     const normalizedStatus = normalizeAgentStateStatus(status);

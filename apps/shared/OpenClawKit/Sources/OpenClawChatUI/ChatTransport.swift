@@ -132,8 +132,10 @@ public protocol OpenClawChatTransport: Sendable {
     var outboxRequiresSessionRoutingContract: Bool { get }
 
     func abortRun(sessionKey: String, runId: String) async throws
-    func listSessions(limit: Int?) async throws -> OpenClawChatSessionsListResponse
-    func listSessions(limit: Int?, archived: Bool) async throws -> OpenClawChatSessionsListResponse
+    func listSessions(
+        limit: Int?,
+        search: String?,
+        archived: Bool) async throws -> OpenClawChatSessionsListResponse
     func patchSession(
         key: String,
         label: String??,
@@ -232,21 +234,27 @@ extension OpenClawChatTransport {
             userInfo: [NSLocalizedDescriptionKey: "chat.abort not supported by this transport"])
     }
 
-    public func listSessions(limit _: Int?) async throws -> OpenClawChatSessionsListResponse {
+    public func listSessions(
+        limit _: Int?,
+        search _: String?,
+        archived _: Bool) async throws -> OpenClawChatSessionsListResponse
+    {
         throw NSError(
             domain: "OpenClawChatTransport",
             code: 0,
             userInfo: [NSLocalizedDescriptionKey: "sessions.list not supported by this transport"])
     }
 
+    /// Conveniences for callers that only page a list. Transports must
+    /// implement the canonical `listSessions(limit:search:archived:)`
+    /// requirement; same-name methods on a conformer are shadowed by these
+    /// sugars and never called through the protocol.
+    public func listSessions(limit: Int?) async throws -> OpenClawChatSessionsListResponse {
+        try await self.listSessions(limit: limit, search: nil, archived: false)
+    }
+
     public func listSessions(limit: Int?, archived: Bool) async throws -> OpenClawChatSessionsListResponse {
-        guard !archived else {
-            throw NSError(
-                domain: "OpenClawChatTransport",
-                code: 0,
-                userInfo: [NSLocalizedDescriptionKey: "archived sessions.list not supported by this transport"])
-        }
-        return try await self.listSessions(limit: limit)
+        try await self.listSessions(limit: limit, search: nil, archived: archived)
     }
 
     public func patchSession(

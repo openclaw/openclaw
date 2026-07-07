@@ -113,10 +113,6 @@ describe("live transport scenario helpers", () => {
       standardId: "canary",
     });
     expect(lanes.find((lane) => lane.transportId === "slack")?.members).toContainEqual({
-      standardId: "thread-follow-up",
-      scenarioId: "slack-thread-follow-up",
-    });
-    expect(lanes.find((lane) => lane.transportId === "slack")?.members).toContainEqual({
       standardId: "restart-resume",
       scenarioId: "slack-restart-resume",
     });

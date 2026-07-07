@@ -27,6 +27,7 @@ function sessionRow(
   updatedAt: number,
   options: {
     archived?: boolean;
+    category?: string;
     pinned?: boolean;
     pinnedAt?: number;
     hasActiveRun?: boolean;
@@ -360,6 +361,101 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       await context.close();
     }
   });
+  it("renames, deletes, and toggles sidebar session groups", async () => {
+    const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": {
+          cases: [
+            {
+              match: { archived: true },
+              response: sessionsListResponse([
+                sessionRow("agent:main:old-notes", "Old notes", baseTime - 300_000, {
+                  archived: true,
+                  category: "Research",
+                }),
+              ]),
+            },
+            {
+              match: {},
+              response: sessionsListResponse([
+                sessionRow("agent:main:main", "Main", baseTime),
+                sessionRow("agent:main:paper-a", "Paper A", baseTime - 60_000, {
+                  category: "Research",
+                }),
+                sessionRow("agent:main:paper-b", "Paper B", baseTime - 90_000, {
+                  category: "Research",
+                }),
+              ]),
+            },
+          ],
+        },
+        "sessions.patch": {},
+      },
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      // Categorized rows render as their own sidebar group section.
+      const groups = page.locator(".sidebar-recent-sessions__group");
+      const researchGroup = groups.filter({ hasText: "Research" });
+      await researchGroup.waitFor({ state: "visible", timeout: 10_000 });
+      await expect.poll(() => researchGroup.locator(".sidebar-recent-session").count()).toBe(2);
+      await captureUiProof(page, "sidebar-session-groups.png");
+
+      // Rename group: every member session is patched, including the archived
+      // row that only the unbounded archived list window can see.
+      const groupMenuButton = researchGroup.getByRole("button", {
+        name: "Group options for Research",
+      });
+      await researchGroup.locator(".sidebar-recent-sessions__head").hover();
+      await groupMenuButton.click();
+      await page.getByRole("menuitem", { name: "Rename group…" }).waitFor({ state: "visible" });
+      await captureUiProof(page, "sidebar-group-menu.png");
+      page.once("dialog", (dialog) => void dialog.accept("Projects"));
+      await page.getByRole("menuitem", { name: "Rename group…" }).click();
+      for (const key of ["agent:main:paper-a", "agent:main:paper-b", "agent:main:old-notes"]) {
+        const patch = await waitForPatch(
+          gateway,
+          (params) => params.key === key && params.category === "Projects",
+        );
+        expect(requireRecord(patch.params)).toMatchObject({ category: "Projects", key });
+      }
+
+      // Delete group: sessions survive and move back to Ungrouped.
+      await researchGroup.locator(".sidebar-recent-sessions__head").hover();
+      page.once("dialog", (dialog) => void dialog.accept());
+      await groupMenuButton.click();
+      await page.getByRole("menuitem", { name: "Delete group…" }).click();
+      const dissolvePatch = await waitForPatch(
+        gateway,
+        (params) => params.key === "agent:main:paper-a" && params.category === null,
+      );
+      expect(requireRecord(dissolvePatch.params)).toMatchObject({
+        category: null,
+        key: "agent:main:paper-a",
+      });
+
+      // Group by "None" flattens the category sections into the plain list.
+      await page.getByRole("button", { name: "Sort sessions" }).click();
+      await page.getByRole("menuitemradio", { name: "None" }).waitFor({ state: "visible" });
+      await captureUiProof(page, "sidebar-groupby-sort-menu.png");
+      await page.getByRole("menuitemradio", { name: "None" }).click();
+      await expect.poll(() => groups.count()).toBe(1);
+      await expect.poll(() => groups.first().locator(".sidebar-recent-session").count()).toBe(3);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("does not duplicate the active chat when its only session is pinned", async () => {
     const context = await browser.newContext({
       locale: "en-US",

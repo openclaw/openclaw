@@ -1720,4 +1720,53 @@ describe("Codex app-server elicitation bridge", () => {
       outcome: "approved-once",
     });
   });
+
+  it("does not split surrogate pairs when truncating display parameter values", async () => {
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-utf16-safe", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-utf16-safe", decision: "allow-once" });
+
+    // 116 "b" + "😀" + "tail" = 122 chars. The emoji at UTF-16 positions 116-117 crosses
+    // the 120-char truncateDisplayText() boundary (120 - 3 = 117). Old raw slice(0, 117)
+    // would keep the lone high surrogate; truncateUtf16Safe backs off to 116.
+    const displayValue = `${"b".repeat(116)}😀tail`;
+
+    await handleCodexAppServerElicitationRequest({
+      requestParams: {
+        ...buildApprovalElicitation(),
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          tool_params_display: [{ name: "key", display_name: "Value", value: displayValue }],
+        },
+      },
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    const approvalCallParams = gatewayToolArg(0, 2) as { title?: string; description?: string };
+    const description = approvalCallParams.description ?? "";
+    expect(description).toContain(`${"b".repeat(116)}...`);
+  });
+
+  it("does not expose a split surrogate pair from the display scan cap", async () => {
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-utf16-scan", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-utf16-scan", decision: "allow-once" });
+
+    await handleCodexAppServerElicitationRequest({
+      requestParams: {
+        ...buildApprovalElicitation(),
+        message: `${"\u0000".repeat(4095)}😀tail`,
+      },
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    const approvalCallParams = gatewayToolArg(0, 2) as { title?: string; description?: string };
+    expect(approvalCallParams.title).toBe("Codex MCP tool approval");
+    expect(approvalCallParams.description).not.toContain(String.fromCharCode(0xd83d));
+    expect(() => encodeURIComponent(approvalCallParams.description ?? "")).not.toThrow();
+  });
 });

@@ -8,7 +8,6 @@ import {
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { withDiscordDeliveryRetry } from "./delivery-retry.js";
 import { resolveDiscordReplyReference } from "./reply-reference.js";
 
 type DiscordSendRuntime = typeof import("./send.js");
@@ -66,7 +65,6 @@ export async function createDiscordPayloadSendContext(ctx: {
   resolveReply: () => ReturnType<typeof resolveDiscordReplyReference>;
   send: DiscordSendFn;
   sendVoice: DiscordVoiceSendFn;
-  withRetry: <T>(fn: () => Promise<T>) => Promise<T>;
 }> {
   const runtime = await loadDiscordSendRuntime();
   const nextReplyToId = createReplyToFanout(ctx);
@@ -83,11 +81,5 @@ export async function createDiscordPayloadSendContext(ctx: {
     sendVoice:
       resolveOutboundSendDep<DiscordVoiceSendFn>(ctx.deps, "discordVoice") ??
       runtime.sendVoiceMessageDiscord,
-    withRetry: async (fn) =>
-      await withDiscordDeliveryRetry({
-        cfg: ctx.cfg,
-        accountId: ctx.accountId,
-        fn,
-      }),
   };
 }

@@ -18,11 +18,13 @@ const MANTIS_SLACK_DESKTOP_SMOKE_WORKFLOW = ".github/workflows/mantis-slack-desk
 const MANTIS_TELEGRAM_DESKTOP_PROOF_WORKFLOW =
   ".github/workflows/mantis-telegram-desktop-proof.yml";
 const MANTIS_TELEGRAM_LIVE_WORKFLOW = ".github/workflows/mantis-telegram-live.yml";
+const MANTIS_WEB_UI_CHAT_PROOF_WORKFLOW = ".github/workflows/mantis-web-ui-chat-proof.yml";
 const PACKAGE_JSON = "package.json";
 const SETUP_PNPM_STORE_CACHE_ACTION = ".github/actions/setup-pnpm-store-cache/action.yml";
 const DOCKER_E2E_PLAN_ACTION = ".github/actions/docker-e2e-plan/action.yml";
 const RELEASE_CHECKS_WORKFLOW = ".github/workflows/openclaw-release-checks.yml";
 const RELEASE_PUBLISH_WORKFLOW = ".github/workflows/openclaw-release-publish.yml";
+const ANDROID_RELEASE_WORKFLOW = ".github/workflows/android-release.yml";
 const STABLE_MAIN_CLOSEOUT_WORKFLOW = ".github/workflows/openclaw-stable-main-closeout.yml";
 const WINDOWS_NODE_RELEASE_WORKFLOW = ".github/workflows/windows-node-release.yml";
 const FULL_RELEASE_VALIDATION_WORKFLOW = ".github/workflows/full-release-validation.yml";
@@ -1570,6 +1572,11 @@ describe("package artifact reuse", () => {
         stepName: "Upload Mantis Telegram artifacts",
       },
       {
+        workflowPath: MANTIS_WEB_UI_CHAT_PROOF_WORKFLOW,
+        jobName: "run_web_ui_chat",
+        stepName: "Upload Mantis web UI chat artifacts",
+      },
+      {
         workflowPath: NPM_TELEGRAM_WORKFLOW,
         jobName: "run_package_telegram_e2e",
         stepName: "Upload npm Telegram E2E artifacts",
@@ -2093,6 +2100,99 @@ describe("package artifact reuse", () => {
     );
   });
 
+  it("gates stable GitHub publication on the signed Android APK contract", () => {
+    const releaseWorkflow = readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8");
+    const androidWorkflow = readFileSync(ANDROID_RELEASE_WORKFLOW, "utf8");
+    const androidDocs = readFileSync("docs/platforms/android.md", "utf8");
+    const releaseDocs = readFileSync("docs/reference/RELEASING.md", "utf8");
+    const approvalScript = readFileSync("scripts/validate-release-publish-approval.mjs", "utf8");
+
+    expect(androidWorkflow).toContain("environment: android-release");
+    expect(androidWorkflow).toContain(
+      "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1",
+    );
+    expect(androidWorkflow).toContain("repositories: apps-signing");
+    expect(androidWorkflow).toContain("permission-contents: read");
+    expect(androidWorkflow).toContain("--mode materialize");
+    expect(androidWorkflow).not.toContain("APPS_SIGNING_DEPLOY_KEY");
+    expect(androidWorkflow).toContain("MATCH_PASSWORD");
+    expect(androidWorkflow).toContain("scripts/validate-release-publish-approval.mjs");
+    expect(releaseWorkflow).toContain("Write Android release approval");
+    expect(releaseWorkflow).toContain("Attest Android release approval");
+    expect(releaseWorkflow).toContain("Upload Android release approval");
+    expect(releaseWorkflow).toContain("android-release-approval-${{ github.run_id }}");
+    expect(releaseWorkflow).toContain("parentRunId: process.env.RELEASE_PUBLISH_RUN_ID");
+    expect(releaseWorkflow).toContain("releaseTag: process.env.RELEASE_TAG");
+    expect(releaseWorkflow).toContain("targetSha: process.env.TARGET_SHA");
+    expect(androidWorkflow).toContain("Download parent release approval");
+    expect(androidWorkflow).toContain(
+      "android-release-approval-${{ inputs.release_publish_run_id }}",
+    );
+    expect(androidWorkflow).toContain(
+      '--signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/openclaw-release-publish.yml"',
+    );
+    expect(androidWorkflow).toContain('--source-ref "refs/heads/${EXPECTED_WORKFLOW_BRANCH}"');
+    expect(approvalScript).toContain(
+      "Attested Android release approval does not match this run request.",
+    );
+    expect(androidWorkflow).toContain('--artifact", "third-party');
+    expect(androidWorkflow).toContain("OpenClaw-Android.apk");
+    expect(androidWorkflow).toContain("OpenClaw-Android-SHA256SUMS.txt");
+    expect(androidWorkflow).toContain("actions/attest@a1948c3f048ba23858d222213b7c278aabede763");
+    expect(androidWorkflow).toContain("--signer-workflow");
+    expect(androidWorkflow).toContain('--source-ref "refs/tags/${RELEASE_TAG}"');
+    expect(androidWorkflow).toContain("--deny-self-hosted-runners");
+    expect(androidWorkflow).toContain("--verify-apk");
+    expect(androidWorkflow).toContain('expected_source_ref="refs/tags/${RELEASE_TAG}"');
+    expect(androidWorkflow).toContain("release_target_sha must be a full lowercase commit SHA");
+    expect(androidWorkflow).toContain("does not match ${RELEASE_TAG} (${tag_sha})");
+    expect(androidWorkflow).toContain(
+      "must resolve to the same source commit as ${fallback_base_tag}",
+    );
+    expect(androidWorkflow).toContain("FALLBACK_ANDROID_BASE_TAG");
+    expect(androidWorkflow).toContain("FALLBACK_ANDROID_BASE_SHA");
+    expect(androidWorkflow).toContain('--source-digest "${FALLBACK_ANDROID_BASE_SHA}"');
+    expect(androidWorkflow).toContain("steps.release_source.outputs.fallback_base_tag == ''");
+    expect(androidWorkflow).toContain(
+      "Reusing verified Android APK from ${FALLBACK_ANDROID_BASE_TAG}",
+    );
+    expect(androidWorkflow).toContain("Existing Android release asset ${asset_name} differs");
+    expect(androidWorkflow).not.toContain("--clobber");
+
+    expect(releaseWorkflow).toContain("promote_android_release_asset()");
+    expect(releaseWorkflow).toContain("is_android_release()");
+    expect(androidWorkflow).toContain("requires a final or correction OpenClaw release tag");
+    expect(androidWorkflow).toContain("previous_version_code");
+    expect(androidWorkflow).toContain("must exceed ${previous_tag} versionCode");
+    expect(androidWorkflow).toContain("standalone channel bootstrap");
+    expect(releaseWorkflow).toContain(
+      'dispatch_workflow_at_ref "${RELEASE_TAG}" android-release.yml',
+    );
+    expect(releaseWorkflow).toContain('-f release_target_sha="${TARGET_SHA}"');
+    expect(releaseWorkflow).toContain("verify_android_release_asset_contract");
+    expect(releaseWorkflow).toContain("Android release APK digest does not match");
+    expect(releaseWorkflow).toContain("Android APK asset contract: verified");
+
+    const createDraftCall = releaseWorkflow.lastIndexOf(
+      "\n            create_or_update_github_release\n",
+    );
+    const promoteAndroidCall = releaseWorkflow.lastIndexOf(
+      "\n            if ! promote_android_release_asset; then\n",
+    );
+    const publishReleaseCall = releaseWorkflow.lastIndexOf(
+      "\n              publish_github_release\n",
+    );
+    expect(createDraftCall).toBeGreaterThan(-1);
+    expect(promoteAndroidCall).toBeGreaterThan(createDraftCall);
+    expect(publishReleaseCall).toBeGreaterThan(promoteAndroidCall);
+
+    expect(androidDocs).toContain("github.com/openclaw/openclaw/releases");
+    expect(androidDocs).not.toContain("releases/latest/download/OpenClaw-Android.apk");
+    expect(androidDocs).toContain("gh attestation verify OpenClaw-Android.apk");
+    expect(androidDocs).toContain('--source-ref "refs/tags/${release_tag}"');
+    expect(releaseDocs).toContain("signed standalone Android APK");
+  });
+
   it("rejects malformed Windows checksum manifest lines before parsing entries", () => {
     const releaseWorkflow = readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8");
     const validateManifestLinesIndex = releaseWorkflow.indexOf("all(.[]; test(");
@@ -2439,6 +2539,7 @@ describe("package artifact reuse", () => {
       LIVE_E2E_WORKFLOW,
       NPM_TELEGRAM_WORKFLOW,
       ".github/workflows/openclaw-release-publish.yml",
+      ".github/workflows/android-release.yml",
       ".github/workflows/openclaw-npm-release.yml",
       ".github/workflows/macos-release.yml",
       ".github/workflows/plugin-clawhub-release.yml",

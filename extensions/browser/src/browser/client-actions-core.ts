@@ -19,6 +19,7 @@ import type { BrowserActRequest } from "./client-actions.types.js";
 import { fetchBrowserJson } from "./client-fetch.js";
 import {
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
+  DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS,
   DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS,
 } from "./constants.js";
 import type { BrowserDownloadResult } from "./download-types.js";
@@ -38,6 +39,9 @@ type BrowserActResponse = {
 };
 
 const BROWSER_ACT_REQUEST_TIMEOUT_SLACK_MS = 5_000;
+const BROWSER_DOWNLOAD_REQUEST_TIMEOUT_SLACK_MS = 5_000;
+
+type BrowserDownloadActionResult = BrowserActionTabResult & { download: BrowserDownloadResult };
 
 function normalizePositiveTimeoutMs(value: unknown): number | undefined {
   return clampPositiveTimerTimeoutMs(value);
@@ -58,6 +62,30 @@ function resolveBrowserActRequestTimeoutMs(req: BrowserActRequest): number {
     }
   }
   return Math.max(...candidateTimeouts);
+}
+
+function resolveBrowserDownloadRequestTimeoutMs(timeoutMs: unknown): number {
+  const waitTimeoutMs =
+    normalizePositiveTimeoutMs(timeoutMs) ?? DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS;
+  // Keep the HTTP client alive after the Playwright waiter expires so its
+  // timeout/error response reaches the caller instead of a transport abort.
+  return addTimerTimeoutGraceMs(waitTimeoutMs, BROWSER_DOWNLOAD_REQUEST_TIMEOUT_SLACK_MS) ?? 1;
+}
+
+async function postDownloadRequest(
+  baseUrl: string | undefined,
+  route: "/download" | "/wait/download",
+  body: Record<string, unknown>,
+  profile?: string,
+  timeoutMs?: number,
+): Promise<BrowserDownloadActionResult> {
+  const q = buildProfileQuery(profile);
+  return await fetchBrowserJson<BrowserDownloadActionResult>(withBaseUrl(baseUrl, `${route}${q}`), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    timeoutMs: resolveBrowserDownloadRequestTimeoutMs(timeoutMs),
+  });
 }
 
 /** Navigate a browser tab through the control server. */
@@ -132,6 +160,54 @@ export async function browserArmFileChooser(
     }),
     timeoutMs: 20000,
   });
+}
+
+/** Wait for the next managed browser download and save it under the guarded download root. */
+export async function browserWaitForDownload(
+  baseUrl: string | undefined,
+  opts: {
+    path?: string;
+    targetId?: string;
+    timeoutMs?: number;
+    profile?: string;
+  },
+): Promise<BrowserDownloadActionResult> {
+  return await postDownloadRequest(
+    baseUrl,
+    "/wait/download",
+    {
+      targetId: opts.targetId,
+      path: opts.path,
+      timeoutMs: opts.timeoutMs,
+    },
+    opts.profile,
+    opts.timeoutMs,
+  );
+}
+
+/** Click a snapshot ref and save its download under the guarded download root. */
+export async function browserDownload(
+  baseUrl: string | undefined,
+  opts: {
+    ref: string;
+    path: string;
+    targetId?: string;
+    timeoutMs?: number;
+    profile?: string;
+  },
+): Promise<BrowserDownloadActionResult> {
+  return await postDownloadRequest(
+    baseUrl,
+    "/download",
+    {
+      targetId: opts.targetId,
+      ref: opts.ref,
+      path: opts.path,
+      timeoutMs: opts.timeoutMs,
+    },
+    opts.profile,
+    opts.timeoutMs,
+  );
 }
 
 /** Execute one normalized browser action request. */

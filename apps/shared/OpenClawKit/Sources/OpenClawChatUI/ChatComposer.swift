@@ -64,14 +64,12 @@ private struct CleanChatComposerSurface: ViewModifier {
     }
 }
 
-#if !os(macOS)
 private struct SlashPanelHeightKey: PreferenceKey {
     static let defaultValue: CGFloat = 0
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = max(value, nextValue())
     }
 }
-#endif
 
 @MainActor
 struct OpenClawChatComposer: View {
@@ -87,12 +85,14 @@ struct OpenClawChatComposer: View {
     let isAttachmentInputEnabled: Bool
     let messagePlaceholder: String?
     let talkControl: OpenClawChatTalkControl?
+    let voiceNoteControl: OpenClawChatVoiceNoteControl?
 
-    #if !os(macOS)
-    @State private var pickerItems: [PhotosPickerItem] = []
     @State private var isSlashPopoverPresented = false
     @State private var suppressNextSlashPopoverUpdate = false
     @State private var slashPanelHeight: CGFloat = 0
+    @State private var slashHighlightIndex = 0
+    #if !os(macOS)
+    @State private var pickerItems: [PhotosPickerItem] = []
     @FocusState private var isFocused: Bool
     #else
     @State private var shouldFocusTextView = false
@@ -101,7 +101,7 @@ struct OpenClawChatComposer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            if self.showsToolbar {
+            if self.showsToolbar, self.voiceNoteControl?.recorder.isRecording != true {
                 self.composerToolbar
             }
 
@@ -109,7 +109,12 @@ struct OpenClawChatComposer: View {
                 self.attachmentsStrip
             }
 
-            self.editor
+            if let voiceNoteControl, voiceNoteControl.recorder.isRecording {
+                OpenClawVoiceNoteRecordingRow(recorder: voiceNoteControl.recorder)
+                    .padding(self.editorPadding)
+            } else {
+                self.editor
+            }
         }
         .padding(self.composerPadding)
         .background {
@@ -151,6 +156,7 @@ struct OpenClawChatComposer: View {
         }
         .onAppear {
             self.shouldFocusTextView = true
+            self.viewModel.loadSlashCommandsIfNeeded()
         }
         #else
         .onChange(of: self.isComposerEnabled) { _, isEnabled in
@@ -163,6 +169,26 @@ struct OpenClawChatComposer: View {
                 self.viewModel.loadSlashCommandsIfNeeded()
             }
         #endif
+            .onChange(of: self.voiceNoteControl?.recorder.completedRecording) { _, recording in
+                    guard recording != nil else { return }
+                    self.stageCompletedVoiceNoteIfNeeded()
+                }
+                .onChange(of: self.voiceNoteControl?.recorder.ownsPendingChatAttachment) { _, _ in
+                    self.viewModel.attachmentOwnerActivityChanged()
+                }
+                .onChange(of: self.voiceNoteControl?.recorder.errorMessage) { _, message in
+                    if let message {
+                        self.viewModel.errorText = message
+                    }
+                }
+                .onAppear {
+                    self.viewModel.attachmentOwnerActivityChanged()
+                    self.stageCompletedVoiceNoteIfNeeded()
+                }
+                .onDisappear {
+                    self.cancelActiveVoiceNoteIfNeeded()
+                    self.viewModel.attachmentOwnerActivityChanged()
+                }
     }
 
     private var composerToolbar: some View {
@@ -193,6 +219,13 @@ struct OpenClawChatComposer: View {
             if self.style == .standard {
                 self.refreshButton
                 self.attachmentPicker
+                if let voiceNoteControl, !voiceNoteControl.isTalkActive {
+                    OpenClawVoiceNoteButton(
+                        control: voiceNoteControl,
+                        compact: false,
+                        isComposerEnabled: self.isComposerEnabled,
+                        isAttachmentInputEnabled: self.isAttachmentInputEnabled)
+                }
             }
         }
         .padding(.horizontal, 10)
@@ -400,13 +433,27 @@ struct OpenClawChatComposer: View {
                                 .scaledToFill()
                                 .frame(width: 22, height: 22)
                                 .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        } else if att.mimeType.hasPrefix("audio/") {
+                            Image(systemName: "waveform")
+                            Text("Voice note")
+                                .font(OpenClawChatTypography.caption)
+                            if let durationSeconds = att.durationSeconds {
+                                Text(openClawVoiceNoteDurationLabel(durationSeconds))
+                                    .font(OpenClawChatTypography.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         } else {
                             Image(systemName: "photo")
+                            Text(att.fileName)
+                                .font(OpenClawChatTypography.caption)
+                                .lineLimit(1)
                         }
 
-                        Text(att.fileName)
-                            .font(OpenClawChatTypography.caption)
-                            .lineLimit(1)
+                        if att.preview != nil {
+                            Text(att.fileName)
+                                .font(OpenClawChatTypography.caption)
+                                .lineLimit(1)
+                        }
 
                         Button {
                             self.viewModel.removeAttachment(att.id)
@@ -424,11 +471,7 @@ struct OpenClawChatComposer: View {
         }
     }
 
-    @ViewBuilder
     private var editor: some View {
-        #if os(macOS)
-        self.editorContent
-        #else
         self.editorContent
             .overlay(alignment: .top) {
                 if self.isSlashPopoverPresented {
@@ -446,7 +489,6 @@ struct OpenClawChatComposer: View {
             .onPreferenceChange(SlashPanelHeightKey.self) { newHeight in
                 self.slashPanelHeight = newHeight
             }
-        #endif
     }
 
     @ViewBuilder
@@ -496,6 +538,15 @@ struct OpenClawChatComposer: View {
             HStack(alignment: .bottom, spacing: 8) {
                 self.attachmentPicker
                     .frame(width: self.cleanIconControlSize, height: self.cleanEditorMinHeight)
+
+                if let voiceNoteControl, !voiceNoteControl.isTalkActive {
+                    OpenClawVoiceNoteButton(
+                        control: voiceNoteControl,
+                        compact: true,
+                        isComposerEnabled: self.isComposerEnabled,
+                        isAttachmentInputEnabled: self.isAttachmentInputEnabled)
+                        .frame(width: self.cleanIconControlSize, height: self.cleanEditorMinHeight)
+                }
 
                 self.editorOverlay
                     .padding(.vertical, self.cleanEditorTextPadding)
@@ -666,10 +717,16 @@ struct OpenClawChatComposer: View {
                 onPasteImageAttachment: { data, fileName, mimeType in
                     guard self.isAttachmentInputEnabled else { return }
                     self.viewModel.addImageAttachment(data: data, fileName: fileName, mimeType: mimeType)
+                },
+                onKeyCommand: { command in
+                    self.handleComposerKeyCommand(command)
                 })
                 .frame(minHeight: self.textMinHeight, idealHeight: self.textMinHeight, maxHeight: self.textMaxHeight)
                 .padding(.horizontal, 4)
                 .padding(.vertical, 3)
+                .onChange(of: self.viewModel.input) { _, _ in
+                    self.updateSlashPopoverPresentation()
+                }
             #else
             TextField(
                 "",
@@ -701,7 +758,6 @@ struct OpenClawChatComposer: View {
         }
     }
 
-    #if !os(macOS)
     private var slashQuery: String? {
         let text = self.viewModel.input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard text.hasPrefix("/"), !text.hasPrefix("//") else { return nil }
@@ -758,19 +814,33 @@ struct OpenClawChatComposer: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 96)
             } else {
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 2) {
-                        ForEach(matches) { command in
-                            Button {
-                                self.selectSlashCommand(command)
-                            } label: {
-                                self.slashCommandRow(command)
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 2) {
+                            ForEach(Array(matches.enumerated()), id: \.element.id) { index, command in
+                                Button {
+                                    self.selectSlashCommand(command)
+                                } label: {
+                                    self.slashCommandRow(
+                                        command,
+                                        isHighlighted: self.usesSlashKeyboardHighlight
+                                            && index == self.slashHighlightIndex)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel(command.displayInvocation)
+                                .id(index)
+                                .onHover { hovering in
+                                    if hovering {
+                                        self.slashHighlightIndex = index
+                                    }
+                                }
                             }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel(command.displayInvocation)
                         }
+                        .padding(8)
                     }
-                    .padding(8)
+                    .onChange(of: self.slashHighlightIndex) { _, index in
+                        proxy.scrollTo(index)
+                    }
                 }
                 .frame(maxHeight: .infinity)
                 .overlay(alignment: .bottom) {
@@ -791,7 +861,10 @@ struct OpenClawChatComposer: View {
         .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
     }
 
-    private func slashCommandRow(_ command: OpenClawChatCommandChoice) -> some View {
+    private func slashCommandRow(
+        _ command: OpenClawChatCommandChoice,
+        isHighlighted: Bool) -> some View
+    {
         HStack(alignment: .top, spacing: 0) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(command.displayInvocation)
@@ -813,6 +886,9 @@ struct OpenClawChatComposer: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 8)
         .contentShape(Rectangle())
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(isHighlighted ? AnyShapeStyle(.selection) : AnyShapeStyle(.clear)))
     }
 
     private var slashCommandScrollAffordance: some View {
@@ -840,13 +916,43 @@ struct OpenClawChatComposer: View {
         self.suppressNextSlashPopoverUpdate = true
         self.viewModel.applySlashCommandSelection(command)
         self.setSlashPanelPresented(false)
+        #if os(macOS)
+        self.shouldFocusTextView = true
+        #else
         self.isFocused = true
+        #endif
     }
 
     private func setSlashPanelPresented(_ presented: Bool) {
         withAnimation(.easeInOut(duration: 0.18)) {
             self.isSlashPopoverPresented = presented
         }
+        if presented {
+            self.slashHighlightIndex = 0
+        }
+    }
+
+    private var slashPanelCanPresent: Bool {
+        // Transports without a command catalog (e.g. onboarding) get no panel
+        // instead of an empty "No matching commands" box.
+        guard self.viewModel.transport.supportsSlashCommandCatalog else { return false }
+        // macOS input is an NSTextView outside SwiftUI focus tracking; it is
+        // the composer's only editable field, so enablement is the gate.
+        #if os(macOS)
+        return self.isComposerEnabled
+        #else
+        return self.isComposerEnabled && self.isFocused
+        #endif
+    }
+
+    /// Keyboard-driven row highlight is macOS-only; on touch platforms a
+    /// persistent highlight on row 0 would read as a stray selection.
+    private var usesSlashKeyboardHighlight: Bool {
+        #if os(macOS)
+        true
+        #else
+        false
+        #endif
     }
 
     private func updateSlashPopoverPresentation() {
@@ -854,12 +960,42 @@ struct OpenClawChatComposer: View {
             self.suppressNextSlashPopoverUpdate = false
             return
         }
-        let shouldShow = self.isComposerEnabled && self.isFocused && self.slashQuery != nil
+        let shouldShow = self.slashPanelCanPresent && self.slashQuery != nil
         if shouldShow {
             self.viewModel.loadSlashCommandsIfNeeded()
+            self.slashHighlightIndex = 0
         }
         if shouldShow != self.isSlashPopoverPresented {
             self.setSlashPanelPresented(shouldShow)
+        }
+    }
+
+    #if os(macOS)
+    /// Keyboard routing while the slash panel is open: arrows move the
+    /// highlight, Tab/Return accept, Escape dismisses. Returning false hands
+    /// the key back to the text view (typing, send-on-return).
+    private func handleComposerKeyCommand(_ command: ChatComposerKeyCommand) -> Bool {
+        guard self.isSlashPopoverPresented else { return false }
+        let matches = self.viewModel.slashCommandMatches(query: self.slashQuery ?? "", filter: .all)
+        switch command {
+        case .escape:
+            self.setSlashPanelPresented(false)
+            return true
+        case .moveUp:
+            guard !matches.isEmpty else { return true }
+            self.slashHighlightIndex = (self.slashHighlightIndex - 1 + matches.count) % matches.count
+            return true
+        case .moveDown:
+            guard !matches.isEmpty else { return true }
+            self.slashHighlightIndex = (self.slashHighlightIndex + 1) % matches.count
+            return true
+        case .tab, .returnKey:
+            guard matches.indices.contains(self.slashHighlightIndex) else {
+                self.setSlashPanelPresented(false)
+                return command == .tab
+            }
+            self.selectSlashCommand(matches[self.slashHighlightIndex])
+            return true
         }
     }
     #endif
@@ -1030,8 +1166,32 @@ struct OpenClawChatComposer: View {
 
     private var canSendMessage: Bool {
         self.isComposerEnabled
+            && self.voiceNoteControl?.recorder.ownsPendingChatAttachment != true
             && self.viewModel.canSend
             && (self.isAttachmentInputEnabled || self.viewModel.attachments.isEmpty)
+    }
+
+    private func stageCompletedVoiceNoteIfNeeded() {
+        guard let recorder = self.voiceNoteControl?.recorder,
+              let recording = recorder.claimCompletedRecording()
+        else { return }
+
+        let viewModel = self.viewModel
+        Task {
+            await viewModel.addVoiceNoteAttachment(
+                fileURL: recording.fileURL,
+                durationSeconds: recording.durationSeconds)
+            recorder.completeStaging(recording)
+        }
+    }
+
+    private func cancelActiveVoiceNoteIfNeeded() {
+        guard let recorder = self.voiceNoteControl?.recorder,
+              recorder.isRecording || recorder.isRequestingPermission
+        else { return }
+        // The app-owned recorder outlives this view. Release the microphone
+        // when its only recording UI disappears so capture never runs hidden.
+        recorder.cancel()
     }
 
     private var connectionStatusText: String {
@@ -1109,12 +1269,46 @@ struct OpenClawChatComposer: View {
 import AppKit
 import UniformTypeIdentifiers
 
+/// Navigation keys the composer intercepts while UI like the slash-command
+/// panel is open. The handler returns true when it consumed the key.
+enum ChatComposerKeyCommand: Equatable {
+    case moveUp
+    case moveDown
+    case tab
+    case escape
+    case returnKey
+}
+
+enum ChatComposerKeyRouting {
+    /// Maps a key event to an interceptable command. Modified keys (except
+    /// plain Shift on arrows) stay with the text view so shortcuts keep
+    /// working; marked text (IME composition) is never intercepted.
+    static func command(
+        keyCode: UInt16,
+        modifierFlags: NSEvent.ModifierFlags,
+        hasMarkedText: Bool) -> ChatComposerKeyCommand?
+    {
+        guard !hasMarkedText else { return nil }
+        let disallowed: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
+        guard modifierFlags.intersection(disallowed).isEmpty else { return nil }
+        switch keyCode {
+        case 126: return .moveUp
+        case 125: return .moveDown
+        case 48: return .tab
+        case 53: return .escape
+        case 36: return .returnKey
+        default: return nil
+        }
+    }
+}
+
 private struct ChatComposerTextView: NSViewRepresentable {
     @Binding var text: String
     @Binding var shouldFocus: Bool
     var isEnabled: Bool
     var onSend: () -> Void
     var onPasteImageAttachment: (_ data: Data, _ fileName: String, _ mimeType: String) -> Void
+    var onKeyCommand: (_ command: ChatComposerKeyCommand) -> Bool = { _ in false }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -1133,6 +1327,7 @@ private struct ChatComposerTextView: NSViewRepresentable {
             self.onSend()
         }
         composerTextView.onPasteImageAttachment = self.onPasteImageAttachment
+        composerTextView.onKeyCommand = self.onKeyCommand
 
         let scroll = NSScrollView()
         scroll.drawsBackground = false
@@ -1148,6 +1343,7 @@ private struct ChatComposerTextView: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = scrollView.documentView as? ChatComposerNSTextView else { return }
         textView.onPasteImageAttachment = self.onPasteImageAttachment
+        textView.onKeyCommand = self.onKeyCommand
         textView.isEditable = self.isEnabled
         textView.isSelectable = self.isEnabled
 
@@ -1161,21 +1357,28 @@ private struct ChatComposerTextView: NSViewRepresentable {
 
         let isEditing = scrollView.window?.firstResponder == textView
 
-        // Always allow clearing the text (e.g. after send), even while editing.
-        // Only skip other updates while editing to avoid cursor jumps.
-        let shouldClear = self.text.isEmpty && !textView.string.isEmpty
-        if isEditing, !shouldClear { return }
+        // While the user is typing, binding updates just echo textDidChange;
+        // rewriting the view then would jump the cursor. A binding value the
+        // coordinator never reported is programmatic (send-clear, slash
+        // completion) and must reach the view even mid-edit.
+        let isEcho = context.coordinator.lastReportedText == self.text
+        if isEditing, isEcho { return }
 
         if textView.string != self.text {
             context.coordinator.isProgrammaticUpdate = true
             defer { context.coordinator.isProgrammaticUpdate = false }
             textView.string = self.text
+            if isEditing {
+                textView.setSelectedRange(NSRange(location: (self.text as NSString).length, length: 0))
+            }
         }
+        context.coordinator.lastReportedText = self.text
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: ChatComposerTextView
         var isProgrammaticUpdate = false
+        var lastReportedText: String?
 
         init(_ parent: ChatComposerTextView) {
             self.parent = parent
@@ -1185,6 +1388,7 @@ private struct ChatComposerTextView: NSViewRepresentable {
             guard !self.isProgrammaticUpdate else { return }
             guard let view = notification.object as? NSTextView else { return }
             guard view.window?.firstResponder === view else { return }
+            self.lastReportedText = view.string
             self.parent.text = view.string
         }
     }
@@ -1221,6 +1425,7 @@ enum ChatComposerTextViewFactory {
 private final class ChatComposerNSTextView: NSTextView {
     var onSend: (() -> Void)?
     var onPasteImageAttachment: ((_ data: Data, _ fileName: String, _ mimeType: String) -> Void)?
+    var onKeyCommand: ((_ command: ChatComposerKeyCommand) -> Bool)?
 
     override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
         var types = super.readablePasteboardTypes
@@ -1231,6 +1436,14 @@ private final class ChatComposerNSTextView: NSTextView {
     }
 
     override func keyDown(with event: NSEvent) {
+        if let command = ChatComposerKeyRouting.command(
+            keyCode: event.keyCode,
+            modifierFlags: event.modifierFlags,
+            hasMarkedText: hasMarkedText()),
+            self.onKeyCommand?(command) == true
+        {
+            return
+        }
         let isReturn = event.keyCode == 36
         if isReturn {
             if hasMarkedText() {

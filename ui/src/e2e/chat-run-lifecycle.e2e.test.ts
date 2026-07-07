@@ -38,16 +38,27 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
     await server?.close();
   });
 
-  it("keeps Send visible when a stale active row outlives the terminal toast", async () => {
+  it("clears shared session activity when chat final arrives first", async () => {
     browser = await chromium.launch({ executablePath: chromiumExecutablePath });
     const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
-    const gateway = await installMockGateway(currentPage);
+    const gateway = await installMockGateway(currentPage, {
+      historyMessages: [
+        {
+          content: [{ text: "Ready for run lifecycle verification.", type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+      ],
+    });
 
     await currentPage.goto(`${server?.baseUrl ?? ""}chat`);
+    await currentPage
+      .getByText("Ready for run lifecycle verification.")
+      .waitFor({ timeout: 10_000 });
     await gateway.waitForRequest("sessions.list");
-    await currentPage.locator(".agent-chat__composer-combobox textarea").fill("finish this run");
+    await currentPage.locator(".agent-chat__input textarea").fill("finish this run");
     await currentPage.getByRole("button", { name: "Send message" }).click();
     const send = await gateway.waitForRequest("chat.send");
     const params = send.params as { idempotencyKey?: unknown };
@@ -55,9 +66,22 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
     const runId = params.idempotencyKey as string;
 
     await currentPage.getByRole("button", { name: "Stop generating" }).waitFor();
+    const mainSession = currentPage.locator(".sidebar-recent-session").filter({ hasText: "Main" });
+    await gateway.emitGatewayEvent("sessions.changed", {
+      activeRunIds: [runId],
+      hasActiveRun: true,
+      key: "main",
+      kind: "direct",
+      reason: "lifecycle",
+      startedAt: Date.now() - 1_000,
+      status: "running",
+      updatedAt: Date.now(),
+    });
+    await mainSession.locator(".session-run-spinner").waitFor();
+
     await gateway.emitChatFinal({ runId, text: "Run complete." });
     await currentPage.getByText("Run complete.", { exact: true }).waitFor();
-    await currentPage.getByRole("button", { name: "Send message" }).waitFor();
+    await expect.poll(() => mainSession.locator(".session-run-spinner").count()).toBe(0);
 
     await gateway.emitGatewayEvent("sessions.changed", {
       activeRunIds: [runId],
@@ -70,10 +94,11 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
       updatedAt: Date.now(),
     });
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
+    await expect.poll(() => mainSession.locator(".session-run-spinner").count()).toBe(0);
 
     await currentPage.waitForTimeout(CHAT_RUN_STATUS_TOAST_DURATION_MS + 250);
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
-    expect(await currentPage.getByRole("button", { name: "Send message" }).count()).toBe(1);
+    expect(await mainSession.locator(".session-run-spinner").count()).toBe(0);
 
     await gateway.emitGatewayEvent("sessions.changed", {
       key: "agent:main:another-session",
@@ -83,7 +108,7 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
       updatedAt: Date.now(),
     });
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
-    expect(await currentPage.getByRole("button", { name: "Send message" }).count()).toBe(1);
+    await expect.poll(() => mainSession.locator(".session-run-spinner").count()).toBe(0);
 
     // Re-publish after the former 10-second suppression window. The completed
     // run identity stays terminal until the Gateway publishes different state.
@@ -99,6 +124,6 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
       updatedAt: Date.now(),
     });
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
-    expect(await currentPage.getByRole("button", { name: "Send message" }).count()).toBe(1);
+    await expect.poll(() => mainSession.locator(".session-run-spinner").count()).toBe(0);
   });
 });

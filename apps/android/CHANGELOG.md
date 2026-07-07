@@ -4,9 +4,15 @@
 
 Adds multi-gateway support: the app remembers every paired gateway, lists them in Settings with a quick switcher on the Connect tab, and switches between them without pairing again. Credentials, device tokens, TLS trust, notification routing, chat history, and queued offline messages stay scoped to their gateway, and forgetting a gateway removes all of its stored state.
 
+Stable GitHub Releases now include a signed standalone Android APK with checksums and verifiable GitHub Actions provenance. (#9443)
+
 Android notification forwarding now excludes native WhatsApp, Telegram, Telegram X, Discord, and Signal channel apps to prevent duplicate cross-session replies. (#48516)
 
 Assistant messages now offer a long-press Listen action with gateway TTS playback, on-device fallback, and tap-to-stop status.
+
+Android command-palette rows now align icon and navigation affordances consistently and truncate long session details cleanly. Thanks @IWhatsskill.
+
+Android screenshot-mode voice and screen proof scenes now scale cleanly on compact capture widths. Thanks @IWhatsskill.
 
 The Settings About screen now shows the animated mascot with the app tagline plus Website, Docs, GitHub, and Discord links.
 

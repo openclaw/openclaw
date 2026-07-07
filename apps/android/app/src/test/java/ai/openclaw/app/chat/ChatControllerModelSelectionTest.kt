@@ -7,6 +7,8 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -332,5 +334,66 @@ class ChatControllerModelSelectionTest {
 
       assertEquals(2, metadataRequests)
       assertTrue(controller.modelCatalog.value.isEmpty())
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun unsupportedReasoningSendsOffWithoutChangingStoredLevelAndRestoresAfterFlip() =
+    runTest {
+      val sentThinkingLevels = mutableListOf<String>()
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, paramsJson ->
+            when (method) {
+              "chat.send" -> {
+                val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+                sentThinkingLevels += (params["thinking"] as JsonPrimitive).content
+                """{"runId":"run-${sentThinkingLevels.size}","status":"ok"}"""
+              }
+              "chat.history" -> """{"messages":[],"sessionInfo":{"key":"main"}}"""
+              "sessions.list" -> """{"sessions":[]}"""
+              // Gating reads the controller-owned agent-scoped catalog hydrated from chat.metadata.
+              "chat.metadata" ->
+                """
+                {
+                  "commands": [],
+                  "models": [
+                    {"id": "plain", "name": "plain", "provider": "openai", "available": true, "input": ["text"], "reasoning": false},
+                    {"id": "reasoning", "name": "reasoning", "provider": "openai", "available": true, "input": ["text"], "reasoning": true}
+                  ]
+                }
+                """.trimIndent()
+              else -> "{}"
+            }
+          },
+        )
+      controller.handleGatewayEvent("health", null)
+      controller.load("main")
+      advanceUntilIdle()
+      controller.setThinkingLevel("high")
+      assertTrue(controller.setSessionModelAwait("main", "openai/plain"))
+
+      assertTrue(
+        controller.sendMessageAwaitAcceptance(
+          message = "plain model",
+          thinkingLevel = controller.thinkingLevel.value,
+          attachments = emptyList(),
+        ),
+      )
+      assertEquals(listOf("off"), sentThinkingLevels)
+      assertEquals("high", controller.thinkingLevel.value)
+
+      assertTrue(controller.setSessionModelAwait("main", "openai/reasoning"))
+      assertTrue(
+        controller.sendMessageAwaitAcceptance(
+          message = "reasoning restored",
+          thinkingLevel = controller.thinkingLevel.value,
+          attachments = emptyList(),
+        ),
+      )
+      assertEquals(listOf("off", "high"), sentThinkingLevels)
+      assertEquals("high", controller.thinkingLevel.value)
     }
 }

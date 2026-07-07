@@ -470,6 +470,14 @@ import {
   SkillsDetailResultSchema,
   type SkillsInstallParams,
   SkillsInstallParamsSchema,
+  type SkillsCuratorActionParams,
+  SkillsCuratorActionParamsSchema,
+  type SkillsCuratorActionResult,
+  SkillsCuratorActionResultSchema,
+  type SkillsCuratorStatusParams,
+  SkillsCuratorStatusParamsSchema,
+  type SkillsCuratorStatusResult,
+  SkillsCuratorStatusResultSchema,
   type SkillsProposalActionParams,
   SkillsProposalActionParamsSchema,
   type SkillsProposalApplyResult,
@@ -945,6 +953,12 @@ export const validateSkillsUploadCommitParams = lazyCompile<SkillsUploadCommitPa
 export const validateSkillsUpdateParams = lazyCompile<SkillsUpdateParams>(SkillsUpdateParamsSchema);
 export const validateSkillsSearchParams = lazyCompile<SkillsSearchParams>(SkillsSearchParamsSchema);
 export const validateSkillsDetailParams = lazyCompile<SkillsDetailParams>(SkillsDetailParamsSchema);
+export const validateSkillsCuratorStatusParams = lazyCompile<SkillsCuratorStatusParams>(
+  SkillsCuratorStatusParamsSchema,
+);
+export const validateSkillsCuratorActionParams = lazyCompile<SkillsCuratorActionParams>(
+  SkillsCuratorActionParamsSchema,
+);
 export const validateSkillsProposalsListParams = lazyCompile<SkillsProposalsListParams>(
   SkillsProposalsListParamsSchema,
 );
@@ -1322,6 +1336,10 @@ export {
   ToolsEffectiveParamsSchema,
   ToolsInvokeParamsSchema,
   SkillsInstallParamsSchema,
+  SkillsCuratorActionParamsSchema,
+  SkillsCuratorActionResultSchema,
+  SkillsCuratorStatusParamsSchema,
+  SkillsCuratorStatusResultSchema,
   SkillsSearchParamsSchema,
   SkillsSearchResultSchema,
   SkillsDetailParamsSchema,
@@ -1540,6 +1558,10 @@ export type {
   ToolsInvokeResult,
   SkillsBinsParams,
   SkillsBinsResult,
+  SkillsCuratorActionParams,
+  SkillsCuratorActionResult,
+  SkillsCuratorStatusParams,
+  SkillsCuratorStatusResult,
   SkillsSearchParams,
   SkillsSearchResult,
   SkillsDetailParams,

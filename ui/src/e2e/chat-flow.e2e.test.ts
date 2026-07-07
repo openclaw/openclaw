@@ -775,7 +775,12 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     const gateway = await installMockGateway(page, {
       historyMessages: [
         {
-          content: [{ text: `\`\`\`js\n${code}\n\`\`\``, type: "text" }],
+          content: [
+            {
+              text: `${"long response line\n\n".repeat(80)}\`\`\`js\n${code}\n\`\`\``,
+              type: "text",
+            },
+          ],
           role: "assistant",
           timestamp: Date.now(),
         },
@@ -786,6 +791,11 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}chat`);
       const copyButton = page.locator(".code-block-copy").first();
       await copyButton.waitFor({ timeout: 10_000 });
+      await copyButton.evaluate((element) => element.scrollIntoView({ block: "center" }));
+      const thread = page.locator(".chat-thread");
+      const scrollTopBefore = await thread.evaluate((element) =>
+        Math.round((element as HTMLElement).scrollTop),
+      );
       await copyButton.click();
 
       await expect
@@ -794,6 +804,9 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         })
         .toBe(true);
       expect(await copiedViaExec(page)).toContain(code);
+      await expect
+        .poll(() => thread.evaluate((element) => Math.round((element as HTMLElement).scrollTop)))
+        .toBe(scrollTopBefore);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     } finally {
       await closeBrowserContext(context);

@@ -28,7 +28,7 @@ export type SessionChangedResult = {
   result: SessionsListResult | null;
 };
 
-export type SessionChangedEventInfo = {
+type SessionChangedEventInfo = {
   key: string;
   agentId: string | null;
   runId: string | null;

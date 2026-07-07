@@ -1052,6 +1052,7 @@ async function initSessionStateAttemptLocked(
       },
     });
     await resetRegisteredAgentHarnessSessions({
+      agentId,
       sessionId: previousSessionEntry.sessionId,
       sessionKey,
       sessionFile: previousSessionEntry.sessionFile,

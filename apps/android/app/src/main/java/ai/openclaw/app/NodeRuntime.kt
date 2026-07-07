@@ -661,6 +661,10 @@ class NodeRuntime private constructor(
   val gatewayDefaultAgentId: StateFlow<String?> = _gatewayDefaultAgentId.asStateFlow()
   private val _gatewayAgents = MutableStateFlow<List<GatewayAgentSummary>>(emptyList())
   val gatewayAgents: StateFlow<List<GatewayAgentSummary>> = _gatewayAgents.asStateFlow()
+
+  // Preserve an explicit user choice across metadata refreshes. Gateway reconnects
+  // clear it so the newly connected gateway's canonical main agent wins again.
+  @Volatile private var selectedChatAgentId: String? = null
   private val _cronStatus = MutableStateFlow(GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null))
   val cronStatus: StateFlow<GatewayCronStatus> = _cronStatus.asStateFlow()
   private val _cronJobs = MutableStateFlow<List<GatewayCronJobSummary>>(emptyList())
@@ -742,6 +746,7 @@ class NodeRuntime private constructor(
   // Keep ownership epochs and their service/capture state transitions atomic.
   // Otherwise stale PTT cleanup can pass its epoch check before a UI mode change.
   private val voiceCaptureOwnershipLock = Any()
+  private var voiceNoteOwnsMic = false
   private val voiceCapturePreparationMutex = Mutex()
 
   private var didAutoRequestCanvasRehydrate = false
@@ -817,6 +822,7 @@ class NodeRuntime private constructor(
     _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
     _gatewayDefaultAgentId.value = null
     _gatewayAgents.value = emptyList()
+    selectedChatAgentId = null
     _modelCatalog.value = emptyList()
     _modelAuthProviders.value = emptyList()
     _modelCatalogRefreshing.value = false
@@ -1865,6 +1871,19 @@ class NodeRuntime private constructor(
     setVoiceCaptureMode(if (value) VoiceCaptureMode.ManualMic else VoiceCaptureMode.Off)
   }
 
+  internal fun tryAcquireVoiceNoteMic(): Boolean =
+    synchronized(voiceCaptureOwnershipLock) {
+      if (voiceNoteOwnsMic || !isVoiceCaptureModeActive(VoiceCaptureMode.Off)) return@synchronized false
+      voiceNoteOwnsMic = true
+      true
+    }
+
+  internal fun releaseVoiceNoteMic() {
+    synchronized(voiceCaptureOwnershipLock) {
+      voiceNoteOwnsMic = false
+    }
+  }
+
   fun cancelMicCapture() {
     micCapture.cancelMicCapture()
     setVoiceCaptureMode(VoiceCaptureMode.Off, persistManualMic = false)
@@ -2023,6 +2042,9 @@ class NodeRuntime private constructor(
             talkPttCommandEpoch.get() != commandEpoch
           ) {
             throw IllegalStateException("NODE_BACKGROUND_UNAVAILABLE: command requires foreground")
+          }
+          if (voiceNoteOwnsMic) {
+            throw IllegalStateException("MIC_BUSY: voice note recording is active")
           }
           if (!hasRecordAudioPermission()) {
             throw IllegalStateException("MIC_PERMISSION_REQUIRED: grant Microphone permission")
@@ -2251,6 +2273,7 @@ class NodeRuntime private constructor(
     persistManualMic: Boolean = true,
   ) {
     synchronized(voiceCaptureOwnershipLock) {
+      if (mode != VoiceCaptureMode.Off && voiceNoteOwnsMic) return
       talkPttCommandEpoch.incrementAndGet()
       voiceCaptureOwnershipEpoch.incrementAndGet()
       val permissionDenied = mode.requiresMicrophonePermission && !hasRecordAudioPermission()
@@ -3039,6 +3062,17 @@ class NodeRuntime private constructor(
     )
   }
 
+  suspend fun renameChatSessionGroup(
+    from: String,
+    to: String,
+  ) {
+    chat.renameSessionGroup(from = from, to = to)
+  }
+
+  suspend fun dissolveChatSessionGroup(group: String) {
+    chat.dissolveSessionGroup(group)
+  }
+
   suspend fun deleteChatSession(key: String) {
     chat.deleteSession(key)
   }
@@ -3060,6 +3094,22 @@ class NodeRuntime private constructor(
     stopMessageSpeech()
     chat.switchSession(sessionKey)
   }
+
+  fun selectChatAgent(agentId: String) {
+    val normalizedAgentId = agentId.trim()
+    if (normalizedAgentId.isEmpty()) return
+    stopMessageSpeech()
+    // Agent selection owns every main-session consumer; switching chat alone would
+    // leave Talk mode and the home canvas bound to the previous agent.
+    selectedChatAgentId = normalizedAgentId
+    syncMainSessionKey(normalizedAgentId)
+    chat.switchSession(_mainSessionKey.value)
+  }
+
+  suspend fun fetchChatSessionList(
+    search: String?,
+    archived: Boolean,
+  ): List<ChatSessionEntry> = chat.fetchSessionList(search = search, archived = archived)
 
   fun abortChat() {
     chat.abort()
@@ -3216,7 +3266,6 @@ class NodeRuntime private constructor(
       val raw = ui?.get("seamColor").asStringOrNull()?.trim()
       val parsed = parseHexColorArgb(raw)
       publishGatewayData(gatewayScope) {
-        syncMainSessionKey(gatewayDefaultAgentId.value)
         _seamColorArgb.value = parsed ?: DEFAULT_SEAM_COLOR_ARGB
         updateHomeCanvasState()
       }
@@ -3286,7 +3335,9 @@ class NodeRuntime private constructor(
       publishGatewayData(gatewayScope) {
         _gatewayDefaultAgentId.value = defaultAgentId.ifEmpty { null }
         _gatewayAgents.value = agents
-        syncMainSessionKey(resolveAgentIdFromMainSessionKey(mainKey) ?: gatewayDefaultAgentId.value)
+        val selectedAgentId = selectedChatAgentId?.takeIf { id -> agents.any { it.id == id } }
+        selectedChatAgentId = selectedAgentId
+        syncMainSessionKey(selectedAgentId ?: resolveAgentIdFromMainSessionKey(mainKey) ?: gatewayDefaultAgentId.value)
         updateHomeCanvasState()
       }
     } catch (_: Throwable) {

@@ -115,6 +115,12 @@ struct SwiftUIRenderSmokeTests {
     @Test @MainActor func `display math builds valid and fallback view hierarchies`() {
         for typeSize in [DynamicTypeSize.large, .accessibility2] {
             let root = VStack {
+                ChatMarkdownRenderer(
+                    text: #"Inline math \(E = mc^2\) stays inside prose."#,
+                    context: .assistant,
+                    variant: .standard,
+                    font: OpenClawChatTypography.body,
+                    textColor: OpenClawChatTheme.assistantText)
                 ChatMathBlockView(block: ChatMathBlock(
                     latex: #"\frac{-b \pm \sqrt{b^2 - 4ac}}{2a}"#,
                     isComplete: true), textColor: OpenClawChatTheme.assistantText)

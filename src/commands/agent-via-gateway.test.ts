@@ -438,6 +438,40 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("defers explicit recipient session routing to the Gateway", async () => {
+    await withTempStore(
+      async () => {
+        mockGatewaySuccessReply();
+
+        await agentCliCommand(
+          {
+            message: "hi",
+            agent: "ops",
+            channel: "whatsapp",
+            to: "+15551234567",
+          },
+          runtime,
+        );
+
+        const request = requireRecord(
+          requireFirstCallArg(callGateway, "gateway"),
+          "gateway request",
+        );
+        const params = requireRecord(request.params, "gateway request params");
+        expect(params).toMatchObject({
+          agentId: "ops",
+          channel: "whatsapp",
+          to: "+15551234567",
+        });
+        expect(params.sessionKey).toBeUndefined();
+      },
+      {
+        agents: { list: [{ id: "main" }, { id: "ops" }] },
+        session: { dmScope: "per-channel-peer" },
+      },
+    );
+  });
+
   it("retries gateway dispatch with shell env fallback only when credentials need it", async () => {
     await withTempStore(async ({ store }) => {
       const fastConfig = {
@@ -836,6 +870,88 @@ describe("agentCliCommand", () => {
       expect(signals.listenerCount("SIGTERM")).toBe(0);
       expect(signals.listenerCount("SIGINT")).toBe(0);
     });
+  });
+
+  it("aborts deferred recipient routing by idempotency key before the accepted ack", async () => {
+    await withTempStore(
+      async () => {
+        const signals = createSignalProcess();
+        let sameConnectionAbort:
+          | { method: string; params: unknown; opts?: { timeoutMs?: number | null } }
+          | undefined;
+        callGateway.mockImplementation(async (requestValue: unknown) => {
+          const request = requireRecord(requestValue, "gateway request");
+          if (request.method === "agent") {
+            const params = requireRecord(request.params, "gateway agent params");
+            expect(params).toMatchObject({
+              agentId: "ops",
+              channel: "whatsapp",
+              to: "+15551234567",
+              idempotencyKey: "recipient-pre-accepted-run",
+            });
+            expect(params.sessionKey).toBeUndefined();
+            const onSignalAbort = request.onSignalAbort as
+              | ((
+                  request: (
+                    method: string,
+                    params?: unknown,
+                    opts?: { timeoutMs?: number | null },
+                  ) => Promise<unknown>,
+                ) => Promise<void>)
+              | undefined;
+            const signal = request.signal as AbortSignal | undefined;
+            return await new Promise((_, reject) => {
+              signal?.addEventListener(
+                "abort",
+                () => {
+                  void (async () => {
+                    await onSignalAbort?.(async (method, paramsResult, opts) => {
+                      sameConnectionAbort = { method, params: paramsResult, opts };
+                      return {
+                        ok: true,
+                        aborted: true,
+                        runIds: ["recipient-pre-accepted-run"],
+                      };
+                    });
+                    const err = new Error("gateway recipient routing aborted before accepted ack");
+                    err.name = "AbortError";
+                    reject(err);
+                  })();
+                },
+                { once: true },
+              );
+            });
+          }
+          throw new Error(`unexpected gateway method ${String(request.method)}`);
+        });
+
+        const run = agentCliCommand(
+          {
+            message: "hi",
+            agent: "ops",
+            channel: "whatsapp",
+            to: "+15551234567",
+            runId: "recipient-pre-accepted-run",
+          },
+          runtime,
+          { process: signals.processLike },
+        );
+        await waitForGatewayCall();
+        signals.emit("SIGTERM");
+
+        await run;
+        expect(runtime.exit).toHaveBeenCalledWith(143);
+        expect(sameConnectionAbort?.method).toBe("chat.abort");
+        expect(sameConnectionAbort?.params).toEqual({
+          sessionKey: "agent:ops:main",
+          runId: "recipient-pre-accepted-run",
+        });
+      },
+      {
+        agents: { list: [{ id: "main" }, { id: "ops" }] },
+        session: { dmScope: "per-channel-peer" },
+      },
+    );
   });
 
   it("skips fallback abort when SIGTERM interrupts before the gateway request starts", async () => {

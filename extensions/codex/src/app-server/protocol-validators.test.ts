@@ -38,16 +38,16 @@ function makeMinimalResponse(threadOverrides: Record<string, unknown> = {}) {
 }
 
 describe("Codex thread response validators", () => {
-  it("normalizes missing sessionId from id for start and resume responses", () => {
+  // The 0.142 floor guarantees both thread ids; pre-0.131 servers without
+  // sessionId must fail loudly instead of being silently normalized.
+  it("rejects thread responses missing sessionId", () => {
     for (const assertResponse of [
       assertCodexThreadStartResponse,
       assertCodexThreadResumeResponse,
     ]) {
       const response = makeMinimalResponse({ sessionId: undefined });
       delete (response.thread as Record<string, unknown>).sessionId;
-      const result = assertResponse(response);
-      expect(result.thread.id).toBe("thread-1");
-      expect(result.thread.sessionId).toBe("thread-1");
+      expect(() => assertResponse(response)).toThrow("Invalid Codex app-server");
     }
   });
 });
@@ -57,14 +57,6 @@ describe("assertCodexThreadStartResponse", () => {
     const response = makeMinimalResponse();
     const result = assertCodexThreadStartResponse(response);
     expect(result.thread.id).toBe("thread-1");
-    expect(result.thread.sessionId).toBe("session-1");
-  });
-
-  it("normalizes missing id from sessionId", () => {
-    const response = makeMinimalResponse({ id: undefined, sessionId: "session-1" });
-    delete (response.thread as Record<string, unknown>).id;
-    const result = assertCodexThreadStartResponse(response);
-    expect(result.thread.id).toBe("session-1");
     expect(result.thread.sessionId).toBe("session-1");
   });
 
