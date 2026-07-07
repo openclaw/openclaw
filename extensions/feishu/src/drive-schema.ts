@@ -26,6 +26,8 @@ export const FeishuDriveSchema = Type.Union([
     folder_token: Type.Optional(
       Type.String({ description: "Folder token (optional, omit for root directory)" }),
     ),
+    page_size: Type.Optional(Type.Integer({ minimum: 1, maximum: 200, description: "Page size" })),
+    page_token: Type.Optional(Type.String({ description: "Folder list page token" })),
   }),
   Type.Object({
     action: Type.Literal("info"),

@@ -107,6 +107,25 @@ function expectRequestCall(
   }
 }
 
+function schemaForAction(
+  schema: unknown,
+  action: string,
+): { properties?: Record<string, unknown> } {
+  const variants =
+    (schema as { anyOf?: unknown[]; oneOf?: unknown[] }).anyOf ??
+    (schema as { anyOf?: unknown[]; oneOf?: unknown[] }).oneOf ??
+    [];
+  const variant = variants.find((entry) => {
+    const actionSchema = (entry as { properties?: { action?: { const?: unknown } } }).properties
+      ?.action;
+    return actionSchema?.const === action;
+  });
+  if (!variant) {
+    throw new Error(`Missing schema variant for action ${action}`);
+  }
+  return variant as { properties?: Record<string, unknown> };
+}
+
 describe("registerFeishuDriveTools", () => {
   const requestMock = vi.fn();
 
@@ -358,6 +377,60 @@ describe("registerFeishuDriveTools", () => {
       true,
     );
     expect((replyCommentResult.details as { reply_id?: string }).reply_id).toBe("r4");
+  });
+
+  it("lists a folder continuation page when page_token is provided", async () => {
+    const registerTool = vi.fn();
+    const listFiles = vi.fn().mockResolvedValue({
+      code: 0,
+      data: {
+        files: [{ token: "file_1", name: "File 1", type: "docx", url: "https://example.test/doc" }],
+        next_page_token: "page-3",
+      },
+    });
+    createFeishuToolClientMock.mockReturnValue({
+      drive: { file: { list: listFiles } },
+    });
+    registerFeishuDriveTools(
+      createDriveToolApi({
+        config: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "app_id",
+              appSecret: "app_secret", // pragma: allowlist secret
+              tools: { drive: true },
+            },
+          },
+        },
+        registerTool,
+      }),
+    );
+
+    const toolFactory = firstToolFactory(registerTool);
+    const tool = toolFactory({ agentAccountId: undefined });
+    const listSchema = schemaForAction((tool as { parameters?: unknown }).parameters, "list");
+    expect(listSchema.properties?.page_token).toMatchObject({ type: "string" });
+    expect(listSchema.properties?.page_size).toMatchObject({
+      type: "integer",
+      minimum: 1,
+      maximum: 200,
+    });
+
+    const result = await tool.execute("call-list-page-2", {
+      action: "list",
+      folder_token: "folder_1",
+      page_size: 25,
+      page_token: "page-2",
+    });
+
+    expect(listFiles).toHaveBeenCalledWith({
+      params: { folder_token: "folder_1", page_size: 25, page_token: "page-2" },
+    });
+    expect(result.details).toMatchObject({
+      files: [{ token: "file_1", name: "File 1", type: "docx", url: "https://example.test/doc" }],
+      next_page_token: "page-3",
+    });
   });
 
   it("defaults add_comment file_type to docx when omitted", async () => {

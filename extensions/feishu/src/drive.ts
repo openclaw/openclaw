@@ -325,11 +325,19 @@ async function getRootFolderToken(client: Lark.Client): Promise<string> {
   return token;
 }
 
-async function listFolder(client: Lark.Client, folderToken?: string) {
+async function listFolder(
+  client: Lark.Client,
+  params: { folder_token?: string; page_size?: number; page_token?: string } = {},
+) {
   // Filter out invalid folder_token values (empty, "0", etc.)
-  const validFolderToken = folderToken && folderToken !== "0" ? folderToken : undefined;
+  const validFolderToken =
+    params.folder_token && params.folder_token !== "0" ? params.folder_token : undefined;
   const res = await client.drive.file.list({
-    params: validFolderToken ? { folder_token: validFolderToken } : {},
+    params: {
+      ...(validFolderToken ? { folder_token: validFolderToken } : {}),
+      ...(params.page_size ? { page_size: params.page_size } : {}),
+      ...(params.page_token ? { page_token: params.page_token } : {}),
+    },
   });
   if (res.code !== 0) {
     throw new Error(res.msg);
@@ -766,7 +774,13 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
             });
             switch (p.action) {
               case "list":
-                return jsonResult(await listFolder(client, p.folder_token));
+                return jsonResult(
+                  await listFolder(client, {
+                    folder_token: p.folder_token,
+                    page_size: p.page_size,
+                    page_token: p.page_token,
+                  }),
+                );
               case "info":
                 return jsonResult(await getFileInfo(client, p.file_token));
               case "create_folder":
