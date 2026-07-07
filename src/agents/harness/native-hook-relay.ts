@@ -2147,20 +2147,21 @@ async function waitForNativeHookRelayApprovalDecision(params: {
   if (!params.signal) {
     return waitPromise;
   }
+  const signal = params.signal;
   let onAbort: (() => void) | undefined;
   const abortPromise = new Promise<never>((_, reject) => {
-    if (params.signal!.aborted) {
-      reject(toErrorObject(params.signal!.reason, "Non-Error rejection"));
+    if (signal.aborted) {
+      reject(toErrorObject(signal.reason, "Non-Error rejection"));
       return;
     }
-    onAbort = () => reject(toErrorObject(params.signal!.reason, "Non-Error rejection"));
-    params.signal!.addEventListener("abort", onAbort, { once: true });
+    onAbort = () => reject(toErrorObject(signal.reason, "Non-Error rejection"));
+    signal.addEventListener("abort", onAbort, { once: true });
   });
   try {
     return await Promise.race([waitPromise, abortPromise]);
   } finally {
     if (onAbort) {
-      params.signal.removeEventListener("abort", onAbort);
+      signal.removeEventListener("abort", onAbort);
     }
   }
 }

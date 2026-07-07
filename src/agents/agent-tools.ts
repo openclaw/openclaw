@@ -111,6 +111,12 @@ import {
 
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
 
+/** Runtime guard: asserts that a value is non-null/undefined before use. */
+function defined<T>(v: T | null | undefined): T {
+  if (v == null) throw new Error("unexpected null/undefined");
+  return v;
+}
+
 function hasExplicitDenyPolicy(policy?: { deny?: string[] }): boolean {
   return (
     Array.isArray(policy?.deny) &&
@@ -744,7 +750,7 @@ export function createOpenClawCodingTools(options?: {
         if (sandboxRoot) {
           const sandboxed = createSandboxedReadTool({
             root: sandboxRoot,
-            bridge: sandboxFsBridge!,
+            bridge: defined(sandboxFsBridge),
             modelContextWindowTokens: options?.modelContextWindowTokens,
             imageSanitization,
           });
@@ -873,7 +879,7 @@ export function createOpenClawCodingTools(options?: {
           cwd: codingRoot,
           sandbox:
             sandboxRoot && allowWorkspaceWrites
-              ? { root: sandboxRoot, bridge: sandboxFsBridge! }
+              ? { root: sandboxRoot, bridge: defined(sandboxFsBridge) }
               : undefined,
           workspaceOnly: applyPatchWorkspaceOnly,
         });
@@ -949,22 +955,22 @@ export function createOpenClawCodingTools(options?: {
         ? [
             workspaceOnly
               ? wrapToolWorkspaceRootGuardWithOptions(
-                  createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+                  createSandboxedEditTool({ root: sandboxRoot, bridge: defined(sandboxFsBridge) }),
                   sandboxRoot,
                   {
                     containerWorkdir: sandbox.containerWorkdir,
                   },
                 )
-              : createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+              : createSandboxedEditTool({ root: sandboxRoot, bridge: defined(sandboxFsBridge) }),
             workspaceOnly
               ? wrapToolWorkspaceRootGuardWithOptions(
-                  createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+                  createSandboxedWriteTool({ root: sandboxRoot, bridge: defined(sandboxFsBridge) }),
                   sandboxRoot,
                   {
                     containerWorkdir: sandbox.containerWorkdir,
                   },
                 )
-              : createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+              : createSandboxedWriteTool({ root: sandboxRoot, bridge: defined(sandboxFsBridge) }),
           ]
         : []
       : []),
@@ -1156,7 +1162,7 @@ export function createOpenClawCodingTools(options?: {
     workspaceDir: workspaceRoot,
     ...(options?.skillsSnapshot ? { skillsSnapshot: options.skillsSnapshot } : {}),
     ...(sandboxRoot && allowWorkspaceWrites
-      ? { sandbox: { root: sandboxRoot, bridge: sandboxFsBridge! } }
+      ? { sandbox: { root: sandboxRoot, bridge: defined(sandboxFsBridge) } }
       : {}),
     sessionKey: options?.sessionKey,
     sessionId: options?.sessionId,

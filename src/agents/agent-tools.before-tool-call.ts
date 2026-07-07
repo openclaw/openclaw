@@ -978,20 +978,21 @@ async function requestPluginToolApproval(params: {
       );
       let waitResult: { id?: string; decision?: string | null } | undefined;
       if (params.signal) {
+        const signal = params.signal;
         let onAbort: (() => void) | undefined;
         const abortPromise = new Promise<never>((_, reject) => {
-          if (params.signal!.aborted) {
-            reject(toLintErrorObject(params.signal!.reason, "Non-Error rejection"));
+          if (signal.aborted) {
+            reject(toLintErrorObject(signal.reason, "Non-Error rejection"));
             return;
           }
-          onAbort = () => reject(toLintErrorObject(params.signal!.reason, "Non-Error rejection"));
-          params.signal!.addEventListener("abort", onAbort, { once: true });
+          onAbort = () => reject(toLintErrorObject(signal.reason, "Non-Error rejection"));
+          signal.addEventListener("abort", onAbort, { once: true });
         });
         try {
           waitResult = await Promise.race([waitPromise, abortPromise]);
         } finally {
           if (onAbort) {
-            params.signal.removeEventListener("abort", onAbort);
+            signal.removeEventListener("abort", onAbort);
           }
         }
       } else {
