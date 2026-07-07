@@ -2039,6 +2039,32 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       run: runWorkspaceStatusHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:skill-curator",
+      label: "Skill curator",
+      healthChecks: {
+        id: "core/doctor/skill-curator",
+        description: "Stalled skill lifecycle curation is reported as a warning.",
+        defaultEnabled: false,
+        async detect() {
+          const { getSkillCuratorDoctorWarning } = await import("../skills/workshop/curator.js");
+          const warning = getSkillCuratorDoctorWarning();
+          return warning
+            ? [
+                {
+                  checkId: "core/doctor/skill-curator",
+                  severity: "warning" as const,
+                  source: "doctor",
+                  message: warning,
+                  target: "skill-curator",
+                  requirement:
+                    "latest sweep succeeds and attempts do not trail success by seven days",
+                },
+              ]
+            : [];
+        },
+      },
+    }),
+    createDoctorHealthContribution({
       id: "doctor:skills",
       label: "Skills",
       healthCheckIds: ["core/doctor/skills-readiness"],

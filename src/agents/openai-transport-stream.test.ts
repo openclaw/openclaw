@@ -7667,6 +7667,31 @@ describe("openai transport stream", () => {
     expect(params).not.toHaveProperty("max_tokens");
   });
 
+  it("omits output-token fields when the resolved model has no known cap", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "mimo-v2.5-pro",
+        name: "MiMo V2.5 Pro",
+        api: "openai-completions",
+        provider: "xiaomi",
+        baseUrl: "https://api.xiaomimimo.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_048_576,
+      } as Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    );
+
+    expect(params).not.toHaveProperty("max_completion_tokens");
+    expect(params).not.toHaveProperty("max_tokens");
+  });
+
   it("uses model params max_completion_tokens for OpenAI completions before model maxTokens", () => {
     const params = buildOpenAICompletionsParams(
       {

@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { TranscriptNotContinuableError } from "../../packages/agent-core/src/errors.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
@@ -1351,6 +1352,62 @@ describe("runWithModelFallback", () => {
       }),
     ).rejects.toBe(lockError);
     expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts the fallback chain on transcript continuation failures without candidate_failed attribution", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+      },
+    });
+    const continuationError = new TranscriptNotContinuableError("assistant");
+    const run = vi.fn().mockRejectedValue(continuationError);
+    const onFallbackStep = vi.fn();
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-5.4",
+        run,
+        onFallbackStep,
+      }),
+    ).rejects.toBe(continuationError);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(onFallbackStep).not.toHaveBeenCalledWith(
+      expect.objectContaining({ decision: "candidate_failed" }),
+    );
+  });
+
+  it("still continues fallback on genuine timeout-shaped errors (#99943)", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+      },
+    });
+    const timeoutError = Object.assign(new Error("request timed out"), { name: "TimeoutError" });
+    const run = vi.fn().mockRejectedValueOnce(timeoutError).mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-5.4",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(result.provider).toBe("anthropic");
   });
 
   it("keeps provider failover metadata authoritative over nested session locks", async () => {

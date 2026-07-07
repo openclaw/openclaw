@@ -15,6 +15,10 @@ import {
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexServerNotification, JsonObject, JsonValue, RpcRequest } from "./protocol.js";
+import {
+  createCodexTestBindingStore,
+  type CodexAppServerBindingStore,
+} from "./session-binding.test-helpers.js";
 
 const readCodexAppServerBindingMock = vi.fn();
 const isCodexAppServerNativeAuthProfileMock = vi.fn();
@@ -25,12 +29,10 @@ const toolExecuteMock = vi.fn();
 const handleCodexAppServerApprovalRequestMock = vi.fn();
 const resolveCodexProviderWebSearchSupportForClientMock = vi.fn();
 
-vi.mock("./session-binding.js", () => ({
-  clearCodexAppServerBinding: vi.fn(),
+vi.mock("./session-binding.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-binding.js")>()),
   isCodexAppServerNativeAuthProfile: (...args: unknown[]) =>
     isCodexAppServerNativeAuthProfileMock(...args),
-  readCodexAppServerBinding: (...args: unknown[]) => readCodexAppServerBindingMock(...args),
-  writeCodexAppServerBinding: vi.fn(),
 }));
 
 vi.mock("./shared-client.js", () => ({
@@ -59,7 +61,20 @@ vi.mock("openclaw/plugin-sdk/agent-harness", () => ({
   createOpenClawCodingTools: (...args: unknown[]) => createOpenClawCodingToolsMock(...args),
 }));
 
-const { runCodexAppServerSideQuestion } = await import("./side-question.js");
+const { runCodexAppServerSideQuestion: runCodexAppServerSideQuestionImpl } =
+  await import("./side-question.js");
+const baseBindingStore = createCodexTestBindingStore();
+const bindingStore: CodexAppServerBindingStore = {
+  ...baseBindingStore,
+  read: async (...args) => await readCodexAppServerBindingMock(...args),
+};
+
+function runCodexAppServerSideQuestion(
+  params: Parameters<typeof runCodexAppServerSideQuestionImpl>[0],
+  options: Omit<Parameters<typeof runCodexAppServerSideQuestionImpl>[1], "bindingStore"> = {},
+) {
+  return runCodexAppServerSideQuestionImpl(params, { ...options, bindingStore });
+}
 
 type ServerRequest = Required<Pick<RpcRequest, "id" | "method">> & {
   params?: RpcRequest["params"];

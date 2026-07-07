@@ -6,6 +6,16 @@ openclaw-chat-pane {
   min-height: 0;
 }
 
+.chat-split-view__drop-container {
+  position: relative;
+  display: flex;
+  flex: 1 1 0;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .chat-split-view {
   display: flex;
   flex: 1 1 0;
@@ -30,6 +40,71 @@ openclaw-chat-pane {
 
 .chat-split-view--narrow .chat-split-view__pane {
   min-height: 0;
+}
+
+.chat-split-view__drop-indicator {
+  position: absolute;
+  z-index: 20;
+  box-sizing: border-box;
+  pointer-events: none;
+  border: 1px solid color-mix(in srgb, var(--accent) 65%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.chat-split-view__drop-indicator--center {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.chat-split-view__drop-indicator-label {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .chat-split-view__drop-indicator {
+    animation: chat-drop-indicator-in 0.12s ease;
+    transition:
+      left 0.14s ease,
+      top 0.14s ease,
+      width 0.14s ease,
+      height 0.14s ease,
+      opacity 0.12s ease;
+  }
+
+  .chat-split-view openclaw-chat-pane {
+    animation: chat-pane-in 0.16s ease;
+  }
+
+  @keyframes chat-drop-indicator-in {
+    from {
+      opacity: 0;
+    }
+
+    to {
+      opacity: 1;
+    }
+  }
+
+  @keyframes chat-pane-in {
+    from {
+      opacity: 0;
+      transform: scale(0.985);
+    }
+  }
 }
 
 .chat-pane__header {

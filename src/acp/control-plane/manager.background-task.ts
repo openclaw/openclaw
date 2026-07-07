@@ -178,7 +178,7 @@ export function markBackgroundTaskTerminal(
   runId: string,
   params: {
     sessionKey?: string;
-    status: "succeeded" | "failed" | "timed_out";
+    status: "succeeded" | "failed" | "timed_out" | "cancelled";
     endedAt: number;
     lastEventAt?: number;
     error?: string;

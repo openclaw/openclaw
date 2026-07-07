@@ -307,6 +307,7 @@ import {
 import { buildEmbeddedSandboxInfo, resolveEmbeddedSandboxInfoExecPolicy } from "../sandbox-info.js";
 import {
   mapSandboxSkillEntriesForPrompt,
+  mapSandboxSkillUsagePaths,
   resolveSandboxSkillRuntimeInputs,
 } from "../sandbox-skills.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
@@ -463,9 +464,11 @@ import {
   waitForCompactionRetryWithAggregateTimeout,
 } from "./compaction-retry-aggregate-timeout.js";
 import {
+  canContinueFromMessage,
   resolveRunTimeoutDuringCompaction,
   selectCompactionTimeoutSnapshot,
   shouldFlagCompactionTimeout,
+  trimToContinuableTail,
 } from "./compaction-timeout.js";
 import {
   resolveFinalAssistantRawText,
@@ -734,6 +737,34 @@ function removeTrailingMidTurnPrecheckAssistantError(params: {
       "[context-overflow-midturn-precheck] removed synthetic assistant error from active session but could not locate matching persisted SessionManager entry",
     );
   }
+}
+
+function normalizeCompactionRecoveryTranscriptTail(params: {
+  activeSession: { agent: { state: { messages: AgentMessage[] } } };
+  sessionManager: ReturnType<typeof guardSessionManager>;
+}): number {
+  const messages = params.activeSession.agent.state.messages;
+  const continuableMessages = trimToContinuableTail(messages) ?? [];
+
+  // This is the single recovery owner for compaction exits that hand control
+  // back to a continuation. AgentCore rejects assistant tails before providers run.
+  const removedEntries = params.sessionManager.removeTrailingEntries(
+    (entry) => entry.type === "message" && !canContinueFromMessage(entry.message),
+    {
+      preserveTrailing: (entry) =>
+        entry.type === "custom" ||
+        entry.type === "label" ||
+        entry.type === "session_info" ||
+        (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message)),
+    },
+  );
+  params.activeSession.agent.state.messages =
+    removedEntries > 0
+      ? params.sessionManager.buildSessionContext().messages
+      : continuableMessages.length === messages.length
+        ? messages
+        : continuableMessages;
+  return removedEntries;
 }
 
 function collectAttemptExplicitToolAllowlistSources(params: {
@@ -1093,6 +1124,11 @@ export async function runEmbeddedAttempt(
       skillsWorkspaceDir: effectiveSkillsWorkspace,
       skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
     });
+    const skillUsagePaths = mapSandboxSkillUsagePaths({
+      paths: sandbox?.skillUsagePaths,
+      skillsWorkspaceDir: effectiveSkillsWorkspace,
+      skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
+    });
 
     const skillsPrompt = resolveSkillsPromptForRun({
       skillsSnapshot: skillsSnapshotForRun,
@@ -1368,6 +1404,7 @@ export async function runEmbeddedAttempt(
             onToolOutcome: params.onToolOutcome,
             allocateToolOutcomeOrdinal: params.allocateToolOutcomeOrdinal,
             skillsSnapshot: skillsSnapshotForRun,
+            skillUsagePaths,
             conversationCapabilityProfile: runtimeCapabilityProfile,
             onYield: (message) => {
               yieldDetected = true;
@@ -5187,6 +5224,19 @@ export async function runEmbeddedAttempt(
             modelApi: params.model.api,
             isCacheTtlEligibleProvider,
           });
+
+          if (timedOutDuringCompaction) {
+            const removedEntries = normalizeCompactionRecoveryTranscriptTail({
+              activeSession,
+              sessionManager: activeSessionManager,
+            });
+            if (removedEntries > 0 && !isProbeSession) {
+              log.warn(
+                `normalized compaction timeout transcript tail: ` +
+                  `removedEntries=${removedEntries} runId=${params.runId} sessionId=${params.sessionId}`,
+              );
+            }
+          }
 
           // If timeout occurred during compaction, use pre-compaction snapshot when available
           // (compaction restructures messages but does not add user/assistant turns).

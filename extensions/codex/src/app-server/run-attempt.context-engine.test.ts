@@ -23,15 +23,19 @@ import type { CodexServerNotification } from "./protocol.js";
 import { runCodexAppServerAttempt as runCodexAppServerAttemptImpl } from "./run-attempt.js";
 import {
   readCodexAppServerBinding,
+  registerCodexTestSessionIdentity,
+  resetCodexTestBindingStore,
+  testCodexAppServerBindingStore,
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
-} from "./session-binding.js";
+} from "./session-binding.test-helpers.js";
 import { createCodexTestModel } from "./test-support.js";
 
 let tempDir: string;
 let codexAppServerClientFactoryForTest: CodexAppServerClientFactory | undefined;
 
-type RunCodexAppServerAttemptOptions = NonNullable<
-  Parameters<typeof runCodexAppServerAttemptImpl>[1]
+type RunCodexAppServerAttemptOptions = Omit<
+  NonNullable<Parameters<typeof runCodexAppServerAttemptImpl>[1]>,
+  "bindingStore"
 >;
 
 function setCodexAppServerClientFactoryForTest(factory: CodexAppServerClientFactory): void {
@@ -47,13 +51,15 @@ function runCodexAppServerAttempt(
   options: RunCodexAppServerAttemptOptions = {},
 ) {
   const clientFactory = options.clientFactory ?? codexAppServerClientFactoryForTest;
-  return runCodexAppServerAttemptImpl(
-    params,
-    clientFactory ? { ...options, clientFactory } : options,
-  );
+  return runCodexAppServerAttemptImpl(params, {
+    ...options,
+    bindingStore: testCodexAppServerBindingStore,
+    ...(clientFactory ? { clientFactory } : {}),
+  });
 }
 
 function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAttemptParams {
+  registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
   return {
     prompt: "hello",
     sessionId: "session-1",
@@ -349,6 +355,7 @@ function getRequestInputTextAt(
 
 describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   beforeEach(async () => {
+    resetCodexTestBindingStore();
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-context-engine-"));
   });
 

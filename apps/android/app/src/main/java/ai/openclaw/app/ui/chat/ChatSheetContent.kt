@@ -79,6 +79,11 @@ fun ChatSheetContent(viewModel: MainViewModel) {
   val sessionKey by viewModel.chatSessionKey.collectAsState()
   val mainSessionKey by viewModel.mainSessionKey.collectAsState()
   val thinkingLevel by viewModel.chatThinkingLevel.collectAsState()
+  val selectedModelRef by viewModel.chatSelectedModelRef.collectAsState()
+  // Gate from the controller's agent-scoped catalog — the same source the send gate reads —
+  // so the visible control can never disagree with what sends actually carry.
+  val modelCatalog by viewModel.chatModelCatalog.collectAsState()
+  val thinkingSupported = thinkingSupportedForSelection(selectedModelRef, modelCatalog)
   val streamingAssistantText by viewModel.chatStreamingAssistantText.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
@@ -204,6 +209,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
         draftText = chatDraft,
         healthOk = healthOk,
         thinkingLevel = thinkingLevel,
+        thinkingSupported = thinkingSupported,
         pendingRunCount = pendingRunCount,
         commands = chatCommands,
         attachments = attachments,

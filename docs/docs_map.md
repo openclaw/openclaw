@@ -9576,6 +9576,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: How it works
   - H2: Lifecycle
+  - H2: Lifecycle curation
   - H2: Chat
   - H3: Learn from recent work
   - H2: CLI
