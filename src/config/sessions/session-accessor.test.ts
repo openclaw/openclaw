@@ -21,6 +21,7 @@ import {
   listSessionEntries,
   loadReplySessionInitializationSnapshot,
   loadSessionEntry,
+  loadTranscriptEvents,
   markSessionAbortTarget,
   openSessionEntryReadView,
   patchSessionEntry,
@@ -99,6 +100,39 @@ describe("session accessor file-backed seam", () => {
       sessionId: "session-1",
       updatedAt: expect.any(Number),
     });
+  });
+
+  it("loads parsed transcript events from explicit and store-derived targets", async () => {
+    const header = { type: "session", id: "session-events", timestamp: 1 };
+    const message = { type: "message", id: "m1", message: { role: "assistant" } };
+    fs.writeFileSync(
+      transcriptPath,
+      `${JSON.stringify(header)}\n${JSON.stringify(message)}\nnot-json\n`,
+      "utf-8",
+    );
+    await upsertSessionEntry(
+      { sessionKey: "agent:main:main", storePath },
+      { sessionId: "session-events", sessionFile: transcriptPath, updatedAt: 10 },
+    );
+
+    const explicit = await loadTranscriptEvents({
+      sessionFile: transcriptPath,
+      sessionId: "session-events",
+    });
+    expect(explicit).toEqual([header, message]);
+
+    const derived = await loadTranscriptEvents({
+      sessionId: "session-events",
+      sessionKey: "agent:main:main",
+      storePath,
+    });
+    expect(derived).toEqual([header, message]);
+
+    const missing = await loadTranscriptEvents({
+      sessionFile: path.join(tempDir, "missing.jsonl"),
+      sessionId: "session-events",
+    });
+    expect(missing).toEqual([]);
   });
 
   it("opens a borrowed read view with raw exact-key probes and deferred enumeration", async () => {

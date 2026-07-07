@@ -2089,6 +2089,24 @@ export async function appendTranscriptMessage<TMessage>(
   });
 }
 
+/** Reads parsed transcript records from an explicit or derived transcript target. */
+export async function loadTranscriptEvents(
+  scope: SessionTranscriptReadScope,
+): Promise<TranscriptEvent[]> {
+  const target = resolveSessionTranscriptReadTarget(scope);
+  const events: TranscriptEvent[] = [];
+  // Missing transcripts stream zero lines, so readers get an empty event list
+  // instead of a filesystem error; that keeps the read contract storage-neutral.
+  for await (const line of streamSessionTranscriptLines(target.sessionFile)) {
+    try {
+      events.push(JSON.parse(line) as TranscriptEvent);
+    } catch {
+      // Malformed lines are skipped, matching transcript index tolerance.
+    }
+  }
+  return events;
+}
+
 /** Emits a transcript update after resolving the current transcript target. */
 export async function publishTranscriptUpdate(
   scope: SessionTranscriptWriteScope,
