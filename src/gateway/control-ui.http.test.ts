@@ -923,6 +923,7 @@ describe("handleControlUiHttpRequest", () => {
         );
         expect(handled).toBe(true);
         const body = String(end.mock.calls[0]?.[0] ?? "");
+        expect(body).toContain('data-openclaw-control-ui-base-path="/openclaw"');
         expect(body).toContain('href="/openclaw/manifest.webmanifest"');
         expect(body).toContain('href="/openclaw/favicon.svg"');
         expect(body).not.toContain('href="/manifest.webmanifest"');
