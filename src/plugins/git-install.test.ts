@@ -7,6 +7,7 @@ import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensit
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { DiagnosticSecurityEvent } from "../infra/diagnostic-events.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 
 const runCommandWithTimeoutMock = vi.fn();
 const installPluginFromInstalledPackageDirMock = vi.fn();
@@ -568,7 +569,9 @@ describe("installPluginFromGitSpec", () => {
         normalizedSpec: "git:https://github.com/acme/demo.git",
       });
       expect(path.dirname(targetPrefix)).toBe(await fs.realpath(path.dirname(persistentRepoDir)));
-      expect(path.dirname(fallbackPrefix)).toBe(await fs.realpath(os.tmpdir()));
+      expect(path.dirname(fallbackPrefix)).toBe(
+        await fs.realpath(resolvePreferredOpenClawTmpDir()),
+      );
       expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(3);
     } finally {
       mkdtempSpy.mockRestore();
