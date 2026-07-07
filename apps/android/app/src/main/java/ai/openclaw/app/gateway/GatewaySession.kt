@@ -107,6 +107,8 @@ data class GatewayHelloSummary(
   val serverVersion: String?,
   val mainSessionKey: String?,
   val updateAvailable: GatewayUpdateAvailableSummary?,
+  val authRole: String? = null,
+  val authScopes: List<String> = emptyList(),
 )
 
 data class GatewayUpdateAvailableSummary(
@@ -993,6 +995,8 @@ class GatewaySession(
             serverVersion = serverVersion,
             mainSessionKey = nextMainSessionKey,
             updateAvailable = parseUpdateAvailable(snapshot?.get("updateAvailable").asObjectOrNull()),
+            authRole = authRole,
+            authScopes = authScopes,
           ),
       )
     }

@@ -89,10 +89,13 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -113,6 +116,7 @@ import java.util.concurrent.atomic.AtomicReference
 
 private const val MAX_PENDING_NOTIFICATION_EVENTS = 128
 private const val NODE_APPROVAL_COMMAND_FRESH_MS = 30_000L
+private const val OperatorAdminScope = "operator.admin"
 
 internal data class PendingNotificationNodeEvent(
   val event: String,
@@ -626,6 +630,12 @@ class NodeRuntime private constructor(
   val statusText: StateFlow<String> = _statusText.asStateFlow()
   private val _gatewayConnectionProblem = MutableStateFlow<GatewayConnectionProblem?>(null)
   val gatewayConnectionProblem: StateFlow<GatewayConnectionProblem?> = _gatewayConnectionProblem.asStateFlow()
+  private val _operatorScopes = MutableStateFlow<List<String>>(emptyList())
+  val operatorScopes: StateFlow<List<String>> = _operatorScopes.asStateFlow()
+  val operatorAdminScopeAvailable: StateFlow<Boolean> =
+    operatorScopes
+      .map { scopes -> scopes.any { it == OperatorAdminScope } }
+      .stateIn(scope, SharingStarted.Eagerly, false)
 
   private val _pendingGatewayTrust = MutableStateFlow<GatewayTrustPrompt?>(null)
   val pendingGatewayTrust: StateFlow<GatewayTrustPrompt?> = _pendingGatewayTrust.asStateFlow()
@@ -708,6 +718,20 @@ class NodeRuntime private constructor(
   val skillsRefreshing: StateFlow<Boolean> = _skillsRefreshing.asStateFlow()
   private val _skillsErrorText = MutableStateFlow<String?>(null)
   val skillsErrorText: StateFlow<String?> = _skillsErrorText.asStateFlow()
+  private val _skillWorkshopSummary = MutableStateFlow(GatewaySkillWorkshopSummary(proposals = emptyList()))
+  val skillWorkshopSummary: StateFlow<GatewaySkillWorkshopSummary> = _skillWorkshopSummary.asStateFlow()
+  private val _skillWorkshopRefreshing = MutableStateFlow(false)
+  val skillWorkshopRefreshing: StateFlow<Boolean> = _skillWorkshopRefreshing.asStateFlow()
+  private val _skillWorkshopErrorText = MutableStateFlow<String?>(null)
+  val skillWorkshopErrorText: StateFlow<String?> = _skillWorkshopErrorText.asStateFlow()
+  private val _skillWorkshopNoticeText = MutableStateFlow<String?>(null)
+  val skillWorkshopNoticeText: StateFlow<String?> = _skillWorkshopNoticeText.asStateFlow()
+  private val _skillWorkshopInspectingProposalId = MutableStateFlow<String?>(null)
+  val skillWorkshopInspectingProposalId: StateFlow<String?> = _skillWorkshopInspectingProposalId.asStateFlow()
+  private val _skillWorkshopMutatingProposalId = MutableStateFlow<String?>(null)
+  val skillWorkshopMutatingProposalId: StateFlow<String?> = _skillWorkshopMutatingProposalId.asStateFlow()
+  private val skillWorkshopListSeq = AtomicLong(0)
+  private val skillWorkshopInspectSeq = AtomicLong(0)
   private val _nodesDevicesSummary =
     MutableStateFlow(
       GatewayNodesDevicesSummary(
@@ -791,6 +815,7 @@ class NodeRuntime private constructor(
         _remoteAddress.value = hello.remoteAddress
         _gatewayVersion.value = hello.serverVersion
         _gatewayUpdateAvailable.value = hello.updateAvailable
+        _operatorScopes.value = normalizeOperatorScopes(hello.authScopes)
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
         syncMainSessionKey(resolveAgentIdFromMainSessionKey(hello.mainSessionKey))
         // Every successful connection refreshes history; reconnects preserve local run ownership.
@@ -839,6 +864,7 @@ class NodeRuntime private constructor(
     _remoteAddress.value = null
     _gatewayVersion.value = null
     _gatewayUpdateAvailable.value = null
+    _operatorScopes.value = emptyList()
     _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
     _gatewayDefaultAgentId.value = null
     _gatewayAgents.value = emptyList()
@@ -859,6 +885,14 @@ class NodeRuntime private constructor(
     _skillsSummary.value = GatewaySkillsSummary(skills = emptyList())
     _skillsRefreshing.value = false
     _skillsErrorText.value = null
+    _skillWorkshopSummary.value = GatewaySkillWorkshopSummary(proposals = emptyList())
+    _skillWorkshopRefreshing.value = false
+    _skillWorkshopErrorText.value = null
+    _skillWorkshopNoticeText.value = null
+    _skillWorkshopInspectingProposalId.value = null
+    _skillWorkshopMutatingProposalId.value = null
+    skillWorkshopListSeq.incrementAndGet()
+    skillWorkshopInspectSeq.incrementAndGet()
     _nodesDevicesSummary.value =
       GatewayNodesDevicesSummary(
         nodes = emptyList(),
@@ -1375,6 +1409,61 @@ class NodeRuntime private constructor(
     scope.launch {
       refreshSkillsFromGateway()
     }
+  }
+
+  fun refreshSkillWorkshopProposals(agentId: String? = null) {
+    scope.launch {
+      refreshSkillWorkshopProposalsFromGateway(agentId = agentId)
+    }
+  }
+
+  fun inspectSkillWorkshopProposal(
+    proposalId: String,
+    agentId: String? = null,
+  ) {
+    val normalized = proposalId.trim()
+    if (normalized.isEmpty()) return
+    scope.launch {
+      inspectSkillWorkshopProposalFromGateway(proposalId = normalized, agentId = agentId)
+    }
+  }
+
+  fun applySkillWorkshopProposal(
+    proposalId: String,
+    agentId: String? = null,
+  ) {
+    mutateSkillWorkshopProposal(proposalId = proposalId, agentId = agentId, action = "apply")
+  }
+
+  fun rejectSkillWorkshopProposal(
+    proposalId: String,
+    agentId: String? = null,
+  ) {
+    mutateSkillWorkshopProposal(proposalId = proposalId, agentId = agentId, action = "reject")
+  }
+
+  fun quarantineSkillWorkshopProposal(
+    proposalId: String,
+    agentId: String? = null,
+  ) {
+    mutateSkillWorkshopProposal(proposalId = proposalId, agentId = agentId, action = "quarantine")
+  }
+
+  private fun mutateSkillWorkshopProposal(
+    proposalId: String,
+    agentId: String?,
+    action: String,
+  ) {
+    val normalized = proposalId.trim()
+    if (normalized.isEmpty()) return
+    scope.launch {
+      mutateSkillWorkshopProposalOnGateway(proposalId = normalized, agentId = agentId, action = action)
+    }
+  }
+
+  fun clearSkillWorkshopMessage() {
+    _skillWorkshopErrorText.value = null
+    _skillWorkshopNoticeText.value = null
   }
 
   fun refreshNodesDevices() {
@@ -3602,6 +3691,150 @@ class NodeRuntime private constructor(
     }
   }
 
+  private suspend fun refreshSkillWorkshopProposalsFromGateway(agentId: String?) {
+    val listSeq = skillWorkshopListSeq.incrementAndGet()
+    val gatewayScope = captureGatewayDataScope()
+    if (gatewayScope == null || !operatorConnected) {
+      _skillWorkshopSummary.value = GatewaySkillWorkshopSummary(proposals = emptyList())
+      _skillWorkshopRefreshing.value = false
+      _skillWorkshopErrorText.value = "Connect the gateway to load Skill Workshop proposals."
+      return
+    }
+    publishGatewayData(gatewayScope) {
+      _skillWorkshopRefreshing.value = true
+      _skillWorkshopErrorText.value = null
+    }
+    try {
+      val res =
+        requestGatewayData(
+          gatewayScope,
+          "skills.proposals.list",
+          skillWorkshopParams(agentId = agentId).toString(),
+        )
+      val root = json.parseToJsonElement(res).asObjectOrNull()
+      val previousById = _skillWorkshopSummary.value.proposals.associateBy { it.id }
+      val proposals = parseSkillWorkshopProposals(root?.get("proposals") as? JsonArray, previousById)
+      publishGatewayData(gatewayScope) {
+        if (skillWorkshopListSeq.get() == listSeq) {
+          _skillWorkshopSummary.value = GatewaySkillWorkshopSummary(proposals = proposals)
+        }
+      }
+    } catch (err: CancellationException) {
+      throw err
+    } catch (_: Throwable) {
+      publishGatewayData(gatewayScope) {
+        if (skillWorkshopListSeq.get() == listSeq) {
+          _skillWorkshopErrorText.value = "Could not load Skill Workshop proposals."
+        }
+      }
+    } finally {
+      publishGatewayData(gatewayScope) {
+        if (skillWorkshopListSeq.get() == listSeq) {
+          _skillWorkshopRefreshing.value = false
+        }
+      }
+    }
+  }
+
+  private suspend fun inspectSkillWorkshopProposalFromGateway(
+    proposalId: String,
+    agentId: String?,
+  ) {
+    val inspectSeq = skillWorkshopInspectSeq.incrementAndGet()
+    val gatewayScope = captureGatewayDataScope()
+    if (gatewayScope == null || !operatorConnected) {
+      _skillWorkshopErrorText.value = "Connect the gateway to inspect Skill Workshop proposals."
+      return
+    }
+    publishGatewayData(gatewayScope) {
+      _skillWorkshopInspectingProposalId.value = proposalId
+      _skillWorkshopErrorText.value = null
+    }
+    try {
+      val res =
+        requestGatewayData(
+          gatewayScope,
+          "skills.proposals.inspect",
+          skillWorkshopParams(agentId = agentId, proposalId = proposalId).toString(),
+        )
+      val root = json.parseToJsonElement(res).asObjectOrNull()
+      val previous = _skillWorkshopSummary.value.proposals.firstOrNull { it.id == proposalId }
+      val inspected = parseSkillWorkshopProposalInspect(root, previous) ?: throw IllegalStateException("skills.proposals.inspect returned no proposal")
+      publishGatewayData(gatewayScope) {
+        if (skillWorkshopInspectSeq.get() == inspectSeq) {
+          _skillWorkshopSummary.value = _skillWorkshopSummary.value.withProposal(inspected)
+        }
+      }
+    } catch (err: CancellationException) {
+      throw err
+    } catch (_: Throwable) {
+      publishGatewayData(gatewayScope) {
+        if (skillWorkshopInspectSeq.get() == inspectSeq) {
+          _skillWorkshopErrorText.value = "Could not inspect Skill Workshop proposal."
+        }
+      }
+    } finally {
+      publishGatewayData(gatewayScope) {
+        if (skillWorkshopInspectSeq.get() == inspectSeq) {
+          _skillWorkshopInspectingProposalId.value = null
+        }
+      }
+    }
+  }
+
+  private suspend fun mutateSkillWorkshopProposalOnGateway(
+    proposalId: String,
+    agentId: String?,
+    action: String,
+  ) {
+    if (!operatorAdminScopeAvailable.value) {
+      _skillWorkshopErrorText.value = "Skill Workshop proposal actions require operator.admin scope."
+      return
+    }
+    val gatewayScope = captureGatewayDataScope()
+    if (gatewayScope == null || !operatorConnected) {
+      _skillWorkshopErrorText.value = "Connect the gateway to update Skill Workshop proposals."
+      return
+    }
+    publishGatewayData(gatewayScope) {
+      _skillWorkshopMutatingProposalId.value = proposalId
+      _skillWorkshopErrorText.value = null
+      _skillWorkshopNoticeText.value = null
+    }
+    try {
+      requestGatewayData(
+        gatewayScope,
+        "skills.proposals.$action",
+        skillWorkshopParams(agentId = agentId, proposalId = proposalId).toString(),
+      )
+      publishGatewayData(gatewayScope) {
+        _skillWorkshopNoticeText.value = skillWorkshopActionNotice(action)
+      }
+      refreshSkillWorkshopProposalsFromGateway(agentId = agentId)
+    } catch (err: CancellationException) {
+      throw err
+    } catch (_: Throwable) {
+      publishGatewayData(gatewayScope) {
+        _skillWorkshopErrorText.value = "Could not ${skillWorkshopActionVerb(action)} Skill Workshop proposal."
+      }
+    } finally {
+      publishGatewayData(gatewayScope) {
+        _skillWorkshopMutatingProposalId.value = null
+      }
+    }
+  }
+
+  private fun skillWorkshopParams(
+    agentId: String?,
+    proposalId: String? = null,
+  ): JsonObject =
+    buildJsonObject {
+      val normalizedAgentId = agentId?.trim()?.takeIf { it.isNotEmpty() }
+      if (normalizedAgentId != null) put("agentId", JsonPrimitive(normalizedAgentId))
+      val normalizedProposalId = proposalId?.trim()?.takeIf { it.isNotEmpty() }
+      if (normalizedProposalId != null) put("proposalId", JsonPrimitive(normalizedProposalId))
+    }
+
   private suspend fun refreshNodesDevicesFromGateway() {
     val gatewayScope = captureGatewayDataScope() ?: return
     val refreshGeneration = nodeApprovalRefreshGuard.begin()
@@ -4199,6 +4432,99 @@ class NodeRuntime private constructor(
         )
       }.orEmpty()
 
+  private fun parseSkillWorkshopProposals(
+    proposals: JsonArray?,
+    previousById: Map<String, GatewaySkillWorkshopProposal>,
+  ): List<GatewaySkillWorkshopProposal> {
+    val parsed =
+      proposals?.mapNotNull { item ->
+        val obj = item.asObjectOrNull() ?: return@mapNotNull null
+        val id = obj.skillWorkshopString("id") ?: return@mapNotNull null
+        val previous = previousById[id]
+        val updatedAt = obj.skillWorkshopString("updatedAt").orEmpty()
+        GatewaySkillWorkshopProposal(
+          id = id,
+          kind = obj.skillWorkshopString("kind") ?: "proposal",
+          status = obj.skillWorkshopString("status") ?: "pending",
+          title = obj.skillWorkshopString("title") ?: obj.skillWorkshopString("skillName") ?: id,
+          description = obj.skillWorkshopString("description"),
+          skillName = obj.skillWorkshopString("skillName") ?: id,
+          skillKey = obj.skillWorkshopString("skillKey") ?: id,
+          createdAt = obj.skillWorkshopString("createdAt").orEmpty(),
+          updatedAt = updatedAt,
+          scanState = obj.skillWorkshopString("scanState"),
+          content = previous?.content?.takeIf { previous.updatedAt == updatedAt },
+          supportFiles = previous?.supportFiles?.takeIf { previous.updatedAt == updatedAt }.orEmpty(),
+        )
+      }
+    return parsed.orEmpty().sortedByDescending { it.updatedAt }
+  }
+
+  private fun parseSkillWorkshopProposalInspect(
+    root: JsonObject?,
+    previous: GatewaySkillWorkshopProposal?,
+  ): GatewaySkillWorkshopProposal? {
+    val source = root ?: return null
+    val record = source["record"].asObjectOrNull() ?: return null
+    val id = record.skillWorkshopString("id") ?: previous?.id ?: return null
+    val target = record["target"].asObjectOrNull()
+    val updatedAt = record.skillWorkshopString("updatedAt").orEmpty()
+    return GatewaySkillWorkshopProposal(
+      id = id,
+      kind = record.skillWorkshopString("kind") ?: previous?.kind ?: "proposal",
+      status = record.skillWorkshopString("status") ?: previous?.status ?: "pending",
+      title = record.skillWorkshopString("title") ?: target?.skillWorkshopString("skillName") ?: previous?.title ?: id,
+      description = record.skillWorkshopString("description") ?: previous?.description,
+      skillName = target?.skillWorkshopString("skillName") ?: previous?.skillName ?: id,
+      skillKey = target?.skillWorkshopString("skillKey") ?: previous?.skillKey ?: id,
+      createdAt = record.skillWorkshopString("createdAt") ?: previous?.createdAt.orEmpty(),
+      updatedAt = updatedAt.ifEmpty { previous?.updatedAt.orEmpty() },
+      scanState = record.skillWorkshopString("scanState") ?: previous?.scanState,
+      content = stripSkillWorkshopFrontmatter(source["content"].asStringOrNull().orEmpty()),
+      supportFiles = parseSkillWorkshopSupportFiles(source["supportFiles"] as? JsonArray),
+    )
+  }
+
+  private fun parseSkillWorkshopSupportFiles(files: JsonArray?): List<GatewaySkillWorkshopSupportFile> {
+    val parsed =
+      files?.mapNotNull { item ->
+        val obj = item.asObjectOrNull() ?: return@mapNotNull null
+        val path = obj.skillWorkshopString("path") ?: return@mapNotNull null
+        GatewaySkillWorkshopSupportFile(
+          path = path,
+          content = obj["content"].asStringOrNull()?.takeIf { it.isNotEmpty() },
+        )
+      }
+    return parsed.orEmpty()
+  }
+
+  private fun stripSkillWorkshopFrontmatter(content: String): String {
+    val withoutFrontmatter = content.replace(Regex("(?s)^---\\r?\\n.*?\\r?\\n---\\r?\\n?"), "")
+    return withoutFrontmatter.trim()
+  }
+
+  private fun JsonObject.skillWorkshopString(key: String): String? =
+    get(key)
+      .asStringOrNull()
+      ?.trim()
+      ?.takeIf { it.isNotEmpty() }
+
+  private fun skillWorkshopActionNotice(action: String): String =
+    when (action) {
+      "apply" -> "Proposal applied."
+      "reject" -> "Proposal rejected."
+      "quarantine" -> "Proposal quarantined."
+      else -> "Proposal updated."
+    }
+
+  private fun skillWorkshopActionVerb(action: String): String =
+    when (action) {
+      "apply" -> "apply"
+      "reject" -> "reject"
+      "quarantine" -> "quarantine"
+      else -> "update"
+    }
+
   private fun skillMissingCount(missing: JsonObject?): Int = listOf("bins", "env", "config", "os").sumOf { key -> (missing?.get(key) as? JsonArray)?.size ?: 0 }
 
   private fun parsePendingDevices(devices: JsonArray?): List<GatewayPendingDeviceSummary> =
@@ -4674,6 +5000,13 @@ internal fun operatorConnectScopesForAuth(
   return ConnectionManager.nativeClientOperatorScopes
 }
 
+internal fun normalizeOperatorScopes(scopes: List<String>): List<String> =
+  scopes
+    .map { it.trim() }
+    .filter { it.isNotEmpty() }
+    .distinct()
+    .sorted()
+
 private enum class HomeCanvasGatewayState {
   Connected,
   Connecting,
@@ -4765,6 +5098,37 @@ data class GatewayUsageWindowSummary(
 data class GatewaySkillsSummary(
   val managedSkillsDirAvailable: Boolean = false,
   val skills: List<GatewaySkillSummary>,
+)
+
+data class GatewaySkillWorkshopSummary(
+  val proposals: List<GatewaySkillWorkshopProposal>,
+) {
+  fun withProposal(proposal: GatewaySkillWorkshopProposal): GatewaySkillWorkshopSummary =
+    copy(
+      proposals =
+        (proposals.filterNot { it.id == proposal.id } + proposal)
+          .sortedByDescending { it.updatedAt },
+    )
+}
+
+data class GatewaySkillWorkshopProposal(
+  val id: String,
+  val kind: String,
+  val status: String,
+  val title: String,
+  val description: String?,
+  val skillName: String,
+  val skillKey: String,
+  val createdAt: String,
+  val updatedAt: String,
+  val scanState: String?,
+  val content: String? = null,
+  val supportFiles: List<GatewaySkillWorkshopSupportFile> = emptyList(),
+)
+
+data class GatewaySkillWorkshopSupportFile(
+  val path: String,
+  val content: String?,
 )
 
 data class GatewaySkillSummary(
