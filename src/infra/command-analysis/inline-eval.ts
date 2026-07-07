@@ -29,6 +29,7 @@ type ShortClusterFlagSpec = {
   label: string;
   flag: string;
   prefixChars: ReadonlySet<string>;
+  allowNumericRecordSeparator?: boolean;
 };
 
 type PositionalInterpreterSpec = {
@@ -88,6 +89,7 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
         label: "-e",
         flag: "e",
         prefixChars: new Set(["S", "U", "a", "c", "d", "l", "n", "p", "s", "v", "w"]),
+        allowNumericRecordSeparator: true,
       },
     ],
   },
@@ -114,6 +116,7 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
           "u",
           "w",
         ]),
+        allowNumericRecordSeparator: true,
       },
       {
         label: "-e",
@@ -134,6 +137,7 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
           "u",
           "w",
         ]),
+        allowNumericRecordSeparator: true,
       },
     ],
   },
@@ -343,18 +347,28 @@ function matchShortClusterFlag(spec: InterpreterFlagSpec, token: string): string
       continue;
     }
     const prefix = token.slice(1, index);
-    let prefixAllowed = true;
-    for (const char of prefix) {
-      if (!clusterFlag.prefixChars.has(char)) {
-        prefixAllowed = false;
-        break;
-      }
-    }
-    if (prefixAllowed) {
+    if (isShortClusterPrefixAllowed(clusterFlag, prefix)) {
       return clusterFlag.label;
     }
   }
   return null;
+}
+
+function isShortClusterPrefixAllowed(clusterFlag: ShortClusterFlagSpec, prefix: string): boolean {
+  for (let index = 0; index < prefix.length; index += 1) {
+    const char = prefix[index] ?? "";
+    if (clusterFlag.prefixChars.has(char)) {
+      continue;
+    }
+    if (clusterFlag.allowNumericRecordSeparator === true && char === "0") {
+      while (/^[0-9]$/.test(prefix[index + 1] ?? "")) {
+        index += 1;
+      }
+      continue;
+    }
+    return false;
+  }
+  return true;
 }
 
 export function detectInterpreterInlineEvalArgv(
