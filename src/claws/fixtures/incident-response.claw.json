@@ -1,0 +1,45 @@
+{
+  "schemaVersion": "openclaw.claw.v1",
+  "id": "incident-response",
+  "name": "Incident Response",
+  "version": "1.0.0",
+  "publisher": "openclaw.examples",
+  "description": "Starter claw for triage, workspace context, and response automation.",
+  "compatibility": {
+    "minHostVersion": "2026.7.0",
+    "surfaces": ["cli", "gateway"]
+  },
+  "update": {
+    "mode": "pinned"
+  },
+  "entries": [
+    {
+      "kind": "skill",
+      "id": "incident-triage-skill",
+      "selector": "clawhub:incident-triage@1.0.0"
+    },
+    {
+      "kind": "plugin",
+      "id": "pager-duty-plugin",
+      "selector": "npm:@openclaw/plugin-pager-duty@2.4.0"
+    },
+    {
+      "kind": "mcpServer",
+      "id": "statuspage-mcp",
+      "selector": "clawhub:statuspage-mcp@1.1.0",
+      "required": false
+    },
+    {
+      "kind": "workspaceFile",
+      "id": "runbook",
+      "path": "SOUL.md",
+      "source": "files/SOUL.md"
+    },
+    {
+      "kind": "schedule",
+      "id": "heartbeat-summary",
+      "source": "automations/heartbeat-summary.json",
+      "enableDefault": false
+    }
+  ]
+}

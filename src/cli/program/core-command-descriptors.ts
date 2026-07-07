@@ -34,6 +34,12 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
+    name: "claws",
+    description: "Inspect and plan OpenClaw Claws",
+    hasSubcommands: true,
+    parentDefaultHelp: true,
+  },
+  {
     name: "backup",
     description: "Create and verify backup archives and SQLite snapshots",
     hasSubcommands: true,
