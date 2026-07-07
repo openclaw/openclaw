@@ -12,16 +12,10 @@ struct DeviceIdentityStoreTests {
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         let blocker = tempDir.appendingPathComponent("not-a-directory", isDirectory: false)
         try Data().write(to: blocker)
-        let previousStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]
+        // Repoint the pinned state dir at a plain file to force write failures;
+        // the isolation trait restores the env var after the test.
         setenv("OPENCLAW_STATE_DIR", blocker.path, 1)
-        defer {
-            if let previousStateDir {
-                setenv("OPENCLAW_STATE_DIR", previousStateDir, 1)
-            } else {
-                unsetenv("OPENCLAW_STATE_DIR")
-            }
-            try? FileManager.default.removeItem(at: tempDir)
-        }
+        defer { try? FileManager.default.removeItem(at: tempDir) }
 
         let compatibleEntry: DeviceAuthEntry = DeviceAuthStore.storeToken(
             deviceId: "unwritable-device",
@@ -38,21 +32,7 @@ struct DeviceIdentityStoreTests {
     }
 
     @Test(.stateDirectoryIsolated)
-    func `device auth tokens are isolated by gateway owner`() throws {
-        let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        let previousStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]
-        setenv("OPENCLAW_STATE_DIR", tempDir.path, 1)
-        defer {
-            if let previousStateDir {
-                setenv("OPENCLAW_STATE_DIR", previousStateDir, 1)
-            } else {
-                unsetenv("OPENCLAW_STATE_DIR")
-            }
-            try? FileManager.default.removeItem(at: tempDir)
-        }
-
+    func `device auth tokens are isolated by gateway owner`() {
         let deviceID = "test-device"
         _ = DeviceAuthStore.storeToken(deviceId: deviceID, role: "node", token: "legacy-token")
         #expect(DeviceAuthStore.loadToken(deviceId: deviceID, role: "node", gatewayID: "gateway-a") == nil)
@@ -91,21 +71,7 @@ struct DeviceIdentityStoreTests {
     }
 
     @Test(.stateDirectoryIsolated)
-    func `legacy device auth migration claims only the proven role`() throws {
-        let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        let previousStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]
-        setenv("OPENCLAW_STATE_DIR", tempDir.path, 1)
-        defer {
-            if let previousStateDir {
-                setenv("OPENCLAW_STATE_DIR", previousStateDir, 1)
-            } else {
-                unsetenv("OPENCLAW_STATE_DIR")
-            }
-            try? FileManager.default.removeItem(at: tempDir)
-        }
-
+    func `legacy device auth migration claims only the proven role`() {
         let deviceID = "legacy-device"
         _ = DeviceAuthStore.storeToken(
             deviceId: deviceID,
@@ -216,20 +182,6 @@ struct DeviceIdentityStoreTests {
 
     @Test(.stateDirectoryIsolated)
     func `secondary profiles use separate identity and auth files`() throws {
-        let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        let previousStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]
-        setenv("OPENCLAW_STATE_DIR", tempDir.path, 1)
-        defer {
-            if let previousStateDir {
-                setenv("OPENCLAW_STATE_DIR", previousStateDir, 1)
-            } else {
-                unsetenv("OPENCLAW_STATE_DIR")
-            }
-            try? FileManager.default.removeItem(at: tempDir)
-        }
-
         let primaryIdentity = DeviceIdentityStore.loadOrCreate()
         let nodeIdentity = DeviceIdentityStore.loadOrCreate(profile: .node)
         let shareIdentity = DeviceIdentityStore.loadOrCreate(profile: .shareExtension)
@@ -248,7 +200,11 @@ struct DeviceIdentityStoreTests {
             token: "share-token",
             profile: .shareExtension)
 
-        let identityDir = tempDir.appendingPathComponent("identity", isDirectory: true)
+        // getenv, not ProcessInfo: the trait pins OPENCLAW_STATE_DIR via setenv and
+        // ProcessInfo.environment can serve a stale snapshot on Darwin.
+        let stateDirPath = try #require(getenv("OPENCLAW_STATE_DIR").map { String(cString: $0) })
+        let identityDir = URL(fileURLWithPath: stateDirPath, isDirectory: true)
+            .appendingPathComponent("identity", isDirectory: true)
         #expect(primaryIdentity.deviceId != nodeIdentity.deviceId)
         #expect(primaryIdentity.deviceId != shareIdentity.deviceId)
         #expect(FileManager.default.fileExists(atPath: identityDir.appendingPathComponent("device.json").path))
@@ -407,6 +363,7 @@ struct DeviceIdentityStoreTests {
         let migrationSource = DeviceIdentityPaths.appGroupMigrationSource(
             appGroupStateDirURL: appGroupURL,
             appGroupStateDirAvailable: false,
+            stateDirOverridden: false,
             profile: .primary)
         let identity = DeviceIdentityStore.loadOrCreate(
             fileURL: legacyIdentityURL,
@@ -458,6 +415,7 @@ struct DeviceIdentityStoreTests {
             migrationSource: DeviceIdentityPaths.appGroupMigrationSource(
                 appGroupStateDirURL: tempDir.appendingPathComponent("shared", isDirectory: true),
                 appGroupStateDirAvailable: false,
+                stateDirOverridden: false,
                 profile: .primary))
 
         #expect(identity.deviceId == "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c")
@@ -493,6 +451,7 @@ struct DeviceIdentityStoreTests {
         let migrationSource = DeviceIdentityPaths.appGroupMigrationSource(
             appGroupStateDirURL: appGroupURL,
             appGroupStateDirAvailable: false,
+            stateDirOverridden: false,
             profile: .primary)
         let identity = DeviceIdentityStore.loadOrCreate(
             fileURL: legacyIdentityURL,
@@ -509,6 +468,21 @@ struct DeviceIdentityStoreTests {
         #expect(DeviceIdentityPaths.appGroupMigrationSource(
             appGroupStateDirURL: appGroupURL,
             appGroupStateDirAvailable: true,
+            stateDirOverridden: false,
+            profile: .primary) == nil)
+    }
+
+    // Regression: an explicit OPENCLAW_STATE_DIR override must never import the
+    // machine's app-group identity/tokens; developer-Mac pairing state leaked
+    // into isolated test state dirs through this migration path.
+    @Test
+    func `provides no app group migration source when the state dir is overridden`() {
+        let appGroupURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        #expect(DeviceIdentityPaths.appGroupMigrationSource(
+            appGroupStateDirURL: appGroupURL,
+            appGroupStateDirAvailable: false,
+            stateDirOverridden: true,
             profile: .primary) == nil)
     }
 
