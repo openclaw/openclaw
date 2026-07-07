@@ -419,7 +419,7 @@ export async function assertNoSutReplyWindow(params: {
   };
 }
 
-export async function runConfigurableTopLevelScenario(params: {
+async function runConfigurableTopLevelScenario(params: {
   accessToken: string;
   actorId: MatrixQaActorId;
   baseUrl: string;
