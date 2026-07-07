@@ -251,49 +251,4 @@ describe("ChatLog", () => {
     );
     expect(chatLog.countPendingUsers()).toBe(1);
   });
-
-  describe("hasStreamingRun", () => {
-    it("returns false when no streaming run exists", () => {
-      const chatLog = new ChatLog(40);
-      expect(chatLog.hasStreamingRun("nonexistent")).toBe(false);
-    });
-
-    it("returns true for an active streaming run", () => {
-      const chatLog = new ChatLog(40);
-      chatLog.startAssistant("typing…", "run-1");
-      expect(chatLog.hasStreamingRun("run-1")).toBe(true);
-    });
-
-    it("returns false after a streaming run is finalized", () => {
-      const chatLog = new ChatLog(40);
-      chatLog.startAssistant("partial", "run-1");
-      chatLog.finalizeAssistant("complete", "run-1");
-      expect(chatLog.hasStreamingRun("run-1")).toBe(false);
-    });
-
-    it("returns false after a streaming run is dropped", () => {
-      const chatLog = new ChatLog(40);
-      chatLog.startAssistant("typing…", "run-drop");
-      chatLog.dropAssistant("run-drop");
-      expect(chatLog.hasStreamingRun("run-drop")).toBe(false);
-    });
-
-    it("returns false for default runId when no unnamed stream is active", () => {
-      const chatLog = new ChatLog(40);
-      expect(chatLog.hasStreamingRun()).toBe(false);
-    });
-
-    it("returns true for default runId after an unnamed stream is started", () => {
-      const chatLog = new ChatLog(40);
-      chatLog.startAssistant("unnamed stream");
-      expect(chatLog.hasStreamingRun()).toBe(true);
-    });
-
-    it("returns false after clearAll resets streaming state", () => {
-      const chatLog = new ChatLog(40);
-      chatLog.startAssistant("typing…", "run-1");
-      chatLog.clearAll();
-      expect(chatLog.hasStreamingRun("run-1")).toBe(false);
-    });
-  });
 });

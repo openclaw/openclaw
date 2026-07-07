@@ -266,11 +266,6 @@ export class ChatLog extends Container {
     return this.pendingUsers.size;
   }
 
-  /** Returns true when the given runId has an in-flight (streaming) assistant component. */
-  hasStreamingRun(runId?: string): boolean {
-    return this.streamingRuns.has(this.resolveRunId(runId));
-  }
-
   private resolveRunId(runId?: string) {
     return runId ?? "default";
   }
