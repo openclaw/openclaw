@@ -11,6 +11,17 @@ describe("memory hybrid helpers", () => {
     expect(buildFtsQuery("   ")).toBeNull();
   });
 
+  it("buildFtsQuery deduplicates repeated terms", () => {
+    expect(buildFtsQuery("alpha alpha beta alpha")).toBe('"alpha" AND "beta"');
+  });
+
+  it("buildFtsQuery caps oversized recall prompts", () => {
+    const query = buildFtsQuery(Array.from({ length: 40 }, (_, index) => `term${index}`).join(" "));
+    expect(query?.split(" AND ")).toHaveLength(32);
+    expect(query).toContain('"term31"');
+    expect(query).not.toContain('"term32"');
+  });
+
   it("bm25RankToScore is monotonic and clamped", () => {
     expect(bm25RankToScore(0)).toBeCloseTo(1);
     expect(bm25RankToScore(1)).toBeCloseTo(0.5);

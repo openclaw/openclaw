@@ -9,6 +9,8 @@ import {
 
 type HybridSource = string;
 
+const MAX_FTS_QUERY_TOKENS = 32;
+
 type HybridVectorResult = {
   id: string;
   path: string;
@@ -30,11 +32,11 @@ type HybridKeywordResult = {
 };
 
 export function buildFtsQuery(raw: string): string | null {
-  const tokens = normalizeStringEntries(raw.match(/[\p{L}\p{N}_]+/gu) ?? []);
+  const tokens = Array.from(new Set(normalizeStringEntries(raw.match(/[\p{L}\p{N}_]+/gu) ?? [])));
   if (tokens.length === 0) {
     return null;
   }
-  const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
+  const quoted = tokens.slice(0, MAX_FTS_QUERY_TOKENS).map((t) => `"${t.replaceAll('"', "")}"`);
   return quoted.join(" AND ");
 }
 
