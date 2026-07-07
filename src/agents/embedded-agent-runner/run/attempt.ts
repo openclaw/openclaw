@@ -33,6 +33,7 @@ import {
 import { resolveContextEngineOwnerPluginId } from "../../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../../context-engine/runtime-settings.js";
 import type { AssembleResult } from "../../../context-engine/types.js";
+import { createDedupeCache } from "../../../infra/dedupe.js";
 import {
   diagnosticErrorCategory,
   diagnosticErrorMessage,
@@ -561,7 +562,10 @@ export {
 };
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
-const aggregateToolResultPressureWarnings = new Set<string>();
+const aggregateToolResultPressureWarnings = createDedupeCache({
+  ttlMs: 0,
+  maxSize: 4096,
+});
 
 function pluginMetadataSnapshotCoversProvider(
   snapshot: PluginMetadataSnapshot | undefined,
@@ -4381,8 +4385,7 @@ export async function runEmbeddedAttempt(
               `aggregate=${promptToolResultTruncation.aggregateTruncatedCount}) ` +
               `sessionKey=${sessionLogKey}`;
             if (aggregatePressureEngaged) {
-              if (!aggregateToolResultPressureWarnings.has(sessionLogKey)) {
-                aggregateToolResultPressureWarnings.add(sessionLogKey);
+              if (!aggregateToolResultPressureWarnings.check(sessionLogKey)) {
                 log.warn(
                   `${truncationLog}; aggregate tool-result pressure detected, compaction has been requested; consider /compact or /new if pressure persists`,
                 );

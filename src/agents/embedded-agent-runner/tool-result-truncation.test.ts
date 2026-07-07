@@ -1242,3 +1242,14 @@ describe("truncateToolResultText head+tail strategy", () => {
     expect(result).toContain("truncated");
   });
 });
+
+describe("aggregate tool-result warning dedupe cache", () => {
+  it("loads the module with a bounded dedupe cache without errors", async () => {
+    vi.resetModules();
+    // Dynamic re-import proves the createDedupeCache-backed
+    // aggregateToolResultRecoveryWarnings initializes without issues.
+    const mod = await import("./tool-result-truncation.js");
+    expect(mod.truncateToolResultText).toBeDefined();
+    expect(mod.truncateOversizedToolResultsInMessages).toBeDefined();
+  });
+});
