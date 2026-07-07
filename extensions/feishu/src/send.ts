@@ -5,7 +5,7 @@ import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
+import { chunkTextForOutbound, convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
@@ -28,6 +28,7 @@ export { resolveFeishuCardTemplate };
 const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003]);
 const INTERACTIVE_CARD_FALLBACK_TEXT = "[Interactive Card]";
 const POST_FALLBACK_TEXT = "[Rich text message]";
+const FEISHU_TEXT_CHUNK_LIMIT = 4000;
 function shouldFallbackFromReplyTarget(response: { code?: number; msg?: string }): boolean {
   if (response.code !== undefined && WITHDRAWN_REPLY_ERROR_CODES.has(response.code)) {
     return true;
@@ -607,27 +608,39 @@ export async function sendMessageFeishu(
     channel: "feishu",
   });
 
-  const messageText = textIsNormalized
+  const tableConvertedText = textIsNormalized
     ? (text ?? "")
     : convertMarkdownTables(text ?? "", tableMode);
+  const messageText = textIsNormalized
+    ? tableConvertedText
+    : normalizeFeishuPostMarkdownNewlines(tableConvertedText);
 
-  const { content, msgType } = buildFeishuPostMessagePayload({
-    messageText,
-    mentions,
-    textIsNormalized,
-  });
+  const chunks =
+    messageText.length > FEISHU_TEXT_CHUNK_LIMIT
+      ? chunkTextForOutbound(messageText, FEISHU_TEXT_CHUNK_LIMIT)
+      : [messageText];
 
-  const directParams = { receiveId, receiveIdType, content, msgType };
-  return sendReplyOrFallbackDirect(client, {
-    replyToMessageId,
-    replyInThread,
-    allowTopLevelReplyFallback,
-    content,
-    msgType,
-    directParams,
-    directErrorPrefix: "Feishu send failed",
-    replyErrorPrefix: "Feishu reply failed",
-  });
+  let lastResult: FeishuSendResult | undefined;
+  for (const [index, chunk] of chunks.entries()) {
+    const isFirstChunk = index === 0;
+    const { content, msgType } = buildFeishuPostMessagePayload({
+      messageText: chunk,
+      mentions: isFirstChunk ? mentions : undefined,
+      textIsNormalized: true,
+    });
+    const directParams = { receiveId, receiveIdType, content, msgType };
+    lastResult = await sendReplyOrFallbackDirect(client, {
+      replyToMessageId: isFirstChunk ? replyToMessageId : undefined,
+      replyInThread: isFirstChunk ? replyInThread : false,
+      allowTopLevelReplyFallback,
+      content,
+      msgType,
+      directParams,
+      directErrorPrefix: "Feishu send failed",
+      replyErrorPrefix: "Feishu reply failed",
+    });
+  }
+  return lastResult!;
 }
 
 export type SendFeishuCardParams = {
@@ -699,8 +712,14 @@ export async function editMessageFeishu(params: {
     cfg,
     channel: "feishu",
   });
-  const messageText = convertMarkdownTables(text!, tableMode);
-  const payload = buildFeishuPostMessagePayload({ messageText });
+  const tableConvertedText = convertMarkdownTables(text!, tableMode);
+  const messageText = normalizeFeishuPostMarkdownNewlines(tableConvertedText);
+  if (messageText.length > FEISHU_TEXT_CHUNK_LIMIT) {
+    throw new Error(
+      `Feishu message edit failed: expanded text exceeds ${FEISHU_TEXT_CHUNK_LIMIT} characters (${messageText.length}).`,
+    );
+  }
+  const payload = buildFeishuPostMessagePayload({ messageText, textIsNormalized: true });
   const response = await client.im.message.patch({
     path: { message_id: messageId },
     data: { content: payload.content },

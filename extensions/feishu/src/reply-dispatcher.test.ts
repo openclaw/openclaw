@@ -500,6 +500,28 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
   });
 
+  it("converts markdown tables before normalizing newlines for plain text", async () => {
+    const runtime = getFeishuRuntimeMock();
+    runtime.channel.text.convertMarkdownTables.mockImplementation(
+      (text: string) => `${text}\nconverted`,
+    );
+    useNonStreamingAutoAccount();
+
+    const { options } = createDispatcherHarness({
+      chatId: "oc_p2p_chat",
+      sendTarget: "user:ou_sender",
+    });
+    await options.deliver({ text: "line one" }, { kind: "final" });
+
+    expect(runtime.channel.text.convertMarkdownTables).toHaveBeenCalledWith("line one", "preserve");
+    expectMockArgFields(sendMessageFeishuMock, "message send params", {
+      // The appended single newline from table conversion is normalized to a
+      // paragraph break, proving normalization ran after table conversion.
+      text: "line one\n\nconverted",
+      textIsNormalized: true,
+    });
+  });
+
   it("streams auto mode plain final text when streaming is enabled", async () => {
     const { options } = createDispatcherHarness();
     await options.deliver({ text: "plain text" }, { kind: "final" });

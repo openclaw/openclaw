@@ -496,20 +496,22 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     infoKind?: string;
     sendChunk: (params: { chunk: string; isFirst: boolean }) => Promise<void>;
   }) => {
-    // Normalize before chunking so the 4000-character limit is measured against
-    // the post text Feishu will actually receive (single newlines become \n\n).
-    const normalizedText = paramsLocal.useCard
+    // Convert tables before newline normalization so the table output is also
+    // normalized, and so chunking is measured against the exact post text Feishu
+    // will receive. This matches the ordering in sendOutboundText and avoids
+    // double-processing inside sendMessageFeishu when textIsNormalized is true.
+    const tableConvertedText = paramsLocal.useCard
       ? paramsLocal.text
-      : normalizeFeishuPostMarkdownNewlines(paramsLocal.text);
-    const chunkSource = paramsLocal.useCard
-      ? normalizedText
-      : core.channel.text.convertMarkdownTables(normalizedText, tableMode);
+      : core.channel.text.convertMarkdownTables(paramsLocal.text, tableMode);
+    const normalizedText = paramsLocal.useCard
+      ? tableConvertedText
+      : normalizeFeishuPostMarkdownNewlines(tableConvertedText);
     const chunkText = paramsLocal.useCard
       ? core.channel.text.chunkMarkdownTextWithMode
       : core.channel.text.chunkTextWithMode;
     const chunks = resolveTextChunksWithFallback(
-      chunkSource,
-      chunkText(chunkSource, textChunkLimit, chunkMode),
+      normalizedText,
+      chunkText(normalizedText, textChunkLimit, chunkMode),
     );
     for (const [index, chunk] of chunks.entries()) {
       await paramsLocal.sendChunk({

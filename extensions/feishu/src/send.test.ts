@@ -351,6 +351,37 @@ describe("getMessageFeishu", () => {
     });
   });
 
+  it("chunks direct send when newline expansion exceeds the post limit", async () => {
+    const create = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_chunk_1" } });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create,
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+
+    const text = Array.from({ length: 2500 }, () => "x").join("\n");
+
+    const result = await sendMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_send",
+      text,
+    });
+
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(result.messageId).toBe("om_chunk_1");
+    for (const call of create.mock.calls) {
+      const payload = (call[0] as { data: { content: string } }).data.content;
+      const textElement = JSON.parse(payload).zh_cn.content[0][0].text as string;
+      expect(textElement.length).toBeLessThanOrEqual(4000);
+    }
+  });
+
   it("extracts text content from interactive card elements", async () => {
     mockClientGet.mockResolvedValueOnce({
       code: 0,
@@ -788,6 +819,18 @@ describe("editMessageFeishu", () => {
       },
     });
     expect(result).toEqual({ messageId: "om_card", contentType: "interactive" });
+  });
+
+  it("rejects text edits when expanded content exceeds the post limit", async () => {
+    const text = Array.from({ length: 2500 }, () => "x").join("\n");
+
+    await expect(
+      editMessageFeishu({
+        cfg: {} as ClawdbotConfig,
+        messageId: "om_edit",
+        text,
+      }),
+    ).rejects.toThrow("expanded text exceeds 4000 characters");
   });
 });
 
