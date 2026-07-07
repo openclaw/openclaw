@@ -21,6 +21,11 @@ describe("hasUnbackedReminderCommitment", () => {
     expect(hasUnbackedReminderCommitment("I'll remember that preference.")).toBe(false);
     expect(hasUnbackedReminderCommitment("I'll remember the specifics.")).toBe(false);
     expect(hasUnbackedReminderCommitment("I'll remember to use metric units for you.")).toBe(false);
+    expect(
+      hasUnbackedReminderCommitment(
+        "I'll remember to use metric units when answering distance questions.",
+      ),
+    ).toBe(false);
   });
 });
 
