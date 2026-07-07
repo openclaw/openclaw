@@ -128,6 +128,7 @@ Docs: https://docs.openclaw.ai
 - **iOS Watch replies:** persist queued quick replies in the gateway-scoped chat outbox and submit them through idempotent chat delivery, preventing losses, duplicates, and cross-gateway sends after reconnects. (#100031) Thanks @NianJiuZst.
 - **iOS Gateway auth retry:** restrict stored device-token retry to parsed loopback hosts and reject wildcard bind addresses, preventing remote lookalike hostnames from receiving trusted retry credentials. (#99859) Thanks @ly85206559.
 - **Bedrock Mantle discovery:** bound model-catalog fetch time and response size, and release rejected response bodies so stalled, oversized, or failed provider responses fall back safely. (#99961) Thanks @zhangguiping-xydt.
+- **npm self-update roots:** keep staged self-updates on the global prefix that owns the running OpenClaw install when PATH's npm reports a different Node tree, preventing successful updates to a stale second copy. (#101228) Thanks @buddyh.
 
 ## 2026.7.1
 
