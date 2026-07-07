@@ -27,7 +27,7 @@ export async function fetchJson<T>(path: string, init?: RequestInit): Promise<T>
   if (!response.ok) {
     const payload = await readProviderJsonResponse<{ error?: string }>(response, "qa-lab web", {
       maxBytes: QA_LAB_WEB_JSON_MAX_BYTES,
-    }).catch(() => ({}));
+    }).catch((): { error?: string } => ({}));
     throw new Error(payload.error || `${response.status} ${response.statusText}`);
   }
   return readProviderJsonResponse<T>(response, "qa-lab web", {
