@@ -13,6 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { sleep } from "../lib/sleep.mjs";
 import { resolveWindowsTaskkillPath } from "../lib/windows-taskkill.mjs";
 import { createPnpmRunnerSpawnSpec } from "../pnpm-runner.mjs";
 import { readPositiveIntEnv } from "./lib/env-limits.mjs";
@@ -326,12 +327,19 @@ export function parseArgs(argvInput: string[]): Options {
     argv = argv.slice(0, commandSeparator);
   }
   let expectWasPassed = false;
+  const seenSingleValueOptions = new Set<string>();
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    const readValue = () => {
+    const readValue = (options: { repeatable?: boolean } = {}) => {
       const value = argv[index + 1];
       if (isMissingOptionValue(value)) {
         usage();
+      }
+      if (!options.repeatable) {
+        if (seenSingleValueOptions.has(arg)) {
+          throw new Error(`${arg} was provided more than once`);
+        }
+        seenSingleValueOptions.add(arg);
       }
       index += 1;
       return value;
@@ -351,7 +359,7 @@ export function parseArgs(argvInput: string[]): Options {
         opts.expect = [];
         expectWasPassed = true;
       }
-      opts.expect.push(readValue());
+      opts.expect.push(readValue({ repeatable: true }));
     } else if (arg === "--gateway-port") {
       opts.gatewayPort = parseTcpPort(readValue(), "--gateway-port");
     } else if (arg === "--id") {
@@ -986,12 +994,6 @@ function spawnDaemon(params: {
   child.unref();
   fs.closeSync(log);
   return child.pid;
-}
-
-function sleep(ms: number) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 function waitForChildExit(child: ChildProcess) {
@@ -1997,6 +1999,7 @@ const FULL_ARTIFACT_JSON_NAMES = new Set([
   "telegram-user-crabbox-session-summary.json",
 ]);
 const FULL_ARTIFACT_FILE_EXTENSIONS = new Set([".gif", ".log", ".md", ".mp4", ".png"]);
+const FULL_ARTIFACT_PROOF_REPORT = "telegram-user-crabbox-proof.md";
 const TIMESTAMPED_PROBE_ARTIFACT_JSON = /^probe-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.json$/u;
 
 function isFullArtifactJsonName(name: string) {
@@ -2004,6 +2007,10 @@ function isFullArtifactJsonName(name: string) {
 }
 
 export function stageFullSessionArtifacts(outputDir: string) {
+  if (!fs.existsSync(path.join(outputDir, FULL_ARTIFACT_PROOF_REPORT))) {
+    throw new Error(`Missing proof report. Run finish first: ${FULL_ARTIFACT_PROOF_REPORT}`);
+  }
+
   const publishDir = path.join(outputDir, "publish-full-artifacts");
   fs.rmSync(publishDir, { force: true, recursive: true });
   fs.mkdirSync(publishDir, { recursive: true });

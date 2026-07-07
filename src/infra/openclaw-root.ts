@@ -67,6 +67,14 @@ function* iterAncestorDirs(startDir: string, maxDepth: number): Generator<string
   let current = path.resolve(startDir);
   for (let i = 0; i < maxDepth; i += 1) {
     yield current;
+    // Never walk above a node_modules boundary: a package.json up there belongs
+    // to the workspace that installed the tooling (for example an enclosing
+    // checkout hosting a nested git worktree), not to the package owning the
+    // running code. Crossing it made nested worktrees resolve the ancestor
+    // checkout and load its stale bundled plugin manifests.
+    if (path.basename(current) === "node_modules") {
+      break;
+    }
     const parent = path.dirname(current);
     if (parent === current) {
       break;
@@ -82,10 +90,11 @@ function candidateDirsFromArgv1(argv1: string): string[] {
     return [...cached];
   }
   const normalized = path.resolve(argv1);
-  const candidates = [path.dirname(normalized)];
+  const candidates: string[] = [];
 
   // Resolve symlinks for version managers (nvm, fnm, n, Homebrew/Linuxbrew)
-  // that create symlinks in bin/ pointing to the real package location.
+  // that create symlinks in bin/ pointing to the real package location. Prefer
+  // the target so a launcher nested under another OpenClaw checkout keeps its own package root.
   try {
     const resolved = openClawRootFsSync.realpathSync(normalized);
     if (resolved !== normalized) {
@@ -94,6 +103,7 @@ function candidateDirsFromArgv1(argv1: string): string[] {
   } catch {
     // realpathSync throws if path doesn't exist; keep original candidates
   }
+  candidates.push(path.dirname(normalized));
 
   const parts = normalized.split(path.sep);
   const binIndex = parts.lastIndexOf(".bin");

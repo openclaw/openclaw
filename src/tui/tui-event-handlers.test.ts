@@ -343,6 +343,52 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     vi.useRealTimers();
   });
 
+  it("appends the tool-error summary to the abort line when present", () => {
+    const { state, chatLog, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-validation-loop" },
+    });
+
+    handleChatEvent({
+      runId: "run-validation-loop",
+      sessionKey: state.currentSessionKey,
+      state: "aborted",
+      errorMessage: "edit tool validation failed: edits: must have required properties edits",
+    });
+
+    expect(chatLog.addSystem).toHaveBeenCalledWith(
+      "run aborted: edit tool validation failed: edits: must have required properties edits",
+    );
+  });
+
+  it("sanitizes untrusted abort diagnostics before rendering", () => {
+    const { state, chatLog, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-hostile" },
+    });
+
+    handleChatEvent({
+      runId: "run-hostile",
+      sessionKey: state.currentSessionKey,
+      state: "aborted",
+      errorMessage: "edit failed\u001b[31m\nsecret",
+    });
+
+    expect(chatLog.addSystem).toHaveBeenCalledWith("run aborted: edit failed secret");
+  });
+
+  it("falls back to a bare abort line when there is no summary", () => {
+    const { state, chatLog, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-plain" },
+    });
+
+    handleChatEvent({
+      runId: "run-plain",
+      sessionKey: state.currentSessionKey,
+      state: "aborted",
+    });
+
+    expect(chatLog.addSystem).toHaveBeenCalledWith("run aborted");
+  });
+
   it("deduplicates delayed chat errors after terminal lifecycle errors", () => {
     vi.useFakeTimers();
     const { state, chatLog, tui, handleAgentEvent, handleChatEvent } = createHandlersHarness({
@@ -585,7 +631,21 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     expect(setActivityStatus).toHaveBeenCalledWith("idle");
-    expect(tui.requestRender).toHaveBeenCalled();
+    expect(tui.requestRender).toHaveBeenCalledWith(true);
+  });
+
+  it("force-renders when terminal lifecycle end clears an active status", () => {
+    const { tui, handleAgentEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-9" },
+    });
+
+    handleAgentEvent({
+      runId: "run-9",
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+
+    expect(tui.requestRender).toHaveBeenCalledWith(true);
   });
 
   it("does not let delayed finalized-run lifecycle clobber a newer active run", () => {

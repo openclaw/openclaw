@@ -95,11 +95,22 @@ export const defaultRuntime: OutputRuntimeEnv = {
   },
 };
 
+/** Error thrown by createNonExitingRuntime.exit() to signal simulated process exit. */
+export class ExitError extends Error {
+  constructor(
+    public readonly code: number,
+    message?: string,
+  ) {
+    super(message ?? `exit ${code}`);
+    this.name = "ExitError";
+  }
+}
+
 export function createNonExitingRuntime(): OutputRuntimeEnv {
   return {
     ...createRuntimeIo(),
     exit: (code: number) => {
-      throw new Error(`exit ${code}`);
+      throw new ExitError(code);
     },
   };
 }

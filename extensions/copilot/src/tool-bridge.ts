@@ -69,6 +69,7 @@ export type CopilotToolCompletion = {
 };
 
 export interface CopilotToolBridgeInput {
+  allowModelTools?: boolean;
   modelProvider: string;
   modelId: string;
   agentId: string;
@@ -151,7 +152,7 @@ export function supportsModelTools(modelProvider: string): boolean {
 export async function createCopilotToolBridge(
   input: CopilotToolBridgeInput,
 ): Promise<CopilotToolBridge> {
-  if (!supportsModelTools(input.modelProvider)) {
+  if (!input.allowModelTools && !supportsModelTools(input.modelProvider)) {
     return { sdkTools: [], sourceTools: [] };
   }
 
@@ -192,6 +193,8 @@ export async function createCopilotToolBridge(
     executeTool: (toolParams) => executeCatalogTool(input, toolParams),
     forceMessageTool: shouldForceCopilotMessageTool(attemptParams),
     isRawModelRun: isCopilotRawModelRun(attemptParams),
+    modelId: input.modelId,
+    modelProvider: input.modelProvider,
     modelToolsEnabled: true,
     prompt: attemptParams.prompt,
     runId: attemptParams.runId,
@@ -230,7 +233,9 @@ export async function createCopilotToolBridge(
     sourceTools as AnyAgentTool[],
     toolSurfaceRuntime.runtimeToolAllowlist,
   );
-  const compactedTools = toolSurfaceRuntime.compactTools(allowedSourceTools);
+  const compactedTools = toolSurfaceRuntime.compactTools(allowedSourceTools, {
+    localModelLeanApplied: true,
+  });
   const plannedTools = filterCopilotToolsForConstructionPlan(
     compactedTools.tools,
     effectiveToolPlan.codingToolConstructionPlan,

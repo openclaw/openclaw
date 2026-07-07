@@ -155,10 +155,8 @@ function requireString(value: string | undefined, label: string): string {
 beforeAll(async () => {
   ({ onSessionTranscriptUpdate } = await import("../../sessions/transcript-events.js"));
   ({ installSessionToolResultGuard } = await import("../session-tool-result-guard.js"));
-  ({
-    rewriteTranscriptEntriesInRuntimeTranscript,
-    rewriteTranscriptEntriesInSessionManager,
-  } = await import("./transcript-rewrite.js"));
+  ({ rewriteTranscriptEntriesInRuntimeTranscript, rewriteTranscriptEntriesInSessionManager } =
+    await import("./transcript-rewrite.js"));
 });
 
 beforeEach(() => {
@@ -394,7 +392,13 @@ describe("rewriteTranscriptEntriesInRuntimeTranscript", () => {
       expect(listener).toHaveBeenCalledWith({
         agentId: "main",
         sessionFile: resolvedSessionFile,
+        sessionId,
         sessionKey: "agent:main:test",
+        target: {
+          agentId: "main",
+          sessionId,
+          sessionKey: "agent:main:test",
+        },
       });
 
       const rewrittenSession = SessionManager.open(sessionFile);
@@ -411,5 +415,4 @@ describe("rewriteTranscriptEntriesInRuntimeTranscript", () => {
       cleanup();
     }
   });
-
 });

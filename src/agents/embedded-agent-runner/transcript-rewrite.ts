@@ -463,6 +463,11 @@ export async function rewriteTranscriptEntriesInRuntimeTranscript(params: {
         sessionFile: target.sessionFile,
         sessionKey: target.sessionKey,
         agentId: target.agentId,
+        target: {
+          agentId: target.agentId,
+          sessionId: target.sessionId,
+          sessionKey: target.sessionKey,
+        },
       });
       log.info(
         `[transcript-rewrite] rewrote ${result.rewrittenEntries} entr` +

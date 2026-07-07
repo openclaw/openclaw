@@ -91,6 +91,20 @@ describe("Docker E2E helper CLIs", () => {
     expect(result.stderr).not.toContain("at file:");
   });
 
+  it("rejects unknown timings options without treating them as artifact paths", () => {
+    const result = runHelper("scripts/docker-e2e-timings.mjs", "--wat");
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("unknown argument: --wat");
+    expect(result.stderr).toContain(
+      "Usage: node scripts/docker-e2e-timings.mjs <summary.json|lane-timings.json>",
+    );
+    expect(result.stderr).not.toContain("ENOENT");
+    expect(result.stderr).not.toContain("Error:");
+    expect(result.stderr).not.toContain("at file:");
+  });
+
   it("rejects oversized timing JSON artifacts without a Node stack trace", () => {
     const root = mkdtempSync(`${tmpdir()}/openclaw-docker-e2e-timings-`);
     try {

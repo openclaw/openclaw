@@ -3,10 +3,12 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  attachModelProviderRequestTransport,
   buildAgentHarnessUserInputAnswers,
   classifyAgentHarnessTerminalOutcome,
   deliverAgentHarnessUserInputPrompt,
   formatAgentHarnessUserInputPrompt,
+  getModelProviderRequestTransport,
   type AgentHarnessTerminalOutcomeClassification,
 } from "./agent-harness-runtime.js";
 
@@ -154,6 +156,17 @@ describe("agent harness runtime SDK facade", () => {
 
     expect(loadResearchAutocapture).not.toHaveBeenCalled();
   });
+
+  it("exposes attached model request transport metadata helpers", () => {
+    const model = attachModelProviderRequestTransport(
+      { id: "gpt-test", provider: "custom-openai" },
+      { auth: { mode: "header", headerName: "x-api-key", value: "secret" } },
+    );
+
+    expect(getModelProviderRequestTransport(model)).toEqual({
+      auth: { mode: "header", headerName: "x-api-key", value: "secret" },
+    });
+  });
 });
 
 describe("agent harness user input helpers", () => {
@@ -227,5 +240,24 @@ describe("agent harness user input helpers", () => {
         { formatText: (text) => text.replaceAll("<", "&lt;") },
       ),
     ).toContain("a &lt; b");
+  });
+
+  it("preserves blank fallback lines so skipped answers stay aligned", () => {
+    expect(
+      buildAgentHarnessUserInputAnswers(
+        [
+          { id: "q1", header: "Q1", question: "First?" },
+          { id: "q2", header: "Q2", question: "Second?" },
+          { id: "q3", header: "Q3", question: "Third?" },
+        ],
+        "\nyes\nno",
+      ),
+    ).toEqual({
+      answers: {
+        q1: { answers: [] },
+        q2: { answers: ["yes"] },
+        q3: { answers: ["no"] },
+      },
+    });
   });
 });

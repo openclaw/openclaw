@@ -132,7 +132,7 @@ jobs:
     if: ${{ inputs.qa_evidence_run_id == '' }}
     uses: ./.github/workflows/qa-profile-evidence.yml
     with:
-      ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+      ref: ${{ inputs.ref }}
       expected_sha: ${{ needs.validate_selected_ref.outputs.selected_revision }}
       qa_profile: all
     secrets:
@@ -428,14 +428,14 @@ jobs:
           cat > "$body_file" <<BODY
           ## Summary
 
-          - render maturity scorecard docs from \`qa/maturity-scores.yaml\` and release QA evidence
+          - render maturity scorecard docs from \`qa/maturity-scores.yaml\` and full taxonomy QA evidence
           - maturity source ref: ${REF_INPUT}
           - QA evidence run: ${evidence_run_id}
 
           ## Verification
 
           - QA Lab maturity score validation passed
-          - Maturity scorecard workflow rendered docs from release profile qa-evidence.json artifacts with strict inputs
+          - Maturity scorecard workflow rendered docs from all profile qa-evidence.json artifacts with strict inputs
           BODY
 
           pr_url="$(gh pr list --head "$branch" --state open --json url --jq '.[0].url // ""')"

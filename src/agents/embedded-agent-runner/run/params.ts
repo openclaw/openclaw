@@ -3,6 +3,7 @@
  */
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
+  BlockReplyContext,
   PartialReplyPayload,
   SourceReplyDeliveryMode,
 } from "../../../auto-reply/get-reply-options.types.js";
@@ -20,6 +21,7 @@ import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import type { SkillSnapshot } from "../../../skills/types.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
+import type { BootstrapContextRunKind } from "../../bootstrap-mode.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../../command/shared-types.js";
 import type { BlockReplyPayload } from "../../embedded-agent-payloads.js";
 import type {
@@ -29,24 +31,37 @@ import type {
 } from "../../embedded-agent-subscribe.shared-types.js";
 import type { FastModeAutoProgressState } from "../../fast-mode.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
+import type { AgentRunSessionTarget } from "../../run-session-target.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SilentReplyPromptMode } from "../../system-prompt.types.js";
 import type { PromptMode } from "../../system-prompt.types.js";
 import type { EmbeddedAgentExecutionPhase } from "../execution-phase.js";
+import type { BlockReplyFlushContext } from "../types.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 export type { ClientToolDefinition } from "../../command/shared-types.js";
 
 export type EmbeddedRunTrigger = "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
 
+type ReasoningStreamPayload = Pick<
+  ReplyPayload,
+  "text" | "mediaUrls" | "isReasoning" | "isReasoningSnapshot"
+> & {
+  requiresReasoningProgressOptIn?: boolean;
+};
+
 export type CurrentInboundPromptContext = {
   text: string;
   resumableText?: string;
   promptJoiner?: "\n\n" | "\n" | " ";
+  /** Generated goal blocks owned by inbound-context assembly, never user text. */
+  injectedGoalContexts?: string[];
 };
 
 export type RunEmbeddedAgentParams = {
   sessionId: string;
   sessionKey?: string;
+  /** Storage-neutral transcript/session target. Defaults to sessionId/sessionKey/agentId. */
+  sessionTarget?: AgentRunSessionTarget;
   /** Immutable gateway lifecycle ownership captured when this execution was admitted. */
   lifecycleGeneration?: string;
   /** Provider prompt-cache affinity key; distinct from transcript/session identity. */
@@ -122,7 +137,8 @@ export type RunEmbeddedAgentParams = {
   forceHeartbeatTool?: boolean;
   /** Allow runtime plugins for this run to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
-  sessionFile: string;
+  /** @deprecated Use sessionTarget plus sessionId/sessionKey/agentId for runtime identity. */
+  sessionFile?: string;
   workspaceDir: string;
   /** Task working directory for tool/runtime execution. Defaults to workspaceDir. */
   cwd?: string;
@@ -169,9 +185,11 @@ export type RunEmbeddedAgentParams = {
   /** Bootstrap context mode for workspace file injection. */
   bootstrapContextMode?: "full" | "lightweight";
   /** Run kind hint for context mode behavior. */
-  bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
+  bootstrapContextRunKind?: BootstrapContextRunKind;
   /** Optional tool allow-list; when set, only these tools are sent to the model. */
   toolsAllow?: string[];
+  /** Ring-zero Crestodian tool; set only by the Crestodian agent runner. */
+  crestodianTool?: import("../../tools/crestodian-tool.js").CrestodianToolOptions;
   /** Seen bootstrap truncation warning signatures for this session (once mode dedupe). */
   bootstrapPromptWarningSignaturesSeen?: string[];
   /** Last shown bootstrap truncation warning signature for this session. */
@@ -219,15 +237,12 @@ export type RunEmbeddedAgentParams = {
   shouldEmitToolOutput?: () => boolean;
   onPartialReply?: (payload: PartialReplyPayload) => void | Promise<void>;
   onAssistantMessageStart?: () => void | Promise<void>;
-  onBlockReply?: (payload: BlockReplyPayload) => void | Promise<void>;
-  onBlockReplyFlush?: () => void | Promise<void>;
+  onBlockReply?: (payload: BlockReplyPayload, context?: BlockReplyContext) => void | Promise<void>;
+  onBlockReplyFlush?: (context: BlockReplyFlushContext) => void | Promise<void>;
   blockReplyBreak?: "text_end" | "message_end";
   blockReplyChunking?: BlockReplyChunking;
-  onReasoningStream?: (payload: {
-    text?: string;
-    mediaUrls?: string[];
-    isReasoningSnapshot?: boolean;
-  }) => void | Promise<void>;
+  onReasoningStream?: (payload: ReasoningStreamPayload) => void | Promise<void>;
+  streamReasoningInNonStreamModes?: boolean;
   onReasoningEnd?: () => void | Promise<void>;
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
   /** Synchronous private observer for the sanitized per-tool result. */

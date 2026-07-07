@@ -33,6 +33,7 @@ export async function buildNodeInstallPlan(params: {
   env: Record<string, string | undefined>;
   host: string;
   port: number;
+  contextPath?: string;
   tls?: boolean;
   tlsFingerprint?: string;
   nodeId?: string;
@@ -51,6 +52,7 @@ export async function buildNodeInstallPlan(params: {
   const { programArguments, workingDirectory } = await resolveNodeProgramArguments({
     host: params.host,
     port: params.port,
+    contextPath: params.contextPath,
     tls: params.tls,
     tlsFingerprint: params.tlsFingerprint,
     nodeId: params.nodeId,

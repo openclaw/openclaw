@@ -43,6 +43,15 @@ const NextcloudTalkWebhookPayloadSchema: z.ZodType<NextcloudTalkWebhookPayload> 
     name: z.string(),
   }),
 });
+const NextcloudTalkWebhookEnvelopeSchema = z.object({
+  type: z.string().min(1),
+  object: z
+    .object({
+      type: z.string().min(1).optional(),
+    })
+    .passthrough()
+    .optional(),
+});
 const WEBHOOK_ERRORS = {
   missingSignatureHeaders: "Missing signature headers",
   invalidBackend: "Invalid backend",
@@ -184,13 +193,21 @@ function decodeWebhookCreateMessage(params: {
   | { kind: "message"; message: NextcloudTalkInboundMessage }
   | { kind: "ignore" }
   | { kind: "invalid" } {
+  const envelope = safeParseJsonWithSchema(NextcloudTalkWebhookEnvelopeSchema, params.body);
+  if (!envelope) {
+    writeWebhookError(params.res, 400, WEBHOOK_ERRORS.invalidPayloadFormat);
+    return { kind: "invalid" };
+  }
+  if (envelope.type !== "Create") {
+    return { kind: "ignore" };
+  }
+  if (envelope.object?.type && envelope.object.type !== "Note") {
+    return { kind: "ignore" };
+  }
   const payload = parseWebhookPayload(params.body);
   if (!payload) {
     writeWebhookError(params.res, 400, WEBHOOK_ERRORS.invalidPayloadFormat);
     return { kind: "invalid" };
-  }
-  if (payload.type !== "Create") {
-    return { kind: "ignore" };
   }
   return { kind: "message", message: payloadToInboundMessage(payload) };
 }

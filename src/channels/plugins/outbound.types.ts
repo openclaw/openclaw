@@ -40,6 +40,12 @@ export type ChannelOutboundContext = {
   deps?: OutboundSendDeps;
   silent?: boolean;
   gatewayClientScopes?: readonly string[];
+  /** @internal Opaque durable intent id for exact provider-side send reconciliation. */
+  deliveryQueueId?: string;
+  /** @internal Refresh durable timing after provider serialization and before I/O. */
+  onPlatformSendDispatch?: () => Promise<void>;
+  /** @internal Report each completed platform sub-send before starting another fallible step. */
+  onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
 };
 
 export type ChannelOutboundPayloadContext = ChannelOutboundContext & {

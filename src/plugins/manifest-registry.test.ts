@@ -463,7 +463,7 @@ describe("loadPluginManifestRegistry", () => {
     writeManifest(dir, {
       id: "icon-demo",
       name: "Icon Demo",
-      icon: "https://cdn.simpleicons.org/simpleicons/111111",
+      icon: "https://cdn.simpleicons.org/simpleicons",
       configSchema: { type: "object" },
     });
 
@@ -475,7 +475,7 @@ describe("loadPluginManifestRegistry", () => {
       }),
     ]);
 
-    expect(registry.plugins[0]?.icon).toBe("https://cdn.simpleicons.org/simpleicons/111111");
+    expect(registry.plugins[0]?.icon).toBe("https://cdn.simpleicons.org/simpleicons");
   });
 
   it("keeps only the higher-precedence plugin for truly distinct duplicates", () => {
@@ -877,6 +877,7 @@ describe("loadPluginManifestRegistry", () => {
           choiceLabel: "OpenAI API key",
           assistantPriority: 10,
           assistantVisibility: "visible",
+          appGuidedSecret: true,
         },
       ],
       configSchema: { type: "object" },
@@ -944,6 +945,7 @@ describe("loadPluginManifestRegistry", () => {
         choiceLabel: "OpenAI API key",
         assistantPriority: 10,
         assistantVisibility: "visible",
+        appGuidedSecret: true,
       },
     ]);
   });
@@ -2024,13 +2026,14 @@ describe("loadPluginManifestRegistry", () => {
     });
   });
 
-  it("preserves external auth provider contracts from plugin manifests", () => {
+  it("preserves provider hook contracts from plugin manifests", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
       id: "acme-ai",
       providers: ["acme-ai"],
       contracts: {
         externalAuthProviders: ["acme-ai"],
+        usageProviders: ["acme-ai"],
       },
       configSchema: { type: "object" },
     });
@@ -2043,6 +2046,7 @@ describe("loadPluginManifestRegistry", () => {
 
     expect(registry.plugins[0]?.contracts).toEqual({
       externalAuthProviders: ["acme-ai"],
+      usageProviders: ["acme-ai"],
     });
   });
 
@@ -2073,16 +2077,19 @@ describe("loadPluginManifestRegistry", () => {
     const contracts = manifestRegistryTesting.mergeManifestContracts(
       {
         agentToolResultMiddleware: ["openclaw"],
+        usageProviders: ["openai"],
       },
       {
         agentToolResultMiddleware: ["codex"],
         trustedToolPolicies: ["workflow-budget"],
+        usageProviders: ["openrouter"],
       },
     );
 
     expect(contracts).toEqual({
       agentToolResultMiddleware: ["openclaw", "codex"],
       trustedToolPolicies: ["workflow-budget"],
+      usageProviders: ["openai", "openrouter"],
     });
   });
 

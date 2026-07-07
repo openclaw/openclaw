@@ -2,7 +2,7 @@
   "id": "line",
   "name": "LINE",
   "description": "OpenClaw LINE channel plugin for LINE Bot API chats.",
-  "icon": "https://cdn.simpleicons.org/line/111111",
+  "icon": "https://cdn.simpleicons.org/line",
   "activation": {
     "onStartup": false
   },

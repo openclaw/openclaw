@@ -607,13 +607,13 @@ describe("failover-error", () => {
     ).toBe("rate_limit");
   });
 
-  it("does not misclassify structured HTTP 400 context overflow payloads as format", () => {
+  it("classifies structured HTTP 400 context overflow payloads without using format", () => {
     expect(
       resolveFailoverReasonFromError({
         status: 400,
         message: "INVALID_ARGUMENT: input exceeds the maximum number of tokens",
       }),
-    ).toBeNull();
+    ).toBe("context_overflow");
   });
 
   it("keeps context overflow first-class in the shared signal classifier", () => {
@@ -1288,6 +1288,20 @@ describe("failover-error", () => {
       expect(isNonProviderRuntimeCoordinationError(wrappedTakeover)).toBe(true);
     });
 
+    it("returns true for Codex missing tool-result local execution failures", () => {
+      const missingToolResultMessage =
+        "OpenClaw recorded a native Codex tool.call without a matching tool.result before the turn completed.";
+      expect(isNonProviderRuntimeCoordinationError(new Error(missingToolResultMessage))).toBe(true);
+      expect(isNonProviderRuntimeCoordinationError({ reason: "missing_tool_result" })).toBe(true);
+      expect(
+        isNonProviderRuntimeCoordinationError({
+          message: "codex app-server turn failed",
+          cause: { result: { reason: "missing_tool_result" } },
+        }),
+      ).toBe(true);
+      expect(resolveFailoverReasonFromError(new Error(missingToolResultMessage))).toBeNull();
+    });
+
     it("returns false for plain timeouts and provider errors", () => {
       const timeoutErr = Object.assign(new Error("operation timed out"), { name: "TimeoutError" });
       expect(isNonProviderRuntimeCoordinationError(timeoutErr)).toBe(false);
@@ -1302,8 +1316,24 @@ describe("failover-error", () => {
           cause: makeSessionLockError(),
         }),
       ).toBe(false);
+      expect(
+        isNonProviderRuntimeCoordinationError({
+          status: 503,
+          message: "upstream overloaded",
+          cause: { result: { reason: "missing_tool_result" } },
+        }),
+      ).toBe(false);
       expect(isNonProviderRuntimeCoordinationError(null)).toBe(false);
       expect(isNonProviderRuntimeCoordinationError(undefined)).toBe(false);
+    });
+
+    it("does not suppress provider fallback for unrelated free text mentioning the marker", () => {
+      expect(isNonProviderRuntimeCoordinationError("reason=missing_tool_result")).toBe(false);
+      expect(
+        isNonProviderRuntimeCoordinationError(
+          new Error("provider returned diagnostic text: reason=missing_tool_result"),
+        ),
+      ).toBe(false);
     });
   });
 });
