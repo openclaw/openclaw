@@ -120,11 +120,14 @@ describe("loadWorkspace", () => {
     const host = {};
     const state = getDashboardState(host);
     const client = mockClient({
-      request: vi.fn(async () => ({ workspace: sampleDoc })) as never,
+      // Real gateway shape: dashboard.workspace.get returns { doc, workspaceVersion }.
+      request: vi.fn(async () => ({ doc: sampleDoc, workspaceVersion: 3 })) as never,
     });
     await loadWorkspace(state, client, { requestedSlug: "archive" });
     expect(state.loaded).toBe(true);
+    // The workspace actually populates (tabs present), not an empty fallback.
     expect(state.workspace?.workspaceVersion).toBe(3);
+    expect(state.workspace?.tabs).toHaveLength(2);
     expect(state.activeSlug).toBe("archive");
   });
 

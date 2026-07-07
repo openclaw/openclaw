@@ -353,7 +353,9 @@ export async function loadWorkspace(
   try {
     const payload = await client.request("dashboard.workspace.get", {});
     const workspace = normalizeWorkspace(
-      isRecord(payload) && "workspace" in payload ? payload.workspace : payload,
+      // dashboard.workspace.get responds { doc, workspaceVersion } — read `doc`
+      // (a bare payload is tolerated for forward-compat).
+      isRecord(payload) && "doc" in payload ? payload.doc : payload,
     );
     state.workspace = workspace;
     state.activeSlug = resolveActiveSlug(workspace, opts?.requestedSlug ?? state.activeSlug);
