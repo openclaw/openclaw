@@ -1597,6 +1597,8 @@ export const nl: TranslationMap = {
       splitDown: "Omlaag splitsen",
       closePane: "Deelvenster sluiten",
       sessionSelect: "Deelvenstersessie",
+      dropSplit: "Splitsen",
+      dropOpenHere: "Hier openen",
     },
     sidebar: {
       allSessions: "Alle sessies",

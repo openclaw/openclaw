@@ -74,14 +74,30 @@ import {
   releaseCodexSandboxExecServerEnvironment,
 } from "./sandbox-exec-server.js";
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
-import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
+import {
+  readCodexAppServerBinding,
+  registerCodexTestSessionIdentity,
+  testCodexAppServerBindingStore,
+  writeCodexAppServerBinding,
+} from "./session-binding.test-helpers.js";
 import * as sharedClientModule from "./shared-client.js";
 import { createCodexTestModel } from "./test-support.js";
 import {
   buildTurnStartParams,
   codexDynamicToolsFingerprint,
-  startOrResumeThread,
+  startOrResumeThread as startOrResumeThreadImpl,
 } from "./thread-lifecycle.js";
+
+function startOrResumeThread(
+  params: Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore">,
+) {
+  registerCodexTestSessionIdentity(
+    params.params.sessionFile,
+    params.params.sessionId,
+    params.params.sessionKey,
+  );
+  return startOrResumeThreadImpl({ ...params, bindingStore: testCodexAppServerBindingStore });
+}
 
 function flushDiagnosticEvents() {
   return waitForDiagnosticEventsDrained();
@@ -138,6 +154,7 @@ async function writeExistingBinding(
     cwd: workspaceDir,
     model: "gpt-5.4-codex",
     modelProvider: "openai",
+    historyCoveredThrough: new Date().toISOString(),
     webSearchThreadConfigFingerprint: DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,
     ...overrides,
   });
@@ -1632,6 +1649,27 @@ describe("runCodexAppServerAttempt", () => {
     expect(sessionsYield).not.toHaveProperty("deferLoading");
   });
 
+  it("registers the ring-zero crestodian tool directly without a per-run plugin config", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    expect(testing.resolveCodexDynamicToolDirectNames(params)).toEqual([]);
+
+    params.crestodianTool = { surface: "cli", proposalRef: {}, directiveRef: {} };
+    expect(testing.resolveCodexDynamicToolDirectNames(params)).toEqual(["crestodian"]);
+
+    params.sourceReplyDeliveryMode = "message_tool_only";
+    expect(testing.resolveCodexDynamicToolDirectNames(params)).toEqual(["crestodian", "message"]);
+
+    const toolBridge = createCodexToolBridgeForTest(params, [
+      createRuntimeDynamicTool("crestodian"),
+    ]);
+    const crestodian = flattenSpecsWithNamespace(toolBridge.specs).find(
+      (tool) => tool.name === "crestodian",
+    );
+    expect(crestodian).not.toHaveProperty("namespace");
+    expect(crestodian).not.toHaveProperty("deferLoading");
+  });
+
   it("keeps the heartbeat schema deferred and stable across normal and heartbeat turns", async () => {
     testing.setOpenClawCodingToolsFactoryForTests((options) => [
       createRuntimeDynamicTool("message"),
@@ -2346,7 +2384,7 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
     const binding = await readCodexAppServerBinding(sessionFile);
-    const bindingUpdatedAt = Date.parse(binding?.updatedAt ?? "");
+    const bindingUpdatedAt = Date.parse(binding?.historyCoveredThrough ?? "");
     if (!Number.isFinite(bindingUpdatedAt)) {
       throw new Error("expected valid Codex binding timestamp");
     }
@@ -2490,7 +2528,7 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
     const binding = await readCodexAppServerBinding(sessionFile);
-    const bindingUpdatedAt = Date.parse(binding?.updatedAt ?? "");
+    const bindingUpdatedAt = Date.parse(binding?.historyCoveredThrough ?? "");
     if (!Number.isFinite(bindingUpdatedAt)) {
       throw new Error("expected valid Codex binding timestamp");
     }
@@ -2539,7 +2577,7 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
     const binding = await readCodexAppServerBinding(sessionFile);
-    const bindingUpdatedAt = Date.parse(binding?.updatedAt ?? "");
+    const bindingUpdatedAt = Date.parse(binding?.historyCoveredThrough ?? "");
     if (!Number.isFinite(bindingUpdatedAt)) {
       throw new Error("expected valid Codex binding timestamp");
     }
@@ -2586,13 +2624,14 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
     const originalBindingUpdatedAt = Date.now() - 60_000;
-    const bindingPath = `${sessionFile}.codex-app-server.json`;
-    const bindingPayload = JSON.parse(await fs.readFile(bindingPath, "utf8")) as Record<
-      string,
-      unknown
-    >;
-    bindingPayload.updatedAt = new Date(originalBindingUpdatedAt).toISOString();
-    await fs.writeFile(bindingPath, `${JSON.stringify(bindingPayload, null, 2)}\n`);
+    const originalBinding = await readCodexAppServerBinding(sessionFile);
+    if (!originalBinding) {
+      throw new Error("expected Codex binding");
+    }
+    await writeCodexAppServerBinding(sessionFile, {
+      ...originalBinding,
+      historyCoveredThrough: new Date(originalBindingUpdatedAt).toISOString(),
+    });
     const sessionManager = SessionManager.open(sessionFile);
     const firstHarness = createResumeHarness();
     const firstRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
@@ -2601,7 +2640,9 @@ describe("runCodexAppServerAttempt", () => {
     await firstHarness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
     await firstRun;
     const completedBinding = await readCodexAppServerBinding(sessionFile);
-    expect(Date.parse(completedBinding?.updatedAt ?? "")).toBeGreaterThan(originalBindingUpdatedAt);
+    expect(Date.parse(completedBinding?.historyCoveredThrough ?? "")).toBeGreaterThan(
+      originalBindingUpdatedAt,
+    );
 
     const secondHarness = createResumeHarness();
     const secondParams = createParams(sessionFile, workspaceDir);
@@ -2625,13 +2666,14 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
     const oldBindingUpdatedAt = Date.now() - 60_000;
-    const bindingPath = `${sessionFile}.codex-app-server.json`;
-    const bindingPayload = JSON.parse(await fs.readFile(bindingPath, "utf8")) as Record<
-      string,
-      unknown
-    >;
-    bindingPayload.updatedAt = new Date(oldBindingUpdatedAt).toISOString();
-    await fs.writeFile(bindingPath, `${JSON.stringify(bindingPayload, null, 2)}\n`);
+    const oldBinding = await readCodexAppServerBinding(sessionFile);
+    if (!oldBinding) {
+      throw new Error("expected Codex binding");
+    }
+    await writeCodexAppServerBinding(sessionFile, {
+      ...oldBinding,
+      historyCoveredThrough: new Date(oldBindingUpdatedAt).toISOString(),
+    });
     const sessionManager = SessionManager.open(sessionFile);
     sessionManager.appendMessage(
       userMessage("we were discussing the Sonnet leak screenshots", oldBindingUpdatedAt + 1_000),
@@ -5006,7 +5048,6 @@ describe("runCodexAppServerAttempt", () => {
       approvalPolicy: "never",
       approvalsReviewer: "user",
       sandbox: "danger-full-access",
-      persistExtendedHistory: true,
     });
     const resumeRequest = requests.find((request) => request.method === "thread/resume");
     const resumeRequestParams = resumeRequest?.params as Record<string, unknown> | undefined;
@@ -5123,7 +5164,7 @@ describe("runCodexAppServerAttempt", () => {
     const agentDir = path.join(tempDir, "agent");
     await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
     const binding = await readCodexAppServerBinding(sessionFile);
-    const bindingUpdatedAt = Date.parse(binding?.updatedAt ?? "");
+    const bindingUpdatedAt = Date.parse(binding?.historyCoveredThrough ?? "");
     if (!Number.isFinite(bindingUpdatedAt)) {
       throw new Error("expected valid Codex binding timestamp");
     }
@@ -5553,7 +5594,6 @@ describe("runCodexAppServerAttempt", () => {
       approvalsReviewer: "guardian_subagent",
       sandbox: "danger-full-access",
       serviceTier: "priority",
-      persistExtendedHistory: true,
     });
     const resumeRequest = requests.find((request) => request.method === "thread/resume");
     const resumeRequestParams = resumeRequest?.params as Record<string, unknown> | undefined;

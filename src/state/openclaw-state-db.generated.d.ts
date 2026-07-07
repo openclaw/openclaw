@@ -799,6 +799,25 @@ export interface SchemaMeta {
   updated_at: number;
 }
 
+export interface SkillCuratorState {
+  id: Generated<number>;
+  last_attempt_at_ms: number;
+  last_error: string | null;
+  last_result_json: string;
+  last_success_at_ms: number | null;
+}
+
+export interface SkillLifecycle {
+  archived_reason: string | null;
+  created_at_ms: number;
+  pinned: Generated<number>;
+  skill_file: string;
+  skill_key: string;
+  skill_name: string;
+  state: string;
+  state_changed_at_ms: number;
+}
+
 export interface SkillUploads {
   actual_sha256: string | null;
   archive_blob: Uint8Array;
@@ -814,6 +833,17 @@ export interface SkillUploads {
   size_bytes: number;
   slug: string;
   upload_id: string;
+}
+
+export interface SkillUsage {
+  first_used_at_ms: number;
+  last_agent_id: string | null;
+  last_used_at_ms: number;
+  skill_file: string;
+  skill_key: string;
+  skill_name: string;
+  skill_source: string;
+  use_count: number;
 }
 
 export interface StateLeases {
@@ -1058,7 +1088,10 @@ export interface DB {
   plugin_state_entries: PluginStateEntries;
   sandbox_registry_entries: SandboxRegistryEntries;
   schema_meta: SchemaMeta;
+  skill_curator_state: SkillCuratorState;
+  skill_lifecycle: SkillLifecycle;
   skill_uploads: SkillUploads;
+  skill_usage: SkillUsage;
   state_leases: StateLeases;
   subagent_runs: SubagentRuns;
   task_delivery_state: TaskDeliveryState;

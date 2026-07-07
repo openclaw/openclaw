@@ -39,9 +39,8 @@ import {
 import { testing } from "./run-attempt.js";
 import {
   readCodexAppServerBinding,
-  resolveCodexAppServerBindingPath,
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
-} from "./session-binding.js";
+} from "./session-binding.test-helpers.js";
 
 setupRunAttemptTestHooks();
 
@@ -308,7 +307,6 @@ describe("runCodexAppServerAttempt turn watches", () => {
       path.join(tempDir, "workspace"),
     );
     params.timeoutMs = 200;
-    const bindingPath = resolveCodexAppServerBindingPath(params.sessionFile);
 
     const run = runCodexAppServerAttempt(params, {
       pluginConfig: { appServer: { turnCompletionIdleTimeoutMs: 5 } },
@@ -355,7 +353,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
         ),
       { interval: 1 },
     );
-    await expect(fs.stat(bindingPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readCodexAppServerBinding(params.sessionFile)).resolves.toBeUndefined();
     expect(queueActiveRunMessageForTest("session-1", "after timeout")).toBe(false);
   });
 

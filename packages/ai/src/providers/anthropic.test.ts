@@ -861,6 +861,65 @@ describe("Anthropic provider", () => {
   });
 
   it.each([
+    ["empty", ""],
+    ["whitespace-only", " \n\t "],
+    ["invalid-surrogate-only", String.fromCharCode(0xd83d)],
+  ])("replaces %s error tool results with non-empty content", async (_label, text) => {
+    let capturedPayload: unknown;
+    const stream = streamAnthropic(
+      makeAnthropicModel({ provider: "github-copilot" }),
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "github-copilot",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "toolUse",
+            timestamp: 0,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            content: [{ type: "toolCall", id: "call_1", name: "lookup", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "lookup",
+            content: [{ type: "text", text }],
+            isError: true,
+            timestamp: 0,
+          },
+        ],
+      },
+      {
+        apiKey: "copilot-token",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    await stream.result();
+
+    const payload = capturedPayload as {
+      messages: Array<{ role: string; content: Array<Record<string, unknown>> }>;
+    };
+    const userMessage = payload.messages.find((message) => message.role === "user");
+    const toolResult = userMessage?.content.find((entry) => entry.type === "tool_result");
+    expect(toolResult).toMatchObject({
+      content: "[tool error with no output]",
+      is_error: true,
+    });
+  });
+
+  it.each([
     ["claude-fable-5", "Claude Fable 5", "anthropic", "sk-ant-provider"],
     ["claude-mythos-5", "Claude Mythos 5", "anthropic", "sk-ant-provider"],
     ["claude-mythos-5", "Claude Mythos 5", "anthropic-vertex", "vertex-token"],
@@ -1983,6 +2042,44 @@ describe("Anthropic provider", () => {
         text: "Dynamic suffix",
       },
     ]);
+  });
+
+  it("anchors the message cache breakpoint on the last stable user turn, skipping a trailing runtime-context carrier", async () => {
+    let capturedPayload: unknown;
+    const stream = streamSimpleAnthropic(
+      makeAnthropicModel(),
+      {
+        systemPrompt: "system",
+        messages: [
+          { role: "user", content: "stable question", timestamp: 0 },
+          {
+            role: "user",
+            content: "volatile current-turn metadata",
+            timestamp: 1,
+            runtimeContextCarrier: true,
+          },
+        ],
+      },
+      {
+        apiKey: "sk-ant-provider",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    const messages = (capturedPayload as { messages: { content: unknown }[] }).messages;
+    // Deepest breakpoint anchors on the stable user turn (converted to a block
+    // array with cache_control) so it stays a cacheable prefix next turn...
+    expect(messages[0]?.content).toEqual([
+      { type: "text", text: "stable question", cache_control: { type: "ephemeral" } },
+    ]);
+    // ...and NOT on the trailing volatile carrier, which is left uncached.
+    expect(messages[1]?.content).toBe("volatile current-turn metadata");
   });
 
   it("emits start event only after message_start so pre-stream SSE errors arrive before any non-error event", async () => {

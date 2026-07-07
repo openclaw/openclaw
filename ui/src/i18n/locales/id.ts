@@ -1592,6 +1592,8 @@ export const id: TranslationMap = {
       splitDown: "Bagi ke bawah",
       closePane: "Tutup panel",
       sessionSelect: "Sesi panel",
+      dropSplit: "Bagi",
+      dropOpenHere: "Buka di sini",
     },
     sidebar: {
       allSessions: "Semua sesi",
