@@ -224,7 +224,9 @@ export async function clearRestartSentinel(env: NodeJS.ProcessEnv = process.env)
       },
       { env },
     );
-  } catch {}
+  } catch (err) {
+    console.error("[openclaw] Failed to clear restart sentinel:", err);
+  }
   await removeLegacyRestartSentinel(env);
 }
 
@@ -235,7 +237,9 @@ function resolveLegacyRestartSentinelPath(env: NodeJS.ProcessEnv): string {
 async function removeLegacyRestartSentinel(env: NodeJS.ProcessEnv): Promise<void> {
   try {
     await rm(resolveLegacyRestartSentinelPath(env), { force: true });
-  } catch {}
+  } catch (err) {
+    console.error("[openclaw] Failed to remove legacy restart sentinel:", err);
+  }
 }
 
 async function importLegacyRestartSentinel(
