@@ -154,7 +154,7 @@ for compatibility.
 For operator setup, model prefix examples, and Codex-only configs, see
 [Codex Harness](/plugins/codex-harness).
 
-OpenClaw requires Codex app-server `0.125.0` or newer. The Codex plugin checks
+OpenClaw requires Codex app-server `0.142.0` or newer. The Codex plugin checks
 the app-server initialize handshake and blocks older or unversioned servers,
 so OpenClaw only runs against the protocol surface it has tested.
 

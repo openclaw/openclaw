@@ -152,10 +152,12 @@ function isBrowserProxyTimeoutError(err: unknown): boolean {
 function isWsBackedBrowserProxyPath(path: string): boolean {
   return (
     path === "/act" ||
+    path === "/download" ||
     path === "/navigate" ||
     path === "/pdf" ||
     path === "/screenshot" ||
-    path === "/snapshot"
+    path === "/snapshot" ||
+    path === "/wait/download"
   );
 }
 
