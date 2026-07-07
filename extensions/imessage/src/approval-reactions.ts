@@ -233,7 +233,7 @@ const imessageApprovalReactionTargets =
     readPersistedTarget,
   });
 
-export function listIMessageApprovalReactionBindings(
+function listIMessageApprovalReactionBindings(
   allowedDecisions: readonly ExecApprovalReplyDecision[],
 ): IMessageApprovalReactionBinding[] {
   return listApprovalReactionBindings({ allowedDecisions });
