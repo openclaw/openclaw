@@ -8,7 +8,7 @@ import { isOpenClawDeliveryMirrorAssistantMessage } from "../../../shared/transc
 
 // Session transcripts are JSONL files; a generous cap prevents a runaway file
 // from OOMing the memory-extraction path while covering normal session sizes.
-const SESSION_TRANSCRIPT_MAX_BYTES = 16 * 1024 * 1024;
+export const SESSION_TRANSCRIPT_MAX_BYTES = 16 * 1024 * 1024;
 
 const SESSION_MEMORY_TOOL_DIRECTIVE_PREFIX = String.raw`(?:(?:\|DSML\|)|(?:\uFF5CDSML\uFF5C))?`;
 const SESSION_MEMORY_TOOL_DIRECTIVE_KIND = String.raw`(?:tool_calls?|function_calls?|tool_use_error)`;
@@ -68,11 +68,15 @@ async function readBoundedTranscriptContent(sessionFilePath: string): Promise<st
   const lines: string[] = [];
   let bytesRead = 0;
   for await (const line of streamSessionTranscriptLinesReverse(sessionFilePath)) {
-    lines.push(line);
-    bytesRead += Buffer.byteLength(line, "utf-8") + 1;
-    if (bytesRead >= SESSION_TRANSCRIPT_MAX_BYTES) {
+    const lineBytes = Buffer.byteLength(line, "utf-8") + 1;
+    // Stop before retaining a line that would cross the cap. Recent messages are
+    // yielded first, so this keeps the trailing context without buffering an
+    // oversized early record.
+    if (bytesRead + lineBytes > SESSION_TRANSCRIPT_MAX_BYTES) {
       break;
     }
+    lines.push(line);
+    bytesRead += lineBytes;
   }
   if (lines.length === 0) {
     return null;

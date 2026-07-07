@@ -3,7 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { getRecentSessionContent, sanitizeSessionMemoryTranscriptText } from "./transcript.js";
+import {
+  getRecentSessionContent,
+  sanitizeSessionMemoryTranscriptText,
+  SESSION_TRANSCRIPT_MAX_BYTES,
+} from "./transcript.js";
 
 const tempRoots: string[] = [];
 
@@ -95,5 +99,7 @@ describe("session-memory transcript extraction", () => {
 
     expect(memoryContent).toContain("user: recent user message");
     expect(memoryContent).toContain("assistant: recent assistant message");
+    expect(memoryContent).not.toContain("x".repeat(100));
+    expect(memoryContent?.length).toBeLessThan(SESSION_TRANSCRIPT_MAX_BYTES);
   });
 });
