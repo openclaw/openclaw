@@ -62,6 +62,23 @@ describe("release-check", () => {
     }
   });
 
+  it("preserves the no-env local release check path", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-install-test-"));
+    try {
+      writePackedTarballInstallManifest(root, "/tmp/openclaw.tgz", []);
+      const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
+        dependencies?: Record<string, string>;
+        private?: boolean;
+      };
+      expect(manifest.private).toBe(true);
+      expect(manifest.dependencies).toEqual({
+        openclaw: "file:///tmp/openclaw.tgz",
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects missing, empty, or ambiguous local dependency tarball directories", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-tarball-test-"));
     try {

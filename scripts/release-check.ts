@@ -51,6 +51,7 @@ import {
   collectInstalledPackageErrors,
   normalizeInstalledBinaryVersion,
 } from "./openclaw-npm-postpublish-verify.ts";
+import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 import { listStaticExtensionAssetOutputs } from "./runtime-postbuild.mjs";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
@@ -363,6 +364,19 @@ function execNpm(
   return runReleaseCheckCommand(invocation, options);
 }
 
+function execPnpm(
+  args: string[],
+  options: {
+    cwd?: string;
+    encoding: BufferEncoding;
+    maxBuffer?: number;
+    stdio: "inherit" | ["ignore", "pipe", "pipe"];
+  },
+): string {
+  const invocation = resolvePnpmRunner({ env: process.env, pnpmArgs: args });
+  return runReleaseCheckCommand(invocation, options);
+}
+
 function runPackDry(): PackResult[] {
   const raw = execNpm(["pack", "--dry-run", "--json", "--ignore-scripts"], {
     encoding: "utf8",
@@ -373,15 +387,16 @@ function runPackDry(): PackResult[] {
 }
 
 function runPack(packDestination: string): PackResult[] {
-  const raw = execNpm(
-    ["pack", "--json", "--ignore-scripts", "--pack-destination", packDestination],
+  const raw = execPnpm(
+    ["--config.ignore-scripts=true", "pack", "--json", "--pack-destination", packDestination],
     {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       maxBuffer: 1024 * 1024 * 100,
     },
   );
-  return JSON.parse(raw) as PackResult[];
+  const parsed = JSON.parse(raw) as PackResult | PackResult[];
+  return Array.isArray(parsed) ? parsed : [parsed];
 }
 
 export function resolvePackedTarballPath(packDestination: string, results: PackResult[]): string {
@@ -440,10 +455,16 @@ export function writePackedTarballInstallManifest(
   tarballPath: string,
   localPackageTarballs: string[],
 ): void {
-  if (localPackageTarballs.length !== 1) {
+  if (localPackageTarballs.length > 1) {
     throw new Error(
-      `release-check: packed install requires exactly one @openclaw/ai tarball; found ${localPackageTarballs.length}.`,
+      `release-check: packed install accepts at most one @openclaw/ai tarball; found ${localPackageTarballs.length}.`,
     );
+  }
+  const dependencies: Record<string, string> = {
+    openclaw: pathToFileURL(tarballPath).href,
+  };
+  if (localPackageTarballs[0]) {
+    dependencies["@openclaw/ai"] = pathToFileURL(localPackageTarballs[0]).href;
   }
   mkdirSync(prefixDir, { recursive: true });
   writeFileSync(
@@ -451,10 +472,7 @@ export function writePackedTarballInstallManifest(
     `${JSON.stringify(
       {
         private: true,
-        dependencies: {
-          "@openclaw/ai": pathToFileURL(localPackageTarballs[0]).href,
-          openclaw: pathToFileURL(tarballPath).href,
-        },
+        dependencies,
       },
       null,
       2,
