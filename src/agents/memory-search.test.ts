@@ -321,6 +321,42 @@ describe("memory search config", () => {
     expectDefaultRemoteBatch(resolved);
   });
 
+  it("resolves openai provider with api:ollama through generic resolution and routes create() to the correct adapter", async () => {
+    // When the "openai" provider has an explicit api field pointing to a
+    // different adapter, generic resolution should route to that adapter
+    // instead of short-circuiting on the direct "openai" match.
+    registerMemoryEmbeddingProvider({
+      id: "ollama",
+      defaultModel: "nomic-embed-text",
+      transport: "remote",
+      create: async () => ({ provider: null }),
+    });
+    const cfg = asConfig({
+      models: {
+        providers: {
+          openai: {
+            api: "ollama",
+            baseUrl: "http://127.0.0.1:11434/v1",
+            models: [],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+          },
+        },
+      },
+    });
+
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    // Config-level: model should come from ollama adapter, not openai
+    expect(resolved?.provider).toBe("openai");
+    expect(resolved?.model).toBe("nomic-embed-text");
+    expectDefaultRemoteBatch(resolved);
+  });
+
   it("resolves sync config without consulting embedding providers", () => {
     clearMemoryEmbeddingProviders();
     const cfg = asConfig({

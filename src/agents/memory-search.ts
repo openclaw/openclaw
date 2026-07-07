@@ -20,6 +20,7 @@ import {
   normalizeMemoryMultimodalSettings,
   type MemoryMultimodalSettings,
 } from "../memory-host-sdk/multimodal.js";
+import { resolveConfiguredGenericEmbeddingProviderId } from "../plugins/embedding-provider-config.js";
 import { getEmbeddingProvider } from "../plugins/embedding-provider-runtime.js";
 import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
@@ -192,6 +193,19 @@ function getConfiguredMemoryEmbeddingProvider(
   }
   const directAdapter = getMemoryEmbeddingProvider(providerId);
   if (directAdapter) {
+    // When a legacy memory adapter exists but the provider config carries a
+    // custom baseUrl or api override, prefer the generic adapter that honours
+    // those settings so custom endpoints are correctly resolved.
+    const providerConfig = findNormalizedProviderValue(cfg.models?.providers, providerId);
+    if (providerConfig?.baseUrl?.trim() || providerConfig?.api?.trim()) {
+      const resolvedId = resolveConfiguredGenericEmbeddingProviderId(providerId, cfg);
+      if (resolvedId && resolvedId !== normalizeProviderId(providerId)) {
+        const resolvedAdapter = getMemoryEmbeddingProvider(resolvedId);
+        if (resolvedAdapter) {
+          return resolvedAdapter;
+        }
+      }
+    }
     return directAdapter;
   }
   const genericAdapter = getEmbeddingProvider(providerId, cfg);
