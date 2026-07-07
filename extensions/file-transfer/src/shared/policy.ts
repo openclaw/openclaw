@@ -54,7 +54,7 @@ import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 export type FilePolicyKind = "read" | "write";
 export type FilePolicyAskMode = "off" | "on-miss" | "always";
 
-export type FilePolicyDecision =
+type FilePolicyDecision =
   | { ok: true; reason: "matched-allow"; maxBytes?: number; followSymlinks: boolean }
   | {
       ok: true;

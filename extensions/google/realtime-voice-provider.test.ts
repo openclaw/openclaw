@@ -592,22 +592,56 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(lastConnectParams().config).not.toHaveProperty("sessionResumption");
   });
 
-  it("captures Google Live resumption handles and reuses them on reconnect", async () => {
+  it("preserves transcript fragments while reusing a resumption handle", async () => {
     const provider = buildGoogleRealtimeVoiceProvider();
+    const onTranscript = vi.fn();
     const bridge = provider.createBridge({
       providerConfig: { apiKey: "gemini-key" },
       onAudio: vi.fn(),
       onClearAudio: vi.fn(),
+      onTranscript,
     });
 
     await bridge.connect();
     lastConnectParams().callbacks.onmessage({
       sessionResumptionUpdate: { resumable: true, newHandle: "resume-1" },
+      serverContent: { inputTranscription: { text: "Before " } },
     });
 
     await bridge.connect();
+    lastConnectParams().callbacks.onmessage({
+      serverContent: { inputTranscription: { text: "after", finished: true } },
+    });
 
     expect(lastConnectParams().config.sessionResumption).toEqual({ handle: "resume-1" });
+    expect(onTranscript.mock.calls.filter((call) => call[2] === true)).toEqual([
+      ["user", "Before after", true],
+    ]);
+  });
+
+  it("drops unfinished hypotheses when a new session has no continuity", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onTranscript = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key", sessionResumption: false },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onTranscript,
+    });
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onmessage({
+      serverContent: { inputTranscription: { text: "Old fragment " } },
+    });
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onmessage({
+      serverContent: { inputTranscription: { text: "New turn", finished: true } },
+    });
+
+    expect(onTranscript.mock.calls.filter((call) => call[2] === true)).toEqual([
+      ["user", "New turn", true],
+    ]);
   });
 
   it("reconnects unexpected Google Live closes with the latest resumption handle", async () => {
@@ -629,6 +663,9 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
         setupComplete: { sessionId: "session-1" },
         sessionResumptionUpdate: { resumable: true, newHandle: "resume-1" },
       });
+      lastConnectParams().callbacks.onmessage({
+        sessionResumptionUpdate: { resumable: false },
+      });
       lastConnectParams().callbacks.onclose({
         code: 1011,
         reason: "temporary upstream close",
@@ -646,6 +683,106 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("does not finalize or merge a hypothesis across a fresh automatic reconnect", async () => {
+    vi.useFakeTimers();
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onTranscript = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onTranscript,
+    });
+
+    await bridge.connect();
+    const firstSession = lastConnectParams().callbacks;
+    firstSession.onmessage({
+      setupComplete: {},
+      serverContent: { inputTranscription: { text: "Interrupted hypothesis" } },
+    });
+    firstSession.onclose({ code: 1011, reason: "temporary" });
+
+    expect(onTranscript.mock.calls.filter((call) => call[2] === true)).toEqual([]);
+    await vi.advanceTimersByTimeAsync(250);
+    lastConnectParams().callbacks.onmessage({
+      setupComplete: {},
+      serverContent: { inputTranscription: { text: "New utterance", finished: true } },
+    });
+
+    expect(onTranscript.mock.calls.filter((call) => call[2] === true)).toEqual([
+      ["user", "New utterance", true],
+    ]);
+  });
+
+  it("keeps transcript fragments pending across a resumable reconnect", async () => {
+    vi.useFakeTimers();
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onTranscript = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onTranscript,
+    });
+
+    await bridge.connect();
+    const firstSession = lastConnectParams().callbacks;
+    firstSession.onmessage({
+      setupComplete: {},
+      sessionResumptionUpdate: { resumable: true, newHandle: "resume-1" },
+      serverContent: {
+        outputTranscription: { text: "Before " },
+        turnComplete: true,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(500);
+    firstSession.onclose({ code: 1011, reason: "temporary" });
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(onTranscript.mock.calls).toEqual([["assistant", "Before ", false]]);
+
+    lastConnectParams().callbacks.onmessage({
+      setupComplete: {},
+      serverContent: { outputTranscription: { text: "after", finished: true } },
+    });
+    expect(onTranscript.mock.calls.at(-1)).toEqual(["assistant", "Before after", true]);
+  });
+
+  it("flushes pending transcripts before closing after reconnect failures", async () => {
+    vi.useFakeTimers();
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onClose = vi.fn();
+    const onTranscript = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onClose,
+      onTranscript,
+    });
+
+    await bridge.connect();
+    const firstSession = lastConnectParams().callbacks;
+    firstSession.onmessage({
+      setupComplete: {},
+      sessionResumptionUpdate: { resumable: true, newHandle: "resume-1" },
+      serverContent: { inputTranscription: { text: "Last words" } },
+    });
+    connectMock
+      .mockRejectedValueOnce(new Error("connect failed 1"))
+      .mockRejectedValueOnce(new Error("connect failed 2"))
+      .mockRejectedValueOnce(new Error("connect failed 3"));
+    firstSession.onclose({ code: 1011, reason: "temporary" });
+
+    await vi.advanceTimersByTimeAsync(1_750);
+
+    expect(onTranscript.mock.calls.at(-1)).toEqual(["user", "Last words", true]);
+    expect(onClose).toHaveBeenCalledWith("error");
+    expect(onTranscript.mock.invocationCallOrder.at(-1)).toBeLessThan(
+      onClose.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
+    );
   });
 
   it("waits for setup completion before draining audio and firing ready", async () => {
@@ -855,7 +992,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(requireFirstAudio(onAudio)).toEqual(pcm24k);
   });
 
-  it("does not forward Google thought text as assistant transcript", async () => {
+  it("uses official output transcription instead of model-turn text", async () => {
     const provider = buildGoogleRealtimeVoiceProvider();
     const onTranscript = vi.fn();
     const bridge = provider.createBridge({
@@ -870,12 +1007,141 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       setupComplete: {},
       serverContent: {
         modelTurn: {
-          parts: [{ text: "internal reasoning", thought: true }],
+          parts: [
+            { text: "internal reasoning", thought: true },
+            { text: "uncorrelated model text" },
+          ],
         },
       },
     });
 
     expect(onTranscript).not.toHaveBeenCalled();
+  });
+
+  it("emits one complete transcript after Google marks a transcription finished", async () => {
+    vi.useFakeTimers();
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onTranscript = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onTranscript,
+    });
+
+    await bridge.connect();
+    const onmessage = lastConnectParams().callbacks.onmessage;
+    onmessage({ serverContent: { outputTranscription: { text: "Hi, " } } });
+    onmessage({
+      serverContent: { outputTranscription: { text: "how can I help?", finished: true } },
+    });
+    onmessage({ serverContent: { modelTurn: { parts: [{ text: "ignored fallback" }] } } });
+    onmessage({ serverContent: { turnComplete: true } });
+
+    expect(onTranscript.mock.calls).toEqual([
+      ["assistant", "Hi, ", false],
+      ["assistant", "how can I help?", false],
+      ["assistant", "Hi, how can I help?", true],
+    ]);
+  });
+
+  it("honors a finish-only transcription message", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onTranscript = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onTranscript,
+    });
+
+    await bridge.connect();
+    const onmessage = lastConnectParams().callbacks.onmessage;
+    onmessage({ serverContent: { inputTranscription: { text: "Last words" } } });
+    onmessage({ serverContent: { inputTranscription: { finished: true } } });
+
+    expect(onTranscript.mock.calls).toEqual([
+      ["user", "Last words", false],
+      ["user", "Last words", true],
+    ]);
+  });
+
+  it("retains unordered transcript chunks until a protocol terminal or close", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onTranscript = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onTranscript,
+    });
+
+    await bridge.connect();
+    const onmessage = lastConnectParams().callbacks.onmessage;
+    onmessage({ serverContent: { inputTranscription: { text: "Earlier question. " } } });
+    onmessage({ serverContent: { outputTranscription: { text: "Interrupted response " } } });
+    onmessage({ serverContent: { interrupted: true } });
+    onmessage({ serverContent: { turnComplete: true } });
+    onmessage({
+      serverContent: {
+        inputTranscription: { text: "New question" },
+        outputTranscription: { text: "ending" },
+        turnComplete: true,
+      },
+    });
+
+    expect(onTranscript.mock.calls.filter((call) => call[2] === true)).toEqual([]);
+
+    bridge.close();
+    expect(onTranscript.mock.calls.filter((call) => call[2] === true)).toEqual([
+      ["user", "Earlier question. New question", true],
+      ["assistant", "Interrupted response ending", true],
+    ]);
+  });
+
+  it("flushes pending transcripts when the bridge closes", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onTranscript = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onTranscript,
+    });
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onmessage({
+      serverContent: { inputTranscription: { text: "Last words" } },
+    });
+    bridge.close();
+
+    expect(onTranscript.mock.calls.at(-1)).toEqual(["user", "Last words", true]);
+  });
+
+  it("closes the Live session when the final transcript callback throws", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const callbackError = new Error("transcript persistence failed");
+    const onError = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onError,
+      onTranscript: vi.fn((_role, _text, isFinal) => {
+        if (isFinal) {
+          throw callbackError;
+        }
+      }),
+    });
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onmessage({
+      serverContent: { inputTranscription: { text: "Last words" } },
+    });
+
+    expect(() => bridge.close()).not.toThrow();
+    expect(onError).toHaveBeenCalledWith(callbackError);
+    expect(session.close).toHaveBeenCalledTimes(1);
   });
 
   it("reports provider-confirmed input interruption as barge-in", async () => {
