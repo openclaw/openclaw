@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockServerResponse } from "../test-utils/mock-http-response.js";
 import {
   installRequestBodyLimitGuard,
+  readResponsePrefix,
   RequestBodyLimitError,
   type RequestBodyLimitErrorCode,
   readJsonBodyWithLimit,
@@ -289,5 +290,109 @@ describe("http body limits", () => {
       message: "RequestBodyConnectionClosed",
       statusCode: 400,
     });
+  });
+});
+
+function noReaderResponse(bodyBytes: Uint8Array, opts?: { contentLength?: string }): Response {
+  return {
+    body: {} as ReadableStream,
+    headers: {
+      get: (name: string) => (name === "content-length" ? (opts?.contentLength ?? null) : null),
+    },
+    arrayBuffer: async () => bodyBytes.buffer,
+  } as unknown as Response;
+}
+
+describe("readResponsePrefix", () => {
+  it("returns empty buffer immediately when body is null", async () => {
+    let arrayBufferCalled = false;
+    const response = {
+      body: null,
+      arrayBuffer: async () => {
+        arrayBufferCalled = true;
+        return new ArrayBuffer(0);
+      },
+    } as unknown as Response;
+    const result = await readResponsePrefix(response, 1024);
+    expect(result.buffer.length).toBe(0);
+    expect(result.size).toBe(0);
+    expect(result.truncated).toBe(false);
+    expect(arrayBufferCalled).toBe(false);
+  });
+
+  it("throws when Content-Length is missing on no-reader response", async () => {
+    let arrayBufferCalled = false;
+    const response = {
+      body: {} as ReadableStream,
+      arrayBuffer: async () => {
+        arrayBufferCalled = true;
+        return new ArrayBuffer(0);
+      },
+    } as unknown as Response;
+    await expect(readResponsePrefix(response, 100)).rejects.toThrow("Content-Length is missing");
+    expect(arrayBufferCalled).toBe(false);
+  });
+
+  it("throws when Content-Length is invalid on no-reader response", async () => {
+    let arrayBufferCalled = false;
+    const response = {
+      body: {} as ReadableStream,
+      headers: { get: () => "not-a-number" },
+      arrayBuffer: async () => {
+        arrayBufferCalled = true;
+        return new ArrayBuffer(0);
+      },
+    } as unknown as Response;
+    await expect(readResponsePrefix(response, 100)).rejects.toThrow("Content-Length is invalid");
+    expect(arrayBufferCalled).toBe(false);
+  });
+
+  it("skips arrayBuffer when Content-Length exceeds maxBytes", async () => {
+    let arrayBufferCalled = false;
+    const response = {
+      body: {} as ReadableStream,
+      headers: { get: () => "1000" },
+      arrayBuffer: async () => {
+        arrayBufferCalled = true;
+        return new ArrayBuffer(0);
+      },
+    } as unknown as Response;
+    const result = await readResponsePrefix(response, 50);
+    expect(result.buffer.length).toBe(0);
+    expect(result.size).toBe(1000);
+    expect(result.truncated).toBe(true);
+    expect(arrayBufferCalled).toBe(false);
+  });
+
+  it("reads full body when Content-Length is within maxBytes", async () => {
+    const bytes = new Uint8Array([97, 98, 99]); // "abc"
+    const response = noReaderResponse(bytes, { contentLength: "3" });
+    const result = await readResponsePrefix(response, 100);
+    expect(result.buffer.toString()).toBe("abc");
+    expect(result.size).toBe(3);
+    expect(result.truncated).toBe(false);
+  });
+
+  it("truncates when actual body exceeds maxBytes despite trusted Content-Length", async () => {
+    // Content-Length is understated: header says 50, actual body is 500 bytes.
+    // arrayBuffer() IS called because we trust the header, but the returned
+    // buffer is still bounded by maxBytes. This is an accepted risk — if the
+    // server lies about Content-Length there is no bounded-read alternative
+    // without a ReadableStream reader.
+    const bytes = new Uint8Array(500).fill(97); // 500 'a' bytes
+    const response = noReaderResponse(bytes, { contentLength: "50" });
+    const result = await readResponsePrefix(response, 100);
+    expect(result.buffer.length).toBe(100);
+    expect(result.size).toBe(500);
+    expect(result.truncated).toBe(true);
+  });
+
+  it("reads a real stream response bounded by maxBytes", async () => {
+    const data = new Uint8Array(500).fill(97);
+    const response = new Response(new Blob([data]).stream());
+    const result = await readResponsePrefix(response, 100);
+    expect(result.buffer.length).toBe(100);
+    expect(result.size).toBe(500);
+    expect(result.truncated).toBe(true);
   });
 });
