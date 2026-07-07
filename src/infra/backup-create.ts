@@ -802,7 +802,6 @@ export async function createBackupArchive(
   const manifestPath = path.join(tempDir, "manifest.json");
   const tempArchivePath = buildTempArchivePath(outputPath);
   const tempArchiveCleanupPaths = resolveBackupTarAttemptTempPaths(tempArchivePath);
-  let completedTempArchivePath = tempArchivePath;
   const stateAsset = result.assets.find((asset) => asset.kind === "state");
   try {
     const stateSqliteBackup = stateAsset
@@ -880,7 +879,7 @@ export async function createBackupArchive(
       }
       return true;
     };
-    completedTempArchivePath = await writeTarArchiveWithRetry({
+    const completedTempArchivePath = await writeTarArchiveWithRetry({
       tempArchivePath,
       log: opts.log,
       runTar: async (attemptTempArchivePath) => {
