@@ -454,25 +454,23 @@ export function chunkMarkdown(
       // Second pass: if a segment's *weighted* size still exceeds the budget
       // (happens for CJK-heavy text where 1 char ≈ 1 token), re-split it at
       // chunking.tokens so the chunk stays within the token budget.
-      for (let start = 0; start < line.length; start += maxChars) {
-        const coarse = line.slice(start, start + maxChars);
+      for (let start = 0; start < line.length; ) {
+        const coarseEnd = includeTrailingLowSurrogate(
+          line,
+          Math.min(start + maxChars, line.length),
+        );
+        const coarse = line.slice(start, coarseEnd);
         if (estimateStringChars(coarse) > maxChars) {
           const fineStep = Math.max(1, chunking.tokens);
           for (let j = 0; j < coarse.length; ) {
-            let end = Math.min(j + fineStep, coarse.length);
-            // Avoid splitting inside a UTF-16 surrogate pair (CJK Extension B+).
-            if (end < coarse.length) {
-              const code = coarse.charCodeAt(end - 1);
-              if (code >= 0xd800 && code <= 0xdbff) {
-                end += 1; // include the low surrogate
-              }
-            }
+            const end = includeTrailingLowSurrogate(coarse, Math.min(j + fineStep, coarse.length));
             segments.push(coarse.slice(j, end));
             j = end; // advance cursor to the adjusted boundary
           }
         } else {
           segments.push(coarse);
         }
+        start = coarseEnd;
       }
     }
     for (const segment of segments) {
@@ -487,6 +485,16 @@ export function chunkMarkdown(
   }
   flush();
   return chunks;
+}
+
+// A high surrogate at the cut belongs with the following low surrogate; advancing
+// together keeps both the current and next chunk valid UTF-16.
+function includeTrailingLowSurrogate(value: string, end: number): number {
+  if (end >= value.length) {
+    return value.length;
+  }
+  const lastCodeUnit = value.charCodeAt(end - 1);
+  return lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff ? end + 1 : end;
 }
 
 /**
