@@ -99,6 +99,22 @@ function prepareDiscordStartupMocks() {
   monitorDiscordProviderMock.mockResolvedValue(undefined);
 }
 
+async function expectDiscordStartupDelay(
+  cfg: OpenClawConfig,
+  accountId: string,
+  expectedMs: number,
+) {
+  const ctx = createStartAccountContext({ account: resolveAccount(cfg, accountId), cfg });
+  sleepWithAbortMock.mockClear();
+  await discordPlugin.gateway!.startAccount!(ctx);
+  if (expectedMs === 0) {
+    expect(sleepWithAbortMock).not.toHaveBeenCalled();
+    return;
+  }
+  expect(sleepWithAbortMock).toHaveBeenCalledOnce();
+  expect(sleepWithAbortMock).toHaveBeenCalledWith(expectedMs, ctx.abortSignal);
+}
+
 function installDiscordRuntime(discord: Record<string, unknown>) {
   setDiscordRuntime({
     channel: {
@@ -721,17 +737,8 @@ describe("discordPlugin outbound", () => {
       },
     } as OpenClawConfig;
 
-    // First account (index 0) — no delay
-    await startDiscordAccount(cfg, "alpha");
-    expect(sleepWithAbortMock).not.toHaveBeenCalled();
-
-    // Second account (index 1) — 10s delay
-    const zetaContext = createStartAccountContext({
-      account: resolveAccount(cfg, "zeta"),
-      cfg,
-    });
-    await discordPlugin.gateway!.startAccount!(zetaContext);
-    expect(sleepWithAbortMock).toHaveBeenCalledWith(10_000, zetaContext.abortSignal);
+    await expectDiscordStartupDelay(cfg, "alpha", 0);
+    await expectDiscordStartupDelay(cfg, "zeta", 10_000);
   });
 
   it("starts the configured default account before staggering secondary accounts", async () => {
@@ -750,22 +757,9 @@ describe("discordPlugin outbound", () => {
       },
     } as OpenClawConfig;
 
-    await startDiscordAccount(cfg, "main");
-    expect(sleepWithAbortMock).not.toHaveBeenCalled();
-
-    const billyContext = createStartAccountContext({
-      account: resolveAccount(cfg, "billy"),
-      cfg,
-    });
-    await discordPlugin.gateway!.startAccount!(billyContext);
-    expect(sleepWithAbortMock).toHaveBeenLastCalledWith(10_000, billyContext.abortSignal);
-
-    const farberContext = createStartAccountContext({
-      account: resolveAccount(cfg, "farber"),
-      cfg,
-    });
-    await discordPlugin.gateway!.startAccount!(farberContext);
-    expect(sleepWithAbortMock).toHaveBeenLastCalledWith(20_000, farberContext.abortSignal);
+    await expectDiscordStartupDelay(cfg, "main", 0);
+    await expectDiscordStartupDelay(cfg, "billy", 10_000);
+    await expectDiscordStartupDelay(cfg, "farber", 20_000);
   });
 
   it("does not promote a duplicate-token defaultAccount to the zero-delay startup slot", async () => {
@@ -785,15 +779,8 @@ describe("discordPlugin outbound", () => {
       },
     } as OpenClawConfig;
 
-    await startDiscordAccount(cfg, "billy");
-    expect(sleepWithAbortMock).not.toHaveBeenCalled();
-
-    const farberContext = createStartAccountContext({
-      account: resolveAccount(cfg, "farber"),
-      cfg,
-    });
-    await discordPlugin.gateway!.startAccount!(farberContext);
-    expect(sleepWithAbortMock).toHaveBeenLastCalledWith(10_000, farberContext.abortSignal);
+    await expectDiscordStartupDelay(cfg, "billy", 0);
+    await expectDiscordStartupDelay(cfg, "farber", 10_000);
   });
 
   it("does not assign startup slots to enabled but unconfigured accounts", async () => {
@@ -810,8 +797,7 @@ describe("discordPlugin outbound", () => {
       },
     } as OpenClawConfig;
 
-    await startDiscordAccount(cfg, "zeta");
-    expect(sleepWithAbortMock).not.toHaveBeenCalled();
+    await expectDiscordStartupDelay(cfg, "zeta", 0);
   });
 });
 
