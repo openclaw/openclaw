@@ -2515,6 +2515,35 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("exports zero GenAI usage attributes on model usage spans", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "model.usage",
+      provider: "anthropic",
+      model: "claude-sonnet",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        promptTokens: 0,
+        total: 0,
+      },
+      durationMs: 25,
+    });
+    await flushDiagnosticEvents();
+
+    const modelUsageOptions = startedSpanOptions("openclaw.model.usage");
+    expect(modelUsageOptions?.attributes?.["gen_ai.usage.input_tokens"]).toBe(0);
+    expect(modelUsageOptions?.attributes?.["gen_ai.usage.output_tokens"]).toBe(0);
+    expect(modelUsageOptions?.attributes?.["gen_ai.usage.cache_read.input_tokens"]).toBe(0);
+    expect(modelUsageOptions?.attributes?.["gen_ai.usage.cache_creation.input_tokens"]).toBe(0);
+    await service.stop?.(ctx);
+  });
+
   test("exports GenAI client operation duration histogram without diagnostic identifiers", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { metrics: true });
@@ -2833,6 +2862,79 @@ describe("diagnostics-otel service", () => {
     });
     expect(firstSpanEndTime("openclaw.tool.execution")).toBeTypeOf("number");
     expect(telemetryState.tracer.setSpanContext).not.toHaveBeenCalled();
+    await service.stop?.(ctx);
+  });
+
+  test("keeps zero usage attributes on model call spans", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "model.call.completed",
+      runId: "run-1",
+      callId: "call-1",
+      provider: "anthropic",
+      model: "claude-sonnet",
+      contextTokenBudget: 100,
+      durationMs: 80,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        reasoningTokens: 0,
+        promptTokens: 0,
+        total: 0,
+      },
+    });
+    await flushDiagnosticEvents();
+
+    const modelSpanAttributes = firstSpanAttributes("openclaw.model.call");
+    expect(modelSpanAttributes["openclaw.model_call.usage.input_tokens"]).toBe(0);
+    expect(modelSpanAttributes["openclaw.model_call.usage.output_tokens"]).toBe(0);
+    expect(modelSpanAttributes["openclaw.model_call.usage.cache_read_input_tokens"]).toBe(0);
+    expect(modelSpanAttributes["openclaw.model_call.usage.cache_creation_input_tokens"]).toBe(0);
+    expect(modelSpanAttributes["openclaw.model_call.usage.reasoning_output_tokens"]).toBe(0);
+    expect(modelSpanAttributes["openclaw.model_call.usage.prompt_tokens"]).toBe(0);
+    expect(modelSpanAttributes["openclaw.model_call.usage.total_tokens"]).toBe(0);
+    expect(modelSpanAttributes["gen_ai.usage.input_tokens"]).toBe(0);
+    expect(modelSpanAttributes["gen_ai.usage.output_tokens"]).toBe(0);
+    expect(modelSpanAttributes["gen_ai.usage.cache_read.input_tokens"]).toBe(0);
+    expect(modelSpanAttributes["gen_ai.usage.cache_creation.input_tokens"]).toBe(0);
+    expect(modelSpanAttributes["openclaw.model_call.context_token_budget"]).toBe(100);
+    expect(modelSpanAttributes["openclaw.model_call.context_utilization"]).toBe(0);
+    await service.stop?.(ctx);
+  });
+
+  test("exports bounded context utilization on zero-output model call spans", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "model.call.completed",
+      runId: "run-1",
+      callId: "call-1",
+      provider: "anthropic",
+      model: "claude-sonnet",
+      contextTokenBudget: 100,
+      durationMs: 80,
+      usage: {
+        input: 100,
+        output: 0,
+        cacheRead: 25,
+        promptTokens: 125,
+        total: 125,
+      },
+    });
+    await flushDiagnosticEvents();
+
+    const modelSpanAttributes = firstSpanAttributes("openclaw.model.call");
+    expect(modelSpanAttributes["openclaw.model_call.usage.output_tokens"]).toBe(0);
+    expect(modelSpanAttributes["gen_ai.usage.output_tokens"]).toBe(0);
+    expect(modelSpanAttributes["openclaw.model_call.context_token_budget"]).toBe(100);
+    expect(modelSpanAttributes["openclaw.model_call.context_utilization"]).toBe(1);
     await service.stop?.(ctx);
   });
 

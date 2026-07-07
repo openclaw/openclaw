@@ -527,12 +527,27 @@ function positiveFiniteNumber(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
+function nonNegativeFiniteNumber(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
 function assignPositiveNumberAttr(
   attrs: Record<string, string | number | boolean>,
   key: string,
   value: number | undefined,
 ): void {
   const normalized = positiveFiniteNumber(value);
+  if (normalized !== undefined) {
+    attrs[key] = normalized;
+  }
+}
+
+function assignNonNegativeNumberAttr(
+  attrs: Record<string, string | number | boolean>,
+  key: string,
+  value: number | undefined,
+): void {
+  const normalized = nonNegativeFiniteNumber(value);
   if (normalized !== undefined) {
     attrs[key] = normalized;
   }
@@ -574,11 +589,28 @@ function modelCallPromptTokens(usage: {
   if (typeof usage.promptTokens === "number" && Number.isFinite(usage.promptTokens)) {
     return usage.promptTokens;
   }
+  const hasPromptPart = [usage.input, usage.cacheRead, usage.cacheWrite].some(
+    (value) => typeof value === "number" && Number.isFinite(value),
+  );
+  if (!hasPromptPart) {
+    return undefined;
+  }
   const input = usage.input ?? 0;
   const cacheRead = usage.cacheRead ?? 0;
   const cacheWrite = usage.cacheWrite ?? 0;
-  const total = input + cacheRead + cacheWrite;
-  return total > 0 ? total : undefined;
+  return input + cacheRead + cacheWrite;
+}
+
+function modelCallContextUtilization(
+  usage: ModelCallLifecycleDiagnosticEvent["usage"],
+  contextTokenBudget: number | undefined,
+): number | undefined {
+  const promptTokens = nonNegativeFiniteNumber(usage ? modelCallPromptTokens(usage) : undefined);
+  const tokenBudget = positiveFiniteNumber(contextTokenBudget);
+  if (promptTokens === undefined || tokenBudget === undefined) {
+    return undefined;
+  }
+  return Math.min(1, promptTokens / tokenBudget);
 }
 
 function assignModelCallPromptStatsAttrs(
@@ -599,6 +631,22 @@ function assignModelCallPromptStatsAttrs(
   ] as const) {
     assignNumberAttr(attrs, key, value);
   }
+}
+
+function assignModelCallContextAttrs(
+  attrs: Record<string, string | number | boolean>,
+  evt: Pick<ModelCallLifecycleDiagnosticEvent, "contextTokenBudget" | "usage">,
+): void {
+  assignPositiveNumberAttr(
+    attrs,
+    "openclaw.model_call.context_token_budget",
+    evt.contextTokenBudget,
+  );
+  assignNonNegativeNumberAttr(
+    attrs,
+    "openclaw.model_call.context_utilization",
+    modelCallContextUtilization(evt.usage, evt.contextTokenBudget),
+  );
 }
 
 function assignModelCallUsageAttrs(
@@ -623,7 +671,7 @@ function assignModelCallUsageAttrs(
     ["gen_ai.usage.cache_read.input_tokens", usage.cacheRead],
     ["gen_ai.usage.cache_creation.input_tokens", usage.cacheWrite],
   ] as const) {
-    assignPositiveNumberAttr(attrs, key, value);
+    assignNonNegativeNumberAttr(attrs, key, value);
   }
 }
 
@@ -2655,14 +2703,14 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           "openclaw.tokens.total": usage.total ?? 0,
         };
         assignGenAiSpanIdentityAttrs(spanAttrs, evt);
-        assignPositiveNumberAttr(spanAttrs, "gen_ai.usage.input_tokens", genAiInputTokens);
-        assignPositiveNumberAttr(spanAttrs, "gen_ai.usage.output_tokens", usage.output);
-        assignPositiveNumberAttr(
+        assignNonNegativeNumberAttr(spanAttrs, "gen_ai.usage.input_tokens", genAiInputTokens);
+        assignNonNegativeNumberAttr(spanAttrs, "gen_ai.usage.output_tokens", usage.output);
+        assignNonNegativeNumberAttr(
           spanAttrs,
           "gen_ai.usage.cache_read.input_tokens",
           usage.cacheRead,
         );
-        assignPositiveNumberAttr(
+        assignNonNegativeNumberAttr(
           spanAttrs,
           "gen_ai.usage.cache_creation.input_tokens",
           usage.cacheWrite,
@@ -3495,6 +3543,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         }
         assignModelCallSizeTimingAttrs(spanAttrs, evt);
         assignModelCallPromptStatsAttrs(spanAttrs, evt);
+        assignModelCallContextAttrs(spanAttrs, evt);
         assignModelCallUsageAttrs(spanAttrs, evt);
         assignOtelModelContentAttributes(spanAttrs, modelContent, contentCapturePolicy);
         const span =
@@ -3549,6 +3598,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         }
         assignModelCallSizeTimingAttrs(spanAttrs, evt);
         assignModelCallPromptStatsAttrs(spanAttrs, evt);
+        assignModelCallContextAttrs(spanAttrs, evt);
         assignModelCallUsageAttrs(spanAttrs, evt);
         assignOtelModelContentAttributes(spanAttrs, modelContent, contentCapturePolicy);
         const span =
