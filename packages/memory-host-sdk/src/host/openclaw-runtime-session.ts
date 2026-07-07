@@ -3,8 +3,6 @@ import path from "node:path";
 
 export {
   canonicalizeMainSessionAlias,
-  clearConfigCache,
-  clearRuntimeConfigSnapshot,
   getRuntimeConfig,
   HEARTBEAT_PROMPT,
   HEARTBEAT_TOKEN,

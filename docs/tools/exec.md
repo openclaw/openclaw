@@ -168,7 +168,7 @@ To hard-disable exec, deny it via tool policy (`tools.deny: ["exec"]` or per-age
 
 Sandboxed agents can require per-request approval before `exec` runs on the gateway or node host. See [Exec approvals](/tools/exec-approvals) for the policy, allowlist, and UI flow.
 
-When approvals are required, the exec tool returns immediately with `status: "approval-pending"` and an approval id. Once approved (or denied / timed out), the Gateway emits command progress and completion system events only for approved runs (`Exec running` / `Exec finished`). Denied or timed-out approvals are terminal and do not wake the agent session with a denial system event.
+When a human approval is required, node-host and non-native gateway flows return immediately with `status: "approval-pending"` and an approval id. Native chat and Web UI gateway flows can instead wait inline and return the final command result after approval. An `approval-pending` result means the command has not started, so foreground fallback warnings appear only if the approved command actually runs inline. Approved asynchronous runs emit command progress and completion system events (`Exec running` / `Exec finished`); denied or timed-out approvals are terminal and do not wake the agent session with a denial system event.
 
 On channels with native approval cards/buttons, the agent should rely on that native UI first and only include a manual `/approve` command when the tool result explicitly says chat approvals are unavailable or manual approval is the only path.
 

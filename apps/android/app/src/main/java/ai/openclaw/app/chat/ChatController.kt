@@ -458,6 +458,9 @@ class ChatController internal constructor(
         buildJsonObject {
           put("key", JsonPrimitive(sessionKey))
           put("deleteTranscript", JsonPrimitive(true))
+          // archive-then-delete: the bounded operator session lacks admin, and
+          // the gateway grants write-scope deletes only for archived sessions.
+          put("archivedOnly", JsonPrimitive(true))
         }
       requestGateway("sessions.delete", params.toString())
       fallBackFromRetiredActiveSession(sessionKey)

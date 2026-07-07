@@ -2979,6 +2979,7 @@ public struct SessionsDeleteParams: Codable, Sendable {
     public let expectedlifecyclerevision: String?
     public let expectedsessionupdatedat: Double?
     public let emitlifecyclehooks: Bool?
+    public let archivedonly: Bool?
 
     public init(
         key: String,
@@ -2987,7 +2988,8 @@ public struct SessionsDeleteParams: Codable, Sendable {
         expectedsessionid: String? = nil,
         expectedlifecyclerevision: String? = nil,
         expectedsessionupdatedat: Double? = nil,
-        emitlifecyclehooks: Bool?)
+        emitlifecyclehooks: Bool?,
+        archivedonly: Bool?)
     {
         self.key = key
         self.agentid = agentid
@@ -2996,6 +2998,7 @@ public struct SessionsDeleteParams: Codable, Sendable {
         self.expectedlifecyclerevision = expectedlifecyclerevision
         self.expectedsessionupdatedat = expectedsessionupdatedat
         self.emitlifecyclehooks = emitlifecyclehooks
+        self.archivedonly = archivedonly
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -3006,6 +3009,7 @@ public struct SessionsDeleteParams: Codable, Sendable {
         case expectedlifecyclerevision = "expectedLifecycleRevision"
         case expectedsessionupdatedat = "expectedSessionUpdatedAt"
         case emitlifecyclehooks = "emitLifecycleHooks"
+        case archivedonly = "archivedOnly"
     }
 }
 

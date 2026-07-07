@@ -40,6 +40,7 @@ class AndroidLicenseNoticesTest {
         "Bouncy Castle Provider",
         "CommonMark Java",
         "dnsjava",
+        "KaTeX",
         "Kotlin Libraries",
         "Manrope",
         "nibor autolink",

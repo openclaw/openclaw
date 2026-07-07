@@ -4028,6 +4028,7 @@ output="$(cat "$sampler_log")"
     expect(doctorLoginctlShim).toContain("Linger=yes");
     expect(doctorSystemctlShim).toContain("ActiveState=inactive");
     expect(doctorSystemctlShim).toContain('unit_path="$HOME/.config/systemd/user/${unit}"');
+    expect(doctorScenario).toContain("OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR=1");
     expect(readFileSync(PLUGINS_DOCKER_E2E_PATH, "utf8")).toContain(
       "scripts/e2e/lib/plugins/sweep.sh",
     );
