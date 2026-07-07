@@ -1,4 +1,5 @@
 // Session memory transcript helpers persist compact session transcript excerpts.
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { streamSessionTranscriptLinesReverse } from "../../../config/sessions/transcript-stream.js";
@@ -62,26 +63,62 @@ function extractTextMessageContent(content: unknown): string | undefined {
 }
 
 async function readBoundedTranscriptContent(sessionFilePath: string): Promise<string | null> {
-  // Stream the transcript newest-first so we never buffer the whole file,
-  // then reverse the collected tail back into chronological order for the
-  // existing sanitizer/filter pipeline.
-  const lines: string[] = [];
-  let bytesRead = 0;
-  for await (const line of streamSessionTranscriptLinesReverse(sessionFilePath)) {
-    const lineBytes = Buffer.byteLength(line, "utf-8") + 1;
-    // Stop before retaining a line that would cross the cap. Recent messages are
-    // yielded first, so this keeps the trailing context without buffering an
-    // oversized early record.
-    if (bytesRead + lineBytes > SESSION_TRANSCRIPT_MAX_BYTES) {
-      break;
-    }
-    lines.push(line);
-    bytesRead += lineBytes;
-  }
-  if (lines.length === 0) {
+  let stat: fs.Stats;
+  try {
+    stat = await fs.stat(sessionFilePath);
+  } catch {
     return null;
   }
-  return lines.toReversed().join("\n");
+  if (!stat.isFile() || stat.size <= 0) {
+    return null;
+  }
+
+  // For files that fit under the cap, stream newest-first so we can stop early
+  // once we have retained enough trailing context.
+  if (stat.size <= SESSION_TRANSCRIPT_MAX_BYTES) {
+    const lines: string[] = [];
+    let bytesRead = 0;
+    for await (const line of streamSessionTranscriptLinesReverse(sessionFilePath)) {
+      const lineBytes = Buffer.byteLength(line, "utf-8") + 1;
+      if (bytesRead + lineBytes > SESSION_TRANSCRIPT_MAX_BYTES) {
+        break;
+      }
+      lines.push(line);
+      bytesRead += lineBytes;
+    }
+    if (lines.length === 0) {
+      return null;
+    }
+    return lines.toReversed().join("\n");
+  }
+
+  // For oversized files, read only the trailing cap bytes. This avoids
+  // materializing a single over-cap JSONL row: if the last newline falls
+  // outside the tail window, the final line is itself larger than the cap and
+  // we drop it instead of buffering the whole record.
+  const start = stat.size - SESSION_TRANSCRIPT_MAX_BYTES;
+  const flags =
+    fsConstants.O_RDONLY |
+    (typeof fsConstants.O_NOFOLLOW === "number" && process.platform !== "win32"
+      ? fsConstants.O_NOFOLLOW
+      : 0);
+  const fd = await fs.open(sessionFilePath, flags);
+  try {
+    const tailBuffer = Buffer.alloc(SESSION_TRANSCRIPT_MAX_BYTES);
+    const { bytesRead } = await fd.read(tailBuffer, 0, SESSION_TRANSCRIPT_MAX_BYTES, start);
+    const tail = tailBuffer.toString("utf-8", 0, bytesRead);
+    const firstNewline = tail.indexOf("\n");
+    if (firstNewline === -1) {
+      return null;
+    }
+    const content = tail.slice(firstNewline + 1).trim();
+    if (!content) {
+      return null;
+    }
+    return content;
+  } finally {
+    await fd.close();
+  }
 }
 
 export async function getRecentSessionContent(

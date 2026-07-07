@@ -102,4 +102,13 @@ describe("session-memory transcript extraction", () => {
     expect(memoryContent).not.toContain("x".repeat(100));
     expect(memoryContent?.length).toBeLessThan(SESSION_TRANSCRIPT_MAX_BYTES);
   });
+
+  it("returns null when a single line exceeds the byte cap", async () => {
+    // A lone oversized JSONL row must not be materialized. The bounded tail
+    // read drops it when no newline appears inside the cap window.
+    const huge = message("user", "x".repeat(17 * 1024 * 1024));
+    const transcriptPath = await writeTranscript(`${huge}\n`);
+
+    await expect(getRecentSessionContent(transcriptPath)).resolves.toBeNull();
+  });
 });
