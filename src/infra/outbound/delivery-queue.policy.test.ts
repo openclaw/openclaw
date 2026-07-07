@@ -78,7 +78,7 @@ describe("delivery-queue policy", () => {
         enqueuedAt: now - 30_000,
         retryCount: 3,
         lastAttemptAt: now,
-      } as const;
+      };
       const retryDelay = computeRecoveryRetryDelayMs(entry.id, entry.retryCount + 1);
       const result = isEntryEligibleForRecoveryRetry(entry, now + retryDelay - 1);
       expect(result.eligible).toBe(false);
