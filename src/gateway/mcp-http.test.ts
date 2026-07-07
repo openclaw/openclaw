@@ -1153,19 +1153,86 @@ describe("mcp loopback server", () => {
   });
 
   it("executes tools for loopback callers", async () => {
-    const cronExecute = vi.fn(async () => ({
+    const cronExecute = vi.fn<MockGatewayTool["execute"]>(async () => ({
       content: [{ type: "text", text: "CRON_EXECUTED" }],
     }));
+    const args = { action: "status" };
     mockScopedTools([makeMessageTool(), makeCronTool({ execute: cronExecute })]);
     const { runtime } = await startLoopbackServerForTest();
 
     const payload = await callMainSessionTool({
       token: runtime?.ownerToken,
       name: "cron",
+      args,
     });
 
     expect(cronExecute).toHaveBeenCalledTimes(1);
+    expect(getBeforeToolCallHookInput(0).params).toEqual(args);
+    expect(cronExecute.mock.calls[0]?.[1]).toEqual(args);
     expectMcpResultText(payload, "CRON_EXECUTED");
+  });
+
+  it.each([
+    ["null", null],
+    ["array", []],
+    ["string", "bad"],
+  ])("rejects %s tool call arguments before hooks or execution", async (_label, badArguments) => {
+    const execute = vi.fn<MockGatewayTool["execute"]>(async () => ({
+      content: [{ type: "text", text: "EXECUTED" }],
+    }));
+    mockScopedTools([makeMessageTool({ execute })]);
+    const { runtime, port } = await startLoopbackServerForTest();
+
+    const response = await sendRaw({
+      port,
+      token: runtime.ownerToken,
+      headers: jsonHeaders(),
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "message", arguments: badArguments },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await readMcpPayload(response)).toEqual({
+      jsonrpc: "2.0",
+      id: 1,
+      error: {
+        code: -32602,
+        message: "Invalid params: tools/call arguments must be an object",
+      },
+    });
+    expect(runBeforeToolCallHookMock).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("keeps omitted tool call arguments as an empty object", async () => {
+    const execute = vi.fn<MockGatewayTool["execute"]>(async () => ({
+      content: [{ type: "text", text: "EXECUTED" }],
+    }));
+    mockScopedTools([makeMessageTool({ execute })]);
+    const { runtime, port } = await startLoopbackServerForTest();
+
+    const response = await sendRaw({
+      port,
+      token: runtime.ownerToken,
+      headers: jsonHeaders(),
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "message" },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expectMcpResultText(await readMcpPayload(response), "EXECUTED");
+    expect(runBeforeToolCallHookMock).toHaveBeenCalledTimes(1);
+    expect(getBeforeToolCallHookInput(0).params).toEqual({});
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute.mock.calls[0]?.[1]).toEqual({});
   });
 
   it("preserves valid MCP content blocks returned by loopback tools", async () => {
