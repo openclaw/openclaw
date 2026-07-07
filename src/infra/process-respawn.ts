@@ -53,6 +53,12 @@ function spawnDetachedGatewayProcess(opts: GatewayRespawnOptions = {}): {
     detached: true,
     stdio: "inherit",
   });
+  // Attach a noop error listener before unref so async spawn failures
+  // (ENOMEM, missing executable, etc.) don't crash the parent as an
+  // unhandled 'error' event on the ChildProcess.
+  if (typeof child.on === "function") {
+    child.on("error", () => {});
+  }
   child.unref();
   return { child, pid: child.pid ?? undefined };
 }
