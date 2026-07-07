@@ -624,16 +624,14 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           } catch (error) {
             log.error?.(`[${id}] native approval bootstrap failed: ${formatErrorMessage(error)}`);
           }
-          const runStartedAtMs = Date.now();
-          let channelRunStartedAt: number | undefined;
-          let channelRunSettledAt: number | undefined;
+          let channelRunDurationMs: number | undefined;
           setRuntime(channelId, id, {
             accountId: id,
             enabled: true,
             configured: true,
             running: true,
             restartPending: false,
-            lastStartAt: runStartedAtMs,
+            lastStartAt: Date.now(),
             lastError: null,
             reconnectAttempts: preserveRestartAttempts ? (restartAttempts.get(rKey) ?? 0) : 0,
           });
@@ -652,7 +650,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 return;
               }
               const runStartAccount = () => {
-                channelRunStartedAt = Date.now();
+                const startedAt = Date.now();
+                const recordDuration = () => {
+                  channelRunDurationMs = Date.now() - startedAt;
+                };
                 try {
                   return startAccount({
                     cfg,
@@ -667,11 +668,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                         ? setRuntimeFromTaskStatus(channelId, id, next, abort.signal)
                         : getRuntime(channelId, id),
                     ...(channelRuntimeForTask ? { channelRuntime: channelRuntimeForTask } : {}),
-                  }).finally(() => {
-                    channelRunSettledAt = Date.now();
-                  });
+                  }).finally(recordDuration);
                 } catch (error) {
-                  channelRunSettledAt = Date.now();
+                  recordDuration();
                   throw error;
                 }
               };
@@ -774,13 +773,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 }
                 return;
               }
-              const completedStableRun =
-                channelRunStartedAt !== undefined &&
-                channelRunSettledAt !== undefined &&
-                channelRunSettledAt - channelRunStartedAt >= CHANNEL_STABLE_RUN_MS;
               // Only plugin task lifetime counts. Deferred handoff and cleanup must not
               // make a short crash look stable and erase crash-loop attempts.
-              if (completedStableRun) {
+              if (
+                channelRunDurationMs !== undefined &&
+                channelRunDurationMs >= CHANNEL_STABLE_RUN_MS
+              ) {
                 restartAttempts.delete(rKey);
               }
               const attempt = (restartAttempts.get(rKey) ?? 0) + 1;
