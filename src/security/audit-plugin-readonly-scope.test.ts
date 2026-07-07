@@ -44,8 +44,8 @@ function createAuditContext(params: {
     plugins: params.plugins,
     loadPluginSecurityCollectors: true,
     configSnapshot: null,
-    codeSafetySummaryCache: new Map<string, Promise<unknown>>(),
     authoredEnvVarEntries: [],
+    codeSafetySummaryCache: new Map<string, Promise<unknown>>(),
   };
 }
 

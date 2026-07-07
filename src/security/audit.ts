@@ -146,7 +146,7 @@ export type AuditExecutionContext = {
   deepProbeAuth?: SecurityAuditExplicitGatewayAuth;
   auditGatewayAuthOverride?: SecurityAuditGatewayAuthOverride;
   workspaceDir?: string;
-  authoredEnvVarEntries: Array<{ key: string; value: string }>;
+  authoredEnvVarEntries: Array<{ key: string; value: string; path: "env.vars" | "env" }>;
 };
 
 let readOnlyChannelPluginsModulePromise:
@@ -1384,7 +1384,11 @@ async function createAuditExecutionContext(
         ? await readConfigSnapshotForAudit({ env, configPath }).catch(() => null)
         : null;
 
-  const authoredEnvVarEntries = ((): Array<{ key: string; value: string }> => {
+  const authoredEnvVarEntries = ((): Array<{
+    key: string;
+    value: string;
+    path: "env.vars" | "env";
+  }> => {
     if (
       configSnapshot?.exists &&
       configSnapshot.parsed &&
@@ -1402,9 +1406,8 @@ async function createAuditExecutionContext(
         // Include resolution failed; fall back to sourceConfig entries.
       }
     }
-    return getConfigEnvVarEntries(sourceConfig).length > 0
-      ? getConfigEnvVarEntries(sourceConfig)
-      : getConfigEnvVarEntries(cfg);
+    const sourceEntries = getConfigEnvVarEntries(sourceConfig);
+    return sourceEntries.length > 0 ? sourceEntries : getConfigEnvVarEntries(cfg);
   })();
 
   return {

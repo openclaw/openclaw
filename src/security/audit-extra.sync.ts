@@ -82,17 +82,19 @@ function looksLikePlaintextApiKey(value: string): boolean {
   return /^(sk-|xoxb-|xapp-|ghp_|AKIA)/.test(value.trim());
 }
 
-export function getConfigEnvVarEntries(cfg: OpenClawConfig): Array<{ key: string; value: string }> {
+export function getConfigEnvVarEntries(
+  cfg: OpenClawConfig,
+): Array<{ key: string; value: string; path: "env.vars" | "env" }> {
   const envConfig = cfg.env;
   if (!envConfig || typeof envConfig !== "object") {
     return [];
   }
-  const entries: Array<{ key: string; value: string }> = [];
+  const entries: Array<{ key: string; value: string; path: "env.vars" | "env" }> = [];
   const vars = (envConfig as Record<string, unknown>).vars;
   if (vars && typeof vars === "object") {
     for (const [key, value] of Object.entries(vars)) {
       if (typeof value === "string") {
-        entries.push({ key, value });
+        entries.push({ key, value, path: "env.vars" });
       }
     }
   }
@@ -101,7 +103,7 @@ export function getConfigEnvVarEntries(cfg: OpenClawConfig): Array<{ key: string
       continue;
     }
     if (typeof value === "string") {
-      entries.push({ key, value });
+      entries.push({ key, value, path: "env" });
     }
   }
   return entries;
@@ -607,7 +609,7 @@ export function collectSyncedFolderFindings(params: {
 
 export function collectSecretsInConfigFindings(
   cfg: OpenClawConfig,
-  authoredEnvVarEntries?: Array<{ key: string; value: string }>,
+  authoredEnvVarEntries?: Array<{ key: string; value: string; path: "env.vars" | "env" }>,
 ): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const password = normalizeOptionalString(cfg.gateway?.auth?.password) ?? "";
@@ -634,13 +636,13 @@ export function collectSecretsInConfigFindings(
     });
   }
 
-  for (const { key, value } of authoredEnvVarEntries ?? getConfigEnvVarEntries(cfg)) {
+  for (const { key, value, path } of authoredEnvVarEntries ?? getConfigEnvVarEntries(cfg)) {
     if (!looksLikeEnvRef(value) && looksLikePlaintextApiKey(value)) {
       findings.push({
         checkId: "config.secrets.api_key_in_env_vars",
         severity: "warn",
         title: `API key stored in config env var "${key}"`,
-        detail: `env.vars.${key} looks like a plaintext API key; prefer storing secrets in ~/.openclaw/.env or using SecretRefs instead of openclaw.json.`,
+        detail: `${path}.${key} looks like a plaintext API key; prefer storing secrets in ~/.openclaw/.env or using SecretRefs instead of openclaw.json.`,
         remediation: `Move ${key} out of openclaw.json and load it from the process environment or a secrets manager.`,
       });
     }
