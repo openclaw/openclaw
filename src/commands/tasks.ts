@@ -208,7 +208,9 @@ function truncate(value: string, maxChars: number) {
   if (maxChars <= 1) {
     return value.slice(0, maxChars);
   }
-  return `${value.slice(0, maxChars - 1)}…`;
+  return `${Array.from(value)
+    .slice(0, maxChars - 1)
+    .join("")}…`;
 }
 
 function shortToken(value: string | undefined, maxChars = ID_PAD): string {

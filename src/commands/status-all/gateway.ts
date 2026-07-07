@@ -27,7 +27,9 @@ function shorten(message: string, maxLen: number): string {
   if (cleaned.length <= maxLen) {
     return cleaned;
   }
-  return `${cleaned.slice(0, Math.max(0, maxLen - 1))}…`;
+  return `${Array.from(cleaned)
+    .slice(0, Math.max(0, maxLen - 1))
+    .join("")}…`;
 }
 
 function normalizeGwsLine(line: string): string {
