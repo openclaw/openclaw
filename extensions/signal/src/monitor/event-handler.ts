@@ -107,6 +107,32 @@ function formatAttachmentSummaryPlaceholder(contentTypes: Array<string | undefin
   return `[${parts.join(" + ")} attached]`;
 }
 
+const SIGNAL_SESSION_INIT_CONFLICT_RETRY_DELAYS_MS = [200, 500] as const;
+
+function isReplySessionInitializationConflict(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("reply session initialization conflicted");
+}
+
+async function runWithSignalSessionInitConflictRetry<T>(params: {
+  run: () => Promise<T>;
+}): Promise<T> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await params.run();
+    } catch (error) {
+      const delayMs = SIGNAL_SESSION_INIT_CONFLICT_RETRY_DELAYS_MS[attempt];
+      if (!isReplySessionInitializationConflict(error) || delayMs === undefined) {
+        throw error;
+      }
+      logVerbose(
+        `signal inbound retry after reply session initialization conflict (${attempt + 1}/${SIGNAL_SESSION_INIT_CONFLICT_RETRY_DELAYS_MS.length}) delay=${delayMs}ms`,
+      );
+      await delay(delayMs);
+    }
+  }
+}
+
 function resolveSignalInboundRoute(params: {
   cfg: SignalEventHandlerDeps["cfg"];
   accountId: SignalEventHandlerDeps["accountId"];
@@ -655,29 +681,33 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       if (!last) {
         return;
       }
-      if (entries.length === 1) {
-        await handleSignalInboundMessage(last);
-        return;
-      }
-      const combinedText = entries
-        .map((entry) => entry.bodyText)
-        .filter(Boolean)
-        .join("\\n");
-      const combinedCommandBody = entries
-        .map((entry) => entry.commandBody)
-        .filter(Boolean)
-        .join("\\n");
-      if (!combinedText.trim()) {
-        return;
-      }
-      await handleSignalInboundMessage({
-        ...last,
-        bodyText: combinedText,
-        commandBody: combinedCommandBody,
-        mediaPath: undefined,
-        mediaType: undefined,
-        mediaPaths: undefined,
-        mediaTypes: undefined,
+      await runWithSignalSessionInitConflictRetry({
+        run: async () => {
+          if (entries.length === 1) {
+            await handleSignalInboundMessage(last);
+            return;
+          }
+          const combinedText = entries
+            .map((entry) => entry.bodyText)
+            .filter(Boolean)
+            .join("\\n");
+          const combinedCommandBody = entries
+            .map((entry) => entry.commandBody)
+            .filter(Boolean)
+            .join("\\n");
+          if (!combinedText.trim()) {
+            return;
+          }
+          await handleSignalInboundMessage({
+            ...last,
+            bodyText: combinedText,
+            commandBody: combinedCommandBody,
+            mediaPath: undefined,
+            mediaType: undefined,
+            mediaPaths: undefined,
+            mediaTypes: undefined,
+          });
+        },
       });
     },
     onError: (err) => {
