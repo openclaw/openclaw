@@ -50,6 +50,7 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   resolveCodexAppServerForModelProvider,
   resolveCodexAppServerForOpenClawToolPolicy,
@@ -360,14 +361,18 @@ async function emitCodexAppServerEvent(
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     });
   } catch (error) {
-    embeddedAgentLog.debug("codex app-server global agent event emit failed", { error });
+    embeddedAgentLog.debug("codex app-server global agent event emit failed", {
+      error,
+    });
   }
   try {
     await params.onAgentEvent?.(event);
   } catch (error) {
     // Event consumers are observational; they must not abort or strand the
     // canonical app-server turn lifecycle.
-    embeddedAgentLog.debug("codex app-server agent event handler threw", { error });
+    embeddedAgentLog.debug("codex app-server agent event handler threw", {
+      error,
+    });
   }
 }
 
@@ -391,19 +396,28 @@ function toTranscriptToolResultContentItem(item: unknown): Record<string, unknow
   }
   const record = item as Record<string, unknown>;
   if (record.type === "inputText") {
-    return { type: "text", text: typeof record.text === "string" ? record.text : "" };
+    return {
+      type: "text",
+      text: typeof record.text === "string" ? record.text : "",
+    };
   }
   if (record.type === "inputImage") {
     return typeof record.imageUrl === "string"
       ? { type: "image", url: record.imageUrl }
-      : { type: "text", text: formatUnsupportedCodexDynamicToolOutput(record.type) };
+      : {
+          type: "text",
+          text: formatUnsupportedCodexDynamicToolOutput(record.type),
+        };
   }
-  return { type: "text", text: formatUnsupportedCodexDynamicToolOutput(record.type) };
+  return {
+    type: "text",
+    text: formatUnsupportedCodexDynamicToolOutput(record.type),
+  };
 }
 
 function formatUnsupportedCodexDynamicToolOutput(type: unknown): string {
   const rawType = typeof type === "string" ? type.replace(/\s+/g, " ").trim() : "";
-  const label = rawType ? rawType.slice(0, 80) : "unknown";
+  const label = rawType ? truncateUtf16Safe(rawType, 80) : "unknown";
   const suffix = rawType.length > 80 ? "..." : "";
   return `[Unsupported Codex dynamic tool output: ${label}${suffix}]`;
 }
@@ -637,7 +651,9 @@ export async function runCodexAppServerAttempt(
   if (params.abortSignal?.aborted) {
     abortFromUpstream();
   } else {
-    params.abortSignal?.addEventListener("abort", abortFromUpstream, { once: true });
+    params.abortSignal?.addEventListener("abort", abortFromUpstream, {
+      once: true,
+    });
   }
 
   startupBinding = await rotateOversizedCodexAppServerStartupBinding({
@@ -929,7 +945,9 @@ export async function runCodexAppServerAttempt(
       ? { contextWindowSource: params.contextWindowInfo.source }
       : {}),
     ...(params.contextWindowInfo?.referenceTokens
-      ? { contextWindowReferenceTokens: params.contextWindowInfo.referenceTokens }
+      ? {
+          contextWindowReferenceTokens: params.contextWindowInfo.referenceTokens,
+        }
       : {}),
   };
   const hookContext = {
@@ -1511,7 +1529,10 @@ export async function runCodexAppServerAttempt(
       matchedSharedClient: Boolean(retired),
     });
     if (retired?.closed) {
-      await client.closeAndWait({ exitTimeoutMs: 2_000, forceKillDelayMs: 250 });
+      await client.closeAndWait({
+        exitTimeoutMs: 2_000,
+        forceKillDelayMs: 250,
+      });
     }
   };
   const releaseSharedClientLeaseAndRetireOneShotClient = async () => {
@@ -2602,7 +2623,9 @@ export async function runCodexAppServerAttempt(
             : {}),
         });
         if (armCompletionWatchOnResponse && postToolContinuationTimeoutMs !== undefined) {
-          turnWatches.armCompletionIdleWatch({ timeoutMs: postToolContinuationTimeoutMs });
+          turnWatches.armCompletionIdleWatch({
+            timeoutMs: postToolContinuationTimeoutMs,
+          });
         }
         scheduleTerminalDynamicToolReleaseCheck();
       } else {
@@ -2843,7 +2866,10 @@ export async function runCodexAppServerAttempt(
       if (compactTurnCompleted && !runAbortController.signal.aborted) {
         void emitCodexAppServerEvent(params, {
           stream: "codex_app_server.lifecycle",
-          data: { phase: "turn_start_retry_after_compact", threadId: thread.threadId },
+          data: {
+            phase: "turn_start_retry_after_compact",
+            threadId: thread.threadId,
+          },
         });
         try {
           turn = await startCodexTurn();
@@ -3179,7 +3205,10 @@ export async function runCodexAppServerAttempt(
     if (shouldRetireClient) {
       void (async () => {
         // Timed-out native turns cannot be safely resumed on the same thread.
-        await bindingStore.mutate(bindingIdentity, { kind: "clear", threadId: thread.threadId });
+        await bindingStore.mutate(bindingIdentity, {
+          kind: "clear",
+          threadId: thread.threadId,
+        });
         await retireCodexAppServerClientAfterTimedOutTurn(client, {
           threadId: thread.threadId,
           turnId: activeTurnId,
@@ -3196,7 +3225,9 @@ export async function runCodexAppServerAttempt(
     });
     resolveCompletion?.();
   };
-  runAbortController.signal.addEventListener("abort", abortListener, { once: true });
+  runAbortController.signal.addEventListener("abort", abortListener, {
+    once: true,
+  });
   if (runAbortController.signal.aborted) {
     abortListener();
   }
@@ -3246,7 +3277,9 @@ export async function runCodexAppServerAttempt(
         timeoutMs: turnWatchTimeoutMs,
       });
     }
-    const result = activeProjector.buildResult(toolBridge.telemetry, { yieldDetected });
+    const result = activeProjector.buildResult(toolBridge.telemetry, {
+      yieldDetected,
+    });
     const effectiveTimedOut = timedOut && !recoveredTurnWatchTimeout;
     const effectiveTurnCompletionIdleTimedOut =
       turnCompletionIdleTimedOut && !recoveredTurnWatchTimeout;
@@ -3294,7 +3327,10 @@ export async function runCodexAppServerAttempt(
           error: finalPromptErrorMessage,
         },
       );
-      await bindingStore.mutate(bindingIdentity, { kind: "clear", threadId: thread.threadId });
+      await bindingStore.mutate(bindingIdentity, {
+        kind: "clear",
+        threadId: thread.threadId,
+      });
     }
     const refreshedUsageLimitPromptError = await refreshCodexUsageLimitPromptError({
       client,
@@ -3547,12 +3583,18 @@ export async function runCodexAppServerAttempt(
       emitLifecycleTerminal({
         phase: "error",
         error: formatErrorMessage(finalPromptError),
-        ...buildLifecycleTerminalMeta({ aborted: finalAborted, timedOut: effectiveTimedOut }),
+        ...buildLifecycleTerminalMeta({
+          aborted: finalAborted,
+          timedOut: effectiveTimedOut,
+        }),
       });
     } else {
       emitLifecycleTerminal({
         phase: "end",
-        ...buildLifecycleTerminalMeta({ aborted: finalAborted, timedOut: effectiveTimedOut }),
+        ...buildLifecycleTerminalMeta({
+          aborted: finalAborted,
+          timedOut: effectiveTimedOut,
+        }),
       });
     }
     return {
@@ -3679,7 +3721,10 @@ async function clearCodexBindingAfterInvalidImagePayload(
     "codex app-server image payload error detected; clearing thread binding",
     fields,
   );
-  await bindingStore.mutate(identity, { kind: "clear", threadId: expectedThreadId });
+  await bindingStore.mutate(identity, {
+    kind: "clear",
+    threadId: expectedThreadId,
+  });
 }
 
 async function markCodexAppServerBindingCoveredThroughTurn(params: {
@@ -3822,19 +3867,25 @@ function buildCodexAppServerTimeoutDiagnostics(params: {
       ? { lastAssistantTextPreview: readString("lastAssistantTextPreview") }
       : {}),
     ...(readNumber("activeAppServerTurnRequests") !== undefined
-      ? { activeAppServerTurnRequests: readNumber("activeAppServerTurnRequests") }
+      ? {
+          activeAppServerTurnRequests: readNumber("activeAppServerTurnRequests"),
+        }
       : {}),
     ...(readNumber("activeTurnItemCount") !== undefined
       ? { activeTurnItemCount: readNumber("activeTurnItemCount") }
       : {}),
     ...(readBoolean("terminalTurnNotificationQueued") !== undefined
-      ? { terminalTurnNotificationQueued: readBoolean("terminalTurnNotificationQueued") }
+      ? {
+          terminalTurnNotificationQueued: readBoolean("terminalTurnNotificationQueued"),
+        }
       : {}),
     ...(readBoolean("completionIdleWatchArmed") !== undefined
       ? { completionIdleWatchArmed: readBoolean("completionIdleWatchArmed") }
       : {}),
     ...(readBoolean("assistantCompletionIdleWatchArmed") !== undefined
-      ? { assistantCompletionIdleWatchArmed: readBoolean("assistantCompletionIdleWatchArmed") }
+      ? {
+          assistantCompletionIdleWatchArmed: readBoolean("assistantCompletionIdleWatchArmed"),
+        }
       : {}),
     ...(readBoolean("terminalIdleWatchArmed") !== undefined
       ? { terminalIdleWatchArmed: readBoolean("terminalIdleWatchArmed") }
