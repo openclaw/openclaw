@@ -70,4 +70,34 @@ describe("agent bundle MCP names", () => {
     expect(safeToolName.startsWith(`memory${TOOL_NAME_SEPARATOR}`)).toBe(true);
     expect(safeToolName.length).toBeLessThanOrEqual(64);
   });
+
+  it("preserves emoji surrogate pairs at truncation boundaries", () => {
+    // Truncation that lands between the two UTF-16 code units of an emoji
+    // must not split the pair into a lone surrogate.
+    const safeToolName = buildSafeToolName({
+      serverName: "srv",
+      // Build a tool name such that maxToolChars falls exactly inside an emoji's
+      // surrogate pair. The emoji 🧠 (U+1F9E0) is "🧠" (2 code units).
+      // maxToolChars = 64 - "srv".length - "__".length - 2 = 64 - 3 - 2 - 2 = 57
+      // We place the emoji at position 57 so raw .slice(0,57) would split it.
+      toolName: "a".repeat(56) + "🧠" + "b".repeat(30),
+      reservedNames: new Set(),
+    });
+
+    // Must never contain a lone surrogate half.
+    expect(safeToolName).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    expect(safeToolName).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+    expect(safeToolName.length).toBeLessThanOrEqual(64);
+  });
+
+  it("preserves multi-byte emoji at server name truncation boundaries", () => {
+    const usedNames = new Set<string>();
+    // Server name with emoji positioned at the 30-char prefix boundary
+    const serverName = sanitizeServerName("a".repeat(29) + "🧠" + "b".repeat(10), usedNames);
+
+    // Must never contain a lone surrogate half.
+    expect(serverName).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    expect(serverName).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+    expect(serverName.length).toBeLessThanOrEqual(30);
+  });
 });
