@@ -136,11 +136,25 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await menu.getByRole("menuitem", { name: "Reset to defaults" }).click();
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Overview"]);
 
+      // The sidebar search field is the command palette entry point.
+      const searchButton = sidebar.locator(".sidebar-search");
+      await searchButton.click();
+      const paletteInput = page.locator("#cmd-palette-input");
+      await expect.poll(() => paletteInput.isVisible()).toBe(true);
+      await page.keyboard.press("Escape");
+      await expect.poll(() => paletteInput.isVisible()).toBe(false);
+
+      // The sidebar toggle lives in the topbar, macOS style.
       const collapseButton = page.getByRole("button", { name: "Collapse sidebar" });
+      await expect
+        .poll(() => collapseButton.evaluate((element) => Boolean(element.closest(".topbar"))))
+        .toBe(true);
       await collapseButton.click();
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
         .toContain("shell--nav-collapsed");
+      // Rail mode keeps the palette entry reachable as an icon-only control.
+      await expect.poll(() => searchButton.isVisible()).toBe(true);
       await page.reload();
       await expect
         .poll(() => page.getByRole("button", { name: "Expand sidebar" }).isVisible())
