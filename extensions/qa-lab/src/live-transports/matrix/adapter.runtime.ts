@@ -13,6 +13,7 @@ import { startMatrixQaHarness } from "./substrate/harness.runtime.js";
 import { createMatrixQaRoomObserver } from "./substrate/sync.js";
 import {
   mergeMatrixQaTopologySpecs,
+  resolveMatrixQaRoomObserverRole,
   type MatrixQaProvisionedTopology,
   type MatrixQaTopologySpec,
 } from "./substrate/topology.js";
@@ -163,10 +164,11 @@ export async function createMatrixQaTransportAdapter(
   const accountId = options.sutAccountId?.trim() || "sut";
   const observedEvents: MatrixQaObservedEvent[] = [];
   const roomObservers = provisioning.topology.rooms.map((room) => {
+    const observerRole = resolveMatrixQaRoomObserverRole(room);
     return {
       observedEvents,
       observer: createMatrixQaRoomObserver({
-        accessToken: provisioning.driver.accessToken,
+        accessToken: provisioning[observerRole].accessToken,
         baseUrl: harness.baseUrl,
         observedEvents,
       }),

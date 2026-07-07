@@ -75,6 +75,18 @@ export function findMatrixQaProvisionedRoom(
   return room;
 }
 
+export function resolveMatrixQaRoomObserverRole(
+  room: Pick<MatrixQaProvisionedRoom, "key" | "memberRoles">,
+): Exclude<MatrixQaParticipantRole, "sut"> {
+  if (room.memberRoles.includes("driver")) {
+    return "driver";
+  }
+  if (room.memberRoles.includes("observer")) {
+    return "observer";
+  }
+  throw new Error(`Matrix QA room "${room.key}" has no independent observer member`);
+}
+
 export function mergeMatrixQaTopologySpecs(specs: MatrixQaTopologySpec[]): MatrixQaTopologySpec {
   const first = specs[0];
   if (!first) {
