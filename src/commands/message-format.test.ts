@@ -181,6 +181,40 @@ describe("renderPaginationHint", () => {
     expect(out).not.toContain("More results available");
   });
 
+  it("resolves Matrix-native fields (eventId, sender, body, numeric timestamp)", () => {
+    const messages = [
+      {
+        eventId: "$evt-abc123",
+        sender: "@alice:matrix.org",
+        body: "Hello from Matrix",
+        timestamp: 1751462400000,
+      },
+    ];
+
+    const result = readResultPayload({ messages });
+    const out = textJoined(formatMessageCliText(result, { displayLimit: 5 }));
+
+    expect(out).toContain("$evt-abc123");
+    expect(out).toContain("@alice:matrix.org");
+    expect(out).toContain("Hello from Matrix");
+  });
+
+  it("renders Matrix sender field as author fallback", () => {
+    const messages = [
+      {
+        eventId: "$evt-1",
+        sender: "@bob:matrix.org",
+        body: "matrix text",
+        timestamp: "2026-07-02T10:30:00.000Z",
+      },
+    ];
+
+    const result = readResultPayload({ messages });
+    const out = textJoined(formatMessageCliText(result, { displayLimit: 5 }));
+
+    expect(out).toContain("@bob:matrix.org");
+  });
+
   it("does NOT emit hint when no pagination signal is present", () => {
     const messages = [msg("id-1", "2026-01-01T00:00:00.000Z", "alice", "hello")];
     const result = readResultPayload({ messages });

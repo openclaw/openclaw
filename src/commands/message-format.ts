@@ -96,20 +96,24 @@ function renderMessageList(messages: unknown[], opts: FormatOpts, emptyLabel: st
       (typeof msg.id === "string" && msg.id) ||
       (typeof msg.ts === "string" && msg.ts) ||
       (typeof msg.messageId === "string" && msg.messageId) ||
+      (typeof msg.eventId === "string" && msg.eventId) ||
       "";
     const authorObj = msg.author as Record<string, unknown> | undefined;
     const author =
       (typeof msg.authorTag === "string" && msg.authorTag) ||
       (typeof authorObj?.username === "string" && authorObj.username) ||
       (typeof msg.user === "string" && msg.user) ||
+      (typeof msg.sender === "string" && msg.sender) ||
       "";
     const time =
       (typeof msg.timestamp === "string" && msg.timestamp) ||
+      (typeof msg.timestamp === "number" && new Date(msg.timestamp).toISOString()) ||
       (typeof msg.ts === "string" && msg.ts) ||
       "";
     const text =
       (typeof msg.content === "string" && msg.content) ||
       (typeof msg.text === "string" && msg.text) ||
+      (typeof msg.body === "string" && msg.body) ||
       "";
     return {
       Time: shortenText(time, 28),
