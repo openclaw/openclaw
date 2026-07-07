@@ -1828,6 +1828,16 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Exit codes
   - H2: Related
 
+## cli/promos.md
+
+- Route: /cli/promos
+- Headings:
+  - H1: openclaw promos
+  - H2: Commands
+  - H2: openclaw promos list
+  - H2: openclaw promos claim &lt;slug&gt;
+  - H2: Passive discovery in models list
+
 ## cli/proxy.md
 
 - Route: /cli/proxy
