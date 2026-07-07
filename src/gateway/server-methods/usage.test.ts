@@ -519,4 +519,30 @@ describe("gateway usage helpers", () => {
       totals: { totalTokens: 10, totalCost: 1 },
     });
   });
+
+  it("caps usage.cost all-agent fan-out concurrency", async () => {
+    let inFlight = 0;
+    let peakConcurrency = 0;
+    vi.mocked(loadCostUsageSummaryFromCache).mockImplementation(async () => {
+      inFlight += 1;
+      peakConcurrency = Math.max(peakConcurrency, inFlight);
+      await new Promise<void>((r) => {
+        setTimeout(r, 5);
+      });
+      inFlight -= 1;
+      return costSummary({ totalTokens: 1, totalCost: 0 });
+    });
+
+    const respond = vi.fn();
+    const agents = Array.from({ length: 30 }, (_, i) => ({ id: `agent-${i}` }));
+    await usageHandlers["usage.cost"]({
+      respond,
+      params: { startDate: "2026-02-01", endDate: "2026-02-02", agentScope: "all" },
+      context: { getRuntimeConfig: () => ({ agents: { list: agents } }) },
+    } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
+
+    expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+    expect(peakConcurrency).toBeLessThanOrEqual(12);
+    expect(respond.mock.calls[0]?.[1]?.totals?.totalTokens).toBe(30);
+  });
 });
