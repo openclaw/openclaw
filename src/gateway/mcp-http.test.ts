@@ -2871,6 +2871,20 @@ describe("mcp loopback server", () => {
     expect(payload[1]?.result?.tools?.map((tool) => tool.name)).toContain("message");
   });
 
+  it("returns 202 with an empty body for JSON-RPC notifications", async () => {
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime?.ownerToken,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", method: "tools/list" }),
+    });
+
+    expect(response.status).toBe(202);
+    await expect(response.text()).resolves.toBe("");
+  });
+
   it("returns 413 instead of resetting oversized request bodies", async () => {
     server = await ensureMcpLoopbackServer(0);
     const runtime = getActiveMcpLoopbackRuntime();

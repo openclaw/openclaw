@@ -94,6 +94,10 @@ function isJsonRpcRequest(message: unknown): message is JsonRpcRequest {
   return isRecord(message) && message.jsonrpc === "2.0" && typeof message.method === "string";
 }
 
+function isJsonRpcNotification(message: JsonRpcRequest): boolean {
+  return !Object.prototype.hasOwnProperty.call(message, "id");
+}
+
 function jsonRpcInternalError(parsed: JsonRpcRequest | JsonRpcRequest[] | undefined) {
   if (Array.isArray(parsed)) {
     return parsed.map((message) =>
@@ -368,7 +372,7 @@ async function startMcpLoopbackServer(port = 0): Promise<{
           } finally {
             markMcpLoopbackToolCallFinished(cliCaptureHandle);
           }
-          if (response !== null) {
+          if (response !== null && !isJsonRpcNotification(message)) {
             const responseToolName =
               message.method === "tools/call" && isRecord(message.params)
                 ? message.params.name
