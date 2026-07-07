@@ -170,30 +170,53 @@ function isTarEofRaceError(err: unknown): boolean {
 
 export type BackupTarRetryLogger = (message: string) => void;
 
+function resolveBackupTarAttemptTempPath(tempArchivePath: string, attempt: number): string {
+  return attempt === 1 ? tempArchivePath : `${tempArchivePath}.retry-${attempt}`;
+}
+
+function resolveBackupTarAttemptTempPaths(tempArchivePath: string): string[] {
+  return Array.from({ length: BACKUP_TAR_MAX_ATTEMPTS }, (_value, index) =>
+    resolveBackupTarAttemptTempPath(tempArchivePath, index + 1),
+  );
+}
+
+async function removeBackupTempArchiveBestEffort(tempArchivePath: string): Promise<void> {
+  await fs.rm(tempArchivePath, { force: true }).catch(() => undefined);
+}
+
 async function writeTarArchiveWithRetry(params: {
   tempArchivePath: string;
-  runTar: () => Promise<void>;
+  runTar: (tempArchivePath: string) => Promise<void>;
   log?: BackupTarRetryLogger;
   sleepMs?: (ms: number) => Promise<void>;
-}): Promise<void> {
+}): Promise<string> {
   const sleepFn = params.sleepMs ?? sleep;
   let lastErr: unknown;
+  const attemptTempArchivePaths: string[] = [];
   for (let attempt = 1; attempt <= BACKUP_TAR_MAX_ATTEMPTS; attempt += 1) {
+    const attemptTempArchivePath = resolveBackupTarAttemptTempPath(params.tempArchivePath, attempt);
+    attemptTempArchivePaths.push(attemptTempArchivePath);
     try {
-      await params.runTar();
-      return;
+      await params.runTar(attemptTempArchivePath);
+      for (const staleTempArchivePath of attemptTempArchivePaths.slice(0, -1)) {
+        await removeBackupTempArchiveBestEffort(staleTempArchivePath);
+      }
+      return attemptTempArchivePath;
     } catch (err) {
       lastErr = err;
       if (!isTarEofRaceError(err) || attempt === BACKUP_TAR_MAX_ATTEMPTS) {
+        for (const staleTempArchivePath of attemptTempArchivePaths) {
+          await removeBackupTempArchiveBestEffort(staleTempArchivePath);
+        }
         break;
       }
       try {
-        await fs.rm(params.tempArchivePath, { force: true });
+        await fs.rm(attemptTempArchivePath, { force: true });
       } catch (cleanupErr) {
         const code = (cleanupErr as NodeJS.ErrnoException).code;
         if (code && code !== "ENOENT") {
           params.log?.(
-            `Backup archiver could not remove temp archive ${params.tempArchivePath} between retries: ${code}. Continuing.`,
+            `Backup archiver could not remove temp archive ${attemptTempArchivePath} between retries: ${code}. Continuing.`,
           );
         }
       }
@@ -778,6 +801,7 @@ export async function createBackupArchive(
   const tempDir = await fs.mkdtemp(path.join(tempRoot, "openclaw-backup-"));
   const manifestPath = path.join(tempDir, "manifest.json");
   const tempArchivePath = buildTempArchivePath(outputPath);
+  const tempArchiveCleanupPaths = resolveBackupTarAttemptTempPaths(tempArchivePath);
   const stateAsset = result.assets.find((asset) => asset.kind === "state");
   try {
     const stateSqliteBackup = stateAsset
@@ -855,10 +879,10 @@ export async function createBackupArchive(
       }
       return true;
     };
-    await writeTarArchiveWithRetry({
+    const completedTempArchivePath = await writeTarArchiveWithRetry({
       tempArchivePath,
       log: opts.log,
-      runTar: async () => {
+      runTar: async (attemptTempArchivePath) => {
         // tar.c re-walks the tree (and thus re-invokes tarFilter) on every
         // attempt, so reset the closure counter here or retries would report
         // cumulative skip counts across attempts instead of the final one.
@@ -866,7 +890,7 @@ export async function createBackupArchive(
         unexpectedSqliteSourcePaths.length = 0;
         await tar.c(
           {
-            file: tempArchivePath,
+            file: attemptTempArchivePath,
             gzip: true,
             portable: true,
             preservePaths: true,
@@ -904,9 +928,11 @@ export async function createBackupArchive(
         } (live sessions, cron logs, queues, sockets, pid/tmp).`,
       );
     }
-    await publishTempArchive({ tempArchivePath, outputPath });
+    await publishTempArchive({ tempArchivePath: completedTempArchivePath, outputPath });
   } finally {
-    await fs.rm(tempArchivePath, { force: true }).catch(() => undefined);
+    for (const cleanupPath of tempArchiveCleanupPaths) {
+      await removeBackupTempArchiveBestEffort(cleanupPath);
+    }
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
   }
 
