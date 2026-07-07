@@ -3,8 +3,8 @@ import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { QuarantinedCronConfigJob } from "../store.js";
-import type { CronTriggerEvaluationResult } from "../trigger-script.js";
 import type {
+  CronTriggerEvaluationResult,
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
   CronFailureNotificationDelivery,

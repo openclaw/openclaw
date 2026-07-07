@@ -39,6 +39,7 @@ import {
   resolveCronActiveRuntimeConfig,
 } from "./isolated-agent/run-config.js";
 import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
+import type { CronTriggerEvaluationResult, CronTriggerFailureCode } from "./types.js";
 
 const MAX_CONCURRENT_TRIGGER_EVALS = 3;
 const MAX_TRIGGER_STATE_BYTES = 16 * 1024;
@@ -48,12 +49,15 @@ const HEADLESS_TRIGGER_TOOL_BUDGET = 5;
 
 let activeTriggerEvaluations = 0;
 
-export type CronTriggerFailureCode = CodeModeFailureCode | "tool_budget_exceeded";
-
-export type CronTriggerEvaluationResult =
-  | { kind: "evaluated"; fire: boolean; message?: string; state?: unknown }
-  | { kind: "busy" }
-  | { kind: "error"; code: CronTriggerFailureCode; error: string };
+// Compile-time sync with the leaf contract in ./types.ts: a new code-mode
+// failure code must be added to CronTriggerFailureCode or this line errors.
+type _AssertTriggerCodesCoverHeadless = [CodeModeFailureCode | "tool_budget_exceeded"] extends [
+  CronTriggerFailureCode,
+]
+  ? true
+  : never;
+const _assertTriggerCodes: _AssertTriggerCodesCoverHeadless = true;
+void _assertTriggerCodes;
 
 type PreparedTriggerRuntime = {
   tools: AnyAgentTool[];

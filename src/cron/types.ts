@@ -347,6 +347,27 @@ export type CronTrigger = {
   once?: boolean;
 };
 
+/**
+ * Closed failure taxonomy for trigger-script evaluation. Mirrors the code-mode
+ * failure codes plus the trigger tool budget; trigger-script.ts asserts the
+ * union stays in sync at compile time. Lives here (leaf module) so the cron
+ * service contract never imports the agents runtime.
+ */
+export type CronTriggerFailureCode =
+  | "invalid_input"
+  | "runtime_unavailable"
+  | "timeout"
+  | "output_limit_exceeded"
+  | "snapshot_limit_exceeded"
+  | "internal_error"
+  | "tool_budget_exceeded";
+
+/** Result union returned by the cron trigger-script evaluator. */
+export type CronTriggerEvaluationResult =
+  | { kind: "evaluated"; fire: boolean; message?: string; state?: unknown }
+  | { kind: "busy" }
+  | { kind: "error"; code: CronTriggerFailureCode; error: string };
+
 /** Fully persisted cron job with spec fields and mutable run state. */
 export type CronJob = CronJobBase<
   CronSchedule,
