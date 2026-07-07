@@ -190,7 +190,7 @@ async function openSessionHistoryStream(
   expect(handled).toBe(true);
   expect(transcriptUpdateHandler).toBeTypeOf("function");
 
-  return res;
+  return { req, res };
 }
 
 function emitTranscriptTextUpdate({
@@ -232,7 +232,7 @@ afterEach(() => {
 
 describe("session history SSE auth revocation", () => {
   it("closes the stream before delivering transcript updates after auth is revoked", async () => {
-    const res = await openSessionHistoryStream({ auth: { mode: "trusted-proxy" } as never });
+    const { res } = await openSessionHistoryStream({ auth: { mode: "trusted-proxy" } as never });
 
     expect(res.headers.get("content-type")).toContain("text/event-stream");
 
@@ -247,7 +247,7 @@ describe("session history SSE auth revocation", () => {
   });
 
   it("rechecks SSE auth against live proxy config instead of startup fallbacks", async () => {
-    const res = await openSessionHistoryStream(TRUSTED_PROXY_STARTUP_OPTIONS);
+    const { res } = await openSessionHistoryStream(TRUSTED_PROXY_STARTUP_OPTIONS);
 
     gatewayConfig = {};
 
@@ -260,7 +260,7 @@ describe("session history SSE auth revocation", () => {
   });
 
   it("skips SSE reauth for transcript updates outside this stream", async () => {
-    const res = await openSessionHistoryStream(TRUSTED_PROXY_STARTUP_OPTIONS);
+    const { res } = await openSessionHistoryStream(TRUSTED_PROXY_STARTUP_OPTIONS);
 
     authCheckCalls = 0;
     gatewayConfig = {};
@@ -275,5 +275,31 @@ describe("session history SSE auth revocation", () => {
     expect(authCheckCalls).toBe(0);
     expect(joined).not.toContain("other session");
     expect(res.writableEnded).toBe(false);
+  });
+
+  it("closes and unsubscribes when the request stream emits an error", async () => {
+    const { req, res } = await openSessionHistoryStream(TRUSTED_PROXY_STARTUP_OPTIONS);
+
+    expect(() => {
+      req.emit("error", new Error("client aborted with stream error"));
+    }).not.toThrow();
+
+    await vi.waitFor(() => {
+      expect(res.writableEnded).toBe(true);
+    });
+    expect(transcriptUpdateHandler).toBeUndefined();
+  });
+
+  it("closes and unsubscribes when the response stream emits an error", async () => {
+    const { res } = await openSessionHistoryStream(TRUSTED_PROXY_STARTUP_OPTIONS);
+
+    expect(() => {
+      res.emit("error", new Error("response socket write failed"));
+    }).not.toThrow();
+
+    await vi.waitFor(() => {
+      expect(res.writableEnded).toBe(true);
+    });
+    expect(transcriptUpdateHandler).toBeUndefined();
   });
 });

@@ -258,6 +258,11 @@ export async function handleSessionHistoryHttpRequest(
     }
   };
 
+  const closeStreamAfterError = (error: unknown) => {
+    log.warn("session history SSE stream emitted an error; closing stream", { error });
+    closeStream();
+  };
+
   const queueStreamWork = (work: () => Promise<void>) => {
     streamQueue = streamQueue
       .then(async () => {
@@ -377,6 +382,8 @@ export async function handleSessionHistoryHttpRequest(
       });
     });
   });
+  req.on("error", closeStreamAfterError);
+  res.on("error", closeStreamAfterError);
   req.on("close", cleanup);
   res.on("close", cleanup);
   res.on("finish", cleanup);
