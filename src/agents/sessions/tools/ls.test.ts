@@ -93,7 +93,9 @@ describe("ls tool", () => {
     const controller = new AbortController();
     const listener = trackAbortListener(controller.signal);
 
-    await expect(tool.execute("call-1", {}, controller.signal)).rejects.toThrow(error);
+    await expect(
+      tool.execute("call-1", {}, controller.signal, undefined, {} as never),
+    ).rejects.toThrow(error);
 
     listener.expectReleased();
   });
@@ -103,7 +105,9 @@ describe("ls tool", () => {
     const controller = new AbortController();
     const listener = trackAbortListener(controller.signal);
 
-    await expect(tool.execute("call-1", {}, controller.signal)).resolves.toBeDefined();
+    await expect(
+      tool.execute("call-1", {}, controller.signal, undefined, {} as never),
+    ).resolves.toBeDefined();
 
     listener.expectReleased();
   });
@@ -121,7 +125,7 @@ describe("ls tool", () => {
     });
     const controller = new AbortController();
     const listener = trackAbortListener(controller.signal);
-    const result = tool.execute("call-1", {}, controller.signal);
+    const result = tool.execute("call-1", {}, controller.signal, undefined, {} as never);
 
     controller.abort();
 

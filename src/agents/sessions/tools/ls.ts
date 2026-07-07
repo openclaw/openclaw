@@ -143,7 +143,7 @@ export function createLsToolDefinition(
             entries = await ops.readdir(dirPath);
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
-            throw new Error(`Cannot read directory: ${message}`);
+            throw new Error(`Cannot read directory: ${message}`, { cause: error });
           }
 
           // Sort alphabetically, case-insensitive.

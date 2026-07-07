@@ -139,6 +139,12 @@ export class CodexAppServerClient {
     this.child = child;
     this.lines = createInterface({ input: child.stdout });
     this.lines.on("line", (line) => this.handleLine(line));
+    this.lines.on("error", (error) =>
+      this.closeWithError(error instanceof Error ? error : new Error(String(error))),
+    );
+    child.stdout.on("error", (error) =>
+      this.closeWithError(error instanceof Error ? error : new Error(String(error))),
+    );
     child.stderr.on("data", (chunk: Buffer | string) => {
       const text = chunk.toString("utf8");
       this.stderrTail = appendBoundedTail(this.stderrTail, text, CODEX_APP_SERVER_STDERR_TAIL_MAX);
@@ -146,6 +152,11 @@ export class CodexAppServerClient {
       if (trimmed) {
         embeddedAgentLog.debug(`codex app-server stderr: ${trimmed}`);
       }
+    });
+    // Codex reserves stderr for diagnostics; losing that stream must not tear
+    // down an otherwise healthy JSON-RPC connection on stdout.
+    child.stderr.on("error", (error) => {
+      embeddedAgentLog.warn("codex app-server stderr stream failed", { error });
     });
     child.once("error", (error) =>
       this.closeWithError(error instanceof Error ? error : new Error(String(error))),
