@@ -543,9 +543,12 @@ export async function runCommandWithTimeout(
                   return;
                 }
                 try {
-                  spawn(taskkillPath, ["/PID", String(child.pid), "/T", "/F"], {
+                  const forceKill = spawn(taskkillPath, ["/PID", String(child.pid), "/T", "/F"], {
                     stdio: "ignore",
                     windowsHide: true,
+                  });
+                  forceKill.on("error", () => {
+                    child.kill("SIGKILL");
                   });
                 } catch {
                   child.kill("SIGKILL");

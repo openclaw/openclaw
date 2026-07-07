@@ -414,6 +414,85 @@ describe("runCommandWithTimeout", () => {
 
     expect(result.preservedStdoutLines).toEqual(["x".repeat(22)]);
   });
+
+  it(
+    "falls back to SIGKILL when force-kill taskkill spawn emits async error",
+    { timeout: 5_000 },
+    async () => {
+      vi.useFakeTimers();
+
+      const platformStub = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+      // Create a child that survives the first taskkill so the force-kill
+      // timer fires: exitCode/signalCode must stay null.
+      const mainChild = new EventEmitter() as EventEmitter & ChildProcess;
+      mainChild.stdout = new EventEmitter() as NonNullable<ChildProcess["stdout"]>;
+      mainChild.stderr = new EventEmitter() as NonNullable<ChildProcess["stderr"]>;
+      mainChild.stdin = new EventEmitter() as NonNullable<ChildProcess["stdin"]>;
+      mainChild.stdin.write = vi.fn(() => true) as NonNullable<ChildProcess["stdin"]>["write"];
+      mainChild.stdin.end = vi.fn() as NonNullable<ChildProcess["stdin"]>["end"];
+      let mainKilled = false;
+      const killSpy = vi.fn((_signal?: NodeJS.Signals) => {
+        mainKilled = true;
+        return true;
+      });
+      mainChild.kill = killSpy as ChildProcess["kill"];
+      Object.defineProperties(mainChild, {
+        pid: { get: () => 5678 },
+        killed: { get: () => mainKilled },
+        exitCode: { get: () => null },
+        signalCode: { get: () => null },
+      });
+
+      let forceKillChild: EventEmitter | undefined;
+
+      let spawnCount = 0;
+      spawnMock.mockImplementation(() => {
+        spawnCount++;
+        if (spawnCount >= 3) {
+          // Third spawn: force-kill taskkill inside the 300ms timer.
+          forceKillChild = new EventEmitter();
+          (forceKillChild as EventEmitter & { kill?: unknown }).kill = vi.fn(() => true);
+          return forceKillChild;
+        }
+        // First spawn: main child. Second spawn: first taskkill.
+        if (spawnCount === 1) return mainChild;
+        // Return a dummy for the first taskkill so it doesn't crash.
+        const dummy = new EventEmitter();
+        (dummy as EventEmitter & { kill?: unknown }).kill = vi.fn(() => true);
+        return dummy;
+      });
+
+      await loadExecModules({ mockSpawn: true });
+
+      const resultPromise = runCommandWithTimeout(createSilentIdleArgv(), {
+        timeoutMs: 100,
+        killProcessTree: true,
+      });
+
+      // Advance past the timeout to trigger killChild → first taskkill → timer.
+      await vi.advanceTimersByTimeAsync(150);
+      // Advance past COMMAND_PROCESS_TREE_KILL_GRACE_MS so the force-kill spawns.
+      await vi.advanceTimersByTimeAsync(350);
+
+      if (!forceKillChild) {
+        throw new Error("expected force-kill child to be spawned");
+      }
+
+      // Async spawn error: taskkill.exe not found / failed to execute.
+      forceKillChild.emit("error", new Error("taskkill.exe not found"));
+
+      expect(killSpy).toHaveBeenCalledWith("SIGKILL");
+
+      // Let the process settle.
+      mainChild.emit("exit", null, "SIGTERM");
+      mainChild.emit("close", null, "SIGTERM");
+      await vi.runAllTimersAsync();
+      await resultPromise;
+
+      platformStub.mockRestore();
+    },
+  );
 });
 
 describe("attachChildProcessBridge", () => {
