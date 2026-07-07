@@ -197,7 +197,7 @@ struct DeviceIdentityStoreTests {
     }
 
     @Test
-    func `legacy app support storage wins when app group storage is not available`() throws {
+    func `legacy app support storage wins when app group storage is not available`() {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
@@ -371,7 +371,7 @@ struct DeviceIdentityStoreTests {
     }
 
     @Test
-    func `migrates an existing app group identity when falling back to legacy storage`() throws {
+    func `migrates an existing app group identity and auth store when falling back to legacy storage`() throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
@@ -379,10 +379,16 @@ struct DeviceIdentityStoreTests {
         let appGroupIdentityURL = appGroupURL
             .appendingPathComponent("identity", isDirectory: true)
             .appendingPathComponent("device.json", isDirectory: false)
+        let appGroupAuthURL = appGroupIdentityURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("device-auth.json", isDirectory: false)
         let legacyIdentityURL = tempDir
             .appendingPathComponent("legacy", isDirectory: true)
             .appendingPathComponent("identity", isDirectory: true)
             .appendingPathComponent("device.json", isDirectory: false)
+        let legacyAuthURL = legacyIdentityURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("device-auth.json", isDirectory: false)
         try FileManager.default.createDirectory(
             at: appGroupIdentityURL.deletingLastPathComponent(),
             withIntermediateDirectories: true)
@@ -394,21 +400,68 @@ struct DeviceIdentityStoreTests {
                 label: "PRIVATE KEY",
                 body: "MC4CAQAwBQYDK2VwBCIEIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f"))
         try stored.write(to: appGroupIdentityURL, atomically: true, encoding: .utf8)
+        let storedAuth = #"{"version":1,"deviceId":"app-group-device-id","tokens":{}}"#
+        try storedAuth.write(to: appGroupAuthURL, atomically: true, encoding: .utf8)
         let appGroupBefore = try String(contentsOf: appGroupIdentityURL, encoding: .utf8)
 
-        let migrationSource = DeviceIdentityPaths.appGroupMigrationSourceURL(
+        let migrationSource = DeviceIdentityPaths.appGroupMigrationSource(
             appGroupStateDirURL: appGroupURL,
             appGroupStateDirAvailable: false,
-            identityFileName: "device.json")
+            profile: .primary)
         let identity = DeviceIdentityStore.loadOrCreate(
             fileURL: legacyIdentityURL,
-            migrationSourceURL: migrationSource)
+            migrationSource: migrationSource)
 
         #expect(identity.deviceId == "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c")
         #expect(FileManager.default.fileExists(atPath: legacyIdentityURL.path))
         let reloaded = DeviceIdentityStore.loadOrCreate(fileURL: legacyIdentityURL)
         #expect(reloaded.deviceId == identity.deviceId)
         #expect(try String(contentsOf: appGroupIdentityURL, encoding: .utf8) == appGroupBefore)
+        #expect(try String(contentsOf: legacyAuthURL, encoding: .utf8) == storedAuth)
+        #expect(try String(contentsOf: appGroupAuthURL, encoding: .utf8) == storedAuth)
+    }
+
+    @Test
+    func `does not clobber an existing auth store when migrating an app group identity`() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let appGroupIdentityDirURL = tempDir
+            .appendingPathComponent("shared", isDirectory: true)
+            .appendingPathComponent("identity", isDirectory: true)
+        let legacyIdentityDirURL = tempDir
+            .appendingPathComponent("legacy", isDirectory: true)
+            .appendingPathComponent("identity", isDirectory: true)
+        try FileManager.default.createDirectory(at: appGroupIdentityDirURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: legacyIdentityDirURL, withIntermediateDirectories: true)
+        let stored = try Self.identityJSON(
+            publicKeyPem: Self.pem(
+                label: "PUBLIC KEY",
+                body: "MCowBQYDK2VwAyEAA6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg="),
+            privateKeyPem: Self.pem(
+                label: "PRIVATE KEY",
+                body: "MC4CAQAwBQYDK2VwBCIEIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f"))
+        try stored.write(
+            to: appGroupIdentityDirURL.appendingPathComponent("device.json", isDirectory: false),
+            atomically: true,
+            encoding: .utf8)
+        try #"{"version":1,"deviceId":"app-group-device-id","tokens":{}}"#.write(
+            to: appGroupIdentityDirURL.appendingPathComponent("device-auth.json", isDirectory: false),
+            atomically: true,
+            encoding: .utf8)
+        let legacyAuthURL = legacyIdentityDirURL.appendingPathComponent("device-auth.json", isDirectory: false)
+        let existingLegacyAuth = #"{"version":1,"deviceId":"legacy-device-id","tokens":{}}"#
+        try existingLegacyAuth.write(to: legacyAuthURL, atomically: true, encoding: .utf8)
+
+        let identity = DeviceIdentityStore.loadOrCreate(
+            fileURL: legacyIdentityDirURL.appendingPathComponent("device.json", isDirectory: false),
+            migrationSource: DeviceIdentityPaths.appGroupMigrationSource(
+                appGroupStateDirURL: tempDir.appendingPathComponent("shared", isDirectory: true),
+                appGroupStateDirAvailable: false,
+                profile: .primary))
+
+        #expect(identity.deviceId == "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c")
+        #expect(try String(contentsOf: legacyAuthURL, encoding: .utf8) == existingLegacyAuth)
     }
 
     @Test
@@ -437,13 +490,13 @@ struct DeviceIdentityStoreTests {
         try stored.write(to: appGroupIdentityURL, atomically: true, encoding: .utf8)
 
         let existingLegacy = DeviceIdentityStore.loadOrCreate(fileURL: legacyIdentityURL)
-        let migrationSource = DeviceIdentityPaths.appGroupMigrationSourceURL(
+        let migrationSource = DeviceIdentityPaths.appGroupMigrationSource(
             appGroupStateDirURL: appGroupURL,
             appGroupStateDirAvailable: false,
-            identityFileName: "device.json")
+            profile: .primary)
         let identity = DeviceIdentityStore.loadOrCreate(
             fileURL: legacyIdentityURL,
-            migrationSourceURL: migrationSource)
+            migrationSource: migrationSource)
 
         #expect(identity.deviceId == existingLegacy.deviceId)
         #expect(identity.deviceId != "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c")
@@ -453,10 +506,10 @@ struct DeviceIdentityStoreTests {
     func `provides no app group migration source when the entitlement is present`() {
         let appGroupURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        #expect(DeviceIdentityPaths.appGroupMigrationSourceURL(
+        #expect(DeviceIdentityPaths.appGroupMigrationSource(
             appGroupStateDirURL: appGroupURL,
             appGroupStateDirAvailable: true,
-            identityFileName: "device.json") == nil)
+            profile: .primary) == nil)
     }
 
     private static func base64UrlDecode(_ value: String) -> Data? {
