@@ -87,7 +87,7 @@ actor GatewayEndpointStore {
         let raw = env["OPENCLAW_GATEWAY_PASSWORD"] ?? ""
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
-            if let configPassword = self.resolveConfigPassword(isRemote: isRemote, root: root),
+            if let configPassword = self.resolveConfigPassword(isRemote: isRemote, root: root, env: env),
                !configPassword.isEmpty
             {
                 self.warnEnvOverrideOnce(
@@ -113,8 +113,7 @@ actor GatewayEndpointStore {
            let auth = gateway["auth"] as? [String: Any],
            let password = auth["password"] as? String
         {
-            let pw = password.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !pw.isEmpty {
+            if let pw = self.resolveLocalConfigAuthString(password, env: env) {
                 return pw
             }
         }
@@ -126,7 +125,11 @@ actor GatewayEndpointStore {
         return nil
     }
 
-    private static func resolveConfigPassword(isRemote: Bool, root: [String: Any]) -> String? {
+    private static func resolveConfigPassword(
+        isRemote: Bool,
+        root: [String: Any],
+        env: [String: String] = [:]) -> String?
+    {
         if isRemote {
             if let gateway = root["gateway"] as? [String: Any],
                let remote = gateway["remote"] as? [String: Any],
@@ -141,7 +144,7 @@ actor GatewayEndpointStore {
            let auth = gateway["auth"] as? [String: Any],
            let password = auth["password"] as? String
         {
-            return password.trimmingCharacters(in: .whitespacesAndNewlines)
+            return self.resolveLocalConfigAuthString(password, env: env)
         }
         return nil
     }
@@ -155,7 +158,7 @@ actor GatewayEndpointStore {
         let raw = env["OPENCLAW_GATEWAY_TOKEN"] ?? ""
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
-            if let configToken = self.resolveConfigToken(isRemote: isRemote, root: root),
+            if let configToken = self.resolveConfigToken(isRemote: isRemote, root: root, env: env),
                !configToken.isEmpty,
                configToken != trimmed
             {
@@ -167,7 +170,7 @@ actor GatewayEndpointStore {
             return trimmed
         }
 
-        if let configToken = self.resolveConfigToken(isRemote: isRemote, root: root),
+        if let configToken = self.resolveConfigToken(isRemote: isRemote, root: root, env: env),
            !configToken.isEmpty
         {
             return configToken
@@ -186,7 +189,11 @@ actor GatewayEndpointStore {
         return nil
     }
 
-    private static func resolveConfigToken(isRemote: Bool, root: [String: Any]) -> String? {
+    private static func resolveConfigToken(
+        isRemote: Bool,
+        root: [String: Any],
+        env: [String: String] = [:]) -> String?
+    {
         if isRemote {
             return GatewayRemoteConfig.resolveTokenString(root: root)
         }
@@ -195,9 +202,40 @@ actor GatewayEndpointStore {
            let auth = gateway["auth"] as? [String: Any],
            let token = auth["token"] as? String
         {
-            return token.trimmingCharacters(in: .whitespacesAndNewlines)
+            return self.resolveLocalConfigAuthString(token, env: env)
         }
         return nil
+    }
+
+    private static func resolveLocalConfigAuthString(
+        _ raw: String,
+        env: [String: String]) -> String?
+    {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard self.isEnvTemplate(trimmed) else {
+            return trimmed
+        }
+        guard let envName = self.envTemplateName(trimmed) else { return nil }
+        let value = env[envName]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value?.isEmpty == false ? value : nil
+    }
+
+    private static func isEnvTemplate(_ value: String) -> Bool {
+        value.hasPrefix("${") && value.hasSuffix("}")
+    }
+
+    private static func envTemplateName(_ value: String) -> String? {
+        guard self.isEnvTemplate(value) else { return nil }
+        let nameStart = value.index(value.startIndex, offsetBy: 2)
+        let nameEnd = value.index(before: value.endIndex)
+        let name = value[nameStart..<nameEnd].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty,
+              name.range(of: #"^[A-Za-z_][A-Za-z0-9_]*$"#, options: .regularExpression) != nil
+        else {
+            return nil
+        }
+        return name
     }
 
     private static func warnEnvOverrideOnce(
