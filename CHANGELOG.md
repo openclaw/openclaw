@@ -23,7 +23,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **ACP parent progress:** emit only the new suffix from cumulative item-progress snapshots after an earlier snapshot has flushed, preventing repeated progress text in parent sessions. (#101042) Thanks @mushuiyu886.
 - **Codex app-server protocol:** require app-server 0.142 or newer, remove pre-0.142 wire-shape compatibility, and teach Codex to retrieve deferred native `spawn_agent` through `tool_search` so native subagent task mirroring works on search-capable models. (#101221)
 - **Android hardware keyboard chat:** send with unmodified Enter on physical keyboards while preserving Shift+Enter and other modified Enter combinations for multiline input. (#101239) Thanks @3ninyt3nin-creator.
 - **CJK Markdown emphasis:** render adjacent Chinese, Japanese, and Korean emphasis punctuation through the shared Markdown pipeline instead of leaking literal markers across channels. (#101230, #101120) Thanks @nicknmorty.
