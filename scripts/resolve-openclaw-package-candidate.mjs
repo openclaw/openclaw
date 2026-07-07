@@ -256,7 +256,7 @@ function run(command, args, options = {}) {
     timeout?.unref?.();
     ACTIVE_CHILD_KILLERS.add(killChild);
     let settled = false;
-    const rejectRun = (error, options = {}) => {
+    const rejectRun = (error, rejectOptions = {}) => {
       if (settled) {
         return;
       }
@@ -264,7 +264,7 @@ function run(command, args, options = {}) {
       if (timeout) {
         clearTimeout(timeout);
       }
-      if (killTimer && !options.keepKillTimer) {
+      if (killTimer && !rejectOptions.keepKillTimer) {
         clearTimeout(killTimer);
         killTimer = undefined;
         forceKillAt = undefined;
