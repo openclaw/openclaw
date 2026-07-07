@@ -66,7 +66,7 @@ const defaultRuntime: OutputRuntimeEnv = {
 
 // Defense-in-depth: replace the redaction sentinel with `[REDACTED]`
 // before writing, even if upstream emits it.
-export function scrubSentinel(s: string): string {
+function scrubSentinel(s: string): string {
   if (!s.includes(REDACTED_SENTINEL)) {
     return s;
   }
