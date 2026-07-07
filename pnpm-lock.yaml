@@ -1918,6 +1918,9 @@ importers:
       markdown-it:
         specifier: 14.3.0
         version: 14.3.0
+      markdown-it-cjk-friendly:
+        specifier: 2.0.2
+        version: 2.0.2(@types/markdown-it@14.1.2)(markdown-it@14.3.0)
       yaml:
         specifier: 2.9.0
         version: 2.9.0
@@ -5998,6 +6001,16 @@ packages:
   markdown-extensions@2.0.0:
     resolution: {integrity: sha512-o5vL7aDWatOTX8LzaS1WMoaoxIiLRQJuIKKe2wAw6IeULDHaqbiqiggmx+pKvZDb1Sj+pE46Sn1T7lCqfFtg1Q==}
     engines: {node: '>=16'}
+
+  markdown-it-cjk-friendly@2.0.2:
+    resolution: {integrity: sha512-KXCl6sd129UqkAiRDb+NcAHrxC9xRa2WsGIsMMvtp2y1YlbeIaNYzArX2zfDoGhOjsyNMfJrGO7xGBss27YQSA==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      '@types/markdown-it': '*'
+      markdown-it: '*'
+    peerDependenciesMeta:
+      '@types/markdown-it':
+        optional: true
 
   markdown-it-task-lists@2.1.1:
     resolution: {integrity: sha512-TxFAc76Jnhb2OUu+n3yz9RMu4CwGfaT788br6HhEDlvWfdeJcLUsxk1Hgw2yJio0OXsxv7pyIPmvECY7bMbluA==}
@@ -11809,6 +11822,13 @@ snapshots:
       - supports-color
 
   markdown-extensions@2.0.0: {}
+
+  markdown-it-cjk-friendly@2.0.2(@types/markdown-it@14.1.2)(markdown-it@14.3.0):
+    dependencies:
+      get-east-asian-width: 1.6.0
+      markdown-it: 14.3.0
+    optionalDependencies:
+      '@types/markdown-it': 14.1.2
 
   markdown-it-task-lists@2.1.1: {}
 

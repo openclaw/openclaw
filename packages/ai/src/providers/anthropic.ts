@@ -94,6 +94,7 @@ import {
 import { transformMessages } from "./transform-messages.js";
 
 const ANTHROPIC_CACHE_CONTROL_LIMIT = 4;
+const EMPTY_ERROR_TOOL_RESULT_TEXT = "[tool error with no output]";
 
 function getCacheControl(
   model: Model<"anthropic-messages">,
@@ -146,7 +147,10 @@ const toClaudeCodeName = (name: string) => ccToolLookup.get(name.toLowerCase()) 
 /**
  * Convert content blocks to Anthropic API format
  */
-function convertContentBlocks(content: readonly unknown[]):
+function convertContentBlocks(
+  content: readonly unknown[],
+  isError: boolean,
+):
   | string
   | Array<
       | { type: "text"; text: string }
@@ -170,7 +174,9 @@ function convertContentBlocks(content: readonly unknown[]):
 
   if (!hasImages) {
     const sanitized = sanitizeSurrogates(text);
-    return sanitized.trim().length > 0 ? sanitized : (mediaPlaceholder ?? "");
+    return sanitized.trim().length > 0
+      ? sanitized
+      : (mediaPlaceholder ?? (isError ? EMPTY_ERROR_TOOL_RESULT_TEXT : ""));
   }
 
   const blocks: Array<
@@ -225,6 +231,7 @@ export type AnthropicThinkingDisplay = "summarized" | "omitted";
 
 const FINE_GRAINED_TOOL_STREAMING_BETA = "fine-grained-tool-streaming-2025-05-14";
 const INTERLEAVED_THINKING_BETA = "interleaved-thinking-2025-05-14";
+const ANTHROPIC_MIN_THINKING_BUDGET_TOKENS = 1024;
 
 function getAnthropicCompat(model: Model<"anthropic-messages">): Required<AnthropicMessagesCompat> {
   // Auto-detect session affinity and cache control support from provider
@@ -498,6 +505,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 ) => {
   const stream = new AssistantMessageEventStream();
   const requestContext = prepareClaudeSonnet5RequestContext(model, context);
+  const requestOptions = normalizeAnthropicThinkingOptions(model, options);
 
   void (async () => {
     const output: AssistantMessage = {
@@ -521,7 +529,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
     // to expose until the terminal stop reason is known.
     const refusalBuffer = usesClaudeStreamingRefusalContract(model)
       ? createDeferredEventBuffer<AssistantMessageEvent>(stream, () =>
-          notifyLlmRequestActivity(options?.signal),
+          notifyLlmRequestActivity(requestOptions?.signal),
         )
       : undefined;
     const eventSink = refusalBuffer ?? stream;
@@ -538,11 +546,11 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
       // caller-owned headers.
       let serverSideFallback = false;
 
-      if (options?.client) {
-        client = options.client;
+      if (requestOptions?.client) {
+        client = requestOptions.client;
         isOAuth = false;
       } else {
-        const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? "";
+        const apiKey = requestOptions?.apiKey ?? getEnvApiKey(model.provider) ?? "";
 
         let copilotDynamicHeaders: Record<string, string> | undefined;
         if (model.provider === "github-copilot") {
@@ -553,15 +561,16 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
           });
         }
 
-        const cacheRetention = options?.cacheRetention ?? resolveCacheRetention();
-        const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
+        const cacheRetention = requestOptions?.cacheRetention ?? resolveCacheRetention();
+        const cacheSessionId = cacheRetention === "none" ? undefined : requestOptions?.sessionId;
 
         const created = createClient(
           model,
           apiKey,
-          options?.interleavedThinking ?? true,
+          requestOptions?.thinkingEnabled === true,
+          requestOptions?.interleavedThinking ?? true,
           shouldUseFineGrainedToolStreamingBeta(model, requestContext),
-          options?.headers,
+          requestOptions?.headers,
           copilotDynamicHeaders,
           cacheSessionId,
         );
@@ -569,23 +578,31 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         isOAuth = created.isOAuthToken;
         serverSideFallback = created.serverSideFallback;
       }
-      const builtParams = buildParams(model, requestContext, isOAuth, options, serverSideFallback);
+      const builtParams = buildParams(
+        model,
+        requestContext,
+        isOAuth,
+        requestOptions,
+        serverSideFallback,
+      );
       let params = builtParams.params;
       const toolProjection = builtParams.toolProjection;
-      const nextParams = await options?.onPayload?.(params, model);
+      const nextParams = await requestOptions?.onPayload?.(params, model);
       if (nextParams !== undefined) {
         params = nextParams as MessageCreateParamsStreaming;
       }
       applyClaudeRequestContract(params as unknown as Record<string, unknown>, model);
-      const requestOptions = {
-        ...(options?.signal ? { signal: options.signal } : {}),
-        ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
-        ...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
+      const sdkRequestOptions = {
+        ...(requestOptions?.signal ? { signal: requestOptions.signal } : {}),
+        ...(requestOptions?.timeoutMs !== undefined ? { timeout: requestOptions.timeoutMs } : {}),
+        ...(requestOptions?.maxRetries !== undefined
+          ? { maxRetries: requestOptions.maxRetries }
+          : {}),
       };
       const response = await client.messages
-        .create({ ...params, stream: true }, requestOptions)
+        .create({ ...params, stream: true }, sdkRequestOptions)
         .asResponse();
-      await options?.onResponse?.(
+      await requestOptions?.onResponse?.(
         { status: response.status, headers: headersToRecord(response.headers) },
         model,
       );
@@ -598,7 +615,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 
       for await (const event of iterateAnthropicEvents(
         response,
-        options?.signal,
+        requestOptions?.signal,
         refusalBuffer !== undefined,
       )) {
         if (event.type === "message_start") {
@@ -897,7 +914,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         }
       }
 
-      if (options?.signal?.aborted) {
+      if (requestOptions?.signal?.aborted) {
         throw new Error("Request was aborted");
       }
 
@@ -918,7 +935,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         refusalBuffer.discard();
         output.content = [];
       }
-      output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+      output.stopReason = requestOptions?.signal?.aborted ? "aborted" : "error";
       output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
       stream.push({ type: "error", reason: output.stopReason, error: output });
       stream.end();
@@ -946,6 +963,25 @@ function normalizeAnthropicToolChoice(
  */
 function supportsAdaptiveThinking(model: Model<"anthropic-messages">): boolean {
   return supportsClaudeAdaptiveThinking(model);
+}
+
+function normalizeAnthropicThinkingOptions(
+  model: Model<"anthropic-messages">,
+  options: AnthropicOptions | undefined,
+): AnthropicOptions | undefined {
+  if (options?.thinkingEnabled !== true || supportsAdaptiveThinking(model)) {
+    return options;
+  }
+
+  const budgetTokens = options.thinkingBudgetTokens ?? ANTHROPIC_MIN_THINKING_BUDGET_TOKENS;
+  const maxTokens = options.maxTokens ?? model.maxTokens;
+  if (budgetTokens >= ANTHROPIC_MIN_THINKING_BUDGET_TOKENS && budgetTokens < maxTokens) {
+    return options;
+  }
+
+  // Manual thinking is one request-wide mode: replay, sampling, tool choice,
+  // headers, and payload construction must all observe the disabled state.
+  return { ...options, thinkingEnabled: false, thinkingBudgetTokens: undefined };
 }
 
 function supportsNativeXhighEffort(model: Model<"anthropic-messages">): boolean {
@@ -1063,11 +1099,14 @@ export const streamSimpleAnthropic: StreamFunction<
     options?.thinkingBudgets,
   );
 
+  // Sub-minimum budgets (< 1024) resolve to thinking disabled so downstream
+  // consumers (payload, replay, temperature, tool-choice) see consistent state.
+  const thinkingEnabled = adjusted.thinkingBudget >= 1024;
   return streamAnthropic(model, context, {
     ...base,
     maxTokens: adjusted.maxTokens,
-    thinkingEnabled: true,
-    thinkingBudgetTokens: adjusted.thinkingBudget,
+    thinkingEnabled,
+    thinkingBudgetTokens: thinkingEnabled ? adjusted.thinkingBudget : undefined,
   } satisfies AnthropicOptions);
 };
 
@@ -1101,6 +1140,7 @@ function supportsAnthropicServerSideFallback(model: Model<"anthropic-messages">)
 function createClient(
   model: Model<"anthropic-messages">,
   apiKey: string,
+  thinkingEnabled: boolean,
   interleavedThinking: boolean,
   useFineGrainedToolStreamingBeta: boolean,
   optionsHeaders?: Record<string, string>,
@@ -1117,6 +1157,11 @@ function createClient(
   if (needsInterleavedBeta) {
     betaFeatures.push(INTERLEAVED_THINKING_BETA);
   }
+  const fetchOptions =
+    /^kimi(?:-|$)/.test(model.provider) && thinkingEnabled
+      ? { sanitizeSse: false as const }
+      : undefined;
+  const fetch = getAiTransportHost().buildModelFetch(model, undefined, fetchOptions);
 
   if (model.provider === "cloudflare-ai-gateway") {
     const client = new Anthropic({
@@ -1134,7 +1179,7 @@ function createClient(
         model.headers,
         optionsHeaders,
       ),
-      fetch: getAiTransportHost().buildModelFetch(model),
+      fetch,
     });
 
     return { client, isOAuthToken: false, serverSideFallback: false };
@@ -1157,6 +1202,7 @@ function createClient(
         dynamicHeaders,
         optionsHeaders,
       ),
+      fetch,
     });
 
     return { client, isOAuthToken: false, serverSideFallback: false };
@@ -1178,6 +1224,7 @@ function createClient(
         dynamicHeaders,
         optionsHeaders,
       ),
+      fetch,
     });
 
     return { client, isOAuthToken: false, serverSideFallback: false };
@@ -1201,6 +1248,7 @@ function createClient(
         model.headers,
         optionsHeaders,
       ),
+      fetch,
     });
 
     return { client, isOAuthToken: true, serverSideFallback: false };
@@ -1230,6 +1278,7 @@ function createClient(
       model.headers,
       optionsHeaders,
     ),
+    fetch,
   });
 
   return { client, isOAuthToken: false, serverSideFallback };
@@ -1332,10 +1381,10 @@ function buildParams(
               : { effort };
         }
       } else {
-        // Budget-based thinking for older models
+        // Budget-based thinking for older models.
         params.thinking = {
           type: "enabled",
-          budget_tokens: options?.thinkingBudgetTokens || 1024,
+          budget_tokens: options?.thinkingBudgetTokens ?? ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
           display,
         };
       }
@@ -1381,6 +1430,10 @@ function convertMessages(
   replayThinkingEnabled = true,
 ): MessageParam[] {
   const params: MessageParam[] = [];
+  // Param indexes for transient runtime-context carriers — excluded from
+  // cache_control breakpoint selection so the deepest breakpoint anchors on the
+  // last stable user turn, not the volatile carrier appended after it.
+  const cacheBreakpointOptOutParamIndexes = new Set<number>();
 
   // Transform messages for cross-provider compatibility
   const transformedMessages = transformMessages(messages, model, normalizeToolCallId);
@@ -1392,8 +1445,12 @@ function convertMessages(
     const msg = transformedMessages[i];
 
     if (msg.role === "user") {
+      const isRuntimeContextCarrier = msg.runtimeContextCarrier === true;
       if (typeof msg.content === "string") {
         if (msg.content.trim().length > 0) {
+          if (isRuntimeContextCarrier) {
+            cacheBreakpointOptOutParamIndexes.add(params.length);
+          }
           params.push({
             role: "user",
             content: sanitizeSurrogates(msg.content),
@@ -1424,6 +1481,9 @@ function convertMessages(
         });
         if (filteredBlocks.length === 0) {
           continue;
+        }
+        if (isRuntimeContextCarrier) {
+          cacheBreakpointOptOutParamIndexes.add(params.length);
         }
         params.push({
           role: "user",
@@ -1507,7 +1567,7 @@ function convertMessages(
       toolResults.push({
         type: "tool_result",
         tool_use_id: msg.toolCallId,
-        content: convertContentBlocks(msg.content),
+        content: convertContentBlocks(msg.content, msg.isError),
         is_error: msg.isError,
       });
 
@@ -1517,7 +1577,7 @@ function convertMessages(
         toolResults.push({
           type: "tool_result",
           tool_use_id: nextMsg.toolCallId,
-          content: convertContentBlocks(nextMsg.content),
+          content: convertContentBlocks(nextMsg.content, nextMsg.isError),
           is_error: nextMsg.isError,
         });
         j++;
@@ -1536,7 +1596,7 @@ function convertMessages(
 
     for (let i = params.length - 1; i >= 0; i--) {
       const message = params[i];
-      if (message.role !== "user") {
+      if (message.role !== "user" || cacheBreakpointOptOutParamIndexes.has(i)) {
         continue;
       }
 

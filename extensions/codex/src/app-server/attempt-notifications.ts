@@ -1,11 +1,6 @@
 /**
  * Predicates and readers for Codex app-server notification envelopes.
  */
-import { asBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  describeCodexNotificationCorrelation,
-  isCodexNotificationForTurn,
-} from "./notification-correlation.js";
 import {
   isJsonObject,
   type CodexServerNotification,
@@ -271,13 +266,6 @@ export function isNativeToolProgressNotification(notification: CodexServerNotifi
   }
 }
 
-/** Returns true for raw native response stream delta events. */
-export function isNativeResponseStreamDeltaNotification(
-  notification: CodexServerNotification,
-): boolean {
-  return notification.method.startsWith("response.") && notification.method.endsWith(".delta");
-}
-
 /** Returns true for file-change patch update notifications. */
 export function isFileChangePatchUpdatedNotification(
   notification: CodexServerNotification,
@@ -332,74 +320,9 @@ function readRawAssistantTextPreview(item: JsonObject): string | undefined {
   return text.length > 240 ? `${text.slice(0, 237)}...` : text;
 }
 
-/** Returns true when notification params correlate to a specific thread/turn. */
-export function isTurnNotification(
-  value: JsonValue | undefined,
-  threadId: string,
-  turnId: string,
-): boolean {
-  return isCodexNotificationForTurn(value, threadId, turnId);
-}
-
-/** Returns true when a correlated notification belongs to another active run. */
-export function isCodexNotificationOutsideActiveRun(
-  correlation: ReturnType<typeof describeCodexNotificationCorrelation>,
-): boolean {
-  const hasThreadScope = Boolean(correlation.threadId || correlation.nestedTurnThreadId);
-  if (!hasThreadScope) {
-    return false;
-  }
-  if (!correlation.matchesActiveThread) {
-    return true;
-  }
-  const hasTurnScope = Boolean(correlation.turnId || correlation.nestedTurnId);
-  return hasTurnScope && correlation.matchesActiveTurn === false;
-}
-
-/** Checks request params that must contain the current thread and turn ids. */
-export function isCurrentThreadTurnRequestParams(
-  value: JsonValue | undefined,
-  threadId: string,
-  turnId: string,
-): boolean {
-  if (!isJsonObject(value)) {
-    return false;
-  }
-  return readString(value, "threadId") === threadId && readString(value, "turnId") === turnId;
-}
-
-/** Checks approval request params, accepting `conversationId` as thread id. */
-export function isCurrentApprovalTurnRequestParams(
-  value: JsonValue | undefined,
-  threadId: string,
-  turnId: string,
-): boolean {
-  if (!isJsonObject(value)) {
-    return false;
-  }
-  const requestThreadId = readString(value, "threadId") ?? readString(value, "conversationId");
-  return requestThreadId === threadId && readString(value, "turnId") === turnId;
-}
-
-/** Checks request params where `turnId` may be omitted or null for the thread. */
-export function isCurrentThreadOptionalTurnRequestParams(
-  value: JsonValue | undefined,
-  threadId: string,
-  turnId: string,
-): boolean {
-  if (!isJsonObject(value) || readString(value, "threadId") !== threadId) {
-    return false;
-  }
-  const requestTurnId = value.turnId;
-  return requestTurnId === null || requestTurnId === undefined || requestTurnId === turnId;
-}
-
 /** Returns true for app-server error notifications that will retry. */
 export function isRetryableErrorNotification(value: JsonValue | undefined): boolean {
-  if (!isJsonObject(value)) {
-    return false;
-  }
-  return readBoolean(value, "willRetry") === true || readBoolean(value, "will_retry") === true;
+  return isJsonObject(value) && value.willRetry === true;
 }
 
 /** Returns true for terminal app-server thread status strings. */
@@ -472,10 +395,6 @@ function extractRawResponseItemText(item: JsonObject): string {
 function readString(record: JsonObject, key: string): string | undefined {
   const value = record[key];
   return typeof value === "string" ? value : undefined;
-}
-
-function readBoolean(record: JsonObject, key: string): boolean | undefined {
-  return asBoolean(record[key]);
 }
 
 /** Reads a typed Codex item from notification params when id/type are present. */

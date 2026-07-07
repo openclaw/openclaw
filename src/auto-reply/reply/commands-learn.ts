@@ -148,6 +148,7 @@ function workshopIsAvailable(params: HandleCommandsParams): boolean {
       senderName: params.ctx.SenderName,
       senderUsername: params.ctx.SenderUsername,
       senderE164: params.ctx.SenderE164,
+      senderIsOwner: params.command.senderIsOwner,
       agentAccountId: params.command.accountId ?? params.ctx.AccountId,
       modelProvider: params.provider,
       modelId: params.model,
