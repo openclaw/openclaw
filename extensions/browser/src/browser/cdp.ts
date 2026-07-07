@@ -103,7 +103,13 @@ export async function captureScreenshot(opts: {
             returnByValue: true,
           })) as {
             result?: {
-              value?: { w?: number; h?: number; dpr?: number; sw?: number; sh?: number };
+              value?: {
+                w?: number;
+                h?: number;
+                dpr?: number;
+                sw?: number;
+                sh?: number;
+              };
             };
           };
           const v = vpResult?.result?.value;
@@ -161,7 +167,9 @@ export async function captureScreenshot(opts: {
               expression:
                 "({ w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio })",
               returnByValue: true,
-            })) as { result?: { value?: { w?: number; h?: number; dpr?: number } } };
+            })) as {
+              result?: { value?: { w?: number; h?: number; dpr?: number } };
+            };
             const p = postResult?.result?.value;
             if (p?.w !== savedVp.w || p?.h !== savedVp.h || p?.dpr !== savedVp.dpr) {
               await send("Emulation.setDeviceMetricsOverride", {
@@ -254,7 +262,9 @@ export async function createTargetViaCdp(opts: {
       return await withCdpSocket(
         candidateWsUrl,
         async (send) => {
-          const created = (await send("Target.createTarget", { url: opts.url })) as {
+          const created = (await send("Target.createTarget", {
+            url: opts.url,
+          })) as {
             targetId?: string;
           };
           const targetId = created?.targetId?.trim() ?? "";
@@ -478,7 +488,10 @@ type RoleTreeNode = {
   frameId?: string;
 };
 
-function buildRoleTree(nodes: RawAXNode[]): { tree: RoleTreeNode[]; roots: number[] } {
+function buildRoleTree(nodes: RawAXNode[]): {
+  tree: RoleTreeNode[];
+  roots: number[];
+} {
   const byId = new Map<string, number>();
   const tree: RoleTreeNode[] = [];
   for (const raw of nodes) {
@@ -627,7 +640,7 @@ async function findCursorInteractiveElements(
           }
           el.setAttribute("${attr}", String(out.length));
           out.push({
-            text: String(el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 101),
+            text: truncateUtf16Safe(String(el.textContent || "").replace(/\\s+/g, " ").trim(), 101),
             tagName,
             hasCursorPointer,
             hasOnClick,
@@ -670,7 +683,9 @@ async function findCursorInteractiveElements(
     (queried?.nodeIds ?? []).map(async (nodeId) => {
       const described = (await send("DOM.describeNode", { nodeId }, sessionId).catch(
         () => null,
-      )) as { node?: { backendNodeId?: number; attributes?: string[] } } | null;
+      )) as {
+        node?: { backendNodeId?: number; attributes?: string[] };
+      } | null;
       const attrs = described?.node?.attributes ?? [];
       const attrIndex = attrs.indexOf(attr);
       const rawIndex = attrIndex >= 0 ? attrs[attrIndex + 1] : undefined;
