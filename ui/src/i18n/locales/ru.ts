@@ -474,6 +474,7 @@ export const ru: TranslationMap = {
   nav: {
     chat: "Чат",
     settings: "Настройки",
+    plugins: "Plugins",
     expand: "Развернуть боковую панель",
     collapse: "Свернуть боковую панель",
     resize: "Изменить размер боковой панели",

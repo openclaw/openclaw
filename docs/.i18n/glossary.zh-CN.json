@@ -1398,5 +1398,93 @@
   {
     "source": "Zalo personal channel config",
     "target": "Zalo 个人渠道配置"
+  },
+  {
+    "source": "Raft",
+    "target": "Raft"
+  },
+  {
+    "source": "Attach CLI",
+    "target": "Attach CLI"
+  },
+  {
+    "source": "Gateway protocol",
+    "target": "Gateway 协议"
+  },
+  {
+    "source": "Tasks",
+    "target": "任务"
+  },
+  {
+    "source": "Cron jobs",
+    "target": "Cron 任务"
+  },
+  {
+    "source": "Promos",
+    "target": "Promos"
+  },
+  {
+    "source": "Managed worktrees",
+    "target": "托管工作树"
+  },
+  {
+    "source": "Logbook plugin",
+    "target": "Logbook 插件"
+  },
+  {
+    "source": "Featherless plugin",
+    "target": "Featherless 插件"
+  },
+  {
+    "source": "featherless",
+    "target": "featherless"
+  },
+  {
+    "source": "logbook",
+    "target": "logbook"
+  },
+  {
+    "source": "LongCat plugin",
+    "target": "LongCat 插件"
+  },
+  {
+    "source": "longcat",
+    "target": "longcat"
+  },
+  {
+    "source": "Raft plugin",
+    "target": "Raft 插件"
+  },
+  {
+    "source": "raft",
+    "target": "raft"
+  },
+  {
+    "source": "Featherless AI",
+    "target": "Featherless AI"
+  },
+  {
+    "source": "All providers",
+    "target": "所有提供商"
+  },
+  {
+    "source": "Thinking modes",
+    "target": "思考模式"
+  },
+  {
+    "source": "LongCat",
+    "target": "LongCat"
+  },
+  {
+    "source": "@openclaw/ai package",
+    "target": "@openclaw/ai 包"
+  },
+  {
+    "source": "v2026.6.11",
+    "target": "v2026.6.11"
+  },
+  {
+    "source": "Chrome Extension",
+    "target": "Chrome 扩展"
   }
 ]

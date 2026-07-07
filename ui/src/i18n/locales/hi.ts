@@ -470,6 +470,7 @@ export const hi: TranslationMap = {
   nav: {
     chat: "चैट",
     settings: "सेटिंग्स",
+    plugins: "Plugins",
     expand: "साइडबार फैलाएँ",
     collapse: "साइडबार समेटें",
     resize: "साइडबार का आकार बदलें",
