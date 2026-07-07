@@ -1,7 +1,6 @@
 // Gateway BOOT.md runner.
 // Runs per-workspace boot checks in an isolated boot session and restores mappings.
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
@@ -21,6 +20,7 @@ import { resolveStorePath } from "../config/sessions/paths.js";
 import { preserveTemporarySessionMapping } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { readRegularFile } from "../infra/regular-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { type RuntimeEnv, defaultRuntime } from "../runtime.js";
 import { clearBootEchoContextForSession, setBootEchoContextForSession } from "./boot-echo-guard.js";
@@ -72,21 +72,27 @@ function resolveBootSessionKey(sessionKey: string): string {
   return `agent:${agentId}:boot`;
 }
 
+const MAX_BOOT_FILE_BYTES = 16 * 1024 * 1024;
+
 async function loadBootFile(
   workspaceDir: string,
 ): Promise<{ content?: string; status: "ok" | "missing" | "empty" }> {
   const bootPath = path.join(workspaceDir, BOOT_FILENAME);
   try {
-    const content = await fs.readFile(bootPath, "utf-8");
+    const { buffer } = await readRegularFile({ filePath: bootPath, maxBytes: MAX_BOOT_FILE_BYTES });
+    const content = buffer.toString("utf-8");
     const trimmed = content.trim();
     if (!trimmed) {
       return { status: "empty" };
     }
     return { status: "ok", content: trimmed };
   } catch (err) {
-    const anyErr = err as { code?: string };
+    const anyErr = err as { code?: string; message?: string };
     if (anyErr.code === "ENOENT") {
       return { status: "missing" };
+    }
+    if (anyErr.message?.startsWith("File exceeds")) {
+      return { status: "empty" };
     }
     throw err;
   }

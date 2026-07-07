@@ -170,6 +170,19 @@ describe("runBootOnce", () => {
     });
   });
 
+  it("skips when BOOT.md exceeds the safe read size limit", async () => {
+    await withBootWorkspace({ bootContent: "" }, async (workspaceDir) => {
+      const bootPath = path.join(workspaceDir, "BOOT.md");
+      const oversized = Buffer.alloc(16 * 1024 * 1024 + 1, "x");
+      await fs.writeFile(bootPath, oversized);
+      await expect(runBootOnce({ cfg: {}, deps: makeDeps(), workspaceDir })).resolves.toEqual({
+        status: "skipped",
+        reason: "empty",
+      });
+      expect(agentCommand).not.toHaveBeenCalled();
+    });
+  });
+
   it("returns failed when BOOT.md cannot be read", async () => {
     await withBootWorkspace({ bootAsDirectory: true }, async (workspaceDir) => {
       const result = await runBootOnce({ cfg: {}, deps: makeDeps(), workspaceDir });
