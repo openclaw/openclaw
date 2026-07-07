@@ -1026,9 +1026,6 @@ function classifyFailoverClassificationFromMessage(
   if (isCliSessionExpiredErrorMessage(raw)) {
     return toReasonClassification("session_expired");
   }
-  if (isModelNotFoundErrorMessage(raw)) {
-    return toReasonClassification("model_not_found");
-  }
   if (isContextOverflowError(raw)) {
     return { kind: "context_overflow" };
   }
@@ -1109,6 +1106,9 @@ function classifyFailoverClassificationFromMessage(
   }
   if (isStructuredInvalidRequestError(raw)) {
     return toReasonClassification("format");
+  }
+  if (isModelNotFoundErrorMessage(raw)) {
+    return toReasonClassification("model_not_found");
   }
   // Provider-specific patterns as a final catch (Bedrock, Groq, Together AI, etc.)
   const providerSpecific = classifyProviderSpecificError(
