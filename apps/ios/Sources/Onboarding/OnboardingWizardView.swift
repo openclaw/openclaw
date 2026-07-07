@@ -891,7 +891,6 @@ extension OnboardingWizardView {
     private var manualTransport: GatewayManualTransportPresentation {
         GatewayConnectionController.manualTransportPresentation(
             host: self.manualHost,
-            port: self.manualPort,
             requestedTLS: self.manualTLS)
     }
 
@@ -920,15 +919,6 @@ extension OnboardingWizardView {
         Text(self.manualTransport.helperText)
             .font(OpenClawType.footnote)
             .foregroundStyle(.secondary)
-
-        if let endpoint = self.manualTransport.endpoint {
-            LabeledContent("Endpoint") {
-                Text(verbatim: endpoint)
-                    .font(OpenClawType.mono)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-            }
-        }
     }
 
     private func onboardingLabeledContent(_ title: LocalizedStringKey, value: String) -> some View {

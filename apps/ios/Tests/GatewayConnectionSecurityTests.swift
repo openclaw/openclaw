@@ -123,49 +123,21 @@ import Testing
     @Test @MainActor func `manual transport presentation shows effective remote security`() {
         let presentation = GatewayConnectionController.manualTransportPresentation(
             host: "gateway.example.com",
-            port: 18789,
             requestedTLS: false)
 
         #expect(presentation.requiresTLS)
         #expect(presentation.effectiveTLS)
-        #expect(presentation.endpoint == "wss://gateway.example.com:18789")
         #expect(presentation.helperText == "Secure connection is required for this host.")
     }
 
     @Test @MainActor func `manual transport presentation allows unencrypted private LAN`() {
         let presentation = GatewayConnectionController.manualTransportPresentation(
             host: "192.168.1.20",
-            port: 18789,
             requestedTLS: false)
 
         #expect(!presentation.requiresTLS)
         #expect(!presentation.effectiveTLS)
-        #expect(presentation.endpoint == "ws://192.168.1.20:18789")
         #expect(presentation.helperText == "Use only on a trusted private network.")
-    }
-
-    @Test @MainActor func `manual transport presentation shows resolved default ports`() {
-        let remote = GatewayConnectionController.manualTransportPresentation(
-            host: "gateway.example.com",
-            port: 0,
-            requestedTLS: false)
-        let tailnet = GatewayConnectionController.manualTransportPresentation(
-            host: "device.sample.ts.net",
-            port: 0,
-            requestedTLS: false)
-        let privateLAN = GatewayConnectionController.manualTransportPresentation(
-            host: "192.168.1.20",
-            port: 0,
-            requestedTLS: false)
-        let emptyHost = GatewayConnectionController.manualTransportPresentation(
-            host: "",
-            port: 18789,
-            requestedTLS: true)
-
-        #expect(remote.endpoint == "wss://gateway.example.com:18789")
-        #expect(tailnet.endpoint == "wss://device.sample.ts.net:443")
-        #expect(privateLAN.endpoint == "ws://192.168.1.20:18789")
-        #expect(emptyHost.endpoint == nil)
     }
 
     @Test @MainActor func `manual connections allow private lan plaintext`() {

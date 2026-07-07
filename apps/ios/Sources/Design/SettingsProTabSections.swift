@@ -978,14 +978,6 @@ extension SettingsProTab {
             Text(self.manualGatewayTransport.helperText)
                 .font(OpenClawType.footnote)
                 .foregroundStyle(.secondary)
-            if let endpoint = self.manualGatewayTransport.endpoint {
-                LabeledContent("Endpoint") {
-                    Text(verbatim: endpoint)
-                        .font(OpenClawType.mono)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-            }
             self.gatewayActionButton(
                 title: "Connect Manual",
                 icon: "network",
@@ -1003,7 +995,6 @@ extension SettingsProTab {
     private var manualGatewayTransport: GatewayManualTransportPresentation {
         GatewayConnectionController.manualTransportPresentation(
             host: self.manualGatewayHost,
-            port: self.manualGatewayPort,
             requestedTLS: self.manualGatewayTLS)
     }
 

@@ -591,7 +591,6 @@ fun OnboardingFlow(
       val transport =
         gatewayManualTransportPresentation(
           hostInput = manualHost,
-          portInput = manualPort,
           requestedTls = manualTls,
         )
       val plan =
@@ -1581,10 +1580,9 @@ private fun ManualGatewaySetupScreen(
   modifier: Modifier = Modifier,
 ) {
   val transport =
-    remember(manualHost, manualPort, manualTls) {
+    remember(manualHost, manualTls) {
       gatewayManualTransportPresentation(
         hostInput = manualHost,
-        portInput = manualPort,
         requestedTls = manualTls,
       )
     }
@@ -1646,13 +1644,6 @@ private fun ManualGatewaySetupScreen(
               style = ClawTheme.type.caption,
               color = ClawTheme.colors.textMuted,
             )
-            transport.endpoint?.let { endpoint ->
-              Text(
-                text = endpoint,
-                style = ClawTheme.type.caption.copy(fontFamily = FontFamily.Monospace),
-                color = ClawTheme.colors.textSubtle,
-              )
-            }
           }
         }
         error?.let { message ->

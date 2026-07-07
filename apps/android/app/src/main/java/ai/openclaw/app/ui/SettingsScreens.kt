@@ -1157,10 +1157,9 @@ private fun GatewaySettingsScreen(
   var pendingSetupResetPlan by remember { mutableStateOf<GatewayConnectPlan?>(null) }
   var pendingForgetStableId by remember { mutableStateOf<String?>(null) }
   val transport =
-    remember(hostInput, portInput, tlsInput) {
+    remember(hostInput, tlsInput) {
       gatewayManualTransportPresentation(
         hostInput = hostInput,
-        portInput = portInput,
         requestedTls = tlsInput,
       )
     }
@@ -1334,13 +1333,6 @@ private fun GatewaySettingsScreen(
           style = ClawTheme.type.caption,
           color = ClawTheme.colors.textMuted,
         )
-        transport.endpoint?.let { endpoint ->
-          Text(
-            text = endpoint,
-            style = ClawTheme.type.caption.copy(fontFamily = FontFamily.Monospace),
-            color = ClawTheme.colors.textSubtle,
-          )
-        }
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
           ClawTextField(value = tokenInput, onValueChange = { tokenInput = it }, placeholder = "Token", modifier = Modifier.weight(1f))
           ClawTextField(value = bootstrapTokenInput, onValueChange = { bootstrapTokenInput = it }, placeholder = "Bootstrap", modifier = Modifier.weight(1.05f))

@@ -1498,7 +1498,6 @@ private struct GatewayPendingTrustConnect {
 struct GatewayManualTransportPresentation: Equatable {
     let requiresTLS: Bool
     let effectiveTLS: Bool
-    let endpoint: String?
     let helperText: String
 }
 
@@ -1515,30 +1514,16 @@ extension GatewayConnectionController {
     private func resolveManualUseTLS(host: String, useTLS: Bool) -> Bool {
         Self.manualTransportPresentation(
             host: host,
-            port: 0,
             requestedTLS: useTLS).effectiveTLS
     }
 
     static func manualTransportPresentation(
         host: String,
-        port: Int,
         requestedTLS: Bool) -> GatewayManualTransportPresentation
     {
         let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
         let requiresTLS = !trimmedHost.isEmpty && !LoopbackHost.isLocalNetworkHost(trimmedHost)
         let effectiveTLS = requestedTLS || requiresTLS
-        let endpoint: String? = {
-            guard !trimmedHost.isEmpty,
-                  let resolvedPort = Self.resolvedManualPort(host: trimmedHost, port: port)
-            else {
-                return nil
-            }
-            var components = URLComponents()
-            components.scheme = effectiveTLS ? "wss" : "ws"
-            components.host = trimmedHost
-            components.port = resolvedPort
-            return components.url?.absoluteString
-        }()
         let helperText = if requiresTLS {
             "Secure connection is required for this host."
         } else if effectiveTLS {
@@ -1549,7 +1534,6 @@ extension GatewayConnectionController {
         return GatewayManualTransportPresentation(
             requiresTLS: requiresTLS,
             effectiveTLS: effectiveTLS,
-            endpoint: endpoint,
             helperText: helperText)
     }
 

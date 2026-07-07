@@ -22,7 +22,6 @@ internal data class GatewayEndpointConfig(
 internal data class GatewayManualTransportPresentation(
   val requiresTls: Boolean,
   val effectiveTls: Boolean,
-  val endpoint: String?,
   val helperText: String,
 )
 
@@ -386,7 +385,6 @@ internal fun composeGatewayManualUrl(
 /** Keeps manual transport controls aligned with the runtime's remote-host TLS policy. */
 internal fun gatewayManualTransportPresentation(
   hostInput: String,
-  portInput: String,
   requestedTls: Boolean,
 ): GatewayManualTransportPresentation {
   val host = hostInput.trim()
@@ -394,7 +392,6 @@ internal fun gatewayManualTransportPresentation(
     return gatewayManualTransportPresentation(
       requiresTls = false,
       effectiveTls = requestedTls,
-      endpoint = null,
     )
   }
 
@@ -404,7 +401,6 @@ internal fun gatewayManualTransportPresentation(
       return gatewayManualTransportPresentation(
         requiresTls = !isLocalCleartextGatewayHost(config.host),
         effectiveTls = config.tls,
-        endpoint = config.webSocketDisplayUrl(),
       )
     }
   }
@@ -412,26 +408,19 @@ internal fun gatewayManualTransportPresentation(
   val normalizedHost = host.trimEnd('/')
   val requiresTls = !isLocalCleartextGatewayHost(normalizedHost)
   val effectiveTls = requestedTls || requiresTls
-  val endpoint =
-    composeGatewayManualUrl(normalizedHost, portInput, effectiveTls)
-      ?.let(::parseGatewayEndpoint)
-      ?.webSocketDisplayUrl()
   return gatewayManualTransportPresentation(
     requiresTls = requiresTls,
     effectiveTls = effectiveTls,
-    endpoint = endpoint,
   )
 }
 
 private fun gatewayManualTransportPresentation(
   requiresTls: Boolean,
   effectiveTls: Boolean,
-  endpoint: String?,
 ): GatewayManualTransportPresentation =
   GatewayManualTransportPresentation(
     requiresTls = requiresTls,
     effectiveTls = effectiveTls,
-    endpoint = endpoint,
     helperText =
       when {
         requiresTls -> "Secure connection is required for this host."
@@ -439,14 +428,6 @@ private fun gatewayManualTransportPresentation(
         else -> "Use only on a trusted private network."
       },
   )
-
-private fun GatewayEndpointConfig.webSocketDisplayUrl(): String {
-  val scheme = if (tls) "wss" else "ws"
-  val authority =
-    ai.openclaw.app.gateway
-      .formatGatewayAuthority(host, port)
-  return "$scheme://$authority"
-}
 
 private fun parseJsonObject(input: String): JsonObject? = runCatching { gatewaySetupJson.parseToJsonElement(input).jsonObject }.getOrNull()
 
