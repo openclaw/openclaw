@@ -166,6 +166,23 @@ export async function deferDeliveryRecovery(
   }));
 }
 
+/** Record a failed attempt that provably ended before any platform request was sent. */
+export async function failDeliveryBeforePlatformSend(
+  id: string,
+  error: string,
+  stateDir?: string,
+): Promise<void> {
+  updateQueuedDelivery(id, stateDir, (entry) => ({
+    ...entry,
+    retryCount: entry.retryCount + 1,
+    lastAttemptAt: Date.now(),
+    lastError: error,
+    // Clear both fields together; retaining either would preserve false send evidence.
+    platformSendStartedAt: undefined,
+    recoveryState: undefined,
+  }));
+}
+
 /** Record a failed attempt without losing evidence that platform delivery may have completed. */
 export async function failDeliveryAfterPlatformSend(
   id: string,

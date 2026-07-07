@@ -12,8 +12,8 @@ import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { chunkDiscordTextWithMode } from "./chunk.js";
-import { withDiscordDeliveryRetry } from "./delivery-retry.js";
 import { notifyDiscordInboundEventOutboundPayloadSuccess } from "./inbound-event-delivery.js";
 import { isLikelyDiscordVideoMedia } from "./media-detection.js";
 import type { ThreadBindingRecord } from "./monitor/thread-bindings.js";
@@ -55,7 +55,7 @@ function resolveDiscordWebhookIdentity(params: {
 }): { username?: string; avatarUrl?: string } {
   const usernameRaw = normalizeOptionalString(params.identity?.name);
   const fallbackUsername = normalizeOptionalString(params.binding.label) ?? params.binding.agentId;
-  const username = (usernameRaw || fallbackUsername || "").slice(0, 80) || undefined;
+  const username = truncateUtf16Safe(usernameRaw || fallbackUsername || "", 80) || undefined;
   const avatarUrl = normalizeOptionalString(params.identity?.avatarUrl);
   return { username, avatarUrl };
 }
@@ -196,27 +196,22 @@ export const discordOutbound: ChannelOutboundAdapter = {
       const send =
         resolveOutboundSendDep<DiscordSendFn>(deps, "discord") ??
         (await loadDiscordSendRuntime()).sendMessageDiscord;
-      return await withDiscordDeliveryRetry({
+      return await send(resolveDiscordOutboundTarget({ to, threadId }), text, {
+        verbose: false,
+        reply: resolveDiscordReplyReference({
+          replyToId,
+          replyToIdSource,
+          replyToMode,
+        }),
+        accountId: accountId ?? undefined,
+        silent: silent ?? undefined,
         cfg,
-        accountId,
-        fn: async () =>
-          await send(resolveDiscordOutboundTarget({ to, threadId }), text, {
-            verbose: false,
-            reply: resolveDiscordReplyReference({
-              replyToId,
-              replyToIdSource,
-              replyToMode,
-            }),
-            accountId: accountId ?? undefined,
-            silent: silent ?? undefined,
-            cfg,
-            ...resolveDiscordFormattingOptions({ formatting }),
-            onDeliveryResult: onDeliveryResult
-              ? async (result) => {
-                  await onDeliveryResult(attachChannelToResult("discord", result));
-                }
-              : undefined,
-          }),
+        ...resolveDiscordFormattingOptions({ formatting }),
+        onDeliveryResult: onDeliveryResult
+          ? async (result) => {
+              await onDeliveryResult(attachChannelToResult("discord", result));
+            }
+          : undefined,
       });
     },
     sendMedia: async ({
@@ -252,95 +247,70 @@ export const discordOutbound: ChannelOutboundAdapter = {
         const sendVoice =
           resolveOutboundSendDep<DiscordVoiceSendFn>(deps, "discordVoice") ??
           (await loadDiscordSendRuntime()).sendVoiceMessageDiscord;
-        return await withDiscordDeliveryRetry({
+        return await sendVoice(target, mediaUrl, {
           cfg,
-          accountId,
-          fn: async () =>
-            await sendVoice(target, mediaUrl, {
-              cfg,
-              reply,
-              accountId: accountId ?? undefined,
-              silent: silent ?? undefined,
-            }),
+          reply,
+          accountId: accountId ?? undefined,
+          silent: silent ?? undefined,
         });
       }
       if (text.trim() && mediaUrl && isLikelyDiscordVideoMedia(mediaUrl)) {
-        await withDiscordDeliveryRetry({
+        await send(target, text, {
+          verbose: false,
+          reply,
+          accountId: accountId ?? undefined,
+          silent: silent ?? undefined,
           cfg,
-          accountId,
-          fn: async () =>
-            await send(target, text, {
-              verbose: false,
-              reply,
-              accountId: accountId ?? undefined,
-              silent: silent ?? undefined,
-              cfg,
-              ...formattingOptions,
-              onDeliveryResult: onDeliveryResult
-                ? async (result) => {
-                    await onDeliveryResult(attachChannelToResult("discord", result));
-                  }
-                : undefined,
-            }),
+          ...formattingOptions,
+          onDeliveryResult: onDeliveryResult
+            ? async (result) => {
+                await onDeliveryResult(attachChannelToResult("discord", result));
+              }
+            : undefined,
         });
-        return await withDiscordDeliveryRetry({
+        return await send(target, "", {
+          verbose: false,
+          mediaUrl,
+          reply: reply?.scope === "all" ? reply : undefined,
+          mediaAccess,
+          mediaLocalRoots,
+          mediaReadFile,
+          accountId: accountId ?? undefined,
+          silent: silent ?? undefined,
           cfg,
-          accountId,
-          fn: async () =>
-            await send(target, "", {
-              verbose: false,
-              mediaUrl,
-              reply: reply?.scope === "all" ? reply : undefined,
-              mediaAccess,
-              mediaLocalRoots,
-              mediaReadFile,
-              accountId: accountId ?? undefined,
-              silent: silent ?? undefined,
-              cfg,
-              ...formattingOptions,
-              onDeliveryResult: onDeliveryResult
-                ? async (result) => {
-                    await onDeliveryResult(attachChannelToResult("discord", result));
-                  }
-                : undefined,
-            }),
+          ...formattingOptions,
+          onDeliveryResult: onDeliveryResult
+            ? async (result) => {
+                await onDeliveryResult(attachChannelToResult("discord", result));
+              }
+            : undefined,
         });
       }
-      return await withDiscordDeliveryRetry({
+      return await send(target, text, {
+        verbose: false,
+        mediaUrl,
+        mediaAccess,
+        mediaLocalRoots,
+        mediaReadFile,
+        reply,
+        accountId: accountId ?? undefined,
+        silent: silent ?? undefined,
         cfg,
-        accountId,
-        fn: async () =>
-          await send(target, text, {
-            verbose: false,
-            mediaUrl,
-            mediaAccess,
-            mediaLocalRoots,
-            mediaReadFile,
-            reply,
-            accountId: accountId ?? undefined,
-            silent: silent ?? undefined,
-            cfg,
-            ...formattingOptions,
-            onDeliveryResult: onDeliveryResult
-              ? async (result) => {
-                  await onDeliveryResult(attachChannelToResult("discord", result));
-                }
-              : undefined,
-          }),
+        ...formattingOptions,
+        onDeliveryResult: onDeliveryResult
+          ? async (result) => {
+              await onDeliveryResult(attachChannelToResult("discord", result));
+            }
+          : undefined,
       });
     },
     sendPoll: async ({ cfg, to, poll, accountId, threadId, silent }) =>
-      await withDiscordDeliveryRetry({
+      await (
+        await loadDiscordSendRuntime()
+      ).sendPollDiscord(resolveDiscordOutboundTarget({ to, threadId }), poll, {
+        accountId: accountId ?? undefined,
+        silent: silent ?? undefined,
         cfg,
-        accountId,
-        fn: async () =>
-          await (
-            await loadDiscordSendRuntime()
-          ).sendPollDiscord(resolveDiscordOutboundTarget({ to, threadId }), poll, {
-            accountId: accountId ?? undefined,
-            silent: silent ?? undefined,
-            cfg,
-          }),
       }),
   }),
   afterDeliverPayload: async ({ target, payload }) => {

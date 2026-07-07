@@ -792,6 +792,14 @@ struct RootTabsSourceGuardTests {
             settingsPendingSetupHandler.range(of: "self.scannerResultHandoff.cancel()"))
         let settingsSetupStaging = try #require(
             settingsPendingSetupHandler.range(of: "self.stagedGatewaySetupLink = link"))
+        let scannerMake = try Self.extract(
+            scannerSource,
+            from: "func makeUIViewController",
+            to: "func updateUIViewController")
+        let scannerLifecycle = try Self.extract(
+            scannerSource,
+            from: "final class QRScannerContainerViewController",
+            to: "final class Coordinator")
         let scannerDelivery = try Self.extract(
             scannerSource,
             from: "private func deliver(_ result: QRScannerResult",
@@ -799,6 +807,12 @@ struct RootTabsSourceGuardTests {
         let stopScanning = try #require(scannerDelivery.range(of: "scanner.stopScanning()"))
         let deliverResult = try #require(scannerDelivery.range(of: "self.parent.onResult(result)"))
         #expect(scannerSource.contains("static let defaultSettlingNanoseconds: UInt64 = 1_200_000_000"))
+        #expect(scannerSource.contains("QRScannerContainerViewController(coordinator: context.coordinator)"))
+        #expect(!scannerMake.contains("startScanning()"))
+        #expect(scannerLifecycle.contains("override func viewDidAppear"))
+        #expect(scannerLifecycle.contains("try self.scanner.startScanning()"))
+        #expect(scannerLifecycle.contains("override func viewWillDisappear"))
+        #expect(scannerLifecycle.contains("self.stopScannerCapture()"))
         let activeProblemToast = try Self.extract(
             rootSource,
             from: "private var activeGatewayProblemToast: GatewayConnectionProblem?",
@@ -892,7 +906,7 @@ struct RootTabsSourceGuardTests {
         #expect(rootSource.contains("self.appModel.gatewayProblemReportCount"))
         #expect(rootSource.contains("GatewayToastShakeEffect"))
 
-        #expect(actionsSource.contains("await self.gatewayController.connectLastKnown()"))
+        #expect(actionsSource.contains("await self.gatewayController.connectActiveGateway()"))
         #expect(actionsSource.contains("self.gatewayController.refreshActiveGatewayRegistrationFromSettings()"))
         #expect(actionsSource.contains("self.gatewayController.restartDiscovery()"))
         #expect(actionsSource.contains("await self.appModel.refreshGatewayOverviewIfConnected()"))
@@ -917,7 +931,7 @@ struct RootTabsSourceGuardTests {
         #expect(rootSource.contains("GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: instanceId)"))
         #expect(rootSource.contains("self.gatewayController.trustRotatedGatewayCertificate(from: problem)"))
         #expect(rootSource.contains("GatewayProblemPrimaryAction.openProtocolMismatchHelpIfNeeded(problem)"))
-        #expect(rootSource.contains("await self.gatewayController.connectLastKnown()"))
+        #expect(rootSource.contains("await self.gatewayController.connectActiveGateway()"))
 
         #expect(rootSource.contains("GatewayProblemDetailsSheet("))
         #expect(onboardingSetupOwnerGuard.lowerBound < consumedGatewaySetup.lowerBound)

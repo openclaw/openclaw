@@ -255,6 +255,7 @@ final class NodeAppModel {
     private var gatewayHealthMonitorDisabled = false
     private let notificationCenter: NotificationCentering
     let voiceWake = VoiceWakeManager()
+    let voiceNoteRecorder: OpenClawVoiceNoteRecorder
     let talkMode: TalkModeManager
     private let locationService: any LocationServicing
     private let deviceStatusService: any DeviceStatusServicing
@@ -304,10 +305,17 @@ final class NodeAppModel {
     private var shareDeliveryTo: String?
     private var apnsDeviceTokenHex: String?
     private var apnsLastRegisteredTokenHex: String?
+    private var apnsLastRegisteredGatewayStableID: String?
     @ObservationIgnored private let pushRegistrationManager = PushRegistrationManager()
 
     var operatorSession: GatewayNodeSession {
         self.operatorGateway
+    }
+
+    var isTalkCaptureActive: Bool {
+        // PTT owns its Voice Wake lease before permission and audio setup.
+        // Count that pending interval so Chat cannot race another mic owner.
+        self.talkMode.isEnabled || self.talkMode.isPushToTalkActive || self.pttVoiceWakeLeaseCount > 0
     }
 
     var localChatFixture: LocalChatFixture? {
@@ -344,7 +352,7 @@ final class NodeAppModel {
     }
 
     /// Gateway identity the transcript cache is scoped to: the active
-    /// connection's stableID, or the keychain-persisted last connection on
+    /// connection's stableID, or the keychain-persisted active gateway on
     /// cold open before the gateway session is up. Nil for fixture transports
     /// and unpaired installs so demo or foreign rows can never leak into a
     /// real gateway's transcript.
@@ -352,7 +360,7 @@ final class NodeAppModel {
         guard !self.isLocalGatewayFixtureEnabled else { return nil }
         let stableID = self.activeGatewayConnectConfig?.effectiveStableID
             ?? self.connectedGatewayID
-            ?? GatewaySettingsStore.loadLastGatewayConnection()?.stableID
+            ?? GatewaySettingsStore.activeGatewayEntry()?.stableID
         guard let stableID, !stableID.isEmpty else { return nil }
         return stableID
     }
@@ -384,7 +392,7 @@ final class NodeAppModel {
         if let cache = self.chatTranscriptCachesByGatewayID[gatewayID] {
             return cache
         }
-        guard let databaseURL = self.chatTranscriptCacheDatabaseURL(gatewayID: gatewayID) else { return nil }
+        guard let databaseURL = Self.chatTranscriptCacheDatabaseURL(gatewayID: gatewayID) else { return nil }
         let cache = OpenClawChatSQLiteTranscriptCache(databaseURL: databaseURL, gatewayID: gatewayID)
         self.chatTranscriptCachesByGatewayID[gatewayID] = cache
         return cache
@@ -428,7 +436,7 @@ final class NodeAppModel {
     /// drops that gateway's queued commands.
     func purgeChatTranscriptCache(gatewayID: String? = nil) async {
         if let gatewayID, !gatewayID.isEmpty {
-            guard let databaseURL = self.chatTranscriptCacheDatabaseURL(gatewayID: gatewayID) else { return }
+            guard let databaseURL = Self.chatTranscriptCacheDatabaseURL(gatewayID: gatewayID) else { return }
             if let cache = self.chatTranscriptCachesByGatewayID[gatewayID] {
                 await cache.retire()
             }
@@ -443,7 +451,7 @@ final class NodeAppModel {
         for cache in self.chatTranscriptCachesByGatewayID.values {
             await cache.retire()
         }
-        if let directoryURL = self.chatTranscriptCacheDirectoryURL() {
+        if let directoryURL = Self.chatTranscriptCacheDirectoryURL() {
             try? FileManager.default.removeItem(at: directoryURL)
         }
         self.chatTranscriptCachesByGatewayID.removeAll()
@@ -453,22 +461,22 @@ final class NodeAppModel {
     /// Debug launch reset runs before Chat can create a cache actor, so direct
     /// file removal preserves the launch flag's synchronous startup contract.
     func purgeChatTranscriptCacheBeforeStartup() {
-        guard let directoryURL = self.chatTranscriptCacheDirectoryURL() else { return }
+        guard let directoryURL = Self.chatTranscriptCacheDirectoryURL() else { return }
         try? FileManager.default.removeItem(at: directoryURL)
         self.chatTranscriptCachesByGatewayID.removeAll()
         self.chatTranscriptCacheGeneration &+= 1
     }
 
-    private func chatTranscriptCacheDirectoryURL() -> URL? {
+    private static func chatTranscriptCacheDirectoryURL() -> URL? {
         try? OpenClawNodeStorage.appSupportDir()
             .appendingPathComponent("chat-cache", isDirectory: true)
     }
 
-    private func chatTranscriptCacheDatabaseURL(gatewayID: String) -> URL? {
+    static func chatTranscriptCacheDatabaseURL(gatewayID: String) -> URL? {
         let digest = SHA256.hash(data: Data(gatewayID.utf8))
             .map { String(format: "%02x", $0) }
             .joined()
-        return self.chatTranscriptCacheDirectoryURL()?
+        return Self.chatTranscriptCacheDirectoryURL()?
             .appendingPathComponent("\(digest).sqlite", isDirectory: false)
     }
 
@@ -499,7 +507,8 @@ final class NodeAppModel {
         remindersService: any RemindersServicing = RemindersService(),
         motionService: any MotionServicing = MotionService(),
         watchMessagingService: any WatchMessagingServicing = WatchMessagingService(),
-        talkMode: TalkModeManager = TalkModeManager())
+        talkMode: TalkModeManager = TalkModeManager(),
+        voiceNoteRecorder: OpenClawVoiceNoteRecorder = OpenClawVoiceNoteRecorder())
     {
         self.screen = screen
         self.camera = camera
@@ -514,6 +523,10 @@ final class NodeAppModel {
         self.motionService = motionService
         self.watchMessagingService = watchMessagingService
         self.talkMode = talkMode
+        self.voiceNoteRecorder = voiceNoteRecorder
+        self.voiceNoteRecorder.setCaptureAdmissionHandler { [weak self] in
+            self?.isTalkCaptureActive == false
+        }
         self.apnsDeviceTokenHex = UserDefaults.standard.string(forKey: Self.apnsDeviceTokenUserDefaultsKey)
         restorePersistedWatchExecApprovalBridgeState()
         GatewayDiagnostics.bootstrap()
@@ -573,6 +586,9 @@ final class NodeAppModel {
             } catch {
                 // Best-effort only.
             }
+        }
+        self.voiceNoteRecorder.onRecordingActiveChanged = { [weak self] isActive in
+            self?.voiceWake.setSuppressedByVoiceNote(isActive)
         }
 
         let enabled = UserDefaults.standard.bool(forKey: "voiceWake.enabled")
@@ -693,6 +709,11 @@ final class NodeAppModel {
             self.backgroundedAt = Date()
             self.reconnectAfterBackgroundArmed = true
             self.beginBackgroundConnectionGracePeriod()
+            if self.voiceNoteRecorder.isRecording || self.voiceNoteRecorder.isRequestingPermission {
+                // Cancel first: releasing the voice-note suppression reason can
+                // schedule Voice Wake, which the background suspension must catch.
+                self.voiceNoteRecorder.cancel()
+            }
             // Release voice wake mic in background.
             self.backgroundVoiceWakeSuspended = self.voiceWake.suspendForExternalAudioCapture()
             let shouldKeepTalkActive = keepTalkActive && self.talkMode.isEnabled
@@ -880,6 +901,9 @@ final class NodeAppModel {
         }
         UserDefaults.standard.set(enabled, forKey: "talk.enabled")
         if enabled {
+            if self.voiceNoteRecorder.isRecording || self.voiceNoteRecorder.isRequestingPermission {
+                self.voiceNoteRecorder.cancel()
+            }
             // Voice wake holds the microphone continuously; talk mode needs exclusive access for STT.
             // When talk is enabled from the UI, prioritize talk and pause voice wake.
             self.voiceWake.setSuppressedByTalk(true)
@@ -1973,6 +1997,7 @@ final class NodeAppModel {
 
     private func handleTalkInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         if req.command == OpenClawTalkCommand.pttOnce.rawValue {
+            try self.rejectTalkCaptureWhileVoiceNoteActive()
             self.acquirePttVoiceWakeLease()
             defer { self.releasePttVoiceWakeLease() }
             let payload = try await talkMode.runPushToTalkOnce()
@@ -1985,6 +2010,7 @@ final class NodeAppModel {
 
         switch req.command {
         case OpenClawTalkCommand.pttStart.rawValue:
+            try self.rejectTalkCaptureWhileVoiceNoteActive()
             let acquiredLease = !self.pttSessionOwnsVoiceWakeLease
             if acquiredLease {
                 self.acquirePttVoiceWakeLease()
@@ -2024,6 +2050,15 @@ final class NodeAppModel {
                 ok: false,
                 error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
         }
+    }
+
+    private func rejectTalkCaptureWhileVoiceNoteActive() throws {
+        // Remote PTT bypasses the Chat Talk toggle. Preserve the user's draft;
+        // Talk must not reconfigure AVAudioSession while its recorder owns it.
+        guard self.voiceNoteRecorder.isRecording || self.voiceNoteRecorder.isRequestingPermission else { return }
+        throw NSError(domain: "TalkMode", code: 8, userInfo: [
+            NSLocalizedDescriptionKey: "Finish or cancel the active voice note before starting push-to-talk.",
+        ])
     }
 
     private func acquirePttVoiceWakeLease() {
@@ -2678,17 +2713,30 @@ extension NodeAppModel {
     }
 
     func disconnectGateway() {
-        self.disconnectGateway(disablePersistedAutoConnect: true)
+        self.disconnectGateway(disablePersistedAutoConnect: true, invalidateConnectAttempts: true)
     }
 
     func suspendGatewayForTargetReview() {
         // Target review pauses live reconnects without changing the user's launch preference.
-        self.disconnectGateway(disablePersistedAutoConnect: false)
+        self.disconnectGateway(disablePersistedAutoConnect: false, invalidateConnectAttempts: true)
     }
 
-    private func disconnectGateway(disablePersistedAutoConnect: Bool) {
+    /// A replacement target may already own the connect generation while the forgotten route is live.
+    /// Preserve that generation so teardown cannot strand the replacement offline.
+    func disconnectForgottenGateway(preservingPendingConnectAttempt: Bool) {
+        self.disconnectGateway(
+            disablePersistedAutoConnect: !preservingPendingConnectAttempt,
+            invalidateConnectAttempts: !preservingPendingConnectAttempt)
+    }
+
+    private func disconnectGateway(
+        disablePersistedAutoConnect: Bool,
+        invalidateConnectAttempts: Bool)
+    {
         invalidateExecApprovalSurfacesForGatewayChange()
-        self.invalidateGatewayConnectAttempts()
+        if invalidateConnectAttempts {
+            self.invalidateGatewayConnectAttempts()
+        }
         self.isAppleReviewDemoModeEnabled = false
         self.isScreenshotFixtureModeEnabled = false
         if disablePersistedAutoConnect {
@@ -2770,6 +2818,7 @@ extension NodeAppModel {
         self.focusedChatSessionKey = nil
         self.homeCanvasRevision &+= 1
         self.apnsLastRegisteredTokenHex = nil
+        self.apnsLastRegisteredGatewayStableID = nil
         Task { [weak self] in
             await self?.restoreChatSessionRoutingIdentityIfNeeded()
         }
@@ -2959,12 +3008,13 @@ extension NodeAppModel {
         else { return nil }
         let instanceID = GatewaySettingsStore.currentInstanceID()
         let deviceAuthGatewayID = nodeOptions.deviceAuthGatewayID ?? stableID
-        if let metadata = GatewaySettingsStore.loadGatewayCredentialMetadata(instanceId: instanceID),
-           metadata.gatewayStableID == deviceAuthGatewayID,
-           metadata.suppressStoredDeviceAuth,
-           !GatewaySettingsStore.completeGatewayCredentialHandoff(
-               instanceId: instanceID,
-               gatewayStableID: deviceAuthGatewayID)
+        if let metadata = GatewaySettingsStore.loadGatewayCredentialMetadata(
+            instanceId: instanceID,
+            gatewayStableID: deviceAuthGatewayID),
+            metadata.suppressStoredDeviceAuth,
+            !GatewaySettingsStore.completeGatewayCredentialHandoff(
+                instanceId: instanceID,
+                gatewayStableID: deviceAuthGatewayID)
         {
             return nil
         }
@@ -3170,6 +3220,9 @@ extension NodeAppModel {
         self.gatewayStatusText = "Connected"
         self.gatewayServerName = url.host ?? "gateway"
         self.gatewayConnected = true
+        _ = GatewaySettingsStore.markGatewayConnected(
+            stableID: stableID,
+            atMs: Int(Date().timeIntervalSince1970 * 1000))
         self.screen.errorText = nil
         UserDefaults.standard.set(true, forKey: "gateway.autoconnect")
         LiveActivityManager.shared.handleReconnect()
@@ -5736,7 +5789,16 @@ extension NodeAppModel {
             }
             return
         }
-        if !usesRelayTransport, token == self.apnsLastRegisteredTokenHex {
+        let gatewayStableID = self.activeGatewayConnectConfig?.effectiveStableID
+            ?? self.connectedGatewayID
+            ?? ""
+        if !usesRelayTransport,
+           !Self.shouldPublishDirectAPNsRegistration(
+               token: token,
+               gatewayStableID: gatewayStableID,
+               lastToken: self.apnsLastRegisteredTokenHex,
+               lastGatewayStableID: self.apnsLastRegisteredGatewayStableID)
+        {
             return
         }
         guard let topic = Bundle.main.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -5776,6 +5838,7 @@ extension NodeAppModel {
                 ifCurrentRoute: nodeRoute)
             guard published, shouldContinue() else { return }
             self.apnsLastRegisteredTokenHex = token
+            self.apnsLastRegisteredGatewayStableID = gatewayStableID
             if usesRelayTransport {
                 GatewayDiagnostics.pushRelay.stage("gateway registration event published")
             }
@@ -5803,6 +5866,15 @@ extension NodeAppModel {
             return false
         }
         return true
+    }
+
+    nonisolated static func shouldPublishDirectAPNsRegistration(
+        token: String,
+        gatewayStableID: String,
+        lastToken: String?,
+        lastGatewayStableID: String?) -> Bool
+    {
+        token != lastToken || gatewayStableID != lastGatewayStableID
     }
 
     private func fetchPushRelayGatewayIdentity(

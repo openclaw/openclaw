@@ -2,16 +2,65 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { buildQaTarget } from "openclaw/plugin-sdk/qa-channel";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { createMatrixQaClient, provisionMatrixQaRoom } from "./substrate/client.js";
 import { buildMatrixQaConfig } from "./substrate/config.js";
 import type { MatrixQaObservedEvent } from "./substrate/events.js";
 import { startMatrixQaHarness } from "./substrate/harness.runtime.js";
 import { createMatrixQaRoomObserver } from "./substrate/sync.js";
+import type { MatrixQaProvisionedTopology, MatrixQaTopologySpec } from "./substrate/topology.js";
 
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 type FactoryContext = Parameters<AdapterFactory["create"]>[0];
 type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
+
+const MATRIX_SHARED_FLOW_TOPOLOGY = {
+  defaultRoomKey: "main",
+  rooms: [
+    {
+      key: "main",
+      kind: "group",
+      members: ["driver", "observer", "sut"],
+      name: "OpenClaw Matrix QA",
+      requireMention: true,
+    },
+    {
+      key: "secondary",
+      kind: "group",
+      members: ["driver", "observer", "sut"],
+      name: "OpenClaw Matrix QA Secondary Room",
+      requireMention: true,
+    },
+    {
+      key: "driver-dm",
+      kind: "dm",
+      members: ["driver", "sut"],
+      name: "OpenClaw Matrix QA Driver DM",
+    },
+    {
+      key: "driver-dm-shared",
+      kind: "dm",
+      members: ["driver", "sut"],
+      name: "OpenClaw Matrix QA Shared DM",
+    },
+  ],
+} satisfies MatrixQaTopologySpec;
+
+function resolveMatrixQaAdapterRoom(
+  topology: MatrixQaProvisionedTopology,
+  conversation: { id: string; kind: "channel" | "direct" | "group" },
+) {
+  return (
+    topology.rooms.find(
+      (room) => room.key === conversation.id || room.roomId === conversation.id,
+    ) ??
+    (conversation.kind === "direct"
+      ? topology.rooms.find((room) => room.kind === "dm")
+      : undefined) ??
+    topology.rooms.find((room) => room.roomId === topology.defaultRoomId)!
+  );
+}
 
 async function waitForMatrixChannelReady(
   gateway: Parameters<AdapterDefinition["waitReady"]>[0]["gateway"],
@@ -81,20 +130,27 @@ export async function createMatrixQaTransportAdapter(
       registrationToken: harness.registrationToken,
       roomName: `OpenClaw Matrix QA ${suffix}`,
       sutLocalpart: `qa-sut-${suffix}`,
+      topology: MATRIX_SHARED_FLOW_TOPOLOGY,
     });
   } catch (error) {
     await harness.stop().catch(() => undefined);
     throw error;
   }
   const accountId = options.sutAccountId?.trim() || "sut";
-  const observedEvents: MatrixQaObservedEvent[] = [];
-  const observer = createMatrixQaRoomObserver({
-    accessToken: provisioning.observer.accessToken,
-    baseUrl: harness.baseUrl,
-    observedEvents,
+  const roomObservers = provisioning.topology.rooms.map((room) => {
+    const observedEvents: MatrixQaObservedEvent[] = [];
+    return {
+      observedEvents,
+      observer: createMatrixQaRoomObserver({
+        accessToken: provisioning.driver.accessToken,
+        baseUrl: harness.baseUrl,
+        observedEvents,
+      }),
+      roomId: room.roomId,
+    };
   });
   try {
-    await observer.prime();
+    await Promise.all(roomObservers.map(({ observer }) => observer.prime()));
   } catch (error) {
     await harness.stop().catch(() => undefined);
     throw error;
@@ -109,40 +165,61 @@ export async function createMatrixQaTransportAdapter(
   });
   let stopped = false;
   let pollingError: Error | undefined;
-  let logicalConversationId = provisioning.roomId;
-  let logicalConversationKind: "channel" | "direct" | "group" = "channel";
+  const logicalConversationByRoomId = new Map<
+    string,
+    { id: string; kind: "channel" | "direct" | "group" }
+  >(
+    provisioning.topology.rooms.map((room) => [
+      room.roomId,
+      { id: room.key, kind: room.kind === "dm" ? ("direct" as const) : ("channel" as const) },
+    ]),
+  );
   const nativeEventIds = new Map<string, string>();
   const busMessageIds = new Map<string, string>();
-  const polling = (async () => {
-    for (;;) {
-      if (stopped) {
-        return;
-      }
-      const result = await observer.waitForOptionalRoomEvent({
-        predicate: (event) => event.sender === provisioning.sut.userId,
-        roomId: provisioning.roomId,
-        timeoutMs: 1_000,
-      });
-      if (!result.matched) {
-        continue;
-      }
-      const event = result.event;
-      await context.messages.addOutboundMessage({
-        accountId,
-        to: `${logicalConversationKind}:${logicalConversationId}`,
-        senderId: event.sender,
-        text: event.body ?? "",
-        timestamp: event.originServerTs,
-        threadId:
-          event.relatesTo?.relType === "m.thread" && event.relatesTo.eventId
-            ? busMessageIds.get(event.relatesTo.eventId)
+  const polling = Promise.all(
+    roomObservers.map(async ({ observer, roomId }) => {
+      for (;;) {
+        if (stopped) {
+          return;
+        }
+        const observed = await observer.waitForOptionalRoomEvent({
+          predicate: (event) => event.sender === provisioning.sut.userId && Boolean(event.body),
+          roomId,
+          timeoutMs: 1_000,
+        });
+        if (!observed.matched) {
+          continue;
+        }
+        const event = observed.event;
+        const text = event.body;
+        if (!text) {
+          continue;
+        }
+        const logicalConversation = logicalConversationByRoomId.get(event.roomId);
+        if (!logicalConversation) {
+          continue;
+        }
+        const outbound = await context.messages.addOutboundMessage({
+          accountId,
+          to: buildQaTarget({
+            chatType: logicalConversation.kind,
+            conversationId: logicalConversation.id,
+          }),
+          senderId: event.sender,
+          text,
+          timestamp: event.originServerTs,
+          threadId:
+            event.relatesTo?.relType === "m.thread" && event.relatesTo.eventId
+              ? busMessageIds.get(event.relatesTo.eventId)
+              : undefined,
+          replyToId: event.relatesTo?.inReplyToId
+            ? busMessageIds.get(event.relatesTo.inReplyToId)
             : undefined,
-        replyToId: event.relatesTo?.inReplyToId
-          ? busMessageIds.get(event.relatesTo.inReplyToId)
-          : undefined,
-      });
-    }
-  })().catch((error: unknown) => {
+        });
+        busMessageIds.set(event.eventId, outbound.id);
+      }
+    }),
+  ).catch((error: unknown) => {
     if (!stopped) {
       pollingError = error instanceof Error ? error : new Error(String(error));
     }
@@ -160,8 +237,11 @@ export async function createMatrixQaTransportAdapter(
       }
     },
     async sendInbound(input) {
-      logicalConversationId = input.conversation.id;
-      logicalConversationKind = input.conversation.kind;
+      const room = resolveMatrixQaAdapterRoom(provisioning.topology, input.conversation);
+      logicalConversationByRoomId.set(room.roomId, {
+        id: input.conversation.id,
+        kind: input.conversation.kind,
+      });
       const actor = input.senderId === "observer" ? provisioning.observer : provisioning.driver;
       const actorClient = input.senderId === "observer" ? observerClient : driverClient;
       const hasPortableMention = input.text.includes("@openclaw");
@@ -170,7 +250,7 @@ export async function createMatrixQaTransportAdapter(
         body,
         mentionUserIds: hasPortableMention ? [provisioning.sut.userId] : undefined,
         replyToEventId: input.replyToId ? nativeEventIds.get(input.replyToId) : undefined,
-        roomId: provisioning.roomId,
+        roomId: room.roomId,
         threadRootEventId: input.threadId ? nativeEventIds.get(input.threadId) : undefined,
       });
       const message = await context.messages.addInboundMessage({
@@ -183,8 +263,6 @@ export async function createMatrixQaTransportAdapter(
       return message;
     },
     resetTransport: () => {
-      logicalConversationId = provisioning.roomId;
-      logicalConversationKind = "channel";
       nativeEventIds.clear();
       busMessageIds.clear();
     },

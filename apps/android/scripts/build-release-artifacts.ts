@@ -4,9 +4,19 @@
  * version metadata, verifies signatures, and writes SHA-256 checksum files.
  */
 
-import { $ } from "bun";
-import { existsSync, readdirSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import {
+  accessSync,
+  constants,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from "node:fs";
+import { basename, delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveAndroidVersion, syncAndroidVersioning } from "../../../scripts/lib/android-version.ts";
 
@@ -18,28 +28,52 @@ type ReleaseArtifact = {
 };
 
 type CliOptions = {
+  artifact: "all" | ReleaseArtifact["flavorName"];
   dryRun: boolean;
+  verifyApk?: string;
 };
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const androidDir = join(scriptDir, "..");
 const rootDir = join(androidDir, "..", "..");
 const releaseOutputDir = join(androidDir, "build", "release-artifacts");
+const releaseSigningManifestPath = join(androidDir, "Config", "ReleaseSigning.json");
 
 function parseArgs(argv: string[]): CliOptions {
+  let artifact: CliOptions["artifact"] = "all";
   let dryRun = false;
+  let verifyApk: string | undefined;
 
-  for (const arg of argv) {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
     switch (arg) {
+      case "--artifact": {
+        const value = argv[index + 1];
+        if (value !== "all" && value !== "play" && value !== "third-party") {
+          throw new Error("--artifact must be one of: all, play, third-party");
+        }
+        artifact = value;
+        index += 1;
+        break;
+      }
       case "--dry-run": {
         dryRun = true;
+        break;
+      }
+      case "--verify-apk": {
+        const value = argv[index + 1];
+        if (!value || value.startsWith("-")) {
+          throw new Error("Missing value for --verify-apk");
+        }
+        verifyApk = value;
+        index += 1;
         break;
       }
       case "-h":
       case "--help": {
         console.log(
           [
-            "Usage: bun apps/android/scripts/build-release-artifacts.ts [--dry-run]",
+            "Usage: bun apps/android/scripts/build-release-artifacts.ts [--artifact all|play|third-party] [--dry-run] [--verify-apk PATH]",
             "",
             "Builds the signed Play AAB and third-party APK from apps/android/version.json.",
           ].join("\n"),
@@ -52,7 +86,22 @@ function parseArgs(argv: string[]): CliOptions {
     }
   }
 
-  return { dryRun };
+  if (verifyApk && (artifact !== "all" || dryRun)) {
+    throw new Error("--verify-apk cannot be combined with --artifact or --dry-run");
+  }
+
+  return { artifact, dryRun, verifyApk };
+}
+
+function pinnedApkCertificateSha256(): string {
+  const manifest = JSON.parse(readFileSync(releaseSigningManifestPath, "utf8")) as {
+    apkCertificateSha256?: unknown;
+  };
+  const fingerprint = manifest.apkCertificateSha256;
+  if (typeof fingerprint !== "string" || !/^[a-f0-9]{64}$/u.test(fingerprint)) {
+    throw new Error("ReleaseSigning.json must pin apkCertificateSha256 as 64 lowercase hex digits");
+  }
+  return fingerprint;
 }
 
 function releaseArtifacts(versionName: string): ReleaseArtifact[] {
@@ -89,21 +138,19 @@ function releaseArtifacts(versionName: string): ReleaseArtifact[] {
   ];
 }
 
-async function sha256Hex(path: string): Promise<string> {
-  const buffer = await Bun.file(path).arrayBuffer();
-  const digest = await crypto.subtle.digest("SHA-256", buffer);
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+function sha256Hex(path: string): string {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
-async function writeSha256File(path: string): Promise<string> {
-  const hash = await sha256Hex(path);
+function writeSha256File(path: string): string {
+  const hash = sha256Hex(path);
   const checksumPath = `${path}.sha256`;
-  await Bun.write(checksumPath, `${hash}  ${basename(path)}\n`);
+  writeFileSync(checksumPath, `${hash}  ${basename(path)}\n`);
   return hash;
 }
 
-async function verifyAabSignature(path: string): Promise<void> {
-  await $`jarsigner -verify ${path}`.quiet();
+function verifyAabSignature(path: string): void {
+  execFileSync("jarsigner", ["-verify", path], { stdio: "ignore" });
 }
 
 function resolveApkSignerFromSdk(sdkRoot: string | undefined): string | null {
@@ -124,57 +171,87 @@ function resolveApkSignerFromSdk(sdkRoot: string | undefined): string | null {
   return candidates[0] ?? null;
 }
 
-async function resolveApkSigner(): Promise<string> {
+function resolveApkSigner(): string {
   const sdkApkSigner =
-    resolveApkSignerFromSdk(Bun.env.ANDROID_HOME) ??
-    resolveApkSignerFromSdk(Bun.env.ANDROID_SDK_ROOT);
+    resolveApkSignerFromSdk(process.env.ANDROID_HOME) ??
+    resolveApkSignerFromSdk(process.env.ANDROID_SDK_ROOT);
   if (sdkApkSigner) {
     return sdkApkSigner;
   }
 
+  for (const pathDir of (process.env.PATH ?? "").split(delimiter)) {
+    const candidate = join(pathDir, "apksigner");
+    try {
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      continue;
+    }
+  }
+
+  throw new Error("Missing apksigner. Install Android SDK build-tools or put apksigner on PATH.");
+}
+
+function verifyApkSignature(path: string, expectedCertificateSha256: string): void {
+  const apkSigner = resolveApkSigner();
+  let output: string;
   try {
-    return (await $`command -v apksigner`.text()).trim();
+    output = execFileSync(apkSigner, ["verify", "--print-certs", path], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "inherit"],
+    });
   } catch {
+    throw new Error(`apksigner verification failed for ${path}`);
+  }
+
+  const fingerprints = Array.from(
+    output.matchAll(/^Signer #[0-9]+ certificate SHA-256 digest: ([a-fA-F0-9:]+)$/gmu),
+    (match) => match[1].replaceAll(":", "").toLowerCase(),
+  );
+  if (fingerprints.length !== 1 || !/^[a-f0-9]{64}$/u.test(fingerprints[0] ?? "")) {
+    throw new Error(`Expected exactly one SHA-256 signing certificate for ${path}`);
+  }
+  if (fingerprints[0] !== expectedCertificateSha256) {
     throw new Error(
-      "Missing apksigner. Install Android SDK build-tools or put apksigner on PATH.",
+      `APK signing certificate mismatch for ${path}: expected ${expectedCertificateSha256}, got ${fingerprints[0]}`,
     );
   }
 }
 
-async function verifyApkSignature(path: string): Promise<void> {
-  const apkSigner = await resolveApkSigner();
-  const apkSignerProcess = Bun.spawn([apkSigner, "verify", path], {
-    stdout: "ignore",
-    stderr: "inherit",
-  });
-  const exitCode = await apkSignerProcess.exited;
-  if (exitCode !== 0) {
-    throw new Error(`apksigner verification failed for ${path}`);
-  }
-}
-
-async function copyArtifact(sourcePath: string, destinationPath: string): Promise<void> {
-  const sourceFile = Bun.file(sourcePath);
-  if (!(await sourceFile.exists())) {
+function copyArtifact(sourcePath: string, destinationPath: string): void {
+  if (!existsSync(sourcePath)) {
     throw new Error(`Signed release artifact missing at ${sourcePath}`);
   }
 
-  await Bun.write(destinationPath, sourceFile);
+  copyFileSync(sourcePath, destinationPath);
 }
 
-async function verifyArtifactSignature(artifact: ReleaseArtifact, outputPath: string): Promise<void> {
+function verifyArtifactSignature(
+  artifact: ReleaseArtifact,
+  outputPath: string,
+  expectedCertificateSha256: string,
+): void {
   if (artifact.kind === "aab") {
-    await verifyAabSignature(outputPath);
+    verifyAabSignature(outputPath);
   } else {
-    await verifyApkSignature(outputPath);
+    verifyApkSignature(outputPath, expectedCertificateSha256);
   }
 }
 
-async function main() {
+function main() {
   const options = parseArgs(process.argv.slice(2));
+  const expectedCertificateSha256 = pinnedApkCertificateSha256();
+  if (options.verifyApk) {
+    verifyApkSignature(options.verifyApk, expectedCertificateSha256);
+    console.log(`Verified pinned APK signing certificate: ${options.verifyApk}`);
+    return;
+  }
+
   syncAndroidVersioning({ mode: "check", rootDir });
   const version = resolveAndroidVersion(rootDir);
-  const artifacts = releaseArtifacts(version.canonicalVersion);
+  const artifacts = releaseArtifacts(version.canonicalVersion).filter(
+    (artifact) => options.artifact === "all" || artifact.flavorName === options.artifact,
+  );
 
   console.log(`Android versionName: ${version.canonicalVersion}`);
   console.log(`Android versionCode: ${version.versionCode}`);
@@ -188,8 +265,11 @@ async function main() {
     return;
   }
 
-  await $`mkdir -p ${releaseOutputDir}`;
-  await $`./gradlew ${artifacts.map((artifact) => artifact.gradleTask)}`.cwd(androidDir);
+  mkdirSync(releaseOutputDir, { recursive: true });
+  execFileSync("./gradlew", artifacts.map((artifact) => artifact.gradleTask), {
+    cwd: androidDir,
+    stdio: "inherit",
+  });
 
   for (const artifact of artifacts) {
     const outputPath = join(
@@ -197,13 +277,13 @@ async function main() {
       `openclaw-${version.canonicalVersion}-${artifact.flavorName}-release.${artifact.kind}`,
     );
 
-    await copyArtifact(artifact.sourcePath, outputPath);
-    await verifyArtifactSignature(artifact, outputPath);
-    const hash = await writeSha256File(outputPath);
+    copyArtifact(artifact.sourcePath, outputPath);
+    verifyArtifactSignature(artifact, outputPath, expectedCertificateSha256);
+    const hash = writeSha256File(outputPath);
 
     console.log(`Signed ${artifact.kind.toUpperCase()} (${artifact.flavorName}): ${outputPath}`);
     console.log(`SHA-256 (${artifact.flavorName}): ${hash}`);
   }
 }
 
-await main();
+main();

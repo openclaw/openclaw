@@ -1,10 +1,34 @@
 import Foundation
 
 extension OpenClawChatViewModel {
+    nonisolated static func chatContextUsageFraction(for session: OpenClawChatSessionEntry?) -> Double? {
+        guard session?.totalTokensFresh != false,
+              let totalTokens = session?.totalTokens,
+              totalTokens >= 0,
+              let contextTokens = session?.contextTokens,
+              contextTokens > 0
+        else {
+            return nil
+        }
+        return min(max(Double(totalTokens) / Double(contextTokens), 0), 1)
+    }
+
+    func syncContextUsageFraction() {
+        let mainSessionKey = self.resolvedMainSessionKey
+        let activeSessionKey = self.sessionKey == "main" && mainSessionKey != "main"
+            ? mainSessionKey
+            : self.sessionKey
+        let currentSession = self.sessions.first(where: { $0.key == activeSessionKey }) ??
+            self.sessions.first(where: {
+                self.matchesCurrentSessionKey(incoming: $0.key, current: self.sessionKey)
+            })
+        self.contextUsageFraction = Self.chatContextUsageFraction(for: currentSession)
+    }
+
     public var sessionChoices: [OpenClawChatSessionEntry] {
         let now = Date().timeIntervalSince1970 * 1000
         let cutoff = now - (24 * 60 * 60 * 1000)
-        let sorted = sessions.sorted { ($0.updatedAt ?? 0) > ($1.updatedAt ?? 0) }
+        let sorted = OpenClawChatSessionListOrganizer.organize(sessions)
         let mainSessionKey = resolvedMainSessionKey
 
         var result: [OpenClawChatSessionEntry] = []
@@ -21,8 +45,10 @@ extension OpenClawChatViewModel {
 
         for entry in sorted {
             guard !included.contains(entry.key) else { continue }
-            guard entry.key == sessionKey || !Self.isHiddenInternalSession(entry.key) else { continue }
-            guard (entry.updatedAt ?? 0) >= cutoff else { continue }
+            guard entry.key == sessionKey || !ChatSessionSidebarModel.isHiddenInternalSession(entry.key)
+            else { continue }
+            // Pinned sessions stay reachable regardless of recency.
+            guard (entry.updatedAt ?? 0) >= cutoff || entry.isPinned else { continue }
             result.append(entry)
             included.insert(entry.key)
         }
@@ -36,12 +62,6 @@ extension OpenClawChatViewModel {
         }
 
         return result
-    }
-
-    private static func isHiddenInternalSession(_ key: String) -> Bool {
-        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return false }
-        return trimmed == "onboarding" || trimmed.hasSuffix(":onboarding")
     }
 
     func matchesCurrentSessionKey(incoming: String, current: String) -> Bool {

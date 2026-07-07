@@ -1047,11 +1047,13 @@ private class FakeTalkAudioPlayer : TalkAudioPlaying {
 
 private class InMemoryDeviceAuthStore : DeviceAuthTokenStore {
   override fun loadEntry(
+    gatewayId: String,
     deviceId: String,
     role: String,
   ): DeviceAuthEntry? = null
 
   override fun saveToken(
+    gatewayId: String,
     deviceId: String,
     role: String,
     token: String,
@@ -1059,6 +1061,7 @@ private class InMemoryDeviceAuthStore : DeviceAuthTokenStore {
   ) = Unit
 
   override fun clearToken(
+    gatewayId: String,
     deviceId: String,
     role: String,
   ) = Unit

@@ -1661,6 +1661,7 @@ describe("official external plugin catalog", () => {
       ["vercel-ai-gateway", "@openclaw/vercel-ai-gateway-provider"],
       ["zai", "@openclaw/zai-provider"],
     ] as const;
+    const currentExternalized = [["featherless", "@openclaw/featherless-provider"]] as const;
 
     for (const [id, npmSpec] of [...providers, ...plugins]) {
       expect(resolveOfficialExternalPluginInstall(expectCatalogEntry(id))).toEqual({
@@ -1676,6 +1677,14 @@ describe("official external plugin catalog", () => {
         npmSpec,
         defaultChoice: "npm",
         minHostVersion: ">=2026.6.9",
+      });
+    }
+    for (const [id, npmSpec] of currentExternalized) {
+      expect(resolveOfficialExternalPluginInstall(expectCatalogEntry(id))).toEqual({
+        clawhubSpec: `clawhub:${npmSpec}`,
+        npmSpec,
+        defaultChoice: "npm",
+        minHostVersion: ">=2026.6.11",
       });
     }
   });
@@ -1827,6 +1836,7 @@ describe("official external plugin catalog", () => {
         CLOUDFLARE_AI_GATEWAY_API_KEY: "cloudflare-key",
         DEEPINFRA_API_KEY: "deepinfra-key",
         DEEPSEEK_API_KEY: "deepseek-key",
+        FEATHERLESS_API_KEY: "featherless-key",
         GROQ_API_KEY: "groq-key",
         LONGCAT_API_KEY: "longcat-key",
         KILOCODE_API_KEY: "kilocode-key",
@@ -1850,6 +1860,7 @@ describe("official external plugin catalog", () => {
       "cloudflare-ai-gateway",
       "deepinfra",
       "deepseek",
+      "featherless",
       "fireworks",
       "groq",
       "kilocode",

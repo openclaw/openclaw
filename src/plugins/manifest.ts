@@ -24,7 +24,7 @@ import type { PluginKind } from "./plugin-kind.types.js";
 
 /** Canonical plugin manifest filename inside plugin roots. */
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
-export const PLUGIN_MANIFEST_FILENAMES = [PLUGIN_MANIFEST_FILENAME] as const;
+const PLUGIN_MANIFEST_FILENAMES = [PLUGIN_MANIFEST_FILENAME] as const;
 export const MAX_PLUGIN_MANIFEST_BYTES = 256 * 1024;
 const MAX_PLUGIN_MANIFEST_LOAD_CACHE_ENTRIES = 512;
 const MAX_SECRET_PROVIDER_EXEC_ARGS = 128;
@@ -525,6 +525,8 @@ export type PluginManifestProviderAuthChoice = {
   cliFlag?: string;
   cliOption?: string;
   cliDescription?: string;
+  /** One pasted secret plus provider defaults is sufficient for app-guided setup. */
+  appGuidedSecret?: boolean;
   /**
    * Interactive onboarding surfaces where this auth choice should appear.
    * Defaults to `["text-inference"]` when omitted.
@@ -1536,6 +1538,7 @@ function normalizeProviderAuthChoices(
     const cliFlag = normalizeOptionalString(entry.cliFlag) ?? "";
     const cliOption = normalizeOptionalString(entry.cliOption) ?? "";
     const cliDescription = normalizeOptionalString(entry.cliDescription) ?? "";
+    const appGuidedSecret = entry.appGuidedSecret === true;
     const onboardingScopes = normalizeTrimmedStringList(entry.onboardingScopes).filter(
       (scope): scope is PluginManifestOnboardingScope =>
         scope === "text-inference" || scope === "image-generation" || scope === "music-generation",
@@ -1557,6 +1560,7 @@ function normalizeProviderAuthChoices(
       ...(cliFlag ? { cliFlag } : {}),
       ...(cliOption ? { cliOption } : {}),
       ...(cliDescription ? { cliDescription } : {}),
+      ...(appGuidedSecret ? { appGuidedSecret: true } : {}),
       ...(onboardingScopes.length > 0 ? { onboardingScopes } : {}),
     });
   }

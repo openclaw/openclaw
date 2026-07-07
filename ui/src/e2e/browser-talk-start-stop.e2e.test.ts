@@ -68,6 +68,20 @@ async function installTalkBrowserFixtures(page: Page) {
   });
 }
 
+async function installBlockedMicrophoneFixture(page: Page) {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        enumerateDevices: async () => [],
+        getUserMedia: async () => {
+          throw new DOMException("Permission denied", "NotAllowedError");
+        },
+      },
+    });
+  });
+}
+
 describeControlUiE2e("Control UI browser Talk", () => {
   beforeAll(async () => {
     server = await startControlUiE2eServer();
@@ -104,27 +118,25 @@ describeControlUiE2e("Control UI browser Talk", () => {
     try {
       await page.goto(`${server.baseUrl}chat`);
       await page.setViewportSize({ width: 320, height: 720 });
-      const microphoneTrigger = page.getByRole("button", { name: "Microphone input" });
-      await microphoneTrigger.click();
-      const microphoneMenu = page.getByRole("group", { name: "Microphone input" });
-      const menuBounds = await microphoneMenu.boundingBox();
-      expect(menuBounds).not.toBeNull();
-      expect(menuBounds?.x ?? 0).toBeGreaterThanOrEqual(8);
-      expect((menuBounds?.x ?? 0) + (menuBounds?.width ?? 0)).toBeLessThanOrEqual(312);
-      await page.getByRole("button", { name: "USB Audio Interface" }).click();
       await expect
-        .poll(() => page.evaluate(() => document.activeElement?.getAttribute("aria-label")))
-        .toBe("Microphone input");
-      await microphoneTrigger.click();
-      await page.keyboard.press("Escape");
+        .poll(() => page.getByRole("button", { name: "Microphone input" }).count())
+        .toBe(0);
+      const settings = page.getByRole("button", { name: "Chat settings" });
+      await settings.click();
+      const settingsDialog = page.getByRole("dialog", { name: "Chat settings" });
+      const microphoneSelect = settingsDialog.locator('[data-talk-select="microphone"] select');
       await expect
-        .poll(() => page.evaluate(() => document.activeElement?.getAttribute("aria-label")))
-        .toBe("Microphone input");
-      await expect.poll(() => microphoneMenu.count()).toBe(0);
-      await page.getByRole("button", { name: "Start Talk" }).click();
+        .poll(async () =>
+          (await microphoneSelect.locator("option").allTextContents()).map((label) => label.trim()),
+        )
+        .toEqual(["System default", "Built-in Microphone", "USB Audio Interface"]);
+      await microphoneSelect.selectOption("usb");
+      await settings.click();
+      await expect.poll(() => settingsDialog.isVisible()).toBe(false);
+      await page.getByRole("button", { name: "Start voice input" }).click();
 
       const createRequest = await gateway.waitForRequest("talk.client.create");
-      expect(createRequest.params).toEqual({ sessionKey: "main" });
+      expect(createRequest.params).toMatchObject({ sessionKey: "main" });
       await expect
         .poll(() =>
           page.evaluate(
@@ -150,45 +162,78 @@ describeControlUiE2e("Control UI browser Talk", () => {
         .poll(async () =>
           (await page.locator(".agent-chat__talk-status-text").textContent())?.trim(),
         )
-        .toBe("Talk live");
+        .toBe("Listening...");
 
-      await page.getByRole("button", { name: "Stop Talk" }).click();
+      await page.getByRole("button", { name: "Stop voice input" }).click();
       await expect
-        .poll(() => page.getByRole("button", { name: "Start Talk" }).isVisible())
+        .poll(() => page.getByRole("button", { name: "Start voice input" }).isVisible())
         .toBe(true);
       await expect.poll(() => page.locator(".agent-chat__talk-status-text").count()).toBe(0);
       await expect
         .poll(() =>
-          page.evaluate(
-            () =>
-              (
-                window as Window & {
-                  openclawTalkE2eState?: {
-                    audioContextsClosed: number;
-                    tracksStopped: number;
-                  };
+          page.evaluate(() => {
+            const state = (
+              window as Window & {
+                openclawTalkE2eState?: { audioContextsClosed: number; tracksStopped: number };
+              }
+            ).openclawTalkE2eState;
+            return state
+              ? {
+                  audioContextsClosed: state.audioContextsClosed,
+                  tracksStopped: state.tracksStopped,
                 }
-              ).openclawTalkE2eState?.audioContextsClosed,
-          ),
+              : null;
+          }),
         )
-        .toBe(2);
-      await expect
-        .poll(() =>
-          page.evaluate(
-            () =>
-              (
-                window as Window & {
-                  openclawTalkE2eState?: { tracksStopped: number };
-                }
-              ).openclawTalkE2eState?.tracksStopped,
-          ),
-        )
-        .toBe(1);
+        .toEqual({ audioContextsClosed: 2, tracksStopped: 1 });
 
       await gateway.deliverLatest({ setupComplete: {} });
       await expect
-        .poll(() => page.getByRole("button", { name: "Start Talk" }).isVisible())
+        .poll(() => page.getByRole("button", { name: "Start voice input" }).isVisible())
         .toBe(true);
+    } finally {
+      await context.close();
+      await browser.close();
+    }
+  });
+
+  it("keeps blocked microphone guidance readable in a narrow viewport", async () => {
+    const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await installMockGateway(page);
+    await installBlockedMicrophoneFixture(page);
+
+    try {
+      await page.setViewportSize({ width: 320, height: 720 });
+      await page.goto(`${server.baseUrl}chat`);
+      await page.getByRole("button", { name: "Chat settings" }).click();
+
+      const settingsDialog = page.getByRole("dialog", { name: "Chat settings" });
+      await settingsDialog.getByRole("button", { name: "Refresh: Microphone input" }).click();
+      const permissionAlert = settingsDialog.getByRole("alert");
+      await expect.poll(() => permissionAlert.isVisible()).toBe(true);
+
+      const [settingsBounds, alertBounds] = await Promise.all([
+        settingsDialog.boundingBox(),
+        permissionAlert.boundingBox(),
+      ]);
+      expect(settingsBounds).not.toBeNull();
+      expect(alertBounds).not.toBeNull();
+      expect(settingsBounds?.width ?? 0).toBeGreaterThanOrEqual(280);
+      expect(settingsBounds?.x ?? 0).toBeGreaterThanOrEqual(8);
+      expect((settingsBounds?.x ?? 0) + (settingsBounds?.width ?? 0)).toBeLessThanOrEqual(312);
+      expect(alertBounds?.x ?? 0).toBeGreaterThanOrEqual(settingsBounds?.x ?? 0);
+      expect((alertBounds?.x ?? 0) + (alertBounds?.width ?? 0)).toBeLessThanOrEqual(
+        (settingsBounds?.x ?? 0) + (settingsBounds?.width ?? 0),
+      );
+      expect(alertBounds?.y ?? 0).toBeGreaterThanOrEqual(settingsBounds?.y ?? 0);
+      expect((alertBounds?.y ?? 0) + (alertBounds?.height ?? 0)).toBeLessThanOrEqual(
+        (settingsBounds?.y ?? 0) + (settingsBounds?.height ?? 0),
+      );
+      await expect
+        .poll(() => permissionAlert.textContent())
+        .toContain("Microphone access is blocked.");
     } finally {
       await context.close();
       await browser.close();

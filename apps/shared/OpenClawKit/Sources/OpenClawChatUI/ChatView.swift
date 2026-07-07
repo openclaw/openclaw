@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -98,6 +101,7 @@ public struct OpenClawChatView: View {
     private let emptyAssistantIntro: String?
     private let emptyAssistantPrompts: [StarterPrompt]
     private let talkControl: OpenClawChatTalkControl?
+    private let voiceNoteControl: OpenClawChatVoiceNoteControl?
     private let speech: OpenClawChatSpeechController?
 
     private enum ScrollFollowTarget: Equatable {
@@ -150,6 +154,7 @@ public struct OpenClawChatView: View {
         emptyAssistantIntro: String? = nil,
         emptyAssistantPrompts: [StarterPrompt] = [],
         talkControl: OpenClawChatTalkControl? = nil,
+        voiceNoteControl: OpenClawChatVoiceNoteControl? = nil,
         speech: OpenClawChatSpeechController? = nil)
     {
         _viewModel = State(initialValue: viewModel)
@@ -170,6 +175,7 @@ public struct OpenClawChatView: View {
         self.emptyAssistantIntro = emptyAssistantIntro
         self.emptyAssistantPrompts = emptyAssistantPrompts
         self.talkControl = talkControl
+        self.voiceNoteControl = voiceNoteControl
         self.speech = speech
     }
 
@@ -228,10 +234,13 @@ public struct OpenClawChatView: View {
             assistantAvatarText: self.assistantAvatarText,
             assistantAvatarTint: self.assistantAvatarTint,
             composerChrome: self.composerChrome,
-            isComposerEnabled: self.isComposerEnabled,
-            isAttachmentInputEnabled: self.isAttachmentInputEnabled,
+            isComposerEnabled: self.isComposerEnabled
+                && !self.viewModel.isSendingAttachmentDraft,
+            isAttachmentInputEnabled: self.isAttachmentInputEnabled
+                && !self.viewModel.isSendingAttachmentDraft,
             messagePlaceholder: self.messagePlaceholder,
-            talkControl: self.talkControl)
+            talkControl: self.talkControl,
+            voiceNoteControl: self.voiceNoteControl)
     }
 
     private var messageList: some View {
@@ -422,6 +431,7 @@ public struct OpenClawChatView: View {
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
             .contextMenu {
+                self.copyMessageButton(for: msg)
                 if outboxState.isFailed {
                     Button {
                         self.viewModel.retryOutboxMessage(msg.id)
@@ -484,7 +494,14 @@ public struct OpenClawChatView: View {
                 }
             }
         } else {
+            #if os(macOS)
             bubble
+                .contextMenu {
+                    self.copyMessageButton(for: msg)
+                }
+            #else
+            bubble
+            #endif
         }
     }
 
@@ -505,6 +522,32 @@ public struct OpenClawChatView: View {
         default:
             nil
         }
+    }
+
+    @ViewBuilder
+    private func copyMessageButton(for message: OpenClawChatMessage) -> some View {
+        let text = self.primaryText(in: message)
+        if !text.isEmpty {
+            Button {
+                Self.copyToClipboard(text)
+            } label: {
+                Label {
+                    Text("Copy Message")
+                        .font(OpenClawChatTypography.body)
+                } icon: {
+                    Image(systemName: "doc.on.doc")
+                }
+            }
+        }
+    }
+
+    private static func copyToClipboard(_ text: String) {
+        #if os(macOS)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        #else
+        UIPasteboard.general.string = text
+        #endif
     }
 
     private var visibleMessages: [OpenClawChatMessage] {
@@ -679,7 +722,7 @@ public struct OpenClawChatView: View {
 
     private var emptyStateTitle: String {
         #if os(macOS)
-        "Web Chat"
+        "Start a Conversation"
         #else
         "Chat"
         #endif
@@ -687,7 +730,7 @@ public struct OpenClawChatView: View {
 
     private var emptyStateMessage: String {
         #if os(macOS)
-        "Type a message below to start.\nReturn sends • Shift-Return adds a line break."
+        "Message your agent to get started.\nReturn sends • Shift-Return adds a line break • / shows commands."
         #else
         "Type a message below to start."
         #endif

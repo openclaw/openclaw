@@ -49,9 +49,9 @@ export function hashCrestodianOperation(operation: CrestodianOperation): string 
 }
 
 /** Result markers shared with out-of-process hosts (CLI MCP runs). */
-export const CRESTODIAN_NEEDS_APPROVAL_PREFIX = "needs-approval:";
-export const CRESTODIAN_APPROVAL_MISMATCH_PREFIX = "approval-mismatch:";
-export const CRESTODIAN_DIRECTIVE_PREFIX = "directive:";
+const CRESTODIAN_NEEDS_APPROVAL_PREFIX = "needs-approval:";
+const CRESTODIAN_APPROVAL_MISMATCH_PREFIX = "approval-mismatch:";
+const CRESTODIAN_DIRECTIVE_PREFIX = "directive:";
 
 /**
  * Reconstruct a host directive from an out-of-process tool result. Directive

@@ -283,6 +283,7 @@ describe("tool-cards", () => {
     expect(preview).toHaveLength(120);
     expect(preview?.startsWith("A")).toBe(true);
     expect(preview).not.toContain("with ");
+    expect(formatCollapsedToolPreviewText(`${"A".repeat(119)}🚀tail`)).toBe("A".repeat(119));
   });
 
   it("bounds raw string argument fallbacks in collapsed summaries", () => {

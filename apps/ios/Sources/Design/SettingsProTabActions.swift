@@ -113,7 +113,55 @@ extension SettingsProTab {
         guard !self.isReconnectingGateway else { return }
         self.isReconnectingGateway = true
         defer { self.isReconnectingGateway = false }
-        await self.gatewayController.connectLastKnown()
+        await self.gatewayController.connectActiveGateway()
+    }
+
+    func switchGateway(to entry: GatewaySettingsStore.GatewayRegistryEntry) async {
+        guard self.connectingGatewayID == nil else { return }
+        self.connectingGatewayID = entry.stableID
+        self.setupStatusText = "Switching to \(entry.name)…"
+        defer {
+            self.connectingGatewayID = nil
+            self.refreshGatewayRegistry()
+        }
+        if let failure = await self.gatewayController.switchToGateway(stableID: entry.stableID) {
+            self.setupStatusText = failure
+            return
+        }
+        self.selectGatewayCredentialTarget(entry.stableID, allowManualOverride: false)
+    }
+
+    func forgetPendingGateway() {
+        guard let entry = self.pendingForgetGateway else { return }
+        self.pendingForgetGateway = nil
+        guard self.gatewayController.forgetGateway(stableID: entry.stableID) else {
+            self.setupStatusText = "Could not forget \(entry.name)."
+            self.refreshGatewayRegistry()
+            return
+        }
+        if self.gatewayCredentialFieldStableID == entry.stableID {
+            self.clearManualCredentialFields()
+        }
+        self.setupStatusText = "Forgot \(entry.name)."
+        self.refreshGatewayRegistry()
+    }
+
+    func refreshGatewayRegistry() {
+        self.gatewayRegistry = GatewaySettingsStore.loadGatewayRegistry()
+    }
+
+    func gatewayEndpointSummary(_ entry: GatewaySettingsStore.GatewayRegistryEntry) -> String {
+        switch entry.kind {
+        case .manual:
+            let endpoint = if let host = entry.host, let port = entry.port {
+                "\(host):\(port)"
+            } else {
+                "Saved endpoint unavailable"
+            }
+            return entry.useTLS ? "\(endpoint) • TLS" : endpoint
+        case .discovered:
+            return entry.useTLS ? "Discovered • TLS" : "Discovered"
+        }
     }
 
     @MainActor
@@ -141,6 +189,7 @@ extension SettingsProTab {
     }
 
     func syncSettingsState() {
+        self.refreshGatewayRegistry()
         self.manualGatewayPortText = self.manualGatewayPort > 0 ? String(self.manualGatewayPort) : ""
         self.selectedAgentPickerId = self.appModel.selectedAgentId ?? ""
         self.defaultShareInstruction = ShareToAgentSettings.loadDefaultInstruction()
@@ -213,7 +262,10 @@ extension SettingsProTab {
             }
         }
         self.connectingGatewayID = gateway.id
-        defer { self.connectingGatewayID = nil }
+        defer {
+            self.connectingGatewayID = nil
+            self.refreshGatewayRegistry()
+        }
         self.manualGatewayEnabled = false
         self.selectGatewayCredentialTarget(gateway.stableID, allowManualOverride: false)
         GatewaySettingsStore.savePreferredGatewayStableID(gateway.stableID)
@@ -416,7 +468,10 @@ extension SettingsProTab {
         }
         self.connectingGatewayID = "manual"
         self.manualGatewayEnabled = true
-        defer { self.connectingGatewayID = nil }
+        defer {
+            self.connectingGatewayID = nil
+            self.refreshGatewayRegistry()
+        }
         let stableID = GatewayConnectionController.ManualAuthOverride.manualStableID(
             host: host,
             port: port)

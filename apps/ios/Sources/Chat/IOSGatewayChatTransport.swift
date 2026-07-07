@@ -34,6 +34,7 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         var includeGlobal: Bool
         var includeUnknown: Bool
         var limit: Int?
+        var search: String?
         var archived: Bool?
     }
 
@@ -205,11 +206,17 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         max(1, Int(ceil(Double(timeoutMs) / 1000.0)) + 5)
     }
 
-    static func makeListSessionsParamsJSON(limit: Int?, archived: Bool = false) throws -> String {
-        try self.encodeParams(ListSessionsParams(
+    static func makeListSessionsParamsJSON(
+        limit: Int?,
+        search: String? = nil,
+        archived: Bool = false) throws -> String
+    {
+        let normalizedSearch = search?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return try self.encodeParams(ListSessionsParams(
             includeGlobal: true,
             includeUnknown: false,
             limit: limit,
+            search: normalizedSearch?.isEmpty == false ? normalizedSearch : nil,
             archived: archived ? true : nil))
     }
 
@@ -444,12 +451,12 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         _ = try await self.gateway.request(method: "chat.abort", paramsJSON: json, timeoutSeconds: 10)
     }
 
-    func listSessions(limit: Int?) async throws -> OpenClawChatSessionsListResponse {
-        try await self.listSessions(limit: limit, archived: false)
-    }
-
-    func listSessions(limit: Int?, archived: Bool) async throws -> OpenClawChatSessionsListResponse {
-        let json = try Self.makeListSessionsParamsJSON(limit: limit, archived: archived)
+    func listSessions(
+        limit: Int?,
+        search: String?,
+        archived: Bool) async throws -> OpenClawChatSessionsListResponse
+    {
+        let json = try Self.makeListSessionsParamsJSON(limit: limit, search: search, archived: archived)
         let res = try await self.gateway.request(method: "sessions.list", paramsJSON: json, timeoutSeconds: 15)
         return try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: res)
     }

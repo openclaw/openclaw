@@ -888,7 +888,8 @@ describe("runSetupWizard", () => {
       prompter,
     );
 
-    expect(replaceConfigFile).toHaveBeenCalledTimes(3);
+    // Migration write + pre-channels persist + post-channels write + final write.
+    expect(replaceConfigFile).toHaveBeenCalledTimes(4);
     const migrationParams = requireRecord(
       getMockCallArg(replaceConfigFile, 0, 0, "migration config replacement"),
       "migration config replacement params",
@@ -904,7 +905,7 @@ describe("runSetupWizard", () => {
     expect(migrationWriteOptions.unsetPaths).toContainEqual(["plugins", "installs"]);
 
     const replaceParams = requireRecord(
-      getMockCallArg(replaceConfigFile, 2, 0, "config replacement"),
+      getMockCallArg(replaceConfigFile, 3, 0, "config replacement"),
       "config replacement params",
     );
     expect(requireRecord(replaceParams.nextConfig, "next config").plugins).toBeUndefined();

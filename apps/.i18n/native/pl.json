@@ -2229,6 +2229,11 @@
       "translated": "Zastąp konfigurację"
     },
     {
+      "id": "native.android.66aad1078731e6a3",
+      "source": "Forget gateway?",
+      "translated": "Zapomnieć Gateway?"
+    },
+    {
       "id": "native.android.c6c8e0c4b8a9a7cf",
       "source": "Cancel",
       "translated": "Anuluj"
@@ -2269,14 +2274,34 @@
       "translated": "Rozłącz"
     },
     {
-      "id": "native.android.68959b6e93aec68b",
-      "source": "Clear this phone's saved gateway access and scan a fresh setup code.",
-      "translated": "Wyczyść zapisany na tym telefonie dostęp do gateway i zeskanuj nowy kod konfiguracji."
+      "id": "native.android.87eee1e2bafbf13b",
+      "source": "Gateways",
+      "translated": "Gateway"
     },
     {
-      "id": "native.android.7fd6bb4d56f1fb3f",
-      "source": "Pair New Gateway",
-      "translated": "Sparuj nowy Gateway"
+      "id": "native.android.c3974020a08e239e",
+      "source": "No paired gateways.",
+      "translated": "Brak sparowanych Gateway."
+    },
+    {
+      "id": "native.android.74ee3bbbd2e37e9c",
+      "source": "Forget",
+      "translated": "Zapomnij"
+    },
+    {
+      "id": "native.android.56e98811c4e9b027",
+      "source": "Gateway setup",
+      "translated": "Konfiguracja Gateway"
+    },
+    {
+      "id": "native.android.c040d4ee72a810e0",
+      "source": "Scan or paste a setup code to add another gateway.",
+      "translated": "Zeskanuj lub wklej kod konfiguracji, aby dodać kolejne Gateway."
+    },
+    {
+      "id": "native.android.a7c243ff3f1d6447",
+      "source": "Add gateway",
+      "translated": "Dodaj Gateway"
     },
     {
       "id": "native.android.77a03c8c22155ec5",
@@ -4034,6 +4059,11 @@
       "translated": "Mówienie…"
     },
     {
+      "id": "native.android.6fbf0916309dbaba",
+      "source": "Mic on · waiting for gateway",
+      "translated": "Mikrofon włączony · oczekiwanie na Gateway"
+    },
+    {
       "id": "native.android.d84c6c14e42763ff",
       "source": "Mic off",
       "translated": "Mikrofon wyłączony"
@@ -4267,6 +4297,21 @@
       "id": "native.android.6ad2d3f084142bed",
       "source": "The gateway certificate changed. Continue only if you expected this.\n\nOld SHA-256:\n%1$s\n\nNew SHA-256:\n%2$s",
       "translated": "Certyfikat gateway uległ zmianie. Kontynuuj tylko, jeśli tego oczekiwano.\n\nStary SHA-256:\n%1$s\n\nNowy SHA-256:\n%2$s"
+    },
+    {
+      "id": "native.android.7c49ec7fe94a9063",
+      "source": "Switch gateway",
+      "translated": "Przełącz Gateway"
+    },
+    {
+      "id": "native.android.9e0a677fd629a15f",
+      "source": "Select gateway",
+      "translated": "Wybierz Gateway"
+    },
+    {
+      "id": "native.android.b0034ac5bbc6b25f",
+      "source": "Active gateway",
+      "translated": "Aktywne Gateway"
     },
     {
       "id": "native.apple.8f741d09cc1d5495",
@@ -13619,6 +13664,26 @@
       "translated": "Pisanie"
     },
     {
+      "id": "native.apple.cbc285107b965641",
+      "source": "Preparing audio…",
+      "translated": "Przygotowywanie dźwięku…"
+    },
+    {
+      "id": "native.apple.d781ade49132fec6",
+      "source": "Speaking…",
+      "translated": "Mówienie…"
+    },
+    {
+      "id": "native.apple.9e4b306460f4a32d",
+      "source": "Preparing audio, tap to cancel",
+      "translated": "Przygotowywanie dźwięku, stuknij, aby anulować"
+    },
+    {
+      "id": "native.apple.142c01bf6b97e380",
+      "source": "Speaking, tap to stop",
+      "translated": "Mówienie, stuknij, aby zatrzymać"
+    },
+    {
       "id": "native.apple.86695104895ebed8",
       "source": "Queued",
       "translated": "W kolejce"
@@ -13692,6 +13757,16 @@
       "id": "native.apple.cdad35e9657fa693",
       "source": "Delete",
       "translated": "Usuń"
+    },
+    {
+      "id": "native.apple.9d58b2a2a23c0d69",
+      "source": "Stop Listening",
+      "translated": "Przestań słuchać"
+    },
+    {
+      "id": "native.apple.99df7de891c8235f",
+      "source": "Listen",
+      "translated": "Słuchaj"
     },
     {
       "id": "native.apple.f84b674ad395b694",

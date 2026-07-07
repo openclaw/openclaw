@@ -14,6 +14,7 @@ import {
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import {
+  filterLegacyNodeProtocolFeatures,
   isForegroundRestrictedPluginNodeCommand,
   isNodeCommandAllowed,
   normalizeDeclaredNodeCommands,
@@ -113,6 +114,21 @@ describe("gateway/node-command-policy", () => {
 
     expect(allowlist.has("canvas.snapshot")).toBe(true);
     expect(allowlist.has("canvas.present")).toBe(true);
+  });
+
+  it("suppresses plugin-owned features for legacy protocol nodes", () => {
+    installCanvasPluginDefaults();
+
+    expect(
+      filterLegacyNodeProtocolFeatures({
+        caps: ["canvas", "device"],
+        commands: ["canvas.snapshot", "device.info"],
+        pluginSurfaces: ["canvas"],
+      }),
+    ).toEqual({
+      caps: ["device"],
+      commands: ["device.info"],
+    });
   });
 
   it("keeps plugin node defaults from the pinned Gateway registry", () => {

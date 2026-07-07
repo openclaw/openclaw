@@ -142,6 +142,15 @@ function expectRecordFields(record: unknown, expected: Record<string, unknown>) 
 }
 
 describe("openai transport stream", () => {
+  it("keeps bounded redacted diagnostics UTF-16 well-formed", () => {
+    const payload = testing.stringifyRedactedPayload(`${"x".repeat(7_998)}🚀tail`);
+    const event = testing.stringifyRedactedEvent(`${"x".repeat(1_998)}🚀tail`);
+
+    expect(payload).toContain(`${"x".repeat(7_998)}…<truncated>`);
+    expect(event).toContain(`${"x".repeat(1_998)}…<truncated>`);
+    expect(payload).not.toContain("\uD83D");
+    expect(event).not.toContain("\uD83D");
+  });
   it("fails Azure Responses streams when headers arrive but no first event follows", async () => {
     vi.useFakeTimers();
     try {
@@ -966,6 +975,124 @@ describe("openai transport stream", () => {
     });
     expect(headers.Accept).toBeUndefined();
     expect(headers.accept).toBeUndefined();
+  });
+
+  it("adds session_id header for the native ChatGPT/Codex Responses transport when a session id is present", () => {
+    const headers = testing.buildOpenAIClientHeaders(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
+        baseUrl: "https://chatgpt.com/backend-api",
+        headers: {},
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-chatgpt-responses">,
+      { systemPrompt: "", messages: [] } as never,
+      undefined,
+      undefined,
+      "session-abc-123",
+    );
+
+    expect(headers.session_id).toBe("session-abc-123");
+  });
+
+  it("omits the session_id header for the native ChatGPT/Codex Responses transport when no session id is available", () => {
+    const headers = testing.buildOpenAIClientHeaders(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
+        baseUrl: "https://chatgpt.com/backend-api",
+        headers: {},
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-chatgpt-responses">,
+      { systemPrompt: "", messages: [] } as never,
+    );
+
+    expect(headers.session_id).toBeUndefined();
+  });
+
+  it("does not add a session_id header for non-native OpenAI Responses transports even when a session id is present", () => {
+    const headers = testing.buildOpenAIClientHeaders(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        headers: {},
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      { systemPrompt: "", messages: [] } as never,
+      undefined,
+      undefined,
+      "session-abc-123",
+    );
+
+    expect(headers.session_id).toBeUndefined();
+  });
+
+  it("does not overwrite an existing session_id header on the native ChatGPT/Codex Responses transport", () => {
+    const headers = testing.buildOpenAIClientHeaders(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
+        baseUrl: "https://chatgpt.com/backend-api",
+        headers: {},
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-chatgpt-responses">,
+      { systemPrompt: "", messages: [] } as never,
+      { session_id: "caller-supplied-session" },
+      undefined,
+      "session-abc-123",
+    );
+
+    expect(headers.session_id).toBe("caller-supplied-session");
+  });
+
+  it("does not add a generated session_id header when the caller supplies a differently-cased one", () => {
+    const headers = testing.buildOpenAIClientHeaders(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-chatgpt-responses",
+        provider: "openai",
+        baseUrl: "https://chatgpt.com/backend-api",
+        headers: {},
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-chatgpt-responses">,
+      { systemPrompt: "", messages: [] } as never,
+      { Session_ID: "caller-supplied-session" },
+      undefined,
+      "session-abc-123",
+    );
+
+    expect(headers.Session_ID).toBe("caller-supplied-session");
+    expect(headers.session_id).toBeUndefined();
   });
 
   it("adds SSE Accept only to native ChatGPT/Codex Responses stream requests", () => {
@@ -2099,6 +2226,62 @@ describe("openai transport stream", () => {
         totalTokens: 30,
       },
     );
+  });
+
+  it("preserves a valid provider-reported usage cost", () => {
+    const model = {
+      id: "openrouter/free",
+      name: "OpenRouter Free",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 8_192,
+    } satisfies Model<"openai-completions">;
+
+    const usage = parseTransportChunkUsage(
+      {
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        total_tokens: 15,
+        cost: 0,
+      },
+      model,
+    );
+
+    expect(usage.cost.total).toBe(0);
+    expect(usage.cost.totalOrigin).toBe("provider-billed");
+  });
+
+  it("keeps the catalog estimate for an invalid provider-reported usage cost", () => {
+    const model = {
+      id: "openrouter/free",
+      name: "OpenRouter Free",
+      api: "openai-completions",
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 8_192,
+    } satisfies Model<"openai-completions">;
+
+    const usage = parseTransportChunkUsage(
+      {
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        total_tokens: 15,
+        cost: -1,
+      },
+      model,
+    );
+
+    expect(usage.cost.total).toBeCloseTo(0.00002);
+    expect(usage.cost.totalOrigin).toBeUndefined();
   });
 
   it("clamps uncached prompt usage at zero", () => {
@@ -7664,6 +7847,31 @@ describe("openai transport stream", () => {
     );
 
     expect(params.max_completion_tokens).toBe(65_536);
+    expect(params).not.toHaveProperty("max_tokens");
+  });
+
+  it("omits output-token fields when the resolved model has no known cap", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "mimo-v2.5-pro",
+        name: "MiMo V2.5 Pro",
+        api: "openai-completions",
+        provider: "xiaomi",
+        baseUrl: "https://api.xiaomimimo.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_048_576,
+      } as Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    );
+
+    expect(params).not.toHaveProperty("max_completion_tokens");
     expect(params).not.toHaveProperty("max_tokens");
   });
 

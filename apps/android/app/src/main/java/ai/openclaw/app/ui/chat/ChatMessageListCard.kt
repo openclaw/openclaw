@@ -3,6 +3,7 @@ package ai.openclaw.app.ui.chat
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.ui.mobileBorder
 import ai.openclaw.app.ui.mobileCallout
 import ai.openclaw.app.ui.mobileCardSurface
@@ -34,7 +35,7 @@ import androidx.compose.ui.unit.dp
 
 /** Renders chat history newest-first while preserving stable scroll behavior during streaming. */
 @Composable
-fun ChatMessageListCard(
+internal fun ChatMessageListCard(
   sessionKey: String,
   messages: List<ChatMessage>,
   historyLoading: Boolean,
@@ -48,6 +49,8 @@ fun ChatMessageListCard(
   onRetryOutbox: (String) -> Unit = {},
   onDeleteOutbox: (String) -> Unit = {},
   onReplyMessage: (String) -> Unit = {},
+  speechState: MessageSpeechState? = null,
+  onToggleListen: ((String, String) -> Unit)? = null,
 ) {
   val timeline =
     remember(messages, pendingRunCount, pendingToolCalls, streamingAssistantText, outboxItems) {
@@ -82,6 +85,8 @@ fun ChatMessageListCard(
             ChatMessageBubble(
               message = item.message,
               onReplyMessage = onReplyMessage,
+              speechState = speechState,
+              onToggleListen = onToggleListen,
             )
           is ChatTimelineItem.OutboxCommand ->
             ChatOutboxBubble(

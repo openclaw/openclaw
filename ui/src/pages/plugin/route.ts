@@ -1,7 +1,7 @@
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 
-export type PluginTabRef = { pluginId: string; id: string };
+type PluginTabRef = { pluginId: string; id: string };
 
 /** Reads the plugin tab reference from a `/plugin?plugin=<pluginId>&id=<tab>` search string. */
 export function pluginTabRefFromSearch(search: string): PluginTabRef {

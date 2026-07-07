@@ -113,10 +113,6 @@ describe("live transport scenario helpers", () => {
       standardId: "canary",
     });
     expect(lanes.find((lane) => lane.transportId === "slack")?.members).toContainEqual({
-      standardId: "thread-follow-up",
-      scenarioId: "slack-thread-follow-up",
-    });
-    expect(lanes.find((lane) => lane.transportId === "slack")?.members).toContainEqual({
       standardId: "restart-resume",
       scenarioId: "slack-restart-resume",
     });
@@ -151,10 +147,16 @@ describe("live transport scenario helpers", () => {
       expect.arrayContaining(slackTesting.SLACK_QA_STANDARD_SCENARIO_IDS),
     );
     expect(lanes.get("telegram")).toEqual(
-      expect.arrayContaining(telegramTesting.TELEGRAM_QA_STANDARD_SCENARIO_IDS),
+      expect.arrayContaining([
+        "help-command",
+        ...telegramTesting.TELEGRAM_QA_STANDARD_SCENARIO_IDS,
+      ]),
     );
     expect(lanes.get("whatsapp")).toEqual(
-      expect.arrayContaining(whatsAppTesting.WHATSAPP_QA_STANDARD_SCENARIO_IDS),
+      expect.arrayContaining([
+        "help-command",
+        ...whatsAppTesting.WHATSAPP_QA_STANDARD_SCENARIO_IDS,
+      ]),
     );
   });
 });

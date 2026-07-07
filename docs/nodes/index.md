@@ -40,6 +40,21 @@ Pending pairing requests expire 5 minutes after the device's last retry — a de
   - non-exec node commands: `operator.pairing` + `operator.write`
   - `system.run` / `system.run.prepare` / `system.which`: `operator.pairing` + `operator.admin`
 
+## Version skew and upgrade order
+
+The Gateway accepts authenticated node clients across an N-1 protocol window.
+The current v4 Gateway therefore accepts v3 nodes when the connection declares
+both `role: "node"` and `client.mode: "node"`. Operator and UI sessions must
+still use the current protocol.
+
+For staged fleet upgrades, upgrade the Gateway first, then upgrade each node.
+An N-1 node remains visible and manageable while it is upgraded; the Gateway
+logs `legacy node protocol accepted` with an upgrade recommendation. Pairing,
+device authentication, command allowlists, and exec approvals still apply.
+Plugin-owned capabilities and commands stay hidden until the node upgrades to
+the current protocol. Nodes older than N-1 require an out-of-band upgrade before
+reconnecting.
+
 ## Remote node host (system.run)
 
 Use a **node host** when your Gateway runs on one machine and you want commands to execute on another. The model still talks to the **gateway**; the gateway forwards `exec` calls to the **node host** when `host=node` is selected.

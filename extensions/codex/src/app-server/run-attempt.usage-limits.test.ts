@@ -1,7 +1,7 @@
 // Codex tests cover run attempt.usage limits plugin behavior.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { rememberCodexRateLimits } from "./rate-limit-cache.js";
+import { readCodexRateLimitsRevision, rememberCodexRateLimitsRead } from "./rate-limit-cache.js";
 import {
   createParams,
   createStartedThreadHarness,
@@ -25,7 +25,11 @@ describe("runCodexAppServerAttempt usage limits", () => {
         if (!harnessRef.current) {
           throw new Error("Expected Codex app-server harness to be initialized");
         }
-        void harnessRef.current.notify(rateLimitsUpdated(resetsAt));
+        const revisionBeforeUpdate = readCodexRateLimitsRevision(harnessRef.current.client);
+        await harnessRef.current.notify(rateLimitsUpdated(resetsAt));
+        expect(readCodexRateLimitsRevision(harnessRef.current.client)).toBe(
+          revisionBeforeUpdate + 1,
+        );
         throw Object.assign(new Error("You've reached your usage limit."), {
           data: { codexErrorInfo: "usageLimitExceeded" },
         });
@@ -60,7 +64,15 @@ describe("runCodexAppServerAttempt usage limits", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const resetsAt = Math.ceil(Date.now() / 1000) + 120;
     const authProfileId = "openai:work";
-    rememberCodexRateLimits({
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "turn/start") {
+        throw Object.assign(new Error("You've reached your usage limit."), {
+          data: { codexErrorInfo: "usageLimitExceeded" },
+        });
+      }
+      return undefined;
+    });
+    rememberCodexRateLimitsRead(harness.client, {
       rateLimits: {
         limitId: "codex",
         limitName: "Codex",
@@ -71,14 +83,6 @@ describe("runCodexAppServerAttempt usage limits", () => {
         rateLimitReachedType: "rate_limit_reached",
       },
       rateLimitsByLimitId: null,
-    });
-    const harness = createStartedThreadHarness(async (method) => {
-      if (method === "turn/start") {
-        throw Object.assign(new Error("You've reached your usage limit."), {
-          data: { codexErrorInfo: "usageLimitExceeded" },
-        });
-      }
-      return undefined;
     });
 
     const params = createParams(sessionFile, workspaceDir);
@@ -102,6 +106,62 @@ describe("runCodexAppServerAttempt usage limits", () => {
     const result = await run;
     expect(result.promptErrorSource).toBe("prompt");
     expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
+    expect(result.promptError).toContain("Next reset in");
+    expect(params.authProfileStore.usageStats?.[authProfileId]?.blockedUntil).toBeUndefined();
+  });
+
+  it("does not trust an unrelated in-turn rate-limit update for profile blocking", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const resetsAt = Math.ceil(Date.now() / 1000) + 120;
+    const authProfileId = "openai:work";
+    const harnessRef: { current?: ReturnType<typeof createStartedThreadHarness> } = {};
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "turn/start") {
+        if (!harnessRef.current) {
+          throw new Error("Expected Codex app-server harness to be initialized");
+        }
+        await harnessRef.current.notify({
+          method: "account/rateLimits/updated",
+          params: {
+            rateLimits: {
+              limitId: "codex_other",
+              primary: { usedPercent: 100, windowDurationMins: 60, resetsAt: resetsAt + 60 },
+              rateLimitReachedType: "rate_limit_reached",
+            },
+          },
+        });
+        throw Object.assign(new Error("You've reached your usage limit."), {
+          data: { codexErrorInfo: "usageLimitExceeded" },
+        });
+      }
+      return undefined;
+    });
+    harnessRef.current = harness;
+    rememberCodexRateLimitsRead(harness.client, {
+      rateLimits: {
+        limitId: "codex",
+        primary: { usedPercent: 100, windowDurationMins: 300, resetsAt },
+        rateLimitReachedType: "rate_limit_reached",
+      },
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.authProfileId = authProfileId;
+    params.authProfileStore = {
+      version: 1,
+      profiles: {
+        [authProfileId]: {
+          type: "oauth",
+          provider: "openai",
+          access: "access",
+          refresh: "refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+
+    const result = await runCodexAppServerAttempt(params);
+
     expect(result.promptError).toContain("Next reset in");
     expect(params.authProfileStore.usageStats?.[authProfileId]?.blockedUntil).toBeUndefined();
   });

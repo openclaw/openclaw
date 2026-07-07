@@ -248,7 +248,9 @@ export async function createTargetViaCdp(opts: {
   let lastError: unknown;
   for (const candidateWsUrl of candidateWsUrls) {
     try {
-      await assertCdpEndpointAllowed(candidateWsUrl, opts.ssrfPolicy);
+      await assertCdpEndpointAllowed(candidateWsUrl, opts.ssrfPolicy, {
+        source: candidateWsUrl === opts.cdpUrl ? "configured" : "discovered",
+      });
       return await withCdpSocket(
         candidateWsUrl,
         async (send) => {

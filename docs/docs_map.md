@@ -66,6 +66,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: How cron works
   - H2: Schedule types
   - H3: Day-of-month and day-of-week use OR logic
+  - H2: Event triggers (condition watchers)
   - H2: Payloads
   - H3: Agent-turn options
   - H3: Command payloads
@@ -1827,6 +1828,16 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Repair
   - H2: Exit codes
   - H2: Related
+
+## cli/promos.md
+
+- Route: /cli/promos
+- Headings:
+  - H1: openclaw promos
+  - H2: Commands
+  - H2: openclaw promos list
+  - H2: openclaw promos claim &lt;slug&gt;
+  - H2: Passive discovery in models list
 
 ## cli/proxy.md
 
@@ -4676,6 +4687,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /nodes
 - Headings:
   - H2: Pairing + status
+  - H2: Version skew and upgrade order
   - H2: Remote node host (system.run)
   - H3: Start a node host (foreground)
   - H3: Remote gateway via SSH tunnel (loopback bind)
@@ -4848,6 +4860,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /platforms/android
 - Headings:
   - H2: Support snapshot
+  - H2: Install outside Google Play
   - H2: Mirror and control Android from a remote Mac
   - H3: Before you begin
   - H3: Enable ADB over TCP
@@ -4860,6 +4873,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: 2. Verify discovery (optional)
   - H4: Cross-network discovery via unicast DNS-SD
   - H3: 3. Connect from Android
+  - H3: Multiple gateways
   - H3: Presence alive beacons
   - H3: 4. Approve pairing (CLI)
   - H3: 5. Verify the node is connected
@@ -4913,6 +4927,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Bonjour (LAN)
   - H3: Tailnet (cross-network)
   - H3: Manual host/port
+  - H2: Multiple gateways
   - H2: Canvas + A2UI
   - H2: Computer Use relationship
   - H3: Canvas eval / snapshot
@@ -5422,6 +5437,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: How native plugin setup works
   - H2: V1 support boundary
   - H2: App inventory and ownership
+  - H2: Connected account apps
   - H2: Thread app config
   - H2: Destructive action policy
   - H2: Troubleshooting
@@ -5775,6 +5791,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Distribution
   - H2: Surface
   - H2: Claude Fable 5
+  - H2: Claude Sonnet 5
 
 ## plugins/reference/anthropic.md
 
@@ -6053,6 +6070,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /plugins/reference/fal
 - Headings:
   - H1: fal plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
+## plugins/reference/featherless.md
+
+- Route: /plugins/reference/featherless
+- Headings:
+  - H1: Featherless plugin
   - H2: Distribution
   - H2: Surface
   - H2: Related docs
@@ -7235,7 +7261,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Usage and cost tracking
   - H2: Getting started
-  - H2: Thinking defaults (Claude Fable 5, 4.8, and 4.6)
+  - H2: Thinking defaults (Claude Sonnet 5, Mythos 5, Fable 5, 4.8, and 4.6)
   - H2: Safety refusal fallback (Claude Fable 5)
   - H3: Why this exists
   - H3: How it works
@@ -7429,6 +7455,16 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Image generation
   - H2: Video generation
   - H2: Music generation
+  - H2: Related
+
+## providers/featherless.md
+
+- Route: /providers/featherless
+- Headings:
+  - H2: Setup
+  - H2: Default model
+  - H2: Other Featherless models
+  - H2: Troubleshooting
   - H2: Related
 
 ## providers/fireworks.md
@@ -9083,7 +9119,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: How it works
   - H2: Install and pair
   - H2: Use it
-  - H2: Remote browser nodes
+  - H2: Remote / cross-machine
   - H2: Diagnostics
   - H2: Security model
 
@@ -9551,6 +9587,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: How it works
   - H2: Lifecycle
+  - H2: Lifecycle curation
   - H2: Chat
   - H3: Learn from recent work
   - H2: CLI

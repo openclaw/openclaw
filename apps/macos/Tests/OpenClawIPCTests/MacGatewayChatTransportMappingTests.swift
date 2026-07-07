@@ -4,6 +4,34 @@ import Testing
 @testable import OpenClaw
 
 struct MacGatewayChatTransportMappingTests {
+    @Test func `bare global session target carries normalized selected agent`() {
+        let transport = MacGatewayChatTransport(defaultGlobalAgentID: "  Agent-A  ")
+
+        #expect(transport.sessionTarget(for: " GLOBAL ") == .init(
+            sessionKey: " GLOBAL ",
+            agentID: "agent-a"))
+        #expect(transport.sessionTarget(for: "agent:agent-a:main") == .init(
+            sessionKey: "agent:agent-a:main",
+            agentID: nil))
+        #expect(transport.sessionTarget(for: "main") == .init(
+            sessionKey: "main",
+            agentID: nil))
+
+        let snapshotObserverTransport = transport
+        snapshotObserverTransport.updateDefaultGlobalAgentID("Agent-B")
+        #expect(transport.sessionTarget(for: "global") == .init(
+            sessionKey: "global",
+            agentID: "agent-b"))
+    }
+
+    @Test func `bare global session target tolerates missing selected agent`() {
+        let transport = MacGatewayChatTransport()
+
+        #expect(transport.sessionTarget(for: "global") == .init(
+            sessionKey: "global",
+            agentID: nil))
+    }
+
     @Test func `snapshot maps to health`() {
         let snapshot = Snapshot(
             presence: [],

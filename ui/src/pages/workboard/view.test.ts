@@ -562,6 +562,55 @@ describe("renderWorkboard", () => {
     expect(container.textContent).toContain("Needs proof.");
   });
 
+  it("keeps bounded diagnostic badges UTF-16 safe", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [
+      {
+        id: "card-boundary",
+        title: "Boundary badge",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+        metadata: {
+          diagnostics: [
+            {
+              kind: "protocol_violation",
+              severity: "warning",
+              title: `${"x".repeat(62)}🚀tail`,
+              detail: "Boundary detail.",
+              firstSeenAt: 1,
+              lastSeenAt: 1,
+              count: 1,
+            },
+          ],
+        },
+      },
+    ];
+    const container = document.createElement("div");
+
+    render(
+      renderWorkboard({
+        host,
+        client: null,
+        connected: true,
+        pluginEnabled: true,
+        agentsList: null,
+        sessions: [],
+        onOpenSession: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".workboard-card__badge--warning")?.textContent?.trim()).toBe(
+      `${"x".repeat(62)}…`,
+    );
+  });
+
   it("renders sub-minute heartbeat ages with the duration count interpolation", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-13T12:00:00Z"));

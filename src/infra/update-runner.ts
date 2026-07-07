@@ -161,7 +161,12 @@ type UpdateRunnerOptions = {
   channel?: UpdateChannel;
   devTargetRef?: string;
   deferConfiguredPluginInstallRepair?: boolean;
-  beforeGitMutation?: () => Promise<void>;
+  allowGatewayServiceRepair?: boolean;
+  allowGatewayActivation?: boolean;
+  beforeGitMutation?: () => Promise<{
+    allowGatewayServiceRepair?: boolean;
+    allowGatewayActivation?: boolean;
+  } | void>;
   timeoutMs?: number;
   runCommand?: CommandRunner;
   progress?: UpdateStepProgress;
@@ -208,6 +213,14 @@ const UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV =
   "OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR";
 const UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV =
   "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE";
+const UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART_ENV =
+  "OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART";
+const UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR_ENV =
+  "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR";
+const UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION_ENV =
+  "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION";
+const UPDATE_DOCTOR_SERVICE_REPAIR_POLICY_ENV = "OPENCLAW_SERVICE_REPAIR_POLICY";
+const EXTERNAL_SERVICE_REPAIR_POLICY_MIN_VERSION = "2026.4.25-beta.1";
 const PREFLIGHT_TEMP_PREFIX =
   process.platform === "win32" ? "ocu-pf-" : "openclaw-update-preflight-";
 const PREFLIGHT_WORKTREE_DIRNAME = process.platform === "win32" ? "wt" : "worktree";
@@ -220,6 +233,24 @@ const DEV_PREFLIGHT_LINT_ENV: NodeJS.ProcessEnv = {
   OPENCLAW_OXLINT_SHARDS_SERIAL: "1",
 };
 const DEV_PREFLIGHT_LINT_OPT_IN_ENV = "OPENCLAW_UPDATE_PREFLIGHT_LINT";
+
+export function resolveUpdateDoctorExecutionPolicy(params: {
+  targetVersion: string | null;
+  allowGatewayServiceRepair: boolean;
+}): { fix: boolean; serviceRepairPolicy?: "external" } {
+  if (params.allowGatewayServiceRepair) {
+    return { fix: true };
+  }
+  const externalPolicySupport = compareSemverStrings(
+    params.targetVersion,
+    EXTERNAL_SERVICE_REPAIR_POLICY_MIN_VERSION,
+  );
+  if (externalPolicySupport !== null && externalPolicySupport >= 0) {
+    return { fix: true, serviceRepairPolicy: "external" };
+  }
+  // Older targets ignore both ownership markers and the external-service policy.
+  return { fix: false };
+}
 
 function normalizeDir(value?: string | null) {
   if (!value) {
@@ -779,6 +810,8 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
   const progress = opts.progress;
   const steps: UpdateStepResult[] = [];
   const candidates = buildStartDirs(opts);
+  let allowGatewayServiceRepair = opts.allowGatewayServiceRepair !== false;
+  let allowGatewayActivation = opts.allowGatewayActivation === true;
 
   let stepIndex = 0;
   let gitTotalSteps = 0;
@@ -862,7 +895,13 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       if (gitMutationPrepared) {
         return;
       }
-      await opts.beforeGitMutation?.();
+      const preparation = await opts.beforeGitMutation?.();
+      if (typeof preparation?.allowGatewayServiceRepair === "boolean") {
+        allowGatewayServiceRepair = preparation.allowGatewayServiceRepair;
+      }
+      if (typeof preparation?.allowGatewayActivation === "boolean") {
+        allowGatewayActivation = preparation.allowGatewayActivation;
+      }
       gitMutationPrepared = true;
     };
     const buildGitErrorResult = (reason: string): UpdateRunResult => ({
@@ -1573,10 +1612,19 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         return await buildGitErrorResultWithRollback("doctor-entry-missing");
       }
 
-      // Use --fix so that doctor auto-strips unknown config keys introduced by
-      // schema changes between versions, preventing a startup validation crash.
       const doctorNodePath = await resolveStableNodePath(process.execPath);
-      const doctorArgv = [doctorNodePath, doctorEntry, "doctor", "--non-interactive", "--fix"];
+      const doctorTargetVersion = await readPackageVersion(gitRoot);
+      const doctorPolicy = resolveUpdateDoctorExecutionPolicy({
+        targetVersion: doctorTargetVersion,
+        allowGatewayServiceRepair,
+      });
+      const doctorArgv = [
+        doctorNodePath,
+        doctorEntry,
+        "doctor",
+        "--non-interactive",
+        ...(doctorPolicy.fix ? ["--fix"] : []),
+      ];
       const doctorStep = await runStep(
         step("openclaw doctor", doctorArgv, gitRoot, {
           OPENCLAW_UPDATE_IN_PROGRESS: "1",
@@ -1584,6 +1632,12 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             ? { [UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV]: "1" }
             : {}),
           [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
+          [UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART_ENV]: "1",
+          [UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR_ENV]: allowGatewayServiceRepair ? "1" : "0",
+          [UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION_ENV]: allowGatewayActivation ? "1" : "0",
+          ...(doctorPolicy.serviceRepairPolicy
+            ? { [UPDATE_DOCTOR_SERVICE_REPAIR_POLICY_ENV]: doctorPolicy.serviceRepairPolicy }
+            : {}),
         }),
       );
       steps.push(doctorStep);
@@ -1751,15 +1805,33 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         }
         const doctorNodePath = await resolveStableNodePath(process.execPath);
         const candidateHostVersion = await readPackageVersion(verifiedPackageRoot);
+        const doctorPolicy = resolveUpdateDoctorExecutionPolicy({
+          targetVersion: candidateHostVersion,
+          allowGatewayServiceRepair,
+        });
         return await runStep({
           runCommand,
           name: "openclaw doctor",
-          argv: [doctorNodePath, doctorEntry, "doctor", "--non-interactive", "--fix"],
+          argv: [
+            doctorNodePath,
+            doctorEntry,
+            "doctor",
+            "--non-interactive",
+            ...(doctorPolicy.fix ? ["--fix"] : []),
+          ],
           cwd: verifiedPackageRoot,
           timeoutMs,
           env: {
             OPENCLAW_UPDATE_IN_PROGRESS: "1",
             [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
+            [UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART_ENV]: "1",
+            [UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR_ENV]: allowGatewayServiceRepair
+              ? "1"
+              : "0",
+            [UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION_ENV]: allowGatewayActivation ? "1" : "0",
+            ...(doctorPolicy.serviceRepairPolicy
+              ? { [UPDATE_DOCTOR_SERVICE_REPAIR_POLICY_ENV]: doctorPolicy.serviceRepairPolicy }
+              : {}),
             ...(candidateHostVersion === null
               ? {}
               : { OPENCLAW_COMPATIBILITY_HOST_VERSION: candidateHostVersion }),

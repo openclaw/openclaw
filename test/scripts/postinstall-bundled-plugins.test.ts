@@ -991,7 +991,10 @@ describe("bundled plugin postinstall", () => {
     ).toThrow(
       "installed dist scan exceeded 1 filesystem entries; refusing to scan unbounded package contents",
     );
-    expect(MAX_INSTALLED_DIST_SCAN_ENTRIES).toBeGreaterThan(1);
+    // One budget spans all three prune walks, and npm upgrades scan old+new
+    // content-hashed dist files (~24k entries as of 2026.6.x). A cap without
+    // several-x headroom fails `npm install -g openclaw` for upgrading users.
+    expect(MAX_INSTALLED_DIST_SCAN_ENTRIES).toBeGreaterThanOrEqual(100_000);
   });
 
   it("uses one packaged dist scan budget across listing and pruning phases", () => {

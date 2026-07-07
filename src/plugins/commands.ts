@@ -347,6 +347,7 @@ export async function executePluginCommand(params: {
     isAuthorizedSender,
     ...(senderIsOwnerForCommand === undefined ? {} : { senderIsOwner: senderIsOwnerForCommand }),
     gatewayClientScopes: params.gatewayClientScopes,
+    agentId: params.agentId,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
     sessionFile: params.sessionFile,

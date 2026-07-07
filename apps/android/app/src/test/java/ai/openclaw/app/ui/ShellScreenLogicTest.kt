@@ -328,21 +328,107 @@ class ShellScreenLogicTest {
       }
 
     assertEquals(50, overviewRecentSessionCount(sessions))
-    assertEquals((1..50).map { "session-$it" }, overviewRecentSessions(sessions).map { it.key })
+    assertEquals((51 downTo 2).map { "session-$it" }, overviewRecentSessions(sessions).map { it.key })
   }
 
   @Test
-  fun overviewRecentSessionsDeduplicateWithinTheRecentWindow() {
-    assertEquals(
-      listOf("main", "cron"),
+  fun overviewRecentSessionsSortByMostRecentTimestamp() {
+    val sessions =
+      listOf(
+        ChatSessionEntry(key = "cron", updatedAtMs = 2),
+        ChatSessionEntry(key = "main", updatedAtMs = 3),
+        ChatSessionEntry(key = "telegram", updatedAtMs = 1),
+      )
+
+    assertEquals(listOf("main", "cron", "telegram"), overviewRecentSessions(sessions).map { session -> session.key })
+  }
+
+  @Test
+  fun overviewRecentSessionsPreferLastActivityForRecency() {
+    val sessions =
+      listOf(
+        ChatSessionEntry(key = "main", updatedAtMs = 10, lastActivityAt = 10),
+        ChatSessionEntry(key = "cron", updatedAtMs = 50, lastActivityAt = 20),
+        ChatSessionEntry(key = "telegram", updatedAtMs = 1, lastActivityAt = 100),
+      )
+
+    assertEquals(listOf("telegram", "cron", "main"), overviewRecentSessions(sessions).map { session -> session.key })
+  }
+
+  @Test
+  fun overviewRecentSessionsDeduplicateByNewestEntry() {
+    val sessions =
       overviewRecentSessions(
         listOf(
-          ChatSessionEntry(key = "main", updatedAtMs = 3),
-          ChatSessionEntry(key = "cron", updatedAtMs = 2),
+          ChatSessionEntry(key = "main", displayName = "Stale main", updatedAtMs = 10, lastActivityAt = 10),
+          ChatSessionEntry(key = "cron", displayName = "Cron", updatedAtMs = 2),
+          ChatSessionEntry(key = "main", displayName = "Fresh main", updatedAtMs = 3, lastActivityAt = 30),
+        ),
+      )
+
+    assertEquals(listOf("main", "cron"), sessions.map { session -> session.key })
+    assertEquals("Fresh main", sessions.first().displayName)
+  }
+
+  @Test
+  fun overviewRecentSessionsUseStableKeyOrderWhenTimestampsMatch() {
+    assertEquals(
+      listOf("cron", "main", "telegram"),
+      overviewRecentSessions(
+        listOf(
+          ChatSessionEntry(key = "telegram", updatedAtMs = 1),
           ChatSessionEntry(key = "main", updatedAtMs = 1),
+          ChatSessionEntry(key = "cron", updatedAtMs = 1),
         ),
       ).map { session -> session.key },
     )
+  }
+
+  @Test
+  fun overviewRecentSessionRowsUseLastActivityForMetadata() {
+    val rows =
+      overviewRecentSessionRows(
+        sessions = listOf(ChatSessionEntry(key = "main", updatedAtMs = null, lastActivityAt = System.currentTimeMillis())),
+        channelsSummary = emptyChannels(),
+      )
+
+    assertTrue(rows.single().metadata.isNotBlank())
+  }
+
+  @Test
+  fun stableOverviewRecentRowsKeepPreviousMetadataDuringPartialRefresh() {
+    val rows =
+      stableOverviewRecentRows(
+        previousRows =
+          listOf(
+            RecentSessionListItem(key = "main", title = "Main session", source = "OpenClaw", metadata = "1h"),
+          ),
+        candidateRows =
+          listOf(
+            RecentSessionListItem(key = "main", title = "Main session", source = "OpenClaw", metadata = ""),
+          ),
+      )
+
+    assertEquals("1h", rows.single().metadata)
+  }
+
+  @Test
+  fun stableOverviewRecentRowsFollowCandidateRows() {
+    val rows =
+      stableOverviewRecentRows(
+        previousRows =
+          listOf(
+            RecentSessionListItem(key = "main", title = "Main session", source = "OpenClaw", metadata = "1h"),
+            RecentSessionListItem(key = "discord", title = "Discord", source = "Discord", metadata = "2h"),
+          ),
+        candidateRows =
+          listOf(
+            RecentSessionListItem(key = "main", title = "Main session", source = "OpenClaw", metadata = "1h"),
+            RecentSessionListItem(key = "cron", title = "Cron", source = "Cron", metadata = "4h"),
+          ),
+      )
+
+    assertEquals(listOf("main", "cron"), rows.map { row -> row.key })
   }
 
   @Test

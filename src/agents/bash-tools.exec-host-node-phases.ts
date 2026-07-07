@@ -39,7 +39,7 @@ import {
 } from "../infra/system-run-command.js";
 import { addSafeTimeoutDelayGraceMs } from "../utils/timer-delay.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
-import { renderExecOutputText } from "./bash-tools.exec-output.js";
+import { renderExecUpdateText } from "./bash-tools.exec-output.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -225,6 +225,7 @@ export function formatNodeRunToolResult(params: {
   raw: unknown;
   startedAt: number;
   cwd: string | undefined;
+  warnings?: string[];
 }): AgentToolResult<ExecToolDetails> {
   const payload =
     params.raw && typeof params.raw === "object"
@@ -241,7 +242,10 @@ export function formatNodeRunToolResult(params: {
     content: [
       {
         type: "text",
-        text: renderExecOutputText(stdout || stderr || errorText),
+        text: renderExecUpdateText({
+          tailText: stdout || stderr || errorText,
+          warnings: params.warnings ?? [],
+        }),
       },
     ],
     details: {
@@ -404,7 +408,12 @@ export async function invokeNodeSystemRunDirect(params: {
       notifyOnExit: params.request.notifyOnExit,
     }),
   );
-  return formatNodeRunToolResult({ raw, startedAt, cwd: params.request.workdir });
+  return formatNodeRunToolResult({
+    raw,
+    startedAt,
+    cwd: params.request.workdir,
+    warnings: [...params.request.warnings, ...(params.request.foregroundWarnings ?? [])],
+  });
 }
 
 /** Prepares a node-host system run using remote prepare support or local fallback. */

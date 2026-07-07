@@ -15,6 +15,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  canonicalProviderName,
+  isProviderAdvertised,
+  parseProvidersFromHelp,
+} from "../../scripts/crabbox-wrapper-providers.mjs";
 
 const tempDirs: string[] = [];
 const repoRoot = process.cwd();
@@ -588,24 +593,24 @@ describe("scripts/crabbox-wrapper", () => {
     "",
   ].join("\n");
   const advertisedProviderAliases = [
-    "blacksmith",
-    "cf",
-    "container",
-    "docker",
-    "exe",
-    "exedev",
-    "google",
-    "google-cloud",
-    "local-docker",
-    "namespace",
-    "namespace-devboxes",
-    "rail",
-    "railwayapp",
-    "run-pod",
-    "runpodio",
-    "sem",
-    "static",
-    "static-ssh",
+    ["blacksmith", "blacksmith-testbox"],
+    ["cf", "cloudflare"],
+    ["container", "local-container"],
+    ["docker", "local-container"],
+    ["exe", "exe-dev"],
+    ["exedev", "exe-dev"],
+    ["google", "gcp"],
+    ["google-cloud", "gcp"],
+    ["local-docker", "local-container"],
+    ["namespace", "namespace-devbox"],
+    ["namespace-devboxes", "namespace-devbox"],
+    ["rail", "railway"],
+    ["railwayapp", "railway"],
+    ["run-pod", "runpod"],
+    ["runpodio", "runpod"],
+    ["sem", "semaphore"],
+    ["static", "ssh"],
+    ["static-ssh", "ssh"],
   ];
   beforeAll(() => {
     runWrapper("provider: aws\n", ["--version"]);
@@ -3077,18 +3082,12 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it.each(advertisedProviderAliases)(
-    "accepts Crabbox provider alias %s when its canonical provider is advertised",
-    (alias) => {
-      const result = runWrapper(advertisedProviderAliasHelp, [
-        "run",
-        "--provider",
-        alias,
-        "--",
-        "echo ok",
-      ]);
+    "canonicalizes Crabbox provider alias %s to %s",
+    (alias, canonical) => {
+      const advertisedProviders = parseProvidersFromHelp(advertisedProviderAliasHelp);
 
-      expect(result.status, alias).toBe(0);
-      expect(parseFakeCrabboxOutput(result).args).toContain(alias);
+      expect(canonicalProviderName(alias)).toBe(canonical);
+      expect(isProviderAdvertised(alias, advertisedProviders)).toBe(true);
     },
   );
 
@@ -3099,11 +3098,9 @@ describe("scripts/crabbox-wrapper", () => {
       "",
     ].join("\n");
 
+    const advertisedProviders = parseProvidersFromHelp(helpText);
     for (const provider of ["tensorlake", "tl", "tensorlake-sbx"]) {
-      const result = runWrapper(helpText, ["run", "--provider", provider, "--", "echo ok"]);
-
-      expect(result.status, provider).toBe(0);
-      expect(parseFakeCrabboxOutput(result).args).toContain(provider);
+      expect(isProviderAdvertised(provider, advertisedProviders), provider).toBe(true);
     }
   });
 
@@ -3132,15 +3129,16 @@ describe("scripts/crabbox-wrapper", () => {
   });
 
   it("parses provider choices from the --provider flag help format", () => {
-    const result = runWrapper(
-      "Usage: crabbox run [options]\n  --provider hetzner|aws|local-container|blacksmith-testbox|cloudflare\n",
-      ["run", "--provider", "aws", "--", "echo ok"],
-    );
+    const helpText =
+      "Usage: crabbox run [options]\n  --provider hetzner|aws|local-container|blacksmith-testbox|cloudflare\n";
 
-    expect(result.status).toBe(0);
-    expect(result.stderr).toContain(
-      "providers=hetzner,aws,local-container,blacksmith-testbox,cloudflare",
-    );
+    expect(parseProvidersFromHelp(helpText)).toEqual([
+      "hetzner",
+      "aws",
+      "local-container",
+      "blacksmith-testbox",
+      "cloudflare",
+    ]);
   });
 
   it("uses a temporary full checkout for clean sparse Blacksmith syncs", () => {

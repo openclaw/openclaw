@@ -76,12 +76,41 @@ describe("qa suite", () => {
         channelDriver: "live",
         channelId: "telegram",
         outputDir: "/tmp/qa-output",
+        transportPolicy: { requireGroupMention: true },
         state: {} as QaLabServerHandle["state"],
         transportId: "qa-channel",
       }),
     ).resolves.toMatchObject({ adapter });
 
     expect(create).toHaveBeenCalledTimes(1);
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapterOptions: expect.objectContaining({
+          transportPolicy: { requireGroupMention: true },
+        }),
+      }),
+    );
+  });
+
+  it("preserves caller-supplied transport policy without scenario metadata", async () => {
+    const adapter = { id: "telegram" } as QaTransportAdapter;
+    const create = vi.fn(async () => adapter);
+
+    await qaSuiteProgressTesting.createQaSuiteTransportAdapter({
+      adapterFactories: [{ id: "telegram", matches: () => true, create }],
+      adapterOptions: { transportPolicy: { topLevelReplies: true } },
+      channelDriver: "live",
+      channelId: "telegram",
+      outputDir: "/tmp/qa-output",
+      state: {} as QaLabServerHandle["state"],
+      transportId: "qa-channel",
+    });
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapterOptions: { transportPolicy: { topLevelReplies: true } },
+      }),
+    );
   });
 
   it("parses progress env booleans", () => {
