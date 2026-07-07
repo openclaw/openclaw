@@ -57,4 +57,33 @@ describe("scpFile", () => {
     await expect(resultPromise).rejects.toThrow("spawn failed");
     expect(kill).not.toHaveBeenCalled();
   });
+
+  it("passes AbortSignal to spawn options when provided", async () => {
+    const { child } = createChild();
+    const ac = new AbortController();
+
+    const resultPromise = testing.scpFile("host", "/remote/path", "/local/path", ac.signal);
+    child.emit("close", 0);
+    await expect(resultPromise).resolves.toBeUndefined();
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Array),
+      expect.objectContaining({ signal: ac.signal }),
+    );
+  });
+
+  it("calls scpFile without signal for backward compatibility", async () => {
+    const { child } = createChild();
+
+    const resultPromise = testing.scpFile("host", "/remote/path", "/local/path");
+    child.emit("close", 0);
+    await expect(resultPromise).resolves.toBeUndefined();
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Array),
+      expect.not.objectContaining({ signal: expect.anything() }),
+    );
+  });
 });

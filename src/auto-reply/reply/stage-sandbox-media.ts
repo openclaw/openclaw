@@ -359,7 +359,12 @@ function rewriteStagedMediaPaths(params: {
   }
 }
 
-async function scpFile(remoteHost: string, remotePath: string, localPath: string): Promise<void> {
+async function scpFile(
+  remoteHost: string,
+  remotePath: string,
+  localPath: string,
+  signal?: AbortSignal,
+): Promise<void> {
   const safeRemoteHost = normalizeScpRemoteHost(remoteHost);
   if (!safeRemoteHost) {
     throw new Error("invalid remote host for SCP");
@@ -376,11 +381,13 @@ async function scpFile(remoteHost: string, remotePath: string, localPath: string
         "BatchMode=yes",
         "-o",
         "StrictHostKeyChecking=yes",
+        "-o",
+        "ConnectTimeout=10",
         "--",
         `${safeRemoteHost}:${safeRemotePath}`,
         localPath,
       ],
-      { stdio: ["ignore", "ignore", "pipe"] },
+      { stdio: ["ignore", "ignore", "pipe"], ...(signal ? { signal } : {}) },
     );
 
     let stderr = "";
