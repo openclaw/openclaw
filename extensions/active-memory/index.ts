@@ -390,7 +390,10 @@ function recordCircuitBreakerTimeout(key: string): void {
     entry.consecutiveTimeouts++;
     entry.lastTimeoutAt = Date.now();
   } else {
-    timeoutCircuitBreaker.set(key, { consecutiveTimeouts: 1, lastTimeoutAt: Date.now() });
+    timeoutCircuitBreaker.set(key, {
+      consecutiveTimeouts: 1,
+      lastTimeoutAt: Date.now(),
+    });
   }
 }
 
@@ -1978,7 +1981,11 @@ async function readActiveMemoryTranscriptState(
       hasUsableMemoryResult ||= hasUsableMemoryResultInSessionRecord(record, toolsAllow);
     },
   });
-  return { searchDebug, hasUsableMemoryResult, hasUnavailableMemorySearchResult };
+  return {
+    searchDebug,
+    hasUsableMemoryResult,
+    hasUnavailableMemorySearchResult,
+  };
 }
 
 async function readActiveMemorySearchDebug(
@@ -2005,7 +2012,11 @@ async function readMergedActiveMemoryTranscriptState(params: {
     hasUsableMemoryResult ||= state.hasUsableMemoryResult;
     hasUnavailableMemorySearchResult ||= state.hasUnavailableMemorySearchResult;
   }
-  return { searchDebug, hasUsableMemoryResult, hasUnavailableMemorySearchResult };
+  return {
+    searchDebug,
+    hasUsableMemoryResult,
+    hasUnavailableMemorySearchResult,
+  };
 }
 
 async function readTerminalMemorySearchResult(
@@ -2325,7 +2336,10 @@ async function waitForSubagentPartialTimeoutData(
     return await Promise.race([
       subagentPromise.then(
         () => ({ settled: true as const }),
-        (error: unknown) => ({ ...readPartialTimeoutData(error), settled: true as const }),
+        (error: unknown) => ({
+          ...readPartialTimeoutData(error),
+          settled: true as const,
+        }),
       ),
       timeoutPromise,
     ]);
@@ -2735,11 +2749,10 @@ function buildSearchQuery(params: {
   if (!previousUser) {
     return latest || clampSearchQuery(params.latestUserMessage);
   }
-  const context = clampSearchQuery(
-    normalizeSearchQueryText(stripRecalledContextNoise(previousUser.text)),
-  )
-    .slice(0, 120)
-    .trim();
+  const context = truncateUtf16Safe(
+    clampSearchQuery(normalizeSearchQueryText(stripRecalledContextNoise(previousUser.text))),
+    120,
+  ).trim();
   return clampSearchQuery(context ? `${context} ${latest}` : latest);
 }
 
@@ -2871,7 +2884,12 @@ function parseModelCandidate(modelRef: string | undefined, defaultProvider = DEF
   if (!modelRef) {
     return undefined;
   }
-  return parseModelRef(modelRef, defaultProvider) ?? { provider: defaultProvider, model: modelRef };
+  return (
+    parseModelRef(modelRef, defaultProvider) ?? {
+      provider: defaultProvider,
+      model: modelRef,
+    }
+  );
 }
 
 function getModelRef(
@@ -3214,7 +3232,9 @@ async function maybeResolveActiveRecall(params: {
 
   const controller = new AbortController();
   const abortFromParent = () => controller.abort(params.abortSignal?.reason);
-  params.abortSignal?.addEventListener("abort", abortFromParent, { once: true });
+  params.abortSignal?.addEventListener("abort", abortFromParent, {
+    once: true,
+  });
   if (params.abortSignal?.aborted) {
     abortFromParent();
   }
@@ -3566,17 +3586,28 @@ export default definePluginEntry({
           return { text: "Active Memory: off for this session." };
         }
         if (action === "status") {
-          const disabled = await isSessionActiveMemoryDisabled({ api, sessionKey });
+          const disabled = await isSessionActiveMemoryDisabled({
+            api,
+            sessionKey,
+          });
           return {
             text: `Active Memory: ${disabled ? "off" : "on"} for this session.`,
           };
         }
         if (action === "on" || action === "enable" || action === "enabled") {
-          await setSessionActiveMemoryDisabled({ api, sessionKey, disabled: false });
+          await setSessionActiveMemoryDisabled({
+            api,
+            sessionKey,
+            disabled: false,
+          });
           return { text: "Active Memory: on for this session." };
         }
         if (action === "off" || action === "disable" || action === "disabled") {
-          await setSessionActiveMemoryDisabled({ api, sessionKey, disabled: true });
+          await setSessionActiveMemoryDisabled({
+            api,
+            sessionKey,
+            disabled: true,
+          });
           await persistPluginStatusLines({
             api,
             agentId: resolveStatusUpdateAgentId({ sessionKey }),
