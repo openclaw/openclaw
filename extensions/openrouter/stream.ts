@@ -107,7 +107,9 @@ async function fetchOpenRouterGenerationTotalCost(params: {
   const url = resolveOpenRouterGenerationUrl(params.model, params.responseId);
   for (const retryDelayMs of OPENROUTER_GENERATION_RETRY_DELAYS_MS) {
     if (retryDelayMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, retryDelayMs);
+      });
     }
     const { response, release } = await fetchWithTimeoutGuarded(
       url,
