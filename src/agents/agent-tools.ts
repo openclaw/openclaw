@@ -113,7 +113,9 @@ const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
 
 /** Runtime guard: asserts that a value is non-null/undefined before use. */
 function defined<T>(v: T | null | undefined): T {
-  if (v == null) throw new Error("unexpected null/undefined");
+  if (v == null) {
+    throw new Error("unexpected null/undefined");
+  }
   return v;
 }
 
