@@ -9,12 +9,9 @@ const { spawnMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("node:child_process", async () => {
-  const { mockNodeBuiltinModule } = await import(
-    "openclaw/plugin-sdk/test-node-mocks"
-  );
+  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
   return mockNodeBuiltinModule(
-    () =>
-      vi.importActual<typeof import("node:child_process")>("node:child_process"),
+    () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
     { spawn: spawnMock },
   );
 });
@@ -39,7 +36,7 @@ describe("StdioCodexJsonRpcConnection stream error handling", () => {
       stdout,
       stderr,
       stdin,
-    }) as ChildProcess;
+    }) as unknown as ChildProcess;
 
     spawnMock.mockReturnValue(child);
 
