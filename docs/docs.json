@@ -1913,7 +1913,7 @@
                 "group": "Project",
                 "pages": [
                   "reference/application-modernization-plan",
-                  "reference/pull-request-workflow",
+                  "reference/pull-request-review-flow",
                   "reference/credits"
                 ]
               },

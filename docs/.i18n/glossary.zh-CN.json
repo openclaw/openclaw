@@ -1332,8 +1332,8 @@
     "target": "操作员权限范围"
   },
   {
-    "source": "Pull request automation",
-    "target": "PR 自动化"
+    "source": "Pull request review flow",
+    "target": "PR 审查流程"
   },
   {
     "source": "Scheduled tasks vs heartbeat",
