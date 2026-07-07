@@ -36,6 +36,14 @@ const CHANNEL_RESTART_POLICY: BackoffPolicy = {
   jitter: 0.1,
 };
 const MAX_RESTART_ATTEMPTS = 10;
+// A run that outlasts the maximum restart backoff counts as healthy: on exit the
+// accumulated attempt count is cleared so the next crash starts a fresh incident
+// (supervisor-window semantics, like systemd StartLimit*). Attempts otherwise only
+// reset on manual stop/start, so one isolated provider blip per day would permanently
+// kill the channel after MAX_RESTART_ATTEMPTS days (observed with Telegram's nightly
+// Bot API restart). Deliberate trade-off: a channel that keeps producing stable runs
+// between exits retries forever instead of ever reaching the give-up cap.
+export const STABLE_RUN_RESET_MS = CHANNEL_RESTART_POLICY.maxMs;
 const CHANNEL_STOP_ABORT_TIMEOUT_MS = 5_000;
 const CHANNEL_STARTUP_CONCURRENCY = 4;
 
@@ -623,13 +631,14 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           } catch (error) {
             log.error?.(`[${id}] native approval bootstrap failed: ${formatErrorMessage(error)}`);
           }
+          const runStartedAtMs = Date.now();
           setRuntime(channelId, id, {
             accountId: id,
             enabled: true,
             configured: true,
             running: true,
             restartPending: false,
-            lastStartAt: Date.now(),
+            lastStartAt: runStartedAtMs,
             lastError: null,
             reconnectAttempts: preserveRestartAttempts ? (restartAttempts.get(rKey) ?? 0) : 0,
           });
@@ -760,6 +769,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                   // abort or startup failure — runtime state was recorded by startChannelInternal
                 }
                 return;
+              }
+              // Stable run => fresh incident: without this, attempts accumulate across
+              // isolated exits days apart until the channel permanently gives up.
+              if (Date.now() - runStartedAtMs >= STABLE_RUN_RESET_MS) {
+                restartAttempts.delete(rKey);
               }
               const attempt = (restartAttempts.get(rKey) ?? 0) + 1;
               restartAttempts.set(rKey, attempt);

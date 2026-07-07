@@ -14,7 +14,11 @@ import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createChannelManager, type ChannelManager } from "./server-channels.js";
+import {
+  createChannelManager,
+  STABLE_RUN_RESET_MS,
+  type ChannelManager,
+} from "./server-channels.js";
 
 const hoisted = vi.hoisted(() => {
   const computeBackoff = vi.fn(() => 10);
@@ -267,6 +271,38 @@ describe("server-channels auto restart", () => {
 
     await vi.advanceTimersByTimeAsync(200);
     expect(startAccount).toHaveBeenCalledTimes(11);
+  });
+
+  it("resets the restart counter after a stable run", async () => {
+    let calls = 0;
+    const startAccount = vi.fn(async () => {
+      calls += 1;
+      if (calls >= 3) {
+        // Stay up past STABLE_RUN_RESET_MS so the run counts as healthy.
+        await new Promise<void>((resolve) => setTimeout(resolve, STABLE_RUN_RESET_MS + 1_000));
+      }
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    // Two instant exits accumulate attempts 1 and 2; the third run is stable.
+    await advanceTimersUntil(
+      () => startAccount.mock.calls.length >= 3,
+      "expected two crash-loop restarts before the stable run",
+      { stepMs: 10, maxMs: 500 },
+    );
+    await advanceTimersUntil(
+      () => startAccount.mock.calls.length >= 4,
+      "expected an auto-restart after the stable run exited",
+      { stepMs: 30_000, maxMs: 4 * STABLE_RUN_RESET_MS },
+    );
+
+    const snapshot = manager.getRuntimeSnapshot();
+    const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(true);
+    // The stable run cleared the accumulated attempts: this restart is attempt 1, not 3.
+    expect(account?.reconnectAttempts).toBe(1);
   });
 
   it("records a clean channel monitor exit before auto-restart", async () => {
