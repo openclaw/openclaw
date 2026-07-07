@@ -29,7 +29,7 @@ const CJK_RE = /[\u3040-\u309f\u30a0-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7
  */
 export function tokenize(text: string): Set<string> {
   const lower = normalizeLowercaseStringOrEmpty(text);
-  const ascii = lower.match(/[a-z0-9_]+/g) ?? [];
+  const words = (lower.match(/[\p{L}\p{N}_]+/gu) ?? []).filter((token) => !CJK_RE.test(token));
 
   // Track CJK characters with their original positions
   const chars = Array.from(lower);
@@ -49,7 +49,7 @@ export function tokenize(text: string): Set<string> {
   }
 
   const unigrams = cjkData.map((d) => d.char);
-  return new Set([...ascii, ...bigrams, ...unigrams]);
+  return new Set([...words, ...bigrams, ...unigrams]);
 }
 
 /**

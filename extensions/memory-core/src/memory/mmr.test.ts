@@ -27,6 +27,11 @@ describe("tokenize", () => {
         expected: ["hello_world", "test_case"],
       },
       {
+        name: "unicode words",
+        input: "Malmö café Привет مرحبا",
+        expected: ["malmö", "café", "привет", "مرحبا"],
+      },
+      {
         name: "dedupe repeated tokens",
         input: "hello hello world world",
         expected: ["hello", "world"],
@@ -154,14 +159,13 @@ describe("textSimilarity", () => {
 
   // Regression: dreaming dedupe (and any caller comparing arbitrary content
   // strings via Jaccard tokens) must NOT merge distinct snippets when both
-  // sides tokenize to the empty set. The shared `tokenize` only emits ASCII
-  // word-tokens and CJK uni-/bigrams, so inputs in other scripts (Cyrillic,
-  // Arabic, emoji-only, punctuation-only) all tokenize to `{}` and would
+  // sides tokenize to the empty set. Emoji-only and punctuation-only snippets
+  // still tokenize to `{}` and would
   // otherwise return Jaccard=1 → false dedupe.
   it("falls back to literal equality when both inputs tokenize to empty sets (non-CJK/non-ASCII)", () => {
-    // Distinct Cyrillic snippets — must NOT merge.
+    // Distinct Cyrillic snippets now tokenize as Unicode words, but still must NOT merge.
     expect(textSimilarity("Привет мир", "Доброе утро")).toBe(0);
-    // Distinct Arabic snippets — must NOT merge.
+    // Distinct Arabic snippets now tokenize as Unicode words, but still must NOT merge.
     expect(textSimilarity("مرحبا بالعالم", "صباح الخير")).toBe(0);
     // Emoji-only — distinct must NOT merge, identical must merge.
     expect(textSimilarity("🦞🦞🦞", "🚀🚀🚀")).toBe(0);
@@ -173,7 +177,7 @@ describe("textSimilarity", () => {
     expect(textSimilarity("Привет мир", "Привет мир")).toBe(1);
     // Empty vs empty — preserve identity (both literally equal).
     expect(textSimilarity("", "")).toBe(1);
-    // Normalized equality is case-insensitive for non-tokenized text.
+    // Normalized equality is case-insensitive for Unicode-word text.
     expect(textSimilarity("Привет МИР", "привет мир")).toBe(1);
   });
 });
