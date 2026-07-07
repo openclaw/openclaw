@@ -137,6 +137,8 @@ export function installEmbeddedAttemptContextGuards(input: {
       agent: activeSession.agent,
       contextWindowTokens: contextTokenBudget,
       ...midTurnPrecheckOptions,
+      sessionId: attempt.sessionId,
+      sessionKey: attempt.sessionKey,
     });
     removeLoopGuard = () => {
       removeToolResultGuard();
@@ -147,6 +149,8 @@ export function installEmbeddedAttemptContextGuards(input: {
       agent: activeSession.agent,
       contextWindowTokens: contextTokenBudget,
       ...midTurnPrecheckOptions,
+      sessionId: attempt.sessionId,
+      sessionKey: attempt.sessionKey,
     });
   }
 

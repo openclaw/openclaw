@@ -8,6 +8,7 @@ import type {
   ContextEngineRuntimeSettings,
   ContextEngineSessionTarget,
 } from "../../context-engine/types.js";
+import { markDiagnosticSessionProgress } from "../../logging/diagnostic.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import { log } from "./logger.js";
@@ -469,6 +470,9 @@ export function installToolResultContextGuard(params: {
   agent: GuardableAgent;
   contextWindowTokens: number;
   midTurnPrecheck?: MidTurnPrecheckOptions;
+  /** Session identifiers used to refresh the diagnostic progress marker on every model call. */
+  sessionId?: string;
+  sessionKey?: string;
 }): () => void {
   const contextWindowTokens = Math.max(1, Math.floor(params.contextWindowTokens));
   const maxContextChars = Math.max(
@@ -557,6 +561,13 @@ export function installToolResultContextGuard(params: {
       })
     ) {
       throw new Error(PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE);
+    }
+
+    if (params.sessionId || params.sessionKey) {
+      markDiagnosticSessionProgress({
+        sessionId: params.sessionId!,
+        sessionKey: params.sessionKey!,
+      });
     }
 
     return contextMessages;

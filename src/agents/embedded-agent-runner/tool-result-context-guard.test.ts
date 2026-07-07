@@ -3,8 +3,9 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContextEngine, ContextEngineRuntimeSettings } from "../../context-engine/types.js";
+import { markDiagnosticSessionProgress as _unused } from "../../logging/diagnostic.js";
 import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
@@ -20,6 +21,14 @@ import {
 
 const PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE =
   "Context overflow: estimated context size exceeds safe threshold during tool loop.";
+
+vi.mock("../../logging/diagnostic.js", async () => {
+  const actual = await vi.importActual("../../logging/diagnostic.js");
+  return {
+    ...(actual as Record<string, unknown>),
+    markDiagnosticSessionProgress: vi.fn(),
+  };
+});
 
 function makeUser(text: string): AgentMessage {
   return castAgentMessage({
@@ -192,6 +201,9 @@ describe("formatContextLimitTruncationNotice", () => {
 });
 
 describe("installToolResultContextGuard", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
   it("passes through unchanged context when under the per-tool and total budget", async () => {
     const agent = makeGuardableAgent();
     const contextForNextCall = [makeUser("hello"), makeToolResult("call_ok", "small output")];
@@ -488,6 +500,36 @@ describe("installToolResultContextGuard", () => {
     const transformed = (await applyGuardToContext(agent, contextForNextCall)) as AgentMessage[];
 
     expect(transformed).toBe(contextForNextCall);
+  });
+
+  it("refreshes diagnostic progress marker when sessionId and sessionKey are provided", async () => {
+    const agent = makeGuardableAgent();
+    const contextForNextCall = [makeUser("hello"), makeToolResult("call_ok", "small")];
+    installToolResultContextGuard({
+      agent,
+      contextWindowTokens: 100_000,
+      sessionId: "test-sid",
+      sessionKey: "agent:main:test",
+    });
+    const result = await agent.transformContext?.(contextForNextCall, new AbortController().signal);
+    expect(result).toBeDefined();
+    const { markDiagnosticSessionProgress } = await import("../../logging/diagnostic.js");
+    expect(markDiagnosticSessionProgress).toHaveBeenCalledWith({
+      sessionId: "test-sid",
+      sessionKey: "agent:main:test",
+    });
+  });
+
+  it("does not call diagnostic progress marker when session identifiers are omitted", async () => {
+    const agent = makeGuardableAgent();
+    const contextForNextCall = [makeUser("hello")];
+    installToolResultContextGuard({
+      agent,
+      contextWindowTokens: 100_000,
+    });
+    await agent.transformContext?.(contextForNextCall, new AbortController().signal);
+    const { markDiagnosticSessionProgress } = await import("../../logging/diagnostic.js");
+    expect(markDiagnosticSessionProgress).not.toHaveBeenCalled();
   });
 });
 
