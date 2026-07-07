@@ -508,4 +508,46 @@ describe("proxy cli runtime", () => {
     expect(session?.mode).toBe("proxy-run");
     expect(session?.endedAt).toBeGreaterThanOrEqual(beforeRun);
   });
+
+  it("forwards SIGTERM to the child and ends the session before exiting", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      killed: false,
+      kill: vi.fn((signal: NodeJS.Signals) => {
+        child.killed = true;
+        queueMicrotask(() => {
+          child.emit("exit", null, signal);
+        });
+        return true;
+      }),
+    });
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+
+    spawnMock.mockImplementation(() => child);
+
+    const { runDebugProxyRunCommand } = await import("./proxy-cli.runtime.js");
+    const { getDebugProxyCaptureStore } = await import("../proxy-capture/store.sqlite.js");
+
+    const beforeRun = Date.now();
+    const runPromise = runDebugProxyRunCommand({
+      commandArgs: ["long-lived"],
+    });
+
+    const sigtermListener = process.listeners("SIGTERM").at(-1);
+    expect(sigtermListener).toBeTypeOf("function");
+    (sigtermListener as () => void)();
+
+    await runPromise;
+
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(serverStopSpy).toHaveBeenCalledTimes(1);
+    expect(exitSpy).toHaveBeenCalledWith(1);
+
+    const store = getDebugProxyCaptureStore();
+    const [session] = store.listSessions(5);
+    expect(session?.mode).toBe("proxy-run");
+    expect(session?.endedAt).toBeGreaterThanOrEqual(beforeRun);
+
+    exitSpy.mockRestore();
+    process.exitCode = undefined;
+  });
 });

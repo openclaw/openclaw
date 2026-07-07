@@ -79,7 +79,8 @@ export async function runDebugProxyRunCommand(opts: {
     ...baseSettings,
     sessionId,
   };
-  getDebugProxyCaptureStore().upsertSession({
+  const store = getDebugProxyCaptureStore();
+  store.upsertSession({
     id: sessionId,
     startedAt: Date.now(),
     mode: "proxy-run",
@@ -87,33 +88,87 @@ export async function runDebugProxyRunCommand(opts: {
     sourceProcess: "openclaw",
     proxyUrl: undefined,
   });
-  const server = await startDebugProxyServer({
-    host: opts.host,
-    port: opts.port,
-    settings,
-  });
   const [command, ...args] = opts.commandArgs;
+  let child: ReturnType<typeof spawn> | undefined = undefined;
+  let server: Awaited<ReturnType<typeof startDebugProxyServer>> | undefined;
+  // A signal can land while the server is still starting; remember it so the
+  // child spawned afterwards is killed instead of orphaned.
+  let pendingSignal: NodeJS.Signals | undefined;
+  let resolveChildDone: () => void = () => undefined;
+  let rejectChildDone: (error: unknown) => void = () => undefined;
+  const childDone = new Promise<void>((resolve, reject) => {
+    resolveChildDone = resolve;
+    rejectChildDone = reject;
+  });
+  let shutdownPromise: Promise<void> | null = null;
+  const shutdown = async (signal?: NodeJS.Signals) => {
+    if (shutdownPromise) {
+      return await shutdownPromise;
+    }
+    shutdownPromise = (async () => {
+      process.off("SIGINT", onSigint);
+      process.off("SIGTERM", onSigterm);
+      if (signal) {
+        pendingSignal = signal;
+      }
+      if (signal && child && !child.killed) {
+        child.kill(signal);
+      }
+      try {
+        await childDone;
+      } finally {
+        if (server) {
+          await server.stop();
+        }
+        store.endSession(sessionId);
+      }
+      if (signal) {
+        process.exit(process.exitCode ?? 1);
+      }
+    })();
+    return await shutdownPromise;
+  };
+  const onSigint = () => {
+    void shutdown("SIGINT");
+  };
+  const onSigterm = () => {
+    void shutdown("SIGTERM");
+  };
+  // Register before any await so Ctrl+C during startup still cleans up.
+  process.on("SIGINT", onSigint);
+  process.on("SIGTERM", onSigterm);
+  try {
+    server = await startDebugProxyServer({
+      host: opts.host,
+      port: opts.port,
+      settings,
+    });
+  } catch (error) {
+    rejectChildDone(error);
+    throw error;
+  }
   const childEnv = applyDebugProxyEnv(process.env, {
     proxyUrl: server.proxyUrl,
     sessionId,
     certDir: settings.certDir,
   });
+  child = spawn(command, args, {
+    stdio: "inherit",
+    env: childEnv,
+    cwd: process.cwd(),
+  });
+  child.once("error", rejectChildDone);
+  child.once("exit", (code, signal) => {
+    process.exitCode = signal ? 1 : (code ?? 1);
+    resolveChildDone();
+  });
+  if (pendingSignal && !child.killed) {
+    child.kill(pendingSignal);
+  }
   try {
-    await new Promise<void>((resolve, reject) => {
-      const child = spawn(command, args, {
-        stdio: "inherit",
-        env: childEnv,
-        cwd: process.cwd(),
-      });
-      child.once("error", reject);
-      child.once("exit", (code, signal) => {
-        process.exitCode = signal ? 1 : (code ?? 1);
-        resolve();
-      });
-    });
+    await childDone;
   } finally {
-    await server.stop();
-    getDebugProxyCaptureStore().endSession(sessionId);
+    await shutdown();
   }
 }
 
