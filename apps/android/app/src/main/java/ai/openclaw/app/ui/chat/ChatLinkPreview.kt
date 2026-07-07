@@ -38,6 +38,7 @@ internal const val LINK_PREVIEW_IMAGE_MAX_DIMENSION = 600
 private const val LINK_PREVIEW_MAX_REDIRECTS = 3
 private const val LINK_PREVIEW_TIMEOUT_MILLIS = 6_000L
 private const val LINK_PREVIEW_CACHE_ENTRIES = 64
+private const val LINK_PREVIEW_IMAGE_CACHE_MAX_BYTES = 8 * 1024 * 1024
 private const val LINK_PREVIEW_IMAGE_CACHE_ENTRIES = 32
 private const val LINK_PREVIEW_ACCEPT = "text/html, application/xhtml+xml;q=0.9"
 private const val LINK_PREVIEW_IMAGE_ACCEPT = "image/*"
@@ -324,9 +325,22 @@ internal class LinkPreviewStore(
 
 internal class LinkPreviewImageStore(
   private val fetcher: suspend (String) -> LinkPreviewImageResult,
-  maxEntries: Int = LINK_PREVIEW_IMAGE_CACHE_ENTRIES,
+  maxBytes: Int = LINK_PREVIEW_IMAGE_CACHE_MAX_BYTES,
 ) {
-  private val cache = LruCache<String, LinkPreviewImageResult>(maxEntries)
+  // Every result pays at least one entry share, preserving the entry cap while loaded bitmaps
+  // also pay their full backing allocation.
+  private val minimumResultBytes = max(1, maxBytes / LINK_PREVIEW_IMAGE_CACHE_ENTRIES)
+  private val cache =
+    object : LruCache<String, LinkPreviewImageResult>(maxBytes) {
+      override fun sizeOf(
+        key: String,
+        value: LinkPreviewImageResult,
+      ): Int =
+        when (value) {
+          is LinkPreviewImageResult.Loaded -> value.bitmap.allocationByteCount.coerceAtLeast(minimumResultBytes)
+          LinkPreviewImageResult.Failed -> minimumResultBytes
+        }
+    }
 
   suspend fun get(url: String): LinkPreviewImageResult {
     cache.get(url)?.let { return it }
