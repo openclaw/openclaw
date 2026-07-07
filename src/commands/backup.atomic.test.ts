@@ -101,22 +101,28 @@ describe("backupCreateCommand atomic archive write", () => {
       const key = String(targetPath);
       const attempt = (rmAttempts.get(key) ?? 0) + 1;
       rmAttempts.set(key, attempt);
-      if ((key === attemptFiles[0] || key === attemptFiles[1]) && attempt === 1) {
+      if (key.startsWith(`${outputPath}.`) && !attemptFiles.includes(key)) {
+        attemptFiles.push(key);
+      }
+      if (attemptFiles.length <= 2 && key === attemptFiles.at(-1) && attempt === 1) {
         throw Object.assign(new Error("resource busy"), { code: "EBUSY" });
       }
       await realRm(targetPath, options);
     }) as typeof fs.rm);
     try {
       let tarAttempt = 0;
-      tarCreateMock.mockImplementation(async ({ file }: { file: string }) => {
+      tarCreateMock.mockImplementation(() => {
         tarAttempt += 1;
-        attemptFiles.push(file);
-        await fs.writeFile(file, `archive-attempt-${tarAttempt}`, "utf8");
-        if (tarAttempt < 3) {
-          throw Object.assign(new Error("did not encounter expected EOF"), {
-            path: path.join(tempHome.home, ".openclaw", "state.txt"),
-          });
-        }
+        return createMockTarStream({
+          contents: `archive-attempt-${tarAttempt}`,
+          ...(tarAttempt < 3
+            ? {
+                error: Object.assign(new Error("did not encounter expected EOF"), {
+                  path: path.join(tempHome.home, ".openclaw", "state.txt"),
+                }),
+              }
+            : {}),
+        });
       });
 
       const result = await backupCreateCommand(runtime, {
