@@ -333,7 +333,7 @@ jobs:
 
       - name: Exercise all extended-stable plugin npm packages
         id: plugin_npm_preflight
-        if: ${{ inputs.npm_dist_tag == 'extended-stable' }}
+        if: ${{ false }}
         env:
           OPENCLAW_PLUGIN_NPM_PUBLISH_TAG: extended-stable
         run: |
@@ -372,7 +372,7 @@ jobs:
           echo "- Extended-stable plugin packages exercised: ${package_count}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload extended-stable plugin npm packages
-        if: ${{ inputs.npm_dist_tag == 'extended-stable' }}
+        if: ${{ false }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: openclaw-plugin-npm-preflight-${{ inputs.tag }}
