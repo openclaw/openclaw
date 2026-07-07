@@ -1,6 +1,6 @@
 // Control UI component implements the file preview modal element.
 import { LitElement, css, html, type PropertyValues } from "lit";
-import { property, query, state } from "lit/decorators.js";
+import { property, query } from "lit/decorators.js";
 import { renderCopyButton } from "./copy-button.ts";
 import { icons } from "./icons.ts";
 
@@ -25,19 +25,11 @@ export class OpenClawFilePreviewModal extends LitElement {
   @query(".search") private searchInput?: HTMLInputElement;
   @query(".detail-body") private detailBody?: HTMLElement;
 
-  private static readonly LINE_HEIGHT = 22;
-  private static readonly OVERSCAN = 30;
-
-  @state() private visibleStart = 0;
-  @state() private visibleEnd = 0;
   private filteredFiles: FilePreviewModalFile[] = [];
   private activeFile?: FilePreviewModalFile;
   private derivedInputsReady = false;
   private codeSource?: string;
-  private codeLines: string[] = [];
-  private scrollRafId = 0;
-  private resizeObserver?: ResizeObserver;
-  private resizeObserverTarget?: HTMLElement;
+  private codeChunks: string[] = [];
   private resetScrollAfterUpdate = true;
 
   static override styles = css`
@@ -398,24 +390,26 @@ export class OpenClawFilePreviewModal extends LitElement {
 
     .detail-body {
       flex: 1;
-      overflow: auto;
+      overflow-x: hidden;
+      overflow-y: auto;
       padding: 20px 24px 24px;
     }
 
-    .code-vscroll {
-      min-width: 100%;
-      width: max-content;
+    .code-content {
+      min-width: 0;
     }
 
-    .code-line {
-      height: 22px;
-      line-height: 22px;
+    .code-chunk {
+      margin: 0;
+      min-width: 0;
       font-family: var(--mono);
       font-size: 13px;
+      line-height: 1.7;
       color: var(--text);
-      white-space: pre;
-      overflow: hidden;
-      text-overflow: ellipsis;
+      white-space: pre-wrap;
+      word-break: break-word;
+      content-visibility: auto;
+      contain-intrinsic-block-size: auto 1414px;
     }
 
     .foot {
@@ -496,10 +490,9 @@ export class OpenClawFilePreviewModal extends LitElement {
     const nextCodeSource = nextActiveFile?.contents;
     if (nextCodeSource !== this.codeSource) {
       this.codeSource = nextCodeSource;
-      this.codeLines = nextCodeSource?.split("\n") ?? [];
+      this.codeChunks = nextCodeSource === undefined ? [] : chunkFileContents(nextCodeSource);
     }
 
-    this.resetVirtualRange();
     this.resetScrollAfterUpdate = true;
   }
 
@@ -565,13 +558,6 @@ export class OpenClawFilePreviewModal extends LitElement {
   }
 
   private renderFile(file: FilePreviewModalFile) {
-    const totalLines = this.codeLines.length;
-    const totalHeight = totalLines * OpenClawFilePreviewModal.LINE_HEIGHT;
-    const start = Math.min(this.visibleStart, totalLines);
-    const fallbackEnd = Math.min(totalLines, 100);
-    const end = Math.max(start, Math.min(this.visibleEnd || fallbackEnd, totalLines));
-    const visible = this.codeLines.slice(start, end);
-
     return html`
       <section class="detail">
         <div class="detail-head">
@@ -586,20 +572,11 @@ export class OpenClawFilePreviewModal extends LitElement {
             ${this.contextLabel ? html`<span class="chip ok">${this.contextLabel}</span>` : ""}
           </div>
         </div>
-        <div class="detail-body" @scroll=${this.handleCodeScroll}>
-          <div class="code-vscroll" role="presentation" style="height:${totalHeight}px;">
-            <div
-              aria-hidden="true"
-              style="height:${start * OpenClawFilePreviewModal.LINE_HEIGHT}px;"
-            ></div>
-            ${visible.map(
-              (line, index) =>
-                html`<div class="code-line" data-line=${start + index}>${line || " "}</div>`,
+        <div class="detail-body">
+          <div class="code-content">
+            ${this.codeChunks.map(
+              (chunk, index) => html`<pre class="code-chunk" data-chunk=${index}>${chunk}</pre>`,
             )}
-            <div
-              aria-hidden="true"
-              style="height:${(totalLines - end) * OpenClawFilePreviewModal.LINE_HEIGHT}px;"
-            ></div>
           </div>
         </div>
       </section>
@@ -636,20 +613,11 @@ export class OpenClawFilePreviewModal extends LitElement {
 
   override connectedCallback() {
     super.connectedCallback();
-    this.resetVirtualRange();
     this.resetScrollAfterUpdate = true;
     this.requestUpdate();
   }
 
-  override disconnectedCallback() {
-    super.disconnectedCallback();
-    this.cancelScrollFrame();
-    this.resizeObserver?.disconnect();
-    this.resizeObserverTarget = undefined;
-  }
-
   protected override updated(changed: PropertyValues<this>) {
-    this.syncResizeObserver();
     if (this.resetScrollAfterUpdate) {
       this.resetScrollAfterUpdate = false;
       const body = this.detailBody;
@@ -693,65 +661,6 @@ export class OpenClawFilePreviewModal extends LitElement {
       default:
     }
   };
-
-  private resetVirtualRange() {
-    this.cancelScrollFrame();
-    this.visibleStart = 0;
-    this.visibleEnd = 0;
-  }
-
-  private cancelScrollFrame() {
-    if (this.scrollRafId) {
-      cancelAnimationFrame(this.scrollRafId);
-      this.scrollRafId = 0;
-    }
-  }
-
-  private handleCodeScroll = () => {
-    if (this.scrollRafId) {
-      return;
-    }
-    this.scrollRafId = requestAnimationFrame(() => {
-      this.scrollRafId = 0;
-      this.recalcVisibleRange();
-    });
-  };
-
-  private recalcVisibleRange() {
-    const container = this.detailBody;
-    if (!container || this.codeLines.length === 0) {
-      return;
-    }
-
-    const { LINE_HEIGHT, OVERSCAN } = OpenClawFilePreviewModal;
-    const start = Math.max(0, Math.floor(container.scrollTop / LINE_HEIGHT) - OVERSCAN);
-    const visibleCount = Math.ceil(container.clientHeight / LINE_HEIGHT);
-    const end = Math.min(this.codeLines.length, start + visibleCount + OVERSCAN * 2);
-
-    if (start !== this.visibleStart || end !== this.visibleEnd) {
-      this.visibleStart = start;
-      this.visibleEnd = end;
-    }
-  }
-
-  private syncResizeObserver() {
-    const target = this.detailBody;
-    if (target === this.resizeObserverTarget) {
-      return;
-    }
-
-    this.resizeObserver?.disconnect();
-    this.resizeObserverTarget = undefined;
-    if (!target || typeof ResizeObserver !== "function") {
-      return;
-    }
-
-    this.resizeObserver ??= new ResizeObserver(() => {
-      this.recalcVisibleRange();
-    });
-    this.resizeObserver.observe(target);
-    this.resizeObserverTarget = target;
-  }
 
   private focusModal() {
     const target = this.searchInput ?? this.shadowRoot?.querySelector<HTMLElement>(".modal");
@@ -806,6 +715,17 @@ export class OpenClawFilePreviewModal extends LitElement {
       }),
     );
   };
+}
+
+const FILE_PREVIEW_CHUNK_LINES = 64;
+
+function chunkFileContents(contents: string): string[] {
+  const lines = contents.split("\n");
+  const chunks: string[] = [];
+  for (let index = 0; index < lines.length; index += FILE_PREVIEW_CHUNK_LINES) {
+    chunks.push(lines.slice(index, index + FILE_PREVIEW_CHUNK_LINES).join("\n"));
+  }
+  return chunks;
 }
 
 function fileKind(path: string): string {

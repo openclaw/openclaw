@@ -157,14 +157,7 @@ describe("openclaw-file-preview-modal", () => {
     expect(onDocumentKeydown).not.toHaveBeenCalled();
   });
 
-  it("keeps large-file rendering bounded and resets the real scroller on file changes", async () => {
-    let frameCallback: FrameRequestCallback | undefined;
-    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-      frameCallback = callback;
-      return 1;
-    });
-    vi.stubGlobal("cancelAnimationFrame", vi.fn());
-
+  it("chunks large files without changing their text and resets the scroller on file changes", async () => {
     const firstContents = Array.from({ length: 500 }, (_, index) => `first-${index}`).join("\n");
     const secondContents = Array.from({ length: 500 }, (_, index) => `second-${index}`).join("\n");
     const previewFiles = [
@@ -174,56 +167,20 @@ describe("openclaw-file-preview-modal", () => {
     const modal = await renderPreview({ activePath: "first.ts", previewFiles });
     const body = modal.shadowRoot?.querySelector<HTMLElement>(".detail-body");
     expect(body).toBeInstanceOf(HTMLElement);
-    Object.defineProperty(body, "clientHeight", { configurable: true, value: 220 });
+    const firstChunks = [...(modal.shadowRoot?.querySelectorAll<HTMLElement>(".code-chunk") ?? [])];
+    expect(firstChunks).toHaveLength(8);
+    expect(firstChunks.map((chunk) => chunk.textContent ?? "").join("\n")).toBe(firstContents);
 
     body!.scrollTop = 2200;
-    body!.dispatchEvent(new Event("scroll"));
-    frameCallback?.(0);
-    await modal.updateComplete;
-
-    const scrolledLines = modal.shadowRoot?.querySelectorAll<HTMLElement>(".code-line") ?? [];
-    expect(scrolledLines.length).toBeLessThanOrEqual(70);
-    expect(scrolledLines[0]?.dataset.line).toBe("70");
-    expect(scrolledLines[0]?.textContent).toBe("first-70");
 
     const updatedModal = await renderPreview({ activePath: "second.ts", previewFiles });
     const updatedBody = updatedModal.shadowRoot?.querySelector<HTMLElement>(".detail-body");
-    const updatedLines = updatedModal.shadowRoot?.querySelectorAll<HTMLElement>(".code-line") ?? [];
+    const secondChunks = [
+      ...(updatedModal.shadowRoot?.querySelectorAll<HTMLElement>(".code-chunk") ?? []),
+    ];
 
     expect(updatedBody?.scrollTop).toBe(0);
-    expect(updatedLines[0]?.dataset.line).toBe("0");
-    expect(updatedLines[0]?.textContent).toBe("second-0");
-  });
-
-  it("observes the current scroller after an empty filter replaces it", async () => {
-    const observedTargets: Element[] = [];
-    const disconnect = vi.fn();
-    class TestResizeObserver {
-      observe(target: Element) {
-        observedTargets.push(target);
-      }
-      unobserve() {}
-      disconnect = disconnect;
-      takeRecords(): ResizeObserverEntry[] {
-        return [];
-      }
-    }
-    vi.stubGlobal("ResizeObserver", TestResizeObserver);
-
-    const modal = await renderPreview();
-    const initialBody = modal.shadowRoot?.querySelector<HTMLElement>(".detail-body");
-    expect(initialBody).toBeInstanceOf(HTMLElement);
-    expect(observedTargets).toContain(initialBody);
-
-    await renderPreview({ query: "missing" });
-    expect(modal.shadowRoot?.querySelector(".detail-body")).toBeNull();
-    expect(disconnect).toHaveBeenCalled();
-
-    const restoredModal = await renderPreview();
-    const restoredBody = restoredModal.shadowRoot?.querySelector<HTMLElement>(".detail-body");
-    expect(restoredBody).toBeInstanceOf(HTMLElement);
-    expect(restoredBody).not.toBe(initialBody);
-    expect(observedTargets).toContain(restoredBody);
+    expect(secondChunks.map((chunk) => chunk.textContent ?? "").join("\n")).toBe(secondContents);
   });
 
   it("copies the complete active file while only a virtual window is rendered", async () => {
@@ -235,7 +192,7 @@ describe("openclaw-file-preview-modal", () => {
     const copyButton = modal.shadowRoot?.querySelector<HTMLButtonElement>(".chat-copy-btn");
 
     expect(copyButton).toBeInstanceOf(HTMLButtonElement);
-    expect(modal.shadowRoot?.querySelectorAll(".code-line").length).toBeLessThan(500);
+    expect(modal.shadowRoot?.querySelectorAll(".code-chunk").length).toBe(8);
     copyButton!.click();
 
     await vi.waitFor(() => {
