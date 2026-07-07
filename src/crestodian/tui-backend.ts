@@ -326,7 +326,7 @@ export async function runCrestodianTui(
   for (;;) {
     // A returned agent request is single-use; a later wizard handoff must not
     // replay it when Crestodian re-enters the chat shell.
-    const message = nextInput;
+    const initialMessage = nextInput;
     nextInput = undefined;
     const engine = createChatEngine(opts);
     let welcome: string;
@@ -352,7 +352,7 @@ export async function runCrestodianTui(
         backend,
         config: {},
         title: "openclaw crestodian",
-        ...(message ? { message } : {}),
+        ...(initialMessage ? { message: initialMessage } : {}),
       });
     } finally {
       await backend.dispose();
