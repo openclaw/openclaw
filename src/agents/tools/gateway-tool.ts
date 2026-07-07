@@ -80,6 +80,11 @@ const ALLOWED_GATEWAY_CONFIG_PATHS = [
   "messages.groupChat.unmentionedInbound",
 ] as const;
 
+/** @internal Frozen allowlist snapshot for contract tests; do not import from runtime code. */
+export const ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST: readonly string[] = Object.freeze([
+  ...ALLOWED_GATEWAY_CONFIG_PATHS,
+]);
+
 /** @internal Exposed for regression tests only; do not import from runtime code. */
 export function assertGatewayConfigMutationAllowedForTest(params: {
   action: "config.apply" | "config.patch";
