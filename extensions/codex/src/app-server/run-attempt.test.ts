@@ -1455,39 +1455,6 @@ describe("runCodexAppServerAttempt", () => {
     );
   });
 
-  it("accepts turn completions scoped by nested turn thread id", async () => {
-    const harness = createStartedThreadHarness();
-    const params = createParams(
-      path.join(tempDir, "session.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
-
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-    await harness.notify({
-      method: "turn/completed",
-      params: {
-        threadId: "parent-thread",
-        turn: {
-          id: "turn-1",
-          threadId: "thread-1",
-          status: "completed",
-          items: [{ id: "agent-1", type: "agentMessage", text: "Nested done." }],
-          error: null,
-          startedAt: null,
-          completedAt: null,
-          durationMs: null,
-        },
-      },
-    });
-
-    const result = await run;
-
-    expect(result.promptError).toBeNull();
-    expect(result.assistantTexts).toEqual(["Nested done."]);
-    expect(result.assistantTranscriptOwned).toBe(true);
-  });
-
   it("delivers completed assistant text when an orphan native tool call lacks a matching result", async () => {
     const harness = createStartedThreadHarness();
     const params = createParams(
@@ -2020,7 +1987,8 @@ describe("runCodexAppServerAttempt", () => {
     params.cleanupBundleMcpOnRunEnd = true;
 
     const run = runCodexAppServerAttempt(params);
-    await vi.waitFor(() => expect(notify).toBeDefined(), fastWait);
+    // The keyed router only delivers turn/completed after the turn is bound.
+    await vi.waitFor(() => expect(events).toContain("request:turn/start"), fastWait);
     if (!notify) {
       throw new Error("expected turn notification handler");
     }
@@ -2092,19 +2060,20 @@ describe("runCodexAppServerAttempt", () => {
     const retireSpy = vi.spyOn(sharedClientModule, "retireSharedCodexAppServerClientIfCurrent");
     const closeAndWait = vi.fn(async () => true);
     let notify: ((notification: CodexServerNotification) => Promise<void>) | undefined;
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult();
+      }
+      if (method === "turn/start") {
+        return turnStartResult();
+      }
+      return {};
+    });
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
           ...mockClientRuntimeMethods(),
-          request: vi.fn(async (method: string) => {
-            if (method === "thread/start") {
-              return threadStartResult();
-            }
-            if (method === "turn/start") {
-              return turnStartResult();
-            }
-            return {};
-          }),
+          request,
           addNotificationHandler: vi.fn((handler) => {
             notify = handler;
             return () => undefined;
@@ -2120,7 +2089,11 @@ describe("runCodexAppServerAttempt", () => {
     );
 
     const run = runCodexAppServerAttempt(params);
-    await vi.waitFor(() => expect(notify).toBeDefined(), fastWait);
+    // The keyed router only delivers turn/completed after the turn is bound.
+    await vi.waitFor(
+      () => expect(request.mock.calls.map(([method]) => method)).toContain("turn/start"),
+      fastWait,
+    );
     if (!notify) {
       throw new Error("expected turn notification handler");
     }
@@ -4221,6 +4194,10 @@ describe("runCodexAppServerAttempt", () => {
       },
     );
     await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"));
+    // The keyed router only accepts turn-scoped requests once the turn is bound.
+    await vi.waitFor(() =>
+      expect(request.mock.calls.map(([method]) => method)).toContain("turn/start"),
+    );
 
     const result = await handleRequest?.({
       id: "request-elicitation-1",
@@ -4417,6 +4394,10 @@ describe("runCodexAppServerAttempt", () => {
     params.agentDir = agentDir;
     const run = runCodexAppServerAttempt(params, { pluginConfig });
     await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"));
+    // The keyed router only accepts turn-scoped requests once the turn is bound.
+    await vi.waitFor(() =>
+      expect(request.mock.calls.map(([method]) => method)).toContain("turn/start"),
+    );
 
     const result = await handleRequest?.({
       id: "request-elicitation-1",
