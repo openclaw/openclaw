@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 // Summarizes extra security audit findings for user-facing output.
 import {
   resolveConfiguredToolPolicies,
@@ -10,6 +11,8 @@ import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { hasConfiguredInternalHooks } from "../hooks/configured.js";
+import { normalizePluginsConfigWithResolver } from "../plugins/config-normalization-shared.js";
+import { passesManifestOwnerBasePolicy } from "../plugins/manifest-owner-policy.js";
 import { hasConfiguredWebSearchCredential } from "../plugins/web-search-credential-presence.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 import { collectAuditModelRefs } from "./audit-model-refs.js";
@@ -114,37 +117,19 @@ function isWebFetchEnabled(cfg: OpenClawConfig): boolean {
 }
 
 function isBrowserEnabled(cfg: OpenClawConfig): boolean {
-  return cfg.browser?.enabled !== false;
-}
-
-function listIncludesPluginId(list: readonly string[] | undefined, pluginId: string): boolean {
-  const normalizedPluginId = pluginId.trim().toLowerCase();
-  return list?.some((entry) => entry.trim().toLowerCase() === normalizedPluginId) ?? false;
-}
-
-function hasBrowserStartupIntent(cfg: OpenClawConfig): boolean {
-  return cfg.browser !== undefined && cfg.browser.enabled !== false;
-}
-
-function isBrowserControlSummaryEnabled(cfg: OpenClawConfig): boolean {
-  if (cfg.browser?.enabled === false || cfg.plugins?.enabled === false) {
+  if (cfg.browser?.enabled === false) {
     return false;
   }
-  if (
-    cfg.plugins?.entries?.browser?.enabled === false ||
-    listIncludesPluginId(cfg.plugins?.deny, "browser")
-  ) {
-    return false;
-  }
-  if (
-    Array.isArray(cfg.plugins?.allow) &&
-    cfg.plugins.allow.length > 0 &&
-    !listIncludesPluginId(cfg.plugins.allow, "browser") &&
-    !hasBrowserStartupIntent(cfg)
-  ) {
-    return false;
-  }
-  return true;
+  return passesManifestOwnerBasePolicy({
+    plugin: { id: "browser" },
+    normalizedConfig: normalizePluginsConfigWithResolver(
+      cfg.plugins,
+      (pluginId) => normalizeOptionalLowercaseString(pluginId) ?? "",
+    ),
+    // Explicit browser config is a manifest-owned startup path and therefore
+    // bypasses only the restrictive allowlist, never deny or disable policy.
+    allowRestrictiveAllowlistBypass: cfg.browser !== undefined,
+  });
 }
 
 /** Produce a concise inventory of major security-relevant surfaces. */
@@ -153,7 +138,7 @@ export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): Securi
   const elevated = cfg.tools?.elevated?.enabled !== false;
   const webhooksEnabled = cfg.hooks?.enabled === true;
   const internalHooksEnabled = hasConfiguredInternalHooks(cfg);
-  const browserEnabled = isBrowserControlSummaryEnabled(cfg);
+  const browserEnabled = isBrowserEnabled(cfg);
 
   const detail =
     `groups: open=${group.open}, allowlist=${group.allowlist}` +

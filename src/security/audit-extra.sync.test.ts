@@ -68,6 +68,10 @@ describe("collectSmallModelRiskFindings", () => {
     agents: { defaults: { model: { primary: "ollama/mistral-8b" } } },
     tools: { web: { fetch: { enabled: false } } },
   } satisfies OpenClawConfig;
+  const browserBlockedByPluginPolicyCfg = {
+    ...browserDefaultCfg,
+    plugins: { allow: ["openai"] },
+  } satisfies OpenClawConfig;
 
   it.each([
     {
@@ -85,6 +89,14 @@ describe("collectSmallModelRiskFindings", () => {
       expectedSeverity: "critical",
       detailIncludes: ["web=[browser]"],
       detailExcludes: ["No web/browser tools detected"],
+    },
+    {
+      name: "treats browser as disabled when restrictive plugin policy excludes it",
+      cfg: browserBlockedByPluginPolicyCfg,
+      env: {},
+      expectedSeverity: "info",
+      detailIncludes: ["web=[off]", "No web/browser tools detected"],
+      detailExcludes: ["web=[browser]"],
     },
   ])("$name", ({ cfg, env, expectedSeverity, detailIncludes, detailExcludes }) => {
     const finding = requireFirstFinding(

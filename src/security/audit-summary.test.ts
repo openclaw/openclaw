@@ -56,6 +56,13 @@ describe("security audit attack surface summary", () => {
       expected: "browser control: enabled",
     },
     {
+      name: "plugin ids use the same case-insensitive canonical form as startup",
+      cfg: {
+        plugins: { allow: ["Browser"] },
+      } satisfies OpenClawConfig,
+      expected: "browser control: enabled",
+    },
+    {
       name: "plugin deny policy wins over explicit browser config",
       cfg: {
         browser: { enabled: true },
@@ -76,6 +83,13 @@ describe("security audit attack surface summary", () => {
       cfg: {
         browser: { enabled: false },
         plugins: { allow: ["browser"] },
+      } satisfies OpenClawConfig,
+      expected: "browser control: disabled",
+    },
+    {
+      name: "case-normalized plugin deny policy disables browser control",
+      cfg: {
+        plugins: { deny: ["BROWSER"] },
       } satisfies OpenClawConfig,
       expected: "browser control: disabled",
     },
