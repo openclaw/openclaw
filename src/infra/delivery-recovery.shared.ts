@@ -1,6 +1,6 @@
 import { sleep } from "../utils/sleep.js";
 import { collectErrorGraphCandidates, extractErrorCode } from "./errors.js";
-import { getRetryAttemptErrors } from "./retry.js";
+import { getRetryAttemptErrors } from "./retry-attempt-errors.js";
 
 const RECOVERY_BACKOFF_MS: readonly number[] = [5_000, 25_000, 120_000, 600_000];
 export const RECOVERY_REPLAY_SPACING_MS = 250;

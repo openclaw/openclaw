@@ -3,6 +3,7 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { MAX_TIMER_TIMEOUT_MS, resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { sleep } from "../utils.js";
 import { toErrorObject } from "./errors.js";
+import { getRetryAttemptErrors, recordRetryAttemptErrors } from "./retry-attempt-errors.js";
 import { generateSecureFraction } from "./secure-random.js";
 
 /** Retry timing knobs shared by generic retry runners and channel retry policies. */
@@ -38,8 +39,6 @@ const DEFAULT_RETRY_CONFIG = {
   jitter: 0,
 };
 
-const retryAttemptErrors = new WeakMap<object, readonly unknown[]>();
-
 function appendRetryAttemptError(attemptErrors: unknown[], err: unknown): void {
   const nestedAttempts = getRetryAttemptErrors(err);
   attemptErrors.push(...(nestedAttempts ?? [err]));
@@ -53,16 +52,9 @@ function createRetryFailure(attemptErrors: readonly unknown[]): Error {
   if (attemptErrors.length > 1) {
     // Preserve the public terminal-error identity while carrying every internal
     // attempt into duplicate-send decisions made outside the channel adapter.
-    retryAttemptErrors.set(failure, [...attemptErrors]);
+    recordRetryAttemptErrors(failure, attemptErrors);
   }
   return failure;
-}
-
-/** Returns flattened failures from an exhausted retry operation, when it retried. */
-export function getRetryAttemptErrors(err: unknown): readonly unknown[] | undefined {
-  return err !== null && (typeof err === "object" || typeof err === "function")
-    ? retryAttemptErrors.get(err)
-    : undefined;
 }
 
 const clampNumber = (value: unknown, fallback: number, min?: number, max?: number) => {
