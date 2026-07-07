@@ -32,8 +32,17 @@ import {
   resolveSessionPluginTraceLines,
   type SessionEntry,
 } from "../../config/sessions.js";
-import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  persistSessionTranscriptTurn,
+  updateSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
+import {
+  MESSAGE_TOOL_ONLY_UNDELIVERED_FINAL_CUSTOM_TYPE,
+  MESSAGE_TOOL_ONLY_UNDELIVERED_FINAL_NOTICE,
+  type MessageToolOnlyUndeliveredFinalNoticeDetails,
+} from "../../config/sessions/undelivered-final-notice.js";
 import type { TypingMode } from "../../config/types.js";
 import { resolveSessionTranscriptCandidates } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
@@ -70,7 +79,7 @@ import {
 } from "../reply-payload.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   buildEmptyInteractiveReplyPayload,
@@ -222,6 +231,75 @@ function resolveSourceReplyPolicy(params: {
     requested: params.opts?.sourceReplyDeliveryMode,
     sendPolicy,
   });
+}
+
+async function persistMessageToolOnlyUndeliveredFinalNotice(params: {
+  cfg: OpenClawConfig;
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+  sessionId: string;
+  sessionKey?: string;
+  storePath?: string;
+  sessionAgentId?: string;
+  threadId?: string | number;
+  workspaceDir: string;
+  sourceReplyDeliveryMode?: string;
+  sendPolicyDenied: boolean;
+  successfulSourceReplyDelivery: boolean;
+  finalText: string;
+}): Promise<void> {
+  if (
+    params.sourceReplyDeliveryMode !== "message_tool_only" ||
+    params.sendPolicyDenied ||
+    params.successfulSourceReplyDelivery
+  ) {
+    return;
+  }
+  const trimmed = params.finalText.trim();
+  if (!trimmed || isSilentReplyText(trimmed)) {
+    return;
+  }
+  const sessionKey = params.sessionKey?.trim();
+  const sessionId = params.sessionId.trim();
+  if (!sessionKey || !sessionId) {
+    return;
+  }
+
+  await persistSessionTranscriptTurn(
+    {
+      sessionId,
+      sessionKey,
+      sessionEntry: params.sessionEntry,
+      sessionStore: params.sessionStore,
+      storePath: params.storePath,
+      agentId: params.sessionAgentId,
+      threadId: params.threadId,
+    },
+    {
+      config: params.cfg,
+      cwd: params.workspaceDir,
+      messages: [
+        {
+          message: {
+            role: "custom",
+            customType: MESSAGE_TOOL_ONLY_UNDELIVERED_FINAL_CUSTOM_TYPE,
+            content: MESSAGE_TOOL_ONLY_UNDELIVERED_FINAL_NOTICE,
+            display: false,
+            details: {
+              sourceReplyDeliveryMode: "message_tool_only",
+              delivered: false,
+              finalTextLength: trimmed.length,
+            } satisfies MessageToolOnlyUndeliveredFinalNoticeDetails,
+            timestamp: Date.now(),
+          },
+        },
+      ],
+      publishWhen: "when-appended",
+      touchSessionEntry: true,
+      updateMode: "file-only",
+      ...(params.storePath ? { expectedSessionId: sessionId } : {}),
+    },
+  );
 }
 
 function resolveReplyRunDeliveryContext(params: {
@@ -2701,6 +2779,21 @@ export async function runReplyAgent(params: {
           }
         }
       }
+      await persistMessageToolOnlyUndeliveredFinalNotice({
+        cfg,
+        sessionEntry: activeSessionEntry,
+        sessionStore: activeSessionStore,
+        sessionId: followupRun.run.sessionId,
+        sessionKey,
+        storePath,
+        sessionAgentId: followupRun.run.agentId,
+        threadId: replyRouteThreadId,
+        workspaceDir: followupRun.run.workspaceDir,
+        sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
+        sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
+        successfulSourceReplyDelivery,
+        finalText: assistantFinalText,
+      });
       const pendingText = sourceReplyPolicy.suppressDelivery ? "" : finalDeliveryText;
       const agentId = followupRun.run.agentId;
       const heartbeatAgentCfg = agentId ? resolveAgentConfig(cfg, agentId)?.heartbeat : undefined;

@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { MESSAGE_TOOL_ONLY_UNDELIVERED_FINAL_CUSTOM_TYPE } from "./undelivered-final-notice.js";
 import { CURRENT_SESSION_VERSION } from "./version.js";
 
 /** Tail kept so DM continuity survives silent session rotations. */
@@ -12,9 +13,9 @@ type SessionRecord = {
   id?: unknown;
   parentId?: unknown;
   timestamp?: unknown;
-  message?: { role?: unknown };
+  message?: { role?: unknown; customType?: unknown };
 };
-type KeptRecord = { role: "user" | "assistant"; line: string };
+type KeptRecord = { role: "user" | "assistant"; lines: string[] };
 
 function isValidReplayTimestamp(value: unknown): boolean {
   if (typeof value === "number") {
@@ -23,30 +24,41 @@ function isValidReplayTimestamp(value: unknown): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function replayableRole(record: SessionRecord | null): "user" | "assistant" | undefined {
-  if (
-    !record ||
-    record.type !== "message" ||
-    typeof record.id !== "string" ||
-    record.id.trim().length === 0 ||
-    !isValidReplayTimestamp(record.timestamp) ||
-    !(
-      record.parentId === null ||
+function isValidReplayMessageRecord(record: SessionRecord | null): record is SessionRecord {
+  return Boolean(
+    record &&
+    record.type === "message" &&
+    typeof record.id === "string" &&
+    record.id.trim().length > 0 &&
+    isValidReplayTimestamp(record.timestamp) &&
+    (record.parentId === null ||
       record.parentId === undefined ||
-      typeof record.parentId === "string"
-    )
-  ) {
+      typeof record.parentId === "string"),
+  );
+}
+
+function replayableRole(record: SessionRecord | null): "user" | "assistant" | undefined {
+  if (!isValidReplayMessageRecord(record)) {
     return undefined;
   }
   const role = record.message?.role;
   return role === "user" || role === "assistant" ? role : undefined;
 }
 
+function isMessageToolOnlyUndeliveredFinalNotice(record: SessionRecord | null): boolean {
+  return (
+    isValidReplayMessageRecord(record) &&
+    record.message?.role === "custom" &&
+    record.message.customType === MESSAGE_TOOL_ONLY_UNDELIVERED_FINAL_CUSTOM_TYPE
+  );
+}
+
 /**
  * Copy the tail of user/assistant JSONL records from a prior transcript into a
- * freshly-rotated one. Tool, system, and compaction records are skipped so
- * replay cannot reshape tool/role ordering, and the tail is aligned and
- * coalesced into alternating user/assistant turns so role-ordering resets
+ * freshly-rotated one, retaining delivery notices attached to assistant turns.
+ * Tool, system, and compaction records are skipped so replay cannot reshape
+ * tool/role ordering, and the tail is aligned and coalesced into alternating
+ * user/assistant turns so role-ordering resets
  * cannot immediately recur. Uses async I/O so long transcripts do not block
  * the event loop. Returns 0 on any error.
  */
@@ -68,9 +80,15 @@ export async function replayRecentUserAssistantMessages(params: {
         continue;
       }
       try {
-        const role = replayableRole(JSON.parse(line) as SessionRecord | null);
+        const record = JSON.parse(line) as SessionRecord | null;
+        const role = replayableRole(record);
         if (role) {
-          kept.push({ role, line });
+          kept.push({ role, lines: [line] });
+          continue;
+        }
+        const lastKept = kept.at(-1);
+        if (lastKept?.role === "assistant" && isMessageToolOnlyUndeliveredFinalNotice(record)) {
+          lastKept.lines.push(line);
         }
       } catch {
         // Skip malformed lines.
@@ -88,7 +106,9 @@ export async function replayRecentUserAssistantMessages(params: {
       // role-ordering hazard this reset path is recovering from.
       return 0;
     }
-    const tail = coalesceAlternatingReplayTail(kept.slice(startIdx)).map((entry) => entry.line);
+    const tail = coalesceAlternatingReplayTail(kept.slice(startIdx)).flatMap(
+      (entry) => entry.lines,
+    );
     if (!fs.existsSync(params.targetTranscript)) {
       await fsp.mkdir(path.dirname(params.targetTranscript), { recursive: true });
       const header = JSON.stringify({

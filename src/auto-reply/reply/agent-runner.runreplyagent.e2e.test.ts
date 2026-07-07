@@ -1,10 +1,15 @@
 // E2E tests for run-reply-agent execution and generated session artifacts.
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { saveSessionStore, type SessionEntry } from "../../config/sessions.js";
 import { readSessionStoreForTest } from "../../config/sessions/test-helpers.js";
+import {
+  MESSAGE_TOOL_ONLY_UNDELIVERED_FINAL_CUSTOM_TYPE,
+  MESSAGE_TOOL_ONLY_UNDELIVERED_FINAL_NOTICE,
+} from "../../config/sessions/undelivered-final-notice.js";
 import type { TypingMode } from "../../config/types.js";
 import {
   HEARTBEAT_RUN_SCOPE,
@@ -674,16 +679,49 @@ describe("runReplyAgent pending final delivery capture", () => {
     return requireStoredSessionEntry(storePath);
   }
 
-  it("does not persist message-tool-only final replies for heartbeat replay", async () => {
+  it("marks message-tool-only final replies as undelivered without enabling heartbeat replay", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "openclaw-agent-runner-undelivered-"));
+    const sessionFile = join(dir, "session.jsonl");
+    const storePath = join(dir, "sessions.json");
     const sessionEntry: SessionEntry = {
       sessionId: "session",
+      sessionFile,
       updatedAt: Date.now(),
     };
     const sessionStore = { main: sessionEntry };
-    const storePath = await createSessionStoreFile(sessionEntry);
+    await writeFile(
+      sessionFile,
+      [
+        {
+          type: "session",
+          id: "session",
+          timestamp: new Date().toISOString(),
+          cwd: dir,
+        },
+        {
+          type: "message",
+          id: "assistant-final",
+          parentId: null,
+          timestamp: new Date().toISOString(),
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "private final" }],
+            api: "anthropic-messages",
+            provider: "anthropic",
+            model: "claude",
+            stopReason: "stop",
+            timestamp: Date.now(),
+          },
+        },
+      ]
+        .map((entry) => `${JSON.stringify(entry)}\n`)
+        .join(""),
+      "utf-8",
+    );
+    await saveSessionStore(storePath, sessionStore, { skipMaintenance: true });
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "private final" }],
-      meta: {},
+      meta: { finalAssistantRawText: "private final" },
     });
 
     const { run } = createMinimalRun({
@@ -699,6 +737,45 @@ describe("runReplyAgent pending final delivery capture", () => {
     const stored = await readStoredMainSession(storePath);
     expect(stored.pendingFinalDelivery).toBeUndefined();
     expect(stored.pendingFinalDeliveryText).toBeUndefined();
+    expect(stored.sessionFile).toBe(sessionFile);
+
+    const entries = (await readFile(sessionFile, "utf-8"))
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => JSON.parse(line) as { type?: string; message?: Record<string, unknown> });
+    const assistantIndex = entries.findIndex((entry) => entry.message?.role === "assistant");
+    const noticeIndex = entries.findIndex(
+      (entry) => entry.message?.customType === MESSAGE_TOOL_ONLY_UNDELIVERED_FINAL_CUSTOM_TYPE,
+    );
+    expect(assistantIndex).toBeGreaterThanOrEqual(0);
+    expect(noticeIndex).toBeGreaterThan(assistantIndex);
+    expect(entries[noticeIndex]).toEqual(
+      expect.objectContaining({
+        type: "message",
+        message: expect.objectContaining({
+          role: "custom",
+          customType: MESSAGE_TOOL_ONLY_UNDELIVERED_FINAL_CUSTOM_TYPE,
+          content: MESSAGE_TOOL_ONLY_UNDELIVERED_FINAL_NOTICE,
+          display: false,
+          details: {
+            sourceReplyDeliveryMode: "message_tool_only",
+            delivered: false,
+            finalTextLength: "private final".length,
+          },
+        }),
+      }),
+    );
+
+    expect(
+      SessionManager.open(sessionFile)
+        .buildSessionContext()
+        .messages.some(
+          (message) =>
+            message.role === "custom" &&
+            message.customType === MESSAGE_TOOL_ONLY_UNDELIVERED_FINAL_CUSTOM_TYPE &&
+            message.content === MESSAGE_TOOL_ONLY_UNDELIVERED_FINAL_NOTICE,
+        ),
+    ).toBe(true);
   });
 
   it("does not persist sendPolicy-denied final replies for heartbeat replay", async () => {

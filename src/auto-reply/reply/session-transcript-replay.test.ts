@@ -4,6 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { replayRecentUserAssistantMessages } from "../../config/sessions/transcript-replay.js";
+import {
+  MESSAGE_TOOL_ONLY_UNDELIVERED_FINAL_CUSTOM_TYPE,
+  MESSAGE_TOOL_ONLY_UNDELIVERED_FINAL_NOTICE,
+} from "../../config/sessions/undelivered-final-notice.js";
 
 const DEFAULT_REPLAY_MAX_MESSAGES = 6;
 
@@ -28,11 +32,32 @@ function messageEntry(params: {
   });
 }
 
+function undeliveredFinalNoticeEntry(params: { id: string; parentId?: string | null }): string {
+  return j({
+    type: "message",
+    id: params.id,
+    parentId: params.parentId ?? null,
+    timestamp: "2026-05-16T00:00:01.000Z",
+    message: {
+      role: "custom",
+      customType: MESSAGE_TOOL_ONLY_UNDELIVERED_FINAL_CUSTOM_TYPE,
+      content: MESSAGE_TOOL_ONLY_UNDELIVERED_FINAL_NOTICE,
+      display: false,
+      details: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        delivered: false,
+        finalTextLength: "private final".length,
+      },
+    },
+  });
+}
+
 type ReplayRecord = {
   type?: string;
   id?: string;
   message?: {
     role?: string;
+    customType?: string;
     content?: string;
   };
 };
@@ -135,6 +160,42 @@ describe("replayRecentUserAssistantMessages", () => {
     await fs.writeFile(assistantSource, onlyAssistants, "utf8");
     expect(await call(assistantSource, assistantTarget)).toBe(0);
     await expectPathMissing(assistantTarget);
+  });
+
+  it("replays message-tool-only undelivered notices with the assistant turn they annotate", async () => {
+    const source = path.join(root, "prev.jsonl");
+    const target = path.join(root, "next.jsonl");
+    await fs.writeFile(
+      source,
+      [
+        messageEntry({ id: "u1", role: "user", content: "request" }),
+        messageEntry({ id: "a1", role: "assistant", content: "private final", parentId: "u1" }),
+        undeliveredFinalNoticeEntry({ id: "n1", parentId: "a1" }),
+        j({
+          type: "message",
+          id: "custom-other",
+          parentId: "n1",
+          timestamp: "2026-05-16T00:00:02.000Z",
+          message: { role: "custom", customType: "other", content: "skip" },
+        }),
+        messageEntry({ id: "u2", role: "user", content: "follow-up", parentId: "custom-other" }),
+        messageEntry({ id: "a2", role: "assistant", content: "answer", parentId: "u2" }),
+      ].join(""),
+      "utf8",
+    );
+
+    expect(await call(source, target)).toBe(5);
+    const records = await readJsonlRecords(target);
+    expect(records.slice(1).map((record) => record.message?.role)).toEqual([
+      "user",
+      "assistant",
+      "custom",
+      "user",
+      "assistant",
+    ]);
+    expect(records[3].message?.customType).toBe(MESSAGE_TOOL_ONLY_UNDELIVERED_FINAL_CUSTOM_TYPE);
+    expect(records[3].message?.content).toBe(MESSAGE_TOOL_ONLY_UNDELIVERED_FINAL_NOTICE);
+    expect(records.some((record) => record.id === "custom-other")).toBe(false);
   });
 
   it("skips header for pre-existing targets and aligns the tail to a user turn", async () => {
