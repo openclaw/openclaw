@@ -79,6 +79,7 @@ describe("exec inline eval detection", () => {
     expect(detectInterpreterInlineEvalArgv(["node", "script.js"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["node", "--evalish=console.log(1)"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["find", ".", "-execute", "id"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["ruby", "-EUTF-8", "script.rb"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["php", "-F", "filter.php"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["Rscript", "script.R"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["r2", "-e", "bin.cache=true", "program"])).toBeNull();

@@ -216,7 +216,11 @@ function createInlineEvalHit(
   };
 }
 
-function matchJoinedExactFlag(spec: InterpreterFlagSpec, lower: string): string | null {
+function matchJoinedExactFlag(
+  spec: InterpreterFlagSpec,
+  token: string,
+  lower: string,
+): string | null {
   for (const flag of spec.exactFlags) {
     if (flag.startsWith("--")) {
       const prefix = `${flag}=`;
@@ -225,8 +229,8 @@ function matchJoinedExactFlag(spec: InterpreterFlagSpec, lower: string): string 
       }
       continue;
     }
-    if (/^-[a-z]$/.test(flag) && lower.startsWith(flag) && lower.length > flag.length) {
-      return flag;
+    if (/^-[A-Za-z]$/.test(flag) && token.startsWith(flag) && token.length > flag.length) {
+      return normalizeLowercaseStringOrEmpty(flag);
     }
   }
   return null;
@@ -282,7 +286,7 @@ export function detectInterpreterInlineEvalArgv(
       if (spec.exactFlags.has(lower)) {
         return createInlineEvalHit(executable, argv, lower);
       }
-      const joinedExactFlag = matchJoinedExactFlag(spec, lower);
+      const joinedExactFlag = matchJoinedExactFlag(spec, token, lower);
       if (joinedExactFlag) {
         return createInlineEvalHit(executable, argv, joinedExactFlag);
       }
