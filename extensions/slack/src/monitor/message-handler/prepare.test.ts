@@ -187,6 +187,15 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared.ctxPayload.BodyForAgent).toContain(body);
   });
 
+  it("truncates inbound preview on a surrogate boundary", async () => {
+    const body = `${"a".repeat(159)}🐱`;
+    const prepared = await prepareWithDefaultCtx(createSlackMessage({ text: body }));
+
+    assertPrepared(prepared);
+    expect(prepared.preview).toBe("a".repeat(159));
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(prepared.preview)).toBe(false);
+  });
+
   it("logs inbound metadata without logging message content", async () => {
     const body = "confidential acquisition target: northstar; do not include this text in logs";
     shouldLogVerboseMock.mockReturnValue(true);
