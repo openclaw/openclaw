@@ -40,6 +40,10 @@ export function hasTopLevelShellControlOperator(raw: string): boolean {
     if (ch === "#" && wordStart) {
       return /[\r\n]/u.test(raw.slice(i + 1));
     }
+    if (ch === "&" && (raw[i - 1] === ">" || raw[i - 1] === "<")) {
+      wordStart = false;
+      continue;
+    }
     if (ch === ";" || ch === "&" || ch === "|" || ch === "\n" || ch === "\r") {
       return true;
     }

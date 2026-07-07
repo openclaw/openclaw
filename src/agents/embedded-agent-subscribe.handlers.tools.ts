@@ -460,6 +460,64 @@ function isOpenClawExecutable(token: string | undefined): boolean {
   return executable?.split(/[\\/]/).at(-1) === "openclaw";
 }
 
+function isOpenClawPackageSpec(token: string | undefined): boolean {
+  const packageSpec = normalizeOptionalLowercaseString(token);
+  return packageSpec?.startsWith("openclaw@") === true && packageSpec.length > "openclaw@".length;
+}
+
+function skipOpenClawPackageRunner(
+  tokens: string[],
+  startIndex: number,
+): { commandIndex: number; acceptsPackageSpec: boolean } {
+  let commandIndex = startIndex;
+  let acceptsPackageSpec = false;
+  let runner = normalizeOptionalLowercaseString(tokens[commandIndex]);
+  if (
+    runner === "corepack" &&
+    normalizeOptionalLowercaseString(tokens[commandIndex + 1]) === "pnpm"
+  ) {
+    commandIndex += 1;
+    runner = "pnpm";
+  }
+  if (runner === "pnpm") {
+    const subcommand = normalizeOptionalLowercaseString(tokens[commandIndex + 1]);
+    if (subcommand === "exec" || subcommand === "dlx") {
+      commandIndex += 2;
+      acceptsPackageSpec = subcommand === "dlx";
+    } else {
+      commandIndex = startIndex;
+    }
+  } else if (runner === "npx" || runner === "bunx") {
+    commandIndex += 1;
+    acceptsPackageSpec = true;
+    while (true) {
+      const option = normalizeOptionalLowercaseString(tokens[commandIndex]);
+      if (
+        option === "-y" ||
+        option === "--yes" ||
+        option === "--no-install" ||
+        option === "--bun"
+      ) {
+        commandIndex += 1;
+        continue;
+      }
+      if (option === "-p" || option === "--package") {
+        commandIndex += 2;
+        continue;
+      }
+      if (option?.startsWith("--package=") || option?.startsWith("--yes=")) {
+        commandIndex += 1;
+        continue;
+      }
+      break;
+    }
+  }
+  if (tokens[commandIndex] === "--") {
+    commandIndex += 1;
+  }
+  return { commandIndex, acceptsPackageSpec };
+}
+
 function isOpenClawCronAddShellCommand(args: unknown): boolean {
   const record = asOptionalObjectRecord(args);
   const command = readStringValue(record?.command) ?? readStringValue(record?.cmd);
@@ -479,15 +537,8 @@ function isOpenClawCronAddShellCommand(args: unknown): boolean {
   while (/^[A-Za-z_][A-Za-z0-9_]*=/u.test(tokens[commandIndex] ?? "")) {
     commandIndex += 1;
   }
-  const executable = normalizeOptionalLowercaseString(tokens[commandIndex]);
-  if (
-    executable === "corepack" &&
-    normalizeOptionalLowercaseString(tokens[commandIndex + 1]) === "pnpm"
-  ) {
-    commandIndex += 2;
-  } else if (executable === "pnpm" || executable === "npx" || executable === "bunx") {
-    commandIndex += 1;
-  }
+  const packageRunner = skipOpenClawPackageRunner(tokens, commandIndex);
+  commandIndex = packageRunner.commandIndex;
 
   let cliArgIndex = commandIndex + 1;
   for (
@@ -500,7 +551,8 @@ function isOpenClawCronAddShellCommand(args: unknown): boolean {
   const action = normalizeOptionalLowercaseString(tokens[cliArgIndex + 1]);
   const actionArgs = tokens.slice(cliArgIndex + 2);
   return (
-    isOpenClawExecutable(tokens[commandIndex]) &&
+    (isOpenClawExecutable(tokens[commandIndex]) ||
+      (packageRunner.acceptsPackageSpec && isOpenClawPackageSpec(tokens[commandIndex]))) &&
     normalizeOptionalLowercaseString(tokens[cliArgIndex]) === "cron" &&
     (action === "add" || action === "create") &&
     !actionArgs.some((token) => token === "-h" || token === "--help")
