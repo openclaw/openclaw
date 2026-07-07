@@ -181,7 +181,7 @@ function shouldPreferInlineLineValue(params: {
   return lineEntry.value.includes(":");
 }
 
-type ExtractedFrontmatterBlock = {
+export type ExtractedFrontmatterBlock = {
   block: string;
   body: string;
 };
@@ -195,7 +195,7 @@ function normalizeFrontmatterContent(content: string): string {
     .replace(/\r/g, "\n");
 }
 
-function extractFrontmatterBlock(content: string): ExtractedFrontmatterBlock | undefined {
+export function extractFrontmatterBlock(content: string): ExtractedFrontmatterBlock | undefined {
   const normalized = normalizeFrontmatterContent(content);
   if (!normalized.startsWith("---\n")) {
     return undefined;

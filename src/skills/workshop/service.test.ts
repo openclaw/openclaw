@@ -148,6 +148,27 @@ describe("skill workshop proposals", () => {
     expect((await inspectSkillProposal(proposal.record.id))?.record.status).toBe("applied");
   });
 
+  it("preserves dash-prefixed markdown text when applying proposals", async () => {
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Dash Prefix",
+      description: "Preserve dash-prefixed content",
+      content: "---not\nname: nope\n---not\nActual prompt body.\n",
+    });
+
+    expect(proposal.content).toContain("---not\nname: nope\n---not\nActual prompt body.");
+
+    const applied = await applySkillProposal({
+      workspaceDir,
+      proposalId: proposal.record.id,
+    });
+
+    await expect(fs.readFile(applied.targetSkillFile, "utf8")).resolves.toBe(
+      '---\nname: "dash-prefix"\ndescription: "Preserve dash-prefixed content"\n---\n\n---not\nname: nope\n---not\nActual prompt body.\n',
+    );
+  });
+
   it.runIf(process.platform !== "win32")(
     "applies updates through opted-in trusted workspace skills symlink targets",
     async () => {

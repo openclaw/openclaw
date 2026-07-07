@@ -1,4 +1,5 @@
 // Workshop frontmatter helpers parse generated skill metadata before saving drafts.
+import { extractFrontmatterBlock } from "../../../packages/markdown-core/src/frontmatter.js";
 import { parseFrontmatter } from "../loading/frontmatter.js";
 
 type ProposalFrontmatter = {
@@ -21,9 +22,9 @@ export function renderProposalMarkdown(params: {
   date?: string;
 }): string {
   const originalFrontmatter =
-    extractFrontmatterBlock(params.content) ??
+    extractFrontmatterBlock(params.content)?.block ??
     (params.fallbackFrontmatterContent
-      ? extractFrontmatterBlock(params.fallbackFrontmatterContent)
+      ? extractFrontmatterBlock(params.fallbackFrontmatterContent)?.block
       : undefined);
   const keptFrontmatter = originalFrontmatter
     ? filterFrontmatterBlock(originalFrontmatter, [
@@ -64,18 +65,13 @@ export function readProposalFrontmatter(content: string): ProposalFrontmatter | 
 
 export function stripProposalFrontmatterForSkill(content: string): string {
   const normalized = normalizeNewlines(content);
-  if (!normalized.startsWith("---")) {
-    return normalized.endsWith("\n") ? normalized : `${normalized}\n`;
-  }
-  const endIndex = normalized.indexOf("\n---", 3);
-  if (endIndex === -1) {
+  const extracted = extractFrontmatterBlock(normalized);
+  if (!extracted) {
     return normalized.endsWith("\n") ? normalized : `${normalized}\n`;
   }
 
-  const rawBlock = normalized.slice(4, endIndex);
-  const bodyStart = endIndex + "\n---".length;
-  const body = normalized.slice(bodyStart).replace(/^\n+/, "");
-  const keptLines = rawBlock
+  const body = extracted.body.replace(/^\n+/, "");
+  const keptLines = extracted.block
     .split("\n")
     .filter((line) => {
       const key = line.match(/^([\w-]+):/)?.[1]?.toLowerCase();
@@ -88,26 +84,9 @@ export function stripProposalFrontmatterForSkill(content: string): string {
   return result.endsWith("\n") ? result : `${result}\n`;
 }
 
-function extractFrontmatterBlock(content: string): string | undefined {
-  const normalized = normalizeNewlines(content);
-  if (!normalized.startsWith("---")) {
-    return undefined;
-  }
-  const endIndex = normalized.indexOf("\n---", 3);
-  if (endIndex === -1) {
-    return undefined;
-  }
-  return normalized.slice(4, endIndex);
-}
-
 function stripFrontmatterBlock(content: string): string {
   const normalized = normalizeNewlines(content);
-  const block = extractFrontmatterBlock(normalized);
-  if (block === undefined) {
-    return normalized;
-  }
-  const endIndex = normalized.indexOf("\n---", 3);
-  return normalized.slice(endIndex + "\n---".length).replace(/^\n+/, "");
+  return extractFrontmatterBlock(normalized)?.body.replace(/^\n+/, "") ?? normalized;
 }
 
 function filterFrontmatterBlock(block: string, keysToDrop: readonly string[]): string {
