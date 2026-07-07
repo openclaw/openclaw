@@ -140,14 +140,14 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
     vi.clearAllMocks();
   });
 
-  it("fetches $value endpoint when contentBytes is null but item.id exists", async () => {
+  it("fetches hosted bytes from the documented $value endpoint", async () => {
     const imageBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]); // PNG magic bytes
 
     const fetchCalls: string[] = [];
 
     mockGraphMediaFetch({
       messageId: "msg-1",
-      hostedContents: [{ id: "hosted-123", contentType: "image/png", contentBytes: null }],
+      hostedContents: [{ id: "hosted-123", contentType: "image/png" }],
       valueResponses: {
         "/hostedContents/hosted-123/$value": mockBinaryResponse(imageBytes),
       },
@@ -168,10 +168,10 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
     expect(result.hostedCount).toBe(1);
   });
 
-  it("skips hosted content when contentBytes is null and id is missing", async () => {
+  it("skips hosted content when the list item has no id", async () => {
     mockGraphMediaFetch({
       messageId: "msg-2",
-      hostedContents: [{ contentType: "image/png", contentBytes: null }],
+      hostedContents: [{ contentType: "image/png" }],
     });
 
     const result = await downloadMSTeamsGraphMedia({
@@ -180,7 +180,7 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
       maxBytes: 10 * 1024 * 1024,
     });
 
-    // No media because there's no id to fetch $value from and no contentBytes
+    // No media because there is no id for the required $value fetch.
     expect(result.media).toHaveLength(0);
   });
 
@@ -189,7 +189,7 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
 
     mockGraphMediaFetch({
       messageId: "msg-cl",
-      hostedContents: [{ id: "hosted-big", contentType: "image/png", contentBytes: null }],
+      hostedContents: [{ id: "hosted-big", contentType: "image/png" }],
       valueResponses: {
         "/hostedContents/hosted-big/$value": new Response(
           Buffer.from(new Uint8Array([0x89, 0x50, 0x4e, 0x47])) as BodyInit,
@@ -218,7 +218,7 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
   it("skips hosted content when the Graph collection response exceeds the byte cap", async () => {
     const fetchCalls: string[] = [];
     const hugeBody = oversizedGraphJson({
-      value: [{ id: "hosted-huge", contentType: "image/png", contentBytes: null }],
+      value: [{ id: "hosted-huge", contentType: "image/png" }],
     });
     const hugeResponse = new Response(hugeBody, {
       status: 200,
@@ -244,13 +244,17 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
     expect(hugeResponse.bodyUsed).toBe(true);
   });
 
-  it("uses inline contentBytes when available instead of $value", async () => {
+  it("ignores unexpected inline bytes and still fetches bounded $value", async () => {
     const fetchCalls: string[] = [];
     const base64Png = Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString("base64");
+    const imageBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
 
     mockGraphMediaFetch({
       messageId: "msg-3",
       hostedContents: [{ id: "hosted-456", contentType: "image/png", contentBytes: base64Png }],
+      valueResponses: {
+        "/hostedContents/hosted-456/$value": mockBinaryResponse(imageBytes),
+      },
       fetchCalls,
     });
 
@@ -260,9 +264,9 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
       maxBytes: 10 * 1024 * 1024,
     });
 
-    // Should NOT have fetched $value since contentBytes was available
-    const valueCall = fetchCalls.find((u) => u.includes("/$value"));
-    expect(valueCall).toBeUndefined();
+    expect(fetchCalls).toContain(
+      "https://graph.microsoft.com/v1.0/chats/c/messages/msg-3/hostedContents/hosted-456/$value",
+    );
     expect(result.media.length).toBeGreaterThan(0);
   });
 
