@@ -38,7 +38,13 @@ import {
 import { detectBinary } from "../infra/detect-binary.js";
 import { movePathToTrash } from "../infra/fs-safe.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { resolveConfigDir, shortenHomeInString, shortenHomePath, sleep } from "../utils.js";
+import {
+  resolveConfigDir,
+  shortenHomeInString,
+  shortenHomePath,
+  sleep,
+  truncateUtf16Safe,
+} from "../utils.js";
 import { VERSION } from "../version.js";
 import type { NodeManagerChoice, OnboardMode, ResetScope } from "./onboard-types.js";
 export { randomToken } from "./random-token.js";
@@ -410,7 +416,7 @@ function summarizeError(err: unknown): string {
       .split("\n")
       .map((s) => s.trim())
       .find(Boolean) ?? raw;
-  return line.length > 120 ? `${line.slice(0, 119)}…` : line;
+  return line.length > 120 ? `${truncateUtf16Safe(line, 119)}…` : line;
 }
 
 /** Default workspace path shown by onboarding prompts. */

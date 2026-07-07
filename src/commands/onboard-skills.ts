@@ -17,6 +17,7 @@ import {
   type SkillInstallReadiness,
   type SkillInstallSkipReason,
 } from "../skills/lifecycle/install.js";
+import { truncateUtf16Safe } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { detectBinary } from "./onboard-helpers.js";
@@ -47,7 +48,7 @@ function summarizeInstallFailure(message: string): string | undefined {
     return undefined;
   }
   const maxLen = 140;
-  return cleaned.length > maxLen ? `${cleaned.slice(0, maxLen - 1)}…` : cleaned;
+  return cleaned.length > maxLen ? `${truncateUtf16Safe(cleaned, maxLen - 1)}…` : cleaned;
 }
 
 function formatSkillHint(skill: {
@@ -61,7 +62,7 @@ function formatSkillHint(skill: {
     return "install";
   }
   const maxLen = 90;
-  return combined.length > maxLen ? `${combined.slice(0, maxLen - 1)}…` : combined;
+  return combined.length > maxLen ? `${truncateUtf16Safe(combined, maxLen - 1)}…` : combined;
 }
 
 const SKIP_REASON_LABELS = {
