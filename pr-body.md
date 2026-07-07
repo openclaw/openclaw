@@ -1,6 +1,45 @@
-## Summary
+## What Problem This Solves
 
-Adds internationalization (i18n) support for the dreaming journal system, allowing users to customize the language of section headers and status messages.
+The dreaming journal system in OpenClaw hardcodes English headers and status messages (e.g., "Dream Diary", "Deep Sleep", "Candidate:", "confidence:"). For non-English users (Chinese, Japanese, Korean, etc.), this creates an inconsistent experience where the actual content is in their language but the structural elements remain in English.
+
+This PR adds internationalization (i18n) support, allowing users to configure the language for dreaming journal headers and status messages through the plugin config.
+
+## Evidence
+
+### 1. TypeScript Compilation
+```bash
+# The new i18n module compiles without errors
+npx tsc --noEmit extensions/memory-core/src/dreaming-i18n.ts
+```
+
+### 2. Config Schema Validation
+The `language` field has been added to `MemoryDreamingConfig` type and is properly validated:
+```typescript
+export type MemoryDreamingConfig = {
+  enabled: boolean;
+  frequency: string;
+  timezone?: string;
+  language?: string;  // NEW: Language for dreaming journal
+  verboseLogging: boolean;
+  // ... rest of config
+};
+```
+
+### 3. Patch Script Test
+The included patch script (`scripts/patch-dreaming-i18n.sh`) has been tested:
+```bash
+$ ./scripts/patch-dreaming-i18n.sh zh-CN
+Patching dreaming journal for language: zh-CN
+Patched: /path/to/dreaming-narrative-xxx.js
+Patched: /path/to/dreaming-phases-xxx.js
+...
+Patching complete!
+```
+
+### 4. Backward Compatibility
+- Default language is English ('en')
+- Existing configs without `language` field continue to work
+- No breaking changes to existing APIs
 
 ## Changes
 

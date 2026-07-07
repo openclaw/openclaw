@@ -5,7 +5,7 @@
  * To add a new language, create a new translations object and register it.
  */
 
-export type DreamingLanguage = 'en' | 'zh-CN' | 'zh-TW' | 'ja' | 'ko' | string;
+export type DreamingLanguage = string;
 
 export interface DreamingTranslations {
   // Section headers
@@ -151,11 +151,11 @@ const ko: DreamingTranslations = {
 
 // Registry of available translations
 const translationsRegistry: Record<string, DreamingTranslations> = {
-  'en': en,
+  en,
   'zh-CN': zhCN,
   'zh-TW': zhTW,
-  'ja': ja,
-  'ko': ko,
+  ja,
+  ko,
 };
 
 /**
