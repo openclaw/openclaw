@@ -482,7 +482,7 @@ export const ja_JP: TranslationMap = {
     more: "その他",
     customize: "サイドバーをカスタマイズ",
     customizeReset: "デフォルトに戻す",
-    backToOpenClaw: "Back to OpenClaw",
+    backToOpenClaw: "OpenClawに戻る",
   },
   terminal: {
     title: "Terminal",

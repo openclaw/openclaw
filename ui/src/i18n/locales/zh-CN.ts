@@ -473,7 +473,7 @@ export const zh_CN: TranslationMap = {
     more: "更多",
     customize: "自定义侧边栏",
     customizeReset: "恢复默认设置",
-    backToOpenClaw: "Back to OpenClaw",
+    backToOpenClaw: "返回 OpenClaw",
   },
   terminal: {
     title: "Terminal",

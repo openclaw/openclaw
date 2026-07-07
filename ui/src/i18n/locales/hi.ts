@@ -476,7 +476,7 @@ export const hi: TranslationMap = {
     more: "अधिक",
     customize: "साइडबार कस्टमाइज़ करें",
     customizeReset: "डिफ़ॉल्ट पर रीसेट करें",
-    backToOpenClaw: "Back to OpenClaw",
+    backToOpenClaw: "OpenClaw पर वापस जाएँ",
   },
   terminal: {
     title: "टर्मिनल",

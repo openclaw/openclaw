@@ -1,13 +1,11 @@
 {
-  "fallbackKeys": [
-    "nav.backToOpenClaw"
-  ],
+  "fallbackKeys": [],
   "generatedAt": "2026-07-07T13:19:24.422Z",
   "locale": "id",
   "model": "claude-opus-4-8",
   "provider": "anthropic",
   "sourceHash": "1865cabe5f5dc9df41b08fe5a60cae60edc68a89566cb50e805eec5a9d264e3e",
   "totalKeys": 1670,
-  "translatedKeys": 1669,
+  "translatedKeys": 1670,
   "workflow": 1
 }

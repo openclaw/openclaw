@@ -473,7 +473,7 @@ export const zh_TW: TranslationMap = {
     more: "更多",
     customize: "自訂側邊欄",
     customizeReset: "重設為預設值",
-    backToOpenClaw: "Back to OpenClaw",
+    backToOpenClaw: "返回 OpenClaw",
   },
   terminal: {
     title: "Terminal",

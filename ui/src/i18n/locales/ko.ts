@@ -475,7 +475,7 @@ export const ko: TranslationMap = {
     more: "더 보기",
     customize: "사이드바 사용자 지정",
     customizeReset: "기본값으로 재설정",
-    backToOpenClaw: "Back to OpenClaw",
+    backToOpenClaw: "OpenClaw로 돌아가기",
   },
   terminal: {
     title: "Terminal",

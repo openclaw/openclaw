@@ -475,7 +475,7 @@ export const ar: TranslationMap = {
     more: "المزيد",
     customize: "تخصيص الشريط الجانبي",
     customizeReset: "إعادة التعيين إلى الإعدادات الافتراضية",
-    backToOpenClaw: "Back to OpenClaw",
+    backToOpenClaw: "العودة إلى OpenClaw",
   },
   terminal: {
     title: "Terminal",

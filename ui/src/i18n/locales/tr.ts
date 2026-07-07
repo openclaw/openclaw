@@ -479,7 +479,7 @@ export const tr: TranslationMap = {
     more: "Daha fazla",
     customize: "Kenar çubuğunu özelleştir",
     customizeReset: "Varsayılanlara sıfırla",
-    backToOpenClaw: "Back to OpenClaw",
+    backToOpenClaw: "OpenClaw'a dön",
   },
   terminal: {
     title: "Terminal",

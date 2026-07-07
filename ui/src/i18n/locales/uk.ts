@@ -477,7 +477,7 @@ export const uk: TranslationMap = {
     more: "Більше",
     customize: "Налаштувати бічну панель",
     customizeReset: "Скинути до типових налаштувань",
-    backToOpenClaw: "Back to OpenClaw",
+    backToOpenClaw: "Повернутися до OpenClaw",
   },
   terminal: {
     title: "Terminal",

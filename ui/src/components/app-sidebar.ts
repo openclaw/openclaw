@@ -15,7 +15,6 @@ import {
   SETTINGS_NAVIGATION_GROUPS,
   type SidebarNavRoute,
   sidebarMoreRoutes,
-  subtitleForRoute,
   titleForRoute,
 } from "../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";

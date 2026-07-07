@@ -474,7 +474,7 @@ export const th: TranslationMap = {
     more: "เพิ่มเติม",
     customize: "ปรับแต่งแถบด้านข้าง",
     customizeReset: "รีเซ็ตเป็นค่าเริ่มต้น",
-    backToOpenClaw: "Back to OpenClaw",
+    backToOpenClaw: "กลับไปที่ OpenClaw",
   },
   terminal: {
     title: "Terminal",

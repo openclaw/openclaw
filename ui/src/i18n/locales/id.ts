@@ -477,7 +477,7 @@ export const id: TranslationMap = {
     more: "Lainnya",
     customize: "Sesuaikan bilah samping",
     customizeReset: "Atur ulang ke default",
-    backToOpenClaw: "Back to OpenClaw",
+    backToOpenClaw: "Kembali ke OpenClaw",
   },
   terminal: {
     title: "Terminal",

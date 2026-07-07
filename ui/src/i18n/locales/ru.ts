@@ -480,7 +480,7 @@ export const ru: TranslationMap = {
     more: "Ещё",
     customize: "Настроить боковую панель",
     customizeReset: "Сбросить настройки",
-    backToOpenClaw: "Back to OpenClaw",
+    backToOpenClaw: "Вернуться к OpenClaw",
   },
   terminal: {
     title: "Терминал",

@@ -477,7 +477,7 @@ export const fa: TranslationMap = {
     more: "بیشتر",
     customize: "سفارشی‌سازی نوار کناری",
     customizeReset: "بازنشانی به پیش‌فرض‌ها",
-    backToOpenClaw: "Back to OpenClaw",
+    backToOpenClaw: "بازگشت به OpenClaw",
   },
   terminal: {
     title: "Terminal",

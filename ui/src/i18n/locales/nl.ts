@@ -479,7 +479,7 @@ export const nl: TranslationMap = {
     more: "Meer",
     customize: "Zijbalk aanpassen",
     customizeReset: "Standaardinstellingen herstellen",
-    backToOpenClaw: "Back to OpenClaw",
+    backToOpenClaw: "Terug naar OpenClaw",
   },
   terminal: {
     title: "Terminal",

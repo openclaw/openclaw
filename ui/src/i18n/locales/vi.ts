@@ -476,7 +476,7 @@ export const vi: TranslationMap = {
     more: "Thêm",
     customize: "Tùy chỉnh thanh bên",
     customizeReset: "Đặt lại về mặc định",
-    backToOpenClaw: "Back to OpenClaw",
+    backToOpenClaw: "Quay lại OpenClaw",
   },
   terminal: {
     title: "Terminal",

@@ -481,7 +481,7 @@ export const it: TranslationMap = {
     more: "Altro",
     customize: "Personalizza barra laterale",
     customizeReset: "Ripristina impostazioni predefinite",
-    backToOpenClaw: "Back to OpenClaw",
+    backToOpenClaw: "Torna a OpenClaw",
   },
   terminal: {
     title: "Terminal",

@@ -480,7 +480,7 @@ export const de: TranslationMap = {
     more: "Mehr",
     customize: "Seitenleiste anpassen",
     customizeReset: "Auf Standardwerte zurücksetzen",
-    backToOpenClaw: "Back to OpenClaw",
+    backToOpenClaw: "Zurück zu OpenClaw",
   },
   terminal: {
     title: "Terminal",
