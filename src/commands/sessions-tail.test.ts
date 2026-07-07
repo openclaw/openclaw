@@ -7,6 +7,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import {
   resolveTrajectoryFilePath,
   resolveTrajectoryPointerFilePath,
+  TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
 } from "../trajectory/paths.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
 import { sessionsTailCommand, setSessionsTailFollowIntervalMsForTests } from "./sessions-tail.js";
@@ -495,10 +496,14 @@ describe("sessionsTailCommand", () => {
 
   it("rejects oversized trajectory snapshots", async () => {
     const runtime = makeRuntime();
-    fs.writeFileSync(trajectoryPath, Buffer.alloc(16 * 1024 * 1024 + 1, "x"), "utf8");
+    fs.writeFileSync(
+      trajectoryPath,
+      Buffer.alloc(TRAJECTORY_RUNTIME_FILE_MAX_BYTES + 1, "x"),
+      "utf8",
+    );
 
     await expect(sessionsTailCommand({ store: storePath, sessionKey }, runtime)).rejects.toThrow(
-      /exceeds limit of 16777216 bytes/,
+      /File exceeds 52428800 bytes/,
     );
   });
 });

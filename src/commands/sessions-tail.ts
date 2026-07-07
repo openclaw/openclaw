@@ -7,7 +7,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { readRegularFileSync } from "openclaw/plugin-sdk/security-runtime";
 import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveSessionFilePath } from "../config/sessions/paths.js";
@@ -16,11 +15,13 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
+import { readRegularFileSync } from "../infra/regular-file.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   resolveTrajectoryFilePath,
   resolveTrajectoryPointerFilePath,
+  TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
 } from "../trajectory/paths.js";
 import {
   isRegularNonSymlinkFile,
@@ -278,17 +279,14 @@ function formatProgressLine(event: TrajectoryEvent): string {
   return [formatTimestamp(event.ts), typeLabel, sessionLabel, preview].join(" ").trimEnd();
 }
 
-// Trajectory snapshots are read to render recent events; 16 MiB is generous
-// headroom for busy sessions while preventing a rotated/runaway file from OOMing
-// the tail command.
-const TRAJECTORY_SNAPSHOT_MAX_BYTES = 16 * 1024 * 1024;
-
 function readTrajectorySnapshot(filePath: string): TrajectorySnapshot {
   try {
     const stat = fs.statSync(filePath);
+    // Use the runtime trajectory limit so tail accepts any file the runtime
+    // would have written and rejects anything larger.
     const { buffer } = readRegularFileSync({
       filePath,
-      maxBytes: TRAJECTORY_SNAPSHOT_MAX_BYTES,
+      maxBytes: TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
     });
     const text = buffer.toString("utf8");
     return {
