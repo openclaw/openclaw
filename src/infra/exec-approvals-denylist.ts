@@ -94,7 +94,7 @@ export function collectExecDenylistErrors(raw: unknown, path: string): string[] 
   raw.forEach((item, index) => {
     const at = `${path}[${index}]`;
     if (!item || typeof item !== "object" || Array.isArray(item)) {
-      errors.push(`${at} must be an object with a non-empty \"pattern\"`);
+      errors.push(`${at} must be an object with a non-empty "pattern"`);
       return;
     }
     const record = item as Record<string, unknown>;
