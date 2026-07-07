@@ -1807,9 +1807,11 @@ async function runWithModelFallbackInternal<T>(
 
       // LiveSessionModelSwitchError during fallback may point at a later
       // candidate that is already the active live-session selection.  Jump
-      // there directly.  Stale same/earlier targets remain a known failover
-      // so the outer runner cannot loop on the conflicting model, but they
-      // are not provider overloads.
+      // there directly.  Otherwise re-throw so the outer retry loop
+      // (agent-command.ts / agent-runner-execution.ts) can restart the
+      // turn against the newly-selected model.  The outer loop has its
+      // own bounded retry count (MAX_LIVE_SWITCH_RETRIES), so this cannot
+      // loop forever.
       if (err instanceof LiveSessionModelSwitchError) {
         const liveSwitchTargetIndex = findLiveSessionModelSwitchRedirectIndex({
           error: err,
@@ -1821,32 +1823,7 @@ async function runWithModelFallbackInternal<T>(
           continue;
         }
 
-        const switchMsg = err.message;
-        const switchNormalized = new FailoverError(switchMsg, {
-          reason: "unknown",
-          provider: candidate.provider,
-          model: candidate.model,
-          sessionId: params.sessionId,
-          lane: params.lane,
-        });
-        lastError = switchNormalized;
-        await observeFailedCandidate({
-          attempts,
-          candidate,
-          error: switchNormalized,
-          runId: params.runId,
-          sessionId: params.sessionId,
-          lane: params.lane,
-          requestedProvider: params.provider,
-          requestedModel: params.model,
-          attempt: i + 1,
-          total: candidates.length,
-          nextCandidate: candidates[i + 1],
-          isPrimary,
-          requestedModelMatched: requestedModel,
-          fallbackConfigured: hasFallbackCandidates,
-        });
-        continue;
+        throw err;
       }
 
       // Even unrecognized errors should not abort the fallback loop when
