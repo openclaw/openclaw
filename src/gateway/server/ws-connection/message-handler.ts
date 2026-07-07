@@ -108,7 +108,11 @@ import {
 } from "../../../utils/message-channel.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
 import { verifyAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
-import { AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING, type AuthRateLimiter } from "../../auth-rate-limit.js";
+import {
+  AUTH_RATE_LIMIT_SCOPE_DEVICE_SIGNATURE,
+  AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING,
+  type AuthRateLimiter,
+} from "../../auth-rate-limit.js";
 import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
 import { hasForwardedRequestHeaders, isLocalDirectRequest } from "../../auth.js";
 import { listControlUiPluginTabs } from "../../control-ui-plugin-tabs.js";
@@ -1158,6 +1162,41 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             });
             close(1008, message);
           };
+          // Per-IP gate on the pre-auth crypto path. deriveDeviceIdFromPublicKey
+          // and resolveDeviceSignaturePayloadVersion both call createPublicKey
+          // and crypto.verify, which an unauthenticated attacker can otherwise
+          // trigger on every handshake. The check runs *before* any crypto so
+          // a locked-out IP cannot pay the key-parse cost via PEM input. The
+          // attempt is recorded as a failure pessimistically before crypto
+          // runs; reset only fires after resolveConnectAuthDecision confirms
+          // the full handshake is authorized, so an attacker with their own
+          // keypair producing valid self-signatures still consumes the bucket.
+          if (authRateLimiter) {
+            const signatureRateCheck = authRateLimiter.check(
+              browserRateLimitClientIp,
+              AUTH_RATE_LIMIT_SCOPE_DEVICE_SIGNATURE,
+            );
+            if (!signatureRateCheck.allowed) {
+              // Lockouts here are auth rate limits, not device-auth failures:
+              // surface the canonical `rate_limited` contract (AUTH_RATE_LIMITED
+              // detail code, wait_then_retry guidance, high-severity security
+              // event) so clients, telemetry, and retry handling see the same
+              // shape as bootstrap/device-token lockouts instead of a
+              // signature-scope `device-auth-invalid` variant. The crypto bound
+              // still holds: this returns before any createPublicKey/verify work.
+              rejectUnauthorized({
+                ok: false,
+                reason: "rate_limited",
+                rateLimited: true,
+                retryAfterMs: signatureRateCheck.retryAfterMs,
+              });
+              return;
+            }
+            authRateLimiter.recordFailure(
+              browserRateLimitClientIp,
+              AUTH_RATE_LIMIT_SCOPE_DEVICE_SIGNATURE,
+            );
+          }
           const derivedId = deriveDeviceIdFromPublicKey(device.publicKey);
           if (!derivedId || derivedId !== device.id) {
             rejectDeviceAuthInvalid("device-id-mismatch", "device identity mismatch");
@@ -1271,6 +1310,9 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         if (!authOk) {
           rejectUnauthorized(authResult);
           return;
+        }
+        if (device) {
+          authRateLimiter?.reset(browserRateLimitClientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_SIGNATURE);
         }
         const usesSharedGatewayAuth =
           authMethod === "token" || authMethod === "password" || authMethod === "trusted-proxy";
