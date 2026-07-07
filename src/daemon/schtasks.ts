@@ -536,6 +536,7 @@ async function launchFallbackTaskScript(
       stdio: "ignore",
       windowsHide: true,
     });
+    child.on("error", () => {});
     child.unref();
     return;
   }
@@ -545,6 +546,7 @@ async function launchFallbackTaskScript(
     stdio: "ignore",
     windowsHide: true,
   });
+  child.on("error", () => {});
   child.unref();
 }
 
