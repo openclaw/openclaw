@@ -1291,14 +1291,15 @@ function renderArchiveCardAction(
     icon: archived ? icons.archiveRestore : icons.archive,
     iconOnly: options.iconOnly,
     disabled: busy,
-    onClick: () =>
-      archiveWorkboardCard({
+    onClick: () => {
+      void archiveWorkboardCard({
         host: props.host,
         client: props.client,
         cardId: card.id,
         archived: !archived,
         requestUpdate: props.onRequestUpdate,
-      }),
+      });
+    },
   });
 }
 
@@ -1329,13 +1330,14 @@ function renderStopCardAction(
     icon: icons.stop,
     iconOnly: options.iconOnly,
     disabled: busy || !props.connected,
-    onClick: () =>
-      stopWorkboardCard({
+    onClick: () => {
+      void stopWorkboardCard({
         host: props.host,
         client: props.client,
         card,
         requestUpdate: props.onRequestUpdate,
-      }),
+      });
+    },
   });
 }
 
@@ -1351,13 +1353,14 @@ function renderDeleteCardAction(
     iconOnly: options.iconOnly,
     className: "workboard-card__delete",
     disabled: busy,
-    onClick: () =>
-      deleteWorkboardCard({
+    onClick: () => {
+      void deleteWorkboardCard({
         host: props.host,
         client: props.client,
         cardId: card.id,
         requestUpdate: props.onRequestUpdate,
-      }),
+      });
+    },
   });
 }
 
