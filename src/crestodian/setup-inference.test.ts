@@ -14,6 +14,7 @@ import {
   activateSetupInference,
   detectSetupInference,
   listSetupInferenceManualProviders,
+  verifySetupInference,
 } from "./setup-inference.js";
 
 vi.mock("../config/config.js", () => ({
@@ -580,5 +581,60 @@ describe("activateSetupInference", () => {
       agentHarnessId: "codex",
       provider: "openai",
     });
+  });
+});
+
+describe("verifySetupInference", () => {
+  function configuredSnapshot() {
+    return {
+      exists: true,
+      valid: true,
+      config: {
+        agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+      },
+    };
+  }
+
+  it("returns a passing live check without persisting setup", async () => {
+    const applySetup = vi.fn();
+    const updateConfig = vi.fn();
+    const result = await verifySetupInference({
+      runtime,
+      deps: {
+        readConfigFileSnapshot: vi.fn(async () => configuredSnapshot()) as never,
+        runEmbeddedAgent: vi.fn(async () => ({
+          meta: { finalAssistantVisibleText: "OK" },
+        })) as never,
+        applySetup: applySetup as never,
+        updateConfig: updateConfig as never,
+        createTempDir: makeTempDir,
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, modelRef: "openai/gpt-5.5" });
+    expect(applySetup).not.toHaveBeenCalled();
+    expect(updateConfig).not.toHaveBeenCalled();
+  });
+
+  it("maps live-check failures without writing config or auth", async () => {
+    const applySetup = vi.fn();
+    const updateConfig = vi.fn();
+    const result = await verifySetupInference({
+      runtime,
+      timeoutMs: 50,
+      deps: {
+        readConfigFileSnapshot: vi.fn(async () => configuredSnapshot()) as never,
+        runEmbeddedAgent: vi.fn(async () => {
+          throw new Error("401 invalid_api_key");
+        }) as never,
+        applySetup: applySetup as never,
+        updateConfig: updateConfig as never,
+        createTempDir: makeTempDir,
+      },
+    });
+
+    expect(result).toMatchObject({ ok: false, status: "auth" });
+    expect(applySetup).not.toHaveBeenCalled();
+    expect(updateConfig).not.toHaveBeenCalled();
   });
 });

@@ -15,7 +15,7 @@ Crestodian is OpenClaw's local setup, repair, and configuration helper. It stays
 
 Running `openclaw` with no subcommand routes based on config state:
 
-- Config missing, or exists with no authored settings (empty, or only `$schema`/`meta` keys): starts classic onboarding.
+- Config missing, or exists with no authored settings (empty, or only `$schema`/`meta` keys): starts guided onboarding with live AI verification.
 - Config exists but fails validation: starts Crestodian.
 - Config exists and is valid: opens the normal agent TUI (against a reachable configured Gateway, or locally if none is reachable). Use `/crestodian` inside the TUI, or run `openclaw crestodian` directly, to reach Crestodian.
 
@@ -23,7 +23,9 @@ Running `openclaw crestodian` always starts Crestodian explicitly, regardless of
 
 Noninteractive bare `openclaw` (no TTY) exits with a short message instead of printing root help: it points to non-interactive onboarding on a fresh install, to `openclaw crestodian --message "status"` when config is invalid, or to `openclaw agent --local ...` when config is valid.
 
-`openclaw onboard --modern` starts Crestodian as the modern onboarding preview. Plain `openclaw onboard` keeps classic onboarding.
+`openclaw onboard --modern` starts Crestodian directly. Plain `openclaw onboard`
+starts guided onboarding; `openclaw onboard --classic` opens the full
+step-by-step wizard.
 
 ## What Crestodian shows
 

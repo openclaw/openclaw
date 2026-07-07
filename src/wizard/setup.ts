@@ -44,6 +44,68 @@ function hasConfiguredDefaultModel(config: OpenClawConfig): boolean {
   return resolveAgentModelPrimaryValue(config.agents?.defaults?.model) !== undefined;
 }
 
+async function offerLiveModelVerification(params: {
+  config: OpenClawConfig;
+  opts: OnboardOptions;
+  prompter: WizardPrompter;
+  runtime: RuntimeEnv;
+  workspaceDir: string;
+  writeConfig: (config: OpenClawConfig) => Promise<OpenClawConfig>;
+}): Promise<OpenClawConfig> {
+  const shouldTest = await params.prompter.confirm({
+    message: t("wizard.setup.testAiAccess"),
+    initialValue: true,
+  });
+  if (!shouldTest) {
+    return params.config;
+  }
+
+  const { verifySetupInference } = await import("../crestodian/setup-inference.js");
+  const verify = async () => {
+    const progress = params.prompter.progress(t("wizard.setup.testAiProgress"));
+    const result = await verifySetupInference({ runtime: params.runtime });
+    progress.stop();
+    if (result.ok) {
+      await params.prompter.note(
+        t("wizard.setup.testAiSuccess", { seconds: (result.latencyMs / 1000).toFixed(1) }),
+        t("wizard.setup.testAiTitle"),
+      );
+    } else {
+      await params.prompter.note(
+        t("wizard.setup.testAiFailure", { reason: result.error }),
+        t("wizard.setup.testAiTitle"),
+      );
+    }
+    return result;
+  };
+
+  const firstResult = await verify();
+  if (firstResult.ok) {
+    return params.config;
+  }
+  const action = await params.prompter.select({
+    message: t("wizard.setup.testAiFailureChoice"),
+    options: [
+      { value: "fix", label: t("wizard.setup.testAiFix") },
+      { value: "continue", label: t("wizard.setup.testAiContinue") },
+    ],
+  });
+  if (action === "continue") {
+    return params.config;
+  }
+
+  const fixedConfig = await runSetupModelAuthStep({
+    config: params.config,
+    opts: { ...params.opts, authChoice: undefined },
+    prompter: params.prompter,
+    runtime: params.runtime,
+    workspaceDir: params.workspaceDir,
+  });
+  const persistedConfig = await params.writeConfig(fixedConfig);
+  await verify();
+  return persistedConfig;
+}
+
 function isSetupImportFlowChoice(flow: SetupFlowChoice): boolean {
   return flow === "import" || flow.startsWith("import:");
 }
@@ -217,7 +279,8 @@ async function runSetupWizardOnce(
     );
   }
 
-  if (opts.importFrom || isSetupImportFlowChoice(flow)) {
+  const usedImportFlow = Boolean(opts.importFrom || isSetupImportFlowChoice(flow));
+  if (usedImportFlow) {
     const importFrom = opts.importFrom ?? resolveImportProviderFromFlowChoice(flow);
     prompter.disableBackNavigation?.();
     await runSetupMigrationImport({
@@ -474,6 +537,23 @@ async function runSetupWizardOnce(
   nextConfig = await writeSetupConfigFile(nextConfig, {
     allowConfigSizeDrop: false,
   });
+
+  if (
+    opts.nonInteractive !== true &&
+    opts.authChoice !== "skip" &&
+    !usedImportFlow &&
+    hasConfiguredDefaultModel(nextConfig)
+  ) {
+    nextConfig = await offerLiveModelVerification({
+      config: nextConfig,
+      opts,
+      prompter,
+      runtime,
+      workspaceDir,
+      writeConfig: async (config) =>
+        await writeSetupConfigFile(config, { allowConfigSizeDrop: false }),
+    });
+  }
 
   prompter.disableBackNavigation?.();
   if (opts.skipChannels ?? opts.skipProviders) {
