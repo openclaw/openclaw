@@ -394,6 +394,7 @@ export function createOpenClawCodingTools(options?: {
   agentAccountId?: string;
   messageTo?: string;
   messageThreadId?: string | number;
+  messageThreadParentId?: string | number;
   sandbox?: SandboxContext | null;
   sessionKey?: string;
   /**
@@ -989,6 +990,7 @@ export function createOpenClawCodingTools(options?: {
           agentAccountId: options?.agentAccountId,
           agentTo: options?.messageTo,
           agentThreadId: options?.messageThreadId,
+          agentThreadParentId: options?.messageThreadParentId,
           agentGroupId: options?.groupId ?? null,
           agentGroupChannel: options?.groupChannel ?? null,
           agentGroupSpace: options?.groupSpace ?? null,

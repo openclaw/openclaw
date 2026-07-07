@@ -83,6 +83,8 @@ export type RunEmbeddedAgentParams = {
   messageTo?: string;
   /** Thread/topic identifier for routing replies to the originating thread. */
   messageThreadId?: string | number;
+  /** Parent conversation for providers whose thread ids are nested under a channel/topic. */
+  messageThreadParentId?: string | number;
   /** Group id for channel-level tool policy resolution. */
   groupId?: string | null;
   /** Group channel label (e.g. #general) for channel-level tool policy resolution. */

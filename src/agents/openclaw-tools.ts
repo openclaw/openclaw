@@ -102,6 +102,8 @@ export function createOpenClawTools(
     agentTo?: string;
     /** Thread/topic identifier for routing replies to the originating thread. */
     agentThreadId?: string | number;
+    /** Parent conversation for providers whose thread ids are nested under a channel/topic. */
+    agentThreadParentId?: string | number;
     agentDir?: string;
     sandboxRoot?: string;
     sandboxContainerWorkdir?: string;
@@ -533,6 +535,7 @@ export function createOpenClawTools(
             agentAccountId: options?.agentAccountId,
             agentTo: options?.agentTo,
             agentThreadId: options?.agentThreadId,
+            agentThreadParentId: options?.agentThreadParentId,
             agentGroupId: options?.agentGroupId,
             agentGroupChannel: options?.agentGroupChannel,
             agentGroupSpace: options?.agentGroupSpace,

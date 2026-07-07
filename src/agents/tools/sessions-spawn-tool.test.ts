@@ -309,6 +309,7 @@ describe("sessions_spawn tool", () => {
       agentAccountId: "default",
       agentTo: "channel:123",
       agentThreadId: "456",
+      agentThreadParentId: "123",
     });
 
     const result = await tool.execute("call-1", {
@@ -561,6 +562,7 @@ describe("sessions_spawn tool", () => {
       agentAccountId: "default",
       agentTo: "channel:123",
       agentThreadId: "456",
+      agentThreadParentId: "123",
     });
 
     const result = await tool.execute("call-2", {
@@ -589,6 +591,7 @@ describe("sessions_spawn tool", () => {
     const spawnContext = mockCallArg(hoisted.spawnAcpDirectMock, 0, 1, "spawnAcpDirect");
     expect(spawnContext.agentSessionKey).toBe("agent:main:main");
     expect(spawnContext.requesterAgentIdOverride).toBe("main");
+    expect(spawnContext.agentThreadParentId).toBe("123");
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
     const registration = mockCallArg(hoisted.registerSubagentRunMock, 0, 0, "registerSubagentRun");
     expect(registration.runId).toBe("run-acp");

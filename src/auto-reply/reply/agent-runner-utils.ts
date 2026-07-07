@@ -261,6 +261,7 @@ function buildEmbeddedContextFromTemplate(params: {
       normalizeChatType(params.sessionCtx.ChatType) ??
       params.run.chatType,
     MessageThreadId: params.replyRoute?.originatingThreadId ?? params.sessionCtx.MessageThreadId,
+    ThreadParentId: params.sessionCtx.ThreadParentId,
     ReplyToId: params.replyRoute?.originatingReplyToId ?? params.sessionCtx.ReplyToId,
   };
   return {
@@ -279,6 +280,7 @@ function buildEmbeddedContextFromTemplate(params: {
       to: sessionCtx.To,
     }),
     messageThreadId: sessionCtx.MessageThreadId ?? undefined,
+    messageThreadParentId: sessionCtx.ThreadParentId ?? undefined,
     chatId:
       normalizeOptionalString(sessionCtx.NativeChannelId) ??
       normalizeOptionalString(sessionCtx.ChatId),
