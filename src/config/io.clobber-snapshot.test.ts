@@ -290,3 +290,11 @@ describe("config clobber snapshots", () => {
     });
   });
 });
+
+describe("clobberCapWarnedPaths", () => {
+  it("loads the module with a bounded dedupe cache", async () => {
+    vi.resetModules();
+    const mod = await import("./io.clobber-snapshot.js");
+    expect(mod.persistBoundedClobberedConfigSnapshot).toBeDefined();
+  });
+});
