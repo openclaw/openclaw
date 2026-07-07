@@ -73,6 +73,9 @@ describe("IMessageRpcClient child stream error handling", () => {
       expect(() => child[streamName].emit("error", streamError)).not.toThrow();
 
       await expect(pending).rejects.toThrow(`${streamName} broke`);
+      await expect(client.waitForClose()).resolves.toBeUndefined();
+      expect(child.kill).toHaveBeenCalledOnce();
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
 
       await client.stop();
     },
