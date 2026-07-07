@@ -96,7 +96,10 @@ import { resolveSessionTranscriptFile } from "./transcript-file-resolve.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import { serializeJsonlLine, writeJsonlLines } from "./transcript-jsonl.js";
 import { replayRecentUserAssistantMessages } from "./transcript-replay.js";
-import { streamSessionTranscriptLines } from "./transcript-stream.js";
+import {
+  streamSessionTranscriptLines,
+  streamSessionTranscriptLinesReverse,
+} from "./transcript-stream.js";
 import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
@@ -2087,6 +2090,30 @@ export async function appendTranscriptMessage<TMessage>(
       ? { useRawWhenLinear: options.useRawWhenLinear }
       : {}),
   });
+}
+
+/**
+ * Finds the newest transcript record accepted by the matcher. Reads newest-first
+ * with early exit so hot append-path lookups never materialize the whole
+ * transcript; missing transcripts match nothing. The match is wrapped so parsed
+ * falsy records stay distinguishable from "no match".
+ */
+export async function findTranscriptEvent(
+  scope: SessionTranscriptReadScope,
+  match: (event: TranscriptEvent) => boolean,
+): Promise<{ event: TranscriptEvent } | undefined> {
+  const target = resolveSessionTranscriptReadTarget(scope);
+  for await (const line of streamSessionTranscriptLinesReverse(target.sessionFile)) {
+    try {
+      const event = JSON.parse(line) as TranscriptEvent;
+      if (match(event)) {
+        return { event };
+      }
+    } catch {
+      // Malformed lines are skipped, matching transcript index tolerance.
+    }
+  }
+  return undefined;
 }
 
 /** Reads parsed transcript records from an explicit or derived transcript target. */

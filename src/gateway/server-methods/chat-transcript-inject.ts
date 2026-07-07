@@ -2,7 +2,7 @@
 // preserving agent-session parent links and transcript update notifications.
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
-  loadTranscriptEvents,
+  findTranscriptEvent,
   persistSessionTranscriptTurn,
   type TranscriptEvent,
 } from "../../config/sessions/session-accessor.js";
@@ -92,24 +92,28 @@ async function findInjectedAssistantMessageByIdempotencyKey(params: {
   }
   // The in-lock duplicate check resolves through the already-resolved
   // sessionFile when present so the lookup reads the file being appended to.
-  const events = await loadTranscriptEvents({
-    ...(params.target.agentId ? { agentId: params.target.agentId } : {}),
-    ...(params.target.sessionFile ? { sessionFile: params.target.sessionFile } : {}),
-    sessionId: params.target.sessionId,
-    sessionKey: params.target.sessionKey,
-    ...(params.target.storePath ? { storePath: params.target.storePath } : {}),
-  });
-  const event = events.toReversed().find((candidate) => {
-    const message = transcriptEventMessage(candidate);
-    return message?.role === "assistant" && message.idempotencyKey === params.idempotencyKey;
-  });
-  const message = event ? transcriptEventMessage(event) : undefined;
+  // findTranscriptEvent scans newest-first with early exit, keeping the hot
+  // idempotent append path from materializing the whole transcript.
+  const found = await findTranscriptEvent(
+    {
+      ...(params.target.agentId ? { agentId: params.target.agentId } : {}),
+      ...(params.target.sessionFile ? { sessionFile: params.target.sessionFile } : {}),
+      sessionId: params.target.sessionId,
+      sessionKey: params.target.sessionKey,
+      ...(params.target.storePath ? { storePath: params.target.storePath } : {}),
+    },
+    (candidate) => {
+      const message = transcriptEventMessage(candidate);
+      return message?.role === "assistant" && message.idempotencyKey === params.idempotencyKey;
+    },
+  );
+  const message = found ? transcriptEventMessage(found.event) : undefined;
   if (!message) {
     return undefined;
   }
   // Legacy shipped transcripts can carry assistant rows without top-level ids;
   // fall back to the idempotency key so re-issued aborts still dedupe there.
-  const messageId = (event ? transcriptEventId(event) : undefined) ?? params.idempotencyKey;
+  const messageId = (found ? transcriptEventId(found.event) : undefined) ?? params.idempotencyKey;
   return { messageId, message };
 }
 

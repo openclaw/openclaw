@@ -18,6 +18,7 @@ import {
   cleanupSessionLifecycleArtifacts,
   commitReplySessionInitialization,
   createSessionEntryWithTranscript,
+  findTranscriptEvent,
   listSessionEntries,
   loadReplySessionInitializationSnapshot,
   loadSessionEntry,
@@ -133,6 +134,35 @@ describe("session accessor file-backed seam", () => {
       sessionId: "session-events",
     });
     expect(missing).toEqual([]);
+  });
+
+  it("finds the newest matching transcript event without loading the whole file", async () => {
+    const header = { type: "session", id: "session-find", timestamp: 1 };
+    const older = { type: "message", id: "m1", message: { role: "assistant", tag: "old" } };
+    const newer = { type: "message", id: "m2", message: { role: "assistant", tag: "new" } };
+    fs.writeFileSync(
+      transcriptPath,
+      `${JSON.stringify(header)}\n${JSON.stringify(older)}\n${JSON.stringify(newer)}\n`,
+      "utf-8",
+    );
+
+    const seen: unknown[] = [];
+    const found = await findTranscriptEvent(
+      { sessionFile: transcriptPath, sessionId: "session-find" },
+      (event) => {
+        seen.push(event);
+        return (event as { type?: string }).type === "message";
+      },
+    );
+    // Newest-first with early exit: the older message is never visited.
+    expect(found).toEqual({ event: newer });
+    expect(seen).toEqual([newer]);
+
+    const missing = await findTranscriptEvent(
+      { sessionFile: path.join(tempDir, "missing.jsonl"), sessionId: "session-find" },
+      () => true,
+    );
+    expect(missing).toBeUndefined();
   });
 
   it("opens a borrowed read view with raw exact-key probes and deferred enumeration", async () => {

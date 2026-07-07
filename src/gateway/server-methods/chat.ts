@@ -69,6 +69,7 @@ import {
   SESSION_ROUTING_CHANGED_ERROR_REASON,
 } from "../../config/sessions/main-session.js";
 import {
+  findTranscriptEvent,
   loadTranscriptEvents,
   patchSessionEntry,
   type SessionTranscriptWriteScope,
@@ -1865,7 +1866,12 @@ async function transcriptExists(scope: SessionTranscriptWriteScope): Promise<boo
   if (!sessionId) {
     return false;
   }
-  return (await loadTranscriptEvents({ ...scope, sessionId }).catch(() => [])).length > 0;
+  // Existence probe: the newest-first matcher returns on the first record, so
+  // this reads one transcript line instead of materializing the whole file.
+  const found = await findTranscriptEvent({ ...scope, sessionId }, () => true).catch(
+    () => undefined,
+  );
+  return found !== undefined;
 }
 
 async function appendAssistantTranscriptMessage(params: {
