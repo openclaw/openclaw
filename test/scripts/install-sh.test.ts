@@ -789,6 +789,71 @@ NODE
     expect(result?.stderr ?? "").toBe("");
   });
 
+  it.each(["openclaw.json", "clawdbot.json"])(
+    "detects %s under OPENCLAW_STATE_DIR",
+    (configName) => {
+      const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-state-config-"));
+      const stateDir = join(tmp, "state");
+      mkdirSync(stateDir, { recursive: true });
+      writeFileSync(join(stateDir, configName), "{}\n");
+
+      let result: ReturnType<typeof runInstallShell> | undefined;
+      try {
+        result = runInstallShell(
+          [
+            `cd ${JSON.stringify(process.cwd())}`,
+            `source ${JSON.stringify(SCRIPT_PATH)}`,
+            'if has_openclaw_config; then printf "configured=1\\n"; else printf "configured=0\\n"; fi',
+          ].join("\n"),
+          {
+            OPENCLAW_CONFIG_PATH: undefined,
+            OPENCLAW_STATE_DIR: stateDir,
+            TERM: "dumb",
+          },
+        );
+      } finally {
+        rmSync(tmp, { force: true, recursive: true });
+      }
+
+      expect(result?.status).toBe(0);
+      expect(result?.stdout).toContain("configured=1");
+      expect(result?.stderr ?? "").toBe("");
+    },
+  );
+
+  it("does not fall back to home config when OPENCLAW_STATE_DIR is set", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-state-override-"));
+    const home = join(tmp, "home");
+    const stateDir = join(tmp, "state");
+    mkdirSync(join(home, ".openclaw"), { recursive: true });
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(join(home, ".openclaw", "openclaw.json"), "{}\n");
+
+    let result: ReturnType<typeof runInstallShell> | undefined;
+    try {
+      result = runInstallShell(
+        [
+          `cd ${JSON.stringify(process.cwd())}`,
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          'if has_openclaw_config; then printf "configured=1\\n"; else printf "configured=0\\n"; fi',
+        ].join("\n"),
+        {
+          HOME: home,
+          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_HOME: undefined,
+          OPENCLAW_STATE_DIR: stateDir,
+          TERM: "dumb",
+        },
+      );
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+
+    expect(result?.status).toBe(0);
+    expect(result?.stdout).toContain("configured=0");
+    expect(result?.stderr ?? "").toBe("");
+  });
+
   it.each([
     {
       expected: /No TTY; run .*\/\.local\/bin\/openclaw onboard to finish setup/,
