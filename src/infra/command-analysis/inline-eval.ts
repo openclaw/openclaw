@@ -279,7 +279,14 @@ function matchShortClusterFlag(spec: InterpreterFlagSpec, token: string): string
       continue;
     }
     const prefix = token.slice(1, index);
-    if ([...prefix].every((char) => clusterFlag.prefixChars.has(char))) {
+    let prefixAllowed = true;
+    for (const char of prefix) {
+      if (!clusterFlag.prefixChars.has(char)) {
+        prefixAllowed = false;
+        break;
+      }
+    }
+    if (prefixAllowed) {
       return clusterFlag.label;
     }
   }
