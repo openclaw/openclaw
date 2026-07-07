@@ -836,31 +836,31 @@ describe("push APNs send semantics", () => {
       environment: "production",
       transport: "relay",
     });
+  });
 
-    it("does not split surrogate pairs when truncating non-JSON error bodies", async () => {
-      const { send, registration, auth } = createDirectApnsSendFixture({
-        nodeId: "ios-node-surrogate-reason",
-        environment: "sandbox",
-        sendResult: {
-          status: 400,
-          apnsId: "apns-surrogate-reason-id",
-          body: "x".repeat(199) + "🚀tail",
-        },
-      });
-
-      const result = await sendApnsAlert({
-        registration,
-        nodeId: "ios-node-surrogate-reason",
-        title: "Wake",
-        body: "Ping",
-        auth,
-        requestSender: send,
-      });
-
-      const record = requireRecord(result, "APNs result");
-      expect(record.reason).not.toContain("�");
-      expect(record.ok).toBe(false);
-      expect(record.status).toBe(400);
+  it("does not split surrogate pairs when truncating non-JSON error bodies", async () => {
+    const { send, registration, auth } = createDirectApnsSendFixture({
+      nodeId: "ios-node-surrogate-reason",
+      environment: "sandbox",
+      sendResult: {
+        status: 400,
+        apnsId: "apns-surrogate-reason-id",
+        body: "x".repeat(199) + "🚀tail",
+      },
     });
+
+    const result = await sendApnsAlert({
+      registration,
+      nodeId: "ios-node-surrogate-reason",
+      title: "Wake",
+      body: "Ping",
+      auth,
+      requestSender: send,
+    });
+
+    const record = requireRecord(result, "APNs result");
+    expect(record.reason).not.toContain("�");
+    expect(record.ok).toBe(false);
+    expect(record.status).toBe(400);
   });
 });
