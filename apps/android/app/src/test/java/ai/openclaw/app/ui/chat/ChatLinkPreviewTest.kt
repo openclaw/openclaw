@@ -319,6 +319,84 @@ class ChatLinkPreviewTest {
     }
 
   @Test
+  fun imageCacheEvictsLeastRecentlyUsedBitmapByAllocatedBytes() =
+    runBlocking {
+      val first = Bitmap.createBitmap(20, 20, Bitmap.Config.ARGB_8888)
+      val second = Bitmap.createBitmap(20, 20, Bitmap.Config.ARGB_8888)
+      val fetchCounts = mutableMapOf<String, Int>()
+      val store =
+        LinkPreviewImageStore(
+          fetcher = { url ->
+            fetchCounts[url] = fetchCounts.getOrDefault(url, 0) + 1
+            LinkPreviewImageResult.Loaded(if (url == "first") first else second)
+          },
+          maxBytes = first.allocationByteCount,
+        )
+
+      try {
+        assertTrue(store.get("first") is LinkPreviewImageResult.Loaded)
+        assertTrue(store.get("second") is LinkPreviewImageResult.Loaded)
+        assertTrue(store.get("first") is LinkPreviewImageResult.Loaded)
+
+        assertEquals(2, fetchCounts["first"])
+        assertEquals(1, fetchCounts["second"])
+      } finally {
+        first.recycle()
+        second.recycle()
+      }
+    }
+
+  @Test
+  fun imageCacheBoundsNegativeResults() =
+    runBlocking {
+      val fetchCounts = mutableMapOf<String, Int>()
+      val store =
+        LinkPreviewImageStore(
+          fetcher = { url ->
+            fetchCounts[url] = fetchCounts.getOrDefault(url, 0) + 1
+            LinkPreviewImageResult.Failed
+          },
+          maxBytes = 2,
+        )
+
+      assertSame(LinkPreviewImageResult.Failed, store.get("first"))
+      assertSame(LinkPreviewImageResult.Failed, store.get("second"))
+      assertSame(LinkPreviewImageResult.Failed, store.get("third"))
+      assertSame(LinkPreviewImageResult.Failed, store.get("first"))
+
+      assertEquals(2, fetchCounts["first"])
+      assertEquals(1, fetchCounts["second"])
+      assertEquals(1, fetchCounts["third"])
+    }
+
+  @Test
+  fun imageCacheBoundsTinyLoadedResultsByEntryCount() =
+    runBlocking {
+      val tiny = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+      val maxEntries = 32
+      val fetchCounts = mutableMapOf<String, Int>()
+      val store =
+        LinkPreviewImageStore(
+          fetcher = { url ->
+            fetchCounts[url] = fetchCounts.getOrDefault(url, 0) + 1
+            LinkPreviewImageResult.Loaded(tiny)
+          },
+          maxBytes = tiny.allocationByteCount * maxEntries * 2,
+        )
+
+      try {
+        repeat(maxEntries + 1) { index ->
+          assertTrue(store.get("image-$index") is LinkPreviewImageResult.Loaded)
+        }
+        assertTrue(store.get("image-0") is LinkPreviewImageResult.Loaded)
+
+        assertEquals(2, fetchCounts["image-0"])
+      } finally {
+        tiny.recycle()
+      }
+    }
+
+  @Test
   fun imageContentTypeAllowlistAndBodyCapAreEnforced() =
     withServer { server ->
       server.enqueue(MockResponse().setHeader("Content-Type", "image/gif").setBody("GIF89a"))

@@ -1409,13 +1409,23 @@ describe("resolveReasoningEffort (#71946)", () => {
       expect(resolveReasoningEffort("minimal", " gpt-5.4-mini ")).toBe("low");
     });
 
+    it.each(["gpt-5.5-pro", "gpt-5.4-pro"] as const)(
+      "uses the %s minimum effort when metadata is unavailable",
+      (modelId) => {
+        expect(resolveReasoningEffort("minimal", modelId)).toBe("medium");
+        expect(resolveReasoningEffort("low", modelId)).toBe("medium");
+        expect(resolveReasoningEffort("medium", modelId)).toBe("medium");
+        expect(resolveReasoningEffort("max", modelId)).toBe("xhigh");
+      },
+    );
+
     it("honors stricter app-server reasoning metadata", () => {
       const supported = ["medium", "high", "xhigh"];
 
-      expect(resolveReasoningEffort("minimal", "gpt-5.4-pro", supported)).toBe("medium");
-      expect(resolveReasoningEffort("low", "gpt-5.4-pro", supported)).toBe("medium");
-      expect(resolveReasoningEffort("medium", "gpt-5.4-pro", supported)).toBe("medium");
-      expect(resolveReasoningEffort("max", "gpt-5.4-pro", supported)).toBe("xhigh");
+      expect(resolveReasoningEffort("minimal", "gpt-5.5-pro", supported)).toBe("medium");
+      expect(resolveReasoningEffort("low", "gpt-5.5-pro", supported)).toBe("medium");
+      expect(resolveReasoningEffort("medium", "gpt-5.5-pro", supported)).toBe("medium");
+      expect(resolveReasoningEffort("max", "gpt-5.5-pro", supported)).toBe("xhigh");
     });
   });
 
