@@ -236,7 +236,6 @@ jobs:
       # exact candidate values can be committed, then rerun without drift.
       - name: Refresh candidate generated baselines
         if: ${{ false }}
-        if: ${{ inputs.preflight_only }}
         run: |
           set -euo pipefail
           pnpm config:docs:gen
