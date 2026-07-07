@@ -603,7 +603,7 @@ export function renderTransitiveManifestRiskMarkdownReport(report) {
   return `${lines.join("\n")}\n`;
 }
 
-export async function runTransitiveManifestRiskReport({
+async function runTransitiveManifestRiskReport({
   rootDir = process.cwd(),
   fetchImpl = fetch,
   now = new Date(),
