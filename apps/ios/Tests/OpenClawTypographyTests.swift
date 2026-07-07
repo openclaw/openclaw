@@ -156,6 +156,9 @@ struct OpenClawTypographyTests {
         let settingsSections = try String(
             contentsOf: Self.sourceURL("Design/SettingsProTabSections.swift"),
             encoding: .utf8)
+        let settingsSupport = try String(
+            contentsOf: Self.sourceURL("Design/SettingsProTabSupport.swift"),
+            encoding: .utf8)
         let privacyAccess = try String(
             contentsOf: Self.sourceURL("Settings/PrivacyAccessSectionView.swift"),
             encoding: .utf8)
@@ -186,8 +189,16 @@ struct OpenClawTypographyTests {
             encoding: .utf8)
 
         #expect(proComponents.contains(".font(OpenClawType.subheadSemiBold)"))
+        #expect(proComponents.contains(".font(OpenClawType.subheadMedium)"))
         #expect(proComponents.contains("Text(primaryActionTitle)"))
         #expect(proComponents.contains("Text(secondaryActionTitle)"))
+        #expect(proComponents
+            .contains(
+                "Text(primaryActionTitle)\n                                        .font(OpenClawType.captionSemiBold)"))
+        #expect(proComponents
+            .contains(
+                "Text(secondaryActionTitle)\n                                        .font(OpenClawType.captionMedium)"))
+        #expect(proComponents.contains("Text(actionTitle)\n                        .font(OpenClawType.captionMedium)"))
 
         #expect(chatTab.contains("Text(\"Export Transcript\")"))
         #expect(chatTab.contains(".font(OpenClawType.body)"))
@@ -238,8 +249,8 @@ struct OpenClawTypographyTests {
             onboardingSecurityPicker,
             from: "Text(\"Secure (TLS)\")",
             to: ".tag(true)")
-        #expect(onboardingUnencryptedOption.contains(".font(OpenClawType.captionSemiBold)"))
-        #expect(onboardingSecureOption.contains(".font(OpenClawType.captionSemiBold)"))
+        #expect(onboardingUnencryptedOption.contains(".font(OpenClawType.captionMedium)"))
+        #expect(onboardingSecureOption.contains(".font(OpenClawType.captionMedium)"))
 
         #expect(settingsSections.contains(".font(OpenClawType.body)"))
         #expect(settingsSections.contains("self.settingsToggle(\"Show Talk Control\", isOn: self.$talkButtonEnabled)"))
@@ -279,8 +290,11 @@ struct OpenClawTypographyTests {
             settingsSecurityPicker,
             from: "Text(\"Secure (TLS)\")",
             to: ".tag(true)")
-        #expect(settingsUnencryptedOption.contains(".font(OpenClawType.captionSemiBold)"))
-        #expect(settingsSecureOption.contains(".font(OpenClawType.captionSemiBold)"))
+        #expect(settingsUnencryptedOption.contains(".font(OpenClawType.captionMedium)"))
+        #expect(settingsSecureOption.contains(".font(OpenClawType.captionMedium)"))
+        #expect(settingsSupport.contains("private func previewButton"))
+        #expect(settingsSupport
+            .contains("Label(title, systemImage: systemImage)\n                .font(OpenClawType.captionMedium)"))
 
         #expect(!privacyAccess.contains("DisclosureGroup(\"Privacy & Access\")"))
         #expect(privacyAccess.contains("Text(\"Privacy & Access\")"))
@@ -314,6 +328,22 @@ struct OpenClawTypographyTests {
     @Test func `iOS app text and control calls keep branded font boundaries`() throws {
         let offenders = try Self.unbrandedTextCallOffenders()
         #expect(offenders.isEmpty, Comment(rawValue: offenders.joined(separator: "\n")))
+    }
+
+    @Test func `iOS typography guidance defines token role balance`() throws {
+        let agents = try String(
+            contentsOf: Self.iosRootURL().appendingPathComponent("AGENTS.md"),
+            encoding: .utf8)
+        let design = try String(
+            contentsOf: Self.iosRootURL().appendingPathComponent("DESIGN.md"),
+            encoding: .utf8)
+
+        #expect(agents.contains("Token role balance matters"))
+        #expect(agents.contains("Reserve display/semibold tokens"))
+        #expect(agents.contains("non-prominent controls should prefer `subheadMedium` or `captionMedium`"))
+        #expect(design.contains("## Typography Roles"))
+        #expect(design.contains("Token selection should preserve hierarchy"))
+        #expect(design.contains("Secondary actions, neutral menu items, repeated toolbar controls"))
     }
 
     @Test func `secure fields do not use platform placeholder text`() throws {
@@ -378,52 +408,124 @@ struct OpenClawTypographyTests {
         self.iosRootURL().appendingPathComponent("Sources/\(relativePath)")
     }
 
-    private static func swiftSourcesForTypographyAudit() throws -> [URL] {
-        let roots = [
-            self.sourceURL(""),
-            self.iosRootURL()
-                .deletingLastPathComponent()
-                .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI"),
-        ]
-        return roots.flatMap { root -> [URL] in
-            guard let enumerator = FileManager.default.enumerator(
-                at: root,
-                includingPropertiesForKeys: nil)
-            else { return [] }
-            return enumerator.compactMap { item -> URL? in
-                guard let url = item as? URL, url.pathExtension == "swift" else { return nil }
-                return url
-            }
+    private struct TypographyAuditSource {
+        let url: URL
+        let fontTokens: [String]
+        let allowedFragments: [String]
+    }
+
+    private static func swiftSources(in root: URL) -> [URL] {
+        guard let enumerator = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: nil)
+        else { return [] }
+        return enumerator.compactMap { item -> URL? in
+            guard let url = item as? URL, url.pathExtension == "swift" else { return nil }
+            return url
         }
         .sorted { $0.path < $1.path }
     }
 
+    private static func swiftSourcesForTypographyAudit() throws -> [URL] {
+        self.swiftSources(in: self.sourceURL(""))
+    }
+
+    private static func sharedChatSourcesForTypographyAudit() throws -> [URL] {
+        self.swiftSources(
+            in: self.iosRootURL()
+                .deletingLastPathComponent()
+                .appendingPathComponent("shared/OpenClawKit/Sources/OpenClawChatUI"))
+    }
+
+    private static func typographyAuditSources() throws -> [TypographyAuditSource] {
+        let iosAllowedFragments = [".navigationTitle(", ".alert(\"", ".tabItem { Label("]
+        let sharedAllowedFragments = iosAllowedFragments + [
+            ".accessibilityLabel(Text(",
+            ".searchable(text:",
+            "Button(\"Cancel\", role: .cancel)",
+            "Button(\"Rename\")",
+            "Label(",
+            "SwiftUI.Text(",
+            "TextField(\"Session name\"",
+        ]
+        return try self.swiftSourcesForTypographyAudit().map { source in
+            TypographyAuditSource(
+                url: source,
+                fontTokens: ["OpenClawType"],
+                allowedFragments: iosAllowedFragments)
+        } + self.sharedChatSourcesForTypographyAudit().map { source in
+            TypographyAuditSource(
+                url: source,
+                fontTokens: ["OpenClawChatTypography"],
+                allowedFragments: sharedAllowedFragments)
+        }
+    }
+
     private static func unbrandedTextCallOffenders() throws -> [String] {
-        let fontTokens = ["OpenClawType", "OpenClawChatTypography"]
-        let allowedFragments = [".navigationTitle(", ".alert(\"", ".tabItem { Label("]
-        return try self.swiftSourcesForTypographyAudit().flatMap { url -> [String] in
-            let source = try String(contentsOf: url, encoding: .utf8)
-            let lines = source.components(separatedBy: .newlines)
-            return lines.indices.compactMap { idx -> String? in
-                let rawLine = lines[idx]
-                let line = rawLine.trimmingCharacters(in: .whitespaces)
-                guard !line.hasPrefix("//") else { return nil }
-                guard !allowedFragments.contains(where: rawLine.contains) else { return nil }
+        try self.typographyAuditSources().flatMap { auditSource -> [String] in
+            let source = try String(contentsOf: auditSource.url, encoding: .utf8)
+            return self.unbrandedTextCallOffenders(
+                in: self.sourceForTypographyAudit(source, url: auditSource.url),
+                url: auditSource.url,
+                fontTokens: auditSource.fontTokens,
+                allowedFragments: auditSource.allowedFragments)
+        }
+    }
 
-                let window = lines[idx..<min(lines.count, idx + 12)].joined(separator: "\n")
-                let hasLocalFont = fontTokens.contains { window.contains($0) }
-                    || self.hasAllowedBrandedFontParameter(window, in: url)
-
-                if self.isTextOrLabelCall(rawLine), !hasLocalFont {
-                    return "\(self.relativePath(url)):\(idx + 1): \(line)"
-                }
-
-                if self.isShorthandControlCall(rawLine), !hasLocalFont {
-                    return "\(self.relativePath(url)):\(idx + 1): \(line)"
-                }
-
-                return nil
+    private static func sourceForTypographyAudit(_ source: String, url: URL) -> String {
+        guard self.relativePath(url).contains("apps/shared/OpenClawKit/Sources/OpenClawChatUI/") else {
+            return source
+        }
+        var output: [String] = []
+        var skippedMacOSDepth = 0
+        for line in source.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed == "#if os(macOS)" {
+                skippedMacOSDepth += 1
+                continue
             }
+            if skippedMacOSDepth > 0 {
+                if trimmed == "#if os(macOS)" {
+                    skippedMacOSDepth += 1
+                } else if trimmed == "#endif" {
+                    skippedMacOSDepth -= 1
+                }
+                continue
+            }
+            output.append(line)
+        }
+        return output.joined(separator: "\n")
+    }
+
+    private static func unbrandedTextCallOffenders(
+        in source: String,
+        url: URL,
+        fontTokens: [String],
+        allowedFragments: [String]) -> [String]
+    {
+        let lines = source.components(separatedBy: .newlines)
+        return lines.indices.compactMap { idx -> String? in
+            let rawLine = lines[idx]
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard !line.hasPrefix("//") else { return nil }
+            guard !allowedFragments.contains(where: rawLine.contains) else { return nil }
+
+            let previousWindow = lines[max(0, idx - 4)...idx].joined(separator: "\n")
+            guard !previousWindow.contains(".accessibilityLabel(") else { return nil }
+
+            let window = lines[idx..<min(lines.count, idx + 12)].joined(separator: "\n")
+            let hasLocalFont = fontTokens.contains { window.contains($0) }
+                || self.hasAllowedBrandedFontParameter(window, in: url)
+
+            if self.isTextOrLabelCall(rawLine), !hasLocalFont {
+                return "\(self.relativePath(url)):\(idx + 1): \(line)"
+            }
+
+            if self.isShorthandControlCall(rawLine), !hasLocalFont {
+                return "\(self.relativePath(url)):\(idx + 1): \(line)"
+            }
+
+            return nil
         }
     }
 

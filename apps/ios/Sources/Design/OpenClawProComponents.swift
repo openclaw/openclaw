@@ -139,7 +139,7 @@ private struct OpenClawGlassButtonModifier: ViewModifier {
                     .tint(self.tint ?? OpenClawBrand.accent)
             } else {
                 content
-                    .font(OpenClawType.subheadSemiBold)
+                    .font(OpenClawType.subheadMedium)
                     .buttonStyle(.glass)
                     .tint(self.tint)
             }
@@ -150,7 +150,7 @@ private struct OpenClawGlassButtonModifier: ViewModifier {
                 .tint(self.tint ?? OpenClawBrand.accent)
         } else {
             content
-                .font(OpenClawType.subheadSemiBold)
+                .font(OpenClawType.subheadMedium)
                 .buttonStyle(.bordered)
                 .tint(self.tint)
         }
@@ -377,9 +377,9 @@ struct OpenClawNoticeBanner: View {
                             if let secondaryActionTitle, let onSecondaryAction {
                                 Button(action: onSecondaryAction) {
                                     Text(secondaryActionTitle)
-                                        .font(OpenClawType.captionSemiBold)
+                                        .font(OpenClawType.captionMedium)
                                 }
-                                .font(OpenClawType.captionSemiBold)
+                                .font(OpenClawType.captionMedium)
                                 .openClawGlassButton()
                                 .controlSize(.small)
                             }
@@ -762,7 +762,7 @@ struct ProPanelHeader: View {
             } else if let actionTitle {
                 Button(action: action) {
                     Text(actionTitle)
-                        .font(OpenClawType.captionSemiBold)
+                        .font(OpenClawType.captionMedium)
                 }
                 .disabled(self.isActionDisabled)
             }
@@ -799,7 +799,7 @@ struct ProStatusRow: View {
                 if let actionTitle, let action {
                     Button(action: action) {
                         Text(actionTitle)
-                            .font(OpenClawType.captionSemiBold)
+                            .font(OpenClawType.captionMedium)
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.mini)

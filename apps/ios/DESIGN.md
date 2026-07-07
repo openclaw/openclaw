@@ -25,6 +25,16 @@ Apple references: [Adopting Liquid Glass](https://developer.apple.com/documentat
 
 Feature-local layout enums may define row heights and grid dimensions, but should reference the shared radius instead of introducing a new card shape.
 
+## Typography Roles
+
+`OpenClawType` in `Sources/Design/OpenClawTypography.swift` is the source of truth for branded iOS text. Token selection should preserve hierarchy, not only font family.
+
+- Screen titles and prominent destination headings use display tokens such as `title2SemiBold`, `title3SemiBold`, or `headline`.
+- The one primary action in a region may use `subheadSemiBold`.
+- Secondary actions, neutral menu items, repeated toolbar controls, inactive segmented options, and dense operational controls should prefer `subheadMedium`, `captionMedium`, or regular body-family tokens.
+- Row titles can use `subheadSemiBold` only when the row is a primary object, selected, active, or status-bearing. Supporting text, metadata, helper copy, and badges should usually use `caption`, `captionMedium`, `caption2`, or `caption2Medium`.
+- Destructive or high-risk actions may use semibold, but color and placement should still carry most of the warning.
+
 ## Components
 
 - `OpenClawProBackground`: grouped page background

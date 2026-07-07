@@ -427,6 +427,10 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
         }
     }
 
+    private struct SendableDatabaseHandle: @unchecked Sendable {
+        let raw: OpaquePointer
+    }
+
     private let databaseURL: URL
     public nonisolated let gatewayID: String
     private var db: Connection?
@@ -1012,6 +1016,7 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
 
     public func cancelCommand(id: String) async -> OpenClawChatOutboxUpdateResult {
         guard !self.isRetired, let db = await handle() else { return .unavailable }
+        let transactionDB = SendableDatabaseHandle(raw: db)
         guard self.execute(db, sql: "BEGIN IMMEDIATE", bindings: []) else { return .unavailable }
         var committed = false
         defer {
@@ -1029,7 +1034,7 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
             agentID = foundAgentID
         case .missing:
             return self.canonicalMessageProofHub.withProofDecision(for: messageKey) { isProven in
-                committed = self.execute(db, sql: "COMMIT", bindings: [])
+                committed = self.execute(transactionDB.raw, sql: "COMMIT", bindings: [])
                 guard committed else { return .unavailable }
                 return isProven ? .confirmed : .missing
             }
@@ -1047,18 +1052,18 @@ public actor OpenClawChatSQLiteTranscriptCache: OpenClawChatTranscriptCache,
         guard sqlite3_changes(db) > 0 else { return .unavailable }
         let result = self.canonicalMessageProofHub.withProofDecision(for: messageKey) { isProven in
             if isProven {
-                committed = self.execute(db, sql: "COMMIT", bindings: [])
+                committed = self.execute(transactionDB.raw, sql: "COMMIT", bindings: [])
                 return committed ? OpenClawChatOutboxUpdateResult.confirmed : .unavailable
             }
             guard self.removeCachedMessage(
-                db,
+                transactionDB.raw,
                 sessionKey: sessionKey,
                 agentID: Self.transcriptCacheAgentID(
                     sessionKey: sessionKey,
                     agentID: agentID),
                 idempotencyKey: messageKey)
             else { return .unavailable }
-            committed = self.execute(db, sql: "COMMIT", bindings: [])
+            committed = self.execute(transactionDB.raw, sql: "COMMIT", bindings: [])
             return committed ? .updated : .unavailable
         }
         if result == .confirmed {

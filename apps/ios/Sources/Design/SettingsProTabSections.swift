@@ -967,10 +967,10 @@ extension SettingsProTab {
                 .keyboardType(.numberPad)
             Picker("Connection security", selection: self.manualGatewayTLSBinding) {
                 Text("Unencrypted")
-                    .font(OpenClawType.captionSemiBold)
+                    .font(OpenClawType.captionMedium)
                     .tag(false)
                 Text("Secure (TLS)")
-                    .font(OpenClawType.captionSemiBold)
+                    .font(OpenClawType.captionMedium)
                     .tag(true)
             }
             .pickerStyle(.segmented)

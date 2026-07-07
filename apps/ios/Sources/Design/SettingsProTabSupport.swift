@@ -410,10 +410,10 @@ private struct SettingsGatewayStatesPreview: View {
     {
         Button {} label: {
             Label(title, systemImage: systemImage)
-                .font(OpenClawType.captionSemiBold)
+                .font(OpenClawType.captionMedium)
                 .frame(maxWidth: .infinity)
         }
-        .font(OpenClawType.captionSemiBold)
+        .font(OpenClawType.captionMedium)
         .buttonStyle(.bordered)
         .controlSize(.small)
         .disabled(isBusy)
