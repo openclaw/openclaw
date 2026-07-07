@@ -685,15 +685,17 @@ describe("openai transport stream", () => {
     expect(output.stopReason).toBe("error");
     expect(output.content).toEqual([]);
     expect(output.errorMessage).toBe("OpenAI refusal: Tool use is not allowed.");
-    expect(output.diagnostics).toEqual([
-      expect.objectContaining({
-        type: "provider_refusal",
-        details: {
-          provider: model.provider,
-          explanation: "Tool use is not allowed.",
-        },
-      }),
-    ]);
+    expect(output).toMatchObject({
+      diagnostics: [
+        expect.objectContaining({
+          type: "provider_refusal",
+          details: {
+            provider: model.provider,
+            explanation: "Tool use is not allowed.",
+          },
+        }),
+      ],
+    });
     expect(pushSpy.mock.calls.map(([event]) => (event as { type?: string }).type)).toEqual([
       "toolcall_start",
       "toolcall_delta",
