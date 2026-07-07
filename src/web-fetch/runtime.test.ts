@@ -307,6 +307,51 @@ describe("web fetch runtime", () => {
     expect(resolvePluginWebFetchProvidersMock).toHaveBeenCalledTimes(2);
   });
 
+  it("invalidates provider discovery when a large same config object changes", () => {
+    const firecrawl = createFirecrawlProvider({
+      getConfiguredCredentialValue: () => "firecrawl-key",
+    });
+    const external = createThirdPartyFetchProvider();
+    resolvePluginWebFetchProvidersMock
+      .mockReturnValueOnce([firecrawl])
+      .mockReturnValueOnce([external]);
+    const config = {
+      plugins: {
+        entries: {
+          firecrawl: {
+            enabled: true,
+            config: {
+              webFetch: {
+                apiKey: "firecrawl-key",
+              },
+              ballast: Array.from({ length: 6000 }, (_, index) => ({
+                id: `plugin-config-ballast-${index}`,
+                selected: "firecrawl",
+                value: "stable provider resolution config payload ".repeat(8),
+              })),
+            },
+          },
+        },
+      },
+    } as OpenClawConfig & {
+      plugins: {
+        entries: {
+          firecrawl: {
+            config: { ballast: Array<{ selected: string }> };
+          };
+        };
+      };
+    };
+
+    const first = requireResolvedWebFetch(resolveWebFetchDefinition({ config }));
+    config.plugins.entries.firecrawl.config.ballast[5999].selected = "thirdparty";
+    const second = requireResolvedWebFetch(resolveWebFetchDefinition({ config }));
+
+    expect(first.provider.id).toBe("firecrawl");
+    expect(second.provider.id).toBe("thirdparty");
+    expect(resolvePluginWebFetchProvidersMock).toHaveBeenCalledTimes(2);
+  });
+
   it("evicts superseded provider discovery cache entries", () => {
     const firstFirecrawl = createFirecrawlProvider({
       getConfiguredCredentialValue: () => "firecrawl-key",

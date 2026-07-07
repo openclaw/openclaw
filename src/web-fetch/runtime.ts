@@ -1,5 +1,6 @@
 /** Runtime provider selection and tool construction for the `web_fetch` tool. */
 import { createHash } from "node:crypto";
+import { serialize } from "node:v8";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   hasWebProviderEntryCredential,
@@ -205,7 +206,7 @@ function resolveWebFetchProviderCacheKey(
 }
 
 function createWebFetchProviderConfigFingerprint(config: OpenClawConfig): string {
-  return createHash("sha256").update(JSON.stringify(config)).digest("hex");
+  return createHash("sha256").update(serialize(config)).digest("hex");
 }
 
 function resolveCachedWebFetchProviders(params: {
