@@ -639,4 +639,349 @@ describe("matrix message actions", () => {
     expect(result.messages.map((message) => message.eventId)).toEqual(["$thread-reply"]);
     expect(result.nextBatch).toBeNull();
   });
+
+  it("dedupes m.replace events keeping the latest per target for backward pagination (default)", async () => {
+    const { client } = createMessagesClient({
+      chunk: [
+        {
+          event_id: "$edit-v3",
+          sender: "@bot:example.org",
+          type: "m.room.message",
+          origin_server_ts: 50,
+          content: {
+            msgtype: "m.text",
+            body: "* final version",
+            "m.new_content": { msgtype: "m.text", body: "* final version" },
+            "m.relates_to": { rel_type: "m.replace", event_id: "$original" },
+          },
+        },
+        {
+          event_id: "$edit-v2",
+          sender: "@bot:example.org",
+          type: "m.room.message",
+          origin_server_ts: 40,
+          content: {
+            msgtype: "m.text",
+            body: "* intermediate edit",
+            "m.new_content": { msgtype: "m.text", body: "* intermediate edit" },
+            "m.relates_to": { rel_type: "m.replace", event_id: "$original" },
+          },
+        },
+        {
+          event_id: "$edit-v1",
+          sender: "@bot:example.org",
+          type: "m.room.message",
+          origin_server_ts: 30,
+          content: {
+            msgtype: "m.text",
+            body: "* first edit",
+            "m.new_content": { msgtype: "m.text", body: "* first edit" },
+            "m.relates_to": { rel_type: "m.replace", event_id: "$original" },
+          },
+        },
+        {
+          event_id: "$original",
+          sender: "@bot:example.org",
+          type: "m.room.message",
+          origin_server_ts: 20,
+          content: {
+            msgtype: "m.text",
+            body: "original message",
+          },
+        },
+      ],
+    });
+
+    const result = await readMatrixMessages("room:!room:example.org", { client });
+
+    expect(result.messages.map((msg) => msg.eventId)).toEqual(["$edit-v3"]);
+    expect(result.messages[0]?.body).toBe("* final version");
+  });
+
+  it("dedupes m.replace events correctly with forward pagination (--after)", async () => {
+    // Forward pagination returns events in chronological order (oldest first),
+    // so the latest edit is the last one, not the first.
+    const { client } = createMessagesClient({
+      chunk: [
+        {
+          event_id: "$original",
+          sender: "@bot:example.org",
+          type: "m.room.message",
+          origin_server_ts: 20,
+          content: {
+            msgtype: "m.text",
+            body: "original message",
+          },
+        },
+        {
+          event_id: "$edit-v1",
+          sender: "@bot:example.org",
+          type: "m.room.message",
+          origin_server_ts: 30,
+          content: {
+            msgtype: "m.text",
+            body: "* first edit",
+            "m.new_content": { msgtype: "m.text", body: "* first edit" },
+            "m.relates_to": { rel_type: "m.replace", event_id: "$original" },
+          },
+        },
+        {
+          event_id: "$edit-v2",
+          sender: "@bot:example.org",
+          type: "m.room.message",
+          origin_server_ts: 40,
+          content: {
+            msgtype: "m.text",
+            body: "* intermediate edit",
+            "m.new_content": { msgtype: "m.text", body: "* intermediate edit" },
+            "m.relates_to": { rel_type: "m.replace", event_id: "$original" },
+          },
+        },
+        {
+          event_id: "$edit-v3",
+          sender: "@bot:example.org",
+          type: "m.room.message",
+          origin_server_ts: 50,
+          content: {
+            msgtype: "m.text",
+            body: "* final version",
+            "m.new_content": { msgtype: "m.text", body: "* final version" },
+            "m.relates_to": { rel_type: "m.replace", event_id: "$original" },
+          },
+        },
+      ],
+    });
+
+    const result = await readMatrixMessages("room:!room:example.org", {
+      client,
+      after: "start-token",
+    });
+
+    expect(result.messages.map((msg) => msg.eventId)).toEqual(["$edit-v3"]);
+    expect(result.messages[0]?.body).toBe("* final version");
+  });
+
+  it("preserves non-replace messages when deduping m.replace events", async () => {
+    const { client } = createMessagesClient({
+      chunk: [
+        {
+          event_id: "$edit-final",
+          sender: "@bot:example.org",
+          type: "m.room.message",
+          origin_server_ts: 60,
+          content: {
+            msgtype: "m.text",
+            body: "* final edit",
+            "m.new_content": { msgtype: "m.text", body: "* final edit" },
+            "m.relates_to": { rel_type: "m.replace", event_id: "$target" },
+          },
+        },
+        {
+          event_id: "$normal-msg",
+          sender: "@alice:example.org",
+          type: "m.room.message",
+          origin_server_ts: 50,
+          content: {
+            msgtype: "m.text",
+            body: "normal message",
+          },
+        },
+        {
+          event_id: "$edit-old",
+          sender: "@bot:example.org",
+          type: "m.room.message",
+          origin_server_ts: 40,
+          content: {
+            msgtype: "m.text",
+            body: "* older edit",
+            "m.new_content": { msgtype: "m.text", body: "* older edit" },
+            "m.relates_to": { rel_type: "m.replace", event_id: "$target" },
+          },
+        },
+        {
+          event_id: "$target",
+          sender: "@bot:example.org",
+          type: "m.room.message",
+          origin_server_ts: 30,
+          content: {
+            msgtype: "m.text",
+            body: "original",
+          },
+        },
+      ],
+    });
+
+    const result = await readMatrixMessages("room:!room:example.org", { client });
+
+    expect(result.messages.map((msg) => msg.eventId)).toEqual(["$edit-final", "$normal-msg"]);
+  });
+
+  it("drops m.replace events that lack m.new_content (invalid per Matrix spec)", async () => {
+    const { client } = createMessagesClient({
+      chunk: [
+        {
+          event_id: "$invalid-replace",
+          sender: "@bot:example.org",
+          type: "m.room.message",
+          origin_server_ts: 30,
+          content: {
+            msgtype: "m.text",
+            body: "* bot edited the message",
+            // No m.new_content — invalid replacement per Matrix spec.
+            "m.relates_to": { rel_type: "m.replace", event_id: "$original" },
+          },
+        },
+        {
+          event_id: "$original",
+          sender: "@bot:example.org",
+          type: "m.room.message",
+          origin_server_ts: 20,
+          content: {
+            msgtype: "m.text",
+            body: "original message",
+          },
+        },
+      ],
+    });
+
+    const result = await readMatrixMessages("room:!room:example.org", { client });
+
+    // Invalid m.replace is dropped; original message is preserved.
+    expect(result.messages.map((msg) => msg.eventId)).toEqual(["$original"]);
+  });
+
+  it("breaks equal-timestamp m.replace ties by event_id lexicographic order", async () => {
+    const { client } = createMessagesClient({
+      chunk: [
+        {
+          event_id: "$edit-b",
+          sender: "@bot:example.org",
+          type: "m.room.message",
+          origin_server_ts: 50,
+          content: {
+            msgtype: "m.text",
+            body: "edit b",
+            "m.new_content": { msgtype: "m.text", body: "edit b" },
+            "m.relates_to": { rel_type: "m.replace", event_id: "$original" },
+          },
+        },
+        {
+          event_id: "$edit-a",
+          sender: "@bot:example.org",
+          type: "m.room.message",
+          origin_server_ts: 50, // same timestamp
+          content: {
+            msgtype: "m.text",
+            body: "edit a",
+            "m.new_content": { msgtype: "m.text", body: "edit a" },
+            "m.relates_to": { rel_type: "m.replace", event_id: "$original" },
+          },
+        },
+        {
+          event_id: "$original",
+          sender: "@bot:example.org",
+          type: "m.room.message",
+          origin_server_ts: 20,
+          content: {
+            msgtype: "m.text",
+            body: "original message",
+          },
+        },
+      ],
+    });
+
+    const result = await readMatrixMessages("room:!room:example.org", { client });
+
+    // "$edit-b" > "$edit-a" lexicographically, so $edit-b wins.
+    expect(result.messages.map((msg) => msg.eventId)).toEqual(["$edit-b"]);
+  });
+
+  it("does not suppress original when m.replace sender differs from original sender", async () => {
+    const { client } = createMessagesClient({
+      chunk: [
+        {
+          event_id: "$cross-replace",
+          sender: "@mallory:example.org", // different sender
+          type: "m.room.message",
+          origin_server_ts: 30,
+          content: {
+            msgtype: "m.text",
+            body: "malicious edit",
+            "m.new_content": { msgtype: "m.text", body: "malicious edit" },
+            "m.relates_to": { rel_type: "m.replace", event_id: "$original" },
+          },
+        },
+        {
+          event_id: "$original",
+          sender: "@alice:example.org", // original sender
+          type: "m.room.message",
+          origin_server_ts: 20,
+          content: {
+            msgtype: "m.text",
+            body: "alice's message",
+          },
+        },
+      ],
+    });
+
+    const result = await readMatrixMessages("room:!room:example.org", { client });
+
+    // Cross-sender m.replace is invalid per Matrix spec — original must be preserved.
+    expect(result.messages.map((msg) => msg.eventId)).toEqual(
+      expect.arrayContaining(["$original"]),
+    );
+    expect(result.messages.map((msg) => msg.eventId)).not.toContain("$cross-replace");
+  });
+
+  it("does not suppress an m.replace when another m.replace targets it (chain)", async () => {
+    // Chain: $edit-final replaces $edit-intermediate, $edit-intermediate replaces $original.
+    // Only $original should be suppressed; the intermediate edit must be preserved
+    // because m.replace targets must be the original room-message, not another replace.
+    const { client } = createMessagesClient({
+      chunk: [
+        {
+          event_id: "$edit-final",
+          sender: "@bot:example.org",
+          type: "m.room.message",
+          origin_server_ts: 60,
+          content: {
+            msgtype: "m.text",
+            body: "final",
+            "m.new_content": { msgtype: "m.text", body: "final" },
+            "m.relates_to": { rel_type: "m.replace", event_id: "$edit-intermediate" },
+          },
+        },
+        {
+          event_id: "$edit-intermediate",
+          sender: "@bot:example.org",
+          type: "m.room.message",
+          origin_server_ts: 50,
+          content: {
+            msgtype: "m.text",
+            body: "intermediate",
+            "m.new_content": { msgtype: "m.text", body: "intermediate" },
+            "m.relates_to": { rel_type: "m.replace", event_id: "$original" },
+          },
+        },
+        {
+          event_id: "$original",
+          sender: "@bot:example.org",
+          type: "m.room.message",
+          origin_server_ts: 20,
+          content: {
+            msgtype: "m.text",
+            body: "original message",
+          },
+        },
+      ],
+    });
+
+    const result = await readMatrixMessages("room:!room:example.org", { client });
+
+    // $original suppressed. $edit-intermediate preserved (not an eligible replace target).
+    expect(result.messages.map((msg) => msg.eventId)).toEqual(
+      expect.arrayContaining(["$edit-final", "$edit-intermediate"]),
+    );
+    expect(result.messages.map((msg) => msg.eventId)).not.toContain("$original");
+  });
 });

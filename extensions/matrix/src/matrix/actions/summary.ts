@@ -31,19 +31,24 @@ export function summarizeMatrixRawEvent(event: MatrixRawEvent): MatrixMessageSum
           eventId,
         }
       : undefined;
+  // For m.replace events, prefer m.new_content (the authoritative edit body)
+  // over the outer content.body, which is a fallback string for clients that
+  // do not understand edits (e.g. "* sender edited the message").
+  const effectiveContent =
+    relType === "m.replace" && content["m.new_content"] ? content["m.new_content"] : content;
   return {
     eventId: event.event_id,
     sender: event.sender,
     body: resolveMatrixMessageBody({
-      body: content.body,
-      filename: content.filename,
-      msgtype: content.msgtype,
+      body: effectiveContent.body,
+      filename: effectiveContent.filename,
+      msgtype: effectiveContent.msgtype,
     }),
-    msgtype: content.msgtype,
+    msgtype: effectiveContent.msgtype,
     attachment: resolveMatrixMessageAttachment({
-      body: content.body,
-      filename: content.filename,
-      msgtype: content.msgtype,
+      body: effectiveContent.body,
+      filename: effectiveContent.filename,
+      msgtype: effectiveContent.msgtype,
     }),
     timestamp: event.origin_server_ts,
     relatesTo,

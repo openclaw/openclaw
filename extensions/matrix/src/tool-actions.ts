@@ -51,6 +51,29 @@ const messageActions = new Set(["sendMessage", "editMessage", "deleteMessage", "
 const reactionActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
 const pollActions = new Set(["pollVote"]);
+
+/**
+ * Normalize Matrix-native message fields to the shape the shared CLI formatter
+ * (`renderMessageList`) expects.  Fields are additive — original fields are
+ * preserved so JSON consumers (`--json`) keep the full Matrix payload.
+ */
+function normalizeMatrixMessagesForFormatter(messages: Array<Record<string, unknown>>) {
+  return messages.map((m) => {
+    const relatesTo = m.relatesTo as { relType?: unknown; eventId?: unknown } | undefined;
+    const isReplace = relatesTo?.relType === "m.replace" && typeof relatesTo.eventId === "string";
+    return {
+      ...m,
+      // For m.replace events, project the original target event id as the
+      // display id so the CLI table shows the actionable id (reply / react /
+      // pin target), not the replacement event's own id.
+      id: m.id ?? (isReplace ? relatesTo.eventId : m.eventId),
+      authorTag: m.authorTag ?? m.sender,
+      content: m.content ?? m.body,
+      ts:
+        m.ts ?? (typeof m.timestamp === "number" ? new Date(m.timestamp).toISOString() : undefined),
+    };
+  });
+}
 const profileActions = new Set(["setProfile"]);
 const verificationActions = new Set([
   "encryptionStatus",
@@ -319,7 +342,12 @@ export async function handleMatrixAction(
             client: target.client,
           });
         });
-        return jsonResult({ ok: true, ...result });
+        return jsonResult({
+          ok: true,
+          messages: normalizeMatrixMessagesForFormatter(result.messages),
+          nextBatch: result.nextBatch,
+          prevBatch: result.prevBatch,
+        });
       }
       default:
         break;
@@ -357,7 +385,13 @@ export async function handleMatrixAction(
         return jsonResult({ ok: true, pinned: result.pinned });
       }
       const result = await listMatrixPins(target.roomId, actionOpts);
-      return jsonResult({ ok: true, pinned: result.pinned, events: result.events });
+      const normalizedPins = normalizeMatrixMessagesForFormatter(result.events);
+      return jsonResult({
+        ok: true,
+        pinned: result.pinned,
+        events: result.events,
+        pins: normalizedPins,
+      });
     });
   }
 

@@ -514,6 +514,62 @@ describe("handleMatrixAction pollVote", () => {
     },
   );
 
+  it("preserves raw Matrix events while adding formatter-friendly pins fields", async () => {
+    const cfg = { channels: { matrix: { actions: { pins: true } } } } as CoreConfig;
+    const rawEvent = {
+      eventId: "$pin-event",
+      sender: "@bot:example.org",
+      body: "pinned message content",
+      msgtype: "m.text",
+      timestamp: 1718000000000,
+    };
+    mocks.listMatrixPins.mockResolvedValue({
+      pinned: ["$pin-event"],
+      events: [rawEvent],
+    });
+
+    const result = await handleMatrixAction(
+      { action: "listPins", roomId: "!room:example" }, cfg);
+
+    const payload = (result as { details?: Record<string, unknown> }).details ?? {};
+    expect(payload.events).toEqual([rawEvent]);
+    const pins = payload.pins as Array<Record<string, unknown>>;
+    expect(pins).toHaveLength(1);
+    expect(pins[0]).toMatchObject({
+      id: "$pin-event",
+      authorTag: "@bot:example.org",
+      content: "pinned message content",
+      eventId: "$pin-event",
+      sender: "@bot:example.org",
+      body: "pinned message content",
+    });
+    expect(typeof pins[0]?.ts).toBe("string");
+  });
+
+  it("projects original target event id for m.replace events", async () => {
+    const cfg = { channels: { matrix: { actions: { pins: true } } } } as CoreConfig;
+    const rawEvent = {
+      eventId: "$edit-123",
+      sender: "@bot:example.org",
+      body: "* edited message",
+      msgtype: "m.text",
+      timestamp: 1718000000000,
+      relatesTo: { relType: "m.replace", eventId: "$original" },
+    };
+    mocks.listMatrixPins.mockResolvedValue({
+      pinned: ["$original"],
+      events: [rawEvent],
+    });
+
+    const result = await handleMatrixAction(
+      { action: "listPins", roomId: "!room:example" }, cfg);
+
+    const payload = (result as { details?: Record<string, unknown> }).details ?? {};
+    const pins = payload.pins as Array<Record<string, unknown>>;
+    expect(pins[0]?.id).toBe("$original");
+    expect(pins[0]?.eventId).toBe("$edit-123");
+  });
+
   it("passes account-scoped opts to member and room info actions", async () => {
     const memberCfg = {
       channels: { matrix: { actions: { memberInfo: true } } },
