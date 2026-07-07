@@ -10,7 +10,7 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { shouldSuppressGoogleChatManualExecApprovalFollowupText } from "./approval-card-actions.js";
 import { getGoogleChatAccessToken } from "./auth.js";
-import type { GoogleChatCardV2, GoogleChatReaction, GoogleChatSpace } from "./types.js";
+import type { GoogleChatCardV2, GoogleChatSpace } from "./types.js";
 
 const CHAT_API_BASE = "https://chat.googleapis.com/v1";
 const CHAT_UPLOAD_BASE = "https://chat.googleapis.com/upload/v1";
@@ -225,28 +225,6 @@ export async function sendGoogleChatMessage(params: {
   return result ? { messageName: result.name, threadName: result.thread?.name } : null;
 }
 
-export async function getGoogleChatSpace(params: {
-  account: ResolvedGoogleChatAccount;
-  space: string;
-}): Promise<GoogleChatSpace> {
-  return await fetchJson<GoogleChatSpace>(params.account, `${CHAT_API_BASE}/${params.space}`, {
-    method: "GET",
-  });
-}
-
-export async function getGoogleChatSpaceMembership(params: {
-  account: ResolvedGoogleChatAccount;
-  space: string;
-  member: string;
-}): Promise<{ name?: string; member?: { name?: string } }> {
-  const member = params.member.replace(/^users\//i, "");
-  return await fetchJson(
-    params.account,
-    `${CHAT_API_BASE}/${params.space}/members/${encodeURIComponent(member)}`,
-    { method: "GET" },
-  );
-}
-
 export async function updateGoogleChatMessage(params: {
   account: ResolvedGoogleChatAccount;
   messageName: string;
@@ -339,44 +317,6 @@ export async function downloadGoogleChatMedia(params: {
   const { account, resourceName, maxBytes } = params;
   const url = `${CHAT_API_BASE}/media/${resourceName}?alt=media`;
   return await fetchBuffer(account, url, undefined, { maxBytes });
-}
-
-export async function createGoogleChatReaction(params: {
-  account: ResolvedGoogleChatAccount;
-  messageName: string;
-  emoji: string;
-}): Promise<GoogleChatReaction> {
-  const { account, messageName, emoji } = params;
-  const url = `${CHAT_API_BASE}/${messageName}/reactions`;
-  return await fetchJson<GoogleChatReaction>(account, url, {
-    method: "POST",
-    body: JSON.stringify({ emoji: { unicode: emoji } }),
-  });
-}
-
-export async function listGoogleChatReactions(params: {
-  account: ResolvedGoogleChatAccount;
-  messageName: string;
-  limit?: number;
-}): Promise<GoogleChatReaction[]> {
-  const { account, messageName, limit } = params;
-  const url = new URL(`${CHAT_API_BASE}/${messageName}/reactions`);
-  if (limit && limit > 0) {
-    url.searchParams.set("pageSize", String(limit));
-  }
-  const result = await fetchJson<{ reactions?: GoogleChatReaction[] }>(account, url.toString(), {
-    method: "GET",
-  });
-  return result.reactions ?? [];
-}
-
-export async function deleteGoogleChatReaction(params: {
-  account: ResolvedGoogleChatAccount;
-  reactionName: string;
-}): Promise<void> {
-  const { account, reactionName } = params;
-  const url = `${CHAT_API_BASE}/${reactionName}`;
-  await fetchOk(account, url, { method: "DELETE" });
 }
 
 export async function findGoogleChatDirectMessage(params: {

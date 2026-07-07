@@ -1423,7 +1423,12 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 emojiType: emoji,
                 accountId: ctx.accountId ?? undefined,
               });
-              const ownReaction = matches.find((entry) => entry.operatorType === "app");
+              const ownReaction = matches.find(
+                (entry) =>
+                  entry.operatorType === "app" &&
+                  Boolean(account.appId) &&
+                  entry.operatorId === account.appId,
+              );
               if (!ownReaction) {
                 return jsonActionResult({ ok: true, removed: null });
               }
@@ -1457,7 +1462,13 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 accountId: ctx.accountId ?? undefined,
               });
               let removed = 0;
-              for (const reaction of reactions.filter((entry) => entry.operatorType === "app")) {
+              const ownReactions = reactions.filter(
+                (entry) =>
+                  entry.operatorType === "app" &&
+                  Boolean(account.appId) &&
+                  entry.operatorId === account.appId,
+              );
+              for (const reaction of ownReactions) {
                 await runtime.removeReactionFeishu({
                   cfg: ctx.cfg,
                   messageId,

@@ -96,7 +96,6 @@ export function createGoogleChatPluginBase(
     setupWizard: googlechatSetupWizard,
     capabilities: {
       chatTypes: ["direct", "group", "thread"],
-      reactions: true,
       threads: true,
       media: true,
       nativeCommands: false,

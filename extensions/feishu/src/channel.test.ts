@@ -1740,8 +1740,10 @@ describe("feishuPlugin actions", () => {
       contentType: "text",
     });
     listReactionsFeishuMock.mockResolvedValueOnce([
-      { reactionId: "r1", operatorType: "app" },
-      { reactionId: "r2", operatorType: "app" },
+      { reactionId: "r1", operatorType: "app", operatorId: "cli_main" },
+      { reactionId: "r2", operatorType: "app", operatorId: "cli_main" },
+      { reactionId: "r-other-app", operatorType: "app", operatorId: "cli_other" },
+      { reactionId: "r-user", operatorType: "user", operatorId: "ou_user" },
     ]);
 
     const result = await feishuPlugin.actions?.handleAction?.({
@@ -1757,6 +1759,18 @@ describe("feishuPlugin actions", () => {
       accountId: undefined,
     });
     expect(removeReactionFeishuMock).toHaveBeenCalledTimes(2);
+    expect(removeReactionFeishuMock).toHaveBeenNthCalledWith(1, {
+      cfg,
+      messageId: "om_msg1",
+      reactionId: "r1",
+      accountId: undefined,
+    });
+    expect(removeReactionFeishuMock).toHaveBeenNthCalledWith(2, {
+      cfg,
+      messageId: "om_msg1",
+      reactionId: "r2",
+      accountId: undefined,
+    });
     const details = resultDetails(result);
     expect(details.ok).toBe(true);
     expect(details.removed).toBe(2);
@@ -1770,7 +1784,10 @@ describe("feishuPlugin actions", () => {
       content: "hello",
       contentType: "text",
     });
-    listReactionsFeishuMock.mockResolvedValueOnce([{ reactionId: "r1", operatorType: "app" }]);
+    listReactionsFeishuMock.mockResolvedValueOnce([
+      { reactionId: "r-other", operatorType: "app", operatorId: "cli_other" },
+      { reactionId: "r1", operatorType: "app", operatorId: "cli_main" },
+    ]);
 
     const result = await feishuPlugin.actions?.handleAction?.({
       action: "react",
@@ -1793,8 +1810,37 @@ describe("feishuPlugin actions", () => {
     expect(resultDetails(result)).toMatchObject({ ok: true, removed: "THUMBSUP" });
   });
 
+  it("does not remove another app's matching reaction", async () => {
+    getMessageFeishuMock.mockResolvedValueOnce({
+      messageId: "om_msg1",
+      chatId: "oc_group_1",
+      chatType: "group",
+      content: "hello",
+      contentType: "text",
+    });
+    listReactionsFeishuMock.mockResolvedValueOnce([
+      { reactionId: "r-other", operatorType: "app", operatorId: "cli_other" },
+      { reactionId: "r-user", operatorType: "user", operatorId: "ou_user" },
+    ]);
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "react",
+      params: {
+        messageId: "om_msg1",
+        chatId: "oc_group_1",
+        emoji: "THUMBSUP",
+        remove: true,
+      },
+      cfg,
+      accountId: undefined,
+    } as never);
+
+    expect(removeReactionFeishuMock).not.toHaveBeenCalled();
+    expect(resultDetails(result)).toMatchObject({ ok: true, removed: null });
+  });
+
   it("lists reactions from an authorized Feishu message", async () => {
-    const reactions = [{ reactionId: "r1", operatorType: "app" }];
+    const reactions = [{ reactionId: "r1", operatorType: "app", operatorId: "cli_main" }];
     getMessageFeishuMock.mockResolvedValueOnce({
       messageId: "om_msg1",
       chatId: "oc_group_1",

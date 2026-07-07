@@ -1,5 +1,4 @@
 // Googlechat plugin module implements channel behavior.
-import type { ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
@@ -61,12 +60,7 @@ const googlechatActions: ChannelMessageActionAdapter = {
     if (accounts.length === 0) {
       return null;
     }
-    const actions = new Set<ChannelMessageActionName>(["send", "upload-file"]);
-    if (accounts.some((account) => account.config.actions?.reactions !== false)) {
-      actions.add("react");
-      actions.add("reactions");
-    }
-    return { actions: Array.from(actions) };
+    return { actions: ["send", "upload-file"] };
   },
   extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),
   handleAction: async (ctx) => {

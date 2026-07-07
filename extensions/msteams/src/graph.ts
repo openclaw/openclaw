@@ -56,10 +56,8 @@ async function requestGraph(params: {
 }): Promise<Response> {
   const hasBody = params.body !== undefined;
   const url = `${params.root ?? GRAPH_ROOT}${params.path}`;
-  const currentFetch = globalThis.fetch;
   const { response, release } = await fetchWithSsrFGuard({
     url,
-    fetchImpl: async (input, guardedInit) => await currentFetch(input, guardedInit),
     init: {
       method: params.method,
       headers: {
