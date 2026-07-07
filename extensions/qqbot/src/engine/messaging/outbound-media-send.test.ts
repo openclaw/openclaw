@@ -2,8 +2,8 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
 const { audioPortMock } = vi.hoisted(() => ({
   audioPortMock: {
@@ -663,36 +663,16 @@ describe("trySendViaHostRead error handling", () => {
   });
 });
 
-// Pin the same UTF-16 boundary behavior that the production error-return
-// sites in outbound-media-send.ts rely on.
-describe("outbound-media-send UTF-16-safe truncation helper", () => {
-  const hasLoneSurrogate = (value: string): boolean => {
-    for (let i = 0; i < value.length; i++) {
-      const code = value.charCodeAt(i);
-      if (code >= 0xd800 && code <= 0xdbff) {
-        const next = value.charCodeAt(i + 1);
-        if (!(next >= 0xdc00 && next <= 0xdfff)) {
-          return true;
-        }
-        i++;
-      } else if (code >= 0xdc00 && code <= 0xdfff) {
-        return true;
-      }
-    }
-    return false;
-  };
-
-  it("truncates error-message media path on UTF-16 boundary", () => {
+// Cap-precise regression for the inline `truncateUtf16Safe` sites touched
+// by this branch: error-message media path (cap 80) in
+// outbound-media-send.ts. Each test pins the exact code-unit output for
+// one cap value, so the "safe truncation" claim is enforced at the
+// boundary, not just on length.
+describe("outbound-media-send UTF-16 truncation cap boundary", () => {
+  it("cap 80 keeps a 79-char ASCII prefix and drops the trailing emoji pair", () => {
     // Mirrors the call shape at outbound-media-send.ts error-return sites
     //   return { channel: "qqbot", error: `Failed to download image: ${truncateUtf16Safe(mediaPath, 80)}` };
-    const mediaPath = "/path/to/测试图片文件🎉🎉🎉剩余路径超过80字符限制的部分被截断.png";
-    const truncated = truncateUtf16Safe(mediaPath, 80);
-    expect(truncated.length).toBeLessThanOrEqual(80);
-    expect(hasLoneSurrogate(truncated)).toBe(false);
-  });
-
-  it("passes plain ASCII paths through unchanged (negative control)", () => {
-    const asciiPath = "/path/to/some-image-file-name-without-special-chars.png";
-    expect(truncateUtf16Safe(asciiPath, 80)).toBe(asciiPath);
+    const safePrefix = "x".repeat(79);
+    expect(truncateUtf16Safe(safePrefix + "🎉 trailing path", 80)).toBe(safePrefix);
   });
 });

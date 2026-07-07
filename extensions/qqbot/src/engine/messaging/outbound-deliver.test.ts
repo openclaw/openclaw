@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayAccount } from "../types.js";
 
 const { sendTextMock, senderSendMediaMock } = vi.hoisted(() => ({
@@ -148,47 +148,23 @@ describe("outbound deliver sandbox media", () => {
   });
 });
 
-// Pin the same UTF-16 boundary behavior that the production debugLog sites
-// in outbound-deliver.ts rely on. The helper is the same one used by 130+
-// other extension sites (Discord, Feishu, Telegram, msteams, voice-call,
-// iMessage, etc.) for log/error preview truncation.
-describe("outbound-deliver UTF-16-safe truncation helper", () => {
-  const hasLoneSurrogate = (value: string): boolean => {
-    for (let i = 0; i < value.length; i++) {
-      const code = value.charCodeAt(i);
-      if (code >= 0xd800 && code <= 0xdbff) {
-        const next = value.charCodeAt(i + 1);
-        if (!(next >= 0xdc00 && next <= 0xdfff)) {
-          return true;
-        }
-        i++;
-      } else if (code >= 0xdc00 && code <= 0xdfff) {
-        return true;
-      }
-    }
-    return false;
-  };
-
-  it("truncates sent-chunk preview on UTF-16 boundary without splitting emoji", () => {
+// Cap-precise regression for the inline `truncateUtf16Safe` sites touched
+// by this branch: sent-chunk preview (cap 50) and media-URL preview
+// (cap 80) in outbound-deliver.ts. Each test pins the exact code-unit
+// output for one cap value, so the "safe truncation" claim is enforced
+// at the boundary, not just on length.
+describe("outbound-deliver UTF-16 truncation cap boundary", () => {
+  it("cap 50 keeps a 49-char ASCII prefix and drops the trailing emoji pair", () => {
     // Mirrors the call shape at outbound-deliver.ts sent-chunk debugLog sites
     //   `Sent text chunk (${chunk.length}/${text.length} chars): ${truncateUtf16Safe(chunk, 50)}...`
-    const input = "测试消息🎉🎉🎉剩余内容这是50个字符文本测试";
-    const truncated = truncateUtf16Safe(input, 50);
-    expect(truncated.length).toBeLessThanOrEqual(50);
-    expect(hasLoneSurrogate(truncated)).toBe(false);
+    const safePrefix = "x".repeat(49);
+    expect(truncateUtf16Safe(safePrefix + "🎉 trailing content", 50)).toBe(safePrefix);
   });
 
-  it("truncates media-URL preview on UTF-16 boundary", () => {
+  it("cap 80 keeps a 79-char ASCII prefix and drops the trailing emoji pair", () => {
     // Mirrors the call shape at the media-URL debugLog / onSuccess sites in
     // outbound-deliver.ts (url.slice / mediaUrl.slice / imgUrl.slice / nextImageUrl.slice).
-    const urlWithEmoji = "https://example.com/测试🎉🎉/path/to/file.jpg";
-    const truncated = truncateUtf16Safe(urlWithEmoji, 80);
-    expect(truncated.length).toBeLessThanOrEqual(80);
-    expect(hasLoneSurrogate(truncated)).toBe(false);
-  });
-
-  it("passes plain ASCII through unchanged (negative control)", () => {
-    const ascii = "https://example.com/path/to/file.jpg";
-    expect(truncateUtf16Safe(ascii, 80)).toBe(ascii);
+    const safePrefix = "x".repeat(79);
+    expect(truncateUtf16Safe(safePrefix + "🎉 trailing url", 80)).toBe(safePrefix);
   });
 });
