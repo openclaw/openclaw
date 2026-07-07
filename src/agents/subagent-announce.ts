@@ -650,7 +650,7 @@ export async function runSubagentAnnounceFlow(params: {
         // Best-effort
       }
     }
-    if (shouldDeleteChildSession) {
+    if (shouldDeleteChildSession && (params.onBeforeDeleteChildSession?.() ?? true)) {
       try {
         await callGatewayForAnnounceFinalize({
           method: "sessions.delete",
