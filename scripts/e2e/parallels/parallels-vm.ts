@@ -17,13 +17,13 @@ export interface EnsureVmRunningOptions extends WaitForVmStatusOptions {
   transitionTimeoutMs?: () => number | undefined;
 }
 
-export function listVmNames(): string[] {
+function listVmNames(): string[] {
   return listVms()
     .map((item) => (item.name ?? "").trim())
     .filter(Boolean);
 }
 
-export function vmStatus(vmName: string, timeoutMs?: number): string {
+function vmStatus(vmName: string, timeoutMs?: number): string {
   return listVms(timeoutMs).find((vm) => vm.name === vmName)?.status || "missing";
 }
 
