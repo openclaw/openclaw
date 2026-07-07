@@ -488,6 +488,18 @@ describe("feishuOutbound.sendText post-md normalization", () => {
       expect((call[0] as { text: string }).text.length).toBeLessThanOrEqual(4000);
     }
   });
+
+  it("marks pre-normalized chunks so sendMessageFeishu does not normalize again", async () => {
+    await sendText({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "line one\nline two",
+      accountId: "main",
+    });
+
+    expect(sendMessageCall()?.text).toBe("line one\n\nline two");
+    expect(sendMessageCall()?.textIsNormalized).toBe(true);
+  });
 });
 
 describe("feishuOutbound.sendPayload native cards", () => {

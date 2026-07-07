@@ -468,6 +468,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expectMockArgFields(sendMessageFeishuMock, "message send params", {
       to: "user:ou_sender",
       text: "line one\n\nline two",
+      textIsNormalized: true,
     });
   });
 

@@ -357,6 +357,7 @@ async function sendOutboundText(params: {
       accountId,
       replyToMessageId,
       replyInThread,
+      textIsNormalized: true,
     });
   }
   return lastResult!;

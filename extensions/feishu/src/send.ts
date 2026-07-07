@@ -531,6 +531,9 @@ export type SendFeishuMessageParams = {
   mentions?: MentionTarget[];
   /** Account ID (optional, uses default if not specified) */
   accountId?: string;
+  /** When true, `text` has already been normalized and table-converted by the caller.
+   *  Skip those steps inside sendMessageFeishu to avoid double work. */
+  textIsNormalized?: boolean;
 };
 
 type FeishuPostMessageElement =
@@ -561,16 +564,17 @@ function buildFeishuPostMentionElements(mentions?: MentionTarget[]): FeishuPostM
 export function buildFeishuPostMessagePayload(params: {
   messageText: string;
   mentions?: MentionTarget[];
+  textIsNormalized?: boolean;
 }): {
   content: string;
   msgType: string;
 } {
-  const { messageText, mentions } = params;
+  const { messageText, mentions, textIsNormalized } = params;
   const content: FeishuPostMessageElement[] = [
     ...buildFeishuPostMentionElements(mentions),
     {
       tag: "md",
-      text: normalizeFeishuPostMarkdownNewlines(messageText),
+      text: textIsNormalized ? messageText : normalizeFeishuPostMarkdownNewlines(messageText),
     },
   ];
   return {
@@ -595,6 +599,7 @@ export async function sendMessageFeishu(
     allowTopLevelReplyFallback,
     mentions,
     accountId,
+    textIsNormalized,
   } = params;
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
   const tableMode = resolveMarkdownTableMode({
@@ -602,9 +607,15 @@ export async function sendMessageFeishu(
     channel: "feishu",
   });
 
-  const messageText = convertMarkdownTables(text ?? "", tableMode);
+  const messageText = textIsNormalized
+    ? (text ?? "")
+    : convertMarkdownTables(text ?? "", tableMode);
 
-  const { content, msgType } = buildFeishuPostMessagePayload({ messageText, mentions });
+  const { content, msgType } = buildFeishuPostMessagePayload({
+    messageText,
+    mentions,
+    textIsNormalized,
+  });
 
   const directParams = { receiveId, receiveIdType, content, msgType };
   return sendReplyOrFallbackDirect(client, {

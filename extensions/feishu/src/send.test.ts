@@ -125,6 +125,26 @@ describe("buildFeishuPostMessagePayload", () => {
     });
   });
 
+  it("preserves caller-normalized text when textIsNormalized is true", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "line one\nline two",
+      textIsNormalized: true,
+    });
+
+    expect(JSON.parse(payload.content)).toEqual({
+      zh_cn: {
+        content: [
+          [
+            {
+              tag: "md",
+              text: "line one\nline two",
+            },
+          ],
+        ],
+      },
+    });
+  });
+
   it("preserves fenced code block newlines when upgrading paragraph breaks", () => {
     const payload = buildFeishuPostMessagePayload({
       messageText: "intro\n```\ncode line one\ncode line two\n```\noutro",
