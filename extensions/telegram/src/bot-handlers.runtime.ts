@@ -2003,6 +2003,9 @@ export const registerTelegramHandlers = ({
       if (!reaction) {
         return;
       }
+      if (!reaction?.chat) {
+        return;
+      }
       if (shouldSkipUpdate(ctx)) {
         return;
       }
