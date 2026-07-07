@@ -313,7 +313,7 @@ export async function readResponseTextSnippet(
     return undefined;
   }
   if (collapsed.length > maxChars) {
-    return `${collapsed.slice(0, maxChars)}…`;
+    return `${Array.from(collapsed).slice(0, maxChars).join("")}…`;
   }
   return prefix.truncated ? `${collapsed}…` : collapsed;
 }
