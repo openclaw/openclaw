@@ -304,14 +304,7 @@ export async function listPinsMSTeams(
 // Reactions
 // ---------------------------------------------------------------------------
 
-export const TEAMS_REACTION_TYPES = [
-  "like",
-  "heart",
-  "laugh",
-  "surprised",
-  "sad",
-  "angry",
-] as const;
+const TEAMS_REACTION_TYPES = ["like", "heart", "laugh", "surprised", "sad", "angry"] as const;
 type TeamsReactionType = (typeof TEAMS_REACTION_TYPES)[number];
 
 type GraphReaction = {
