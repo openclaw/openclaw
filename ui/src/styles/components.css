@@ -1,4 +1,48 @@
 /* ===========================================
+   Connect Splash (first connect with stored credentials)
+   =========================================== */
+
+.connect-splash {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  height: 100dvh;
+  max-height: 100%;
+  background: var(--bg);
+  /* Stay invisible past fast handshakes so a quick connect paints nothing. */
+  opacity: 0;
+  animation: fade-in 0.3s var(--ease-out) 0.2s forwards;
+}
+
+.connect-splash__logo {
+  width: 44px;
+  height: 44px;
+  animation: connect-splash-wiggle 1.8s ease-in-out infinite;
+}
+
+@keyframes connect-splash-wiggle {
+  0%,
+  100% {
+    transform: rotate(-6deg);
+  }
+  50% {
+    transform: rotate(6deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .connect-splash {
+    opacity: 1;
+    animation: none;
+  }
+
+  .connect-splash__logo {
+    animation: none;
+  }
+}
+
+/* ===========================================
    Login Gate
    =========================================== */
 
@@ -629,7 +673,6 @@
   background: var(--danger-subtle);
   color: var(--danger);
 }
-
 
 /* ===========================================
    Status Dot - With glow for emphasis
