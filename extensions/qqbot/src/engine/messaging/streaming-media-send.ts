@@ -5,8 +5,8 @@
  * 拆分、路径编码修复，以及统一的发送队列执行器。
  */
 
-import type { GatewayAccount } from "../types.js";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import type { GatewayAccount } from "../types.js";
 import { normalizePath } from "../utils/platform.js";
 import type { OutboundMediaAccessContext } from "./outbound-types.js";
 import {

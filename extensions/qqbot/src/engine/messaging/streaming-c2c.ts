@@ -15,8 +15,8 @@
  *    it is treated as a new message.
  */
 
-import { getNextMsgSeq } from "../api/routes.js";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { getNextMsgSeq } from "../api/routes.js";
 import type { GatewayAccount } from "../types.js";
 import {
   StreamInputMode,

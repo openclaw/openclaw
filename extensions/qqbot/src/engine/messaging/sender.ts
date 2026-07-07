@@ -25,6 +25,7 @@
  */
 
 import os from "node:os";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { ApiClient } from "../api/api-client.js";
 import { ChunkedMediaApi as ChunkedMediaApiClass } from "../api/media-chunked.js";
 import { downloadDirectUploadUrl, MediaApi as MediaApiClass } from "../api/media.js";
@@ -41,7 +42,6 @@ import {
   type OutboundMeta,
   type UploadMediaResponse,
 } from "../types.js";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getMaxUploadSize, LARGE_FILE_THRESHOLD } from "../utils/file-utils.js";
 import { formatErrorMessage } from "../utils/format.js";
 import { debugLog, debugError, debugWarn } from "../utils/log.js";

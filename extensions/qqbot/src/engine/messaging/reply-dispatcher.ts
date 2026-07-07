@@ -282,12 +282,7 @@ function resolveStructuredPayloadPath(
 }
 
 function sanitizeForLog(value: string, maxLen = 200): string {
-  return truncateUtf16Safe(
-    value
-      .replace(/[\r\n\t]/g, " ")
-      .replaceAll("\0", " "),
-    maxLen,
-  );
+  return truncateUtf16Safe(value.replace(/[\r\n\t]/g, " ").replaceAll("\0", " "), maxLen);
 }
 
 function describeMediaTargetForLog(pathValue: string, isHttpUrl: boolean): string {
