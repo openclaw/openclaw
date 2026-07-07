@@ -12,7 +12,7 @@ scenario:
     channels:
       matrix:
         accounts:
-          sut:
+          $selectedAccount:
             dm:
               sessionScope: per-room
   successCriteria:

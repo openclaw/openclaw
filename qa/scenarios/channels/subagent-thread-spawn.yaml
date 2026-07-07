@@ -14,7 +14,7 @@ scenario:
     channels:
       matrix:
         accounts:
-          sut:
+          $selectedAccount:
             threadBindings:
               enabled: true
               spawnSessions: true

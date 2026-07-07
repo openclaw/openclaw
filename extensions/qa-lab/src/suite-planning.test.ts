@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { defaultQaSuiteConcurrencyForTransport } from "./qa-transport-registry.js";
+import { readQaScenarioById } from "./scenario-catalog.js";
 import {
   collectQaSuiteGatewayConfigPatch,
   collectQaSuiteGatewayRuntimeOptions,
@@ -399,6 +400,22 @@ describe("qa suite planning helpers", () => {
 
     expect(patch).toEqual({ plugins: { entries: {} } });
     expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
+  });
+
+  it("targets the selected adapter account in scenario startup config patches", () => {
+    const scenarios = [readQaScenarioById("thread-reply-override")];
+
+    expect(collectQaSuiteGatewayConfigPatch(scenarios, "matrix-alt")).toEqual({
+      channels: {
+        matrix: {
+          accounts: {
+            "matrix-alt": {
+              threadReplies: "always",
+            },
+          },
+        },
+      },
+    });
   });
 
   it("collects gateway runtime options across selected scenarios", () => {

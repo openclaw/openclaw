@@ -11,7 +11,7 @@ scenario:
     channels:
       matrix:
         accounts:
-          sut:
+          $selectedAccount:
             threadReplies: always
   successCriteria:
     - A top-level Matrix inbound message receives the requested marker.

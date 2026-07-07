@@ -194,18 +194,50 @@ function collectQaSuitePluginIds(
   ];
 }
 
+const QA_GATEWAY_CONFIG_SELECTED_ACCOUNT_KEY = "$selectedAccount";
+
+// Scenario patches resolve this reserved object key against the adapter's selected account before
+// merging, so CLI account overrides cannot leave configuration on an inactive default account.
+function resolveQaGatewayConfigPatchSelectedAccount(
+  patch: unknown,
+  selectedAccountId: string,
+): unknown {
+  if (Array.isArray(patch)) {
+    return patch.map((entry) =>
+      resolveQaGatewayConfigPatchSelectedAccount(entry, selectedAccountId),
+    );
+  }
+  if (!isQaMergePatchObject(patch)) {
+    return patch;
+  }
+  const resolved: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(patch)) {
+    const resolvedKey = key === QA_GATEWAY_CONFIG_SELECTED_ACCOUNT_KEY ? selectedAccountId : key;
+    Object.defineProperty(resolved, resolvedKey, {
+      configurable: true,
+      enumerable: true,
+      value: resolveQaGatewayConfigPatchSelectedAccount(value, selectedAccountId),
+      writable: true,
+    });
+  }
+  return resolved;
+}
+
 function collectQaSuiteGatewayConfigPatch(
   scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"],
+  selectedAccountId = "sut",
 ): Record<string, unknown> | undefined {
+  const resolvedSelectedAccountId = selectedAccountId.trim() || "sut";
   let merged: Record<string, unknown> | undefined;
   for (const scenario of scenarios) {
     if (!isQaMergePatchObject(scenario.gatewayConfigPatch)) {
       continue;
     }
-    merged = applyQaMergePatch(merged ?? {}, scenario.gatewayConfigPatch) as Record<
-      string,
-      unknown
-    >;
+    const resolvedPatch = resolveQaGatewayConfigPatchSelectedAccount(
+      scenario.gatewayConfigPatch,
+      resolvedSelectedAccountId,
+    );
+    merged = applyQaMergePatch(merged ?? {}, resolvedPatch) as Record<string, unknown>;
   }
   return merged;
 }

@@ -88,6 +88,30 @@ describe("matrix qa cli registration", () => {
     expect(optionNames).not.toContain("--credential-role");
   });
 
+  it("passes a non-default selected account into an affected shared flow", async () => {
+    process.env.OPENCLAW_QA_MATRIX_DISABLE_FORCE_EXIT = "1";
+    const qa = new Command();
+    matrixQaCliRegistration.register(qa);
+    runQaMatrixCommand.mockResolvedValue(undefined);
+
+    await qa.parseAsync([
+      "node",
+      "openclaw",
+      "matrix",
+      "--scenario",
+      "thread-reply-override",
+      "--sut-account",
+      "matrix-alt",
+    ]);
+
+    expect(runQaMatrixCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scenarioIds: ["thread-reply-override"],
+        sutAccountId: "matrix-alt",
+      }),
+    );
+  });
+
   it("exits with failure after Matrix artifacts are written for a failed run", async () => {
     const qa = new Command();
     matrixQaCliRegistration.register(qa);
