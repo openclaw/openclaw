@@ -1,6 +1,5 @@
 // Markdown Core module implements ir behavior.
 import MarkdownIt from "markdown-it";
-import markdownItCjkFriendly from "markdown-it-cjk-friendly";
 import { chunkText } from "./chunk-text.js";
 import type { MarkdownTableMode } from "./types.js";
 
@@ -15,7 +14,11 @@ type LinkState = {
   labelStart: number;
 };
 
+type MarkdownInlineState = InstanceType<MarkdownIt["inline"]["State"]>;
+type MarkdownDelimiterScan = ReturnType<MarkdownInlineState["scanDelims"]>;
+
 const OPEN_MARKDOWN_HTML_TAG_PATTERN = /<\/?[a-zA-Z][a-zA-Z0-9-]*\b[^<>]*$/;
+const ASTERISK_CODE_POINT = 0x2a;
 
 type RenderEnv = {
   listStack: ListState[];
@@ -151,7 +154,7 @@ function createMarkdownIt(options: MarkdownParseOptions): MarkdownIt {
     breaks: false,
     typographer: false,
   });
-  md.use(markdownItCjkFriendly);
+  enableCjkFriendlyAsteriskClose(md);
   md.enable("strikethrough");
   if (options.tableMode && options.tableMode !== "off") {
     md.enable("table");
@@ -162,6 +165,69 @@ function createMarkdownIt(options: MarkdownParseOptions): MarkdownIt {
     md.disable("autolink");
   }
   return md;
+}
+
+// CommonMark keeps `**标签：**正文` literal because the close sits after punctuation
+// and CJK text has no required space after it. Preserve the default scan first,
+// then relax only that CJK/full-width asterisk-close boundary.
+function enableCjkFriendlyAsteriskClose(md: MarkdownIt): void {
+  const PreviousState = md.inline.State;
+  class CjkFriendlyState extends PreviousState {
+    override scanDelims(start: number, canSplitWord: boolean): MarkdownDelimiterScan {
+      const scanned = super.scanDelims(start, canSplitWord);
+      if (
+        scanned.can_close ||
+        !canSplitWord ||
+        this.src.charCodeAt(start) !== ASTERISK_CODE_POINT ||
+        !isCjkFriendlyCloseBoundary(this.src, start)
+      ) {
+        return scanned;
+      }
+      return { ...scanned, can_close: true };
+    }
+  }
+  md.inline.State = CjkFriendlyState;
+}
+
+function isCjkFriendlyCloseBoundary(source: string, delimiterStart: number): boolean {
+  const previous = codePointBefore(source, delimiterStart);
+  if (previous === undefined || !isCjkFriendlyDelimiterNeighbor(previous)) {
+    return false;
+  }
+  const next = codePointAfterDelimiterRun(source, delimiterStart);
+  return next !== undefined && !isMarkdownWhitespace(next);
+}
+
+function codePointBefore(source: string, index: number): number | undefined {
+  if (index <= 0) {
+    return undefined;
+  }
+  const highSurrogateStart = index - 2;
+  const codePoint = highSurrogateStart >= 0 ? source.codePointAt(highSurrogateStart) : undefined;
+  if (codePoint !== undefined && codePoint > 0xffff) {
+    return codePoint;
+  }
+  return source.codePointAt(index - 1);
+}
+
+function codePointAfterDelimiterRun(source: string, index: number): number | undefined {
+  let nextIndex = index;
+  while (source.charCodeAt(nextIndex) === ASTERISK_CODE_POINT) {
+    nextIndex += 1;
+  }
+  return source.codePointAt(nextIndex);
+}
+
+function isCjkFriendlyDelimiterNeighbor(codePoint: number): boolean {
+  const char = String.fromCodePoint(codePoint);
+  return (
+    /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(char) ||
+    /[\u3000-\u303f\uff00-\uffef]/u.test(char)
+  );
+}
+
+function isMarkdownWhitespace(codePoint: number): boolean {
+  return /\s/u.test(String.fromCodePoint(codePoint));
 }
 
 function getAttr(token: MarkdownToken, name: string): string | null {
