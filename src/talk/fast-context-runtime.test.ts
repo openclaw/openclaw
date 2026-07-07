@@ -12,6 +12,22 @@ vi.mock("../plugins/memory-runtime.js", () => ({
 
 import { resolveRealtimeVoiceFastContextConsult } from "./fast-context-runtime.js";
 
+function hasLoneSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next < 0xdc00 || next > 0xdfff) {
+        return true;
+      }
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
 describe("resolveRealtimeVoiceFastContextConsult", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -78,5 +94,44 @@ describe("resolveRealtimeVoiceFastContextConsult", () => {
       "[talk] fast context lookup failed: fast context lookup timed out after 25ms",
     );
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("keeps truncated context snippets well-formed at UTF-16 boundaries", async () => {
+    mocks.getActiveMemorySearchManager.mockResolvedValue({
+      manager: {
+        search: vi.fn().mockResolvedValue([
+          {
+            path: "memory.md",
+            startLine: 10,
+            endLine: 12,
+            snippet: `${"a".repeat(698)}😀 tail`,
+            source: "memory",
+            score: 0.9,
+          },
+        ]),
+      },
+    });
+
+    const result = await resolveRealtimeVoiceFastContextConsult({
+      cfg: {},
+      agentId: "main",
+      sessionKey: "voice:15550001234",
+      config: {
+        enabled: true,
+        timeoutMs: 1_000,
+        maxResults: 3,
+        sources: ["memory", "sessions"],
+        fallbackToConsult: true,
+      },
+      args: { question: "What do you remember?" },
+      logger: {},
+    });
+
+    expect(result.handled).toBe(true);
+    if (!result.handled) {
+      return;
+    }
+    expect(result.result.text).toContain(`${"a".repeat(698)}...`);
+    expect(hasLoneSurrogate(result.result.text)).toBe(false);
   });
 });
