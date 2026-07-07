@@ -285,7 +285,7 @@ export async function handleSlackAction(
         return jsonResult({ ok: true, removed: emoji });
       }
       if (isEmpty) {
-        assertSlackReadTargetAllowed({ account, cfg, channelId });
+        await assertReadTargetAllowed(channelId);
         const removed = writeOpts
           ? await slackActionRuntime.removeOwnSlackReactions(channelId, messageId, writeOpts)
           : await slackActionRuntime.removeOwnSlackReactions(channelId, messageId);
