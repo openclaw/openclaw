@@ -4,14 +4,19 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.LruCache
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import okhttp3.Authenticator
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.CookieJar
 import okhttp3.Dns
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import okhttp3.ResponseBody
 import okio.Buffer
 import org.commonmark.node.Code
@@ -28,6 +33,7 @@ import java.net.URI
 import java.net.UnknownHostException
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resume
 import kotlin.math.max
 
 internal const val LINK_PREVIEW_TITLE_MAX_CHARS = 120
@@ -136,7 +142,7 @@ internal class LinkPreviewFetcher(
       fetchImageBlocking(url)
     }
 
-  private fun fetchBlocking(originalUrl: String): LinkPreviewResult {
+  private suspend fun fetchBlocking(originalUrl: String): LinkPreviewResult {
     val response =
       fetchBody(
         originalUrl = originalUrl,
@@ -152,7 +158,7 @@ internal class LinkPreviewFetcher(
     }
   }
 
-  private fun fetchImageBlocking(url: String): LinkPreviewImageResult {
+  private suspend fun fetchImageBlocking(url: String): LinkPreviewImageResult {
     val response =
       fetchBody(
         originalUrl = url,
@@ -169,7 +175,7 @@ internal class LinkPreviewFetcher(
     return LinkPreviewImageResult.Loaded(bitmap)
   }
 
-  private fun fetchBody(
+  private suspend fun fetchBody(
     originalUrl: String,
     accept: String,
     allowedContentTypes: Set<String>,
@@ -198,7 +204,7 @@ internal class LinkPreviewFetcher(
       val call = client.newCall(request)
       call.timeout().timeout(remainingNanos, TimeUnit.NANOSECONDS)
 
-      val response = runCatching { call.execute() }.getOrElse { return null }
+      val response = call.awaitResponse() ?: return null
       response.use {
         if (it.isRedirect) {
           if (redirects >= LINK_PREVIEW_MAX_REDIRECTS) return null
@@ -211,12 +217,7 @@ internal class LinkPreviewFetcher(
         val contentTypeName = "${contentType.type}/${contentType.subtype}".lowercase(Locale.US)
         if (contentTypeName !in allowedContentTypes) return null
 
-        val bytes =
-          try {
-            readBody(it.body, maxBytes, rejectOversizedBody)
-          } catch (_: IOException) {
-            return null
-          } ?: return null
+        val bytes = call.awaitBodyRead { readBody(it.body, maxBytes, rejectOversizedBody) } ?: return null
         return LinkPreviewFetchedBody(
           url = currentUrl,
           bytes = bytes,
@@ -227,6 +228,51 @@ internal class LinkPreviewFetcher(
     }
   }
 }
+
+private suspend fun Call.awaitResponse(): Response? =
+  suspendCancellableCoroutine { continuation ->
+    continuation.invokeOnCancellation { cancel() }
+    enqueue(
+      object : Callback {
+        override fun onFailure(
+          call: Call,
+          e: IOException,
+        ) {
+          if (continuation.isActive) {
+            continuation.resume(null)
+          }
+        }
+
+        override fun onResponse(
+          call: Call,
+          response: Response,
+        ) {
+          if (continuation.isActive) {
+            continuation.resume(response) { _, cancelledResponse, _ ->
+              cancelledResponse.close()
+            }
+          } else {
+            response.close()
+          }
+        }
+      },
+    )
+  }
+
+private suspend fun <T> Call.awaitBodyRead(block: () -> T?): T? =
+  suspendCancellableCoroutine { continuation ->
+    continuation.invokeOnCancellation { cancel() }
+    try {
+      val result = block()
+      if (continuation.isActive) {
+        continuation.resume(result)
+      }
+    } catch (_: IOException) {
+      if (continuation.isActive) {
+        continuation.resume(null)
+      }
+    }
+  }
 
 private data class LinkPreviewFetchedBody(
   val url: HttpUrl,
