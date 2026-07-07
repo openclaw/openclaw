@@ -101,7 +101,10 @@ struct ChatSessionSidebarModelTests {
     }
 
     @Test func `global aliases select their agent wrapped row`() {
-        let sessions = [self.entry(key: "agent:ops:global", updatedAt: 100)]
+        let sessions = [
+            self.entry(key: "global", updatedAt: 200),
+            self.entry(key: "agent:ops:global", updatedAt: 100, archived: true),
+        ]
         let sections = ChatSessionSidebarModel.sections(
             sessions: sessions,
             currentSessionKey: "global",
@@ -109,6 +112,11 @@ struct ChatSessionSidebarModelTests {
             activeAgentID: "ops",
             query: "")
 
+        #expect(ChatSessionSidebarModel.selectedSessionKey(
+            sessions: sessions,
+            currentSessionKey: "global",
+            mainSessionKey: "agent:main:main",
+            activeAgentID: "ops") == "agent:ops:global")
         #expect(sections.flatMap(\.sessions).map(\.key) == ["agent:ops:global"])
     }
 

@@ -69,6 +69,23 @@ enum ChatSessionSidebarModel {
         mainSessionKey: String,
         activeAgentID: String?) -> String
     {
+        let normalizedCurrent = currentSessionKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedAgent = activeAgentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let preferredAliasKey = if normalizedCurrent == "global",
+                                   let normalizedAgent,
+                                   !normalizedAgent.isEmpty
+        {
+            "agent:\(normalizedAgent):global"
+        } else if normalizedCurrent == "main" {
+            mainSessionKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        } else {
+            ""
+        }
+        // The selected wrapper is the active session even when archived;
+        // active rows stay visible until the user leaves them.
+        if let preferred = sessions.first(where: { $0.key.lowercased() == preferredAliasKey }) {
+            return preferred.key
+        }
         if sessions.contains(where: { $0.key == currentSessionKey }) {
             return currentSessionKey
         }
@@ -108,7 +125,13 @@ enum ChatSessionSidebarModel {
             currentSessionKey: currentSessionKey,
             mainSessionKey: mainSessionKey,
             activeAgentID: activeAgentID)
+        let normalizedCurrent = currentSessionKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let selectedIsResolvedAlias = (normalizedCurrent == "main" || normalizedCurrent == "global") &&
+            selectedSessionKey.lowercased() != normalizedCurrent
         var entries = sessions.filter { entry in
+            if selectedIsResolvedAlias, entry.key.lowercased() == normalizedCurrent {
+                return false
+            }
             entry.key == selectedSessionKey ||
                 (!self.isHiddenInternalSession(entry.key) && entry.archived != true)
         }
