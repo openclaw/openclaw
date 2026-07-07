@@ -80,4 +80,11 @@ describe("session-memory transcript extraction", () => {
       "assistant: Answer [REMOVED_SPECIAL_TOKEN]",
     );
   });
+
+  it("returns null for oversized transcripts instead of buffering them", async () => {
+    const oversized = `${message("user", "x".repeat(1024))}\n${message("user", "x".repeat(16 * 1024 * 1024))}\n`;
+    const transcriptPath = await writeTranscript(oversized);
+
+    await expect(getRecentSessionContent(transcriptPath)).resolves.toBeNull();
+  });
 });

@@ -1,9 +1,14 @@
 // Session memory transcript helpers persist compact session transcript excerpts.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readRegularFile } from "../../../infra/regular-file.js";
 import { sanitizeModelSpecialTokens } from "../../../security/external-content.js";
 import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
+
+// Session transcripts are JSONL files; a generous cap prevents a runaway file
+// from OOMing the memory-extraction path while covering normal session sizes.
+const SESSION_TRANSCRIPT_MAX_BYTES = 16 * 1024 * 1024;
 
 const SESSION_MEMORY_TOOL_DIRECTIVE_PREFIX = String.raw`(?:(?:\|DSML\|)|(?:\uFF5CDSML\uFF5C))?`;
 const SESSION_MEMORY_TOOL_DIRECTIVE_KIND = String.raw`(?:tool_calls?|function_calls?|tool_use_error)`;
@@ -61,7 +66,11 @@ export async function getRecentSessionContent(
   messageCount = 15,
 ): Promise<string | null> {
   try {
-    const content = await fs.readFile(sessionFilePath, "utf-8");
+    const { buffer } = await readRegularFile({
+      filePath: sessionFilePath,
+      maxBytes: SESSION_TRANSCRIPT_MAX_BYTES,
+    });
+    const content = buffer.toString("utf-8");
     const lines = content.trim().split("\n");
 
     const allMessages: string[] = [];
