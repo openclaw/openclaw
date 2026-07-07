@@ -273,6 +273,8 @@ export type RunEmbeddedAgentParams = {
   silentReplyPromptMode?: SilentReplyPromptMode;
   internalEvents?: AgentInternalEvent[];
   inputProvenance?: InputProvenance;
+  /** Internal runs can execute without surfacing visible session/message side effects. */
+  sessionEffects?: "visible" | "internal";
   streamParams?: AgentStreamParams;
   ownerNumbers?: string[];
   enforceFinalTag?: boolean;

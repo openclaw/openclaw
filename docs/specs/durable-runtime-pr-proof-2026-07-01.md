@@ -34,13 +34,16 @@ git diff --check
 
 Results:
 
-Latest private durable-core-only rerun on 2026-07-07:
+Latest private durable-core-only rerun on 2026-07-07 23:09 GMT+7:
 
-- durable/gateway/context-ref shard: passed, 125 tests across 17 files;
+- durable/gateway/context-ref shard: passed, 55 tests across 15 files;
 - `pnpm tsgo:core`: passed;
 - `pnpm tsgo:core:test`: passed;
-- `pnpm lint:kysely`: passed;
+- `pnpm lint:kysely`: passed with `Kysely guardrails OK`;
 - `git diff --check`: passed.
+
+The prior `sessionEffects` typecheck blocker is fixed by carrying the existing
+embedded-agent internal session-effect option on `RunEmbeddedAgentParams`.
 
 Earlier Workboard extension shards and full build were intentionally removed
 from this proof narrative because they are outside durable-core private review
