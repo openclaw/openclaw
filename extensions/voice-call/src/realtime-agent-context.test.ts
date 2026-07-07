@@ -93,4 +93,29 @@ describe("buildRealtimeVoiceInstructions", () => {
     expect(instructions).toContain("### IDENTITY.md");
     expect(instructions).not.toContain("do not include");
   });
+
+  it("truncates injected context without splitting UTF-16 surrogate pairs", async () => {
+    const agentId = `abc\uD83D\uDE80tail`;
+    const config = createConfig({
+      agentContext: {
+        enabled: true,
+        maxChars: "OpenClaw agent voice context:\n\n- Agent id: abc".length + 33,
+        includeIdentity: false,
+        includeWorkspaceFiles: false,
+        files: [],
+      },
+    });
+    config.agentId = agentId;
+
+    const instructions = await buildRealtimeVoiceInstructions({
+      baseInstructions: "Base voice instructions.",
+      config,
+      coreConfig: { agents: { list: [{ id: agentId }] } } as CoreConfig,
+      agentRuntime: createAgentRuntime(await createWorkspace()),
+    });
+
+    expect(instructions).toContain("- Agent id: abc\n[truncated]");
+    expect(instructions).not.toContain("\uD83D");
+    expect(instructions).not.toContain("\uDE80");
+  });
 });
