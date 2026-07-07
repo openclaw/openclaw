@@ -1775,6 +1775,13 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/lib/ios-version.ts",
         ["test/scripts/ios-version.test.ts", "test/scripts/ios-pin-version.test.ts"],
       ],
+      ["scripts/lib/vitest-local-scheduling.mjs", ["test/scripts/vitest-local-scheduling.test.ts"]],
+      ["scripts/qa-e2e.ts", ["test/scripts/qa-e2e.test.ts"]],
+      ["scripts/qa-lab-up.ts", ["test/scripts/qa-lab-up.test.ts"]],
+      ["scripts/qa-coverage-report.ts", ["test/scripts/qa-report-cli.test.ts"]],
+      ["scripts/qa-parity-report.ts", ["test/scripts/qa-report-cli.test.ts"]],
+      ["scripts/qa/render-maturity-docs.ts", ["test/scripts/render-maturity-docs.test.ts"]],
+      ["scripts/watch-node.mjs", ["test/scripts/watch-node.test.ts"]],
       [
         ".github/images/live-media-runner/Dockerfile",
         ["test/scripts/package-acceptance-workflow.test.ts"],
@@ -2008,22 +2015,10 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/lib/plugin-npm-release.ts",
         ["test/plugin-npm-release.test.ts", "test/plugin-clawhub-release.test.ts"],
       ],
-      [
-        "scripts/plugin-clawhub-release-check.ts",
-        ["test/scripts/release-wrapper-scripts.test.ts"],
-      ],
-      [
-        "scripts/plugin-clawhub-release-plan.ts",
-        ["test/scripts/release-wrapper-scripts.test.ts"],
-      ],
-      [
-        "scripts/plugin-npm-release-check.ts",
-        ["test/scripts/release-wrapper-scripts.test.ts"],
-      ],
-      [
-        "scripts/plugin-npm-release-plan.ts",
-        ["test/scripts/release-wrapper-scripts.test.ts"],
-      ],
+      ["scripts/plugin-clawhub-release-check.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
+      ["scripts/plugin-clawhub-release-plan.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
+      ["scripts/plugin-npm-release-check.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
+      ["scripts/plugin-npm-release-plan.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
       [
         "scripts/plugin-release-pretag-pack-check.ts",
         ["test/scripts/plugin-release-pretag-pack-check.test.ts"],
