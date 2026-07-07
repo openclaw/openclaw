@@ -95,6 +95,7 @@ function normalizeId(value: unknown): string {
 
 export function buildAgentSessionKey(params: {
   agentId: string;
+  mainKey?: string;
   channel: string;
   accountId?: string | null;
   peer?: RoutePeer | null;
@@ -106,7 +107,7 @@ export function buildAgentSessionKey(params: {
   const peer = params.peer;
   return buildAgentPeerSessionKey({
     agentId: params.agentId,
-    mainKey: DEFAULT_MAIN_KEY,
+    mainKey: params.mainKey ?? DEFAULT_MAIN_KEY,
     channel,
     accountId: params.accountId,
     peerKind: peer?.kind ?? "direct",
@@ -666,6 +667,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     const effectiveDmScope = sessionOverride?.dmScope ?? dmScope;
     const sessionKey = buildAgentSessionKey({
       agentId: resolvedAgentId,
+      mainKey: input.cfg.session?.mainKey,
       channel,
       accountId,
       peer,
@@ -675,7 +677,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     const mainSessionKey = normalizeLowercaseStringOrEmpty(
       buildAgentMainSessionKey({
         agentId: resolvedAgentId,
-        mainKey: DEFAULT_MAIN_KEY,
+        mainKey: input.cfg.session?.mainKey,
       }),
     );
     const route = {

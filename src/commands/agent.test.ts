@@ -1619,6 +1619,7 @@ describe("agentCommand", () => {
       callArgs = getLastEmbeddedCall();
       expect(callArgs?.sessionKey).toBe("agent:ops:whatsapp:group:120363040000000000@g.us");
 
+      cfg.session = { ...cfg.session, dmScope: "main", mainKey: "work" };
       await agentCommand(
         {
           message: "hi",
@@ -1630,7 +1631,7 @@ describe("agentCommand", () => {
         runtime,
       );
       callArgs = getLastEmbeddedCall();
-      expect(callArgs?.sessionKey).toBe("agent:ops:main");
+      expect(callArgs?.sessionKey).toBe("agent:ops:work");
     });
   });
 

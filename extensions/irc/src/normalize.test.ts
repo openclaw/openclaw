@@ -35,10 +35,25 @@ describe("irc normalize", () => {
       sessionKey: "agent:main:irc:direct:alice",
       peer: { kind: "direct", id: "alice" },
       chatType: "direct",
-      recipientSessionExact: false,
+      recipientSessionExact: "direct-alias",
       to: "alice",
     });
     expect(resolveIrcOutboundSessionRoute({ cfg, agentId: "main", target: "\n" })).toBeNull();
+  });
+
+  it("collapses direct aliases to the configured shared main session", () => {
+    expect(
+      resolveIrcOutboundSessionRoute({
+        cfg: { session: { dmScope: "main", mainKey: "work" } },
+        agentId: "ops",
+        target: "user:alice",
+      }),
+    ).toMatchObject({
+      sessionKey: "agent:ops:work",
+      baseSessionKey: "agent:ops:work",
+      recipientSessionExact: "direct-alias",
+      chatType: "direct",
+    });
   });
 
   it("normalizes allowlist entries", () => {

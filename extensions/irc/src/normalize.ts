@@ -57,7 +57,7 @@ export function resolveIrcOutboundSessionRoute(params: {
     agentId: params.agentId,
     channel: "irc",
     accountId: params.accountId,
-    recipientSessionExact: false,
+    recipientSessionExact: chatType === "direct" ? "direct-alias" : false,
     peer: { kind: chatType, id: target },
     chatType,
     from: `irc:${target}`,
