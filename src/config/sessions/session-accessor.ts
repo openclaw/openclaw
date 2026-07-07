@@ -40,11 +40,6 @@ import {
   type PluginHostSessionCleanupStoreParams,
 } from "./plugin-host-cleanup.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
-import {
-  buildForkedBranchEntries,
-  forkSourceHasAssistantEntry,
-  readForkSourceTranscript,
-} from "./session-fork-transcript.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import type {
   ResolvedSessionMaintenanceConfig,
@@ -462,6 +457,13 @@ type SessionEntryRetirement = {
 
 const loadSessionArchiveRuntime = createLazyRuntimeModule(
   () => import("../../gateway/session-archive.runtime.js"),
+);
+
+// Fork-source reading parses legacy transcript versions through the agents
+// session-manager; load it lazily so accessor consumers do not pull that
+// runtime (and its module-init package metadata reads) at import time.
+const loadSessionForkTranscriptRuntime = createLazyRuntimeModule(
+  () => import("./session-fork-transcript.runtime.js"),
 );
 
 export type SessionEntryPatchOptions = {
@@ -1530,6 +1532,8 @@ export async function forkSessionFromParentTranscript(
     return { status: "missing-parent" };
   }
   try {
+    const { buildForkedBranchEntries, forkSourceHasAssistantEntry, readForkSourceTranscript } =
+      await loadSessionForkTranscriptRuntime();
     const source = await readForkSourceTranscript(parentSessionFile);
     if (!source) {
       return { status: "failed" };

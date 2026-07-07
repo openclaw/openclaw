@@ -54,7 +54,7 @@ const browserMaintenanceMocks = vi.hoisted(() => ({
 
 type ForkSessionParamsForTest = {
   parentEntry: SessionEntry;
-  sessionsDir: string;
+  storePath: string;
 };
 
 vi.mock("./session-fork.js", () => ({
@@ -450,10 +450,11 @@ beforeEach(() => {
   });
   sessionForkMocks.forkSessionFromParent
     .mockReset()
-    .mockImplementation(async ({ parentEntry, sessionsDir }: ForkSessionParamsForTest) => {
+    .mockImplementation(async ({ parentEntry, storePath }: ForkSessionParamsForTest) => {
       if (!parentEntry.sessionFile) {
         return null;
       }
+      const sessionsDir = path.dirname(storePath);
       await fs.mkdir(sessionsDir, { recursive: true });
       const sessionId = `forked-session-${++sessionForkMocks.nextSessionId}`;
       const sessionFile = path.join(sessionsDir, `${sessionId}.jsonl`);
