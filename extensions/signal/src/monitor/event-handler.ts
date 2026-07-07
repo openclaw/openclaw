@@ -102,6 +102,34 @@ function resolveSignalInboundRoute(params: {
   });
 }
 
+/**
+ * Retry an async handler with bounded exponential backoff when it throws a
+ * "reply session initialization conflicted" error.  Slack and Telegram
+ * handlers already apply equivalent bounded retries; this helper lets Signal
+ * do the same without duplicating the backoff loop inline.
+ *
+ * Exported so proof scripts can exercise the retry logic directly.
+ */
+export async function dispatchWithRetryOnConflict(
+  handler: () => Promise<void>,
+  maxRetries = 3,
+  baseDelayMs = 200,
+): Promise<void> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      await handler();
+      return;
+    } catch (err) {
+      const isConflict =
+        err instanceof Error && err.message.includes("reply session initialization conflicted");
+      if (!isConflict || attempt >= maxRetries) {
+        throw err;
+      }
+      await new Promise((resolve) => setTimeout(resolve, baseDelayMs * Math.pow(2, attempt)));
+    }
+  }
+}
+
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   type SignalInboundEntry = {
     senderName: string;
@@ -163,7 +191,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     let combinedBody = body;
     const historyKey = entry.isGroup ? (entry.groupId ?? "unknown") : undefined;
     if (entry.isGroup && historyKey) {
-      const channelHistory = createChannelHistoryWindow({ historyMap: deps.groupHistories });
+      const channelHistory = createChannelHistoryWindow({
+        historyMap: deps.groupHistories,
+      });
       combinedBody = channelHistory.buildPendingContext({
         historyKey,
         limit: deps.historyLimit,
@@ -188,7 +218,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const signalTo = normalizeSignalMessagingTarget(signalToRaw) ?? signalToRaw;
     const inboundHistory =
       entry.isGroup && historyKey && deps.historyLimit > 0
-        ? createChannelHistoryWindow({ historyMap: deps.groupHistories }).buildInboundHistory({
+        ? createChannelHistoryWindow({
+            historyMap: deps.groupHistories,
+          }).buildInboundHistory({
             historyKey,
             limit: deps.historyLimit,
           })
@@ -201,7 +233,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             contentType: entry.mediaTypes?.[index],
           }))
         : entry.mediaPath
-          ? [{ path: entry.mediaPath, url: entry.mediaPath, contentType: entry.mediaType }]
+          ? [
+              {
+                path: entry.mediaPath,
+                url: entry.mediaPath,
+                contentType: entry.mediaType,
+              },
+            ]
           : undefined;
     const ctxPayload = buildChannelInboundEventContext({
       channel: "signal",
@@ -430,8 +468,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       if (!last) {
         return;
       }
+
       if (entries.length === 1) {
-        await handleSignalInboundMessage(last);
+        await dispatchWithRetryOnConflict(() => handleSignalInboundMessage(last));
         return;
       }
       const combinedText = entries
@@ -441,14 +480,16 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       if (!combinedText.trim()) {
         return;
       }
-      await handleSignalInboundMessage({
-        ...last,
-        bodyText: combinedText,
-        mediaPath: undefined,
-        mediaType: undefined,
-        mediaPaths: undefined,
-        mediaTypes: undefined,
-      });
+      await dispatchWithRetryOnConflict(() =>
+        handleSignalInboundMessage({
+          ...last,
+          bodyText: combinedText,
+          mediaPath: undefined,
+          mediaType: undefined,
+          mediaPaths: undefined,
+          mediaTypes: undefined,
+        }),
+      );
     },
     onError: (err) => {
       deps.runtime.error?.(`signal debounce flush failed: ${String(err)}`);
@@ -461,7 +502,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     senderDisplay: string;
     reaction: SignalReactionMessage;
     hasBodyContent: boolean;
-    accessDecision: { decision: "allow" | "block" | "pairing"; reasonCode: string };
+    accessDecision: {
+      decision: "allow" | "block" | "pairing";
+      reasonCode: string;
+    };
   }): Promise<boolean> {
     if (params.hasBodyContent) {
       return false;
