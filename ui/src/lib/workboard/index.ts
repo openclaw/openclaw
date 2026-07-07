@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { requestSessionCreate } from "../sessions/index.ts";
@@ -2192,7 +2193,9 @@ async function loadWorkboardInternal(
             taskRefreshError = confirmationResult.error;
           }
           nextUnfilteredCursor = pollResult?.nextUnfilteredCursor;
-          applyTaskSummariesToState(taskLinkState, taskSummaries, { missingTaskIds });
+          applyTaskSummariesToState(taskLinkState, taskSummaries, {
+            missingTaskIds,
+          });
           preserveLifecycleTaskRefreshFailure =
             params.taskRefresh === "linked" &&
             state.lifecycleTaskRefreshFailed &&
@@ -3167,7 +3170,9 @@ async function refreshWorkboardLifecycleTasks(
       }
       resetWorkboardLifecycleTaskConfirmations(state, { host: params.host });
       const recoveredTaskRefreshError = state.lifecycleTaskRefreshError;
-      setWorkboardLifecycleTaskRefreshFailed(state, false, { host: params.host });
+      setWorkboardLifecycleTaskRefreshFailed(state, false, {
+        host: params.host,
+      });
       state.lifecycleTaskRefreshError = null;
       if (
         recoveredTaskRefreshError !== null &&
@@ -3584,7 +3589,9 @@ export async function deleteWorkboardCard(params: {
   state.error = null;
   params.requestUpdate?.();
   try {
-    await params.client.request("workboard.cards.delete", { id: params.cardId });
+    await params.client.request("workboard.cards.delete", {
+      id: params.cardId,
+    });
     state.cards = removeCardAndReferences(state.cards, params.cardId);
   } catch (error) {
     state.error = formatError(error);
@@ -3658,7 +3665,9 @@ export async function dispatchWorkboard(params: {
     resetWorkboardLifecycleTaskConfirmations(state, { host: params.host });
     try {
       applyTaskSummariesToState(state, await listWorkboardTasks(params.client));
-      setWorkboardLifecycleTaskRefreshFailed(state, false, { host: params.host });
+      setWorkboardLifecycleTaskRefreshFailed(state, false, {
+        host: params.host,
+      });
       state.lifecycleTaskRefreshError = null;
       state.lastRefreshError = null;
     } catch (error) {
@@ -3712,7 +3721,7 @@ function buildCardSessionLabel(card: WorkboardCard): string {
     return `${title}${suffixText}`;
   }
   const titleMax = WORKBOARD_SESSION_LABEL_MAX_CHARS - suffixText.length;
-  return `${title.slice(0, titleMax - 3).trimEnd()}...${suffixText}`;
+  return `${truncateUtf16Safe(title, titleMax - 3).trimEnd()}...${suffixText}`;
 }
 
 function sanitizeSessionSegment(value: string | undefined, fallback: string): string {
@@ -3721,7 +3730,7 @@ function sanitizeSessionSegment(value: string | undefined, fallback: string): st
     .replace(/[^a-zA-Z0-9_-]/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
-  return (sanitized || fallback).slice(0, 96);
+  return truncateUtf16Safe(sanitized || fallback, 96);
 }
 
 function buildCardTaskSessionKey(card: WorkboardCard): string {
@@ -3839,7 +3848,11 @@ function taskIsActive(task: WorkboardTaskSummary | undefined): task is Workboard
 async function cancelWorkboardTaskRun(params: {
   client: GatewayBrowserClient;
   taskId: string;
-}): Promise<{ cancelled: boolean; missing: boolean; task: WorkboardTaskSummary | null }> {
+}): Promise<{
+  cancelled: boolean;
+  missing: boolean;
+  task: WorkboardTaskSummary | null;
+}> {
   const result = await params.client.request("tasks.cancel", {
     taskId: params.taskId,
     reason: "Stopped from Workboard.",

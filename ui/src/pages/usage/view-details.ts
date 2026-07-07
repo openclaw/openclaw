@@ -1,8 +1,9 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Control UI view renders usage render details screen content.
 import { html, svg, nothing } from "lit";
 import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
-import { t } from "../../i18n/index.ts";
 import "../../components/tooltip.ts";
+import { t } from "../../i18n/index.ts";
 import { formatDateTimeMs, formatMs, formatTimeMs } from "../../lib/format.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { parseToolSummary } from "./helpers.ts";
@@ -257,7 +258,7 @@ function renderSessionDetailPanel(
   onClose: () => void,
 ) {
   const label = session.label || session.key;
-  const displayLabel = label.length > 50 ? label.slice(0, 50) + "…" : label;
+  const displayLabel = label.length > 50 ? truncateUtf16Safe(label, 50) + "…" : label;
   const usage = session.usage;
 
   const hasRange = timeSeriesCursorStart !== null && timeSeriesCursorEnd !== null;
@@ -266,8 +267,14 @@ function renderSessionDetailPanel(
       ? computeFilteredUsage(usage, timeSeries.points, timeSeriesCursorStart, timeSeriesCursorEnd)
       : undefined;
   const headerStats = filteredUsage
-    ? { totalTokens: filteredUsage.totalTokens, totalCost: filteredUsage.totalCost }
-    : { totalTokens: usage?.totalTokens ?? 0, totalCost: usage?.totalCost ?? 0 };
+    ? {
+        totalTokens: filteredUsage.totalTokens,
+        totalCost: filteredUsage.totalCost,
+      }
+    : {
+        totalTokens: usage?.totalTokens ?? 0,
+        totalCost: usage?.totalCost ?? 0,
+      };
   const cursorIndicator = filteredUsage ? t("usage.details.filtered") : "";
 
   return html`

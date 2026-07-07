@@ -1,8 +1,9 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Control UI view renders usage render overview screen content.
 import { html, nothing } from "lit";
 import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
-import { t } from "../../i18n/index.ts";
 import "../../components/tooltip.ts";
+import { t } from "../../i18n/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import {
   buildUsageCostWindows,
@@ -96,11 +97,13 @@ function renderFilterChips(
   const selectedSession =
     selectedSessions.length === 1 ? sessions.find((s) => s.key === selectedSessions[0]) : null;
   const sessionsLabel = selectedSession
-    ? (selectedSession.label || selectedSession.key).slice(0, 20) +
+    ? truncateUtf16Safe(selectedSession.label || selectedSession.key, 20) +
       ((selectedSession.label || selectedSession.key).length > 20 ? "…" : "")
     : selectedSessions.length === 1
       ? selectedSessions[0].slice(0, 8) + "…"
-      : t("usage.filters.sessionsCount", { count: String(selectedSessions.length) });
+      : t("usage.filters.sessionsCount", {
+          count: String(selectedSessions.length),
+        });
   const sessionsFullName = selectedSession
     ? selectedSession.label || selectedSession.key
     : selectedSessions.length === 1
@@ -196,7 +199,11 @@ function renderCostWindowComparison(
     return t("usage.costWindows.lastDays", { count: String(days) });
   };
   const cards = [
-    { label: t("usage.costWindows.selectedRange"), summary: range, range: true },
+    {
+      label: t("usage.costWindows.selectedRange"),
+      summary: range,
+      range: true,
+    },
     ...windows.map((summary) => ({
       label: labelForWindow(summary.days, summary.endDate),
       summary,
@@ -687,7 +694,9 @@ function renderUsageInsights(
 
   const costShare = (cost: number) =>
     showCostShares && totals.totalCost > 0
-      ? t("usage.overview.costShare", { percent: ((cost / totals.totalCost) * 100).toFixed(1) })
+      ? t("usage.overview.costShare", {
+          percent: ((cost / totals.totalCost) * 100).toFixed(1),
+        })
       : null;
   const costAttributionSub = (cost: number, tokens: number, messageCount?: number) =>
     [
@@ -787,7 +796,9 @@ function renderUsageInsights(
             title: t("usage.overview.sessions"),
             hint: t("usage.overview.sessionsHint"),
             value: sessionCount,
-            sub: t("usage.overview.sessionsInRange", { count: String(totalSessions) }),
+            sub: t("usage.overview.sessionsInRange", {
+              count: String(totalSessions),
+            }),
             className: "usage-summary-card--compact",
           })}
           ${renderSummaryStat({
