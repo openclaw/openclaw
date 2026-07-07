@@ -528,7 +528,6 @@ export class OpenClawFilePreviewModal extends LitElement {
             placeholder=${this.searchPlaceholder}
             .value=${this.query}
             @input=${this.handleQueryInput}
-            autofocus
           />
           <span class="state">${fileCount}</span>
         </header>
