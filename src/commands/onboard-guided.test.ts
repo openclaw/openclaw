@@ -258,10 +258,14 @@ describe("runGuidedOnboarding", () => {
     expect(applySetup.mock.calls[0]?.[0]).not.toHaveProperty("model");
   });
 
-  it("hands the original options to the classic wizard escape", async () => {
-    const opts = { acceptRisk: true, workspace: "/tmp/original" };
+  it("hands options to the classic escape with the collected risk acknowledgement", async () => {
+    const opts = { workspace: "/tmp/original" };
     const select = vi.fn(async () => "action:classic") as unknown as WizardPrompter["select"];
-    const prompter = createWizardPrompter({ text: vi.fn(async () => "/tmp/work"), select });
+    const prompter = createWizardPrompter({
+      text: vi.fn(async () => "/tmp/work"),
+      select,
+      confirm: vi.fn(async () => true),
+    });
     const runClassicSetup = vi.fn(async () => {});
     const deps = setupDeps({
       prompter,
@@ -272,7 +276,11 @@ describe("runGuidedOnboarding", () => {
 
     await runGuidedOnboarding(opts, runtime, deps);
 
-    expect(runClassicSetup).toHaveBeenCalledWith(opts, runtime);
+    // Guided already collected the risk acknowledgement; classic must not re-ask.
+    expect(runClassicSetup).toHaveBeenCalledWith(
+      { workspace: "/tmp/original", acceptRisk: true },
+      runtime,
+    );
   });
 
   it("opens Crestodian chat with the selected workspace", async () => {

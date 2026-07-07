@@ -331,6 +331,23 @@ describe("command queue", () => {
     ).toBe(true);
   });
 
+  it("keeps setup-inference probe lane failures quiet", async () => {
+    const error = new Error("Authentication failed");
+
+    await expect(
+      enqueueCommandInLane("session:probe-setup-inference:openai", async () => {
+        throw error;
+      }),
+    ).rejects.toBe(error);
+
+    expect(diagnosticMocks.diag.error).not.toHaveBeenCalled();
+    expect(
+      diagnosticDebugMessages().some((message) =>
+        message.includes("lane task interrupted: lane=session:probe-setup-inference:openai"),
+      ),
+    ).toBe(false);
+  });
+
   it("getActiveTaskCount returns count of currently executing tasks", async () => {
     const { task, release } = enqueueBlockedMainTask();
 

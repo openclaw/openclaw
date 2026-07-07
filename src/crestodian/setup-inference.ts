@@ -738,7 +738,9 @@ async function runSetupInferenceTest(params: {
   { ok: true; latencyMs: number } | { ok: false; status: SetupInferenceStatus; error: string }
 > {
   const { plan, tempDir, deps } = params;
-  const runId = `setup-inference-${randomUUID()}`;
+  // Keep these probe prefixes aligned with logging/subsystem.ts and process/command-queue.ts
+  // so expected setup failures stay off the interactive TTY.
+  const runId = `probe-setup-inference-${randomUUID()}`;
   const sessionId = `${runId}-session`;
   const sessionFile = path.join(tempDir, "session.jsonl");
   const timeoutMs = deps.timeoutMs ?? SETUP_INFERENCE_TEST_TIMEOUT_MS;
@@ -788,7 +790,7 @@ async function runSetupInferenceTest(params: {
           : {}),
         timeoutMs,
         runId,
-        lane: `setup-inference:${plan.provider}`,
+        lane: `session:probe-setup-inference:${plan.provider}`,
         thinkLevel: "off",
         reasoningLevel: "off",
         verboseLevel: "off",

@@ -209,6 +209,13 @@ describe("activateSetupInference", () => {
       },
     });
     expect(result).toMatchObject({ ok: false, status: "format" });
+    expect(runEmbeddedAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: expect.stringMatching(/^probe-setup-inference-/),
+        sessionId: expect.stringMatching(/^probe-setup-inference-.*-session$/),
+        lane: "session:probe-setup-inference:anthropic",
+      }),
+    );
     expect(applySetup).not.toHaveBeenCalled();
   });
 

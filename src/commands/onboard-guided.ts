@@ -176,9 +176,10 @@ async function runManualStage(params: {
           const { runInteractiveSetup } = await import("./onboard-interactive.js");
           await runInteractiveSetup(opts, runtime);
         });
-      // The classic escape owns its workspace/default handling and receives
-      // the original CLI options unchanged, matching direct classic routing.
-      await runClassic(params.opts, params.runtime);
+      // The classic escape owns its workspace/default handling. The risk
+      // acknowledgement was already collected by the guided flow, so pass it
+      // through — re-prompting the same session twice reads as a bug.
+      await runClassic({ ...params.opts, acceptRisk: true }, params.runtime);
       return { kind: "delegated" };
     }
     if (choice === MANUAL_SKIP) {
