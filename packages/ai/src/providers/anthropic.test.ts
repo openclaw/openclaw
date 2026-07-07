@@ -1698,6 +1698,48 @@ describe("Anthropic provider", () => {
     expect((capturedPayload as { thinking?: unknown }).thinking).toEqual({ type: "disabled" });
   });
 
+  it.each([
+    { budgetTokens: 512, maxTokens: 8192 },
+    { budgetTokens: 1024, maxTokens: 1024 },
+  ])(
+    "normalizes raw manual thinking budget $budgetTokens below max $maxTokens",
+    async ({ budgetTokens, maxTokens }) => {
+      const model = makeAnthropicModel({
+        id: "claude-haiku-4-5",
+        name: "Claude Haiku 4.5",
+        maxTokens: 8192,
+      });
+      let capturedPayload: unknown;
+      const stream = streamAnthropic(
+        model,
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+          tools: [{ name: "lookup", description: "Lookup", parameters: { type: "object" } }],
+        },
+        {
+          apiKey: "sk-ant-provider",
+          maxTokens,
+          temperature: 0.2,
+          thinkingEnabled: true,
+          thinkingBudgetTokens: budgetTokens,
+          toolChoice: "any",
+          onPayload: (payload) => {
+            capturedPayload = payload;
+            throw new Error("stop before network");
+          },
+        },
+      );
+
+      await stream.result();
+
+      expect(capturedPayload).toMatchObject({
+        thinking: { type: "disabled" },
+        temperature: 0.2,
+        tool_choice: { type: "any" },
+      });
+    },
+  );
+
   it.each(["claude-opus-4-8", "claude-mythos-preview"])(
     "restores default sampling for %s after payload hooks",
     async (modelId) => {
