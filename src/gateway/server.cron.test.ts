@@ -1142,6 +1142,73 @@ describe("gateway server cron", () => {
     }
   });
 
+  test("keeps implicit no-channel command cron runs successful", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-command-no-channel-",
+      cronEnabled: true,
+    });
+    const events = createCronEventCollector();
+    const cronState = await createDirectCronState({ broadcast: events["broadcast"] });
+
+    try {
+      const addRes = await directCronReq(cronState, "cron.add", {
+        name: "command no-channel default delivery",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: {
+          kind: "command",
+          argv: [process.execPath, "-e", 'console.log("OPENCLAW_91399_COMMAND")'],
+        },
+      });
+      const jobId = expectCronJobIdFromResponse(addRes);
+
+      const finishedRun = events.wait(
+        (payload) => payload?.jobId === jobId && payload?.action === "finished",
+      );
+      const runRes = await directCronReq(cronState, "cron.run", { id: jobId, mode: "force" });
+      const runId = expectEnqueuedRunPayload(runRes.payload);
+      const finishedPayload = await finishedRun;
+
+      expectRecordFields(finishedPayload, {
+        jobId,
+        action: "finished",
+        status: "ok",
+        summary: "OPENCLAW_91399_COMMAND",
+        delivered: false,
+        deliveryStatus: "not-delivered",
+      });
+      expect((finishedPayload as { error?: unknown }).error).toBeUndefined();
+      const delivery = (finishedPayload as { delivery?: Record<string, unknown> }).delivery;
+      expect(delivery?.intended).toEqual({ channel: "last", source: "last" });
+      expect(delivery?.resolved).toEqual({
+        channel: "last",
+        source: "last",
+        ok: false,
+        error:
+          "Channel is required (no configured channels detected). Run openclaw channels add to configure one, or pass --channel <channel> after enabling a channel. Use openclaw channels list --all to see available channel ids. Set delivery.channel explicitly or use a main session with a previous channel.",
+      });
+
+      const runsRes = await directCronReq(cronState, "cron.runs", { id: jobId, limit: 20 });
+      expect(runsRes.ok).toBe(true);
+      const entries = (runsRes.payload as { entries?: unknown } | null)?.entries;
+      expect(Array.isArray(entries)).toBe(true);
+      const entry = (entries as Array<Record<string, unknown>>).find(
+        (candidate) => candidate.runId === runId,
+      );
+      expectRecordFields(entry, {
+        status: "ok",
+        summary: "OPENCLAW_91399_COMMAND",
+        delivered: false,
+        deliveryStatus: "not-delivered",
+      });
+      expect(entry?.error).toBeUndefined();
+    } finally {
+      await cleanupCronTestRun({ cronState, prevSkipCron });
+    }
+  });
+
   test("writes cron run history and auto-runs due jobs", async () => {
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-log-",

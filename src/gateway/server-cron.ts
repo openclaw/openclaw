@@ -21,6 +21,7 @@ import {
 } from "../cron/command-output-summary.js";
 import { runCronCommandJob } from "../cron/command-runner.js";
 import { resolveCronStoredDeliveryContext } from "../cron/delivery-context.js";
+import { hasExplicitCronDeliveryTarget } from "../cron/delivery-plan.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { appendCronRunLog, resolveCronRunLogPruneOptions } from "../cron/run-log.js";
@@ -130,6 +131,34 @@ function pickDefined<T extends Record<string, unknown>>(
     }
   }
   return result;
+}
+
+function cronDeliveryTraceSource(
+  plan: ReturnType<typeof resolveCronDeliveryPlan>,
+): "explicit" | "last" {
+  return plan.channel && plan.channel !== "last" ? "explicit" : "last";
+}
+
+function isImplicitNoChannelCommandDeliveryFailure(params: {
+  plan: ReturnType<typeof resolveCronDeliveryPlan>;
+  error: string;
+  commandStatus: string;
+}) {
+  if (
+    params.commandStatus !== "ok" ||
+    params.plan.mode !== "announce" ||
+    hasExplicitCronDeliveryTarget(params.plan)
+  ) {
+    return false;
+  }
+  if (params.plan.channel && params.plan.channel !== "last") {
+    return false;
+  }
+  return (
+    /\bchannel is required\b/i.test(params.error) &&
+    (/\bno configured channels detected\b/i.test(params.error) ||
+      /\bno previous channel\b/i.test(params.error))
+  );
 }
 
 function omitExplicitHeartbeatDestination(
@@ -501,6 +530,7 @@ export function buildGatewayCronService(params: {
         nowMs: Date.now,
       });
       const plan = resolveCronDeliveryPlan(job);
+      const deliveryTraceSource = cronDeliveryTraceSource(plan);
       const deliveryTrace = {
         intended: pickDefined(
           {
@@ -508,7 +538,7 @@ export function buildGatewayCronService(params: {
             to: plan.to,
             accountId: plan.accountId,
             threadId: plan.threadId,
-            source: "explicit" as const,
+            source: deliveryTraceSource,
           },
           ["channel", "to", "accountId", "threadId", "source"],
         ),
@@ -572,6 +602,36 @@ export function buildGatewayCronService(params: {
         };
       } catch (err) {
         const error = formatErrorMessage(err);
+        if (
+          isImplicitNoChannelCommandDeliveryFailure({
+            plan,
+            error,
+            commandStatus: result.status,
+          })
+        ) {
+          cronLogger.warn(
+            { jobId: job.id, err: error },
+            "cron: command delivery skipped because no channel was available",
+          );
+          return {
+            ...result,
+            deliveryAttempted: false,
+            delivered: false,
+            delivery: {
+              ...deliveryTrace,
+              delivered: false,
+              resolved: {
+                channel: plan.channel ?? "last",
+                to: plan.to,
+                accountId: plan.accountId,
+                threadId: plan.threadId,
+                source: deliveryTraceSource,
+                ok: false,
+                error,
+              },
+            },
+          };
+        }
         cronLogger.warn({ jobId: job.id, err: error }, "cron: command delivery failed");
         return {
           ...result,
@@ -587,7 +647,7 @@ export function buildGatewayCronService(params: {
               to: plan.to,
               accountId: plan.accountId,
               threadId: plan.threadId,
-              source: "explicit" as const,
+              source: deliveryTraceSource,
               ok: false,
               error,
             },
