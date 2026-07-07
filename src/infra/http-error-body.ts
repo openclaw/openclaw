@@ -1,3 +1,5 @@
+import { readResponsePrefix } from "./http-body.js";
+
 export async function readResponseBodySnippet(
   response: Response,
   limits: { maxBytes: number; maxChars: number },
@@ -5,16 +7,9 @@ export async function readResponseBodySnippet(
   try {
     const body = response.body;
     if (!body || typeof body.getReader !== "function") {
-      const text = await response.text();
-      const encoded = new TextEncoder().encode(text);
-      if (encoded.byteLength > limits.maxBytes) {
-        return new TextDecoder()
-          .decode(encoded.subarray(0, limits.maxBytes), {
-            stream: true,
-          })
-          .slice(0, limits.maxChars);
-      }
-      return text.slice(0, limits.maxChars);
+      const { buffer } = await readResponsePrefix(response, limits.maxBytes);
+      if (buffer.length === 0) return "";
+      return new TextDecoder().decode(buffer).slice(0, limits.maxChars);
     }
 
     const reader = body.getReader();

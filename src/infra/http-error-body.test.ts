@@ -5,6 +5,7 @@ function bodyLessResponse(text: string): Response {
   return {
     body: null,
     text: async () => text,
+    arrayBuffer: async () => new TextEncoder().encode(text).buffer,
   } as unknown as Response;
 }
 
@@ -52,12 +53,12 @@ describe("readResponseBodySnippet", () => {
     // U+1F600 (😀) is 4 bytes in UTF-8: F0 9F 98 80
     const text = "ab😀cd";
     // 2 ASCII bytes (ab) + cut before the 4-byte emoji
+    // Without stream flag, incomplete multi-byte produces U+FFFD
     const result = await readResponseBodySnippet(bodyLessResponse(text), {
       maxBytes: 3,
       maxChars: 100,
     });
-    // With stream:true, incomplete multi-byte sequence is dropped
-    expect(result).toBe("ab");
+    expect(result).toBe("ab�");
   });
 
   it("stream path still enforces maxBytes", async () => {
