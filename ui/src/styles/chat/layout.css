@@ -1710,15 +1710,17 @@ openclaw-chat-page {
   background: color-mix(in srgb, var(--text) 6%, transparent);
 }
 
+/* No position: relative here — the menu must resolve its percentage width and
+   insets against .agent-chat__input (the composer box), not this button-sized
+   wrapper, or it collapses to the caret width. */
 .agent-chat__talk-input-picker {
   display: inline-flex;
-  position: relative;
 }
 
 .agent-chat__talk-input-menu {
   position: absolute;
-  inset-inline-start: 8px;
-  bottom: 52px;
+  inset-inline-end: 8px;
+  bottom: calc(100% + 8px);
   z-index: 95;
   width: min(320px, calc(100% - 16px));
   padding: 6px;

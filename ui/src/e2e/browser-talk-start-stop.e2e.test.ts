@@ -111,6 +111,9 @@ describeControlUiE2e("Control UI browser Talk", () => {
       expect(menuBounds).not.toBeNull();
       expect(menuBounds?.x ?? 0).toBeGreaterThanOrEqual(8);
       expect((menuBounds?.x ?? 0) + (menuBounds?.width ?? 0)).toBeLessThanOrEqual(312);
+      // The menu must size against the composer box, not its button-sized
+      // wrapper; a collapsed menu still passed the edge checks above.
+      expect(menuBounds?.width ?? 0).toBeGreaterThanOrEqual(240);
       await page.getByRole("button", { name: "USB Audio Interface" }).click();
       await expect
         .poll(() => page.evaluate(() => document.activeElement?.getAttribute("aria-label")))
