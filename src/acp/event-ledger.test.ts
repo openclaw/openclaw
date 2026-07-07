@@ -1,7 +1,8 @@
 /** Tests ACP event ledger recording, replay, retention, and SQLite migration. */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
@@ -246,6 +247,41 @@ describe("ACP event ledger", () => {
       await expect(
         ledger.readReplay({ sessionId: "session-1", sessionKey: "agent:main:work" }),
       ).resolves.toEqual({ complete: false, events: [] });
+    });
+  });
+
+  it("uses SQLite page stats instead of full table scans for byte retention estimates", async () => {
+    await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
+      const prepareSpy = vi.spyOn(DatabaseSync.prototype, "prepare");
+      try {
+        const ledger = createSqliteAcpEventLedger({
+          path: path.join(dir, "openclaw.sqlite"),
+          maxSerializedBytes: Number.MAX_SAFE_INTEGER,
+        });
+        await ledger.startSession({
+          sessionId: "session-1",
+          sessionKey: "agent:main:work",
+          cwd: "/work",
+          complete: true,
+        });
+        await ledger.recordUpdate({
+          sessionId: "session-1",
+          sessionKey: "agent:main:work",
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "tool-1",
+            status: "completed",
+            rawOutput: { content: "x".repeat(5_000) },
+          },
+        });
+
+        const preparedSql = prepareSpy.mock.calls.map(([sql]) => sql);
+        expect(preparedSql).toContain("PRAGMA page_count");
+        expect(preparedSql).toContain("PRAGMA page_size");
+        expect(preparedSql.some((sql) => sql.includes("SUM(length("))).toBe(false);
+      } finally {
+        prepareSpy.mockRestore();
+      }
     });
   });
 

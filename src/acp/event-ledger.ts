@@ -18,6 +18,7 @@ const LEDGER_VERSION = 1;
 const DEFAULT_MAX_SESSIONS = 200;
 const DEFAULT_MAX_EVENTS_PER_SESSION = 5_000;
 const DEFAULT_MAX_SERIALIZED_BYTES = 16 * 1024 * 1024;
+const DEFAULT_SQLITE_PAGE_SIZE_BYTES = 4096;
 const FILE_LEDGER_LOCK_OPTIONS = {
   retries: {
     retries: 8,
@@ -537,6 +538,13 @@ function normalizeSqliteInteger(value: number | bigint | null): number {
   return typeof value === "number" ? value : 0;
 }
 
+function readSqlitePragmaInteger(db: DatabaseSync, name: "page_count" | "page_size"): number {
+  const row = db.prepare(`PRAGMA ${name}`).get() as
+    | Record<string, number | bigint | null>
+    | undefined;
+  return normalizeSqliteInteger(row?.[name] ?? null);
+}
+
 type AcpReplaySessionRow = {
   session_id: string;
   session_key: string;
@@ -682,16 +690,9 @@ function upsertSqliteSession(
 }
 
 function estimateSqliteLedgerBytes(db: DatabaseSync): number {
-  const row = db
-    .prepare(
-      `SELECT
-         COALESCE(SUM(length(session_id) + length(session_key) + length(cwd) + 32), 0) AS sessions,
-         (SELECT COALESCE(SUM(length(session_id) + length(session_key) + length(update_json) + COALESCE(length(run_id), 0) + 32), 0)
-            FROM acp_replay_events) AS events
-       FROM acp_replay_sessions`,
-    )
-    .get() as { sessions?: number | bigint; events?: number | bigint } | undefined;
-  return normalizeSqliteInteger(row?.sessions ?? 0) + normalizeSqliteInteger(row?.events ?? 0);
+  const pageCount = readSqlitePragmaInteger(db, "page_count");
+  const pageSize = readSqlitePragmaInteger(db, "page_size") || DEFAULT_SQLITE_PAGE_SIZE_BYTES;
+  return pageCount * pageSize;
 }
 
 function trimSqliteLedger(
