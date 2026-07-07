@@ -115,4 +115,34 @@ describe("memory hybrid helpers", () => {
     expect(merged[0]?.vectorScore).toBeCloseTo(0.2);
     expect(merged[0]?.textScore).toBeCloseTo(1);
   });
+
+  it("mergeHybridResults sorts tied scores deterministically", async () => {
+    const merged = await mergeHybridResults({
+      vectorWeight: 1,
+      textWeight: 0,
+      vector: [
+        {
+          id: "b",
+          path: "memory/b.md",
+          startLine: 2,
+          endLine: 2,
+          source: "memory",
+          snippet: "b",
+          vectorScore: 0.5,
+        },
+        {
+          id: "a",
+          path: "memory/a.md",
+          startLine: 1,
+          endLine: 1,
+          source: "memory",
+          snippet: "a",
+          vectorScore: 0.5,
+        },
+      ],
+      keyword: [],
+    });
+
+    expect(merged.map((entry) => entry.path)).toEqual(["memory/a.md", "memory/b.md"]);
+  });
 });

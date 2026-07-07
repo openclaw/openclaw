@@ -155,7 +155,13 @@ export async function mergeHybridResults(params: {
     temporalDecayMultiplier:
       entry.scoreBeforeTemporalDecay === 0 ? 1 : entry.score / entry.scoreBeforeTemporalDecay,
   }));
-  const sorted = withDecayDiagnostics.toSorted((a, b) => b.score - a.score);
+  const sorted = withDecayDiagnostics.toSorted(
+    (a, b) =>
+      b.score - a.score ||
+      a.source.localeCompare(b.source) ||
+      a.path.localeCompare(b.path) ||
+      a.startLine - b.startLine,
+  );
 
   // Apply MMR re-ranking if enabled
   const mmrConfig = { ...DEFAULT_MMR_CONFIG, ...params.mmr };
