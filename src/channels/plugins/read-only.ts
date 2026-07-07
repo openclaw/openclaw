@@ -154,7 +154,7 @@ type ReadOnlyChannelPluginResolution = {
   loadFailures: ReadOnlyChannelPluginLoadFailure[];
 };
 type ManifestChannelConfigRecord = NonNullable<PluginManifestRecord["channelConfigs"]>[string];
-export type ReadOnlyChannelPluginLoadFailure = {
+type ReadOnlyChannelPluginLoadFailure = {
   channelId: string;
   pluginId: string;
   message: string;

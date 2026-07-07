@@ -193,6 +193,7 @@ export const migratedSessionAccessorWriteFiles = new Set([
   "src/config/sessions/cleanup-service.ts",
   "src/config/sessions/goals.ts",
   "src/gateway/boot.ts",
+  "src/gateway/server-methods/chat.ts",
   "src/gateway/server-methods/sessions.ts",
   "src/gateway/server-node-events.ts",
   "src/gateway/session-compaction-checkpoints.ts",

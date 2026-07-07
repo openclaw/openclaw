@@ -46,7 +46,12 @@ export type BrowserServerState = {
   stopUnhandledRejectionHandler?: () => void;
 };
 
-export type EnsureTabAvailableOptions = {
+export type BrowserOperationOptions = {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+};
+
+export type EnsureTabAvailableOptions = BrowserOperationOptions & {
   /** Allow a target-id-only tab when the caller can continue through Playwright. */
   allowPlaywrightFallback?: boolean;
 };
@@ -63,7 +68,7 @@ type BrowserProfileActions = {
     timeoutMs?: number,
     options?: { ephemeral?: boolean; signal?: AbortSignal },
   ) => Promise<boolean>;
-  listTabs: () => Promise<BrowserTab[]>;
+  listTabs: (options?: BrowserOperationOptions) => Promise<BrowserTab[]>;
   openTab: (url: string, opts?: { label?: string }) => Promise<BrowserTab>;
   labelTab: (targetId: string, label: string) => Promise<BrowserTab>;
   focusTab: (targetId: string) => Promise<void>;

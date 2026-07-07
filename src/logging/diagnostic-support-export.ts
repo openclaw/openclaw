@@ -33,7 +33,7 @@ import {
 } from "./diagnostic-support-redaction.js";
 import { readConfiguredLogTail, type LogTailPayload } from "./log-tail.js";
 
-export const DIAGNOSTIC_SUPPORT_EXPORT_VERSION = 1;
+const DIAGNOSTIC_SUPPORT_EXPORT_VERSION = 1;
 
 const DEFAULT_LOG_LIMIT = 5000;
 const DEFAULT_LOG_MAX_BYTES = 1_000_000;

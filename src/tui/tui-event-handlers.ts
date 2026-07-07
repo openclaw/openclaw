@@ -1,5 +1,6 @@
 // Handles TUI keyboard, paste, backend, and command events.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { classifyFailoverReason, isAuthErrorMessage } from "../agents/embedded-agent-helpers.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
@@ -55,7 +56,7 @@ function formatAbortDiagnostic(value: string | undefined): string | undefined {
     return undefined;
   }
   return diagnostic.length > MAX_ABORT_DIAGNOSTIC_LENGTH
-    ? `${diagnostic.slice(0, MAX_ABORT_DIAGNOSTIC_LENGTH - 1)}…`
+    ? `${truncateUtf16Safe(diagnostic, MAX_ABORT_DIAGNOSTIC_LENGTH - 1)}…`
     : diagnostic;
 }
 

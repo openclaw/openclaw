@@ -17,6 +17,7 @@ import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { RequestClient } from "../internal/discord.js";
 import { sendMessageDiscord, sendVoiceMessageDiscord } from "../send.js";
 import type { DiscordAllowedMentions } from "../send.shared.js";
@@ -71,8 +72,9 @@ function resolveBindingIdentity(
     return undefined;
   }
   const baseLabel = binding.label?.trim() || binding.agentId;
+  const displayName = `🤖 ${baseLabel}`.trim() || "🤖 agent";
   const identity: OutboundIdentity = {
-    name: (`🤖 ${baseLabel}`.trim() || "🤖 agent").slice(0, 80),
+    name: truncateUtf16Safe(displayName, 80),
   };
   try {
     const avatar = resolveAgentAvatar(cfg, binding.agentId);

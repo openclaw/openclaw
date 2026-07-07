@@ -2160,7 +2160,7 @@ export async function discoverAllSessions(params?: {
             if (message?.role === "user") {
               const content = message.content;
               if (typeof content === "string") {
-                firstUserMessage = content.slice(0, 100);
+                firstUserMessage = truncateUtf16Safe(content, 100);
               } else if (Array.isArray(content)) {
                 for (const block of content) {
                   if (
@@ -2170,7 +2170,7 @@ export async function discoverAllSessions(params?: {
                   ) {
                     const text = (block as Record<string, unknown>).text;
                     if (typeof text === "string") {
-                      firstUserMessage = text.slice(0, 100);
+                      firstUserMessage = truncateUtf16Safe(text, 100);
                     }
                     break;
                   }

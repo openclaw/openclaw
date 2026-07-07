@@ -1748,7 +1748,7 @@ export type ChatRunControlsProps = {
   showSecondary?: boolean;
 };
 
-export function renderChatPrimaryActions(props: ChatRunControlsProps) {
+function renderChatPrimaryActions(props: ChatRunControlsProps) {
   const hasComposedContent = Boolean(props.draft.trim() || props.hasAttachments);
   const storeDraftAndSend = () => {
     if (props.draft.trim()) {

@@ -7,11 +7,6 @@ const LEGACY_TOKEN_SESSION_KEY = "openclaw.control.token.v1";
 const TOKEN_SESSION_KEY_PREFIX = "openclaw.control.token.v1:";
 const MAX_SCOPED_SESSION_ENTRIES = 10;
 
-type WindowWithControlUiBasePath = Window &
-  typeof globalThis & {
-    [key: string]: unknown;
-  };
-
 function settingsKeyForGateway(gatewayUrl: string): string {
   return `${SETTINGS_KEY_PREFIX}${normalizeGatewayTokenScope(gatewayUrl)}`;
 }
@@ -37,19 +32,15 @@ import {
   normalizeSidebarPinnedRoutes,
   type SidebarNavRoute,
 } from "../app-navigation.ts";
-import { inferBasePathFromPathname, normalizeBasePath } from "../app-route-paths.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { getSafeLocalStorage, getSafeSessionStorage } from "../local-storage.ts";
 import { normalizeChatSplitLayout, type ChatSplitLayout } from "../pages/chat/split-layout.ts";
+import { resolveControlUiBasePath } from "./browser.ts";
 import { parseImportedCustomTheme, type ImportedCustomTheme } from "./custom-theme.ts";
 import { normalizeGatewayTokenScope } from "./gateway-scope.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
-import {
-  hasLocalUserIdentity,
-  normalizeLocalUserIdentity,
-  type LocalUserIdentity,
-} from "./user-identity.ts";
+import { normalizeLocalUserIdentity, type LocalUserIdentity } from "./user-identity.ts";
 
 export const BORDER_RADIUS_STOPS = [0, 25, 50, 75, 100] as const;
 export type BorderRadiusStop = (typeof BORDER_RADIUS_STOPS)[number];
@@ -128,8 +119,6 @@ export type UiSettings = {
   customTheme?: ImportedCustomTheme;
   locale?: string;
 };
-
-export type { LocalUserIdentity } from "./user-identity.ts";
 
 type LastActiveSessionHost = {
   settings: UiSettings;
@@ -332,14 +321,7 @@ function formatHostWithPort(hostname: string, port: string): string {
 
 function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  const configured =
-    typeof window !== "undefined" &&
-    normalizeOptionalString(
-      (window as WindowWithControlUiBasePath)["__OPENCLAW_CONTROL_UI_BASE_PATH__"],
-    );
-  const basePath = configured
-    ? normalizeBasePath(configured)
-    : inferBasePathFromPathname(location.pathname);
+  const basePath = resolveControlUiBasePath(location.pathname);
   const pageUrl = `${proto}://${location.host}${basePath}`;
   if (!isViteDevPage()) {
     return { pageUrl, effectiveUrl: pageUrl };
@@ -665,21 +647,6 @@ export function loadLocalUserIdentity(): LocalUserIdentity {
     return normalizeLocalUserIdentity(JSON.parse(raw) as Partial<LocalUserIdentity>);
   } catch {
     return normalizeLocalUserIdentity();
-  }
-}
-
-export function saveLocalUserIdentity(next: LocalUserIdentity) {
-  const storage = getSafeLocalStorage();
-  const normalized = normalizeLocalUserIdentity(next);
-  try {
-    if (!hasLocalUserIdentity(normalized)) {
-      storage?.removeItem(LOCAL_USER_IDENTITY_KEY);
-      return;
-    }
-    storage?.setItem(LOCAL_USER_IDENTITY_KEY, JSON.stringify(normalized));
-  } catch {
-    // best-effort — quota exceeded or security restrictions should not
-    // prevent in-memory identity updates from being applied
   }
 }
 

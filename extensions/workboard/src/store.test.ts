@@ -1938,6 +1938,24 @@ describe("WorkboardStore", () => {
     await expect(store.buildWorkerContext(card.id)).resolves.toContain("Failure screenshot");
   });
 
+  it("keeps worker-context text bounds UTF-16 safe", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Bound context",
+      metadata: {
+        comments: [
+          {
+            id: "comment-1",
+            body: `${"x".repeat(398)}🚀tail`,
+            createdAt: 10,
+          },
+        ],
+      },
+    });
+
+    await expect(store.buildWorkerContext(card.id)).resolves.toContain(`- ${"x".repeat(398)}…`);
+  });
+
   it("scopes idempotent creates and stats by board", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const ops = await store.create({
