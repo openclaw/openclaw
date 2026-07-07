@@ -734,7 +734,7 @@ function sortRecordByKey(record) {
 }
 
 /** Counts legacy call sites per unmigrated file for every debt concern. */
-export async function collectSessionAccessorDebtCounts(repoRoot) {
+async function collectSessionAccessorDebtCounts(repoRoot) {
   const counts = {};
   for (const concern of sessionAccessorDebtConcerns) {
     const violations = await collectFileViolations({

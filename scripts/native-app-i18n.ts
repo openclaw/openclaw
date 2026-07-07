@@ -1000,7 +1000,7 @@ function render(entries: NativeI18nEntry[]): string {
   return `${JSON.stringify({ version: 1, entries }, null, 2)}\n`;
 }
 
-export async function syncNativeI18n(options: { checkOnly: boolean; write: boolean }) {
+async function syncNativeI18n(options: { checkOnly: boolean; write: boolean }) {
   const expected = render(await collectNativeI18nEntries());
   let current = "";
   try {
