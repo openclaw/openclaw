@@ -1,10 +1,9 @@
 /**
- * Real behavior proof: readResponseBodySnippet maxBytes enforcement.
+ * Real behavior proof: readResponseBodySnippet fail-closed fallback.
  *
- * Calls the actual readResponseBodySnippet with a mock Response whose body
- * is null (simulating non-streaming / mocked transports), exercising the
- * fixed fallback path that now encodes → bounds → decodes instead of
- * buffering the entire response.text() without a byte limit.
+ * When the response body has no reader (non-streaming/mocked responses),
+ * the function now returns "" instead of calling response.text() which
+ * would buffer the full body before maxBytes can be applied.
  *
  * Usage: node --import tsx test/_proof_response_body_snippet_bound.mts
  */
@@ -22,7 +21,7 @@ function check(label: string, ok: boolean, detail = "") {
   }
 }
 
-/** Mock Response-like object with no body reader (hits the fallback). */
+/** Mock Response with null body — hits the fail-closed fallback. */
 function nonStreamingMock(bodyText: string): Response {
   return {
     body: null,
@@ -30,61 +29,57 @@ function nonStreamingMock(bodyText: string): Response {
   } as unknown as Response;
 }
 
-/** Real ReadableStream-backed Response (hits the streaming path). */
+/** ReadableStream-backed Response — hits the bounded streaming path. */
 function streamingResponse(bodyText: string): Response {
   const encoded = new TextEncoder().encode(bodyText);
-  const stream = new ReadableStream({
-    start(controller) {
-      controller.enqueue(encoded);
-      controller.close();
-    },
-  });
-  return new Response(stream, {
-    status: 400,
-    headers: { "content-type": "text/plain" },
-  });
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoded);
+        controller.close();
+      },
+    }),
+    { status: 400, headers: { "content-type": "text/plain" } },
+  );
 }
 
 async function proof() {
-  const { readResponseBodySnippet } =
-    await import("../src/infra/http-error-body.js");
+  const { readResponseBodySnippet } = await import(
+    "../src/infra/http-error-body.js"
+  );
 
-  // ── Non-streaming: body exceeds maxBytes ──
+  // ── Non-streaming: fails closed, returns "" ──
   const largeBody = "x".repeat(10_000);
-  const limits = { maxBytes: 200, maxChars: 500 };
   const nonStreamingRes = nonStreamingMock(largeBody);
-  const snippet = await readResponseBodySnippet(nonStreamingRes, limits);
-
+  const snippet = await readResponseBodySnippet(nonStreamingRes, {
+    maxBytes: 200,
+    maxChars: 500,
+  });
   check(
-    "non-streaming: snippet ≤ maxChars",
-    snippet.length <= limits.maxChars,
-    `len=${snippet.length} max=${limits.maxChars}`,
-  );
-  const byteLen = new TextEncoder().encode(snippet).length;
-  check(
-    "non-streaming: byte length ≤ maxBytes",
-    byteLen <= limits.maxBytes,
-    `bytes=${byteLen} max=${limits.maxBytes}`,
+    "non-streaming fail-closed: returns empty string",
+    snippet === "",
+    `len=${snippet.length}`,
   );
 
-  // ── Non-streaming: small body passes through ──
-  const smallBody = "hello";
-  const smallRes = nonStreamingMock(smallBody);
+  // ── Non-streaming: even small bodies fail closed ──
+  const smallRes = nonStreamingMock("hello");
   const smallSnippet = await readResponseBodySnippet(smallRes, {
     maxBytes: 10_000,
     maxChars: 10_000,
   });
   check(
-    "non-streaming small: passes through",
-    smallSnippet === smallBody,
+    "non-streaming small: also returns empty (fail-closed)",
+    smallSnippet === "",
     `got="${smallSnippet}"`,
   );
 
   // ── Streaming: body exceeds maxBytes ──
   const largeStreamingBody = "y".repeat(10_000);
-  const streamingRes = streamingResponse(largeStreamingBody);
-  const streamSnippet = await readResponseBodySnippet(streamingRes, limits);
-
+  const limits = { maxBytes: 200, maxChars: 500 };
+  const streamSnippet = await readResponseBodySnippet(
+    streamingResponse(largeStreamingBody),
+    limits,
+  );
   check(
     "streaming: snippet ≤ maxChars",
     streamSnippet.length <= limits.maxChars,
@@ -97,50 +92,42 @@ async function proof() {
     `bytes=${streamByteLen} max=${limits.maxBytes}`,
   );
 
-  // ── Streaming: small body ──
-  const smallStreamRes = streamingResponse("world");
-  const smallStreamSnippet = await readResponseBodySnippet(smallStreamRes, {
-    maxBytes: 10_000,
-    maxChars: 10_000,
-  });
+  // ── Streaming: small body passes through ──
+  const smallStreamSnippet = await readResponseBodySnippet(
+    streamingResponse("world"),
+    { maxBytes: 10_000, maxChars: 10_000 },
+  );
   check(
     "streaming small: passes through",
     smallStreamSnippet === "world",
     `got="${smallStreamSnippet}"`,
   );
 
-  // ── Multibyte CJK not corrupted by byte-boundary truncation ──
-  const cjkBody = "啊".repeat(500); // 3 bytes each in UTF-8
-  const cjkLimits = { maxBytes: 15, maxChars: 100 };
-  const cjkNonStreamingRes = nonStreamingMock(cjkBody);
-  const cjkSnippet = await readResponseBodySnippet(
-    cjkNonStreamingRes,
-    cjkLimits,
+  // ── Streaming: multibyte CJK not corrupted ──
+  const cjkStreamSnippet = await readResponseBodySnippet(
+    streamingResponse("啊".repeat(500)),
+    { maxBytes: 15, maxChars: 100 },
   );
-  const cjkByteLen = new TextEncoder().encode(cjkSnippet).length;
+  const cjkByteLen = new TextEncoder().encode(cjkStreamSnippet).length;
   check(
-    "multibyte non-streaming: bytes ≤ maxBytes",
-    cjkByteLen <= cjkLimits.maxBytes,
-    `bytes=${cjkByteLen} max=${cjkLimits.maxBytes}`,
+    "streaming multibyte: bytes ≤ maxBytes",
+    cjkByteLen <= 15,
+    `bytes=${cjkByteLen} max=15`,
   );
   check(
-    "multibyte non-streaming: chars ≤ maxChars",
-    cjkSnippet.length <= cjkLimits.maxChars,
-    `chars=${cjkSnippet.length} max=${cjkLimits.maxChars}`,
+    "streaming multibyte: chars ≤ maxChars",
+    cjkStreamSnippet.length <= 100,
+    `chars=${cjkStreamSnippet.length} max=100`,
   );
-  // subarray may split a multibyte character; the decoder replaces that
-  // trailing fragment with U+FFFD (�).  Verify we strip it.
   check(
-    "multibyte non-streaming: no replacement character",
-    !cjkSnippet.includes("�"),
-    `snippet="${cjkSnippet}"`,
+    "streaming multibyte: no replacement char",
+    !cjkStreamSnippet.includes("�"),
+    `snippet="${cjkStreamSnippet}"`,
   );
 }
 
 async function main() {
-  console.log(
-    `node --import tsx test/_proof_response_body_snippet_bound.mts\n`,
-  );
+  console.log(`node --import tsx test/_proof_response_body_snippet_bound.mts\n`);
   await proof();
   console.log(`\n[proof] ${pass} PASS, ${fail} FAIL`);
   if (fail > 0) process.exit(1);

@@ -5,12 +5,10 @@ export async function readResponseBodySnippet(
   try {
     const body = response.body;
     if (!body || typeof body.getReader !== "function") {
-      const text = await response.text();
-      const encoded = new TextEncoder().encode(text);
-      const bounded =
-        encoded.length > limits.maxBytes ? encoded.subarray(0, limits.maxBytes) : encoded;
-      // subarray may cut mid-codepoint; strip trailing U+FFFD artifacts
-      return new TextDecoder().decode(bounded).replace(/�+$/, "").slice(0, limits.maxChars);
+      // Fail closed when no reader is available: calling response.text()
+      // would buffer the full body before maxBytes can be applied, so
+      // return an empty snippet rather than risk OOM on large bodies.
+      return "";
     }
 
     const reader = body.getReader();
