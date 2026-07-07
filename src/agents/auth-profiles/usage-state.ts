@@ -23,7 +23,10 @@ export function isModelScopedCooldownReason(reason: AuthProfileFailureReason | u
 
 /** Resolves the latest active blocked/cooldown/disabled timestamp for a profile. */
 export function resolveProfileUnusableUntil(
-  stats: Pick<ProfileUsageStats, "blockedUntil" | "cooldownUntil" | "disabledUntil" | "blockedModel">,
+  stats: Pick<
+    ProfileUsageStats,
+    "blockedUntil" | "cooldownUntil" | "disabledUntil" | "blockedModel"
+  >,
   forModel?: string,
 ): number | null {
   // Model-aware bypass: a subscription_limit block recorded against a specific
