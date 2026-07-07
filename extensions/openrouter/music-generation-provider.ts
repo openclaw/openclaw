@@ -22,6 +22,9 @@ import { OPENROUTER_BASE_URL } from "./provider-catalog.js";
 const DEFAULT_OPENROUTER_MUSIC_MODEL = "google/lyria-3-pro-preview";
 const OPENROUTER_CLIP_MUSIC_MODEL = "google/lyria-3-clip-preview";
 const DEFAULT_TIMEOUT_MS = 180_000;
+const OPENROUTER_MUSIC_SSE_PENDING_MAX_BYTES = 2 * 1024 * 1024;
+const OPENROUTER_MUSIC_AUDIO_MAX_BYTES = 64 * 1024 * 1024;
+const OPENROUTER_MUSIC_TRANSCRIPT_MAX_BYTES = 1024 * 1024;
 const OPENROUTER_MUSIC_MODELS = [
   DEFAULT_OPENROUTER_MUSIC_MODEL,
   OPENROUTER_CLIP_MUSIC_MODEL,
@@ -112,9 +115,43 @@ function readDeltaAudio(part: unknown): { data?: string; transcript?: string } |
   };
 }
 
+function appendOpenRouterMusicAudio(
+  result: { audioBuffers: Buffer[]; audioBytes: number },
+  data: string,
+): void {
+  const buffer = Buffer.from(data, "base64");
+  const nextBytes = result.audioBytes + buffer.byteLength;
+  if (nextBytes > OPENROUTER_MUSIC_AUDIO_MAX_BYTES) {
+    throw new Error(
+      `OpenRouter music generation audio exceeded ${OPENROUTER_MUSIC_AUDIO_MAX_BYTES} bytes`,
+    );
+  }
+  result.audioBytes = nextBytes;
+  result.audioBuffers.push(buffer);
+}
+
+function appendOpenRouterMusicTranscript(
+  result: { transcriptChunks: string[]; transcriptBytes: number },
+  transcript: string,
+): void {
+  const nextBytes = result.transcriptBytes + Buffer.byteLength(transcript, "utf8");
+  if (nextBytes > OPENROUTER_MUSIC_TRANSCRIPT_MAX_BYTES) {
+    throw new Error(
+      `OpenRouter music generation transcript exceeded ${OPENROUTER_MUSIC_TRANSCRIPT_MAX_BYTES} bytes`,
+    );
+  }
+  result.transcriptBytes = nextBytes;
+  result.transcriptChunks.push(transcript);
+}
+
 function processOpenRouterSseLine(
   line: string,
-  result: { audioBuffers: Buffer[]; transcriptChunks: string[] },
+  result: {
+    audioBuffers: Buffer[];
+    audioBytes: number;
+    transcriptChunks: string[];
+    transcriptBytes: number;
+  },
 ): boolean {
   if (!line.startsWith("data:")) {
     return false;
@@ -128,10 +165,10 @@ function processOpenRouterSseLine(
   }
   const audio = readDeltaAudio(JSON.parse(data));
   if (audio?.data) {
-    result.audioBuffers.push(Buffer.from(audio.data, "base64"));
+    appendOpenRouterMusicAudio(result, audio.data);
   }
   if (audio?.transcript) {
-    result.transcriptChunks.push(audio.transcript);
+    appendOpenRouterMusicTranscript(result, audio.transcript);
   }
   return false;
 }
@@ -177,14 +214,28 @@ async function readOpenRouterAudioStream(
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
-  const result = { audioBuffers: [] as Buffer[], transcriptChunks: [] as string[] };
+  const result = {
+    audioBuffers: [] as Buffer[],
+    audioBytes: 0,
+    transcriptChunks: [] as string[],
+    transcriptBytes: 0,
+  };
   let buffer = "";
+  let pendingBytes = 0;
   let doneSeen = false;
   try {
     for (;;) {
       const { value, done } = await readOpenRouterStreamChunk(reader, deadline);
       if (done) {
         break;
+      }
+      for (const byte of value) {
+        pendingBytes = byte === 0x0a ? 0 : pendingBytes + 1;
+        if (pendingBytes > OPENROUTER_MUSIC_SSE_PENDING_MAX_BYTES) {
+          throw new Error(
+            `OpenRouter music generation SSE event exceeded ${OPENROUTER_MUSIC_SSE_PENDING_MAX_BYTES} bytes`,
+          );
+        }
       }
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split(/\r?\n/u);
@@ -201,6 +252,12 @@ async function readOpenRouterAudioStream(
     }
     resolveOpenRouterStreamRemainingMs(deadline);
     buffer += decoder.decode();
+    pendingBytes = Buffer.byteLength(buffer, "utf8");
+    if (pendingBytes > OPENROUTER_MUSIC_SSE_PENDING_MAX_BYTES) {
+      throw new Error(
+        `OpenRouter music generation SSE event exceeded ${OPENROUTER_MUSIC_SSE_PENDING_MAX_BYTES} bytes`,
+      );
+    }
     if (buffer.trim()) {
       for (const line of buffer.split(/\r?\n/u)) {
         if (processOpenRouterSseLine(line.trim(), result)) {
@@ -215,6 +272,9 @@ async function readOpenRouterAudioStream(
       audioBuffer: Buffer.concat(result.audioBuffers),
       transcript: result.transcriptChunks.join(""),
     };
+  } catch (error) {
+    await reader.cancel().catch(() => {});
+    throw error;
   } finally {
     try {
       reader.releaseLock();

@@ -39,16 +39,24 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => {
   };
 });
 
-function sseResponse(lines: string[], options?: { releaseLock?: () => void }): Response {
+function sseResponse(
+  lines: Array<string | Uint8Array>,
+  options?: { releaseLock?: () => void },
+): Response {
   const encoder = new TextEncoder();
+  const encodeLine = (line: string | Uint8Array) =>
+    typeof line === "string" ? encoder.encode(line) : line;
   if (!options?.releaseLock) {
+    let index = 0;
     return new Response(
       new ReadableStream({
-        start(controller) {
-          for (const line of lines) {
-            controller.enqueue(encoder.encode(line));
+        pull(controller) {
+          const line = lines[index++];
+          if (line === undefined) {
+            controller.close();
+            return;
           }
-          controller.close();
+          controller.enqueue(encodeLine(line));
         },
       }),
       { status: 200, headers: { "content-type": "text/event-stream" } },
@@ -57,7 +65,7 @@ function sseResponse(lines: string[], options?: { releaseLock?: () => void }): R
 
   const chunks: Array<ReadableStreamReadResult<Uint8Array>> = lines.map((line) => ({
     done: false,
-    value: encoder.encode(line),
+    value: encodeLine(line),
   }));
   chunks.push({ done: true, value: undefined });
   const reader = {
@@ -351,5 +359,60 @@ describe("openrouter music generation provider", () => {
         cfg: {},
       }),
     ).rejects.toThrow("OpenRouter music generation stream ended before completion");
+  });
+
+  it("rejects OpenRouter music SSE events that never delimit a line", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: sseResponse([new Uint8Array(2 * 1024 * 1024 + 1)]),
+      release: vi.fn(async () => {}),
+    });
+
+    await expect(
+      buildOpenRouterMusicGenerationProvider().generateMusic({
+        provider: "openrouter",
+        model: "google/lyria-3-clip-preview",
+        prompt: "unterminated event",
+        cfg: {},
+      }),
+    ).rejects.toThrow("OpenRouter music generation SSE event exceeded 2097152 bytes");
+  });
+
+  it("rejects oversized OpenRouter music audio chunks", async () => {
+    const oneMbAudioLine = `data: ${JSON.stringify({ choices: [{ delta: { audio: { data: Buffer.alloc(1024 * 1024).toString("base64") } } }] })}\n`;
+    postJsonRequestMock.mockResolvedValue({
+      response: sseResponse([
+        ...Array.from({ length: 65 }, () => oneMbAudioLine),
+        "data: [DONE]\n",
+      ]),
+      release: vi.fn(async () => {}),
+    });
+
+    await expect(
+      buildOpenRouterMusicGenerationProvider().generateMusic({
+        provider: "openrouter",
+        model: "google/lyria-3-clip-preview",
+        prompt: "oversized audio",
+        cfg: {},
+      }),
+    ).rejects.toThrow("OpenRouter music generation audio exceeded 67108864 bytes");
+  });
+
+  it("rejects oversized OpenRouter music transcripts", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: sseResponse([
+        `data: ${JSON.stringify({ choices: [{ delta: { audio: { transcript: "x".repeat(1024 * 1024 + 1) } } }] })}\n`,
+        "data: [DONE]\n",
+      ]),
+      release: vi.fn(async () => {}),
+    });
+
+    await expect(
+      buildOpenRouterMusicGenerationProvider().generateMusic({
+        provider: "openrouter",
+        model: "google/lyria-3-clip-preview",
+        prompt: "oversized transcript",
+        cfg: {},
+      }),
+    ).rejects.toThrow("OpenRouter music generation transcript exceeded 1048576 bytes");
   });
 });
