@@ -45,11 +45,7 @@ import { normalizeChatSplitLayout, type ChatSplitLayout } from "../pages/chat/sp
 import { parseImportedCustomTheme, type ImportedCustomTheme } from "./custom-theme.ts";
 import { normalizeGatewayTokenScope } from "./gateway-scope.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
-import {
-  hasLocalUserIdentity,
-  normalizeLocalUserIdentity,
-  type LocalUserIdentity,
-} from "./user-identity.ts";
+import { normalizeLocalUserIdentity, type LocalUserIdentity } from "./user-identity.ts";
 
 export const BORDER_RADIUS_STOPS = [0, 25, 50, 75, 100] as const;
 export type BorderRadiusStop = (typeof BORDER_RADIUS_STOPS)[number];
@@ -128,8 +124,6 @@ export type UiSettings = {
   customTheme?: ImportedCustomTheme;
   locale?: string;
 };
-
-export type { LocalUserIdentity } from "./user-identity.ts";
 
 type LastActiveSessionHost = {
   settings: UiSettings;
@@ -665,21 +659,6 @@ export function loadLocalUserIdentity(): LocalUserIdentity {
     return normalizeLocalUserIdentity(JSON.parse(raw) as Partial<LocalUserIdentity>);
   } catch {
     return normalizeLocalUserIdentity();
-  }
-}
-
-export function saveLocalUserIdentity(next: LocalUserIdentity) {
-  const storage = getSafeLocalStorage();
-  const normalized = normalizeLocalUserIdentity(next);
-  try {
-    if (!hasLocalUserIdentity(normalized)) {
-      storage?.removeItem(LOCAL_USER_IDENTITY_KEY);
-      return;
-    }
-    storage?.setItem(LOCAL_USER_IDENTITY_KEY, JSON.stringify(normalized));
-  } catch {
-    // best-effort — quota exceeded or security restrictions should not
-    // prevent in-memory identity updates from being applied
   }
 }
 
