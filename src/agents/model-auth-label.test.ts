@@ -360,4 +360,24 @@ describe("resolveModelAuthLabel", () => {
     expect(label).toBe("unknown");
     expect(mocks.resolveUsableCustomProviderApiKey).not.toHaveBeenCalled();
   });
+
+  it("shows literal api-key label when providerEntryProfileRef is a literal models.json key", () => {
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {},
+    } as never);
+    mocks.resolveAuthProfileOrder.mockReturnValue([]);
+    mocks.resolveProviderEntryApiKeyProfileReference.mockReturnValue({
+      kind: "literal",
+      apiKey: "sk-literal-secret-key",
+      source: "models.json",
+    });
+
+    const label = resolveModelAuthLabel({
+      provider: "openai",
+      cfg: {},
+    });
+
+    expect(label).toBe("api-key (models.json)");
+  });
 });

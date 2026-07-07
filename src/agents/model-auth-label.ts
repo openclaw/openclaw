@@ -67,9 +67,59 @@ export function resolveModelAuthLabel(params: {
       }),
     ),
   );
-  const candidates = [profileOverride, ...order].filter(Boolean) as string[];
+  const providerEntryProfileRef = resolveProviderEntryApiKeyProfileReference({
+    cfg: params.cfg,
+    provider: providerKey,
+    store,
+  });
 
-  for (const profileId of candidates) {
+  if (profileOverride) {
+    const profile = store.profiles[profileOverride];
+    if (
+      profile &&
+      acceptedProviderKeys.some((acceptedProvider) =>
+        isStoredCredentialCompatibleWithAuthProvider({
+          cfg: params.cfg,
+          provider: acceptedProvider,
+          credential: profile,
+        }),
+      )
+    ) {
+      const label = resolveAuthProfileDisplayLabel({
+        cfg: params.cfg,
+        store,
+        profileId: profileOverride,
+      });
+      if (profile.type === "oauth") {
+        return `oauth${label ? ` (${label})` : ""}`;
+      }
+      if (profile.type === "token") {
+        return `token${label ? ` (${label})` : ""}`;
+      }
+      return `api-key${label ? ` (${label})` : ""}`;
+    }
+  }
+
+  if (providerEntryProfileRef.kind === "literal") {
+    return `api-key (models.json)`;
+  }
+  if (providerEntryProfileRef.kind === "profile") {
+    const label = resolveAuthProfileDisplayLabel({
+      cfg: params.cfg,
+      store,
+      profileId: providerEntryProfileRef.profileId,
+    });
+    if (providerEntryProfileRef.mode === "token") {
+      return `token${label ? ` (${label})` : ""}`;
+    }
+    return `api-key${label ? ` (${label})` : ""}`;
+  }
+  if (providerEntryProfileRef.kind === "profile-incompatible") {
+    return "unknown";
+  }
+
+  const remainingCandidates = order.filter((id) => id !== profileOverride);
+  for (const profileId of remainingCandidates) {
     const profile = store.profiles[profileId];
     if (
       !profile ||
@@ -95,28 +145,6 @@ export function resolveModelAuthLabel(params: {
       return `token${label ? ` (${label})` : ""}`;
     }
     return `api-key${label ? ` (${label})` : ""}`;
-  }
-
-  const providerEntryProfileRef = resolveProviderEntryApiKeyProfileReference({
-    cfg: params.cfg,
-    provider: providerKey,
-    store,
-  });
-  if (providerEntryProfileRef.kind === "profile") {
-    const label = resolveAuthProfileDisplayLabel({
-      cfg: params.cfg,
-      store,
-      profileId: providerEntryProfileRef.profileId,
-    });
-    if (providerEntryProfileRef.mode === "token") {
-      return `token${label ? ` (${label})` : ""}`;
-    }
-    return `api-key${label ? ` (${label})` : ""}`;
-  }
-  if (providerEntryProfileRef.kind === "profile-incompatible") {
-    // Preserve the fact that config pointed at a profile while avoiding a
-    // misleading auth mode for an incompatible provider/profile pairing.
-    return "unknown";
   }
 
   if (
