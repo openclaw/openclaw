@@ -22,10 +22,7 @@ export {
 } from "./openclaw-runtime.js";
 
 export type {
-  ResolveWindowsSpawnProgramParams,
   SqliteConnectionPragmaOptions,
   SqliteWalMaintenance,
   SqliteWalMaintenanceOptions,
-  WindowsSpawnInvocation,
-  WindowsSpawnProgram,
 } from "./openclaw-runtime.js";
