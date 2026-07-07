@@ -235,11 +235,11 @@ describe("matrix live qa runtime", () => {
     const blockStreamingScenario = liveTesting.MATRIX_QA_SCENARIOS.find(
       (scenario) => scenario.id === "matrix-room-block-streaming",
     );
-    const topLevelScenario = liveTesting.MATRIX_QA_SCENARIOS.find(
-      (scenario) => scenario.id === "matrix-top-level-reply-shape",
+    const threadScenario = liveTesting.MATRIX_QA_SCENARIOS.find(
+      (scenario) => scenario.id === "matrix-thread-root-preservation",
     );
     expect(blockStreamingScenario).toBeDefined();
-    expect(topLevelScenario).toBeDefined();
+    expect(threadScenario).toBeDefined();
 
     const pinnedSchedule = liveTesting.scheduleMatrixQaScenariosInCatalogOrder([
       blockStreamingScenario!,
@@ -247,7 +247,7 @@ describe("matrix live qa runtime", () => {
     expect(liveTesting.selectMatrixQaCanaryProviderMode(pinnedSchedule)).toBe("mock-openai");
 
     const mixedSchedule = liveTesting.scheduleMatrixQaScenariosInCatalogOrder([
-      topLevelScenario!,
+      threadScenario!,
       blockStreamingScenario!,
     ]);
     expect(liveTesting.selectMatrixQaCanaryProviderMode(mixedSchedule)).toBeUndefined();
@@ -583,7 +583,7 @@ describe("matrix live qa runtime", () => {
 
   it("groups Matrix scenario execution by gateway config while preserving tail scenarios", () => {
     const scenarios = liveTesting.findMatrixQaScenarios([
-      "matrix-top-level-reply-shape",
+      "matrix-thread-root-preservation",
       "matrix-e2ee-cli-encryption-setup-multi-account",
       "matrix-reaction-notification",
       "matrix-e2ee-cli-setup-then-gateway-reply",
@@ -596,7 +596,7 @@ describe("matrix live qa runtime", () => {
         .scheduleMatrixQaScenariosInCatalogOrder(scenarios)
         .map(({ scenario }) => scenario.id),
     ).toEqual([
-      "matrix-top-level-reply-shape",
+      "matrix-thread-root-preservation",
       "matrix-reaction-notification",
       "matrix-e2ee-cli-self-verification",
       "matrix-e2ee-cli-encryption-setup-multi-account",
