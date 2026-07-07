@@ -43,7 +43,6 @@ export type ChatRealtimeState = {
   realtimeTalkDetail: string | null;
   realtimeTalkConversation: RealtimeTalkConversationEntry[];
   realtimeTalkOptions: RealtimeTalkOptions;
-  realtimeTalkInputOpen: boolean;
   realtimeTalkInputDevices: RealtimeTalkInputDevice[];
   realtimeTalkInputDeviceId: string;
   realtimeTalkInputLoading: boolean;
@@ -74,7 +73,6 @@ export function createInitialChatRealtimeState(inputDeviceId = "") {
     realtimeTalkDetail: null,
     realtimeTalkConversation: [],
     realtimeTalkOptions: createDefaultRealtimeTalkOptions(),
-    realtimeTalkInputOpen: false,
     realtimeTalkInputDevices: [] as RealtimeTalkInputDevice[],
     realtimeTalkInputDeviceId: inputDeviceId,
     realtimeTalkInputLoading: false,
@@ -158,7 +156,6 @@ export function attachChatRealtimeActions(state: ChatRealtimeState) {
     };
     saveSettings(state.settings);
     state.realtimeTalkInputError = null;
-    state.realtimeTalkInputOpen = false;
     state.requestUpdate();
   };
   state.toggleRealtimeTalk = async () => {
