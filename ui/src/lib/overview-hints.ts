@@ -36,7 +36,7 @@ const INSECURE_CONTEXT_CODES = new Set<string>([
 
 type AuthHintKind = "required" | "failed";
 
-export type PairingHint =
+type PairingHint =
   | {
       kind: "pairing-required";
       requestId: string | null;

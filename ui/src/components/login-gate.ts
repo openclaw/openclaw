@@ -73,7 +73,8 @@ function resolveDocsLabel(href: string): string {
   return t("login.failure.docsAuth");
 }
 
-function redactLoginFailureError(value: string): string {
+// Shared with the connection banner so no offline surface prints credentials.
+export function redactLoginFailureError(value: string): string {
   return value
     .replace(
       /([?#&])(?:access_token|auth|deviceToken|password|refresh_token|token)=([^&#\s]+)/gi,
@@ -313,9 +314,20 @@ function renderLoginGate(props: LoginGateProps) {
           <label class="field">
             <span>${t("overview.access.wsUrl")}</span>
             <input
+              inputmode="url"
+              autocapitalize="none"
+              autocorrect="off"
+              autocomplete="off"
+              spellcheck="false"
+              enterkeyhint="go"
               .value=${props.gatewayUrl}
               @input=${(e: Event) => {
                 props.onGatewayUrlChange((e.target as HTMLInputElement).value);
+              }}
+              @keydown=${(e: KeyboardEvent) => {
+                if (e.key === "Enter") {
+                  props.onConnect();
+                }
               }}
               placeholder="ws://127.0.0.1:18789"
             />
@@ -327,6 +339,7 @@ function renderLoginGate(props: LoginGateProps) {
                 type=${props.showGatewayToken ? "text" : "password"}
                 autocomplete="off"
                 spellcheck="false"
+                enterkeyhint="go"
                 .value=${props.token}
                 @input=${(e: Event) => {
                   props.onTokenChange((e.target as HTMLInputElement).value);
@@ -360,6 +373,7 @@ function renderLoginGate(props: LoginGateProps) {
                 type=${props.showGatewayPassword ? "text" : "password"}
                 autocomplete="off"
                 spellcheck="false"
+                enterkeyhint="go"
                 .value=${props.password}
                 @input=${(e: Event) => {
                   props.onPasswordChange((e.target as HTMLInputElement).value);
@@ -393,8 +407,8 @@ function renderLoginGate(props: LoginGateProps) {
           </button>
         </div>
         ${failure ? renderLoginFailure(failure) : ""}
-        <div class="login-gate__help">
-          <div class="login-gate__help-title">${t("overview.connection.title")}</div>
+        <details class="login-gate__help">
+          <summary class="login-gate__help-title">${t("overview.connection.title")}</summary>
           <ol class="login-gate__steps">
             <li>
               ${t("overview.connection.step1")}${renderConnectCommand("openclaw gateway run")}
@@ -411,7 +425,7 @@ function renderLoginGate(props: LoginGateProps) {
               >${t("overview.connection.docsLink")}</a
             >
           </div>
-        </div>
+        </details>
       </div>
     </div>
   `;

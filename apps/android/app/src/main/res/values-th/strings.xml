@@ -6,6 +6,7 @@
     <string name="trust_this_gateway">เชื่อถือเกตเวย์นี้หรือไม่?</string>
     <string name="trust_and_continue">เชื่อถือและดำเนินการต่อ</string>
     <string name="cancel">ยกเลิก</string>
+    <string name="new_chat_in_worktree">แชทใหม่ใน worktree</string>
     <string name="endpoint">เอนด์พอยต์</string>
     <string name="status">สถานะ</string>
     <string name="connected_gateway_ready">เกตเวย์ของคุณเปิดใช้งานและพร้อมใช้งานแล้ว</string>
@@ -20,8 +21,17 @@
     <string name="use_tls">ใช้ TLS</string>
     <string name="token_optional">โทเค็น (ไม่บังคับ)</string>
     <string name="password">รหัสผ่าน</string>
+    <string name="custom_headers_optional">ส่วนหัวที่กำหนดเอง (ไม่บังคับ)</string>
+    <string name="custom_headers_explainer">ส่งไปพร้อมกับทุกการเชื่อมต่อไปยัง gateway นี้ เช่น ส่วนหัวโทเค็นบริการ Cloudflare Access จัดเก็บแบบเข้ารหัสและจะนำไปใช้ในการเชื่อมต่อใหม่ครั้งถัดไป</string>
+    <string name="custom_header_value">ค่าส่วนหัว</string>
+    <string name="custom_header_reserved">ส่วนหัวนี้ถูกจัดการโดยการเชื่อมต่อและไม่สามารถเขียนทับได้</string>
+    <string name="add_custom_header">เพิ่มส่วนหัว</string>
+    <string name="remove_custom_header">ลบ %1$s</string>
     <string name="run_onboarding_again">เรียกใช้การเริ่มต้นใช้งานอีกครั้ง</string>
     <string name="resolved_endpoint">เอนด์พอยต์ที่แก้ไขแล้ว</string>
     <string name="gateway_trust_first_seen">ตรวจสอบลายนิ้วมือของใบรับรองก่อนเชื่อถือเกตเวย์นี้\n\n%1$s</string>
     <string name="gateway_trust_changed">ใบรับรองของเกตเวย์มีการเปลี่ยนแปลง ดำเนินการต่อเมื่อคุณคาดว่าจะมีการเปลี่ยนแปลงนี้เท่านั้น\n\nSHA-256 เดิม:\n%1$s\n\nSHA-256 ใหม่:\n%2$s</string>
+    <string name="switch_gateway">สลับ Gateway</string>
+    <string name="select_gateway">เลือก Gateway</string>
+    <string name="active_gateway">Gateway ที่ใช้งานอยู่</string>
 </resources>

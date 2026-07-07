@@ -22,6 +22,9 @@ const { fetchBrowserJson } = await import("./client-fetch.js");
 
 const STREAM_CHUNK = Buffer.alloc(4 * 1024, "x");
 const STREAM_BODY_BYTES = 1024 * 1024;
+const SUCCESS_STREAM_CHUNK = Buffer.alloc(64 * 1024, "x");
+const SUCCESS_STREAM_BODY_BYTES = 33 * 1024 * 1024;
+const BROWSER_SUCCESS_BODY_LIMIT_BYTES = 32 * 1024 * 1024;
 
 describe("fetchHttpJson error body boundary", () => {
   let server: http.Server;
@@ -30,7 +33,10 @@ describe("fetchHttpJson error body boundary", () => {
   let resolveStreamClosed: () => void;
   let smallConnectionClosed: Promise<void>;
   let resolveSmallConnectionClosed: () => void;
+  let successStreamClosed: Promise<void>;
+  let resolveSuccessStreamClosed: () => void;
   let streamCompleted: boolean;
+  let successStreamCompleted: boolean;
 
   beforeEach(async () => {
     for (const key of [
@@ -50,8 +56,52 @@ describe("fetchHttpJson error body boundary", () => {
     smallConnectionClosed = new Promise<void>((resolve) => {
       resolveSmallConnectionClosed = resolve;
     });
+    successStreamClosed = new Promise<void>((resolve) => {
+      resolveSuccessStreamClosed = resolve;
+    });
     streamCompleted = false;
+    successStreamCompleted = false;
     server = http.createServer((req, res) => {
+      if (req.url === "/success-small") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end('{"payload":"control"}');
+        return;
+      }
+      if (req.url === "/success-large") {
+        let written = 0;
+        let closed = false;
+        res.once("close", () => {
+          closed = true;
+          resolveSuccessStreamClosed();
+        });
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.write('{"payload":"');
+        const writeNext = () => {
+          if (closed) {
+            return;
+          }
+          if (written >= SUCCESS_STREAM_BODY_BYTES) {
+            successStreamCompleted = true;
+            res.end('"}');
+            return;
+          }
+          const remaining = SUCCESS_STREAM_BODY_BYTES - written;
+          const chunk =
+            remaining >= SUCCESS_STREAM_CHUNK.byteLength
+              ? SUCCESS_STREAM_CHUNK
+              : SUCCESS_STREAM_CHUNK.subarray(0, remaining);
+          written += chunk.byteLength;
+          const scheduleNext = () => setTimeout(writeNext, 2);
+          if (res.write(chunk)) {
+            scheduleNext();
+          } else {
+            res.once("drain", scheduleNext);
+          }
+        };
+        writeNext();
+        return;
+      }
+
       if (req.url === "/small") {
         req.socket.once("close", () => resolveSmallConnectionClosed());
         res.writeHead(500, { "Content-Type": "text/plain" });
@@ -109,6 +159,23 @@ describe("fetchHttpJson error body boundary", () => {
     expect(error).toMatchObject({ name: "BrowserServiceError", message: "HTTP 500" });
     await expect(streamClosed).resolves.toBeUndefined();
     expect(streamCompleted).toBe(false);
+  });
+
+  it("cancels an overflowing successful JSON response", async () => {
+    const error = await fetchBrowserJson(`${baseUrl}/success-large`).catch((err: unknown) => err);
+
+    expect(error).toMatchObject({
+      name: "BrowserServiceError",
+      message: `Browser control response exceeded ${BROWSER_SUCCESS_BODY_LIMIT_BYTES} bytes`,
+    });
+    await expect(successStreamClosed).resolves.toBeUndefined();
+    expect(successStreamCompleted).toBe(false);
+  });
+
+  it("preserves a normal successful JSON response", async () => {
+    await expect(fetchBrowserJson(`${baseUrl}/success-small`)).resolves.toEqual({
+      payload: "control",
+    });
   });
 
   it("preserves a complete diagnostic body within the limit", async () => {

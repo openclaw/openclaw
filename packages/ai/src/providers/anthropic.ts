@@ -46,12 +46,16 @@ import {
   usesFoundryBearerAuth,
 } from "./anthropic-auth-headers.js";
 import {
+  applyClaudeRequestContract,
+  prepareClaudeSonnet5RequestContext,
   resolveClaudeNativeThinkingLevelMap,
+  resolveClaudeSonnet5ModelIdentity,
   requiresClaudeAdaptiveThinking,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
   usesClaudeFable5MessagesContract,
+  usesClaudeStreamingRefusalContract,
 } from "./anthropic-model-contract.js";
 import { applyAnthropicRefusal } from "./anthropic-refusal.js";
 import {
@@ -72,6 +76,12 @@ import {
   type AnthropicProjectedToolChoice,
   type AnthropicToolProjection,
 } from "./anthropic-tool-projection.js";
+import {
+  readAnthropicPromptUsageSnapshot,
+  readAnthropicUsageTokenCount,
+  readLastAnthropicIterationUsage,
+  type AnthropicPromptUsageSnapshot,
+} from "./anthropic-usage.js";
 import { resolveCacheRetention } from "./cache-retention.js";
 import { resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
@@ -103,6 +113,7 @@ function getCacheControl(
 
 // Stealth mode: Mimic Claude Code's tool naming exactly
 const claudeCodeVersion = "2.1.75";
+const claudeCodeBillingSystemBlock = `x-anthropic-billing-header: cc_version=${claudeCodeVersion}; cc_entrypoint=sdk-cli;`;
 
 // Claude Code 2.x tool names (canonical casing)
 // Source: https://cchistory.mariozechner.at/data/prompts-2.1.11.md
@@ -486,6 +497,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
   options?: AnthropicOptions,
 ) => {
   const stream = new AssistantMessageEventStream();
+  const requestContext = prepareClaudeSonnet5RequestContext(model, context);
 
   void (async () => {
     const output: AssistantMessage = {
@@ -505,9 +517,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
       stopReason: "stop",
       timestamp: Date.now(),
     };
-    // Fable classifiers can refuse after partial generation, so no event is
-    // safe to expose until the terminal stop reason is known.
-    const refusalBuffer = usesClaudeFable5MessagesContract(model)
+    // Classifier refusals can invalidate partial output, so no event is safe
+    // to expose until the terminal stop reason is known.
+    const refusalBuffer = usesClaudeStreamingRefusalContract(model)
       ? createDeferredEventBuffer<AssistantMessageEvent>(stream, () =>
           notifyLlmRequestActivity(options?.signal),
         )
@@ -516,6 +528,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
     // Fallback-served turns bill at the serving model's rates; a boundary
     // swaps this to the fallback model's cost table.
     let costModel = model;
+    let messageStartPromptUsage: AnthropicPromptUsageSnapshot | undefined;
 
     try {
       let client: Anthropic;
@@ -533,9 +546,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 
         let copilotDynamicHeaders: Record<string, string> | undefined;
         if (model.provider === "github-copilot") {
-          const hasImages = hasCopilotVisionInput(context.messages);
+          const hasImages = hasCopilotVisionInput(requestContext.messages);
           copilotDynamicHeaders = buildCopilotDynamicHeaders({
-            messages: context.messages,
+            messages: requestContext.messages,
             hasImages,
           });
         }
@@ -547,7 +560,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
           model,
           apiKey,
           options?.interleavedThinking ?? true,
-          shouldUseFineGrainedToolStreamingBeta(model, context),
+          shouldUseFineGrainedToolStreamingBeta(model, requestContext),
           options?.headers,
           copilotDynamicHeaders,
           cacheSessionId,
@@ -556,13 +569,14 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         isOAuth = created.isOAuthToken;
         serverSideFallback = created.serverSideFallback;
       }
-      const builtParams = buildParams(model, context, isOAuth, options, serverSideFallback);
+      const builtParams = buildParams(model, requestContext, isOAuth, options, serverSideFallback);
       let params = builtParams.params;
       const toolProjection = builtParams.toolProjection;
       const nextParams = await options?.onPayload?.(params, model);
       if (nextParams !== undefined) {
         params = nextParams as MessageCreateParamsStreaming;
       }
+      applyClaudeRequestContract(params as unknown as Record<string, unknown>, model);
       const requestOptions = {
         ...(options?.signal ? { signal: options.signal } : {}),
         ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
@@ -590,15 +604,45 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         if (event.type === "message_start") {
           output.responseId = event.message.id;
           output.responseModel = event.message.model;
-          output.usage.input = event.message.usage.input_tokens || 0;
-          output.usage.output = event.message.usage.output_tokens || 0;
-          output.usage.cacheRead = event.message.usage.cache_read_input_tokens || 0;
-          output.usage.cacheWrite = event.message.usage.cache_creation_input_tokens || 0;
+          const promptUsage = readAnthropicPromptUsageSnapshot(event.message.usage);
+          const messageStartPromptTokens = promptUsage
+            ? promptUsage.input + promptUsage.cacheRead + promptUsage.cacheWrite
+            : 0;
+          messageStartPromptUsage = messageStartPromptTokens > 0 ? promptUsage : undefined;
+          const inputTokens = readAnthropicUsageTokenCount(event.message.usage.input_tokens);
+          if (inputTokens !== undefined) {
+            output.usage.input = inputTokens;
+          }
+          const outputTokens = readAnthropicUsageTokenCount(event.message.usage.output_tokens);
+          if (outputTokens !== undefined) {
+            output.usage.output = outputTokens;
+          }
+          const cacheReadTokens =
+            event.message.usage.cache_read_input_tokens == null
+              ? 0
+              : readAnthropicUsageTokenCount(event.message.usage.cache_read_input_tokens);
+          if (cacheReadTokens !== undefined) {
+            output.usage.cacheRead = cacheReadTokens;
+          }
+          const cacheWriteTokens =
+            event.message.usage.cache_creation_input_tokens == null
+              ? 0
+              : readAnthropicUsageTokenCount(event.message.usage.cache_creation_input_tokens);
+          if (cacheWriteTokens !== undefined) {
+            output.usage.cacheWrite = cacheWriteTokens;
+          }
           output.usage.totalTokens =
             output.usage.input +
             output.usage.output +
             output.usage.cacheRead +
             output.usage.cacheWrite;
+          if (messageStartPromptUsage && outputTokens !== undefined) {
+            output.usage.contextUsage = {
+              state: "available",
+              promptTokens: messageStartPromptTokens,
+              totalTokens: messageStartPromptTokens + output.usage.output,
+            };
+          }
           calculateCost(costModel, output.usage);
           // Defer start until after message_start so that pre-stream SSE errors
           // (e.g. invalid thinking signatures) arrive before any non-error event
@@ -799,24 +843,56 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
           }
           // Only update usage fields if present (not null).
           // Preserves input_tokens from message_start when proxies omit it in message_delta.
-          if (event.usage.input_tokens != null) {
-            output.usage.input = event.usage.input_tokens;
+          const inputTokens = readAnthropicUsageTokenCount(event.usage.input_tokens);
+          if (inputTokens !== undefined) {
+            output.usage.input = inputTokens;
           }
-          if (event.usage.output_tokens != null) {
-            output.usage.output = event.usage.output_tokens;
+          const outputTokens = readAnthropicUsageTokenCount(event.usage.output_tokens);
+          if (outputTokens !== undefined) {
+            output.usage.output = outputTokens;
           }
-          if (event.usage.cache_read_input_tokens != null) {
-            output.usage.cacheRead = event.usage.cache_read_input_tokens;
+          // Match the SDK stream accumulator: null means no update, not a zero counter.
+          const cacheReadTokens = readAnthropicUsageTokenCount(event.usage.cache_read_input_tokens);
+          if (cacheReadTokens !== undefined) {
+            output.usage.cacheRead = cacheReadTokens;
           }
-          if (event.usage.cache_creation_input_tokens != null) {
-            output.usage.cacheWrite = event.usage.cache_creation_input_tokens;
+          const cacheWriteTokens = readAnthropicUsageTokenCount(
+            event.usage.cache_creation_input_tokens,
+          );
+          if (cacheWriteTokens !== undefined) {
+            output.usage.cacheWrite = cacheWriteTokens;
           }
-          // Anthropic doesn't provide total_tokens, compute from components
           output.usage.totalTokens =
             output.usage.input +
             output.usage.output +
             output.usage.cacheRead +
             output.usage.cacheWrite;
+          const iterationUsage = readLastAnthropicIterationUsage(event.usage);
+          if (iterationUsage.state === "valid") {
+            output.usage.contextUsage = {
+              state: "available",
+              promptTokens: iterationUsage.usage.contextPromptTokens,
+              totalTokens: iterationUsage.usage.totalTokens,
+            };
+          } else if (iterationUsage.state === "invalid") {
+            output.usage.contextUsage = { state: "unavailable" };
+          } else if (
+            outputTokens !== undefined &&
+            (messageStartPromptUsage !== undefined ||
+              (inputTokens !== undefined &&
+                cacheReadTokens !== undefined &&
+                cacheWriteTokens !== undefined))
+          ) {
+            const promptTokens =
+              output.usage.input + output.usage.cacheRead + output.usage.cacheWrite;
+            output.usage.contextUsage = {
+              state: "available",
+              promptTokens,
+              totalTokens: promptTokens + output.usage.output,
+            };
+          } else {
+            output.usage.contextUsage = { state: "unavailable" };
+          }
           calculateCost(costModel, output.usage);
         }
       }
@@ -853,11 +929,11 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 };
 
 function normalizeAnthropicToolChoice(
-  model: Model<"anthropic-messages">,
+  thinkingEnabled: boolean,
   toolChoice: NonNullable<AnthropicOptions["toolChoice"]>,
 ): AnthropicProjectedToolChoice {
   if (
-    requiresClaudeAdaptiveThinking(model) &&
+    thinkingEnabled &&
     (toolChoice === "any" || (typeof toolChoice === "object" && toolChoice.type === "tool"))
   ) {
     return { type: "auto" as const };
@@ -918,19 +994,48 @@ function mapThinkingLevelToEffort(
   }
 }
 
-export const streamSimpleAnthropic: StreamFunction<"anthropic-messages", SimpleStreamOptions> = (
+type AnthropicSimpleStreamOptions = SimpleStreamOptions & {
+  toolChoice?: AnthropicOptions["toolChoice"];
+};
+
+export const streamSimpleAnthropic: StreamFunction<
+  "anthropic-messages",
+  AnthropicSimpleStreamOptions
+> = (
   model: Model<"anthropic-messages">,
   context: Context,
-  options?: SimpleStreamOptions,
+  options?: AnthropicSimpleStreamOptions,
 ) => {
   const apiKey = options?.apiKey || getEnvApiKey(model.provider);
   if (!apiKey) {
     throw new Error(`No API key for provider: ${model.provider}`);
   }
 
-  const base = buildBaseOptions(model, options, apiKey);
-  if (!options?.reasoning) {
-    const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
+  const base = {
+    ...buildBaseOptions(model, options, apiKey),
+    toolChoice: options?.toolChoice,
+  };
+  const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
+  if (options?.reasoning === "off" && !mandatoryAdaptiveThinking) {
+    return streamAnthropic(model, context, {
+      ...base,
+      thinkingEnabled: false,
+    } satisfies AnthropicOptions);
+  }
+  const reasoning =
+    options?.reasoning === "off"
+      ? mandatoryAdaptiveThinking
+        ? "low"
+        : "high"
+      : options?.reasoning;
+  if (resolveClaudeSonnet5ModelIdentity(model)) {
+    return streamAnthropic(model, context, {
+      ...base,
+      thinkingEnabled: true,
+      effort: mapThinkingLevelToEffort(model, reasoning ?? "high"),
+    } satisfies AnthropicOptions);
+  }
+  if (!reasoning) {
     return streamAnthropic(model, context, {
       ...base,
       thinkingEnabled: mandatoryAdaptiveThinking,
@@ -941,7 +1046,7 @@ export const streamSimpleAnthropic: StreamFunction<"anthropic-messages", SimpleS
   // For Opus 4.6 and Sonnet 4.6: use adaptive thinking with effort level
   // For older models: use budget-based thinking
   if (supportsAdaptiveThinking(model)) {
-    const effort = mapThinkingLevelToEffort(model, options.reasoning);
+    const effort = mapThinkingLevelToEffort(model, reasoning);
     return streamAnthropic(model, context, {
       ...base,
       thinkingEnabled: true,
@@ -954,8 +1059,8 @@ export const streamSimpleAnthropic: StreamFunction<"anthropic-messages", SimpleS
   const adjusted = adjustMaxTokensForThinking(
     base.maxTokens,
     model.maxTokens,
-    options.reasoning,
-    options.thinkingBudgets,
+    reasoning,
+    options?.thinkingBudgets,
   );
 
   return streamAnthropic(model, context, {
@@ -1140,8 +1245,8 @@ function buildParams(
   params: MessageCreateParamsStreaming;
   toolProjection?: AnthropicToolProjection;
 } {
-  const fable5 = usesClaudeFable5MessagesContract(model);
-  const replayThinkingEnabled = fable5 || options?.thinkingEnabled === true;
+  const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
+  const replayThinkingEnabled = mandatoryAdaptiveThinking || options?.thinkingEnabled === true;
   const { cacheControl } = getCacheControl(model, options?.cacheRetention);
   const system = buildAnthropicSystemBlocks(context.systemPrompt, isOAuthTokenResult, cacheControl);
   const compat = context.tools ? getAnthropicCompat(model) : undefined;
@@ -1205,18 +1310,18 @@ function buildParams(
     params.tools = tools;
   }
 
-  // Configure thinking mode: always-on adaptive (Fable 5), adaptive (Opus
-  // 4.6+ and Sonnet 4.6),
+  // Configure thinking mode: always-on adaptive (Fable 5 and Mythos 5),
+  // adaptive (Opus 4.6+ and Sonnet 4.6),
   // budget-based (older models), or explicitly disabled.
-  if (fable5 || model.reasoning || supportsAdaptiveThinking(model)) {
-    if (fable5 || options?.thinkingEnabled) {
+  if (mandatoryAdaptiveThinking || model.reasoning || supportsAdaptiveThinking(model)) {
+    if (mandatoryAdaptiveThinking || options?.thinkingEnabled) {
       // Default to "summarized" so Opus 4.7+ and Mythos Preview behave like
       // older Claude 4 models (whose API default is also "summarized").
       const display: AnthropicThinkingDisplay = options?.thinkingDisplay ?? "summarized";
       if (supportsAdaptiveThinking(model)) {
         // Adaptive thinking: Claude decides when and how much to think.
         params.thinking = { type: "adaptive", display };
-        const effort = options?.effort ?? (fable5 ? "high" : undefined);
+        const effort = options?.effort ?? (mandatoryAdaptiveThinking ? "high" : undefined);
         if (effort) {
           // The Anthropic SDK types can lag newly supported effort values such as "xhigh".
           params.output_config =
@@ -1247,7 +1352,10 @@ function buildParams(
   }
 
   if (options?.toolChoice) {
-    const normalizedToolChoice = normalizeAnthropicToolChoice(model, options.toolChoice);
+    const normalizedToolChoice = normalizeAnthropicToolChoice(
+      replayThinkingEnabled,
+      options.toolChoice,
+    );
     const projectedToolChoice = toolProjection
       ? reconcileAnthropicToolChoice(normalizedToolChoice, toolProjection)
       : normalizedToolChoice;
@@ -1495,6 +1603,11 @@ function buildAnthropicSystemBlocks(
 ): TextBlockParam[] | undefined {
   const blocks: TextBlockParam[] = [];
   if (isOAuthTokenResult) {
+    // Anthropic uses this first system block to route Claude subscription OAuth billing.
+    blocks.push({
+      type: "text",
+      text: claudeCodeBillingSystemBlock,
+    });
     blocks.push({
       type: "text",
       text: "You are Claude Code, Anthropic's official CLI for Claude.",

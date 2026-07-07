@@ -21,6 +21,44 @@ CREATE TABLE IF NOT EXISTS diagnostic_events (
 CREATE INDEX IF NOT EXISTS idx_diagnostic_events_scope_created
   ON diagnostic_events(scope, created_at, event_key);
 
+CREATE TABLE IF NOT EXISTS audit_events (
+  sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id TEXT NOT NULL UNIQUE,
+  source_id TEXT NOT NULL UNIQUE,
+  source_sequence INTEGER NOT NULL,
+  occurred_at INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  action TEXT NOT NULL,
+  status TEXT NOT NULL,
+  error_code TEXT,
+  actor_type TEXT NOT NULL,
+  actor_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  session_key TEXT,
+  session_id TEXT,
+  run_id TEXT NOT NULL,
+  tool_call_id TEXT,
+  tool_name TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_time
+  ON audit_events(occurred_at DESC, sequence DESC);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_agent_sequence
+  ON audit_events(agent_id, sequence DESC);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_session_sequence
+  ON audit_events(session_key, sequence DESC);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_run_sequence
+  ON audit_events(run_id, sequence DESC);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_kind_sequence
+  ON audit_events(kind, sequence DESC);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_status_sequence
+  ON audit_events(status, sequence DESC);
+
 CREATE TABLE IF NOT EXISTS diagnostic_stability_bundles (
   bundle_key TEXT NOT NULL PRIMARY KEY,
   reason TEXT NOT NULL,
@@ -538,6 +576,19 @@ CREATE TABLE IF NOT EXISTS gateway_restart_handoff (
 CREATE INDEX IF NOT EXISTS idx_gateway_restart_handoff_expiry
   ON gateway_restart_handoff(expires_at, pid);
 
+CREATE TABLE IF NOT EXISTS gateway_boot_lifecycle (
+  boot_id TEXT NOT NULL PRIMARY KEY,
+  pid INTEGER NOT NULL,
+  started_at_ms INTEGER NOT NULL,
+  completed_at_ms INTEGER,
+  outcome TEXT,
+  startup_reason TEXT,
+  reason TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_gateway_boot_lifecycle_started
+  ON gateway_boot_lifecycle(started_at_ms);
+
 CREATE TABLE IF NOT EXISTS acp_sessions (
   session_key TEXT NOT NULL PRIMARY KEY,
   session_id TEXT,
@@ -867,6 +918,10 @@ CREATE INDEX IF NOT EXISTS idx_cron_run_logs_delivery
 CREATE TABLE IF NOT EXISTS cron_jobs (
   store_key TEXT NOT NULL,
   job_id TEXT NOT NULL,
+  declaration_key TEXT,
+  display_name TEXT,
+  owner_agent_id TEXT,
+  owner_session_key TEXT,
   name TEXT NOT NULL,
   description TEXT,
   enabled INTEGER NOT NULL,
@@ -898,6 +953,7 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
   delivery_channel TEXT,
   delivery_to TEXT,
   delivery_thread_id TEXT,
+  delivery_thread_id_type TEXT,
   delivery_account_id TEXT,
   delivery_best_effort INTEGER,
   delivery_completion_mode TEXT,
@@ -1224,3 +1280,24 @@ CREATE TABLE IF NOT EXISTS backup_runs (
 
 CREATE INDEX IF NOT EXISTS idx_backup_runs_created
   ON backup_runs(created_at DESC, id);
+
+CREATE TABLE IF NOT EXISTS worktrees (
+  id TEXT NOT NULL PRIMARY KEY,
+  repo_fingerprint TEXT NOT NULL,
+  repo_root TEXT NOT NULL,
+  path TEXT NOT NULL,
+  branch TEXT NOT NULL,
+  base_ref TEXT NOT NULL,
+  owner_kind TEXT NOT NULL CHECK (owner_kind IN ('manual', 'workboard', 'session')),
+  owner_id TEXT,
+  snapshot_ref TEXT,
+  created_at INTEGER NOT NULL,
+  last_active_at INTEGER NOT NULL,
+  removed_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_worktrees_repo_fingerprint
+  ON worktrees(repo_fingerprint);
+
+CREATE INDEX IF NOT EXISTS idx_worktrees_removed_at
+  ON worktrees(removed_at);

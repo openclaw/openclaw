@@ -275,6 +275,7 @@ const qaSeedScenarioBodySchema = z.object({
   plugins: z.array(z.string().trim().min(1)).optional(),
   gatewayConfigPatch: z.record(z.string(), z.unknown()).optional(),
   gatewayRuntime: qaScenarioGatewayRuntimeSchema.optional(),
+  regressionRefs: z.array(z.string().trim().min(1)).optional(),
   docsRefs: z.array(z.string().trim().min(1)).optional(),
   codeRefs: z.array(z.string().trim().min(1)).optional(),
   execution: qaScenarioExecutionSchema.optional(),

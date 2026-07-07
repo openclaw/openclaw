@@ -45,20 +45,21 @@ function bundledPluginIdsWithContract(
 }
 
 describe("web provider public artifacts", () => {
-  it("loads public artifacts for every bundled web provider declared in manifests", () => {
+  it("declares bundled web providers in manifests", () => {
     expect(webSearchPluginIds).not.toHaveLength(0);
-    for (const pluginId of webSearchPluginIds) {
-      expect(
-        loadBundledWebSearchProviderEntriesFromDir({ dirName: pluginId, pluginId }),
-      ).not.toBeNull();
-    }
-
     expect(webFetchPluginIds).not.toHaveLength(0);
-    for (const pluginId of webFetchPluginIds) {
-      expect(
-        loadBundledWebFetchProviderEntriesFromDir({ dirName: pluginId, pluginId }),
-      ).not.toBeNull();
-    }
+  });
+
+  it.each(webSearchPluginIds)("loads public web-search artifacts for %s", (pluginId) => {
+    expect(
+      loadBundledWebSearchProviderEntriesFromDir({ dirName: pluginId, pluginId }),
+    ).not.toBeNull();
+  });
+
+  it.each(webFetchPluginIds)("loads public web-fetch artifacts for %s", (pluginId) => {
+    expect(
+      loadBundledWebFetchProviderEntriesFromDir({ dirName: pluginId, pluginId }),
+    ).not.toBeNull();
   });
 
   it("registers compatibility runtime paths for bundled SecretRef-capable web search providers", () => {

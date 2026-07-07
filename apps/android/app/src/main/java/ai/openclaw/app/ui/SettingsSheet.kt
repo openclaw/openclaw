@@ -656,7 +656,10 @@ fun SettingsSheet(viewModel: MainViewModel) {
               colors = listItemColors,
               headlineContent = { Text("SMS", style = mobileHeadline) },
               supportingContent = {
-                Text("Send and search SMS from this device.", style = mobileCallout)
+                Text(
+                  "Grants Android SMS access. The Gateway must separately allow `sms.search` and, only if needed, `sms.send`.",
+                  style = mobileCallout,
+                )
               },
               trailingContent = {
                 Button(

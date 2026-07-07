@@ -139,6 +139,13 @@ const browserCommandGroupDefinitions: readonly BrowserCommandGroupDefinition[] =
       module.registerBrowserStateCommands(args.browser, args.parentOpts);
     },
   },
+  {
+    placeholders: [command("extension", "Chrome extension load path and pairing")],
+    register: async (args) => {
+      const module = await import("./browser-cli-extension.js");
+      module.registerBrowserExtensionCommands(args.browser, args.parentOpts);
+    },
+  },
 ];
 
 function buildBrowserCommandGroups(params: {

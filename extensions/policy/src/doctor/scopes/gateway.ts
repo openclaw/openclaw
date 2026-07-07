@@ -1,6 +1,7 @@
 // Policy doctor checks and findings for gateway exposure policy.
 import type { HealthCheck, HealthFinding } from "openclaw/plugin-sdk/health";
 import type { PolicyEvidence } from "../../policy-state.js";
+import { repairPolicyAutomaticNarrower } from "../automatic-repairs.js";
 import { CHECK_IDS } from "../metadata.js";
 import type { PolicyDoctorCheckDeps } from "../types.js";
 import { readPolicyBoolean, readStringList } from "../utils.js";
@@ -43,6 +44,9 @@ export function createPolicyGatewayChecks(deps: PolicyDoctorCheckDeps): readonly
     async detect(ctx) {
       return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyGatewayControlUiInsecure);
     },
+    repair(ctx, findings) {
+      return repairPolicyAutomaticNarrower(ctx, findings, CHECK_IDS.policyGatewayControlUiInsecure);
+    },
   };
   const policyGatewayTailscaleFunnelCheck: HealthCheck = {
     id: CHECK_IDS.policyGatewayTailscaleFunnel,
@@ -60,6 +64,9 @@ export function createPolicyGatewayChecks(deps: PolicyDoctorCheckDeps): readonly
     source: "policy",
     async detect(ctx) {
       return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyGatewayRemoteEnabled);
+    },
+    repair(ctx, findings) {
+      return repairPolicyAutomaticNarrower(ctx, findings, CHECK_IDS.policyGatewayRemoteEnabled);
     },
   };
   const policyGatewayHttpEndpointEnabledCheck: HealthCheck = {

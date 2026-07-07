@@ -50,6 +50,7 @@ import {
   mockedWaitForDeferredTurnMaintenanceForSession,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
+  warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 import type { RunEmbeddedAgentParams } from "./run/params.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
@@ -252,6 +253,7 @@ async function waitForRunEvent(events: string[], expected: string): Promise<void
 describe("runEmbeddedAgent overflow compaction trigger routing", () => {
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
+    await warmRunOverflowCompactionHarness(runEmbeddedAgent);
   });
 
   beforeEach(() => {
@@ -2288,6 +2290,41 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
 
     expectMockCallFields(mockedCompactDirect, {
       currentTokenCount: 277403,
+    });
+    expect(result.meta.error).toBeUndefined();
+  });
+
+  it("passes preflight prompt estimates into synthetic overflow compaction", async () => {
+    mockedExtractObservedOverflowTokenCount.mockReturnValueOnce(undefined);
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          promptError: makeOverflowError(),
+          promptErrorSource: "precheck",
+          preflightRecovery: {
+            route: "compact_then_truncate",
+            estimatedPromptTokens: 268138,
+            promptBudgetBeforeReserve: 241616,
+            overflowTokens: 26522,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted session",
+        firstKeptEntryId: "entry-preflight",
+        tokensBefore: 268138,
+      }),
+    );
+
+    const result = await runEmbeddedAgent(overflowBaseRunParams);
+
+    expectMockCallFields(mockedCompactDirect, {
+      currentTokenCount: 268138,
+    });
+    expectRecordFields(expectMockCallFields(mockedCompactDirect, {}).runtimeContext, {
+      currentTokenCount: 268138,
     });
     expect(result.meta.error).toBeUndefined();
   });

@@ -12,13 +12,13 @@ optional chat channels — they just differ in how you interact with the setup.
 
 ## Which path should I use?
 
-|                | CLI onboarding                         | macOS app onboarding      |
-| -------------- | -------------------------------------- | ------------------------- |
-| **Platforms**  | macOS, Linux, Windows (native or WSL2) | macOS only                |
-| **Interface**  | Terminal wizard                        | Guided UI in the app      |
-| **Best for**   | Servers, headless, full control        | Desktop Mac, visual setup |
-| **Automation** | `--non-interactive` for scripts        | Manual only               |
-| **Command**    | `openclaw onboard`                     | Launch the app            |
+|                | CLI onboarding                         | macOS app onboarding        |
+| -------------- | -------------------------------------- | --------------------------- |
+| **Platforms**  | macOS, Linux, Windows (native or WSL2) | macOS only                  |
+| **Interface**  | Terminal wizard                        | Guided UI + Crestodian chat |
+| **Best for**   | Servers, headless, full control        | Desktop Mac, visual setup   |
+| **Automation** | `--non-interactive` for scripts        | Manual only                 |
+| **Command**    | `openclaw onboard`                     | Launch the app              |
 
 Most users should start with **CLI onboarding** — it works everywhere and gives
 you the most control.
@@ -50,8 +50,13 @@ CLI command docs: [`openclaw onboard`](/cli/onboard)
 
 ## macOS app onboarding
 
-Open the OpenClaw app. The first-run wizard walks you through the same steps
-with a visual interface.
+Open the OpenClaw app. For local setup, the first-run flow starts the Gateway,
+detects existing AI access (Claude Code, Codex, Gemini CLI, or API keys),
+live-tests the best option, and saves it only after a real reply — falling
+back automatically and offering a verified manual API-key step when nothing is
+found. Sensitive credentials use masked input. Remote setup connects to an
+already-configured Gateway instead, and the same AI check runs against that
+Gateway.
 
 Full reference: [Onboarding (macOS App)](/start/onboarding)
 

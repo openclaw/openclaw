@@ -231,6 +231,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   const nativeExecutionPolicy = resolveCodexNativeExecutionPolicyForDynamicTools(input);
   const allTools = createOpenClawCodingTools({
     agentId: input.sessionAgentId,
+    ...(params.crestodianTool ? { crestodianTool: params.crestodianTool } : {}),
     ...buildEmbeddedAttemptToolRunContext(params),
     exec: {
       ...params.execOverrides,
@@ -662,7 +663,7 @@ function codexNetworkAccessForOpenClawSandbox(
   return Boolean(network && network !== "none");
 }
 
-/** Returns a Codex config copy with app-server Codex plugin loading disabled for thread tools. */
+/** Returns a Codex config copy with all app exposure disabled for restricted thread tools. */
 export function disableCodexPluginThreadConfig(pluginConfig?: unknown): CodexPluginConfig {
   const config = readCodexPluginConfig(pluginConfig);
   return {

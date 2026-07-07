@@ -158,7 +158,10 @@ async function main() {
   // Profile uses slow dynamic pattern - upgrade to cached version
   if (status.usesSlowPattern) {
     console.log(theme.warn("Profile uses slow dynamic completion. Upgrading to cached version..."));
-    const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME, { shell: status.shell });
+    const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME, {
+      shell: status.shell,
+      generationMode: "full",
+    });
     if (cacheGenerated) {
       await installCompletion(status.shell, false, CLI_NAME);
       console.log(theme.success("Upgraded to cached completion."));
@@ -171,7 +174,10 @@ async function main() {
   // Profile has completion but no cache - auto-fix
   if (status.profileInstalled && !status.cacheExists) {
     console.log(theme.warn("Profile has completion but cache is missing. Regenerating..."));
-    const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME, { shell: status.shell });
+    const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME, {
+      shell: status.shell,
+      generationMode: "full",
+    });
     if (cacheGenerated) {
       console.log(theme.success("Cache regenerated successfully."));
     } else {
@@ -208,7 +214,10 @@ async function main() {
   // Generate cache first (required for fast shell startup)
   if (!status.cacheExists) {
     console.log(theme.muted("Generating completion cache..."));
-    const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME, { shell: status.shell });
+    const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME, {
+      shell: status.shell,
+      generationMode: "full",
+    });
     if (!cacheGenerated) {
       console.log(theme.error("Failed to generate completion cache."));
       return;

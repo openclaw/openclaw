@@ -32,6 +32,20 @@ func chatReaderHasNewerContent(
     return messageIndex < visibleIDs.index(before: visibleIDs.endIndex) || hasTransientContent
 }
 
+/// The view's own one-shot positioning always runs in a nil-animation transaction, so
+/// `.animating` only comes from system scrolls (status-bar scroll-to-top, keyboard
+/// avoidance). Not releasing there lets the next timeline tick yank the reader back down.
+func chatReaderScrollReleasesFollow(_ phase: ScrollPhase) -> Bool {
+    switch phase {
+    case .interacting, .animating:
+        true
+    case .idle, .tracking, .decelerating:
+        false
+    @unknown default:
+        false
+    }
+}
+
 @MainActor
 public struct OpenClawChatView: View {
     public enum Style {
@@ -79,10 +93,13 @@ public struct OpenClawChatView: View {
     private let showsAssistantAvatars: Bool
     private let composerChrome: ComposerChrome
     private let isComposerEnabled: Bool
+    private let isAttachmentInputEnabled: Bool
     private let messagePlaceholder: String?
     private let emptyAssistantIntro: String?
     private let emptyAssistantPrompts: [StarterPrompt]
     private let talkControl: OpenClawChatTalkControl?
+    private let voiceNoteControl: OpenClawChatVoiceNoteControl?
+    private let speech: OpenClawChatSpeechController?
 
     private enum ScrollFollowTarget: Equatable {
         case latest
@@ -129,10 +146,13 @@ public struct OpenClawChatView: View {
         showsAssistantAvatars: Bool = true,
         composerChrome: ComposerChrome = .full,
         isComposerEnabled: Bool = true,
+        isAttachmentInputEnabled: Bool? = nil,
         messagePlaceholder: String? = nil,
         emptyAssistantIntro: String? = nil,
         emptyAssistantPrompts: [StarterPrompt] = [],
-        talkControl: OpenClawChatTalkControl? = nil)
+        talkControl: OpenClawChatTalkControl? = nil,
+        voiceNoteControl: OpenClawChatVoiceNoteControl? = nil,
+        speech: OpenClawChatSpeechController? = nil)
     {
         _viewModel = State(initialValue: viewModel)
         self.drawsBackground = drawsBackground
@@ -147,10 +167,13 @@ public struct OpenClawChatView: View {
         self.showsAssistantAvatars = showsAssistantAvatars
         self.composerChrome = composerChrome
         self.isComposerEnabled = isComposerEnabled
+        self.isAttachmentInputEnabled = isAttachmentInputEnabled ?? isComposerEnabled
         self.messagePlaceholder = messagePlaceholder
         self.emptyAssistantIntro = emptyAssistantIntro
         self.emptyAssistantPrompts = emptyAssistantPrompts
         self.talkControl = talkControl
+        self.voiceNoteControl = voiceNoteControl
+        self.speech = speech
     }
 
     public var body: some View {
@@ -208,9 +231,13 @@ public struct OpenClawChatView: View {
             assistantAvatarText: self.assistantAvatarText,
             assistantAvatarTint: self.assistantAvatarTint,
             composerChrome: self.composerChrome,
-            isComposerEnabled: self.isComposerEnabled,
+            isComposerEnabled: self.isComposerEnabled
+                && !self.viewModel.isSendingAttachmentDraft,
+            isAttachmentInputEnabled: self.isAttachmentInputEnabled
+                && !self.viewModel.isSendingAttachmentDraft,
             messagePlaceholder: self.messagePlaceholder,
-            talkControl: self.talkControl)
+            talkControl: self.talkControl,
+            voiceNoteControl: self.voiceNoteControl)
     }
 
     private var messageList: some View {
@@ -252,7 +279,7 @@ public struct OpenClawChatView: View {
             }
             .onScrollPhaseChange { _, phase in
                 guard self.hasPerformedInitialScroll else { return }
-                if phase == .interacting {
+                if chatReaderScrollReleasesFollow(phase) {
                     self.isUserScrolling = true
                     self.followTarget = nil
                 } else if phase == .idle, self.isUserScrolling {
@@ -295,6 +322,7 @@ public struct OpenClawChatView: View {
             self.lastUserMessageID = self.latestVisibleUserMessageID
         }
         .onChange(of: self.viewModel.sessionKey) { _, _ in
+            self.speech?.stop()
             self.hasPerformedInitialScroll = false
             self.followTarget = .latest
             self.isAtLiveEdge = true
@@ -303,8 +331,14 @@ public struct OpenClawChatView: View {
             self.lastUserMessageID = nil
         }
         .onChange(of: self.scenePhase) { _, newValue in
+            if newValue == .background {
+                self.speech?.stop()
+            }
             guard newValue == .active else { return }
             self.viewModel.resumeFromForeground()
+        }
+        .onDisappear {
+            self.speech?.stop()
         }
         .onChange(of: self.viewModel.timelineRevision) { _, _ in
             self.handleTimelineChange()
@@ -330,20 +364,7 @@ public struct OpenClawChatView: View {
         }
 
         ForEach(self.visibleMessages) { msg in
-            ChatMessageBubble(
-                message: msg,
-                style: self.style,
-                markdownVariant: self.markdownVariant,
-                userAccent: self.userAccent,
-                showsAssistantTrace: self.showsAssistantTrace,
-                assistantName: self.assistantName,
-                assistantAvatarText: self.assistantAvatarText,
-                assistantAvatarTint: self.assistantAvatarTint,
-                showsAssistantAvatar: self.showsAssistantAvatars,
-                isClean: self.composerChrome == .clean)
-                .frame(
-                    maxWidth: .infinity,
-                    alignment: msg.role.lowercased() == "user" ? .trailing : .leading)
+            self.messageRow(for: msg)
         }
 
         if self.viewModel.pendingRunCount > 0 {
@@ -378,6 +399,117 @@ public struct OpenClawChatView: View {
                 showsAssistantAvatar: self.showsAssistantAvatars,
                 isClean: self.composerChrome == .clean)
                 .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder
+    private func messageRow(for msg: OpenClawChatMessage) -> some View {
+        let bubble = ChatMessageBubble(
+            message: msg,
+            style: self.style,
+            markdownVariant: self.markdownVariant,
+            userAccent: self.userAccent,
+            showsAssistantTrace: self.showsAssistantTrace,
+            assistantName: self.assistantName,
+            assistantAvatarText: self.assistantAvatarText,
+            assistantAvatarTint: self.assistantAvatarTint,
+            showsAssistantAvatar: self.showsAssistantAvatars,
+            isClean: self.composerChrome == .clean)
+            .frame(
+                maxWidth: .infinity,
+                alignment: msg.role.lowercased() == "user" ? .trailing : .leading)
+        if let outboxState = self.viewModel.outboxState(for: msg.id) {
+            // Offline-queued send: show the durable state under the bubble
+            // and offer retry/delete through the row's context menu.
+            VStack(alignment: .trailing, spacing: 3) {
+                bubble
+                ChatOutboxStatusLabel(state: outboxState)
+                    .padding(.trailing, 8)
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .contextMenu {
+                if outboxState.isFailed {
+                    Button {
+                        self.viewModel.retryOutboxMessage(msg.id)
+                    } label: {
+                        Label {
+                            Text("Retry Send")
+                                .font(OpenClawChatTypography.body)
+                        } icon: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                    }
+                }
+                // Sending and acknowledged-but-unconfirmed rows may still
+                // reach canonical history, so deletion would hide real work.
+                if !outboxState.preventsDeletion {
+                    Button(role: .destructive) {
+                        self.viewModel.deleteOutboxMessage(msg.id)
+                    } label: {
+                        Label {
+                            Text("Delete")
+                                .font(OpenClawChatTypography.body)
+                        } icon: {
+                            Image(systemName: "trash")
+                        }
+                    }
+                }
+            }
+        } else if let speech = self.speech, self.isListenable(msg) {
+            VStack(alignment: .leading, spacing: 3) {
+                bubble
+                if let isPreparing = self.speechChipIsPreparing(speech, messageID: msg.id) {
+                    ChatSpeechStatusChip(isPreparing: isPreparing) {
+                        speech.stop()
+                    }
+                    .padding(.leading, 8)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contextMenu {
+                Button {
+                    if speech.isActive(msg.id) {
+                        speech.stop()
+                    } else {
+                        speech.toggle(
+                            messageID: msg.id,
+                            text: ChatMessageVisibleText.visibleText(in: msg))
+                    }
+                } label: {
+                    Label {
+                        if speech.isActive(msg.id) {
+                            Text("Stop Listening")
+                                .font(OpenClawChatTypography.body)
+                        } else {
+                            Text("Listen")
+                                .font(OpenClawChatTypography.body)
+                        }
+                    } icon: {
+                        Image(systemName: speech.isActive(msg.id) ? "stop.circle" : "speaker.wave.2")
+                    }
+                }
+            }
+        } else {
+            bubble
+        }
+    }
+
+    private func isListenable(_ msg: OpenClawChatMessage) -> Bool {
+        msg.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "assistant"
+            && ChatMessageVisibleText.hasVisibleText(in: msg)
+    }
+
+    private func speechChipIsPreparing(
+        _ speech: OpenClawChatSpeechController,
+        messageID: UUID) -> Bool?
+    {
+        switch speech.phase {
+        case let .preparing(id) where id == messageID:
+            true
+        case let .speaking(id) where id == messageID:
+            false
+        default:
+            nil
         }
     }
 

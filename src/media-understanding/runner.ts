@@ -632,7 +632,14 @@ async function resolveKeyEntry(params: {
             explicitModel: model,
             workspaceDir,
           })
-        : model;
+        : capability === "video"
+          ? (model ??
+            resolveDefaultMediaModelFromRegistry({
+              providerId,
+              capability: "video",
+              providerRegistry,
+            }))
+          : model;
     if (capability === "image" && !resolvedModel) {
       return null;
     }
@@ -907,7 +914,13 @@ async function resolveActiveModelEntry(params: {
       providerRegistry: params.providerRegistry,
     });
   } else {
-    model = params.activeModel?.model;
+    model =
+      params.activeModel?.model ??
+      resolveDefaultMediaModelFromRegistry({
+        providerId,
+        capability: "video",
+        providerRegistry: params.providerRegistry,
+      });
   }
   if ((params.capability === "image" || params.capability === "audio") && !model) {
     return null;

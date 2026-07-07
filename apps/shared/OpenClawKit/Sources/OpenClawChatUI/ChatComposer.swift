@@ -84,8 +84,10 @@ struct OpenClawChatComposer: View {
     let assistantAvatarTint: Color?
     let composerChrome: OpenClawChatView.ComposerChrome
     let isComposerEnabled: Bool
+    let isAttachmentInputEnabled: Bool
     let messagePlaceholder: String?
     let talkControl: OpenClawChatTalkControl?
+    let voiceNoteControl: OpenClawChatVoiceNoteControl?
 
     #if !os(macOS)
     @State private var pickerItems: [PhotosPickerItem] = []
@@ -100,7 +102,7 @@ struct OpenClawChatComposer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            if self.showsToolbar {
+            if self.showsToolbar, self.voiceNoteControl?.recorder.isRecording != true {
                 self.composerToolbar
             }
 
@@ -108,7 +110,12 @@ struct OpenClawChatComposer: View {
                 self.attachmentsStrip
             }
 
-            self.editor
+            if let voiceNoteControl, voiceNoteControl.recorder.isRecording {
+                OpenClawVoiceNoteRecordingRow(recorder: voiceNoteControl.recorder)
+                    .padding(self.editorPadding)
+            } else {
+                self.editor
+            }
         }
         .padding(self.composerPadding)
         .background {
@@ -162,6 +169,26 @@ struct OpenClawChatComposer: View {
                 self.viewModel.loadSlashCommandsIfNeeded()
             }
         #endif
+            .onChange(of: self.voiceNoteControl?.recorder.completedRecording) { _, recording in
+                    guard recording != nil else { return }
+                    self.stageCompletedVoiceNoteIfNeeded()
+                }
+                .onChange(of: self.voiceNoteControl?.recorder.ownsPendingChatAttachment) { _, _ in
+                    self.viewModel.attachmentOwnerActivityChanged()
+                }
+                .onChange(of: self.voiceNoteControl?.recorder.errorMessage) { _, message in
+                    if let message {
+                        self.viewModel.errorText = message
+                    }
+                }
+                .onAppear {
+                    self.viewModel.attachmentOwnerActivityChanged()
+                    self.stageCompletedVoiceNoteIfNeeded()
+                }
+                .onDisappear {
+                    self.cancelActiveVoiceNoteIfNeeded()
+                    self.viewModel.attachmentOwnerActivityChanged()
+                }
     }
 
     private var composerToolbar: some View {
@@ -170,22 +197,54 @@ struct OpenClawChatComposer: View {
                 HStack(spacing: 5) {
                     if self.showsSessionSwitcher {
                         self.sessionPicker
-                        self.thinkingPicker
+                        if self.viewModel.showsThinkingPicker {
+                            self.thinkingPicker
+                        }
                     }
                     if self.viewModel.showsModelPicker {
                         self.modelPicker
+                        if self.viewModel.modelSelectionID != OpenClawChatViewModel.defaultModelSelectionID {
+                            self.modelPinButton
+                        }
                     }
                 }
             }
 
             Spacer(minLength: 4)
 
+            if let fraction = self.viewModel.contextUsageFraction {
+                self.contextUsageIndicator(fraction)
+            }
+
             if self.style == .standard {
                 self.refreshButton
                 self.attachmentPicker
+                if let voiceNoteControl, !voiceNoteControl.isTalkActive {
+                    OpenClawVoiceNoteButton(
+                        control: voiceNoteControl,
+                        compact: false,
+                        isComposerEnabled: self.isComposerEnabled,
+                        isAttachmentInputEnabled: self.isAttachmentInputEnabled)
+                }
             }
         }
         .padding(.horizontal, 10)
+    }
+
+    private func contextUsageIndicator(_ fraction: Double) -> some View {
+        let percentage = Int((fraction * 100).rounded())
+        let color = fraction >= 0.8 ? OpenClawChatTheme.warning : OpenClawChatTheme.muted
+        return ZStack {
+            Circle()
+                .stroke(OpenClawChatTheme.muted.opacity(0.2), lineWidth: 2)
+            Circle()
+                .trim(from: 0, to: fraction)
+                .stroke(color, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+        }
+        .frame(width: 14, height: 14)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Context \(percentage)% used")
     }
 
     private var thinkingPicker: some View {
@@ -208,7 +267,9 @@ struct OpenClawChatComposer: View {
     }
 
     private var modelPicker: some View {
-        Picker(
+        // Sections come from an O(n) recompute over the catalog; bind once per body eval.
+        let sections = self.viewModel.modelPickerSections
+        return Picker(
             "Model",
             selection: Binding(
                 get: { self.viewModel.modelSelectionID },
@@ -217,10 +278,34 @@ struct OpenClawChatComposer: View {
             Text(self.viewModel.defaultModelLabel)
                 .font(OpenClawChatTypography.captionSemiBold)
                 .tag(OpenClawChatViewModel.defaultModelSelectionID)
-            ForEach(self.viewModel.modelChoices) { model in
-                Text(model.displayLabel)
-                    .font(OpenClawChatTypography.captionSemiBold)
-                    .tag(model.selectionID)
+            if sections.pinned.isEmpty, sections.recent.isEmpty {
+                // No pins/recents yet: keep the pre-feature flat list without section chrome.
+                self.modelOptions(sections.remaining)
+            } else {
+                if !sections.pinned.isEmpty {
+                    Section {
+                        self.modelOptions(sections.pinned)
+                    } header: {
+                        Text("Pinned")
+                            .font(OpenClawChatTypography.captionSemiBold)
+                    }
+                }
+                if !sections.recent.isEmpty {
+                    Section {
+                        self.modelOptions(sections.recent)
+                    } header: {
+                        Text("Recent")
+                            .font(OpenClawChatTypography.captionSemiBold)
+                    }
+                }
+                if !sections.remaining.isEmpty {
+                    Section {
+                        self.modelOptions(sections.remaining)
+                    } header: {
+                        Text("Models")
+                            .font(OpenClawChatTypography.captionSemiBold)
+                    }
+                }
             }
         }
         .labelsHidden()
@@ -228,6 +313,25 @@ struct OpenClawChatComposer: View {
         .controlSize(.small)
         .frame(maxWidth: 240, alignment: .leading)
         .help("Model")
+    }
+
+    private func modelOptions(_ models: [OpenClawChatModelChoice]) -> some View {
+        ForEach(models) { model in
+            Text(model.displayLabel)
+                .font(OpenClawChatTypography.captionSemiBold)
+                .tag(model.selectionID)
+        }
+    }
+
+    private var modelPinButton: some View {
+        Button {
+            self.viewModel.toggleSelectedModelPinned()
+        } label: {
+            Image(systemName: self.viewModel.isSelectedModelPinned ? "star.fill" : "star")
+                .font(.system(size: 12, weight: .semibold))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(self.viewModel.isSelectedModelPinned ? "Unpin model" : "Pin model")
     }
 
     private var sessionPicker: some View {
@@ -264,7 +368,7 @@ struct OpenClawChatComposer: View {
             .accessibilityIdentifier("chat-attachment-picker")
             .buttonStyle(.plain)
             .controlSize(.small)
-            .disabled(!self.isComposerEnabled)
+            .disabled(!self.isAttachmentInputEnabled)
         } else {
             Button {
                 self.pickFilesMac()
@@ -275,7 +379,7 @@ struct OpenClawChatComposer: View {
             .accessibilityLabel("Attachments")
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .disabled(!self.isComposerEnabled)
+            .disabled(!self.isAttachmentInputEnabled)
         }
         #else
         if self.composerChrome == .clean {
@@ -287,7 +391,7 @@ struct OpenClawChatComposer: View {
             .accessibilityIdentifier("chat-attachment-picker")
             .buttonStyle(.plain)
             .controlSize(.small)
-            .disabled(!self.isComposerEnabled)
+            .disabled(!self.isAttachmentInputEnabled)
             .onChange(of: self.pickerItems) { _, newItems in
                 Task { await self.loadPhotosPickerItems(newItems) }
             }
@@ -299,7 +403,7 @@ struct OpenClawChatComposer: View {
             .accessibilityLabel("Attachments")
             .buttonStyle(.bordered)
             .controlSize(.small)
-            .disabled(!self.isComposerEnabled)
+            .disabled(!self.isAttachmentInputEnabled)
             .onChange(of: self.pickerItems) { _, newItems in
                 Task { await self.loadPhotosPickerItems(newItems) }
             }
@@ -329,13 +433,27 @@ struct OpenClawChatComposer: View {
                                 .scaledToFill()
                                 .frame(width: 22, height: 22)
                                 .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        } else if att.mimeType.hasPrefix("audio/") {
+                            Image(systemName: "waveform")
+                            Text("Voice note")
+                                .font(OpenClawChatTypography.caption)
+                            if let durationSeconds = att.durationSeconds {
+                                Text(openClawVoiceNoteDurationLabel(durationSeconds))
+                                    .font(OpenClawChatTypography.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         } else {
                             Image(systemName: "photo")
+                            Text(att.fileName)
+                                .font(OpenClawChatTypography.caption)
+                                .lineLimit(1)
                         }
 
-                        Text(att.fileName)
-                            .font(OpenClawChatTypography.caption)
-                            .lineLimit(1)
+                        if att.preview != nil {
+                            Text(att.fileName)
+                                .font(OpenClawChatTypography.caption)
+                                .lineLimit(1)
+                        }
 
                         Button {
                             self.viewModel.removeAttachment(att.id)
@@ -425,6 +543,15 @@ struct OpenClawChatComposer: View {
             HStack(alignment: .bottom, spacing: 8) {
                 self.attachmentPicker
                     .frame(width: self.cleanIconControlSize, height: self.cleanEditorMinHeight)
+
+                if let voiceNoteControl, !voiceNoteControl.isTalkActive {
+                    OpenClawVoiceNoteButton(
+                        control: voiceNoteControl,
+                        compact: true,
+                        isComposerEnabled: self.isComposerEnabled,
+                        isAttachmentInputEnabled: self.isAttachmentInputEnabled)
+                        .frame(width: self.cleanIconControlSize, height: self.cleanEditorMinHeight)
+                }
 
                 self.editorOverlay
                     .padding(.vertical, self.cleanEditorTextPadding)
@@ -593,7 +720,7 @@ struct OpenClawChatComposer: View {
                     self.sendDraftIfEnabled()
                 },
                 onPasteImageAttachment: { data, fileName, mimeType in
-                    guard self.isComposerEnabled else { return }
+                    guard self.isAttachmentInputEnabled else { return }
                     self.viewModel.addImageAttachment(data: data, fileName: fileName, mimeType: mimeType)
                 })
                 .frame(minHeight: self.textMinHeight, idealHeight: self.textMinHeight, maxHeight: self.textMaxHeight)
@@ -958,7 +1085,33 @@ struct OpenClawChatComposer: View {
     }
 
     private var canSendMessage: Bool {
-        self.isComposerEnabled && self.viewModel.canSend
+        self.isComposerEnabled
+            && self.voiceNoteControl?.recorder.ownsPendingChatAttachment != true
+            && self.viewModel.canSend
+            && (self.isAttachmentInputEnabled || self.viewModel.attachments.isEmpty)
+    }
+
+    private func stageCompletedVoiceNoteIfNeeded() {
+        guard let recorder = self.voiceNoteControl?.recorder,
+              let recording = recorder.claimCompletedRecording()
+        else { return }
+
+        let viewModel = self.viewModel
+        Task {
+            await viewModel.addVoiceNoteAttachment(
+                fileURL: recording.fileURL,
+                durationSeconds: recording.durationSeconds)
+            recorder.completeStaging(recording)
+        }
+    }
+
+    private func cancelActiveVoiceNoteIfNeeded() {
+        guard let recorder = self.voiceNoteControl?.recorder,
+              recorder.isRecording || recorder.isRequestingPermission
+        else { return }
+        // The app-owned recorder outlives this view. Release the microphone
+        // when its only recording UI disappears so capture never runs hidden.
+        recorder.cancel()
     }
 
     private var connectionStatusText: String {
@@ -976,7 +1129,7 @@ struct OpenClawChatComposer: View {
 
     #if os(macOS)
     private func pickFilesMac() {
-        guard self.isComposerEnabled else { return }
+        guard self.isAttachmentInputEnabled else { return }
         let panel = NSOpenPanel()
         panel.title = "Select image attachments"
         panel.allowsMultipleSelection = true
@@ -989,7 +1142,7 @@ struct OpenClawChatComposer: View {
     }
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
-        guard self.isComposerEnabled else { return false }
+        guard self.isAttachmentInputEnabled else { return false }
         let fileProviders = providers.filter { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }
         guard !fileProviders.isEmpty else { return false }
         for item in fileProviders {
@@ -1006,7 +1159,7 @@ struct OpenClawChatComposer: View {
     }
     #else
     private func loadPhotosPickerItems(_ items: [PhotosPickerItem]) async {
-        guard self.isComposerEnabled else {
+        guard self.isAttachmentInputEnabled else {
             self.pickerItems = []
             return
         }
@@ -1027,7 +1180,7 @@ struct OpenClawChatComposer: View {
     #endif
 
     private func sendDraftIfEnabled() {
-        guard self.isComposerEnabled else { return }
+        guard self.canSendMessage else { return }
         self.viewModel.send()
     }
 }

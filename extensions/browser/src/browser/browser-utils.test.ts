@@ -263,6 +263,12 @@ describe("browser server-context listKnownProfileNames", () => {
       ]),
     };
 
-    expect(listKnownProfileNames(state).toSorted()).toEqual(["openclaw", "stale-removed", "user"]);
+    // "chrome" is the built-in Chrome extension-relay profile.
+    expect(listKnownProfileNames(state).toSorted()).toEqual([
+      "chrome",
+      "openclaw",
+      "stale-removed",
+      "user",
+    ]);
   });
 });

@@ -174,6 +174,32 @@ describe("codex app-server session binding", () => {
     expect(binding?.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
   });
 
+  it("round-trips account app policy context", async () => {
+    const sessionFile = path.join(tempDir, "session.json");
+    const pluginAppPolicyContext = {
+      fingerprint: "account-policy-1",
+      apps: {
+        "chatgpt-meetings": {
+          source: "account" as const,
+          appName: "ChatGPT Meetings",
+          allowDestructiveActions: true,
+          destructiveApprovalMode: "auto" as const,
+          mcpServerNames: [],
+        },
+      },
+      pluginAppIds: {},
+    };
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-123",
+      cwd: tempDir,
+      pluginAppPolicyContext,
+    });
+
+    const binding = await readCodexAppServerBinding(sessionFile);
+
+    expect(binding?.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
+  });
+
   it("drops old always plugin app policy context destructive approval mode", async () => {
     const sessionFile = path.join(tempDir, "session.json");
     await fs.writeFile(

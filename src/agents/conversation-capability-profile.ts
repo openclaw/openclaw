@@ -166,6 +166,8 @@ export type ResolvedConversationCapabilityProfile = {
     inheritedToolPolicy?: SandboxToolPolicy;
     inheritancePolicies: Array<ToolPolicyLike | undefined>;
     explicitToolAllowlist: string[];
+    /** Explicit config/runtime grants only; excludes built-in profile expansion. */
+    explicitToolOverrideAllowlist: string[];
     explicitToolDenylist: string[];
   };
 };
@@ -236,9 +238,7 @@ export function resolveConversationCapabilityProfile(
       store: subagentStore,
     },
   );
-  const inheritancePolicies = [
-    profilePolicy,
-    providerProfilePolicy,
+  const configuredOverridePolicies = [
     effective.globalPolicy,
     effective.globalProviderPolicy,
     effective.agentPolicy,
@@ -247,8 +247,17 @@ export function resolveConversationCapabilityProfile(
     senderPolicy,
     params.sandboxToolPolicy,
     subagentPolicy,
+  ];
+  const runtimeToolPolicy = params.runtimeToolAllowlist
+    ? { allow: params.runtimeToolAllowlist }
+    : undefined;
+  const explicitOverridePolicies = [...configuredOverridePolicies, runtimeToolPolicy];
+  const inheritancePolicies = [
+    profilePolicy,
+    providerProfilePolicy,
+    ...configuredOverridePolicies,
     inheritedToolPolicy,
-    params.runtimeToolAllowlist ? { allow: params.runtimeToolAllowlist } : undefined,
+    runtimeToolPolicy,
   ];
 
   return {
@@ -345,6 +354,7 @@ export function resolveConversationCapabilityProfile(
       inheritedToolPolicy,
       inheritancePolicies,
       explicitToolAllowlist: collectExplicitAllowlist(inheritancePolicies),
+      explicitToolOverrideAllowlist: collectExplicitAllowlist(explicitOverridePolicies),
       explicitToolDenylist: collectExplicitDenylist(inheritancePolicies),
     },
   };

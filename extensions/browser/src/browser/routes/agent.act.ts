@@ -36,7 +36,7 @@ import {
   jsonActError,
 } from "./agent.act.errors.js";
 import { registerBrowserAgentActHookRoutes } from "./agent.act.hooks.js";
-import { normalizeActRequest, validateBatchTargetIds } from "./agent.act.normalize.js";
+import { canonicalizeActTargetIds, normalizeActRequest } from "./agent.act.normalize.js";
 import { type ActKind, isActKind } from "./agent.act.shared.js";
 import {
   readBody,
@@ -436,13 +436,16 @@ export function registerBrowserAgentActRoutes(
               ...extra,
             });
           };
-          if (action.targetId && action.targetId !== tab.targetId) {
-            return jsonActError(
-              res,
-              403,
-              ACT_ERROR_CODES.targetIdMismatch,
-              "action targetId must match request targetId",
-            );
+          // Nested batch aliases can differ from the request alias, so prefixes
+          // must stay unique across the full tab set before canonicalization.
+          const actionTabs =
+            action.kind === "batch" && !isExistingSession ? await profileCtx.listTabs() : [tab];
+          if (!actionTabs.some((candidate) => candidate.targetId === tab.targetId)) {
+            actionTabs.unshift(tab);
+          }
+          const targetIdError = canonicalizeActTargetIds(action, tab, actionTabs);
+          if (targetIdError) {
+            return jsonActError(res, 403, ACT_ERROR_CODES.targetIdMismatch, targetIdError);
           }
           const profileName = profileCtx.profile.name;
           if (isExistingSession) {
@@ -656,12 +659,6 @@ export function registerBrowserAgentActRoutes(
           if (!pw) {
             return;
           }
-          if (action.kind === "batch") {
-            const targetIdError = validateBatchTargetIds(action.actions, tab.targetId);
-            if (targetIdError) {
-              return jsonActError(res, 403, ACT_ERROR_CODES.targetIdMismatch, targetIdError);
-            }
-          }
           const result = await pw.executeActViaPlaywright({
             cdpUrl,
             action,
@@ -676,21 +673,29 @@ export function registerBrowserAgentActRoutes(
               browserState: result.browserState,
             });
           }
+          const downloads = result.downloads;
           switch (action.kind) {
             case "batch":
               return await jsonOk(
-                { results: result.results ?? [] },
+                { results: result.results ?? [], ...(downloads ? { downloads } : {}) },
                 { resolveCurrentTarget: true },
               );
             case "evaluate":
-              return await jsonOk({ result: result.result }, { resolveCurrentTarget: true });
+              return await jsonOk(
+                { result: result.result, ...(downloads ? { downloads } : {}) },
+                { resolveCurrentTarget: true },
+              );
             case "click":
             case "clickCoords":
-              return await jsonOk(undefined, { resolveCurrentTarget: true });
+              return await jsonOk(downloads ? { downloads } : undefined, {
+                resolveCurrentTarget: true,
+              });
             case "resize":
-              return await jsonOk();
+              return await jsonOk(downloads ? { downloads } : undefined);
             default:
-              return await jsonOk(undefined, { resolveCurrentTarget: true });
+              return await jsonOk(downloads ? { downloads } : undefined, {
+                resolveCurrentTarget: true,
+              });
           }
         },
       });

@@ -15,7 +15,10 @@ import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "../../daemon/const
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { type RestartSentinelPayload, writeRestartSentinel } from "../../infra/restart-sentinel.js";
-import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
+import {
+  resolveGatewayRestartDeferralTimeoutMs,
+  scheduleGatewaySigusr1Restart,
+} from "../../infra/restart.js";
 import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON } from "../../infra/update-control-plane-sentinel.js";
@@ -44,7 +47,7 @@ import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-const SYSTEMD_HANDOFF_RESTART_GRACE_MS = 2000;
+const MANAGED_HANDOFF_RESTART_DELAY_MS = 2000;
 
 function formatUpdateRunErrorMessage(err: unknown): string {
   if (err instanceof Error) {
@@ -79,16 +82,14 @@ async function readPreUpdateConfigForPostCoreFinalize(): Promise<
 function resolveManagedServiceHandoffRestartDelayMs(
   restartDelayMs: number | undefined,
   supervisor: ReturnType<typeof detectRespawnSupervisor>,
-): number | undefined {
+): number {
+  const resolvedDelayMs = restartDelayMs ?? MANAGED_HANDOFF_RESTART_DELAY_MS;
   if (supervisor !== "systemd") {
-    return restartDelayMs;
+    return resolvedDelayMs;
   }
   // systemd needs a short grace period after the handoff process starts before
   // the gateway exits, otherwise the service can restart before handoff state is durable.
-  return Math.max(
-    restartDelayMs ?? SYSTEMD_HANDOFF_RESTART_GRACE_MS,
-    SYSTEMD_HANDOFF_RESTART_GRACE_MS,
-  );
+  return Math.max(resolvedDelayMs, MANAGED_HANDOFF_RESTART_DELAY_MS);
 }
 
 function hasManagedServiceHandoffContext(
@@ -165,6 +166,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       | { status: "started"; pid?: number; command: string }
       | { status: "unavailable"; command: string; message: string }
       | null = null;
+    let managedHandoffRestart: ReturnType<typeof scheduleGatewaySigusr1Restart> | null = null;
     const sentinelMeta: UpdateRestartSentinelMeta = {
       ...(sessionKey ? { sessionKey } : {}),
       ...(deliveryContext ? { deliveryContext } : {}),
@@ -172,7 +174,6 @@ export const updateHandlers: GatewayRequestHandlers = {
       ...(note !== undefined ? { note } : {}),
       ...(continuationMessage !== undefined ? { continuationMessage } : {}),
     };
-    let supervisor: ReturnType<typeof detectRespawnSupervisor> = null;
     try {
       const config = context.getRuntimeConfig();
       const configChannel = normalizeUpdateChannel(config.update?.channel);
@@ -190,7 +191,7 @@ export const updateHandlers: GatewayRequestHandlers = {
         cwd: root,
         argv1: process.argv[1],
       });
-      supervisor = detectRespawnSupervisor(process.env, process.platform);
+      const supervisor = detectRespawnSupervisor(process.env, process.platform);
       const hasHandoffContext = supervisor
         ? hasManagedServiceHandoffContext(process.env, supervisor)
         : false;
@@ -230,8 +231,15 @@ export const updateHandlers: GatewayRequestHandlers = {
         });
         if (supervisor && hasHandoffContext) {
           try {
+            const beforeVersion = installSurface.root
+              ? await readPackageVersion(installSurface.root)
+              : null;
             const startedAt = Date.now();
             const handoffId = randomUUID();
+            const managedRestartDelayMs = resolveManagedServiceHandoffRestartDelayMs(
+              restartDelayMs,
+              supervisor,
+            );
             sentinelMeta.handoffId = handoffId;
             // Managed services update from a detached helper so the running
             // gateway does not replace its own package or git-built dist tree
@@ -239,8 +247,11 @@ export const updateHandlers: GatewayRequestHandlers = {
             const started = await startManagedServiceUpdateHandoff({
               root,
               timeoutMs,
+              restartDrainTimeoutMs: resolveGatewayRestartDeferralTimeoutMs(
+                config.gateway?.reload?.deferralTimeoutMs,
+              ),
               ...(handoffChannel ? { channel: handoffChannel } : {}),
-              restartDelayMs,
+              restartDelayMs: managedRestartDelayMs,
               meta: sentinelMeta,
               handoffId,
               supervisor,
@@ -250,9 +261,20 @@ export const updateHandlers: GatewayRequestHandlers = {
               ...(started.pid ? { pid: started.pid } : {}),
               command: started.command,
             };
-            const beforeVersion = installSurface.root
-              ? await readPackageVersion(installSurface.root)
-              : null;
+            // Once the detached helper exists, arm its parent exit without an
+            // intervening await so persistence failures cannot orphan it.
+            managedHandoffRestart = scheduleGatewaySigusr1Restart({
+              delayMs: managedRestartDelayMs,
+              reason: "update.run",
+              skipDeferral: true,
+              skipCooldown: true,
+              audit: {
+                actor: actor.actor,
+                deviceId: actor.deviceId,
+                clientIp: actor.clientIp,
+                changedPaths: [],
+              },
+            });
             result = {
               status: "skipped",
               mode: installSurface.mode,
@@ -312,11 +334,17 @@ export const updateHandlers: GatewayRequestHandlers = {
                 return undefined;
               })
             : undefined;
+        // Supervised Windows gateways, including Startup-folder fallbacks, take
+        // the detached handoff above. This direct path is unsupervised, so keep
+        // doctor service mutation disabled: it could rewrite or terminate the
+        // RPC server before the response and restart sentinel become durable.
         result = await runGatewayUpdate({
           timeoutMs,
           cwd: root,
           argv1: process.argv[1],
           channel: configChannel ?? undefined,
+          allowGatewayServiceRepair: false,
+          allowGatewayActivation: false,
         });
         // The CLI `openclaw update` resumes post-core plugin convergence after a
         // git/source core update; the RPC path did not, leaving official managed
@@ -324,6 +352,7 @@ export const updateHandlers: GatewayRequestHandlers = {
         const finalizeOutcome = await runPostCoreFinalizeAfterGatewayUpdate({
           result,
           channel: configChannel ?? undefined,
+          serviceRepairPolicy: "external",
           ...(timeoutMs === undefined ? {} : { timeoutMs }),
           ...(preUpdateConfig ? { preUpdateConfig } : {}),
         });
@@ -363,19 +392,15 @@ export const updateHandlers: GatewayRequestHandlers = {
     // (corrupted node_modules, partial builds) and causes a crash loop.
     const updateWasPackageSwap = result.status === "ok" && result.mode !== "git";
     const restart =
-      handoff?.status === "started" || result.status === "ok"
+      managedHandoffRestart ??
+      (result.status === "ok"
         ? scheduleGatewaySigusr1Restart({
-            delayMs:
-              handoff?.status === "started"
-                ? resolveManagedServiceHandoffRestartDelayMs(restartDelayMs, supervisor)
-                : updateWasPackageSwap
-                  ? 0
-                  : restartDelayMs,
+            delayMs: updateWasPackageSwap ? 0 : restartDelayMs,
             reason: "update.run",
-            // Package swaps and managed handoffs should restart without waiting
-            // for normal deferral/cooldown windows; the new code is already staged.
-            skipDeferral: updateWasPackageSwap || handoff?.status === "started",
-            skipCooldown: updateWasPackageSwap || handoff?.status === "started",
+            // Package swaps should restart without waiting for normal
+            // deferral/cooldown windows; the new code is already staged.
+            skipDeferral: updateWasPackageSwap,
+            skipCooldown: updateWasPackageSwap,
             audit: {
               actor: actor.actor,
               deviceId: actor.deviceId,
@@ -383,7 +408,7 @@ export const updateHandlers: GatewayRequestHandlers = {
               changedPaths: [],
             },
           })
-        : null;
+        : null);
     context?.logGateway?.info(
       `update.run completed ${formatControlPlaneActor(actor)} changedPaths=<n/a> restartReason=update.run status=${result.status}`,
     );

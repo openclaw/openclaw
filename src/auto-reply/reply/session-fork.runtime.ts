@@ -95,20 +95,30 @@ export async function resolveParentForkTokenCountRuntime(params: {
       undefined,
       1024 * 1024,
     );
-    const promptTokens = resolvePositiveTokenCount(
-      derivePromptTokens({
-        input: usage?.inputTokens,
-        cacheRead: usage?.cacheRead,
-        cacheWrite: usage?.cacheWrite,
-      }),
-    );
-    const outputTokens = resolvePositiveTokenCount(usage?.outputTokens);
-    if (typeof promptTokens === "number") {
-      return maxPositiveTokenCount(
-        promptTokens + (outputTokens ?? 0),
-        cachedTokens,
-        byteEstimateTokens,
+    let transcriptTokens: number | undefined;
+    if (usage?.contextUsage?.state === "available") {
+      const trailingTokens = Math.ceil(
+        (usage.trailingBytes ?? 0) / FALLBACK_TRANSCRIPT_BYTES_PER_TOKEN,
       );
+      transcriptTokens = resolvePositiveTokenCount(usage.contextUsage.totalTokens + trailingTokens);
+      if (typeof transcriptTokens === "number") {
+        return transcriptTokens;
+      }
+    } else if (usage?.contextUsage?.state !== "unavailable") {
+      const promptTokens = resolvePositiveTokenCount(
+        derivePromptTokens({
+          input: usage?.inputTokens,
+          cacheRead: usage?.cacheRead,
+          cacheWrite: usage?.cacheWrite,
+        }),
+      );
+      const outputTokens = resolvePositiveTokenCount(usage?.outputTokens);
+      if (typeof promptTokens === "number") {
+        transcriptTokens = promptTokens + (outputTokens ?? 0);
+      }
+    }
+    if (typeof transcriptTokens === "number") {
+      return maxPositiveTokenCount(transcriptTokens, cachedTokens, byteEstimateTokens);
     }
   } catch {
     // Fall back to cached totals when recent transcript usage cannot be read.
@@ -265,11 +275,12 @@ async function writeForkHeaderOnly(params: {
 async function writeBranchedSession(params: {
   parentSessionFile: string;
   source: ForkSourceTranscript;
+  sessionDir: string;
 }): Promise<{ sessionId: string; sessionFile: string }> {
   const sessionId = crypto.randomUUID();
   const timestamp = new Date().toISOString();
   const fileTimestamp = timestamp.replace(/[:.]/g, "-");
-  const sessionFile = path.join(params.source.sessionDir, `${fileTimestamp}_${sessionId}.jsonl`);
+  const sessionFile = path.join(params.sessionDir, `${fileTimestamp}_${sessionId}.jsonl`);
   const pathEntries = params.source.branchEntries;
   const pathEntryIds = new Set(
     pathEntries.flatMap((entry) =>
@@ -318,6 +329,7 @@ export async function forkSessionFromParentRuntime(params: {
   parentEntry: StoreSessionEntry;
   agentId: string;
   sessionsDir: string;
+  targetSessionsDir?: string;
 }): Promise<{ sessionId: string; sessionFile: string } | null> {
   const parentSessionFile = resolveSessionFilePath(
     params.parentEntry.sessionId,
@@ -334,11 +346,12 @@ export async function forkSessionFromParentRuntime(params: {
     }
     const shouldPersistBranch =
       source.preserveLeafControl || hasAssistantEntry(source.branchEntries);
+    const targetSessionsDir = params.targetSessionsDir ?? source.sessionDir;
     return shouldPersistBranch
-      ? await writeBranchedSession({ parentSessionFile, source })
+      ? await writeBranchedSession({ parentSessionFile, source, sessionDir: targetSessionsDir })
       : await writeForkHeaderOnly({
           parentSessionFile,
-          sessionDir: source.sessionDir,
+          sessionDir: targetSessionsDir,
           cwd: source.cwd,
         });
   } catch {
