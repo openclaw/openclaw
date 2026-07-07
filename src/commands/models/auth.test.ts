@@ -54,6 +54,7 @@ const mocks = vi.hoisted(() => ({
   createClackPrompter: vi.fn(),
   loadValidConfigOrThrow: vi.fn(),
   updateConfig: vi.fn(),
+  callGateway: vi.fn(),
   logConfigUpdated: vi.fn(),
   openUrl: vi.fn(),
   isRemoteEnvironment: vi.fn(() => false),
@@ -153,6 +154,10 @@ vi.mock("./shared.js", async (importOriginal) => {
     updateConfig: mocks.updateConfig,
   };
 });
+
+vi.mock("../../gateway/call.js", () => ({
+  callGateway: mocks.callGateway,
+}));
 
 vi.mock("../../config/logging.js", () => ({
   logConfigUpdated: mocks.logConfigUpdated,
@@ -389,6 +394,8 @@ describe("modelsAuthLoginCommand", () => {
         return lastUpdatedConfig;
       },
     );
+    mocks.callGateway.mockReset();
+    mocks.callGateway.mockResolvedValue({ ts: Date.now(), providers: [] });
     mocks.createClackPrompter.mockReturnValue({
       note: vi.fn(async () => {}),
       select: vi.fn(),
@@ -499,6 +506,23 @@ describe("modelsAuthLoginCommand", () => {
     );
     expect(runtime.log).toHaveBeenCalledWith(
       "Default model available: openai/gpt-5.5 (use --set-default to apply)",
+    );
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      config: currentConfig,
+      method: "models.authStatus",
+      params: { refresh: true },
+    });
+  });
+
+  it("keeps login successful when gateway model-auth refresh fails", async () => {
+    const runtime = createRuntime();
+    mocks.callGateway.mockRejectedValueOnce(new Error("gateway unreachable"));
+
+    await modelsAuthLoginCommand({ provider: "openai" }, runtime);
+
+    expect(runProviderAuth).toHaveBeenCalledOnce();
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Saved auth profile openai:user@example.com (openai), but the running gateway did not refresh model auth status: gateway unreachable",
     );
   });
 
@@ -1342,6 +1366,11 @@ describe("modelsAuthLoginCommand", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       "Anthropic staff told us this OpenClaw path is allowed again.",
     );
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      config: currentConfig,
+      method: "models.authStatus",
+      params: { refresh: true },
+    });
   });
 
   it("writes pasted tokens to the requested agent store", async () => {

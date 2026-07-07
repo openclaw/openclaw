@@ -41,6 +41,8 @@ import { parseDurationMs } from "../../cli/parse-duration.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { normalizeAgentModelRefForConfig } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { callGateway } from "../../gateway/call.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { isRemoteEnvironment } from "../../infra/remote-env.js";
 import {
   applyProviderAuthConfigPatch,
@@ -594,6 +596,15 @@ async function runProviderAuthMethod(params: {
     setDefault: params.setDefault,
   });
 
+  const nextConfig = await loadValidConfigOrThrow();
+  const refreshedProfile = profiles[0];
+  await refreshRunningGatewayModelAuthStatus({
+    cfg: nextConfig,
+    runtime: params.runtime,
+    provider: normalizeProviderId(refreshedProfile?.credential.provider) || selectedProviderId,
+    profileId: refreshedProfile?.profileId ?? selectedProviderId,
+  });
+
   return { result, profiles };
 }
 
@@ -712,9 +723,16 @@ export async function modelsAuthPasteTokenCommand(
   });
 
   await updateConfig((cfg) => applyAuthProfileConfig(cfg, { profileId, provider, mode: "token" }));
+  const nextConfig = await loadValidConfigOrThrow();
 
   logConfigUpdated(runtime);
   runtime.log(`Auth profile: ${profileId} (${provider}/token)`);
+  await refreshRunningGatewayModelAuthStatus({
+    cfg: nextConfig,
+    runtime,
+    provider,
+    profileId,
+  });
   if (provider === "anthropic") {
     runtime.log("Anthropic setup-token auth is supported in OpenClaw.");
     runtime.log("OpenClaw prefers Claude CLI reuse when it is available on the host.");
@@ -770,9 +788,16 @@ export async function modelsAuthPasteApiKeyCommand(
   await updateConfig((cfg) =>
     applyAuthProfileConfig(cfg, { profileId, provider, mode: "api_key" }),
   );
+  const nextConfig = await loadValidConfigOrThrow();
 
   logConfigUpdated(runtime);
   runtime.log(`Auth profile: ${profileId} (${provider}/api_key)`);
+  await refreshRunningGatewayModelAuthStatus({
+    cfg: nextConfig,
+    runtime,
+    provider,
+    profileId,
+  });
 }
 
 async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
@@ -780,6 +805,25 @@ async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams)
   if (!updated) {
     throw new Error(
       "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
+    );
+  }
+}
+
+async function refreshRunningGatewayModelAuthStatus(params: {
+  cfg: OpenClawConfig;
+  runtime: RuntimeEnv;
+  provider: string;
+  profileId: string;
+}): Promise<void> {
+  try {
+    await callGateway({
+      config: params.cfg,
+      method: "models.authStatus",
+      params: { refresh: true },
+    });
+  } catch (error) {
+    params.runtime.log(
+      `Saved auth profile ${params.profileId} (${params.provider}), but the running gateway did not refresh model auth status: ${formatErrorMessage(error)}`,
     );
   }
 }
