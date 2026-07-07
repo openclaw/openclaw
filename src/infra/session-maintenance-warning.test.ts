@@ -34,6 +34,8 @@ type SessionMaintenanceWarningModule = typeof import("./session-maintenance-warn
 
 let deliverSessionMaintenanceWarning: SessionMaintenanceWarningModule["deliverSessionMaintenanceWarning"];
 let resetSessionMaintenanceWarningForTests: SessionMaintenanceWarningModule["testing"]["resetSessionMaintenanceWarningForTests"];
+let cacheMeta: SessionMaintenanceWarningModule["testing"]["cacheMeta"];
+let setWarnedContextForKeyTestOnly: SessionMaintenanceWarningModule["testing"]["setWarnedContextForKeyTestOnly"];
 
 function createParams(
   overrides: Partial<Parameters<typeof deliverSessionMaintenanceWarning>[0]> = {},
@@ -57,7 +59,7 @@ function createParams(
 
 function expectedMaintenanceWarning(reasonText: string): string {
   return (
-    `\u26A0\uFE0F Session maintenance warning: this active session would be evicted (${reasonText}). ` +
+    `⚠️ Session maintenance warning: this active session would be evicted (${reasonText}). ` +
     `Maintenance is set to warn-only, so nothing was reset. ` +
     `To enforce cleanup, set \`session.maintenance.mode: "enforce"\` or increase the limits.`
   );
@@ -94,7 +96,11 @@ describe("deliverSessionMaintenanceWarning", () => {
     }));
     ({
       deliverSessionMaintenanceWarning,
-      testing: { resetSessionMaintenanceWarningForTests },
+      testing: {
+        resetSessionMaintenanceWarningForTests,
+        cacheMeta,
+        setWarnedContextForKeyTestOnly,
+      },
     } = await import("./session-maintenance-warning.js"));
   });
 
@@ -234,5 +240,64 @@ describe("deliverSessionMaintenanceWarning", () => {
     await deliverSessionMaintenanceWarning(params);
 
     expect(firstSystemEventCall()?.[0]).toContain(`older than ${expected}`);
+  });
+
+  it("evicts the least-recently-used context entry once the cache exceeds its cap", async () => {
+    const maxEntries = cacheMeta.MAX_WARNED_CONTEXTS;
+    const params0 = createParams({
+      sessionKey: "session:0",
+      warning: {
+        activeSessionKey: "session:0",
+        pruneAfterMs: 1_000,
+        maxEntries: 100,
+        wouldPrune: true,
+        wouldCap: false,
+      } as never,
+    });
+
+    // Fill the cache so every slot holds a unique session.
+    for (let i = 1; i < maxEntries; i++) {
+      setWarnedContextForKeyTestOnly(`session:${i}`, `ctx-${i}`);
+    }
+    // session:0 is not yet cached, so this delivers.
+    await deliverSessionMaintenanceWarning(params0);
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+
+    // Insert one more — the least-recently-used entry (session:1) is evicted.
+    setWarnedContextForKeyTestOnly("session:extra", "ctx-extra");
+
+    // session:1 was evicted, so this must deliver again.
+    const params1 = createParams({
+      sessionKey: "session:1",
+      warning: {
+        activeSessionKey: "session:1",
+        pruneAfterMs: 1_000,
+        maxEntries: 100,
+        wouldPrune: true,
+        wouldCap: false,
+      } as never,
+    });
+    await deliverSessionMaintenanceWarning(params1);
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-delivers when the warning context changes for the same session", async () => {
+    const sessionKey = `agent:${randomUUID()}:main`;
+    const params = createParams({ sessionKey });
+    await deliverSessionMaintenanceWarning(params);
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+
+    const changedParams = createParams({
+      sessionKey,
+      warning: {
+        activeSessionKey: sessionKey,
+        pruneAfterMs: 86_400_000,
+        maxEntries: 500,
+        wouldPrune: true,
+        wouldCap: true,
+      } as never,
+    });
+    await deliverSessionMaintenanceWarning(changedParams);
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(2);
   });
 });
