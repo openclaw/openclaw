@@ -18,7 +18,7 @@ import {
   resolveDiscordReferencedReplyMessage,
   resolveDiscordSnapshotStickers,
 } from "./message-forwarded.js";
-import { mergeAbortSignals } from "./timeouts.js";
+import { createDisposableMergedAbortSignal } from "./timeouts.js";
 
 const DISCORD_CDN_HOSTNAMES = [
   "cdn.discordapp.com",
@@ -254,7 +254,10 @@ async function fetchDiscordMedia(params: {
   originalFilename?: string;
 }) {
   const timeoutAbortController = params.totalTimeoutMs ? new AbortController() : undefined;
-  const signal = mergeAbortSignals([params.abortSignal, timeoutAbortController?.signal]);
+  const mergedAbortSignal = createDisposableMergedAbortSignal([
+    params.abortSignal,
+    timeoutAbortController?.signal,
+  ]);
   let timedOut = false;
   let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
 
@@ -267,7 +270,7 @@ async function fetchDiscordMedia(params: {
     readIdleTimeoutMs: params.readIdleTimeoutMs,
     fallbackContentType: params.fallbackContentType,
     originalFilename: params.originalFilename,
-    ...(signal ? { requestInit: { signal } } : {}),
+    ...(mergedAbortSignal.signal ? { requestInit: { signal: mergedAbortSignal.signal } } : {}),
   }).catch((error: unknown) => {
     if (timedOut) {
       return new Promise<never>(() => {});
@@ -292,6 +295,7 @@ async function fetchDiscordMedia(params: {
     if (timeoutHandle) {
       clearTimeout(timeoutHandle);
     }
+    mergedAbortSignal.dispose();
   }
 }
 

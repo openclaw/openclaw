@@ -32,7 +32,7 @@ async function withNativeAbortSignalAnyDisabled<T>(run: () => Promise<T>): Promi
     if (descriptor) {
       Object.defineProperty(AbortSignal, "any", descriptor);
     } else {
-      delete (AbortSignal as typeof AbortSignal & { any?: typeof AbortSignal.any }).any;
+      delete (AbortSignal as { any?: unknown }).any;
     }
   }
 }

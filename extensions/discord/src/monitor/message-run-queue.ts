@@ -12,7 +12,7 @@ import {
 import { materializeDiscordInboundJob, type DiscordInboundJob } from "./inbound-job.js";
 import type { RuntimeEnv } from "./message-handler.preflight.types.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
-import { mergeAbortSignals } from "./timeouts.js";
+import { createDisposableMergedAbortSignal } from "./timeouts.js";
 
 type ProcessDiscordMessage = typeof import("./message-handler.process.js").processDiscordMessage;
 
@@ -48,9 +48,14 @@ async function processDiscordQueuedMessage(params: {
   const processDiscordMessageImpl =
     params.testing?.processDiscordMessage ??
     (await loadMessageProcessRuntime()).processDiscordMessage;
-  const abortSignal = mergeAbortSignals([params.job.runtime.abortSignal, params.lifecycleSignal]);
+  const mergedAbortSignal = createDisposableMergedAbortSignal([
+    params.job.runtime.abortSignal,
+    params.lifecycleSignal,
+  ]);
   try {
-    await processDiscordMessageImpl(materializeDiscordInboundJob(params.job, abortSignal));
+    await processDiscordMessageImpl(
+      materializeDiscordInboundJob(params.job, mergedAbortSignal.signal),
+    );
     await commitDiscordInboundReplay({
       replayKeys: params.job.replayKeys,
       replayGuard: params.replayGuard,
@@ -69,6 +74,8 @@ async function processDiscordQueuedMessage(params: {
       });
     }
     throw error;
+  } finally {
+    mergedAbortSignal.dispose();
   }
 }
 

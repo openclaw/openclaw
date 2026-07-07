@@ -55,6 +55,20 @@ function createDeferred<T = void>() {
   return { promise, resolve };
 }
 
+async function withNativeAbortSignalAnyDisabled<T>(run: () => Promise<T>): Promise<T> {
+  const descriptor = Object.getOwnPropertyDescriptor(AbortSignal, "any");
+  Object.defineProperty(AbortSignal, "any", { configurable: true, value: undefined });
+  try {
+    return await run();
+  } finally {
+    if (descriptor) {
+      Object.defineProperty(AbortSignal, "any", descriptor);
+    } else {
+      delete (AbortSignal as { any?: unknown }).any;
+    }
+  }
+}
+
 async function flushQueueWork(): Promise<void> {
   for (let i = 0; i < 40; i += 1) {
     await Promise.resolve();
@@ -618,6 +632,49 @@ describe("createDiscordMessageHandler queue behavior", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("disposes fallback run abort listeners after queued processing settles", async () => {
+    await withNativeAbortSignalAnyDisabled(async () => {
+      preflightDiscordMessageMock.mockReset();
+      processDiscordMessageMock.mockReset();
+
+      const jobAbortController = new AbortController();
+      const lifecycleAbortController = new AbortController();
+      const removeListenerSpy = vi.spyOn(jobAbortController.signal, "removeEventListener");
+      let capturedAbortSignal: AbortSignal | undefined;
+      preflightDiscordMessageMock.mockImplementation(
+        async (params: { data: { channel_id: string } }) => ({
+          ...createPreflightContext(params.data.channel_id),
+          abortSignal: jobAbortController.signal,
+        }),
+      );
+      processDiscordMessageMock.mockImplementation(
+        async (ctx: { abortSignal?: AbortSignal }) => {
+          capturedAbortSignal = ctx.abortSignal;
+        },
+      );
+
+      const handler = createDiscordMessageHandler(
+        createDiscordHandlerParams({ abortSignal: lifecycleAbortController.signal }),
+      );
+
+      await expect(
+        handler(createMessageData("m-dispose") as never, {} as never),
+      ).resolves.toBeUndefined();
+      await flushQueueWork();
+
+      expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+      expect(capturedAbortSignal).toBeDefined();
+      expect(capturedAbortSignal).not.toBe(jobAbortController.signal);
+      expect(capturedAbortSignal?.aborted).toBe(false);
+      expect(removeListenerSpy).toHaveBeenCalledWith("abort", expect.any(Function));
+
+      jobAbortController.abort();
+      lifecycleAbortController.abort();
+
+      expect(capturedAbortSignal?.aborted).toBe(false);
+    });
   });
 
   it("refreshes run activity while active runs are in progress", async () => {

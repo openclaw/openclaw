@@ -44,7 +44,7 @@ export function mergeAbortSignals(
   return createDisposableMergedAbortSignal(signals).signal;
 }
 
-function createDisposableMergedAbortSignal(signals: Array<AbortSignal | undefined>): {
+export function createDisposableMergedAbortSignal(signals: Array<AbortSignal | undefined>): {
   signal: AbortSignal | undefined;
   dispose: () => void;
 } {

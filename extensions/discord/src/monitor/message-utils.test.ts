@@ -70,6 +70,20 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+async function withNativeAbortSignalAnyDisabled<T>(run: () => Promise<T>): Promise<T> {
+  const descriptor = Object.getOwnPropertyDescriptor(AbortSignal, "any");
+  Object.defineProperty(AbortSignal, "any", { configurable: true, value: undefined });
+  try {
+    return await run();
+  } finally {
+    if (descriptor) {
+      Object.defineProperty(AbortSignal, "any", descriptor);
+    } else {
+      delete (AbortSignal as { any?: unknown }).any;
+    }
+  }
+}
+
 function asMessage(payload: Record<string, unknown>): Message {
   return payload as unknown as Message;
 }
@@ -920,6 +934,53 @@ describe("resolveMediaList", () => {
     ]);
     const requestInit = requireRecord(fetchParams().requestInit, "fetch request init");
     expect(requestInit.signal).toBe(abortController.signal);
+  });
+
+  it("disposes fallback attachment abort listeners after downloads settle", async () => {
+    await withNativeAbortSignalAnyDisabled(async () => {
+      const attachment = {
+        id: "att-dispose",
+        url: "https://cdn.discordapp.com/attachments/1/dispose.png",
+        filename: "dispose.png",
+        content_type: "image/png",
+      };
+      const abortController = new AbortController();
+      const removeListenerSpy = vi.spyOn(abortController.signal, "removeEventListener");
+      readRemoteMediaBuffer.mockResolvedValueOnce({
+        buffer: Buffer.from("image"),
+        contentType: "image/png",
+      });
+      saveMediaBuffer.mockResolvedValueOnce({
+        path: "/tmp/dispose.png",
+        contentType: "image/png",
+      });
+
+      await expect(
+        resolveMediaList(
+          asMessage({
+            attachments: [attachment],
+          }),
+          512,
+          { abortSignal: abortController.signal, totalTimeoutMs: 10_000 },
+        ),
+      ).resolves.toEqual([
+        {
+          path: "/tmp/dispose.png",
+          contentType: "image/png",
+          placeholder: "<media:image>",
+        },
+      ]);
+
+      const requestInit = requireRecord(fetchParams().requestInit, "fetch request init");
+      const requestSignal = requestInit.signal as AbortSignal;
+      expect(requestSignal).not.toBe(abortController.signal);
+      expect(requestSignal.aborted).toBe(false);
+      expect(removeListenerSpy).toHaveBeenCalledWith("abort", expect.any(Function));
+
+      abortController.abort();
+
+      expect(requestSignal.aborted).toBe(false);
+    });
   });
 });
 
