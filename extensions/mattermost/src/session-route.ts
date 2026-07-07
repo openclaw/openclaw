@@ -27,16 +27,10 @@ export function resolveMattermostOutboundSessionRoute(params: ChannelOutboundSes
   if (!rawId) {
     return null;
   }
-  const hasExplicitKind =
-    resolvedKind === "user" ||
-    resolvedKind === "channel" ||
-    resolvedKind === "group" ||
-    lower.startsWith("user:") ||
-    lower.startsWith("channel:") ||
-    lower.startsWith("group:");
-  // User and channel ids share one shape, so an id is canonical only when its
-  // kind is explicit. Names and bare ids can deliver but cannot select a session.
-  const recipientSessionExact = hasExplicitKind && /^[a-z0-9]{26}$/.test(rawId);
+  const hasExplicitUserKind = resolvedKind === "user" || lower.startsWith("user:");
+  // User ids map to inbound DM sender ids. Channel ids do not encode whether
+  // the conversation is public, private, or a group DM, so they stay inexact.
+  const recipientSessionExact = isUser && hasExplicitUserKind && /^[a-z0-9]{26}$/.test(rawId);
   const baseRoute = buildChannelOutboundSessionRoute({
     cfg: params.cfg,
     agentId: params.agentId,

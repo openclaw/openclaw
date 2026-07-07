@@ -539,7 +539,9 @@ function resolveTelegramOutboundSessionRoute(params: {
   const isGroup =
     parsed.chatType === "group" ||
     (parsed.chatType === "unknown" && resolvedKind !== undefined && resolvedKind !== "user");
-  const recipientSessionExact = isGroup && /^-\d+$/.test(chatId);
+  // Telegram private chat ids are the sender's stable numeric user id, while
+  // group ids are negative. Usernames remain aliases and cannot key replies.
+  const recipientSessionExact = /^-?\d+$/.test(chatId);
   const peerId =
     isGroup && resolvedThreadId ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : chatId;
   const peer: RoutePeer = {

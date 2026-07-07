@@ -102,7 +102,7 @@ describe("telegram session route", () => {
     expect(route?.sessionKey).toBe("agent:main:main");
     expect(route?.baseSessionKey).toBe("agent:main:main");
     expect(route?.threadId).toBeUndefined();
-    expect(route?.recipientSessionExact).toBe(false);
+    expect(route?.recipientSessionExact).toBe(true);
   });
 
   it("uses inbound named-account isolation for direct sessions", async () => {
@@ -115,7 +115,7 @@ describe("telegram session route", () => {
 
     expect(route?.sessionKey).toBe("agent:main:telegram:work:direct:12345");
     expect(route?.baseSessionKey).toBe("agent:main:telegram:work:direct:12345");
-    expect(route?.recipientSessionExact).toBe(false);
+    expect(route?.recipientSessionExact).toBe(true);
   });
 
   it("keeps group topic ids in the group peer route instead of adding a thread suffix", async () => {
