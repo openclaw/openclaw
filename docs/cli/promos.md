@@ -73,8 +73,9 @@ directly:
   announced again.
 
 This reads a locally cached copy of ClawHub's hosted promotions feed
-(refreshed at most once a day with a conditional request, silently skipped
-when offline). A stale refresh waits at most 2.5 seconds and never breaks the
-listing. `--json` and `--plain` output stay machine-clean: no promotion
-sections or notices. Claiming always revalidates against the live ClawHub API,
-so an offer withdrawn early is refused even while a cached copy still shows it.
+(normally refreshed once a day with a conditional request, or earlier when the
+cached snapshot expires; refresh failures are silently skipped). A stale
+refresh waits at most 2.5 seconds and never breaks the listing. `--json` and
+`--plain` output stay machine-clean: no promotion sections or notices.
+Claiming always revalidates against the live ClawHub API, so an offer withdrawn
+early is refused even while a cached copy still shows it.

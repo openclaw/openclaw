@@ -378,6 +378,41 @@ describe("promosClaimCommand", () => {
     }
   });
 
+  it("refuses a promotion withdrawn after provider authentication", async () => {
+    const initial = makePromotion();
+    mocks.fetchClawHubPromotion
+      .mockResolvedValueOnce(initial)
+      .mockResolvedValueOnce({ ...initial, active: false });
+    mocks.applyAuthChoiceLoadedPluginProvider.mockResolvedValue({ config: {} });
+
+    await expect(
+      promosClaimCommand("spring-models", { apiKey: "sk-test" }, makeRuntime()),
+    ).rejects.toThrow(/not live/);
+
+    expect(mocks.fetchClawHubPromotion).toHaveBeenCalledTimes(2);
+    // Provider auth completed before the withdrawal was observed, but no
+    // promotion model/default/provenance mutation may follow it.
+    expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(1);
+    expect(mocks.recordPromotionClaim).not.toHaveBeenCalled();
+  });
+
+  it("refuses actionable promotion changes after authentication", async () => {
+    const initial = makePromotion();
+    mocks.fetchClawHubPromotion.mockResolvedValueOnce(initial).mockResolvedValueOnce(
+      makePromotion({
+        models: [{ modelRef: "openrouter/example/model-beta", suggestedDefault: true }],
+      }),
+    );
+
+    await expect(promosClaimCommand("spring-models", {}, makeRuntime())).rejects.toThrow(
+      /changed while the claim was in progress/,
+    );
+
+    expect(mocks.fetchClawHubPromotion).toHaveBeenCalledTimes(2);
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    expect(mocks.recordPromotionClaim).not.toHaveBeenCalled();
+  });
+
   it("runs the install path when the auth choice is not installed, even with existing auth", async () => {
     // Existing env credentials must not shortcut past a required plugin install.
     mocks.resolveManifestProviderAuthChoice.mockReturnValue(undefined);

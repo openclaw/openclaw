@@ -77,10 +77,12 @@ describe("promotions feed state", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(state.sequence).toBe(4);
     expect(state.etag).toBe('"v4"');
+    expect(state.expiresAtMs).toBe(Date.parse("2026-07-06T00:00:00.000Z"));
     expect(state.entries).toHaveLength(1);
 
     const persisted = readPromotionsFeedState();
     expect(persisted.sequence).toBe(4);
+    expect(persisted.expiresAtMs).toBe(Date.parse("2026-07-06T00:00:00.000Z"));
     expect(persisted.entries[0]?.slug).toBe("example-models-launch");
     expect(listLivePromotionEntries(persisted, NOW)).toHaveLength(1);
     expect(listLivePromotionEntries(persisted, NOW + 3 * 86_400_000)).toHaveLength(0);
@@ -92,6 +94,56 @@ describe("promotions feed state", () => {
     const second = await maybeRefreshPromotionsFeed({ nowMs: NOW + 60_000, fetchImpl });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(second.entries).toHaveLength(1);
+  });
+
+  it("refreshes at feed expiry and keeps an expired 304 snapshot hidden without retrying", async () => {
+    const expiresAt = new Date(NOW + 60_000).toISOString();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(feedResponse(feedPayload({ expiresAt }), { etag: '"v4"' }))
+      .mockResolvedValueOnce(feedResponse(null, { status: 304 }));
+    await maybeRefreshPromotionsFeed({ nowMs: NOW, fetchImpl });
+
+    const expired = await maybeRefreshPromotionsFeed({ nowMs: NOW + 60_000, fetchImpl });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(listLivePromotionEntries(expired, NOW + 60_000)).toHaveLength(0);
+
+    const cached = await maybeRefreshPromotionsFeed({ nowMs: NOW + 61_000, fetchImpl });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(listLivePromotionEntries(cached, NOW + 61_000)).toHaveLength(0);
+  });
+
+  it("keeps an expired snapshot hidden after a failed expiry refresh without retrying", async () => {
+    const expiresAt = new Date(NOW + 60_000).toISOString();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(feedResponse(feedPayload({ expiresAt })))
+      .mockRejectedValueOnce(new Error("offline"));
+    await maybeRefreshPromotionsFeed({ nowMs: NOW, fetchImpl });
+
+    const expired = await maybeRefreshPromotionsFeed({ nowMs: NOW + 60_000, fetchImpl });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(listLivePromotionEntries(expired, NOW + 60_000)).toHaveLength(0);
+
+    const cached = await maybeRefreshPromotionsFeed({ nowMs: NOW + 61_000, fetchImpl });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(listLivePromotionEntries(cached, NOW + 61_000)).toHaveLength(0);
+  });
+
+  it("replaces an expired snapshot when ClawHub publishes a newer sequence", async () => {
+    const firstExpiry = new Date(NOW + 60_000).toISOString();
+    const nextExpiry = new Date(NOW + 86_400_000).toISOString();
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(feedResponse(feedPayload({ expiresAt: firstExpiry, sequence: 4 })))
+      .mockResolvedValueOnce(feedResponse(feedPayload({ expiresAt: nextExpiry, sequence: 5 })));
+    await maybeRefreshPromotionsFeed({ nowMs: NOW, fetchImpl });
+
+    const refreshed = await maybeRefreshPromotionsFeed({ nowMs: NOW + 60_000, fetchImpl });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(refreshed.sequence).toBe(5);
+    expect(refreshed.expiresAtMs).toBe(Date.parse(nextExpiry));
+    expect(listLivePromotionEntries(refreshed, NOW + 60_000)).toHaveLength(1);
   });
 
   it("revalidates with If-None-Match and keeps the cache on 304", async () => {

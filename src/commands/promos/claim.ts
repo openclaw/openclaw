@@ -83,6 +83,34 @@ function requireLiveWindow(promotion: ClawHubPromotion) {
   }
 }
 
+function promotionClaimContract(promotion: ClawHubPromotion): string {
+  return JSON.stringify({
+    slug: promotion.slug,
+    startsAt: promotion.startsAt,
+    endsAt: promotion.endsAt,
+    provider: promotion.provider ?? null,
+    authChoiceId: promotion.authChoiceId ?? null,
+    pluginNames: [...(promotion.pluginNames ?? [])].toSorted(),
+    models: promotion.models.map((model) => ({
+      modelRef: model.modelRef,
+      alias: model.alias ?? null,
+      suggestedDefault: Boolean(model.suggestedDefault),
+    })),
+  });
+}
+
+function requireUnchangedClaimContract(
+  initial: ClawHubPromotion,
+  revalidated: ClawHubPromotion,
+): void {
+  if (promotionClaimContract(initial) === promotionClaimContract(revalidated)) {
+    return;
+  }
+  throw new Error(
+    `Promotion "${initial.slug}" changed while the claim was in progress; no promotional models were added. Any provider credentials you just configured were kept. Run ${formatCliCommand("openclaw promos list")} and retry.`,
+  );
+}
+
 // Mirrors applyAuthChoiceLoadedPluginProvider's own resolution order: loaded
 // plugin manifests (bundled/installed providers) first, then the install
 // catalog for providers that would need a plugin install. The source matters:
@@ -263,7 +291,7 @@ export async function promosClaimCommand(
   if (!slug) {
     throw new Error("Promotion slug required.");
   }
-  const promotion = await fetchLivePromotion(slug);
+  let promotion = await fetchLivePromotion(slug);
   requireLiveWindow(promotion);
 
   const provider = promotion.provider?.trim();
@@ -292,7 +320,10 @@ export async function promosClaimCommand(
     makeDefault = await promptYesNo(`Set ${suggested.modelRef} as your default model?`, false);
   }
 
-  requireLiveWindow(promotion);
+  const revalidatedPromotion = await fetchLivePromotion(slug);
+  requireLiveWindow(revalidatedPromotion);
+  requireUnchangedClaimContract(promotion, revalidatedPromotion);
+  promotion = revalidatedPromotion;
 
   const registered: string[] = [];
   const skippedAliases: string[] = [];

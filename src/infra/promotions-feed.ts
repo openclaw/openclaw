@@ -35,6 +35,7 @@ type PromotionsFeedDatabase = Pick<
 export type PromotionsFeedState = {
   etag?: string;
   sequence?: number;
+  expiresAtMs?: number;
   entries: ClawHubPromotionsFeedEntry[];
   lastCheckedAtMs?: number;
   notifiedSlugs: Set<string>;
@@ -90,10 +91,13 @@ function readPromotionsFeedStateWithMetadata(): PromotionsFeedStateRead {
       };
     }
     let entries: ClawHubPromotionsFeedEntry[] = [];
+    let expiresAtMs: number | undefined;
     let payloadInvalid = false;
     if (row.payload_json) {
       try {
-        entries = parseClawHubPromotionsFeed(JSON.parse(row.payload_json)).entries;
+        const feed = parseClawHubPromotionsFeed(JSON.parse(row.payload_json));
+        entries = feed.entries;
+        expiresAtMs = Date.parse(feed.expiresAt);
       } catch {
         payloadInvalid = true;
       }
@@ -104,6 +108,7 @@ function readPromotionsFeedStateWithMetadata(): PromotionsFeedStateRead {
         ...(!payloadInvalid && typeof row.feed_sequence === "number"
           ? { sequence: row.feed_sequence }
           : {}),
+        ...(!payloadInvalid && expiresAtMs !== undefined ? { expiresAtMs } : {}),
         entries,
         ...(typeof row.last_checked_at_ms === "number"
           ? { lastCheckedAtMs: row.last_checked_at_ms }
@@ -200,6 +205,9 @@ export function listLivePromotionEntries(
   state: PromotionsFeedState,
   nowMs: number,
 ): ClawHubPromotionsFeedEntry[] {
+  if (state.expiresAtMs !== undefined && nowMs >= state.expiresAtMs) {
+    return [];
+  }
   return state.entries.filter((entry) => isPromotionWindowLive(entry, nowMs));
 }
 
@@ -224,10 +232,18 @@ export async function maybeRefreshPromotionsFeed(
   // Never hit the network from unit tests unless the test injects a fetch.
   const skipForTests =
     !params.fetchImpl && (process.env.VITEST !== undefined || process.env.NODE_ENV === "test");
+  // Revalidate when a snapshot reaches its producer-declared expiry. Once an
+  // expiry refresh has been attempted, lastCheckedAtMs moves past that horizon
+  // so an offline/304 response stays hidden without retrying on every command.
+  const checkedBeforeSnapshotExpired =
+    state.expiresAtMs !== undefined &&
+    state.lastCheckedAtMs !== undefined &&
+    state.lastCheckedAtMs < state.expiresAtMs;
   const fresh =
     !payloadInvalid &&
     state.lastCheckedAtMs !== undefined &&
-    nowMs - state.lastCheckedAtMs < PROMOTIONS_FEED_CHECK_INTERVAL_MS;
+    nowMs - state.lastCheckedAtMs < PROMOTIONS_FEED_CHECK_INTERVAL_MS &&
+    (!checkedBeforeSnapshotExpired || state.expiresAtMs === undefined || nowMs < state.expiresAtMs);
   if (skipForTests || (fresh && !params.force)) {
     return state;
   }
@@ -256,6 +272,7 @@ export async function maybeRefreshPromotionsFeed(
     return {
       ...(result.etag ? { etag: result.etag } : {}),
       sequence: result.feed.sequence,
+      expiresAtMs: Date.parse(result.feed.expiresAt),
       entries: result.feed.entries,
       lastCheckedAtMs: nowMs,
       notifiedSlugs: state.notifiedSlugs,
