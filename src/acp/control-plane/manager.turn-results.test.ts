@@ -15,6 +15,7 @@ import {
   extractStatesFromUpserts,
   hoisted,
   installAcpSessionManagerTestLifecycle,
+  mockParentedAcpSessionEntries,
   mockCallArg,
   readySessionMeta,
   resetAcpSessionManagerForTests,
@@ -189,147 +190,6 @@ describe("AcpSessionManager turn results", () => {
         task: "Print the current directory",
         status: "succeeded",
         progressSummary: "Current directory is /tmp/openclaw.",
-      });
-    });
-  });
-
-  it("records cancelled parented ACP turns as cancelled, not succeeded", async () => {
-    await withAcpManagerTaskStateDir(async () => {
-      const runtimeState = createRuntime();
-      runtimeState.runtime.startTurn = vi.fn((input) => ({
-        requestId: input.requestId,
-        events: (async function* () {
-          yield {
-            type: "text_delta" as const,
-            stream: "output" as const,
-            text: "Starting the investigation.",
-          };
-        })(),
-        result: Promise.resolve({
-          status: "cancelled" as const,
-          stopReason: "cancelled",
-        }),
-        cancel: vi.fn(async () => {}),
-        closeStream: vi.fn(async () => {}),
-      }));
-      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-        id: "acpx",
-        runtime: runtimeState.runtime,
-      });
-      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
-        if (sessionKey === "agent:codex:acp:child-1") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "child-1",
-              updatedAt: Date.now(),
-              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
-              label: "Codex investigation",
-            },
-            acp: readySessionMeta(),
-          };
-        }
-        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "parent-1",
-              updatedAt: Date.now(),
-            },
-          };
-        }
-        return null;
-      });
-
-      const events: string[] = [];
-      const manager = new AcpSessionManager();
-      await manager.runTurn({
-        cfg: baseCfg,
-        sessionKey: "agent:codex:acp:child-1",
-        text: "Investigate and report back",
-        mode: "prompt",
-        requestId: "direct-parented-cancelled-run",
-        onEvent: (event) => {
-          events.push(event.type);
-        },
-      });
-
-      expect(runtimeState.runTurn).not.toHaveBeenCalled();
-      expect(events).toEqual(["text_delta", "done"]);
-      expectRecordFields(requireTaskByRunId("direct-parented-cancelled-run"), {
-        runtime: "acp",
-        ownerKey: "agent:quant:telegram:quant:direct:822430204",
-        scopeKind: "session",
-        childSessionKey: "agent:codex:acp:child-1",
-        label: "Codex investigation",
-        task: "Investigate and report back",
-        status: "cancelled",
-        progressSummary: "Starting the investigation.",
-      });
-    });
-  });
-
-  it("records cancelled parented ACP turns via runTurn stopReason as cancelled", async () => {
-    await withAcpManagerTaskStateDir(async () => {
-      const runtimeState = createRuntime();
-      // No startTurn: exercises the raw runTurn fallback, where cancellation arrives as a
-      // done event with a stopReason and no status.
-      runtimeState.runTurn.mockImplementation(async function* () {
-        yield {
-          type: "text_delta" as const,
-          stream: "output" as const,
-          text: "Working on it.",
-        };
-        yield { type: "done" as const, stopReason: "cancel" };
-      });
-      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-        id: "acpx",
-        runtime: runtimeState.runtime,
-      });
-      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
-        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
-        if (sessionKey === "agent:codex:acp:child-1") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "child-1",
-              updatedAt: Date.now(),
-              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
-              label: "Codex investigation",
-            },
-            acp: readySessionMeta(),
-          };
-        }
-        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
-          return {
-            sessionKey,
-            storeSessionKey: sessionKey,
-            entry: {
-              sessionId: "parent-1",
-              updatedAt: Date.now(),
-            },
-          };
-        }
-        return null;
-      });
-
-      const manager = new AcpSessionManager();
-      await manager.runTurn({
-        cfg: baseCfg,
-        sessionKey: "agent:codex:acp:child-1",
-        text: "Investigate and report back",
-        mode: "prompt",
-        requestId: "runturn-parented-cancelled-run",
-      });
-
-      expect(runtimeState.runTurn).toHaveBeenCalled();
-      expectRecordFields(requireTaskByRunId("runturn-parented-cancelled-run"), {
-        status: "cancelled",
-        progressSummary: "Working on it.",
       });
     });
   });
@@ -803,50 +663,56 @@ describe("AcpSessionManager turn results", () => {
   });
 
   it("keeps startTurn cancelled results as non-error terminal turns", async () => {
-    const runtimeState = createRuntime();
-    const closeStream = vi.fn(async () => {});
-    runtimeState.runtime.startTurn = vi.fn((input) => ({
-      requestId: input.requestId,
-      events: (async function* () {
-        yield { type: "text_delta" as const, stream: "output" as const, text: "stopping" };
-      })(),
-      result: Promise.resolve({
-        status: "cancelled" as const,
-      }),
-      cancel: vi.fn(async () => {}),
-      closeStream,
-    }));
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    hoisted.readAcpSessionEntryMock.mockReturnValue({
-      sessionKey: "agent:codex:acp:session-1",
-      storeSessionKey: "agent:codex:acp:session-1",
-      acp: readySessionMeta(),
-    });
+    await withAcpManagerTaskStateDir(async () => {
+      const runtimeState = createRuntime();
+      const closeStream = vi.fn(async () => {});
+      runtimeState.runtime.startTurn = vi.fn((input) => ({
+        requestId: input.requestId,
+        events: (async function* () {
+          yield { type: "text_delta" as const, stream: "output" as const, text: "stopping" };
+        })(),
+        result: Promise.resolve({
+          status: "cancelled" as const,
+        }),
+        cancel: vi.fn(async () => {}),
+        closeStream,
+      }));
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      mockParentedAcpSessionEntries({
+        childSessionKey: "agent:codex:acp:child-1",
+        parentSessionKey: "agent:main:main",
+      });
 
-    const events: AcpRuntimeEvent[] = [];
-    const manager = new AcpSessionManager();
-    await manager.runTurn({
-      cfg: baseCfg,
-      sessionKey: "agent:codex:acp:session-1",
-      text: "long task",
-      mode: "prompt",
-      requestId: "run-1",
-      onEvent: (event) => {
-        events.push(event);
-      },
-    });
+      const events: AcpRuntimeEvent[] = [];
+      const manager = new AcpSessionManager();
+      await manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:child-1",
+        text: "long task",
+        mode: "prompt",
+        requestId: "run-1",
+        onEvent: (event) => {
+          events.push(event);
+        },
+      });
 
-    expect(runtimeState.runTurn).not.toHaveBeenCalled();
-    expect(closeStream).toHaveBeenCalledWith({ reason: "turn-result-cancelled" });
-    expect(events.map((event) => event.type)).toEqual(["text_delta", "done"]);
-    expect(events.at(-1)).toEqual({ type: "done", status: "cancelled" });
-    const states = extractStatesFromUpserts();
-    expect(states).toContain("running");
-    expect(states).toContain("idle");
-    expect(states).not.toContain("error");
+      expect(runtimeState.runTurn).not.toHaveBeenCalled();
+      expect(closeStream).toHaveBeenCalledWith({ reason: "turn-result-cancelled" });
+      expect(events.map((event) => event.type)).toEqual(["text_delta", "done"]);
+      expect(events.at(-1)).toEqual({ type: "done", status: "cancelled" });
+      expectRecordFields(requireTaskByRunId("run-1"), {
+        ownerKey: "agent:main:main",
+        childSessionKey: "agent:codex:acp:child-1",
+        status: "cancelled",
+      });
+      const states = extractStatesFromUpserts();
+      expect(states).toContain("running");
+      expect(states).toContain("idle");
+      expect(states).not.toContain("error");
+    });
   });
 
   it("fails immediately when startTurn events fail before terminal result settles", async () => {

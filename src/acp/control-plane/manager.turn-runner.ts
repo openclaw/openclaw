@@ -283,7 +283,7 @@ export async function runManagerTurn(params: {
               });
             },
           });
-          if (!turnOutcome.sawTerminalEvent) {
+          if (!turnOutcome.terminalStatus) {
             throw new AcpRuntimeError(
               "ACP_TURN_FAILED",
               "ACP turn ended without a terminal done event.",
@@ -294,8 +294,6 @@ export async function runManagerTurn(params: {
           });
           if (taskContext) {
             const terminalResult = resolveBackgroundTaskTerminalResult(taskProgressSummary);
-            // A cancelled turn also resolves without throwing; record it honestly
-            // rather than mirroring the child task as succeeded.
             markBackgroundTaskTerminal(taskContext.runId, {
               sessionKey,
               status: turnOutcome.terminalStatus === "cancelled" ? "cancelled" : "succeeded",

@@ -17,15 +17,9 @@ type AcpTurnEventGate = {
 /** Summary of whether a turn stream emitted user-visible output or terminal events. */
 type AcpTurnStreamOutcome = {
   sawOutput: boolean;
-  sawTerminalEvent: boolean;
-  // Closed terminal status so callers preserve cancel/complete precedence instead of
-  // assuming success; undefined when the stream ended without a terminal done event.
   terminalStatus?: "completed" | "cancelled";
 };
 
-// Legacy runTurn `done` events may omit status and signal cancellation via stopReason;
-// mirror the acpx adapter (extensions/acpx runtime-turn.ts) so the raw fallback path does
-// not silently convert a cancelled turn into a completed one.
 function isCancellationStopReason(stopReason: string | undefined): boolean {
   return stopReason === "cancel" || stopReason === "cancelled" || stopReason === "manual-cancel";
 }
@@ -40,15 +34,14 @@ async function consumeAcpTurnEvents(params: {
 }): Promise<AcpTurnStreamOutcome> {
   let streamError: AcpRuntimeError | null = null;
   let sawOutput = false;
-  let sawTerminalEvent = false;
-  let terminalStatus: "completed" | "cancelled" | undefined;
+  let terminalStatus: AcpTurnStreamOutcome["terminalStatus"];
 
   for await (const event of params.events) {
     if (!params.eventGate.open) {
       continue;
     }
     if (event.type === "done") {
-      sawTerminalEvent = true;
+      // Legacy runTurn adapters may omit status but retain the cancellation reason.
       terminalStatus =
         event.status ?? (isCancellationStopReason(event.stopReason) ? "cancelled" : "completed");
     } else if (event.type === "error") {
@@ -70,7 +63,6 @@ async function consumeAcpTurnEvents(params: {
 
   return {
     sawOutput,
-    sawTerminalEvent,
     terminalStatus,
   };
 }
@@ -194,7 +186,6 @@ export async function consumeAcpTurnStream(params: {
     }
     return {
       sawOutput: eventOutcome.sawOutput,
-      sawTerminalEvent: true,
       terminalStatus: result.status,
     };
   }

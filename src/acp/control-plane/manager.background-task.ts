@@ -201,8 +201,6 @@ export function markBackgroundTaskTerminal(
       });
       return;
     }
-    // Non-success terminals (failed/timed_out/cancelled) record through the detached-task
-    // fail sink, which preserves the distinct terminal status instead of collapsing to success.
     failTaskRunByRunId({
       runId,
       runtime: "acp",
