@@ -70,7 +70,7 @@ Supported keys: `voice` / `voice_id` / `voiceId`, `model` / `model_id` / `modelI
       providers: {
         openai: {
           apiKey: "openai_api_key",
-          model: "gpt-realtime-2",
+          model: "gpt-realtime-2.1",
           speakerVoice: "cedar",
         },
       },
@@ -98,7 +98,7 @@ Supported keys: `voice` / `voice_id` / `voiceId`, `model` / `model_id` / `modelI
 | `consultFastMode`                        | unset                                      | Fast-mode override for realtime `openclaw_agent_consult` calls.                                                                                                                                                                                                          |
 | `realtime.provider`                      | -                                          | `openai` for WebRTC, `google` for provider WebSocket, or a bridge-only provider through Gateway relay.                                                                                                                                                                   |
 | `realtime.providers.<id>`                | -                                          | Provider-owned realtime config. Browsers receive only ephemeral/constrained session credentials, never a standard API key.                                                                                                                                               |
-| `realtime.providers.openai.speakerVoice` | `alloy`                                    | Built-in OpenAI Realtime voice id (the older `voice` key still works but is deprecated). Current `gpt-realtime-2` voices: `alloy`, `ash`, `ballad`, `cedar`, `coral`, `echo`, `marin`, `sage`, `shimmer`, `verse`; `marin` and `cedar` are recommended for best quality. |
+| `realtime.providers.openai.speakerVoice` | `alloy`                                    | Built-in OpenAI Realtime voice id (the older `voice` key still works but is deprecated). Current `gpt-realtime-2.1` voices: `alloy`, `ash`, `ballad`, `cedar`, `coral`, `echo`, `marin`, `sage`, `shimmer`, `verse`; `marin` and `cedar` are recommended for best quality. |
 | `realtime.transport`                     | -                                          | `webrtc`: client-owned OpenAI WebRTC on iOS and in the browser. `provider-websocket`: browser-owned, stays on Gateway relay on iOS. `gateway-relay`: keeps provider audio on the Gateway; Android uses realtime only with this transport.                                |
 | `realtime.brain`                         | -                                          | `agent-consult` routes realtime tool calls through Gateway policy; `direct-tools` is legacy direct-tool compatibility; `none` is for transcription/external orchestration.                                                                                               |
 | `realtime.consultRouting`                | -                                          | `provider-direct` preserves the provider's direct reply when it skips `openclaw_agent_consult`; `force-agent-consult` routes finalized user transcripts through OpenClaw instead.                                                                                        |

@@ -1527,7 +1527,7 @@ Defaults for Talk mode (macOS/iOS/Android and the browser Control UI).
       provider: "openai",
       providers: {
         openai: {
-          model: "gpt-realtime-2",
+          model: "gpt-realtime-2.1",
           speakerVoice: "cedar",
         },
       },
