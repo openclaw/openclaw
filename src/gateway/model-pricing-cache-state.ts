@@ -24,6 +24,8 @@ export type CachedModelPricing = {
 
 type GatewayModelPricingHealthSource = "openrouter" | "litellm" | "bootstrap" | "refresh";
 
+export const GATEWAY_MODEL_PRICING_CACHE_MAX_ENTRIES = 4096;
+
 export type GatewayModelPricingHealth = {
   state: "ok" | "degraded" | "disabled";
   sources: Array<{
@@ -58,11 +60,44 @@ function modelPricingCacheKey(provider: string, model: string): string {
     : `${providerId}/${modelId}`;
 }
 
+function buildBoundedGatewayModelPricingCache(
+  nextPricing: Map<string, CachedModelPricing>,
+): Map<string, CachedModelPricing> {
+  const bounded = new Map<string, CachedModelPricing>();
+  for (const [key] of cachedPricing) {
+    if (nextPricing.has(key)) {
+      bounded.set(key, nextPricing.get(key)!);
+    }
+  }
+  for (const [key, pricing] of nextPricing) {
+    if (!bounded.has(key)) {
+      bounded.set(key, pricing);
+    }
+  }
+  for (const key of bounded.keys()) {
+    if (bounded.size <= GATEWAY_MODEL_PRICING_CACHE_MAX_ENTRIES) {
+      break;
+    }
+    bounded.delete(key);
+  }
+  return bounded;
+}
+
+function getCachedGatewayModelPricingEntry(key: string): CachedModelPricing | undefined {
+  const pricing = cachedPricing.get(key);
+  if (!pricing) {
+    return undefined;
+  }
+  cachedPricing.delete(key);
+  cachedPricing.set(key, pricing);
+  return pricing;
+}
+
 export function replaceGatewayModelPricingCache(
   nextPricing: Map<string, CachedModelPricing>,
   nextCachedAt = Date.now(),
 ): void {
-  cachedPricing = nextPricing;
+  cachedPricing = buildBoundedGatewayModelPricingCache(nextPricing);
   cachedAt = nextCachedAt;
 }
 
@@ -134,7 +169,7 @@ export function getCachedGatewayModelPricing(params: {
     return undefined;
   }
   const key = modelPricingCacheKey(provider, model);
-  const direct = key ? cachedPricing.get(key) : undefined;
+  const direct = key ? getCachedGatewayModelPricingEntry(key) : undefined;
   if (direct) {
     return direct;
   }
@@ -143,7 +178,7 @@ export function getCachedGatewayModelPricing(params: {
   if (normalizedKey === key) {
     return undefined;
   }
-  return normalizedKey ? cachedPricing.get(normalizedKey) : undefined;
+  return normalizedKey ? getCachedGatewayModelPricingEntry(normalizedKey) : undefined;
 }
 
 export function getGatewayModelPricingCacheMeta(): {

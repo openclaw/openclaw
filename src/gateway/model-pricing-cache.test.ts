@@ -59,7 +59,12 @@ vi.mock("../plugins/manifest-metadata-scan.js", async (importOriginal) => {
   };
 });
 
-import { getGatewayModelPricingHealth } from "./model-pricing-cache-state.js";
+import {
+  GATEWAY_MODEL_PRICING_CACHE_MAX_ENTRIES,
+  getGatewayModelPricingCacheMeta,
+  getGatewayModelPricingHealth,
+  replaceGatewayModelPricingCache,
+} from "./model-pricing-cache-state.js";
 import {
   resetGatewayModelPricingCacheForTest,
   collectConfiguredModelPricingRefs,
@@ -97,6 +102,24 @@ function requireAbortSignal(signal: RequestInit["signal"] | undefined): AbortSig
   return signal;
 }
 
+function createCachedModelPricing(index: number): CachedModelPricing {
+  return {
+    input: index,
+    output: index + 1,
+    cacheRead: 0,
+    cacheWrite: 0,
+  };
+}
+
+function createCachedModelPricingMap(count: number): Map<string, CachedModelPricing> {
+  return new Map(
+    Array.from({ length: count }, (_, index): [string, CachedModelPricing] => [
+      modelKey("custom", `model-${index}`),
+      createCachedModelPricing(index),
+    ]),
+  );
+}
+
 describe("model-pricing-cache", () => {
   beforeEach(() => {
     resetGatewayModelPricingCacheForTest();
@@ -110,6 +133,52 @@ describe("model-pricing-cache", () => {
     resetGatewayModelPricingCacheForTest();
     loggingState.rawConsole = null;
     resetLogger();
+  });
+
+  it("bounds replacement cache size and evicts the oldest pricing rows", () => {
+    replaceGatewayModelPricingCache(
+      createCachedModelPricingMap(GATEWAY_MODEL_PRICING_CACHE_MAX_ENTRIES + 2),
+      123,
+    );
+
+    expect(getGatewayModelPricingCacheMeta()).toEqual({
+      cachedAt: 123,
+      ttlMs: 0,
+      size: GATEWAY_MODEL_PRICING_CACHE_MAX_ENTRIES,
+    });
+    expect(getCachedGatewayModelPricing({ provider: "custom", model: "model-0" })).toBeUndefined();
+    expect(getCachedGatewayModelPricing({ provider: "custom", model: "model-1" })).toBeUndefined();
+    expect(getCachedGatewayModelPricing({ provider: "custom", model: "model-2" })).toEqual(
+      createCachedModelPricing(2),
+    );
+  });
+
+  it("keeps recently used pricing rows when a refreshed cache exceeds the cap", () => {
+    replaceGatewayModelPricingCache(
+      createCachedModelPricingMap(GATEWAY_MODEL_PRICING_CACHE_MAX_ENTRIES),
+      123,
+    );
+
+    expect(getCachedGatewayModelPricing({ provider: "custom", model: "model-0" })).toEqual(
+      createCachedModelPricing(0),
+    );
+
+    replaceGatewayModelPricingCache(
+      createCachedModelPricingMap(GATEWAY_MODEL_PRICING_CACHE_MAX_ENTRIES + 1),
+      456,
+    );
+
+    expect(getGatewayModelPricingCacheMeta().size).toBe(GATEWAY_MODEL_PRICING_CACHE_MAX_ENTRIES);
+    expect(getCachedGatewayModelPricing({ provider: "custom", model: "model-0" })).toEqual(
+      createCachedModelPricing(0),
+    );
+    expect(getCachedGatewayModelPricing({ provider: "custom", model: "model-1" })).toBeUndefined();
+    expect(
+      getCachedGatewayModelPricing({
+        provider: "custom",
+        model: `model-${GATEWAY_MODEL_PRICING_CACHE_MAX_ENTRIES}`,
+      }),
+    ).toEqual(createCachedModelPricing(GATEWAY_MODEL_PRICING_CACHE_MAX_ENTRIES));
   });
 
   it("collects configured model refs across defaults, aliases, overrides, and media tools", () => {
