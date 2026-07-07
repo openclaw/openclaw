@@ -1,4 +1,5 @@
-// Discord tests cover gateway websocket transport options.
+// Discord tests cover gateway websocket transport options, including the disabled
+// ws 8.21 retained-part receiver limits (maxBufferedChunks/maxFragments = 0).
 import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -38,7 +39,7 @@ describe("GatewayPlugin websocket options", () => {
     expect(webSocketCtorCalls).toHaveLength(1);
     expect(webSocketCtorCalls[0]).toEqual({
       url: "wss://gateway.example.test/?v=10&encoding=json",
-      options: { maxPayload: 16 * 1024 * 1024 },
+      options: { maxPayload: 16 * 1024 * 1024, maxBufferedChunks: 0, maxFragments: 0 },
     });
   });
 });
