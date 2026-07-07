@@ -482,10 +482,6 @@ export const it: TranslationMap = {
     customize: "Personalizza barra laterale",
     customizeReset: "Ripristina impostazioni predefinite",
     backToOpenClaw: "Back to OpenClaw",
-    searchSettings: "Search settings...",
-    settingsSearchResults: "Settings search results",
-    noSettingsResults: "No matching settings.",
-    contextProfile: "Context Profile",
   },
   terminal: {
     title: "Terminal",

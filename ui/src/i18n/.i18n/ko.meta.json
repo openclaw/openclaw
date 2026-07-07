@@ -1,17 +1,13 @@
 {
   "fallbackKeys": [
-    "nav.backToOpenClaw",
-    "nav.contextProfile",
-    "nav.noSettingsResults",
-    "nav.searchSettings",
-    "nav.settingsSearchResults"
+    "nav.backToOpenClaw"
   ],
-  "generatedAt": "2026-07-07T12:29:56.885Z",
+  "generatedAt": "2026-07-07T13:19:23.604Z",
   "locale": "ko",
   "model": "claude-opus-4-8",
   "provider": "anthropic",
-  "sourceHash": "543e3cab838ec82e0ef5cef98324a36334b6768393534e965bc941f5a95daf5e",
-  "totalKeys": 1674,
+  "sourceHash": "1865cabe5f5dc9df41b08fe5a60cae60edc68a89566cb50e805eec5a9d264e3e",
+  "totalKeys": 1670,
   "translatedKeys": 1669,
   "workflow": 1
 }

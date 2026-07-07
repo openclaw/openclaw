@@ -2,6 +2,10 @@
    Shell Layout
    =========================================== */
 
+:root {
+  --settings-content-width: 840px;
+}
+
 .shell {
   --shell-pad: 16px;
   --shell-gap: 16px;
@@ -320,8 +324,6 @@
 }
 
 .settings-sidebar-back__icon svg,
-.settings-sidebar-title__icon svg,
-.settings-sidebar-search__icon svg,
 .settings-sidebar-link__icon svg {
   width: 100%;
   height: 100%;
@@ -332,69 +334,11 @@
   stroke-linejoin: round;
 }
 
-.settings-sidebar-title {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  min-width: 0;
-  padding: 0 6px;
-  color: var(--text-strong);
-  font-size: 15px;
-  font-weight: 650;
-  line-height: 1.2;
-}
-
-.settings-sidebar-title__icon {
-  display: inline-flex;
-  width: 17px;
-  height: 17px;
-  color: var(--accent);
-}
-
-.settings-sidebar-search {
-  position: relative;
-  flex: 0 0 auto;
-}
-
-.settings-sidebar-search__icon {
-  position: absolute;
-  left: 10px;
-  top: 50%;
-  display: inline-flex;
-  width: 14px;
-  height: 14px;
-  color: var(--muted);
-  pointer-events: none;
-  transform: translateY(-50%);
-}
-
-.settings-sidebar-search__input {
-  width: 100%;
-  min-height: 34px;
-  padding: 7px 10px 7px 31px;
-  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--bg-elevated) 78%, transparent);
-  color: var(--text);
-  font: inherit;
-  font-size: 12.5px;
-  outline: none;
-}
-
-.settings-sidebar-search__input::placeholder {
-  color: var(--muted);
-}
-
-.settings-sidebar-search__input:focus-visible {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
-  box-shadow: var(--focus-ring);
-}
-
 .settings-sidebar-nav {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: 14px;
+  gap: 19px;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
@@ -404,17 +348,17 @@
 
 .settings-sidebar-section {
   display: grid;
-  gap: 5px;
+  gap: 8px;
 }
 
 .settings-sidebar-section__label {
   padding: 0 8px;
-  color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: 0.07em;
-  line-height: 1.2;
-  text-transform: uppercase;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1.25;
+  text-transform: none;
 }
 
 .settings-sidebar-section__items {
@@ -473,35 +417,6 @@
   color: inherit;
   font-size: 13px;
   font-weight: 550;
-}
-
-.settings-sidebar-link--search-item {
-  min-height: 42px;
-  align-items: flex-start;
-  padding-block: 6px;
-}
-
-.settings-sidebar-link__text-stack {
-  display: grid;
-  min-width: 0;
-  gap: 2px;
-}
-
-.settings-sidebar-link__meta {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.settings-sidebar-empty {
-  padding: 8px 9px;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.35;
 }
 
 .sidebar-shell__footer {
@@ -1777,11 +1692,11 @@
   gap: 14px;
 }
 
-.content--settings .content-header {
+.content:has(.settings-workspace--settings) .content-header {
   width: 100%;
-  max-width: 980px;
+  max-width: var(--settings-content-width);
   margin: 0 auto;
-  padding-inline: 16px;
+  padding-inline: 0;
 }
 
 :root[data-theme-mode="light"] .content {
@@ -1996,6 +1911,11 @@
 
 .grid-cols-3 {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.settings-workspace--settings .channels-grid {
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .stat-grid {

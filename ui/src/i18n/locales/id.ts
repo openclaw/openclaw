@@ -478,10 +478,6 @@ export const id: TranslationMap = {
     customize: "Sesuaikan bilah samping",
     customizeReset: "Atur ulang ke default",
     backToOpenClaw: "Back to OpenClaw",
-    searchSettings: "Search settings...",
-    settingsSearchResults: "Settings search results",
-    noSettingsResults: "No matching settings.",
-    contextProfile: "Context Profile",
   },
   terminal: {
     title: "Terminal",

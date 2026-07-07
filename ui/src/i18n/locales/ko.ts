@@ -476,10 +476,6 @@ export const ko: TranslationMap = {
     customize: "사이드바 사용자 지정",
     customizeReset: "기본값으로 재설정",
     backToOpenClaw: "Back to OpenClaw",
-    searchSettings: "Search settings...",
-    settingsSearchResults: "Settings search results",
-    noSettingsResults: "No matching settings.",
-    contextProfile: "Context Profile",
   },
   terminal: {
     title: "Terminal",

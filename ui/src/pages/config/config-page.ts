@@ -20,7 +20,7 @@ import {
 } from "../../app/settings.ts";
 import { startThemeTransition } from "../../app/theme-transition.ts";
 import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts";
-import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { renderSettingsPage } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { renderMcp } from "./mcp.ts";
@@ -905,25 +905,26 @@ export class ConfigPage extends LitElement {
       this.pageId === "config" && this.settingsMode === "quick"
         ? this.renderQuickConfig(configObject)
         : this.renderAdvancedConfig(configObject);
-    return html`
-      <section class="content-header">
+    return renderSettingsPage(
+      this.context.basePath,
+      html`
         <div>
           <div class="page-title">${configPageTitle(this.pageId)}</div>
           <div class="page-sub">${configPageSubtitle(this.pageId)}</div>
         </div>
         ${this.renderSettingsModeToggle()}
-      </section>
-      ${this.pageId === "config"
-        ? html`<div class="config-view-toggle-row">${this.renderSettingsModeToggle()}</div>`
-        : nothing}
-      ${renderSettingsWorkspace(
-        this.context.basePath,
-        body,
-        this.pageId,
-        (routeId) => this.navigate(routeId),
-        (routeId) => this.context.preload(routeId),
-      )}
-    `;
+      `,
+      body,
+      this.pageId,
+      (routeId) => this.navigate(routeId),
+      (routeId) => this.context.preload(routeId),
+      {
+        afterHeader:
+          this.pageId === "config"
+            ? html`<div class="config-view-toggle-row">${this.renderSettingsModeToggle()}</div>`
+            : nothing,
+      },
+    );
   }
 }
 

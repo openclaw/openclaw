@@ -76,8 +76,6 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await settingsLink.click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/config");
       await expect.poll(() => settingsLink.getAttribute("aria-current")).toBe("page");
-      await sidebar.getByRole("searchbox", { name: "Search settings" }).fill("context");
-      await expect.poll(() => sidebar.getByText("Context Profile").isVisible()).toBe(true);
       await sidebar.getByRole("link", { name: "Back to OpenClaw" }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/overview");
       await captureUiProof(page, "01-default-pinned.png");

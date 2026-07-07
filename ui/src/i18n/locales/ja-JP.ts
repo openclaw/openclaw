@@ -483,10 +483,6 @@ export const ja_JP: TranslationMap = {
     customize: "サイドバーをカスタマイズ",
     customizeReset: "デフォルトに戻す",
     backToOpenClaw: "Back to OpenClaw",
-    searchSettings: "Search settings...",
-    settingsSearchResults: "Settings search results",
-    noSettingsResults: "No matching settings.",
-    contextProfile: "Context Profile",
   },
   terminal: {
     title: "Terminal",

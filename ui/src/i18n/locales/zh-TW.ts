@@ -474,10 +474,6 @@ export const zh_TW: TranslationMap = {
     customize: "自訂側邊欄",
     customizeReset: "重設為預設值",
     backToOpenClaw: "Back to OpenClaw",
-    searchSettings: "Search settings...",
-    settingsSearchResults: "Settings search results",
-    noSettingsResults: "No matching settings.",
-    contextProfile: "Context Profile",
   },
   terminal: {
     title: "Terminal",

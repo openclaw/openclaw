@@ -5,6 +5,8 @@
 /* Layout Container */
 .config-layout {
   display: block;
+  width: 100%;
+  max-width: var(--settings-content-width, 840px);
   margin: 0;
   background: transparent;
   overflow: visible;
@@ -2262,8 +2264,6 @@
 
 @media (max-width: 768px) {
   .config-layout {
-    height: calc(100vh - 100px);
-    height: calc(100dvh - 100px);
     margin: 8px 0 0;
     border-radius: var(--radius-md);
   }

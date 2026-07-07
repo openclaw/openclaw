@@ -480,10 +480,6 @@ export const nl: TranslationMap = {
     customize: "Zijbalk aanpassen",
     customizeReset: "Standaardinstellingen herstellen",
     backToOpenClaw: "Back to OpenClaw",
-    searchSettings: "Search settings...",
-    settingsSearchResults: "Settings search results",
-    noSettingsResults: "No matching settings.",
-    contextProfile: "Context Profile",
   },
   terminal: {
     title: "Terminal",

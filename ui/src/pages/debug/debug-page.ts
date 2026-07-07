@@ -6,7 +6,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { HealthSnapshot, StatusSummary } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { renderSettingsPage } from "../../components/settings-workspace.ts";
 import { loadGatewayDiagnostics } from "../../lib/gateway-diagnostics.ts";
 import { renderDebug } from "./view.ts";
 
@@ -176,21 +176,19 @@ class DebugPage extends LitElement {
       onRefresh: () => void this.loadDiagnostics(),
       onCall: () => void this.callDebugMethod(),
     });
-    return html`
-      <section class="content-header">
+    return renderSettingsPage(
+      this.context.basePath,
+      html`
         <div>
           <div class="page-title">${titleForRoute("debug")}</div>
           <div class="page-sub">${subtitleForRoute("debug")}</div>
         </div>
-      </section>
-      ${renderSettingsWorkspace(
-        this.context.basePath,
-        body,
-        "debug",
-        (routeId) => this.context.navigate(routeId),
-        (routeId) => this.context.preload(routeId),
-      )}
-    `;
+      `,
+      body,
+      "debug",
+      (routeId) => this.context.navigate(routeId),
+      (routeId) => this.context.preload(routeId),
+    );
   }
 }
 

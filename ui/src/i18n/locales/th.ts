@@ -475,10 +475,6 @@ export const th: TranslationMap = {
     customize: "ปรับแต่งแถบด้านข้าง",
     customizeReset: "รีเซ็ตเป็นค่าเริ่มต้น",
     backToOpenClaw: "Back to OpenClaw",
-    searchSettings: "Search settings...",
-    settingsSearchResults: "Settings search results",
-    noSettingsResults: "No matching settings.",
-    contextProfile: "Context Profile",
   },
   terminal: {
     title: "Terminal",

@@ -477,10 +477,6 @@ export const hi: TranslationMap = {
     customize: "साइडबार कस्टमाइज़ करें",
     customizeReset: "डिफ़ॉल्ट पर रीसेट करें",
     backToOpenClaw: "Back to OpenClaw",
-    searchSettings: "Search settings...",
-    settingsSearchResults: "Settings search results",
-    noSettingsResults: "No matching settings.",
-    contextProfile: "Context Profile",
   },
   terminal: {
     title: "टर्मिनल",

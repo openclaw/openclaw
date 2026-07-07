@@ -4,7 +4,7 @@ import { state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { renderSettingsPage } from "../../components/settings-workspace.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -267,22 +267,20 @@ class LogsPage extends LitElement {
       onExport: (lines, label) => this.exportLogs(lines, label),
       onScroll: (event) => this.handleScroll(event),
     });
-    return html`
-      <section class="content-header">
+    return renderSettingsPage(
+      this.context.basePath,
+      html`
         <div>
           <div class="page-title">${titleForRoute("logs")}</div>
           <div class="page-sub">${subtitleForRoute("logs")}</div>
         </div>
-      </section>
-      ${renderSettingsWorkspace(
-        this.context.basePath,
-        body,
-        "logs",
-        (routeId) => this.context.navigate(routeId),
-        (routeId) => this.context.preload(routeId),
-        { fillHeight: true },
-      )}
-    `;
+      `,
+      body,
+      "logs",
+      (routeId) => this.context.navigate(routeId),
+      (routeId) => this.context.preload(routeId),
+      { fillHeight: true },
+    );
   }
 }
 

@@ -477,10 +477,6 @@ export const vi: TranslationMap = {
     customize: "Tùy chỉnh thanh bên",
     customizeReset: "Đặt lại về mặc định",
     backToOpenClaw: "Back to OpenClaw",
-    searchSettings: "Search settings...",
-    settingsSearchResults: "Settings search results",
-    noSettingsResults: "No matching settings.",
-    contextProfile: "Context Profile",
   },
   terminal: {
     title: "Terminal",

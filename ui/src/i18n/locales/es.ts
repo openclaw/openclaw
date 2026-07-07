@@ -478,10 +478,6 @@ export const es: TranslationMap = {
     customize: "Personalizar barra lateral",
     customizeReset: "Restablecer valores predeterminados",
     backToOpenClaw: "Back to OpenClaw",
-    searchSettings: "Search settings...",
-    settingsSearchResults: "Settings search results",
-    noSettingsResults: "No matching settings.",
-    contextProfile: "Context Profile",
   },
   terminal: {
     title: "Terminal",

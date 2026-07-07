@@ -2,9 +2,12 @@
 
 .settings-workspace {
   width: 100%;
-  max-width: 980px;
-  margin: 0 auto;
-  padding: 0 16px 56px;
+}
+
+.settings-workspace--settings {
+  width: 100%;
+  max-width: var(--settings-content-width);
+  margin-inline: auto;
 }
 
 .settings-workspace__body {
@@ -70,9 +73,9 @@ openclaw-logs-page {
 
 .qs-container {
   width: 100%;
-  max-width: 100%;
-  margin: 0 auto;
-  padding: 12px 0 0;
+  max-width: var(--settings-content-width);
+  margin: 0;
+  padding: 28px 0 56px;
 }
 
 /* Persistent Simple/Advanced switch in the page header; keeps the way back
@@ -94,9 +97,9 @@ openclaw-logs-page {
     display: flex;
     justify-content: flex-end;
     width: 100%;
-    max-width: 980px;
+    max-width: var(--settings-content-width);
     margin: 0 auto;
-    padding: 12px 16px 0;
+    padding: 12px 0 0;
   }
 }
 
@@ -104,9 +107,9 @@ openclaw-logs-page {
 
 .qs-grid {
   display: grid;
-  grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   align-items: stretch;
-  gap: 14px;
+  gap: 12px;
 }
 
 /* ── Card ── */
@@ -135,7 +138,7 @@ openclaw-logs-page {
 .qs-card--channels,
 .qs-card--security,
 .qs-card--automations {
-  grid-column: span 4;
+  grid-column: 1 / -1;
 }
 
 .qs-card--appearance,
@@ -144,7 +147,7 @@ openclaw-logs-page {
 }
 
 .qs-card--personal {
-  grid-column: span 8;
+  grid-column: 1 / -1;
 }
 
 .qs-card--personal .qs-identity-grid {
@@ -1009,12 +1012,12 @@ openclaw-logs-page {
 
 @media (max-width: 1100px) {
   .qs-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1fr);
     align-items: stretch;
   }
 
   .qs-card {
-    grid-column: span 1;
+    grid-column: 1 / -1;
   }
 
   .qs-card--appearance,

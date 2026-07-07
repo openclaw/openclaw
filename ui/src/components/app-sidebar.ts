@@ -93,14 +93,6 @@ type SidebarSessionGroupMenuState = {
 };
 
 type SidebarSessionSortMode = "created" | "updated";
-type SettingsSearchResult =
-  | { kind: "route"; routeId: NavigationRouteId }
-  | {
-      kind: "item";
-      routeId: NavigationRouteId;
-      titleKey: "nav.contextProfile";
-      keywords: readonly string[];
-    };
 
 const SIDEBAR_SESSION_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:grouping";
 
@@ -108,15 +100,6 @@ const SIDEBAR_SESSION_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:grouping
 const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
   ? "⌘K"
   : "Ctrl K";
-
-const SETTINGS_SEARCH_ITEMS = [
-  {
-    kind: "item",
-    routeId: "config",
-    titleKey: "nav.contextProfile",
-    keywords: ["context", "profile", "workspace context", "bootstrap", "reinjection", "profiles"],
-  },
-] as const satisfies readonly SettingsSearchResult[];
 
 function loadStoredSidebarSessionsGrouping(): SidebarSessionsGrouping {
   return normalizeSidebarSessionsGrouping(
@@ -183,7 +166,6 @@ export class AppSidebar extends LitElement {
   @state() private sessionsResult: SessionsListResult | null = null;
   @state() private sessionsAgentId: string | null = null;
   @state() private sessionsLoading = false;
-  @state() private settingsSearchQuery = "";
 
   private stopSessionsSubscription: (() => void) | undefined;
   private stopSessionCreatedSubscription: (() => void) | undefined;
@@ -1657,84 +1639,6 @@ export class AppSidebar extends LitElement {
     `;
   }
 
-  private settingsSearchResults(): SettingsSearchResult[] {
-    const query = this.settingsSearchQuery.trim().toLowerCase();
-    if (!query) {
-      return [];
-    }
-    const routeResults = SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes)
-      .filter((routeId) => this.isRouteEnabled(routeId))
-      .filter((routeId, index, routes) => routes.indexOf(routeId) === index)
-      .filter((routeId) => {
-        const haystack = `${titleForRoute(routeId)} ${subtitleForRoute(routeId)} ${routeId}`
-          .toLowerCase()
-          .replace(/[-_]/g, " ");
-        return haystack.includes(query);
-      })
-      .map((routeId) => ({ kind: "route" as const, routeId }));
-    const itemResults = SETTINGS_SEARCH_ITEMS.filter((item) =>
-      this.isRouteEnabled(item.routeId),
-    ).filter((item) => {
-      const haystack =
-        `${t(item.titleKey)} ${titleForRoute(item.routeId)} ${item.routeId} ${item.keywords.join(" ")}`
-          .toLowerCase()
-          .replace(/[-_]/g, " ");
-      return haystack.includes(query);
-    });
-    return [...routeResults, ...itemResults];
-  }
-
-  private renderSettingsSearchItem(result: Extract<SettingsSearchResult, { kind: "item" }>) {
-    const href = pathForRoute(result.routeId as RouteId, this.basePath);
-    return html`
-      <a
-        href=${href}
-        class="settings-sidebar-link settings-sidebar-link--search-item"
-        @focus=${(event: Event) => this.preloadRoute(result.routeId, event)}
-        @blur=${this.cancelPreload}
-        @pointerenter=${(event: Event) => this.preloadRoute(result.routeId, event)}
-        @pointerleave=${this.cancelPreload}
-        @touchstart=${(event: TouchEvent) => this.preloadRoute(result.routeId, event, true)}
-        @click=${(event: MouseEvent) => {
-          if (!shouldHandleNavigationClick(event)) {
-            return;
-          }
-          event.preventDefault();
-          this.onNavigate?.(result.routeId);
-        }}
-      >
-        <span class="settings-sidebar-link__icon" aria-hidden="true"
-          >${icons[navigationIconForRoute(result.routeId)]}</span
-        >
-        <span class="settings-sidebar-link__text-stack">
-          <span class="settings-sidebar-link__text">${t(result.titleKey)}</span>
-          <span class="settings-sidebar-link__meta">${titleForRoute(result.routeId)}</span>
-        </span>
-      </a>
-    `;
-  }
-
-  private renderSettingsSearchResults() {
-    const query = this.settingsSearchQuery.trim();
-    if (!query) {
-      return nothing;
-    }
-    const results = this.settingsSearchResults();
-    return html`
-      <section class="settings-sidebar-section" aria-label=${t("nav.settingsSearchResults")}>
-        <div class="settings-sidebar-section__items">
-          ${results.length
-            ? results.map((result) =>
-                result.kind === "route"
-                  ? this.renderSettingsRoute(result.routeId)
-                  : this.renderSettingsSearchItem(result),
-              )
-            : html`<div class="settings-sidebar-empty">${t("nav.noSettingsResults")}</div>`}
-        </div>
-      </section>
-    `;
-  }
-
   private renderSettingsSidebar() {
     return html`
       <aside class="sidebar sidebar--settings">
@@ -1760,43 +1664,22 @@ export class AppSidebar extends LitElement {
               >
               <span>${t("nav.backToOpenClaw")}</span>
             </a>
-            <div class="settings-sidebar-title">
-              <span class="settings-sidebar-title__icon" aria-hidden="true">${icons.settings}</span>
-              <span>${titleForRoute("config")}</span>
-            </div>
-          </div>
-          <div class="settings-sidebar-search">
-            <span class="settings-sidebar-search__icon" aria-hidden="true">${icons.search}</span>
-            <input
-              class="settings-sidebar-search__input"
-              type="search"
-              spellcheck="false"
-              placeholder=${t("nav.searchSettings")}
-              aria-label=${t("nav.searchSettings")}
-              .value=${this.settingsSearchQuery}
-              @keydown=${(event: KeyboardEvent) => event.stopPropagation()}
-              @input=${(event: Event) => {
-                this.settingsSearchQuery = (event.target as HTMLInputElement).value;
-              }}
-            />
           </div>
           <nav class="settings-sidebar-nav" aria-label=${t("common.settingsSections")}>
-            ${this.settingsSearchQuery.trim()
-              ? this.renderSettingsSearchResults()
-              : SETTINGS_NAVIGATION_GROUPS.map((group) => {
-                  const routes = group.routes.filter((routeId) => this.isRouteEnabled(routeId));
-                  if (!routes.length) {
-                    return nothing;
-                  }
-                  return html`
-                    <section class="settings-sidebar-section">
-                      <div class="settings-sidebar-section__label">${t(group.titleKey)}</div>
-                      <div class="settings-sidebar-section__items">
-                        ${routes.map((routeId) => this.renderSettingsRoute(routeId))}
-                      </div>
-                    </section>
-                  `;
-                })}
+            ${SETTINGS_NAVIGATION_GROUPS.map((group) => {
+              const routes = group.routes.filter((routeId) => this.isRouteEnabled(routeId));
+              if (!routes.length) {
+                return nothing;
+              }
+              return html`
+                <section class="settings-sidebar-section">
+                  <div class="settings-sidebar-section__label">${t(group.titleKey)}</div>
+                  <div class="settings-sidebar-section__items">
+                    ${routes.map((routeId) => this.renderSettingsRoute(routeId))}
+                  </div>
+                </section>
+              `;
+            })}
           </nav>
         </div>
       </aside>

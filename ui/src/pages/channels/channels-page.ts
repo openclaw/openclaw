@@ -5,7 +5,7 @@ import type { NostrProfile } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { resolveControlUiAuthHeader } from "../../app/control-ui-auth.ts";
-import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { renderSettingsPage } from "../../components/settings-workspace.ts";
 import { createNostrProfileFormState } from "./view.nostr-profile-form.ts";
 import { renderChannels } from "./view.ts";
 
@@ -331,52 +331,50 @@ class ChannelsPage extends LitElement {
     const context = this.context;
     const channels = context.channels.state;
     const config = context.runtimeConfig.state;
-    return html`
-      <section class="content-header">
+    return renderSettingsPage(
+      context.basePath,
+      html`
         <div>
           <div class="page-title">${titleForRoute("channels")}</div>
           <div class="page-sub">${subtitleForRoute("channels")}</div>
         </div>
-      </section>
-      ${renderSettingsWorkspace(
-        context.basePath,
-        renderChannels({
-          connected: channels.connected,
-          loading: channels.channelsLoading,
-          snapshot: channels.channelsSnapshot,
-          lastError: channels.channelsError,
-          lastSuccessAt: channels.channelsLastSuccess,
-          whatsappMessage: channels.whatsappLoginMessage,
-          whatsappQrDataUrl: channels.whatsappLoginQrDataUrl,
-          whatsappConnected: channels.whatsappLoginConnected,
-          whatsappBusy: channels.whatsappBusy,
-          configSchema: config.configSchema,
-          configSchemaLoading: config.configSchemaLoading,
-          configForm: config.configForm,
-          configUiHints: config.configUiHints,
-          configSaving: config.configSaving,
-          configFormDirty: config.configFormDirty,
-          nostrProfileFormState: this.nostrProfileFormState,
-          nostrProfileAccountId: this.nostrProfileAccountId,
-          onRefresh: (probe) => void context.channels.refresh(probe),
-          onWhatsAppStart: (force) => void context.channels.startWhatsApp(force),
-          onWhatsAppWait: () => void context.channels.waitWhatsApp(),
-          onWhatsAppLogout: () => void context.channels.logoutWhatsApp(),
-          onConfigPatch: (path, value) => context.runtimeConfig.patchForm(path, value),
-          onConfigSave: () => void this.saveChannelConfig(),
-          onConfigReload: () => void this.reloadChannelConfig(),
-          onNostrProfileEdit: (accountId, profile) => this.editNostrProfile(accountId, profile),
-          onNostrProfileCancel: () => this.cancelNostrProfile(),
-          onNostrProfileFieldChange: (field, value) => this.changeNostrProfileField(field, value),
-          onNostrProfileSave: () => void this.saveNostrProfile(),
-          onNostrProfileImport: () => void this.importNostrProfile(),
-          onNostrProfileToggleAdvanced: () => this.toggleNostrProfileAdvanced(),
-        }),
-        "channels",
-        (routeId) => context.navigate(routeId),
-        (routeId) => context.preload(routeId),
-      )}
-    `;
+      `,
+      renderChannels({
+        connected: channels.connected,
+        loading: channels.channelsLoading,
+        snapshot: channels.channelsSnapshot,
+        lastError: channels.channelsError,
+        lastSuccessAt: channels.channelsLastSuccess,
+        whatsappMessage: channels.whatsappLoginMessage,
+        whatsappQrDataUrl: channels.whatsappLoginQrDataUrl,
+        whatsappConnected: channels.whatsappLoginConnected,
+        whatsappBusy: channels.whatsappBusy,
+        configSchema: config.configSchema,
+        configSchemaLoading: config.configSchemaLoading,
+        configForm: config.configForm,
+        configUiHints: config.configUiHints,
+        configSaving: config.configSaving,
+        configFormDirty: config.configFormDirty,
+        nostrProfileFormState: this.nostrProfileFormState,
+        nostrProfileAccountId: this.nostrProfileAccountId,
+        onRefresh: (probe) => void context.channels.refresh(probe),
+        onWhatsAppStart: (force) => void context.channels.startWhatsApp(force),
+        onWhatsAppWait: () => void context.channels.waitWhatsApp(),
+        onWhatsAppLogout: () => void context.channels.logoutWhatsApp(),
+        onConfigPatch: (path, value) => context.runtimeConfig.patchForm(path, value),
+        onConfigSave: () => void this.saveChannelConfig(),
+        onConfigReload: () => void this.reloadChannelConfig(),
+        onNostrProfileEdit: (accountId, profile) => this.editNostrProfile(accountId, profile),
+        onNostrProfileCancel: () => this.cancelNostrProfile(),
+        onNostrProfileFieldChange: (field, value) => this.changeNostrProfileField(field, value),
+        onNostrProfileSave: () => void this.saveNostrProfile(),
+        onNostrProfileImport: () => void this.importNostrProfile(),
+        onNostrProfileToggleAdvanced: () => this.toggleNostrProfileAdvanced(),
+      }),
+      "channels",
+      (routeId) => context.navigate(routeId),
+      (routeId) => context.preload(routeId),
+    );
   }
 }
 
