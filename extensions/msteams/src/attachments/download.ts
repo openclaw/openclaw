@@ -158,7 +158,7 @@ async function fetchWithAuthFallback(params: {
   if (!isUrlAllowed(params.url, params.policy.authAllowHosts)) {
     return firstAttempt;
   }
-  await firstAttempt.body?.cancel();
+  await firstAttempt.body?.cancel().catch(() => undefined);
 
   const scopes = scopeCandidatesForUrl(params.url);
   const fetchFn = params.fetchFn ?? fetch;
@@ -192,10 +192,10 @@ async function fetchWithAuthFallback(params: {
       }
       if (authAttempt.status !== 401 && authAttempt.status !== 403) {
         // Preserve scope fallback semantics for non-auth failures.
-        await authAttempt.body?.cancel();
+        await authAttempt.body?.cancel().catch(() => undefined);
         continue;
       }
-      await authAttempt.body?.cancel();
+      await authAttempt.body?.cancel().catch(() => undefined);
     } catch {
       // Try the next scope.
     }
