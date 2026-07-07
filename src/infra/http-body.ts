@@ -202,35 +202,17 @@ export async function readResponsePrefix(
       return { buffer: Buffer.alloc(0), size: 0, truncated: false };
     }
     // No ReadableStream reader available (e.g., synthetic Response).
-    // Check Content-Length to avoid materializing an oversized body.
-    // Fail closed when Content-Length is missing or invalid — calling
-    // arrayBuffer() without a known bound risks an unbounded allocation.
+    // Fail closed: Content-Length cannot be trusted as a reliable bound —
+    // headers can be absent, invalid, or understated. Only skip the read
+    // when Content-Length is present, valid, and clearly oversized.
     const contentLength = response.headers?.get?.("content-length") ?? null;
     if (contentLength !== null) {
       const cl = parseStrictNonNegativeInteger(contentLength);
-      if (cl === undefined) {
-        throw new Error(
-          "Cannot safely read response body: no ReadableStream reader and Content-Length is invalid",
-        );
-      }
-      if (cl > maxBytes) {
+      if (cl !== undefined && cl > maxBytes) {
         return { buffer: Buffer.alloc(0), size: cl, truncated: true };
       }
-      // Content-Length is valid and within limit — safe to read.
-    } else {
-      throw new Error(
-        "Cannot safely read response body: no ReadableStream reader and Content-Length is missing",
-      );
     }
-    const fallback = Buffer.from(await response.arrayBuffer());
-    if (fallback.length > maxBytes) {
-      return {
-        buffer: fallback.subarray(0, maxBytes),
-        size: fallback.length,
-        truncated: true,
-      };
-    }
-    return { buffer: fallback, size: fallback.length, truncated: false };
+    throw new Error("Cannot safely read response body: no ReadableStream reader available");
   }
 
   const reader = body.getReader();

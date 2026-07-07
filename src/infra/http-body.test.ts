@@ -293,16 +293,6 @@ describe("http body limits", () => {
   });
 });
 
-function noReaderResponse(bodyBytes: Uint8Array, opts?: { contentLength?: string }): Response {
-  return {
-    body: {} as ReadableStream,
-    headers: {
-      get: (name: string) => (name === "content-length" ? (opts?.contentLength ?? null) : null),
-    },
-    arrayBuffer: async () => bodyBytes.buffer,
-  } as unknown as Response;
-}
-
 describe("readResponsePrefix", () => {
   it("returns empty buffer immediately when body is null", async () => {
     let arrayBufferCalled = false;
@@ -318,52 +308,6 @@ describe("readResponsePrefix", () => {
     expect(result.size).toBe(0);
     expect(result.truncated).toBe(false);
     expect(arrayBufferCalled).toBe(false);
-  });
-
-  it("throws when Content-Length is missing on no-reader response", async () => {
-    let arrayBufferCalled = false;
-    const response = {
-      body: {} as ReadableStream,
-      arrayBuffer: async () => {
-        arrayBufferCalled = true;
-        return new ArrayBuffer(0);
-      },
-    } as unknown as Response;
-    await expect(readResponsePrefix(response, 100)).rejects.toThrow("Content-Length is missing");
-    expect(arrayBufferCalled).toBe(false);
-  });
-
-  it("throws when Content-Length is invalid on no-reader response", async () => {
-    let arrayBufferCalled = false;
-    const response = {
-      body: {} as ReadableStream,
-      headers: { get: () => "not-a-number" },
-      arrayBuffer: async () => {
-        arrayBufferCalled = true;
-        return new ArrayBuffer(0);
-      },
-    } as unknown as Response;
-    await expect(readResponsePrefix(response, 100)).rejects.toThrow("Content-Length is invalid");
-    expect(arrayBufferCalled).toBe(false);
-  });
-
-  it("throws on malformed Content-Length that parseInt would accept", async () => {
-    // Number.parseInt('1junk') → 1, but parseStrictNonNegativeInteger rejects it.
-    // This guards against headers like "1junk" or "1, 2" that parseInt
-    // would silently accept.
-    for (const malformed of ["1junk", "1, 2", "0x10"]) {
-      let arrayBufferCalled = false;
-      const response = {
-        body: {} as ReadableStream,
-        headers: { get: () => malformed },
-        arrayBuffer: async () => {
-          arrayBufferCalled = true;
-          return new ArrayBuffer(0);
-        },
-      } as unknown as Response;
-      await expect(readResponsePrefix(response, 100)).rejects.toThrow("Content-Length is invalid");
-      expect(arrayBufferCalled).toBe(false);
-    }
   });
 
   it("skips arrayBuffer when Content-Length exceeds maxBytes", async () => {
@@ -383,27 +327,74 @@ describe("readResponsePrefix", () => {
     expect(arrayBufferCalled).toBe(false);
   });
 
-  it("reads full body when Content-Length is within maxBytes", async () => {
-    const bytes = new Uint8Array([97, 98, 99]); // "abc"
-    const response = noReaderResponse(bytes, { contentLength: "3" });
-    const result = await readResponsePrefix(response, 100);
-    expect(result.buffer.toString()).toBe("abc");
-    expect(result.size).toBe(3);
-    expect(result.truncated).toBe(false);
+  it("throws when Content-Length is missing on no-reader response", async () => {
+    let arrayBufferCalled = false;
+    const response = {
+      body: {} as ReadableStream,
+      arrayBuffer: async () => {
+        arrayBufferCalled = true;
+        return new ArrayBuffer(0);
+      },
+    } as unknown as Response;
+    await expect(readResponsePrefix(response, 100)).rejects.toThrow(
+      "no ReadableStream reader available",
+    );
+    expect(arrayBufferCalled).toBe(false);
   });
 
-  it("truncates when actual body exceeds maxBytes despite trusted Content-Length", async () => {
-    // Content-Length is understated: header says 50, actual body is 500 bytes.
-    // arrayBuffer() IS called because we trust the header, but the returned
-    // buffer is still bounded by maxBytes. This is an accepted risk — if the
-    // server lies about Content-Length there is no bounded-read alternative
-    // without a ReadableStream reader.
-    const bytes = new Uint8Array(500).fill(97); // 500 'a' bytes
-    const response = noReaderResponse(bytes, { contentLength: "50" });
-    const result = await readResponsePrefix(response, 100);
-    expect(result.buffer.length).toBe(100);
-    expect(result.size).toBe(500);
-    expect(result.truncated).toBe(true);
+  it("throws when Content-Length is invalid on no-reader response", async () => {
+    let arrayBufferCalled = false;
+    const response = {
+      body: {} as ReadableStream,
+      headers: { get: () => "not-a-number" },
+      arrayBuffer: async () => {
+        arrayBufferCalled = true;
+        return new ArrayBuffer(0);
+      },
+    } as unknown as Response;
+    await expect(readResponsePrefix(response, 100)).rejects.toThrow(
+      "no ReadableStream reader available",
+    );
+    expect(arrayBufferCalled).toBe(false);
+  });
+
+  it("throws on malformed Content-Length that parseInt would accept", async () => {
+    // Number.parseInt('1junk') → 1, but parseStrictNonNegativeInteger rejects it.
+    // This guards against headers like "1junk" or "1, 2" that parseInt
+    // would silently accept.
+    for (const malformed of ["1junk", "1, 2", "0x10"]) {
+      let arrayBufferCalled = false;
+      const response = {
+        body: {} as ReadableStream,
+        headers: { get: () => malformed },
+        arrayBuffer: async () => {
+          arrayBufferCalled = true;
+          return new ArrayBuffer(0);
+        },
+      } as unknown as Response;
+      await expect(readResponsePrefix(response, 100)).rejects.toThrow(
+        "no ReadableStream reader available",
+      );
+      expect(arrayBufferCalled).toBe(false);
+    }
+  });
+
+  it("fails closed when Content-Length is within maxBytes (avoids understated risk)", async () => {
+    // Content-Length ≤ maxBytes could be understated — the actual body
+    // may be far larger. Fail closed: throw instead of calling arrayBuffer().
+    let arrayBufferCalled = false;
+    const response = {
+      body: {} as ReadableStream,
+      headers: { get: () => "50" },
+      arrayBuffer: async () => {
+        arrayBufferCalled = true;
+        return new ArrayBuffer(0);
+      },
+    } as unknown as Response;
+    await expect(readResponsePrefix(response, 100)).rejects.toThrow(
+      "no ReadableStream reader available",
+    );
+    expect(arrayBufferCalled).toBe(false);
   });
 
   it("reads a real stream response bounded by maxBytes", async () => {
