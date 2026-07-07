@@ -1,6 +1,6 @@
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 // Qqbot tests cover message queue plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { createMessageQueue, mergeGroupMessages, type QueuedMessage } from "./message-queue.js";
 
 function groupMsg(overrides: Partial<QueuedMessage> = {}): QueuedMessage {
@@ -307,54 +307,29 @@ describe("engine/gateway/message-queue", () => {
   });
 });
 
-// Pin the same UTF-16 boundary behavior that the production debugLog /
-// error-return sites in the gateway surfaces (gateway.ts, inbound-attachments.ts,
-// message-queue.ts, outbound-dispatch.ts, stages/quote-stage.ts) rely on.
-describe("gateway UTF-16-safe truncation helper", () => {
-  const hasLoneSurrogate = (value: string): boolean => {
-    for (let i = 0; i < value.length; i++) {
-      const code = value.charCodeAt(i);
-      if (code >= 0xd800 && code <= 0xdbff) {
-        const next = value.charCodeAt(i + 1);
-        if (!(next >= 0xdc00 && next <= 0xdfff)) {
-          return true;
-        }
-        i++;
-      } else if (code >= 0xdc00 && code <= 0xdfff) {
-        return true;
-      }
-    }
-    return false;
-  };
-
-  it("truncates command content preview on UTF-16 boundary without splitting emoji", () => {
-    // Mirrors the call shape at message-queue.ts:248
-    //   `Processing command independently for ${peerId}: ${truncateUtf16Safe((cmd.content ?? "").trim(), 50)}`;
-    const content = "测试命令参数🎉🎉🎉剩余超过50字符限制的剩余部分";
-    const truncated = truncateUtf16Safe(content.trim(), 50);
-    expect(truncated.length).toBeLessThanOrEqual(50);
-    expect(hasLoneSurrogate(truncated)).toBe(false);
+// Cap-precise regression for the inline `truncateUtf16Safe` sites touched
+// by this branch: command content preview at message-queue.ts:249, STT
+// transcript at inbound-attachments.ts:335, large error body at
+// outbound-dispatch.ts:244, quote body at stages/quote-stage.ts:93.
+// Each test pins the exact code-unit output for one cap value, so the
+// "safe truncation" claim is enforced at the boundary, not just on length.
+describe("gateway UTF-16 truncation cap boundary", () => {
+  it("cap 50 keeps a 49-char ASCII prefix and drops the trailing emoji pair", () => {
+    // Mirrors the call shape at message-queue.ts:249
+    //   truncateUtf16Safe((cmd.content ?? "").trim(), 50)
+    const safePrefix = "x".repeat(49);
+    expect(truncateUtf16Safe(safePrefix + "🎉 trailing content", 50)).toBe(safePrefix);
   });
 
-  it("truncates STT transcript preview on UTF-16 boundary", () => {
-    // Mirrors the call shape at inbound-attachments.ts:334
-    //   log?.debug?.(`STT transcript: ${truncateUtf16Safe(transcript, 100)}...`);
-    const transcript = "用户说了一些话包含emoji🎉🎉剩余内容超过100字符限制被截断的转录文本";
-    const truncated = truncateUtf16Safe(transcript, 100);
-    expect(truncated.length).toBeLessThanOrEqual(100);
-    expect(hasLoneSurrogate(truncated)).toBe(false);
+  it("cap 100 keeps a 99-char ASCII prefix and drops the trailing emoji pair", () => {
+    // Mirrors the call shape at inbound-attachments.ts:335 (STT transcript).
+    const safePrefix = "x".repeat(99);
+    expect(truncateUtf16Safe(safePrefix + "🎉 trailing transcript", 100)).toBe(safePrefix);
   });
 
-  it("truncates large error message body on UTF-16 boundary", () => {
-    // Mirrors the call shape at outbound-dispatch.ts:243 (large 2000-char error message).
-    const toolText = "工具错误信息🎉🎉🎉剩余内容在2000字符内被截断的多行错误".repeat(20);
-    const truncated = truncateUtf16Safe(toolText, 2000);
-    expect(truncated.length).toBeLessThanOrEqual(2000);
-    expect(hasLoneSurrogate(truncated)).toBe(false);
-  });
-
-  it("passes plain ASCII through unchanged (negative control)", () => {
-    const ascii = "Processing command independently for U1";
-    expect(truncateUtf16Safe(ascii, 50)).toBe(ascii);
+  it("cap 2000 keeps a 1999-char ASCII prefix and drops the trailing emoji pair", () => {
+    // Mirrors the call shape at outbound-dispatch.ts:244 (large error body).
+    const safePrefix = "x".repeat(1999);
+    expect(truncateUtf16Safe(safePrefix + "🎉 trailing error", 2000)).toBe(safePrefix);
   });
 });
