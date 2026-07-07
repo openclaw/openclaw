@@ -630,6 +630,20 @@ export async function recoverPendingDeliveries(opts: {
         continue;
       }
 
+      // Stagger recovery with randomized jitter to prevent all pending
+      // entries from firing in lockstep after a prolonged outage and
+      // triggering provider / channel rate limits (429s).  The first
+      // entry fires immediately; each subsequent entry waits 0–2000 ms
+      // capped by the remaining deadline budget so a single slow entry
+      // does not starve the whole recovery window.
+      const remainingBudgetMs = Math.max(0, deadline - Date.now());
+      if (remainingBudgetMs > 0) {
+        const jitterMs = Math.floor(Math.random() * Math.min(2000, remainingBudgetMs));
+        if (jitterMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, jitterMs));
+        }
+      }
+
       const result = await drainQueuedEntry({
         entry: currentEntry,
         cfg: opts.cfg,
