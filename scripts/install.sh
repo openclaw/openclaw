@@ -3299,7 +3299,6 @@ main() {
             local user_claw
             user_claw="$(openclaw_command_for_user "${OPENCLAW_BIN:-}")"
             ui_info "No TTY; run ${user_claw} onboard to finish setup"
-            return 0
         fi
     elif [[ "$is_upgrade" == "true" ]]; then
         ui_info "Upgrade complete"

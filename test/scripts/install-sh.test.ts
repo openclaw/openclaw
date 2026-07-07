@@ -860,6 +860,51 @@ NODE
     },
   );
 
+  it("honors --verify for an unconfigured install without a TTY", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      INSTALL_METHOD=git
+      GIT_DIR="$HOME/openclaw"
+      NO_ONBOARD=0
+      NO_PROMPT=1
+      VERIFY_INSTALL=1
+      OS=linux
+
+      bootstrap_gum_temp() { :; }
+      print_installer_banner() { :; }
+      print_gum_status() { :; }
+      detect_os_or_die() { OS=linux; }
+      detect_openclaw_checkout() { return 1; }
+      show_install_plan() { :; }
+      check_existing_openclaw() { return 0; }
+      load_nvm_for_node_detection() { :; }
+      check_node() { return 0; }
+      activate_supported_node_on_path() { :; }
+      ensure_default_node_active_shell() { return 0; }
+      npm() { return 1; }
+      install_openclaw_from_git() {
+        mkdir -p "$HOME/.local/bin"
+        printf '#!/bin/sh\\nexit 1\\n' > "$HOME/.local/bin/openclaw"
+        chmod +x "$HOME/.local/bin/openclaw"
+        export PATH="$HOME/.local/bin:$PATH"
+      }
+      resolve_openclaw_bin() { printf '%s\\n' "$HOME/.local/bin/openclaw"; }
+      warn_duplicate_openclaw_global_installs() { :; }
+      npm_global_bin_dir() { :; }
+      warn_shell_path_missing_dir() { :; }
+      refresh_gateway_service_if_loaded() { :; }
+      resolve_openclaw_version() { printf 'test-version\\n'; }
+      maybe_open_dashboard() { :; }
+      show_footer_links() { :; }
+
+      main
+    `);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toMatch(/No TTY; run .*\/\.local\/bin\/openclaw onboard to finish setup/);
+  });
+
   it("runs migration doctor for a configured upgrade without a TTY", () => {
     const result = runInstallShell(`
       set -euo pipefail
