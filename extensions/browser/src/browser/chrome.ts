@@ -881,7 +881,7 @@ export async function getChromeWebSocketUrl(
     return null;
   }
   const normalizedWsUrl = normalizeCdpWsUrl(wsUrl, discoveryUrl);
-  await assertCdpEndpointAllowed(normalizedWsUrl, ssrfPolicy);
+  await assertCdpEndpointAllowed(normalizedWsUrl, ssrfPolicy, { source: "discovered" });
   return normalizedWsUrl;
 }
 

@@ -26,7 +26,7 @@ import { testing } from "./run-attempt.js";
 import {
   readCodexAppServerBinding,
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
-} from "./session-binding.js";
+} from "./session-binding.test-helpers.js";
 
 setupRunAttemptTestHooks();
 
@@ -693,7 +693,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
   });
 
   it("extends native hook relay cleanup grace for configured hook timeouts", () => {
-    expect(testing.resolveCodexNativeHookRelayUnregisterGraceMs(undefined)).toBe(10_000);
+    expect(testing.resolveCodexNativeHookRelayUnregisterGraceMs(undefined)).toBe(15_000);
     expect(testing.resolveCodexNativeHookRelayUnregisterGraceMs(5)).toBe(10_000);
     expect(testing.resolveCodexNativeHookRelayUnregisterGraceMs(9)).toBe(14_000);
     expect(testing.resolveCodexNativeHookRelayUnregisterGraceMs(60)).toBe(65_000);

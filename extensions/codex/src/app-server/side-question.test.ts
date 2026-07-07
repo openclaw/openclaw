@@ -15,6 +15,10 @@ import {
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexServerNotification, JsonObject, JsonValue, RpcRequest } from "./protocol.js";
+import {
+  createCodexTestBindingStore,
+  type CodexAppServerBindingStore,
+} from "./session-binding.test-helpers.js";
 
 const readCodexAppServerBindingMock = vi.fn();
 const isCodexAppServerNativeAuthProfileMock = vi.fn();
@@ -25,12 +29,10 @@ const toolExecuteMock = vi.fn();
 const handleCodexAppServerApprovalRequestMock = vi.fn();
 const resolveCodexProviderWebSearchSupportForClientMock = vi.fn();
 
-vi.mock("./session-binding.js", () => ({
-  clearCodexAppServerBinding: vi.fn(),
+vi.mock("./session-binding.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-binding.js")>()),
   isCodexAppServerNativeAuthProfile: (...args: unknown[]) =>
     isCodexAppServerNativeAuthProfileMock(...args),
-  readCodexAppServerBinding: (...args: unknown[]) => readCodexAppServerBindingMock(...args),
-  writeCodexAppServerBinding: vi.fn(),
 }));
 
 vi.mock("./shared-client.js", () => ({
@@ -59,7 +61,20 @@ vi.mock("openclaw/plugin-sdk/agent-harness", () => ({
   createOpenClawCodingTools: (...args: unknown[]) => createOpenClawCodingToolsMock(...args),
 }));
 
-const { testing, runCodexAppServerSideQuestion } = await import("./side-question.js");
+const { runCodexAppServerSideQuestion: runCodexAppServerSideQuestionImpl } =
+  await import("./side-question.js");
+const baseBindingStore = createCodexTestBindingStore();
+const bindingStore: CodexAppServerBindingStore = {
+  ...baseBindingStore,
+  read: async (...args) => await readCodexAppServerBindingMock(...args),
+};
+
+function runCodexAppServerSideQuestion(
+  params: Parameters<typeof runCodexAppServerSideQuestionImpl>[0],
+  options: Omit<Parameters<typeof runCodexAppServerSideQuestionImpl>[1], "bindingStore"> = {},
+) {
+  return runCodexAppServerSideQuestionImpl(params, { ...options, bindingStore });
+}
 
 type ServerRequest = Required<Pick<RpcRequest, "id" | "method">> & {
   params?: RpcRequest["params"];
@@ -2563,57 +2578,6 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(result).toEqual({ text: "No input needed." });
     expect(unrelatedUserInputResponse).toBeUndefined();
     expect(userInputResponse).toEqual({ answers: {} });
-  });
-
-  it("uses configured image generation timeout for side-thread image_generate calls", () => {
-    const timeoutMs = testing.resolveSideDynamicToolCallTimeoutMs({
-      call: {
-        threadId: "side-thread",
-        turnId: "turn-1",
-        callId: "tool-1",
-        tool: "image_generate",
-      },
-      config: {
-        agents: {
-          defaults: {
-            imageGenerationModel: {
-              timeoutMs: 123_456,
-            },
-          },
-        },
-      } as never,
-    });
-
-    expect(timeoutMs).toBe(123_456);
-  });
-
-  it("uses a 120 second default for side-thread image_generate calls", () => {
-    const timeoutMs = testing.resolveSideDynamicToolCallTimeoutMs({
-      call: {
-        threadId: "side-thread",
-        turnId: "turn-1",
-        callId: "tool-1",
-        tool: "image_generate",
-      },
-      config: {} as never,
-    });
-
-    expect(timeoutMs).toBe(120_000);
-  });
-
-  it("uses a 90 second default for generic side-thread dynamic tool calls", () => {
-    const timeoutMs = testing.resolveSideDynamicToolCallTimeoutMs({
-      call: {
-        threadId: "side-thread",
-        turnId: "turn-1",
-        callId: "tool-1",
-        tool: "session_status",
-        arguments: { sessionKey: "current" },
-      },
-      config: {} as never,
-    });
-
-    expect(timeoutMs).toBe(90_000);
   });
 
   it("cleans up notification handlers when side tool setup fails", async () => {

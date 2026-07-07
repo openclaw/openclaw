@@ -53,6 +53,7 @@ describe("listGatewayMethods", () => {
       "exec.approvals.node.set",
       "exec.approval.get",
     ]);
+    expect(methods).toContain("tts.speak");
   });
 
   it("advertises the versioned Talk session RPCs", () => {

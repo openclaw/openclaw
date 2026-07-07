@@ -76,6 +76,28 @@ describe("cron edit command", () => {
     );
   });
 
+  it("does not set delivery mode to announce when disabling best-effort on payload edits", async () => {
+    const program = createCronProgram();
+
+    await program.parseAsync(
+      ["edit", "job-1", "--no-best-effort-deliver", "--message", "new message"],
+      { from: "user" },
+    );
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+      id: "job-1",
+      patch: {
+        payload: {
+          kind: "agentTurn",
+          message: "new message",
+        },
+        delivery: {
+          bestEffort: false,
+        },
+      },
+    });
+  });
+
   it("preserves timezone without copying stale stagger when --cron replaces expression (#92291)", async () => {
     callGatewayFromCli.mockImplementation(async (method: string) => {
       if (method === "cron.get") {

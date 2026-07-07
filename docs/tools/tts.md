@@ -800,7 +800,7 @@ Reply -> TTS enabled?
       Provider-owned settings keyed by speech provider id. Legacy direct blocks (`messages.tts.openai`, `.elevenlabs`, `.microsoft`, `.edge`) are rewritten by `openclaw doctor --fix`; commit only `messages.tts.providers.<id>`.
     </ParamField>
     <ParamField path="maxTextLength" type="number" default="4096">
-      Hard cap for TTS input characters. `/tts audio` and `tts.convert` fail if exceeded.
+      Hard cap for TTS input characters. `/tts audio`, `tts.convert`, and `tts.speak` fail if exceeded.
     </ParamField>
     <ParamField path="timeoutMs" type="number" default="30000">
       Request timeout in milliseconds. A per-call `timeoutMs` (agent tool, gateway) wins when set; otherwise an explicitly configured `messages.tts.timeoutMs` wins over any plugin-authored provider default.

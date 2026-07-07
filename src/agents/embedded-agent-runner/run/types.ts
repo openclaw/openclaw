@@ -125,6 +125,7 @@ export type EmbeddedRunAttemptResult = {
   timedOutDuringCompaction: boolean;
   /** Optional because this type is re-exported as `AgentHarnessAttemptResult`. */
   timedOutDuringToolExecution?: boolean;
+  timedOutByRunBudget?: boolean;
   promptError: unknown;
   /**
    * Identifies which phase produced the promptError.
@@ -141,12 +142,18 @@ export type EmbeddedRunAttemptResult = {
     | {
         route: Exclude<PreemptiveCompactionRoute, "fits">;
         source?: "mid-turn";
+        estimatedPromptTokens?: number;
+        promptBudgetBeforeReserve?: number;
+        overflowTokens?: number;
         handled: true;
         truncatedCount?: number;
       }
     | {
         route: Exclude<PreemptiveCompactionRoute, "fits">;
         source?: "mid-turn";
+        estimatedPromptTokens?: number;
+        promptBudgetBeforeReserve?: number;
+        overflowTokens?: number;
         handled?: false;
       };
   sessionIdUsed: string;

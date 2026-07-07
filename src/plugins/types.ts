@@ -415,6 +415,8 @@ export type ProviderAuthMethod = {
   label: string;
   hint?: string;
   kind: ProviderAuthKind;
+  /** Provider-owned model used to validate app-guided secret setup. */
+  starterModel?: string;
   /**
    * Optional wizard/onboarding metadata for this specific auth method.
    *
@@ -1985,6 +1987,8 @@ export type PluginCommandContext = {
   senderIsOwner?: boolean;
   /** Gateway client scopes for internal control-plane callers */
   gatewayClientScopes?: string[];
+  /** Host-resolved agent that owns the active session. */
+  agentId?: string;
   /** Stable host session key for the active conversation when available. */
   sessionKey?: string;
   /** Ephemeral host session id for the active conversation when available. */

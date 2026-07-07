@@ -196,7 +196,13 @@ describe("qa scenario catalog", () => {
 
     expect(scenarios.map((scenario) => scenario.id).toSorted()).toEqual([
       "kitchen-sink-live-openai",
+      "matrix-post-restart-room-continue",
+      "matrix-restart-replay-dedupe",
+      "matrix-restart-resume",
+      "slack-restart-resume",
       "subagent-stale-child-links",
+      "telegram-repeated-command-authorization",
+      "whatsapp-restart-resume",
     ]);
     expect(
       scenarios
@@ -216,6 +222,7 @@ describe("qa scenario catalog", () => {
   it("loads native test execution scenarios from YAML", () => {
     const scenario = readQaScenarioById("control-ui-chat-flow-playwright");
     const uxMatrix = readQaScenarioById("ux-matrix-evidence-dashboard");
+    const otelSmoke = readQaScenarioById("qa-otel-smoke");
 
     expect(scenario.execution.kind).toBe("playwright");
     if (scenario.execution.kind !== "playwright") {
@@ -232,6 +239,17 @@ describe("qa scenario catalog", () => {
     expect(uxMatrix.execution.args).toStrictEqual(["--artifact-base", "${outputDir}"]);
     expect(uxMatrix.execution.config).toBeUndefined();
     expect(uxMatrix.coverage?.primary).toContain("qa.artifact-safety");
+    expect(otelSmoke.execution.kind).toBe("script");
+    if (otelSmoke.execution.kind !== "script") {
+      throw new Error(`expected script scenario, got ${otelSmoke.execution.kind}`);
+    }
+    expect(otelSmoke.execution.args).toStrictEqual([
+      "--output-dir",
+      "${outputDir}",
+      "--logs-exporter",
+      "both",
+    ]);
+    expect(otelSmoke.coverage?.secondary).not.toContain("harness.qa-lab");
   });
 
   it("loads helper-backed HTTP API scenarios as supporting taxonomy coverage", () => {
@@ -753,7 +771,6 @@ describe("qa scenario catalog", () => {
       "group-message-tool-unavailable-fallback",
       "qa-channel-reconnect-dedupe",
       "reaction-edit-delete",
-      "thread-follow-up",
       "image-generation-roundtrip",
       "image-understanding-attachment",
       "native-image-generation",
@@ -779,6 +796,28 @@ describe("qa scenario catalog", () => {
     }
   });
 
+  it("routes canonical thread relation flows through Crabline Matrix", () => {
+    for (const scenarioId of ["thread-follow-up", "thread-isolation"]) {
+      const scenario = readQaScenarioById(scenarioId);
+      const config = readQaScenarioExecutionConfig(scenarioId) as
+        | { requiredChannelDriver?: string }
+        | undefined;
+
+      expect(scenario.execution.channel, scenarioId).toBe("matrix");
+      expect(config?.requiredChannelDriver, scenarioId).toBeUndefined();
+    }
+  });
+
+  it("keeps Matrix subagent thread spawn explicitly selectable", () => {
+    const scenario = readQaScenarioById("subagent-thread-spawn");
+    const config = readQaScenarioExecutionConfig("subagent-thread-spawn") as
+      | { requiredChannelDriver?: string }
+      | undefined;
+
+    expect(scenario.execution.channel).toBe("matrix");
+    expect(config?.requiredChannelDriver).toBe("live");
+  });
+
   it("routes native command session targeting through Crabline Telegram", () => {
     const scenario = readQaScenarioById("native-command-session-target");
     const config = readQaScenarioExecutionConfig("native-command-session-target") as
@@ -791,6 +830,32 @@ describe("qa scenario catalog", () => {
     expect(scenario.execution.channel).toBe("telegram");
     expect(config?.requiredChannelDriver).toBeUndefined();
     expect(config?.requiredProviderMode).toBe("mock-openai");
+  });
+
+  it("marks channel-owned scenarios that require the live driver", () => {
+    const liveScenarioIds = [
+      "slack-restart-resume",
+      "whatsapp-restart-resume",
+      "whatsapp-access-control-dm-disabled",
+      "whatsapp-access-control-dm-open",
+      "whatsapp-access-control-group-disabled",
+      "whatsapp-access-control-group-open",
+      "whatsapp-pairing-block",
+      "matrix-allowlist-hot-reload",
+    ];
+
+    for (const scenarioId of liveScenarioIds) {
+      const config = readQaScenarioExecutionConfig(scenarioId) as
+        | { requiredChannelDriver?: string }
+        | undefined;
+      expect(config?.requiredChannelDriver, scenarioId).toBe("live");
+    }
+  });
+
+  it("isolates channel baseline silence assertions from shared transport state", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("channel-chat-baseline"));
+
+    expect(scenario.execution.suiteIsolation).toBe("isolated");
   });
 
   it("adds a dreaming shadow trial report scenario", () => {

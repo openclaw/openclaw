@@ -1,8 +1,17 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
     <uses-permission android:name="android.permission.SEND_SMS" />
     <uses-permission android:name="android.permission.READ_SMS" />
     <uses-permission android:name="android.permission.READ_CALL_LOG" />
     <uses-feature
         android:name="android.hardware.telephony"
         android:required="false" />
+    <application>
+        <service
+            android:name=".NodeForegroundService"
+            android:foregroundServiceType="connectedDevice|microphone|location"
+            tools:replace="android:foregroundServiceType" />
+    </application>
 </manifest>

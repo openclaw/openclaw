@@ -1283,13 +1283,13 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         },
         `reason=barge-in audioEndMs=${audioEndMs}`,
       );
-      this.config.onClearAudio();
+      this.config.onClearAudio("barge-in");
       this.markQueue = [];
       this.lastAssistantItemId = null;
       this.responseStartTimestamp = null;
       return;
     }
-    this.config.onClearAudio();
+    this.config.onClearAudio("barge-in");
   }
 
   private emitToolCallOnce(fields: {
@@ -1542,6 +1542,7 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
       ],
       supportsBrowserSession: true,
       supportsBargeIn: true,
+      handlesInputAudioBargeIn: true,
       supportsToolCalls: true,
     },
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),

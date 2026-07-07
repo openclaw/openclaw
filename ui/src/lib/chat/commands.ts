@@ -487,7 +487,7 @@ export function getHiddenCommandCount(): number {
   return SLASH_COMMANDS.filter((cmd) => (cmd.tier ?? "standard") === "power").length;
 }
 
-export type ParsedSlashCommand = {
+type ParsedSlashCommand = {
   command: SlashCommandDef;
   args: string;
 };

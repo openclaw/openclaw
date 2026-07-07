@@ -31,7 +31,7 @@ export type ExecApprovalRequest = {
   expiresAtMs: number;
 };
 
-export type ExecApprovalResolved = {
+type ExecApprovalResolved = {
   id: string;
   decision?: string | null;
   resolvedBy?: string | null;

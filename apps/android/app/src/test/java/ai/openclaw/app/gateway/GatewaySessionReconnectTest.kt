@@ -48,11 +48,13 @@ private const val LIFECYCLE_CONNECT_CHALLENGE_FRAME =
 
 private class ReconnectDeviceAuthStore : DeviceAuthTokenStore {
   override fun loadEntry(
+    gatewayId: String,
     deviceId: String,
     role: String,
   ): DeviceAuthEntry? = null
 
   override fun saveToken(
+    gatewayId: String,
     deviceId: String,
     role: String,
     token: String,
@@ -60,6 +62,7 @@ private class ReconnectDeviceAuthStore : DeviceAuthTokenStore {
   ) = Unit
 
   override fun clearToken(
+    gatewayId: String,
     deviceId: String,
     role: String,
   ) = Unit
@@ -70,11 +73,13 @@ private class BlockingSaveDeviceAuthStore : DeviceAuthTokenStore {
   val allowSave = CountDownLatch(1)
 
   override fun loadEntry(
+    gatewayId: String,
     deviceId: String,
     role: String,
   ): DeviceAuthEntry? = null
 
   override fun saveToken(
+    gatewayId: String,
     deviceId: String,
     role: String,
     token: String,
@@ -85,6 +90,7 @@ private class BlockingSaveDeviceAuthStore : DeviceAuthTokenStore {
   }
 
   override fun clearToken(
+    gatewayId: String,
     deviceId: String,
     role: String,
   ) = Unit
@@ -94,11 +100,13 @@ private class RecordingDeviceAuthStore : DeviceAuthTokenStore {
   val savedToken = CompletableDeferred<String>()
 
   override fun loadEntry(
+    gatewayId: String,
     deviceId: String,
     role: String,
   ): DeviceAuthEntry? = null
 
   override fun saveToken(
+    gatewayId: String,
     deviceId: String,
     role: String,
     token: String,
@@ -108,6 +116,7 @@ private class RecordingDeviceAuthStore : DeviceAuthTokenStore {
   }
 
   override fun clearToken(
+    gatewayId: String,
     deviceId: String,
     role: String,
   ) = Unit
