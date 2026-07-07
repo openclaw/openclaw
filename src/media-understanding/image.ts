@@ -235,12 +235,13 @@ async function prepareResolvedImageRuntime(
     preferredProfile: params.preferredProfile,
     store: params.authStore,
   });
-  // Providers configured for aws-sdk auth (e.g. amazon-bedrock) resolve
-  // credentials through the AWS SDK chain at call time rather than a static
-  // key, so an empty resolved key is expected, not an error. Mirror the chat
-  // path's allowMissingApiKeyModes allowance: pass the empty key through and
-  // skip setRuntimeApiKey so we never persist an empty-string secret.
-  if (!apiKeyInfo.apiKey?.trim() && apiKeyInfo.mode === "aws-sdk") {
+  // Bedrock's runtime client owns AWS credential-chain resolution. Keep the
+  // empty sentinel out of auth storage and pass it through to the stream.
+  if (
+    !apiKeyInfo.apiKey?.trim() &&
+    apiKeyInfo.mode === "aws-sdk" &&
+    model.api === "bedrock-converse-stream"
+  ) {
     return { apiKey: "", model };
   }
   let apiKey = requireApiKey(apiKeyInfo, model.provider);
@@ -429,12 +430,8 @@ async function resolveMinimaxVlmFallbackRuntime(params: {
     agentDir: params.agentDir,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
-  // aws-sdk providers resolve credentials via the SDK chain at call time, so an
-  // empty resolved key is expected; pass it through rather than throwing.
-  const apiKey =
-    !auth.apiKey?.trim() && auth.mode === "aws-sdk" ? "" : requireApiKey(auth, authProvider);
   return {
-    apiKey,
+    apiKey: requireApiKey(auth, authProvider),
     modelBaseUrl: resolveConfiguredProviderBaseUrl(params.cfg, params.provider),
   };
 }

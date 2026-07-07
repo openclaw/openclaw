@@ -126,9 +126,8 @@ async function stubPdfToolInfra(
     loadSpy.mockResolvedValue(FAKE_PDF_MEDIA as never);
   }
 
-  vi.spyOn(modelDiscovery, "discoverAuthStorage").mockReturnValue({
-    setRuntimeApiKey: vi.fn(),
-  } as never);
+  const setRuntimeApiKey = vi.fn();
+  vi.spyOn(modelDiscovery, "discoverAuthStorage").mockReturnValue({ setRuntimeApiKey } as never);
   const find =
     params?.modelFound === false
       ? () => null
@@ -155,7 +154,7 @@ async function stubPdfToolInfra(
   vi.spyOn(modelAuth, "getApiKeyForModel").mockResolvedValue({ apiKey: "test-key" } as never);
   vi.spyOn(modelAuth, "requireApiKey").mockReturnValue("test-key");
 
-  return { loadSpy };
+  return { loadSpy, setRuntimeApiKey };
 }
 
 async function withManagedInboundPdf(
@@ -649,6 +648,47 @@ describe("createPdfTool", () => {
         model: OPENAI_PDF_MODEL,
       });
       expect(firstCompletionContext()?.systemPrompt).toBeUndefined();
+    });
+  });
+
+  it("uses the AWS SDK credential chain for Bedrock PDF models", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      const { setRuntimeApiKey } = await stubPdfToolInfra(agentDir, {
+        provider: "amazon-bedrock",
+        api: "bedrock-converse-stream",
+        input: ["text", "image"],
+      });
+      vi.mocked(modelAuth.getApiKeyForModel).mockResolvedValue({
+        apiKey: "",
+        source: "aws-sdk default chain",
+        mode: "aws-sdk",
+      });
+      vi.mocked(modelAuth.requireApiKey).mockImplementation(() => {
+        throw new Error("Bedrock aws-sdk auth must not require a literal API key");
+      });
+      vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
+        text: "Extracted content",
+        images: [],
+      });
+      completeMock.mockResolvedValue({
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "Bedrock summary" }],
+      } as never);
+
+      const bedrockModel = "amazon-bedrock/us.anthropic.claude-sonnet-4-6";
+      const tool = requirePdfTool(
+        (await loadCreatePdfTool())({ config: withPdfModel(bedrockModel), agentDir }),
+      );
+      const result = await tool.execute("t1", {
+        prompt: "summarize",
+        pdf: "/tmp/doc.pdf",
+      });
+
+      expect(result.content).toEqual([{ type: "text", text: "Bedrock summary" }]);
+      expect(modelAuth.requireApiKey).not.toHaveBeenCalled();
+      expect(setRuntimeApiKey).not.toHaveBeenCalled();
+      expect(firstMockCall(completeMock, "complete")[2]).toMatchObject({ apiKey: "" });
     });
   });
 
