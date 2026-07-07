@@ -39,7 +39,7 @@ const {
   resolveDefaultAccountId: resolveDefaultGoogleChatAccountId,
 } = createAccountListHelpers("googlechat", {
   implicitDefaultAccount: {
-    channelKeys: ["serviceAccount", "serviceAccountRef", "serviceAccountFile"],
+    channelKeys: ["serviceAccount", "serviceAccountRef", "serviceAccountFile", "serviceAccountAdc"],
     envVars: [ENV_SERVICE_ACCOUNT, ENV_SERVICE_ACCOUNT_FILE],
   },
 });
@@ -67,6 +67,7 @@ function mergeGoogleChatAccountConfig(
     serviceAccount: _ignoredServiceAccount,
     serviceAccountRef: _ignoredServiceAccountRef,
     serviceAccountFile: _ignoredServiceAccountFile,
+    serviceAccountAdc: _ignoredServiceAccountAdc,
     ...defaultAccountShared
   } = defaultAccountConfig;
   // In multi-account setups, allow accounts.default to provide shared defaults
