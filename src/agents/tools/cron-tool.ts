@@ -444,7 +444,7 @@ function assertNoCronShellExecution(value: unknown): void {
     return;
   }
   const payload = isRecord(value.payload) ? value.payload : undefined;
-  if (payload?.kind === "command") {
+  if (normalizeLowercaseStringOrEmpty(payload?.kind) === "command") {
     throw new Error(
       "cron command payloads cannot be created or edited through the agent cron tool; use the CLI or Gateway API.",
     );

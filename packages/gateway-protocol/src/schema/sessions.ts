@@ -424,6 +424,12 @@ export const SessionsDeleteParamsSchema = Type.Object(
     expectedSessionUpdatedAt: Type.Optional(Type.Number({ minimum: 0 })),
     // Internal control: when false, still unbind thread bindings but skip hook emission.
     emitLifecycleHooks: Type.Optional(Type.Boolean()),
+    /**
+     * Restricts the delete to already-archived sessions (archive-then-delete).
+     * operator.write callers must set this; deletes without it require
+     * operator.admin.
+     */
+    archivedOnly: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );

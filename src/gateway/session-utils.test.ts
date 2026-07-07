@@ -3,14 +3,18 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadSessionStore, type SessionEntry } from "../config/sessions.js";
 import { writeSessionStoreForTest } from "../config/sessions/test-helpers.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  getActivePluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
   canonicalizeSpawnedByForAgent,
@@ -101,8 +105,10 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
 }
 
 describe("gateway session utils", () => {
+  const emptyPluginRegistry = createEmptyPluginRegistry();
+
   beforeAll(() => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
+    setActivePluginRegistry(emptyPluginRegistry);
     listSessionsFromStore({
       cfg: createModelDefaultsConfig({ primary: "anthropic/claude-sonnet-4.6" }),
       storePath: "",
@@ -117,11 +123,16 @@ describe("gateway session utils", () => {
       opts: {},
     });
     resetConfigRuntimeState();
-    resetPluginRuntimeStateForTest();
   });
 
   afterEach(() => {
     resetConfigRuntimeState();
+    if (getActivePluginRegistry() !== emptyPluginRegistry) {
+      setActivePluginRegistry(emptyPluginRegistry);
+    }
+  });
+
+  afterAll(() => {
     resetPluginRuntimeStateForTest();
   });
 
