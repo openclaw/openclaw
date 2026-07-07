@@ -51,13 +51,13 @@ let activeTriggerEvaluations = 0;
 
 // Compile-time sync with the leaf contract in ./types.ts: a new code-mode
 // failure code must be added to CronTriggerFailureCode or this line errors.
-type _AssertTriggerCodesCoverHeadless = [CodeModeFailureCode | "tool_budget_exceeded"] extends [
+type AssertTriggerCodesCoverHeadless = [CodeModeFailureCode | "tool_budget_exceeded"] extends [
   CronTriggerFailureCode,
 ]
   ? true
   : never;
-const _assertTriggerCodes: _AssertTriggerCodesCoverHeadless = true;
-void _assertTriggerCodes;
+const assertTriggerCodesCoverHeadless: AssertTriggerCodesCoverHeadless = true;
+void assertTriggerCodesCoverHeadless;
 
 type PreparedTriggerRuntime = {
   tools: AnyAgentTool[];
