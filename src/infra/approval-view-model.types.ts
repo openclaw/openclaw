@@ -77,6 +77,7 @@ export type PluginApprovalViewBase = ApprovalViewBase & {
   pluginId?: string | null;
   toolName?: string | null;
   severity: "info" | "warning" | "critical";
+  sessionKey?: string | null;
 };
 
 /** Pending plugin approval view, including executable reply actions. */

@@ -1,4 +1,5 @@
 // Defines plugin approval request/resolution payloads and actions.
+import { formatApprovalIdentityForDisplay } from "./approval-display-identity.js";
 import type { ExecApprovalDecision } from "./exec-approvals.js";
 
 // Plugin approval types and renderers mirror exec approval decisions while
@@ -112,8 +113,16 @@ export function buildPluginApprovalRequestMessage(
   if (request.request.pluginId) {
     lines.push(`Plugin: ${request.request.pluginId}`);
   }
-  if (request.request.agentId) {
-    lines.push(`Agent: ${request.request.agentId}`);
+  const agentId = formatApprovalIdentityForDisplay(request.request.agentId);
+  if (agentId) {
+    lines.push(`Agent: ${agentId}`);
+  }
+  const sessionKey = formatApprovalIdentityForDisplay(request.request.sessionKey);
+  if (sessionKey) {
+    // Disambiguates concurrent sessions of the same agent; the sessionKey
+    // already ships on the delivered payload envelope, so rendering it
+    // discloses nothing new to this recipient.
+    lines.push(`Session: ${sessionKey}`);
   }
   lines.push(`ID: ${request.id}`);
   const expiresIn = Math.max(0, Math.round((request.expiresAtMs - nowMsValue) / 1000));

@@ -6,6 +6,7 @@
  * - Parse INTERACTION_CREATE button data
  */
 
+import { formatApprovalIdentityForDisplay } from "openclaw/plugin-sdk/approval-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ChatScope, InlineKeyboard, KeyboardButton } from "../types.js";
 
@@ -67,8 +68,15 @@ export function buildExecApprovalText(request: ExecApprovalRequest): string {
   if (request.request.cwd) {
     lines.push(`\u{1f4c1} \u76ee\u5f55: ${request.request.cwd}`);
   }
-  if (request.request.agentId) {
-    lines.push(`\u{1f916} Agent: ${request.request.agentId}`);
+  const agentId = formatApprovalIdentityForDisplay(request.request.agentId);
+  if (agentId) {
+    lines.push(`\u{1f916} Agent: ${agentId}`);
+  }
+  const sessionKey = formatApprovalIdentityForDisplay(request.request.sessionKey);
+  if (sessionKey) {
+    // Disambiguates concurrent sessions of one agent, matching the shared
+    // approval prompt surfaces.
+    lines.push(`\u{1f9f5} Session: ${sessionKey}`);
   }
   lines.push("", `\u23f1\ufe0f \u8d85\u65f6: ${expiresIn} \u79d2`);
   return lines.join("\n");
@@ -94,8 +102,14 @@ export function buildPluginApprovalText(request: PluginApprovalRequest): string 
   if (request.request.pluginId) {
     lines.push(`\u{1f50c} \u63d2\u4ef6: ${request.request.pluginId}`);
   }
-  if (request.request.agentId) {
-    lines.push(`\u{1f916} Agent: ${request.request.agentId}`);
+  const agentId = formatApprovalIdentityForDisplay(request.request.agentId);
+  if (agentId) {
+    lines.push(`\u{1f916} Agent: ${agentId}`);
+  }
+  const sessionKey = formatApprovalIdentityForDisplay(request.request.sessionKey);
+  if (sessionKey) {
+    // Same session disambiguation as the exec approval text above.
+    lines.push(`\u{1f9f5} Session: ${sessionKey}`);
   }
   lines.push("", `\u23f1\ufe0f \u8d85\u65f6: ${timeoutSec} \u79d2`);
   return lines.join("\n");

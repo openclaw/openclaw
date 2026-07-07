@@ -23,6 +23,7 @@ import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 // Forwards exec approval requests between runtime sessions and approval handlers.
 import { formatFencedCodeBlock } from "../shared/markdown-code.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
+import { formatApprovalIdentityForDisplay } from "./approval-display-identity.js";
 import { matchesApprovalRequestFilters } from "./approval-request-filters.js";
 import {
   resolveExecApprovalCommandDisplay,
@@ -265,8 +266,16 @@ export function buildExecApprovalRequestMessage(request: ExecApprovalRequest, no
   if (request.request.host) {
     lines.push(`Host: ${request.request.host}`);
   }
-  if (request.request.agentId) {
-    lines.push(`Agent: ${request.request.agentId}`);
+  const agentId = formatApprovalIdentityForDisplay(request.request.agentId);
+  if (agentId) {
+    lines.push(`Agent: ${agentId}`);
+  }
+  const sessionKey = formatApprovalIdentityForDisplay(request.request.sessionKey);
+  if (sessionKey) {
+    // Disambiguates concurrent sessions of the same agent (main vs subagent vs
+    // cron); the same sessionKey already ships on the delivered payload
+    // envelope, so rendering it discloses nothing new to this recipient.
+    lines.push(`Session: ${sessionKey}`);
   }
   if (request.request.security) {
     lines.push(`Security: ${request.request.security}`);

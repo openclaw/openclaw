@@ -1,4 +1,5 @@
 import { sanitizeForPromptLiteral } from "../agents/sanitize-for-prompt.js";
+import { formatApprovalIdentityForDisplay } from "../infra/approval-display-identity.js";
 import { formatApprovalDisplayPath } from "../infra/approval-display-paths.js";
 import { buildPendingApprovalView } from "../infra/approval-view-model.js";
 import type { ApprovalRequest, PendingApprovalView } from "../infra/approval-view-model.types.js";
@@ -297,8 +298,15 @@ function buildApprovalReactionPromptText(params: {
     if (view.nodeId) {
       info.push(`Node: ${view.nodeId}`);
     }
-    if (view.agentId) {
-      info.push(`Agent: ${view.agentId}`);
+    const agentId = formatApprovalIdentityForDisplay(view.agentId);
+    if (agentId) {
+      info.push(`Agent: ${agentId}`);
+    }
+    const sessionKey = formatApprovalIdentityForDisplay(view.sessionKey);
+    if (sessionKey) {
+      // Disambiguates concurrent sessions of one agent, matching the other
+      // approval prompt surfaces; the value already ships on the envelope.
+      info.push(`Session: ${sessionKey}`);
     }
     if (view.ask) {
       info.push(`Ask: ${view.ask}`);
@@ -320,8 +328,14 @@ function buildApprovalReactionPromptText(params: {
     if (view.pluginId) {
       details.push(`Plugin: ${view.pluginId}`);
     }
-    if (view.agentId) {
-      details.push(`Agent: ${view.agentId}`);
+    const agentId = formatApprovalIdentityForDisplay(view.agentId);
+    if (agentId) {
+      details.push(`Agent: ${agentId}`);
+    }
+    const sessionKey = formatApprovalIdentityForDisplay(view.sessionKey);
+    if (sessionKey) {
+      // Same session disambiguation as the exec reaction prompt above.
+      details.push(`Session: ${sessionKey}`);
     }
     details.push(`Expires in: ${formatExecApprovalExpiresIn(view.expiresAtMs, params.nowMs)}`);
     details.push(`Full id: \`${view.approvalId}\``);

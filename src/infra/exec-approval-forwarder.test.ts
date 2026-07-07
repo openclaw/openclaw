@@ -636,6 +636,43 @@ describe("exec approval forwarder", () => {
     expect(text).toContain("Reply with: /approve req-1 allow-once|allow-always|deny");
   });
 
+  it("identifies the originating session in fallback delivery text", () => {
+    const text = buildExecApprovalRequestMessage(baseRequest, 1000);
+    expect(text).toContain("Agent: main");
+    expect(text).toContain("Session: agent:main:main");
+  });
+
+  it("prevents identity fields from injecting fallback approval text", () => {
+    const text = buildExecApprovalRequestMessage(
+      {
+        ...baseRequest,
+        request: {
+          ...baseRequest.request,
+          agentId: "main\n**admin**",
+          sessionKey: "global\u202E\n[approve](danger)",
+        },
+      },
+      1000,
+    );
+
+    expect(text).toContain("Agent: main ＊＊admin＊＊");
+    expect(text).toContain("Session: global ［approve］（danger）");
+    expect(text).not.toContain("\n**admin**");
+    expect(text).not.toContain("\n[approve](danger)");
+    expect(text).not.toContain("\u202E");
+  });
+
+  it("omits the session line when the request carries no session key", () => {
+    const text = buildExecApprovalRequestMessage(
+      {
+        ...baseRequest,
+        request: { ...baseRequest.request, sessionKey: null },
+      },
+      1000,
+    );
+    expect(text).not.toContain("Session:");
+  });
+
   it("includes command analysis warnings in fallback delivery text", () => {
     const text = buildExecApprovalRequestMessage(
       {

@@ -1,5 +1,6 @@
 // Approval request/reply helpers for exec and plugin approval flows.
 
+export { formatApprovalIdentityForDisplay } from "../infra/approval-display-identity.js";
 export {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   resolveExecApprovalAllowedDecisions,

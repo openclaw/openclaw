@@ -388,6 +388,28 @@ describe("exec approval reply helpers", () => {
         sessionKey: "agent:ops-agent:matrix:channel:!room:example.org",
       },
     });
+    expect(payload.text).toContain(
+      "Agent: ops-agent\nSession: agent:ops-agent:matrix:channel:!room:example.org",
+    );
+  });
+
+  it("disambiguates global sessions by agent identity in native prompts", () => {
+    const buildForAgent = (agentId: string) =>
+      buildExecApprovalPendingReplyPayload({
+        approvalId: `req-${agentId}`,
+        approvalSlug: `slug-${agentId}`,
+        agentId,
+        sessionKey: "global",
+        command: "echo ok",
+        host: "gateway",
+      });
+
+    const mainPayload = buildForAgent("main");
+    const workPayload = buildForAgent("work");
+
+    expect(mainPayload.text).toContain("Agent: main\nSession: global");
+    expect(workPayload.text).toContain("Agent: work\nSession: global");
+    expect(mainPayload.text).not.toBe(workPayload.text);
   });
 
   it("uses a longer fence for commands containing triple backticks", () => {

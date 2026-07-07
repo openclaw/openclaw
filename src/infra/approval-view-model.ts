@@ -1,3 +1,4 @@
+import { formatApprovalIdentityForDisplay } from "./approval-display-identity.js";
 // Builds approval prompt view models from request and resolution events.
 import type {
   ApprovalMetadataView,
@@ -24,8 +25,15 @@ type ApprovalPhase = "pending" | "resolved" | "expired";
 
 function buildExecMetadata(request: ExecApprovalRequest): ApprovalMetadataView[] {
   const metadata: ApprovalMetadataView[] = [];
-  if (request.request.agentId) {
-    metadata.push({ label: "Agent", value: request.request.agentId });
+  const agentId = formatApprovalIdentityForDisplay(request.request.agentId);
+  if (agentId) {
+    metadata.push({ label: "Agent", value: agentId });
+  }
+  const sessionKey = formatApprovalIdentityForDisplay(request.request.sessionKey);
+  if (sessionKey) {
+    // Disambiguates concurrent sessions of one agent in adapter-backed prompts,
+    // matching the fallback text; the value already ships on the payload envelope.
+    metadata.push({ label: "Session", value: sessionKey });
   }
   if (request.request.cwd) {
     metadata.push({ label: "CWD", value: request.request.cwd });
@@ -52,8 +60,14 @@ function buildPluginMetadata(request: PluginApprovalRequest): ApprovalMetadataVi
   if (request.request.pluginId) {
     metadata.push({ label: "Plugin", value: request.request.pluginId });
   }
-  if (request.request.agentId) {
-    metadata.push({ label: "Agent", value: request.request.agentId });
+  const agentId = formatApprovalIdentityForDisplay(request.request.agentId);
+  if (agentId) {
+    metadata.push({ label: "Agent", value: agentId });
+  }
+  const sessionKey = formatApprovalIdentityForDisplay(request.request.sessionKey);
+  if (sessionKey) {
+    // Same session disambiguation as the exec metadata above.
+    metadata.push({ label: "Session", value: sessionKey });
   }
   return metadata;
 }
@@ -99,6 +113,7 @@ function buildPluginViewBase<TPhase extends ApprovalPhase>(
     pluginId: request.request.pluginId ?? null,
     toolName: request.request.toolName ?? null,
     severity: request.request.severity ?? "warning",
+    sessionKey: request.request.sessionKey ?? null,
   };
 }
 

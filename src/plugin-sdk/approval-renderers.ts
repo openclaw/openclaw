@@ -102,6 +102,10 @@ export function buildPluginApprovalPendingReplyPayload(params: {
     approvalId: params.request.id,
     approvalSlug: params.approvalSlug ?? params.request.id.slice(0, 8),
     text: params.text ?? buildPluginApprovalRequestMessage(params.request, params.nowMs),
+    // Mirror the exec pending payload: session/agent identity travels on the
+    // metadata envelope alongside the rendered text for every recipient.
+    agentId: params.request.request.agentId,
+    sessionKey: params.request.request.sessionKey,
     allowedDecisions:
       params.allowedDecisions ??
       resolvePluginApprovalRequestAllowedDecisions(params.request.request),
