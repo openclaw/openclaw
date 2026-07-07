@@ -24,6 +24,7 @@ import { formatSessionTokens } from "../../lib/presenter.ts";
 import { formatGoalDetail, formatGoalSummary } from "../../lib/session-goal.ts";
 import { sessionModelMatchesDefaults } from "../../lib/session-model-defaults.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
 import {
   groupSessionRows,
   SESSION_GROUP_MODES,
@@ -484,8 +485,6 @@ function sessionDetailItems(params: {
 }
 
 const NEW_GROUP_OPTION = "__new-group__";
-// Private MIME so stray text/file drags never become sessions.patch calls.
-const SESSION_DRAG_MIME = "application/x-openclaw-session-key";
 
 function sessionsTableColumnCount(props: SessionsProps): number {
   return props.groupBy === "category" ? 9 : 8;
