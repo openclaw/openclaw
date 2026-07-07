@@ -1,7 +1,6 @@
 // Markdown Core module implements ir behavior.
 import MarkdownIt from "markdown-it";
-import type StateInline from "markdown-it/lib/rules_inline/state_inline.mjs";
-import type { Scanned as DelimiterScanResult } from "markdown-it/lib/rules_inline/state_inline.mjs";
+import markdownItCjkFriendly from "markdown-it-cjk-friendly";
 import { chunkText } from "./chunk-text.js";
 import type { MarkdownTableMode } from "./types.js";
 
@@ -32,12 +31,6 @@ type MarkdownToken = {
   attrGet?: (name: string) => string | null;
   hidden?: boolean;
   level?: number;
-};
-
-type MarkdownItWithInlineState = MarkdownIt & {
-  inline: MarkdownIt["inline"] & {
-    State: typeof StateInline;
-  };
 };
 
 export type MarkdownStyle =
@@ -151,122 +144,6 @@ export type MarkdownParseOptions = {
   tableMode?: MarkdownTableMode;
 };
 
-function getCodePointBefore(value: string, index: number): number {
-  if (index <= 0) {
-    return 0x20;
-  }
-  const previous = value.charCodeAt(index - 1);
-  if ((previous & 0xfc00) === 0xdc00 && index > 1) {
-    const high = value.charCodeAt(index - 2);
-    if ((high & 0xfc00) === 0xd800) {
-      return 0x10000 + ((high - 0xd800) << 10) + (previous - 0xdc00);
-    }
-  }
-  if ((previous & 0xf800) === 0xd800) {
-    return 0xfffd;
-  }
-  return previous;
-}
-
-function getCodePointAt(value: string, index: number): number {
-  if (index >= value.length) {
-    return 0x20;
-  }
-  const code = value.charCodeAt(index);
-  if ((code & 0xfc00) === 0xd800 && index + 1 < value.length) {
-    const low = value.charCodeAt(index + 1);
-    if ((low & 0xfc00) === 0xdc00) {
-      return 0x10000 + ((code - 0xd800) << 10) + (low - 0xdc00);
-    }
-  }
-  if ((code & 0xfc00) === 0xdc00) {
-    return 0xfffd;
-  }
-  return code;
-}
-
-// Mirrors markdown-it's isWhiteSpace (Zs plus control whitespace) so the
-// CJK-friendly override never forces delimiter flags where markdown-it's
-// flanking rules see whitespace (notably U+3000, which is also in the East
-// Asian ranges below).
-function isMarkdownWhitespace(codePoint: number): boolean {
-  if (codePoint >= 0x2000 && codePoint <= 0x200a) {
-    return true;
-  }
-  switch (codePoint) {
-    case 0x09:
-    case 0x0a:
-    case 0x0b:
-    case 0x0c:
-    case 0x0d:
-    case 0x20:
-    case 0xa0:
-    case 0x1680:
-    case 0x202f:
-    case 0x205f:
-    case 0x3000:
-      return true;
-    default:
-      return false;
-  }
-}
-
-function isEastAsianMarkdownFlankingChar(codePoint: number): boolean {
-  return (
-    (codePoint >= 0x1100 && codePoint <= 0x11ff) ||
-    (codePoint >= 0x2e80 && codePoint <= 0x2eff) ||
-    (codePoint >= 0x2f00 && codePoint <= 0x2fdf) ||
-    (codePoint >= 0x3000 && codePoint <= 0x303f) ||
-    (codePoint >= 0x3040 && codePoint <= 0x30ff) ||
-    (codePoint >= 0x3130 && codePoint <= 0x318f) ||
-    (codePoint >= 0x31a0 && codePoint <= 0x31ff) ||
-    (codePoint >= 0x3400 && codePoint <= 0x4dbf) ||
-    (codePoint >= 0x4e00 && codePoint <= 0x9fff) ||
-    (codePoint >= 0xa960 && codePoint <= 0xa97f) ||
-    (codePoint >= 0xac00 && codePoint <= 0xd7af) ||
-    (codePoint >= 0xf900 && codePoint <= 0xfaff) ||
-    (codePoint >= 0xfe10 && codePoint <= 0xfe1f) ||
-    (codePoint >= 0xfe30 && codePoint <= 0xfe4f) ||
-    (codePoint >= 0xff00 && codePoint <= 0xffef) ||
-    (codePoint >= 0x20000 && codePoint <= 0x3fffd)
-  );
-}
-
-function applyCjkFriendlyDelimiterScanning(md: MarkdownIt): void {
-  const inline = (md as MarkdownItWithInlineState).inline;
-  const PreviousState = inline.State;
-
-  // CommonMark treats CJK punctuation before a closing delimiter as non-flanking.
-  class CjkFriendlyState extends PreviousState {
-    override scanDelims(start: number, canSplitWord: boolean): DelimiterScanResult {
-      const scanned = super.scanDelims(start, canSplitWord);
-      if (!canSplitWord) {
-        return scanned;
-      }
-
-      const marker = this.src.charCodeAt(start);
-      let pos = start;
-      while (pos < this.posMax && this.src.charCodeAt(pos) === marker) {
-        pos += 1;
-      }
-
-      const lastChar = getCodePointBefore(this.src, start);
-      const nextChar = getCodePointAt(this.src, pos);
-      if (
-        isMarkdownWhitespace(lastChar) ||
-        isMarkdownWhitespace(nextChar) ||
-        (!isEastAsianMarkdownFlankingChar(lastChar) && !isEastAsianMarkdownFlankingChar(nextChar))
-      ) {
-        return scanned;
-      }
-
-      return { ...scanned, can_open: true, can_close: true };
-    }
-  }
-
-  inline.State = CjkFriendlyState;
-}
-
 function createMarkdownIt(options: MarkdownParseOptions): MarkdownIt {
   const md = new MarkdownIt({
     html: false,
@@ -274,7 +151,7 @@ function createMarkdownIt(options: MarkdownParseOptions): MarkdownIt {
     breaks: false,
     typographer: false,
   });
-  applyCjkFriendlyDelimiterScanning(md);
+  md.use(markdownItCjkFriendly);
   md.enable("strikethrough");
   if (options.tableMode && options.tableMode !== "off") {
     md.enable("table");

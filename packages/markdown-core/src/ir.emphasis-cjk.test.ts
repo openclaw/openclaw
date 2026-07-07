@@ -22,6 +22,16 @@ describe("markdownToIR CJK emphasis flanking", () => {
     expect(styledText("이것은 **강조:**입니다")).toEqual(["강조:"]);
   });
 
+  it("handles supplementary CJK and variation selectors at emphasis boundaries", () => {
+    expect(styledText("𰻞𰻞**（ビャンビャン）**麺")).toEqual(["（ビャンビャン）"]);
+    expect(styledText("葛󠄀**(こちらが正式表記)**城市")).toEqual(["(こちらが正式表記)"]);
+  });
+
+  it("supports CJK-friendly underscore flanking without enabling Latin intraword emphasis", () => {
+    expect(styledText("__注意__：注意事項")).toEqual(["注意"]);
+    expect(styledText("foo_bar_baz", "italic")).toEqual([]);
+  });
+
   it("keeps ASCII CommonMark emphasis behavior", () => {
     expect(styledText("**bold** text")).toEqual(["bold"]);
     expect(styledText("foo**bar**baz")).toEqual(["bar"]);
