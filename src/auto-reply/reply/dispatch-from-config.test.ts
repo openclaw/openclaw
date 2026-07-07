@@ -1,5 +1,6 @@
 // Tests dispatch-from-config runtime selection, hooks, and provider handoff.
 import { AsyncResource } from "node:async_hooks";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.core.js";
@@ -12758,5 +12759,25 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(result.queuedFinal).toBe(true);
     expect(firstFinalReplyPayload(dispatcher)?.text).toBe("final reply");
+  });
+});
+
+describe("textPreview truncation", () => {
+  it("does not cut suppressed reply text preview with an emoji straddling the 160-char boundary", () => {
+    // formatSuppressedReplyPayloadForLog is private; the textPreview line is:
+    //   text ? truncateUtf16Safe(text.replace(/\s+/g, " "), 160) : undefined
+    // "🚀" is a surrogate pair (2 UTF-16 code units). Text of 159 'y' + the
+    // emoji has 161 code units. slice(0,160) splits the pair; truncateUtf16Safe
+    // backs out.
+    const text = "y".repeat(159) + "🚀";
+    // slice splits the surrogate pair at position 160
+    const sliced = text.replace(/\s+/g, " ").slice(0, 160);
+    expect(sliced.charCodeAt(159)).toBe(0xd83d); // lone high surrogate
+    // truncateUtf16Safe drops the incomplete pair
+    expect(truncateUtf16Safe(text.replace(/\s+/g, " "), 160)).toBe("y".repeat(159));
+  });
+
+  it("preserves text preview shorter than the limit unchanged", () => {
+    expect(truncateUtf16Safe("hello world", 160)).toBe("hello world");
   });
 });
