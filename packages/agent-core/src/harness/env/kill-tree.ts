@@ -110,11 +110,16 @@ function signalProcessTreeUnix(
 
 function runTaskkill(args: string[]): void {
   try {
-    spawn("taskkill", args, {
+    const child = spawn("taskkill", args, {
       stdio: "ignore",
       detached: true,
       windowsHide: true,
     });
+    // taskkill spawn errors are asynchronous — Node emits 'error' on the child
+    // when the executable cannot start. Without a listener the process would
+    // crash on an unhandled error. Silently drop the error here; this function
+    // is documented as best-effort.
+    child.once("error", () => {});
   } catch {
     // Ignore taskkill spawn failures.
   }

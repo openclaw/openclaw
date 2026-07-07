@@ -514,6 +514,30 @@ export async function runCommandWithTimeout(
       processTreeForceKillTimer = null;
     };
 
+    const killDirectChild = () => {
+      if (settled || childExitState != null || child.exitCode != null || child.signalCode != null) {
+        return;
+      }
+      child.kill("SIGKILL");
+    };
+
+    // Spawn taskkill.exe from System32 with a fallback on async spawn failure.
+    // Node spawn() emits 'error' asynchronously when the executable cannot start,
+    // so try/catch alone is insufficient. Returns whether spawn started.
+    const spawnTaskkillOrFallback = (args: string[], onSpawnError: () => void): boolean => {
+      try {
+        const taskkillChild = spawn(getWindowsSystem32ExePath("taskkill.exe"), args, {
+          stdio: "ignore",
+          windowsHide: true,
+        });
+        taskkillChild.once("error", onSpawnError);
+        return true;
+      } catch {
+        onSpawnError();
+        return false;
+      }
+    };
+
     const killChild = (byTimeout = true) => {
       if (settled || typeof child?.kill !== "function") {
         return;
@@ -525,17 +549,13 @@ export async function runCommandWithTimeout(
       }
       if (killProcessTree && typeof child.pid === "number" && child.pid > 0) {
         if (process.platform === "win32") {
-          const taskkillPath = getWindowsSystem32ExePath("taskkill.exe");
-          try {
-            const gracefulKiller = spawn(taskkillPath, ["/PID", String(child.pid), "/T"], {
-              stdio: "ignore",
-              windowsHide: true,
-            });
-            // taskkill spawn errors are asynchronous — try/catch won't see them.
-            // Fall back to direct child kill so the process tree is never leaked.
-            gracefulKiller.on("error", () => {
-              child.kill("SIGKILL");
-            });
+          // Graceful taskkill /T first; if it fails to spawn, clean up timer
+          // and fall back to direct child kill to avoid leaking the process.
+          const taskkillStarted = spawnTaskkillOrFallback(["/PID", String(child.pid), "/T"], () => {
+            clearProcessTreeForceKillTimer();
+            killDirectChild();
+          });
+          if (taskkillStarted) {
             if (!processTreeForceKillTimer) {
               processTreeForceKillTimer = setTimeout(() => {
                 processTreeForceKillTimer = null;
@@ -547,47 +567,21 @@ export async function runCommandWithTimeout(
                 ) {
                   return;
                 }
-                try {
-                  const forceKiller = spawn(taskkillPath, ["/PID", String(child.pid), "/T", "/F"], {
-                    stdio: "ignore",
-                    windowsHide: true,
-                  });
-                  forceKiller.on("error", () => {
-                    child.kill("SIGKILL");
-                  });
-                } catch {
-                  child.kill("SIGKILL");
-                }
+                spawnTaskkillOrFallback(["/PID", String(child.pid), "/T", "/F"], killDirectChild);
               }, COMMAND_PROCESS_TREE_KILL_GRACE_MS);
               processTreeForceKillTimer.unref();
             }
-            return;
-          } catch {
-            // Fall through to Node's direct child kill as a last resort.
           }
+          return;
         }
         terminateProcessTree(child.pid, { graceMs: COMMAND_PROCESS_TREE_KILL_GRACE_MS });
         return;
       }
       if (process.platform === "win32" && typeof child.pid === "number" && child.pid > 0) {
-        try {
-          const directKiller = spawn(
-            getWindowsSystem32ExePath("taskkill.exe"),
-            ["/PID", String(child.pid), "/T", "/F"],
-            {
-              stdio: "ignore",
-              windowsHide: true,
-            },
-          );
-          directKiller.on("error", () => {
-            child.kill("SIGKILL");
-          });
-          return;
-        } catch {
-          // Fall through to Node's direct child kill as a last resort.
-        }
+        spawnTaskkillOrFallback(["/PID", String(child.pid), "/T", "/F"], killDirectChild);
+        return;
       }
-      child.kill("SIGKILL");
+      killDirectChild();
     };
 
     const armNoOutputTimer = () => {
