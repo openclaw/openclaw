@@ -6,6 +6,7 @@
  * - mdl_list_{prov}_{pg}  - show models for provider (page N, 1-indexed)
  * - mdl_sel_{provider/id} - select model (standard)
  * - mdl_sel/{model}       - select model (compact fallback when standard is >64 bytes)
+ * - mdl_idx_{prov}_{idx}_{token} - select over-limit model by index + identity token
  * - mdl_back              - back to providers list
  */
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
@@ -17,7 +18,7 @@ export type ParsedModelCallback =
   | { type: "providers" }
   | { type: "list"; provider: string; page: number }
   | { type: "select"; provider?: string; model: string }
-  | { type: "selectIndex"; provider: string; index: number }
+  | { type: "selectIndex"; provider: string; index: number; token: string }
   | { type: "back" };
 
 export type ProviderInfo = {
@@ -75,13 +76,13 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
     }
   }
 
-  // mdl_idx_{provider}_{index} (index fallback for models too long to name-encode)
-  const indexSelMatch = trimmed.match(/^mdl_idx_([a-z0-9_.-]+)_(\d+)$/i);
+  // mdl_idx_{provider}_{index}_{token} (index fallback for models too long to name-encode)
+  const indexSelMatch = trimmed.match(/^mdl_idx_([a-z0-9_.-]+)_(\d+)_([a-z0-9]+)$/i);
   if (indexSelMatch) {
-    const [, provider, indexStr] = indexSelMatch;
+    const [, provider, indexStr, token] = indexSelMatch;
     const index = Number(indexStr);
-    if (provider && Number.isInteger(index)) {
-      return { type: "selectIndex", provider, index };
+    if (provider && Number.isInteger(index) && token) {
+      return { type: "selectIndex", provider, index, token: token.toLowerCase() };
     }
   }
 
@@ -136,12 +137,41 @@ export function buildModelSelectionCallbackData(params: {
   // resolved server-side against the same sorted list, so the model stays
   // selectable instead of being silently dropped from the picker.
   if (params.index !== undefined) {
-    const indexCallbackData = `${CALLBACK_PREFIX.selectIndex}${params.provider}_${params.index}`;
+    const token = buildModelSelectionIndexToken({
+      provider: params.provider,
+      model: params.model,
+    });
+    const indexCallbackData = `${CALLBACK_PREFIX.selectIndex}${params.provider}_${params.index}_${token}`;
     if (fitsTelegramCallbackData(indexCallbackData)) {
       return indexCallbackData;
     }
   }
   return null;
+}
+
+export function buildModelSelectionIndexToken(params: { provider: string; model: string }): string {
+  const input = `${params.provider}\0${params.model}`;
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+export function resolveIndexedModelSelection(params: {
+  callback: Extract<ParsedModelCallback, { type: "selectIndex" }>;
+  models: readonly string[];
+}): string | null {
+  const model = params.models[params.callback.index];
+  if (!model) {
+    return null;
+  }
+  const token = buildModelSelectionIndexToken({
+    provider: params.callback.provider,
+    model,
+  });
+  return token === params.callback.token ? model : null;
 }
 
 export function resolveModelSelection(params: {

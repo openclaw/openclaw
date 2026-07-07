@@ -157,6 +157,7 @@ import {
   calculateTotalPages,
   getModelsPageSize,
   parseModelCallbackData,
+  resolveIndexedModelSelection,
   resolveModelSelection,
   type ProviderInfo,
 } from "./model-buttons.js";
@@ -2863,13 +2864,16 @@ export const registerTelegramHandlers = ({
 
         // Resolve an index-based selection (used when a model name is too long for
         // a name-based callback_data) against the same sorted list the keyboard was
-        // built from. A list that changed since render yields no model at the index,
-        // so prompt the user to reopen rather than selecting the wrong model.
+        // built from. The identity token prevents an old in-range index from
+        // selecting a different model after a provider list refresh.
         if (modelCallback.type === "selectIndex") {
           const orderedModels = [...(byProvider.get(modelCallback.provider) ?? [])].toSorted(
             (left, right) => left.localeCompare(right),
           );
-          const indexedModel = orderedModels[modelCallback.index];
+          const indexedModel = resolveIndexedModelSelection({
+            callback: modelCallback,
+            models: orderedModels,
+          });
           if (!indexedModel) {
             try {
               await editMessageWithButtons(
