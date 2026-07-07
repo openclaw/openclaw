@@ -50,6 +50,7 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   resolveCodexAppServerForModelProvider,
   resolveCodexAppServerForOpenClawToolPolicy,
@@ -403,7 +404,7 @@ function toTranscriptToolResultContentItem(item: unknown): Record<string, unknow
 
 function formatUnsupportedCodexDynamicToolOutput(type: unknown): string {
   const rawType = typeof type === "string" ? type.replace(/\s+/g, " ").trim() : "";
-  const label = rawType ? rawType.slice(0, 80) : "unknown";
+  const label = rawType ? truncateUtf16Safe(rawType, 80) : "unknown";
   const suffix = rawType.length > 80 ? "..." : "";
   return `[Unsupported Codex dynamic tool output: ${label}${suffix}]`;
 }
