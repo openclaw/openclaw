@@ -31,4 +31,7 @@
     <string name="resolved_endpoint">解決済みエンドポイント</string>
     <string name="gateway_trust_first_seen">このゲートウェイを信頼する前に、証明書のフィンガープリントを確認してください。\n\n%1$s</string>
     <string name="gateway_trust_changed">ゲートウェイの証明書が変更されました。想定した変更である場合のみ続行してください。\n\n以前の SHA-256:\n%1$s\n\n新しい SHA-256:\n%2$s</string>
+    <string name="switch_gateway">Gatewayを切り替え</string>
+    <string name="select_gateway">Gatewayを選択</string>
+    <string name="active_gateway">アクティブなGateway</string>
 </resources>

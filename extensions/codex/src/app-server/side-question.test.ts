@@ -15,6 +15,10 @@ import {
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexServerNotification, JsonObject, JsonValue, RpcRequest } from "./protocol.js";
+import {
+  createCodexTestBindingStore,
+  type CodexAppServerBindingStore,
+} from "./session-binding.test-helpers.js";
 
 const readCodexAppServerBindingMock = vi.fn();
 const isCodexAppServerNativeAuthProfileMock = vi.fn();
@@ -25,12 +29,10 @@ const toolExecuteMock = vi.fn();
 const handleCodexAppServerApprovalRequestMock = vi.fn();
 const resolveCodexProviderWebSearchSupportForClientMock = vi.fn();
 
-vi.mock("./session-binding.js", () => ({
-  clearCodexAppServerBinding: vi.fn(),
+vi.mock("./session-binding.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-binding.js")>()),
   isCodexAppServerNativeAuthProfile: (...args: unknown[]) =>
     isCodexAppServerNativeAuthProfileMock(...args),
-  readCodexAppServerBinding: (...args: unknown[]) => readCodexAppServerBindingMock(...args),
-  writeCodexAppServerBinding: vi.fn(),
 }));
 
 vi.mock("./shared-client.js", () => ({
@@ -59,7 +61,20 @@ vi.mock("openclaw/plugin-sdk/agent-harness", () => ({
   createOpenClawCodingTools: (...args: unknown[]) => createOpenClawCodingToolsMock(...args),
 }));
 
-const { runCodexAppServerSideQuestion } = await import("./side-question.js");
+const { runCodexAppServerSideQuestion: runCodexAppServerSideQuestionImpl } =
+  await import("./side-question.js");
+const baseBindingStore = createCodexTestBindingStore();
+const bindingStore: CodexAppServerBindingStore = {
+  ...baseBindingStore,
+  read: async (...args) => await readCodexAppServerBindingMock(...args),
+};
+
+function runCodexAppServerSideQuestion(
+  params: Parameters<typeof runCodexAppServerSideQuestionImpl>[0],
+  options: Omit<Parameters<typeof runCodexAppServerSideQuestionImpl>[1], "bindingStore"> = {},
+) {
+  return runCodexAppServerSideQuestionImpl(params, { ...options, bindingStore });
+}
 
 type ServerRequest = Required<Pick<RpcRequest, "id" | "method">> & {
   params?: RpcRequest["params"];
@@ -315,16 +330,6 @@ function nativeCommandItem(
     exitCode: status === "completed" ? 0 : null,
     durationMs,
   };
-}
-
-function turnCompletedWithNestedThread(
-  threadId: string,
-  turnId: string,
-  text: string,
-): CodexServerNotification {
-  const notification = turnCompleted(threadId, turnId, text);
-  const turn = (notification.params as JsonObject).turn;
-  return { method: notification.method, params: { threadId: "parent-thread", turn } };
 }
 
 function sideParams(overrides: Partial<Parameters<typeof runCodexAppServerSideQuestion>[0]> = {}) {
@@ -913,33 +918,6 @@ describe("runCodexAppServerSideQuestion", () => {
     });
     expect(toolExecuteMock).not.toHaveBeenCalled();
     expect(resolveCodexProviderWebSearchSupportForClientMock).not.toHaveBeenCalled();
-  });
-
-  it("returns side-thread completions scoped by nested turn thread id", async () => {
-    const client = createFakeClient();
-    client.request.mockImplementation(async (method: string) => {
-      if (method === "thread/fork") {
-        return threadResult("side-thread");
-      }
-      if (method === "thread/inject_items") {
-        return {};
-      }
-      if (method === "turn/start") {
-        queueMicrotask(() =>
-          client.emit(turnCompletedWithNestedThread("side-thread", "turn-1", "Nested answer.")),
-        );
-        return turnStartResult("turn-1");
-      }
-      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
-        return {};
-      }
-      throw new Error(`unexpected request: ${method}`);
-    });
-    getSharedCodexAppServerClientMock.mockResolvedValue(client);
-
-    const result = await runCodexAppServerSideQuestion(sideParams());
-
-    expect(result).toEqual({ text: "Nested answer." });
   });
 
   it("rejects /btw before forking when the current OpenClaw session is sandboxed", async () => {

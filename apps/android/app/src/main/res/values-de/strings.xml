@@ -31,4 +31,7 @@
     <string name="resolved_endpoint">Aufgelöster Endpunkt</string>
     <string name="gateway_trust_first_seen">Überprüfen Sie den Zertifikatfingerabdruck, bevor Sie diesem Gateway vertrauen.\n\n%1$s</string>
     <string name="gateway_trust_changed">Das Gateway-Zertifikat wurde geändert. Fahren Sie nur fort, wenn Sie diese Änderung erwartet haben.\n\nAlter SHA-256-Wert:\n%1$s\n\nNeuer SHA-256-Wert:\n%2$s</string>
+    <string name="switch_gateway">Gateway wechseln</string>
+    <string name="select_gateway">Gateway auswählen</string>
+    <string name="active_gateway">Aktives Gateway</string>
 </resources>

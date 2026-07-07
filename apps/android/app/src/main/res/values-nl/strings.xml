@@ -31,4 +31,7 @@
     <string name="resolved_endpoint">Opgelost endpoint</string>
     <string name="gateway_trust_first_seen">Controleer de certificaatvingerafdruk voordat je deze gateway vertrouwt.\n\n%1$s</string>
     <string name="gateway_trust_changed">Het gatewaycertificaat is gewijzigd. Ga alleen door als je deze wijziging verwachtte.\n\nOude SHA-256:\n%1$s\n\nNieuwe SHA-256:\n%2$s</string>
+    <string name="switch_gateway">Van gateway wisselen</string>
+    <string name="select_gateway">Gateway selecteren</string>
+    <string name="active_gateway">Actieve gateway</string>
 </resources>

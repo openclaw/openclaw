@@ -378,6 +378,11 @@
       - any-glob-to-any-file:
           - "extensions/deepinfra/**"
           - "docs/providers/deepinfra.md"
+"extensions: featherless":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/featherless/**"
+          - "docs/providers/featherless.md"
 "extensions: gmi":
   - changed-files:
       - any-glob-to-any-file:

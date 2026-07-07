@@ -4,6 +4,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
@@ -174,6 +175,52 @@ class ChatControllerCommandControlsTest {
 
   @OptIn(ExperimentalCoroutinesApi::class)
   @Test
+  fun delayedCommandListFromPreviousGatewayCannotReplaceCurrentCommands() =
+    runTest {
+      var cacheScope = ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1)
+      val gatewayAResponse = CompletableDeferred<String>()
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { _, _ -> error("gateway-bound request expected") },
+          requestGatewayForGateway = { gatewayId, method, _ ->
+            require(method == "chat.metadata")
+            if (gatewayId == "gateway-a") {
+              gatewayAResponse.await()
+            } else {
+              commandResponse("gateway-b")
+            }
+          },
+          cacheScope = { cacheScope },
+        )
+
+      controller.refreshCommands()
+      runCurrent()
+      cacheScope = ChatCacheScope(gatewayId = "gateway-b", connectionGeneration = 2)
+      controller.onGatewayScopeChanging()
+      controller.refreshCommands()
+      runCurrent()
+      assertEquals(
+        "gateway-b",
+        controller.commands.value
+          .single()
+          .name,
+      )
+
+      gatewayAResponse.complete(commandResponse("gateway-a"))
+      advanceUntilIdle()
+
+      assertEquals(
+        "gateway-b",
+        controller.commands.value
+          .single()
+          .name,
+      )
+    }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
   fun startNewChatCreatesWriteScopedSessionAndReloadsHistory() =
     runTest {
       val requests = mutableListOf<Pair<String, String?>>()
@@ -275,6 +322,80 @@ class ChatControllerCommandControlsTest {
       assertTrue(delete.contains("\"key\":\"main\""))
       assertTrue(delete.contains("\"deleteTranscript\":true"))
       assertEquals(2, requests.count { it.first == "sessions.list" })
+    }
+
+  @Test
+  fun renameSessionGroupPatchesEveryMemberIncludingArchivedOnlyOnes() =
+    runTest {
+      val requests = mutableListOf<Pair<String, String?>>()
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, paramsJson ->
+            requests += method to paramsJson
+            when (method) {
+              "sessions.list" ->
+                if (paramsJson.orEmpty().contains("\"archived\":true")) {
+                  """{"sessions":[{"key":"agent:main:active","category":"Work"},{"key":"agent:main:archived","category":" Work "}]}"""
+                } else {
+                  """{"sessions":[{"key":"agent:main:active","category":"Work"},{"key":"agent:main:other","category":"Play"}]}"""
+                }
+              else -> "{}"
+            }
+          },
+        )
+
+      controller.renameSessionGroup(from = "Work", to = "Focus")
+
+      // Membership enumeration sends the explicit high bound (absent limit is
+      // capped at 100 rows server-side) across active + archived rows.
+      val lists = requests.filter { it.first == "sessions.list" }.map { it.second.orEmpty() }
+      assertEquals(2, lists.count { it.contains("\"limit\":10000") })
+      assertEquals(1, lists.count { it.contains("\"archived\":true") })
+
+      val patches = requests.filter { it.first == "sessions.patch" }.map { it.second.orEmpty() }
+      assertEquals(2, patches.size)
+      assertTrue(patches.any { it.contains("\"key\":\"agent:main:active\"") && it.contains("\"category\":\"Focus\"") })
+      assertTrue(patches.any { it.contains("\"key\":\"agent:main:archived\"") && it.contains("\"category\":\"Focus\"") })
+      // The session list refreshes (windowed) after the fan-out.
+      assertTrue(lists.last().contains("\"limit\""))
+    }
+
+  @Test
+  fun dissolveSessionGroupClearsCategoriesBestEffort() =
+    runTest {
+      val requests = mutableListOf<Pair<String, String?>>()
+      var patchCount = 0
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, paramsJson ->
+            requests += method to paramsJson
+            when (method) {
+              "sessions.list" ->
+                if (paramsJson.orEmpty().contains("\"archived\":true")) {
+                  """{"sessions":[{"key":"agent:main:archived","category":"Work"}]}"""
+                } else {
+                  """{"sessions":[{"key":"agent:main:a","category":"Work"},{"key":"agent:main:b","category":"Work"}]}"""
+                }
+              "sessions.patch" -> {
+                patchCount += 1
+                if (patchCount == 1) throw RuntimeException("offline") else "{}"
+              }
+              else -> "{}"
+            }
+          },
+        )
+
+      controller.dissolveSessionGroup("Work")
+
+      // One failed member patch must not abandon the remaining members.
+      val patches = requests.filter { it.first == "sessions.patch" }.map { it.second.orEmpty() }
+      assertEquals(3, patches.size)
+      assertTrue(patches.all { it.contains("\"category\":null") })
+      assertEquals("offline", controller.errorText.value)
     }
 
   @Test
@@ -736,4 +857,6 @@ class ChatControllerCommandControlsTest {
       assertEquals("other-session", controller.sessionId.value)
       assertTrue(requests.any { it.first == "sessions.create" })
     }
+
+  private fun commandResponse(name: String): String = """{"commands":[{"name":"$name","textAliases":["/$name"],"acceptsArgs":false}]}"""
 }

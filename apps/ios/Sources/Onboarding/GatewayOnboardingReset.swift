@@ -82,7 +82,13 @@ enum GatewayOnboardingReset {
 
         let trimmedInstanceId = instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedInstanceId.isEmpty {
-            GatewaySettingsStore.deleteGatewayCredentials(instanceId: trimmedInstanceId)
+            if let gatewayStableID {
+                GatewaySettingsStore.deleteGatewayCredentials(
+                    instanceId: trimmedInstanceId,
+                    stableID: gatewayStableID)
+            } else {
+                GatewaySettingsStore.deleteAllGatewayCredentials(instanceId: trimmedInstanceId)
+            }
         }
 
         let deviceId = DeviceIdentityStore.loadOrCreate().deviceId
@@ -114,7 +120,9 @@ enum GatewayOnboardingReset {
             GatewaySettingsStore.clearGatewayCustomHeaders()
         }
 
-        GatewaySettingsStore.clearLastGatewayConnection(defaults: defaults)
+        if gatewayStableID == nil {
+            GatewaySettingsStore.clearGatewayRegistry(defaults: defaults)
+        }
         GatewaySettingsStore.clearPreferredGatewayStableID(defaults: defaults)
         GatewaySettingsStore.clearLastDiscoveredGatewayStableID(defaults: defaults)
         defaults.set(false, forKey: "gateway.autoconnect")

@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { describe, expect, it, vi } from "vitest";
 import * as approvalBridge from "./approval-bridge.js";
+import { CodexAppServerRpcError } from "./client.js";
 import {
   createParams,
   createResumeHarness,
@@ -26,7 +27,7 @@ import { testing } from "./run-attempt.js";
 import {
   readCodexAppServerBinding,
   writeCodexAppServerBinding as writeRawCodexAppServerBinding,
-} from "./session-binding.js";
+} from "./session-binding.test-helpers.js";
 
 setupRunAttemptTestHooks();
 
@@ -457,7 +458,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       "run-2",
     );
 
-    await secondHarness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await secondHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await secondRun;
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(firstRelayId)?.runId).toBe(
       "run-2",
@@ -509,7 +510,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     expect(extractRelayIdFromThreadRequest(resumeRequest?.params)).toBe(firstRelayId);
     expect(extractGenerationFromThreadRequest(resumeRequest?.params)).toBe(firstGeneration);
 
-    await secondHarness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await secondHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await secondRun;
     testing.flushPendingCodexNativeHookRelayUnregistersForTests();
   });
@@ -639,7 +640,9 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     });
     const harness = createStartedThreadHarness(async (method) => {
       if (method === "thread/resume") {
-        throw new Error("resume failed");
+        // Only a structured RPC rejection proves Codex holds no resume
+        // subscription, so the run may fall back to a fresh thread.
+        throw new CodexAppServerRpcError({ code: -32_000, message: "resume failed" }, method);
       }
       return undefined;
     });

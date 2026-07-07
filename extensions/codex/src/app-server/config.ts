@@ -111,6 +111,7 @@ export type CodexPluginEntryConfig = {
 
 export type CodexPluginsConfig = {
   enabled?: boolean;
+  allow_all_plugins?: boolean;
   allow_destructive_actions?: CodexPluginDestructivePolicy;
   plugins?: Record<string, CodexPluginEntryConfig>;
 };
@@ -159,6 +160,7 @@ export type ResolvedCodexPluginPolicy = {
 export type ResolvedCodexPluginsPolicy = {
   configured: boolean;
   enabled: boolean;
+  allowAllPlugins: boolean;
   allowDestructiveActions: boolean;
   destructiveApprovalMode: CodexPluginDestructiveApprovalMode;
   pluginPolicies: ResolvedCodexPluginPolicy[];
@@ -288,6 +290,7 @@ export const CODEX_COMPUTER_USE_CONFIG_KEYS = [
 
 export const CODEX_PLUGINS_CONFIG_KEYS = [
   "enabled",
+  "allow_all_plugins",
   "allow_destructive_actions",
   "plugins",
 ] as const;
@@ -369,6 +372,7 @@ const codexPluginEntryConfigSchema = z
 const codexPluginsConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
+    allow_all_plugins: z.boolean().optional(),
     allow_destructive_actions: codexPluginDestructivePolicySchema.optional(),
     plugins: z.record(z.string(), codexPluginEntryConfigSchema).optional(),
   })
@@ -496,6 +500,7 @@ export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodex
   return {
     configured,
     enabled,
+    allowAllPlugins: enabled && config?.allow_all_plugins === true,
     allowDestructiveActions: destructivePolicy.allowDestructiveActions,
     destructiveApprovalMode: destructivePolicy.destructiveApprovalMode,
     pluginPolicies,

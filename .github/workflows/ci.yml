@@ -315,12 +315,6 @@ jobs:
           if (runNodeFull) {
             checksFastCoreTasks.push(
               { check_name: "checks-fast-bundled-protocol", runtime: "node", task: "bundled-protocol" },
-              {
-                check_name: "QA Smoke CI",
-                runtime: "node",
-                task: "qa-smoke-ci",
-                runner: "blacksmith-16vcpu-ubuntu-2404",
-              },
               { check_name: "checks-fast-bun-launcher", runtime: "bun", task: "bun-launcher" },
             );
           } else {
@@ -410,6 +404,7 @@ jobs:
                     { check_name: "android-test-play", task: "test-play" },
                     { check_name: "android-test-third-party", task: "test-third-party" },
                     { check_name: "android-build-play", task: "build-play" },
+                    { check_name: "android-ktlint", task: "ktlint" },
                   ]
                 : [],
             ),
@@ -852,7 +847,7 @@ jobs:
       contents: read
     needs: [preflight]
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_native_i18n == 'true' }}
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -906,31 +901,6 @@ jobs:
               pnpm test:bundled
               pnpm protocol:check
               ;;
-            qa-smoke-ci)
-              output_dir=".artifacts/qa-e2e/smoke-ci-profile"
-              package_dir=".artifacts/qa-e2e/smoke-ci-package"
-              export OPENCLAW_BUILD_PRIVATE_QA=1
-              export OPENCLAW_ENABLE_PRIVATE_QA_CLI=1
-              export OPENCLAW_DISABLE_BUNDLED_PLUGINS=0
-              export OPENCLAW_QA_REDACT_PUBLIC_METADATA=1
-              export OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS=180000
-              export NODE_OPTIONS=--max-old-space-size=16384
-              node scripts/package-openclaw-for-docker.mjs \
-                --output-dir "$package_dir" \
-                --output-name openclaw-current.tgz
-              export OPENCLAW_CURRENT_PACKAGE_TGZ="$PWD/$package_dir/openclaw-current.tgz"
-              qa_exit_code=0
-              pnpm openclaw qa run \
-                --repo-root . \
-                --qa-profile smoke-ci \
-                --concurrency 8 \
-                --output-dir "$output_dir" || qa_exit_code=$?
-              echo "QA smoke profile evidence: \`${output_dir}\`" >> "$GITHUB_STEP_SUMMARY"
-              if [ "$qa_exit_code" -ne 0 ]; then
-                echo "::error title=QA smoke profile failed::smoke-ci exited ${qa_exit_code}; evidence upload will still run"
-                exit "$qa_exit_code"
-              fi
-              ;;
             contracts-plugins-ci-routing)
               pnpm test:contracts:plugins
               pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/changed-lanes.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
@@ -947,14 +917,110 @@ jobs:
               ;;
           esac
 
+  qa-smoke-ci-shard:
+    permissions:
+      contents: read
+    name: QA Smoke CI (${{ matrix.name }})
+    needs: [preflight]
+    if: needs.preflight.outputs.run_checks_fast == 'true'
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - name: matrix
+            slug: matrix
+          - name: telegram 1/2
+            slug: telegram-1-of-2
+          - name: telegram 2/2
+            slug: telegram-2-of-2
+    steps:
+      - *linux_node_checkout_step
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Run smoke profile shard
+        env:
+          SHARD_SLUG: ${{ matrix.slug }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          output_dir=".artifacts/qa-e2e/smoke-ci-profile-${SHARD_SLUG}"
+          package_dir=".artifacts/qa-e2e/smoke-ci-package-${SHARD_SLUG}"
+          export OPENCLAW_BUILD_PRIVATE_QA=1
+          export OPENCLAW_ENABLE_PRIVATE_QA_CLI=1
+          export OPENCLAW_DISABLE_BUNDLED_PLUGINS=0
+          export OPENCLAW_QA_REDACT_PUBLIC_METADATA=1
+          export OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS=180000
+          export NODE_OPTIONS=--max-old-space-size=16384
+          node scripts/package-openclaw-for-docker.mjs \
+            --output-dir "$package_dir" \
+            --output-name openclaw-current.tgz
+          export OPENCLAW_CURRENT_PACKAGE_TGZ="$PWD/$package_dir/openclaw-current.tgz"
+          SHARD_SCENARIO_IDS_JSON="$(
+            node --import tsx --input-type=module <<'EOF'
+          import { createQaSmokeCiMatrix } from "./extensions/qa-lab/src/ci-smoke-plan.ts";
+
+          const shard = createQaSmokeCiMatrix().include.find(
+            (candidate) => candidate.slug === process.env.SHARD_SLUG,
+          );
+          if (!shard) {
+            throw new Error(`unknown QA smoke shard: ${process.env.SHARD_SLUG}`);
+          }
+          process.stdout.write(JSON.stringify(shard.scenario_ids));
+          EOF
+          )"
+          export SHARD_SCENARIO_IDS_JSON
+          mapfile -t scenario_ids < <(
+            node -e 'for (const id of JSON.parse(process.env.SHARD_SCENARIO_IDS_JSON)) console.log(id)'
+          )
+          scenario_args=()
+          for scenario_id in "${scenario_ids[@]}"; do
+            scenario_args+=(--scenario "$scenario_id")
+          done
+          qa_exit_code=0
+          pnpm openclaw qa run \
+            --repo-root . \
+            --qa-profile smoke-ci \
+            --concurrency 8 \
+            --output-dir "$output_dir" \
+            "${scenario_args[@]}" || qa_exit_code=$?
+          echo "QA smoke profile evidence: \`${output_dir}\`" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$qa_exit_code" -ne 0 ]; then
+            echo "::error title=QA smoke profile failed::smoke-ci shard ${SHARD_SLUG} exited ${qa_exit_code}; evidence upload will still run"
+            exit "$qa_exit_code"
+          fi
+
       - name: Upload QA smoke profile evidence
-        if: always() && matrix.task == 'qa-smoke-ci'
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: qa-smoke-profile-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .artifacts/qa-e2e/smoke-ci-profile/
+          name: qa-smoke-profile-${{ matrix.slug }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/qa-e2e/smoke-ci-profile-${{ matrix.slug }}/
           if-no-files-found: warn
           retention-days: 7
+
+  qa-smoke-ci:
+    permissions:
+      contents: read
+    name: QA Smoke CI
+    needs: [preflight, qa-smoke-ci-shard]
+    if: always() && needs.preflight.outputs.run_checks_fast == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Verify QA smoke shards
+        env:
+          QA_SMOKE_SHARDS_RESULT: ${{ needs.qa-smoke-ci-shard.result }}
+        run: |
+          if [ "$QA_SMOKE_SHARDS_RESULT" != "success" ]; then
+            echo "QA Smoke CI shards finished with result: $QA_SMOKE_SHARDS_RESULT" >&2
+            exit 1
+          fi
 
   checks-fast-plugin-contracts-shard:
     permissions:
@@ -1073,7 +1139,7 @@ jobs:
       fail-fast: false
       # The canonical main path waits for the admission debounce above, so
       # widen this large matrix within the current runner-registration budget.
-      max-parallel: 24
+      max-parallel: 28
       matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}
     steps:
       - *linux_node_checkout_step
@@ -1973,7 +2039,7 @@ jobs:
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: ~/.android-sdk
-          key: ${{ runner.os }}-android-sdk-v1-cmdline-14742923-platform-36-build-tools-36.0.0
+          key: ${{ runner.os }}-android-sdk-v1-cmdline-14742923-platform-37.0-build-tools-36.0.0
           restore-keys: |
             ${{ runner.os }}-android-sdk-v1-
 
@@ -2003,7 +2069,7 @@ jobs:
           yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null
           sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --install \
             "platform-tools" \
-            "platforms;android-36" \
+            "platforms;android-37.0" \
             "build-tools;36.0.0"
 
       - name: Run Android ${{ matrix.task }}
@@ -2021,7 +2087,16 @@ jobs:
               ./gradlew --no-daemon --build-cache :app:testThirdPartyDebugUnitTest
               ;;
             build-play)
-              ./gradlew --no-daemon --build-cache :app:assemblePlayDebug
+              ./gradlew --no-daemon --build-cache \
+                :app:assemblePlayDebug \
+                :app:assembleThirdPartyDebug \
+                :app:lintPlayDebug \
+                :app:lintThirdPartyDebug \
+                :benchmark:assembleDebug
+              ;;
+            ktlint)
+              # Mirrors `pnpm android:lint`; keeps formatting drift out of main (see PR #100304 sweep).
+              ./gradlew --no-daemon --build-cache :app:ktlintCheck :benchmark:ktlintCheck
               ;;
             *)
               echo "Unsupported Android task: $TASK" >&2

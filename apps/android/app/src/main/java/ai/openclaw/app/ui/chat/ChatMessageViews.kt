@@ -5,6 +5,8 @@ import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.chat.MessageSpeechPhase
+import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.normalizeVisibleChatMessageRole
 import ai.openclaw.app.tools.ToolDisplayRegistry
 import ai.openclaw.app.ui.MobileColorsAccessor
@@ -35,7 +37,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.HourglassEmpty
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -69,9 +74,11 @@ private data class ChatBubbleStyle(
 
 /** Renders one persisted chat message as text and image parts. */
 @Composable
-fun ChatMessageBubble(
+internal fun ChatMessageBubble(
   message: ChatMessage,
   onReplyMessage: (String) -> Unit = {},
+  speechState: MessageSpeechState? = null,
+  onToggleListen: ((String, String) -> Unit)? = null,
 ) {
   val role = normalizeVisibleChatMessageRole(message.role) ?: return
   val style = bubbleStyle(role)
@@ -82,21 +89,72 @@ fun ChatMessageBubble(
       when (part.type) {
         "text" -> !part.text.isNullOrBlank()
         "image" -> !part.base64.isNullOrBlank()
-        else -> false
+        else -> part.isAudioAttachment()
       }
     }
 
   if (displayableContent.isEmpty()) return
 
   val messageText = chatMessagePlainText(displayableContent)
+  val messageSpeech = speechState?.takeIf { it.messageId == message.id }
+  val canListen = role == "assistant" && messageText.isNotBlank() && onToggleListen != null
+  val toggleListen: (() -> Unit)? =
+    if (canListen) {
+      { checkNotNull(onToggleListen).invoke(message.id, messageText) }
+    } else {
+      null
+    }
   ChatMessageActionHost(
     text = messageText,
     onReply = onReplyMessage,
+    listenActive = messageSpeech != null,
+    onToggleListen = toggleListen,
     modifier = Modifier.fillMaxWidth(),
   ) {
     ChatBubbleContainer(style = style, roleLabel = roleLabel(role)) {
       ChatMessageBody(content = displayableContent, textColor = mobileText)
       ChatMessageLinkPreview(messageId = message.id, role = role, content = displayableContent)
+      messageSpeech?.let { speech ->
+        MessageSpeechIndicator(
+          phase = speech.phase,
+          onStop = { checkNotNull(onToggleListen).invoke(message.id, messageText) },
+        )
+      }
+    }
+  }
+}
+
+@Composable
+private fun MessageSpeechIndicator(
+  phase: MessageSpeechPhase,
+  onStop: () -> Unit,
+) {
+  Surface(
+    onClick = onStop,
+    shape = RoundedCornerShape(999.dp),
+    color = mobileAccentSoft,
+  ) {
+    Row(
+      modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+      horizontalArrangement = Arrangement.spacedBy(6.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Icon(
+        imageVector =
+          if (phase == MessageSpeechPhase.Preparing) {
+            Icons.Default.HourglassEmpty
+          } else {
+            Icons.AutoMirrored.Filled.VolumeUp
+          },
+        contentDescription = null,
+        modifier = Modifier.size(14.dp),
+        tint = mobileTextSecondary,
+      )
+      Text(
+        text = if (phase == MessageSpeechPhase.Preparing) "Preparing audio…" else "Speaking…",
+        style = mobileCaption1,
+        color = mobileTextSecondary,
+      )
     }
   }
 }
@@ -142,11 +200,12 @@ private fun ChatMessageBody(
 ) {
   Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
     for (part in content) {
-      when (part.type) {
-        "text" -> {
+      when {
+        part.type == "text" -> {
           val text = part.text ?: continue
           ChatMarkdown(text = text, textColor = textColor)
         }
+        part.isAudioAttachment() -> VoiceNoteMessageRow(durationMs = part.durationMs)
         else -> {
           val b64 = part.base64 ?: continue
           ChatBase64Image(base64 = b64, mimeType = part.mimeType)

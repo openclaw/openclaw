@@ -34,11 +34,14 @@ when the beta tag is missing or its version is older than the latest stable
 release. Use `--tag beta` for a one-off package update pinned to the raw npm
 beta dist-tag instead.
 
-`--channel extended-stable` is package-only and foreground-only. OpenClaw reads
-the public npm `extended-stable` selector, verifies the selected exact package,
-and installs that exact version. Missing or inconsistent registry data fails
-closed; it never falls back to `latest`. If the selected version is older than
-the installed version, the normal downgrade confirmation still applies.
+`--channel extended-stable` is package-only, and installation remains
+foreground-only. OpenClaw reads the public npm `extended-stable` selector,
+verifies the selected exact package, and installs that exact version. Missing
+or inconsistent registry data fails closed; it never falls back to `latest`.
+If the selected version is older than the installed version, the normal
+downgrade confirmation still applies. The CLI persists the channel after a
+successful core update; a direct `npm install -g openclaw@extended-stable`
+does not update `update.channel`.
 After the core swap, eligible official npm plugins with bare/default or
 `latest` intent converge to that exact core version. Exact pins and explicit
 non-`latest` tags, third-party plugins, and non-npm sources remain unchanged.
@@ -213,12 +216,14 @@ Off by default. Enable it in `~/.openclaw/openclaw.json`:
 | Channel           | Behavior                                                                                                                                     |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | `stable`          | Waits `stableDelayHours` (default: 6), then applies with deterministic jitter across `stableJitterHours` (default: 12) for a spread rollout. |
-| `extended-stable` | No startup check or automatic apply. Use `openclaw update` or `openclaw update status` manually.                                             |
+| `extended-stable` | Checks for a read-only update hint on startup and every 24 hours when `checkOnStart` is enabled. Never applies automatically.                |
 | `beta`            | Checks every `betaCheckIntervalHours` (default: 1) and applies immediately.                                                                  |
 | `dev`             | No automatic apply. Use `openclaw update` manually.                                                                                          |
 
-The gateway also logs an update hint on startup (disable with `update.checkOnStart: false`).
-Stored extended-stable selections skip startup and background resolution entirely.
+The gateway also logs an update hint on startup (disable with
+`update.checkOnStart: false`). Stored extended-stable selections use this
+read-only hint path and the existing 24-hour hint interval, but never invoke
+automatic installation, handoff, restart, stable delay/jitter, or beta polling.
 For downgrade or incident recovery, set `OPENCLAW_NO_AUTO_UPDATE=1` in the gateway environment to block automatic applies even when `update.auto.enabled` is configured. Startup update hints can still run unless `update.checkOnStart` is also disabled.
 
 Package-manager updates requested through the live Gateway control-plane

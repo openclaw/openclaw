@@ -1263,13 +1263,14 @@ describe("tui session actions", () => {
       chatLog: chatLog as unknown as import("./components/chat-log.js").ChatLog,
     });
 
-    await runLoadHistory();
+    const result = await runLoadHistory();
 
     expect(chatLog.clearAll).toHaveBeenCalledWith({ preservePendingUsers: true });
     expect(chatLog.reconcilePendingUsers).toHaveBeenCalledWith([
       { text: "persisted", timestamp: 2_000 },
     ]);
     expect(chatLog.restorePendingUsers).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ loaded: true, inFlightRunId: null });
   });
 
   it("force-renders after rebuilding chat history so transient status rows are cleared", async () => {

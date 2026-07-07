@@ -31,4 +31,7 @@
     <string name="resolved_endpoint">Resolved endpoint</string>
     <string name="gateway_trust_first_seen">Verify the certificate fingerprint before trusting this gateway.\n\n%1$s</string>
     <string name="gateway_trust_changed">The gateway certificate changed. Continue only if you expected this.\n\nOld SHA-256:\n%1$s\n\nNew SHA-256:\n%2$s</string>
+    <string name="switch_gateway">Switch gateway</string>
+    <string name="select_gateway">Select gateway</string>
+    <string name="active_gateway">Active gateway</string>
 </resources>

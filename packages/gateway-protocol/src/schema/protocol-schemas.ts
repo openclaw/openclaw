@@ -42,6 +42,10 @@ import {
   SkillsDetailParamsSchema,
   SkillsDetailResultSchema,
   SkillsInstallParamsSchema,
+  SkillsCuratorActionParamsSchema,
+  SkillsCuratorActionResultSchema,
+  SkillsCuratorStatusParamsSchema,
+  SkillsCuratorStatusResultSchema,
   SkillsProposalActionParamsSchema,
   SkillsProposalApplyResultSchema,
   SkillsProposalCreateParamsSchema,
@@ -605,6 +609,10 @@ export const ProtocolSchemas = {
   SkillsSearchResult: SkillsSearchResultSchema,
   SkillsDetailParams: SkillsDetailParamsSchema,
   SkillsDetailResult: SkillsDetailResultSchema,
+  SkillsCuratorActionParams: SkillsCuratorActionParamsSchema,
+  SkillsCuratorActionResult: SkillsCuratorActionResultSchema,
+  SkillsCuratorStatusParams: SkillsCuratorStatusParamsSchema,
+  SkillsCuratorStatusResult: SkillsCuratorStatusResultSchema,
   SkillsProposalsListParams: SkillsProposalsListParamsSchema,
   SkillsProposalsListResult: SkillsProposalsListResultSchema,
   SkillsProposalInspectParams: SkillsProposalInspectParamsSchema,
@@ -704,6 +712,7 @@ export const ProtocolSchemas = {
 
 export {
   MIN_CLIENT_PROTOCOL_VERSION,
+  MIN_NODE_PROTOCOL_VERSION,
   MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "../version.js";
