@@ -48,12 +48,12 @@ describe("security audit attack surface summary", () => {
       expected: "browser control: disabled",
     },
     {
-      name: "explicit browser config is startup intent even when browser is absent from allowlist",
+      name: "explicit browser config does not bypass a restrictive plugin allowlist",
       cfg: {
         browser: { enabled: true },
         plugins: { allow: ["openai"] },
       } satisfies OpenClawConfig,
-      expected: "browser control: enabled",
+      expected: "browser control: disabled",
     },
     {
       name: "plugin ids use the same case-insensitive canonical form as startup",

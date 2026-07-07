@@ -72,6 +72,10 @@ describe("collectSmallModelRiskFindings", () => {
     ...browserDefaultCfg,
     plugins: { allow: ["openai"] },
   } satisfies OpenClawConfig;
+  const configuredBrowserBlockedByPluginPolicyCfg = {
+    ...browserBlockedByPluginPolicyCfg,
+    browser: { enabled: true },
+  } satisfies OpenClawConfig;
 
   it.each([
     {
@@ -93,6 +97,14 @@ describe("collectSmallModelRiskFindings", () => {
     {
       name: "treats browser as disabled when restrictive plugin policy excludes it",
       cfg: browserBlockedByPluginPolicyCfg,
+      env: {},
+      expectedSeverity: "info",
+      detailIncludes: ["web=[off]", "No web/browser tools detected"],
+      detailExcludes: ["web=[browser]"],
+    },
+    {
+      name: "does not let browser config bypass restrictive plugin policy",
+      cfg: configuredBrowserBlockedByPluginPolicyCfg,
       env: {},
       expectedSeverity: "info",
       detailIncludes: ["web=[off]", "No web/browser tools detected"],

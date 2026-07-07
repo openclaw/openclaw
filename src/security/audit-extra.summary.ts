@@ -126,9 +126,7 @@ function isBrowserEnabled(cfg: OpenClawConfig): boolean {
       cfg.plugins,
       (pluginId) => normalizeOptionalLowercaseString(pluginId) ?? "",
     ),
-    // Explicit browser config is a manifest-owned startup path and therefore
-    // bypasses only the restrictive allowlist, never deny or disable policy.
-    allowRestrictiveAllowlistBypass: cfg.browser !== undefined,
+    // Browser config selects behavior; it must not weaken global plugin policy.
   });
 }
 
