@@ -2,7 +2,7 @@
 import { EventEmitter } from "node:events";
 import { resetLogger, setLoggerOverride, success } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { restoreCredsFromBackupIfNeeded } from "./auth-store.js";
+import { clearStalePhoneCodePairingAuthIfNeeded, restoreCredsFromBackupIfNeeded } from "./auth-store.js";
 import { loginWeb, loginWebWithPhoneCode, normalizeWhatsAppPairingPhoneNumber } from "./login.js";
 import { createWaSocket, type waitForWaConnection } from "./session.js";
 
@@ -199,6 +199,14 @@ describe("web login", () => {
 
     expect(firstSock.requestPairingCode).toHaveBeenCalledWith("15551234567");
     expect(secondSock.requestPairingCode).toHaveBeenCalledWith("15551234567");
+    expect(clearStalePhoneCodePairingAuthIfNeeded).toHaveBeenCalledTimes(2);
+    const cleanupBeforeReplacement = vi.mocked(clearStalePhoneCodePairingAuthIfNeeded).mock
+      .invocationCallOrder[1];
+    const replacementCreate = vi.mocked(createWaSocket).mock.invocationCallOrder[1];
+    if (cleanupBeforeReplacement === undefined || replacementCreate === undefined) {
+      throw new Error("expected cleanup and replacement socket calls");
+    }
+    expect(cleanupBeforeReplacement).toBeLessThan(replacementCreate);
     expect(runtime.log).toHaveBeenCalledWith(success("WhatsApp pairing code: 1111 2222"));
     expect(runtime.log).toHaveBeenCalledWith(success("WhatsApp pairing code: 3333 4444"));
     expect(waiter).toHaveBeenCalledTimes(2);

@@ -168,6 +168,29 @@ describe("auth-store", () => {
     expect(fsSync.existsSync(authDir)).toBe(false);
   });
 
+  it("treats completed phone-code pairing creds as linked", async () => {
+    writeAuthFiles({ "creds.json": JSON.stringify({
+      registered: false, pairingCode: "12345678", me: { id: "15551234567@s.whatsapp.net" },
+      account: {}, signalIdentities: [{ identifier: { name: "15551234567", deviceId: 0 } }],
+    }) });
+    await expect(webAuthExists(authDir)).resolves.toBe(true);
+    await expect(readWebAuthState(authDir)).resolves.toBe("linked");
+  });
+
+  it("preserves completed phone-code creds saved before stale cleanup reads", async () => {
+    const creds = { registered: false, pairingCode: "12345678", me: { id: "15551234567@s.whatsapp.net" } };
+    writeAuthFiles({ "creds.json": JSON.stringify(creds) });
+    hoisted.waitForCredsSaveQueueWithTimeout.mockImplementationOnce(async () => {
+      writeAuthFiles({ "creds.json": JSON.stringify({ ...creds, account: {},
+        signalIdentities: [{ identifier: { name: "15551234567", deviceId: 0 } }],
+      }) });
+      return "drained";
+    });
+    await expect(clearStalePhoneCodePairingAuthIfNeeded({ authDir, isLegacyAuthDir: false })).resolves.toBe(false);
+    expect(fsSync.existsSync(credsPath)).toBe(true);
+    await expect(webAuthExists(authDir)).resolves.toBe(true);
+  });
+
   it.runIf(supportsSymlinks).each(["file", "directory"])(
     "treats symlinked %s credentials as missing",
     async (kind) => {

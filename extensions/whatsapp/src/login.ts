@@ -289,7 +289,14 @@ export async function loginWebWithPhoneCode(
       waitForConnection,
       socketTiming,
       onQr: readySignal.onQr,
-      beforeCreateLoginSocket: readySignal.reset,
+      beforeCreateLoginSocket: async () => {
+        readySignal.reset();
+        await clearStalePhoneCodePairingAuthIfNeeded({
+          authDir: account.authDir,
+          isLegacyAuthDir: account.isLegacyAuthDir,
+          runtime,
+        });
+      },
       prepareLoginSocket: async (loginSock, context) => {
         if (context.reason === "post-pairing") {
           return;
