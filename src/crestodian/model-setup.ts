@@ -63,7 +63,5 @@ export async function runCrestodianModelSetup(params: {
     },
   });
 
-  return {
-    ...(model ? { model } : {}),
-  };
+  return model ? { model } : {};
 }
