@@ -1,5 +1,7 @@
 package ai.openclaw.app.ui.chat
 
+import android.graphics.Bitmap
+import android.graphics.Color
 import kotlinx.coroutines.runBlocking
 import okhttp3.Dns
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -11,15 +13,20 @@ import okhttp3.ResponseBody.Companion.toResponseBody
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.SocketPolicy
+import okio.Buffer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import java.io.ByteArrayOutputStream
 import java.net.InetAddress
 import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
 
+@RunWith(RobolectricTestRunner::class)
 class ChatLinkPreviewTest {
   @Test
   fun extractsFirstHttpLinkOutsideCode() {
@@ -297,6 +304,95 @@ class ChatLinkPreviewTest {
       assertEquals(2, server.requestCount)
     }
 
+  @Test
+  fun imageFetchStartsOnlyWhenStoreIsRequestedAndCacheHitAvoidsSecondRequest() =
+    withServer { server ->
+      server.enqueue(imageResponse(pngBytes(width = 120, height = 80)))
+      val store = LinkPreviewImageStore(fetcher = fetcher()::fetchImage)
+      val imageUrl = server.url("/card.png").toString()
+
+      assertEquals(0, server.requestCount)
+      assertTrue(store.get(imageUrl) is LinkPreviewImageResult.Loaded)
+      assertTrue(store.get(imageUrl) is LinkPreviewImageResult.Loaded)
+      assertEquals(1, server.requestCount)
+      assertEquals("image/*", server.takeRequest().getHeader("Accept"))
+    }
+
+  @Test
+  fun imageContentTypeAllowlistAndBodyCapAreEnforced() =
+    withServer { server ->
+      server.enqueue(MockResponse().setHeader("Content-Type", "image/gif").setBody("GIF89a"))
+      server.enqueue(MockResponse().setHeader("Content-Type", "image/svg+xml").setBody("<svg/>"))
+      server.enqueue(MockResponse().setHeader("Content-Type", "image/png").setBody("GIF89a"))
+      server.enqueue(
+        MockResponse()
+          .setHeader("Content-Type", "image/png")
+          .setBody(Buffer().write(ByteArray(LINK_PREVIEW_IMAGE_BODY_MAX_BYTES + 1))),
+      )
+
+      assertSame(LinkPreviewImageResult.Failed, fetcher().fetchImage(server.url("/animated.gif").toString()))
+      assertSame(LinkPreviewImageResult.Failed, fetcher().fetchImage(server.url("/vector.svg").toString()))
+      assertSame(LinkPreviewImageResult.Failed, fetcher().fetchImage(server.url("/spoofed.png").toString()))
+      assertSame(LinkPreviewImageResult.Failed, fetcher().fetchImage(server.url("/oversized.png").toString()))
+      assertEquals(4, server.requestCount)
+    }
+
+  @Test
+  fun privateLiteralImageUrlFailsWithoutNetworkCall() =
+    withServer { server ->
+      server.enqueue(imageResponse(pngBytes(width = 10, height = 10)))
+
+      assertSame(LinkPreviewImageResult.Failed, realPolicyFetcher().fetchImage(server.url("/private.png").toString()))
+      assertEquals(0, server.requestCount)
+    }
+
+  @Test
+  fun imageRedirectsFollowThreeHopsAndRejectUnsafeOrFourthHop() {
+    withServer { server ->
+      repeat(3) { index -> server.enqueue(redirect("/image-hop${index + 1}")) }
+      server.enqueue(imageResponse(pngBytes(width = 12, height = 8)))
+
+      assertTrue(fetcher().fetchImage(server.url("/image-start").toString()) is LinkPreviewImageResult.Loaded)
+      assertEquals(4, server.requestCount)
+    }
+
+    withServer { server ->
+      repeat(4) { index -> server.enqueue(redirect("/image-hop${index + 1}")) }
+      server.enqueue(imageResponse(pngBytes(width = 12, height = 8)))
+
+      assertSame(LinkPreviewImageResult.Failed, fetcher().fetchImage(server.url("/image-start").toString()))
+      assertEquals(4, server.requestCount)
+    }
+
+    withServer { server ->
+      server.enqueue(redirect("file:///tmp/private.png"))
+
+      assertSame(LinkPreviewImageResult.Failed, fetcher().fetchImage(server.url("/image-start").toString()))
+      assertEquals(1, server.requestCount)
+    }
+  }
+
+  @Test
+  fun imageDecodeDownsamplesLargeSource() {
+    val decoded = decodeLinkPreviewBitmap(pngBytes(width = 2_400, height = 1_200))
+
+    assertTrue(decoded != null)
+    assertTrue(checkNotNull(decoded).width <= LINK_PREVIEW_IMAGE_MAX_DIMENSION)
+    assertTrue(decoded.height <= LINK_PREVIEW_IMAGE_MAX_DIMENSION)
+  }
+
+  @Test
+  fun corruptImageIsNegativeCachedWithoutRefetch() =
+    withServer { server ->
+      server.enqueue(MockResponse().setHeader("Content-Type", "image/webp").setBody("not an image"))
+      val store = LinkPreviewImageStore(fetcher = fetcher()::fetchImage)
+      val imageUrl = server.url("/corrupt.webp").toString()
+
+      assertSame(LinkPreviewImageResult.Failed, store.get(imageUrl))
+      assertSame(LinkPreviewImageResult.Failed, store.get(imageUrl))
+      assertEquals(1, server.requestCount)
+    }
+
   private fun fetcher(timeoutMillis: Long = 6_000): LinkPreviewFetcher = LinkPreviewFetcher(baseClient().build(), timeoutMillis, permissiveHostPolicy)
 
   private fun realPolicyFetcher(): LinkPreviewFetcher = LinkPreviewFetcher(baseClient().build())
@@ -311,6 +407,27 @@ class ChatLinkPreviewTest {
     MockResponse()
       .setResponseCode(302)
       .setHeader("Location", location)
+
+  private fun imageResponse(bytes: ByteArray): MockResponse =
+    MockResponse()
+      .setHeader("Content-Type", "image/png")
+      .setBody(Buffer().write(bytes))
+
+  private fun pngBytes(
+    width: Int,
+    height: Int,
+  ): ByteArray {
+    val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    return try {
+      bitmap.eraseColor(Color.rgb(24, 96, 192))
+      ByteArrayOutputStream().use { output ->
+        check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output))
+        output.toByteArray()
+      }
+    } finally {
+      bitmap.recycle()
+    }
+  }
 
   private fun withServer(block: suspend (MockWebServer) -> Unit) {
     MockWebServer().use { server ->

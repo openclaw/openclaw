@@ -1,6 +1,6 @@
 // Msteams tests cover graph upload plugin behavior.
-import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
+import { withFetchPreconnect, withServer } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
 import { resolveGraphChatId, uploadToOneDrive, uploadToSharePoint } from "./graph-upload.js";
 
@@ -246,6 +246,60 @@ describe("resolveGraphChatId", () => {
     });
 
     expect(result).toBeNull();
+  });
+});
+
+describe("graph upload response limits", () => {
+  const tokenProvider = {
+    getAccessToken: vi.fn(async () => "graph-token"),
+  };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("rejects an oversized upload response from a real loopback server", async () => {
+    await withServer(
+      (_req, res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        const chunk = Buffer.alloc(64 * 1024, 0x20);
+        let remaining = 257; // >16 MiB when combined with the JSON prefix.
+        res.write(
+          '{"id":"item-big","webUrl":"https://example.com/big","name":"big.txt","padding":"',
+        );
+        const writeNext = () => {
+          if (remaining <= 0) {
+            res.end('"}');
+            return;
+          }
+          remaining -= 1;
+          if (res.write(chunk)) {
+            setImmediate(writeNext);
+          } else {
+            res.once("drain", writeNext);
+          }
+        };
+        writeNext();
+      },
+      async (baseUrl) => {
+        const realFetch = globalThis.fetch.bind(globalThis);
+        vi.stubGlobal(
+          "fetch",
+          withFetchPreconnect(async (input: RequestInfo | URL, init?: RequestInit) => {
+            const url = new URL(input instanceof Request ? input.url : String(input));
+            const loopback = new URL(`${url.pathname}${url.search}`, baseUrl);
+            return realFetch(loopback, init);
+          }),
+        );
+
+        await expect(
+          uploadToOneDrive({ buffer: Buffer.from("x"), filename: "big.txt", tokenProvider }),
+        ).rejects.toThrow(
+          "msteams.graph-upload.uploadOneDriveFile: JSON response exceeds 16777216 bytes",
+        );
+      },
+    );
   });
 });
 
