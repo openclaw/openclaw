@@ -133,6 +133,7 @@ jobs:
       - name: Validate npm release request
         env:
           BYPASS_EXTENDED_STABLE_GUARD: ${{ inputs.bypass_extended_stable_guard }}
+          PREFLIGHT_ONLY: ${{ inputs.preflight_only }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           RELEASE_TAG: ${{ inputs.tag }}
           NPM_WORKFLOW_REF: ${{ github.ref }}
