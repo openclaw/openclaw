@@ -7,6 +7,7 @@ import {
   storeDeviceAuthTokenInStore,
 } from "../../../../src/shared/device-auth-store.js";
 import type { DeviceAuthStore } from "../../../../src/shared/device-auth.js";
+import { normalizeGatewayCredentialScope } from "../../app/gateway-scope.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { cloneConfigObject, removePathValue, setPathValue } from "../config-form-utils.ts";
 
@@ -142,7 +143,8 @@ export type DeviceIdentity = {
   privateKey: string;
 };
 
-const DEVICE_AUTH_STORAGE_KEY = "openclaw.device.auth.v1";
+const LEGACY_DEVICE_AUTH_STORAGE_KEY = "openclaw.device.auth.v1";
+const DEVICE_AUTH_STORAGE_KEY_PREFIX = `${LEGACY_DEVICE_AUTH_STORAGE_KEY}:`;
 const DEVICE_IDENTITY_STORAGE_KEY = "openclaw-device-identity-v1";
 
 export function createInitialNodesState(
@@ -253,24 +255,26 @@ export async function rejectDevicePairing(state: DevicesState, requestId: string
 
 export async function rotateDeviceToken(
   state: DevicesState,
-  params: { deviceId: string; role: string; scopes?: string[] },
+  params: { deviceId: string; gatewayUrl: string; role: string; scopes?: string[] },
 ) {
   if (!state.client || !state.connected) {
     return;
   }
   try {
+    const { gatewayUrl, ...requestParams } = params;
     const res = await state.client.request<{
       token?: string;
       role?: string;
       deviceId?: string;
       scopes?: Array<string>;
-    }>("device.token.rotate", params);
+    }>("device.token.rotate", requestParams);
     if (res?.token) {
       const identity = await loadOrCreateDeviceIdentity();
       const role = res.role ?? params.role;
       if (res.deviceId === identity.deviceId || params.deviceId === identity.deviceId) {
         storeDeviceAuthToken({
           deviceId: identity.deviceId,
+          gatewayUrl,
           role,
           token: res.token,
           scopes: res.scopes ?? params.scopes ?? [],
@@ -286,7 +290,7 @@ export async function rotateDeviceToken(
 
 export async function revokeDeviceToken(
   state: DevicesState,
-  params: { deviceId: string; role: string },
+  params: { deviceId: string; gatewayUrl: string; role: string },
 ) {
   if (!state.client || !state.connected) {
     return;
@@ -296,10 +300,15 @@ export async function revokeDeviceToken(
     return;
   }
   try {
-    await state.client.request("device.token.revoke", params);
+    const { gatewayUrl, ...requestParams } = params;
+    await state.client.request("device.token.revoke", requestParams);
     const identity = await loadOrCreateDeviceIdentity();
     if (params.deviceId === identity.deviceId) {
-      clearDeviceAuthToken({ deviceId: identity.deviceId, role: params.role });
+      clearDeviceAuthToken({
+        deviceId: identity.deviceId,
+        gatewayUrl,
+        role: params.role,
+      });
     }
     await loadDevices(state);
   } catch (err) {
@@ -433,9 +442,13 @@ export function removeExecApprovalsFormValue(
   state.execApprovalsDirty = true;
 }
 
-function readStore(): DeviceAuthStore | null {
+function deviceAuthStorageKey(gatewayUrl: string): string {
+  return `${DEVICE_AUTH_STORAGE_KEY_PREFIX}${normalizeGatewayCredentialScope(gatewayUrl)}`;
+}
+
+function readStore(gatewayUrl: string): DeviceAuthStore | null {
   try {
-    const raw = getSafeLocalStorage()?.getItem(DEVICE_AUTH_STORAGE_KEY);
+    const raw = getSafeLocalStorage()?.getItem(deviceAuthStorageKey(gatewayUrl));
     if (!raw) {
       return null;
     }
@@ -455,9 +468,11 @@ function readStore(): DeviceAuthStore | null {
   }
 }
 
-function writeStore(store: DeviceAuthStore) {
+function writeStore(gatewayUrl: string, store: DeviceAuthStore) {
   try {
-    getSafeLocalStorage()?.setItem(DEVICE_AUTH_STORAGE_KEY, JSON.stringify(store));
+    const storage = getSafeLocalStorage();
+    storage?.setItem(deviceAuthStorageKey(gatewayUrl), JSON.stringify(store));
+    storage?.removeItem(LEGACY_DEVICE_AUTH_STORAGE_KEY);
   } catch {
     // localStorage can be unavailable in private or embedded contexts.
   }
@@ -465,10 +480,14 @@ function writeStore(store: DeviceAuthStore) {
 
 export function loadDeviceAuthToken(params: {
   deviceId: string;
+  gatewayUrl: string;
   role: string;
 }): DeviceAuthEntry | null {
   return loadDeviceAuthTokenFromStore({
-    adapter: { readStore, writeStore },
+    adapter: {
+      readStore: () => readStore(params.gatewayUrl),
+      writeStore: (store) => writeStore(params.gatewayUrl, store),
+    },
     deviceId: params.deviceId,
     role: params.role,
   });
@@ -476,12 +495,16 @@ export function loadDeviceAuthToken(params: {
 
 export function storeDeviceAuthToken(params: {
   deviceId: string;
+  gatewayUrl: string;
   role: string;
   token: string;
   scopes?: string[];
 }): DeviceAuthEntry {
   return storeDeviceAuthTokenInStore({
-    adapter: { readStore, writeStore },
+    adapter: {
+      readStore: () => readStore(params.gatewayUrl),
+      writeStore: (store) => writeStore(params.gatewayUrl, store),
+    },
     deviceId: params.deviceId,
     role: params.role,
     token: params.token,
@@ -489,9 +512,16 @@ export function storeDeviceAuthToken(params: {
   });
 }
 
-export function clearDeviceAuthToken(params: { deviceId: string; role: string }) {
+export function clearDeviceAuthToken(params: {
+  deviceId: string;
+  gatewayUrl: string;
+  role: string;
+}) {
   clearDeviceAuthTokenFromStore({
-    adapter: { readStore, writeStore },
+    adapter: {
+      readStore: () => readStore(params.gatewayUrl),
+      writeStore: (store) => writeStore(params.gatewayUrl, store),
+    },
     deviceId: params.deviceId,
     role: params.role,
   });
