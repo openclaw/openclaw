@@ -395,7 +395,7 @@ describe("respawnGatewayProcessForUpdate", () => {
     );
   });
 
-  it("handles asynchronous detached child errors before unref", () => {
+  it("registers a no-op detached child error listener before unref", () => {
     clearSupervisorHints();
     setPlatform("linux");
     process.execArgv = [];
