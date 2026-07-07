@@ -3,7 +3,7 @@ import { type ParseError, parseTree, printParseErrorCode } from "jsonc-parser/li
 import type { Diagnostic } from "../ast.js";
 import type { JsoncAst, JsoncEntry, JsoncValue } from "./ast.js";
 
-export const MAX_PARSE_DEPTH = 256;
+const MAX_PARSE_DEPTH = 256;
 
 /**
  * Hard cap on jsonc input size. `parseTree` is iterative and stack-safe
