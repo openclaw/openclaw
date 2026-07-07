@@ -837,8 +837,8 @@ function getDebugProxyCaptureStoreImpl(
   }
   const store = new DebugProxyCaptureStoreImpl(optionsOrDbPath, legacyBlobDir);
   cachedStores.set(key, { store, leases: 0 });
-  // Safety net for legacy path-based stores that own their DatabaseSync; the
-  // shared-path store's handle is closed by the state DB cache's own hook.
+  // Safety net for legacy path-based stores that own their DatabaseSync;
+  // shared-path stores only flip their closed flag here, never the shared DB.
   unregisterExitClose ??= registerSqliteCacheExitClose(closeDebugProxyCaptureStore);
   return store;
 }

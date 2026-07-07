@@ -14,7 +14,6 @@ import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.j
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import {
   configureSqliteConnectionPragmas,
-  registerSqliteCacheExitClose,
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -951,9 +950,6 @@ export function openOpenClawStateDatabase(
   ensureOpenClawStatePermissions(pathname, env);
   const database = { db, path: pathname, walMaintenance };
   cachedDatabases.set(pathname, database);
-  // Safety net for processes that end without an orderly close (CLI one-shots,
-  // ACP bridge). Runtime shutdown paths stay canonical; closing unregisters it.
-  unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawStateDatabase);
   return database;
 }
 
@@ -973,12 +969,8 @@ export function runOpenClawStateWriteTransaction<T>(
   return result;
 }
 
-let unregisterExitClose: (() => void) | null = null;
-
 /** Close all cached shared state database handles. */
 export function closeOpenClawStateDatabase(): void {
-  unregisterExitClose?.();
-  unregisterExitClose = null;
   for (const database of cachedDatabases.values()) {
     database.walMaintenance.close();
     clearNodeSqliteKyselyCacheForDatabase(database.db);

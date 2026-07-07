@@ -272,8 +272,8 @@ export function openOpenClawAgentDatabase(
   ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
   const database = { agentId, db, path: pathname, walMaintenance };
   cachedDatabases.set(pathname, database);
-  // Safety net for processes that end without an orderly close; mirrors the
-  // shared state DB cache. Closing unregisters it.
+  // Safety net for processes that end without an orderly close: agent DBs have
+  // no shutdown owner like the ACP/gateway state DB closes. Closing unregisters.
   unregisterExitClose ??= registerSqliteCacheExitClose(closeOpenClawAgentDatabases);
   registerAgentDatabase({ agentId, path: pathname, env: options.env });
   return database;
