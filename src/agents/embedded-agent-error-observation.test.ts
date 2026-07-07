@@ -207,3 +207,14 @@ describe("sanitizeForConsole", () => {
     expect(sanitizeForConsole("run-1\nprovider\tmodel\rtest")).toBe("run-1 provider model test");
   });
 });
+
+describe("observation truncation", () => {
+  it("does not split surrogate pairs", async () => {
+    const { truncateUtf16Safe } = await import("@openclaw/normalization-core/utf16-slice");
+    const content = "x".repeat(77) + "🚀tail";
+    const bad = content.slice(0, 78);
+    expect(bad.endsWith("\uD83D")).toBe(true);
+    const good = truncateUtf16Safe(content, 78);
+    expect(good).toBe("x".repeat(77));
+  });
+});

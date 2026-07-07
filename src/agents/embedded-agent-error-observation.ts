@@ -1,10 +1,11 @@
-/**
- * Builds structured observations for embedded-agent API/text failures.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readLoggingConfig } from "../logging/config.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
 import { getDefaultRedactPatterns, redactSensitiveText } from "../logging/redact.js";
+/**
+ * Builds structured observations for embedded-agent API/text failures.
+ */
+import { truncateUtf16Safe } from "../utils.js";
 import {
   classifyProviderRuntimeFailureKind,
   getApiErrorPayloadFingerprint,
@@ -43,7 +44,7 @@ function truncateForObservation(text: string | undefined, maxChars: number): str
   if (!trimmed) {
     return undefined;
   }
-  return trimmed.length > maxChars ? `${trimmed.slice(0, maxChars)}…` : trimmed;
+  return trimmed.length > maxChars ? `${truncateUtf16Safe(trimmed, maxChars)}…` : trimmed;
 }
 
 function boundObservationInput(text: string | undefined): string | undefined {
