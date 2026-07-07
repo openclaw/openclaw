@@ -1,6 +1,7 @@
 // Covers delivery retry policy: permanent-error classification, backoff timing,
 // and first-replay eligibility after crashes.
 import { describe, expect, it } from "vitest";
+import { computeRecoveryRetryDelayMs } from "../delivery-recovery.shared.js";
 import {
   computeBackoffMs,
   isEntryEligibleForRecoveryRetry,
@@ -69,23 +70,32 @@ describe("delivery-queue policy", () => {
 
     it("defers retry entries until backoff window elapses", () => {
       const now = Date.now();
-      const result = isEntryEligibleForRecoveryRetry(
-        {
-          id: "entry-2",
-          channel: "demo-channel",
-          to: "+1",
-          payloads: [{ text: "a" }],
-          enqueuedAt: now - 30_000,
-          retryCount: 3,
-          lastAttemptAt: now,
-        },
-        now,
-      );
+      const entry = {
+        id: "entry-2",
+        channel: "demo-channel",
+        to: "+1",
+        payloads: [{ text: "a" }],
+        enqueuedAt: now - 30_000,
+        retryCount: 3,
+        lastAttemptAt: now,
+      } as const;
+      const retryDelay = computeRecoveryRetryDelayMs(entry.id, entry.retryCount + 1);
+      const result = isEntryEligibleForRecoveryRetry(entry, now + retryDelay - 1);
       expect(result.eligible).toBe(false);
       if (result.eligible) {
         throw new Error("Expected ineligible retry entry");
       }
-      expect(result.remainingBackoffMs).toBe(600_000);
+      expect(result.remainingBackoffMs).toBe(1);
+      expect(isEntryEligibleForRecoveryRetry(entry, now + retryDelay)).toEqual({
+        eligible: true,
+      });
+    });
+
+    it("adds stable bounded jitter to retry eligibility", () => {
+      const retryDelay = computeRecoveryRetryDelayMs("entry-with-jitter", 2);
+      expect(retryDelay).toBeGreaterThanOrEqual(25_000);
+      expect(retryDelay).toBeLessThanOrEqual(26_000);
+      expect(computeRecoveryRetryDelayMs("entry-with-jitter", 2)).toBe(retryDelay);
     });
   });
 });

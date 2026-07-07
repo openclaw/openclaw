@@ -2,6 +2,7 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
+import { computeRecoveryRetryDelayMs } from "./delivery-recovery.shared.js";
 import {
   drainPendingSessionDeliveries,
   enqueueSessionDelivery,
@@ -222,10 +223,17 @@ describe("session-delivery queue recovery", () => {
       if (typeof lastAttemptAt !== "number") {
         throw new Error("expected failed delivery attempt timestamp");
       }
-      const notReady = isSessionDeliveryEligibleForRetry(failedEntry, lastAttemptAt + 4_999);
+      const retryDelay = computeRecoveryRetryDelayMs(failedEntry.id, failedEntry.retryCount);
+      expect(retryDelay).toBeGreaterThanOrEqual(5_000);
+      expect(retryDelay).toBeLessThanOrEqual(6_000);
+
+      const notReady = isSessionDeliveryEligibleForRetry(
+        failedEntry,
+        lastAttemptAt + retryDelay - 1,
+      );
       expect(notReady).toEqual({ eligible: false, remainingBackoffMs: 1 });
 
-      const ready = isSessionDeliveryEligibleForRetry(failedEntry, lastAttemptAt + 5_000);
+      const ready = isSessionDeliveryEligibleForRetry(failedEntry, lastAttemptAt + retryDelay);
       expect(ready).toEqual({ eligible: true });
     });
 

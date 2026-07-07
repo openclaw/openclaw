@@ -6,7 +6,8 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import {
   claimRecoveryEntry as claimSharedRecoveryEntry,
-  computeBackoffMs,
+  computeRecoveryReplayPacingMs,
+  computeRecoveryRetryDelayMs,
   getErrnoCode,
   releaseRecoveryEntry as releaseSharedRecoveryEntry,
 } from "./delivery-recovery.shared.js";
@@ -30,6 +31,7 @@ type SessionDeliveryRecoverySummary = {
 };
 
 type DeliverSessionDeliveryFn = (entry: QueuedSessionDelivery) => Promise<void>;
+type SessionDeliveryRecoveryDelayFn = (delayMs: number) => Promise<void>;
 
 export interface SessionDeliveryRecoveryLogger {
   info(msg: string): void;
@@ -46,6 +48,12 @@ const MAX_SESSION_DELIVERY_RETRIES = 5;
 
 const drainInProgress = new Map<string, boolean>();
 const entriesInProgress = new Set<string>();
+
+function waitForSessionDeliveryRecoveryDelay(delayMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, delayMs);
+  });
+}
 
 function createEmptyRecoverySummary(): SessionDeliveryRecoverySummary {
   return {
@@ -72,8 +80,8 @@ export function isSessionDeliveryEligibleForRetry(
   entry: QueuedSessionDelivery,
   now: number,
 ): { eligible: true } | { eligible: false; remainingBackoffMs: number } {
-  const backoff = computeBackoffMs(entry.retryCount);
-  if (backoff <= 0) {
+  const retryDelay = computeRecoveryRetryDelayMs(entry.id, entry.retryCount);
+  if (retryDelay <= 0) {
     return { eligible: true };
   }
   const firstReplayAfterCrash = entry.retryCount === 0 && entry.lastAttemptAt === undefined;
@@ -84,7 +92,7 @@ export function isSessionDeliveryEligibleForRetry(
     typeof entry.lastAttemptAt === "number" && entry.lastAttemptAt > 0
       ? entry.lastAttemptAt
       : entry.enqueuedAt;
-  const nextEligibleAt = baseAttemptAt + backoff;
+  const nextEligibleAt = baseAttemptAt + retryDelay;
   if (now >= nextEligibleAt) {
     return { eligible: true };
   }
@@ -202,6 +210,7 @@ export async function recoverPendingSessionDeliveries(opts: {
   stateDir?: string;
   maxRecoveryMs?: number;
   maxEnqueuedAt?: number;
+  recoveryDelay?: SessionDeliveryRecoveryDelayFn;
 }): Promise<SessionDeliveryRecoverySummary> {
   const pending = (await loadPendingSessionDeliveries(opts.stateDir)).filter(
     (entry) => opts.maxEnqueuedAt == null || entry.enqueuedAt <= opts.maxEnqueuedAt,
@@ -247,6 +256,23 @@ export async function recoverPendingSessionDeliveries(opts: {
       if (!retryEligibility.eligible) {
         summary.deferredBackoff += 1;
         continue;
+      }
+
+      const pacingDelayMs = computeRecoveryReplayPacingMs(currentEntry.id, currentEntry.retryCount);
+      if (pacingDelayMs > 0) {
+        if (Date.now() + pacingDelayMs >= deadline) {
+          opts.log.warn(
+            "Session delivery recovery time budget exceeded — remaining entries deferred",
+          );
+          break;
+        }
+        await (opts.recoveryDelay ?? waitForSessionDeliveryRecoveryDelay)(pacingDelayMs);
+        if (Date.now() >= deadline) {
+          opts.log.warn(
+            "Session delivery recovery time budget exceeded — remaining entries deferred",
+          );
+          break;
+        }
       }
 
       const result = await drainQueuedEntry({

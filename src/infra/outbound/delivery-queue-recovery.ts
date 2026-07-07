@@ -12,6 +12,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   claimRecoveryEntry as claimSharedRecoveryEntry,
   computeBackoffMs,
+  computeRecoveryReplayPacingMs,
+  computeRecoveryRetryDelayMs,
   getErrnoCode,
   releaseRecoveryEntry as releaseSharedRecoveryEntry,
 } from "../delivery-recovery.shared.js";
@@ -66,6 +68,8 @@ export interface RecoveryLogger {
   error(msg: string): void;
 }
 
+type RecoveryDelayFn = (delayMs: number) => Promise<void>;
+
 export interface PendingDeliveryDrainDecision {
   match: boolean;
   bypassBackoff?: boolean;
@@ -93,6 +97,12 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
 
 const drainInProgress = new Map<string, boolean>();
 const entriesInProgress = new Set<string>();
+
+function waitForRecoveryDelay(delayMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, delayMs);
+  });
+}
 
 function resolveRecoveryDeadlineMs(maxRecoveryMs: number | undefined): number {
   const durationMs =
@@ -330,8 +340,8 @@ export function isEntryEligibleForRecoveryRetry(
   entry: QueuedDelivery,
   now: number,
 ): { eligible: true } | { eligible: false; remainingBackoffMs: number } {
-  const backoff = computeBackoffMs(entry.retryCount + 1);
-  if (backoff <= 0) {
+  const retryDelay = computeRecoveryRetryDelayMs(entry.id, entry.retryCount + 1);
+  if (retryDelay <= 0) {
     return { eligible: true };
   }
   const firstReplayAfterCrash = entry.retryCount === 0 && entry.lastAttemptAt === undefined;
@@ -345,7 +355,7 @@ export function isEntryEligibleForRecoveryRetry(
   const baseAttemptAt = hasAttemptTimestamp
     ? (entry.lastAttemptAt ?? entry.enqueuedAt)
     : entry.enqueuedAt;
-  const nextEligibleAt = baseAttemptAt + backoff;
+  const nextEligibleAt = baseAttemptAt + retryDelay;
   if (now >= nextEligibleAt) {
     return { eligible: true };
   }
@@ -727,6 +737,8 @@ export async function recoverPendingDeliveries(opts: {
   stateDir?: string;
   /** Maximum wall-clock time for recovery in ms. Remaining entries are deferred to next startup. Default: 60 000. */
   maxRecoveryMs?: number;
+  /** Test seam for retry pacing delays. */
+  recoveryDelay?: RecoveryDelayFn;
 }): Promise<RecoverySummary> {
   const pending = await loadPendingDeliveries(opts.stateDir);
   if (pending.length === 0) {
@@ -776,6 +788,24 @@ export async function recoverPendingDeliveries(opts: {
           `Delivery ${currentEntry.id} not ready for retry yet — backoff ${currentRetryEligibility.remainingBackoffMs}ms remaining`,
         );
         continue;
+      }
+
+      const pacingDelayMs = computeRecoveryReplayPacingMs(currentEntry.id, currentEntry.retryCount);
+      if (pacingDelayMs > 0) {
+        if (Date.now() + pacingDelayMs >= deadline) {
+          opts.log.warn(
+            `Recovery time budget exceeded — remaining entries deferred to next startup`,
+          );
+          break;
+        }
+        opts.log.info(`Delivery ${currentEntry.id} pacing retry recovery by ${pacingDelayMs}ms`);
+        await (opts.recoveryDelay ?? waitForRecoveryDelay)(pacingDelayMs);
+        if (Date.now() >= deadline) {
+          opts.log.warn(
+            `Recovery time budget exceeded — remaining entries deferred to next startup`,
+          );
+          break;
+        }
       }
 
       const result = await drainQueuedEntry({

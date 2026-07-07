@@ -3,6 +3,10 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import {
+  computeRecoveryReplayPacingMs,
+  computeRecoveryRetryDelayMs,
+} from "../delivery-recovery.shared.js";
 import { OutboundDeliveryError, type OutboundPayloadDeliveryOutcome } from "./deliver-types.js";
 import { attachOutboundDeliveryCommitHook } from "./delivery-commit-hooks.js";
 import {
@@ -78,10 +82,12 @@ describe("delivery-queue recovery", () => {
     deliver,
     log = createRecoveryLog(),
     maxRecoveryMs,
+    recoveryDelay,
   }: {
     deliver: ReturnType<typeof vi.fn>;
     log?: ReturnType<typeof createRecoveryLog>;
     maxRecoveryMs?: number;
+    recoveryDelay?: (delayMs: number) => Promise<void>;
   }) => {
     const result = await recoverPendingDeliveries({
       deliver: asDeliverFn(deliver),
@@ -89,6 +95,7 @@ describe("delivery-queue recovery", () => {
       cfg: baseCfg,
       stateDir: tmpDir(),
       ...(maxRecoveryMs === undefined ? {} : { maxRecoveryMs }),
+      recoveryDelay: recoveryDelay ?? (async () => {}),
     });
     return { result, log };
   };
@@ -1121,6 +1128,51 @@ describe("delivery-queue recovery", () => {
     expect(remaining[0]?.id).toBe(blockedId);
   });
 
+  it("paces eligible retry replays with deterministic per-entry delays", async () => {
+    const now = Date.now();
+    const firstId = await enqueueDelivery(
+      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "first" }] },
+      tmpDir(),
+    );
+    const secondId = await enqueueDelivery(
+      { channel: "demo-channel-b", to: "2", payloads: [{ text: "second" }] },
+      tmpDir(),
+    );
+    setQueuedEntryState(tmpDir(), firstId, {
+      retryCount: 1,
+      lastAttemptAt: now - 60_000,
+      enqueuedAt: now - 20_000,
+    });
+    setQueuedEntryState(tmpDir(), secondId, {
+      retryCount: 1,
+      lastAttemptAt: now - 60_000,
+      enqueuedAt: now - 10_000,
+    });
+
+    const recoveryDelays: number[] = [];
+    const deliver = vi.fn().mockResolvedValue([]);
+    const { result } = await runRecovery({
+      deliver,
+      maxRecoveryMs: 60_000,
+      recoveryDelay: async (delayMs) => {
+        recoveryDelays.push(delayMs);
+      },
+    });
+
+    expect(result).toEqual({
+      recovered: 2,
+      failed: 0,
+      skippedMaxRetries: 0,
+      deferredBackoff: 0,
+    });
+    expect(deliver).toHaveBeenCalledTimes(2);
+    expect(recoveryDelays).toEqual([
+      computeRecoveryReplayPacingMs(firstId, 1),
+      computeRecoveryReplayPacingMs(secondId, 1),
+    ]);
+    expect(recoveryDelays.every((delayMs) => delayMs > 0)).toBe(true);
+  });
+
   it("recovers deferred entries on a later restart once backoff elapsed", async () => {
     vi.useFakeTimers();
     const start = new Date("2026-01-01T00:00:00.000Z");
@@ -1142,7 +1194,7 @@ describe("delivery-queue recovery", () => {
     });
     expect(firstDeliver).not.toHaveBeenCalled();
 
-    vi.setSystemTime(new Date(start.getTime() + 600_000 + 1));
+    vi.setSystemTime(new Date(start.getTime() + computeRecoveryRetryDelayMs(id, 4) + 1));
     const secondDeliver = vi.fn().mockResolvedValue([]);
     const secondRun = await runRecovery({ deliver: secondDeliver, maxRecoveryMs: 60_000 });
     expect(secondRun.result).toEqual({
