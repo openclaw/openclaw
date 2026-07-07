@@ -182,14 +182,22 @@ function resolveEntrypointFromCmdShim(wrapperPath: string): string | null {
   try {
     const content = readFileSync(wrapperPath, "utf8");
     const normalizedContent = content.replaceAll("\r\n", "\n").toLowerCase();
-    // Only npm cmd-shim launchers are safe to bypass; arbitrary batch wrappers
-    // can depend on setup commands before dispatching their target.
+    const significantLines = content
+      .split(/\r?\n/u)
+      .map((line) => line.trim())
+      .filter(Boolean);
     const isNpmCmdShim =
       normalizedContent.includes("\ngoto start\n") &&
       normalizedContent.includes("\n:find_dp0\n") &&
       normalizedContent.includes("set dp0=%~dp0") &&
       normalizedContent.includes("call :find_dp0");
-    if (!isNpmCmdShim) {
+    const isDirectForwarder =
+      significantLines.length === 2 &&
+      /^@echo off$/iu.test(significantLines[0] ?? "") &&
+      /^"%~?dp0%?[\\/][^"\r\n]+"\s+%\*$/iu.test(significantLines[1] ?? "");
+    // Only known direct-forwarder shapes are safe to bypass; arbitrary batch
+    // wrappers can depend on setup commands before dispatching their target.
+    if (!isNpmCmdShim && !isDirectForwarder) {
       return null;
     }
     const candidates: string[] = [];
@@ -210,6 +218,12 @@ function resolveEntrypointFromCmdShim(wrapperPath: string): string | null {
       const base = normalizeLowercaseStringOrEmpty(path.basename(candidate));
       return base !== "node.exe" && base !== "node";
     });
+    if (isDirectForwarder && nonNode) {
+      const ext = normalizeLowercaseStringOrEmpty(path.extname(nonNode));
+      if (ext !== ".exe" && ext !== ".js" && ext !== ".cjs" && ext !== ".mjs") {
+        return null;
+      }
+    }
     return nonNode ?? null;
   } catch {
     return null;
