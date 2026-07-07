@@ -133,6 +133,7 @@ export function createLsToolDefinition(
 
             // Check if path exists.
             if (!(await ops.exists(dirPath))) {
+              signal?.removeEventListener("abort", onAbort);
               reject(new Error(`Path not found: ${dirPath}`));
               return;
             }
@@ -140,6 +141,7 @@ export function createLsToolDefinition(
             // Check if path is a directory.
             const stat = await ops.stat(dirPath);
             if (!stat.isDirectory()) {
+              signal?.removeEventListener("abort", onAbort);
               reject(new Error(`Not a directory: ${dirPath}`));
               return;
             }
@@ -150,6 +152,7 @@ export function createLsToolDefinition(
               entries = await ops.readdir(dirPath);
             } catch (error) {
               const message = error instanceof Error ? error.message : String(error);
+              signal?.removeEventListener("abort", onAbort);
               reject(new Error(`Cannot read directory: ${message}`));
               return;
             }
