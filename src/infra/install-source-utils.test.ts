@@ -8,6 +8,7 @@ import {
   resolveArchiveSourcePath,
   withTempDir,
 } from "./install-source-utils.js";
+import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
 const execFileSyncMock = vi.hoisted(() => vi.fn(() => "/tmp/openclaw-test-global-npmrc\n"));
 const runCommandWithTimeoutMock = vi.fn();
@@ -143,6 +144,21 @@ describe("withTempDir", () => {
     });
 
     expect(value).toBe("done");
+    await expectPathMissing(observedDir);
+  });
+
+  it("uses OpenClaw-owned temp root instead of shared /tmp to avoid chmod of system directories", async () => {
+    const preferredRoot = resolvePreferredOpenClawTmpDir();
+    let observedDir = "";
+
+    await withTempDir("openclaw-install-source-utils-", async (tmpDir) => {
+      observedDir = tmpDir;
+      await fs.writeFile(path.join(tmpDir, "ok"), "ok", "utf-8");
+    });
+
+    // The temp dir must be under the OpenClaw-owned root, not directly under /tmp.
+    // This prevents the underlying temp workspace from chmod'ing the shared /tmp.
+    expect(observedDir.startsWith(preferredRoot)).toBe(true);
     await expectPathMissing(observedDir);
   });
 });
