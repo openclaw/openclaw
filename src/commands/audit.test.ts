@@ -41,3 +41,16 @@ describe("audit command parsing", () => {
     expect(row).toContain("run\\tcolumn");
   });
 });
+
+describe("audit text truncation", () => {
+  it("does not split surrogate pairs", async () => {
+    const { truncateUtf16Safe } = await import("@openclaw/normalization-core/utf16-slice");
+    const content = "x".repeat(78) + "🚀tail";
+    // .slice(0, 79) would cut in the middle of the surrogate pair
+    const bad = content.slice(0, 79);
+    expect(bad.endsWith("\uD83D")).toBe(true);
+    // truncateUtf16Safe drops the broken surrogate, keeping only 78 x's
+    const good = truncateUtf16Safe(content, 79);
+    expect(good).toBe("x".repeat(78));
+  });
+});
