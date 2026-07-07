@@ -11,7 +11,7 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { shouldSuppressGoogleChatManualExecApprovalFollowupText } from "./approval-card-actions.js";
 import { getGoogleChatAccessToken } from "./auth.js";
-import type { GoogleChatCardV2, GoogleChatReaction } from "./types.js";
+import type { GoogleChatCardV2, GoogleChatReaction, GoogleChatSpace } from "./types.js";
 
 const CHAT_API_BASE = "https://chat.googleapis.com/v1";
 const CHAT_UPLOAD_BASE = "https://chat.googleapis.com/upload/v1";
@@ -316,11 +316,20 @@ export async function deleteGoogleChatReaction(params: {
 export async function findGoogleChatDirectMessage(params: {
   account: ResolvedGoogleChatAccount;
   userName: string;
-}): Promise<{ name?: string; displayName?: string } | null> {
+}): Promise<GoogleChatSpace | null> {
   const { account, userName } = params;
   const url = new URL(`${CHAT_API_BASE}/spaces:findDirectMessage`);
   url.searchParams.set("name", userName);
-  return await fetchJson<{ name?: string; displayName?: string }>(account, url.toString(), {
+  return await fetchJson<GoogleChatSpace>(account, url.toString(), {
+    method: "GET",
+  });
+}
+
+export async function getGoogleChatSpace(params: {
+  account: ResolvedGoogleChatAccount;
+  spaceName: string;
+}): Promise<GoogleChatSpace> {
+  return await fetchJson<GoogleChatSpace>(params.account, `${CHAT_API_BASE}/${params.spaceName}`, {
     method: "GET",
   });
 }

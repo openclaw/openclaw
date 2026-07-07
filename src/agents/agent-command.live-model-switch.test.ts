@@ -1401,6 +1401,34 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(state.assertLifecycleCurrentMock).toHaveBeenLastCalledWith("test-generation");
   });
 
+  it("persists structured transcript media for ACP turns", async () => {
+    state.acpResolveSessionMock.mockReturnValue({
+      kind: "ready",
+      meta: {
+        agent: "claude",
+        cwd: "/tmp/workspace",
+      },
+    });
+
+    await agentCommand({
+      message: "[media attached: media://inbound/image-1]",
+      transcriptMessage: "",
+      transcriptMedia: [{ path: "/media/inbound/image-1.png", contentType: "image/png" }],
+      sessionKey: "agent:main:main",
+    });
+
+    expect(state.persistAcpTurnTranscriptMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transcriptBody: "",
+        userInput: {
+          text: "",
+          media: [{ path: "/media/inbound/image-1.png", contentType: "image/png" }],
+          mediaOnlyText: "[User sent media without caption]",
+        },
+      }),
+    );
+  });
+
   it("keeps the initial session touch for local runs", async () => {
     setupSingleAttemptFallback();
     state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
@@ -3034,6 +3062,33 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(attempt.userTurnTranscriptRecorder?.message).toMatchObject({
       role: "user",
       content: "canonical image caption",
+    });
+  });
+
+  it("persists structured transcript media without a caption", async () => {
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+
+    await agentCommand({
+      message: "[media attached: media://inbound/image-1]",
+      transcriptMessage: "",
+      transcriptMedia: [{ path: "/media/inbound/image-1.png", contentType: "image/png" }],
+      images: [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }],
+      to: "+1234567890",
+    });
+
+    const attempt = mockCallArg(state.runAgentAttemptMock) as {
+      suppressPromptPersistenceOnRetry?: boolean;
+      userTurnTranscriptRecorder?: { message?: unknown };
+    };
+    expect(attempt.suppressPromptPersistenceOnRetry).toBe(false);
+    expect(attempt.userTurnTranscriptRecorder?.message).toMatchObject({
+      role: "user",
+      content: "[User sent media without caption]",
+      MediaPath: "/media/inbound/image-1.png",
+      MediaPaths: ["/media/inbound/image-1.png"],
+      MediaType: "image/png",
+      MediaTypes: ["image/png"],
     });
   });
 

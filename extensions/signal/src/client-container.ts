@@ -6,7 +6,6 @@
  * to keep the two modes cleanly isolated.
  */
 
-import fs from "node:fs/promises";
 import nodePath from "node:path";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { detectMime, parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
@@ -19,12 +18,14 @@ import {
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { readRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import WebSocket from "ws";
 
 export type ContainerRpcOptions = {
   baseUrl: string;
   timeoutMs?: number;
   maxResponseBytes?: number;
+  maxAttachmentBytes?: number;
 };
 
 export type ContainerWebSocketMessage = {
@@ -57,6 +58,10 @@ const DEFAULT_ATTACHMENT_RESPONSE_MAX_BYTES = 1_048_576;
 // Receive envelopes contain JSON metadata; attachment bytes are fetched separately.
 // Keep the ws pre-buffer limit narrow so a container cannot force 100 MiB frames.
 const SIGNAL_CONTAINER_WS_MAX_PAYLOAD_BYTES = 1024 * 1024;
+// Outbound file paths are converted to base64 before posting to the container. Cap
+// reads to the same default the native signal send path uses (8 MiB) so a path to a
+// huge or symlinked file cannot OOM the gateway before encoding.
+const DEFAULT_SIGNAL_CONTAINER_MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 const CONTAINER_TEXT_STYLE_MARKERS: Record<string, string> = {
   BOLD: "**",
   ITALIC: "*",
@@ -392,10 +397,20 @@ export async function streamContainerEvents(params: {
  * Convert local file paths to base64 data URIs for the container REST API.
  * The bbernhard container /v2/send only accepts `base64_attachments` (not file paths).
  */
-async function filesToBase64DataUris(filePaths: string[]): Promise<string[]> {
+async function filesToBase64DataUris(
+  filePaths: string[],
+  maxAttachmentBytes: number,
+): Promise<string[]> {
   const results: string[] = [];
+  let remainingBytes = maxAttachmentBytes;
   for (const filePath of filePaths) {
-    const buffer = await fs.readFile(filePath);
+    // One send owns one raw-byte budget. A per-file cap would let attachment
+    // count multiply the memory consumed before the container request starts.
+    const { buffer } = await readRegularFile({
+      filePath,
+      maxBytes: remainingBytes,
+    });
+    remainingBytes -= buffer.byteLength;
     const mime = (await detectMime({ buffer, filePath })) ?? "application/octet-stream";
     const filename = nodePath.basename(filePath);
     const b64 = buffer.toString("base64");
@@ -484,6 +499,7 @@ export async function containerSendMessage(params: {
   message: string;
   textStyles?: Array<{ start: number; length: number; style: string }>;
   attachments?: string[];
+  maxAttachmentBytes?: number;
   quoteTimestamp?: number;
   quoteAuthor?: string;
   quoteMessage?: string;
@@ -502,7 +518,17 @@ export async function containerSendMessage(params: {
 
   if (params.attachments && params.attachments.length > 0) {
     // Container API only accepts base64-encoded attachments, not file paths.
-    payload.base64_attachments = await filesToBase64DataUris(params.attachments);
+    const configuredMaxBytes = params.maxAttachmentBytes;
+    const maxAttachmentBytes =
+      typeof configuredMaxBytes === "number" &&
+      Number.isFinite(configuredMaxBytes) &&
+      configuredMaxBytes >= 0
+        ? Math.floor(configuredMaxBytes)
+        : DEFAULT_SIGNAL_CONTAINER_MAX_ATTACHMENT_BYTES;
+    payload.base64_attachments = await filesToBase64DataUris(
+      params.attachments,
+      maxAttachmentBytes,
+    );
   }
   if (params.quoteTimestamp !== undefined && params.quoteAuthor) {
     payload.quote_timestamp = params.quoteTimestamp;
@@ -695,6 +721,7 @@ export async function containerRpcRequest<T = unknown>(
         message: (p.message as string) ?? "",
         textStyles,
         attachments: p.attachments as string[] | undefined,
+        maxAttachmentBytes: opts.maxAttachmentBytes,
         quoteTimestamp,
         quoteAuthor: quoteAuthor ? stripUuidPrefix(quoteAuthor) : undefined,
         quoteMessage: normalizeContainerQuoteText(p.quoteMessage ?? p["quote-message"]),
