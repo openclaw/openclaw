@@ -520,6 +520,158 @@ describe("handleToolExecutionEnd cron mutation tracking", () => {
     expect(ctx.state.itemActiveIds.size).toBe(0);
   });
 
+  it("increments successfulCronAdds when shell cron add succeeds", async () => {
+    const { ctx } = createTestContext();
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-cron-add",
+        args: {
+          command: "  openclaw cron add --at +1h --message 'follow up' --name reminder",
+        },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-cron-add",
+        isError: false,
+        result: {
+          details: {
+            status: "completed",
+            exitCode: 0,
+            aggregated: JSON.stringify({
+              ok: true,
+              params: {
+                id: "job-shell-cron",
+                schedule: { kind: "once", atMs: 1_713_000_000_000 },
+                payload: { kind: "agentTurn", message: "follow up" },
+              },
+            }),
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.successfulCronAdds).toBe(1);
+  });
+
+  it("increments successfulCronAdds when shell cron add emits warning text with JSON", async () => {
+    const { ctx } = createTestContext();
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "bash",
+        toolCallId: "tool-bash-cron-add-warning-json",
+        args: {
+          command: "openclaw cron add --at +1h --message 'follow up' --name reminder",
+        },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "bash",
+        toolCallId: "tool-bash-cron-add-warning-json",
+        isError: false,
+        result: {
+          details: {
+            status: "completed",
+            exitCode: 0,
+            aggregated: [
+              "No --agent specified; using configured default agent.",
+              JSON.stringify({
+                ok: true,
+                params: {
+                  id: "job-shell-cron",
+                  schedule: { kind: "once", atMs: 1_713_000_000_000 },
+                  payload: { kind: "agentTurn", message: "follow up" },
+                },
+              }),
+              "Scheduled reminder using the configured default agent.",
+            ].join("\n"),
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.successfulCronAdds).toBe(1);
+  });
+
+  it("does not increment successfulCronAdds when shell cron add fails", async () => {
+    const { ctx } = createTestContext();
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-cron-add-failed",
+        args: {
+          command: "openclaw cron add --at +1h --message 'follow up' --name reminder",
+        },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-cron-add-failed",
+        isError: false,
+        result: {
+          details: {
+            status: "completed",
+            exitCode: 1,
+            aggregated: "Cron job name is required.",
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.successfulCronAdds).toBe(0);
+  });
+
+  it("does not increment successfulCronAdds for unrelated shell commands", async () => {
+    const { ctx } = createTestContext();
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-cron-list",
+        args: { command: "openclaw cron list --json" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-cron-list",
+        isError: false,
+        result: {
+          details: {
+            status: "completed",
+            exitCode: 0,
+            aggregated: JSON.stringify({ jobs: [] }),
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.successfulCronAdds).toBe(0);
+  });
+
   it("keeps pre-execution cron failures replay-safe", async () => {
     const { ctx } = createTestContext();
     await handleToolExecutionStart(

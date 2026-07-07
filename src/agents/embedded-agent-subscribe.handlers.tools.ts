@@ -276,6 +276,9 @@ function isExecToolName(toolName: string): boolean {
   return toolName === "exec" || toolName === "bash";
 }
 
+const SHELL_CRON_ADD_COMMAND_PATTERN =
+  /(?:^|(?:&&|\|\||;))\s*(?:env\s+)?(?:(?:[A-Za-z_][A-Za-z0-9_]*=\S+)\s+)*(?:(?:corepack\s+)?pnpm\s+)?(?:[\w./-]*openclaw)\s+cron\s+add(?:\s|$)/;
+
 function isPatchToolName(toolName: string): boolean {
   return toolName === "apply_patch";
 }
@@ -451,6 +454,124 @@ function extractExecOutput(result: unknown): string | undefined {
 function extractLiveExecOutput(result: unknown): string | undefined {
   const output = extractExecOutput(result);
   return typeof output === "string" ? truncateLiveExecOutput(output) : undefined;
+}
+
+function readCronAddShellCommand(args: unknown): string | undefined {
+  const record = asOptionalObjectRecord(args);
+  const command = readStringValue(record?.command) ?? readStringValue(record?.cmd);
+  if (!command || !SHELL_CRON_ADD_COMMAND_PATTERN.test(command)) {
+    return undefined;
+  }
+  return command;
+}
+
+function readJsonObjectAt(
+  text: string,
+  startIndex: number,
+): { record: Record<string, unknown>; endIndex: number } | undefined {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = startIndex; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === "{") {
+      depth += 1;
+      continue;
+    }
+    if (char !== "}") {
+      continue;
+    }
+    depth -= 1;
+    if (depth !== 0) {
+      continue;
+    }
+    try {
+      const parsed: unknown = JSON.parse(text.slice(startIndex, index + 1));
+      const record = asOptionalObjectRecord(parsed);
+      return record ? { record, endIndex: index } : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+function readCronAddResultRecords(output: string | undefined): Record<string, unknown>[] {
+  if (!output) {
+    return [];
+  }
+  try {
+    const parsed: unknown = JSON.parse(output);
+    const record = asOptionalObjectRecord(parsed);
+    if (record) {
+      return [record];
+    }
+  } catch {
+    // Exec aggregated output can contain stderr warnings around JSON stdout.
+  }
+  const records: Record<string, unknown>[] = [];
+  for (let index = 0; index < output.length; index += 1) {
+    if (output[index] !== "{") {
+      continue;
+    }
+    const parsed = readJsonObjectAt(output, index);
+    if (!parsed) {
+      continue;
+    }
+    records.push(parsed.record);
+    index = parsed.endIndex;
+  }
+  return records;
+}
+
+function isCronJobRecord(value: unknown): boolean {
+  const record = asOptionalObjectRecord(value);
+  return Boolean(
+    record &&
+    readStringValue(record.id) &&
+    asOptionalObjectRecord(record.schedule) &&
+    asOptionalObjectRecord(record.payload),
+  );
+}
+
+function isCronAddResponseRecord(value: unknown): boolean {
+  const record = asOptionalObjectRecord(value);
+  if (!record) {
+    return false;
+  }
+  if (isCronJobRecord(record) || isCronJobRecord(record.job)) {
+    return true;
+  }
+  if (record.ok === true) {
+    return isCronJobRecord(record.params) || isCronJobRecord(record.result);
+  }
+  return false;
+}
+
+function didShellCronAddSucceed(args: unknown, result: unknown): boolean {
+  if (!readCronAddShellCommand(args)) {
+    return false;
+  }
+  const details = readExecToolDetails(result);
+  if (details?.status !== "completed" || details.exitCode !== 0) {
+    return false;
+  }
+  const output = extractExecOutput(result);
+  return readCronAddResultRecords(output).some(isCronAddResponseRecord);
 }
 
 function readChannelToolProgress(result: unknown): ChannelToolProgress | undefined {
@@ -1352,7 +1473,11 @@ export async function handleToolExecutionEnd(
   }
 
   // Track committed reminders only when cron.add completed successfully.
-  if (!isToolError && toolName === "cron" && isCronAddAction(startArgs)) {
+  if (
+    !isToolError &&
+    ((toolName === "cron" && isCronAddAction(startArgs)) ||
+      (isExecToolName(toolName) && didShellCronAddSucceed(startArgs, result)))
+  ) {
     ctx.state.successfulCronAdds += 1;
   }
   if (!isToolError && toolName === HEARTBEAT_RESPONSE_TOOL_NAME) {
