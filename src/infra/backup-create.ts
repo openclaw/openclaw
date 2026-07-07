@@ -202,7 +202,14 @@ async function writeTarArchiveWithRetry(params: {
         await fs.rm(params.tempArchivePath, { force: true });
       } catch (cleanupErr) {
         const code = (cleanupErr as NodeJS.ErrnoException).code;
-        if (code && code !== "ENOENT") {
+        if (code === "EBUSY") {
+          // On Windows, a leaked file descriptor from the failed runTar
+          // may still hold a lock.  Wait briefly and retry once so the
+          // next write attempt does not immediately fail on a still-locked
+          // file, defeating the BACKUP_TAR_BACKOFF_MS retry mechanism.
+          await sleepFn(500);
+          await fs.rm(params.tempArchivePath, { force: true }).catch(() => undefined);
+        } else if (code && code !== "ENOENT") {
           params.log?.(
             `Backup archiver could not remove temp archive ${params.tempArchivePath} between retries: ${code}. Continuing.`,
           );
@@ -223,7 +230,9 @@ async function writeTarArchiveWithRetry(params: {
   const suffix = offendingPath
     ? ` (last offending path: ${offendingPath}, after ${BACKUP_TAR_MAX_ATTEMPTS} attempts)`
     : ` (after ${BACKUP_TAR_MAX_ATTEMPTS} attempts)`;
-  throw new Error(`Backup archive write failed: ${final.message}${suffix}`, { cause: final });
+  throw new Error(`Backup archive write failed: ${final.message}${suffix}`, {
+    cause: final,
+  });
 }
 
 export const testApi = {
@@ -735,7 +744,11 @@ export async function createBackupArchive(
   const archiveRoot = buildBackupArchiveRoot(nowMs);
   const onlyConfig = Boolean(opts.onlyConfig);
   const includeWorkspace = onlyConfig ? false : (opts.includeWorkspace ?? true);
-  const plan = await resolveBackupPlanFromDisk({ includeWorkspace, onlyConfig, nowMs });
+  const plan = await resolveBackupPlanFromDisk({
+    includeWorkspace,
+    onlyConfig,
+    nowMs,
+  });
   const outputPath = await resolveOutputPath({
     output: opts.output,
     nowMs,
@@ -784,7 +797,10 @@ export async function createBackupArchive(
   }
 
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
-  const tempRoot = await chooseBackupTempRoot({ assets: result.assets, outputPath });
+  const tempRoot = await chooseBackupTempRoot({
+    assets: result.assets,
+    outputPath,
+  });
   await fs.mkdir(tempRoot, { recursive: true });
   const tempDir = await fs.mkdtemp(path.join(tempRoot, "openclaw-backup-"));
   const manifestPath = path.join(tempDir, "manifest.json");
@@ -823,7 +839,9 @@ export async function createBackupArchive(
     const extensionsFilter = stateAsset
       ? buildExtensionsNodeModulesFilter(stateAsset.sourcePath)
       : undefined;
-    const volatilePlan = { stateDirs: [stateAsset?.sourcePath ?? plan.stateDir] };
+    const volatilePlan = {
+      stateDirs: [stateAsset?.sourcePath ?? plan.stateDir],
+    };
     let skippedVolatileCount = 0;
     // node-tar invokes filters from async stat callbacks, so throwing inside
     // the filter is uncaught. Omit unexpected SQLite and reject after tar settles.
