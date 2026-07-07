@@ -63,7 +63,6 @@ import {
   preflightSessionTranscriptForManualCompact,
   trimSessionTranscriptForManualCompact,
 } from "../../config/sessions/session-accessor.js";
-import { updateSessionStore } from "../../config/sessions/store.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   measureDiagnosticsTimelineSpan,
@@ -158,9 +157,11 @@ async function clearPersistedNoActiveRunSessionState(params: {
     return false;
   }
   let candidateSessionKeys: string[] = [];
-  const target = await updateSessionStore(
-    params.storePath,
-    async (store) => {
+  let primarySessionKey: string | undefined;
+  const target = await applySessionPatchProjection({
+    storePath: params.storePath,
+    resolveTarget: ({ entries }) => {
+      const store = Object.fromEntries(entries.map(({ sessionKey, entry }) => [sessionKey, entry]));
       const resolvedTarget = resolveGatewaySessionStoreTarget({
         cfg: params.cfg,
         key: params.key,
@@ -169,25 +170,27 @@ async function clearPersistedNoActiveRunSessionState(params: {
       });
       const targetEntry = resolveFreshestSessionEntryFromStoreKeys(store, resolvedTarget.storeKeys);
       if (!targetEntry) {
-        return undefined;
+        return { primaryKey: resolvedTarget.canonicalKey, candidateKeys: resolvedTarget.storeKeys };
       }
-      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+      const { target: migratedTarget, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
         cfg: params.cfg,
         key: params.key,
         store,
         agentId: params.agentId,
       });
-      candidateSessionKeys = resolvedTarget.storeKeys;
-      return { primaryKey, storeKeys: resolvedTarget.storeKeys };
+      candidateSessionKeys = migratedTarget.storeKeys;
+      primarySessionKey = primaryKey;
+      return { primaryKey, candidateKeys: migratedTarget.storeKeys };
     },
-    { skipSaveWhenResult: (value) => value === undefined },
-  );
-  if (!target?.primaryKey) {
+    project: ({ existingEntry }) =>
+      existingEntry ? { ok: true, entry: existingEntry } : { ok: false },
+  });
+  if (!target.ok || !primarySessionKey) {
     return false;
   }
   const result = await reconcilePersistedRunningSession({
     storePath: params.storePath,
-    sessionKey: target.primaryKey,
+    sessionKey: primarySessionKey,
     candidateSessionKeys,
     activeRunPresent: false,
     reason: "sessions_abort_no_active_run",
