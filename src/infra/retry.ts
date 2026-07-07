@@ -38,6 +38,33 @@ const DEFAULT_RETRY_CONFIG = {
   jitter: 0,
 };
 
+const retryAttemptErrors = new WeakMap<object, readonly unknown[]>();
+
+function appendRetryAttemptError(attemptErrors: unknown[], err: unknown): void {
+  const nestedAttempts = getRetryAttemptErrors(err);
+  attemptErrors.push(...(nestedAttempts ?? [err]));
+}
+
+function createRetryFailure(attemptErrors: readonly unknown[]): Error {
+  const failure = toErrorObject(
+    attemptErrors.at(-1) ?? new Error("Retry failed"),
+    "Non-Error thrown",
+  );
+  if (attemptErrors.length > 1) {
+    // Preserve the public terminal-error identity while carrying every internal
+    // attempt into duplicate-send decisions made outside the channel adapter.
+    retryAttemptErrors.set(failure, [...attemptErrors]);
+  }
+  return failure;
+}
+
+/** Returns flattened failures from an exhausted retry operation, when it retried. */
+export function getRetryAttemptErrors(err: unknown): readonly unknown[] | undefined {
+  return err !== null && (typeof err === "object" || typeof err === "function")
+    ? retryAttemptErrors.get(err)
+    : undefined;
+}
+
 const clampNumber = (value: unknown, fallback: number, min?: number, max?: number) => {
   const next = asFiniteNumber(value);
   if (next === undefined) {
@@ -112,12 +139,12 @@ export async function retryAsync<T>(
 ): Promise<T> {
   if (typeof attemptsOrOptions === "number") {
     const attempts = resolveAttemptCount(attemptsOrOptions, DEFAULT_RETRY_CONFIG.attempts);
-    let lastErr: unknown;
+    const attemptErrors: unknown[] = [];
     for (let i = 0; i < attempts; i += 1) {
       try {
         return await fn();
       } catch (err) {
-        lastErr = err;
+        appendRetryAttemptError(attemptErrors, err);
         if (i === attempts - 1) {
           break;
         }
@@ -125,7 +152,7 @@ export async function retryAsync<T>(
         await sleep(delay);
       }
     }
-    throw toErrorObject(lastErr ?? new Error("Retry failed"), "Non-Error thrown");
+    throw createRetryFailure(attemptErrors);
   }
 
   const options = attemptsOrOptions;
@@ -146,13 +173,13 @@ export async function retryAsync<T>(
         );
   const jitter = resolved.jitter;
   const shouldRetry = options.shouldRetry ?? (() => true);
-  let lastErr: unknown;
+  const attemptErrors: unknown[] = [];
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       return await fn();
     } catch (err) {
-      lastErr = err;
+      appendRetryAttemptError(attemptErrors, err);
       if (attempt >= maxAttempts || !shouldRetry(err, attempt)) {
         break;
       }
@@ -207,5 +234,5 @@ export async function retryAsync<T>(
     }
   }
 
-  throw toErrorObject(lastErr ?? new Error("Retry failed"), "Non-Error thrown");
+  throw createRetryFailure(attemptErrors);
 }

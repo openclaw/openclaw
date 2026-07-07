@@ -227,6 +227,30 @@ describe("delivery-queue recovery", () => {
     expect(entries[0]?.lastError).toBe("network down");
   });
 
+  it("keeps a repeated pre-connect recovery failure replayable", async () => {
+    const id = await enqueueDelivery(
+      { channel: "demo-channel-c", to: "#ch", payloads: [{ text: "x" }] },
+      tmpDir(),
+    );
+    const connectError = Object.assign(new Error("connect ECONNREFUSED"), {
+      code: "ECONNREFUSED",
+      syscall: "connect",
+    });
+    const deliver = vi.fn(async () => {
+      await markDeliveryPlatformSendAttemptStarted(id, tmpDir());
+      throw connectError;
+    });
+
+    const { result } = await runRecovery({ deliver });
+
+    expect(result).toMatchObject({ recovered: 0, failed: 1 });
+    const entries = await loadPendingDeliveries(tmpDir());
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.retryCount).toBe(1);
+    expect(entries[0]?.recoveryState).toBeUndefined();
+    expect(entries[0]?.platformSendStartedAt).toBeUndefined();
+  });
+
   it("does not replay a recovery batch that rejected after an earlier send succeeded", async () => {
     const id = await enqueueDelivery(
       {
@@ -292,6 +316,94 @@ describe("delivery-queue recovery", () => {
     expect(entries[0]?.recoveryState).toBeUndefined();
     expect(entries[0]?.retryCount).toBe(1);
     expect(entries[0]?.lastError).toBe("network down");
+  });
+
+  it("clears send evidence for an all-pre-connect best-effort recovery failure", async () => {
+    const id = await enqueueDelivery(
+      {
+        channel: "demo-channel-c",
+        to: "#ch",
+        payloads: [{ text: "first" }],
+        bestEffort: true,
+      },
+      tmpDir(),
+    );
+    const deliver = vi.fn(
+      async (params: {
+        onPayloadDeliveryOutcome?: (outcome: OutboundPayloadDeliveryOutcome) => void;
+      }) => {
+        await markDeliveryPlatformSendAttemptStarted(id, tmpDir());
+        params.onPayloadDeliveryOutcome?.({
+          index: 0,
+          status: "failed",
+          error: Object.assign(new Error("getaddrinfo EAI_AGAIN"), {
+            code: "EAI_AGAIN",
+            syscall: "getaddrinfo",
+          }),
+          sentBeforeError: false,
+          stage: "platform_send",
+        });
+        return [];
+      },
+    );
+
+    const { result } = await runRecovery({ deliver });
+
+    expect(result).toMatchObject({ recovered: 0, failed: 1 });
+    const entries = await loadPendingDeliveries(tmpDir());
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.retryCount).toBe(1);
+    expect(entries[0]?.recoveryState).toBeUndefined();
+    expect(entries[0]?.platformSendStartedAt).toBeUndefined();
+  });
+
+  it("preserves send evidence when any best-effort recovery failure is ambiguous", async () => {
+    const id = await enqueueDelivery(
+      {
+        channel: "demo-channel-c",
+        to: "#ch",
+        payloads: [{ text: "first" }, { text: "second" }],
+        bestEffort: true,
+      },
+      tmpDir(),
+    );
+    const deliver = vi.fn(
+      async (params: {
+        onPayloadDeliveryOutcome?: (outcome: OutboundPayloadDeliveryOutcome) => void;
+      }) => {
+        await markDeliveryPlatformSendAttemptStarted(id, tmpDir());
+        params.onPayloadDeliveryOutcome?.({
+          index: 0,
+          status: "failed",
+          error: Object.assign(new Error("connect ECONNREFUSED"), {
+            code: "ECONNREFUSED",
+            syscall: "connect",
+          }),
+          sentBeforeError: false,
+          stage: "platform_send",
+        });
+        params.onPayloadDeliveryOutcome?.({
+          index: 1,
+          status: "failed",
+          error: Object.assign(new Error("read ECONNRESET"), {
+            code: "ECONNRESET",
+            syscall: "read",
+          }),
+          sentBeforeError: false,
+          stage: "platform_send",
+        });
+        return [];
+      },
+    );
+
+    const { result } = await runRecovery({ deliver });
+
+    expect(result).toMatchObject({ recovered: 0, failed: 1 });
+    const entries = await loadPendingDeliveries(tmpDir());
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.retryCount).toBe(1);
+    expect(entries[0]?.recoveryState).toBe("send_attempt_started");
+    expect(typeof entries[0]?.platformSendStartedAt).toBe("number");
   });
 
   it("does not ack a partially sent best-effort recovery batch", async () => {
