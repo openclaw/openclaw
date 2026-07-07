@@ -52,6 +52,9 @@ type NativeLocaleSyncOptions = {
   translate?: NativeTranslator;
   translationsDir?: string;
 };
+type NativeI18nCollectOptions = {
+  rootDir?: string;
+};
 type NativeI18nCommand = {
   command: "check" | "sync";
   locale?: string;
@@ -948,9 +951,27 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
-export async function collectNativeI18nEntries(): Promise<NativeI18nEntry[]> {
+function nativeSourceRoots(rootDir: string): Record<NativeI18nSurface, string[]> {
+  if (rootDir === ROOT) {
+    return SOURCE_ROOTS;
+  }
+  return {
+    android: [path.join(rootDir, "apps", "android", "app", "src", "main")],
+    apple: [
+      path.join(rootDir, "apps", "ios"),
+      path.join(rootDir, "apps", "macos", "Sources"),
+      path.join(rootDir, "apps", "shared", "OpenClawKit", "Sources"),
+    ],
+  };
+}
+
+export async function collectNativeI18nEntries(
+  options: NativeI18nCollectOptions = {},
+): Promise<NativeI18nEntry[]> {
+  const rootDir = options.rootDir ? path.resolve(options.rootDir) : ROOT;
+  const sourceRoots = nativeSourceRoots(rootDir);
   const roots = (["android", "apple"] as const).flatMap((surface) =>
-    SOURCE_ROOTS[surface].map((sourceRoot) => ({ sourceRoot, surface })),
+    sourceRoots[surface].map((sourceRoot) => ({ sourceRoot, surface })),
   );
   const filesByRoot = await Promise.all(
     roots.map(async ({ sourceRoot, surface }) => ({
@@ -962,7 +983,7 @@ export async function collectNativeI18nEntries(): Promise<NativeI18nEntry[]> {
     filesByRoot.flatMap(({ files, surface }) => files.map((filePath) => ({ filePath, surface }))),
     NATIVE_SOURCE_READ_CONCURRENCY,
     async ({ filePath, surface }) => ({
-      repoPath: path.relative(ROOT, filePath).split(path.sep).join("/"),
+      repoPath: path.relative(rootDir, filePath).split(path.sep).join("/"),
       source: await readFile(filePath, "utf8"),
       surface,
     }),

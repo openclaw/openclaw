@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "lastUpdated": "2026-07-07T18:03:07Z",
+  "owner": "Program Manager",
+  "lastVerifiedAt": "2026-07-07T18:03:07Z",
+  "source": "control/docs/PROGRAM_MANAGER_OUTPUT_CONTRACT.md",
+  "verificationStatus": "partial",
+  "stalenessPolicy": "Re-verify against control/docs/PROGRAM_MANAGER_OUTPUT_CONTRACT.md before any Program Manager completion/status contract claim; operational backlog/status remains UNKNOWN unless a separate approved truth source is provided.",
+  "validatedAt": "2026-07-07T18:03:07Z",
+  "checks": [
+    {
+      "name": "approved-source-inspection",
+      "status": "passed",
+      "evidence": "control/docs/PROGRAM_MANAGER_OUTPUT_CONTRACT.md exists and defines Program Manager mission, required schema fields, evidence labels, completion safety, approval gates, and non-scope boundaries."
+    }
+  ],
+  "summary": "Program Manager output-contract state is partially verified from the approved source. Live operational backlog/status remains Unknown until a separate approved operational truth source is provided."
+}

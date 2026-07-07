@@ -8,6 +8,7 @@ import {
   emitAgentAuditEvent,
   emitAgentEvent,
   getAgentEventLifecycleGeneration,
+  emitProgramManagerTelemetryEvent,
   getAgentRunContext,
   listAgentRunsForSession,
   onAgentAuditEvent,
@@ -467,6 +468,53 @@ describe("agent-events sequencing", () => {
     stop();
 
     expect(phases).toEqual(["start", "end"]);
+  });
+
+  test("emits Program Manager telemetry as non-secret agent events", () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const stop = onAgentEvent((evt) => {
+      if (evt.stream === "program_manager_telemetry") {
+        seen.push(evt.data);
+      }
+    });
+
+    emitProgramManagerTelemetryEvent({
+      runId: "run-program-manager",
+      data: {
+        eventName: "program_manager.plan.created",
+        timestamp: "2026-07-07T00:00:00.000Z",
+        milestoneId: "M7",
+        status: "UNKNOWN",
+        ownerRole: "Program Manager",
+        evidenceLabel: "Unknown",
+      },
+    });
+    stop();
+
+    expect(seen).toEqual([
+      {
+        agentId: "program-manager",
+        eventName: "program_manager.plan.created",
+        timestamp: "2026-07-07T00:00:00.000Z",
+        milestoneId: "M7",
+        status: "UNKNOWN",
+        ownerRole: "Program Manager",
+        evidenceLabel: "Unknown",
+      },
+    ]);
+  });
+
+  test("rejects Program Manager telemetry with secret-like fields", () => {
+    expect(() =>
+      emitProgramManagerTelemetryEvent({
+        runId: "run-program-manager",
+        data: {
+          eventName: "program_manager.plan.created",
+          timestamp: "2026-07-07T00:00:00.000Z",
+          token: "not-allowed",
+        } as never,
+      }),
+    ).toThrow("forbidden secret-like key");
   });
 
   test("omits sessionKey for non-lifecycle runs hidden from Control UI", () => {

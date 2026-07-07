@@ -1,4 +1,4 @@
-import { readFile, stat } from "node:fs/promises";
+import { cp, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -21,7 +21,27 @@ describe("native app i18n inventory", () => {
   });
 
   it("collects stable Android and Apple UI entries", async () => {
-    const entries = await collectNativeI18nEntries();
+    const tempDirs: string[] = [];
+    const rootDir = makeTempDir(tempDirs, "native-i18n-inventory-");
+    let entries: NativeI18nEntry[] = [];
+    try {
+      await Promise.all(
+        [
+          "apps/android/app/src/main",
+          "apps/ios",
+          "apps/macos/Sources",
+          "apps/shared/OpenClawKit/Sources",
+        ].map((relativePath) =>
+          cp(path.join(process.cwd(), relativePath), path.join(rootDir, relativePath), {
+            force: true,
+            recursive: true,
+          }),
+        ),
+      );
+      entries = await collectNativeI18nEntries({ rootDir });
+    } finally {
+      cleanupTempDirs(tempDirs);
+    }
     const surfaces = new Set(entries.map((entry) => entry.surface));
 
     expect(entries.length).toBeGreaterThan(100);

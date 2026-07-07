@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "lastUpdated": "2026-07-07T18:03:07Z",
+  "owner": "Program Manager",
+  "lastVerifiedAt": "2026-07-07T18:03:07Z",
+  "source": "control/docs/PROGRAM_MANAGER_OUTPUT_CONTRACT.md",
+  "verificationStatus": "partial",
+  "stalenessPolicy": "Re-verify against control/docs/PROGRAM_MANAGER_OUTPUT_CONTRACT.md before any Program Manager completion/status contract claim; operational backlog/status remains UNKNOWN unless a separate approved truth source is provided.",
+  "priorities": [
+    {
+      "id": "PM-P1",
+      "priority": "Require evidence-labeled accountable planning/status outputs before downstream execution or review.",
+      "evidenceStatus": "Confirmed"
+    },
+    {
+      "id": "PM-P2",
+      "priority": "Refuse or mark Unknown/Not complete for unsupported completion claims.",
+      "evidenceStatus": "Confirmed"
+    },
+    {
+      "id": "PM-P3",
+      "priority": "List approval gates instead of executing approval-required actions.",
+      "evidenceStatus": "Confirmed"
+    }
+  ],
+  "unknowns": [
+    "Operational project priority ordering is not provided by the approved output contract source."
+  ]
+}
