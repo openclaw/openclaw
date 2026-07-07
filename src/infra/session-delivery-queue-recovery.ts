@@ -7,9 +7,9 @@ import {
 import {
   claimRecoveryEntry as claimSharedRecoveryEntry,
   computeBackoffMs,
+  createRecoveryReplayPacer,
   getErrnoCode,
   releaseRecoveryEntry as releaseSharedRecoveryEntry,
-  waitForRecoveryReplayPace,
 } from "./delivery-recovery.shared.js";
 import { formatErrorMessage } from "./errors.js";
 import {
@@ -47,6 +47,7 @@ const MAX_SESSION_DELIVERY_RETRIES = 5;
 
 const drainInProgress = new Map<string, boolean>();
 const entriesInProgress = new Set<string>();
+const recoveryReplayPacer = createRecoveryReplayPacer();
 
 function createEmptyRecoverySummary(): SessionDeliveryRecoverySummary {
   return {
@@ -214,7 +215,6 @@ export async function recoverPendingSessionDeliveries(opts: {
   pending.sort((a, b) => a.enqueuedAt - b.enqueuedAt);
   const summary = createEmptyRecoverySummary();
   const deadline = resolveSessionDeliveryRecoveryDeadlineMs(opts.maxRecoveryMs);
-  let hasAttemptedReplay = false;
 
   for (const entry of pending) {
     if (Date.now() >= deadline) {
@@ -251,10 +251,7 @@ export async function recoverPendingSessionDeliveries(opts: {
         continue;
       }
 
-      const paceResult = await waitForRecoveryReplayPace({
-        hasAttemptedReplay,
-        deadlineMs: deadline,
-      });
+      const paceResult = await recoveryReplayPacer.wait(deadline);
       if (paceResult === "deadline-exceeded") {
         opts.log.warn(
           "Session delivery recovery time budget exceeded — remaining entries deferred",
@@ -274,7 +271,6 @@ export async function recoverPendingSessionDeliveries(opts: {
           opts.log.warn(`Session delivery retry failed: ${errMsg}`);
         },
       });
-      hasAttemptedReplay = true;
       if (result === "recovered") {
         opts.log.info(`Recovered session delivery ${currentEntry.id}`);
       }

@@ -12,9 +12,9 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   claimRecoveryEntry as claimSharedRecoveryEntry,
   computeBackoffMs,
+  createRecoveryReplayPacer,
   getErrnoCode,
   releaseRecoveryEntry as releaseSharedRecoveryEntry,
-  waitForRecoveryReplayPace,
 } from "../delivery-recovery.shared.js";
 import { formatErrorMessage } from "../errors.js";
 import { resolveOutboundChannelMessageAdapter } from "./channel-resolution.js";
@@ -94,6 +94,7 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
 
 const drainInProgress = new Map<string, boolean>();
 const entriesInProgress = new Set<string>();
+const recoveryReplayPacer = createRecoveryReplayPacer();
 
 function resolveRecoveryDeadlineMs(maxRecoveryMs: number | undefined): number {
   const durationMs =
@@ -687,6 +688,8 @@ export async function drainPendingDeliveries(opts: {
           }
         }
 
+        await recoveryReplayPacer.wait();
+
         const result = await drainQueuedEntry({
           entry: currentEntry,
           cfg: opts.cfg,
@@ -739,7 +742,6 @@ export async function recoverPendingDeliveries(opts: {
 
   const deadline = resolveRecoveryDeadlineMs(opts.maxRecoveryMs);
   const summary = createEmptyRecoverySummary();
-  let hasAttemptedReplay = false;
 
   for (const entry of pending) {
     const now = Date.now();
@@ -780,10 +782,7 @@ export async function recoverPendingDeliveries(opts: {
         continue;
       }
 
-      const paceResult = await waitForRecoveryReplayPace({
-        hasAttemptedReplay,
-        deadlineMs: deadline,
-      });
+      const paceResult = await recoveryReplayPacer.wait(deadline);
       if (paceResult === "deadline-exceeded") {
         opts.log.warn(`Recovery time budget exceeded — remaining entries deferred to next startup`);
         break;
@@ -810,7 +809,6 @@ export async function recoverPendingDeliveries(opts: {
           opts.log.warn(`Retry failed for delivery ${failedEntry.id}: ${errMsg}`);
         },
       });
-      hasAttemptedReplay = true;
       if (result === "moved-to-failed") {
         continue;
       }

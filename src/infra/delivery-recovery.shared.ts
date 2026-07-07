@@ -32,20 +32,43 @@ export function releaseRecoveryEntry(entriesInProgress: Set<string>, entryId: st
   entriesInProgress.delete(entryId);
 }
 
-// Startup recovery can find many already-eligible entries after an outage.
-// Pace only between real replay attempts and keep the wait inside the existing
-// wall-clock budget so a large backlog cannot prolong startup work indefinitely.
-export async function waitForRecoveryReplayPace(params: {
-  hasAttemptedReplay: boolean;
-  deadlineMs: number;
-}): Promise<"ready" | "deadline-exceeded"> {
-  if (!params.hasAttemptedReplay) {
-    return "ready";
-  }
-  if (Date.now() >= params.deadlineMs) {
-    return "deadline-exceeded";
-  }
-  const remainingBudgetMs = Math.max(0, params.deadlineMs - Date.now());
-  await sleep(Math.min(RECOVERY_REPLAY_SPACING_MS, remainingBudgetMs));
-  return Date.now() >= params.deadlineMs ? "deadline-exceeded" : "ready";
+export function createRecoveryReplayPacer(): {
+  wait(deadlineMs?: number): Promise<"ready" | "deadline-exceeded">;
+} {
+  let lastReplayStartedAt = 0;
+  let waitQueue = Promise.resolve();
+
+  return {
+    async wait(deadlineMs) {
+      let releaseWaiter: () => void = () => {};
+      const previousWaiter = waitQueue;
+      waitQueue = new Promise<void>((resolve) => {
+        releaseWaiter = resolve;
+      });
+      await previousWaiter;
+
+      try {
+        const now = Date.now();
+        if (deadlineMs !== undefined && now >= deadlineMs) {
+          return "deadline-exceeded";
+        }
+        // Clock rollback starts a fresh pacing epoch. Otherwise concurrent startup
+        // and reconnect drains serialize here so neither can bypass the spacing floor.
+        const elapsedMs = now - lastReplayStartedAt;
+        const waitMs = elapsedMs < 0 ? 0 : Math.max(0, RECOVERY_REPLAY_SPACING_MS - elapsedMs);
+        if (waitMs > 0) {
+          const remainingBudgetMs =
+            deadlineMs === undefined ? waitMs : Math.max(0, deadlineMs - now);
+          await sleep(Math.min(waitMs, remainingBudgetMs));
+        }
+        if (deadlineMs !== undefined && Date.now() >= deadlineMs) {
+          return "deadline-exceeded";
+        }
+        lastReplayStartedAt = Date.now();
+        return "ready";
+      } finally {
+        releaseWaiter();
+      }
+    },
+  };
 }
