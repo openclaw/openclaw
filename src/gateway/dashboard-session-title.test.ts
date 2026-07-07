@@ -39,12 +39,37 @@ function mockSessionUpdate(current: SessionEntry): void {
   });
 }
 
+function hasLoneSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        return true;
+      }
+      index += 1;
+      continue;
+    }
+    if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
 describe("normalizeDashboardSessionTitle", () => {
   it("keeps the first content line and strips common wrappers", () => {
     expect(normalizeDashboardSessionTitle('```text\n"Release Planning"\n```')).toBe(
       "Release Planning",
     );
     expect(normalizeDashboardSessionTitle("Title:  Release   planning ")).toBe("Release planning");
+  });
+
+  it("keeps normalized titles on a UTF-16 boundary", () => {
+    const title = normalizeDashboardSessionTitle(`${"a".repeat(59)}\u{1f63e}tail`);
+
+    expect(title).toBe("a".repeat(59));
+    expect(hasLoneSurrogate(title ?? "")).toBe(false);
   });
 });
 
@@ -80,6 +105,20 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     expect(await update?.({ ...baseEntry })).toEqual({
       displayName: "Release Planning",
     });
+  });
+
+  it("keeps utility title prompt input on a UTF-16 boundary", async () => {
+    await expect(
+      maybeGenerateDashboardSessionTitle({
+        ...titleParams(),
+        userMessage: `${"m".repeat(999)}\u{1f63e}tail`,
+      }),
+    ).resolves.toBe(true);
+
+    const call = generateConversationLabel.mock.calls[0]?.[0];
+    const userMessage = String(call?.userMessage);
+    expect(userMessage).toBe("m".repeat(999));
+    expect(hasLoneSurrogate(userMessage)).toBe(false);
   });
 
   it.each([

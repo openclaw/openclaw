@@ -4,6 +4,7 @@ import { updateSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { truncateUtf16Safe } from "../utils.js";
 
 const DASHBOARD_SESSION_TITLE_MAX_CHARS = 60;
 const DASHBOARD_SESSION_TITLE_SOURCE_MAX_CHARS = 1_000;
@@ -48,7 +49,7 @@ export function normalizeDashboardSessionTitle(raw: string): string | null {
   }
   const unwrapped = firstLine.replace(/^\s*(?:title\s*:\s*)?/i, "").replace(/^["'`]+|["'`]+$/g, "");
   const normalized = unwrapped.replace(/\s+/g, " ").trim();
-  return normalized ? normalized.slice(0, DASHBOARD_SESSION_TITLE_MAX_CHARS) : null;
+  return normalized ? truncateUtf16Safe(normalized, DASHBOARD_SESSION_TITLE_MAX_CHARS) : null;
 }
 
 export async function maybeGenerateDashboardSessionTitle(params: {
@@ -80,7 +81,7 @@ export async function maybeGenerateDashboardSessionTitle(params: {
   dashboardTitleRequests.add(requestKey);
   try {
     const generated = await generateConversationLabel({
-      userMessage: sourceText.slice(0, DASHBOARD_SESSION_TITLE_SOURCE_MAX_CHARS),
+      userMessage: truncateUtf16Safe(sourceText, DASHBOARD_SESSION_TITLE_SOURCE_MAX_CHARS),
       prompt: DASHBOARD_SESSION_TITLE_PROMPT,
       cfg: params.cfg,
       agentId: params.agentId,
