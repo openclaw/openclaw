@@ -94,6 +94,7 @@ import {
 import { transformMessages } from "./transform-messages.js";
 
 const ANTHROPIC_CACHE_CONTROL_LIMIT = 4;
+const EMPTY_ERROR_TOOL_RESULT_TEXT = "[tool error with no output]";
 
 function getCacheControl(
   model: Model<"anthropic-messages">,
@@ -146,7 +147,10 @@ const toClaudeCodeName = (name: string) => ccToolLookup.get(name.toLowerCase()) 
 /**
  * Convert content blocks to Anthropic API format
  */
-function convertContentBlocks(content: readonly unknown[]):
+function convertContentBlocks(
+  content: readonly unknown[],
+  isError: boolean,
+):
   | string
   | Array<
       | { type: "text"; text: string }
@@ -170,7 +174,9 @@ function convertContentBlocks(content: readonly unknown[]):
 
   if (!hasImages) {
     const sanitized = sanitizeSurrogates(text);
-    return sanitized.trim().length > 0 ? sanitized : (mediaPlaceholder ?? "");
+    return sanitized.trim().length > 0
+      ? sanitized
+      : (mediaPlaceholder ?? (isError ? EMPTY_ERROR_TOOL_RESULT_TEXT : ""));
   }
 
   const blocks: Array<
@@ -1529,7 +1535,7 @@ function convertMessages(
       toolResults.push({
         type: "tool_result",
         tool_use_id: msg.toolCallId,
-        content: convertContentBlocks(msg.content),
+        content: convertContentBlocks(msg.content, msg.isError),
         is_error: msg.isError,
       });
 
@@ -1539,7 +1545,7 @@ function convertMessages(
         toolResults.push({
           type: "tool_result",
           tool_use_id: nextMsg.toolCallId,
-          content: convertContentBlocks(nextMsg.content),
+          content: convertContentBlocks(nextMsg.content, nextMsg.isError),
           is_error: nextMsg.isError,
         });
         j++;
