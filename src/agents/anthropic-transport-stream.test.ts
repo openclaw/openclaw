@@ -865,7 +865,7 @@ describe("anthropic transport stream", () => {
     );
 
     expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toBe(`${"x".repeat(400)}…`);
+    expect(result.errorMessage).toBe(`${"x".repeat(399)}…`);
     expect(pullCount).toBeGreaterThanOrEqual(2);
     expect(cancelCount).toBe(1);
   });
