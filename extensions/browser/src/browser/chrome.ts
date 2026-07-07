@@ -15,6 +15,7 @@ import os from "node:os";
 import path from "node:path";
 import { prepareOomScoreAdjustedSpawn } from "openclaw/plugin-sdk/process-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { ensurePortAvailable } from "../infra/ports.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -1055,6 +1056,16 @@ export async function launchOpenClawChrome(
       stderrChunks.push(chunk);
     };
     proc.stderr?.on("data", onStderr);
+    // EPIPE / RST on the stderr pipe (e.g. the wrapper's parent already
+    // exited and the kernel tore the pipe down before the child's own exit
+    // handler ran). Without this listener Node escalates the error to an
+    // unhandled "error" event that crashes the gateway host even though
+    // Chrome itself is on its way out. Mirror the launch-readiness loop's
+    // recovery path: log, then let the existing kill/diagnostic flow handle
+    // the rest.
+    proc.stderr?.on("error", (error: Error) => {
+      log.warn(`Chrome launch stderr pipe error: ${formatErrorMessage(error)}`);
+    });
 
     try {
       const readyDeadline =

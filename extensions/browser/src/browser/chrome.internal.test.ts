@@ -1122,6 +1122,59 @@ describe("chrome.ts internal", () => {
       }
     });
 
+    it("does not crash the host when Chrome stderr pipe errors mid-launch", async () => {
+      const originalPlatform = process.platform;
+      Object.defineProperty(process, "platform", { value: "linux" });
+      try {
+        vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+          const s = String(p);
+          if (
+            s.includes("Google Chrome") ||
+            s.includes("google-chrome") ||
+            s.includes("/usr/bin/chromium")
+          ) {
+            return true;
+          }
+          if (s.endsWith("Local State") || s.endsWith("Preferences")) {
+            return true;
+          }
+          return false;
+        });
+        const fakeProc = makeFakeProc();
+        spawnMock.mockReturnValue(fakeProc);
+        // Emit a stderr `error` event (simulating EPIPE on the stderr pipe)
+        // only after `launchOpenClawChrome` has registered its `error`
+        // listener on `proc.stderr`. We do this by hooking the EventEmitter's
+        // `newListener` event and resolving once the `error` listener is
+        // attached. The fixture EventEmitter has no `error` listener of
+        // its own; without the production fix Node would escalate the emit
+        // to an unhandled error that crashes the host. With the fix in
+        // place the launch-failure path continues, the `error` listener
+        // routes through, and `proc.kill("SIGKILL")` runs.
+        mockExpiredLaunchPollingClock();
+        vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")));
+
+        const profile = makeProfile(55558);
+        const listenerAttached = new Promise<void>((resolve) => {
+          fakeProc.stderr.on("newListener", (event) => {
+            if (event === "error") {
+              resolve();
+            }
+          });
+        });
+        const launchPromise = launchOpenClawChrome(
+          makeResolved({ localLaunchTimeoutMs: 1 }),
+          profile,
+        );
+        await listenerAttached;
+        fakeProc.stderr.emit("error", new Error("EPIPE"));
+        await expect(launchPromise).rejects.toThrow(/Failed to start Chrome CDP/);
+        expect(fakeProc.kill).toHaveBeenCalledWith("SIGKILL");
+      } finally {
+        Object.defineProperty(process, "platform", { value: originalPlatform });
+      }
+    });
+
     it("uses the configured local launch timeout while waiting for CDP discovery", async () => {
       const executablePath = path.join(tmpDir, "chrome");
       await fsp.writeFile(executablePath, "");
