@@ -101,9 +101,9 @@ describe("executeChannelApi", () => {
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 
-  it("blocks guild paths outside configured qqbot groups", async () => {
+  it("blocks guild paths when qqbot groups are scoped", async () => {
     const result = await executeChannelApi(
-      { method: "GET", path: "/guilds/G2/channels" },
+      { method: "GET", path: "/guilds/G1/channels" },
       {
         accessToken: "token-1",
         cfg: qqbotCfg({ groups: { G1: {} } }),
@@ -111,13 +111,29 @@ describe("executeChannelApi", () => {
     );
 
     expect(result.details).toEqual({
-      error: "QQ channel API path targets a guild outside configured qqbot groups.",
-      path: "/guilds/G2/channels",
+      error: "QQ channel API guild paths are unavailable while qqbot groups are scoped.",
+      path: "/guilds/G1/channels",
     });
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 
-  it("allows guild paths in configured qqbot groups", async () => {
+  it("blocks channel paths when qqbot groups are scoped", async () => {
+    const result = await executeChannelApi(
+      { method: "GET", path: "/channels/C1/threads" },
+      {
+        accessToken: "token-1",
+        cfg: qqbotCfg({ groups: { C1: {} } }),
+      },
+    );
+
+    expect(result.details).toEqual({
+      error: "QQ channel API channel paths are unavailable while qqbot groups are scoped.",
+      path: "/channels/C1/threads",
+    });
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it("allows guild paths with wildcard qqbot groups", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
       response: new Response(JSON.stringify({ id: "channel-1" }), { status: 200 }),
@@ -128,7 +144,7 @@ describe("executeChannelApi", () => {
       { method: "GET", path: "/guilds/G1/channels" },
       {
         accessToken: "token-1",
-        cfg: qqbotCfg({ groups: { G1: {} } }),
+        cfg: qqbotCfg({ groups: { "*": {} } }),
       },
     );
 
@@ -143,22 +159,6 @@ describe("executeChannelApi", () => {
       }),
     );
     expect(release).toHaveBeenCalledTimes(1);
-  });
-
-  it("blocks channel paths outside configured qqbot groups", async () => {
-    const result = await executeChannelApi(
-      { method: "GET", path: "/channels/C2/threads" },
-      {
-        accessToken: "token-1",
-        cfg: qqbotCfg({ groups: { C1: {} } }),
-      },
-    );
-
-    expect(result.details).toEqual({
-      error: "QQ channel API path targets a channel outside configured qqbot groups.",
-      path: "/channels/C2/threads",
-    });
-    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 
   it("allows global guild listing with wildcard qqbot groups", async () => {

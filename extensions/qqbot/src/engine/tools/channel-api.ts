@@ -213,16 +213,9 @@ function validateConfiguredTargetScope(
       : "QQ channel API path target cannot be verified against configured qqbot groups.";
   }
 
-  const targetPolicy = resolveChannelGroupPolicy({
-    cfg: options.cfg,
-    channel: "qqbot",
-    groupId: target.id,
-    accountId: options.accountId,
-    groupIdCaseInsensitive: true,
-  });
-  return targetPolicy.allowed
+  return basePolicy.allowed
     ? null
-    : `QQ channel API path targets a ${target.kind} outside configured qqbot groups.`;
+    : `QQ channel API ${target.kind} paths are unavailable while qqbot groups are scoped.`;
 }
 
 function isBulkAnnouncementDeletePath(path: string): boolean {
