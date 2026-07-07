@@ -430,6 +430,7 @@ describe("createChildAdapter", () => {
     await createAdapterHarness({
       pid: 3335,
       argv: ["pnpm", "--version"],
+      env: { PATH: "", PATHEXT: ".EXE;.CMD;.BAT" },
     });
 
     const spawnArgs = firstSpawnWithFallbackParams();
@@ -463,7 +464,8 @@ describe("createChildAdapter", () => {
     });
 
     const spawnArgs = firstSpawnWithFallbackParams();
-    expect(spawnArgs.argv).toEqual([nodePath, entrypoint, "--prompt", prompt]);
+    expect(spawnArgs.argv?.[0]?.toLowerCase()).toBe(nodePath.toLowerCase());
+    expect(spawnArgs.argv?.slice(1)).toEqual([entrypoint, "--prompt", prompt]);
     expect(spawnArgs.options?.windowsVerbatimArguments).toBeUndefined();
     expect(spawnArgs.fallbacks).toStrictEqual([]);
   });
