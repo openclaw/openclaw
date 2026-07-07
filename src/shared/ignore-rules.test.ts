@@ -47,4 +47,19 @@ describe("addIgnoreRules", () => {
 
     expect(ig.ignores("ignored-file")).toBe(false);
   });
+
+  it("follows a symlinked .gitignore to a regular file", () => {
+    const realDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ignore-rules-real-"));
+    try {
+      fs.writeFileSync(path.join(realDir, "real.gitignore"), "node_modules/\n", "utf-8");
+      fs.symlinkSync(path.join(realDir, "real.gitignore"), path.join(tempDir, ".gitignore"));
+
+      const ig = ignore();
+      addIgnoreRules(ig, tempDir, tempDir);
+
+      expect(ig.ignores("node_modules/foo")).toBe(true);
+    } finally {
+      fs.rmSync(realDir, { force: true, recursive: true });
+    }
+  });
 });
