@@ -675,7 +675,14 @@ function verifyPackedInstalledPackage(params: {
 export function createPackedPluginSdkTypescriptSmokeProject(params: {
   consumerDir: string;
   packageSpec: string;
+  aiPackageSpec?: string;
 }): void {
+  const dependencies: Record<string, string> = {
+    openclaw: params.packageSpec,
+  };
+  if (params.aiPackageSpec) {
+    dependencies["@openclaw/ai"] = params.aiPackageSpec;
+  }
   mkdirSync(join(params.consumerDir, "src"), { recursive: true });
   writeFileSync(
     join(params.consumerDir, "package.json"),
@@ -684,9 +691,7 @@ export function createPackedPluginSdkTypescriptSmokeProject(params: {
         name: "openclaw-plugin-sdk-type-smoke",
         private: true,
         type: "module",
-        dependencies: {
-          openclaw: params.packageSpec,
-        },
+        dependencies,
       },
       null,
       2,
@@ -718,11 +723,16 @@ export function createPackedPluginSdkTypescriptSmokeProject(params: {
   );
 }
 
-function runPackedPluginSdkTypescriptSmoke(tarballPath: string, tmpRoot: string): void {
+function runPackedPluginSdkTypescriptSmoke(
+  tarballPath: string,
+  tmpRoot: string,
+  localPackageTarballs: string[],
+): void {
   const consumerDir = join(tmpRoot, "plugin-sdk-type-consumer");
   createPackedPluginSdkTypescriptSmokeProject({
     consumerDir,
     packageSpec: `file:${tarballPath}`,
+    aiPackageSpec: localPackageTarballs[0] ? `file:${localPackageTarballs[0]}` : undefined,
   });
   execNpm(["install", "--ignore-scripts", "--no-audit", "--no-fund"], {
     cwd: consumerDir,
@@ -907,12 +917,8 @@ function runPackedBundledChannelEntrySmoke(): void {
     const packResults = runPack(packDir);
     const tarballPath = resolvePackedTarballPath(packDir, packResults);
     const prefixDir = join(tmpRoot, "prefix");
-    installPackedTarball(
-      prefixDir,
-      tarballPath,
-      tmpRoot,
-      resolveReleaseCheckLocalPackageTarballs(),
-    );
+    const localPackageTarballs = resolveReleaseCheckLocalPackageTarballs();
+    installPackedTarball(prefixDir, tarballPath, tmpRoot, localPackageTarballs);
 
     const packageRoot = join(prefixDir, "node_modules", "openclaw");
     verifyPackedInstalledPackage({
@@ -933,7 +939,7 @@ function runPackedBundledChannelEntrySmoke(): void {
     runPackedBundledPluginPostinstall(packageRoot);
     runPackedBundledPluginActivationSmoke(packageRoot, tmpRoot);
     runPackedTaskRegistryControlRuntimeSmoke(packageRoot);
-    runPackedPluginSdkTypescriptSmoke(tarballPath, tmpRoot);
+    runPackedPluginSdkTypescriptSmoke(tarballPath, tmpRoot, localPackageTarballs);
     runReleaseCheckCommand(
       {
         command: process.execPath,
