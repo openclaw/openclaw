@@ -1,10 +1,11 @@
 // Creates backup archives while filtering volatile runtime state.
 import { randomUUID } from "node:crypto";
-import { constants as fsConstants, type Stats } from "node:fs";
+import { constants as fsConstants, createWriteStream, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { pipeline } from "node:stream/promises";
 import { resolveDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
 import {
@@ -184,6 +185,15 @@ async function removeBackupTempArchiveBestEffort(tempArchivePath: string): Promi
   await fs.rm(tempArchivePath, { force: true }).catch(() => undefined);
 }
 
+async function writeArchiveStreamToFile(params: {
+  archivePath: string;
+  archiveStream: AsyncIterable<Uint8Array> | NodeJS.ReadableStream;
+}): Promise<void> {
+  // Own both stream lifecycles so a tar read error closes the output handle
+  // before retry cleanup touches the partial archive.
+  await pipeline(params.archiveStream, createWriteStream(params.archivePath));
+}
+
 async function writeTarArchiveWithRetry(params: {
   tempArchivePath: string;
   runTar: (tempArchivePath: string) => Promise<void>;
@@ -239,6 +249,7 @@ async function writeTarArchiveWithRetry(params: {
 }
 
 export const testApi = {
+  writeArchiveStreamToFile,
   writeTarArchiveWithRetry,
   isTarEofRaceError,
   createBackupVolatileStatCache,
@@ -888,30 +899,32 @@ export async function createBackupArchive(
         // cumulative skip counts across attempts instead of the final one.
         skippedVolatileCount = 0;
         unexpectedSqliteSourcePaths.length = 0;
-        await tar.c(
-          {
-            file: attemptTempArchivePath,
-            gzip: true,
-            portable: true,
-            preservePaths: true,
-            linkCache: new BackupLinkCache(),
-            statCache: createBackupVolatileStatCache(volatilePlan),
-            filter: tarFilter,
-            onWriteEntry: (entry) => {
-              entry.path = remapArchiveEntryPath({
-                entryPath: entry.path,
-                manifestPath,
-                archiveRoot,
-                sourcePathRemaps,
-              });
+        await writeArchiveStreamToFile({
+          archivePath: attemptTempArchivePath,
+          archiveStream: tar.c(
+            {
+              gzip: true,
+              portable: true,
+              preservePaths: true,
+              linkCache: new BackupLinkCache(),
+              statCache: createBackupVolatileStatCache(volatilePlan),
+              filter: tarFilter,
+              onWriteEntry: (entry) => {
+                entry.path = remapArchiveEntryPath({
+                  entryPath: entry.path,
+                  manifestPath,
+                  archiveRoot,
+                  sourcePathRemaps,
+                });
+              },
             },
-          },
-          [
-            manifestPath,
-            ...stateSqliteBackup.snapshots.map((snapshot) => snapshot.sourcePath),
-            ...result.assets.map((asset) => asset.sourcePath),
-          ],
-        );
+            [
+              manifestPath,
+              ...stateSqliteBackup.snapshots.map((snapshot) => snapshot.sourcePath),
+              ...result.assets.map((asset) => asset.sourcePath),
+            ],
+          ),
+        });
         const unexpectedSqliteSourcePath = unexpectedSqliteSourcePaths[0];
         if (unexpectedSqliteSourcePath) {
           throw new Error(
