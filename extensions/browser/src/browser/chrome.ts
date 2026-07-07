@@ -89,6 +89,7 @@ const CHROME_SINGLETON_LOCK_PATHS = [
 const CHROME_SINGLETON_IN_USE_PATTERN = /profile appears to be in use by another chromium process/i;
 const CHROME_MISSING_DISPLAY_PATTERN = /missing x server|\$DISPLAY/i;
 const CHROME_GRACEFUL_CLOSE_COMMAND_TIMEOUT_MS = 500;
+const CHROME_LAUNCH_STDERR_TAIL_MAX_BYTES = 64 * 1024;
 const CHROME_HTTP_DISCOVERY_FAILURE_CODES = new Set([
   "ssrf_blocked",
   "http_unreachable",
@@ -132,6 +133,45 @@ function diagnosticShowsChromeHttpDiscovery(diagnostic: ChromeCdpDiagnostic | nu
     return true;
   }
   return !CHROME_HTTP_DISCOVERY_FAILURE_CODES.has(diagnostic.code);
+}
+
+function createBoundedBufferTail(maxBytes: number) {
+  let chunks: Buffer[] = [];
+  let totalBytes = 0;
+
+  const trim = () => {
+    while (totalBytes > maxBytes && chunks.length > 0) {
+      const overflowBytes = totalBytes - maxBytes;
+      const first = chunks[0]!;
+      if (overflowBytes >= first.length) {
+        chunks.shift();
+        totalBytes -= first.length;
+        continue;
+      }
+      chunks[0] = first.subarray(overflowBytes);
+      totalBytes -= overflowBytes;
+      break;
+    }
+  };
+
+  return {
+    append(chunk: Buffer | string) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      if (buffer.length === 0 || maxBytes <= 0) {
+        return;
+      }
+      chunks.push(buffer);
+      totalBytes += buffer.length;
+      trim();
+    },
+    toString() {
+      return Buffer.concat(chunks, totalBytes).toString("utf8");
+    },
+    clear() {
+      chunks = [];
+      totalBytes = 0;
+    },
+  };
 }
 
 function processExists(pid: number): boolean {
@@ -1052,12 +1092,12 @@ export async function launchOpenClawChrome(
   const launchOnceAndWait = async (allowSingletonRecovery: boolean): Promise<RunningChrome> => {
     const proc = spawnOnce();
 
-    // Collect stderr for diagnostics in case Chrome fails to start.
-    // The listener is removed on success to avoid unbounded memory growth
-    // from a long-lived Chrome process that emits periodic warnings.
-    const stderrChunks: Buffer[] = [];
-    const onStderr = (chunk: Buffer) => {
-      stderrChunks.push(chunk);
+    // Keep a bounded stderr tail for diagnostics in case Chrome fails to start.
+    // The listener is removed on success to avoid retaining output from a
+    // long-lived Chrome process that emits periodic warnings.
+    const stderrTail = createBoundedBufferTail(CHROME_LAUNCH_STDERR_TAIL_MAX_BYTES);
+    const onStderr = (chunk: Buffer | string) => {
+      stderrTail.append(chunk);
     };
     proc.stderr?.on("data", onStderr);
 
@@ -1098,8 +1138,7 @@ export async function launchOpenClawChrome(
         if (launchHttpReachable) {
           log.debug(diagnosticText);
         } else {
-          const stderrOutput =
-            normalizeOptionalString(Buffer.concat(stderrChunks).toString("utf8")) ?? "";
+          const stderrOutput = normalizeOptionalString(stderrTail.toString()) ?? "";
           const redactedStderrOutput = redactToolPayloadText(stderrOutput);
           if (
             allowSingletonRecovery &&
@@ -1144,9 +1183,9 @@ export async function launchOpenClawChrome(
       };
     } finally {
       // Chrome started successfully or launch failed — detach the stderr listener
-      // and release the buffer.
+      // and release the bounded tail buffer.
       proc.stderr?.off("data", onStderr);
-      stderrChunks.length = 0;
+      stderrTail.clear();
     }
   };
 
