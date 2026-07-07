@@ -36,6 +36,8 @@ flow:
             - env: { ref: env }
               patch:
                 expr: "({ channels: { matrix: { accounts: { [env.gateway.runtimeEnv.OPENCLAW_QA_MATRIX_SUT_ACCOUNT_ID]: { groupAllowFrom: [env.gateway.runtimeEnv.OPENCLAW_QA_MATRIX_DRIVER_USER_ID, env.gateway.runtimeEnv.OPENCLAW_QA_MATRIX_OBSERVER_USER_ID] } } } }, gateway: { reload: { mode: 'off' } } })"
+              replacePaths:
+                - expr: "`channels.matrix.accounts.${env.gateway.runtimeEnv.OPENCLAW_QA_MATRIX_SUT_ACCOUNT_ID}.groupAllowFrom`"
               restartDelayMs: 300000
         - resetTransport: true
         - set: acceptedMarker
@@ -58,6 +60,8 @@ flow:
             - env: { ref: env }
               patch:
                 expr: "({ channels: { matrix: { accounts: { [env.gateway.runtimeEnv.OPENCLAW_QA_MATRIX_SUT_ACCOUNT_ID]: { groupAllowFrom: [env.gateway.runtimeEnv.OPENCLAW_QA_MATRIX_DRIVER_USER_ID] } } } }, gateway: { reload: { mode: 'off' } } })"
+              replacePaths:
+                - expr: "`channels.matrix.accounts.${env.gateway.runtimeEnv.OPENCLAW_QA_MATRIX_SUT_ACCOUNT_ID}.groupAllowFrom`"
               restartDelayMs: 300000
         - set: blockedMarker
           value:
