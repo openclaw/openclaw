@@ -907,8 +907,12 @@ extension OnboardingWizardView {
     @ViewBuilder
     private var manualConnectionSecurityRows: some View {
         Picker("Connection security", selection: self.manualTLSBinding) {
-            Text("Unencrypted").tag(false)
-            Text("Secure (TLS)").tag(true)
+            Text("Unencrypted")
+                .font(OpenClawType.captionSemiBold)
+                .tag(false)
+            Text("Secure (TLS)")
+                .font(OpenClawType.captionSemiBold)
+                .tag(true)
         }
         .pickerStyle(.segmented)
         .disabled(self.manualTransport.requiresTLS)
