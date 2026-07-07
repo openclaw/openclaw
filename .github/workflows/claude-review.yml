@@ -3,35 +3,87 @@ name: Claude PR Review
 on:
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review]
+  issue_comment:
+    types: [created]
 
 # Workflow-level permissions locked down; real grants are on the job.
 permissions: {}
 
 concurrency:
-  group: claude-review-${{ github.event.pull_request.number }}
+  group: claude-review-${{ github.event.pull_request.number || github.event.issue.number }}
   cancel-in-progress: true
 
 jobs:
   claude-review:
-    # Skip draft PRs.
-    if: "!github.event.pull_request.draft"
+    # pull_request: skip drafts and fork PRs (CLAUDE_CODE_OAUTH_TOKEN unavailable to forks)
+    # issue_comment: only fire on PR comments containing '@claude review'
+    # from a maintainer (association pre-filter here; hard write-permission +
+    # same-repo check in the first step below) — on a public repo an ungated
+    # comment trigger lets any passerby burn review quota or prompt-inject
+    # the reviewer.
+    if: >
+      (
+        github.event_name == 'pull_request' &&
+        github.event.pull_request.draft == false &&
+        github.event.pull_request.head.repo.full_name == github.repository
+      ) || (
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request != null &&
+        contains(github.event.comment.body, '@claude review') &&
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+      )
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
     permissions:
       contents: read
       pull-requests: write
       issues: write
       id-token: write
     steps:
+      # author_association alone is too coarse (MEMBER = any org member,
+      # COLLABORATOR includes read-only). Require actual write access, and
+      # refuse comment-triggered runs on fork PRs — the job would check out
+      # refs/pull/N/head, making fork-controlled files the workspace while
+      # the OAuth secret is available.
+      - name: Gate comment-triggered runs (write permission + same-repo)
+        if: github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PERM=$(gh api "repos/${{ github.repository }}/collaborators/${{ github.event.comment.user.login }}/permission" --jq .permission)
+          case "$PERM" in
+            admin|maintain|write) ;;
+            *) echo "::error::@claude review requires write access (commenter has: $PERM)"; exit 1 ;;
+          esac
+          CROSS=$(gh pr view "${{ env.PR_NUMBER }}" --repo "${{ github.repository }}" --json isCrossRepository --jq .isCrossRepository)
+          if [ "$CROSS" != "false" ]; then
+            echo "::error::comment-triggered review is not supported on fork PRs"
+            exit 1
+          fi
+
+      - name: Resolve PR branch for issue_comment trigger
+        if: github.event_name == 'issue_comment'
+        id: pr-ref
+        run: |
+          ref=$(gh pr view ${{ env.PR_NUMBER }} --repo ${{ github.repository }} --json headRefName -q .headRefName)
+          echo "ref=$ref" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ github.token }}
+
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 1
+          ref: ${{ steps.pr-ref.outputs.ref }}
 
       - name: Classify PR complexity and pick model
         id: classify
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          PR=${{ github.event.pull_request.number || github.event.issue.number }}
+          PR=${{ env.PR_NUMBER }}
           files=$(gh pr view "$PR" --repo ${{ github.repository }} \
             --json files --jq '[.files[].path] | join("\n")')
           lines=$(gh pr diff "$PR" --repo ${{ github.repository }} 2>/dev/null \
@@ -75,15 +127,13 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           track_progress: true
-          claude_args: '--model ${{ steps.classify.outputs.model }} --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"'
+          claude_args: '--model ${{ steps.classify.outputs.model }} --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr review:*),Bash(gh pr diff:*),Bash(gh pr view:*)"'
           prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ env.PR_NUMBER }}
+
             You are a code reviewer for mctlhq/mctl-openclaw, a TypeScript ESM
             strict-mode repository (pnpm workspaces, Vitest, oxfmt/oxlint).
-
-            TRIVIAL DIFF SHORT-CIRCUIT
-            If the entire diff is documentation-only, changelog-only, or
-            config-formatting with no logic changes, respond with a single line
-            noting the trivial scope and skip further analysis.
 
             SEVERITY CLASSIFICATION
             Classify every finding with one of:
@@ -125,6 +175,28 @@ jobs:
               insufficient to determine context, say so rather than guessing.
             - Group findings by file. For each finding include the severity tag,
               a brief explanation, and a suggested fix where applicable.
+
+            If the diff is trivial — documentation-only, changelog-only,
+            config-formatting with no logic changes, a dependency bump with no
+            logic change, or a one-line typo — approve the PR with a one-line
+            reason and nothing else:
+            `gh pr review ${{ env.PR_NUMBER }} --repo ${{ github.repository }} --approve --body "<reason>"`.
+
+            Otherwise, post each finding as an inline comment using the
+            mcp__github_inline_comment__create_inline_comment tool, prefixed
+            with its severity tag.
+
+            Finish by submitting a single PR review verdict (this is the merge
+            gate — `main` requires one approving review). Include the P1/P2/P3
+            counts in the body; be concise and do not restate the diff:
+            - No P1/P2 findings (P3 nits are fine): approve —
+              `gh pr review ${{ env.PR_NUMBER }} --repo ${{ github.repository }} --approve --body "No P1/P2 findings (<n> P3). Good to merge."`
+            - One or more P1/P2 findings: request changes —
+              `gh pr review ${{ env.PR_NUMBER }} --repo ${{ github.repository }} --request-changes --body "Has P1/P2 findings, changes requested: <summary>"`
+
+      - name: Reset git state before fallback
+        if: steps.review.outcome == 'failure' && steps.token-check.outputs.has_fallback == 'true'
+        run: git checkout . && git clean -fd
 
       - name: Claude PR Review (fallback token)
         if: steps.review.outcome == 'failure' && steps.token-check.outputs.has_fallback == 'true'
@@ -132,15 +204,13 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN_2 }}
           track_progress: true
-          claude_args: '--model ${{ steps.classify.outputs.model }} --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"'
+          claude_args: '--model ${{ steps.classify.outputs.model }} --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr review:*),Bash(gh pr diff:*),Bash(gh pr view:*)"'
           prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ env.PR_NUMBER }}
+
             You are a code reviewer for mctlhq/mctl-openclaw, a TypeScript ESM
             strict-mode repository (pnpm workspaces, Vitest, oxfmt/oxlint).
-
-            TRIVIAL DIFF SHORT-CIRCUIT
-            If the entire diff is documentation-only, changelog-only, or
-            config-formatting with no logic changes, respond with a single line
-            noting the trivial scope and skip further analysis.
 
             SEVERITY CLASSIFICATION
             Classify every finding with one of:
@@ -182,3 +252,21 @@ jobs:
               insufficient to determine context, say so rather than guessing.
             - Group findings by file. For each finding include the severity tag,
               a brief explanation, and a suggested fix where applicable.
+
+            If the diff is trivial — documentation-only, changelog-only,
+            config-formatting with no logic changes, a dependency bump with no
+            logic change, or a one-line typo — approve the PR with a one-line
+            reason and nothing else:
+            `gh pr review ${{ env.PR_NUMBER }} --repo ${{ github.repository }} --approve --body "<reason>"`.
+
+            Otherwise, post each finding as an inline comment using the
+            mcp__github_inline_comment__create_inline_comment tool, prefixed
+            with its severity tag.
+
+            Finish by submitting a single PR review verdict (this is the merge
+            gate — `main` requires one approving review). Include the P1/P2/P3
+            counts in the body; be concise and do not restate the diff:
+            - No P1/P2 findings (P3 nits are fine): approve —
+              `gh pr review ${{ env.PR_NUMBER }} --repo ${{ github.repository }} --approve --body "No P1/P2 findings (<n> P3). Good to merge."`
+            - One or more P1/P2 findings: request changes —
+              `gh pr review ${{ env.PR_NUMBER }} --repo ${{ github.repository }} --request-changes --body "Has P1/P2 findings, changes requested: <summary>"`
