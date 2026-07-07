@@ -243,15 +243,12 @@ extension RootTabs {
         if gatewayConnected {
             return .none
         }
-        if shouldPresentOnLaunch {
-            return .onboarding
-        }
         // Saved gateway state survives independently of the onboarding markers.
-        // Only an explicit presentation request should cover a configured app.
+        // Explicit resets bypass this route through evaluateOnboardingPresentation(force:).
         if hasExistingGatewayConfig {
             return .none
         }
-        if !hasConnectedOnce || !onboardingComplete {
+        if shouldPresentOnLaunch || !hasConnectedOnce || !onboardingComplete {
             return .onboarding
         }
         return .settings
