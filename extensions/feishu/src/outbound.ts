@@ -12,6 +12,7 @@ import {
   renderMessagePresentationFallbackText,
   resolveInteractiveTextFallback,
 } from "openclaw/plugin-sdk/interactive-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import {
   resolvePayloadMediaUrls,
   sendPayloadMediaSequenceAndFinalize,
@@ -23,6 +24,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
@@ -343,20 +345,25 @@ async function sendOutboundText(params: {
     });
   }
 
-  // Post-md newline expansion happens only after card/table routing has run on
-  // the original text. Rechunk the normalized text so no chunk exceeds Feishu's
-  // 4000-character post limit.
-  const normalizedText = normalizeFeishuPostMarkdownNewlines(text);
+  // Post-md newline expansion and markdown-table conversion happen only after
+  // card/table routing has run on the original text. Rechunk the normalized text
+  // so no chunk exceeds Feishu's 4000-character post limit.
+  const tableMode = resolveMarkdownTableMode({ cfg, channel: "feishu" });
+  const tableConvertedText = convertMarkdownTables(text, tableMode);
+  const normalizedText = normalizeFeishuPostMarkdownNewlines(tableConvertedText);
   const chunks = chunkTextForOutbound(normalizedText, FEISHU_TEXT_CHUNK_LIMIT);
   let lastResult: Awaited<ReturnType<typeof sendMessageFeishu>> | undefined;
-  for (const chunk of chunks) {
+  for (const [index, chunk] of chunks.entries()) {
+    const isFirstChunk = index === 0;
+    // Only the first subchunk should carry the reply target; later subchunks are
+    // continuations of the same message and must not create additional replies.
     lastResult = await sendMessageFeishu({
       cfg,
       to,
       text: chunk,
       accountId,
-      replyToMessageId,
-      replyInThread,
+      replyToMessageId: isFirstChunk ? replyToMessageId : undefined,
+      replyInThread: isFirstChunk ? replyInThread : false,
       textIsNormalized: true,
     });
   }

@@ -472,6 +472,34 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
+  it("uses replyToMessageId only on the first plain-text subchunk", async () => {
+    const runtime = getFeishuRuntimeMock();
+    runtime.channel.text.resolveTextChunkLimit.mockReturnValue(10);
+    runtime.channel.text.chunkTextWithMode.mockReturnValue(["0123456789", "abcdefghij"]);
+    useNonStreamingAutoAccount();
+
+    const { options } = createDispatcherHarness({
+      chatId: "oc_p2p_chat",
+      sendTarget: "user:ou_sender",
+      replyToMessageId: "om_reply_target",
+    });
+    await options.deliver({ text: "0123456789abcdefghij" }, { kind: "final" });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expectMockArgFields(sendMessageFeishuMock, "first message send params", {
+      replyToMessageId: "om_reply_target",
+    });
+    expectMockArgFields(
+      sendMessageFeishuMock,
+      "second message send params",
+      {
+        replyToMessageId: undefined,
+        replyInThread: false,
+      },
+      1,
+    );
+  });
+
   it("streams auto mode plain final text when streaming is enabled", async () => {
     const { options } = createDispatcherHarness();
     await options.deliver({ text: "plain text" }, { kind: "final" });

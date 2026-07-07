@@ -135,6 +135,13 @@ const cardRenderConfig: ClawdbotConfig = {
     },
   },
 };
+const rawRenderConfig: ClawdbotConfig = {
+  channels: {
+    feishu: {
+      renderMode: "raw",
+    },
+  },
+};
 
 afterAll(() => {
   vi.doUnmock("./media.js");
@@ -498,6 +505,41 @@ describe("feishuOutbound.sendText post-md normalization", () => {
     });
 
     expect(sendMessageCall()?.text).toBe("line one\n\nline two");
+    expect(sendMessageCall()?.textIsNormalized).toBe(true);
+  });
+
+  it("uses replyToId only on the first post subchunk", async () => {
+    const line = "x".repeat(1000);
+    const text = [line, line, line, line, line].join("\n");
+    await sendText({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text,
+      accountId: "main",
+      replyToId: "om_reply_target",
+    });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expect(sendMessageFeishuMock.mock.calls[0]?.[0]).toMatchObject({
+      replyToMessageId: "om_reply_target",
+      replyInThread: false,
+    });
+    expect(sendMessageFeishuMock.mock.calls[1]?.[0]).toMatchObject({
+      replyToMessageId: undefined,
+      replyInThread: false,
+    });
+  });
+
+  it("converts markdown tables before normalizing plain post text", async () => {
+    await sendText({
+      cfg: rawRenderConfig,
+      to: "chat_1",
+      text: "| A | B |\n|---|---|\n| 1 | 2 |",
+      accountId: "main",
+    });
+
+    const sentText = sendMessageCall()?.text as string;
+    expect(sentText).toContain("```");
     expect(sendMessageCall()?.textIsNormalized).toBe(true);
   });
 });
