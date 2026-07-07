@@ -682,16 +682,15 @@ function upsertSqliteSession(
 }
 
 function estimateSqliteLedgerBytes(db: DatabaseSync): number {
-  const row = db
-    .prepare(
-      `SELECT
-         COALESCE(SUM(length(session_id) + length(session_key) + length(cwd) + 32), 0) AS sessions,
-         (SELECT COALESCE(SUM(length(session_id) + length(session_key) + length(update_json) + COALESCE(length(run_id), 0) + 32), 0)
-            FROM acp_replay_events) AS events
-       FROM acp_replay_sessions`,
-    )
-    .get() as { sessions?: number | bigint; events?: number | bigint } | undefined;
-  return normalizeSqliteInteger(row?.sessions ?? 0) + normalizeSqliteInteger(row?.events ?? 0);
+  // Use PRAGMA instead of SUM(length(...)) across all rows to avoid O(N)
+  // full table scans on every event ledger write.  page_count × page_size
+  // returns a fast, approximate file-size estimate that is safe for trim
+  // gating: if the database file is under maxSerializedBytes then the
+  // serialized data certainly is too, because the file includes index and
+  // free-page overhead that the data alone does not.
+  const pageCount = db.prepare("PRAGMA page_count").get() as { page_count: number } | undefined;
+  const pageSize = db.prepare("PRAGMA page_size").get() as { page_size: number } | undefined;
+  return (pageCount?.page_count ?? 0) * (pageSize?.page_size ?? 4096);
 }
 
 function trimSqliteLedger(
@@ -744,7 +743,9 @@ function trimSqliteLedger(
   }
 
   let serializedBytes = estimateSqliteLedgerBytes(db);
-  while (serializedBytes > state.maxSerializedBytes) {
+  let trimIterations = 0;
+  while (serializedBytes > state.maxSerializedBytes && trimIterations < 10_000) {
+    trimIterations++;
     const event = db
       .prepare(
         `SELECT e.session_id AS session_id, e.seq AS seq
@@ -767,7 +768,8 @@ function trimSqliteLedger(
     serializedBytes = estimateSqliteLedgerBytes(db);
   }
 
-  while (serializedBytes > state.maxSerializedBytes) {
+  while (serializedBytes > state.maxSerializedBytes && trimIterations < 10_000) {
+    trimIterations++;
     const session = db
       .prepare(
         `SELECT session_id
