@@ -145,6 +145,13 @@ export function createPolicyAgentToolChecks(deps: PolicyDoctorCheckDeps): readon
     async detect(ctx) {
       return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyToolsAlsoAllowMissing);
     },
+    repair(ctx, findings) {
+      return previewPolicyReviewRequiredRepair(
+        ctx,
+        findings,
+        CHECK_IDS.policyToolsAlsoAllowMissing,
+      );
+    },
   };
   const policyToolsAlsoAllowUnexpectedCheck: HealthCheck = {
     id: CHECK_IDS.policyToolsAlsoAllowUnexpected,
@@ -153,6 +160,13 @@ export function createPolicyAgentToolChecks(deps: PolicyDoctorCheckDeps): readon
     source: "policy",
     async detect(ctx) {
       return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyToolsAlsoAllowUnexpected);
+    },
+    repair(ctx, findings) {
+      return previewPolicyReviewRequiredRepair(
+        ctx,
+        findings,
+        CHECK_IDS.policyToolsAlsoAllowUnexpected,
+      );
     },
   };
   const policyToolsRequiredDenyMissingCheck: HealthCheck = {

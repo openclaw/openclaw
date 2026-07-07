@@ -19,6 +19,8 @@ const REVIEW_REQUIRED_REPAIR_CHECK_IDS = new Set<PolicyCheckId>([
   CHECK_IDS.policyToolsExecSecurityUnapproved,
   CHECK_IDS.policyToolsExecAskUnapproved,
   CHECK_IDS.policyToolsExecHostUnapproved,
+  CHECK_IDS.policyToolsAlsoAllowMissing,
+  CHECK_IDS.policyToolsAlsoAllowUnexpected,
 ]);
 
 export function previewPolicyReviewRequiredRepair(
@@ -113,6 +115,10 @@ function previewForFinding(
         "set tools.exec.host to an approved policy value",
         "approved value",
       );
+    case CHECK_IDS.policyToolsAlsoAllowMissing:
+      return previewToolsAlsoAllowEntry(finding, "missing");
+    case CHECK_IDS.policyToolsAlsoAllowUnexpected:
+      return previewToolsAlsoAllowEntry(finding, "unexpected");
     default:
       return [];
   }
@@ -207,6 +213,39 @@ function previewConfigPathSet(
         kind: "config",
         action: "would-set-after-review",
         target: `${target} -> ${targetValue}`,
+        dryRunSafe: true,
+      },
+    },
+  ];
+}
+
+function previewToolsAlsoAllowEntry(
+  finding: HealthFinding,
+  kind: "missing" | "unexpected",
+): readonly { readonly change: string; readonly effect: HealthRepairEffect }[] {
+  const target = configTargetFromOcPath(finding.ocPath);
+  const entry = finding.message.match(/tools\.alsoAllow entry '([^']+)'/)?.[1]?.trim();
+  if (
+    target === undefined ||
+    entry === undefined ||
+    entry === "" ||
+    !target.endsWith("tools.alsoAllow")
+  ) {
+    return [];
+  }
+  const action = kind === "missing" ? "add" : "remove";
+  const effectAction =
+    kind === "missing" ? "would-append-after-review" : "would-remove-after-review";
+  const operator = kind === "missing" ? "+=" : "-=";
+  return [
+    {
+      change: `Review required: ${action} ${entry} ${
+        kind === "missing" ? "to" : "from"
+      } ${target} for policy conformance.`,
+      effect: {
+        kind: "config",
+        action: effectAction,
+        target: `${target} ${operator} ${entry}`,
         dryRunSafe: true,
       },
     },

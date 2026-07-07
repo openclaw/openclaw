@@ -2039,6 +2039,138 @@ describe("registerPolicyDoctorChecks", () => {
     expect(cfg.tools?.exec).toMatchObject({ security: "full", ask: "off", host: "gateway" });
   });
 
+  it("previews review-required alsoAllow missing repairs without mutating config", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy({ workspaceRepairs: true }),
+      tools: { alsoAllow: ["read"] },
+      agents: {
+        list: [{ id: "sebby", tools: { alsoAllow: ["read"] } }],
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        tools: { alsoAllow: { expected: ["read", "message"] } },
+        scopes: {
+          sebby: {
+            agentIds: ["sebby"],
+            tools: { alsoAllow: { expected: ["read", "message"] } },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyRepairCheck(
+      "policy/tools-also-allow-missing",
+      repairCtx(configPath, cfg),
+    );
+
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("policy repair requires review before changing config");
+    expect(result.changes).toEqual([
+      "Review required: add message to agents.list.#0.tools.alsoAllow for policy conformance.",
+      "Review required: add message to tools.alsoAllow for policy conformance.",
+    ]);
+    expect(result.warnings).toEqual(result.changes);
+    expect(result.effects).toEqual([
+      {
+        kind: "config",
+        action: "would-append-after-review",
+        target: "agents.list.#0.tools.alsoAllow += message",
+        dryRunSafe: true,
+      },
+      {
+        kind: "config",
+        action: "would-append-after-review",
+        target: "tools.alsoAllow += message",
+        dryRunSafe: true,
+      },
+    ]);
+    expect(result.config.tools?.alsoAllow).toEqual(["read"]);
+    expect(result.config.agents?.list?.[0]?.tools?.alsoAllow).toEqual(["read"]);
+    expect(result.remainingFindings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/tools-also-allow-missing",
+          ocPath: "oc://openclaw.config/agents/list/#0/tools/alsoAllow",
+        }),
+        expect.objectContaining({
+          checkId: "policy/tools-also-allow-missing",
+          ocPath: "oc://openclaw.config/tools/alsoAllow",
+        }),
+      ]),
+    );
+  });
+
+  it("previews review-required alsoAllow unexpected repairs without mutating config", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy({ workspaceRepairs: true }),
+      tools: { alsoAllow: ["read", "cron"] },
+      agents: {
+        list: [{ id: "sebby", tools: { alsoAllow: ["read", "shell"] } }],
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        tools: { alsoAllow: { expected: ["read"] } },
+        scopes: {
+          sebby: {
+            agentIds: ["sebby"],
+            tools: { alsoAllow: { expected: ["read"] } },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyRepairCheck(
+      "policy/tools-also-allow-unexpected",
+      repairCtx(configPath, cfg),
+    );
+
+    expect(result.status).toBe("skipped");
+    expect(result.reason).toBe("policy repair requires review before changing config");
+    expect(result.changes).toEqual([
+      "Review required: remove shell from agents.list.#0.tools.alsoAllow for policy conformance.",
+      "Review required: remove cron from tools.alsoAllow for policy conformance.",
+    ]);
+    expect(result.warnings).toEqual(result.changes);
+    expect(result.effects).toEqual([
+      {
+        kind: "config",
+        action: "would-remove-after-review",
+        target: "agents.list.#0.tools.alsoAllow -= shell",
+        dryRunSafe: true,
+      },
+      {
+        kind: "config",
+        action: "would-remove-after-review",
+        target: "tools.alsoAllow -= cron",
+        dryRunSafe: true,
+      },
+    ]);
+    expect(result.config.tools?.alsoAllow).toEqual(["read", "cron"]);
+    expect(result.config.agents?.list?.[0]?.tools?.alsoAllow).toEqual(["read", "shell"]);
+    expect(result.remainingFindings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/tools-also-allow-unexpected",
+          ocPath: "oc://openclaw.config/agents/list/#0/tools/alsoAllow",
+        }),
+        expect.objectContaining({
+          checkId: "policy/tools-also-allow-unexpected",
+          ocPath: "oc://openclaw.config/tools/alsoAllow",
+        }),
+      ]),
+    );
+  });
+
   it("repairs automatic channel ingress narrowing findings", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
