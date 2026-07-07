@@ -683,22 +683,20 @@ describe("official external plugin catalog", () => {
         ),
     );
 
-    await expect(
-      loadHostedOfficialExternalPluginCatalogEntries({
-        feedProfile: "acme",
-        catalogConfig: {
-          feeds: {
-            acme: {
-              url: "https://packages.acme.example/openclaw/feed",
-              verification: {
-                mode: "signed",
-                keys: [
-                  {
-                    keyId: "acme-root",
-                    publicKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-                  },
-                ],
-              },
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      feedProfile: "acme",
+      catalogConfig: {
+        feeds: {
+          acme: {
+            url: "https://packages.acme.example/openclaw/feed",
+            verification: {
+              mode: "signed",
+              keys: [
+                {
+                  keyId: "acme-root",
+                  publicKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                },
+              ],
             },
           },
         },
@@ -710,7 +708,9 @@ describe("official external plugin catalog", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(result.source).toBe("bundled-fallback");
     expect(result.entries).toEqual([]);
-    expect(result.error).toContain("signed envelope is malformed");
+    if (result.source === "bundled-fallback") {
+      expect(result.error).toContain("signed envelope is malformed");
+    }
   });
 
   it("keeps direct hosted feed URL overrides constrained to the public allowlist", async () => {
@@ -1317,8 +1317,10 @@ describe("official external plugin catalog", () => {
 
     expect(result.source).toBe("bundled-fallback");
     expect(result.entries).toEqual([]);
-    expect(result.error).toContain("snapshot fallback failed");
-    expect(result.error).toContain("signed envelope is malformed");
+    if (result.source === "bundled-fallback") {
+      expect(result.error).toContain("snapshot fallback failed");
+      expect(result.error).toContain("signed envelope is malformed");
+    }
   });
 
   it("persists hosted feed snapshots in OpenClaw state for HTTP 304 reuse", async () => {
