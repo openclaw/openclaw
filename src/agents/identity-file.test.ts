@@ -2,8 +2,15 @@
  * Regression coverage for IDENTITY.md parsing and merging.
  * Ensures placeholders are ignored and rich identity fields stay stable.
  */
-import { describe, expect, it } from "vitest";
-import { mergeIdentityMarkdownContent, parseIdentityMarkdown } from "./identity-file.js";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  loadAgentIdentityFromWorkspace,
+  mergeIdentityMarkdownContent,
+  parseIdentityMarkdown,
+} from "./identity-file.js";
 
 describe("parseIdentityMarkdown", () => {
   it("ignores identity template placeholders", () => {
@@ -115,5 +122,36 @@ Fluent in over six million error messages.
     });
 
     expect(merged).toBe("- Name: New Name\n");
+  });
+});
+
+describe("loadAgentIdentityFromWorkspace", () => {
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-identity-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tempDir, { force: true, recursive: true });
+  });
+
+  it("loads identity values from IDENTITY.md", () => {
+    fs.writeFileSync(
+      path.join(tempDir, "IDENTITY.md"),
+      ["- **Name:** Test Agent", "- **Emoji:** 🤖"].join("\n"),
+      "utf-8",
+    );
+
+    expect(loadAgentIdentityFromWorkspace(tempDir)).toEqual({
+      name: "Test Agent",
+      emoji: "🤖",
+    });
+  });
+
+  it("returns null when IDENTITY.md exceeds the size cap", () => {
+    fs.writeFileSync(path.join(tempDir, "IDENTITY.md"), "x".repeat(2 * 1024 * 1024), "utf-8");
+
+    expect(loadAgentIdentityFromWorkspace(tempDir)).toBeNull();
   });
 });
