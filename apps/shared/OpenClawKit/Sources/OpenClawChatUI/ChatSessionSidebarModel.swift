@@ -132,7 +132,7 @@ enum ChatSessionSidebarModel {
             if selectedIsResolvedAlias, entry.key.lowercased() == normalizedCurrent {
                 return false
             }
-            entry.key == selectedSessionKey ||
+            return entry.key == selectedSessionKey ||
                 (!self.isHiddenInternalSession(entry.key) && entry.archived != true)
         }
         if !entries.contains(where: { $0.key == selectedSessionKey }),
