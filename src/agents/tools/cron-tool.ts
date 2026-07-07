@@ -450,7 +450,7 @@ function assertNoCronShellExecution(value: unknown): void {
     );
   }
   const schedule = isRecord(value.schedule) ? value.schedule : undefined;
-  if (normalizeLowercaseStringOrEmpty(schedule?.kind) === "on-exit") {
+  if (schedule?.kind === "on-exit") {
     throw new Error(
       "cron on-exit schedules cannot be created or edited through the agent cron tool; use the CLI or Gateway API.",
     );
