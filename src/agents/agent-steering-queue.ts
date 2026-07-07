@@ -59,7 +59,9 @@ function describeOutcome(payload: PendingFinalDeliveryPayload): string {
 
 function promptLiteral(value: string): string {
   const literal = sanitizeForPromptLiteral(value).trim();
-  return literal.length > MAX_METADATA_CHARS ? truncateUtf16Safe(literal, MAX_METADATA_CHARS) : literal;
+  return literal.length > MAX_METADATA_CHARS
+    ? truncateUtf16Safe(literal, MAX_METADATA_CHARS)
+    : literal;
 }
 
 function sortPendingSteeringItems(a: AgentSteeringQueueItem, b: AgentSteeringQueueItem): number {

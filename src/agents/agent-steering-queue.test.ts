@@ -274,12 +274,8 @@ describe("agent steering queue", () => {
       }),
     ).toBe("steering\n\nCurrent parent turn:\n\ncurrent request");
   });
-});
 
-  it("preserves emoji when steering metadata label truncates at UTF-16 boundary", () => {
-    // promptLiteral caps at MAX_METADATA_CHARS (500). Place an emoji whose
-    // surrogate pair straddles the boundary so raw .slice(0,500) would
-    // split it into lone surrogates.
+  it("backs off before an emoji that crosses the metadata limit", () => {
     const emojiLabel = "x".repeat(499) + "🧠" + "extra";
     const run = makeRun({
       runId: "emoji-run",
@@ -299,8 +295,7 @@ describe("agent steering queue", () => {
       { runId: "emoji-run", entry: run, payload: run.delivery!.payload! },
     ]);
 
-    expect(prompt).toBeTruthy();
-    // Must never contain a lone surrogate half.
-    expect(prompt).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
-    expect(prompt).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+    const title = prompt?.split("\n").find((line) => line.startsWith("1. "));
+    expect(title).toBe(`1. ${"x".repeat(499)}`);
   });
+});
