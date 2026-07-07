@@ -187,14 +187,24 @@ async function writeTarArchiveWithRetry(params: {
       if (!isTarEofRaceError(err) || attempt === BACKUP_TAR_MAX_ATTEMPTS) {
         break;
       }
-      try {
-        await fs.rm(params.tempArchivePath, { force: true });
-      } catch (cleanupErr) {
-        const code = (cleanupErr as NodeJS.ErrnoException).code;
-        if (code && code !== "ENOENT") {
-          params.log?.(
-            `Backup archiver could not remove temp archive ${params.tempArchivePath} between retries: ${code}. Continuing.`,
-          );
+      // Retry rm on EBUSY (Windows) so the next tar attempt does not
+      // fail immediately because the file is still locked.
+      for (let rmAttempt = 0; rmAttempt < 3; rmAttempt += 1) {
+        try {
+          await fs.rm(params.tempArchivePath, { force: true });
+          break;
+        } catch (cleanupErr) {
+          const code = (cleanupErr as NodeJS.ErrnoException).code;
+          if (code === "EBUSY" && rmAttempt < 2) {
+            await sleepFn(100);
+            continue;
+          }
+          if (code && code !== "ENOENT") {
+            params.log?.(
+              `Backup archiver could not remove temp archive ${params.tempArchivePath} between retries: ${code}. Continuing.`,
+            );
+          }
+          break;
         }
       }
       const backoff = BACKUP_TAR_BACKOFF_MS[attempt - 1] ?? 0;
