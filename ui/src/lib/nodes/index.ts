@@ -88,12 +88,33 @@ export type ExecApprovalsFile = {
   agents?: Record<string, ExecApprovalsAgent>;
 };
 
-export type ExecApprovalsSnapshot = {
+export type FileExecApprovalsSnapshot = {
   path: string;
   exists: boolean;
   hash: string;
   file: ExecApprovalsFile;
 };
+
+export type NativeExecApprovalRule = {
+  pattern: string;
+  action: "allow" | "deny" | "prompt";
+  shells?: string[];
+  description?: string;
+  enabled?: boolean;
+};
+
+export type NativeExecApprovalsSnapshot =
+  | {
+      enabled: true;
+      hash: string;
+      baseHash?: string;
+      defaultAction: "allow" | "deny" | "prompt";
+      rules: NativeExecApprovalRule[];
+      constraints?: Record<string, boolean>;
+    }
+  | { enabled: false; message?: string };
+
+export type ExecApprovalsSnapshot = FileExecApprovalsSnapshot | NativeExecApprovalsSnapshot;
 
 export type ExecApprovalsTarget = { kind: "gateway" } | { kind: "node"; nodeId: string };
 
@@ -372,9 +393,20 @@ export async function loadExecApprovals(
 
 function applyExecApprovalsSnapshot(state: ExecApprovalsState, snapshot: ExecApprovalsSnapshot) {
   state.execApprovalsSnapshot = snapshot;
-  if (!state.execApprovalsDirty) {
-    state.execApprovalsForm = cloneConfigObject(snapshot.file ?? {});
+  if (isNativeExecApprovalsSnapshot(snapshot)) {
+    state.execApprovalsForm = null;
+    state.execApprovalsDirty = false;
+    return;
   }
+  if (!state.execApprovalsDirty) {
+    state.execApprovalsForm = cloneConfigObject(snapshot.file);
+  }
+}
+
+export function isNativeExecApprovalsSnapshot(
+  snapshot: ExecApprovalsSnapshot | null | undefined,
+): snapshot is NativeExecApprovalsSnapshot {
+  return Boolean(snapshot && "enabled" in snapshot);
 }
 
 export async function saveExecApprovals(
@@ -389,6 +421,11 @@ export async function saveExecApprovals(
   state.lastError = null;
   state.chatError = null;
   try {
+    if (isNativeExecApprovalsSnapshot(state.execApprovalsSnapshot)) {
+      state.lastError =
+        "Host-native node approvals are read-only here; use the companion app or approvals set --node.";
+      return;
+    }
     const baseHash = state.execApprovalsSnapshot?.hash;
     if (!baseHash) {
       state.lastError = "Exec approvals hash missing; reload and retry.";
@@ -422,6 +459,10 @@ export function updateExecApprovalsFormValue(
   path: Array<string | number>,
   value: unknown,
 ) {
+  if (isNativeExecApprovalsSnapshot(state.execApprovalsSnapshot)) {
+    state.lastError = "Host-native node approvals are read-only here.";
+    return;
+  }
   const base = cloneConfigObject(
     state.execApprovalsForm ?? state.execApprovalsSnapshot?.file ?? {},
   );
@@ -434,6 +475,10 @@ export function removeExecApprovalsFormValue(
   state: ExecApprovalsState,
   path: Array<string | number>,
 ) {
+  if (isNativeExecApprovalsSnapshot(state.execApprovalsSnapshot)) {
+    state.lastError = "Host-native node approvals are read-only here.";
+    return;
+  }
   const base = cloneConfigObject(
     state.execApprovalsForm ?? state.execApprovalsSnapshot?.file ?? {},
   );

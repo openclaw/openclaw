@@ -12,6 +12,7 @@ import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { chunkDiscordTextWithMode } from "./chunk.js";
 import { notifyDiscordInboundEventOutboundPayloadSuccess } from "./inbound-event-delivery.js";
 import { isLikelyDiscordVideoMedia } from "./media-detection.js";
@@ -54,7 +55,7 @@ function resolveDiscordWebhookIdentity(params: {
 }): { username?: string; avatarUrl?: string } {
   const usernameRaw = normalizeOptionalString(params.identity?.name);
   const fallbackUsername = normalizeOptionalString(params.binding.label) ?? params.binding.agentId;
-  const username = (usernameRaw || fallbackUsername || "").slice(0, 80) || undefined;
+  const username = truncateUtf16Safe(usernameRaw || fallbackUsername || "", 80) || undefined;
   const avatarUrl = normalizeOptionalString(params.identity?.avatarUrl);
   return { username, avatarUrl };
 }
