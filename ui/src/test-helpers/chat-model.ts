@@ -44,9 +44,7 @@ export function createAmbiguousModelCatalog(
   }));
 }
 
-export function createMainSessionRow(
-  overrides: Partial<GatewaySessionRow> = {},
-): GatewaySessionRow {
+function createMainSessionRow(overrides: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
   return {
     key: "main",
     kind: "direct",
