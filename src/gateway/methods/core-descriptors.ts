@@ -173,7 +173,10 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "sessions.pluginPatch", scope: "operator.admin" },
   { name: "sessions.cleanup", scope: "operator.admin" },
   { name: "sessions.reset", scope: "operator.admin" },
-  { name: "sessions.delete", scope: "operator.admin" },
+  // State-aware: write scope may delete already-archived sessions
+  // (archive-then-delete); the handler enforces the archived requirement and
+  // admin keeps unrestricted delete. Policy in method-scopes.ts + handler.
+  { name: "sessions.delete", scope: "dynamic" },
   { name: "sessions.compact", scope: "operator.admin" },
   { name: "last-heartbeat", scope: "operator.read" },
   { name: "set-heartbeats", scope: "operator.admin" },

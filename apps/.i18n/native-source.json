@@ -2883,7 +2883,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 673,
+      "line": 672,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
       "source": "Group name",
       "surface": "android",
@@ -2891,7 +2891,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 673,
+      "line": 672,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
       "source": "Name",
       "surface": "android",
@@ -2899,7 +2899,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 683,
+      "line": 682,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
       "source": "Cancel",
       "surface": "android",
@@ -2907,7 +2907,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 765,
+      "line": 764,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
       "source": "No sessions yet",
       "surface": "android",
@@ -2915,7 +2915,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 766,
+      "line": 765,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
       "source": "No current session",
       "surface": "android",
@@ -2923,7 +2923,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 767,
+      "line": 766,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
       "source": "No archived sessions",
       "surface": "android",
@@ -2931,7 +2931,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 773,
+      "line": 772,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
       "source": "Start a new conversation and it will show up here.",
       "surface": "android",
@@ -2939,7 +2939,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 774,
+      "line": 773,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
       "source": "Open Chat to start or resume the current session.",
       "surface": "android",
@@ -2947,7 +2947,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 775,
+      "line": 774,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
       "source": "Archived sessions will show up here.",
       "surface": "android",
