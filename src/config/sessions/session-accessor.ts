@@ -109,7 +109,12 @@ import {
   resolveOwnedSessionTranscriptWriteLockRunner,
   withOwnedSessionTranscriptWrites,
 } from "./transcript-write-context.js";
-import type { GroupKeyResolution, SessionCompactionCheckpoint, SessionEntry } from "./types.js";
+import {
+  mergeSessionEntry,
+  type GroupKeyResolution,
+  type SessionCompactionCheckpoint,
+  type SessionEntry,
+} from "./types.js";
 
 /**
  * Session access API for callers that need entries or transcripts without
@@ -455,6 +460,13 @@ type SessionEntryRetirement = {
 
 const loadSessionArchiveRuntime = createLazyRuntimeModule(
   () => import("../../gateway/session-archive.runtime.js"),
+);
+
+// Fork-source reading parses legacy transcript versions through the agents
+// session-manager; load it lazily so accessor consumers do not pull that
+// runtime (and its module-init package metadata reads) at import time.
+const loadSessionForkTranscriptRuntime = createLazyRuntimeModule(
+  () => import("./session-fork-transcript.runtime.js"),
 );
 
 export type SessionEntryPatchOptions = {
@@ -1369,6 +1381,91 @@ export type ForkedSessionTranscriptTarget = {
   sessionId: string;
 };
 
+/** Decision made before inheriting parent context into a child session. */
+export type SessionParentForkDecision =
+  | {
+      status: "fork";
+      maxTokens: number;
+      parentTokens?: number;
+    }
+  | {
+      status: "skip";
+      reason: "parent-too-large";
+      maxTokens: number;
+      parentTokens: number;
+      message: string;
+    };
+
+/** Transcript identity created for a child fork. */
+export type ParentForkedSessionTranscript = {
+  sessionFile: string;
+  sessionId: string;
+};
+
+export type ForkSessionFromParentTranscriptResult =
+  | {
+      status: "created";
+      transcript: ParentForkedSessionTranscript;
+    }
+  | { status: "missing-parent" }
+  | { status: "failed" };
+
+export type ForkSessionFromParentTranscriptParams = {
+  agentId?: string;
+  parentEntry: SessionEntry;
+  parentSessionKey: string;
+  sessionKey: string;
+  storePath: string;
+  /** Cross-agent forks land the child transcript beside the child's store. */
+  targetStorePath?: string;
+};
+
+export type ForkSessionEntryFromParentTargetResult =
+  | {
+      status: "forked";
+      fork: ParentForkedSessionTranscript;
+      parentEntry: SessionEntry;
+      sessionEntry: SessionEntry;
+      decision: Extract<SessionParentForkDecision, { status: "fork" }>;
+    }
+  | {
+      status: "skipped";
+      reason: "existing-entry" | "decision-skip";
+      parentEntry?: SessionEntry;
+      sessionEntry: SessionEntry;
+      decision?: SessionParentForkDecision;
+    }
+  | { status: "missing-entry" }
+  | { status: "missing-parent" }
+  | { status: "failed" };
+
+export type ForkSessionEntryFromParentTargetParams = {
+  agentId?: string;
+  decisionSkipPatch?: (params: {
+    decision: Extract<SessionParentForkDecision, { status: "skip" }>;
+    entry: SessionEntry;
+    parentEntry: SessionEntry;
+  }) => Partial<SessionEntry> | null;
+  fallbackEntry?: SessionEntry;
+  parentTarget: SessionLifecycleStoreTarget;
+  patch?: (params: {
+    entry: SessionEntry;
+    parentEntry: SessionEntry;
+    fork: ParentForkedSessionTranscript;
+    decision: Extract<SessionParentForkDecision, { status: "fork" }>;
+  }) => Partial<SessionEntry>;
+  /**
+   * File-era seam: token counting for the fork decision still reads transcript
+   * tails through gateway helpers, so the caller supplies the decision. The
+   * SQLite flip resolves the decision inside the storage boundary instead.
+   */
+  resolveDecision: (parentEntry: SessionEntry) => Promise<SessionParentForkDecision>;
+  sessionTarget: SessionLifecycleStoreTarget;
+  skipForkWhen?: (entry: SessionEntry) => boolean;
+  skipPatch?: (entry: SessionEntry) => Partial<SessionEntry> | null;
+  storePath: string;
+};
+
 export type CreateForkedSessionTranscriptParams = {
   /** Working directory recorded in the forked transcript header. */
   cwd: string;
@@ -1412,6 +1509,190 @@ export async function createForkedSessionTranscript(
     mode: 0o600,
   });
   return { sessionFile, sessionId };
+}
+
+/**
+ * Forks the active branch of a parent transcript into a fresh child transcript.
+ * This is for guarded callers that already own the eventual entry commit.
+ */
+export async function forkSessionFromParentTranscript(
+  params: ForkSessionFromParentTranscriptParams,
+): Promise<ForkSessionFromParentTranscriptResult> {
+  let parentSessionFile: string;
+  try {
+    parentSessionFile = resolveSessionFilePath(
+      params.parentEntry.sessionId,
+      params.parentEntry,
+      resolveSessionFilePathOptions({
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+        storePath: params.storePath,
+      }),
+    );
+  } catch {
+    return { status: "missing-parent" };
+  }
+  if (!parentSessionFile) {
+    return { status: "missing-parent" };
+  }
+  try {
+    const { buildForkedBranchEntries, forkSourceHasAssistantEntry, readForkSourceTranscript } =
+      await loadSessionForkTranscriptRuntime();
+    const source = await readForkSourceTranscript(parentSessionFile);
+    if (!source) {
+      return { status: "failed" };
+    }
+    const shouldPersistBranch =
+      source.preserveLeafControl || forkSourceHasAssistantEntry(source.branchEntries);
+    // Cross-agent forks land beside the child's store; same-store forks stay
+    // beside the parent transcript so sibling artifacts sort together.
+    const targetSessionsDir = params.targetStorePath
+      ? path.dirname(params.targetStorePath)
+      : source.sessionDir;
+    const transcript = shouldPersistBranch
+      ? await createForkedSessionTranscript({
+          cwd: source.cwd,
+          parentSessionFile,
+          sessionsDir: targetSessionsDir,
+          buildEntries: ({ timestamp }) => buildForkedBranchEntries({ source, timestamp }),
+        })
+      : // Header-only fork: nothing on the active branch is worth copying.
+        await createForkedSessionTranscript({
+          cwd: source.cwd,
+          parentSessionFile,
+          sessionsDir: targetSessionsDir,
+        });
+    return { status: "created", transcript };
+  } catch {
+    return { status: "failed" };
+  }
+}
+
+function resolveEntryFromStoreKeys(params: {
+  store: Record<string, SessionEntry>;
+  keys: readonly string[];
+}): SessionEntry | undefined {
+  for (const key of params.keys) {
+    const entry = params.store[key];
+    if (entry) {
+      return entry;
+    }
+  }
+  return undefined;
+}
+
+function persistForkedSessionEntry(params: {
+  store: Record<string, SessionEntry>;
+  target: SessionLifecycleStoreTarget;
+  existing: SessionEntry;
+  patch: Partial<SessionEntry>;
+}): SessionEntry {
+  const next = mergeSessionEntry(params.existing, params.patch);
+  params.store[params.target.canonicalKey] = next;
+  // Alias rows collapse onto the canonical key so the forked identity has one owner row.
+  for (const key of params.target.storeKeys) {
+    if (key !== params.target.canonicalKey) {
+      delete params.store[key];
+    }
+  }
+  return next;
+}
+
+/**
+ * Forks parent transcript content and persists the child entry/alias cleanup in
+ * one storage-owned operation.
+ */
+export async function forkSessionEntryFromParentTarget(
+  params: ForkSessionEntryFromParentTargetParams,
+): Promise<ForkSessionEntryFromParentTargetResult> {
+  return await updateSessionStore(
+    params.storePath,
+    async (store) => {
+      const parentEntry = resolveEntryFromStoreKeys({
+        store,
+        keys: params.parentTarget.storeKeys,
+      });
+      if (!parentEntry?.sessionId) {
+        return { status: "missing-parent" };
+      }
+
+      const entry =
+        resolveEntryFromStoreKeys({ store, keys: params.sessionTarget.storeKeys }) ??
+        params.fallbackEntry;
+      if (!entry) {
+        return { status: "missing-entry" };
+      }
+
+      if (params.skipForkWhen?.(entry)) {
+        const patch = params.skipPatch?.(entry);
+        const sessionEntry = patch
+          ? persistForkedSessionEntry({
+              store,
+              target: params.sessionTarget,
+              existing: entry,
+              patch,
+            })
+          : entry;
+        return { status: "skipped", reason: "existing-entry", parentEntry, sessionEntry };
+      }
+
+      const decision = await params.resolveDecision(parentEntry);
+      if (decision.status === "skip") {
+        const patch = params.decisionSkipPatch?.({ decision, entry, parentEntry });
+        const sessionEntry = patch
+          ? persistForkedSessionEntry({
+              store,
+              target: params.sessionTarget,
+              existing: entry,
+              patch,
+            })
+          : entry;
+        return {
+          status: "skipped",
+          reason: "decision-skip",
+          parentEntry,
+          sessionEntry,
+          decision,
+        };
+      }
+
+      const forked = await forkSessionFromParentTranscript({
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+        parentEntry,
+        parentSessionKey: params.parentTarget.canonicalKey,
+        sessionKey: params.sessionTarget.canonicalKey,
+        storePath: params.storePath,
+      });
+      if (forked.status !== "created") {
+        return { status: "failed" };
+      }
+      const fork = forked.transcript;
+      const sessionEntry = persistForkedSessionEntry({
+        store,
+        target: params.sessionTarget,
+        existing: entry,
+        patch: {
+          ...params.patch?.({ entry, parentEntry, fork, decision }),
+          sessionId: fork.sessionId,
+          sessionFile: fork.sessionFile,
+          forkedFromParent: true,
+        },
+      });
+      return {
+        status: "forked",
+        fork,
+        parentEntry,
+        sessionEntry,
+        decision,
+      };
+    },
+    {
+      skipSaveWhenResult: (result) =>
+        result.status === "missing-entry" ||
+        result.status === "missing-parent" ||
+        result.status === "failed" ||
+        (result.status === "skipped" && result.sessionEntry === params.fallbackEntry),
+    },
+  );
 }
 
 /** Updates an existing entry only; returns null when the session is absent. */

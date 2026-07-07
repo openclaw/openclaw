@@ -124,7 +124,7 @@ function shouldHandleNavigationClick(event: MouseEvent): boolean {
   );
 }
 
-export class AppSidebar extends LitElement {
+class AppSidebar extends LitElement {
   override createRenderRoot() {
     return this;
   }
