@@ -1,7 +1,18 @@
 // Tests for CLI message text formatting helpers (renderMessageList, formatMessageCliText).
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { MessageActionRunResult } from "../infra/outbound/message-action-runner.js";
 import { formatMessageCliText } from "./message-format.js";
+
+const getChannelPluginMock = vi.hoisted(() =>
+  vi.fn((channel: string) =>
+    channel === "directchat" ? { meta: { label: "Direct Chat" } } : undefined,
+  ),
+);
+
+vi.mock("../channels/plugins/index.js", () => ({
+  getChannelPlugin: getChannelPluginMock,
+  getLoadedChannelPlugin: getChannelPluginMock,
+}));
 
 function readResultPayload(payload: unknown) {
   return {
@@ -196,13 +207,13 @@ describe("formatMessageCliText poll results", () => {
     const result = {
       kind: "poll",
       action: "poll",
-      channel: "matrix",
+      channel: "directchat",
       to: "room-1",
       handledBy: "core",
       payload: {},
       dryRun: false,
       pollResult: {
-        channel: "matrix",
+        channel: "directchat",
         to: "room-1",
         question: "Lunch?",
         options: ["Pizza", "Sushi"],
@@ -219,7 +230,7 @@ describe("formatMessageCliText poll results", () => {
     } satisfies MessageActionRunResult;
 
     expect(formatMessageCliText(result)).toEqual([
-      "✅ Poll sent via matrix. Message ID: p1 (conversation conv-1)",
+      "✅ Poll sent via Direct Chat. Message ID: p1 (conversation conv-1)",
       "Poll id: poll-1",
     ]);
   });
