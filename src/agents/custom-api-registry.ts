@@ -1,7 +1,7 @@
 /**
  * Registers caller-supplied custom API stream functions with the LLM registry.
  */
-import { getApiProvider, registerApiProvider } from "../llm/api-registry.js";
+import { getApiProvider, registerApiProvider } from "@openclaw/ai/internal/runtime";
 import type {
   Api,
   AssistantMessageEventStreamContract,

@@ -9,7 +9,7 @@ import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-co
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
-import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
+import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
@@ -512,7 +512,7 @@ export function createSessionsSendTool(opts?: {
       const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
       const idempotencyKey = crypto.randomUUID();
       let runId: string = idempotencyKey;
-      if (parseSessionThreadInfoFast(resolvedKey).threadId) {
+      if (parseSessionThreadInfo(resolvedKey).threadId) {
         return jsonResult({
           runId: crypto.randomUUID(),
           status: "error",
@@ -665,6 +665,7 @@ export function createSessionsSendTool(opts?: {
         waitRunId?: string,
         flowTargetSessionKey = resolvedKey,
         flowDisplayKey = displayKey,
+        notifyRequesterOnWaitFailure = false,
       ) => {
         if (skipA2AFlow) {
           return;
@@ -684,6 +685,7 @@ export function createSessionsSendTool(opts?: {
           baseline: flowBaseline,
           roundOneReply,
           waitRunId,
+          notifyRequesterOnWaitFailure,
         });
       };
 
@@ -701,7 +703,7 @@ export function createSessionsSendTool(opts?: {
         }
         runId = start.runId;
         if (!start.activeRunQueue) {
-          startA2AFlow(undefined, runId, start.a2aSessionKey, start.a2aDisplayKey);
+          startA2AFlow(undefined, runId, start.a2aSessionKey, start.a2aDisplayKey, true);
         }
         return jsonResult({
           runId,
@@ -744,7 +746,7 @@ export function createSessionsSendTool(opts?: {
           });
         }
         if (!isTerminalAgentWaitTimeout(result)) {
-          startA2AFlow(undefined, runId);
+          startA2AFlow(undefined, runId, resolvedKey, displayKey, true);
           return jsonResult({
             runId,
             status: "accepted",

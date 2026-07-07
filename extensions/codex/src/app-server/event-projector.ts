@@ -13,6 +13,7 @@ import {
   runAgentHarnessBeforeCompactionHook,
   TOOL_PROGRESS_OUTPUT_MAX_CHARS,
   type AgentMessage,
+  type BeforeToolCallFailureDisposition,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptResult,
   type HeartbeatToolResponse,
@@ -25,7 +26,12 @@ import { generatedImageAssetFromBase64 } from "openclaw/plugin-sdk/image-generat
 import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
+import {
+  emitCodexNativePreToolUseFailureDiagnostic,
+  type CodexNativePreToolUseFailure,
+} from "./native-hook-relay.js";
 import {
   readCodexNotificationThreadId,
   readCodexNotificationTurnId,
@@ -40,7 +46,6 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
-import { readRecentCodexRateLimits, rememberCodexRateLimits } from "./rate-limit-cache.js";
 import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 import {
@@ -67,8 +72,358 @@ export type CodexAppServerToolTelemetry = {
 export type CodexAppServerEventProjectorOptions = {
   nativePostToolUseRelayEnabled?: boolean;
   onNativeToolResultRecorded?: () => void | Promise<void>;
+  readRecentRateLimits?: () => JsonValue | undefined;
+  runAbortSignal?: AbortSignal;
   trajectoryRecorder?: CodexTrajectoryRecorder | null;
 };
+
+type CodexNativeToolLifecycleContext = Pick<
+  EmbeddedRunAttemptParams,
+  "agentId" | "runId" | "sessionId" | "sessionKey"
+>;
+
+type CodexNativeToolLifecycleProjectorOptions = {
+  runAbortSignal?: AbortSignal;
+};
+
+type CodexNativeToolAuditStatus = ReturnType<typeof itemStatus> | "cancelled" | "unknown";
+type CodexNativeToolUnfinishedStatus = Extract<CodexNativeToolAuditStatus, "failed" | "unknown">;
+type CodexNativePreToolUseFailureRecord = {
+  failure: CodexNativePreToolUseFailure;
+  terminalReason: CodexNativePreToolUseFailure["disposition"];
+};
+
+/** Projects metadata-only lifecycle diagnostics for native tool items. */
+export class CodexNativeToolLifecycleProjector {
+  private readonly startedAtByItem = new Map<string, number>();
+  private readonly activeItems = new Map<
+    string,
+    { toolName: string; unfinishedStatus: CodexNativeToolUnfinishedStatus }
+  >();
+  private readonly webSearchCompletionByItem = new Map<
+    string,
+    { runWasAborted: boolean; sourceTimestampMs?: number }
+  >();
+  private readonly completedItemIds = new Set<string>();
+  private readonly approvalFailureDispositionByItem = new Map<
+    string,
+    Exclude<BeforeToolCallFailureDisposition, "blocked">
+  >();
+  private readonly preToolUseFailureByItem = new Map<string, CodexNativePreToolUseFailureRecord>();
+  private finalized = false;
+
+  constructor(
+    private readonly context: CodexNativeToolLifecycleContext,
+    private readonly threadId: string,
+    private readonly turnId: string,
+    private readonly options: CodexNativeToolLifecycleProjectorOptions = {},
+  ) {}
+
+  handleNotification(notification: CodexServerNotification): void {
+    const params = isJsonObject(notification.params) ? notification.params : undefined;
+    if (
+      !params ||
+      readCodexNotificationThreadId(params) !== this.threadId ||
+      readCodexNotificationTurnId(params) !== this.turnId
+    ) {
+      return;
+    }
+    if (notification.method === "turn/completed") {
+      const turn = readCodexTurn(params.turn);
+      if (!turn || turn.id !== this.turnId) {
+        return;
+      }
+      for (const item of turn.items ?? []) {
+        this.recordSnapshotItem(item);
+      }
+      return;
+    }
+    if (notification.method === "rawResponseItem/completed") {
+      const item = isJsonObject(params.item) ? params.item : undefined;
+      if (item) {
+        this.recordRawWebSearchResult(item);
+      }
+      return;
+    }
+    if (notification.method !== "item/started" && notification.method !== "item/completed") {
+      return;
+    }
+    const item = readItem(params.item);
+    if (!item) {
+      return;
+    }
+    this.recordItem({
+      phase: notification.method === "item/started" ? "start" : "result",
+      item,
+      sourceTimestampMs: asDateTimestampMs(
+        notification.method === "item/started" ? params.startedAtMs : params.completedAtMs,
+      ),
+    });
+  }
+
+  recordItem(params: {
+    phase: "start" | "result";
+    item: CodexThreadItem;
+    sourceTimestampMs?: number;
+  }): void {
+    const toolName = auditNativeToolName(params.item);
+    if (!toolName || this.completedItemIds.has(params.item.id)) {
+      return;
+    }
+    if (params.phase === "start") {
+      this.recordStarted(
+        params.item.id,
+        toolName,
+        auditNativeToolUnfinishedStatus(params.item),
+        params.sourceTimestampMs,
+      );
+      return;
+    }
+    if (params.item.type === "webSearch") {
+      // Warm resumes retain raw-event delivery, while cold resumes expose no
+      // capability bit. Wait through the drain; finalization closes misses unknown.
+      this.webSearchCompletionByItem.set(params.item.id, {
+        runWasAborted: this.options.runAbortSignal?.aborted === true,
+        sourceTimestampMs: params.sourceTimestampMs,
+      });
+      return;
+    }
+
+    const itemDurationMs =
+      typeof params.item.durationMs === "number" ? params.item.durationMs : undefined;
+    this.recordTerminal(params.item.id, toolName, auditNativeToolTerminalStatus(params.item), {
+      itemDurationMs,
+      sourceTimestampMs: params.sourceTimestampMs,
+    });
+  }
+
+  recordApprovalFailureDisposition(
+    toolCallId: string,
+    disposition: Exclude<BeforeToolCallFailureDisposition, "blocked">,
+  ): void {
+    if (!this.completedItemIds.has(toolCallId)) {
+      this.approvalFailureDispositionByItem.set(toolCallId, disposition);
+    }
+  }
+
+  recordPreToolUseFailure(
+    failure: CodexNativePreToolUseFailure,
+    runWasAborted = this.options.runAbortSignal?.aborted === true,
+  ): void {
+    if (this.completedItemIds.has(failure.toolCallId)) {
+      return;
+    }
+    const record: CodexNativePreToolUseFailureRecord = {
+      failure,
+      terminalReason:
+        runWasAborted && this.options.runAbortSignal
+          ? resolveCodexToolAbortTerminalReason(this.options.runAbortSignal)
+          : failure.disposition,
+    };
+    if (this.finalized) {
+      // Relay subprocesses can settle after result construction. Emit the
+      // item-less fallback here because no later notification drain remains.
+      this.completedItemIds.add(failure.toolCallId);
+      this.emitPreToolUseFailure(record, failure.toolName, failure.durationMs);
+      return;
+    }
+    this.preToolUseFailureByItem.set(failure.toolCallId, record);
+  }
+
+  private recordRawWebSearchResult(item: JsonObject): void {
+    if (readString(item, "type") !== "web_search_call") {
+      return;
+    }
+    const toolCallId = readString(item, "id");
+    if (!toolCallId || this.completedItemIds.has(toolCallId)) {
+      return;
+    }
+    const toolName = "web_search";
+    this.recordStarted(toolCallId, toolName, "unknown");
+    const rawStatus = readString(item, "status");
+    if (rawStatus === "in_progress" || rawStatus === "running") {
+      return;
+    }
+    const status: CodexNativeToolAuditStatus =
+      rawStatus === "completed"
+        ? "completed"
+        : rawStatus === "cancelled"
+          ? "cancelled"
+          : rawStatus === "failed" || rawStatus === "error" || rawStatus === "incomplete"
+            ? "failed"
+            : "unknown";
+    this.recordTerminal(toolCallId, toolName, status, {
+      sourceTimestampMs: this.webSearchCompletionByItem.get(toolCallId)?.sourceTimestampMs,
+    });
+  }
+
+  private recordTerminal(
+    toolCallId: string,
+    toolName: string,
+    status: CodexNativeToolAuditStatus,
+    options: {
+      itemDurationMs?: number;
+      sourceTimestampMs?: number;
+      runWasAborted?: boolean;
+    } = {},
+  ): void {
+    const runWasAborted = options.runWasAborted ?? this.options.runAbortSignal?.aborted === true;
+    const preToolUseFailure = this.preToolUseFailureByItem.get(toolCallId);
+    this.preToolUseFailureByItem.delete(toolCallId);
+    const approvalFailureDisposition = this.approvalFailureDispositionByItem.get(toolCallId);
+    this.approvalFailureDispositionByItem.delete(toolCallId);
+    this.completedItemIds.add(toolCallId);
+    this.activeItems.delete(toolCallId);
+    this.webSearchCompletionByItem.delete(toolCallId);
+    const startedAt = this.startedAtByItem.get(toolCallId);
+    this.startedAtByItem.delete(toolCallId);
+    const endedAt = options.sourceTimestampMs ?? Date.now();
+    const durationMs =
+      options.itemDurationMs ?? (startedAt === undefined ? 0 : Math.max(0, endedAt - startedAt));
+    if (preToolUseFailure) {
+      this.emitPreToolUseFailure(
+        preToolUseFailure,
+        toolName,
+        durationMs,
+        options.sourceTimestampMs,
+      );
+      return;
+    }
+    const terminalEvent = approvalFailureDisposition
+      ? {
+          type: "tool.execution.error" as const,
+          durationMs,
+          errorCategory: "codex_native_tool_approval",
+          terminalReason: approvalFailureDisposition,
+        }
+      : status === "blocked"
+        ? {
+            type: "tool.execution.blocked" as const,
+            reason: "codex_native_tool_blocked",
+            deniedReason: "codex_native_tool_blocked",
+          }
+        : status === "failed" || status === "cancelled" || status === "unknown"
+          ? {
+              type: "tool.execution.error" as const,
+              durationMs,
+              errorCategory:
+                status === "unknown"
+                  ? "codex_native_tool_outcome_unknown"
+                  : status === "cancelled"
+                    ? "aborted"
+                    : "codex_native_tool_error",
+              ...(status === "unknown" ? { errorCode: "tool_outcome_unknown" } : {}),
+              terminalReason:
+                // An enclosing abort explains unfinished work, but cannot classify
+                // a native terminal whose status is absent or unrecognized.
+                status === "unknown"
+                  ? ("failed" as const)
+                  : runWasAborted && this.options.runAbortSignal
+                    ? resolveCodexToolAbortTerminalReason(this.options.runAbortSignal)
+                    : status === "cancelled"
+                      ? ("cancelled" as const)
+                      : ("failed" as const),
+            }
+          : {
+              type: "tool.execution.completed" as const,
+              durationMs,
+            };
+    emitTrustedDiagnosticEvent({
+      ...this.buildBase(toolCallId, toolName),
+      ...terminalEvent,
+      ...(options.sourceTimestampMs !== undefined
+        ? { sourceTimestampMs: options.sourceTimestampMs }
+        : {}),
+    });
+  }
+
+  finalizeActive(runWasAborted = this.options.runAbortSignal?.aborted === true): void {
+    this.finalized = true;
+    for (const [toolCallId, { toolName, unfinishedStatus }] of this.activeItems) {
+      const webSearchCompletion = this.webSearchCompletionByItem.get(toolCallId);
+      const itemRunWasAborted = webSearchCompletion
+        ? webSearchCompletion.runWasAborted
+        : runWasAborted;
+      this.recordTerminal(toolCallId, toolName, unfinishedStatus, {
+        runWasAborted: itemRunWasAborted,
+        sourceTimestampMs: webSearchCompletion?.sourceTimestampMs,
+      });
+    }
+    for (const [toolCallId, record] of this.preToolUseFailureByItem) {
+      if (!this.completedItemIds.has(toolCallId)) {
+        this.recordTerminal(toolCallId, record.failure.toolName, "failed", {
+          itemDurationMs: record.failure.durationMs,
+        });
+      }
+    }
+    this.activeItems.clear();
+    this.webSearchCompletionByItem.clear();
+    this.approvalFailureDispositionByItem.clear();
+    this.preToolUseFailureByItem.clear();
+  }
+
+  private emitPreToolUseFailure(
+    record: CodexNativePreToolUseFailureRecord,
+    toolName: string,
+    durationMs: number,
+    sourceTimestampMs?: number,
+  ): void {
+    emitCodexNativePreToolUseFailureDiagnostic({
+      agentId: this.context.agentId,
+      sessionId: this.context.sessionId,
+      sessionKey: this.context.sessionKey,
+      runId: this.context.runId,
+      failure: { ...record.failure, toolName, durationMs },
+      terminalReason: record.terminalReason,
+      sourceTimestampMs,
+    });
+  }
+
+  private recordSnapshotItem(item: CodexThreadItem): void {
+    if (
+      !auditNativeToolName(item) ||
+      this.completedItemIds.has(item.id) ||
+      itemStatus(item) === "running"
+    ) {
+      return;
+    }
+    const toolName = auditNativeToolName(item);
+    if (!toolName) {
+      return;
+    }
+    this.recordStarted(item.id, toolName, auditNativeToolUnfinishedStatus(item));
+    this.recordItem({ phase: "result", item });
+  }
+
+  private recordStarted(
+    toolCallId: string,
+    toolName: string,
+    unfinishedStatus: CodexNativeToolUnfinishedStatus,
+    sourceTimestampMs?: number,
+  ): void {
+    if (this.activeItems.has(toolCallId)) {
+      return;
+    }
+    this.startedAtByItem.set(toolCallId, sourceTimestampMs ?? Date.now());
+    this.activeItems.set(toolCallId, { toolName, unfinishedStatus });
+    emitTrustedDiagnosticEvent({
+      type: "tool.execution.started",
+      ...this.buildBase(toolCallId, toolName),
+      ...(sourceTimestampMs !== undefined ? { sourceTimestampMs } : {}),
+    });
+  }
+
+  private buildBase(toolCallId: string, toolName: string) {
+    return {
+      agentId: this.context.agentId,
+      runId: this.context.runId,
+      sessionId: this.context.sessionId,
+      sessionKey: this.context.sessionKey,
+      toolName,
+      toolCallId,
+    };
+  }
+}
 
 type ReasoningDeltaMethod = "item/reasoning/summaryTextDelta" | "item/reasoning/textDelta";
 
@@ -93,22 +448,6 @@ const ZERO_USAGE: Usage = {
     total: 0,
   },
 };
-
-const CURRENT_TOKEN_USAGE_KEYS = [
-  "last",
-  "current",
-  "lastCall",
-  "lastCallUsage",
-  "lastTokenUsage",
-  "last_token_usage",
-] as const;
-
-const CODEX_PROMPT_TOTAL_INPUT_KEYS = [
-  "inputTokens",
-  "input_tokens",
-  "promptTokens",
-  "prompt_tokens",
-] as const;
 
 const MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM = 20;
 const TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS = 12_000;
@@ -150,6 +489,13 @@ export class CodexAppServerEventProjector {
   private readonly assistantTextByItem = new Map<string, string>();
   private readonly assistantItemOrder: string[] = [];
   private readonly assistantPhaseByItem = new Map<string, string>();
+  private latestCompletedItemId: string | undefined;
+  private latestCompletedTerminalAssistantItemId: string | undefined;
+  private latestTerminalAssistantCandidateItemId: string | undefined;
+  private latestTerminalAssistantCandidateSuperseded = false;
+  private latestTerminalAssistantCandidateCanReleaseAfterToolHandoff = false;
+  private terminalAssistantCandidateEarlierActiveItemIds = new Set<string>();
+  private pendingRawTerminalAssistantEchoItemId: string | undefined;
   private readonly lastCommentaryProgressTextByItem = new Map<string, string>();
   // Codex emits each typed item completion before its matching raw response item.
   // Pair by protocol order because contributors may rewrite only the typed text.
@@ -191,7 +537,7 @@ export class CodexAppServerEventProjector {
   private lastNativeToolError: EmbeddedRunAttemptResult["lastToolError"];
   private readonly nativeGeneratedMediaItemIds = new Set<string>();
   private readonly nativeGeneratedMediaUrlsByItemId = new Map<string, string>();
-  private readonly diagnosticToolStartedAtByItem = new Map<string, number>();
+  private readonly nativeToolLifecycleProjector: CodexNativeToolLifecycleProjector;
   private readonly afterToolCallObservedItemIds = new Set<string>();
   private assistantStarted = false;
   private reasoningStarted = false;
@@ -206,22 +552,79 @@ export class CodexAppServerEventProjector {
   private tokenUsage: ReturnType<typeof normalizeUsage>;
   private guardianReviewCount = 0;
   private completedCompactionCount = 0;
-  private latestRateLimits: JsonValue | undefined;
 
   constructor(
     private readonly params: EmbeddedRunAttemptParams,
     private readonly threadId: string,
     private readonly turnId: string,
     private readonly options: CodexAppServerEventProjectorOptions = {},
-  ) {}
+  ) {
+    this.nativeToolLifecycleProjector = new CodexNativeToolLifecycleProjector(
+      params,
+      threadId,
+      turnId,
+      {
+        runAbortSignal: options.runAbortSignal,
+      },
+    );
+  }
 
   getCompletedTurnStatus(): CodexTurn["status"] | undefined {
     return this.completedTurn?.status;
   }
 
   hasCompletedTerminalAssistantText(): boolean {
+    const latestCompletedItemId = this.latestCompletedTerminalAssistantItemId;
+    if (!latestCompletedItemId) {
+      return false;
+    }
     const finalItem = this.resolveFinalAssistantTextItem();
-    return finalItem !== undefined && this.completedItemIds.has(finalItem.itemId);
+    return (
+      this.latestCompletedItemId === latestCompletedItemId &&
+      finalItem?.itemId === latestCompletedItemId &&
+      this.completedItemIds.has(latestCompletedItemId)
+    );
+  }
+
+  getLatestTerminalAssistantCandidate(): { itemId: string; hasText: boolean } | undefined {
+    const itemId = this.latestTerminalAssistantCandidateItemId;
+    if (!itemId) {
+      return undefined;
+    }
+    const text = this.assistantTextByItem.get(itemId)?.trim();
+    return {
+      itemId,
+      hasText: Boolean(text && !this.toolProgressTexts.has(text)),
+    };
+  }
+
+  hasLatestTerminalAssistantCandidateText(): boolean {
+    return (
+      !this.latestTerminalAssistantCandidateSuperseded &&
+      this.getLatestTerminalAssistantCandidate()?.hasText === true
+    );
+  }
+
+  canReleaseLatestTerminalAssistantAfterToolHandoff(): boolean {
+    return (
+      this.latestTerminalAssistantCandidateCanReleaseAfterToolHandoff &&
+      this.hasLatestTerminalAssistantCandidateText()
+    );
+  }
+
+  /** Restores a completed final item after only the enclosing turn timeout fired. */
+  recoverCompletedTerminalAssistantAfterTurnWatchTimeout(): boolean {
+    if (
+      !this.aborted ||
+      this.promptError !== "codex app-server attempt timed out" ||
+      !this.hasCompletedTerminalAssistantText()
+    ) {
+      return false;
+    }
+    this.aborted = false;
+    this.promptError = undefined;
+    this.promptErrorSource = null;
+    return true;
   }
 
   /** Resolves the shared model-order position for a native tool item. */
@@ -239,23 +642,35 @@ export class CodexAppServerEventProjector {
     }
   }
 
+  recordNativeToolApprovalFailure(
+    toolCallId: string,
+    disposition: Exclude<BeforeToolCallFailureDisposition, "blocked">,
+  ): void {
+    this.nativeToolLifecycleProjector.recordApprovalFailureDisposition(toolCallId, disposition);
+  }
+
+  recordNativeToolPreToolUseFailure(failure: CodexNativePreToolUseFailure): void {
+    this.nativeToolLifecycleProjector.recordPreToolUseFailure(failure);
+  }
+
   async handleNotification(notification: CodexServerNotification): Promise<void> {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
     if (!params) {
-      return;
-    }
-    if (notification.method === "account/rateLimits/updated") {
-      this.latestRateLimits = params;
-      rememberCodexRateLimits(params);
       return;
     }
     if (isHookNotificationMethod(notification.method)) {
       if (!this.isHookNotificationForCurrentThread(params)) {
         return;
       }
+    } else if (notification.method === "guardianWarning") {
+      // Codex guardian warnings are thread-scoped and carry no turn id.
+      if (readCodexNotificationThreadId(params) !== this.threadId) {
+        return;
+      }
     } else if (!this.isNotificationForTurn(params)) {
       return;
     }
+    this.nativeToolLifecycleProjector.handleNotification(notification);
 
     switch (notification.method) {
       case "item/agentMessage/delta":
@@ -280,12 +695,12 @@ export class CodexAppServerEventProjector {
       case "item/commandExecution/outputDelta":
         this.handleOutputDelta(params, "bash");
         break;
-      case "item/fileChange/outputDelta":
-        this.handleOutputDelta(params, "apply_patch");
-        break;
       case "item/autoApprovalReview/started":
       case "item/autoApprovalReview/completed":
         this.handleGuardianReviewNotification(notification.method, params);
+        break;
+      case "guardianWarning":
+        this.handleGuardianWarning(params);
         break;
       case "hook/started":
       case "hook/completed":
@@ -301,7 +716,7 @@ export class CodexAppServerEventProjector {
         await this.handleRawResponseItemCompleted(params);
         break;
       case "error":
-        if (readBooleanAlias(params, ["willRetry", "will_retry"]) === true) {
+        if (params.willRetry === true) {
           break;
         }
         this.promptError = this.formatCodexErrorMessage(params) ?? "codex app-server error";
@@ -316,6 +731,9 @@ export class CodexAppServerEventProjector {
     toolTelemetry: CodexAppServerToolTelemetry,
     options?: { yieldDetected?: boolean },
   ): EmbeddedRunAttemptResult {
+    // Result construction runs after the notification queue drains. Close any
+    // tool lacking a terminal item so audit consumers never retain an open action.
+    this.nativeToolLifecycleProjector.finalizeActive();
     const assistantTexts = this.collectAssistantTexts();
     const reasoningText = collectReasoningTextValues(
       this.reasoningTextByGroup,
@@ -506,15 +924,19 @@ export class CodexAppServerEventProjector {
   }
 
   private async handleAssistantDelta(params: JsonObject): Promise<void> {
-    const itemId = readString(params, "itemId") ?? readString(params, "id") ?? "assistant";
+    const itemId = readString(params, "itemId") ?? "assistant";
     const delta = readString(params, "delta") ?? "";
     if (!delta) {
       return;
     }
-    this.rememberAssistantPhase(readItem(params.item));
-    const phase = readString(params, "phase");
-    if (phase) {
-      this.assistantPhaseByItem.set(itemId, phase);
+    if (itemId !== this.pendingRawTerminalAssistantEchoItemId) {
+      this.pendingRawTerminalAssistantEchoItemId = undefined;
+    }
+    // Deltas carry no phase; the item/started notification for this item has
+    // already recorded it in assistantPhaseByItem.
+    const isCommentary = this.isCommentaryAssistantItem(itemId);
+    if (!isCommentary && itemId !== this.latestTerminalAssistantCandidateItemId) {
+      this.markTerminalAssistantCandidateSupersededBy();
     }
     if (!this.assistantStarted) {
       this.assistantStarted = true;
@@ -523,7 +945,7 @@ export class CodexAppServerEventProjector {
     this.rememberAssistantItem(itemId);
     const text = `${this.assistantTextByItem.get(itemId) ?? ""}${delta}`;
     this.assistantTextByItem.set(itemId, text);
-    if (this.isCommentaryAssistantItem(itemId)) {
+    if (isCommentary) {
       this.emitCommentaryProgress({ itemId, text });
     } else {
       const knownFinalAnswer = this.shouldStreamAssistantPartial(itemId);
@@ -571,7 +993,7 @@ export class CodexAppServerEventProjector {
     method: ReasoningDeltaMethod,
     params: JsonObject,
   ): Promise<void> {
-    const itemId = readString(params, "itemId") ?? readString(params, "id") ?? "reasoning";
+    const itemId = readString(params, "itemId") ?? "reasoning";
     const delta = readString(params, "delta") ?? "";
     if (!delta) {
       return;
@@ -603,7 +1025,7 @@ export class CodexAppServerEventProjector {
   }
 
   private handlePlanDelta(params: JsonObject): void {
-    const itemId = readString(params, "itemId") ?? readString(params, "id") ?? "plan";
+    const itemId = readString(params, "itemId") ?? "plan";
     const delta = readString(params, "delta") ?? "";
     if (!delta) {
       return;
@@ -635,10 +1057,25 @@ export class CodexAppServerEventProjector {
 
   private async handleItemStarted(params: JsonObject): Promise<void> {
     const item = readItem(params.item);
-    const itemId = item?.id ?? readString(params, "itemId") ?? readString(params, "id");
+    const itemId = item?.id ?? readString(params, "itemId");
+    if (
+      item?.type === "agentMessage" &&
+      itemId &&
+      itemId !== this.pendingRawTerminalAssistantEchoItemId
+    ) {
+      this.pendingRawTerminalAssistantEchoItemId = undefined;
+    }
     this.rememberAssistantPhase(item);
     if (itemId) {
       this.activeItemIds.add(itemId);
+      if (itemId !== this.latestTerminalAssistantCandidateItemId) {
+        this.markTerminalAssistantCandidateSupersededBy(itemId, {
+          preserveEarlierActiveItem: true,
+        });
+        if (this.latestTerminalAssistantCandidateSuperseded) {
+          this.pendingRawTerminalAssistantEchoItemId = undefined;
+        }
+      }
     }
     this.recordNativeToolOutcome(item);
     if (item?.type === "contextCompaction" && itemId) {
@@ -683,12 +1120,32 @@ export class CodexAppServerEventProjector {
     const item = readItem(params.item);
     this.recordNativeToolOutcome(item);
     this.clearTerminalPresentationForNativeItem(item);
-    const itemId = item?.id ?? readString(params, "itemId") ?? readString(params, "id");
+    const itemId = item?.id ?? readString(params, "itemId");
+    if (
+      item?.type === "agentMessage" &&
+      itemId &&
+      itemId !== this.pendingRawTerminalAssistantEchoItemId
+    ) {
+      this.pendingRawTerminalAssistantEchoItemId = undefined;
+    }
     if (itemId) {
       this.activeItemIds.delete(itemId);
       this.completedItemIds.add(itemId);
+      this.latestCompletedItemId = itemId;
     }
     this.rememberAssistantPhase(item);
+    if (item?.type === "agentMessage" && !this.isCommentaryAssistantItem(item.id)) {
+      this.latestCompletedTerminalAssistantItemId = item.id;
+      this.markLatestTerminalAssistantCandidate(item.id);
+      this.pendingRawTerminalAssistantEchoItemId = item.id;
+    } else if (itemId) {
+      this.markTerminalAssistantCandidateSupersededBy(itemId, {
+        preserveEarlierActiveItem: true,
+      });
+      if (this.latestTerminalAssistantCandidateSuperseded) {
+        this.pendingRawTerminalAssistantEchoItemId = undefined;
+      }
+    }
     if (item?.type === "agentMessage" && typeof item.text === "string") {
       this.rememberAssistantItem(item.id);
       this.assistantTextByItem.set(item.id, item.text);
@@ -746,14 +1203,13 @@ export class CodexAppServerEventProjector {
   }
 
   private handleTokenUsage(params: JsonObject): void {
+    // v2 ThreadTokenUsageUpdatedNotification: tokenUsage = {total, last, modelContextWindow}.
     const tokenUsage = isJsonObject(params.tokenUsage) ? params.tokenUsage : undefined;
-    const current =
-      (tokenUsage ? readFirstJsonObject(tokenUsage, CURRENT_TOKEN_USAGE_KEYS) : undefined) ??
-      readFirstJsonObject(params, CURRENT_TOKEN_USAGE_KEYS);
-    if (!current) {
+    const last = tokenUsage && isJsonObject(tokenUsage.last) ? tokenUsage.last : undefined;
+    if (!last) {
       return;
     }
-    const usage = normalizeCodexTokenUsage(current);
+    const usage = normalizeCodexTokenUsage(last);
     if (usage) {
       this.tokenUsage = usage;
     }
@@ -776,6 +1232,16 @@ export class CodexAppServerEventProjector {
         userAuthorization: review ? readString(review, "userAuthorization") : undefined,
         rationale: review ? readNullableString(review, "rationale") : undefined,
         actionType: action ? readString(action, "type") : undefined,
+      },
+    });
+  }
+
+  private handleGuardianWarning(params: JsonObject): void {
+    this.emitAgentEvent({
+      stream: "codex_app_server.guardian",
+      data: {
+        phase: "warning",
+        message: readString(params, "message"),
       },
     });
   }
@@ -810,7 +1276,7 @@ export class CodexAppServerEventProjector {
   }
 
   private async handleTurnCompleted(params: JsonObject): Promise<void> {
-    const turn = readTurn(params.turn);
+    const turn = readCodexTurn(params.turn);
     if (!turn || turn.id !== this.turnId) {
       return;
     }
@@ -820,7 +1286,7 @@ export class CodexAppServerEventProjector {
         formatCodexUsageLimitErrorMessage({
           message: turn.error?.message,
           codexErrorInfo: turn.error?.codexErrorInfo as JsonValue | null | undefined,
-          rateLimits: this.latestRateLimits ?? readRecentCodexRateLimits(),
+          rateLimits: this.options.readRecentRateLimits?.(),
         }) ??
         turn.error?.message ??
         "codex app-server turn failed";
@@ -886,7 +1352,7 @@ export class CodexAppServerEventProjector {
   }
 
   private isCurrentTurnSnapshotItem(item: CodexThreadItem): boolean {
-    const itemTurnId = readItemString(item, "turnId") ?? readItemString(item, "turn_id");
+    const itemTurnId = readItemString(item, "turnId");
     return itemTurnId === undefined || itemTurnId === this.turnId;
   }
 
@@ -952,20 +1418,60 @@ export class CodexAppServerEventProjector {
     if (!item) {
       return;
     }
+    const role = readString(item, "role");
+    const phase = readString(item, "phase");
+    const rawItemId = readString(item, "id");
+    const candidateWasSupersededBeforeRaw = this.latestTerminalAssistantCandidateSuperseded;
+    const pendingTerminalAssistantEchoItemId = this.pendingRawTerminalAssistantEchoItemId;
+    const isPendingTerminalAssistantEcho =
+      role === "assistant" &&
+      phase !== "commentary" &&
+      pendingTerminalAssistantEchoItemId !== undefined &&
+      (rawItemId === undefined || rawItemId === pendingTerminalAssistantEchoItemId);
+    if (pendingTerminalAssistantEchoItemId !== undefined && !isPendingTerminalAssistantEcho) {
+      this.pendingRawTerminalAssistantEchoItemId = undefined;
+    }
+    if (!isPendingTerminalAssistantEcho) {
+      this.latestCompletedItemId = undefined;
+      this.markTerminalAssistantCandidateSupersededBy(rawItemId);
+    }
     await this.recordRawGeneratedImageMedia(item);
-    if (readString(item, "role") !== "assistant") {
+    if (role !== "assistant") {
       return;
     }
-    const phase = readString(item, "phase");
     if (phase === "commentary" && this.pendingRawCommentaryEchoes > 0) {
       this.pendingRawCommentaryEchoes -= 1;
       return;
     }
     const text = extractRawAssistantText(item);
+    if (isPendingTerminalAssistantEcho) {
+      const typedItemId = pendingTerminalAssistantEchoItemId;
+      this.pendingRawTerminalAssistantEchoItemId = undefined;
+      // Contributors may rewrite the typed completion without rewriting its raw echo.
+      if (this.assistantTextByItem.get(typedItemId)?.trim() || !text) {
+        return;
+      }
+      this.rememberAssistantItem(typedItemId);
+      this.assistantTextByItem.set(typedItemId, text);
+      return;
+    }
     if (!text) {
       return;
     }
-    const itemId = readString(item, "id") ?? `raw-assistant-${this.assistantItemOrder.length + 1}`;
+    const itemId = rawItemId ?? `raw-assistant-${this.assistantItemOrder.length + 1}`;
+    const isIdlessTerminalAssistantAfterCompletedWork =
+      candidateWasSupersededBeforeRaw &&
+      rawItemId === undefined &&
+      pendingTerminalAssistantEchoItemId === undefined &&
+      this.activeItemIds.size === 0;
+    if (
+      phase !== "commentary" &&
+      candidateWasSupersededBeforeRaw &&
+      itemId !== this.streamedPartialAssistantItemId &&
+      !isIdlessTerminalAssistantAfterCompletedWork
+    ) {
+      return;
+    }
     if (phase) {
       this.assistantPhaseByItem.set(itemId, phase);
     }
@@ -973,7 +1479,43 @@ export class CodexAppServerEventProjector {
     this.assistantTextByItem.set(itemId, text);
     if (phase === "commentary") {
       this.emitCommentaryProgress({ itemId, text });
+    } else {
+      this.markLatestTerminalAssistantCandidate(itemId, {
+        canReleaseAfterToolHandoff: isIdlessTerminalAssistantAfterCompletedWork,
+      });
     }
+  }
+
+  private markLatestTerminalAssistantCandidate(
+    itemId: string,
+    options?: { canReleaseAfterToolHandoff?: boolean },
+  ): void {
+    this.latestTerminalAssistantCandidateItemId = itemId;
+    this.latestTerminalAssistantCandidateSuperseded = false;
+    this.latestTerminalAssistantCandidateCanReleaseAfterToolHandoff =
+      options?.canReleaseAfterToolHandoff === true;
+    this.terminalAssistantCandidateEarlierActiveItemIds = new Set(this.activeItemIds);
+  }
+
+  private markTerminalAssistantCandidateSupersededBy(
+    itemId?: string,
+    options?: { preserveEarlierActiveItem?: boolean },
+  ): void {
+    if (!this.latestTerminalAssistantCandidateItemId) {
+      return;
+    }
+    // Preserve app-server ordering where an item already active at assistant
+    // completion reports its delayed completion afterward. Only new work proves
+    // the candidate stale; origin/main has an integration test for this order.
+    if (itemId && this.terminalAssistantCandidateEarlierActiveItemIds.has(itemId)) {
+      if (!options?.preserveEarlierActiveItem) {
+        this.terminalAssistantCandidateEarlierActiveItemIds.delete(itemId);
+      }
+      return;
+    }
+    this.latestTerminalAssistantCandidateSuperseded = true;
+    this.latestTerminalAssistantCandidateCanReleaseAfterToolHandoff = false;
+    this.terminalAssistantCandidateEarlierActiveItemIds.clear();
   }
 
   private recordNativeGeneratedMedia(item: CodexThreadItem | undefined): void {
@@ -1179,7 +1721,6 @@ export class CodexAppServerEventProjector {
     const args = itemToolArgs(item);
     const meta = itemMeta(item, this.toolProgressDetailMode());
     this.recordToolTrajectoryEvent({ phase: params.phase, item, name, args, status });
-    this.emitDiagnosticToolExecutionEvent({ phase: params.phase, item, name, status });
     if (params.phase === "result") {
       this.recordNativeToolError({ item, name, meta, status });
     }
@@ -1304,54 +1845,6 @@ export class CodexAppServerEventProjector {
       ...(toolResult ? { result: toolResult } : {}),
       ...(output ? { output } : {}),
     });
-  }
-
-  private emitDiagnosticToolExecutionEvent(params: {
-    phase: "start" | "result";
-    item: CodexThreadItem;
-    name: string;
-    status: ReturnType<typeof itemStatus>;
-  }): void {
-    const base = {
-      runId: this.params.runId,
-      sessionId: this.params.sessionId,
-      sessionKey: this.params.sessionKey,
-      toolName: params.name,
-      toolCallId: params.item.id,
-    };
-    if (params.phase === "start") {
-      this.diagnosticToolStartedAtByItem.set(params.item.id, Date.now());
-      emitTrustedDiagnosticEvent({
-        type: "tool.execution.started",
-        ...base,
-      });
-      return;
-    }
-
-    const startedAt = this.diagnosticToolStartedAtByItem.get(params.item.id);
-    this.diagnosticToolStartedAtByItem.delete(params.item.id);
-    const itemDurationMs =
-      typeof params.item.durationMs === "number" ? params.item.durationMs : undefined;
-    const durationMs =
-      itemDurationMs ?? (startedAt === undefined ? 0 : Math.max(0, Date.now() - startedAt));
-    const terminalEvent =
-      params.status === "blocked"
-        ? {
-            type: "tool.execution.blocked" as const,
-            reason: "codex_native_tool_blocked",
-            deniedReason: "codex_native_tool_blocked",
-          }
-        : params.status === "failed"
-          ? {
-              type: "tool.execution.error" as const,
-              durationMs,
-              errorCategory: "codex_native_tool_error",
-            }
-          : {
-              type: "tool.execution.completed" as const,
-              durationMs,
-            };
-    emitTrustedDiagnosticEvent({ ...base, ...terminalEvent });
   }
 
   private emitAfterToolCallObservation(item: CodexThreadItem): void {
@@ -1738,7 +2231,7 @@ export class CodexAppServerEventProjector {
       formatCodexUsageLimitErrorMessage({
         message: error ? readString(error, "message") : undefined,
         codexErrorInfo: error?.codexErrorInfo,
-        rateLimits: this.latestRateLimits ?? readRecentCodexRateLimits(),
+        rateLimits: this.options.readRecentRateLimits?.(),
       }) ?? readCodexErrorNotificationMessage(params)
     );
   }
@@ -1941,7 +2434,7 @@ export class CodexAppServerEventProjector {
 
   private isNotificationForTurn(params: JsonObject): boolean {
     const threadId = readCodexNotificationThreadId(params);
-    const turnId = readNotificationTurnId(params);
+    const turnId = readCodexNotificationTurnId(params);
     return threadId === this.threadId && turnId === this.turnId;
   }
 
@@ -1954,10 +2447,6 @@ export class CodexAppServerEventProjector {
 
 function isHookNotificationMethod(method: string): method is "hook/started" | "hook/completed" {
   return method === "hook/started" || method === "hook/completed";
-}
-
-function readNotificationTurnId(record: JsonObject): string | undefined {
-  return readCodexNotificationTurnId(record);
 }
 
 function readString(record: JsonObject, key: string): string | undefined {
@@ -2049,27 +2538,10 @@ function readNonNegativeInteger(record: JsonObject, key: string): number | undef
   return value !== undefined && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
-function readBoolean(record: JsonObject, key: string): boolean | undefined {
-  const value = record[key];
-  return typeof value === "boolean" ? value : undefined;
-}
-
-function readBooleanAlias(record: JsonObject, keys: readonly string[]): boolean | undefined {
-  for (const key of keys) {
-    const value = readBoolean(record, key);
-    if (value !== undefined) {
-      return value;
-    }
-  }
-  return undefined;
-}
 
 function readCodexErrorNotificationMessage(record: JsonObject): string | undefined {
   const error = record.error;
-  if (isJsonObject(error)) {
-    return readString(error, "message") ?? readString(error, "error");
-  }
-  return readString(record, "message");
+  return isJsonObject(error) ? readString(error, "message") : undefined;
 }
 
 function readHookOutputEntries(
@@ -2091,52 +2563,20 @@ function readHookOutputEntries(
   });
 }
 
-function readFirstJsonObject(record: JsonObject, keys: readonly string[]): JsonObject | undefined {
-  for (const key of keys) {
-    const value = record[key];
-    if (isJsonObject(value)) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
-function readNumberAlias(record: JsonObject, keys: readonly string[]): number | undefined {
-  for (const key of keys) {
-    const value = readNumber(record, key);
-    if (value !== undefined) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
 function normalizeCodexTokenUsage(record: JsonObject): ReturnType<typeof normalizeUsage> {
-  const promptTotalInput = readNumberAlias(record, CODEX_PROMPT_TOTAL_INPUT_KEYS);
-  const cacheRead = readNumberAlias(record, [
-    "cachedInputTokens",
-    "cached_input_tokens",
-    "cacheRead",
-    "cache_read",
-    "cache_read_input_tokens",
-    "cached_tokens",
-  ]);
+  // v2 TokenUsageBreakdown. inputTokens includes cached input; OpenClaw usage
+  // tracks uncached input and cache reads separately.
+  const inputTokens = readNumber(record, "inputTokens");
+  const cacheRead = readNumber(record, "cachedInputTokens");
   const input =
-    promptTotalInput !== undefined && cacheRead !== undefined
-      ? Math.max(0, promptTotalInput - cacheRead)
-      : (promptTotalInput ?? readNumber(record, "input"));
-
+    inputTokens !== undefined && cacheRead !== undefined
+      ? Math.max(0, inputTokens - cacheRead)
+      : inputTokens;
   return normalizeUsage({
     input,
-    output: readNumberAlias(record, ["outputTokens", "output_tokens", "output"]),
+    output: readNumber(record, "outputTokens"),
     cacheRead,
-    cacheWrite: readNumberAlias(record, [
-      "cacheWrite",
-      "cache_write",
-      "cacheCreationInputTokens",
-      "cache_creation_input_tokens",
-    ]),
-    total: readNumberAlias(record, ["totalTokens", "total_tokens", "total"]),
+    total: readNumber(record, "totalTokens"),
   });
 }
 
@@ -2236,16 +2676,41 @@ function itemTitle(item: CodexThreadItem): string {
 
 function itemStatus(item: CodexThreadItem): "completed" | "failed" | "running" | "blocked" {
   const status = readItemString(item, "status");
-  if (status === "failed") {
+  if (status === "failed" || status === "error") {
     return "failed";
   }
   if (status === "declined") {
     return "blocked";
   }
-  if (status === "inProgress" || status === "running") {
+  if (status === "inProgress" || status === "in_progress" || status === "running") {
     return "running";
   }
   return "completed";
+}
+
+function auditNativeToolTerminalStatus(item: CodexThreadItem): CodexNativeToolAuditStatus {
+  if (item.type === "imageView" || item.type === "sleep") {
+    return "completed";
+  }
+  const status = readItemString(item, "status");
+  if (status === "completed") {
+    return "completed";
+  }
+  if (status === "failed" || status === "error") {
+    return "failed";
+  }
+  if (status === "declined") {
+    return "blocked";
+  }
+  // A completed notification with a missing, active, or new status does not
+  // prove success. Preserve that ambiguity at the durable audit boundary.
+  return "unknown";
+}
+
+function auditNativeToolUnfinishedStatus(item: CodexThreadItem): CodexNativeToolUnfinishedStatus {
+  // Search and image generation publish explicit terminal states. An enclosing
+  // run outcome cannot substitute when that dependency-owned state is absent.
+  return item.type === "webSearch" || item.type === "imageGeneration" ? "unknown" : "failed";
 }
 
 function formatMissingToolResultError(params: { id: string; name: string }): string {
@@ -2272,6 +2737,31 @@ function itemName(item: CodexThreadItem): string | undefined {
   }
   if (item.type === "webSearch") {
     return "web_search";
+  }
+  return undefined;
+}
+
+function auditNativeToolName(item: CodexThreadItem): string | undefined {
+  if (item.type === "dynamicToolCall") {
+    return undefined;
+  }
+  const progressName = itemName(item);
+  if (progressName) {
+    return progressName;
+  }
+  if (item.type === "collabAgentToolCall") {
+    return typeof item.tool === "string" && item.tool.trim()
+      ? `collab.${item.tool.trim()}`
+      : "collab_agent";
+  }
+  if (item.type === "imageGeneration") {
+    return "image_generation";
+  }
+  if (item.type === "imageView") {
+    return "image_view";
+  }
+  if (item.type === "sleep") {
+    return "sleep";
   }
   return undefined;
 }
@@ -2640,8 +3130,4 @@ function readItem(value: JsonValue | undefined): CodexThreadItem | undefined {
     return undefined;
   }
   return value as CodexThreadItem;
-}
-
-function readTurn(value: JsonValue | undefined): CodexTurn | undefined {
-  return readCodexTurn(value);
 }

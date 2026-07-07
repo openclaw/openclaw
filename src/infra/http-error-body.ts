@@ -5,7 +5,16 @@ export async function readResponseBodySnippet(
   try {
     const body = response.body;
     if (!body || typeof body.getReader !== "function") {
-      return (await response.text()).slice(0, limits.maxChars);
+      const text = await response.text();
+      const encoded = new TextEncoder().encode(text);
+      if (encoded.byteLength > limits.maxBytes) {
+        return new TextDecoder()
+          .decode(encoded.subarray(0, limits.maxBytes), {
+            stream: true,
+          })
+          .slice(0, limits.maxChars);
+      }
+      return text.slice(0, limits.maxChars);
     }
 
     const reader = body.getReader();

@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { createMatrixQaClient, type MatrixQaRoomObserver } from "../../substrate/client.js";
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";
+import type { MatrixQaFaultProxyObserver } from "../../substrate/fault-proxy.js";
 import { createMatrixQaRoomObserver } from "../../substrate/sync.js";
 import type { MatrixQaProvisionedTopology } from "../../substrate/topology.js";
 import { resolveMatrixQaScenarioRoomId } from "./scenario-catalog.js";
@@ -23,6 +24,8 @@ export type MatrixQaScenarioContext = {
   driverDeviceId?: string;
   driverPassword?: string;
   driverUserId: string;
+  faultProxyObserver?: MatrixQaFaultProxyObserver;
+  faultProxyTargetBaseUrl?: string;
   observedEvents: MatrixQaObservedEvent[];
   observerAccessToken: string;
   observerDeviceId?: string;

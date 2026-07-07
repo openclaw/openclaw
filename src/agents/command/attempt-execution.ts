@@ -2,9 +2,14 @@
  * Orchestrates one agent attempt across embedded, CLI, and ACP runtimes.
  */
 import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
-import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  type FastMode,
+} from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
+import { ACP_TURN_TIMEOUT_DETAIL_CODE } from "../../acp/control-plane/manager.turn-timeout.js";
 import { formatAcpErrorChain } from "../../acp/runtime/errors.js";
+import { resolveAcpToolTerminalOutcome } from "../../acp/tool-status.js";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
@@ -15,7 +20,8 @@ import {
   injectTimestamp,
   timestampOptsFromConfig,
 } from "../../gateway/server-methods/agent-timestamp.js";
-import { emitAgentEvent } from "../../infra/agent-events.js";
+import { emitAgentAuditEvent, emitAgentEvent } from "../../infra/agent-events.js";
+import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { readErrorName } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -23,8 +29,11 @@ import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snaps
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import {
+  buildPersistedUserTurnMessage,
   preparePersistedUserTurnMessageForTranscriptWrite,
   type PersistedUserTurnMessage,
+  type UserTurnInput,
+  type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
 import { buildWorkspaceSkillSnapshot } from "../../skills/loading/workspace.js";
 import { resolveUserPath } from "../../utils.js";
@@ -97,9 +106,7 @@ const ACP_TRANSCRIPT_USAGE = {
 const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
 const GOOGLE_PROVIDER_ID = "google";
 
-function shouldSuppressEmbeddedLiveStreamOutput(params: {
-  opts: AgentCommandOpts;
-}): boolean {
+function shouldSuppressEmbeddedLiveStreamOutput(params: { opts: AgentCommandOpts }): boolean {
   return params.opts.sessionEffects === "internal" && params.opts.deliver !== true;
 }
 
@@ -303,11 +310,6 @@ async function persistTextTurnTranscript(
 ): Promise<PersistTextTurnTranscriptResult> {
   const promptText = params.transcriptBody ?? params.body;
   const replyText = params.finalText;
-  if (!promptText && !replyText) {
-    return { kind: "persisted", sessionEntry: params.sessionEntry };
-  }
-
-  const messages = [];
   const userMessage =
     params.userMessage ??
     (promptText
@@ -317,6 +319,11 @@ async function persistTextTurnTranscript(
           timestamp: Date.now(),
         } as PersistedUserTurnMessage)
       : undefined);
+  if (!userMessage && !replyText) {
+    return { kind: "persisted", sessionEntry: params.sessionEntry };
+  }
+
+  const messages = [];
   if (userMessage) {
     messages.push({
       message: userMessage,
@@ -400,6 +407,7 @@ function isClaudeCliProvider(provider: string): boolean {
 export async function persistAcpTurnTranscript(params: {
   body: string;
   transcriptBody?: string;
+  userInput?: UserTurnInput;
   finalText: string;
   sessionId: string;
   sessionKey: string;
@@ -413,6 +421,7 @@ export async function persistAcpTurnTranscript(params: {
 }): Promise<PersistTextTurnTranscriptResult> {
   return await persistTextTurnTranscript({
     ...params,
+    ...(params.userInput ? { userMessage: buildPersistedUserTurnMessage(params.userInput) } : {}),
     assistant: {
       api: "openai-responses",
       provider: "openclaw",
@@ -436,16 +445,18 @@ export async function persistCliTurnTranscript(params: {
   sessionCwd: string;
   config: OpenClawConfig;
   embeddedAssistantGapFill?: boolean;
+  skipUserTurn?: boolean;
 }): Promise<PersistTextTurnTranscriptResult> {
   const replyText = resolveCliTranscriptReplyText(params.result);
   const provider = params.result.meta.agentMeta?.provider?.trim() ?? "cli";
   const model = params.result.meta.agentMeta?.model?.trim() ?? "default";
   const gapFill = params.embeddedAssistantGapFill ?? false;
+  const skipUserTurn = gapFill || params.skipUserTurn === true;
 
   return await persistTextTurnTranscript({
-    body: gapFill ? "" : params.body,
-    transcriptBody: gapFill ? undefined : params.transcriptBody,
-    ...(!gapFill && params.userMessage ? { userMessage: params.userMessage } : {}),
+    body: skipUserTurn ? "" : params.body,
+    transcriptBody: skipUserTurn ? undefined : params.transcriptBody,
+    ...(!skipUserTurn && params.userMessage ? { userMessage: params.userMessage } : {}),
     finalText: replyText,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -479,6 +490,7 @@ export function runAgentAttempt(params: {
   workspaceDir: string;
   cwd?: string;
   body: string;
+  transcriptBody?: string;
   isFallbackRetry: boolean;
   resolvedThinkLevel: ThinkLevel;
   fastMode?: FastMode;
@@ -512,7 +524,9 @@ export function runAgentAttempt(params: {
   allowTransientCooldownProbe?: boolean;
   modelFallbacksOverride?: string[];
   sessionHasHistory?: boolean;
+  fallbackRuntimeState?: { originRuntime?: "cli" | "embedded" };
   suppressPromptPersistenceOnRetry?: boolean;
+  userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
   onLifecycleGenerationChanged?: (lifecycleGeneration: string) => void;
 }) {
@@ -551,6 +565,12 @@ export function runAgentAttempt(params: {
         authProfileId: params.sessionEntry?.authProfileOverride,
       }) ?? params.providerOverride);
   const isCliExecutionProvider = isCliProvider(cliExecutionProvider, params.cfg);
+  if (params.fallbackRuntimeState && params.fallbackRuntimeState.originRuntime === undefined) {
+    params.fallbackRuntimeState.originRuntime =
+      !isRawModelRun && isCliExecutionProvider ? "cli" : "embedded";
+  }
+  const shouldForwardImagesToEmbedded =
+    !params.isFallbackRetry || params.fallbackRuntimeState?.originRuntime === "cli";
   const allowCliAuthProfileForwarding =
     isCliExecutionProvider &&
     cliBackendAcceptsAuthProfileForwarding({
@@ -674,6 +694,7 @@ export function runAgentAttempt(params: {
         cwd: params.cwd,
         config: params.cfg,
         prompt: cliPrompt,
+        transcriptPrompt: params.transcriptBody,
         provider: cliExecutionProvider,
         model: params.modelOverride,
         thinkLevel: params.resolvedThinkLevel,
@@ -694,8 +715,12 @@ export function runAgentAttempt(params: {
         authProfileId,
         bootstrapPromptWarningSignaturesSeen,
         bootstrapPromptWarningSignature,
-        images: params.isFallbackRetry ? undefined : params.opts.images,
-        imageOrder: params.isFallbackRetry ? undefined : params.opts.imageOrder,
+        // Image discovery must use the original turn, before retry/history decoration.
+        imagePrompt: params.body,
+        // Fallback prompts repeat the current task, so prompt-local images must
+        // accompany every CLI process. Native dedupe requires a runtime receipt.
+        images: params.opts.images,
+        imageOrder: params.opts.imageOrder,
         skillsSnapshot: params.skillsSnapshot,
         messageChannel: params.messageChannel,
         streamParams: params.opts.streamParams,
@@ -713,6 +738,8 @@ export function runAgentAttempt(params: {
         cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
         cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
         oneShotCliRun: params.opts.oneShotCliRun,
+        userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+        suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
         ...(mutableCliSessionStore
           ? {
               onBeforeFreshCliSessionRetry: async (retry) => {
@@ -790,8 +817,11 @@ export function runAgentAttempt(params: {
     agentHarnessRuntimeOverride: embeddedAgentHarnessOverride,
     skillsSnapshot: params.skillsSnapshot,
     prompt: effectivePrompt,
-    images: params.isFallbackRetry ? undefined : params.opts.images,
-    imageOrder: params.isFallbackRetry ? undefined : params.opts.imageOrder,
+    transcriptPrompt: params.transcriptBody,
+    // CLI-origin retries cannot rely on transcript replay: orphan-user repair
+    // removes the persisted CLI turn before the embedded prompt is submitted.
+    images: shouldForwardImagesToEmbedded ? params.opts.images : undefined,
+    imageOrder: shouldForwardImagesToEmbedded ? params.opts.imageOrder : undefined,
     clientTools: params.opts.clientTools,
     provider: embeddedAgentProvider,
     model: params.modelOverride,
@@ -824,6 +854,7 @@ export function runAgentAttempt(params: {
     disableMessageTool: params.opts.disableMessageTool,
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
+    allowGatewaySubagentBinding: params.opts.allowGatewaySubagentBinding,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
     cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
     oneShotCliRun: params.opts.oneShotCliRun,
@@ -834,6 +865,7 @@ export function runAgentAttempt(params: {
     deferTerminalLifecycle: params.deferTerminalLifecycle,
     deferTerminalLifecycleEnd: params.deferTerminalLifecycleEnd,
     suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
+    userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
     onUserMessagePersisted: params.onUserMessagePersisted,
     onExecutionStarted: (info) => {
       if (info?.lifecycleGeneration) {
@@ -850,6 +882,7 @@ export function buildAcpResult(params: {
   payloadText: string;
   startedAt: number;
   stopReason?: string;
+  resultStatus?: Extract<AcpRuntimeEvent, { type: "done" }>["status"];
   abortSignal?: AbortSignal;
 }) {
   const normalizedFinalPayload = normalizeReplyPayload({
@@ -857,12 +890,13 @@ export function buildAcpResult(params: {
   });
   const payloads = normalizedFinalPayload ? [normalizedFinalPayload] : [];
   const abortFields = resolveAgentRunAbortLifecycleFields(params.abortSignal);
+  const resultCancelled = params.resultStatus === "cancelled";
   return {
     payloads,
     meta: {
       durationMs: Date.now() - params.startedAt,
-      aborted: abortFields.aborted ?? false,
-      stopReason: abortFields.stopReason ?? params.stopReason,
+      aborted: abortFields.aborted ?? resultCancelled,
+      stopReason: abortFields.stopReason ?? (resultCancelled ? "stop" : params.stopReason),
     },
   };
 }
@@ -870,10 +904,16 @@ export function buildAcpResult(params: {
 export function emitAcpLifecycleStart(params: {
   runId: string;
   startedAt: number;
+  sessionKey?: string;
+  agentId?: string;
   lifecycleGeneration?: string;
+  auditOnly?: boolean;
 }) {
-  emitAgentEvent({
+  const emit = params.auditOnly ? emitAgentAuditEvent : emitAgentEvent;
+  emit({
     runId: params.runId,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
     stream: "lifecycle",
     data: {
@@ -891,6 +931,228 @@ const ACP_PROXY_ENV_KEYS = [
   "https_proxy",
   "all_proxy",
 ] as const;
+type ActiveAcpTool = {
+  runId: string;
+  sessionKey?: string;
+  agentId?: string;
+  toolCallId: string;
+  toolName: string;
+  startedAt: number;
+};
+
+export type AcpToolLifecycleTracker = {
+  active: Map<string, ActiveAcpTool>;
+  terminalToolCallIds: Set<string>;
+  saturated: boolean;
+};
+
+const MAX_TRACKED_ACP_TOOLS = 4_096;
+
+export function createAcpToolLifecycleTracker(): AcpToolLifecycleTracker {
+  return {
+    active: new Map(),
+    terminalToolCallIds: new Set(),
+    saturated: false,
+  };
+}
+
+function acpAuditToolName(kind: unknown): string {
+  switch (kind) {
+    case "read":
+    case "edit":
+    case "delete":
+    case "move":
+    case "search":
+    case "execute":
+    case "fetch":
+    case "switch_mode":
+    case "think":
+    case "other":
+      return `acp_${kind}`;
+    default:
+      return "acp_tool";
+  }
+}
+
+function resolveAcpToolTerminalReason(
+  signal: AbortSignal | undefined,
+  stopReason?: string,
+  error?: unknown,
+  resultStatus?: Extract<AcpRuntimeEvent, { type: "done" }>["status"],
+): "failed" | "cancelled" | "timed_out" {
+  const abortFields = resolveAgentRunAbortLifecycleFields(signal);
+  if (abortFields.aborted) {
+    return abortFields.stopReason === "timeout" ? "timed_out" : "cancelled";
+  }
+  const normalizedStopReason = normalizeOptionalLowercaseString(stopReason);
+  if (normalizedStopReason === "timeout") {
+    return "timed_out";
+  }
+  if (resultStatus === "cancelled") {
+    return "cancelled";
+  }
+  if (
+    error instanceof Error &&
+    (error as Error & { detailCode?: unknown }).detailCode === ACP_TURN_TIMEOUT_DETAIL_CODE
+  ) {
+    return "timed_out";
+  }
+  if (
+    normalizedStopReason === "cancel" ||
+    normalizedStopReason === "cancelled" ||
+    normalizedStopReason === "manual-cancel"
+  ) {
+    return "cancelled";
+  }
+  return "failed";
+}
+
+function resolveAcpLifecycleEndFields(
+  signal: AbortSignal | undefined,
+  stopReason?: string,
+  resultStatus?: Extract<AcpRuntimeEvent, { type: "done" }>["status"],
+) {
+  const abortFields = resolveAgentRunAbortLifecycleFields(signal);
+  if (abortFields.aborted) {
+    return abortFields;
+  }
+  const terminalReason = resolveAcpToolTerminalReason(
+    undefined,
+    stopReason,
+    undefined,
+    resultStatus,
+  );
+  if (terminalReason === "timed_out") {
+    return { aborted: true, stopReason: "timeout", status: "timed_out" } as const;
+  }
+  if (terminalReason === "cancelled") {
+    return { aborted: true, stopReason: "stop", status: "cancelled" } as const;
+  }
+  return {};
+}
+
+function emitAcpToolExecutionEvent(params: {
+  runId: string;
+  toolTracker: AcpToolLifecycleTracker;
+  sessionKey?: string;
+  agentId?: string;
+  abortSignal?: AbortSignal;
+  event: Extract<AcpRuntimeEvent, { type: "tool_call" }>;
+}): void {
+  const { event } = params;
+  const now = Date.now();
+  const toolCallId = event.toolCallId?.trim() ? event.toolCallId : undefined;
+  const activeTool = toolCallId ? params.toolTracker.active.get(toolCallId) : undefined;
+  const terminalOutcome = resolveAcpToolTerminalOutcome(event.status);
+  const toolName = acpAuditToolName(event.kind);
+  // ACP runtimes may replay terminal updates. Keep the closed identity until the run ends so a
+  // late progress/terminal pair cannot reopen one invocation as a second durable audit action.
+  if (toolCallId && !activeTool) {
+    if (params.toolTracker.terminalToolCallIds.has(toolCallId)) {
+      return;
+    }
+    // Never evict an open identity: once this run reaches its bound, ignore new identities until
+    // lifecycle cleanup releases the complete set. Other runs own independent trackers.
+    const trackedIdentities =
+      params.toolTracker.active.size + params.toolTracker.terminalToolCallIds.size;
+    if (params.toolTracker.saturated || trackedIdentities >= MAX_TRACKED_ACP_TOOLS) {
+      params.toolTracker.saturated = true;
+      return;
+    }
+  }
+  // Without an identity, wait for a terminal event so every observed action closes immediately.
+  // Opening on progress would leave an unmatched audit action if the runtime omits its result.
+  const startsUnidentifiedTool = toolCallId === undefined && terminalOutcome !== undefined;
+  if (!activeTool && (toolCallId !== undefined || startsUnidentifiedTool)) {
+    emitTrustedDiagnosticEvent({
+      type: "tool.execution.started",
+      runId: params.runId,
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...(toolCallId ? { toolCallId } : {}),
+      toolName,
+      toolSource: "core",
+      toolOwner: "acp",
+    });
+    if (toolCallId) {
+      params.toolTracker.active.set(toolCallId, {
+        runId: params.runId,
+        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+        toolCallId,
+        toolName,
+        startedAt: now,
+      });
+    }
+  }
+  if (!terminalOutcome) {
+    return;
+  }
+  const terminalReason = resolveAcpToolTerminalReason(
+    params.abortSignal,
+    undefined,
+    undefined,
+    terminalOutcome === "cancelled" ? "cancelled" : undefined,
+  );
+  const durationMs = Math.max(0, now - (activeTool?.startedAt ?? now));
+  emitTrustedDiagnosticEvent(
+    terminalOutcome === "completed"
+      ? {
+          type: "tool.execution.completed",
+          runId: params.runId,
+          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+          ...(params.agentId ? { agentId: params.agentId } : {}),
+          ...(toolCallId ? { toolCallId } : {}),
+          toolName: activeTool?.toolName ?? toolName,
+          toolSource: "core",
+          toolOwner: "acp",
+          durationMs,
+        }
+      : {
+          type: "tool.execution.error",
+          runId: params.runId,
+          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+          ...(params.agentId ? { agentId: params.agentId } : {}),
+          ...(toolCallId ? { toolCallId } : {}),
+          toolName: activeTool?.toolName ?? toolName,
+          toolSource: "core",
+          toolOwner: "acp",
+          durationMs,
+          errorCategory: terminalReason === "cancelled" ? "aborted" : "acp_tool",
+          terminalReason,
+        },
+  );
+  if (toolCallId) {
+    params.toolTracker.active.delete(toolCallId);
+    params.toolTracker.terminalToolCallIds.add(toolCallId);
+  }
+}
+
+function finalizeAcpToolsForRun(
+  toolTracker: AcpToolLifecycleTracker,
+  runId: string,
+  terminalReason: "failed" | "cancelled" | "timed_out",
+): void {
+  const now = Date.now();
+  for (const activeTool of toolTracker.active.values()) {
+    emitTrustedDiagnosticEvent({
+      type: "tool.execution.error",
+      runId,
+      ...(activeTool.sessionKey ? { sessionKey: activeTool.sessionKey } : {}),
+      ...(activeTool.agentId ? { agentId: activeTool.agentId } : {}),
+      toolName: activeTool.toolName,
+      toolSource: "core",
+      toolOwner: "acp",
+      toolCallId: activeTool.toolCallId,
+      durationMs: Math.max(0, now - activeTool.startedAt),
+      errorCategory: terminalReason === "cancelled" ? "aborted" : "acp_tool_incomplete",
+      terminalReason,
+    });
+  }
+  toolTracker.active.clear();
+  toolTracker.terminalToolCallIds.clear();
+  toolTracker.saturated = false;
+}
 
 function resolvePresentProxyEnvKeys(env: NodeJS.ProcessEnv = process.env): string[] {
   return ACP_PROXY_ENV_KEYS.filter((key) => {
@@ -932,6 +1194,7 @@ function acpRuntimeEventDiagnostics(event: AcpRuntimeEvent): Record<string, unkn
   if (event.type === "done") {
     return {
       eventType: event.type,
+      ...(event.status ? { status: event.status } : {}),
       ...(event.stopReason ? { stopReason: sanitizeAcpDiagnosticText(event.stopReason) } : {}),
     };
   }
@@ -956,54 +1219,104 @@ export function emitAcpPromptSubmitted(params: { runId: string; sessionKey?: str
 
 export function emitAcpRuntimeEvent(params: {
   runId: string;
+  toolTracker: AcpToolLifecycleTracker;
   event: AcpRuntimeEvent;
   sessionKey?: string;
+  agentId?: string;
+  abortSignal?: AbortSignal;
+  auditOnly?: boolean;
 }) {
-  emitAgentEvent({
-    runId: params.runId,
-    stream: "acp",
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-    data: {
-      phase: "runtime_event",
-      ...acpRuntimeEventDiagnostics(params.event),
-    },
-  });
+  if (params.event.type === "tool_call") {
+    emitAcpToolExecutionEvent({
+      runId: params.runId,
+      toolTracker: params.toolTracker,
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
+      event: params.event,
+    });
+  }
+  if (!params.auditOnly) {
+    emitAgentEvent({
+      runId: params.runId,
+      stream: "acp",
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      data: {
+        phase: "runtime_event",
+        ...acpRuntimeEventDiagnostics(params.event),
+      },
+    });
+  }
 }
 
 export function emitAcpLifecycleEnd(params: {
   runId: string;
+  toolTracker: AcpToolLifecycleTracker;
+  sessionKey?: string;
+  agentId?: string;
   lifecycleGeneration?: string;
   abortSignal?: AbortSignal;
+  stopReason?: string;
+  resultStatus?: Extract<AcpRuntimeEvent, { type: "done" }>["status"];
+  auditOnly?: boolean;
 }) {
-  emitAgentEvent({
+  finalizeAcpToolsForRun(
+    params.toolTracker,
+    params.runId,
+    resolveAcpToolTerminalReason(
+      params.abortSignal,
+      params.stopReason,
+      undefined,
+      params.resultStatus,
+    ),
+  );
+  const emit = params.auditOnly ? emitAgentAuditEvent : emitAgentEvent;
+  emit({
     runId: params.runId,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
     stream: "lifecycle",
     data: {
       phase: "end",
       endedAt: Date.now(),
-      ...resolveAgentRunAbortLifecycleFields(params.abortSignal),
+      ...resolveAcpLifecycleEndFields(params.abortSignal, params.stopReason, params.resultStatus),
     },
   });
 }
 
 export function emitAcpLifecycleError(params: {
   runId: string;
+  toolTracker: AcpToolLifecycleTracker;
   error: unknown;
   sessionKey?: string;
+  agentId?: string;
   lifecycleGeneration?: string;
   abortSignal?: AbortSignal;
+  terminalOutcome?: "blocked";
+  auditOnly?: boolean;
 }) {
-  emitAgentEvent({
+  const terminalReason = resolveAcpToolTerminalReason(params.abortSignal, undefined, params.error);
+  finalizeAcpToolsForRun(params.toolTracker, params.runId, terminalReason);
+  const lifecycleFields =
+    params.terminalOutcome === "blocked"
+      ? ({ livenessState: "blocked" } as const)
+      : terminalReason === "timed_out"
+        ? ({ aborted: true, stopReason: "timeout", status: "timed_out" } as const)
+        : resolveAgentRunAbortLifecycleFields(params.abortSignal);
+  const emit = params.auditOnly ? emitAgentAuditEvent : emitAgentEvent;
+  emit({
     runId: params.runId,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
     stream: "lifecycle",
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     data: {
       phase: "error",
-      error: formatAcpErrorChain(params.error),
+      ...(!params.auditOnly ? { error: formatAcpErrorChain(params.error) } : {}),
       endedAt: Date.now(),
-      ...resolveAgentRunAbortLifecycleFields(params.abortSignal),
+      ...lifecycleFields,
     },
   });
 }

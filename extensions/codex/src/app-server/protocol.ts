@@ -87,18 +87,6 @@ export type CodexDynamicToolNamespaceSpec = JsonObject & {
 
 export type CodexDynamicToolSpec = CodexDynamicToolFunctionSpec | CodexDynamicToolNamespaceSpec;
 
-export type CodexLegacyDynamicToolFunctionSpec = JsonObject & {
-  name: string;
-  description: string;
-  inputSchema: JsonValue;
-  deferLoading?: boolean;
-  namespace?: string;
-};
-
-export type CodexThreadStartDynamicToolSpec =
-  | CodexDynamicToolSpec
-  | CodexLegacyDynamicToolFunctionSpec;
-
 export function flattenCodexDynamicToolFunctions(
   tools: readonly CodexDynamicToolSpec[] | undefined,
 ): CodexDynamicToolFunctionSpec[] {
@@ -120,12 +108,10 @@ export type CodexThreadStartParams = JsonObject & {
   approvalsReviewer?: string | null;
   sandbox?: string;
   serviceTier?: CodexServiceTier | null;
-  dynamicTools?: CodexThreadStartDynamicToolSpec[] | null;
+  dynamicTools?: CodexDynamicToolSpec[] | null;
   developerInstructions?: string;
   experimentalRawEvents?: boolean;
   environments?: CodexTurnEnvironmentParams[] | null;
-  /** Retired by Codex 0.137, but still sent for supported custom app-server 0.125-0.136. */
-  persistExtendedHistory?: boolean;
 };
 
 export type CodexThreadResumeParams = JsonObject & {
@@ -139,8 +125,6 @@ export type CodexThreadResumeParams = JsonObject & {
   serviceTier?: CodexServiceTier | null;
   config?: JsonObject;
   developerInstructions?: string;
-  /** Retired by Codex 0.137, but still sent for supported custom app-server 0.125-0.136. */
-  persistExtendedHistory?: boolean;
 };
 
 export type CodexThreadStartResponse = {
@@ -158,6 +142,58 @@ export type CodexThreadForkParams = CodexThreadStartParams & {
 };
 
 export type CodexThreadForkResponse = CodexThreadStartResponse;
+
+export const CODEX_INTERACTIVE_THREAD_SOURCE_KINDS = ["cli", "vscode"] as const;
+
+export type CodexThreadSourceKind =
+  | (typeof CODEX_INTERACTIVE_THREAD_SOURCE_KINDS)[number]
+  | "exec"
+  | "appServer"
+  | "subAgent"
+  | "subAgentReview"
+  | "subAgentCompact"
+  | "subAgentThreadSpawn"
+  | "subAgentOther"
+  | "unknown";
+
+export type CodexThreadListParams = JsonObject & {
+  cursor?: string | null;
+  limit?: number | null;
+  modelProviders?: string[] | null;
+  sortKey?: "created_at" | "updated_at" | "recency_at" | null;
+  sortDirection?: "asc" | "desc" | null;
+  archived?: boolean | null;
+  searchTerm?: string | null;
+  sourceKinds?: CodexThreadSourceKind[] | null;
+};
+
+export type CodexThreadListResponse = {
+  data: CodexThread[];
+  nextCursor?: string | null;
+  backwardsCursor?: string | null;
+};
+
+export type CodexThreadReadParams = JsonObject & {
+  threadId: string;
+  includeTurns?: boolean;
+};
+
+export type CodexThreadReadResponse = {
+  thread: CodexThread;
+};
+
+export type CodexThreadSetNameParams = JsonObject & {
+  threadId: string;
+  name: string;
+};
+
+export type CodexThreadArchiveParams = JsonObject & {
+  threadId: string;
+};
+
+export type CodexThreadUnarchiveResponse = {
+  thread: CodexThread;
+};
 
 export type CodexThreadResumeResponse = {
   thread: CodexThread;
@@ -229,6 +265,7 @@ export type CodexThread = {
   threadSource?: string | null;
   agentNickname?: string | null;
   agentRole?: string | null;
+  turns?: CodexTurn[];
 };
 
 export type CodexThreadStatus =
@@ -310,6 +347,7 @@ export type CodexDynamicToolCallParams = {
 export type CodexDynamicToolCallResponse = {
   asyncStarted?: boolean;
   contentItems: CodexDynamicToolCallOutputContentItem[];
+  diagnosticTerminalReason?: CodexDynamicToolDiagnosticTerminalReason;
   diagnosticTerminalType?: CodexDynamicToolDiagnosticTerminalType;
   sideEffectEvidence?: boolean;
   success: boolean;
@@ -317,6 +355,7 @@ export type CodexDynamicToolCallResponse = {
 };
 
 export type CodexDynamicToolDiagnosticTerminalType = "blocked" | "completed" | "error";
+export type CodexDynamicToolDiagnosticTerminalReason = "failed" | "cancelled" | "timed_out";
 
 export type CodexDynamicToolCallOutputContentItem =
   | {
@@ -329,6 +368,9 @@ export type CodexDynamicToolCallOutputContentItem =
     }
   | JsonObject;
 
+// Mirrors v2 ErrorNotification/TurnError (codex-rs app-server-protocol
+// notification.rs + thread_data.rs). `message` is required upstream; other
+// TurnError fields stay open because CodexErrorInfo is a wide enum.
 export type CodexErrorNotification = {
   error: {
     message?: string;
@@ -336,9 +378,12 @@ export type CodexErrorNotification = {
       message?: string;
       [key: string]: unknown;
     };
+    additionalDetails?: string | null;
     [key: string]: unknown;
   };
-  message?: string;
+  willRetry?: boolean;
+  threadId?: string;
+  turnId?: string;
 };
 
 export type CodexTurnCompletedNotification = {
@@ -564,8 +609,13 @@ export declare namespace v2 {
 type CodexAppServerRequestParamsOverride = {
   "environment/add": { environmentId: string; execServerUrl: string };
   "thread/fork": CodexThreadForkParams;
+  "thread/archive": CodexThreadArchiveParams;
   "thread/inject_items": CodexThreadInjectItemsParams;
+  "thread/list": CodexThreadListParams;
+  "thread/name/set": CodexThreadSetNameParams;
+  "thread/read": CodexThreadReadParams;
   "thread/start": CodexThreadStartParams;
+  "thread/unarchive": CodexThreadArchiveParams;
   "thread/unsubscribe": CodexThreadUnsubscribeParams;
   "turn/interrupt": CodexTurnInterruptParams;
 };
@@ -592,11 +642,15 @@ type CodexAppServerRequestResultMap = {
   "review/start": JsonValue;
   "skills/list": CodexSkillsListResponse;
   "thread/compact/start": JsonValue;
+  "thread/archive": JsonValue;
   "thread/fork": CodexThreadForkResponse;
   "thread/inject_items": JsonValue;
-  "thread/list": JsonValue;
+  "thread/list": CodexThreadListResponse;
+  "thread/name/set": JsonValue;
+  "thread/read": CodexThreadReadResponse;
   "thread/resume": CodexThreadResumeResponse;
   "thread/start": CodexThreadStartResponse;
+  "thread/unarchive": CodexThreadUnarchiveResponse;
   "thread/unsubscribe": JsonValue;
   "turn/interrupt": JsonValue;
   "turn/start": CodexTurnStartResponse;

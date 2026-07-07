@@ -40,6 +40,7 @@ import {
 } from "../infra/exec-safe-bin-runtime-policy.js";
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { collectDeepCodeSafetyFindings } from "./audit-deep-code-safety.js";
 import { collectDeepProbeFindings } from "./audit-deep-probe-findings.js";
 import {
@@ -147,70 +148,32 @@ export type AuditExecutionContext = {
   workspaceDir?: string;
 };
 
-let readOnlyChannelPluginsModulePromise:
-  | Promise<typeof import("../channels/plugins/read-only.js")>
-  | undefined;
-let auditNonDeepModulePromise: Promise<typeof import("./audit.nondeep.runtime.js")> | undefined;
-let auditChannelModulePromise:
-  | Promise<typeof import("./audit-channel.collect.runtime.js")>
-  | undefined;
-let pluginMetadataRegistryLoaderModulePromise:
-  | Promise<typeof import("../plugins/runtime/metadata-registry-loader.js")>
-  | undefined;
-let pluginAutoEnableModulePromise:
-  | Promise<typeof import("../config/plugin-auto-enable.js")>
-  | undefined;
-let channelPluginIdsModulePromise:
-  | Promise<typeof import("../plugins/channel-plugin-ids.js")>
-  | undefined;
-let pluginRuntimeModulePromise: Promise<typeof import("../plugins/runtime.js")> | undefined;
-let gatewayProbeDepsPromise:
-  | Promise<{
-      buildGatewayConnectionDetails: typeof import("../gateway/call.js").buildGatewayConnectionDetails;
-      resolveGatewayProbeAuthSafe: typeof import("../gateway/probe-auth.js").resolveGatewayProbeAuthSafe;
-      resolveGatewayProbeTarget: typeof import("../gateway/probe-auth.js").resolveGatewayProbeTarget;
-      probeGateway: typeof import("../gateway/probe.js").probeGateway;
-    }>
-  | undefined;
+const loadReadOnlyChannelPlugins = createLazyRuntimeModule(
+  () => import("../channels/plugins/read-only.js"),
+);
 
-async function loadReadOnlyChannelPlugins() {
-  readOnlyChannelPluginsModulePromise ??= import("../channels/plugins/read-only.js");
-  return await readOnlyChannelPluginsModulePromise;
-}
+const loadAuditNonDeepModule = createLazyRuntimeModule(() => import("./audit.nondeep.runtime.js"));
 
-async function loadAuditNonDeepModule() {
-  auditNonDeepModulePromise ??= import("./audit.nondeep.runtime.js");
-  return await auditNonDeepModulePromise;
-}
+const loadAuditChannelModule = createLazyRuntimeModule(
+  () => import("./audit-channel.collect.runtime.js"),
+);
 
-async function loadAuditChannelModule() {
-  auditChannelModulePromise ??= import("./audit-channel.collect.runtime.js");
-  return await auditChannelModulePromise;
-}
+const loadPluginMetadataRegistryLoaderModule = createLazyRuntimeModule(
+  () => import("../plugins/runtime/metadata-registry-loader.js"),
+);
 
-async function loadPluginMetadataRegistryLoaderModule() {
-  pluginMetadataRegistryLoaderModulePromise ??=
-    import("../plugins/runtime/metadata-registry-loader.js");
-  return await pluginMetadataRegistryLoaderModulePromise;
-}
+const loadPluginAutoEnableModule = createLazyRuntimeModule(
+  () => import("../config/plugin-auto-enable.js"),
+);
 
-async function loadPluginAutoEnableModule() {
-  pluginAutoEnableModulePromise ??= import("../config/plugin-auto-enable.js");
-  return await pluginAutoEnableModulePromise;
-}
+const loadChannelPluginIdsModule = createLazyRuntimeModule(
+  () => import("../plugins/channel-plugin-ids.js"),
+);
 
-async function loadChannelPluginIdsModule() {
-  channelPluginIdsModulePromise ??= import("../plugins/channel-plugin-ids.js");
-  return await channelPluginIdsModulePromise;
-}
+const loadPluginRuntimeModule = createLazyRuntimeModule(() => import("../plugins/runtime.js"));
 
-async function loadPluginRuntimeModule() {
-  pluginRuntimeModulePromise ??= import("../plugins/runtime.js");
-  return await pluginRuntimeModulePromise;
-}
-
-async function loadGatewayProbeDeps() {
-  gatewayProbeDepsPromise ??= Promise.all([
+const loadGatewayProbeDeps = createLazyRuntimeModule(() =>
+  Promise.all([
     import("../gateway/call.js"),
     import("../gateway/probe-auth.js"),
     import("../gateway/probe.js"),
@@ -219,9 +182,8 @@ async function loadGatewayProbeDeps() {
     resolveGatewayProbeAuthSafe: probeAuthModule.resolveGatewayProbeAuthSafe,
     resolveGatewayProbeTarget: probeAuthModule.resolveGatewayProbeTarget,
     probeGateway: probeModule.probeGateway,
-  }));
-  return await gatewayProbeDepsPromise;
-}
+  })),
+);
 
 function countBySeverity(findings: SecurityAuditFinding[]): SecurityAuditSummary {
   let critical = 0;

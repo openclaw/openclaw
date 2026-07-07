@@ -24,7 +24,7 @@ import {
 } from "./rest-scheduler.js";
 import { isDiscordRateLimitBody } from "./schemas.js";
 
-export { DiscordError, RateLimitError } from "./rest-errors.js";
+export { DiscordError, isUnknownDiscordVoiceStateError, RateLimitError } from "./rest-errors.js";
 
 export type RuntimeProfile = "serverless" | "persistent";
 export type RequestPriority = RestRequestPriority;

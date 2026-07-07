@@ -1,5 +1,6 @@
 // Msteams plugin module implements bot framework behavior.
 import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { ensureUserAgentHeader } from "../user-agent.js";
 import {
@@ -112,7 +113,10 @@ async function fetchBotFrameworkAttachmentInfo(params: {
     return undefined;
   }
   try {
-    return (await response.json()) as BotFrameworkAttachmentInfo;
+    return await readProviderJsonResponse<BotFrameworkAttachmentInfo>(
+      response,
+      "msteams botFramework attachmentInfo",
+    );
   } catch (err) {
     params.logger?.warn?.("msteams botFramework attachmentInfo parse failed", {
       error: err instanceof Error ? err.message : String(err),

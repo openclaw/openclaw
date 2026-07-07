@@ -584,6 +584,27 @@ describe("session MCP runtime", () => {
     expect(dynamicRefValidator(1).valid).toBe(false);
   });
 
+  it("attributes draft-2020-12 compiler failures to the MCP schema", () => {
+    let thrown: unknown;
+    try {
+      createBundleMcpJsonSchemaValidator().getValidator({
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        properties: {
+          value: { type: "string", pattern: "[" },
+        },
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toMatchObject({
+      message: expect.stringContaining(
+        "Invalid MCP draft-2020-12 JSON Schema: Invalid regular expression",
+      ),
+      cause: expect.any(Error),
+    });
+  });
+
   it("compiles draft-2020-12 patterns with redundant unicode-invalid escapes", () => {
     const validator = createBundleMcpJsonSchemaValidator().getValidator({
       $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -722,15 +743,15 @@ describe("session MCP runtime", () => {
     expect(activeLeases).toBe(0);
   });
 
-  it("keeps MCP tools/list responses that exceed the connection timeout but finish within the internal catalog timeout", async () => {
+  it("uses the internal catalog timeout for MCP tools/list after connecting", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-slow-listtools-"));
     const serverPath = path.join(tempDir, "slow-list-tools.mjs");
     const logPath = path.join(tempDir, "server.log");
-    testing.setBundleMcpCatalogListTimeoutMsForTest(3_000);
+    testing.setBundleMcpCatalogListTimeoutMsForTest(300);
     await writeListToolsMcpServer({
       filePath: serverPath,
       logPath,
-      delayMs: 1_250,
+      delayMs: 100,
     });
 
     const runtime = await getOrCreateSessionMcpRuntime({
@@ -758,7 +779,7 @@ describe("session MCP runtime", () => {
         serverName: "slowListTools",
         toolCount: 1,
       });
-      await expect(fs.readFile(logPath, "utf8")).resolves.toContain("delay tools/list 1250");
+      await expect(fs.readFile(logPath, "utf8")).resolves.toContain("delay tools/list 100");
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
@@ -901,6 +922,46 @@ describe("session MCP runtime", () => {
       ]);
       expect(catalog.servers.docs?.toolCount).toBe(2);
       expect(catalog.servers.docs?.tools?.filteredCount).toBe(1);
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects adversarial MCP tool filters without regex backtracking", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-linear-filter-"));
+    const serverPath = path.join(tempDir, "linear-filter.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      tools: [
+        {
+          name: `${"a".repeat(64)}c`,
+          inputSchema: { type: "object", properties: {} },
+        },
+      ],
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-linear-tool-filter",
+      sessionKey: "agent:test:session-linear-tool-filter",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            docs: {
+              command: process.execPath,
+              args: [serverPath],
+              toolFilter: { include: [`${"*a".repeat(24)}*b`] },
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      expect((await runtime.getCatalog()).tools).toEqual([]);
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
@@ -1901,6 +1962,7 @@ describe("disposeSession timeout", () => {
     "force-closes transport and client when terminateSession hangs past the timeout",
     { timeout: 15_000 },
     async () => {
+      testing.setBundleMcpDisposeTimeoutMsForTest(100);
       const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-force-close-"));
       const serverPath = path.join(tempDir, "hanging-terminate.mjs");
       const logPath = path.join(tempDir, "server.log");
@@ -1984,10 +2046,7 @@ process.stdin.on("end", () => {
       await runtime.dispose();
       const elapsed = Date.now() - start;
 
-      // The timeout fires at 5s and force-closes transport + client,
-      // so disposal must complete well before 8s even when the process
-      // ignores shutdown signals.
-      expect(elapsed).toBeLessThan(8_000);
+      expect(elapsed).toBeLessThan(1_000);
 
       await retireSessionMcpRuntime({
         sessionId: "session-force-close-timeout",
@@ -2001,6 +2060,7 @@ process.stdin.on("end", () => {
     "completes disposal even when the MCP server process ignores shutdown",
     { timeout: 15_000 },
     async () => {
+      testing.setBundleMcpDisposeTimeoutMsForTest(100);
       const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-dispose-timeout-"));
       const serverPath = path.join(tempDir, "hanging-close.mjs");
       const logPath = path.join(tempDir, "server.log");
@@ -2083,9 +2143,7 @@ process.stdin.on("end", () => {
       await runtime.dispose();
       const elapsed = Date.now() - start;
 
-      // Dispose should complete within DISPOSE_TIMEOUT_MS (5s) + a small buffer,
-      // not hang indefinitely.
-      expect(elapsed).toBeLessThan(8_000);
+      expect(elapsed).toBeLessThan(1_000);
 
       await fs.rm(tempDir, { recursive: true, force: true });
     },
@@ -2095,6 +2153,7 @@ process.stdin.on("end", () => {
     "force-closes streamable-http transport when DELETE hangs past the timeout",
     { timeout: 15_000 },
     async () => {
+      testing.setBundleMcpDisposeTimeoutMsForTest(100);
       const sessionId = "test-session-" + Date.now();
       const server = http.createServer((req, res) => {
         if (req.method === "GET") {
@@ -2176,10 +2235,7 @@ process.stdin.on("end", () => {
         await runtime.dispose();
         const elapsed = Date.now() - start;
 
-        // The timeout fires at 5s and force-closes transport + client,
-        // so disposal must complete well before 8s even when the DELETE
-        // request never receives a response.
-        expect(elapsed).toBeLessThan(8_000);
+        expect(elapsed).toBeLessThan(1_000);
       } finally {
         server.close();
       }

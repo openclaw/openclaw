@@ -10,8 +10,10 @@ import {
   errorShape,
   type GatewayRequestHandlerOptions,
 } from "openclaw/plugin-sdk/gateway-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import {
   buildGoogleMeetCalendarDayWindow,
@@ -42,18 +44,9 @@ import {
 import { GoogleMeetRuntime } from "./src/runtime.js";
 import { isGoogleMeetBrowserManualActionError } from "./src/transports/chrome-create.js";
 
-let googleMeetCreateModulePromise: Promise<typeof import("./src/create.js")> | null = null;
-let googleMeetCliModulePromise: Promise<typeof import("./src/cli.js")> | null = null;
+const loadGoogleMeetCreateModule = createLazyRuntimeModule(() => import("./src/create.js"));
 
-const loadGoogleMeetCreateModule = async () => {
-  googleMeetCreateModulePromise ??= import("./src/create.js");
-  return await googleMeetCreateModulePromise;
-};
-
-const loadGoogleMeetCliModule = async () => {
-  googleMeetCliModulePromise ??= import("./src/cli.js");
-  return await googleMeetCliModulePromise;
-};
+const loadGoogleMeetCliModule = createLazyRuntimeModule(() => import("./src/cli.js"));
 
 const googleMeetConfigSchema = {
   parse(value: unknown) {
@@ -354,13 +347,6 @@ function asParamRecord(params: unknown): Record<string, unknown> {
   return params && typeof params === "object" && !Array.isArray(params)
     ? (params as Record<string, unknown>)
     : {};
-}
-
-function json(payload: unknown) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
-    details: payload,
-  };
 }
 
 function normalizeTransport(value: unknown): GoogleMeetTransport | undefined {

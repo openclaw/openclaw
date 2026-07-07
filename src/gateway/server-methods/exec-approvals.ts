@@ -17,6 +17,7 @@ import {
   type ExecApprovalsFile,
   type ExecApprovalsSnapshot,
 } from "../../infra/exec-approvals.js";
+import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import { resolveBaseHashParam } from "./base-hash.js";
 import {
   respondUnavailableOnNodeInvokeError,
@@ -111,6 +112,29 @@ async function respondWithExecApprovalsNodePayload<TParams extends { nodeId: str
   if (!nodeId) {
     params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
     return;
+  }
+  const nodeSession = params.context.nodeRegistry.get(nodeId);
+  if (nodeSession) {
+    const allowed = isNodeCommandAllowed({
+      command: params.command,
+      declaredCommands: nodeSession.commands,
+      allowlist: resolveNodeCommandAllowlist(params.context.getRuntimeConfig(), {
+        ...nodeSession,
+        approvedCommands: nodeSession.commands,
+      }),
+    });
+    if (!allowed.ok) {
+      params.respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `node command not allowed: ${params.command} (${allowed.reason})`,
+          { details: { command: params.command, reason: allowed.reason } },
+        ),
+      );
+      return;
+    }
   }
   await respondUnavailableOnThrow(params.respond, async () => {
     const res = await params.context.nodeRegistry.invoke({

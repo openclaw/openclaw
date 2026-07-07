@@ -573,11 +573,7 @@ function createScenarios(codexApi: CodexPromptSnapshotApi): PromptScenario[] {
           silentToken: SILENT_REPLY_TOKEN,
         }),
         intro: buildGroupIntro({
-          cfg: baseConfig,
-          sessionCtx: discordGroupCtx,
           defaultActivation: "mention",
-          silentToken: SILENT_REPLY_TOKEN,
-          silentReplyPolicy: "allow",
         }),
       }),
       dynamicTools: discordGroupTools,

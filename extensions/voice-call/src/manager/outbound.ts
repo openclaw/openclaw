@@ -268,10 +268,15 @@ export async function initiateCall(
   }
 }
 
+export type SpeakOptions = {
+  listenAfterPlayback?: boolean;
+};
+
 export async function speak(
   ctx: SpeakContext,
   callId: CallId,
   text: string,
+  options?: SpeakOptions,
 ): Promise<{ success: boolean; error?: string }> {
   const connected = requireConnectedCall(ctx, callId);
   if (!connected.ok) {
@@ -295,11 +300,13 @@ export async function speak(
     const voice = resolvePreferredTtsVoice(
       resolveVoiceCallEffectiveConfig(ctx.config, numberRouteKey).config,
     );
+    const playbackOptions = options?.listenAfterPlayback ? { listenAfterPlayback: true } : {};
     await provider.playTts({
       callId,
       providerCallId,
       text,
       voice,
+      ...playbackOptions,
     });
 
     addTranscriptEntry(call, "bot", text);

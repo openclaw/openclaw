@@ -1,3 +1,4 @@
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { explainShellCommand } from "./command-explainer/extract.js";
 import type {
   CommandExplanation,
@@ -204,7 +205,7 @@ function stepReasons(step: CommandStep, risks: readonly CommandRisk[]): string[]
       reasons.push(risk.kind);
     }
   }
-  return [...new Set(reasons)];
+  return uniqueStrings(reasons);
 }
 
 function nonReusableStepReasons(step: CommandStep, risks: readonly CommandRisk[]): string[] {
@@ -214,7 +215,7 @@ function nonReusableStepReasons(step: CommandStep, risks: readonly CommandRisk[]
       reasons.push(risk.kind);
     }
   }
-  return [...new Set(reasons)];
+  return uniqueStrings(reasons);
 }
 
 function isShellExpansionDynamicArgument(risk: CommandRisk): boolean {
@@ -266,7 +267,7 @@ function shellWrapperPreludeReasons(params: {
       (risk) => UNANALYZABLE_RISKS.has(risk.kind) && riskBeforeStepExecutable(risk, params.step),
     )
     .map((risk) => risk.kind);
-  return [...new Set(reasons)];
+  return uniqueStrings(reasons);
 }
 
 function isPathScopedExecutableToken(token: string): boolean {
@@ -417,9 +418,11 @@ function createCandidate(params: {
   if (hasCommandPrelude(params.step) && preludeReasons.length === 0) {
     preludeReasons.push(SHELL_WRAPPER_PRELUDE_REASON);
   }
-  const reasons = [
-    ...new Set([...stepPromptReasons, ...stepNonReusableReasons, ...preludeReasons]),
-  ];
+  const reasons = uniqueStrings([
+    ...stepPromptReasons,
+    ...stepNonReusableReasons,
+    ...preludeReasons,
+  ]);
   const trustMode: ExecAuthorizationTrustMode =
     params.segment.resolution?.policyBlocked === true
       ? "prompt-only"

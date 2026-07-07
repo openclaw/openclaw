@@ -11,6 +11,7 @@ import { isRecord } from "../utils.js";
 import type {
   PluginManifestChannelConfig,
   PluginManifestContracts,
+  PluginManifestProviderEndpoint,
   PluginPackageInstall,
 } from "./manifest.js";
 
@@ -81,6 +82,11 @@ export type OfficialExternalPluginCatalogManifest = {
     envVars?: readonly string[];
   };
   providers?: readonly OfficialExternalProviderCatalogProvider[];
+  /**
+   * Mirrors the plugin manifest's providerEndpoints so endpoint classification
+   * keeps working when the plugin is not installed (dist excludes it).
+   */
+  providerEndpoints?: readonly PluginManifestProviderEndpoint[];
   webSearchProviders?: readonly OfficialExternalWebSearchProvider[];
   install?: PluginPackageInstall & { sourceRef?: string };
   contracts?: PluginManifestContracts;

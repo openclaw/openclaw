@@ -1,5 +1,10 @@
 /** Normalizes agent run wait/liveness/timeout metadata into sticky terminal outcomes. */
-import { formatBlockedLivenessError, isBlockedLivenessState } from "../shared/agent-liveness.js";
+import {
+  formatAbandonedLivenessError,
+  formatBlockedLivenessError,
+  isAbandonedLivenessState,
+  isBlockedLivenessState,
+} from "../shared/agent-liveness.js";
 import {
   AGENT_RUN_ABORTED_ERROR,
   AGENT_RUN_RESTART_ABORT_STOP_REASON,
@@ -22,6 +27,7 @@ type AgentRunTerminalReason =
   | "cancelled"
   | "aborted"
   | "blocked"
+  | "abandoned"
   | "failed";
 
 /** Normalized terminal outcome for an agent run. */
@@ -53,6 +59,9 @@ type AgentRunTerminalInput = {
 type AgentRunTerminalWaitInput = Omit<AgentRunTerminalInput, "status"> & {
   status?: unknown;
 };
+
+/** Shared grace window for terminal observations that may still be followed by a retry. */
+export const AGENT_RUN_TERMINAL_RETRY_GRACE_MS = 15_000;
 
 const HARD_TIMEOUT_PHASES = new Set<AgentRunTimeoutPhase>(["preflight", "provider", "post_turn"]);
 
@@ -115,13 +124,18 @@ export function buildAgentRunTerminalOutcome(
   const cancelled =
     restartCancelled || (input.status !== "ok" && isCancellationStopReason(stopReason));
   const blocked = isBlockedLivenessState(livenessState);
+  const abandoned = isAbandonedLivenessState(livenessState);
   const error = hardTimeout
     ? rawError
     : blocked
       ? formatBlockedLivenessError(rawError)
       : aborted && !rawError
         ? AGENT_RUN_ABORTED_ERROR
-        : rawError;
+        : aborted || cancelled
+          ? rawError
+          : abandoned
+            ? formatAbandonedLivenessError(rawError)
+            : rawError;
   const reason: AgentRunTerminalReason = hardTimeout
     ? "hard_timeout"
     : blocked
@@ -130,18 +144,19 @@ export function buildAgentRunTerminalOutcome(
         ? "aborted"
         : cancelled
           ? "cancelled"
-          : input.status === "timeout"
-            ? "timed_out"
-            : input.status === "error"
-              ? "failed"
-              : "completed";
+          : abandoned
+            ? "abandoned"
+            : input.status === "timeout"
+              ? "timed_out"
+              : input.status === "error"
+                ? "failed"
+                : "completed";
   return {
     reason,
     status:
       reason === "completed"
         ? "ok"
-        : reason === "hard_timeout" ||
-            (input.status === "timeout" && (reason === "timed_out" || reason === "cancelled"))
+        : reason === "hard_timeout" || reason === "timed_out"
           ? "timeout"
           : "error",
     ...(error ? { error } : {}),

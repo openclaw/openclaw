@@ -165,6 +165,24 @@ function computeStatus(job: CronJob): string {
   return state.lastRunStatus ?? state.lastStatus ?? "idle";
 }
 
+// Human-facing decoration only: enrichCronJsonWithStatus() emits computeStatus()
+// verbatim as the --json `status` field, so the failure count must stay out of it.
+// consecutiveErrors resets to 0 on the next successful run, so the count is live.
+function decorateStatusWithFailures(status: string, consecutiveErrors: number | undefined): string {
+  const failures = consecutiveErrors ?? 0;
+  if (status !== "error" || failures <= 1) {
+    return status;
+  }
+  // Capped so the Status column never overflows (a minute cron failing for a day
+  // reaches 4 digits); past 99 the exact figure adds nothing over "chronic".
+  return failures > 99 ? `${status} (99+x)` : `${status} (${failures}x)`;
+}
+
+function formatCronStatusForDisplay(job: CronJob): string {
+  const state = job.state ?? {};
+  return decorateStatusWithFailures(computeStatus(job), state.consecutiveErrors);
+}
+
 export function handleCronCliError(err: unknown) {
   defaultRuntime.error(danger(String(err)));
   defaultRuntime.exit(1);
@@ -227,9 +245,9 @@ export function parseDurationMs(input: string): number | null {
             ? 3_600_000
             : 86_400_000;
   const result = Math.floor(n * factor);
-  if (!Number.isFinite(result)) {
+  if (!Number.isFinite(result) || result <= 0) {
     // A finite mantissa can still overflow to Infinity for a large unit (e.g. a long
-    // pure-digit string with "d"); reject it instead of returning Infinity ms.
+    // pure-digit string with "d"); tiny positive values can also floor to 0ms.
     return null;
   }
   return result;
@@ -313,14 +331,16 @@ export function parseAt(input: string, tz?: string): string | null {
 }
 
 const CRON_ID_PAD = 36;
+const CRON_DECLARATION_PAD = 24;
 const CRON_NAME_PAD = 24;
 const CRON_SCHEDULE_PAD = 32;
 const CRON_NEXT_PAD = 10;
 const CRON_LAST_PAD = 10;
-const CRON_STATUS_PAD = 9;
+const CRON_STATUS_PAD = 12;
 const CRON_TARGET_PAD = 9;
 const CRON_DELIVERY_PAD = 64;
 const CRON_AGENT_PAD = 10;
+const CRON_OWNER_PAD = 24;
 const CRON_MODEL_PAD = 20;
 
 const stringifyCell = (value: unknown, fallback = "-") => {
@@ -434,6 +454,7 @@ export function printCronList(
   const rich = isRich();
   const header = [
     pad("ID", CRON_ID_PAD),
+    pad("Declaration", CRON_DECLARATION_PAD),
     pad("Name", CRON_NAME_PAD),
     pad("Schedule", CRON_SCHEDULE_PAD),
     pad("Next", CRON_NEXT_PAD),
@@ -442,6 +463,7 @@ export function printCronList(
     pad("Target", CRON_TARGET_PAD),
     pad("Delivery", CRON_DELIVERY_PAD),
     pad("Agent ID", CRON_AGENT_PAD),
+    pad("Owner", CRON_OWNER_PAD),
     pad("Model", CRON_MODEL_PAD),
   ].join(" ");
 
@@ -451,7 +473,14 @@ export function printCronList(
   for (const job of jobs) {
     const state = job.state ?? {};
     const idLabel = pad(job.id, CRON_ID_PAD);
-    const nameLabel = pad(truncate(stringifyCell(job.name), CRON_NAME_PAD), CRON_NAME_PAD);
+    const declarationLabel = pad(
+      truncate(job.declarationKey ?? "-", CRON_DECLARATION_PAD),
+      CRON_DECLARATION_PAD,
+    );
+    const nameLabel = pad(
+      truncate(stringifyCell(job.displayName ?? job.name), CRON_NAME_PAD),
+      CRON_NAME_PAD,
+    );
     const scheduleLabel = pad(
       truncate(formatSchedule(job.schedule), CRON_SCHEDULE_PAD),
       CRON_SCHEDULE_PAD,
@@ -462,7 +491,7 @@ export function printCronList(
     );
     const lastLabel = pad(formatRelative(state.lastRunAtMs, now), CRON_LAST_PAD);
     const statusRaw = computeStatus(job);
-    const statusLabel = pad(statusRaw, CRON_STATUS_PAD);
+    const statusLabel = pad(formatCronStatusForDisplay(job), CRON_STATUS_PAD);
     const targetLabel = pad(job.sessionTarget ?? "-", CRON_TARGET_PAD);
     const deliveryPreview = opts?.deliveryPreviews?.get(job.id);
     const deliveryText = deliveryPreview
@@ -470,6 +499,10 @@ export function printCronList(
       : "-";
     const deliveryLabel = pad(truncate(deliveryText, CRON_DELIVERY_PAD), CRON_DELIVERY_PAD);
     const agentLabel = pad(truncate(job.agentId ?? "-", CRON_AGENT_PAD), CRON_AGENT_PAD);
+    const ownerLabel = pad(
+      truncate(job.owner?.sessionKey ?? job.owner?.agentId ?? "-", CRON_OWNER_PAD),
+      CRON_OWNER_PAD,
+    );
     const modelLabel = pad(
       truncate(
         (job.payload?.kind === "agentTurn" ? job.payload.model : undefined) ?? "-",
@@ -504,6 +537,7 @@ export function printCronList(
 
     const line = [
       colorize(rich, theme.accent, idLabel),
+      colorize(rich, theme.muted, declarationLabel),
       colorize(rich, theme.info, nameLabel),
       colorize(rich, theme.info, scheduleLabel),
       colorize(rich, theme.muted, nextLabel),
@@ -514,6 +548,7 @@ export function printCronList(
         ? colorize(rich, theme.info, deliveryLabel)
         : colorize(rich, theme.muted, deliveryLabel),
       coloredAgent,
+      colorize(rich, job.owner ? theme.info : theme.muted, ownerLabel),
       job.payload?.kind === "agentTurn" && job.payload.model
         ? colorize(rich, theme.info, modelLabel)
         : colorize(rich, theme.muted, modelLabel),
@@ -530,7 +565,11 @@ export function printCronShow(
 ) {
   const preview = opts?.deliveryPreview ?? { label: "-", detail: "unavailable" };
   runtime.log(`id: ${job.id}`);
+  runtime.log(`declaration: ${job.declarationKey ?? "-"}`);
   runtime.log(`name: ${job.name}`);
+  runtime.log(`display name: ${job.displayName ?? "-"}`);
+  runtime.log(`owner agent: ${job.owner?.agentId ?? "-"}`);
+  runtime.log(`owner session: ${job.owner?.sessionKey ?? "-"}`);
   runtime.log(`enabled: ${job.enabled ? "yes" : "no"}`);
   runtime.log(`schedule: ${formatSchedule(job.schedule)}`);
   runtime.log(`session: ${job.sessionTarget ?? "-"}`);
@@ -539,6 +578,11 @@ export function printCronShow(
   runtime.log(`delivery: ${preview.label} (${preview.detail})`);
   runtime.log(`next: ${formatRelative(job.state.nextRunAtMs, Date.now())}`);
   runtime.log(`last: ${formatRelative(job.state.lastRunAtMs, Date.now())}`);
-  runtime.log(`status: ${computeStatus(job)}`);
+  runtime.log(`status: ${formatCronStatusForDisplay(job)}`);
+  // lastError is the run/schedule failure message; the diagnostic line below is
+  // the run-diagnostics summary and can be empty when only lastError is set.
+  runtime.log(`last error: ${job.state.lastError ?? "-"}`);
+  runtime.log(`last delivery: ${job.state.lastDeliveryStatus ?? "-"}`);
+  runtime.log(`last delivery error: ${job.state.lastDeliveryError ?? "-"}`);
   runtime.log(`diagnostic: ${job.state.lastDiagnosticSummary ?? "-"}`);
 }

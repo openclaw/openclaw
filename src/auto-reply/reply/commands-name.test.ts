@@ -170,6 +170,7 @@ describe("name command", () => {
         totalTokens: 0,
         totalTokensFresh: true,
         label: "Billing rework",
+        displayName: "Dashboard session",
       },
     });
 
@@ -177,6 +178,7 @@ describe("name command", () => {
     const result = await handleNameCommand(params, true);
 
     expect(result?.reply?.text).toContain("Current session name: Billing rework");
+    expect(result?.reply?.text).toContain("Suggested name: Dashboard session");
   });
 
   it("seeds a brand-new native session entry that is not yet persisted", async () => {

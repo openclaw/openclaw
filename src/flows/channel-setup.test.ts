@@ -1,6 +1,7 @@
 // Channel setup tests cover setup flow prompts and config output.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
   makeCatalogEntry,
   makeChannelSetupEntries,
@@ -46,39 +47,14 @@ function externalChatSetupEntries(overrides: Partial<ReturnType<ResolveChannelSe
 }
 
 function makePluginRegistry(overrides: Partial<PluginRegistry> = {}): PluginRegistry {
-  return {
-    plugins: [],
-    channels: [],
-    channelSetups: [],
-    providers: [],
-    authProviders: [],
-    authRequirements: [],
-    webSearchProviders: [],
-    webFetchProviders: [],
-    migrationProviders: [],
-    embeddingProviders: [],
-    mediaUnderstandingProviders: [],
-    imageGenerationProviders: [],
-    videoGenerationProviders: [],
-    musicGenerationProviders: [],
-    speechProviders: [],
-    realtimeTranscriptionProviders: [],
-    realtimeVoiceProviders: [],
-    cliBackends: [],
-    tools: [],
-    hooks: [],
-    typedHooks: [],
-    bundledExtensionDescriptors: [],
-    doctorChecks: [],
-    flowContributions: [],
-    flowContributionResolvers: [],
-    providerExtensions: [],
-    toolsets: [],
-    toolDisplayEntries: [],
-    textTransforms: [],
-    diagnostics: [],
-    ...overrides,
-  } as unknown as PluginRegistry;
+  const registry = createEmptyPluginRegistry();
+  for (const key of Object.keys(overrides) as Array<keyof PluginRegistry>) {
+    const value = overrides[key];
+    if (value !== undefined) {
+      Object.assign(registry, { [key]: value });
+    }
+  }
+  return registry;
 }
 
 function callArg<T>(mock: { mock: { calls: unknown[][] } }, index = 0, _type?: (value: T) => T): T {

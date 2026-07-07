@@ -109,7 +109,11 @@ function failureDestinationModeSchema(params: { nullableClears: boolean }) {
   return Type.Optional(Type.Union(variants));
 }
 
-function cronPayloadObjectSchema(params: { model: TSchema; toolsAllow: TSchema }) {
+function cronPayloadObjectSchema(params: {
+  model: TSchema;
+  toolsAllow: TSchema;
+  fallbacks: TSchema;
+}) {
   return Type.Object(
     {
       kind: optionalStringEnum(CRON_PAYLOAD_KINDS, { description: "Payload kind" }),
@@ -120,7 +124,7 @@ function cronPayloadObjectSchema(params: { model: TSchema; toolsAllow: TSchema }
       timeoutSeconds: optionalFiniteNumberSchema({ minimum: 0 }),
       lightContext: Type.Optional(Type.Boolean()),
       allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
-      fallbacks: Type.Optional(Type.Array(Type.String(), { description: "Fallback models" })),
+      fallbacks: params.fallbacks,
       toolsAllow: params.toolsAllow,
     },
     { additionalProperties: true },
@@ -161,6 +165,7 @@ function createCronPayloadSchema(): TSchema {
     cronPayloadObjectSchema({
       model: Type.Optional(Type.String({ description: "Model override" })),
       toolsAllow: Type.Optional(Type.Array(Type.String(), { description: "Allowed tools" })),
+      fallbacks: Type.Optional(Type.Array(Type.String(), { description: "Fallback models" })),
     }),
   );
 }
@@ -255,6 +260,26 @@ function createCronJobObjectSchema(): TSchema {
     Type.Object(
       {
         name: Type.Optional(Type.String({ description: "Job name" })),
+        declarationKey: Type.Optional(
+          Type.String({
+            description: "Idempotent declaration identity key",
+            minLength: 1,
+            maxLength: 200,
+            pattern: "\\S",
+          }),
+        ),
+        displayName: Type.Optional(
+          Type.String({ description: "Human-readable declarative job label", maxLength: 200 }),
+        ),
+        owner: Type.Optional(
+          Type.Object(
+            {
+              agentId: Type.Optional(Type.String()),
+              sessionKey: Type.Optional(Type.String()),
+            },
+            { additionalProperties: false },
+          ),
+        ),
         schedule: createCronScheduleSchema(),
         sessionTarget: Type.Optional(
           Type.String({
@@ -281,6 +306,11 @@ function createCronPatchObjectSchema(): TSchema {
     Type.Object(
       {
         name: Type.Optional(Type.String({ description: "Job name" })),
+        displayName: Type.Optional(
+          Type.Union([Type.String({ maxLength: 200 }), Type.Null()], {
+            description: "Human-readable label; null clears it",
+          }),
+        ),
         schedule: createCronScheduleSchema(),
         sessionTarget: Type.Optional(Type.String({ description: "Session target" })),
         wakeMode: optionalStringEnum(CRON_WAKE_MODES),
@@ -288,6 +318,7 @@ function createCronPatchObjectSchema(): TSchema {
           cronPayloadObjectSchema({
             model: nullableStringSchema("Model override, or null to clear"),
             toolsAllow: nullableStringArraySchema("Allowed tool ids, or null to clear"),
+            fallbacks: nullableStringArraySchema("Fallback models, or null to clear"),
           }),
         ),
         delivery: createCronDeliveryPatchSchema(),
@@ -413,7 +444,7 @@ function assertNoCronShellExecution(value: unknown): void {
     return;
   }
   const payload = isRecord(value.payload) ? value.payload : undefined;
-  if (payload?.kind === "command") {
+  if (normalizeLowercaseStringOrEmpty(payload?.kind) === "command") {
     throw new Error(
       "cron command payloads cannot be created or edited through the agent cron tool; use the CLI or Gateway API.",
     );
@@ -1034,10 +1065,30 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
             const canonicalJob = canonicalizeCronToolObject(params.job as Record<string, unknown>);
             assertNoCronShellExecution(canonicalJob);
             assertCronDeliveryInputNonBlankFields(canonicalJob.delivery);
+            if (
+              typeof canonicalJob.declarationKey === "string" &&
+              canonicalJob.declarationKey.trim().length === 0
+            ) {
+              throw new Error("declarationKey must be a non-empty string");
+            }
+            if (
+              typeof canonicalJob.displayName === "string" &&
+              canonicalJob.displayName.trim().length === 0
+            ) {
+              throw new Error("displayName must be a non-empty string");
+            }
+            const enabledExplicit = typeof canonicalJob.enabled === "boolean";
             const job =
               normalizeCronJobCreate(canonicalJob, {
                 sessionContext: { sessionKey: opts?.agentSessionKey },
               }) ?? canonicalJob;
+            if (
+              typeof job.declarationKey === "string" &&
+              job.declarationKey.length > 0 &&
+              !enabledExplicit
+            ) {
+              delete job.enabled;
+            }
             capCronAgentTurnJobToolsAllow(job, opts?.creatorToolAllowlist);
             if (job && typeof job === "object") {
               const { mainKey, alias } = resolveMainSessionAlias(runtimeConfig);
@@ -1158,6 +1209,12 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
             );
             assertNoCronShellExecution(canonicalPatch);
             assertCronDeliveryInputNonBlankFields(canonicalPatch.delivery);
+            if (
+              typeof canonicalPatch.displayName === "string" &&
+              canonicalPatch.displayName.trim().length === 0
+            ) {
+              throw new Error("displayName must be a non-empty string or null");
+            }
             const patch = normalizeCronJobPatch(canonicalPatch) ?? canonicalPatch;
             if (recoveredFlatPatch && isEmptyRecoveredCronPatch(patch)) {
               throw new Error("patch required");

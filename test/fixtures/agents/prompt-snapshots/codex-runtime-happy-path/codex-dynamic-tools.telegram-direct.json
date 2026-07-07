@@ -125,6 +125,104 @@
     "type": "function"
   },
   {
+    "description": "List agent ids allowed for `sessions_spawn runtime=\"subagent\"`.",
+    "inputSchema": {
+      "properties": {},
+      "type": "object"
+    },
+    "name": "agents_list",
+    "type": "function"
+  },
+  {
+    "description": "Spawn clean child session; default `runtime=\"subagent\"`. `mode=\"run\"` one-shot background work. Subagents inherit parent workspace. Native subagents get task in first visible `[Subagent Task]` message. Native only: `context=\"fork\"` only when child needs current transcript; else omit or `isolated`. Use for fresh child-session work. Delegate sidecar/parallel tasks: batch file reads, multi-step searches, data collection. Avoid delegating quick lookups or single-file reads unless policy prefers delegation. After spawning, do non-overlapping work while run-mode results return.",
+    "inputSchema": {
+      "properties": {
+        "agentId": {
+          "type": "string"
+        },
+        "attachAs": {
+          "properties": {
+            "mountPath": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "attachments": {
+          "items": {
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "encoding": {
+                "enum": ["utf8", "base64"],
+                "type": "string"
+              },
+              "mimeType": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": ["name", "content"],
+            "type": "object"
+          },
+          "maxItems": 50,
+          "type": "array"
+        },
+        "cleanup": {
+          "enum": ["delete", "keep"],
+          "type": "string"
+        },
+        "context": {
+          "description": "Native context. Omit/\"isolated\" for clean child; \"fork\" only when child needs requester transcript.",
+          "enum": ["isolated", "fork"],
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "lightContext": {
+          "description": "Light bootstrap context; runtime=\"subagent\" only.",
+          "type": "boolean"
+        },
+        "mode": {
+          "enum": ["run"],
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "runtime": {
+          "enum": ["subagent"],
+          "type": "string"
+        },
+        "sandbox": {
+          "enum": ["inherit", "require"],
+          "type": "string"
+        },
+        "task": {
+          "type": "string"
+        },
+        "taskName": {
+          "description": "Stable alias for later targeting; lowercase letters/digits/underscores/hyphens, starts letter.",
+          "type": "string"
+        },
+        "thinking": {
+          "type": "string"
+        }
+      },
+      "required": ["task"],
+      "type": "object"
+    },
+    "name": "sessions_spawn",
+    "type": "function"
+  },
+  {
     "description": "End current turn. Use after spawning subagents; results arrive as next message.",
     "inputSchema": {
       "properties": {
@@ -336,6 +434,13 @@
                   ],
                   "description": "Agent id, or null to keep it unset"
                 },
+                "declarationKey": {
+                  "description": "Idempotent declaration identity key",
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "pattern": "\\S",
+                  "type": "string"
+                },
                 "deleteAfterRun": {
                   "description": "Delete after first run",
                   "type": "boolean"
@@ -411,6 +516,11 @@
                   "description": "Human description",
                   "type": "string"
                 },
+                "displayName": {
+                  "description": "Human-readable declarative job label",
+                  "maxLength": 200,
+                  "type": "string"
+                },
                 "enabled": {
                   "type": "boolean"
                 },
@@ -453,6 +563,18 @@
                 "name": {
                   "description": "Job name",
                   "type": "string"
+                },
+                "owner": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "agentId": {
+                      "type": "string"
+                    },
+                    "sessionKey": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
                 },
                 "payload": {
                   "additionalProperties": true,
@@ -716,6 +838,18 @@
                 "description": {
                   "type": "string"
                 },
+                "displayName": {
+                  "anyOf": [
+                    {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Human-readable label; null clears it"
+                },
                 "enabled": {
                   "type": "boolean"
                 },
@@ -766,11 +900,18 @@
                       "type": "boolean"
                     },
                     "fallbacks": {
-                      "description": "Fallback models",
-                      "items": {
-                        "type": "string"
-                      },
-                      "type": "array"
+                      "anyOf": [
+                        {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Fallback models, or null to clear"
                     },
                     "kind": {
                       "description": "Payload kind",
@@ -1003,17 +1144,7 @@
       },
       {
         "deferLoading": true,
-        "description": "List agent ids allowed for `sessions_spawn runtime=\"subagent\"`.",
-        "inputSchema": {
-          "properties": {},
-          "type": "object"
-        },
-        "name": "agents_list",
-        "type": "function"
-      },
-      {
-        "deferLoading": true,
-        "description": "List visible sessions; filter by kind, label, agentId, search, activity. Use before sessions_history or sessions_send target selection.",
+        "description": "List visible sessions; filter by kind, label, agentId, search, activity, archive state. Use before sessions_history or sessions_send target selection.",
         "inputSchema": {
           "properties": {
             "activeMinutes": {
@@ -1024,6 +1155,9 @@
               "maxLength": 64,
               "minLength": 1,
               "type": "string"
+            },
+            "archived": {
+              "type": "boolean"
             },
             "includeDerivedTitles": {
               "type": "boolean"
@@ -1115,96 +1249,6 @@
           "type": "object"
         },
         "name": "sessions_send",
-        "type": "function"
-      },
-      {
-        "deferLoading": true,
-        "description": "Spawn clean child session; default `runtime=\"subagent\"`. `mode=\"run\"` one-shot background work. Subagents inherit parent workspace. Native subagents get task in first visible `[Subagent Task]` message. Native only: `context=\"fork\"` only when child needs current transcript; else omit or `isolated`. Use for fresh child-session work. Delegate sidecar/parallel tasks: batch file reads, multi-step searches, data collection. Avoid delegating quick lookups or single-file reads unless policy prefers delegation. After spawning, do non-overlapping work while run-mode results return.",
-        "inputSchema": {
-          "properties": {
-            "agentId": {
-              "type": "string"
-            },
-            "attachAs": {
-              "properties": {
-                "mountPath": {
-                  "type": "string"
-                }
-              },
-              "type": "object"
-            },
-            "attachments": {
-              "items": {
-                "properties": {
-                  "content": {
-                    "type": "string"
-                  },
-                  "encoding": {
-                    "enum": ["utf8", "base64"],
-                    "type": "string"
-                  },
-                  "mimeType": {
-                    "type": "string"
-                  },
-                  "name": {
-                    "type": "string"
-                  }
-                },
-                "required": ["name", "content"],
-                "type": "object"
-              },
-              "maxItems": 50,
-              "type": "array"
-            },
-            "cleanup": {
-              "enum": ["delete", "keep"],
-              "type": "string"
-            },
-            "context": {
-              "description": "Native context. Omit/\"isolated\" for clean child; \"fork\" only when child needs requester transcript.",
-              "enum": ["isolated", "fork"],
-              "type": "string"
-            },
-            "cwd": {
-              "type": "string"
-            },
-            "label": {
-              "type": "string"
-            },
-            "lightContext": {
-              "description": "Light bootstrap context; runtime=\"subagent\" only.",
-              "type": "boolean"
-            },
-            "mode": {
-              "enum": ["run"],
-              "type": "string"
-            },
-            "model": {
-              "type": "string"
-            },
-            "runtime": {
-              "enum": ["subagent"],
-              "type": "string"
-            },
-            "sandbox": {
-              "enum": ["inherit", "require"],
-              "type": "string"
-            },
-            "task": {
-              "type": "string"
-            },
-            "taskName": {
-              "description": "Stable alias for later targeting; lowercase letters/digits/underscores/hyphens, starts letter.",
-              "type": "string"
-            },
-            "thinking": {
-              "type": "string"
-            }
-          },
-          "required": ["task"],
-          "type": "object"
-        },
-        "name": "sessions_spawn",
         "type": "function"
       },
       {

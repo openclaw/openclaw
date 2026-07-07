@@ -2,6 +2,7 @@
  * Public parameter types for subscribing to embedded-agent sessions.
  */
 import type {
+  BlockReplyContext,
   PartialReplyPayload,
   SourceReplyDeliveryMode,
 } from "../auto-reply/get-reply-options.types.js";
@@ -12,6 +13,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { BlockReplyPayload } from "./embedded-agent-payloads.js";
 import type { EmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
+import type { BlockReplyFlushContext } from "./embedded-agent-runner/types.js";
 import type {
   BlockReplyChunking,
   ToolProgressDetailMode,
@@ -59,9 +61,9 @@ export type SubscribeEmbeddedAgentSessionParams = {
   streamReasoningInNonStreamModes?: boolean;
   /** Called when a thinking/reasoning block ends (</think> tag processed). */
   onReasoningEnd?: () => void | Promise<void>;
-  onBlockReply?: (payload: BlockReplyPayload) => void | Promise<void>;
-  /** Flush pending block replies (e.g., before tool execution to preserve message boundaries). */
-  onBlockReplyFlush?: () => void | Promise<void>;
+  onBlockReply?: (payload: BlockReplyPayload, context?: BlockReplyContext) => void | Promise<void>;
+  /** Flush pending block replies and identify the boundary that requested it. */
+  onBlockReplyFlush?: (context: BlockReplyFlushContext) => void | Promise<void>;
   blockReplyBreak?: "text_end" | "message_end";
   blockReplyChunking?: BlockReplyChunking;
   onPartialReply?: (payload: PartialReplyPayload) => void | Promise<void>;

@@ -2,6 +2,7 @@
 import type { Chat, Message, MessageOrigin, User } from "grammy/types";
 import type { NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
 import {
+  isRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -104,10 +105,6 @@ function hasTelegramRichMessage(value: unknown): boolean {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function compactRichText(value: string): string {
   return value
     .split("\n")
@@ -157,8 +154,29 @@ function renderRichBlocks(value: unknown): string {
     return telegramHtmlToPlainTextFallback(value.html);
   }
   const parts: string[] = [];
-  for (const key of ["text", "title", "subtitle", "caption", "credit"] as const) {
+  for (const key of [
+    "text",
+    "summary",
+    "label",
+    "title",
+    "subtitle",
+    "credit",
+    "expression",
+  ] as const) {
     parts.push(renderRichInlineText(value[key]));
+  }
+  if (value.caption !== undefined) {
+    const caption = value.caption;
+    if (isRecord(caption) && caption.credit !== undefined) {
+      parts.push(
+        joinRichText(
+          [renderRichInlineText(caption.text), renderRichInlineText(caption.credit)],
+          "\n",
+        ),
+      );
+    } else {
+      parts.push(renderRichInlineText(caption));
+    }
   }
   for (const key of ["blocks", "items", "rows", "cells", "headers", "children"] as const) {
     parts.push(renderRichBlocks(value[key]));

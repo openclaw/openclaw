@@ -3,8 +3,8 @@ import {
   drainPendingDeliveries as coreDrainPendingDeliveries,
   type DeliverFn,
 } from "../infra/outbound/delivery-queue.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 
-type OutboundDeliverRuntimeModule = typeof import("../infra/outbound/deliver-runtime.js");
 type DrainPendingDeliveriesOptions = Omit<
   Parameters<typeof coreDrainPendingDeliveries>[0],
   "deliver"
@@ -13,12 +13,9 @@ type DrainPendingDeliveriesOptions = Omit<
   deliver?: DeliverFn;
 };
 
-let outboundDeliverRuntimePromise: Promise<OutboundDeliverRuntimeModule> | null = null;
-
-async function loadOutboundDeliverRuntime(): Promise<OutboundDeliverRuntimeModule> {
-  outboundDeliverRuntimePromise ??= import("../infra/outbound/deliver-runtime.js");
-  return await outboundDeliverRuntimePromise;
-}
+const loadOutboundDeliverRuntime = createLazyRuntimeModule(
+  () => import("../infra/outbound/deliver-runtime.js"),
+);
 
 /**
  * Drain queued outbound payloads after a channel reconnect or transport recovery.

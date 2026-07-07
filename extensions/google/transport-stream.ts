@@ -9,7 +9,14 @@ import {
   type ThinkingLevel,
 } from "openclaw/plugin-sdk/llm";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
-import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
+import {
+  collectProviderApiKeysForExecution,
+  executeWithApiKeyRotation,
+} from "openclaw/plugin-sdk/provider-auth-runtime";
+import {
+  createProviderHttpError,
+  providerOperationRetryConfig,
+} from "openclaw/plugin-sdk/provider-http";
 import {
   buildGuardedModelFetch,
   coerceTransportToolCallArguments,
@@ -153,7 +160,7 @@ function requiresToolCallId(modelId: string): boolean {
 }
 
 function requiresToolCallThoughtSignature(modelId: string): boolean {
-  return normalizeLowercaseStringOrEmpty(modelId).includes("gemini-3");
+  return isGoogleGemini3ProModel(modelId) || isGoogleGemini3FlashModel(modelId);
 }
 
 function supportsMultimodalFunctionResponse(modelId: string): boolean {
@@ -480,7 +487,7 @@ function resolveGoogleThinkingConfig(
     }
     return normalizeGoogleThinkingConfig(model.id, config);
   }
-  if (!options?.reasoning) {
+  if (!options?.reasoning || options.reasoning === "off") {
     return getDisabledThinkingConfig(model.id);
   }
   if (isAdaptiveReasoningLevel(options.reasoning)) {
@@ -787,6 +794,40 @@ function buildGoogleHeaders(
   );
 }
 
+function isGoogleOauthApiKey(apiKey: string | undefined): boolean {
+  return Boolean(
+    apiKey?.trimStart().startsWith("{") && parseGeminiAuth(apiKey).headers.Authorization,
+  );
+}
+
+function hasGoogleAuthHeader(headers: Record<string, string> | undefined): boolean {
+  return Object.keys(headers ?? {}).some((name) => {
+    const normalized = name.trim().toLowerCase();
+    return normalized === "authorization" || normalized === "x-goog-api-key";
+  });
+}
+
+function collectGoogleTransportApiKeys(params: {
+  kind: CanonicalGoogleTransportApi;
+  model: GoogleTransportModel;
+  options: GoogleTransportOptions | undefined;
+  primaryApiKey: string | undefined;
+}): string[] {
+  if (
+    params.kind !== "google-generative-ai" ||
+    !isOfficialGoogleGenerativeAiBaseUrl(params.model.baseUrl) ||
+    isGoogleOauthApiKey(params.primaryApiKey) ||
+    hasGoogleAuthHeader(params.model.headers) ||
+    hasGoogleAuthHeader(params.options?.headers)
+  ) {
+    return [];
+  }
+  return collectProviderApiKeysForExecution({
+    provider: params.model.provider,
+    primaryApiKey: params.primaryApiKey,
+  });
+}
+
 async function buildGoogleVertexHeaders(
   model: GoogleTransportModel,
   apiKey: string | undefined,
@@ -827,7 +868,8 @@ function isOfficialGoogleGenerativeAiBaseUrl(baseUrl: string | undefined): boole
     return true;
   }
   try {
-    return new URL(baseUrl).hostname === "generativelanguage.googleapis.com";
+    const url = new URL(baseUrl);
+    return url.protocol === "https:" && url.hostname === "generativelanguage.googleapis.com";
   } catch {
     return false;
   }
@@ -1243,22 +1285,40 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
           params = nextParams as GoogleGenerateContentRequest;
         }
         const requestUrl = buildGoogleTransportRequestUrl(kind, model, options);
-        const requestHeaders = await buildGoogleTransportHeaders({
-          kind,
-          model,
-          apiKey,
-          optionHeaders: options?.headers,
-          fetchImpl: (options as { fetch?: typeof fetch } | undefined)?.fetch,
-        });
-        const sse = await openGoogleSseChunks({
+        const fetchImpl = (options as { fetch?: typeof fetch } | undefined)?.fetch;
+        const openSse = async (apiKeyForRequest: string | undefined) => {
+          const requestHeaders = await buildGoogleTransportHeaders({
+            kind,
+            model,
+            apiKey: apiKeyForRequest,
+            optionHeaders: options?.headers,
+            fetchImpl,
+          });
+          return await openGoogleSseChunks({
+            kind,
+            model,
+            options,
+            guardedFetch,
+            url: requestUrl,
+            headers: requestHeaders,
+            request: params,
+          });
+        };
+        const apiKeys = collectGoogleTransportApiKeys({
           kind,
           model,
           options,
-          guardedFetch,
-          url: requestUrl,
-          headers: requestHeaders,
-          request: params,
+          primaryApiKey: apiKey,
         });
+        const sse =
+          apiKeys.length > 0
+            ? await executeWithApiKeyRotation({
+                provider: model.provider,
+                apiKeys,
+                transientRetry: providerOperationRetryConfig("read"),
+                execute: openSse,
+              })
+            : await openSse(apiKey);
         stream.push({ type: "start", partial: output as never });
         let currentBlockIndex = -1;
         const toolCallBlocksById = new Map<

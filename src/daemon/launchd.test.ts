@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "./constants.js";
 import {
+  LAUNCH_AGENT_ENV_WRAPPER_SHELL,
   LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS,
   LAUNCH_AGENT_PROCESS_TYPE,
   LAUNCH_AGENT_STDIN_PATH,
@@ -79,6 +80,13 @@ function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean):
     }
   }
   return count;
+}
+
+function readPlistProgramArgumentStrings(plist: string): string[] {
+  const match = plist.match(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/i);
+  return Array.from((match?.[1] ?? "").matchAll(/<string>([\s\S]*?)<\/string>/gi)).map(
+    (item) => item[1] ?? "",
+  );
 }
 
 function createDefaultLaunchdEnv(): Record<string, string | undefined> {
@@ -838,8 +846,12 @@ describe("launchd install", () => {
     const plist = state.files.get(plistPath) ?? "";
     expect(plist).not.toContain("<key>EnvironmentVariables</key>");
     expect(plist).not.toContain(apiKey);
-    expect(plist).toContain(`<string>${wrapperPath}</string>`);
-    expect(plist).toContain(`<string>${envFilePath}</string>`);
+    expect(readPlistProgramArgumentStrings(plist)).toEqual([
+      LAUNCH_AGENT_ENV_WRAPPER_SHELL,
+      wrapperPath,
+      envFilePath,
+      ...defaultProgramArguments,
+    ]);
     const envFile = state.files.get(envFilePath) ?? "";
     expect(envFile).toContain(`export TMPDIR='${tmpDir}'`);
     expect(envFile).toContain(`export OPENAI_API_KEY='${apiKey}'`);
@@ -930,6 +942,49 @@ describe("launchd install", () => {
     expect(state.files.get(wrapperPath)).toBe(generatedWrapper);
   });
 
+  it("rewrites legacy LaunchAgent environment wrappers to a system shell executable", async () => {
+    const env = createDefaultLaunchdEnv();
+    const envFilePath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway.env";
+    const wrapperPath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway-env-wrapper.sh";
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+      environment: { OPENCLAW_GATEWAY_PORT: "19007" },
+    });
+
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    const legacyPlist = (state.files.get(plistPath) ?? "").replace(
+      [
+        `<string>${LAUNCH_AGENT_ENV_WRAPPER_SHELL}</string>`,
+        `<string>${wrapperPath}</string>`,
+        `<string>${envFilePath}</string>`,
+      ].join("\n      "),
+      [`<string>${wrapperPath}</string>`, `<string>${envFilePath}</string>`].join("\n      "),
+    );
+    expect(readPlistProgramArgumentStrings(legacyPlist)).toEqual([
+      wrapperPath,
+      envFilePath,
+      ...defaultProgramArguments,
+    ]);
+    state.files.set(plistPath, legacyPlist);
+    state.launchctlCalls.length = 0;
+
+    await restartLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+    });
+
+    const rewritten = state.files.get(plistPath) ?? "";
+    expect(readPlistProgramArgumentStrings(rewritten)).toEqual([
+      LAUNCH_AGENT_ENV_WRAPPER_SHELL,
+      wrapperPath,
+      envFilePath,
+      ...defaultProgramArguments,
+    ]);
+    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19007);
+  });
+
   it("repairs a mangled label-derived service-env wrapper path on restart", async () => {
     const callerEnv = createDefaultLaunchdEnv();
     const serviceEnv = {
@@ -976,8 +1031,12 @@ describe("launchd install", () => {
     });
 
     const rewritten = state.files.get(plistPath) ?? "";
-    expect(rewritten).toContain(`<string>${callerWrapperPath}</string>`);
-    expect(rewritten).toContain(`<string>${callerEnvFilePath}</string>`);
+    expect(readPlistProgramArgumentStrings(rewritten)).toEqual([
+      LAUNCH_AGENT_ENV_WRAPPER_SHELL,
+      callerWrapperPath,
+      callerEnvFilePath,
+      ...defaultProgramArguments,
+    ]);
     expect(rewritten).not.toContain(mangledEnvFilePath);
     expect(rewritten).not.toContain(mangledWrapperPath);
     const rewrittenEnv = state.files.get(callerEnvFilePath) ?? "";

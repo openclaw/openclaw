@@ -421,6 +421,7 @@ describe("parseFirecrawlScrapePayload", () => {
     expect(result.extractor).toBe("firecrawl");
     expect(result.extractMode).toBe("markdown");
     expect(result.text).toContain("# Hello");
+    expect(result.wrappedLength).toBe((result.text as string).length);
     expect(result.truncated).toBe(false);
   });
 

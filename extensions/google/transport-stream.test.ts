@@ -98,6 +98,15 @@ function buildSseResponse(events: unknown[]): Response {
   return buildRawSseResponse(sse);
 }
 
+function buildRateLimitResponse(): Response {
+  return new Response(
+    JSON.stringify({
+      error: { message: "quota exceeded", status: "RESOURCE_EXHAUSTED" },
+    }),
+    { status: 429, headers: { "content-type": "application/json" } },
+  );
+}
+
 function buildRawSseResponse(sse: string): Response {
   const encoder = new TextEncoder();
   const body = new ReadableStream<Uint8Array>({
@@ -474,6 +483,163 @@ describe("google transport stream", () => {
     expect(result.content[2]).toHaveProperty("name", "lookup");
     expect(result.content[2]).toHaveProperty("arguments", { q: "hello" });
     expect(result.content[2]).toHaveProperty("thoughtSignature", "Y2FsbF9zaWdfMQ==");
+  });
+
+  it("rotates Gemini LLM API keys when a pre-stream request is rate limited", async () => {
+    vi.stubEnv("OPENCLAW_LIVE_GEMINI_KEY", "");
+    vi.stubEnv("GEMINI_API_KEYS", "gemini-key-2");
+    guardedFetchMock.mockResolvedValueOnce(buildRateLimitResponse()).mockResolvedValueOnce(
+      buildSseResponse([
+        {
+          candidates: [{ content: { parts: [{ text: "recovered" }] }, finishReason: "STOP" }],
+        },
+      ]),
+    );
+
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        buildGeminiModel(),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as Parameters<typeof streamFn>[1],
+        { apiKey: "gemini-key-1" } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(result.content).toEqual([{ type: "text", text: "recovered" }]);
+    expect(guardedFetchMock).toHaveBeenCalledTimes(2);
+    expectHeaders(
+      requireRequestInit(requireMockCall(guardedFetchMock, 0, "guarded fetch"), "guarded fetch"),
+      { "x-goog-api-key": "gemini-key-1" },
+    );
+    expectHeaders(
+      requireRequestInit(requireMockCall(guardedFetchMock, 1, "guarded fetch"), "guarded fetch"),
+      { "x-goog-api-key": "gemini-key-2" },
+    );
+  });
+
+  it("does not rotate OAuth JSON credentials through configured Gemini API keys", async () => {
+    vi.stubEnv("OPENCLAW_LIVE_GEMINI_KEY", "");
+    vi.stubEnv("GEMINI_API_KEYS", "gemini-env-key");
+    guardedFetchMock.mockResolvedValueOnce(buildRateLimitResponse());
+
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        buildGeminiModel(),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as Parameters<typeof streamFn>[1],
+        {
+          apiKey: JSON.stringify({ token: "oauth-token", projectId: "demo" }),
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(guardedFetchMock).toHaveBeenCalledTimes(1);
+    const init = requireRequestInit(
+      requireMockCall(guardedFetchMock, 0, "guarded fetch"),
+      "guarded fetch",
+    );
+    expectHeaders(init, {
+      Authorization: "Bearer oauth-token",
+      "Content-Type": "application/json",
+    });
+    expect(new Headers(init.headers).has("x-goog-api-key")).toBe(false);
+  });
+
+  it("does not rotate when request headers override Gemini authentication", async () => {
+    vi.stubEnv("OPENCLAW_LIVE_GEMINI_KEY", "");
+    vi.stubEnv("GEMINI_API_KEYS", "gemini-env-key");
+    guardedFetchMock.mockResolvedValueOnce(buildRateLimitResponse());
+
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        buildGeminiModel(),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "explicit-option-key",
+          headers: { "x-goog-api-key": "header-key" },
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(guardedFetchMock).toHaveBeenCalledTimes(1);
+    expectHeaders(
+      requireRequestInit(requireMockCall(guardedFetchMock, 0, "guarded fetch"), "guarded fetch"),
+      { "x-goog-api-key": "header-key" },
+    );
+  });
+
+  it("does not rotate global Gemini API keys into custom Gemini endpoints", async () => {
+    vi.stubEnv("OPENCLAW_LIVE_GEMINI_KEY", "");
+    vi.stubEnv("GEMINI_API_KEYS", "gemini-env-key");
+    guardedFetchMock.mockResolvedValueOnce(buildRateLimitResponse());
+
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        buildGeminiModel({
+          provider: "custom-google",
+          baseUrl: "https://proxy.example.com/gemini/v1beta",
+        }),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as Parameters<typeof streamFn>[1],
+        { apiKey: "explicit-proxy-key" } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(guardedFetchMock).toHaveBeenCalledTimes(1);
+    const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
+    expect(guardedCall[0]).toBe(
+      "https://proxy.example.com/gemini/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse",
+    );
+    expectHeaders(requireRequestInit(guardedCall, "guarded fetch"), {
+      "x-goog-api-key": "explicit-proxy-key",
+    });
+  });
+
+  it("does not rotate global Gemini API keys into non-TLS Gemini endpoints", async () => {
+    vi.stubEnv("OPENCLAW_LIVE_GEMINI_KEY", "");
+    vi.stubEnv("GEMINI_API_KEYS", "gemini-env-key");
+    guardedFetchMock.mockResolvedValueOnce(buildRateLimitResponse());
+
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        buildGeminiModel({
+          baseUrl: "http://generativelanguage.googleapis.com/v1beta",
+        }),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as Parameters<typeof streamFn>[1],
+        { apiKey: "explicit-http-key" } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(guardedFetchMock).toHaveBeenCalledTimes(1);
+    const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
+    expect(guardedCall[0]).toBe(
+      "http://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse",
+    );
+    expectHeaders(requireRequestInit(guardedCall, "guarded fetch"), {
+      "x-goog-api-key": "explicit-http-key",
+    });
   });
 
   it("preserves MAX_TOKENS when the partial response contains a function call", async () => {
@@ -1205,6 +1371,55 @@ describe("google transport stream", () => {
     });
   });
 
+  it("rejects oversized authorized_user ADC token responses", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-adc-large-"));
+    const credentialsPath = path.join(tempDir, "application_default_credentials.json");
+    await writeFile(
+      credentialsPath,
+      JSON.stringify({
+        type: "authorized_user",
+        client_id: "client-id",
+        client_secret: "client-secret",
+        refresh_token: "large-refresh-token",
+      }),
+      "utf8",
+    );
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", credentialsPath);
+    const tokenFetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response("x".repeat(1024 * 1024 + 1), { status: 200 }));
+
+    await expect(resolveGoogleVertexAuthorizedUserHeaders(tokenFetchMock)).rejects.toThrow(
+      "Google OAuth token response exceeds 1048576 bytes",
+    );
+  });
+
+  it("rejects authorized_user ADC gzip responses that expand past the limit", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-adc-bomb-"));
+    const credentialsPath = path.join(tempDir, "application_default_credentials.json");
+    await writeFile(
+      credentialsPath,
+      JSON.stringify({
+        type: "authorized_user",
+        client_id: "client-id",
+        client_secret: "client-secret",
+        refresh_token: "bomb-refresh-token",
+      }),
+      "utf8",
+    );
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", credentialsPath);
+    const tokenFetchMock = vi.fn().mockResolvedValue(
+      new Response(gzipSync("x".repeat(1024 * 1024 + 1)), {
+        status: 200,
+        headers: { "content-encoding": "gzip" },
+      }),
+    );
+
+    await expect(resolveGoogleVertexAuthorizedUserHeaders(tokenFetchMock)).rejects.toThrow(
+      "Google OAuth token response exceeds 1048576 decompressed bytes",
+    );
+  });
+
   it("does not reuse authorized_user ADC tokens with unsafe expiry lifetimes", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-unsafe-adc-"));
     const credentialsPath = path.join(tempDir, "application_default_credentials.json");
@@ -1777,6 +1992,35 @@ describe("google transport stream", () => {
       functionCall: { name: "string_transform", args: { text: "claw", mode: "reverse" } },
     });
   });
+
+  it.each([
+    ["gemini-pro-latest", "Gemini Pro Latest"],
+    ["gemini-flash-latest", "Gemini Flash Latest"],
+    ["gemini-flash-lite-latest", "Gemini Flash Lite Latest"],
+  ])(
+    "adds skip-validator fallback to first-turn unsigned Gemini 3 tool calls for %s",
+    (modelId, modelName) => {
+      const model = buildGeminiModel({ id: modelId, name: modelName });
+      const params = buildGoogleGenerativeAiParams(model, {
+        messages: [
+          googleToolCallAssistantTurn({ model: modelId }),
+          toolResultTurn(),
+          googleToolCallAssistantTurn({ timestamp: 2, model: modelId }),
+        ],
+      } as never);
+
+      const modelTurns = params.contents.filter(isModelTurnWithParts);
+      expect(modelTurns).toHaveLength(2);
+      expect(modelTurns[0]).toMatchObject({
+        parts: [
+          {
+            thoughtSignature: "skip_thought_signature_validator",
+            functionCall: { name: "lookup", args: { q: "hello" } },
+          },
+        ],
+      });
+    },
+  );
 
   it("does not trust cross-provider tool-call thought signatures for non-Gemini-3 models", () => {
     const model = buildGeminiModel({

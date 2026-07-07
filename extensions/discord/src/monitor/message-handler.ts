@@ -3,6 +3,7 @@ import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
@@ -61,14 +62,9 @@ type PrestartedTypingFeedbackEntry = {
   feedback: DiscordReplyTypingFeedback;
 };
 
-let messagePreflightRuntimePromise:
-  | Promise<typeof import("./message-handler.preflight.js")>
-  | undefined;
-
-async function loadMessagePreflightRuntime() {
-  messagePreflightRuntimePromise ??= import("./message-handler.preflight.js");
-  return await messagePreflightRuntimePromise;
-}
+const loadMessagePreflightRuntime = createLazyRuntimeModule(
+  () => import("./message-handler.preflight.js"),
+);
 
 export type DiscordMessageHandlerWithLifecycle = DiscordMessageHandler & {
   deactivate: () => void;

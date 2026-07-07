@@ -161,6 +161,7 @@ export type SlackMonitorContext = {
     channelId: string;
     threadTs?: string;
     status: string;
+    loadingMessages?: string[];
   }) => Promise<void>;
   getSlackAssistantThreadContext: (
     channelId: string | undefined,
@@ -447,6 +448,7 @@ export function createSlackMonitorContext(params: {
     channelId: string;
     threadTs?: string;
     status: string;
+    loadingMessages?: string[];
   }) => {
     if (!p.threadTs) {
       return;
@@ -457,6 +459,7 @@ export function createSlackMonitorContext(params: {
         channel_id: p.channelId,
         thread_ts: p.threadTs,
         status: p.status,
+        ...(p.loadingMessages?.length ? { loading_messages: p.loadingMessages.slice(0, 10) } : {}),
       });
     } catch (err) {
       logVerbose(`slack status update failed for channel ${p.channelId}: ${formatSlackError(err)}`);

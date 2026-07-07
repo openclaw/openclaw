@@ -1,4 +1,5 @@
 /** Cron timer loop, execution, catch-up, and run-result state transitions. */
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
@@ -388,11 +389,7 @@ export function maybeNotifyIsolatedAgentSetupTimeout(
 }
 
 function resolveRunConcurrency(state: CronServiceState): number {
-  const raw = state.deps.cronConfig?.maxConcurrentRuns;
-  if (typeof raw !== "number" || !Number.isFinite(raw)) {
-    return 1;
-  }
-  return Math.max(1, Math.floor(raw));
+  return resolveIntegerOption(state.deps.cronConfig?.maxConcurrentRuns, 1, { min: 1 });
 }
 
 function resolveMainSessionCronDeliveryContext(

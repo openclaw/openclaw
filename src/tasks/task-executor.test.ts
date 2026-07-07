@@ -5,6 +5,7 @@ import { resetHeartbeatWakeStateForTests } from "../infra/heartbeat-wake.js";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { captureEnv } from "../test-utils/env.js";
+import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
 import {
   getDetachedTaskLifecycleRuntime,
   resetDetachedTaskLifecycleRuntimeForTests,
@@ -362,6 +363,58 @@ describe("task-executor", () => {
     });
   });
 
+  it("promotes a provisional kill in an already-cancelled one-task flow", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const child = createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:worker:subagent:mirrored-kill",
+        runId: "run-mirrored-provisional-kill",
+        task: "Stop mirrored child",
+        startedAt: 10,
+        deliveryStatus: "pending",
+      });
+      const flowId = expectParentFlowId(child);
+      failTaskRunByRunId({
+        runId: child.runId!,
+        runtime: "subagent",
+        sessionKey: child.childSessionKey,
+        status: "cancelled",
+        endedAt: 20,
+        error: SUBAGENT_KILL_TASK_ERROR,
+      });
+      hoisted.killSubagentRunAdminMock.mockResolvedValueOnce({
+        found: true,
+        killed: false,
+        runId: child.runId!,
+        sessionKey: child.childSessionKey!,
+        targetState: {
+          state: "terminal",
+          task: { status: "cancelled", endedAt: 20, error: SUBAGENT_KILL_TASK_ERROR },
+        },
+      });
+      expect(getTaskFlowById(flowId)?.status).toBe("cancelled");
+
+      const cancelled = await cancelFlowById({ cfg: {} as never, flowId });
+      completeTaskRunByRunId({
+        runId: child.runId!,
+        runtime: "subagent",
+        sessionKey: child.childSessionKey,
+        endedAt: 30,
+        terminalSummary: "completed too late",
+      });
+
+      expect(cancelled).toMatchObject({ found: true, cancelled: true });
+      expect(getTaskFlowById(flowId)?.status).toBe("cancelled");
+      expect(getTaskById(child.taskId)).toMatchObject({
+        status: "cancelled",
+        endedAt: 20,
+        error: "Cancelled by operator.",
+      });
+    });
+  });
+
   it("does not auto-create one-task flows for non-returning bookkeeping runs", async () => {
     await withTaskExecutorStateDir(async () => {
       const created = createRunningTaskRun({
@@ -418,6 +471,61 @@ describe("task-executor", () => {
       const cancelledFlow = getTaskFlowById(flow.flowId);
       expect(cancelledFlow?.flowId).toBe(flow.flowId);
       expect(cancelledFlow?.status).toBe("cancelled");
+    });
+  });
+
+  it("promotes provisional subagent kills before cancelling a managed TaskFlow", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/managed-flow",
+        goal: "Cancel a killed child",
+      });
+      const created = runTaskInFlow({
+        flowId: flow.flowId,
+        runtime: "subagent",
+        childSessionKey: "agent:worker:subagent:flow-killed",
+        runId: "run-flow-provisional-kill",
+        task: "Stop the child",
+        status: "running",
+        startedAt: 10,
+      });
+      const child = requireCreatedFlowTask(created);
+      failTaskRunByRunId({
+        runId: child.runId!,
+        runtime: "subagent",
+        sessionKey: child.childSessionKey,
+        status: "cancelled",
+        endedAt: 20,
+        error: SUBAGENT_KILL_TASK_ERROR,
+      });
+      hoisted.killSubagentRunAdminMock.mockResolvedValueOnce({
+        found: true,
+        killed: false,
+        runId: child.runId!,
+        sessionKey: child.childSessionKey!,
+        targetState: {
+          state: "terminal",
+          task: { status: "cancelled", endedAt: 20, error: SUBAGENT_KILL_TASK_ERROR },
+        },
+      });
+
+      const cancelled = await cancelFlowById({ cfg: {} as never, flowId: flow.flowId });
+      completeTaskRunByRunId({
+        runId: child.runId!,
+        runtime: "subagent",
+        sessionKey: child.childSessionKey,
+        endedAt: 30,
+        terminalSummary: "completed too late",
+      });
+
+      expect(cancelled).toMatchObject({ found: true, cancelled: true });
+      expect(getTaskFlowById(flow.flowId)?.status).toBe("cancelled");
+      expect(getTaskById(child.taskId)).toMatchObject({
+        status: "cancelled",
+        endedAt: 20,
+        error: "Cancelled by operator.",
+      });
     });
   });
 

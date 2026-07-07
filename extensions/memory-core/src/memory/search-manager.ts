@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 // Memory Core plugin module implements search manager behavior.
 import fs from "node:fs/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   createSubsystemLogger,
   resolveAgentContextLimits,
@@ -112,18 +113,10 @@ const {
   pendingQmdManagerCreates: PENDING_QMD_MANAGER_CREATES,
   qmdManagerOpenFailures: QMD_MANAGER_OPEN_FAILURES,
 } = getMemorySearchManagerCacheStore();
-let managerRuntimePromise: Promise<typeof import("../../manager-runtime.js")> | null = null;
-let qmdManagerModulePromise: Promise<typeof import("./qmd-manager.js")> | null = null;
+const managerRuntimeLoader = createLazyRuntimeModule(() => import("../../manager-runtime.js"));
+const loadManagerRuntime = managerRuntimeLoader;
 
-function loadManagerRuntime() {
-  managerRuntimePromise ??= import("../../manager-runtime.js");
-  return managerRuntimePromise;
-}
-
-function loadQmdManagerModule() {
-  qmdManagerModulePromise ??= import("./qmd-manager.js");
-  return qmdManagerModulePromise;
-}
+const loadQmdManagerModule = createLazyRuntimeModule(() => import("./qmd-manager.js"));
 
 export type MemorySearchManagerResult = {
   manager: Maybe<MemorySearchManager>;
@@ -522,7 +515,7 @@ export async function closeAllMemorySearchManagers(): Promise<void> {
       log.warn(`failed to close qmd memory manager: ${String(err)}`);
     }
   }
-  if (managerRuntimePromise !== null) {
+  if (managerRuntimeLoader.peek()) {
     const { closeAllMemoryIndexManagers } = await loadManagerRuntime();
     await closeAllMemoryIndexManagers();
   }
@@ -548,7 +541,7 @@ export async function closeMemorySearchManager(params: {
       log.warn(`failed to close qmd memory manager for agent ${normalizedAgentId}: ${String(err)}`);
     }
   }
-  if (managerRuntimePromise !== null) {
+  if (managerRuntimeLoader.peek()) {
     const { closeMemoryIndexManagersForAgent } = await loadManagerRuntime();
     await closeMemoryIndexManagersForAgent({ cfg: params.cfg, agentId: normalizedAgentId });
   }

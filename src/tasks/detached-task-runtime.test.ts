@@ -6,6 +6,7 @@ import {
   createQueuedTaskRun,
   createRunningTaskRun,
   failTaskRunByRunId,
+  findDetachedTaskRun,
   finalizeTaskRunByRunId,
   getDetachedTaskLifecycleRuntime,
   getDetachedTaskLifecycleRuntimeRegistration,
@@ -19,9 +20,12 @@ import {
 } from "./detached-task-runtime.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
-const { mockLogWarn } = vi.hoisted(() => ({
-  mockLogWarn: vi.fn(),
-}));
+const { mockFindTaskByRunIdForStatus, mockListTasksForSessionKeyForStatus, mockLogWarn } =
+  vi.hoisted(() => ({
+    mockFindTaskByRunIdForStatus: vi.fn(),
+    mockListTasksForSessionKeyForStatus: vi.fn(() => [] as TaskRecord[]),
+    mockLogWarn: vi.fn(),
+  }));
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({
     subsystem: "tasks/detached-runtime",
@@ -35,6 +39,11 @@ vi.mock("../logging/subsystem.js", () => ({
     raw: vi.fn(),
     child: vi.fn(),
   }),
+}));
+
+vi.mock("./task-status-access.js", () => ({
+  findTaskByRunIdForStatus: mockFindTaskByRunIdForStatus,
+  listTasksForSessionKeyForStatus: mockListTasksForSessionKeyForStatus,
 }));
 
 function createFakeTaskRecord(overrides?: Partial<TaskRecord>): TaskRecord {
@@ -77,7 +86,121 @@ function requireFirstCallArg(
 describe("detached-task-runtime", () => {
   afterEach(() => {
     resetDetachedTaskLifecycleRuntimeForTests();
+    mockFindTaskByRunIdForStatus.mockReset();
+    mockListTasksForSessionKeyForStatus.mockReset();
+    mockListTasksForSessionKeyForStatus.mockReturnValue([]);
     mockLogWarn.mockClear();
+  });
+
+  it("finds a replacement task within the requested session generation", () => {
+    const expected = createFakeTaskRecord({
+      taskId: "task-expected",
+      runtime: "subagent",
+      runId: "run-shared",
+      childSessionKey: "agent:main:subagent:expected",
+      createdAt: 30,
+    });
+    mockFindTaskByRunIdForStatus.mockReturnValue(
+      createFakeTaskRecord({
+        taskId: "task-other-generation",
+        runtime: "subagent",
+        runId: "run-shared",
+        childSessionKey: "agent:main:subagent:other",
+        createdAt: 10,
+      }),
+    );
+    mockListTasksForSessionKeyForStatus.mockReturnValue([
+      createFakeTaskRecord({
+        taskId: "task-next-generation",
+        runtime: "subagent",
+        runId: "run-next",
+        childSessionKey: "agent:main:subagent:expected",
+        createdAt: 40,
+      }),
+      expected,
+    ]);
+
+    expect(
+      findDetachedTaskRun({
+        runId: "run-shared",
+        runtime: "subagent",
+        sessionKey: "agent:main:subagent:expected",
+        createdAtOrAfter: 15,
+        createdBefore: 40,
+        allowSessionFallback: true,
+      }),
+    ).toEqual({ lookup: "available", task: expected });
+  });
+
+  it("uses an exact task owner even when its timestamps predate the current run", () => {
+    const expected = createFakeTaskRecord({
+      taskId: "task-original-owner",
+      runtime: "subagent",
+      runId: "run-original-owner",
+      childSessionKey: "agent:main:subagent:steered",
+      createdAt: 10,
+    });
+    mockFindTaskByRunIdForStatus.mockReturnValue(expected);
+
+    expect(
+      findDetachedTaskRun({
+        runId: "run-original-owner",
+        runtime: "subagent",
+        sessionKey: "agent:main:subagent:steered",
+        createdAtOrAfter: 20,
+        createdBefore: 20,
+      }),
+    ).toEqual({ lookup: "available", task: expected });
+    expect(mockListTasksForSessionKeyForStatus).not.toHaveBeenCalled();
+  });
+
+  it("does not adopt a session task for an unchanged run ID", () => {
+    mockListTasksForSessionKeyForStatus.mockReturnValue([
+      createFakeTaskRecord({
+        taskId: "task-unrelated",
+        runtime: "subagent",
+        runId: "run-unrelated",
+        childSessionKey: "agent:main:subagent:expected",
+        createdAt: 30,
+      }),
+    ]);
+
+    expect(
+      findDetachedTaskRun({
+        runId: "run-current",
+        runtime: "subagent",
+        sessionKey: "agent:main:subagent:expected",
+        createdAtOrAfter: 15,
+        createdBefore: 40,
+      }),
+    ).toEqual({ lookup: "available", task: undefined });
+    expect(mockListTasksForSessionKeyForStatus).not.toHaveBeenCalled();
+  });
+
+  it("contains failures from custom task lookup hooks", () => {
+    setDetachedTaskLifecycleRuntime({
+      ...getDetachedTaskLifecycleRuntime(),
+      findTaskRun: () => {
+        throw new Error("lookup unavailable");
+      },
+    });
+
+    expect(
+      findDetachedTaskRun({
+        runId: "run-lookup-failure",
+        runtime: "subagent",
+        sessionKey: "agent:main:subagent:lookup-failure",
+        createdAtOrAfter: 1,
+      }),
+    ).toEqual({ lookup: "unavailable" });
+    expect(mockLogWarn).toHaveBeenCalledWith(
+      "Detached task lookup failed",
+      expect.objectContaining({
+        runtime: "subagent",
+        runId: "run-lookup-failure",
+        error: expect.any(Error),
+      }),
+    );
   });
 
   it("dispatches lifecycle operations through the installed runtime", async () => {
@@ -102,6 +225,7 @@ describe("detached-task-runtime", () => {
       completeTaskRunByRunId: vi.fn(() => updatedTasks),
       failTaskRunByRunId: vi.fn(() => updatedTasks),
       setDetachedTaskDeliveryStatusByRunId: vi.fn(() => updatedTasks),
+      findTaskRun: vi.fn(() => runningTask),
       cancelDetachedTaskRunById: vi.fn(async () => ({
         found: true,
         cancelled: true,
@@ -141,6 +265,14 @@ describe("detached-task-runtime", () => {
       runId: "run-running",
       deliveryStatus: "delivered",
     });
+    expect(
+      findDetachedTaskRun({
+        runId: "run-running",
+        runtime: "cli",
+        sessionKey: "agent:main:main",
+        createdAtOrAfter: 1,
+      }),
+    ).toEqual({ lookup: "available", task: runningTask });
     await cancelDetachedTaskRunById({
       cfg: {} as never,
       taskId: runningTask.taskId,
@@ -182,6 +314,12 @@ describe("detached-task-runtime", () => {
       .calls[0]?.[0];
     expect(deliveryArgs?.runId).toBe("run-running");
     expect(deliveryArgs?.deliveryStatus).toBe("delivered");
+    expect(fakeRuntime.findTaskRun).toHaveBeenCalledWith({
+      runId: "run-running",
+      runtime: "cli",
+      sessionKey: "agent:main:main",
+      createdAtOrAfter: 1,
+    });
     expect(fakeRuntime.cancelDetachedTaskRunById).toHaveBeenCalledWith({
       cfg: {} as never,
       taskId: runningTask.taskId,
@@ -230,6 +368,21 @@ describe("detached-task-runtime", () => {
     expect(failArgs.runId).toBe("legacy-timeout");
     expect(failArgs.status).toBe("timed_out");
     expect(failArgs.endedAt).toBe(20);
+  });
+
+  it("reports unavailable lookup for an opaque legacy runtime", () => {
+    const legacyRuntime = { ...getDetachedTaskLifecycleRuntime() };
+    delete legacyRuntime.findTaskRun;
+    setDetachedTaskLifecycleRuntime(legacyRuntime);
+
+    expect(
+      findDetachedTaskRun({
+        runId: "run-not-mirrored",
+        runtime: "subagent",
+        sessionKey: "agent:main:subagent:not-mirrored",
+        createdAtOrAfter: 1,
+      }),
+    ).toEqual({ lookup: "unavailable" });
   });
 
   describe("tryRecoverTaskBeforeMarkLost", () => {

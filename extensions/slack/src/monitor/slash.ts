@@ -12,6 +12,7 @@ import {
   resolveNativeCommandSessionTargets,
 } from "openclaw/plugin-sdk/command-auth-native";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
@@ -67,36 +68,22 @@ const SLACK_COMMAND_ARG_CONFIRM_TEXT_MAX = 300;
 const SLACK_HEADER_TEXT_MAX = 150;
 const SLACK_COMMAND_ARG_CHROME_BLOCKS = 3;
 const SLACK_COMMAND_ARG_ACTION_BLOCKS_MAX = SLACK_MAX_BLOCKS - SLACK_COMMAND_ARG_CHROME_BLOCKS;
-let slashCommandsRuntimePromise: Promise<typeof import("./slash-commands.runtime.js")> | null =
-  null;
-let slashDispatchRuntimePromise: Promise<typeof import("./slash-dispatch.runtime.js")> | null =
-  null;
-let slackPluginCommandsRuntimePromise: Promise<
-  typeof import("./slash-plugin-commands.runtime.js")
-> | null = null;
-let slashSkillCommandsRuntimePromise: Promise<
-  typeof import("./slash-skill-commands.runtime.js")
-> | null = null;
 
-function loadSlashCommandsRuntime() {
-  slashCommandsRuntimePromise ??= import("./slash-commands.runtime.js");
-  return slashCommandsRuntimePromise;
-}
+const loadSlashCommandsRuntime = createLazyRuntimeModule(
+  () => import("./slash-commands.runtime.js"),
+);
 
-function loadSlashDispatchRuntime() {
-  slashDispatchRuntimePromise ??= import("./slash-dispatch.runtime.js");
-  return slashDispatchRuntimePromise;
-}
+const loadSlashDispatchRuntime = createLazyRuntimeModule(
+  () => import("./slash-dispatch.runtime.js"),
+);
 
-function loadSlackPluginCommandsRuntime() {
-  slackPluginCommandsRuntimePromise ??= import("./slash-plugin-commands.runtime.js");
-  return slackPluginCommandsRuntimePromise;
-}
+const loadSlackPluginCommandsRuntime = createLazyRuntimeModule(
+  () => import("./slash-plugin-commands.runtime.js"),
+);
 
-function loadSlashSkillCommandsRuntime() {
-  slashSkillCommandsRuntimePromise ??= import("./slash-skill-commands.runtime.js");
-  return slashSkillCommandsRuntimePromise;
-}
+const loadSlashSkillCommandsRuntime = createLazyRuntimeModule(
+  () => import("./slash-skill-commands.runtime.js"),
+);
 
 function resolveSlackCommandMenuModelContext(params: {
   cfg: SlackMonitorContext["cfg"];

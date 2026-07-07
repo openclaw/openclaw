@@ -27,8 +27,10 @@ export type NodeSession = {
   modelIdentifier?: string;
   remoteIp?: string;
   declaredCaps: string[];
+  sessionCapsCeiling?: string[];
   caps: string[];
   declaredCommands: string[];
+  sessionCommandsCeiling?: string[];
   commands: string[];
   declaredPermissions?: Record<string, boolean>;
   permissions?: Record<string, boolean>;
@@ -194,6 +196,18 @@ export class NodeRegistry {
     )
       ? ((connect as { declaredCommands?: string[] }).declaredCommands ?? [])
       : commands;
+    // Session ceilings preserve protocol compatibility across later pairing
+    // approvals while declared* retains the durable approval surface.
+    const sessionCapsCeiling = Array.isArray(
+      (connect as { sessionCapsCeiling?: string[] }).sessionCapsCeiling,
+    )
+      ? ((connect as { sessionCapsCeiling?: string[] }).sessionCapsCeiling ?? [])
+      : declaredCaps;
+    const sessionCommandsCeiling = Array.isArray(
+      (connect as { sessionCommandsCeiling?: string[] }).sessionCommandsCeiling,
+    )
+      ? ((connect as { sessionCommandsCeiling?: string[] }).sessionCommandsCeiling ?? [])
+      : declaredCommands;
     const permissions =
       typeof (connect as { permissions?: Record<string, boolean> }).permissions === "object"
         ? ((connect as { permissions?: Record<string, boolean> }).permissions ?? undefined)
@@ -223,8 +237,10 @@ export class NodeRegistry {
       modelIdentifier: connect.client.modelIdentifier,
       remoteIp: opts.remoteIp,
       declaredCaps,
+      sessionCapsCeiling,
       caps,
       declaredCommands,
+      sessionCommandsCeiling,
       commands,
       declaredPermissions,
       permissions,
@@ -375,14 +391,16 @@ export class NodeRegistry {
     }
 
     // Runtime approvals can only narrow capabilities/commands/permissions declared at connect.
-    const declaredCommands = new Set(node.declaredCommands);
-    const nextCommands = surface.commands.filter((command) => declaredCommands.has(command));
+    const sessionCommandsCeiling = new Set(node.sessionCommandsCeiling ?? node.declaredCommands);
+    const nextCommands = surface.commands.filter((command) => sessionCommandsCeiling.has(command));
     node.commands = nextCommands;
     (node.client.connect as { commands?: string[] }).commands = nextCommands;
 
     if ("caps" in surface) {
-      const declaredCaps = new Set(node.declaredCaps);
-      const nextCaps = (surface.caps ?? []).filter((capability) => declaredCaps.has(capability));
+      const sessionCapsCeiling = new Set(node.sessionCapsCeiling ?? node.declaredCaps);
+      const nextCaps = (surface.caps ?? []).filter((capability) =>
+        sessionCapsCeiling.has(capability),
+      );
       node.caps = nextCaps;
       (node.client.connect as { caps?: string[] }).caps = nextCaps;
     }
