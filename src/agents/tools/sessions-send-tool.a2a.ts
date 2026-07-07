@@ -174,6 +174,18 @@ export async function runSessionsSendA2AFlow(params: {
       return;
     }
 
+    // Deliver the first reply back to the requester's channel before entering
+    // ping-pong. In cross-agent scenarios, this is the only reliable delivery
+    // point: the ping-pong loop consumes messages within agent sessions, and
+    // the final announce step depends on the target agent choosing to announce.
+    if (announceTarget && primaryReply) {
+      await deliverAnnounceReply({
+        announceTarget,
+        message: primaryReply,
+        runContextId,
+      });
+    }
+
     if (
       params.maxPingPongTurns > 0 &&
       params.requesterSessionKey &&

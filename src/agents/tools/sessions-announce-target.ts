@@ -32,7 +32,11 @@ export async function resolveAnnounceTarget(params: {
   if (fallback) {
     const normalized = normalizeChannelId(fallback.channel);
     const plugin = normalized ? getChannelPlugin(normalized) : null;
-    if (!plugin?.meta?.preferSessionLookupForAnnounceTarget) {
+    // Only return early for known plugin channels that don't prefer session lookup.
+    // For non-plugin channels (e.g. bncr), fall through to session-based lookup
+    // so the delivery context's target format (e.g. "Bncr:tgBot:...") is used
+    // instead of the raw conversation id.
+    if (plugin && !plugin.meta?.preferSessionLookupForAnnounceTarget) {
       return fallback;
     }
   }
