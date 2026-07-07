@@ -2659,6 +2659,17 @@ describe("runReplyAgent reminder commitment guard", () => {
     );
   });
 
+  it("does not append a reminder note to a plain memory promise", async () => {
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "I'll remember that preference." }],
+      meta: {},
+      successfulCronAdds: 0,
+    });
+
+    const result = await createRun();
+    expectReplyText(result, "I'll remember that preference.");
+  });
+
   it("keeps reminder commitment unchanged when cron.add succeeded", async () => {
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "I'll remind you tomorrow morning." }],

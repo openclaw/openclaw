@@ -9,6 +9,7 @@ const UNSCHEDULED_REMINDER_NOTE =
 
 const REMINDER_COMMITMENT_PATTERNS: RegExp[] = [
   /\b(?:i\s*['’]?ll|i will)\s+(?:make sure to\s+)?(?:remember\s+to\b|remind|ping|follow up|follow-up|check back|circle back)\b/i,
+  /\b(?:i\s*['’]?ll|i will)\s+(?:make sure to\s+)?remember\b\s*(?:,\s*(?:and\s+)?then|\s+and(?:\s+then)?)\s+(?:remind|ping|follow up|follow-up|check back|circle back)\b/i,
   /\b(?:i\s*['’]?ll|i will)\s+(?:set|create|schedule)\s+(?:a\s+)?reminder\b/i,
 ];
 
