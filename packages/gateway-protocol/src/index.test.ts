@@ -381,6 +381,31 @@ describe("formatValidationErrors", () => {
     expect(formatValidationErrors([err])).toBe('at /auth: must have required property "token"');
   });
 
+  it("escapes embedded quotes/backslashes in unexpected-property names as valid JSON tokens", () => {
+    const weird = 'weird"key\\path';
+    const err = makeError({
+      keyword: "additionalProperties",
+      params: { additionalProperty: weird },
+    });
+
+    const message = formatValidationErrors([err]);
+    expect(message).toBe(`at root: unexpected property ${JSON.stringify(weird)}`);
+    expect(JSON.parse(message.slice(message.indexOf('"')))).toBe(weird);
+  });
+
+  it("escapes embedded quotes/backslashes in required-property names as valid JSON tokens", () => {
+    const weird = 'weird"key\\path';
+    const err = makeError({
+      keyword: "required",
+      instancePath: "/auth",
+      params: { missingProperty: weird },
+    });
+
+    const message = formatValidationErrors([err]);
+    expect(message).toBe(`at /auth: must have required property ${JSON.stringify(weird)}`);
+    expect(JSON.parse(message.slice(message.indexOf('"')))).toBe(weird);
+  });
+
   it("de-dupes repeated entries", () => {
     const err = makeError({
       keyword: "required",
