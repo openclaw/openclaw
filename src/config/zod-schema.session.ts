@@ -149,6 +149,7 @@ export const SessionSchema = z
         }
       })
       .optional(),
+    autoTitle: z.boolean().optional(),
   })
   .strict()
   .optional();
