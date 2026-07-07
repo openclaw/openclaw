@@ -505,6 +505,46 @@ describe("compaction-safeguard summary budgets", () => {
     expect(capped).not.toContain("[Compaction summary truncated");
   });
 
+  it("preserves emoji surrogate pairs at compaction summary truncation boundaries", () => {
+    // Place an emoji such that maxChars falls inside its surrogate pair.
+    // 🧠 (U+1F9E0) is 2 UTF-16 code units. If raw .slice(0, maxChars) splits
+    // the pair, the result will contain a dangling surrogate.
+    const emojiAtBoundary = "x".repeat(MAX_COMPACTION_SUMMARY_CHARS - 1) + "🧠extra";
+    const capped = capCompactionSummary(emojiAtBoundary, MAX_COMPACTION_SUMMARY_CHARS);
+
+    // Must not contain lone surrogates.
+    expect(capped).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    expect(capped).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+    expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+  });
+
+  it("preserves emoji surrogate pairs in truncateFailureText", () => {
+    // truncateFailureText is not exported directly; tested via the cap pathway.
+    // Use a summary that triggers the truncation path with an emoji at the cut.
+    const marker = SUMMARY_TRUNCATED_MARKER;
+    const budget = MAX_COMPACTION_SUMMARY_CHARS - marker.length;
+    const emojiAtCut = "x".repeat(budget - 1) + "🧠trailing";
+    const capped = capCompactionSummary(emojiAtCut);
+
+    expect(capped).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    expect(capped).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+    expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+  });
+
+  it("preserves emoji when capCompactionSummaryPreservingSuffix truncates body with surrogate pair at boundary", () => {
+    // When the body + suffix exceeds the cap, the body is truncated. An emoji
+    // at the cut point must stay intact.
+    const { capCompactionSummaryPreservingSuffix } = testing;
+    const suffix = "\n\n## Tool Failures\n- exec: failed";
+    const body = "x".repeat(MAX_COMPACTION_SUMMARY_CHARS - 1) + "🧠extra";
+
+    const capped = capCompactionSummaryPreservingSuffix(body, suffix);
+
+    expect(capped).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    expect(capped).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+    expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+  });
+
   it("preserves tail sections when suffix exceeds cap (workspace rules, diagnostics over preserved turns)", () => {
     const criticalTail =
       "\n\n## Tool Failures\n- exec: failed\n\n<read-files>\nfoo.ts\n</read-files>\n\n" +
