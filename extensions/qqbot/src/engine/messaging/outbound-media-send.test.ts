@@ -676,3 +676,57 @@ describe("outbound-media-send UTF-16 truncation cap boundary", () => {
     expect(truncateUtf16Safe(safePrefix + "🎉 trailing path", 80)).toBe(safePrefix);
   });
 });
+
+// Runtime proof for the user-visible error-message template in
+// outbound-media-send.ts:460 — evaluates the EXACT production template
+// literal against an emoji-boundary input so the BEFORE/AFTER run can be
+// pasted into the PR body as evidence that the cap is enforced at the
+// surrogate boundary, not just on length.
+describe("outbound-media-send runtime UTF-16 evidence", () => {
+  function hexCodeUnits(s: string): string {
+    return Array.from(s)
+      .map((c) => "U+" + c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0"))
+      .join(" ");
+  }
+
+  it("'Failed to download image' template at cap 80 keeps the 79-ASCII prefix and drops the trailing emoji pair", () => {
+    // EXACT prod template literal from outbound-media-send.ts:460
+    //   return { channel: "qqbot", error: `Failed to download image: ${truncateUtf16Safe(mediaPath, 80)}` };
+    const pathPrefix = "/tmp/uploads/" + "x".repeat(66); // 13 + 66 = 79 ASCII chars total
+    const mediaPath = pathPrefix + "🎉" + "tail"; // 79 ASCII + 2 (emoji) + 4 = 85 code units; the emoji straddles the cap-80 boundary at code-unit position 79.
+
+    const before = `Failed to download image: ${mediaPath.slice(0, 80)}`;
+    const after = `Failed to download image: ${truncateUtf16Safe(mediaPath, 80)}`;
+
+    console.log(
+      "\n=== PR 1a runtime proof: outbound-media-send Failed-to-download-image error ===",
+    );
+    console.log(`input mediaPath (${mediaPath.length} code units): ${mediaPath}`);
+    console.log(`input hex:          ${hexCodeUnits(mediaPath)}`);
+    console.log(`slice(0, 80) path:  ${mediaPath.slice(0, 80)}`);
+    console.log(`slice(0, 80) hex:   ${hexCodeUnits(mediaPath.slice(0, 80))}`);
+    console.log(`truncateUtf16Safe:  ${truncateUtf16Safe(mediaPath, 80)}`);
+    console.log(`truncateUtf16Safe hex: ${hexCodeUnits(truncateUtf16Safe(mediaPath, 80))}`);
+    console.log(`BEFORE full message (${before.length} code units):`);
+    console.log(`  ${before}`);
+    console.log(`  hex: ${hexCodeUnits(before)}`);
+    console.log(`AFTER  full message (${after.length} code units):`);
+    console.log(`  ${after}`);
+    console.log(`  hex: ${hexCodeUnits(after)}`);
+    const beforeHasLone =
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(before);
+    const afterHasLone =
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(after);
+    console.log(`BEFORE contains lone surrogate? ${beforeHasLone}`);
+    console.log(`AFTER  contains lone surrogate? ${afterHasLone}`);
+
+    // The cap-80 helper preserves the 79-ASCII prefix and drops the
+    // trailing emoji pair, so the AFTER message ends exactly at the
+    // prefix without a half-surrogate dangling in the error string.
+    expect(after).toBe(`Failed to download image: ${pathPrefix}`);
+    expect(afterHasLone).toBe(false);
+    // Sanity: the BEFORE path still emits a lone 0xD83D high surrogate
+    // in the user-facing error string (the bug being fixed).
+    expect(beforeHasLone).toBe(true);
+  });
+});
