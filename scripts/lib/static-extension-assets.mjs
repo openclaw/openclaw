@@ -33,10 +33,24 @@ function listTrackedExtensionPackageDirs(rootDir, fsImpl) {
   if (result.status !== 0) {
     return null;
   }
+  const deletedResult = spawnSync(
+    "git",
+    ["ls-files", "--deleted", "--", ":(glob)extensions/*/package.json"],
+    {
+      cwd: rootDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
+  const deletedPaths = new Set(
+    deletedResult.status === 0
+      ? deletedResult.stdout.split("\n").map((line) => toPosixPath(line.trim()))
+      : [],
+  );
   return result.stdout
     .split("\n")
     .map((line) => toPosixPath(line.trim()))
-    .filter((line) => line.length > 0)
+    .filter((line) => line.length > 0 && !deletedPaths.has(line))
     .flatMap((line) => {
       const match = /^extensions\/([^/]+)\/package\.json$/u.exec(line);
       if (!match?.[1]) {
@@ -108,7 +122,7 @@ export function discoverStaticExtensionAssets(params = {}) {
     rootDir,
     fsImpl,
   )) {
-    if (!(hasPackageJson ?? true) || !fsImpl.existsSync(packageJsonPath)) {
+    if (!(hasPackageJson ?? fsImpl.existsSync(packageJsonPath))) {
       continue;
     }
     const packageJson = readJsonFile(packageJsonPath, fsImpl);

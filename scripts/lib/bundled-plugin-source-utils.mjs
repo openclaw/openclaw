@@ -30,10 +30,33 @@ function collectTrackedBundledPluginSourceCandidates(repoRoot) {
   if (result.status !== 0) {
     return null;
   }
+  const deletedResult = spawnSync(
+    "git",
+    [
+      "ls-files",
+      "--deleted",
+      "--",
+      ":(glob)extensions/*/openclaw.plugin.json",
+      ":(glob)extensions/*/package.json",
+    ],
+    {
+      cwd: repoRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
+  const deletedPaths = new Set(
+    deletedResult.status === 0
+      ? deletedResult.stdout.split("\n").map((line) => line.trim().replaceAll("\\", "/"))
+      : [],
+  );
 
   const candidatesByDir = new Map();
   for (const rawLine of result.stdout.split("\n")) {
     const line = rawLine.trim().replaceAll("\\", "/");
+    if (deletedPaths.has(line)) {
+      continue;
+    }
     const match = /^extensions\/([^/]+)\/(openclaw\.plugin\.json|package\.json)$/u.exec(line);
     if (!match?.[1] || !match[2]) {
       continue;
@@ -45,11 +68,9 @@ function collectTrackedBundledPluginSourceCandidates(repoRoot) {
       pluginDir: path.join(repoRoot, "extensions", match[1]),
     };
     if (match[2] === "openclaw.plugin.json") {
-      const manifestPath = path.join(repoRoot, line);
-      current.manifestPath = fs.existsSync(manifestPath) ? manifestPath : null;
+      current.manifestPath = path.join(repoRoot, line);
     } else {
-      const packageJsonPath = path.join(repoRoot, line);
-      current.packageJsonPath = fs.existsSync(packageJsonPath) ? packageJsonPath : null;
+      current.packageJsonPath = path.join(repoRoot, line);
     }
     candidatesByDir.set(match[1], current);
   }
