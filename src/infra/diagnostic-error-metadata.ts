@@ -160,13 +160,12 @@ export function diagnosticErrorCategory(err: unknown): string {
 /**
  * Human-readable error message for diagnostics. Complements
  * {@link diagnosticErrorCategory} (low-cardinality class name) with the actual
- * message so error spans/events carry a real status message instead of a bare
- * category. Returns undefined for non-Error, non-string throwables so the
- * category stays the sole signal there. Emitted raw onto diagnostic events;
- * span/log exporters redact it before it leaves the process.
+ * message so error spans carry a real status message instead of a bare
+ * category. Reads only an own data property so diagnostics never invoke a
+ * user-defined getter.
  */
 export function diagnosticErrorMessage(err: unknown): string | undefined {
-  const text = err instanceof Error ? err.message : typeof err === "string" ? err : undefined;
+  const text = readDirectMessage(err);
   const trimmed = text?.trim();
   return trimmed ? trimmed : undefined;
 }

@@ -33,8 +33,14 @@ import {
 import { resolveContextEngineOwnerPluginId } from "../../../context-engine/registry.js";
 import { buildContextEngineRuntimeSettings } from "../../../context-engine/runtime-settings.js";
 import type { AssembleResult } from "../../../context-engine/types.js";
-import { diagnosticErrorCategory } from "../../../infra/diagnostic-error-metadata.js";
-import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
+import {
+  diagnosticErrorCategory,
+  diagnosticErrorMessage,
+} from "../../../infra/diagnostic-error-metadata.js";
+import {
+  emitTrustedDiagnosticEvent,
+  emitTrustedDiagnosticEventWithPrivateData,
+} from "../../../infra/diagnostic-events.js";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../../infra/diagnostic-llm-content.js";
 import {
   createChildDiagnosticTraceContext,
@@ -1188,14 +1194,19 @@ export async function runEmbeddedAttempt(
         return;
       }
       diagnosticRunCompleted = true;
-      emitTrustedDiagnosticEvent({
-        type: "run.completed",
-        ...diagnosticRunBase,
-        durationMs: Date.now() - diagnosticRunStartedAt,
-        outcome,
-        ...(extra?.blockedBy ? { blockedBy: extra.blockedBy } : {}),
-        ...(err && outcome !== "blocked" ? { errorCategory: diagnosticErrorCategory(err) } : {}),
-      });
+      const failed = err != null && outcome !== "blocked";
+      const errorMessage = failed ? diagnosticErrorMessage(err) : undefined;
+      emitTrustedDiagnosticEventWithPrivateData(
+        {
+          type: "run.completed",
+          ...diagnosticRunBase,
+          durationMs: Date.now() - diagnosticRunStartedAt,
+          outcome,
+          ...(extra?.blockedBy ? { blockedBy: extra.blockedBy } : {}),
+          ...(failed ? { errorCategory: diagnosticErrorCategory(err) } : {}),
+        },
+        errorMessage ? { errorMessage } : undefined,
+      );
     };
     const corePluginToolStages = createEmbeddedRunStageTracker();
     const forceDirectMessageTool =

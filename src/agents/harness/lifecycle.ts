@@ -14,6 +14,7 @@ import {
 } from "../../infra/diagnostic-error-metadata.js";
 import {
   emitTrustedDiagnosticEvent,
+  emitTrustedDiagnosticEventWithPrivateData,
   type DiagnosticHarnessRunErrorEvent,
   type DiagnosticHarnessRunOutcome,
 } from "../../infra/diagnostic-events.js";
@@ -174,18 +175,20 @@ function emitAgentHarnessRunCompleted(params: {
   // A classified (non-thrown) failure carries its error on result.promptError;
   // forward the message so the error span shows more than a bare category.
   const errorMessage = outcome === "error" ? diagnosticErrorMessage(result.promptError) : undefined;
-  emitTrustedDiagnosticEvent({
-    type: "harness.run.completed",
-    ...agentHarnessDiagnosticBase(harness, attemptParams, trace ?? result.diagnosticTrace),
-    durationMs: Date.now() - startedAt,
-    outcome,
-    ...(errorMessage ? { error: errorMessage } : {}),
-    ...(result.agentHarnessResultClassification
-      ? { resultClassification: result.agentHarnessResultClassification }
-      : {}),
-    ...(typeof result.yieldDetected === "boolean" ? { yieldDetected: result.yieldDetected } : {}),
-    itemLifecycle: { ...result.itemLifecycle },
-  });
+  emitTrustedDiagnosticEventWithPrivateData(
+    {
+      type: "harness.run.completed",
+      ...agentHarnessDiagnosticBase(harness, attemptParams, trace ?? result.diagnosticTrace),
+      durationMs: Date.now() - startedAt,
+      outcome,
+      ...(result.agentHarnessResultClassification
+        ? { resultClassification: result.agentHarnessResultClassification }
+        : {}),
+      ...(typeof result.yieldDetected === "boolean" ? { yieldDetected: result.yieldDetected } : {}),
+      itemLifecycle: { ...result.itemLifecycle },
+    },
+    errorMessage ? { errorMessage } : undefined,
+  );
 }
 
 function emitAgentHarnessRunError(params: {
@@ -198,14 +201,16 @@ function emitAgentHarnessRunError(params: {
 }): void {
   const { harness, attemptParams, startedAt, phase, error, trace } = params;
   const errorMessage = diagnosticErrorMessage(error);
-  emitTrustedDiagnosticEvent({
-    type: "harness.run.error",
-    ...agentHarnessDiagnosticBase(harness, attemptParams, trace),
-    durationMs: Date.now() - startedAt,
-    phase,
-    errorCategory: diagnosticErrorCategory(error),
-    ...(errorMessage ? { error: errorMessage } : {}),
-  });
+  emitTrustedDiagnosticEventWithPrivateData(
+    {
+      type: "harness.run.error",
+      ...agentHarnessDiagnosticBase(harness, attemptParams, trace),
+      durationMs: Date.now() - startedAt,
+      phase,
+      errorCategory: diagnosticErrorCategory(error),
+    },
+    errorMessage ? { errorMessage } : undefined,
+  );
 }
 
 /** Runs one harness attempt with diagnostics, tracing, and result classification. */
@@ -225,17 +230,19 @@ export async function runAgentHarnessLifecycleAttempt(
       return;
     }
     agentRunCompleted = true;
-    const failed = completion.outcome === "error" && Boolean(completion.error);
+    const failed = completion.outcome === "error" && completion.error != null;
     const errorMessage = failed ? diagnosticErrorMessage(completion.error) : undefined;
-    emitTrustedDiagnosticEvent({
-      type: "run.completed",
-      ...agentRunDiagnosticBase(params, agentRunTrace),
-      durationMs: Date.now() - agentRunStartedAt,
-      outcome: completion.outcome,
-      ...(completion.blockedBy ? { blockedBy: completion.blockedBy } : {}),
-      ...(failed ? { errorCategory: diagnosticErrorCategory(completion.error) } : {}),
-      ...(errorMessage ? { error: errorMessage } : {}),
-    });
+    emitTrustedDiagnosticEventWithPrivateData(
+      {
+        type: "run.completed",
+        ...agentRunDiagnosticBase(params, agentRunTrace),
+        durationMs: Date.now() - agentRunStartedAt,
+        outcome: completion.outcome,
+        ...(completion.blockedBy ? { blockedBy: completion.blockedBy } : {}),
+        ...(failed ? { errorCategory: diagnosticErrorCategory(completion.error) } : {}),
+      },
+      errorMessage ? { errorMessage } : undefined,
+    );
   };
 
   emitAgentHarnessRunStarted(harness, params, activeHarnessTrace);

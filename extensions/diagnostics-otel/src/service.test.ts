@@ -1460,16 +1460,18 @@ describe("diagnostics-otel service", () => {
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
     await service.start(ctx);
 
-    emitDiagnosticEvent({
-      type: "run.completed",
-      runId: "run-1",
-      provider: "openai",
-      model: "gpt-5.4",
-      outcome: "error",
-      errorCategory: "Error",
-      error: "upstream model stream stalled then aborted",
-      durationMs: 100,
-    });
+    emitTrustedDiagnosticEventWithPrivateData(
+      {
+        type: "run.completed",
+        runId: "run-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        outcome: "error",
+        errorCategory: "Error",
+        durationMs: 100,
+      },
+      { errorMessage: "upstream model stream stalled then aborted" },
+    );
     await flushDiagnosticEvents();
 
     expect(startedSpanOptions("openclaw.run")?.attributes?.["openclaw.error"]).toBe(
@@ -1487,22 +1489,52 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("run.completed bounds sensitive error text before export", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true });
+    await service.start(ctx);
+    const secret = "sk-1234567890abcdef";
+
+    emitTrustedDiagnosticEventWithPrivateData(
+      {
+        type: "run.completed",
+        runId: "run-1",
+        outcome: "error",
+        errorCategory: "Error",
+        durationMs: 100,
+      },
+      { errorMessage: `OPENAI_API_KEY=${secret} ${"x".repeat(8 * 1024)}` },
+    );
+    await flushDiagnosticEvents();
+
+    const status = mockCallArg(spanByName("openclaw.run").setStatus, 0) as {
+      message?: string;
+    };
+    expect(status.message).not.toContain(secret);
+    expect(status.message).toMatch(/\.\.\.\(truncated\)$/u);
+    expect(status.message?.length).toBeLessThanOrEqual(4 * 1024 + 20);
+
+    await service.stop?.(ctx);
+  });
+
   test("harness.run.completed error span carries the redacted message", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
     await service.start(ctx);
 
-    emitDiagnosticEvent({
-      type: "harness.run.completed",
-      runId: "run-1",
-      provider: "openai",
-      model: "gpt-5.4",
-      harnessId: "openclaw",
-      outcome: "error",
-      error: "model run failed during resolve phase",
-      durationMs: 90,
-      itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
-    });
+    emitTrustedDiagnosticEventWithPrivateData(
+      {
+        type: "harness.run.completed",
+        runId: "run-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        harnessId: "openclaw",
+        outcome: "error",
+        durationMs: 90,
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+      },
+      { errorMessage: "model run failed during resolve phase" },
+    );
     await flushDiagnosticEvents();
 
     expect(startedSpanOptions("openclaw.harness.run")?.attributes?.["openclaw.error"]).toBe(
@@ -1523,17 +1555,19 @@ describe("diagnostics-otel service", () => {
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
     await service.start(ctx);
 
-    emitDiagnosticEvent({
-      type: "harness.run.error",
-      runId: "run-1",
-      provider: "openai",
-      model: "gpt-5.4",
-      harnessId: "openclaw",
-      phase: "resolve",
-      errorCategory: "Error",
-      error: "harness cleanup threw",
-      durationMs: 90,
-    });
+    emitTrustedDiagnosticEventWithPrivateData(
+      {
+        type: "harness.run.error",
+        runId: "run-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        harnessId: "openclaw",
+        phase: "resolve",
+        errorCategory: "Error",
+        durationMs: 90,
+      },
+      { errorMessage: "harness cleanup threw" },
+    );
     await flushDiagnosticEvents();
 
     expect(startedSpanOptions("openclaw.harness.run")?.attributes?.["openclaw.error"]).toBe(

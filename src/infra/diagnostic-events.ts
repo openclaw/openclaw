@@ -545,8 +545,6 @@ export type DiagnosticRunCompletedEvent = DiagnosticRunBaseEvent & {
   durationMs: number;
   outcome: "completed" | "aborted" | "blocked" | "error";
   errorCategory?: string;
-  /** Raw error message when outcome is "error"; span/log exporters redact it. */
-  error?: string;
   blockedBy?: string;
 };
 
@@ -574,8 +572,6 @@ export type DiagnosticHarnessRunCompletedEvent = DiagnosticHarnessRunBaseEvent &
   type: "harness.run.completed";
   durationMs: number;
   outcome: DiagnosticHarnessRunOutcome;
-  /** Raw error message when outcome is "error"; span/log exporters redact it. */
-  error?: string;
   resultClassification?: "empty" | "reasoning-only" | "planning-only";
   yieldDetected?: boolean;
   itemLifecycle?: {
@@ -590,8 +586,6 @@ export type DiagnosticHarnessRunErrorEvent = DiagnosticHarnessRunBaseEvent & {
   durationMs: number;
   phase: DiagnosticHarnessRunPhase;
   errorCategory: string;
-  /** Raw error message; span/log exporters redact it. */
-  error?: string;
   cleanupFailed?: boolean;
 };
 
@@ -845,6 +839,8 @@ export type DiagnosticSkillUsagePrivateData = Readonly<{
 }>;
 
 export type DiagnosticEventPrivateData = Readonly<{
+  /** Raw failure text for trusted diagnostics exporters; never part of the public event payload. */
+  errorMessage?: string;
   modelContent?: DiagnosticModelCallContent;
   skillUsage?: DiagnosticSkillUsagePrivateData;
   toolContent?: DiagnosticToolCallContent;
