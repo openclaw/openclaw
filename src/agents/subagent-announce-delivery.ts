@@ -672,7 +672,22 @@ export function loadRequesterSessionEntry(requesterSessionKey: string) {
   const agentId = resolveAgentIdFromSessionKey(canonicalKey);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   const store = loadSessionStore(storePath);
-  const entry = store[canonicalKey];
+  let entry = store[canonicalKey];
+  // Cron run-session keys (agent:...:cron:...:run:<id>) are not persisted in
+  // the session store — only the base cron key survives. When the run key
+  // lookup misses, fall back to the base key so async completion wakes (e.g.
+  // media generation) can read restore context (bootstrapContextRunKind,
+  // provider, model, thinking) after the cron run completes.
+  if (!entry) {
+    const runIndex = canonicalKey.lastIndexOf(":run:");
+    if (runIndex > 0) {
+      const baseCronKey = canonicalKey.slice(0, runIndex);
+      const baseEntry = store[baseCronKey];
+      if (baseEntry?.bootstrapContextRunKind) {
+        entry = baseEntry;
+      }
+    }
+  }
   return { cfg, entry, canonicalKey };
 }
 

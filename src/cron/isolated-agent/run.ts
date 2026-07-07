@@ -644,6 +644,11 @@ async function prepareCronRunContext(params: {
     nowMs: now,
     forceNew: input.job.sessionTarget === "isolated",
   });
+  // Persist bootstrap context run kind on the base session entry so async
+  // completion wakes (e.g. media generation) can look up the cron marker even
+  // though the run-session key is not stored in the session store.
+  cronSession.sessionEntry.bootstrapContextRunKind = "cron";
+
   const runSessionId = cronSession.sessionEntry.sessionId;
   const currentRunSessionId = () => cronSession.sessionEntry.sessionId ?? runSessionId;
   if (!cronSession.sessionEntry.sessionFile?.trim()) {
