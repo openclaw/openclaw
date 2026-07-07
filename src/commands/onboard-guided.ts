@@ -9,6 +9,7 @@ import type {
   SetupInferenceDetection,
   SetupInferenceStatus,
 } from "../crestodian/setup-inference.js";
+import { withConsoleSubsystemsSuppressed } from "../logging/console.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
@@ -101,12 +102,14 @@ async function tryCandidate(params: {
       modelRef: params.candidate.modelRef,
     }),
   );
-  const result = await params.activate({
-    kind: params.candidate.kind,
-    workspace: params.workspace,
-    surface: "cli",
-    runtime: params.runtime,
-  });
+  const result = await withConsoleSubsystemsSuppressed(() =>
+    params.activate({
+      kind: params.candidate.kind,
+      workspace: params.workspace,
+      surface: "cli",
+      runtime: params.runtime,
+    }),
+  );
   progress.stop(result.ok ? t("wizard.guided.testPassed") : t("wizard.guided.testFailed"));
   if (result.ok) {
     return { kind: "success", result };
@@ -226,14 +229,16 @@ async function runManualStage(params: {
     const progress = params.prompter.progress(
       t("wizard.guided.testingManualProvider", { label: provider.label }),
     );
-    const result = await params.activate({
-      kind: "api-key",
-      authChoice: provider.id,
-      apiKey,
-      workspace: params.workspace,
-      surface: "cli",
-      runtime: params.runtime,
-    });
+    const result = await withConsoleSubsystemsSuppressed(() =>
+      params.activate({
+        kind: "api-key",
+        authChoice: provider.id,
+        apiKey,
+        workspace: params.workspace,
+        surface: "cli",
+        runtime: params.runtime,
+      }),
+    );
     progress.stop(result.ok ? t("wizard.guided.testPassed") : t("wizard.guided.testFailed"));
     if (result.ok) {
       return { kind: "complete", lines: activationLines(result) };

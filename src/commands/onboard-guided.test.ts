@@ -1,5 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import { createSuiteLogPathTracker } from "../logging/log-test-helpers.js";
+import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { loggingState } from "../logging/state.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter, WizardSelectParams } from "../wizard/prompts.js";
 import { runGuidedOnboarding, type GuidedOnboardingDeps } from "./onboard-guided.js";
@@ -16,6 +21,8 @@ vi.mock("./onboard-interactive-runner.js", async (importActual) => {
 const readConfigFileSnapshot = vi.hoisted(() =>
   vi.fn(async () => ({ exists: false, valid: true, config: {} })),
 );
+
+const logPathTracker = createSuiteLogPathTracker("openclaw-guided-onboard-log-");
 
 vi.mock("../config/config.js", () => ({ readConfigFileSnapshot }));
 
@@ -82,9 +89,22 @@ function setupDeps(params: {
 }
 
 describe("runGuidedOnboarding", () => {
+  beforeAll(async () => {
+    await logPathTracker.setup();
+  });
+
   beforeEach(() => {
     readConfigFileSnapshot.mockReset();
     readConfigFileSnapshot.mockResolvedValue({ exists: false, valid: true, config: {} });
+  });
+
+  afterEach(() => {
+    loggingState.rawConsole = null;
+    resetLogger();
+  });
+
+  afterAll(async () => {
+    await logPathTracker.cleanup();
   });
 
   it("auto-connects one credentialed candidate and completes without manual setup", async () => {
@@ -103,6 +123,36 @@ describe("runGuidedOnboarding", () => {
     );
     expect(select).not.toHaveBeenCalled();
     expect(prompter.outro).toHaveBeenCalledWith("OpenClaw is ready.");
+  });
+
+  it("suppresses activation subsystem output and restores it when activation throws", async () => {
+    const file = logPathTracker.nextPath();
+    setLoggerOverride({ level: "info", consoleLevel: "info", file });
+    const consoleLog = vi.fn();
+    loggingState.rawConsole = {
+      log: consoleLog,
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    const transportLog = createSubsystemLogger("provider-transport-fetch");
+    const activationError = new Error("activation failed");
+    const activate = vi.fn(async () => {
+      transportLog.info("[model-fetch] response status=401");
+      expect(consoleLog).not.toHaveBeenCalled();
+      throw activationError;
+    }) as GuidedOnboardingDeps["activate"];
+    const prompter = createWizardPrompter({ text: vi.fn(async () => "/tmp/work") });
+
+    await expect(
+      runGuidedOnboarding({ acceptRisk: true }, makeRuntime(), setupDeps({ prompter, activate })),
+    ).rejects.toBe(activationError);
+
+    transportLog.info("after activation");
+    expect(consoleLog).toHaveBeenCalledOnce();
+    const fileLog = fs.readFileSync(file, "utf8");
+    expect(fileLog).toContain("[model-fetch] response status=401");
+    expect(fileLog).toContain("after activation");
   });
 
   it("falls through after an auth failure and surfaces both outcomes", async () => {

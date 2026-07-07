@@ -6,6 +6,7 @@ import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeSecretInputString } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { withConsoleSubsystemsSuppressed } from "../logging/console.js";
 import {
   buildPluginCompatibilitySnapshotNotices,
   formatPluginCompatibilityNotice,
@@ -63,7 +64,9 @@ async function offerLiveModelVerification(params: {
   const { verifySetupInference } = await import("../crestodian/setup-inference.js");
   const verify = async () => {
     const progress = params.prompter.progress(t("wizard.setup.testAiProgress"));
-    const result = await verifySetupInference({ runtime: params.runtime });
+    const result = await withConsoleSubsystemsSuppressed(() =>
+      verifySetupInference({ runtime: params.runtime }),
+    );
     progress.stop();
     if (result.ok) {
       await params.prompter.note(
