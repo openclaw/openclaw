@@ -671,7 +671,6 @@ describe("AcpSessionManager turn results", () => {
       })(),
       result: Promise.resolve({
         status: "cancelled" as const,
-        stopReason: "manual-cancel",
       }),
       cancel: vi.fn(async () => {}),
       closeStream,
@@ -686,7 +685,7 @@ describe("AcpSessionManager turn results", () => {
       acp: readySessionMeta(),
     });
 
-    const events: string[] = [];
+    const events: AcpRuntimeEvent[] = [];
     const manager = new AcpSessionManager();
     await manager.runTurn({
       cfg: baseCfg,
@@ -695,13 +694,14 @@ describe("AcpSessionManager turn results", () => {
       mode: "prompt",
       requestId: "run-1",
       onEvent: (event) => {
-        events.push(event.type);
+        events.push(event);
       },
     });
 
     expect(runtimeState.runTurn).not.toHaveBeenCalled();
     expect(closeStream).toHaveBeenCalledWith({ reason: "turn-result-cancelled" });
-    expect(events).toEqual(["text_delta", "done"]);
+    expect(events.map((event) => event.type)).toEqual(["text_delta", "done"]);
+    expect(events.at(-1)).toEqual({ type: "done", status: "cancelled" });
     const states = extractStatesFromUpserts();
     expect(states).toContain("running");
     expect(states).toContain("idle");

@@ -13,6 +13,7 @@ import ai.openclaw.app.HomeDestination
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.R
+import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.ui.chat.ChatScreen
 import ai.openclaw.app.ui.design.ClawBottomNav
 import ai.openclaw.app.ui.design.ClawDesignTheme
@@ -25,6 +26,7 @@ import ai.openclaw.app.ui.design.ClawScaffold
 import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawTheme
+import ai.openclaw.app.ui.design.OpenClawMascot
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -74,9 +76,11 @@ import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.MicNone
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -89,6 +93,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -97,7 +102,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -115,6 +119,7 @@ internal enum class Tab(
   Sessions(key = "sessions", label = "Sessions", icon = Icons.Outlined.AccessTime),
   Settings(key = "settings", label = "Settings", icon = Icons.Outlined.Settings),
   ProvidersModels(key = "providers-models", label = "Providers", icon = Icons.Outlined.Inventory2),
+  Files(key = "files", label = "Files", icon = Icons.Outlined.Folder),
 }
 
 private val shellNavTabs = listOf(Tab.Overview, Tab.Chat, Tab.Voice, Tab.Settings)
@@ -125,6 +130,7 @@ private val shellContentInsets: WindowInsets
 private val overviewMetricTileMinHeight = 96.dp
 private val overviewTalkPanelMinHeight = 72.dp
 private val overviewListRowMinHeight = 54.dp
+private const val overviewRecentSessionLimit = 50
 
 internal fun shellBottomNavVisible(
   keyboardVisible: Boolean,
@@ -233,6 +239,11 @@ fun ShellScreen(
               viewModel = viewModel,
               onOpenCommand = { commandOpen = true },
               onOpenChat = { nav.selectTab(Tab.Chat) },
+            )
+          Tab.Files ->
+            WorkspaceFilesScreen(
+              viewModel = viewModel,
+              onBack = nav::back,
             )
           Tab.Settings ->
             SettingsShellScreen(
@@ -372,13 +383,19 @@ private fun OverviewScreen(
   val headerRoute = overviewHeaderRoute(attentionRows)
   val activeAgentName = overviewAgentName(agents = agents, defaultAgentId = defaultAgentId)
   val activeAgentBadge = overviewAgentBadgeText(agents = agents, defaultAgentId = defaultAgentId)
+  val overviewSessions = overviewRecentSessions(sessions)
+  val overviewSessionCount = overviewSessions.size
+  val recentRows =
+    remember(overviewSessions, channelsSummary) {
+      overviewRecentSessionRows(sessions = overviewSessions, channelsSummary = channelsSummary)
+    }
   val metricCards =
     overviewMetricCards(
       isConnected = isConnected,
       hasAttention = attentionRows.isNotEmpty(),
       nodesDevicesSummary = nodesDevicesSummary,
       pendingApprovals = pendingApprovalsCount,
-      sessionCount = sessions.size,
+      sessionCount = overviewSessionCount,
     )
 
   LaunchedEffect(isConnected) {
@@ -418,7 +435,7 @@ private fun OverviewScreen(
             statusText = gatewaySummary(gatewayConnectionDisplay),
             isConnected = gatewayConnectionDisplay.isConnected,
             pendingRunCount = pendingRunCount,
-            sessionCount = sessions.size,
+            sessionCount = overviewSessionCount,
             cronJobCount = cronStatus.jobs,
             onOpenChat = { onSelectTab(Tab.Chat) },
             onOpenVoice = { onSelectTab(Tab.Voice) },
@@ -447,7 +464,7 @@ private fun OverviewScreen(
 
         item { RecentSessionsHeader(onOpenSessions = { onSelectTab(Tab.Sessions) }) }
 
-        if (sessions.isEmpty()) {
+        if (recentRows.isEmpty()) {
           item {
             ClawEmptyState(
               title = "No recent sessions",
@@ -458,16 +475,7 @@ private fun OverviewScreen(
         } else {
           item {
             RecentSessionList(
-              rows =
-                sessions.take(3).map { session ->
-                  val title = displaySessionTitle(session.displayName)
-                  RecentSessionListItem(
-                    key = session.key,
-                    title = title,
-                    source = sessionSourceLabel(session.key, channelsSummary),
-                    metadata = session.updatedAtMs?.let(::relativeSessionTime) ?: "",
-                  )
-                },
+              rows = recentRows,
               onOpen = { sessionKey ->
                 viewModel.switchChatSession(sessionKey)
                 onSelectTab(Tab.Chat)
@@ -505,12 +513,7 @@ private fun OverviewHeader(
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(10.dp),
   ) {
-    Icon(
-      painter = painterResource(id = R.drawable.openclaw_logo),
-      contentDescription = null,
-      modifier = Modifier.size(25.dp),
-      tint = ClawTheme.colors.text,
-    )
+    OpenClawMascot(modifier = Modifier.size(25.dp), tint = ClawTheme.colors.text)
     Text(
       text = "OpenClaw",
       style = ClawTheme.type.title.copy(fontSize = 17.sp, lineHeight = 21.sp),
@@ -857,6 +860,10 @@ internal fun overviewHeaderState(
 
 internal fun overviewHeaderRoute(attentionRows: List<HomeAttentionRow>): SettingsRoute = attentionRows.firstNotNullOfOrNull { it.settingsRoute } ?: SettingsRoute.Gateway
 
+internal fun overviewRecentSessionCount(sessions: List<ChatSessionEntry>): Int = overviewRecentSessions(sessions).size
+
+internal fun overviewRecentSessions(sessions: List<ChatSessionEntry>): List<ChatSessionEntry> = sessions.take(overviewRecentSessionLimit).distinctBy { session -> session.key }
+
 internal data class OverviewMetricCard(
   val title: String,
   val value: String,
@@ -984,6 +991,14 @@ internal fun overviewMetricCardSpecs(
       icon = Icons.Default.Groups,
       status = if (sessionCount > 0) ClawStatus.Success else ClawStatus.Neutral,
       tab = Tab.Sessions,
+    ),
+    OverviewMetricCardSpec(
+      title = "Files",
+      value = if (isConnected) "Browse" else "Offline",
+      subtitle = "Agent workspace files",
+      icon = Icons.Outlined.Folder,
+      status = if (isConnected) ClawStatus.Success else ClawStatus.Neutral,
+      tab = Tab.Files,
     ),
   )
 }
@@ -1232,6 +1247,22 @@ private data class RecentSessionListItem(
   val metadata: String,
 )
 
+private fun overviewRecentSessionRows(
+  sessions: List<ChatSessionEntry>,
+  channelsSummary: GatewayChannelsSummary,
+): List<RecentSessionListItem> =
+  sessions
+    .take(3)
+    .map { session ->
+      val title = displaySessionTitle(session.displayName)
+      RecentSessionListItem(
+        key = session.key,
+        title = title,
+        source = sessionSourceLabel(session.key, channelsSummary),
+        metadata = session.updatedAtMs?.let(::relativeSessionTime) ?: "",
+      )
+    }
+
 /** Recent sessions panel that preserves the session key behind display labels. */
 @Composable
 private fun RecentSessionList(
@@ -1443,6 +1474,7 @@ private fun SettingsShellScreen(
           SettingsRow("Usage", usageSummaryText(usageSummary.providers.size), Icons.Default.Storage, status = if (usageSummary.providers.isNotEmpty()) true else null, route = SettingsRoute.Usage),
           SettingsRow("Skills", skillsSummaryText(skillsSummary.skills), Icons.Default.Settings, status = skillsStatus(skillsSummary.skills), route = SettingsRoute.Skills),
           SettingsRow("Dreaming", dreamingSummaryText(dreamingSummary), Icons.Default.Storage, status = dreamingStatus(dreamingSummary), route = SettingsRoute.Dreaming),
+          SettingsRow("Terminal", "Shell in the agent workspace", Icons.Outlined.Terminal, status = isConnected, route = SettingsRoute.Terminal),
           SettingsRow("Voice", if (speakerEnabled) "Speaker on" else "Speaker muted", Icons.Default.Mic, route = SettingsRoute.Voice),
           SettingsRow("Canvas", "Screen surface", Icons.AutoMirrored.Filled.ScreenShare, status = isConnected, route = SettingsRoute.Canvas),
           SettingsRow("Notifications", if (notificationForwardingEnabled) "Smart delivery" else "Off", Icons.Default.Notifications, route = SettingsRoute.Notifications),
@@ -1649,6 +1681,7 @@ internal fun settingsSectionTitleForRoute(route: SettingsRoute): String =
     SettingsRoute.Usage,
     SettingsRoute.Skills,
     SettingsRoute.Dreaming,
+    SettingsRoute.Terminal,
     -> "Agents & automation"
 
     SettingsRoute.Voice,

@@ -319,8 +319,9 @@ export function parseFeishuMessageEvent(
   };
 
   // Detect mention forward request: message mentions bot + at least one other user
-  if (isMentionForwardRequest(event, botOpenId)) {
-    const mentionTargets = extractMentionTargets(event, botOpenId);
+  const mentionForwardBotOpenId = botOpenId?.trim();
+  if (mentionForwardBotOpenId && isMentionForwardRequest(event, mentionForwardBotOpenId)) {
+    const mentionTargets = extractMentionTargets(event, mentionForwardBotOpenId);
     if (mentionTargets.length > 0) {
       ctx.mentionTargets = mentionTargets;
     }

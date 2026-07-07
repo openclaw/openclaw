@@ -30,6 +30,11 @@ import {
   emitAgentPatchSummaryEvent,
 } from "../infra/agent-events.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
+import {
+  parseInteractiveParam,
+  parseJsonMessageParam,
+} from "../infra/outbound/message-action-params.js";
+import { hasReplyPayloadContent } from "../interactive/payload.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { truncateUtf16Safe } from "../utils.js";
@@ -78,6 +83,10 @@ import {
 import { inferToolMetaFromArgs } from "./embedded-agent-utils.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import type { AgentEvent } from "./runtime/index.js";
+import {
+  createToolValidationErrorSummary,
+  summarizeToolValidationError,
+} from "./tool-error-summary.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 import { readToolResultDetails } from "./tool-result-error.js";
@@ -554,6 +563,21 @@ function readMessagingText(record: Record<string, unknown>): string | undefined 
   return undefined;
 }
 
+function hasMessagingRichContent(record: Record<string, unknown>): boolean {
+  const payload = {
+    presentation: record.presentation,
+    interactive: record.interactive,
+    channelData: record.channelData,
+  };
+  try {
+    parseJsonMessageParam(payload, "presentation");
+    parseInteractiveParam(payload);
+  } catch {
+    return false;
+  }
+  return hasReplyPayloadContent(payload);
+}
+
 function queuePendingToolMedia(
   ctx: ToolHandlerContext,
   mediaReply: { mediaUrls: string[]; audioAsVoice?: boolean; trustedLocalMedia?: boolean },
@@ -792,7 +816,10 @@ export function handleToolExecutionStart(
   },
 ): void | Promise<void> {
   const continueAfterBlockReplyFlush = (): void | Promise<void> => {
-    const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.();
+    const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.({
+      reason: "tool_start",
+      assistantMessageIndex: ctx.state.assistantMessageIndex,
+    });
     if (isPromiseLike<void>(onBlockReplyFlushResult)) {
       return onBlockReplyFlushResult.then(() => {
         continueToolExecutionStart();
@@ -1201,11 +1228,16 @@ export async function handleToolExecutionEnd(
   if (isToolError) {
     const errorMessage = extractToolErrorMessage(sanitizedResult);
     const errorCode = extractToolErrorCode(sanitizedResult);
+    const validationErrorSummary =
+      evt.executionStarted === false && evt.errorKind === "argument-validation"
+        ? createToolValidationErrorSummary(toolName)
+        : undefined;
     ctx.state.lastToolError = {
       toolName,
       meta,
       ...(errorCode ? { errorCode } : {}),
       error: errorMessage,
+      ...(validationErrorSummary ? { validationErrorSummary } : {}),
       timedOut: isToolResultTimedOut(sanitizedResult) || undefined,
       middlewareError: isMiddlewareToolResultError(sanitizedResult) || undefined,
       mutatingAction: attemptedMutatingAction,
@@ -1229,6 +1261,9 @@ export async function handleToolExecutionEnd(
       ctx.state.lastToolError = undefined;
     }
   }
+  const toolErrorSummary = ctx.state.lastToolError
+    ? summarizeToolValidationError(ctx.state.lastToolError)
+    : undefined;
   if (asyncStarted) {
     ctx.state.hadDeterministicSideEffect = true;
   }
@@ -1256,6 +1291,7 @@ export async function handleToolExecutionEnd(
     });
   const messageText = isMessagingSend ? readMessagingText(startArgs) : undefined;
   const argumentMediaUrls = isMessagingSend ? collectMessagingMediaUrlsFromRecord(startArgs) : [];
+  const hasRichContent = isMessagingSend && hasMessagingRichContent(startArgs);
   const messageTarget = hasMessagingTargetEvidence
     ? extractMessagingToolSend(toolName, messagingArgs, {
         config: ctx.params.config,
@@ -1288,6 +1324,7 @@ export async function handleToolExecutionEnd(
       ...confirmedTarget,
       ...(messageText ? { text: messageText } : {}),
       ...(committedMediaUrls.length > 0 ? { mediaUrls: committedMediaUrls.slice() } : {}),
+      ...(hasRichContent ? { hasRichContent: true as const } : {}),
     });
     ctx.trimMessagingToolSent();
   }
@@ -1341,6 +1378,7 @@ export async function handleToolExecutionEnd(
       meta,
       isError: isToolError,
       result: eventResult,
+      ...(toolErrorSummary ? { toolErrorSummary } : {}),
       ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     },
   });
@@ -1371,6 +1409,7 @@ export async function handleToolExecutionEnd(
       toolCallId,
       meta,
       isError: isToolError,
+      ...(toolErrorSummary ? { toolErrorSummary } : {}),
       ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     },
   });

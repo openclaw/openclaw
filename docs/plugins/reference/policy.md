@@ -26,7 +26,7 @@ The Policy plugin contributes doctor health checks for policy-managed OpenClaw
 settings and governed workspace declarations. Policy currently covers channel
 conformance, governed tool metadata, MCP server posture, model-provider posture,
 private-network access posture, Gateway exposure posture, agent workspace/tool
-and node command posture, configured global/per-agent tool posture, configured sandbox runtime
+posture, configured global/per-agent tool posture, configured sandbox runtime
 posture, ingress/channel access posture, data-handling posture, and OpenClaw config secret
 provider/auth profile posture.
 
@@ -47,11 +47,6 @@ tools, bounded exec security/ask/host settings, disabled elevated mode, exact
 additive `alsoAllow` entries because they can widen effective tool posture.
 These checks observe config conformance only; they do not read runtime approval
 state or add runtime enforcement.
-
-Gateway node command rules can require exact, case-sensitive command ids such
-as `system.run` to be present in OpenClaw config
-`gateway.nodes.denyCommands`. These checks observe config conformance only;
-they do not add runtime enforcement or change the gateway command allowlist.
 
 Sandbox posture rules can require approved sandbox modes/backends, deny host
 container networking, deny container namespace joins, require read-only container

@@ -5,9 +5,10 @@ description: Use the Crabbox wrapper for OpenClaw remote validation across Linux
 
 # Crabbox
 
-Use the Crabbox wrapper when OpenClaw needs remote Linux proof for broad tests,
+OpenClaw agent sessions use the Crabbox wrapper by default for tests and
+computationally intensive work: builds, typechecks, lint fan-out, broad gates,
 CI-parity checks, secrets, hosted services, Docker/E2E/package lanes, warmed
-reusable boxes, sync timing, logs/results, cache inspection, or lease cleanup.
+reusable boxes, sync timing, logs/results, cache inspection, and lease cleanup.
 
 Crabbox is the transport/orchestration surface. The actual backend can be:
 
@@ -16,17 +17,18 @@ Crabbox is the transport/orchestration surface. The actual backend can be:
 - Blacksmith Testbox through Crabbox: delegated provider,
   `provider=blacksmith-testbox`, ids like `tbx_...`, `syncDelegated=true`
 
-For OpenClaw maintainer broad `pnpm` gates, Blacksmith Testbox through the
-Crabbox wrapper is acceptable and often preferred when the standing Testbox
-rules apply. Do not describe those runs as "AWS Crabbox"; report them as
-Testbox-through-Crabbox with the `tbx_...` id and Actions run.
+Blacksmith Testbox through the Crabbox wrapper is the default OpenClaw agent
+backend for trusted maintainer code and heavy `pnpm` gates. The configured
+Blacksmith workflow hydrates provider and agent credentials, so never sync or
+run untrusted contributor/fork code there. Use secretless fork CI or
+sanitized direct AWS Crabbox for untrusted source. Do not describe
+Blacksmith runs as "AWS Crabbox"; report them as Testbox-through-Crabbox with
+the `tbx_...` id and Actions run.
 
-Use the repo `.crabbox.yaml` brokered AWS path when the task specifically needs
-direct AWS Crabbox behavior, persistent direct-provider leases, `--fresh-pr`,
-`--full-resync`, environment forwarding, capture/download support, or provider
-comparison. Use `--provider blacksmith-testbox` when the task needs OpenClaw
-maintainer Testbox proof, prepared CI environment, broad/heavy pnpm gates, or
-the user asks for Testbox/Blacksmith.
+Pass `--provider aws` when the task specifically needs direct AWS Crabbox
+behavior, persistent direct-provider leases, `--fresh-pr`, `--full-resync`,
+environment forwarding, capture/download support, or provider comparison. Use
+`--provider blacksmith-testbox` for the default OpenClaw agent path.
 
 ## First Checks
 
@@ -51,16 +53,85 @@ pnpm crabbox:run -- --help | sed -n '1,120p'
   config pins hot `eu-west-1a/b/c` placement so Fast Snapshot Restore can apply.
   If warmup drifts well past the minute-scale path, verify image promotion,
   region/AZ placement, and FSR state before blaming OpenClaw.
-- For broad OpenClaw maintainer `pnpm` gates, prefer the repo wrapper with
-  `--provider blacksmith-testbox` or the repo Testbox helpers when the standing
-  Testbox policy applies.
-- Cold Testbox acquisition and hydration often take tens of seconds. When broad
-  remote proof is likely, immediately start
+- For trusted OpenClaw agent tests and computationally intensive work, use the
+  repo wrapper with `--provider blacksmith-testbox` or the repo Testbox helpers.
+- Treat contributor/fork source as untrusted unless a maintainer explicitly
+  approves credentialed execution after review. Run untrusted source only in
+  secretless fork CI or sanitized direct AWS Crabbox. For every untrusted AWS
+  run, launch an installed trusted Crabbox binary from a clean trusted `main`
+  checkout and fetch the remote PR with `--fresh-pr`; never execute the
+  untrusted checkout's wrapper or config locally. Set
+  `CRABBOX_ENV_ALLOW=CI` to replace the repo's `OPENCLAW_*`/`NODE_OPTIONS`
+  allowlist, pass `--provider aws --no-hydrate`, and use a fresh temporary
+  remote `HOME` on a newly warmed lease dedicated to that untrusted source.
+  Unset `CRABBOX_AWS_INSTANCE_PROFILE` and fail closed unless resolved
+  `aws.instanceProfile` is empty. Before install/test, use trusted absolute-path
+  tools to require an IMDSv2 token, prove the IAM credentials endpoint returns
+  404, and verify remote `git rev-parse HEAD` equals the full reviewed PR head
+  SHA. Bind the lease to that SHA; stop and rewarm when the head changes. Do not
+  inherit Tailscale: unset every `CRABBOX_TAILSCALE*` override, force
+  `--network public --tailscale=false`, clear exit-node/LAN flags, and require
+  `crabbox inspect` to report public networking with no Tailscale state before
+  uploading any script. Execute PR code only through trusted
+  `scripts/crabbox-untrusted-bootstrap.sh`, uploaded from clean `main` alongside
+  `--fresh-pr`; it installs pinned Node/pnpm and rejects a changed PR
+  `packageManager` pin before install. Never reuse a trusted or previously
+  hydrated lease. If the broker cannot provide
+  the no-role proof or no remote PR exists, use secretless fork CI. Never use
+  `hydrate-github` or a credential-hydrated Testbox workflow for untrusted code.
+- Cold Testbox acquisition and hydration often take about a minute. At the
+  start of any task likely to change code or need tests/heavy proof, immediately
+  start, after confirming the source is trusted,
   `node scripts/crabbox-wrapper.mjs warmup --provider blacksmith-testbox --keep --timing-json`
-  in a background command session while inspecting, editing, and running
-  focused local tests. Poll later, reuse the returned `tbx_...` with
+  in a background command session while inspecting and editing. Poll later,
+  reuse the returned `tbx_...` with
   `--provider blacksmith-testbox --id <tbx_id>`, and stop it before handoff.
-  Do not warm speculatively when remote proof is unlikely.
+  For untrusted source, switch to a clean trusted `main` checkout and pre-warm
+  with the installed binary after the empty-instance-profile check below.
+  Do not warm for read-only, docs-only, or clearly trivial work that will not
+  run tests or heavy commands.
+- Run untrusted source only with the sanitized form below. The explicit
+  allowlist prevents locally exported `OPENCLAW_*` credentials from crossing
+  the SSH boundary; `--no-hydrate` and temporary `HOME` prevent auth-profile
+  reuse:
+
+```sh
+env -u CRABBOX_AWS_INSTANCE_PROFILE \
+  crabbox config show --json | \
+  jq -e '.aws.instanceProfile == ""' >/dev/null
+env -u CRABBOX_AWS_INSTANCE_PROFILE \
+  -u CRABBOX_TAILSCALE \
+  -u CRABBOX_TAILSCALE_AUTH_KEY \
+  -u CRABBOX_TAILSCALE_AUTH_KEY_ENV \
+  -u CRABBOX_TAILSCALE_EXIT_NODE \
+  -u CRABBOX_TAILSCALE_EXIT_NODE_ALLOW_LAN_ACCESS \
+  -u CRABBOX_TAILSCALE_HOSTNAME_TEMPLATE \
+  -u CRABBOX_TAILSCALE_TAGS \
+  crabbox warmup \
+  --provider aws \
+  --network public \
+  --tailscale=false \
+  --tailscale-exit-node= \
+  --tailscale-exit-node-allow-lan-access=false \
+  --keep \
+  --timing-json
+crabbox inspect --provider aws --id <cbx_id> --json | \
+  jq -e '.network == "public" and .tailscale == null' >/dev/null
+env -u CRABBOX_AWS_INSTANCE_PROFILE \
+  CRABBOX_ENV_ALLOW=CI \
+  crabbox run \
+  --provider aws \
+  --id <cbx_id> \
+  --fresh-pr <owner/repo#number> \
+  --no-hydrate \
+  --timing-json \
+  --script scripts/crabbox-untrusted-bootstrap.sh -- \
+  <expected_head_sha> /usr/local/bin/pnpm test <path>
+# After all proof:
+env -u CRABBOX_AWS_INSTANCE_PROFILE \
+  crabbox stop --provider aws <cbx_id>
+```
+
 - Always report the actual provider and id. `cbx_...` means AWS Crabbox;
   `tbx_...` means Blacksmith Testbox through Crabbox. If the output only says
   `blacksmith testbox list`, use `blacksmith testbox list --all` before
@@ -75,15 +146,17 @@ pnpm crabbox:run -- --help | sed -n '1,120p'
   not leave it in remote shell history or logs. If no secret-safe injection path
   is available, say true live provider auth is blocked instead of silently using
   a fake key.
-- Prefer local targeted tests for tight edit loops. Broad gates belong remote.
+- Agent-run tests, including targeted edit-loop tests, default to a pre-warmed
+  remote box selected by source trust. Local test execution requires an
+  explicit user request or a reported remote-provider blocker.
 - Do not treat inherited shell env as operator intent. In particular,
   `OPENCLAW_LOCAL_CHECK_MODE=throttled` from the local shell is not permission
   to move broad `pnpm check:changed`, `pnpm test:changed`, full `pnpm test`, or
   lint/typecheck fan-out onto the laptop.
 - Only use `OPENCLAW_LOCAL_CHECK_MODE=throttled|full` when the user explicitly
   asks for local proof in the current task. If Testbox is queued or capacity is
-  constrained, report the blocker and keep only targeted local edit-loop checks
-  running.
+  constrained, report the blocker; do not silently move heavy work onto the
+  laptop.
 
 ## macOS And Windows Targets
 
@@ -152,6 +225,7 @@ Changed gate:
 
 ```sh
 pnpm crabbox:run -- \
+  --provider aws \
   --idle-timeout 90m \
   --ttl 240m \
   --timing-json \
@@ -163,6 +237,7 @@ Full suite:
 
 ```sh
 pnpm crabbox:run -- \
+  --provider aws \
   --idle-timeout 90m \
   --ttl 240m \
   --timing-json \
@@ -179,6 +254,7 @@ Focused rerun:
 
 ```sh
 pnpm crabbox:run -- \
+  --provider aws \
   --idle-timeout 90m \
   --ttl 240m \
   --timing-json \
@@ -368,7 +444,7 @@ Efficient flow:
 1. Reproduce or prove the pre-fix symptom from the real user-facing entrypoint
    when feasible. If the issue cannot be reproduced, capture the exact command
    and observed behavior instead.
-2. Patch locally and run narrow local tests for edit speed.
+2. Patch locally and run narrow tests on the pre-warmed remote box.
 3. Run one Crabbox E2E command that starts from the user-facing entrypoint:
    package install, Docker setup, onboarding, channel add, gateway start, or
    agent turn as appropriate.
@@ -387,8 +463,9 @@ Keep it efficient:
   top of that PR.
 - Use `--full-resync` before replacing a warmed direct-provider lease when the
   remote workdir or sync fingerprint appears stale.
-- Use one-shot Crabbox for a single proof; use a reusable Testbox only when
-  several commands must share built images, installed packages, or live state.
+- For agent code tasks, reuse the pre-warmed remote box across focused tests
+  and heavy proof. Use a one-shot only when a single late proof is genuinely
+  the task's only remote command.
 - Prefer `OPENCLAW_CURRENT_PACKAGE_TGZ` with Docker/package lanes when testing a
   candidate tarball; prefer the repo's package helper instead of direct source
   execution when the bug might be packaging/install related.
@@ -448,13 +525,24 @@ Interactive CLI/onboarding:
 
 ## Reuse And Keepalive
 
-For most Crabbox calls, one-shot is enough. Use reuse only when you need
-multiple manual commands on the same hydrated box.
+Agent code tasks should pre-warm and reuse one remote box selected by source
+trust for focused tests and heavy proof. One-shot runs remain appropriate for a
+single late proof when early warmup was not warranted.
+
+Reuse the lease, not stale source. Each command must sync the current checkout;
+use `--no-sync` only to rerun an unchanged, already-synced tree intentionally.
+Untrusted reuse still requires `CRABBOX_ENV_ALLOW=CI`,
+`--no-hydrate`, and a fresh temporary remote `HOME` on every command. Reuse
+only a fresh lease dedicated to the same untrusted source; never a trusted or
+previously hydrated lease. Launch from the clean trusted `main` checkout and
+use `--fresh-pr` plus the same reviewed-SHA check on every run. Keep
+`CRABBOX_AWS_INSTANCE_PROFILE` unset for warmup, run, and cleanup. The lease is
+valid only for that reviewed SHA; stop and rewarm after any head change.
 
 If Crabbox returns a reusable id or you intentionally keep a lease:
 
 ```sh
-pnpm crabbox:run -- --id <cbx_id-or-slug> --no-sync --timing-json --shell -- "pnpm test <path>"
+node scripts/crabbox-wrapper.mjs run --provider <blacksmith-testbox-or-aws> --id <id-or-slug> --timing-json --shell -- "corepack pnpm test <path>"
 ```
 
 Stop boxes you created before handoff:
@@ -549,8 +637,8 @@ Common Crabbox-only failures:
 - Provider missing or old CLI: use `../crabbox/bin/crabbox` from the sibling
   repo, or update/install Crabbox before retrying.
 - Bad local config: inspect `.crabbox.yaml`, `crabbox config show`, and
-  `crabbox whoami`; normal OpenClaw proof should use brokered AWS without
-  asking for cloud keys.
+  `crabbox whoami`; normal OpenClaw agent proof should use Blacksmith Testbox.
+  Direct AWS is an explicit fallback and must use brokered auth, not raw keys.
 - Slug/claim confusion: use the raw `cbx_...` / `tbx_...` id, or run one-shot
   without `--id`.
 - Sync/timing bug: add `--debug --timing-json`; capture the final JSON and the
@@ -563,21 +651,21 @@ Common Crabbox-only failures:
   Blacksmith runs, use `blacksmith testbox list` and stop only boxes you
   created.
 - Testbox queued/capacity pressure: do not retry Blacksmith repeatedly. Rerun
-  once without `--provider` so `.crabbox.yaml` routes to brokered AWS, or report
-  the Blacksmith blocker if Testbox itself is the requested proof.
+  once with `--provider aws` when direct AWS still proves the requested
+  surface, or report the Blacksmith blocker if Testbox itself is required.
 
 If brokered AWS cannot dispatch, sync, attach, or stop, retry once with
 `--debug` and `--timing-json`:
 
 ```sh
-pnpm crabbox:run -- --debug --timing-json -- \
+pnpm crabbox:run -- --provider aws --debug --timing-json -- \
   pnpm test:changed
 ```
 
 Full suite:
 
 ```sh
-pnpm crabbox:run -- --debug --timing-json -- \
+pnpm crabbox:run -- --provider aws --debug --timing-json -- \
   pnpm test
 ```
 
@@ -596,10 +684,10 @@ Raw Blacksmith footguns:
 - Treat `blacksmith testbox list` as cleanup diagnostics, not a shared reusable
   queue.
 
-Use Blacksmith only when the task is specifically about Testbox, brokered AWS
-is unavailable, or an explicit comparison is needed. If Blacksmith is down or
-quota-limited, do not keep probing it; stay on brokered AWS and note the
-delegated-provider outage.
+Use Blacksmith Testbox through Crabbox by default for OpenClaw agent tests and
+heavy work. If Blacksmith is down or quota-limited, do not keep probing it;
+switch to direct AWS only when that backend proves the same surface, and note
+the delegated-provider outage.
 
 ## Blacksmith Backend Notes
 
@@ -636,17 +724,17 @@ Important Blacksmith footguns:
 blacksmith auth login --non-interactive --organization openclaw
 ```
 
-## Brokered AWS
+## Brokered AWS Fallback
 
-Use AWS for normal OpenClaw remote proof. The repo `.crabbox.yaml` already
-selects brokered AWS, so omit `--provider` unless you are testing a different
-provider deliberately.
+Use direct AWS when Testbox is unavailable, when the task needs direct-provider
+semantics, or when an explicit backend comparison is required. The repo
+`.crabbox.yaml` defaults to Blacksmith Testbox, so pass `--provider aws`.
 
 ```sh
-pnpm crabbox:warmup -- --class beast --market on-demand --idle-timeout 90m
-pnpm crabbox:hydrate -- --id <cbx_id-or-slug>
-pnpm crabbox:run -- --id <cbx_id-or-slug> --timing-json --shell -- "pnpm test:changed"
-pnpm crabbox:stop -- <cbx_id-or-slug>
+pnpm crabbox:warmup -- --provider aws --class beast --market on-demand --idle-timeout 90m
+pnpm crabbox:hydrate -- --provider aws --id <cbx_id-or-slug>
+pnpm crabbox:run -- --provider aws --id <cbx_id-or-slug> --timing-json --shell -- "pnpm test:changed"
+pnpm crabbox:stop -- --provider aws <cbx_id-or-slug>
 ```
 
 Install/auth for owned Crabbox if needed:

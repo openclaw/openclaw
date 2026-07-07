@@ -38,6 +38,7 @@ import {
 } from "../../config/sessions/transcript-write-context.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { ImageContent, Message, TextContent } from "../../llm/types.js";
+import { logWarn } from "../../logger.js";
 import { getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.js";
 import {
   type AgentMessage,
@@ -145,6 +146,7 @@ export interface SessionInfoEntry extends SessionEntryBase {
 interface PromptReleasedOpaqueEntry {
   type: "prompt_released_opaque";
   record: unknown;
+  preserveActiveLeaf?: true;
 }
 
 type PromptReleasedSessionEntry =
@@ -937,6 +939,7 @@ function freezeJsonLikeValue(value: unknown, seen = new WeakSet<object>()): void
 function parseJsonlEntries(content: string): FileEntry[] {
   const entries: FileEntry[] = [];
   const lines = content.trim().split("\n");
+  let skipped = 0;
 
   for (const line of lines) {
     if (!line.trim()) {
@@ -946,8 +949,18 @@ function parseJsonlEntries(content: string): FileEntry[] {
       const entry = JSON.parse(line) as FileEntry;
       entries.push(normalizeLoadedFileEntry(entry));
     } catch {
-      // Skip malformed lines
+      skipped++;
     }
+  }
+
+  // Transcripts written by older code or repaired externally may contain
+  // malformed entries that JSON.parse cannot deserialize. Warn once so the
+  // operator knows data was skipped instead of silently dropping entries.
+  if (skipped > 0) {
+    logWarn(
+      `parseJsonlEntries: skipped ${skipped} malformed JSONL line(s) — ` +
+        `${entries.length} valid entries were loaded`,
+    );
   }
 
   return entries;
@@ -1282,6 +1295,7 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
     const content = await readFile(filePath, "utf8");
     const entries: FileEntry[] = [];
     const lines = content.trim().split("\n");
+    let skipped = 0;
 
     for (const line of lines) {
       if (!line.trim()) {
@@ -1290,8 +1304,15 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
       try {
         entries.push(JSON.parse(line) as FileEntry);
       } catch {
-        // Skip malformed lines
+        skipped++;
       }
+    }
+
+    if (skipped > 0) {
+      logWarn(
+        `buildSessionInfo: skipped ${skipped} malformed JSONL line(s) in ${filePath} — ` +
+          `${entries.length} valid entries were loaded`,
+      );
     }
 
     if (entries.length === 0) {
@@ -2201,6 +2222,7 @@ export class SessionManager {
     entries: readonly PromptReleasedSessionEntry[],
     options?: { persistLeaf?: boolean },
   ): PromptReleasedSessionMergeResult | undefined {
+    this.assertPromptReleasedEntriesPreserveActiveLeaf(entries);
     let sideBranchParentId =
       this.promptReleasedSideBranchParentId === undefined
         ? this.leafId
@@ -2324,6 +2346,39 @@ export class SessionManager {
       sessionFileSnapshot: this.sessionFileSnapshot,
       publishedEntries: [{ kind: "id", id: leafEntry.id }],
     };
+  }
+
+  private assertPromptReleasedEntriesPreserveActiveLeaf(
+    entries: readonly PromptReleasedSessionEntry[],
+  ): void {
+    let sideBranchParentId =
+      this.promptReleasedSideBranchParentId === undefined
+        ? this.leafId
+        : this.promptReleasedSideBranchParentId;
+    for (const entry of entries) {
+      if (entry.type !== "prompt_released_opaque") {
+        sideBranchParentId = entry.id;
+        continue;
+      }
+      const leaf = parseOpaqueLeafEntry(entry.record);
+      if (leaf && entry.preserveActiveLeaf) {
+        const appendParentId =
+          leaf.appendParentId === undefined ? leaf.targetId : leaf.appendParentId;
+        if (
+          leaf.appendMode !== "side" ||
+          leaf.targetId !== this.leafId ||
+          leaf.parentId !== sideBranchParentId ||
+          appendParentId !== sideBranchParentId
+        ) {
+          throw new Error("prompt-released side leaf changed the active branch");
+        }
+        continue;
+      }
+      const link = parseParentLinkedOpaqueEntry(entry.record);
+      if (link) {
+        sideBranchParentId = link.id;
+      }
+    }
   }
 
   private appendEntry(entry: SessionEntry, options?: AppendPersistenceOptions): void {

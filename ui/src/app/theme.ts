@@ -11,7 +11,7 @@ export type ResolvedTheme =
   | "custom"
   | "custom-light";
 
-export const VALID_THEME_NAMES = new Set<ThemeName>(["claw", "knot", "dash", "custom"]);
+const VALID_THEME_NAMES = new Set<ThemeName>(["claw", "knot", "dash", "custom"]);
 const VALID_THEME_MODES = new Set<ThemeMode>(["system", "light", "dark"]);
 
 type ThemeSelection = { theme: ThemeName; mode: ThemeMode };

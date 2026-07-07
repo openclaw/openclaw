@@ -1,13 +1,50 @@
 // Verifies default model alias config values and overrides.
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import { applyModelDefaults } from "./defaults.js";
+import { applyModelDefaults as applyModelDefaultsWithPolicy } from "./defaults.js";
 import type { OpenClawConfig } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
+const emptyManifestRegistry = { plugins: [] } satisfies Pick<PluginManifestRegistry, "plugins">;
+
+function applyModelDefaults(
+  cfg: OpenClawConfig,
+  options?: Parameters<typeof applyModelDefaultsWithPolicy>[1],
+) {
+  return applyModelDefaultsWithPolicy(cfg, options ?? { manifestRegistry: emptyManifestRegistry });
+}
+
 describe("applyModelDefaults", () => {
+  beforeAll(() => {
+    vi.stubEnv(
+      "OPENCLAW_BUNDLED_PLUGINS_DIR",
+      path.resolve(import.meta.dirname, "../../extensions"),
+    );
+    // Provider public artifacts are process-stable. Keep their one-time load out of assertions.
+    applyModelDefaults({
+      models: {
+        providers: {
+          google: {
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+            models: [],
+          },
+        },
+      },
+    });
+    applyModelDefaults({
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            models: [],
+          },
+        },
+      },
+    });
+  });
+
   beforeEach(() => {
     vi.stubEnv(
       "OPENCLAW_BUNDLED_PLUGINS_DIR",
@@ -109,6 +146,7 @@ describe("applyModelDefaults", () => {
         defaults: {
           models: {
             "anthropic/claude-opus-4-8": {},
+            "anthropic/claude-sonnet-5": {},
             "openai/gpt-5.4": {},
           },
         },
@@ -117,6 +155,7 @@ describe("applyModelDefaults", () => {
     const next = applyModelDefaults(cfg);
 
     expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-8"]?.alias).toBe("opus");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-5"]?.alias).toBe("sonnet");
     expect(next.agents?.defaults?.models?.["openai/gpt-5.4"]?.alias).toBe("gpt");
   });
 
@@ -134,6 +173,24 @@ describe("applyModelDefaults", () => {
     const next = applyModelDefaults(cfg);
 
     expect(next.agents?.defaults?.models?.["anthropic/claude-opus-4-8"]?.alias).toBe("Opus");
+  });
+
+  it("preserves an authored Sonnet alias when the new default target is also present", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
+            "anthropic/claude-sonnet-5": {},
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+
+    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-4-6"]?.alias).toBe("Sonnet");
+    expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-5"]?.alias).toBeUndefined();
   });
 
   it("respects explicit empty alias disables", () => {

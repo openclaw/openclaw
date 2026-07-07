@@ -1,3 +1,4 @@
+import { isConfiguredContextSizeOverflowError } from "@openclaw/ai/internal/runtime";
 /**
  * Classifies provider/runtime failures and formats assistant-facing error text.
  */
@@ -5,9 +6,9 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../llm/types.js";
-import { isConfiguredContextSizeOverflowError } from "../../llm/utils/overflow.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   extractLeadingHttpStatus,
@@ -15,7 +16,6 @@ import {
   isGenericProviderInternalError,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
-import { truncateUtf16Safe } from "../../shared/utf16-slice.js";
 export {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
@@ -1587,7 +1587,7 @@ export function formatAssistantErrorText(
   return raw.length > 600 ? `${truncateUtf16Safe(raw, 600)}…` : raw;
 }
 
-export function isRawAssistantErrorPassthrough(params: {
+function isRawAssistantErrorPassthrough(params: {
   friendlyError?: string;
   rawError?: string;
 }): boolean {
@@ -1653,7 +1653,7 @@ const IMAGE_DIMENSION_ERROR_RE =
 const IMAGE_DIMENSION_PATH_RE = /messages\.(\d+)\.content\.(\d+)\.image/i;
 const IMAGE_SIZE_ERROR_RE = /image exceeds\s*(\d+(?:\.\d+)?)\s*mb/i;
 
-export function isMissingToolCallInputError(raw: string): boolean {
+function isMissingToolCallInputError(raw: string): boolean {
   if (!raw) {
     return false;
   }

@@ -6,6 +6,7 @@
     <string name="trust_this_gateway">Lita på denna gateway?</string>
     <string name="trust_and_continue">Lita på och fortsätt</string>
     <string name="cancel">Avbryt</string>
+    <string name="new_chat_in_worktree">Ny chatt i worktree</string>
     <string name="endpoint">Slutpunkt</string>
     <string name="status">Status</string>
     <string name="connected_gateway_ready">Din gateway är aktiv och redo.</string>
@@ -20,8 +21,17 @@
     <string name="use_tls">Använd TLS</string>
     <string name="token_optional">Token (valfritt)</string>
     <string name="password">Lösenord</string>
+    <string name="custom_headers_optional">Anpassade headers (valfritt)</string>
+    <string name="custom_headers_explainer">Skickas med varje anslutning till denna gateway, till exempel Cloudflare Access service token headers. Lagras krypterat och tillämpas vid nästa återanslutning.</string>
+    <string name="custom_header_value">Headervärde</string>
+    <string name="custom_header_reserved">Denna header hanteras av anslutningen och kan inte åsidosättas.</string>
+    <string name="add_custom_header">Lägg till header</string>
+    <string name="remove_custom_header">Ta bort %1$s</string>
     <string name="run_onboarding_again">Kör introduktionen igen</string>
     <string name="resolved_endpoint">Löst slutpunkt</string>
     <string name="gateway_trust_first_seen">Verifiera certifikatets fingeravtryck innan du litar på denna gateway.\n\n%1$s</string>
     <string name="gateway_trust_changed">Gateway-certifikatet har ändrats. Fortsätt bara om du förväntade dig denna ändring.\n\nTidigare SHA-256:\n%1$s\n\nNy SHA-256:\n%2$s</string>
+    <string name="switch_gateway">Byt Gateway</string>
+    <string name="select_gateway">Välj Gateway</string>
+    <string name="active_gateway">Aktiv Gateway</string>
 </resources>

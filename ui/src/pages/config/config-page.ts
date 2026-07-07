@@ -1,10 +1,17 @@
 import { consume } from "@lit/context";
-import { html, LitElement } from "lit";
+import { html, LitElement, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
+import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { FastMode } from "../../api/types.ts";
 import type { RouteId } from "../../app-route-paths.ts";
-import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import {
+  applicationContext,
+  type ApplicationContext,
+  type ApplicationGatewaySnapshot,
+} from "../../app/context.ts";
 import { importCustomThemeFromUrl } from "../../app/custom-theme.ts";
+import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
   loadSettings,
   normalizeTextScale,
@@ -15,6 +22,7 @@ import { startThemeTransition } from "../../app/theme-transition.ts";
 import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
+import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { renderMcp } from "./mcp.ts";
 import { getPresetById } from "./presets.ts";
 import {
@@ -39,7 +47,7 @@ export type ConfigPageId =
   | "ai-agents";
 
 type ConfigFormMode = "form" | "raw";
-type ConfigSelection = { activeSection: string | null; activeSubsection: string | null };
+export type ConfigSelection = { activeSection: string | null; activeSubsection: string | null };
 
 const CONFIG_PAGE_I18N_KEYS = {
   config: "config",
@@ -97,6 +105,19 @@ const KNOWN_CHANNELS = [
 ] as const;
 
 const BASE_RADII = { sm: 6, md: 10, lg: 14, xl: 20, full: 9999, default: 10 };
+const SYSTEM_INFO_POLL_INTERVAL_MS = 10_000;
+
+function isUnknownSystemInfoMethodError(error: unknown): boolean {
+  return (
+    error instanceof GatewayRequestError &&
+    error.gatewayCode === "INVALID_REQUEST" &&
+    error.message.includes("unknown method: system.info")
+  );
+}
+
+export function supportsSystemInfo(hello: ApplicationGatewaySnapshot["hello"]): boolean {
+  return hello?.features?.methods?.includes("system.info") === true;
+}
 
 function defaultConfigSelection(pageId: ConfigPageId): ConfigSelection {
   switch (pageId) {
@@ -150,6 +171,14 @@ function normalizeConfigSelection(
   return { activeSection, activeSubsection };
 }
 
+export function configSelectionFromSearch(pageId: ConfigPageId, search: string): ConfigSelection {
+  const section = new URLSearchParams(search).get("section");
+  if (!section) {
+    return defaultConfigSelection(pageId);
+  }
+  return normalizeConfigSelection(pageId, section, null);
+}
+
 function configPageTitle(pageId: ConfigPageId): string {
   return pageId === "config" ? t("nav.settings") : t(`tabs.${CONFIG_PAGE_I18N_KEYS[pageId]}`);
 }
@@ -187,7 +216,7 @@ function quickChannels(config: unknown): QuickSettingsChannel[] {
   });
 }
 
-export function extractQuickSettingsSecurity(config: unknown): QuickSettingsSecurity {
+function extractQuickSettingsSecurity(config: unknown): QuickSettingsSecurity {
   const root =
     asConfigRecord((config as { configForm?: unknown } | null)?.configForm) ??
     asConfigRecord(config);
@@ -262,6 +291,8 @@ export class ConfigPage extends LitElement {
 
   @state() private settings = loadSettings();
   @state() private settingsMode: "quick" | "advanced" = "quick";
+  @state() private systemInfo: SystemInfoResult | null = null;
+  @state() private systemInfoUnavailable = false;
   @state() private formModes: Record<ConfigPageId, ConfigFormMode> = {
     config: "form",
     communications: "form",
@@ -297,6 +328,10 @@ export class ConfigPage extends LitElement {
   @state() private customThemeImportFocusToken = 0;
   private customThemeImportSelectOnSuccess = false;
   private readonly configViewState: ConfigViewState = createConfigViewState();
+  private systemInfoClient: GatewayBrowserClient | null = null;
+  private systemInfoLoading = false;
+  private systemInfoRequestId = 0;
+  private systemInfoPollInterval: ReturnType<typeof globalThis.setInterval> | null = null;
   private stops: Array<() => void> = [];
 
   override createRenderRoot() {
@@ -306,16 +341,25 @@ export class ConfigPage extends LitElement {
   override connectedCallback() {
     super.connectedCallback();
     this.settings = loadSettings();
+    const linkedSelection = configSelectionFromSearch(
+      this.pageId,
+      globalThis.location?.search ?? "",
+    );
+    this.selections = { ...this.selections, [this.pageId]: linkedSelection };
     this.stops = [
       this.context.runtimeConfig.subscribe(() => this.requestUpdate()),
       this.context.overlays.subscribe(() => this.requestUpdate()),
       this.context.config.subscribe(() => this.requestUpdate()),
-      this.context.gateway.subscribe(() => this.requestUpdate()),
+      this.context.gateway.subscribe((snapshot) => {
+        this.handleSystemInfoGatewaySnapshot(snapshot);
+        this.requestUpdate();
+      }),
       this.context.webPush.subscribe(() => this.requestUpdate()),
       this.context.theme.subscribe(() => {
         this.settings = loadSettings();
       }),
     ];
+    this.handleSystemInfoGatewaySnapshot(this.context.gateway.snapshot);
     const config = this.context.runtimeConfig.state;
     if (!config.configSnapshot && !config.configLoading) {
       void this.context.runtimeConfig
@@ -327,11 +371,132 @@ export class ConfigPage extends LitElement {
   }
 
   override disconnectedCallback() {
+    this.stopSystemInfoPolling();
+    this.invalidateSystemInfoRequest();
+    this.systemInfoClient = null;
     for (const stop of this.stops) {
       stop();
     }
     this.stops = [];
     super.disconnectedCallback();
+  }
+
+  override updated(changed: Map<PropertyKey, unknown>) {
+    const pageChanged = changed.has("pageId") && changed.get("pageId") !== undefined;
+    const modeChanged = changed.has("settingsMode") && changed.get("settingsMode") !== undefined;
+    if (pageChanged || modeChanged) {
+      this.invalidateSystemInfoRequest();
+    }
+    this.syncSystemInfoPolling();
+  }
+
+  private isSystemInfoVisible(): boolean {
+    return this.pageId === "config" && this.settingsMode === "quick";
+  }
+
+  private handleSystemInfoGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
+    const clientChanged = snapshot.client !== this.systemInfoClient;
+    const hasSystemInfo = supportsSystemInfo(snapshot.hello);
+    this.systemInfoClient = snapshot.client;
+    if (clientChanged) {
+      this.invalidateSystemInfoRequest();
+      this.systemInfo = null;
+      this.systemInfoUnavailable = false;
+    } else if (!snapshot.connected) {
+      this.invalidateSystemInfoRequest();
+      this.systemInfo = null;
+    }
+    if (snapshot.connected && snapshot.hello) {
+      this.systemInfoUnavailable = !hasSystemInfo;
+      if (!hasSystemInfo) {
+        this.invalidateSystemInfoRequest();
+        this.systemInfo = null;
+      }
+    }
+    this.syncSystemInfoPolling();
+  }
+
+  private syncSystemInfoPolling() {
+    const gateway = this.context.gateway.snapshot;
+    const shouldPoll =
+      this.isConnected &&
+      this.isSystemInfoVisible() &&
+      !this.systemInfoUnavailable &&
+      gateway.connected &&
+      supportsSystemInfo(gateway.hello) &&
+      gateway.client != null;
+    if (!shouldPoll) {
+      this.stopSystemInfoPolling();
+      return;
+    }
+    if (this.systemInfoPollInterval !== null) {
+      return;
+    }
+    void this.loadSystemInfo();
+    this.systemInfoPollInterval = globalThis.setInterval(() => {
+      void this.loadSystemInfo();
+    }, SYSTEM_INFO_POLL_INTERVAL_MS);
+  }
+
+  private stopSystemInfoPolling() {
+    if (this.systemInfoPollInterval === null) {
+      return;
+    }
+    globalThis.clearInterval(this.systemInfoPollInterval);
+    this.systemInfoPollInterval = null;
+  }
+
+  private invalidateSystemInfoRequest() {
+    this.systemInfoRequestId += 1;
+    this.systemInfoLoading = false;
+  }
+
+  private isCurrentSystemInfoRequest(requestId: number, client: GatewayBrowserClient): boolean {
+    const gateway = this.context.gateway.snapshot;
+    return (
+      this.isConnected &&
+      this.isSystemInfoVisible() &&
+      requestId === this.systemInfoRequestId &&
+      gateway.connected &&
+      gateway.client === client
+    );
+  }
+
+  private async loadSystemInfo() {
+    const gateway = this.context.gateway.snapshot;
+    const client = gateway.client;
+    if (
+      !gateway.connected ||
+      !client ||
+      !this.isSystemInfoVisible() ||
+      this.systemInfoUnavailable ||
+      this.systemInfoLoading
+    ) {
+      return;
+    }
+
+    const requestId = ++this.systemInfoRequestId;
+    this.systemInfoLoading = true;
+    try {
+      const response = await client.request("system.info", {});
+      if (!this.isCurrentSystemInfoRequest(requestId, client)) {
+        return;
+      }
+      this.systemInfo = response as SystemInfoResult;
+    } catch (error) {
+      if (!this.isCurrentSystemInfoRequest(requestId, client)) {
+        return;
+      }
+      if (isMissingOperatorReadScopeError(error) || isUnknownSystemInfoMethodError(error)) {
+        this.systemInfo = null;
+        this.systemInfoUnavailable = true;
+        this.stopSystemInfoPolling();
+      }
+    } finally {
+      if (this.isCurrentSystemInfoRequest(requestId, client)) {
+        this.systemInfoLoading = false;
+      }
+    }
   }
 
   private navigate(routeId: RouteId) {
@@ -573,7 +738,6 @@ export class ConfigPage extends LitElement {
       excludeSections,
       includeVirtualSections: this.pageId === "communications" || this.pageId === "appearance",
       settingsLayout: this.pageId === "config" ? "accordion" : undefined,
-      onBackToQuick: this.pageId === "config" ? () => (this.settingsMode = "quick") : undefined,
       webPush: this.context.webPush.snapshot,
       onWebPushSubscribe: () => void this.context.webPush.enable(),
       onWebPushUnsubscribe: () => void this.context.webPush.disable(),
@@ -621,6 +785,8 @@ export class ConfigPage extends LitElement {
         mcpServerCount: mcpServerCount(configObject),
       },
       security: extractQuickSettingsSecurity(configObject),
+      systemInfo: this.systemInfo,
+      systemInfoUnavailable: this.systemInfoUnavailable,
       theme: this.settings.theme,
       themeMode: this.settings.themeMode,
       hasCustomTheme: Boolean(this.settings.customTheme),
@@ -655,6 +821,10 @@ export class ConfigPage extends LitElement {
       version:
         appConfig.serverVersion ?? this.context.gateway.snapshot.hello?.server?.version ?? "",
       configObject,
+      savedConfigObject:
+        asConfigRecord(
+          runtimeConfig.state.configFormOriginal ?? runtimeConfig.state.configSnapshot?.config,
+        ) ?? {},
       configDirty: runtimeConfig.state.configFormDirty,
       configSaving: runtimeConfig.state.configSaving,
       configApplying: runtimeConfig.state.configApplying,
@@ -668,9 +838,6 @@ export class ConfigPage extends LitElement {
       onResetConfig: () => runtimeConfig.resetDraft(),
       onSaveConfig: () => void runtimeConfig.save(),
       onApplyConfig: () => void runtimeConfig.apply(),
-      onAdvancedSettings: () => {
-        this.settingsMode = "advanced";
-      },
       onThinkingChange: (level) =>
         runtimeConfig.patchForm(["agents", "defaults", "thinkingLevel"], level),
       onFastModeChange: (mode: FastMode) =>
@@ -686,6 +853,10 @@ export class ConfigPage extends LitElement {
           config: { activeSection: "auth", activeSubsection: null },
         };
       },
+      canPairDevice:
+        runtimeConfig.state.connected &&
+        hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null),
+      onPairMobile: () => void this.context.overlays.openDevicePairSetup(),
       onBrowserEnabledToggle: (enabled) => runtimeConfig.patchForm(["browser", "enabled"], enabled),
       onToolProfileChange: (profile) => runtimeConfig.patchForm(["tools", "profile"], profile),
       assistantAvatar: appConfig.assistantIdentity.avatar,
@@ -696,6 +867,34 @@ export class ConfigPage extends LitElement {
       assistantAvatarOverride: null,
       basePath: this.context.basePath,
     });
+  }
+
+  private renderSettingsModeToggle() {
+    if (this.pageId !== "config") {
+      return nothing;
+    }
+    const modes = [
+      ["quick", "Simple"],
+      ["advanced", "Advanced"],
+    ] as const;
+    return html`
+      <div class="config-view-toggle qs-segmented" role="tablist" aria-label="Settings view">
+        ${modes.map(
+          ([mode, label]) => html`
+            <button
+              class="qs-segmented__btn ${this.settingsMode === mode
+                ? "qs-segmented__btn--active"
+                : ""}"
+              role="tab"
+              aria-selected=${this.settingsMode === mode}
+              @click=${() => (this.settingsMode = mode)}
+            >
+              ${label}
+            </button>
+          `,
+        )}
+      </div>
+    `;
   }
 
   override render() {
@@ -712,7 +911,11 @@ export class ConfigPage extends LitElement {
           <div class="page-title">${configPageTitle(this.pageId)}</div>
           <div class="page-sub">${configPageSubtitle(this.pageId)}</div>
         </div>
+        ${this.renderSettingsModeToggle()}
       </section>
+      ${this.pageId === "config"
+        ? html`<div class="config-view-toggle-row">${this.renderSettingsModeToggle()}</div>`
+        : nothing}
       ${renderSettingsWorkspace(
         this.context.basePath,
         body,

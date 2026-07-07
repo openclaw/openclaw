@@ -159,6 +159,11 @@ struct RootTabsPhoneControlHub: View {
             CommandSessionsScreen(
                 usesNativeNavigationChrome: true,
                 openChat: { self.openChatFromControlDetail(.sessions) })
+        case .files:
+            AgentProTab(
+                directRoute: .files,
+                headerTitle: "Files",
+                openSettings: { self.openGatewayDetail() })
         case .dreaming:
             AgentProTab(
                 directRoute: .dreaming,
@@ -174,6 +179,10 @@ struct RootTabsPhoneControlHub: View {
                 directRoute: .cron,
                 headerTitle: "Cron Jobs",
                 openSettings: { self.openGatewayDetail() })
+        case .terminal:
+            TerminalHubScreen(
+                usesNativeNavigationChrome: true,
+                gatewayAction: { self.openGatewayDetail() })
         case .docs:
             OpenClawDocsScreen(
                 usesNativeNavigationChrome: true,

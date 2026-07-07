@@ -9,6 +9,8 @@ export type UsageTemplateConfig = string | Record<string, unknown> | undefined;
 
 type CacheEntry = { template: UsageBarTemplate | undefined; watcher?: FSWatcher };
 const fileCache = new Map<string, CacheEntry>();
+/** Maximum number of template file paths to cache concurrently. */
+const MAX_CACHED_TEMPLATE_FILES = 64;
 const warnedTemplateOverrides = new Set<string>();
 const usageTemplateLog = createSubsystemLogger("usage-template");
 
@@ -124,6 +126,17 @@ function cacheTemplateFile(path: string): UsageBarTemplate | undefined {
   const result = readTemplateFile(path);
   if (result.reason) {
     warnInvalidUsageTemplate("file", result.reason, path);
+  }
+  // Only evict when inserting a new key that would exceed the limit.
+  // Eviction must happen before watcher allocation so we don't create a
+  // watcher only to close it immediately. Retries for an existing key
+  // (same-path re-read after a prior miss) must not evict other entries.
+  if (!fileCache.has(path) && fileCache.size >= MAX_CACHED_TEMPLATE_FILES) {
+    const oldestKey = fileCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      fileCache.get(oldestKey)?.watcher?.close();
+      fileCache.delete(oldestKey);
+    }
   }
   const entry: CacheEntry = { template: result.template };
   if (entry.template) {

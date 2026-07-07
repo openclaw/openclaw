@@ -10,6 +10,10 @@ import {
   resolveLocalVitestMaxWorkers as resolveLocalVitestMaxWorkersImpl,
   resolveLocalVitestScheduling as resolveLocalVitestSchedulingImpl,
 } from "../../scripts/lib/vitest-local-scheduling.mjs";
+import type {
+  LocalVitestScheduling,
+  VitestHostInfo,
+} from "../../scripts/lib/vitest-local-scheduling.mjs";
 import {
   BUNDLED_PLUGIN_ROOT_DIR,
   BUNDLED_PLUGIN_TEST_GLOB,
@@ -17,19 +21,9 @@ import {
 import { loadVitestExperimentalConfig } from "./vitest.performance-config.ts";
 import { shouldPrintVitestThrottle } from "./vitest.system-load.ts";
 
-type VitestHostInfo = {
-  cpuCount?: number;
-  loadAverage1m?: number;
-  totalMemoryBytes?: number;
-};
-
 export type OpenClawVitestPool = "forks" | "threads";
 
-export type LocalVitestScheduling = {
-  maxWorkers: number;
-  fileParallelism: boolean;
-  throttledBySystem: boolean;
-};
+export type { LocalVitestScheduling };
 
 export const jsdomOptimizedDeps = {
   optimizer: {
@@ -41,7 +35,7 @@ export const jsdomOptimizedDeps = {
 };
 
 function detectVitestHostInfo(): Required<VitestHostInfo> {
-  return detectVitestHostInfoImpl() as Required<VitestHostInfo>;
+  return detectVitestHostInfoImpl();
 }
 
 export function resolveLocalVitestMaxWorkers(
@@ -57,7 +51,7 @@ export function resolveLocalVitestScheduling(
   system: VitestHostInfo = detectVitestHostInfo(),
   pool: OpenClawVitestPool = resolveDefaultVitestPool(env),
 ): LocalVitestScheduling {
-  return resolveLocalVitestSchedulingImpl(env, system, pool) as LocalVitestScheduling;
+  return resolveLocalVitestSchedulingImpl(env, system, pool);
 }
 
 export function resolveDefaultVitestPool(
@@ -242,6 +236,38 @@ export const sharedVitestConfig = {
         replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "index.ts"),
       },
       {
+        find: /^@openclaw\/ai\/internal\/(.+)$/,
+        replacement: path.join(repoRoot, "packages", "ai", "src", "internal", "$1.ts"),
+      },
+      {
+        find: "@openclaw/ai/diagnostics",
+        replacement: path.join(repoRoot, "packages", "ai", "src", "utils", "diagnostics.ts"),
+      },
+      {
+        find: "@openclaw/ai/event-stream",
+        replacement: path.join(repoRoot, "packages", "ai", "src", "utils", "event-stream.ts"),
+      },
+      {
+        find: "@openclaw/ai/providers",
+        replacement: path.join(repoRoot, "packages", "ai", "src", "providers.ts"),
+      },
+      {
+        find: "@openclaw/ai/types",
+        replacement: path.join(repoRoot, "packages", "ai", "src", "types.ts"),
+      },
+      {
+        find: "@openclaw/ai/validation",
+        replacement: path.join(repoRoot, "packages", "ai", "src", "validation.ts"),
+      },
+      {
+        find: /^@openclaw\/ai\/(.+)$/,
+        replacement: path.join(repoRoot, "packages", "ai", "src", "$1.ts"),
+      },
+      {
+        find: "@openclaw/ai",
+        replacement: path.join(repoRoot, "packages", "ai", "src", "index.ts"),
+      },
+      {
         find: "@openclaw/llm-core/diagnostics",
         replacement: path.join(repoRoot, "packages", "llm-core", "src", "utils", "diagnostics.ts"),
       },
@@ -416,9 +442,15 @@ export const sharedVitestConfig = {
         ),
       },
       {
+        find: "@openclaw/normalization-core/utf16-slice",
+        replacement: path.join(repoRoot, "packages", "normalization-core", "src", "utf16-slice.ts"),
+      },
+      {
         find: /^@openclaw\/normalization-core$/u,
         replacement: path.join(repoRoot, "packages", "normalization-core", "src", "index.ts"),
       },
+      sourcePackageAlias("markdown-core", "code-spans"),
+      sourcePackageAlias("markdown-core", "fences"),
       sourcePackageAlias("media-core", "base64"),
       sourcePackageAlias("media-core", "constants"),
       sourcePackageAlias("media-core", "content-length"),
@@ -467,6 +499,7 @@ export const sharedVitestConfig = {
       "package.json",
       "pnpm-lock.yaml",
       "test/setup.ts",
+      "test/setup.env.ts",
       "test/setup.shared.ts",
       "test/setup.extensions.ts",
       "test/setup-openclaw-runtime.ts",

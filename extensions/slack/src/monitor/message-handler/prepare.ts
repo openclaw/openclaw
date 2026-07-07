@@ -704,8 +704,10 @@ export async function prepareSlackMessage(params: {
   if (assistantThreadContextToCache) {
     ctx.saveSlackAssistantThreadContext(assistantThreadContextToCache);
   }
+  const channelReplyToMode =
+    channelConfig?.replyToMode ?? resolveSlackReplyToMode(account, channelChatType);
   const willImplicitlyThreadReply =
-    isRoom && !channelRequireMention && resolveSlackReplyToMode(account, channelChatType) !== "off";
+    isRoom && !channelRequireMention && channelReplyToMode !== "off";
   const seedTopLevelRoomThreadBySource =
     opts.source === "app_mention" ||
     opts.wasMentioned === true ||
@@ -719,6 +721,7 @@ export async function prepareSlackMessage(params: {
     isGroupDm,
     isRoom,
     isRoomish,
+    channelConfig,
     seedTopLevelRoomThread: seedTopLevelRoomThreadBySource,
     assistantThreadTs: assistantThreadContext?.threadTs,
   });
@@ -763,6 +766,7 @@ export async function prepareSlackMessage(params: {
       isGroupDm,
       isRoom,
       isRoomish,
+      channelConfig,
       seedTopLevelRoomThread: true,
       assistantThreadTs: assistantThreadContext?.threadTs,
     });
@@ -1112,11 +1116,13 @@ export async function prepareSlackMessage(params: {
       ctx: { ChatType: chatType, InboundEventKind: inboundEventKind },
     }) === "message_tool_only";
   const statusReactionsExplicitlyEnabled = cfg.messages?.statusReactions?.enabled === true;
+  const isRoomEvent = inboundEventKind === "room_event";
   const shouldAckReaction = () =>
     Boolean(
       ackReaction &&
       shouldAckReactionGate({
         scope: ctx.ackReactionScope as AckReactionScope | undefined,
+        inboundEventKind,
         isDirect: isDirectMessage,
         isGroup: isRoomish,
         isMentionableGroup: isRoom,
@@ -1130,11 +1136,14 @@ export async function prepareSlackMessage(params: {
   const ackReactionMessageTs = message.ts;
   const allowToolOnlyStatusReaction =
     statusReactionsExplicitlyEnabled && (effectiveWasMentioned || shouldBypassMention);
+  const shouldSendConfiguredAck = shouldAckReaction();
   const shouldSendAckReaction =
-    shouldAckReaction() && (!sourceRepliesAreToolOnly || allowToolOnlyStatusReaction);
+    shouldSendConfiguredAck &&
+    (!sourceRepliesAreToolOnly || allowToolOnlyStatusReaction || isRoomEvent);
   const statusReactionsWillHandle =
     Boolean(ackReactionMessageTs) &&
-    cfg.messages?.statusReactions?.enabled !== false &&
+    !isRoomEvent &&
+    statusReactionsExplicitlyEnabled &&
     shouldSendAckReaction;
   const ackReactionPromise =
     !statusReactionsWillHandle && shouldSendAckReaction && ackReactionMessageTs && ackReactionValue
@@ -1396,6 +1405,7 @@ export async function prepareSlackMessage(params: {
       }),
     },
   }) satisfies FinalizedMsgContext;
+  ctxPayload.ReplyToMode = replyToMode;
 
   if (isRoomish && !shouldRequireMention) {
     channelHistory.record({

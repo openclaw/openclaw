@@ -57,6 +57,8 @@ function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettings
       toolProfile: "coding",
     },
     onSecurityConfigure: vi.fn(),
+    canPairDevice: true,
+    onPairMobile: vi.fn(),
     onBrowserEnabledToggle: vi.fn(),
     onToolProfileChange: vi.fn(),
     theme: "claw",
@@ -74,7 +76,6 @@ function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettings
     onUserAvatarChange: vi.fn(),
     configObject: {},
     onSelectPreset: vi.fn(),
-    onAdvancedSettings: vi.fn(),
     connected: true,
     gatewayUrl: "ws://localhost:18789",
     assistantName: "OpenClaw",
@@ -125,12 +126,74 @@ describe("renderQuickSettings", () => {
       "qs-card--model",
       "qs-card--channels",
       "qs-card--security",
-      "qs-card--personal",
+      "qs-card--system",
       "qs-card--appearance",
+      "qs-card--personal",
       "qs-card--automations",
     ]);
-    expect(container.querySelectorAll(".qs-side-stack .qs-card")).toHaveLength(2);
     expect(container.querySelectorAll(".qs-card--span-all")).toHaveLength(1);
+  });
+
+  it("renders Gateway host identity and resources", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(
+        createProps({
+          systemInfo: {
+            machineName: "Gateway Mac",
+            hostname: "gateway.local",
+            platform: "darwin",
+            release: "25.5.0",
+            arch: "arm64",
+            osLabel: "macOS 26.5.0",
+            lanAddress: "192.168.1.20",
+            port: 18789,
+            nodeVersion: "v24.1.0",
+            pid: 1234,
+            uptimeMs: 3_600_000,
+            cpuCount: 10,
+            cpuModel: "Apple M4",
+            loadAverage: [1.2, 1.1, 0.9],
+            memoryTotalBytes: 34_359_738_368,
+            memoryFreeBytes: 17_179_869_184,
+            diskTotalBytes: 994_662_584_320,
+            diskAvailableBytes: 497_331_292_160,
+            diskPath: "/Users/operator/.openclaw",
+          },
+        }),
+      ),
+      container,
+    );
+
+    const hostRow = expectRowByLabel(container, "Host");
+    expect(hostRow.querySelector(".qs-row__value")?.textContent).toBe("Gateway Mac");
+    expect(hostRow.querySelector(".qs-row__value")?.getAttribute("title")).toBe("gateway.local");
+    expect(expectRowByLabel(container, "Address").textContent).toContain("192.168.1.20:18789");
+    expect(expectRowByLabel(container, "OS").textContent).toContain("macOS 26.5.0 · arm64");
+    expect(expectRowByLabel(container, "Uptime").textContent).toContain("1h");
+    expect(expectRowByLabel(container, "CPU").textContent).toContain("10 cores · load 1.2");
+    expect(expectRowByLabel(container, "Memory").textContent).toContain("16 GB free of 32 GB");
+    expect(expectRowByLabel(container, "Disk").textContent).toContain("463 GB free of 926 GB");
+  });
+
+  it("hides Gateway host details when the RPC is unavailable", () => {
+    const container = document.createElement("div");
+
+    render(renderQuickSettings(createProps({ systemInfoUnavailable: true })), container);
+
+    expect(container.querySelector(".qs-card--system")).toBeNull();
+  });
+
+  it("reserves the Gateway host card while its first snapshot loads", () => {
+    const container = document.createElement("div");
+
+    render(renderQuickSettings(createProps()), container);
+
+    const systemCard = container.querySelector(".qs-card--system");
+    expect(systemCard).not.toBeNull();
+    expect(expectRowByLabel(systemCard ?? container, "Host").textContent).toContain("—");
+    expect(expectRowByLabel(systemCard ?? container, "Disk").textContent).toContain("—");
   });
 
   it("shows the current bootstrap default when config omits the explicit limit", () => {
@@ -138,13 +201,9 @@ describe("renderQuickSettings", () => {
 
     render(renderQuickSettings(createProps({ configObject: {} })), container);
 
-    const stat = Array.from(container.querySelectorAll<HTMLElement>(".qs-profile-stat")).find(
-      (candidate) =>
-        candidate.querySelector(".qs-profile-stat__label")?.textContent?.trim() ===
-        "Bootstrap Per File",
-    );
-    expect(stat?.querySelector(".qs-profile-stat__value")?.textContent?.trim()).toBe(
-      "20,000 chars",
+    const summary = container.querySelector(".qs-profiles__summary-values");
+    expect(summary?.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      "20,000 chars per file · 60,000 chars total · Every turn",
     );
   });
 
@@ -210,6 +269,19 @@ describe("renderQuickSettings", () => {
       "qs-segmented__btn--compact",
       "qs-segmented__btn--active",
     ]);
+  });
+
+  it("opens mobile pairing from Security quick settings", () => {
+    const onPairMobile = vi.fn();
+    const container = document.createElement("div");
+
+    render(renderQuickSettings(createProps({ onPairMobile })), container);
+
+    expectRowByLabel(container, "OpenClaw mobile");
+    const button = expectButtonByText(container, "Pair mobile device");
+    expect(button.disabled).toBe(false);
+    button.click();
+    expect(onPairMobile).toHaveBeenCalledOnce();
   });
 
   it("lets operators change text size from Appearance quick settings", () => {

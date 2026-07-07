@@ -99,7 +99,7 @@ function createOperatorClient(): GatewayClient {
   });
 }
 
-type NodeInvokePolicyRegistration = NonNullable<PluginRegistry["nodeInvokePolicies"]>[number];
+type NodeInvokePolicyRegistration = PluginRegistry["nodeInvokePolicies"][number];
 type NodeInvokePolicyHandler = NodeInvokePolicyRegistration["policy"]["handle"];
 type PluginApprovalRecord = ReturnType<
   ExecApprovalManager<PluginApprovalRequestPayload>["listPendingRecords"]
@@ -132,7 +132,7 @@ function createApprovalRequestPolicy(params?: {
 
 function setDangerousDemoCommandRegistry(policies: NodeInvokePolicyRegistration[] = []) {
   const registry = createEmptyPluginRegistry();
-  (registry.nodeHostCommands ??= []).push({
+  registry.nodeHostCommands.push({
     pluginId: DEMO_PLUGIN_ID,
     command: {
       command: DEMO_COMMAND,
@@ -141,13 +141,13 @@ function setDangerousDemoCommandRegistry(policies: NodeInvokePolicyRegistration[
     },
     source: "test",
   });
-  (registry.nodeInvokePolicies ??= []).push(...policies);
+  registry.nodeInvokePolicies.push(...policies);
   setActivePluginRegistry(registry);
 }
 
 function createPolicyRegistry(handle: NodeInvokePolicyHandler): PluginRegistry {
   const registry = createEmptyPluginRegistry();
-  (registry.nodeInvokePolicies ??= []).push(createDemoPolicy(handle));
+  registry.nodeInvokePolicies.push(createDemoPolicy(handle));
   return registry;
 }
 async function invokeDemoPolicy(

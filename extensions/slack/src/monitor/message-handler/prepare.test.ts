@@ -742,6 +742,10 @@ describe("slack prepareSlackMessage inbound contract", () => {
     groupPolicy?: "open";
     defaultRequireMention?: boolean;
     asChannel?: boolean;
+    channelsConfig?: Record<
+      string,
+      { requireMention?: boolean; replyToMode?: "off" | "all" | "first" | "batched" }
+    >;
   }): SlackMonitorContext {
     const slackCtx = createInboundSlackCtx({
       cfg: {
@@ -754,6 +758,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
         },
       } as OpenClawConfig,
       replyToMode: "all",
+      channelsConfig: params?.channelsConfig,
       ...(params?.defaultRequireMention === undefined
         ? {}
         : { defaultRequireMention: params.defaultRequireMention }),
@@ -855,7 +860,86 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(await prepared.ackReactionPromise).toBe(true);
   });
 
-  it("keeps unmentioned room events quiet even when group replies are automatic", async () => {
+  it("defaults Slack to a static ack reaction while native thread status handles progress", async () => {
+    const addReaction = vi.fn().mockResolvedValue({ ok: true });
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        messages: {
+          ackReaction: "eyes",
+        },
+        channels: {
+          slack: {
+            enabled: true,
+            groupPolicy: "open",
+          },
+        },
+      } as OpenClawConfig,
+      appClient: {
+        reactions: { add: addReaction },
+      } as unknown as App["client"],
+    });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const prepared = await prepareMessageWith(slackCtx, defaultAccount, {
+      channel: "C123",
+      channel_type: "channel",
+      user: "U1",
+      text: "<@B1> hi",
+      ts: "1.000",
+    } as SlackMessageEvent);
+
+    assertPrepared(prepared);
+    expect(prepared.ackReactionPromise).toBeInstanceOf(Promise);
+    expect(await prepared.ackReactionPromise).toBe(true);
+    expect(addReaction).toHaveBeenCalledWith({
+      channel: "C123",
+      timestamp: "1.000",
+      name: "eyes",
+    });
+  });
+
+  it("keeps unmentioned room events quiet when ack scope does not force all messages", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        messages: {
+          ackReaction: "eyes",
+          ackReactionScope: "group-all",
+          groupChat: {
+            unmentionedInbound: "room_event",
+            visibleReplies: "automatic",
+          },
+          statusReactions: { enabled: true },
+        },
+        channels: {
+          slack: {
+            enabled: true,
+            groupPolicy: "open",
+          },
+        },
+      } as OpenClawConfig,
+      defaultRequireMention: false,
+    });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+    slackCtx.ackReactionScope = "group-all";
+
+    const prepared = await prepareMessageWith(slackCtx, defaultAccount, {
+      channel: "C123",
+      channel_type: "channel",
+      user: "U1",
+      text: "ambient note",
+      ts: "1.000",
+    } as SlackMessageEvent);
+
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.InboundEventKind).toBe("room_event");
+    expect(prepared.ackReactionMessageTs).toBe("1.000");
+    expect(prepared.ackReactionPromise).toBeNull();
+  });
+
+  it("sends Slack ack reactions for room events when ack scope is all", async () => {
+    const reactionAdd = vi.fn().mockResolvedValue({ ok: true });
     const slackCtx = createInboundSlackCtx({
       cfg: {
         messages: {
@@ -874,10 +958,12 @@ describe("slack prepareSlackMessage inbound contract", () => {
           },
         },
       } as OpenClawConfig,
+      appClient: { reactions: { add: reactionAdd } } as any,
       defaultRequireMention: false,
     });
     slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
     slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+    slackCtx.ackReactionScope = "all";
 
     const prepared = await prepareMessageWith(slackCtx, defaultAccount, {
       channel: "C123",
@@ -890,7 +976,14 @@ describe("slack prepareSlackMessage inbound contract", () => {
     assertPrepared(prepared);
     expect(prepared.ctxPayload.InboundEventKind).toBe("room_event");
     expect(prepared.ackReactionMessageTs).toBe("1.000");
-    expect(prepared.ackReactionPromise).toBeNull();
+    expect(prepared.ackReactionValue).toBe("eyes");
+    expect(prepared.ackReactionPromise).toBeInstanceOf(Promise);
+    expect(await prepared.ackReactionPromise).toBe(true);
+    expect(reactionAdd).toHaveBeenCalledWith({
+      channel: "C123",
+      name: "eyes",
+      timestamp: "1.000",
+    });
   });
 
   it("keeps unmentioned abort requests as user requests when room events are enabled", async () => {
@@ -1807,6 +1900,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
 
     assertPrepared(prepared);
     expect(prepared.replyToMode).toBe("off");
+    expect(prepared.ctxPayload.ReplyToMode).toBe("off");
     expect(prepared.ctxPayload.MessageThreadId).toBeUndefined();
   });
 
@@ -1824,6 +1918,25 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     assertPrepared(prepared);
     expect(prepared.replyToMode).toBe("all");
     expect(prepared.ctxPayload.MessageThreadId).toBe("1.000");
+  });
+
+  it("uses per-channel replyToMode before account fallback", async () => {
+    const prepared = await prepareMessageWith(
+      createReplyToAllSlackCtx({
+        groupPolicy: "open",
+        defaultRequireMention: false,
+        asChannel: true,
+        channelsConfig: {
+          C123: { requireMention: false, replyToMode: "off" },
+        },
+      }),
+      createSlackAccount({ replyToMode: "all", replyToModeByChatType: { channel: "all" } }),
+      createSlackMessage({ channel: "C123", channel_type: "channel" }),
+    );
+
+    assertPrepared(prepared);
+    expect(prepared.replyToMode).toBe("off");
+    expect(prepared.ctxPayload.MessageThreadId).toBeUndefined();
   });
 
   it("respects dm.replyToMode legacy override for DMs", async () => {
@@ -3417,6 +3530,47 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(followUp.ctxPayload.SessionKey).toBe(expectedSessionKey);
     expect(root.ctxPayload.WasMentioned).toBe(true);
     expect(followUp.ctxPayload.WasMentioned).toBe(true);
+  });
+
+  it("keeps per-channel replyToMode during regex mention reroute", async () => {
+    const rootTs = "1777244692.409919";
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        messages: { groupChat: { mentionPatterns: ["\\bbill\\b"] } },
+        channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+      } as OpenClawConfig,
+      channelsConfig: {
+        C0AHZFCAS1K: { requireMention: true, replyToMode: "off" },
+      },
+      defaultRequireMention: true,
+      replyToMode: "all",
+    });
+    slackCtx.resolveChannelName = async () => ({ name: "proj-openclaw", type: "channel" });
+    slackCtx.resolveUserName = async () => ({ name: "Bek" });
+
+    const prepared = await prepareSlackMessage({
+      ctx: slackCtx,
+      account: createSlackAccount({
+        replyToMode: "all",
+        replyToModeByChatType: { channel: "all" },
+      }),
+      message: {
+        type: "message",
+        channel: "C0AHZFCAS1K",
+        channel_type: "channel",
+        user: "U_BEK",
+        text: "Bill send a subagent to review GitHub issue #50621",
+        ts: rootTs,
+      } as SlackMessageEvent,
+      opts: { source: "message" },
+    });
+
+    assertPrepared(prepared);
+    expect(prepared.replyToMode).toBe("off");
+    expect(prepared.ctxPayload.ReplyToMode).toBe("off");
+    expect(prepared.ctxPayload.WasMentioned).toBe(true);
+    expect(prepared.ctxPayload.MessageThreadId).toBeUndefined();
+    expect(prepared.ctxPayload.SessionKey).toBe("agent:main:slack:channel:c0ahzfcas1k");
   });
 
   it("keeps runtime-bound regex mentions on the bound parent session", async () => {

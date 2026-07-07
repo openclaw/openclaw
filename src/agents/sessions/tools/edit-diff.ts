@@ -6,6 +6,7 @@
 import { constants } from "node:fs";
 import { access, readFile } from "node:fs/promises";
 import * as Diff from "diff";
+import { levenshteinDistance } from "../../../shared/levenshtein-distance.js";
 import { resolveToCwd } from "./path-utils.js";
 
 export function detectLineEnding(content: string): "\r\n" | "\n" {
@@ -150,7 +151,7 @@ function applyReplacements(content: string, replacements: TextReplacement[], off
  * Rewrite only lines touched by fuzzy replacements. Untouched lines retain
  * their original bytes even though matching used normalized content.
  */
-export function applyReplacementsPreservingUnchangedLines(
+function applyReplacementsPreservingUnchangedLines(
   originalContent: string,
   baseContent: string,
   replacements: TextReplacement[],
@@ -255,14 +256,157 @@ function countOccurrences(content: string, oldText: string): number {
   return fuzzyContent.split(fuzzyOldText).length - 1;
 }
 
-function getNotFoundError(path: string, editIndex: number, totalEdits: number): Error {
-  if (totalEdits === 1) {
-    return new Error(
-      `Could not find the exact text in ${path}. The old text must match exactly including all whitespace and newlines.`,
-    );
+const EDIT_CANDIDATE_LIMIT = 3;
+const EDIT_CANDIDATE_MAX_LINES = 1000;
+const EDIT_CANDIDATE_MAX_SCAN_CHARS = 128 * 1024;
+const EDIT_CANDIDATE_MAX_LINE_CHARS = 120;
+const EDIT_CANDIDATE_MIN_SCORE = 0.45;
+
+interface EditCandidate {
+  lineNumber: number;
+  line: string;
+  score: number;
+}
+
+function truncateCandidateText(text: string, maxChars: number): string {
+  if (text.length <= maxChars) {
+    return text;
   }
+  const cut =
+    maxChars > 0 &&
+    /[\uD800-\uDBFF]/.test(text[maxChars - 1]) &&
+    /[\uDC00-\uDFFF]/.test(text[maxChars])
+      ? maxChars - 1
+      : maxChars;
+  return text.slice(0, cut);
+}
+
+function getBoundedLines(text: string, maxLines: number, maxScanChars: number): string[] {
+  return truncateCandidateText(text, maxScanChars)
+    .split("\n", maxLines)
+    .map((line) => truncateCandidateText(line, EDIT_CANDIDATE_MAX_LINE_CHARS));
+}
+
+function scoreCandidate(expected: string, candidate: string): number {
+  const normalizedExpected = expected.trim();
+  const normalizedCandidate = candidate.trim();
+  const maxLength = Math.max(normalizedExpected.length, normalizedCandidate.length);
+  if (maxLength === 0) {
+    return 0;
+  }
+
+  // Length alone sets an upper bound on the possible similarity score.
+  if (
+    Math.min(normalizedExpected.length, normalizedCandidate.length) / maxLength <
+    EDIT_CANDIDATE_MIN_SCORE
+  ) {
+    return 0;
+  }
+
+  return 1 - levenshteinDistance(normalizedExpected, normalizedCandidate) / maxLength;
+}
+
+function describeIndentation(line: string): string {
+  const indentation = line.match(/^[ \t]*/)?.[0] ?? "";
+  if (!indentation) {
+    return "none";
+  }
+  const tabs = indentation.match(/\t/g)?.length ?? 0;
+  const spaces = indentation.length - tabs;
+  return tabs === 0 ? `${spaces} spaces` : `${spaces} spaces and ${tabs} tabs`;
+}
+
+function firstDifferenceIndex(left: string, right: string): number {
+  const sharedLength = Math.min(left.length, right.length);
+  for (let index = 0; index < sharedLength; index++) {
+    if (left[index] !== right[index]) {
+      return index;
+    }
+  }
+  return left.length === right.length ? -1 : sharedLength;
+}
+
+function describeCandidateDifference(expected: string, found: string): string {
+  const expectedIndentation = expected.match(/^[ \t]*/)?.[0] ?? "";
+  const foundIndentation = found.match(/^[ \t]*/)?.[0] ?? "";
+  if (expectedIndentation !== foundIndentation) {
+    return `indentation differs (expected ${describeIndentation(expected)}, found ${describeIndentation(found)})`;
+  }
+
+  const expectedBackslashes = expected.match(/\\/g)?.length ?? 0;
+  const foundBackslashes = found.match(/\\/g)?.length ?? 0;
+  if (expectedBackslashes !== foundBackslashes) {
+    return `escaping differs (expected ${expectedBackslashes} backslashes, found ${foundBackslashes})`;
+  }
+
+  const differenceIndex = firstDifferenceIndex(expected, found);
+  return differenceIndex === -1
+    ? "this line matches; surrounding lines differ"
+    : `first difference at column ${differenceIndex + 1}`;
+}
+
+function getCandidateHint(content: string, oldText: string): string {
+  const expected = getBoundedLines(oldText, 32, 4096).reduce(
+    (best, line) => (line.trim().length > best.trim().length ? line : best),
+    "",
+  );
+  if (!expected.trim()) {
+    return "";
+  }
+  const candidates = getBoundedLines(
+    content,
+    EDIT_CANDIDATE_MAX_LINES,
+    EDIT_CANDIDATE_MAX_SCAN_CHARS,
+  )
+    .map((line, index): EditCandidate | undefined => {
+      const score = scoreCandidate(expected, line);
+      return score >= EDIT_CANDIDATE_MIN_SCORE ? { lineNumber: index + 1, line, score } : undefined;
+    })
+    .filter((candidate): candidate is EditCandidate => candidate !== undefined)
+    .toSorted((left, right) => right.score - left.score || left.lineNumber - right.lineNumber)
+    .slice(0, EDIT_CANDIDATE_LIMIT);
+  if (candidates.length === 0) {
+    return "";
+  }
+  const expectedDisplay = JSON.stringify(expected);
+  return (
+    "\nClosest matching lines:\n" +
+    candidates
+      .map((candidate) => {
+        const foundDisplay = JSON.stringify(candidate.line);
+        const differenceIndex = firstDifferenceIndex(expectedDisplay, foundDisplay);
+        const markerIndex =
+          differenceIndex === -1
+            ? Math.min(expectedDisplay.length, foundDisplay.length)
+            : differenceIndex;
+        const markerWidth = Math.max(
+          1,
+          Math.min(12, Math.max(expectedDisplay.length, foundDisplay.length) - markerIndex),
+        );
+        return [
+          `  near line ${candidate.lineNumber} (${Math.round(candidate.score * 100)}% match):`,
+          `    expected: ${expectedDisplay}`,
+          `    found:    ${foundDisplay}`,
+          `              ${" ".repeat(markerIndex)}${"^".repeat(markerWidth)}`,
+          `    hint: ${describeCandidateDifference(expected, candidate.line)}`,
+        ].join("\n");
+      })
+      .join("\n")
+  );
+}
+
+function getNotFoundError(
+  path: string,
+  editIndex: number,
+  totalEdits: number,
+  content: string,
+  oldText: string,
+): Error {
+  const prefix =
+    totalEdits === 1 ? "Could not find the exact text" : `Could not find edits[${editIndex}]`;
+  const hint = getCandidateHint(content, oldText);
   return new Error(
-    `Could not find edits[${editIndex}] in ${path}. The oldText must match exactly including all whitespace and newlines.`,
+    `${prefix} in ${path}. The old text must match exactly including all whitespace and newlines.${hint}`,
   );
 }
 
@@ -336,7 +480,7 @@ export function applyEditsToNormalizedContent(
     const edit = normalizedEdits[i];
     const matchResult = fuzzyFindText(replacementBaseContent, edit.oldText);
     if (!matchResult.found) {
-      throw getNotFoundError(path, i, normalizedEdits.length);
+      throw getNotFoundError(path, i, normalizedEdits.length, normalizedContent, edit.oldText);
     }
 
     const occurrences = countOccurrences(replacementBaseContent, edit.oldText);

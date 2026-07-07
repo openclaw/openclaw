@@ -3,6 +3,7 @@
  */
 import fs from "node:fs/promises";
 import os from "node:os";
+import { ensureSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -134,6 +135,10 @@ import {
   resolveContextInjectionMode,
 } from "../../bootstrap-files.js";
 import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
+import {
+  isPrimaryBootstrapRun,
+  resolveWorkspaceBootstrapRouting,
+} from "../../bootstrap-routing.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import {
   getChannelAgentToolMeta,
@@ -212,7 +217,6 @@ import {
   prependAgentSteeringPrompt,
   releasePendingAgentSteeringItems,
 } from "../../subagent-registry.js";
-import { ensureSystemPromptCacheBoundary } from "../../system-prompt-cache-boundary.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import {
@@ -344,7 +348,6 @@ import { mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { abortable as abortableWithSignal } from "./abortable.js";
 import { releaseEmbeddedAttemptSessionLockForAbort } from "./attempt-abort.js";
-import { resolveAttemptWorkspaceBootstrapRouting } from "./attempt-bootstrap-routing.js";
 import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
 import { createEmbeddedAgentSessionWithResourceLoader } from "./attempt-session.js";
 import {
@@ -372,10 +375,7 @@ import {
   type AsyncStartedToolMeta,
   type CompletionRequiredAsyncTaskWaitResult,
 } from "./attempt.async-tasks.js";
-import {
-  isPrimaryBootstrapRun,
-  remapInjectedContextFilesToWorkspace,
-} from "./attempt.bootstrap-context.js";
+import { remapInjectedContextFilesToWorkspace } from "./attempt.bootstrap-context.js";
 import {
   assembleAttemptContextEngine,
   buildLoopPromptCacheInfo,
@@ -500,6 +500,7 @@ import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
   buildPrePromptContextBudgetStatus,
   estimateLlmBoundaryTokenPressure,
+  estimateRenderedLlmBoundaryTokenPressure,
   formatPrePromptPrecheckLog,
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
@@ -509,6 +510,22 @@ import {
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
+
+type PreflightRecoveryBudgetSnapshot = Pick<
+  MidTurnPrecheckRequest,
+  "estimatedPromptTokens" | "promptBudgetBeforeReserve" | "overflowTokens"
+>;
+
+// Carries the measured prompt budget into the outer recovery loop. The synthetic
+// precheck error is only a routing signal, so compaction engines need these
+// fields to compact against the prompt OpenClaw actually rendered.
+function buildPreflightRecoveryBudgetSnapshot(snapshot: PreflightRecoveryBudgetSnapshot) {
+  return {
+    estimatedPromptTokens: snapshot.estimatedPromptTokens,
+    promptBudgetBeforeReserve: snapshot.promptBudgetBeforeReserve,
+    overflowTokens: snapshot.overflowTokens,
+  };
+}
 
 export {
   appendAttemptCacheTtlIfNeeded,
@@ -918,6 +935,7 @@ export async function runEmbeddedAttempt(
   let idleTimedOut = false;
   let timedOutDuringCompaction = false;
   let timedOutDuringToolExecution = false;
+  let timedOutByRunBudget = false;
   let promptError: unknown = null;
   let emitDiagnosticRunCompleted:
     | ((
@@ -1152,12 +1170,13 @@ export async function runEmbeddedAttempt(
         forceMessageTool: forceDirectMessageTool,
       },
     );
+    const toolsEnabled = supportsModelTools(params.model);
     const toolConstructionPlan = resolveEmbeddedAttemptToolConstructionPlan({
       disableTools: params.disableTools,
       isRawModelRun,
+      toolsEnabled,
       toolsAllow: toolsAllowWithForcedRuntimeTools,
     });
-    const toolsEnabled = supportsModelTools(params.model);
     const codeModeConfig = resolveCodeModeConfig(params.config, sessionAgentId);
     const toolSearchRuntimeConfig = forceDirectMessageTool
       ? params.config
@@ -1189,11 +1208,6 @@ export async function runEmbeddedAttempt(
             ]),
           ]
         : toolsAllowWithForcedRuntimeTools;
-    const localModelLeanPreserveToolNames = resolveLocalModelLeanPreserveToolNames({
-      toolNames: effectiveToolsAllow,
-      forceMessageTool: params.forceMessageTool,
-      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-    });
     const shouldConstructTools =
       toolConstructionPlan.constructTools ||
       toolSearchControlsEnabledForRun ||
@@ -1257,11 +1271,17 @@ export async function runEmbeddedAttempt(
       sandboxToolPolicy: sandbox?.tools,
       runtimeToolAllowlist: effectiveToolsAllow,
     });
+    const localModelLeanPreserveToolNames = resolveLocalModelLeanPreserveToolNames({
+      toolNames: runtimeCapabilityProfile.policy.explicitToolOverrideAllowlist,
+      forceMessageTool: params.forceMessageTool,
+      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    });
     const toolsRaw = !shouldConstructTools
       ? []
       : (() => {
           const allTools = createOpenClawCodingTools({
             agentId: sessionAgentId,
+            ...(params.crestodianTool ? { crestodianTool: params.crestodianTool } : {}),
             ...buildEmbeddedAttemptToolRunContext({ ...params, trace: runTrace }),
             messageChannel: params.messageChannel,
             chatType: params.chatType,
@@ -1378,7 +1398,7 @@ export async function runEmbeddedAttempt(
       return completedBootstrapTurn;
     };
     const resolveBootstrapRouting = (bootstrapFiles?: readonly WorkspaceBootstrapFile[]) =>
-      resolveAttemptWorkspaceBootstrapRouting({
+      resolveWorkspaceBootstrapRouting({
         isWorkspaceBootstrapPending,
         bootstrapFiles,
         bootstrapContextRunKind: params.bootstrapContextRunKind,
@@ -1531,6 +1551,7 @@ export async function runEmbeddedAttempt(
           diagnostics,
           tools: sourceTools,
           runId: params.runId,
+          agentId: sessionAgentId,
           sessionKey: params.sessionKey,
           sessionId: params.sessionId,
         }),
@@ -1613,6 +1634,7 @@ export async function runEmbeddedAttempt(
                 diagnostics,
                 tools: sourceTools,
                 runId: params.runId,
+                agentId: sessionAgentId,
                 sessionKey: params.sessionKey,
                 sessionId: params.sessionId,
               }),
@@ -1640,6 +1662,7 @@ export async function runEmbeddedAttempt(
       diagnostics: uncompactedToolSchemaProjection.diagnostics,
       tools: projectedUncompactedEffectiveTools,
       runId: params.runId,
+      agentId: sessionAgentId,
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
     });
@@ -1652,6 +1675,7 @@ export async function runEmbeddedAttempt(
       sessionKey: sandboxSessionKey,
       sessionId: params.sessionId,
       runId: params.runId,
+      approvalReviewerDeviceId: params.approvalReviewerDeviceId,
       channelId: params.currentChannelId,
       trace: runTrace,
       loopDetection: resolveToolLoopDetectionConfig({
@@ -1745,6 +1769,7 @@ export async function runEmbeddedAttempt(
       diagnostics: toolSearchSchemaProjection.diagnostics,
       tools: projectedToolSearchTools,
       runId: params.runId,
+      agentId: sessionAgentId,
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
     });
@@ -2080,6 +2105,7 @@ export async function runEmbeddedAttempt(
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     const sessionLockController = await createEmbeddedAttemptSessionLockController({
       acquireSessionWriteLock,
+      initialAcquireSignal: params.abortSignal,
       lockOptions: {
         sessionFile: params.sessionFile,
         ...sessionWriteLockOptions,
@@ -2115,6 +2141,9 @@ export async function runEmbeddedAttempt(
         sessionLockController.withSessionWriteLock(operation),
       );
     armExternalAbortSignal();
+    // The signal can fire while the eager session lock is being acquired.
+    // Recheck after arming so a stopped run never reaches session creation or provider prompt.
+    await throwIfAttemptAbortSignalFiredAfterPrepCleanup();
 
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
     let removeToolResultContextGuard: (() => void) | undefined;
@@ -3322,15 +3351,42 @@ export async function runEmbeddedAttempt(
             // history in place would otherwise leave the precheck reading
             // already-windowed messages instead of the true pre-assembly state.
             const preassemblyContextEngineMessagesForPrecheck = activeSession.messages.slice();
+            const contextEngineAssembleReserveTokens = Math.max(
+              0,
+              Math.floor(settingsManager.getCompactionReserveTokens()),
+            );
+            const contextEngineAssembleContextTokenBudget = Math.max(
+              1,
+              Math.floor(
+                params.contextTokenBudget ??
+                  params.model.contextWindow ??
+                  params.model.maxTokens ??
+                  DEFAULT_CONTEXT_TOKENS,
+              ),
+            );
+            const contextEngineAssemblePromptBudget = Math.max(
+              1,
+              contextEngineAssembleContextTokenBudget - contextEngineAssembleReserveTokens,
+            );
+            const contextEngineAssembleRenderedPromptTokens =
+              estimateRenderedLlmBoundaryTokenPressure({
+                systemPrompt: systemPromptText,
+                prompt: params.prompt ?? "",
+              });
+            const contextEngineAssembleMessageBudget = Math.max(
+              1,
+              contextEngineAssemblePromptBudget - contextEngineAssembleRenderedPromptTokens,
+            );
             const assembled = await assembleAttemptContextEngine({
               contextEngine: activeContextEngine,
               sessionId: params.sessionId,
               sessionKey: params.sessionKey,
               messages: activeSession.messages,
-              tokenBudget: params.contextTokenBudget,
+              tokenBudget: contextEngineAssembleMessageBudget,
               availableTools: new Set(capabilityToolNames),
               citationsMode: params.config?.memory?.citations,
               modelId: params.modelId,
+              maxOutputTokens: contextEngineAssembleReserveTokens,
               contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
               providerId: params.provider,
               requestedModelId: params.requestedModelId,
@@ -3812,6 +3868,7 @@ export async function runEmbeddedAttempt(
             ) {
               timedOutDuringCompaction = true;
             }
+            timedOutByRunBudget = true;
             abortRun(true);
             if (!abortWarnTimer) {
               abortWarnTimer = setTimeout(() => {
@@ -3898,6 +3955,7 @@ export async function runEmbeddedAttempt(
             preflightRecovery = {
               route: "truncate_tool_results_only",
               source: "mid-turn",
+              ...buildPreflightRecoveryBudgetSnapshot(request),
               handled: true,
               truncatedCount: truncationResult.truncatedCount,
             };
@@ -3908,7 +3966,11 @@ export async function runEmbeddedAttempt(
               `handled=true truncatedCount=${truncationResult.truncatedCount}`,
             );
           } else {
-            preflightRecovery = { route: "compact_only", source: "mid-turn" };
+            preflightRecovery = {
+              route: "compact_only",
+              source: "mid-turn",
+              ...buildPreflightRecoveryBudgetSnapshot(request),
+            };
             promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
             promptErrorSource = "precheck";
             logMidTurnPrecheck(
@@ -3917,7 +3979,11 @@ export async function runEmbeddedAttempt(
             );
           }
         } else {
-          preflightRecovery = { route: request.route, source: "mid-turn" };
+          preflightRecovery = {
+            route: request.route,
+            source: "mid-turn",
+            ...buildPreflightRecoveryBudgetSnapshot(request),
+          };
           promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
           promptErrorSource = "precheck";
           logMidTurnPrecheck(request.route);
@@ -4184,6 +4250,7 @@ export async function runEmbeddedAttempt(
           }
         }
         const promptForModelBeforeRuntimeContextSplit = effectivePrompt;
+        const promptForRuntimeContextBeforeAnnotation = promptForRuntimeContextSplit;
         if (!isRawModelRun) {
           promptForRuntimeContextSplit = annotateInterSessionPromptText(
             promptForRuntimeContextSplit,
@@ -4264,6 +4331,16 @@ export async function runEmbeddedAttempt(
             modelPrompt: hasPromptBuildContext
               ? promptForModelBeforeRuntimeContextSplit
               : undefined,
+            modelPromptBuildContext:
+              hasPromptBuildContext && effectiveTranscriptPrompt !== undefined
+                ? {
+                    promptBeforeHooks: promptBeforePromptBuildHooks,
+                    transcriptPromptBeforeTransforms: effectiveTranscriptPrompt,
+                    promptBeforeAnnotation: promptForRuntimeContextBeforeAnnotation,
+                    prependContext: promptBuildPrependContext ?? "",
+                    appendContext: promptBuildAppendContext ?? "",
+                  }
+                : undefined,
             emptyTranscriptMode: params.suppressNextUserMessagePersistence
               ? "model-prompt"
               : "runtime-event",
@@ -4737,6 +4814,7 @@ export async function runEmbeddedAttempt(
             if (truncationResult.truncated) {
               preflightRecovery = {
                 route: "truncate_tool_results_only",
+                ...buildPreflightRecoveryBudgetSnapshot(preemptiveCompaction),
                 handled: true,
                 truncatedCount: truncationResult.truncatedCount,
               };
@@ -4759,7 +4837,10 @@ export async function runEmbeddedAttempt(
                   `${params.provider}/${params.modelId}; falling back to compaction ` +
                   `reason=${truncationResult.reason ?? "unknown"} sessionFile=${params.sessionFile}`,
               );
-              preflightRecovery = { route: "compact_only" };
+              preflightRecovery = {
+                route: "compact_only",
+                ...buildPreflightRecoveryBudgetSnapshot(preemptiveCompaction),
+              };
               promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
               promptErrorSource = "precheck";
               skipPromptSubmission = true;
@@ -4768,8 +4849,14 @@ export async function runEmbeddedAttempt(
           if (preemptiveCompaction?.shouldCompact) {
             preflightRecovery =
               preemptiveCompaction.route === "compact_then_truncate"
-                ? { route: "compact_then_truncate" }
-                : { route: "compact_only" };
+                ? {
+                    route: "compact_then_truncate",
+                    ...buildPreflightRecoveryBudgetSnapshot(preemptiveCompaction),
+                  }
+                : {
+                    route: "compact_only",
+                    ...buildPreflightRecoveryBudgetSnapshot(preemptiveCompaction),
+                  };
             promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
             promptErrorSource = "precheck";
             log.warn(
@@ -5019,12 +5106,21 @@ export async function runEmbeddedAttempt(
         const COMPACTION_RETRY_AGGREGATE_TIMEOUT_MS = 60_000;
 
         try {
-          // Flush buffered block replies before waiting for compaction so the
-          // user receives the assistant response immediately.  Without this,
-          // coalesced/buffered blocks stay in the pipeline until compaction
-          // finishes — which can take minutes on large contexts (#35074).
+          // Flush or discard buffered block replies before waiting for
+          // compaction. Side-effecting consumers may deliver only a completed
+          // assistant attempt; retries must not leak rejected output.
           if (onBlockReplyFlush) {
-            await onBlockReplyFlush();
+            const currentAssistant = findCurrentAttemptAssistantMessage({
+              messagesSnapshot: snapshot,
+              prePromptMessageCount,
+            });
+            const attemptAccepted =
+              !promptError &&
+              !aborted &&
+              !timedOut &&
+              !yieldAborted &&
+              currentAssistant?.stopReason === "stop";
+            await onBlockReplyFlush({ reason: "pre_compaction", attemptAccepted });
           }
 
           // Skip compaction wait when yield aborted the run — the signal is
@@ -5641,6 +5737,7 @@ export async function runEmbeddedAttempt(
         idleTimedOut,
         timedOutDuringCompaction,
         timedOutDuringToolExecution,
+        timedOutByRunBudget,
         promptError: promptError ? formatErrorMessage(promptError) : undefined,
         promptErrorSource,
         terminalError: attemptTrajectoryTerminal.terminalError,
@@ -5661,6 +5758,7 @@ export async function runEmbeddedAttempt(
           idleTimedOut,
           timedOutDuringCompaction,
           timedOutDuringToolExecution,
+          timedOutByRunBudget,
           promptError: promptError ? formatErrorMessage(promptError) : undefined,
           promptErrorSource,
           terminalError: attemptTrajectoryTerminal.terminalError,
@@ -5687,6 +5785,7 @@ export async function runEmbeddedAttempt(
         idleTimedOut,
         timedOutDuringCompaction,
         timedOutDuringToolExecution,
+        timedOutByRunBudget,
         promptError: promptError ? formatErrorMessage(promptError) : undefined,
         terminalError: attemptTrajectoryTerminal.terminalError,
       });
@@ -5702,6 +5801,7 @@ export async function runEmbeddedAttempt(
         idleTimedOut,
         timedOutDuringCompaction,
         timedOutDuringToolExecution,
+        timedOutByRunBudget,
         promptError,
         promptErrorSource,
         preflightRecovery,
@@ -5758,6 +5858,7 @@ export async function runEmbeddedAttempt(
           idleTimedOut,
           timedOutDuringCompaction,
           timedOutDuringToolExecution,
+          timedOutByRunBudget,
           promptError: promptError ? formatErrorMessage(promptError) : undefined,
         });
       }

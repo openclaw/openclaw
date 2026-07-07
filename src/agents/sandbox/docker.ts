@@ -81,6 +81,7 @@ export function execDockerRaw(
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
     let aborted = false;
+    let outputStreamError: Error | undefined;
 
     const signal = opts?.signal;
     const handleAbort = () => {
@@ -98,9 +99,20 @@ export function execDockerRaw(
       }
     }
 
+    const handleStreamError = (error: Error) => {
+      if (outputStreamError) {
+        return;
+      }
+      // Broken stdio means the command exchange is incomplete, so it cannot
+      // report success even if Docker later exits with code 0.
+      outputStreamError = error;
+      child.kill("SIGTERM");
+    };
+    child.stdout?.on("error", handleStreamError);
     child.stdout?.on("data", (chunk) => {
       stdoutChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     });
+    child.stderr?.on("error", handleStreamError);
     child.stderr?.on("data", (chunk) => {
       stderrChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     });
@@ -134,7 +146,11 @@ export function execDockerRaw(
       const stdout = Buffer.concat(stdoutChunks);
       const stderr = Buffer.concat(stderrChunks);
       if (aborted || signal?.aborted) {
-      reject(createAbortError("Aborted"));
+        reject(createAbortError("Aborted"));
+        return;
+      }
+      if (outputStreamError) {
+        reject(outputStreamError);
         return;
       }
       const exitCode = code ?? 0;
@@ -156,6 +172,7 @@ export function execDockerRaw(
 
     const stdin = child.stdin;
     if (stdin) {
+      stdin.on("error", handleStreamError);
       if (opts?.input !== undefined) {
         stdin.end(opts.input);
       } else {
@@ -190,7 +207,7 @@ const log = createSubsystemLogger("docker");
 
 const HOT_CONTAINER_WINDOW_MS = 5 * 60 * 1000;
 
-export type ExecDockerOptions = ExecDockerRawOptions;
+type ExecDockerOptions = ExecDockerRawOptions;
 
 function envRecordsEqual(left: Record<string, string>, right: Record<string, string>): boolean {
   const leftEntries = Object.entries(left).toSorted(([leftKey], [rightKey]) =>

@@ -78,7 +78,7 @@ export type RealtimeTalkGatewayRelaySessionResult = {
   consultFastMode?: boolean;
 };
 
-export type RealtimeTalkManagedRoomSessionResult = {
+type RealtimeTalkManagedRoomSessionResult = {
   provider: string;
   transport: "managed-room";
   roomUrl: string;
@@ -105,6 +105,7 @@ export type RealtimeTalkTransportContext = {
   client: GatewayBrowserClient;
   sessionKey: string;
   callbacks: RealtimeTalkCallbacks;
+  inputDeviceId?: string;
   consultThinkingLevel?: string;
   consultFastMode?: boolean;
 };

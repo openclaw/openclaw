@@ -3,6 +3,7 @@ import { resolveSessionTranscriptReadTarget } from "../config/sessions/session-a
 import type {
   ReadRecentSessionMessagesOptions,
   ReadSessionMessagesAsyncOptions,
+  SessionTranscriptUsageSnapshot,
 } from "./session-utils.fs.js";
 import {
   readFirstUserMessageFromTranscript as readFirstUserMessageFromTranscriptFile,
@@ -56,18 +57,6 @@ type ReadSessionMessageByIdResult = {
   seq?: number;
   oversized: boolean;
   found: boolean;
-};
-
-type SessionTranscriptUsageSnapshot = {
-  modelProvider?: string;
-  model?: string;
-  inputTokens?: number;
-  outputTokens?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  totalTokens?: number;
-  totalTokensFresh?: boolean;
-  costUsd?: number;
 };
 
 type FileBackedReadScope = {

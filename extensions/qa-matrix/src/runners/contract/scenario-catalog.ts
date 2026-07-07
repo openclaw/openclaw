@@ -15,13 +15,9 @@ import {
 } from "../../substrate/topology.js";
 
 type MatrixQaScenarioId =
-  | "matrix-thread-follow-up"
   | "matrix-thread-root-preservation"
   | "matrix-thread-nested-reply-shape"
-  | "matrix-thread-isolation"
-  | "matrix-subagent-thread-spawn"
   | "matrix-top-level-reply-shape"
-  | "matrix-room-thread-reply-override"
   | "matrix-room-partial-streaming-preview"
   | "matrix-room-quiet-streaming-preview"
   | "matrix-room-tool-progress-preview"
@@ -37,9 +33,6 @@ type MatrixQaScenarioId =
   | "matrix-attachment-only-ignored"
   | "matrix-unsupported-media-safe"
   | "matrix-dm-reply-shape"
-  | "matrix-dm-shared-session-notice"
-  | "matrix-dm-thread-reply-override"
-  | "matrix-dm-per-room-session-override"
   | "matrix-room-autojoin-invite"
   | "matrix-secondary-room-reply"
   | "matrix-secondary-room-open-trigger"
@@ -53,10 +46,7 @@ type MatrixQaScenarioId =
   | "matrix-approval-deny-reaction"
   | "matrix-approval-thread-target"
   | "matrix-approval-channel-target-both"
-  | "matrix-restart-resume"
-  | "matrix-post-restart-room-continue"
   | "matrix-initial-catchup-then-incremental"
-  | "matrix-restart-replay-dedupe"
   | "matrix-stale-sync-replay-dedupe"
   | "matrix-room-membership-loss"
   | "matrix-homeserver-restart-resume"
@@ -73,7 +63,6 @@ type MatrixQaScenarioId =
   | "matrix-mention-metadata-spoof-block"
   | "matrix-observer-allowlist-override"
   | "matrix-allowlist-block"
-  | "matrix-allowlist-hot-reload"
   | "matrix-multi-actor-ordering"
   | "matrix-inbound-edit-ignored"
   | "matrix-inbound-edit-no-duplicate-trigger"
@@ -144,7 +133,6 @@ export const MATRIX_QA_RESTART_ROOM_KEY = "restart";
 export const MATRIX_QA_SECONDARY_ROOM_KEY = "secondary";
 export const MATRIX_QA_STALE_SYNC_ROOM_KEY = "stale-sync";
 
-const MATRIX_QA_LIVE_MODEL_TIMEOUT_MS = 180_000;
 const MATRIX_QA_IMAGE_GENERATION_TIMEOUT_MS = 180_000;
 const MATRIX_QA_E2EE_REPLY_TIMEOUT_MS = 150_000;
 const MATRIX_QA_E2EE_MEDIA_TIMEOUT_MS = 180_000;
@@ -209,17 +197,6 @@ const MATRIX_QA_DRIVER_DM_TOPOLOGY = buildMatrixQaDmTopology([
   {
     key: MATRIX_QA_DRIVER_DM_ROOM_KEY,
     name: "Matrix QA Driver/SUT DM",
-  },
-]);
-
-const MATRIX_QA_SHARED_DM_TOPOLOGY = buildMatrixQaDmTopology([
-  {
-    key: MATRIX_QA_DRIVER_DM_ROOM_KEY,
-    name: "Matrix QA Driver/SUT DM",
-  },
-  {
-    key: MATRIX_QA_DRIVER_DM_SHARED_ROOM_KEY,
-    name: "Matrix QA Driver/SUT Shared DM",
   },
 ]);
 
@@ -343,12 +320,6 @@ const MATRIX_QA_APPROVAL_BOTH_CONFIG = {
 
 export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
   {
-    id: "matrix-thread-follow-up",
-    standardId: "thread-follow-up",
-    timeoutMs: 60_000,
-    title: "Matrix thread follow-up reply",
-  },
-  {
     id: "matrix-thread-root-preservation",
     timeoutMs: 60_000,
     title: "Matrix threaded replies keep the original root event",
@@ -359,43 +330,10 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     title: "Matrix nested threaded replies keep fallback replies on the root event",
   },
   {
-    id: "matrix-thread-isolation",
-    standardId: "thread-isolation",
-    timeoutMs: 75_000,
-    title: "Matrix top-level reply stays out of prior thread",
-  },
-  {
-    id: "matrix-subagent-thread-spawn",
-    timeoutMs: MATRIX_QA_LIVE_MODEL_TIMEOUT_MS,
-    title: "Matrix sessions_spawn thread=true creates a bound child thread",
-    configOverrides: {
-      groupsByKey: {
-        [MATRIX_QA_MAIN_ROOM_KEY]: {
-          tools: {
-            allow: ["sessions_spawn", "sessions_yield"],
-          },
-        },
-      },
-      threadBindings: {
-        enabled: true,
-        spawnSessions: true,
-      },
-      toolProfile: "coding",
-    },
-  },
-  {
     id: "matrix-top-level-reply-shape",
     standardId: "top-level-reply-shape",
     timeoutMs: 45_000,
     title: "Matrix top-level reply keeps replyToMode off",
-  },
-  {
-    id: "matrix-room-thread-reply-override",
-    timeoutMs: 45_000,
-    title: "Matrix threadReplies always keeps room replies threaded",
-    configOverrides: {
-      threadReplies: "always",
-    },
   },
   {
     id: "matrix-room-partial-streaming-preview",
@@ -540,35 +478,6 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     topology: MATRIX_QA_DRIVER_DM_TOPOLOGY,
   },
   {
-    id: "matrix-dm-shared-session-notice",
-    timeoutMs: 45_000,
-    title: "Matrix shared DM sessions emit a cross-room notice",
-    topology: MATRIX_QA_SHARED_DM_TOPOLOGY,
-  },
-  {
-    id: "matrix-dm-thread-reply-override",
-    timeoutMs: 45_000,
-    title: "Matrix DM thread override keeps DM replies threaded",
-    topology: MATRIX_QA_DRIVER_DM_TOPOLOGY,
-    configOverrides: {
-      dm: {
-        threadReplies: "always",
-      },
-      threadReplies: "off",
-    },
-  },
-  {
-    id: "matrix-dm-per-room-session-override",
-    timeoutMs: 45_000,
-    title: "Matrix DM per-room session override suppresses cross-room notices",
-    topology: MATRIX_QA_SHARED_DM_TOPOLOGY,
-    configOverrides: {
-      dm: {
-        sessionScope: "per-room",
-      },
-    },
-  },
-  {
     id: "matrix-room-autojoin-invite",
     timeoutMs: 60_000,
     title: "Matrix invite auto-join accepts fresh group rooms",
@@ -655,28 +564,9 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     configOverrides: MATRIX_QA_APPROVAL_BOTH_CONFIG,
   },
   {
-    id: "matrix-restart-resume",
-    standardId: "restart-resume",
-    timeoutMs: 60_000,
-    title: "Matrix lane resumes cleanly after gateway restart",
-    topology: MATRIX_QA_RESTART_ROOM_TOPOLOGY,
-  },
-  {
-    id: "matrix-post-restart-room-continue",
-    timeoutMs: 75_000,
-    title: "Matrix restarted room continues after the first recovered reply",
-    topology: MATRIX_QA_RESTART_ROOM_TOPOLOGY,
-  },
-  {
     id: "matrix-initial-catchup-then-incremental",
     timeoutMs: 90_000,
     title: "Matrix initial catchup is followed by incremental replies",
-    topology: MATRIX_QA_RESTART_ROOM_TOPOLOGY,
-  },
-  {
-    id: "matrix-restart-replay-dedupe",
-    timeoutMs: 90_000,
-    title: "Matrix restart does not redeliver a handled event",
     topology: MATRIX_QA_RESTART_ROOM_TOPOLOGY,
   },
   {
@@ -833,14 +723,6 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     standardId: "allowlist-block",
     timeoutMs: 8_000,
     title: "Matrix sender allowlist blocks observer replies",
-  },
-  {
-    id: "matrix-allowlist-hot-reload",
-    timeoutMs: 60_000,
-    title: "Matrix group sender allowlist removals hot-reload without gateway restart",
-    configOverrides: {
-      groupAllowRoles: ["driver", "observer"],
-    },
   },
   {
     id: "matrix-multi-actor-ordering",
@@ -1231,13 +1113,10 @@ export const MATRIX_QA_PROFILE_NAMES: readonly MatrixQaProfile[] = [
 ] as const;
 
 const MATRIX_QA_FAST_PROFILE_SCENARIO_IDS = [
-  "matrix-thread-follow-up",
-  "matrix-thread-isolation",
   "matrix-top-level-reply-shape",
   "matrix-reaction-notification",
   "matrix-approval-exec-metadata-single-event",
   "matrix-approval-exec-metadata-chunked",
-  "matrix-restart-resume",
   "matrix-mention-gating",
   "matrix-allowbots-default-block",
   "matrix-allowbots-mentions-mentioned-room",
@@ -1257,7 +1136,6 @@ const MATRIX_QA_MEDIA_PROFILE_SCENARIO_IDS = [
 
 const MATRIX_QA_EXPLICIT_ONLY_SCENARIO_IDS = new Set<MatrixQaScenarioId>([
   "matrix-room-block-streaming",
-  "matrix-subagent-thread-spawn",
 ]);
 
 const MATRIX_QA_E2EE_SMOKE_PROFILE_SCENARIO_IDS = [

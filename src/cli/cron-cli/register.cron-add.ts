@@ -85,6 +85,8 @@ export function registerCronAddCommand(cron: Command) {
       .argument("[scheduleOrName]", "Schedule string, or job name when using --at/--every/--cron")
       .argument("[message]", "Agent message when using a positional schedule")
       .option("--name <name>", "Job name")
+      .option("--declaration-key <key>", "Idempotent declaration identity key")
+      .option("--display-name <name>", "Human-readable declarative job label")
       .option("--description <text>", "Optional description")
       .option("--disabled", "Create job disabled", false)
       .option("--delete-after-run", "Delete one-shot job after it succeeds", false)
@@ -370,6 +372,14 @@ export function registerCronAddCommand(cron: Command) {
             }
 
             const description = normalizeOptionalString(opts.description);
+            const declarationKey = normalizeOptionalString(opts.declarationKey);
+            if (typeof opts.declarationKey === "string" && !declarationKey) {
+              throw new Error("--declaration-key must not be blank");
+            }
+            const displayName = normalizeOptionalString(opts.displayName);
+            if (typeof opts.displayName === "string" && !displayName) {
+              throw new Error("--display-name must not be blank");
+            }
 
             const sessionKey = normalizeOptionalString(opts.sessionKey);
 
@@ -384,8 +394,12 @@ export function registerCronAddCommand(cron: Command) {
 
             const params = {
               name,
+              declarationKey,
+              displayName,
               description,
-              enabled: !opts.disabled,
+              ...(declarationKey && optionSource("disabled") !== "cli"
+                ? {}
+                : { enabled: !opts.disabled }),
               deleteAfterRun: opts.deleteAfterRun ? true : opts.keepAfterRun ? false : undefined,
               agentId,
               sessionKey,

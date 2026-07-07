@@ -3,8 +3,11 @@
 // `plugin-sdk/provider-model-shared`.
 import {
   CLAUDE_FABLE_5_THINKING_PROFILE,
+  CLAUDE_SONNET_5_THINKING_PROFILE,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
+  resolveClaudeMythos5ModelIdentity,
+  resolveClaudeSonnet5ModelIdentity,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeXhighEffort,
 } from "@openclaw/llm-core";
@@ -36,8 +39,11 @@ export function resolveClaudeThinkingProfile(
 ): ProviderThinkingProfile {
   const ref = { id: modelId, params };
   const canonicalModelId = resolveClaudeModelIdentity(ref);
-  if (resolveClaudeFable5ModelIdentity(ref)) {
+  if (resolveClaudeFable5ModelIdentity(ref) || resolveClaudeMythos5ModelIdentity(ref)) {
     return CLAUDE_FABLE_5_THINKING_PROFILE;
+  }
+  if (resolveClaudeSonnet5ModelIdentity(ref)) {
+    return CLAUDE_SONNET_5_THINKING_PROFILE;
   }
   if (supportsClaudeNativeXhighEffort(ref)) {
     return {

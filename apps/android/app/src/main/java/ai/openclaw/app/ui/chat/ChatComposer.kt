@@ -1,6 +1,9 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.ChatDraft
+import ai.openclaw.app.ChatDraftPlacement
 import ai.openclaw.app.chat.ChatCommandEntry
+import ai.openclaw.app.chat.VoiceNoteRecorderState
 import ai.openclaw.app.ui.mobileAccent
 import ai.openclaw.app.ui.mobileAccentBorderStrong
 import ai.openclaw.app.ui.mobileAccentSoft
@@ -33,6 +36,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
@@ -51,6 +55,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -60,6 +65,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 
 /** Result of applying a stored chat draft to the current composer input. */
 internal data class DraftApplication(
@@ -67,6 +73,17 @@ internal data class DraftApplication(
   val lastAppliedDraft: String?,
   val consumed: Boolean,
 )
+
+internal fun mergeChatDraft(
+  draft: ChatDraft?,
+  currentInput: String,
+): String? {
+  val text = draft?.text?.takeIf { it.isNotBlank() } ?: return null
+  return when (draft.placement) {
+    ChatDraftPlacement.Replace -> text
+    ChatDraftPlacement.BeforeExisting -> text + currentInput
+  }
+}
 
 internal data class SheetSlashCommandSelection(
   val input: String,
@@ -76,25 +93,30 @@ internal data class SheetComposerSendAction(
   val sendMessage: Boolean,
 )
 
-internal fun resolveSheetSlashCommandSelection(command: ChatCommandEntry): SheetSlashCommandSelection =
-  SheetSlashCommandSelection(input = slashCommandCompletion(command))
+internal fun resolveSheetSlashCommandSelection(command: ChatCommandEntry): SheetSlashCommandSelection = SheetSlashCommandSelection(input = slashCommandCompletion(command))
 
-internal fun resolveSheetComposerSendAction(input: String): SheetComposerSendAction =
-  SheetComposerSendAction(sendMessage = input.trim().isNotEmpty())
+internal fun resolveSheetComposerSendAction(input: String): SheetComposerSendAction = SheetComposerSendAction(sendMessage = input.trim().isNotEmpty())
 
 /** Applies a draft exactly once so restored prompts do not overwrite user edits. */
 internal fun applyDraftText(
-  draftText: String?,
+  draft: ChatDraft?,
   currentInput: String,
   lastAppliedDraft: String?,
 ): DraftApplication {
-  val draft =
-    draftText?.trim()?.ifEmpty { null } ?: return DraftApplication(
+  val appliedDraft =
+    draft ?: return DraftApplication(
       input = currentInput,
       lastAppliedDraft = null,
       consumed = false,
     )
-  if (draft == lastAppliedDraft) {
+  val nextInput =
+    mergeChatDraft(appliedDraft, currentInput) ?: return DraftApplication(
+      input = currentInput,
+      lastAppliedDraft = null,
+      consumed = false,
+    )
+  val draftText = appliedDraft.text
+  if (draftText == lastAppliedDraft) {
     return DraftApplication(
       input = currentInput,
       lastAppliedDraft = lastAppliedDraft,
@@ -102,39 +124,47 @@ internal fun applyDraftText(
     )
   }
   return DraftApplication(
-    input = draft,
-    lastAppliedDraft = draft,
+    input = nextInput,
+    lastAppliedDraft = draftText,
     consumed = true,
   )
 }
 
 /** Chat input surface for text, image attachments, thinking level, and run controls. */
 @Composable
-fun ChatComposer(
-  draftText: String?,
+internal fun ChatComposer(
+  draftText: ChatDraft?,
   healthOk: Boolean,
   thinkingLevel: String,
   pendingRunCount: Int,
   commands: List<ChatCommandEntry>,
-  attachments: List<PendingImageAttachment>,
+  attachments: List<PendingAttachment>,
   onDraftApplied: () -> Unit,
   onPickImages: () -> Unit,
   onRemoveAttachment: (id: String) -> Unit,
+  voiceNoteState: VoiceNoteRecorderState,
+  voiceNoteElapsedMs: Long,
+  recordVoiceNoteEnabled: Boolean,
+  onStartVoiceNote: () -> Unit,
+  onCancelVoiceNote: () -> Unit,
+  onFinishVoiceNote: () -> Unit,
   onSetThinkingLevel: (level: String) -> Unit,
   onRefresh: () -> Unit,
   onAbort: () -> Unit,
-  onSend: (text: String) -> Unit,
+  /** Returns whether the send/enqueue was accepted; refusals restore the cleared draft. */
+  onSend: suspend (text: String) -> Boolean,
 ) {
   var input by rememberSaveable { mutableStateOf("") }
   var lastAppliedDraft by rememberSaveable { mutableStateOf<String?>(null) }
   var showThinkingMenu by remember { mutableStateOf(false) }
+  val sendScope = rememberCoroutineScope()
   val slashCommands =
     remember(input, commands) {
       matchingSlashCommands(input = input, commands = commands)
     }
 
   LaunchedEffect(draftText) {
-    val next = applyDraftText(draftText = draftText, currentInput = input, lastAppliedDraft = lastAppliedDraft)
+    val next = applyDraftText(draft = draftText, currentInput = input, lastAppliedDraft = lastAppliedDraft)
     input = next.input
     lastAppliedDraft = next.lastAppliedDraft
     if (next.consumed) {
@@ -144,11 +174,18 @@ fun ChatComposer(
     }
   }
 
-  // One in-flight run owns the composer actions; attachments alone are enough
-  // to send when the gateway is healthy.
+  // One in-flight run owns the composer actions; attachments alone are enough to send when the
+  // gateway is healthy. Offline, only text can be sent (it is queued durably; text-only v1).
   val canSend =
-    pendingRunCount == 0 && (input.trim().isNotEmpty() || attachments.isNotEmpty()) && healthOk
+    pendingRunCount == 0 &&
+      if (healthOk) {
+        input.trim().isNotEmpty() || attachments.isNotEmpty()
+      } else {
+        input.trim().isNotEmpty() && attachments.isEmpty()
+      }
   val sendBusy = pendingRunCount > 0
+  val recordingVoiceNote = voiceNoteState is VoiceNoteRecorderState.Recording
+  val preparingVoiceNote = voiceNoteState is VoiceNoteRecorderState.Preparing
 
   Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
     if (attachments.isNotEmpty()) {
@@ -165,21 +202,33 @@ fun ChatComposer(
       )
     }
 
-    OutlinedTextField(
-      value = input,
-      onValueChange = { input = it },
-      modifier = Modifier.fillMaxWidth(),
-      placeholder = { Text("Type a message…", style = mobileBodyStyle(), color = mobileTextTertiary) },
-      minLines = 2,
-      maxLines = 5,
-      textStyle = mobileBodyStyle().copy(color = mobileText),
-      shape = RoundedCornerShape(14.dp),
-      colors = chatTextFieldColors(),
-    )
+    if (recordingVoiceNote) {
+      VoiceNoteRecordingControls(
+        elapsedMs = voiceNoteElapsedMs,
+        onCancel = onCancelVoiceNote,
+        onDone = onFinishVoiceNote,
+      )
+    } else if (preparingVoiceNote) {
+      VoiceNotePreparing()
+    } else {
+      OutlinedTextField(
+        value = input,
+        onValueChange = { input = it },
+        modifier = Modifier.fillMaxWidth(),
+        placeholder = { Text("Type a message…", style = mobileBodyStyle(), color = mobileTextTertiary) },
+        minLines = 2,
+        maxLines = 5,
+        textStyle = mobileBodyStyle().copy(color = mobileText),
+        shape = RoundedCornerShape(14.dp),
+        colors = chatTextFieldColors(),
+      )
+    }
+
+    VoiceNoteRecorderError(voiceNoteState)
 
     if (!healthOk) {
       Text(
-        text = "Gateway is offline. Open Settings to reconnect.",
+        text = "Gateway is offline. Text messages are queued and sent after reconnecting.",
         style = mobileCallout,
         color = ai.openclaw.app.ui.mobileWarning,
       )
@@ -239,6 +288,13 @@ fun ChatComposer(
         onClick = onPickImages,
       )
 
+      if (!recordingVoiceNote) {
+        VoiceNoteRecordButton(
+          enabled = recordVoiceNoteEnabled && !preparingVoiceNote,
+          onClick = onStartVoiceNote,
+        )
+      }
+
       SecondaryActionButton(
         label = "Refresh",
         icon = Icons.Default.Refresh,
@@ -263,10 +319,17 @@ fun ChatComposer(
           val action = resolveSheetComposerSendAction(input = message)
           if (action.sendMessage || attachments.isNotEmpty()) {
             input = ""
-            onSend(message)
+            sendScope.launch {
+              val accepted = onSend(message)
+              // Refused sends (offline queue full, enqueue failure) must not eat the draft;
+              // restore it unless the user already started typing something new.
+              if (!accepted && input.isEmpty()) {
+                input = message
+              }
+            }
           }
         },
-        enabled = canSend,
+        enabled = canSend && !recordingVoiceNote && !preparingVoiceNote,
         modifier = Modifier.height(44.dp),
         shape = RoundedCornerShape(14.dp),
         contentPadding = PaddingValues(horizontal = 20.dp),
@@ -277,7 +340,11 @@ fun ChatComposer(
             disabledContainerColor = mobileBorderStrong,
             disabledContentColor = mobileTextTertiary,
           ),
-        border = BorderStroke(1.dp, if (canSend) mobileAccentBorderStrong else mobileBorderStrong),
+        border =
+          BorderStroke(
+            1.dp,
+            if (canSend && !recordingVoiceNote && !preparingVoiceNote) mobileAccentBorderStrong else mobileBorderStrong,
+          ),
       ) {
         if (sendBusy) {
           CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
@@ -422,7 +489,7 @@ private fun thinkingLabel(raw: String): String =
 
 @Composable
 private fun AttachmentsStrip(
-  attachments: List<PendingImageAttachment>,
+  attachments: List<PendingAttachment>,
   onRemoveAttachment: (id: String) -> Unit,
 ) {
   Row(
@@ -431,7 +498,7 @@ private fun AttachmentsStrip(
   ) {
     for (att in attachments) {
       AttachmentChip(
-        fileName = att.fileName,
+        attachment = att,
         onRemove = { onRemoveAttachment(att.id) },
       )
     }
@@ -440,7 +507,7 @@ private fun AttachmentsStrip(
 
 @Composable
 private fun AttachmentChip(
-  fileName: String,
+  attachment: PendingAttachment,
   onRemove: () -> Unit,
 ) {
   Surface(
@@ -453,8 +520,13 @@ private fun AttachmentChip(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+      if (attachment.mimeType.startsWith("audio/")) {
+        Icon(imageVector = Icons.Default.Mic, contentDescription = null, modifier = Modifier.size(14.dp), tint = mobileTextSecondary)
+      }
       Text(
-        text = fileName,
+        text =
+          attachment.durationMs?.let { duration -> "Voice note · ${formatVoiceNoteDuration(duration)}" }
+            ?: attachment.fileName,
         style = mobileCaption1,
         color = mobileText,
         maxLines = 1,

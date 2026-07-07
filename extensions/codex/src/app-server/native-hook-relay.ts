@@ -5,15 +5,18 @@
 import { createHash } from "node:crypto";
 import {
   registerNativeHookRelay,
+  type BeforeToolCallFailureDisposition,
   type EmbeddedRunAttemptParams,
   type NativeHookRelayEvent,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
   addTimerTimeoutGraceMs,
   finiteSecondsToTimerSafeMilliseconds,
 } from "openclaw/plugin-sdk/number-runtime";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
+import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
 import type { JsonObject, JsonValue } from "./protocol.js";
 
 /** Codex hook events that can be registered through OpenClaw's native relay. */
@@ -31,6 +34,9 @@ const CODEX_NATIVE_HOOK_RELAY_MIN_TTL_MS = 30 * 60_000;
 export const CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS = 5 * 60_000;
 const CODEX_NATIVE_HOOK_RELAY_COMMAND_MIN_PARENT_MARGIN_MS = 250;
 const CODEX_NATIVE_HOOK_RELAY_COMMAND_MAX_PARENT_MARGIN_MS = 1_000;
+// The relay starts a niced Node subprocess, so busy hosts can exceed the former
+// five-second relay timeout before policy and task-mirroring work completes.
+const CODEX_NATIVE_HOOK_RELAY_DEFAULT_TIMEOUT_SEC = 10;
 const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_GRACE_MS = 10_000;
 const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_EXTRA_GRACE_MS = 5_000;
 
@@ -39,6 +45,13 @@ type CodexHookEventName = "PreToolUse" | "PostToolUse" | "PermissionRequest" | "
 type PendingCodexNativeHookRelayUnregister = {
   timeout: ReturnType<typeof setTimeout>;
   unregister: () => void;
+};
+
+export type CodexNativePreToolUseFailure = {
+  toolName: string;
+  toolCallId: string;
+  disposition: Exclude<BeforeToolCallFailureDisposition, "blocked">;
+  durationMs: number;
 };
 
 const pendingCodexNativeHookRelayUnregisters = new Set<PendingCodexNativeHookRelayUnregister>();
@@ -74,9 +87,7 @@ export function resolveCodexNativeHookRelayUnregisterGraceMs(
   hookTimeoutSec: number | undefined,
 ): number {
   const hookTimeoutMs =
-    typeof hookTimeoutSec === "number" && Number.isFinite(hookTimeoutSec) && hookTimeoutSec > 0
-      ? (finiteSecondsToTimerSafeMilliseconds(Math.ceil(hookTimeoutSec)) ?? 0)
-      : 0;
+    finiteSecondsToTimerSafeMilliseconds(normalizeHookTimeoutSec(hookTimeoutSec)) ?? 0;
   return Math.max(
     CODEX_NATIVE_HOOK_RELAY_UNREGISTER_GRACE_MS,
     addTimerTimeoutGraceMs(hookTimeoutMs, CODEX_NATIVE_HOOK_RELAY_UNREGISTER_EXTRA_GRACE_MS) ?? 0,
@@ -103,6 +114,38 @@ export function clearPendingCodexNativeHookRelayUnregistersForTests(): void {
   pendingCodexNativeHookRelayUnregisters.clear();
 }
 
+/** Records a native pre-tool failure that Codex does not project as a tool item. */
+export function emitCodexNativePreToolUseFailureDiagnostic(params: {
+  agentId: string | undefined;
+  sessionId: string;
+  sessionKey: string | undefined;
+  runId: string;
+  signal?: AbortSignal;
+  failure: CodexNativePreToolUseFailure;
+  terminalReason?: CodexNativePreToolUseFailure["disposition"];
+  sourceTimestampMs?: number;
+}): void {
+  emitTrustedDiagnosticEvent({
+    type: "tool.execution.error",
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    sessionId: params.sessionId,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    runId: params.runId,
+    toolName: params.failure.toolName,
+    toolCallId: params.failure.toolCallId,
+    durationMs: params.failure.durationMs,
+    errorCategory: "before_tool_call",
+    terminalReason:
+      params.terminalReason ??
+      (params.signal?.aborted
+        ? resolveCodexToolAbortTerminalReason(params.signal)
+        : params.failure.disposition),
+    ...(params.sourceTimestampMs !== undefined
+      ? { sourceTimestampMs: params.sourceTimestampMs }
+      : {}),
+  });
+}
+
 /** Registers an OpenClaw native hook relay for a Codex app-server turn. */
 export function createCodexNativeHookRelay(params: {
   options:
@@ -125,6 +168,7 @@ export function createCodexNativeHookRelay(params: {
   startupTimeoutMs: number;
   turnStartTimeoutMs: number;
   signal: AbortSignal;
+  onPreToolUseFailure: (failure: CodexNativePreToolUseFailure) => void | Promise<void>;
 }): NativeHookRelayRegistrationHandle | undefined {
   if (params.options?.enabled === false) {
     return undefined;
@@ -154,6 +198,7 @@ export function createCodexNativeHookRelay(params: {
       turnStartTimeoutMs: params.turnStartTimeoutMs,
     }),
     signal: params.signal,
+    onPreToolUseFailure: params.onPreToolUseFailure,
     command: {
       // Hook relay subprocesses are observational for most tool events; keep
       // them lower priority so they do not compete with the active reply turn.
@@ -312,7 +357,9 @@ export function buildCodexNativeHookRelayDisabledConfig(): JsonObject {
 }
 
 function normalizeHookTimeoutSec(value: number | undefined): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.ceil(value) : 5;
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.ceil(value)
+    : CODEX_NATIVE_HOOK_RELAY_DEFAULT_TIMEOUT_SEC;
 }
 
 export function resolveCodexNativeHookRelayCommandTimeoutMs(

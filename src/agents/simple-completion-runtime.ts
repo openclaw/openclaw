@@ -1,3 +1,5 @@
+import { supportsOpenAIReasoningEffort } from "@openclaw/ai/internal/openai";
+import { resolveClaudeSonnet5ModelIdentity } from "@openclaw/llm-core";
 /**
  * Simple completion runtime preparation.
  *
@@ -10,6 +12,7 @@ import { completeSimple } from "../llm/stream.js";
 import type {
   AssistantMessage,
   Model,
+  ModelThinkingLevel,
   ThinkingLevel as SimpleCompletionThinkingLevel,
 } from "../llm/types.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.js";
@@ -33,7 +36,6 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "./model-selection.js";
-import { supportsOpenAIReasoningEffort } from "./openai-reasoning-effort.js";
 import { OPENAI_PROVIDER_ID, isOpenAIProvider } from "./openai-routing.js";
 import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
 import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
@@ -373,11 +375,12 @@ export async function completeWithPreparedSimpleCompletionModel(params: {
 function normalizeSimpleCompletionReasoning(
   reasoning: SimpleCompletionModelOptions["reasoning"],
   model: Model,
-): SimpleCompletionThinkingLevel | undefined {
+): ModelThinkingLevel | undefined {
   switch (reasoning) {
     case undefined:
-    case "off":
       return undefined;
+    case "off":
+      return resolveClaudeSonnet5ModelIdentity(model) ? "off" : undefined;
     case "adaptive":
       return "medium";
     case "max":
