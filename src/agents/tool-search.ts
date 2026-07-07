@@ -713,12 +713,18 @@ function shouldCatalogTool(tool: AnyAgentTool): boolean {
   return true;
 }
 
-/** Build policy-wrapped entries for a catalog owned only by an explicit ref. */
-export function buildToolSearchCatalogEntries(
-  tools: readonly AnyAgentTool[],
-  hookContext?: HookContext,
-): ToolSearchCatalogEntry[] {
-  return tools
+/**
+ * Register a catalog owned only by an explicit ref (no session keys), for
+ * headless callers like cron trigger evaluation. Registration internals stay
+ * module-private; this is the single public seam for ref-only catalogs.
+ */
+export function registerHeadlessToolSearchCatalog(params: {
+  catalogRef: ToolSearchCatalogRef;
+  tools: readonly AnyAgentTool[];
+  hookContext?: HookContext;
+}): void {
+  const { catalogRef, tools, hookContext } = params;
+  const entries = tools
     .filter((tool) => shouldCatalogTool(tool))
     .map((tool) => {
       const scopedTool =
@@ -727,6 +733,7 @@ export function buildToolSearchCatalogEntries(
           : tool;
       return toCatalogEntry(scopedTool, undefined, hookContext);
     });
+  registerToolSearchCatalog({ catalogRef, entries });
 }
 
 export function collectUniqueCatalogToolNames(tools: readonly AnyAgentTool[]): Set<string> {

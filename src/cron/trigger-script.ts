@@ -24,9 +24,8 @@ import {
 import { ensureRuntimePluginsLoaded } from "../agents/runtime-plugins.js";
 import { resolveSandboxContext } from "../agents/sandbox.js";
 import {
-  buildToolSearchCatalogEntries,
   createToolSearchCatalogRef,
-  registerToolSearchCatalog,
+  registerHeadlessToolSearchCatalog,
   type ToolSearchToolContext,
 } from "../agents/tool-search.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
@@ -404,12 +403,10 @@ export function createCronTriggerEvaluator(deps: CronTriggerEvaluatorDeps) {
 
       const catalogRef = createToolSearchCatalogRef();
       const runId = `cron-trigger:${params.jobId}:${crypto.randomUUID()}`;
-      registerToolSearchCatalog({
+      registerHeadlessToolSearchCatalog({
         catalogRef,
-        entries: buildToolSearchCatalogEntries(runtime.tools, {
-          ...runtime.hookContext,
-          runId,
-        }),
+        tools: runtime.tools,
+        hookContext: { ...runtime.hookContext, runId },
       });
       const remainingWallClockMs = evaluationScope.deadline - Date.now();
       if (remainingWallClockMs <= 0) {

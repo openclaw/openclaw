@@ -1,9 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCodeModeScriptHeadless, testing, type CodeModeHeadlessResult } from "./code-mode.js";
 import {
-  buildToolSearchCatalogEntries,
   createToolSearchCatalogRef,
-  registerToolSearchCatalog,
+  registerHeadlessToolSearchCatalog,
   type ToolSearchToolContext,
 } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
@@ -23,10 +22,7 @@ function createHeadlessHarness(tools: AnyAgentTool[] = []): ToolSearchToolContex
     tools: { codeMode: { enabled: false, timeoutMs: 60_000 } },
   } as never;
   const catalogRef = createToolSearchCatalogRef();
-  registerToolSearchCatalog({
-    catalogRef,
-    entries: buildToolSearchCatalogEntries(tools),
-  });
+  registerHeadlessToolSearchCatalog({ catalogRef, tools });
   return {
     config,
     runtimeConfig: config,
