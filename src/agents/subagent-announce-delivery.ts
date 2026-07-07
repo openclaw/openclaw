@@ -678,6 +678,10 @@ export function loadRequesterSessionEntry(requesterSessionKey: string) {
   // lookup misses, fall back to the base key so async completion wakes (e.g.
   // media generation) can read restore context (bootstrapContextRunKind,
   // provider, model, thinking) after the cron run completes.
+  // effectiveSessionKey is the base cron key when the fallback fires, so
+  // callers can target the persisted session row instead of the ephemeral
+  // run key (#99919).
+  let effectiveSessionKey: string | undefined;
   if (!entry) {
     const runIndex = canonicalKey.lastIndexOf(":run:");
     if (runIndex > 0) {
@@ -685,10 +689,11 @@ export function loadRequesterSessionEntry(requesterSessionKey: string) {
       const baseEntry = store[baseCronKey];
       if (baseEntry?.bootstrapContextRunKind) {
         entry = baseEntry;
+        effectiveSessionKey = baseCronKey;
       }
     }
   }
-  return { cfg, entry, canonicalKey };
+  return { cfg, entry, canonicalKey, effectiveSessionKey };
 }
 
 export function loadSessionEntryByKey(sessionKey: string) {
@@ -1390,7 +1395,9 @@ async function sendSubagentAnnounceDirectly(params: {
     const sessionOnlyOrigin = effectiveDirectOrigin?.channel
       ? effectiveDirectOrigin
       : requesterSessionOrigin;
-    const requesterEntry = loadRequesterSessionEntry(params.targetRequesterSessionKey).entry;
+    const { entry: requesterEntry, effectiveSessionKey } = loadRequesterSessionEntry(
+      params.targetRequesterSessionKey,
+    );
     const deliveryTarget = !params.requesterIsSubagent
       ? resolveExternalBestEffortDeliveryTarget({
           channel: effectiveDirectOrigin?.channel,
@@ -1563,7 +1570,15 @@ async function sendSubagentAnnounceDirectly(params: {
         ? stringifyRouteThreadId(sessionOnlyOrigin?.threadId)
         : undefined;
     const directAgentParams: Record<string, unknown> = {
-      sessionKey: canonicalRequesterSessionKey,
+      // Use the base cron session key (not the ephemeral run key) so the
+      // agent session resolver finds the persisted entry with its transcript
+      // and continues the original task instead of starting a fresh turn
+      // (#99919). effectiveSessionKey is set by loadRequesterSessionEntry
+      // when the run-key fallback fires; otherwise undefined.
+      sessionKey:
+        requesterEntry?.bootstrapContextRunKind === "cron" && effectiveSessionKey
+          ? effectiveSessionKey
+          : canonicalRequesterSessionKey,
       message: params.triggerMessage,
       deliver: shouldDeliverAgentFinal,
       bestEffortDeliver: params.bestEffortDeliver,

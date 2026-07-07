@@ -5199,6 +5199,7 @@ describe("Issue #99919: cron async completion wake carries session context", () 
       loadRequesterSessionEntry: () => ({
         cfg: {} as never,
         canonicalKey: "agent:main:cron:write-article:run:run-abc",
+        effectiveSessionKey: "agent:main:cron:write-article",
         entry: {
           sessionId: "cron-session-context",
           updatedAt: Date.now(),
@@ -5244,7 +5245,10 @@ describe("Issue #99919: cron async completion wake carries session context", () 
     expect(result.delivered).toBe(true);
     expect(callGateway).toHaveBeenCalledTimes(1);
     const params = expectGatewayAgentParams(callGateway, {
-      sessionKey: "agent:main:cron:write-article:run:run-abc",
+      // Issue #99919: cron wake uses the base session key (not the ephemeral
+      // run key) so the agent session resolver finds the persisted entry with
+      // its transcript and continues the original task context.
+      sessionKey: "agent:main:cron:write-article",
       deliver: true,
       idempotencyKey: "ctx-cron-wake",
     });
@@ -5324,6 +5328,7 @@ describe("Issue #99919: cron async completion wake carries session context", () 
       loadRequesterSessionEntry: () => ({
         cfg: {} as never,
         canonicalKey: "agent:main:cron:daily-media:run:run-authz",
+        effectiveSessionKey: "agent:main:cron:daily-media",
         entry: {
           sessionId: "cron-session-authz",
           updatedAt: Date.now(),
@@ -5373,8 +5378,11 @@ describe("Issue #99919: cron async completion wake carries session context", () 
       allowSyntheticModelOverride: true,
     });
 
-    // Also verify the agent params carry the cron context.
+    // Also verify the agent params carry the cron context, with the
+    // base session key (not the ephemeral run key) so the agent continues
+    // the original session with its transcript (#99919).
     const agentParams = mockCallArg(dispatchGatewayMethodInProcess, 0, 1);
+    expect(agentParams.sessionKey).toBe("agent:main:cron:daily-media");
     expect(agentParams.provider).toBe("claude-cli");
     expect(agentParams.model).toBe("claude-opus-4-8");
     expect(agentParams.bootstrapContextRunKind).toBe("cron");
