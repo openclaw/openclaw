@@ -41,7 +41,11 @@ import { exportChatMarkdown } from "../export.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
 import type { RealtimeTalkStatus } from "../realtime-talk.ts";
-import { CHAT_RUN_STATUS_TOAST_DURATION_MS, type ChatRunUiStatus } from "../run-lifecycle.ts";
+import {
+  CHAT_RUN_STATUS_TOAST_DURATION_MS,
+  isChatStopCommand,
+  type ChatRunUiStatus,
+} from "../run-lifecycle.ts";
 import type { CompactionStatus, FallbackStatus } from "../tool-stream.ts";
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
@@ -98,7 +102,7 @@ type ChatComposerProps = {
   onRequestUpdate?: () => void;
   onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
   onSlashIntent?: () => void | Promise<void>;
-  onSend: () => void;
+  onSend: (messageOverride?: string) => void;
   onCompact?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
   onDismissRealtimeTalkError?: () => void;
@@ -1972,6 +1976,19 @@ export function renderChatComposer(props: ChatComposerProps) {
       return;
     }
 
+    const target = event.target as HTMLTextAreaElement;
+    if (event.key === "Enter" && !event.shiftKey && isChatStopCommand(target.value)) {
+      if (!canCompose) {
+        return;
+      }
+      event.preventDefault();
+      closeSlashMenuIfNeeded(state, requestUpdate);
+      commitComposerDraft(props, target.value);
+      props.onSend(target.value);
+      syncComposerDraftAfterSend(target);
+      return;
+    }
+
     if (
       state.slashMenuOpen &&
       state.slashMenuMode === "args" &&
@@ -2046,7 +2063,6 @@ export function renderChatComposer(props: ChatComposerProps) {
     }
 
     if ((event.key === "ArrowUp" || event.key === "ArrowDown") && props.onHistoryKeydown) {
-      const target = event.target as HTMLTextAreaElement;
       commitComposerDraft(props, target.value);
       const result = props.onHistoryKeydown({
         key: event.key,

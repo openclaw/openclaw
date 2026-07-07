@@ -135,6 +135,48 @@ describe("chat.abort authorization", () => {
     expect(context.chatAbortControllers.has("run-hidden")).toBe(true);
   });
 
+  it("aborts hidden channel runs by explicit channel session key", async () => {
+    const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([
+        ["run-wechat", createActiveRun(sessionKey, { controlUiVisible: false })],
+      ]),
+    });
+
+    const respond = await invokeAbort({
+      context,
+      sessionKey,
+      connId: "conn-owner",
+      deviceId: "dev-owner",
+    });
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    expectAbortPayload(payload, { aborted: true, runIds: ["run-wechat"] });
+    expect(context.chatAbortControllers.has("run-wechat")).toBe(false);
+  });
+
+  it("aborts hidden channel runs whose session key omits direct or group markers", async () => {
+    const sessionKey = "agent:main:telegram:8661849123:topic:4052";
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([
+        ["run-telegram-topic", createActiveRun(sessionKey, { controlUiVisible: false })],
+      ]),
+    });
+
+    const respond = await invokeAbort({
+      context,
+      sessionKey,
+      connId: "conn-owner",
+      deviceId: "dev-owner",
+    });
+
+    const [ok, payload] = requireLastRespondCall(respond);
+    expect(ok).toBe(true);
+    expectAbortPayload(payload, { aborted: true, runIds: ["run-telegram-topic"] });
+    expect(context.chatAbortControllers.has("run-telegram-topic")).toBe(false);
+  });
+
   it("preserves BTW runs for TUI session stops", async () => {
     const main = createActiveRun("main", {
       owner: { connId: "conn-owner", deviceId: "dev-owner" },
