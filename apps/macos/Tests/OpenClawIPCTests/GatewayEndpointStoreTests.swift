@@ -47,6 +47,33 @@ struct GatewayEndpointStoreTests {
         #expect(fallbackToken == "launchd-token")
     }
 
+    @Test func `resolve gateway token skips unresolved local config placeholder`() {
+        let snapshot = self.makeLaunchAgentSnapshot(
+            env: ["OPENCLAW_GATEWAY_TOKEN": "launchd-token"],
+            token: "launchd-token",
+            password: nil)
+        let root: [String: Any] = [
+            "gateway": [
+                "auth": [
+                    "token": "${OPENCLAW_GATEWAY_TOKEN}",
+                ],
+            ],
+        ]
+
+        let token = GatewayEndpointStore._testResolveGatewayToken(
+            isRemote: false,
+            root: root,
+            env: [:],
+            launchdSnapshot: snapshot)
+        #expect(token == "launchd-token")
+
+        let config = GatewayEndpointStore._testLocalConfig(
+            root: root,
+            env: [:],
+            launchdSnapshot: snapshot)
+        #expect(config.token == "launchd-token")
+    }
+
     @Test func `resolve gateway token ignores launchd in remote mode`() {
         let snapshot = self.makeLaunchAgentSnapshot(
             env: ["OPENCLAW_GATEWAY_TOKEN": "launchd-token"],
@@ -297,6 +324,23 @@ struct GatewayEndpointStoreTests {
             authToken: "device-token")
         #expect(url.absoluteString == "http://127.0.0.1:18789/control/#token=device-token")
         #expect(url.query == nil)
+    }
+
+    @Test func `dashboard URL rejects unresolved token placeholder`() throws {
+        let config: GatewayConnection.Config = try (
+            url: #require(URL(string: "ws://127.0.0.1:18789")),
+            token: "${OPENCLAW_GATEWAY_TOKEN}",
+            password: nil)
+
+        do {
+            _ = try GatewayEndpointStore.dashboardURL(
+                for: config,
+                mode: .local,
+                localBasePath: "/control")
+            Issue.record("dashboard URL should not accept unresolved token placeholders")
+        } catch {
+            #expect(error.localizedDescription.contains("OPENCLAW_GATEWAY_TOKEN"))
+        }
     }
 
     @Test func `normalize gateway url adds default port for loopback ws`() {

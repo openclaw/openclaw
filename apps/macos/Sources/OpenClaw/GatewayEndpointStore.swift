@@ -31,6 +31,31 @@ actor GatewayEndpointStore {
 
     private static let envOverrideWarnings = LockIsolated((token: false, password: false))
 
+    private static func envPlaceholderName(_ raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("${"), trimmed.hasSuffix("}") else { return nil }
+        let name = String(trimmed.dropFirst(2).dropLast())
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? nil : name
+    }
+
+    private static func resolvedEnvPlaceholder(
+        _ raw: String,
+        env: [String: String],
+        launchdSnapshot: LaunchAgentPlistSnapshot?) -> String?
+    {
+        guard let name = self.envPlaceholderName(raw) else { return nil }
+        if let value = env[name]?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty {
+            return value
+        }
+        if let value = launchdSnapshot?.environment[name]?
+            .trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+        {
+            return value
+        }
+        return nil
+    }
+
     struct Deps {
         let mode: @Sendable () async -> AppState.ConnectionMode
         let token: @Sendable () -> String?
@@ -157,7 +182,8 @@ actor GatewayEndpointStore {
         if !trimmed.isEmpty {
             if let configToken = self.resolveConfigToken(isRemote: isRemote, root: root),
                !configToken.isEmpty,
-               configToken != trimmed
+               configToken != trimmed,
+               self.envPlaceholderName(configToken) != "OPENCLAW_GATEWAY_TOKEN"
             {
                 self.warnEnvOverrideOnce(
                     kind: .token,
@@ -170,7 +196,22 @@ actor GatewayEndpointStore {
         if let configToken = self.resolveConfigToken(isRemote: isRemote, root: root),
            !configToken.isEmpty
         {
-            return configToken
+            if let resolved = self.resolvedEnvPlaceholder(
+                configToken,
+                env: env,
+                launchdSnapshot: isRemote ? nil : launchdSnapshot)
+            {
+                return resolved
+            }
+            if self.envPlaceholderName(configToken) != nil {
+                // The native app often starts outside the gateway service environment.
+                // Treat unresolved ${ENV} refs as absent so local launchd fallback can recover.
+                if isRemote {
+                    return nil
+                }
+            } else {
+                return configToken
+            }
         }
 
         if isRemote {
@@ -701,6 +742,11 @@ extension GatewayEndpointStore {
         if let token = tokenCandidate?.trimmingCharacters(in: .whitespacesAndNewlines),
            !token.isEmpty
         {
+            if let name = self.envPlaceholderName(token) {
+                throw NSError(domain: "Dashboard", code: 3, userInfo: [
+                    NSLocalizedDescriptionKey: "Gateway token placeholder ${\(name)} is not resolved",
+                ])
+            }
             fragmentItems.append(URLQueryItem(name: "token", value: token))
         }
         components.queryItems = nil
