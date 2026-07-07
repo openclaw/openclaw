@@ -1138,6 +1138,7 @@ export const OpenClawSchema = z
                 windowMs: z.number().optional(),
                 lockoutMs: z.number().optional(),
                 exemptLoopback: z.boolean().optional(),
+                global: z.boolean().optional(),
               })
               .strict()
               .optional(),

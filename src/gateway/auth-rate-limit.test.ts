@@ -21,6 +21,7 @@ describe("auth rate limiter", () => {
       windowMs: number;
       lockoutMs: number;
       exemptLoopback: boolean;
+      global: boolean;
       pruneIntervalMs: number;
       maxEntries: number;
     }>,
@@ -158,6 +159,136 @@ describe("auth rate limiter", () => {
     // A different IP should be unaffected.
     expect(limiter.check("10.0.0.11").allowed).toBe(true);
     expect(limiter.check("10.0.0.11").remaining).toBe(2);
+  });
+
+  // ---------- global (IP-agnostic) mode ----------
+
+  it("shares one counter across all IPs when global is enabled", () => {
+    limiter = createAuthRateLimiter({
+      maxAttempts: 3,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+      global: true,
+    });
+    limiter.recordFailure("10.0.0.10");
+    limiter.recordFailure("10.0.0.11");
+    expect(limiter.check("10.0.0.10").remaining).toBe(1);
+    expect(limiter.check("10.0.0.11").remaining).toBe(1);
+
+    limiter.recordFailure("10.0.0.12");
+    expect(limiter.check("10.0.0.10").allowed).toBe(false);
+    expect(limiter.check("10.0.0.11").allowed).toBe(false);
+    expect(limiter.check("10.0.0.12").allowed).toBe(false);
+  });
+
+  it("global mode blocks all IPs together after threshold", () => {
+    limiter = createAuthRateLimiter({
+      maxAttempts: 1,
+      windowMs: 60_000,
+      lockoutMs: 10_000,
+      global: true,
+    });
+    limiter.recordFailure("10.0.0.1");
+    expect(limiter.check("10.0.0.1").allowed).toBe(false);
+    // A different IP must also be blocked.
+    expect(limiter.check("10.0.0.2").allowed).toBe(false);
+  });
+
+  it("global mode still scopes failures independently", () => {
+    limiter = createAuthRateLimiter({
+      maxAttempts: 1,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+      global: true,
+    });
+    limiter.recordFailure("10.0.0.1", AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
+    expect(limiter.check("10.0.0.1", AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET).allowed).toBe(false);
+    // Different scope should still be unaffected.
+    expect(limiter.check("10.0.0.1", AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH).allowed).toBe(true);
+  });
+
+  it("global mode still exempts loopback when exemptLoopback is true", () => {
+    limiter = createAuthRateLimiter({
+      maxAttempts: 1,
+      windowMs: 60_000,
+      lockoutMs: 10_000,
+      global: true,
+      exemptLoopback: true,
+    });
+    // Flood from external IP creates a global lockout.
+    limiter.recordFailure("10.0.0.1");
+    limiter.recordFailure("10.0.0.1");
+    limiter.recordFailure("10.0.0.2");
+    expect(limiter.check("10.0.0.1").allowed).toBe(false);
+    expect(limiter.check("10.0.0.2").allowed).toBe(false);
+
+    // Loopback is still exempt.
+    expect(limiter.check("127.0.0.1").allowed).toBe(true);
+    expect(limiter.check("::1").allowed).toBe(true);
+  });
+
+  it("global mode rate-limits loopback when exemptLoopback is false", () => {
+    limiter = createAuthRateLimiter({
+      maxAttempts: 1,
+      windowMs: 60_000,
+      lockoutMs: 10_000,
+      global: true,
+      exemptLoopback: false,
+    });
+    limiter.recordFailure("10.0.0.1");
+    expect(limiter.check("127.0.0.1").allowed).toBe(false);
+  });
+
+  it("reset clears the global counter for the requested scope", () => {
+    limiter = createAuthRateLimiter({
+      maxAttempts: 2,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+      global: true,
+    });
+    limiter.recordFailure("10.0.0.1");
+    limiter.recordFailure("10.0.0.2");
+    expect(limiter.check("10.0.0.1").allowed).toBe(false);
+    expect(limiter.check("10.0.0.3").allowed).toBe(false);
+
+    limiter.reset("10.0.0.1");
+    expect(limiter.check("10.0.0.1").allowed).toBe(true);
+    expect(limiter.check("10.0.0.3").remaining).toBe(2);
+  });
+
+  it("global mode with unique-IP flood still respects maxEntries", () => {
+    createLimiter({ maxAttempts: 5, maxEntries: 2, global: true, pruneIntervalMs: 0 });
+
+    limiter.recordFailure("10.0.1.1");
+    limiter.recordFailure("10.0.1.2");
+    limiter.recordFailure("10.0.1.3");
+
+    // In global mode, all IPs use the same entry key. The global counter
+    // consumes one slot, so maxEntries is never hit unless scopes diverge.
+    expect(limiter.size()).toBe(1);
+    expect(limiter.check("10.0.1.1").remaining).toBe(2);
+  });
+
+  it("global disabled (default) still tracks IPs independently", () => {
+    limiter = createAuthRateLimiter({
+      maxAttempts: 1,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+      global: false,
+    });
+    limiter.recordFailure("10.0.0.50");
+    expect(limiter.check("10.0.0.50").allowed).toBe(false);
+    expect(limiter.check("10.0.0.51").allowed).toBe(true);
+  });
+
+  it("covers all IPs with retryAfterMs when globally locked", () => {
+    createLimiter({ maxAttempts: 1, lockoutMs: 5_000, global: true });
+    limiter.recordFailure("10.0.5.1");
+    const result = limiter.check("10.0.5.99");
+    expect(result.allowed).toBe(false);
+    expect(result.remaining).toBe(0);
+    expect(result.retryAfterMs).toBeGreaterThan(0);
+    expect(result.retryAfterMs).toBeLessThanOrEqual(5_000);
   });
 
   it("caps unique client entries under flood", () => {

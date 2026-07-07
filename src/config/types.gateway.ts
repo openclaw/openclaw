@@ -222,6 +222,13 @@ export type GatewayAuthRateLimitConfig = {
   lockoutMs?: number;
   /** Exempt localhost/loopback addresses from auth rate limiting.  @default true */
   exemptLoopback?: boolean;
+  /**
+   * Count failed attempts globally across all client IPs instead of per-IP.
+   * When enabled, rotating-IP brute-force attacks cannot bypass the limiter,
+   * but a flood from any IP locks out all clients for the auth scope.
+   * @default false
+   */
+  global?: boolean;
 };
 
 /** Tailscale exposure mode for gateway HTTP/WebSocket surfaces. */

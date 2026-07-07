@@ -32,6 +32,12 @@ export interface RateLimitConfig {
   lockoutMs?: number;
   /** Exempt loopback (localhost) addresses from rate limiting.  @default true */
   exemptLoopback?: boolean;
+  /**
+   * Count failed attempts globally instead of per-IP.
+   * When enabled, all client IPs share one counter per scope so rotating-IP
+   * brute-force attacks cannot bypass the limiter.  @default false
+   */
+  global?: boolean;
   /** Background prune interval in milliseconds; set <= 0 to disable auto-prune.  @default 60_000 */
   pruneIntervalMs?: number;
   /** Maximum tracked client identities before old unlocked entries are evicted.  @default 10_000 */
@@ -139,6 +145,7 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
   const windowMs = resolveTimerTimeoutMs(config?.windowMs, DEFAULT_WINDOW_MS, 0);
   const lockoutMs = resolveTimerTimeoutMs(config?.lockoutMs, DEFAULT_LOCKOUT_MS, 0);
   const exemptLoopback = config?.exemptLoopback ?? true;
+  const globalMode = config?.global ?? false;
   const pruneIntervalMs = resolvePruneIntervalMs(config?.pruneIntervalMs);
   const maxEntries = resolveIntegerOption(config?.maxEntries, DEFAULT_MAX_ENTRIES, { min: 1 });
 
@@ -169,7 +176,8 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
   } {
     const ip = normalizeIp(rawIp);
     const scope = normalizeScope(rawScope);
-    return { key: `${scope}:${ip}`, ip };
+    const key = globalMode ? scope : `${scope}:${ip}`;
+    return { key, ip };
   }
 
   function isExempt(ip: string): boolean {
