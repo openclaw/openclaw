@@ -507,6 +507,8 @@ describe("browser tool description", () => {
     expect(tool.description).toContain("omit timeoutMs on act:type");
     expect(tool.description).toContain("existing-session profiles");
     expect(tool.description).toContain("browser-automation skill");
+    expect(tool.description).toContain("trigger ref with paths in the same upload call");
+    expect(tool.description).toContain("paths-only arming");
   });
 });
 
