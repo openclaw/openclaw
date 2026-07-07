@@ -238,17 +238,24 @@ export class UrbitSSEClient {
         ? Readable.fromWeb(body as never)
         : (body as NodeJS.ReadableStream);
     let buffer = "";
+    let bufferBytes = 0;
 
     try {
       for await (const chunk of stream) {
         if (this.aborted) {
           break;
         }
-        buffer += chunk.toString();
+        const chunkStr = chunk.toString();
+        buffer += chunkStr;
+        bufferBytes += Buffer.byteLength(chunkStr, "utf8");
+        if (bufferBytes > MAX_SSE_PAYLOAD_BYTES) {
+          throw new Error("Tlon Urbit SSE stream buffer exceeded 16 MiB limit");
+        }
         let eventEnd;
         while ((eventEnd = buffer.indexOf("\n\n")) !== -1) {
           const eventData = buffer.slice(0, eventEnd);
           buffer = buffer.slice(eventEnd + 2);
+          bufferBytes = Buffer.byteLength(buffer, "utf8");
           this.processEvent(eventData);
         }
       }

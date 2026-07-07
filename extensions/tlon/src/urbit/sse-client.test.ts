@@ -1,4 +1,5 @@
 // Tlon tests cover sse client plugin behavior.
+import { Readable } from "node:stream";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { urbitFetch } from "./fetch.js";
@@ -230,6 +231,67 @@ describe("UrbitSSEClient", () => {
 
       client.processEvent(`id: 1\ndata: ${hugeJson}`);
       expect(handler).toHaveBeenCalledWith({ ok: true, x: "A".repeat(padLen) });
+    });
+
+    describe("stream buffer bounding", () => {
+      it("rejects oversized stream buffer before unbounded accumulation", async () => {
+        const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
+        const oneMb = 1024 * 1024;
+        const megaChunk = "x".repeat(oneMb);
+
+        // Feed 17 chunks × 1 MiB with no \n\n — buffer exceeds 16 MiB cap.
+        const stream = Readable.from(
+          (async function* () {
+            for (let i = 0; i < 17; i++) {
+              yield megaChunk;
+            }
+          })(),
+        );
+
+        await expect(client.processStream(stream)).rejects.toThrow(
+          "Tlon Urbit SSE stream buffer exceeded 16 MiB limit",
+        );
+      });
+
+      it("processes normal SSE events through the stream path", async () => {
+        const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
+        const handler = vi.fn();
+        client.eventHandlers.set(1, { event: handler });
+
+        const stream = Readable.from(
+          (async function* () {
+            yield 'id: 1\ndata: {"json":{"ok":true}}\n\n';
+          })(),
+        );
+
+        await client.processStream(stream);
+        expect(handler).toHaveBeenCalledWith({ ok: true });
+      });
+
+      it("stays under cap with many small events", async () => {
+        const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
+        const handler = vi.fn();
+        client.eventHandlers.set(1, { event: handler });
+        let calls = 0;
+
+        const stream = Readable.from(
+          (async function* () {
+            // 1000 events × ~64 bytes each — well under cap but exercises the trim path.
+            for (let i = 0; i < 1000; i++) {
+              yield `id: 1\ndata: {"json":{"ok":true,"n":${i}}}\n\n`;
+            }
+          })(),
+        );
+
+        client.eventHandlers.set(1, {
+          event: () => {
+            calls++;
+          },
+        });
+
+        await client.processStream(stream);
+        expect(calls).toBe(1000);
+      });
     });
 
     it("ignores malformed event ids when deciding whether to ack", async () => {
