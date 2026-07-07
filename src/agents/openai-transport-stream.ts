@@ -1910,8 +1910,9 @@ function buildOpenAIClientHeaders(
     precedence: "caller-wins",
   }).headers;
   const resolvedHeaders = headers ?? {};
-  // The ChatGPT Responses backend routes requests by session_id; without it each
-  // request can land on an arbitrary machine and the provider prompt cache misses.
+  // This header routes ChatGPT Responses session affinity; without it requests land
+  // on arbitrary machines and prompt cache misses. codex-rs sends "session-id"
+  // (codex-rs/codex-api/src/requests/headers.rs), but backend accepts "session_id"; align with packages/ai openai-chatgpt-responses.
   if (
     sessionId &&
     !Object.keys(resolvedHeaders).some(
