@@ -203,7 +203,12 @@ function loadHooksFromDir(params: {
   return hooks;
 }
 
-function loadHookEntriesFromDir(params: {
+/** Test-only hooks for exercising internal bounded-read helpers. */
+export const workspaceTesting = {
+  readFdUtf8Bounded,
+};
+
+export function loadHookEntriesFromDir(params: {
   dir: string;
   source: HookSource;
   pluginId?: string;
@@ -305,12 +310,36 @@ function readRootFileUtf8(params: {
   return withOpenedRootFileSync(params, (opened) => {
     try {
       // Read through the already-validated file descriptor so a parent-directory
-      // symlink swap cannot redirect the read outside the hook root.
-      return fs.readFileSync(opened.fd, "utf-8");
+      // symlink swap cannot redirect the read outside the hook root. Enforce the
+      // byte cap while reading so a file that grows after open-time validation
+      // cannot be buffered past the intended limit.
+      return readFdUtf8Bounded(opened.fd, params.maxBytes);
     } catch {
       return null;
     }
   });
+}
+
+function readFdUtf8Bounded(fd: number, maxBytes: number): string {
+  const chunks: Buffer[] = [];
+  const buffer = Buffer.alloc(Math.min(64 * 1024, maxBytes + 1));
+  let total = 0;
+  let position = 0;
+  while (total <= maxBytes) {
+    const remaining = maxBytes - total + 1;
+    const chunkSize = Math.min(buffer.length, remaining);
+    const bytesRead = fs.readSync(fd, buffer, 0, chunkSize, position);
+    if (bytesRead === 0) {
+      break;
+    }
+    if (total + bytesRead > maxBytes) {
+      throw new Error(`File exceeds ${maxBytes} bytes`);
+    }
+    chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
+    total += bytesRead;
+    position += bytesRead;
+  }
+  return Buffer.concat(chunks).toString("utf-8");
 }
 
 function withOpenedRootFileSync<T>(
