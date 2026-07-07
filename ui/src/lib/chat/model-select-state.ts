@@ -10,13 +10,16 @@ import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
 import {
   buildCatalogDisplayLookup,
   buildChatModelOptionFromLookup,
+  buildQualifiedChatModelValue,
   createChatModelOverride,
   formatCatalogChatModelDisplayFromLookup,
+  normalizeChatModelProviderId,
   normalizeChatModelOverrideValue,
   resolvePreferredServerChatModelValue,
 } from "./model-ref.ts";
 
 type ChatModelSelectStateInput = {
+  agentDefaultModel?: string;
   chatModelCatalog: ModelCatalogEntry[];
   modelOverrides: Readonly<Record<string, string | null | undefined>>;
   sessionKey: string;
@@ -28,8 +31,9 @@ export type ChatModelSelectOption = {
   label: string;
 };
 
-export type ChatModelSelectState = {
+type ChatModelSelectState = {
   currentOverride: string;
+  defaultSelectable: boolean;
   defaultModel: string;
   defaultDisplay: string;
   defaultLabel: string;
@@ -87,11 +91,86 @@ export function resolveChatModelOverrideValue(state: ChatModelSelectStateInput):
 }
 
 function resolveDefaultModelValue(state: ChatModelSelectStateInput): string {
+  const agentDefault = resolvePreferredServerChatModelValue(
+    state.agentDefaultModel,
+    undefined,
+    state.chatModelCatalog ?? [],
+  );
+  if (agentDefault) {
+    return agentDefault;
+  }
   return resolvePreferredServerChatModelValue(
     state.sessionsResult?.defaults?.model,
     state.sessionsResult?.defaults?.modelProvider,
     state.chatModelCatalog ?? [],
   );
+}
+
+function normalizeChatModelAvailabilityKey(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  const separator = normalized.indexOf("/");
+  if (separator <= 0) {
+    return normalized;
+  }
+  return `${normalizeChatModelProviderId(normalized.slice(0, separator))}/${normalized.slice(
+    separator + 1,
+  )}`;
+}
+
+function buildUnavailableChatModelValues(
+  catalog: ModelCatalogEntry[],
+  displayLookup: ReturnType<typeof buildCatalogDisplayLookup>,
+): Set<string> {
+  const availableValues = new Set(
+    catalog
+      .filter((entry) => entry.available !== false)
+      .map((entry) =>
+        normalizeChatModelAvailabilityKey(
+          buildChatModelOptionFromLookup(entry, displayLookup).value,
+        ),
+      ),
+  );
+  return new Set(
+    catalog
+      .filter((entry) => entry.available === false)
+      .map((entry) =>
+        normalizeChatModelAvailabilityKey(
+          buildChatModelOptionFromLookup(entry, displayLookup).value,
+        ),
+      )
+      .filter((value) => !availableValues.has(value)),
+  );
+}
+
+function resolveAvailableChatModelValue(
+  value: string,
+  catalog: ModelCatalogEntry[],
+  displayLookup: ReturnType<typeof buildCatalogDisplayLookup>,
+): string {
+  const exactValue = value.trim().toLowerCase();
+  if (!exactValue) {
+    return value;
+  }
+  for (const entry of catalog) {
+    if (entry.available === false) {
+      continue;
+    }
+    const option = buildChatModelOptionFromLookup(entry, displayLookup);
+    if (option.value.trim().toLowerCase() === exactValue) {
+      return option.value;
+    }
+  }
+  const normalizedValue = normalizeChatModelAvailabilityKey(value);
+  for (const entry of catalog) {
+    if (entry.available === false) {
+      continue;
+    }
+    const option = buildChatModelOptionFromLookup(entry, displayLookup);
+    if (normalizeChatModelAvailabilityKey(option.value) === normalizedValue) {
+      return option.value;
+    }
+  }
+  return value;
 }
 
 function buildChatModelOptions(
@@ -102,24 +181,36 @@ function buildChatModelOptions(
 ): ChatModelSelectOption[] {
   const seen = new Set<string>();
   const options: ChatModelSelectOption[] = [];
+  const unavailableValues = buildUnavailableChatModelValues(catalog, displayLookup);
 
   const addOption = (value: string, label?: string) => {
     pushUniqueTrimmedSelectOption(options, seen, value, (trimmed) => label ?? trimmed);
   };
+  const addAvailableOption = (value: string, label?: string) => {
+    if (!unavailableValues.has(normalizeChatModelAvailabilityKey(value))) {
+      addOption(value, label);
+    }
+  };
 
   for (const entry of catalog) {
+    if (entry.available === false) {
+      continue;
+    }
     const option = buildChatModelOptionFromLookup(entry, displayLookup);
     addOption(option.value, option.label);
   }
 
   if (currentOverride) {
-    addOption(
+    addAvailableOption(
       currentOverride,
       formatCatalogChatModelDisplayFromLookup(currentOverride, displayLookup),
     );
   }
   if (defaultModel) {
-    addOption(defaultModel, formatCatalogChatModelDisplayFromLookup(defaultModel, displayLookup));
+    addAvailableOption(
+      defaultModel,
+      formatCatalogChatModelDisplayFromLookup(defaultModel, displayLookup),
+    );
   }
   return options;
 }
@@ -128,13 +219,27 @@ export function resolveChatModelSelectState(
   state: ChatModelSelectStateInput,
 ): ChatModelSelectState {
   const catalog = state.chatModelCatalog ?? [];
-  const displayLookup = buildCatalogDisplayLookup(catalog);
-  const currentOverride = resolveChatModelOverrideValue(state);
-  const defaultModel = resolveDefaultModelValue(state);
+  const displayLookup = buildCatalogDisplayLookup(
+    catalog.filter((entry) => entry.available !== false),
+  );
+  const currentOverride = resolveAvailableChatModelValue(
+    resolveChatModelOverrideValue(state),
+    catalog,
+    displayLookup,
+  );
+  const defaultModel = resolveAvailableChatModelValue(
+    resolveDefaultModelValue(state),
+    catalog,
+    displayLookup,
+  );
   const defaultDisplay = formatCatalogChatModelDisplayFromLookup(defaultModel, displayLookup);
+  const unavailableValues = buildUnavailableChatModelValues(catalog, displayLookup);
+  const defaultSelectable =
+    !defaultModel || !unavailableValues.has(normalizeChatModelAvailabilityKey(defaultModel));
 
   return {
     currentOverride,
+    defaultSelectable,
     defaultModel,
     defaultDisplay,
     defaultLabel: defaultModel ? `Default (${defaultDisplay})` : "Default model",
@@ -163,32 +268,73 @@ export function resolveChatFastModeStatus(session: GatewaySessionRow | undefined
   });
 }
 
-function resolveProviderFromModelValue(value: string, catalog: ModelCatalogEntry[]): string | null {
+function resolveProviderFromModelValue(
+  value: string,
+  catalog: ModelCatalogEntry[],
+  providerHint: string | null,
+): string | null {
   const trimmed = value.trim();
   if (!trimmed) {
     return null;
   }
-  const separator = trimmed.indexOf("/");
-  if (separator > 0) {
-    return trimmed.slice(0, separator).toLowerCase();
-  }
-  return (
+  const normalizedValue = trimmed.toLowerCase();
+  const idProviders = new Set(
     catalog
-      .find((entry) => entry.id.trim().toLowerCase() === trimmed.toLowerCase())
-      ?.provider.trim()
-      .toLowerCase() || null
+      .filter((entry) => entry.id.trim().toLowerCase() === normalizedValue)
+      .map((entry) => normalizeChatModelProviderId(entry.provider))
+      .filter(Boolean),
   );
+  const qualifiedProviders = new Set(
+    catalog
+      .filter(
+        (entry) =>
+          buildQualifiedChatModelValue(entry.id, entry.provider).trim().toLowerCase() ===
+          normalizedValue,
+      )
+      .map((entry) => normalizeChatModelProviderId(entry.provider))
+      .filter(Boolean),
+  );
+  if (qualifiedProviders.size === 1) {
+    return [...qualifiedProviders][0] ?? null;
+  }
+  if (providerHint && idProviders.has(providerHint) && !qualifiedProviders.has(providerHint)) {
+    return providerHint;
+  }
+  return idProviders.size === 1 ? ([...idProviders][0] ?? null) : null;
+}
+
+function hasCatalogProviderMetadata(value: string, catalog: ModelCatalogEntry[]): boolean {
+  const normalizedValue = value.trim().toLowerCase();
+  if (!normalizedValue) {
+    return false;
+  }
+  return catalog.some((entry) => {
+    const normalizedId = entry.id.trim().toLowerCase();
+    const qualifiedValue = buildQualifiedChatModelValue(entry.id, entry.provider)
+      .trim()
+      .toLowerCase();
+    return normalizedId === normalizedValue || qualifiedValue === normalizedValue;
+  });
 }
 
 export function resolveChatFastModeSelectState(
   input: ChatFastModeSelectStateInput,
 ): ChatFastModeSelectState {
   const activeRow = input.sessionsResult?.sessions?.find((row) => row.key === input.sessionKey);
-  const defaultProvider = input.sessionsResult?.defaults?.modelProvider;
+  const activeProvider = normalizeChatModelProviderId(activeRow?.modelProvider ?? "") || null;
+  const defaultProvider =
+    normalizeChatModelProviderId(input.sessionsResult?.defaults?.modelProvider ?? "") || null;
+  const catalogHasProviderMetadata = hasCatalogProviderMetadata(
+    input.currentModelOverride,
+    input.catalog,
+  );
+  const fallbackProvider =
+    !input.currentModelOverride || !catalogHasProviderMetadata
+      ? (activeProvider ?? defaultProvider)
+      : null;
   const effectiveProvider =
-    resolveProviderFromModelValue(input.currentModelOverride, input.catalog) ??
-    activeRow?.modelProvider?.trim().toLowerCase() ??
-    defaultProvider?.trim().toLowerCase() ??
+    resolveProviderFromModelValue(input.currentModelOverride, input.catalog, activeProvider) ??
+    fallbackProvider ??
     null;
   const configuredOverride =
     activeRow?.fastMode === "auto"

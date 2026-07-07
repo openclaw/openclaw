@@ -207,8 +207,3 @@ export function abortQueuedChatTurns(
   }
   return runIds;
 }
-
-/** Test helper: clear all queued turns. */
-export function clearAllQueuedChatTurns(chatQueuedTurns: QueuedChatTurnMap): void {
-  chatQueuedTurns.clear();
-}

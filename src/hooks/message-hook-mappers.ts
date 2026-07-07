@@ -37,6 +37,7 @@ export type CanonicalInboundMessageHookContext = {
   accountId?: string;
   conversationId?: string;
   sessionKey?: string;
+  agentId?: string;
   runId?: string;
   messageId?: string;
   senderId?: string;
@@ -170,6 +171,7 @@ export function deriveInboundMessageHookContext(
     accountId: ctx.AccountId,
     conversationId,
     sessionKey: ctx.SessionKey,
+    agentId: ctx.AgentId,
     messageId:
       overrides?.messageId ??
       ctx.MessageSidFull ??
@@ -359,6 +361,7 @@ export function toPluginInboundClaimContext(
     accountId: canonical.accountId,
     conversationId: conversation.conversationId,
     sessionKey: canonical.sessionKey,
+    agentId: canonical.agentId,
     parentConversationId: conversation.parentConversationId,
     senderId: canonical.senderId,
     senderGroup: canonical.senderGroup,

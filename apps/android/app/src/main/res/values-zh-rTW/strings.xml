@@ -6,6 +6,7 @@
     <string name="trust_this_gateway">信任此閘道？</string>
     <string name="trust_and_continue">信任並繼續</string>
     <string name="cancel">取消</string>
+    <string name="new_chat_in_worktree">在 worktree 中新增聊天</string>
     <string name="endpoint">端點</string>
     <string name="status">狀態</string>
     <string name="connected_gateway_ready">您的閘道已啟用並準備就緒。</string>
@@ -20,8 +21,17 @@
     <string name="use_tls">使用 TLS</string>
     <string name="token_optional">權杖（選填）</string>
     <string name="password">密碼</string>
+    <string name="custom_headers_optional">自訂標頭（選填）</string>
+    <string name="custom_headers_explainer">會隨每次連線傳送至此 gateway，例如 Cloudflare Access 服務權杖標頭。已加密儲存，並會在下次重新連線時套用。</string>
+    <string name="custom_header_value">標頭值</string>
+    <string name="custom_header_reserved">此標頭由連線管理，無法覆寫。</string>
+    <string name="add_custom_header">新增標頭</string>
+    <string name="remove_custom_header">移除 %1$s</string>
     <string name="run_onboarding_again">再次執行新手導覽</string>
     <string name="resolved_endpoint">已解析的端點</string>
     <string name="gateway_trust_first_seen">請先驗證憑證指紋，再信任此閘道。\n\n%1$s</string>
     <string name="gateway_trust_changed">閘道憑證已變更。僅在這是您預期的變更時繼續。\n\n舊 SHA-256：\n%1$s\n\n新 SHA-256：\n%2$s</string>
+    <string name="switch_gateway">切換 gateway</string>
+    <string name="select_gateway">選取 gateway</string>
+    <string name="active_gateway">使用中的 gateway</string>
 </resources>

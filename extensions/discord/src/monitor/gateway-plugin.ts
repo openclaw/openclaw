@@ -37,10 +37,7 @@ const DISCORD_GATEWAY_WS_RECEIVER_LIMIT_CODE = "WS_ERR_TOO_MANY_BUFFERED_PARTS";
 const DISCORD_GATEWAY_CLOSE_REASON_LOG_MAX_CHARS = 240;
 const discordDnsLookup = createDiscordDnsLookup();
 
-type DiscordGatewayWebSocketCtor = new (
-  url: string,
-  options?: { agent?: unknown; handshakeTimeout?: number },
-) => ws.WebSocket;
+type DiscordGatewayWebSocketCtor = typeof ws.WebSocket;
 type DiscordGatewayWebSocketAgent = InstanceType<typeof HttpsAgent> | HttpAgent;
 const registrationPromises = new WeakMap<discordGateway.GatewayPlugin, Promise<void>>();
 type DiscordGatewayClient = Parameters<discordGateway.GatewayPlugin["registerClient"]>[0];
@@ -268,6 +265,7 @@ function createGatewayPlugin(params: {
       // already our proxy path and behaves predictably for lifecycle cleanup.
       const WebSocketCtor = params.testing?.webSocketCtor ?? ws.default;
       const socket = new WebSocketCtor(url, {
+        ...discordGateway.DISCORD_GATEWAY_WS_CLIENT_OPTIONS,
         handshakeTimeout: DISCORD_GATEWAY_HANDSHAKE_TIMEOUT_MS,
         ...(params.wsAgent ? { agent: params.wsAgent } : {}),
       });

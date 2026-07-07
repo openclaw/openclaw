@@ -32,7 +32,9 @@ dispatch.
 | `security-fast`                    | Private key detection, changed-workflow audit via `zizmor`, and production lockfile audit                                                                                                          | Always on non-draft pushes and PRs                  |
 | `pnpm-store-warmup`                | Warm the lockfile-pinned pnpm store cache without blocking Linux Node shards                                                                                                                       | Node or docs-check lanes selected                   |
 | `build-artifacts`                  | Build `dist/`, Control UI, built-CLI smoke checks, startup memory, and embedded built-artifact checks                                                                                              | Node-relevant changes                               |
-| `checks-fast-core`                 | Fast Linux correctness lanes: bundled + protocol, QA Smoke CI, Bun launcher, and the CI-routing fast task                                                                                          | Node-relevant changes                               |
+| `checks-fast-core`                 | Fast Linux correctness lanes: bundled + protocol, Bun launcher, and the CI-routing fast task                                                                                                       | Node-relevant changes                               |
+| `qa-smoke-ci-shard`                | Three bounded, channel-compatible QA Smoke shards; the default Telegram group is balanced across two shards                                                                                        | Node-relevant changes                               |
+| `qa-smoke-ci`                      | Hosted aggregate check preserving the required `QA Smoke CI` status after every shard succeeds                                                                                                     | Node-relevant changes                               |
 | `checks-fast-contracts-plugins-*`  | Two weighted plugin contract shards                                                                                                                                                                | Node-relevant changes                               |
 | `checks-fast-contracts-channels-*` | Two weighted channel contract shards                                                                                                                                                               | Node-relevant changes                               |
 | `checks-node-*`                    | Core Node test shards, excluding channel, bundled, contract, and extension lanes                                                                                                                   | Node-relevant changes                               |
@@ -101,7 +103,7 @@ The slowest Node test families are split or balanced so each job stays small wit
 - `check-additional-*` stripes the supplemental boundary guard list (`scripts/run-additional-boundary-checks.mjs`) into one prompt-heavy shard (`check-additional-boundaries-a`, which includes the Codex prompt snapshot drift check) and one combined shard for the remaining stripes (`check-additional-boundaries-bcd`), each running independent guards concurrently and printing per-check timings. Package-boundary compile/canary work stays together, and runtime topology architecture runs separately from the gateway watch coverage embedded in `build-artifacts`.
 - Gateway watch, channel tests, and the core support-boundary shard run concurrently inside `build-artifacts` after `dist/` and `dist-runtime/` are already built.
 
-Once admitted, canonical Linux CI permits up to 24 concurrent Node test jobs and
+Once admitted, canonical Linux CI permits up to 28 concurrent Node test jobs and
 12 for the smaller fast/check lanes; Windows and Android stay at two because
 those runner pools are narrower. Compact whole-config batches run with a
 120-minute batch timeout, while include-pattern groups share the same bounded
@@ -153,10 +155,10 @@ Release, private dist-tag, or other platform publication.
 
 | Runner                          | Jobs                                                                                                                                                                                                                                                                                               |
 | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ubuntu-24.04`                  | Manual CI dispatch and non-canonical repository fallbacks, CodeQL security and quality scans, workflow-sanity, labeler, auto-response, the standalone Docs workflow, and the whole Install Smoke workflow                                                                                          |
+| `ubuntu-24.04`                  | Manual CI dispatch and non-canonical repository fallbacks, the QA Smoke aggregate, CodeQL security and quality scans, workflow-sanity, labeler, auto-response, the standalone Docs workflow, and the whole Install Smoke workflow                                                                  |
 | `blacksmith-4vcpu-ubuntu-2404`  | `preflight`, `security-fast`, `pnpm-store-warmup`, `native-i18n`, `checks-fast-core` except QA Smoke CI, plugin/channel contract shards, most bundled/lower-weight Linux Node shards, `check-*` lanes except `check-lint`, selected `check-additional-*` shards, `check-docs`, and `skills-python` |
 | `blacksmith-8vcpu-ubuntu-2404`  | Retained heavy Linux Node suites, boundary/extension-heavy `check-additional-*` shards, and `android`                                                                                                                                                                                              |
-| `blacksmith-16vcpu-ubuntu-2404` | QA Smoke CI, `build-artifacts` in CI and Testbox, and `check-lint` (CPU-sensitive enough that 8 vCPU cost more than they saved)                                                                                                                                                                    |
+| `blacksmith-16vcpu-ubuntu-2404` | Automatic QA Smoke CI shards, `build-artifacts` in CI and Testbox, and `check-lint` (CPU-sensitive enough that 8 vCPU cost more than they saved)                                                                                                                                                   |
 | `blacksmith-8vcpu-windows-2025` | `checks-windows`                                                                                                                                                                                                                                                                                   |
 | `blacksmith-6vcpu-macos-15`     | `macos-node` on `openclaw/openclaw`; forks fall back to `macos-15`                                                                                                                                                                                                                                 |
 | `blacksmith-12vcpu-macos-26`    | `macos-swift` and `ios-build` on `openclaw/openclaw`; forks fall back to `macos-26`                                                                                                                                                                                                                |
@@ -605,13 +607,43 @@ Local changed-test routing lives in `scripts/test-projects.test-support.mjs` and
 
 ## Testbox validation
 
-Crabbox is the repo-owned remote-box wrapper for maintainer Linux proof. Use it
-from the repo root when a check is too broad for a local edit loop, when CI
-parity matters, or when the proof needs secrets, Docker, package lanes,
-reusable boxes, or remote logs. The normal OpenClaw backend is
-`blacksmith-testbox`, and `.crabbox.yaml` now defaults to it; owned AWS/Hetzner
-capacity is a fallback for Blacksmith outages, quota issues, or explicit
-owned-capacity testing.
+Crabbox is the repo-owned remote-box wrapper for maintainer Linux proof. Agent
+sessions use it by default for tests and computationally intensive work,
+including builds, typechecks, lint fan-out, Docker, package lanes, E2E, live
+proof, and CI parity. Trusted maintainer code defaults to
+`blacksmith-testbox`, and `.crabbox.yaml` now defaults to it. Its configured
+workflow hydrates provider and agent credentials, so untrusted contributor or
+fork code must use secretless fork CI or sanitized direct AWS Crabbox instead.
+Sanitized AWS runs set `CRABBOX_ENV_ALLOW=CI`, pass
+`--no-hydrate`, and use a fresh temporary remote `HOME`; this prevents the repo
+`OPENCLAW_*` allowlist and existing auth profiles from reaching untrusted code.
+They use a newly warmed lease dedicated to that untrusted source, never a
+trusted or previously hydrated lease. Launch an installed trusted Crabbox
+binary from a clean trusted `main` checkout and fetch only the remote PR with
+`--fresh-pr`; never execute the untrusted checkout's wrapper or config locally.
+Unset `CRABBOX_AWS_INSTANCE_PROFILE` and fail closed unless resolved
+`aws.instanceProfile` is empty. Before any install/test, use trusted
+absolute-path tools to require an IMDSv2 token, prove the IAM credentials
+endpoint returns 404, and compare remote `git rev-parse HEAD` to the full
+reviewed PR head SHA. Bind the lease to that SHA and stop/rewarm on head change.
+Upload trusted `scripts/crabbox-untrusted-bootstrap.sh` from clean `main`
+alongside `--fresh-pr`; it installs pinned Node/pnpm, verifies the SHA and
+package-manager pin, isolates `HOME`, installs dependencies, then executes the
+requested test.
+Unset all `CRABBOX_TAILSCALE*` overrides, force `--network public
+--tailscale=false`, clear exit-node/LAN flags, and require `crabbox inspect` to
+report public networking with no Tailscale state before uploading any script.
+Owned AWS/Hetzner capacity also remains the fallback for Blacksmith outages,
+quota issues, or explicit owned-capacity testing.
+
+At the start of a trusted code task likely to need tests or heavy proof, agents
+should pre-warm immediately in a background command session, continue
+inspection and editing while hydration runs, reuse the returned `tbx_...` id,
+sync the current checkout on every run, and stop it before handoff:
+
+```bash
+node scripts/crabbox-wrapper.mjs warmup --provider blacksmith-testbox --keep --timing-json
+```
 
 Crabbox-backed Blacksmith runs warm, claim, sync, run, report, and clean up
 one-shot Testboxes. The built-in sync sanity check fails fast when
@@ -700,9 +732,25 @@ blacksmith testbox stop --id <tbx_id>
 Use reuse only when you intentionally need multiple commands on the same hydrated box:
 
 ```bash
-pnpm crabbox:run -- --provider blacksmith-testbox --id <tbx_id> --no-sync --timing-json --shell -- "pnpm test <path-or-filter>"
+node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox --id <tbx_id> --timing-json --shell -- "corepack pnpm test <path-or-filter>"
 pnpm crabbox:stop -- <tbx_id>
 ```
+
+Reuse the lease, not stale source. Omit `--no-sync` so each run uploads the
+current checkout; use it only to rerun an unchanged, already-synced tree
+intentionally. Untrusted contributor/fork code must use
+`CRABBOX_ENV_ALLOW=CI`, `--provider aws --no-hydrate`, and a fresh
+temporary remote `HOME` for every command; install dependencies inside that
+sanitized command before testing. Reuse only a newly warmed lease dedicated to
+the same untrusted source; never a trusted or previously hydrated lease. Never
+execute the untrusted checkout's wrapper or config locally: launch the installed
+trusted Crabbox binary from clean trusted `main` and pass `--fresh-pr` on every
+run. Keep `CRABBOX_AWS_INSTANCE_PROFILE` unset, reject a non-empty resolved
+instance profile, require a trusted remote IMDS no-role proof, and verify the
+reviewed head SHA before install/test. Bind the lease to that SHA; stop and
+rewarm after any head change. If no remote PR exists, use secretless fork CI.
+Never select `hydrate-github` or the credential-hydrated Blacksmith workflow
+for untrusted source.
 
 If Crabbox is the broken layer but Blacksmith itself works, use direct
 Blacksmith only for diagnostics such as `list`, `status`, and cleanup. Fix the
@@ -720,9 +768,9 @@ Escalate to owned Crabbox capacity only when Blacksmith is down, quota-limited, 
 ```bash
 CRABBOX_CAPACITY_REGIONS=eu-west-1,eu-west-2,eu-central-1,us-east-1,us-west-2 \
   pnpm crabbox:warmup -- --provider aws --class standard --market on-demand --idle-timeout 90m
-pnpm crabbox:hydrate -- --id <cbx_id-or-slug>
-pnpm crabbox:run -- --id <cbx_id-or-slug> --timing-json --shell -- "pnpm check:changed"
-pnpm crabbox:stop -- <cbx_id-or-slug>
+pnpm crabbox:hydrate -- --provider aws --id <cbx_id-or-slug>
+pnpm crabbox:run -- --provider aws --id <cbx_id-or-slug> --timing-json --shell -- "pnpm check:changed"
+pnpm crabbox:stop -- --provider aws <cbx_id-or-slug>
 ```
 
 Under AWS pressure, avoid `class=beast` unless the task really needs 48xlarge-class CPU. A `beast` request starts at 192 vCPUs and is the easiest way to trip regional EC2 Spot or On-Demand Standard quota. The repo-owned `.crabbox.yaml` defaults to `class: standard`, on-demand market, and `capacity.hints: true` so brokered AWS leases print selected region/market, quota pressure, Spot fallback, and high-pressure class warnings. Use `fast` for heavier broad checks, `large` only after standard/fast are not enough, and `beast` only for exceptional CPU-bound lanes such as full-suite or all-plugin Docker matrices, explicit release/blocker validation, or high-core performance profiling. Do not use `beast` for `pnpm check:changed`, focused tests, docs-only work, ordinary lint/typecheck, small E2E repros, or Blacksmith outage triage. Use `--market on-demand` for capacity diagnosis so Spot market churn is not mixed into the signal.

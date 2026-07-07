@@ -212,7 +212,8 @@ openclaw-logs-page {
   grid-column: span 4;
 }
 
-.qs-card--appearance {
+.qs-card--appearance,
+.qs-card--system {
   grid-column: 1 / -1;
 }
 
@@ -1092,6 +1093,7 @@ openclaw-logs-page {
 
   .qs-card--appearance,
   .qs-card--personal,
+  .qs-card--system,
   .qs-card--span-all {
     grid-column: 1 / -1;
   }

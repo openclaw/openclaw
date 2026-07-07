@@ -44,7 +44,7 @@ function resolveLivePluginInteractiveNamespaceMatch(channel: string, data: strin
   // through live owners so a replaced or released registry cannot keep executing.
   for (const registry of collectLivePluginRegistries()) {
     const match = resolvePluginInteractiveRegistrationsMatch(
-      registry.interactiveHandlers ?? [],
+      registry.interactiveHandlers,
       channel,
       data,
     );
@@ -65,6 +65,7 @@ export async function dispatchPluginInteractiveHandler<
   dedupeId?: string;
   onMatched?: () => Promise<void> | void;
   invoke: (match: PluginInteractiveMatch<TRegistration>) => Promise<TResult> | TResult;
+  afterInvoke?: (result: TResult) => Promise<void> | void;
 }): Promise<InteractiveDispatchResult<TResult>> {
   const match = resolveLivePluginInteractiveNamespaceMatch(params.channel, params.data);
   if (!match) {
@@ -79,6 +80,9 @@ export async function dispatchPluginInteractiveHandler<
   try {
     await params.onMatched?.();
     const resolved = await params.invoke(match as PluginInteractiveMatch<TRegistration>);
+    // Channel post-processing stays inside the dedupe claim. Committing first
+    // would swallow a retry after a retryable post-handler failure.
+    await params.afterInvoke?.(resolved);
     if (dedupeKey) {
       commitPluginInteractiveCallbackDedupe(dedupeKey);
     }

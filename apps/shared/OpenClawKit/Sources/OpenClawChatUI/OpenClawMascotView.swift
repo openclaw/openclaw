@@ -9,7 +9,11 @@ public struct OpenClawMascotView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
 
-    public init() {}
+    private let floats: Bool
+
+    public init(floats: Bool = true) {
+        self.floats = floats
+    }
 
     public var body: some View {
         let palette = OpenClawMascotPalette.forScheme(self.colorScheme)
@@ -23,7 +27,10 @@ public struct OpenClawMascotView: View {
                 // antennae (art starts at y~5 of 120) at the -9.6 float peak.
                 GeometryReader { proxy in
                     OpenClawMascotCanvas(pose: pose, palette: palette)
-                        .offset(y: pose.floatOffset * min(proxy.size.width, proxy.size.height) / 120)
+                        .offset(
+                            y: self.floats
+                                ? pose.floatOffset * min(proxy.size.width, proxy.size.height) / 120
+                                : 0)
                 }
             }
         }

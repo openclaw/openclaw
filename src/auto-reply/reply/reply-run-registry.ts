@@ -1,16 +1,18 @@
 // Tracks active reply runs so stop, queue, and status commands can coordinate.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { createAbortError } from "../../infra/abort-signal.js";
 import {
   createAgentRunRestartAbortError,
   isAgentRunRestartAbortReason,
 } from "../../agents/run-termination.js";
+import { createAbortError } from "../../infra/abort-signal.js";
 import {
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
 } from "../../logging/diagnostic-run-activity.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
+import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import type { ReplyFollowupAdmissionBarrierTimeoutPolicy } from "./reply-dispatcher.types.js";
 
 export type ReplyRunKey = string;
@@ -19,13 +21,23 @@ export type ReplyBackendKind = "embedded" | "cli";
 
 export type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
 
+export type ReplyBackendQueueMessageOptions = {
+  steeringMode?: "all";
+  debounceMs?: number;
+  deliveryTimeoutMs?: number;
+  waitForTranscriptCommit?: boolean;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Prepared channel turn to merge only at transcript persistence. */
+  userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+};
+
 export type ReplyBackendHandle = {
   readonly kind: ReplyBackendKind;
   cancel(reason?: ReplyBackendCancelReason): void;
   isStreaming(): boolean;
   isStopped?: () => boolean;
   isAbortable?: () => boolean;
-  queueMessage?: (text: string) => Promise<void>;
+  queueMessage?: (text: string, options?: ReplyBackendQueueMessageOptions) => Promise<void>;
   /**
    * Compatibility-only hook so legacy "abort compacting runs" paths can still
    * find embedded runs that are compacting during the main run phase.
@@ -69,6 +81,11 @@ export type ReplyOperation = {
    * sibling recovery already in flight, not the proven stale leftover.
    */
   readonly terminalRecovery: boolean;
+  /**
+   * Sticky fact for audio accepted into this operation after its originating turn.
+   * Final delivery reads it because the original dispatch context cannot change.
+   */
+  readonly acceptedSteeredInboundAudio: boolean;
   readonly phase: ReplyOperationPhase;
   readonly result: ReplyOperationResult | null;
   /** True when this operation has owned the supplied session ID. */
@@ -76,6 +93,7 @@ export type ReplyOperation = {
   setPhase(next: "queued" | "preflight_compacting" | "memory_flushing" | "running"): void;
   /** Mark this operation as an in-flight terminal-session recovery. */
   markTerminalRecovery(): void;
+  markAcceptedSteeredInboundAudio(): void;
   updateSessionId(nextSessionId: string): void;
   attachBackend(handle: ReplyBackendHandle): void;
   detachBackend(handle: ReplyBackendHandle): void;
@@ -452,6 +470,7 @@ export function createReplyOperation(params: {
   let stateCleared = false;
   let retainFailureUntilComplete = false;
   let terminalRecovery = false;
+  let acceptedSteeredInboundAudio = false;
   const upstreamAbortSignal = params.upstreamAbortSignal;
   let upstreamAbortHandler: (() => void) | undefined;
   const detachUpstreamAbort = () => {
@@ -534,6 +553,9 @@ export function createReplyOperation(params: {
     get terminalRecovery() {
       return terminalRecovery;
     },
+    get acceptedSteeredInboundAudio() {
+      return acceptedSteeredInboundAudio;
+    },
     get phase() {
       return phase;
     },
@@ -552,6 +574,9 @@ export function createReplyOperation(params: {
     },
     markTerminalRecovery() {
       terminalRecovery = true;
+    },
+    markAcceptedSteeredInboundAudio() {
+      acceptedSteeredInboundAudio = true;
     },
     updateSessionId(nextSessionId) {
       if (result) {
@@ -811,7 +836,11 @@ export function isReplyRunStreamingForSessionId(sessionId: string): boolean {
   return getAttachedBackend(operation)?.isStreaming() ?? false;
 }
 
-export function queueReplyRunMessage(sessionId: string, text: string): boolean {
+export function queueReplyRunMessage(
+  sessionId: string,
+  text: string,
+  options?: ReplyBackendQueueMessageOptions,
+): boolean {
   const operation = resolveReplyRunForCurrentSessionId(sessionId);
   const backend = operation ? getAttachedBackend(operation) : undefined;
   if (!operation || operation.phase !== "running" || !backend?.queueMessage) {
@@ -820,7 +849,7 @@ export function queueReplyRunMessage(sessionId: string, text: string): boolean {
   if (!isReplyBackendMessageInjectable(backend)) {
     return false;
   }
-  void backend.queueMessage(text);
+  void (options ? backend.queueMessage(text, options) : backend.queueMessage(text));
   return true;
 }
 
@@ -840,6 +869,19 @@ export function forceClearReplyRunBySessionId(sessionId: string, cause?: unknown
   operation.fail("run_failed", cause);
   operation.complete();
   return true;
+}
+
+export function clearReplyRunForResetBySessionId(sessionId: string): void {
+  const operation = resolveReplyRunForCurrentSessionId(sessionId);
+  if (!operation || operation.phase === "queued") {
+    return;
+  }
+  operation.abortForRestart();
+  // Backend cancellation may synchronously retire this operation and admit a
+  // replacement. Only clear the exact archived operation resolved above.
+  if (replyRunState.activeRunsByKey.get(operation.key) === operation) {
+    operation.complete();
+  }
 }
 
 export function waitForReplyRunEndBySessionId(

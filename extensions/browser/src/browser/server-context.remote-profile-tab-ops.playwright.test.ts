@@ -29,6 +29,12 @@ async function expectBlockedCdpEndpoint(promise: Promise<unknown>) {
   throw new Error("expected blocked browser CDP endpoint");
 }
 
+const permissiveRemoteCdpPolicy = {
+  allowPrivateNetwork: true,
+  allowedHostnames: ["1.1.1.1"],
+  hostnameAllowlist: ["1.1.1.1"],
+};
+
 describe("browser remote profile tab ops via Playwright", () => {
   it("uses Playwright tab operations when available", async () => {
     const listPagesViaPlaywright = vi.fn(async () => [
@@ -52,6 +58,11 @@ describe("browser remote profile tab ops via Playwright", () => {
 
     const tabs = await remote.listTabs();
     expect(tabs.map((t) => t.targetId)).toEqual(["T1"]);
+    expect(listPagesViaPlaywright).toHaveBeenCalledWith({
+      cdpUrl: "https://1.1.1.1:9222/chrome?token=abc",
+      ssrfPolicy: permissiveRemoteCdpPolicy,
+      timeoutMs: 3000,
+    });
 
     const opened = await remote.openTab("http://127.0.0.1:3000");
     expect(opened.targetId).toBe("T2");
@@ -59,6 +70,7 @@ describe("browser remote profile tab ops via Playwright", () => {
     expect(createPageViaPlaywright).toHaveBeenCalledWith({
       cdpUrl: "https://1.1.1.1:9222/chrome?token=abc",
       url: "http://127.0.0.1:3000",
+      cdpPolicy: permissiveRemoteCdpPolicy,
       ssrfPolicy: { allowPrivateNetwork: true },
     });
 
@@ -66,7 +78,7 @@ describe("browser remote profile tab ops via Playwright", () => {
     expect(closePageByTargetIdViaPlaywright).toHaveBeenCalledWith({
       cdpUrl: "https://1.1.1.1:9222/chrome?token=abc",
       targetId: "T1",
-      ssrfPolicy: { allowPrivateNetwork: true },
+      ssrfPolicy: permissiveRemoteCdpPolicy,
     });
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -240,6 +252,7 @@ describe("browser remote profile tab ops via Playwright", () => {
     expect(createPageViaPlaywright).toHaveBeenCalledWith({
       cdpUrl: "https://1.1.1.1:9222/chrome?token=abc",
       url: "about:blank",
+      cdpPolicy: permissiveRemoteCdpPolicy,
       ssrfPolicy: { allowPrivateNetwork: true },
     });
   });
@@ -285,7 +298,7 @@ describe("browser remote profile tab ops via Playwright", () => {
     expect(focusPageByTargetIdViaPlaywright).toHaveBeenCalledWith({
       cdpUrl: "https://1.1.1.1:9222/chrome?token=abc",
       targetId: "T1",
-      ssrfPolicy: { allowPrivateNetwork: true },
+      ssrfPolicy: permissiveRemoteCdpPolicy,
     });
     expect(fetchMock).not.toHaveBeenCalled();
     expect(state.profiles.get("remote")?.lastTargetId).toBe("T1");

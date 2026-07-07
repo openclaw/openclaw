@@ -118,6 +118,24 @@ export const icons = {
       />
     </svg>
   `,
+  kanban: html`
+    <svg viewBox="0 0 24 24">
+      <rect width="18" height="18" x="3" y="3" rx="2" />
+      <path d="M8 7v7" />
+      <path d="M12 7v4" />
+      <path d="M16 7v9" />
+    </svg>
+  `,
+  bot: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M12 8V4H8" />
+      <rect width="16" height="12" x="4" y="8" rx="2" />
+      <path d="M2 14h2" />
+      <path d="M20 14h2" />
+      <path d="M15 13v2" />
+      <path d="M9 13v2" />
+    </svg>
+  `,
 
   // UI icons
   menu: html`
@@ -135,6 +153,19 @@ export const icons = {
   `,
   check: html` <svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5" /></svg> `,
   play: html` <svg viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3" /></svg> `,
+  pause: html`
+    <svg viewBox="0 0 24 24">
+      <rect x="14" y="4" width="4" height="16" rx="1" />
+      <rect x="6" y="4" width="4" height="16" rx="1" />
+    </svg>
+  `,
+  target: html`
+    <svg viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="10" />
+      <circle cx="12" cy="12" r="6" />
+      <circle cx="12" cy="12" r="2" />
+    </svg>
+  `,
   archive: html`
     <svg viewBox="0 0 24 24">
       <rect width="20" height="5" x="2" y="3" rx="1" />
@@ -171,6 +202,13 @@ export const icons = {
       <rect width="16" height="3" x="4" y="9" rx="1" />
       <rect width="16" height="3" x="4" y="14" rx="1" />
       <rect width="16" height="3" x="4" y="19" rx="1" />
+    </svg>
+  `,
+  listFilter: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M3 6h18" />
+      <path d="M7 12h10" />
+      <path d="M10 18h4" />
     </svg>
   `,
   arrowDown: html`
@@ -279,6 +317,14 @@ export const icons = {
       <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
       <circle cx="9" cy="9" r="2" />
       <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
+    </svg>
+  `,
+  camera: html`
+    <svg viewBox="0 0 24 24">
+      <path
+        d="M14.5 4 16 7h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h3l1.5-3z"
+      />
+      <circle cx="12" cy="13" r="3" />
     </svg>
   `,
   smartphone: html`
@@ -408,6 +454,15 @@ export const icons = {
       <path d="M12 5v14" />
     </svg>
   `,
+  gitBranch: html`
+    <svg viewBox="0 0 24 24">
+      <circle cx="6" cy="5" r="2" />
+      <circle cx="18" cy="6" r="2" />
+      <circle cx="6" cy="19" r="2" />
+      <path d="M6 7v10" />
+      <path d="M8 9h5a5 5 0 0 0 5-5" />
+    </svg>
+  `,
   terminal: html`
     <svg viewBox="0 0 24 24">
       <polyline points="4 17 10 11 4 5" />
@@ -508,6 +563,13 @@ export const icons = {
       <rect x="3" y="3" width="18" height="18" rx="2" />
       <path d="M15 3v18" stroke-linecap="round" />
       <path d="M8 10l3 2-3 2" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>
+  `,
+  panelBottomOpen: html`
+    <svg viewBox="0 0 24 24">
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="M3 15h18" stroke-linecap="round" />
+      <path d="m10 8 2 3 2-3" stroke-linecap="round" stroke-linejoin="round" />
     </svg>
   `,
   maximize: html`

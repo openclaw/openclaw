@@ -19,6 +19,7 @@ import {
 import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../agents/cli-session.js";
 import { abortEmbeddedAgentRun, waitForEmbeddedAgentRunEnd } from "../agents/embedded-agent.js";
+import { resetRegisteredAgentHarnessSessions } from "../agents/harness/registry.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
 import {
   buildSessionEndHookPayload,
@@ -401,7 +402,9 @@ async function ensureSessionRuntimeCleanup(params: {
   if (params.sessionId) {
     queueKeys.add(params.sessionId);
   }
-  clearSessionResetRuntimeState([...queueKeys]);
+  clearSessionResetRuntimeState([...queueKeys], {
+    activeReplySessionId: params.sessionId,
+  });
   stopSubagentsForRequester({ cfg: params.cfg, requesterSessionKey: params.target.canonicalKey });
   if (!params.sessionId) {
     params.assertCurrent?.();
@@ -782,7 +785,23 @@ export async function cleanupSessionBeforeMutation(params: {
     assertCurrent: params.assertCurrent,
   });
   params.assertCurrent?.();
-  return parentAcpError;
+  if (parentAcpError) {
+    return parentAcpError;
+  }
+  if (params.entry?.sessionId) {
+    // Clear physical harness ownership after the old run drains but before the
+    // store can expose a successor generation to a new turn.
+    const resetParams = {
+      agentId: normalizeAgentId(params.target.agentId ?? resolveDefaultAgentId(params.cfg)),
+      sessionId: params.entry.sessionId,
+      sessionKey: params.target.canonicalKey ?? params.key,
+      sessionFile: params.entry.sessionFile,
+      reason: params.reason === "session-reset" ? "reset" : "deleted",
+    } satisfies Parameters<typeof resetRegisteredAgentHarnessSessions>[0];
+    await resetRegisteredAgentHarnessSessions(resetParams);
+    params.assertCurrent?.();
+  }
+  return undefined;
 }
 
 export async function emitGatewayBeforeResetPluginHook(params: {
@@ -848,6 +867,10 @@ export async function emitGatewayBeforeResetPluginHook(params: {
 export async function performGatewaySessionReset(params: {
   key: string;
   agentId?: string;
+  spawnedCwd?: string;
+  // A plain New Chat must return to the agent workspace instead of inheriting the previous
+  // turn's session worktree cwd; only worktree-requested resets carry a spawnedCwd forward.
+  clearSpawnedCwd?: boolean;
   reason: "new" | "reset";
   commandSource: string;
   assertCurrent?: () => void;
@@ -1027,6 +1050,15 @@ export async function performGatewaySessionReset(params: {
         parentKey: target.canonicalKey ?? canonicalKey ?? params.key,
         reason: "session-reset",
       });
+      if (entry?.sessionId) {
+        await resetRegisteredAgentHarnessSessions({
+          agentId,
+          sessionId: entry.sessionId,
+          sessionKey: target.canonicalKey ?? params.key,
+          sessionFile: entry.sessionFile,
+          reason: "reset",
+        });
+      }
 
       const lifecycle = await resetSessionEntryLifecycle({
         agentId: target.agentId,
@@ -1104,7 +1136,9 @@ export async function performGatewaySessionReset(params: {
             queueDrop: currentEntry?.queueDrop,
             spawnedBy: currentEntry?.spawnedBy,
             spawnedWorkspaceDir: currentEntry?.spawnedWorkspaceDir,
-            spawnedCwd: currentEntry?.spawnedCwd,
+            spawnedCwd: params.clearSpawnedCwd
+              ? undefined
+              : (params.spawnedCwd ?? currentEntry?.spawnedCwd),
             parentSessionKey: currentEntry?.parentSessionKey,
             forkedFromParent: currentEntry?.forkedFromParent,
             spawnDepth: currentEntry?.spawnDepth,

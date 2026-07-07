@@ -1,7 +1,13 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
-import { scopedAgentParamsForSession, type SessionScopeHost } from "../../lib/sessions/index.ts";
+import {
+  reconcileSessionRunTerminal,
+  scopedAgentParamsForSession,
+  type SessionCapability,
+  type SessionRunTerminal,
+  type SessionScopeHost,
+} from "../../lib/sessions/index.ts";
 import { uiSessionRowMatchesSelectedChat } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { formatConnectError } from "./connect-error.ts";
@@ -18,23 +24,21 @@ export type ChatRunUiStatus = {
   occurredAt: number;
 };
 
-export type LocalTerminalReconcile = {
+type TerminalSessionRunStatus = Exclude<SessionRunStatus, "running">;
+
+type LocalTerminalReconcile = {
   sessionKey: string;
   runId: string | null;
   phase: ChatRunUiStatus["phase"];
-  sessionStatus: SessionRunStatus;
-  occurredAt: number;
+  sessionStatus: TerminalSessionRunStatus;
 };
-
-// A terminal chat event clears local run state before the periodic
-// sessions.list poll catches up. Within this window a stale "active" row for
-// the just-completed selected session is treated as poll lag and reconciled
-// back to terminal, so the composer does not snap back to in-progress. (#87875)
-export const STALE_ACTIVE_ROW_RECONCILE_WINDOW_MS = 10_000;
 
 type TimerHandle = ReturnType<typeof globalThis.setTimeout>;
 
-type RunLifecycleHost = Omit<Partial<Parameters<typeof resetToolStream>[0]>, "hello"> & {
+type RunLifecycleHost = Omit<
+  Partial<Parameters<typeof resetToolStream>[0]>,
+  "hello" | "sessions"
+> & {
   sessionKey: string;
   agentsList?: { mainKey?: string | null } | null;
   hello?: { snapshot?: unknown } | null;
@@ -49,13 +53,14 @@ type RunLifecycleHost = Omit<Partial<Parameters<typeof resetToolStream>[0]>, "he
   chatRunStatus?: ChatRunUiStatus | null;
   chatRunStatusClearTimer?: TimerHandle | number | null;
   sessionsResult?: SessionsListResult | null;
+  sessions?: Pick<SessionCapability, "reconcileRunTerminal" | "setModelOverride">;
   lastLocalTerminalReconcile?: LocalTerminalReconcile | null;
   requestUpdate?: () => void;
 };
 
 type ReconcileOptions = {
   outcome?: ChatRunUiStatus["phase"];
-  sessionStatus?: SessionRunStatus;
+  sessionStatus?: TerminalSessionRunStatus;
   runId?: string | null;
   sessionKey?: string | null;
   sessionKeys?: readonly (string | null | undefined)[];
@@ -119,7 +124,7 @@ export function isChatStopCommand(text: string) {
   return CHAT_STOP_COMMANDS.has(normalizeLowercaseStringOrEmpty(text.trim()));
 }
 
-export type ChatAbortOptions = { preserveDraft?: boolean };
+type ChatAbortOptions = { preserveDraft?: boolean };
 
 export async function abortChatRun(state: ChatAbortRunState): Promise<boolean> {
   if (!state.client || !state.connected) {
@@ -166,7 +171,9 @@ function clearTimer(timer: TimerHandle | number | null | undefined) {
   }
 }
 
-function canResetToolStream(host: RunLifecycleHost): host is Parameters<typeof resetToolStream>[0] {
+function canResetToolStream(
+  host: RunLifecycleHost,
+): host is RunLifecycleHost & Parameters<typeof resetToolStream>[0] {
   return (
     host.toolStreamById instanceof Map &&
     Array.isArray(host.toolStreamOrder) &&
@@ -195,7 +202,11 @@ function scheduleRunStatusClear(host: RunLifecycleHost, status: ChatRunUiStatus)
     }
     host.chatRunStatus = null;
     host.chatRunStatusClearTimer = null;
-    host.requestUpdate?.();
+    // Terminal status temporarily masks stale active rows from session polling.
+    // Reconcile again as the mask expires so the composer cannot revert to Stop.
+    if (!reconcileStaleChatRunAfterSessionStatePublication(host)) {
+      host.requestUpdate?.();
+    }
   }, CHAT_RUN_STATUS_TOAST_DURATION_MS);
 }
 
@@ -218,6 +229,14 @@ function sessionKeysFor(host: RunLifecycleHost, options: ReconcileOptions): Set<
   if (primary) {
     keys.add(primary);
   }
+  if (uiSessionRowMatchesSelectedChat(host, "global", primary)) {
+    keys.add("global");
+  }
+  for (const row of host.sessionsResult?.sessions ?? []) {
+    if (uiSessionRowMatchesSelectedChat(host, row.key, primary)) {
+      keys.add(row.key);
+    }
+  }
   for (const key of options.sessionKeys ?? []) {
     const normalized = toSessionKey(key);
     if (normalized) {
@@ -232,7 +251,7 @@ function reconcileSessionRows(
   options: ReconcileOptions,
   occurredAt: number,
 ) {
-  if (!options.outcome || !host.sessionsResult) {
+  if (!options.outcome) {
     return;
   }
   const keys = sessionKeysFor(host, options);
@@ -241,29 +260,16 @@ function reconcileSessionRows(
   }
   const status =
     options.sessionStatus ?? (options.outcome === "done" ? ("done" as const) : ("killed" as const));
-  let changed = false;
-  const sessions = host.sessionsResult.sessions.map((row) => {
-    if (!keys.has(row.key)) {
-      return row;
-    }
-    const next = {
-      ...row,
-      hasActiveRun: false,
-      status,
-      endedAt: row.endedAt ?? occurredAt,
-    };
-    if (status === "killed") {
-      next.abortedLastRun = true;
-    }
-    if (typeof next.startedAt === "number" && typeof next.endedAt === "number") {
-      next.runtimeMs = Math.max(0, next.endedAt - next.startedAt);
-    }
-    changed = true;
-    return next;
-  });
-  if (changed) {
-    host.sessionsResult = { ...host.sessionsResult, sessions };
+  const terminal: SessionRunTerminal = {
+    sessionKeys: [...keys],
+    runId: options.runId ?? host.chatRunId ?? null,
+    status,
+    endedAt: occurredAt,
+  };
+  if (host.sessionsResult) {
+    host.sessionsResult = reconcileSessionRunTerminal(host.sessionsResult, terminal);
   }
+  host.sessions?.reconcileRunTerminal(terminal);
 }
 
 export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: ReconcileOptions = {}) {
@@ -301,7 +307,6 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
         runId,
         phase: options.outcome,
         sessionStatus: options.sessionStatus ?? (options.outcome === "done" ? "done" : "killed"),
-        occurredAt,
       };
     }
     if (options.publishRunStatus !== false) {
@@ -315,39 +320,53 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
 }
 
 function currentSessionRow(host: RunLifecycleHost) {
-  return host.sessionsResult?.sessions.find((row) => row.key === host.sessionKey);
+  return host.sessionsResult?.sessions.find((row) =>
+    uiSessionRowMatchesSelectedChat(host, row.key, host.sessionKey),
+  );
 }
 
 // After a terminal chat event clears local run state, a racing sessions.list
 // refresh can still carry a stale "active" row for the session we just
 // finished, which would drive the composer back to in-progress. Re-apply
-// terminal to that row — but only while we hold a recent LOCAL terminal
-// reconcile for the currently selected session, so a genuinely recovered
-// active run (e.g. opening WebChat to a session already running elsewhere) is
-// never cleared. (#87875)
+// terminal to that row — but only while its active-run identity exactly
+// matches the locally completed run. Keep that identity tombstone until the
+// Gateway reports terminal state or a different run, because poll lag has no
+// safe time bound. (#87875)
 function reconcileStaleSelectedSessionRunAfterLocalCompletion(host: RunLifecycleHost): boolean {
   const recent = host.lastLocalTerminalReconcile;
   if (!recent || recent.sessionKey !== host.sessionKey) {
     return false;
   }
-  if (Date.now() - recent.occurredAt > STALE_ACTIVE_ROW_RECONCILE_WINDOW_MS) {
-    host.lastLocalTerminalReconcile = null;
-    return false;
-  }
   const row = currentSessionRow(host);
-  if (!row || !isSessionRunActive(row)) {
-    // No row, or the server already reflects a non-active state — the poll has
-    // caught up, so stop suppressing.
-    host.lastLocalTerminalReconcile = null;
+  if (!row) {
+    // A disconnected or incomplete session result proves nothing about the
+    // run. Retain the identity so reconnect cannot revive the completed run.
     return false;
   }
-  if (typeof row.startedAt === "number" && row.startedAt > recent.occurredAt) {
+  if (!isSessionRunActive(row)) {
+    // This may be our own shared terminal projection rather than a Gateway
+    // publication. Retain the identity so a duplicate stale event cannot
+    // revive the completed run.
+    return false;
+  }
+  // Browser and Gateway clocks can differ. Only an exact active-run identity
+  // proves this row still describes the locally completed run.
+  if (
+    recent.runId == null ||
+    row.activeRunIds?.length !== 1 ||
+    row.activeRunIds[0] !== recent.runId
+  ) {
     host.lastLocalTerminalReconcile = null;
     return false;
   }
   reconcileSessionRows(
     host,
-    { outcome: recent.phase, sessionStatus: recent.sessionStatus, sessionKey: recent.sessionKey },
+    {
+      outcome: recent.phase,
+      sessionStatus: recent.sessionStatus,
+      sessionKey: recent.sessionKey,
+      runId: recent.runId,
+    },
     Date.now(),
   );
   host.requestUpdate?.();
@@ -366,6 +385,14 @@ export function reconcileChatRunFromCurrentSessionRow(
     return false;
   }
   return reconcileChatRunFromSessionRow(host, row, options);
+}
+
+export function reconcileStaleChatRunAfterSessionStatePublication(host: RunLifecycleHost): boolean {
+  // Both session subscriptions and direct event reconciliation can republish
+  // canonical rows after the local terminal projection; guard both paths.
+  const canReconcile =
+    host.lastLocalTerminalReconcile != null && !host.chatRunId && host.chatStream == null;
+  return canReconcile && reconcileChatRunFromCurrentSessionRow(host, { publishRunStatus: false });
 }
 
 function isSessionRowForSelectedChat(
@@ -393,13 +420,19 @@ export function reconcileChatRunFromSessionRow(
   if (isSessionRunActive(row)) {
     return false;
   }
+  // Transcript snapshots can briefly lose the active-run projection while the
+  // persisted lifecycle is still running. Wait for a real terminal status so
+  // tool updates cannot flash an interrupted composer state mid-turn.
+  if (row.hasActiveRun !== false && row.status === "running") {
+    return false;
+  }
   const terminalStatus = row.status !== undefined;
   if (row.hasActiveRun !== false && !terminalStatus) {
     return false;
   }
   reconcileChatRunLifecycle(host, {
     outcome: row.status === "done" ? "done" : "interrupted",
-    sessionStatus: row.status === "done" ? "done" : (row.status ?? "killed"),
+    sessionStatus: row.status === "running" || row.status === undefined ? "killed" : row.status,
     runId: host.chatRunId,
     sessionKey: host.sessionKey,
     sessionKeys: [row.key],

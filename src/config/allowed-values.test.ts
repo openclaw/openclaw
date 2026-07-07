@@ -22,4 +22,13 @@ describe("summarizeAllowedValues", () => {
       values: [`${prefix}x`, `${prefix}y`],
     });
   });
+
+  it("returns empty label for undefined allowed value", () => {
+    const summary = summarizeAllowedValues([undefined]);
+    expect(summary).toStrictEqual({
+      formatted: "",
+      hiddenCount: 0,
+      values: [""],
+    });
+  });
 });

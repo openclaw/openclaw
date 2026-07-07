@@ -1011,6 +1011,27 @@ describe("resolveMedia original filename preservation", () => {
     });
   });
 
+  it("classifies an audio document from the saved MIME type", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "documents/recording.m2a" });
+    saveRemoteMedia.mockResolvedValueOnce({
+      path: "/tmp/inbound/recording.m2a",
+      contentType: "audio/mpeg",
+    });
+
+    const result = await resolveMediaWithDefaults(
+      makeCtx("document", getFile, {
+        file_name: "recording.m2a",
+        mime_type: "application/octet-stream",
+      }),
+    );
+
+    expectResolvedMediaFields(result, "MPEG-2 audio document", {
+      path: "/tmp/inbound/recording.m2a",
+      contentType: "audio/mpeg",
+      placeholder: "<media:audio>",
+    });
+  });
+
   it("passes audio.file_name to saveMediaBuffer", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "music/file_99.mp3" });
     readRemoteMediaBuffer.mockResolvedValueOnce({

@@ -332,6 +332,51 @@ describe("sessions.usage", () => {
     expect(result.totals.totalTokens).toBe(60);
   });
 
+  it("passes the requested timezone offset to session daily summaries", async () => {
+    await runSessionsUsage({
+      ...BASE_USAGE_RANGE,
+      mode: "specific",
+      utcOffset: "UTC-5",
+    });
+
+    expect(vi.mocked(loadSessionCostSummariesFromCache)).toHaveBeenCalledWith(
+      expect.objectContaining({ dailyUtcOffsetMinutes: -300 }),
+    );
+  });
+
+  it("formats response date labels in the requested timezone offset", async () => {
+    const respond = await runSessionsUsage({
+      ...BASE_USAGE_RANGE,
+      startDate: "2026-07-06",
+      endDate: "2026-07-06",
+      mode: "specific",
+      utcOffset: "UTC+8",
+    });
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    expect(mockArg(respond, 0, 0)).toBe(true);
+    const result = mockArg(respond, 0, 1) as { startDate: string; endDate: string };
+    expect(result.startDate).toBe("2026-07-06");
+    expect(result.endDate).toBe("2026-07-06");
+  });
+
+  it("keeps explicit gateway response date labels on DST-short days", async () => {
+    await withEnvAsync({ TZ: "America/New_York" }, async () => {
+      const respond = await runSessionsUsage({
+        ...BASE_USAGE_RANGE,
+        startDate: "2026-03-08",
+        endDate: "2026-03-08",
+        mode: "gateway",
+      });
+
+      expect(respond).toHaveBeenCalledTimes(1);
+      expect(mockArg(respond, 0, 0)).toBe(true);
+      const result = mockArg(respond, 0, 1) as { startDate: string; endDate: string };
+      expect(result.startDate).toBe("2026-03-08");
+      expect(result.endDate).toBe("2026-03-08");
+    });
+  });
+
   it("discovers usage for requested disk-only agents not listed in config", async () => {
     const respond = await runSessionsUsage({ ...BASE_USAGE_RANGE, agentId: "codex" });
 

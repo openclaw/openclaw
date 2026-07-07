@@ -30,6 +30,7 @@ import type {
   QaTransportNativeCommandInput,
   QaTransportOutboundEvent,
   QaTransportOutboundSequenceMatch,
+  QaTransportPolicy,
   QaTransportReportParams,
   QaTransportState,
 } from "./qa-transport.js";
@@ -41,6 +42,8 @@ import type {
 
 const CRABLINE_TRANSPORT_ID = "crabline";
 const CRABLINE_RECORDER_POLL_MS = 25;
+const TELEGRAM_QA_DRIVER_ID = "100001";
+const TELEGRAM_QA_OBSERVER_ID = "100002";
 
 type QaCrablineTransportState = QaTransportState & {
   cleanup: () => Promise<void>;
@@ -49,6 +52,14 @@ type QaCrablineTransportState = QaTransportState & {
 };
 
 const TELEGRAM_LIFECYCLE_METHOD_RE = /\/(sendMessage|editMessageText|deleteMessage)$/u;
+
+function resolveTelegramQaSenderId(senderId: string) {
+  return senderId === "driver"
+    ? TELEGRAM_QA_DRIVER_ID
+    : senderId === "observer"
+      ? TELEGRAM_QA_OBSERVER_ID
+      : senderId;
+}
 
 function readTelegramLifecycleEvent(params: {
   cursor: number;
@@ -198,6 +209,22 @@ async function postCrablineInbound(params: {
         `Crabline ${params.adapter.channel} inbound injection failed with HTTP ${response.status}.`,
       );
     }
+    const result: unknown = await response.json();
+    if (params.adapter.channel === "matrix" && isRecord(result) && isRecord(result.event)) {
+      return readStringValue(result.event.event_id);
+    }
+    if (params.adapter.channel === "slack" && isRecord(result) && isRecord(result.message)) {
+      return readStringValue(result.message.ts);
+    }
+    if (
+      params.adapter.channel === "telegram" &&
+      isRecord(result) &&
+      isRecord(result.update) &&
+      isRecord(result.update.message)
+    ) {
+      return normalizeStringifiedOptionalString(result.update.message.message_id);
+    }
+    return undefined;
   } finally {
     await release();
   }
@@ -284,18 +311,63 @@ function createCrablineState(params: {
       await drainRecorder();
       return outboundEvents;
     },
+    observeEvent(event) {
+      if (params.adapter.channel === "telegram") {
+        const lifecycle = readTelegramLifecycleEvent({
+          cursor: outboundEvents.length + 1,
+          event,
+          messageByProviderId: telegramMessageByProviderId,
+          pendingByChat: pendingTelegramMessagesByChat,
+        });
+        if (lifecycle) {
+          outboundEvents.push(lifecycle);
+        }
+      }
+      const normalizedEvent =
+        params.adapter.channel === "telegram" &&
+        isRecord(event) &&
+        isRecord(event.body) &&
+        normalizeStringifiedOptionalString(event.body.chat_id)
+          ? {
+              ...event,
+              body: {
+                ...event.body,
+                chat_id: normalizeStringifiedOptionalString(event.body.chat_id),
+              },
+            }
+          : event;
+      const outbound = params.adapter.createOutboundFromRecorderEvent({
+        event: normalizedEvent,
+        targetByProviderTarget,
+      }) as QaBusOutboundMessageInput | null;
+      if (outbound) {
+        baseState.addOutboundMessage(outbound);
+      }
+    },
     async addInboundMessage(input: QaBusInboundMessageInput) {
-      const providerInbound = params.adapter.createInbound({ input });
+      const providerSenderId =
+        params.adapter.channel === "telegram"
+          ? resolveTelegramQaSenderId(input.senderId)
+          : input.senderId;
+      const providerInbound = params.adapter.createInbound({
+        input: {
+          ...input,
+          senderId: providerSenderId,
+        },
+      });
       targetByProviderTarget.set(providerInbound.providerTargetKey, providerInbound.qaTarget);
+      const providerMessageId = await postCrablineInbound({
+        adapter: params.adapter,
+        providerInbound,
+      });
       const message = baseState.addInboundMessage({
         ...input,
         conversation: providerInbound.stateConversation,
         ...(providerInbound.threadId ? { threadId: providerInbound.threadId } : {}),
       });
-      await postCrablineInbound({
-        adapter: params.adapter,
-        providerInbound,
-      });
+      if (providerMessageId) {
+        message.id = providerMessageId;
+      }
       return message;
     },
     rememberProviderTarget(providerTargetKey, qaTarget) {
@@ -316,6 +388,7 @@ function createCrablineState(params: {
 class QaCrablineTransport extends QaStateBackedTransportAdapter {
   readonly #adapter: StartedOpenClawCrablineAdapter;
   readonly #selection: OpenClawCrablineChannelDriverSelection;
+  readonly #transportPolicy?: QaTransportPolicy;
   readonly #state: QaCrablineTransportState;
   readonly sendNativeCommand?: (input: QaTransportNativeCommandInput) => Promise<void>;
   readonly waitForOutboundSequence?: (input: QaTransportOutboundSequenceMatch) => Promise<{
@@ -325,6 +398,7 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
 
   constructor(params: {
     adapter: StartedOpenClawCrablineAdapter;
+    transportPolicy?: QaTransportPolicy;
     selection: OpenClawCrablineChannelDriverSelection;
     state: QaCrablineTransportState;
   }) {
@@ -337,6 +411,7 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
     });
     this.#adapter = params.adapter;
     this.#selection = params.selection;
+    this.#transportPolicy = params.transportPolicy;
     this.#state = params.state;
     if (params.selection.channel === "telegram") {
       this.sendNativeCommand = async (input) => {
@@ -355,8 +430,39 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
     }
   }
 
-  createGatewayConfig = (params: { baseUrl: string }): QaTransportGatewayConfig =>
-    this.#adapter.createGatewayConfig(params) as QaTransportGatewayConfig;
+  createGatewayConfig = (params: { baseUrl: string }): QaTransportGatewayConfig => {
+    const config = this.#adapter.createGatewayConfig(params) as OpenClawConfig;
+    if (this.#selection.channel !== "telegram") {
+      return config as QaTransportGatewayConfig;
+    }
+    const senderAllowlist = this.#transportPolicy?.senderAllowlist?.map(resolveTelegramQaSenderId);
+    if (!this.#transportPolicy?.requireGroupMention && !senderAllowlist) {
+      return config as QaTransportGatewayConfig;
+    }
+    return {
+      ...config,
+      channels: {
+        ...config.channels,
+        telegram: {
+          ...config.channels?.telegram,
+          ...(senderAllowlist
+            ? {
+                allowFrom: [...senderAllowlist],
+                groupAllowFrom: [...senderAllowlist],
+                groupPolicy: "allowlist" as const,
+              }
+            : {}),
+          groups: {
+            ...config.channels?.telegram?.groups,
+            "*": {
+              ...config.channels?.telegram?.groups?.["*"],
+              ...(this.#transportPolicy?.requireGroupMention ? { requireMention: true } : {}),
+            },
+          },
+        },
+      },
+    } as QaTransportGatewayConfig;
+  };
 
   waitReady = (params: {
     gateway: QaTransportGatewayClient;
@@ -398,9 +504,18 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
 
 export async function createQaCrablineTransportAdapter(params: {
   outputDir: string;
+  transportPolicy?: QaTransportPolicy;
   selection: OpenClawCrablineChannelDriverSelection;
   state?: QaBusState;
 }) {
+  const requiresTelegramPolicy =
+    params.transportPolicy?.requireGroupMention === true ||
+    params.transportPolicy?.senderAllowlist !== undefined;
+  if (params.selection.channel !== "telegram" && requiresTelegramPolicy) {
+    throw new Error(
+      `Crabline ${params.selection.channel} does not support the requested group transport policy; use the Crabline Telegram bridge or a live channel adapter`,
+    );
+  }
   const recorderPath = path.join(
     params.outputDir,
     "artifacts",
@@ -423,5 +538,11 @@ export async function createQaCrablineTransportAdapter(params: {
     adapter,
     state: params.state ?? createQaBusState(),
   });
-  return new QaCrablineTransport({ adapter, selection: params.selection, state });
+  observeEvent = state.observeEvent;
+  return new QaCrablineTransport({
+    adapter,
+    transportPolicy: params.transportPolicy,
+    selection: params.selection,
+    state,
+  });
 }

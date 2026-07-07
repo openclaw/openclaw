@@ -310,6 +310,9 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
             lastRunActivityAt: snapshot.lastRunActivityAt ?? null,
             lastError: snapshot.lastError ?? null,
             healthState: snapshot.healthState ?? undefined,
+            ...(snapshot.terminalDisconnect
+              ? { terminalDisconnect: snapshot.terminalDisconnect }
+              : {}),
           };
         },
         resolveAccountSnapshot: async ({ account, runtime }) => {
@@ -337,6 +340,9 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
               busy: runtime?.busy ?? false,
               lastRunActivityAt: runtime?.lastRunActivityAt ?? null,
               healthState: runtime?.healthState ?? undefined,
+              ...(runtime?.terminalDisconnect
+                ? { terminalDisconnect: runtime.terminalDisconnect }
+                : {}),
               dmPolicy: account.dmPolicy,
               allowFrom: normalizeWhatsAppAllowFromEntryNumbers(account.allowFrom ?? []),
             },

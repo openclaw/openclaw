@@ -156,6 +156,40 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     });
   });
 
+  it("keeps stable Anthropic Docker proof blocking and full proof advisory", () => {
+    const jobs = workflow().jobs;
+    const dockerLiveJob = jobs.validate_live_docker_provider_suites;
+    const anthropicEntries = dockerLiveJob.strategy.matrix.include
+      .filter((entry) => entry.suite_group === "live-gateway-anthropic-docker")
+      .map((entry) => ({
+        advisory: entry.advisory,
+        profiles: entry.profiles,
+        suiteId: entry.suite_id,
+      }));
+
+    expect(anthropicEntries).toEqual([
+      {
+        advisory: undefined,
+        profiles: "stable",
+        suiteId: "live-gateway-anthropic-docker",
+      },
+      {
+        advisory: true,
+        profiles: "full",
+        suiteId: "live-gateway-anthropic-docker-full",
+      },
+    ]);
+    expect(dockerLiveJob.strategy.matrix.include).toContainEqual(
+      expect.objectContaining({ suite_id: "live-gateway-anthropic-docker-full" }),
+    );
+
+    const conditionalSteps = dockerLiveJob.steps.filter((step) => step.if);
+    expect(conditionalSteps.length).toBeGreaterThan(0);
+    for (const step of conditionalSteps) {
+      expect(step.if).toContain("inputs.live_suite_filter == matrix.suite_group");
+    }
+  });
+
   it("disables live model planning when focused recovery targets another live suite", () => {
     const plan = createReleaseWorkflowMatrixPlan({
       includeLiveSuites: true,

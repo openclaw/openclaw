@@ -56,11 +56,14 @@ plugins {
   alias(libs.plugins.ktlint)
   alias(libs.plugins.kotlin.compose)
   alias(libs.plugins.kotlin.serialization)
+  alias(libs.plugins.ksp)
 }
 
 android {
   namespace = "ai.openclaw.app"
-  compileSdk = 36
+  // AndroidX Core 1.19 and Lifecycle 2.11 require API 37 compilation.
+  // targetSdk stays separate so runtime behavior changes remain an explicit migration.
+  compileSdk = 37
 
   // Release signing is local-only; keep the keystore path and passwords out of the repo.
   signingConfigs {
@@ -217,6 +220,9 @@ dependencies {
   implementation(libs.kotlinx.serialization.json)
 
   implementation(libs.androidx.security.crypto)
+  // Read-only offline cache for chat sessions/transcripts (disposable, destructive migrations only).
+  implementation(libs.androidx.room.runtime)
+  ksp(libs.androidx.room.compiler)
   implementation(libs.androidx.exifinterface)
   implementation(libs.okhttp)
   implementation(libs.bcprov)

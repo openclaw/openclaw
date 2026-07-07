@@ -25,6 +25,7 @@ import {
 } from "../../lib/sessions/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { mergeUsageCacheStatus } from "./cache-status.ts";
+import type { ProviderUsageSummary } from "./data-types.ts";
 import { selectUsageSessionKeys, toggleUsageRangeSelection } from "./helpers.ts";
 import type { SessionLogEntry, SessionLogRole, UsageColumnId, UsageProps } from "./types.ts";
 import { renderUsage } from "./view.ts";
@@ -41,6 +42,7 @@ export type UsageRouteData = {
   };
   result: SessionsUsageResult | null;
   costSummary: CostUsageSummary | null;
+  providerUsageSummary: ProviderUsageSummary | null;
   error: string | null;
 };
 
@@ -77,7 +79,7 @@ function toErrorMessage(error: unknown): string {
   return "request failed";
 }
 
-export class UsagePage extends LitElement {
+class UsagePage extends LitElement {
   override createRenderRoot() {
     return this;
   }
@@ -90,6 +92,7 @@ export class UsagePage extends LitElement {
   @state() private usageLoading = true;
   @state() private usageResult: SessionsUsageResult | null = null;
   @state() private usageCostSummary: CostUsageSummary | null = null;
+  @state() private providerUsageSummary: ProviderUsageSummary | null = null;
   @state() private usageError: string | null = null;
   @state() private usageStartDate = currentLocalDate();
   @state() private usageEndDate = currentLocalDate();
@@ -213,6 +216,7 @@ export class UsagePage extends LitElement {
     this.usageAgentId = data.query.agentId;
     this.usageResult = data.result;
     this.usageCostSummary = data.costSummary;
+    this.providerUsageSummary = data.providerUsageSummary;
     this.usageError = data.error;
     this.usageLoading = false;
   }
@@ -236,6 +240,7 @@ export class UsagePage extends LitElement {
     this.routeDataEnabled = false;
     this.usageResult = null;
     this.usageCostSummary = null;
+    this.providerUsageSummary = null;
     this.usageError = null;
     this.usageAgentId = null;
     this.clearSelectionsAndDetails();
@@ -301,7 +306,7 @@ export class UsagePage extends LitElement {
     this.usageError = null;
     try {
       const agentScopeParams = agentId ? { agentId } : { agentScope: "all" as const };
-      const [sessionsResult, costSummary] = await Promise.all([
+      const [sessionsResult, costSummary, providerUsageSummary] = await Promise.all([
         requestSessionUsage(client, { startDate, endDate, agentId, scope, timeZone }),
         client.request<CostUsageSummary>("usage.cost", {
           startDate,
@@ -309,12 +314,14 @@ export class UsagePage extends LitElement {
           ...agentScopeParams,
           ...buildSessionUsageDateParams(timeZone),
         }),
+        client.request<ProviderUsageSummary>("usage.status").catch(() => null),
       ]);
       if (!this.isCurrentRequest(requestId, client)) {
         return;
       }
       this.usageResult = sessionsResult;
       this.usageCostSummary = costSummary;
+      this.providerUsageSummary = providerUsageSummary;
     } catch (error) {
       if (!this.isCurrentRequest(requestId, client)) {
         return;
@@ -465,6 +472,7 @@ export class UsagePage extends LitElement {
           this.usageResult?.cacheStatus,
           this.usageCostSummary?.cacheStatus,
         ),
+        providerUsage: this.providerUsageSummary?.providers ?? [],
       },
       filters: {
         startDate: this.usageStartDate,

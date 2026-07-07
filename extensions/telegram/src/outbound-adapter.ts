@@ -32,7 +32,7 @@ import { loadTelegramSendModule, type TelegramSendModule } from "./send-runtime.
 import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
 
 export const TELEGRAM_TEXT_CHUNK_LIMIT = 4000;
-export const TELEGRAM_POLL_OPTION_LIMIT = 10;
+const TELEGRAM_POLL_OPTION_LIMIT = 10;
 
 type TelegramSendFn = typeof import("./send.js").sendMessageTelegram;
 type TelegramSendOpts = Parameters<TelegramSendFn>[2];
@@ -121,7 +121,7 @@ async function resolveTelegramOutboundSendContext(
   return { outboundTo, send, baseOpts };
 }
 
-export type CreateTelegramOutboundAdapterOptions = {
+type CreateTelegramOutboundAdapterOptions = {
   resolveSend?: ResolveTelegramSendFn;
   loadSendModule?: LoadTelegramSendModuleFn;
   beforeDeliverPayload?: ChannelOutboundAdapter["beforeDeliverPayload"];
