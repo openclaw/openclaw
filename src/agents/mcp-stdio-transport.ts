@@ -120,9 +120,6 @@ export class OpenClawStdioClientTransport implements Transport {
     this.process = undefined;
     this.closingProcess = processToClose;
     if (processToClose) {
-      this.closingProcess = processToClose;
-    }
-    if (processToClose) {
       const closePromise = new Promise<void>((resolve) => {
         processToClose.once("close", () => resolve());
       });
