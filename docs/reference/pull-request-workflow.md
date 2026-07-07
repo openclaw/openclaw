@@ -1,16 +1,16 @@
 ---
-summary: "How Barnacle and ClawSweeper help route, review, and keep OpenClaw pull requests moving."
+summary: "How Barnacle and ClawSweeper route, review, and troubleshoot OpenClaw pull requests."
 read_when:
   - Opening your first pull request against OpenClaw
   - Asking ClawSweeper for review
   - Debugging Barnacle, ClawSweeper, stale labels, or auto-closures
-title: "Pull request workflow"
-sidebarTitle: "Pull requests"
+title: "Pull request automation"
+sidebarTitle: "PR automation"
 ---
 
-This page explains the OpenClaw pull request flow after a PR is open: what the
-automation does, when to ask for review, and what to check when nothing appears
-to happen.
+This page explains the automation that may appear after an OpenClaw pull
+request is open: what Barnacle and ClawSweeper do, how to improve the PR from
+their feedback, and what to check when nothing appears to happen.
 
 Barnacle and ClawSweeper help maintainers keep the queue usable. They do not
 replace maintainer judgment.
@@ -72,7 +72,7 @@ working on it, do not summon ClawSweeper or otherwise work on the PR at the same
 time. Let the human review or repair finish first. If activity stops, check
 whether the author was asked for proof or other work.
 
-## Typical workflow
+## Improve a PR after automation feedback
 
 1. Open a focused PR.
 2. Fill in the PR template with the problem, the change, user impact, and
@@ -81,16 +81,15 @@ whether the author was asked for proof or other work.
 4. Barnacle may label, comment, or close obvious queue-management cases.
 5. ClawSweeper reviews the PR automatically the first time, or after a review
    request.
-6. The maintainer goal is to reach a strong ClawSweeper rating, such as
-   `rating: 🦞 diamond lobster`, and a clear next-step label. When the PR has
-   `status: ⏳ waiting on author`, the author is expected to keep working on it.
-7. The author updates the branch and PR description, resolves addressed bot
-   issues, and asks for a re-review when ready. A few update and review cycles
-   between the author, maintainer, and ClawSweeper are normal.
-8. If the PR has a `P0`, `P1`, or `P2` label and is ready for merge, ask in
-   `#clawtributors` on Discord. Check the pinned messages for the requested
-   form, and include the PR link, current status, and any remaining evidence or
-   maintainer decision needed.
+6. Read ClawSweeper's `Rank-up moves:` and `Proof guidance:` as the action list
+   for that PR. Ratings and labels are review signals, not fixed merge targets.
+7. Update the branch and PR description, resolve addressed bot issues, and ask
+   for a re-review when ready. A few update and review cycles between the
+   author, maintainer, and ClawSweeper are normal.
+8. Keep discussion on the PR when possible. Move to `#clawtributors` on Discord
+   only when the PR needs maintainer coordination, automation appears blocked,
+   or the next decision is hard to settle in GitHub comments. Include the PR
+   link, current status, and the specific question or remaining evidence.
 9. A maintainer reviews the PR, CI, bot feedback, and evidence, and can
    eventually merge the PR.
 

@@ -122,7 +122,7 @@ For coordinated change sets that genuinely need more than 20 PRs, join the **#cl
 
 ## Before You PR
 
-- New contributor? Read the [pull request workflow guide](https://docs.openclaw.ai/reference/pull-request-workflow) for how Barnacle and ClawSweeper route, review, and troubleshoot PRs.
+- New contributor? Read the [pull request automation guide](https://docs.openclaw.ai/reference/pull-request-workflow) for how Barnacle and ClawSweeper route, review, and troubleshoot PRs.
 - Use **Node 24** for source checkouts when possible. OpenClaw also supports Node 22.19+, but older Node 22 minors such as 22.17 are below the repository engine floor and can fail before `pnpm` commands run. See [Node install guidance](docs/install/node.md) if your local version is too old.
 - Test locally with your OpenClaw instance
 - External PRs must describe the user, product, or operational problem in **What Problem This Solves** and include useful validation in **Evidence**. Focused tests, CI results, screenshots, recordings, terminal output, live observations, redacted logs, and artifact links all count. Reviewers will inspect the code, tests, and CI; use the PR body to explain intent and make validation easy to understand.
