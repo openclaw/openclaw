@@ -47,6 +47,16 @@ const cases = [
   ["400 Bad Request", false, "NEGATIVE: provider_error_4xx still throws"],
   ["401 Unauthorized", false, "NEGATIVE: provider_error_4xx still throws"],
   ["403 Forbidden", false, "NEGATIVE: provider_error_4xx still throws"],
+  // Billing/quota 429 responses ARE non-retryable operator-action failures.
+  ["429: insufficient_quota", false, "NEGATIVE: billing 429 → provider_error_4xx"],
+  ["HTTP 429 insufficient quota", false, "NEGATIVE: billing 429 → provider_error_4xx"],
+  ["429 Insufficient account balance", false, "NEGATIVE: billing 429 → provider_error_4xx"],
+  ["429 Resource has been exhausted", false, "NEGATIVE: billing 429 → provider_error_4xx"],
+  ["429 quota exceeded for model", false, "NEGATIVE: billing 429 → provider_error_4xx"],
+  ["429 账户余额不足", false, "NEGATIVE: billing 429 (zh-CN) → provider_error_4xx"],
+  // Non-billing 429 (true rate limit) — skip
+  ["429 Too Many Requests", true, "FIX: true rate-limit 429 → skip"],
+  ["rate limit exceeded 429 retry after 60s", true, "FIX: true rate-limit 429 → skip"],
   [
     "Compaction safeguard could not resolve an API key",
     false,

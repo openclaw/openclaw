@@ -59,7 +59,23 @@ export function classifyCompactionReason(reason?: string): string {
   }
   // 429 (rate limiting) is a retryable transient failure distinct from
   // non-retryable 400/401/403 auth and request-shape errors.
+  // Billing/quota 429 responses are non-retryable operator-action failures
+  // that must surface at the preflight boundary rather than being hidden
+  // behind a later over-budget agent turn. See isBillingErrorMessage in
+  // failover-matches.ts for the canonical billing error patterns.
   if (text.includes("429")) {
+    if (
+      /insufficient[_ ]quota/i.test(text) ||
+      /insufficient[_ ]balance/i.test(text) ||
+      /\binsufficient\s+\w+\s+balance\b/i.test(text) ||
+      /exhausted/i.test(text) ||
+      /quota\s+exceeded/i.test(text) ||
+      /exceeded\s+.*quota/i.test(text) ||
+      /\bbilling\b/i.test(text) ||
+      /余额不足|欠费/.test(text)
+    ) {
+      return "provider_error_4xx";
+    }
     return "provider_error_429";
   }
   if (text.includes("400") || text.includes("401") || text.includes("403")) {

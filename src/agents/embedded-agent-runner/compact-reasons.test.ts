@@ -64,6 +64,30 @@ describe("classifyCompactionReason", () => {
     expect(classifyCompactionReason("HTTP 429 Too Many Requests")).toBe("provider_error_429");
   });
 
+  it("classifies billing/quota 429 responses as non-retryable provider_error_4xx", () => {
+    // Billing/quota 429s must not be skipped — they signal operator-action
+    // failures (exhausted quota, insufficient balance) that need to surface
+    // at the preflight boundary. See failover-matches.ts isBillingErrorMessage.
+    expect(classifyCompactionReason("429: insufficient_quota")).toBe("provider_error_4xx");
+    expect(classifyCompactionReason("HTTP 429 insufficient quota")).toBe("provider_error_4xx");
+    expect(classifyCompactionReason("429 Insufficient account balance")).toBe("provider_error_4xx");
+    expect(classifyCompactionReason("429 Resource has been exhausted (e.g. check quota).")).toBe(
+      "provider_error_4xx",
+    );
+    expect(classifyCompactionReason("429 quota exceeded for model claude-opus-4-6")).toBe(
+      "provider_error_4xx",
+    );
+    expect(classifyCompactionReason("429 Your account has exceeded the current quota")).toBe(
+      "provider_error_4xx",
+    );
+    expect(classifyCompactionReason("429 billing error: please add more credits")).toBe(
+      "provider_error_4xx",
+    );
+    // Chinese billing messages
+    expect(classifyCompactionReason("429 账户余额不足")).toBe("provider_error_4xx");
+    expect(classifyCompactionReason("429 欠费")).toBe("provider_error_4xx");
+  });
+
   it("classifies provider 5xx errors", () => {
     expect(classifyCompactionReason("HTTP 503 Service Unavailable")).toBe("provider_error_5xx");
     expect(classifyCompactionReason("Internal Server Error 500")).toBe("provider_error_5xx");
