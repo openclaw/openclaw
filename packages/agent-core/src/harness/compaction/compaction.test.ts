@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createAssistantMessageEventStream } from "../../llm.js";
-import type { AssistantMessage, Model, StreamFn } from "../../llm.js";
+import type { AssistantMessage, Model, StreamFn, Usage } from "../../llm.js";
 import {
   calculateContextTokens,
   compact,
@@ -42,6 +42,19 @@ describe("calculateContextTokens", () => {
     ).toBe(927_907);
   });
 
+  it("normalizes OpenAI-style usage fields without producing NaN", () => {
+    expect(
+      calculateContextTokens({
+        input: 0,
+        output: 0,
+        total: 41_000,
+        prompt_tokens: 40_000,
+        completion_tokens: 1_000,
+        cache: { read: 500, write: 250 },
+      } as unknown as Usage),
+    ).toBe(41_000);
+  });
+
   it("estimates the transcript instead of using aggregate billing when context is unavailable", () => {
     const estimate = estimateContextTokens([
       { role: "user", content: "hello", timestamp: 0 },
@@ -69,6 +82,56 @@ describe("calculateContextTokens", () => {
     expect(estimate.tokens).toBeGreaterThan(0);
     expect(estimate.usageTokens).toBe(0);
     expect(estimate.lastUsageIndex).toBeNull();
+  });
+
+  it("ignores delivery-mirror usage when selecting the latest context snapshot", () => {
+    const estimate = estimateContextTokens([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "real answer" }],
+        api: "anthropic-messages",
+        provider: "anthropic",
+        model: "claude-fable-5",
+        usage: {
+          input: 12,
+          output: 100,
+          cacheRead: 1_000,
+          cacheWrite: 0,
+          contextUsage: {
+            state: "available",
+            promptTokens: 1_012,
+            totalTokens: 1_112,
+          },
+          totalTokens: 1_112,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: 0,
+      },
+      { role: "user", content: "next", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "mirrored answer" }],
+        api: "openclaw-internal",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        usage: {
+          input: 0,
+          output: 0,
+          total_tokens: 99_999,
+          prompt_tokens: 90_000,
+          completion_tokens: 9_999,
+          cache: { read: 0, write: 0 },
+        } as unknown as Usage,
+        stopReason: "stop",
+        timestamp: 2,
+      },
+    ]);
+
+    expect(estimate.usageTokens).toBe(1_112);
+    expect(estimate.tokens).toBeGreaterThan(1_112);
+    expect(estimate.tokens).toBeLessThan(99_999);
+    expect(estimate.lastUsageIndex).toBe(0);
   });
 
   it("uses the previous exact snapshot and estimates only the unavailable tail", () => {

@@ -146,17 +146,63 @@ export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
   keepRecentTokens: 20000,
 };
 
+function readNonNegativeToken(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function readPositiveToken(value: unknown): number | undefined {
+  const token = readNonNegativeToken(value);
+  return token !== undefined && token > 0 ? token : undefined;
+}
+
+function readTokenComponent(...values: unknown[]): number {
+  for (const value of values) {
+    const token = readPositiveToken(value);
+    if (token !== undefined) {
+      return token;
+    }
+  }
+  for (const value of values) {
+    const token = readNonNegativeToken(value);
+    if (token !== undefined) {
+      return token;
+    }
+  }
+  return 0;
+}
+
 /** Calculate total context tokens from provider usage. */
 export function calculateContextTokens(usage: Usage): number {
   if (usage.contextUsage?.state === "available") {
-    return usage.contextUsage.totalTokens;
+    const contextTokens = readPositiveToken(usage.contextUsage.totalTokens);
+    if (contextTokens !== undefined) {
+      return contextTokens;
+    }
   }
-  return usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+  const record = usage as unknown as Record<string, unknown>;
+  const totalTokens =
+    readPositiveToken(record.totalTokens) ??
+    readPositiveToken(record.total_tokens) ??
+    readPositiveToken(record.total);
+  if (totalTokens !== undefined) {
+    return totalTokens;
+  }
+  const cache = record.cache as Record<string, unknown> | undefined;
+  const summed =
+    readTokenComponent(record.input, record.prompt_tokens) +
+    readTokenComponent(record.output, record.completion_tokens) +
+    readTokenComponent(record.cacheRead, cache?.read) +
+    readTokenComponent(record.cacheWrite, cache?.write);
+  if (summed > 0 && Number.isFinite(summed)) {
+    return summed;
+  }
+  return 0;
 }
 function getAssistantUsage(msg: AgentMessage): Usage | undefined {
   if (msg.role === "assistant" && "usage" in msg) {
     const assistantMsg = msg;
     if (
+      assistantMsg.model !== "delivery-mirror" &&
       assistantMsg.stopReason !== "aborted" &&
       assistantMsg.stopReason !== "error" &&
       assistantMsg.usage
@@ -223,6 +269,18 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
   }
 
   const usageTokens = calculateContextTokens(usageInfo.usage);
+  if (!Number.isFinite(usageTokens) || usageTokens <= 0) {
+    let estimated = 0;
+    for (const message of messages) {
+      estimated += estimateTokens(message);
+    }
+    return {
+      tokens: estimated,
+      usageTokens: 0,
+      trailingTokens: estimated,
+      lastUsageIndex: null,
+    };
+  }
   let trailingTokens = 0;
   for (let i = usageInfo.index + 1; i < messages.length; i++) {
     trailingTokens += estimateTokens(messages[i]);

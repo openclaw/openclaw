@@ -242,11 +242,13 @@ function isSessionEntry(entry: FileEntry): entry is SessionEntry {
         summary?: unknown;
         tokensBefore?: unknown;
       };
-      return (
-        isString(candidate.firstKeptEntryId) &&
-        typeof candidate.summary === "string" &&
-        typeof candidate.tokensBefore === "number"
-      );
+      if (!isString(candidate.firstKeptEntryId) || typeof candidate.summary !== "string") {
+        return false;
+      }
+      if (typeof candidate.tokensBefore !== "number" || !Number.isFinite(candidate.tokensBefore)) {
+        candidate.tokensBefore = 0;
+      }
+      return true;
     }
     case "custom":
       return isString((entry as { customType?: unknown }).customType);
