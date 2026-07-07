@@ -1823,6 +1823,27 @@ describe("chat voice controls", () => {
     expect(onRealtimeTalkInputSelect).toHaveBeenCalledWith("built-in");
   });
 
+  it("keeps a persisted microphone visible before discovery can name it", () => {
+    const container = renderVoiceOptions({
+      realtimeTalkInputDeviceId: "persisted-microphone",
+    });
+
+    const microphone = container.querySelector<HTMLSelectElement>(
+      '[data-talk-select="microphone"] select',
+    );
+    expect(microphone).toBeInstanceOf(HTMLSelectElement);
+    expect(
+      Array.from(microphone?.options ?? []).map((option) => ({
+        label: option.textContent?.trim(),
+        value: option.value,
+      })),
+    ).toEqual([
+      { label: "System default", value: "" },
+      { label: "Microphone 1", value: "persisted-microphone" },
+    ]);
+    expect(microphone?.value).toBe("persisted-microphone");
+  });
+
   it("shows microphone loading, empty, and error states without hiding System default", () => {
     const loading = renderVoiceOptions({
       realtimeTalkInputLoading: true,

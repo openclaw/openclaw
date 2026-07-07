@@ -116,6 +116,8 @@ async function refreshRealtimeTalkInputs(
     state.realtimeTalkInputDevices = result.devices;
     state.realtimeTalkInputDeviceId = currentRealtimeTalkInput(state);
     const selectedDeviceMissing =
+      requestPermission &&
+      result.warning === null &&
       state.realtimeTalkInputDeviceId.length > 0 &&
       result.devices.length > 0 &&
       !result.devices.some((device) => device.deviceId === state.realtimeTalkInputDeviceId);

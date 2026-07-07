@@ -98,9 +98,21 @@ function renderRealtimeTalkInputSetting(props: ChatRealtimeTalkOptionsProps) {
     return nothing;
   }
   const devices = props.realtimeTalkInputDevices ?? [];
+  const selectedDeviceId = props.realtimeTalkInputDeviceId?.trim() ?? "";
+  const selectedDeviceKnown = devices.some((device) => device.deviceId === selectedDeviceId);
   const options = [
     { label: t("chat.composer.systemDefaultMicrophone"), value: "" },
     ...devices.map((device) => ({ label: device.label, value: device.deviceId })),
+    ...(selectedDeviceId && !selectedDeviceKnown
+      ? [
+          {
+            label: t("chat.composer.microphoneFallback", {
+              number: String(devices.length + 1),
+            }),
+            value: selectedDeviceId,
+          },
+        ]
+      : []),
   ];
   const refreshLabel = `${t("common.refresh")}: ${t("chat.composer.microphoneInput")}`;
   return html`
@@ -109,7 +121,7 @@ function renderRealtimeTalkInputSetting(props: ChatRealtimeTalkOptionsProps) {
         ${renderNativeTalkSelect({
           id: "microphone",
           label: t("chat.composer.microphoneInput"),
-          value: props.realtimeTalkInputDeviceId ?? "",
+          value: selectedDeviceId,
           options,
           onSelect: props.onRealtimeTalkInputSelect,
         })}
