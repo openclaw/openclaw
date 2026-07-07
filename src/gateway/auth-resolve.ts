@@ -21,6 +21,7 @@ export type ResolvedGatewayAuth = {
   token?: string;
   password?: string;
   allowTailscale: boolean;
+  requireTailscaleSharedSecret?: boolean;
   trustedProxy?: GatewayTrustedProxyConfig;
 };
 
@@ -55,6 +56,9 @@ export function resolveGatewayAuth(params: {
     }
     if (authOverride.allowTailscale !== undefined) {
       authConfig.allowTailscale = authOverride.allowTailscale;
+    }
+    if (authOverride.requireTailscaleSharedSecret !== undefined) {
+      authConfig.requireTailscaleSharedSecret = authOverride.requireTailscaleSharedSecret;
     }
     if (authOverride.rateLimit !== undefined) {
       authConfig.rateLimit = authOverride.rateLimit;
@@ -112,6 +116,7 @@ export function resolveGatewayAuth(params: {
     token,
     password,
     allowTailscale,
+    requireTailscaleSharedSecret: authConfig.requireTailscaleSharedSecret === true,
     trustedProxy,
   };
 }

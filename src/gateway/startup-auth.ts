@@ -42,6 +42,9 @@ export function mergeGatewayAuthConfig(
   if (override.allowTailscale !== undefined) {
     merged.allowTailscale = override.allowTailscale;
   }
+  if (override.requireTailscaleSharedSecret !== undefined) {
+    merged.requireTailscaleSharedSecret = override.requireTailscaleSharedSecret;
+  }
   if (override.rateLimit !== undefined) {
     merged.rateLimit = override.rateLimit;
   }

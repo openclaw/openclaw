@@ -1,5 +1,6 @@
 // Defines user-facing config field labels used by schema metadata.
 import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
+import { GATEWAY_AUTH_FIELD_LABELS } from "./schema.gateway-auth.js";
 import { NODE_CAPABILITY_FIELD_LABELS } from "./schema.node-capabilities.js";
 
 export const FIELD_LABELS: Record<string, string> = {
@@ -147,11 +148,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.terminal.enabled": "Operator Terminal Enabled",
   "gateway.terminal.shell": "Operator Terminal Shell",
   "gateway.terminal.detachedSessionTimeoutSeconds": "Operator Terminal Detached Session Timeout",
-  "gateway.auth": "Gateway Auth",
-  "gateway.auth.mode": "Gateway Auth Mode",
-  "gateway.auth.allowTailscale": "Gateway Auth Allow Tailscale Identity",
-  "gateway.auth.rateLimit": "Gateway Auth Rate Limit",
-  "gateway.auth.trustedProxy": "Gateway Trusted Proxy Auth",
+  ...GATEWAY_AUTH_FIELD_LABELS,
   "gateway.trustedProxies": "Gateway Trusted Proxy CIDRs",
   "gateway.allowRealIpFallback": "Gateway Allow x-real-ip Fallback",
   "gateway.tools": "Gateway Tool Exposure Policy",

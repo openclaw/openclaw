@@ -1,5 +1,6 @@
 // Defines user-facing config field help text for docs and UI surfaces.
 import { MEDIA_AUDIO_FIELD_HELP } from "./media-audio-field-metadata.js";
+import { GATEWAY_AUTH_FIELD_HELP } from "./schema.gateway-auth.js";
 import { NODE_CAPABILITY_FIELD_HELP } from "./schema.node-capabilities.js";
 import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";
 export const FIELD_HELP: Record<string, string> = {
@@ -143,16 +144,7 @@ export const FIELD_HELP: Record<string, string> = {
     "Shell executable the operator terminal launches. Leave unset to use the host login shell ($SHELL on Unix, %ComSpec% on Windows), or pin an explicit interpreter for a consistent operator environment.",
   "gateway.terminal.detachedSessionTimeoutSeconds":
     "Seconds a terminal session survives after its connection drops (laptop sleep, page reload), staying reattachable via terminal.attach with its recent output replayed. Set 0 to kill sessions the moment the connection drops. Default: 300 (5 minutes). Detached sessions keep running their commands, so shorten this on shared or exposed hosts.",
-  "gateway.auth":
-    "Authentication policy for gateway HTTP/WebSocket access including mode, credentials, trusted-proxy behavior, and rate limiting. Keep auth enabled for every non-loopback deployment.",
-  "gateway.auth.mode":
-    'Gateway auth mode: "none", "token", "password", or "trusted-proxy" depending on your edge architecture. Use token/password for direct exposure, and trusted-proxy only behind hardened identity-aware proxies.',
-  "gateway.auth.allowTailscale":
-    "Allows trusted Tailscale identity paths to satisfy gateway auth checks when configured. Use this only when your tailnet identity posture is strong and operator workflows depend on it.",
-  "gateway.auth.rateLimit":
-    "Login/auth attempt throttling controls to reduce credential brute-force risk at the gateway boundary. Keep enabled in exposed environments and tune thresholds to your traffic baseline.",
-  "gateway.auth.trustedProxy":
-    "Trusted-proxy auth header mapping for upstream identity providers that inject user claims. Use only with known proxy CIDRs and strict header allowlists to prevent spoofed identity headers.",
+  ...GATEWAY_AUTH_FIELD_HELP,
   "gateway.trustedProxies":
     "CIDR/IP allowlist of upstream proxies permitted to provide forwarded client identity headers. Keep this list narrow so untrusted hops cannot impersonate users.",
   "gateway.allowRealIpFallback":

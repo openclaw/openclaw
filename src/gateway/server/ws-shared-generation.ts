@@ -38,9 +38,11 @@ export function resolveSharedGatewaySessionGeneration(
   auth: ResolvedGatewayAuth,
   trustedProxies?: readonly string[],
 ): string | undefined {
+  const tailscaleRequirementMarker =
+    auth.requireTailscaleSharedSecret === true ? "\u0000require-tailscale-shared-secret" : "";
   const shared = resolveSharedSecret(auth);
   if (shared) {
-    return sha256Base64Url(`${shared.mode}\u0000${shared.secret}`);
+    return sha256Base64Url(`${shared.mode}\u0000${shared.secret}${tailscaleRequirementMarker}`);
   }
   if (auth.mode === "trusted-proxy") {
     return sha256Base64Url(

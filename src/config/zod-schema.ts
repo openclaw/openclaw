@@ -25,6 +25,7 @@ import {
   SecretInputSchema,
   SecretsConfigSchema,
 } from "./zod-schema.core.js";
+import { GatewayAuthSchema } from "./zod-schema.gateway-auth.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
 import { BrowserSnapshotDefaultsSchema, NodeHostAgentRunsSchema } from "./zod-schema.node-host.js";
 import { ProxyConfigSchema } from "./zod-schema.proxy.js";
@@ -642,7 +643,10 @@ export const OpenClawSchema = z
               .transform((n, ctx) => {
                 const d = new Date(n);
                 if (Number.isNaN(d.getTime())) {
-                  ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Invalid timestamp" });
+                  ctx.addIssue({
+                    code: z.ZodIssueCode.custom,
+                    message: "Invalid timestamp",
+                  });
                   return z.NEVER;
                 }
                 return d.toISOString();
@@ -1169,37 +1173,7 @@ export const OpenClawSchema = z
             detachedSessionTimeoutSeconds: z.number().int().min(0).optional(),
           })
           .optional(),
-        auth: z
-          .strictObject({
-            mode: z
-              .union([
-                z.literal("none"),
-                z.literal("token"),
-                z.literal("password"),
-                z.literal("trusted-proxy"),
-              ])
-              .optional(),
-            token: SecretInputSchema.optional().register(sensitive),
-            password: SecretInputSchema.optional().register(sensitive),
-            allowTailscale: z.boolean().optional(),
-            rateLimit: z
-              .strictObject({
-                maxAttempts: z.number().optional(),
-                windowMs: z.number().optional(),
-                lockoutMs: z.number().optional(),
-                exemptLoopback: z.boolean().optional(),
-              })
-              .optional(),
-            trustedProxy: z
-              .strictObject({
-                userHeader: z.string().min(1, "userHeader is required for trusted-proxy mode"),
-                requiredHeaders: z.array(z.string()).optional(),
-                allowUsers: z.array(z.string()).optional(),
-                allowLoopback: z.boolean().optional(),
-              })
-              .optional(),
-          })
-          .optional(),
+        auth: GatewayAuthSchema,
         trustedProxies: z.array(z.string()).optional(),
         allowRealIpFallback: z.boolean().optional(),
         tools: z

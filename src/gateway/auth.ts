@@ -7,13 +7,18 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayAuthConfig, GatewayTrustedProxyConfig } from "../config/types.gateway.js";
 import { readTailscaleWhoisIdentity, type TailscaleWhoisIdentity } from "../infra/tailscale.js";
-import { safeEqualSecret } from "../security/secret-equal.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
   type AuthRateLimiter,
   type RateLimitCheckResult,
 } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth-resolve.js";
+import {
+  authorizePasswordAuth,
+  authorizeSharedSecretAuth,
+  type ConnectAuth,
+  type GatewayAuthResult,
+} from "./auth-shared-secret.js";
 import {
   isLoopbackAddress,
   resolveLocalInterfaceAddressMatch,
@@ -28,33 +33,10 @@ export {
   resolveGatewayAuth,
   type ResolvedGatewayAuth,
 } from "./auth-resolve.js";
+export type { GatewayAuthResult } from "./auth-shared-secret.js";
 
 const LEGACY_OPENCLAW_ENV_NOTE =
   " Legacy CLAWDBOT_* and MOLTBOT_* environment variables are ignored; use OPENCLAW_* names.";
-
-/** Normalized outcome for gateway shared-secret, Tailscale, device, and proxy auth. */
-export type GatewayAuthResult = {
-  ok: boolean;
-  method?:
-    | "none"
-    | "token"
-    | "password"
-    | "tailscale"
-    | "device-token"
-    | "bootstrap-token"
-    | "trusted-proxy";
-  user?: string;
-  reason?: string;
-  /** Present when the request was blocked by the rate limiter. */
-  rateLimited?: boolean;
-  /** Milliseconds the client should wait before retrying (when rate-limited). */
-  retryAfterMs?: number;
-};
-
-type ConnectAuth = {
-  token?: string;
-  password?: string;
-};
 
 type GatewayAuthSurface = "http" | "ws-control-ui";
 
@@ -256,7 +238,7 @@ export function assertGatewayAuthConfigured(
   rawAuthConfig?: GatewayAuthConfig | null,
 ): void {
   if (auth.mode === "token" && !auth.token) {
-    if (auth.allowTailscale) {
+    if (auth.allowTailscale && auth.requireTailscaleSharedSecret !== true) {
       return;
     }
     throw new Error(
@@ -396,52 +378,6 @@ function authorizeTrustedProxyBrowserOrigin(params: {
   });
 }
 
-function authorizeTokenAuth(params: {
-  authToken?: string;
-  connectToken?: string;
-  limiter?: AuthRateLimiter;
-  ip?: string;
-  rateLimitScope: string;
-}): GatewayAuthResult {
-  if (!params.authToken) {
-    return { ok: false, reason: "token_missing_config" };
-  }
-  if (!params.connectToken) {
-    // Don't burn rate-limit slots for missing credentials — the client
-    // simply hasn't provided a token yet (e.g. bare browser open).
-    // Only actual *wrong* credentials should count as failures.
-    return { ok: false, reason: "token_missing" };
-  }
-  if (!safeEqualSecret(params.connectToken, params.authToken)) {
-    params.limiter?.recordFailure(params.ip, params.rateLimitScope);
-    return { ok: false, reason: "token_mismatch" };
-  }
-  params.limiter?.reset(params.ip, params.rateLimitScope);
-  return { ok: true, method: "token" };
-}
-
-function authorizePasswordAuth(params: {
-  authPassword?: string;
-  connectPassword?: string;
-  limiter?: AuthRateLimiter;
-  ip?: string;
-  rateLimitScope: string;
-}): GatewayAuthResult {
-  if (!params.authPassword) {
-    return { ok: false, reason: "password_missing_config" };
-  }
-  if (!params.connectPassword) {
-    // Same as token_missing — don't penalize absent credentials.
-    return { ok: false, reason: "password_missing" };
-  }
-  if (!safeEqualSecret(params.connectPassword, params.authPassword)) {
-    params.limiter?.recordFailure(params.ip, params.rateLimitScope);
-    return { ok: false, reason: "password_mismatch" };
-  }
-  params.limiter?.reset(params.ip, params.rateLimitScope);
-  return { ok: true, method: "password" };
-}
-
 function rejectIfRateLimited(params: {
   limiter?: AuthRateLimiter;
   ip?: string;
@@ -525,7 +461,11 @@ async function authorizeGatewayConnectCore(
       return { ok: true, method: "trusted-proxy", user: result.user };
     }
     if (localDirect && auth.password && connectAuth?.password) {
-      const rateLimitResult = rejectIfRateLimited({ limiter, ip, rateLimitScope });
+      const rateLimitResult = rejectIfRateLimited({
+        limiter,
+        ip,
+        rateLimitScope,
+      });
       if (rateLimitResult) {
         return rateLimitResult;
       }
@@ -558,12 +498,33 @@ async function authorizeGatewayConnectCore(
     return rateLimitResult;
   }
 
-  if (
-    allowTailscaleHeaderAuth &&
-    auth.allowTailscale &&
-    !localDirect &&
-    !hasExplicitSharedSecretAuth(connectAuth)
-  ) {
+  const canUseTailscaleHeaderAuth = allowTailscaleHeaderAuth && auth.allowTailscale && !localDirect;
+
+  if (canUseTailscaleHeaderAuth && auth.requireTailscaleSharedSecret === true) {
+    const tailscaleCheck = await resolveVerifiedTailscaleUser({
+      req,
+      tailscaleWhois,
+    });
+    if (!tailscaleCheck.ok) {
+      return tailscaleCheck;
+    }
+    const sharedSecretResult = authorizeSharedSecretAuth({
+      auth,
+      connectAuth,
+      limiter,
+      ip,
+      rateLimitScope,
+    });
+    if (!sharedSecretResult.ok) {
+      return sharedSecretResult;
+    }
+    return {
+      ...sharedSecretResult,
+      user: tailscaleCheck.user.login,
+    };
+  }
+
+  if (canUseTailscaleHeaderAuth && !hasExplicitSharedSecretAuth(connectAuth)) {
     const tailscaleCheck = await resolveVerifiedTailscaleUser({
       req,
       tailscaleWhois,
@@ -578,28 +539,13 @@ async function authorizeGatewayConnectCore(
     }
   }
 
-  if (auth.mode === "token") {
-    return authorizeTokenAuth({
-      authToken: auth.token,
-      connectToken: connectAuth?.token,
-      limiter,
-      ip,
-      rateLimitScope,
-    });
-  }
-
-  if (auth.mode === "password") {
-    return authorizePasswordAuth({
-      authPassword: auth.password,
-      connectPassword: connectAuth?.password,
-      limiter,
-      ip,
-      rateLimitScope,
-    });
-  }
-
-  limiter?.recordFailure(ip, rateLimitScope);
-  return { ok: false, reason: "unauthorized" };
+  return authorizeSharedSecretAuth({
+    auth,
+    connectAuth,
+    limiter,
+    ip,
+    rateLimitScope,
+  });
 }
 
 /** Authorize an HTTP gateway request with Tailscale forwarded-header auth disabled. */

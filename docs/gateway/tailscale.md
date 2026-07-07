@@ -108,6 +108,23 @@ When `tailscale.mode: "serve"` and `gateway.auth.allowTailscale` is `true`, Cont
 
 This tokenless flow assumes the gateway host is trusted. If untrusted local code may run on the same host, set `gateway.auth.allowTailscale: false` and require token/password auth instead.
 
+To require both Tailscale identity and a Gateway shared secret for Control UI/WebSocket access, keep `allowTailscale: true` and set `requireTailscaleSharedSecret: true` with `auth.mode: "token"` or `"password"`:
+
+```json5
+{
+  gateway: {
+    bind: "loopback",
+    tailscale: { mode: "serve" },
+    auth: {
+      mode: "password",
+      password: "replace-me",
+      allowTailscale: true,
+      requireTailscaleSharedSecret: true,
+    },
+  },
+}
+```
+
 Scope of the bypass:
 
 - Applies only to the Control UI WebSocket auth surface. HTTP API endpoints (`/v1/*`, `/tools/invoke`, `/api/channels/*`, etc.) never use Tailscale identity-header auth; they always follow the gateway's normal HTTP auth mode.

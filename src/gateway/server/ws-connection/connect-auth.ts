@@ -395,11 +395,15 @@ export async function authenticateGatewayConnect(
   advanceHandshakePhase("auth_validated");
   const usesSharedGatewayAuth =
     authMethod === "token" || authMethod === "password" || authMethod === "trusted-proxy";
-  const sharedGatewaySessionGeneration = usesSharedGatewayAuth
-    ? resolveSharedGatewaySessionGeneration(resolvedAuth, trustedProxies)
-    : undefined;
+  const tracksTailscaleAuthPolicy = authMethod === "tailscale";
+  const sharedGatewaySessionGeneration =
+    usesSharedGatewayAuth || tracksTailscaleAuthPolicy
+      ? resolveSharedGatewaySessionGeneration(resolvedAuth, trustedProxies)
+      : undefined;
   const sessionUsesSharedGatewayAuth =
-    usesSharedGatewayAuth || deviceTokenSharedGatewaySessionGeneration !== undefined;
+    usesSharedGatewayAuth ||
+    deviceTokenSharedGatewaySessionGeneration !== undefined ||
+    (tracksTailscaleAuthPolicy && sharedGatewaySessionGeneration !== undefined);
   const sessionSharedGatewaySessionGeneration =
     sharedGatewaySessionGeneration ?? deviceTokenSharedGatewaySessionGeneration;
   if (sessionUsesSharedGatewayAuth) {

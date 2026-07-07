@@ -471,6 +471,80 @@ describe("gateway auth", () => {
     expect(res.user).toBe("peter");
   });
 
+  it("requires shared token auth with tailscale identity when configured", async () => {
+    const missing = await authorizeWsControlUiGatewayConnect({
+      auth: {
+        mode: "token",
+        token: "secret",
+        allowTailscale: true,
+        requireTailscaleSharedSecret: true,
+      },
+      connectAuth: null,
+      tailscaleWhois: createTailscaleWhois(),
+      req: createTailscaleForwardedReq(),
+    });
+    expect(missing.ok).toBe(false);
+    expect(missing.reason).toBe("token_missing");
+
+    const accepted = await authorizeWsControlUiGatewayConnect({
+      auth: {
+        mode: "token",
+        token: "secret",
+        allowTailscale: true,
+        requireTailscaleSharedSecret: true,
+      },
+      connectAuth: { token: "secret" },
+      tailscaleWhois: createTailscaleWhois(),
+      req: createTailscaleForwardedReq(),
+    });
+    expect(accepted.ok).toBe(true);
+    expect(accepted.method).toBe("token");
+    expect(accepted.user).toBe("peter");
+  });
+
+  it("rejects shared token without tailscale identity when layered auth is configured", async () => {
+    const missingUser = await authorizeWsControlUiGatewayConnect({
+      auth: {
+        mode: "token",
+        token: "secret",
+        allowTailscale: true,
+        requireTailscaleSharedSecret: true,
+      },
+      connectAuth: { token: "secret" },
+      tailscaleWhois: createTailscaleWhois(),
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: {
+          host: "gateway.local",
+          "x-forwarded-for": "100.64.0.1",
+          "x-forwarded-proto": "https",
+          "x-forwarded-host": "ai-hub.bone-egret.ts.net",
+        },
+      } as never,
+    });
+
+    expect(missingUser.ok).toBe(false);
+    expect(missingUser.reason).toBe("tailscale_user_missing");
+
+    const directRemote = await authorizeWsControlUiGatewayConnect({
+      auth: {
+        mode: "token",
+        token: "secret",
+        allowTailscale: true,
+        requireTailscaleSharedSecret: true,
+      },
+      connectAuth: { token: "secret" },
+      tailscaleWhois: createTailscaleWhois(),
+      req: {
+        socket: { remoteAddress: "203.0.113.10" },
+        headers: { host: "gateway.example.com" },
+      } as never,
+    });
+
+    expect(directRemote.ok).toBe(false);
+    expect(directRemote.reason).toBe("tailscale_user_missing");
+  });
+
   it("serializes async auth attempts per rate-limit key", async () => {
     const limiter = createAuthRateLimiter({
       maxAttempts: 1,
@@ -659,6 +733,24 @@ describe("gateway auth", () => {
     expect(() => assertGatewayAuthConfigured(auth, { mode: "password" })).toThrow(
       "gateway auth mode is password, but no password was configured",
     );
+  });
+
+  it("requires token config when tailscale shared-secret auth is configured", () => {
+    const auth = resolveGatewayAuth({
+      authConfig: {
+        mode: "token",
+        allowTailscale: true,
+        requireTailscaleSharedSecret: true,
+      },
+    });
+
+    expect(() =>
+      assertGatewayAuthConfigured(auth, {
+        mode: "token",
+        allowTailscale: true,
+        requireTailscaleSharedSecret: true,
+      }),
+    ).toThrow("gateway auth mode is token, but no token was configured");
   });
 });
 

@@ -57,4 +57,26 @@ describe("resolveSharedGatewaySessionGeneration", () => {
       resolveSharedGatewaySessionGeneration(auth, ["10.0.0.10"]),
     );
   });
+
+  it("rotates the generation when requireTailscaleSharedSecret toggles", () => {
+    const auth = {
+      mode: "token" as const,
+      allowTailscale: true,
+      token: "shared-token",
+    };
+
+    const withoutRequirement = resolveSharedGatewaySessionGeneration(auth);
+    const withRequirement = resolveSharedGatewaySessionGeneration({
+      ...auth,
+      requireTailscaleSharedSecret: true,
+    });
+
+    expect(withRequirement).not.toBe(withoutRequirement);
+    expect(
+      resolveSharedGatewaySessionGeneration({
+        ...auth,
+        requireTailscaleSharedSecret: false,
+      }),
+    ).toBe(withoutRequirement);
+  });
 });
