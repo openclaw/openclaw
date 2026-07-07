@@ -516,6 +516,7 @@ describe("web_fetch extraction fallbacks", () => {
 
     const result = await tool?.execute?.("call", { url: "https://example.com/spill-utf16" });
     const details = result?.details as {
+      text?: string;
       fullOutputPath?: string;
       spilledChars?: number;
       spillTruncated?: boolean;
@@ -525,6 +526,7 @@ describe("web_fetch extraction fallbacks", () => {
     }
 
     expect(details.spilledChars).toBe(WEB_FETCH_SPILL_MAX_CHARS - 1);
+    expect(details.text).toContain(`Spilled first ${WEB_FETCH_SPILL_MAX_CHARS - 1} chars.`);
     expect(details.spillTruncated).toBe(true);
     const spilledText = await readFile(details.fullOutputPath, "utf8");
     expect(spilledText).toContain(prefix);
