@@ -19,6 +19,7 @@ import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-ext
 import { loadWebMediaRaw } from "../../media/web-media.js";
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import { optionalFiniteNumberSchema } from "../schema/typebox.js";
 import { readFiniteNumberParam, ToolInputError } from "./common.js";
 import { coerceImageModelConfig, type ImageModelConfig } from "./image-tool.helpers.js";
@@ -208,6 +209,10 @@ async function runPdfPrompt(params: {
             pdfs,
             maxTokens: resolvePdfToolMaxTokens(model.maxTokens),
             baseUrl: model.baseUrl,
+            requestConfig: {
+              headers: model.headers,
+              request: getModelProviderRequestTransport(model),
+            },
           });
           return { text, provider, model: modelId, native: true };
         }
@@ -219,6 +224,10 @@ async function runPdfPrompt(params: {
             prompt: params.prompt,
             pdfs,
             baseUrl: model.baseUrl,
+            requestConfig: {
+              headers: model.headers,
+              request: getModelProviderRequestTransport(model),
+            },
           });
           return { text, provider, model: modelId, native: true };
         }
@@ -365,6 +374,7 @@ export function createPdfTool(options?: {
 
       // Parse page range
       const pagesRaw = normalizeOptionalString(record.pages);
+      const pageNumbers = pagesRaw ? parsePageRange(pagesRaw, configuredMaxPages) : undefined;
       const password = typeof record.password === "string" ? record.password : undefined;
 
       const pdfModelConfig =
@@ -485,8 +495,6 @@ export function createPdfTool(options?: {
             : {}),
         });
       }
-
-      const pageNumbers = pagesRaw ? parsePageRange(pagesRaw, configuredMaxPages) : undefined;
 
       const getExtractions = async (): Promise<PdfExtractedContent[]> => {
         const extractedAll: PdfExtractedContent[] = [];

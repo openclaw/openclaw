@@ -293,6 +293,7 @@ export async function runAfterCompactionHooks(params: {
   tokensAfter?: number;
   compactedCount: number;
   sessionFile: string;
+  previousSessionId?: string;
   summaryLength?: number;
   tokensBefore?: number;
   firstKeptEntryId?: string;
@@ -338,6 +339,7 @@ export async function runAfterCompactionHooks(params: {
           tokenCount: params.tokensAfter,
           compactedCount: params.compactedCount,
           sessionFile: params.sessionFile,
+          ...(params.previousSessionId ? { previousSessionId: params.previousSessionId } : {}),
         },
         {
           sessionId: params.sessionId,

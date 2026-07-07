@@ -149,23 +149,44 @@ describe("agent session resolution", () => {
     });
   });
 
-  it("rotates stale terminal main sessions whose transcript is newer than the registry", async () => {
+  it("handles terminal main sessions whose transcript is newer than the registry", async () => {
     const scenarios = [
       {
-        label: "canonical main",
+        label: "canonical done main",
         mainKey: "main",
         sessionKey: "agent:main:main",
         status: "done" as const,
+        expectNewSession: false,
       },
-      { label: "raw main alias", mainKey: "main", sessionKey: "main", status: "done" as const },
       {
-        label: "custom main alias",
+        label: "raw done main alias",
+        mainKey: "main",
+        sessionKey: "main",
+        status: "done" as const,
+        expectNewSession: false,
+      },
+      {
+        label: "custom done main alias",
         mainKey: "work",
         sessionKey: "agent:main:main",
         status: "done" as const,
+        expectNewSession: false,
       },
-      { label: "endedAt-only main", mainKey: "main", sessionKey: "agent:main:main" },
-    ];
+      {
+        label: "killed main",
+        mainKey: "main",
+        sessionKey: "agent:main:main",
+        status: "killed" as const,
+        expectNewSession: true,
+      },
+      {
+        label: "endedAt-only main",
+        mainKey: "main",
+        sessionKey: "agent:main:main",
+        status: undefined,
+        expectNewSession: true,
+      },
+    ] as const;
     for (const scenario of scenarios) {
       await withTempHome(async (home) => {
         const store = path.join(home, "sessions.json");
@@ -205,7 +226,11 @@ describe("agent session resolution", () => {
 
         const resolution = resolveSession({ cfg, sessionKey: scenario.sessionKey });
 
-        expect(resolution.isNewSession).toBe(true);
+        expect(resolution.isNewSession).toBe(scenario.expectNewSession);
+        if (!scenario.expectNewSession) {
+          expect(resolution.sessionId).toBe(sessionId);
+          return;
+        }
         expect(resolution.sessionId).not.toBe(sessionId);
         expect(resolution.sessionEntry?.sessionFile).toBeUndefined();
         expect(resolution.sessionEntry?.status).toBeUndefined();

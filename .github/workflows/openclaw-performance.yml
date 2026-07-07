@@ -151,11 +151,39 @@ jobs:
             echo "present=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Resolve OpenClaw target ref
+        id: target
+        if: steps.lane.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_REF_INPUT: ${{ inputs.target_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          requested="${TARGET_REF_INPUT:-}"
+          if [[ -z "$requested" ]]; then
+            echo "checkout_ref=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+            echo "tested_ref=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          encoded_ref="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$requested")"
+          if ! resolved_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}" --jq '.sha')"; then
+            echo "::error::Unable to resolve OpenClaw target_ref '${requested}'." >&2
+            exit 1
+          fi
+          if [[ ! "$resolved_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::OpenClaw target_ref '${requested}' resolved to invalid SHA '${resolved_sha}'." >&2
+            exit 1
+          fi
+          echo "checkout_ref=${resolved_sha}" >> "$GITHUB_OUTPUT"
+          echo "tested_ref=${requested}" >> "$GITHUB_OUTPUT"
+
       - name: Checkout OpenClaw
         if: steps.lane.outputs.run == 'true'
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ${{ inputs.target_ref || github.ref }}
+          ref: ${{ steps.target.outputs.checkout_ref }}
           fetch-depth: 1
           persist-credentials: false
 

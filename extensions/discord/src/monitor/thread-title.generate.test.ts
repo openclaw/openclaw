@@ -101,6 +101,7 @@ describe("generateThreadTitle", () => {
     expect(prepareSimpleCompletionModelForAgentMock).toHaveBeenCalledWith({
       cfg,
       agentId: "main",
+      useUtilityModel: true,
       allowMissingApiKeyModes: ["aws-sdk"],
     });
   });
@@ -118,6 +119,7 @@ describe("generateThreadTitle", () => {
       cfg,
       agentId: "main",
       modelRef: "openai/gpt-4.1-mini@local",
+      useUtilityModel: true,
       allowMissingApiKeyModes: ["aws-sdk"],
     });
   });

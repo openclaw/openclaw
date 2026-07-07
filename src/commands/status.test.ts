@@ -3,7 +3,7 @@ import type { Mock } from "vitest";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import { createCompatibilityNotice } from "../plugins/status.test-helpers.js";
-import { captureEnv } from "../test-utils/env.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 
 let envSnapshot: ReturnType<typeof captureEnv>;
 
@@ -404,17 +404,17 @@ async function withOptionalEnvVar<T>(
 ): Promise<T> {
   const prevValue = process.env[key];
   if (value === undefined) {
-    delete process.env[key];
+    deleteTestEnvValue(key);
   } else {
-    process.env[key] = value;
+    setTestEnvValue(key, value);
   }
   try {
     return await run();
   } finally {
     if (prevValue === undefined) {
-      delete process.env[key];
+      deleteTestEnvValue(key);
     } else {
-      process.env[key] = prevValue;
+      setTestEnvValue(key, prevValue);
     }
   }
 }

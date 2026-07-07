@@ -8,7 +8,7 @@ import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import {
-  recordSessionMetaFromInbound,
+  recordInboundSessionMeta,
   resolveStorePath,
 } from "../../config/sessions/inbound.runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -226,7 +226,7 @@ export async function ensureOutboundSessionEntry(params: {
     OriginatingTo: params.route.to,
   };
   try {
-    await recordSessionMetaFromInbound({
+    await recordInboundSessionMeta({
       storePath,
       sessionKey: params.route.sessionKey,
       ctx,

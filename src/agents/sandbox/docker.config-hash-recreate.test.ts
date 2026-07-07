@@ -22,7 +22,7 @@ type SpawnCall = {
 type MockDockerChild = EventEmitter & {
   stdout: Readable;
   stderr: Readable;
-  stdin: { end: (input?: string | Buffer) => void };
+  stdin: EventEmitter & { end: (input?: string | Buffer) => void };
   kill: (signal?: NodeJS.Signals) => void;
 };
 
@@ -54,7 +54,7 @@ function createMockDockerChild(): MockDockerChild {
   const child = new EventEmitter() as MockDockerChild;
   child.stdout = new Readable({ read() {} });
   child.stderr = new Readable({ read() {} });
-  child.stdin = { end: () => undefined };
+  child.stdin = Object.assign(new EventEmitter(), { end: () => undefined });
   child.kill = () => undefined;
   return child;
 }

@@ -21,12 +21,36 @@ type SlackChoice = {
   style?: "primary" | "secondary" | "success" | "danger";
 };
 
+function resolveChoiceDelimiter(value: string): number {
+  const firstDelimiter = value.indexOf(":");
+  if (firstDelimiter === -1) {
+    return -1;
+  }
+  const prefix = value.slice(0, firstDelimiter);
+  const suffix = value.slice(firstDelimiter + 1);
+  const startsWithClockLabel = /\b(?:[01]?\d|2[0-3])$/.test(prefix) && /^[0-5]\d/.test(suffix);
+  if (!startsWithClockLabel) {
+    return firstDelimiter;
+  }
+
+  // Legacy syntax makes label and callback colons ambiguous. Recognize only a
+  // complete clock or dash-separated range followed by the real separator/end.
+  const clockEnd = firstDelimiter + 3;
+  const labelSuffix =
+    value.slice(clockEnd).match(/^(?:\s*[-–—]\s*(?:[01]?\d|2[0-3]):[0-5]\d)*\s*/)?.[0] ?? "";
+  const delimiter = clockEnd + labelSuffix.length;
+  if (value[delimiter] === ":") {
+    return delimiter;
+  }
+  return delimiter === value.length ? -1 : firstDelimiter;
+}
+
 function parseChoice(raw: string, options?: { allowStyle?: boolean }): SlackChoice | null {
   const trimmed = raw.trim();
   if (!trimmed) {
     return null;
   }
-  const delimiter = trimmed.indexOf(":");
+  const delimiter = resolveChoiceDelimiter(trimmed);
   if (delimiter === -1) {
     return {
       label: trimmed,

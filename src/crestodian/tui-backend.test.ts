@@ -12,6 +12,7 @@ const overview: CrestodianOverview = {
   tools: {
     codex: { command: "codex", found: false, error: "not found" },
     claude: { command: "claude", found: false, error: "not found" },
+    gemini: { command: "gemini", found: false, error: "not found" },
     apiKeys: { openai: true, anthropic: false },
   },
   gateway: {
@@ -72,5 +73,67 @@ describe("runCrestodianTui", () => {
     if (!options.backend || typeof options.backend !== "object") {
       throw new Error("expected crestodian TUI backend");
     }
+  });
+
+  it("isolates event consumer failures during sendChat", async () => {
+    const backendWithEngine = await new Promise<{
+      backend: {
+        sendChat: (opts: { message: string }) => Promise<{ runId: string }>;
+        onEvent?: (evt: {
+          event: string;
+          payload?: { state?: string; errorMessage?: string };
+        }) => void;
+        engine: {
+          handle: () => Promise<{ text: string; action: "none" }>;
+          dispose: () => Promise<void>;
+        };
+      };
+      dispose: () => Promise<void>;
+    }>((resolve) => {
+      void runCrestodianTui(
+        {
+          deps: { loadOverview: async () => overview },
+          runTui: async (opts) => {
+            const backend = opts.backend as unknown as {
+              sendChat: (opts: { message: string }) => Promise<{ runId: string }>;
+              onEvent?: (evt: {
+                event: string;
+                payload?: { state?: string; errorMessage?: string };
+              }) => void;
+              engine: {
+                handle: () => Promise<{ text: string; action: "none" }>;
+                dispose: () => Promise<void>;
+              };
+              dispose: () => Promise<void>;
+            };
+            resolve({ backend, dispose: async () => backend.dispose() });
+            return { exitReason: "exit" };
+          },
+        },
+        createRuntime(),
+      );
+    });
+
+    const { backend, dispose } = backendWithEngine;
+    backend.engine.handle = async () => ({ text: "hello", action: "none" });
+    backend.onEvent = () => {
+      throw new Error("simulated render failure");
+    };
+
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      await backend.sendChat({ message: "hello" });
+      // Wait for the fire-and-forget response path to emit its final event.
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      await dispose();
+    }
+
+    expect(unhandled).toHaveLength(0);
   });
 });

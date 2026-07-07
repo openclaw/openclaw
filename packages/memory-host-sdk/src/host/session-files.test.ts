@@ -158,6 +158,91 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     });
   });
 
+  it("classifies active entries through cron parentage chains", async () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    const cronPath = path.join(sessionsDir, "cron-run.jsonl");
+    const spawnedChildPath = path.join(sessionsDir, "spawned-child.jsonl");
+    const keyedChildPath = path.join(sessionsDir, "keyed-child.jsonl");
+    const orphanChildPath = path.join(sessionsDir, "orphan-child.jsonl");
+    const normalPath = path.join(sessionsDir, "normal-child.jsonl");
+    for (const filePath of [
+      cronPath,
+      spawnedChildPath,
+      keyedChildPath,
+      orphanChildPath,
+      normalPath,
+    ]) {
+      fsSync.writeFileSync(filePath, "");
+    }
+    fsSync.writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        "agent:main:cron:job-1:run:run-1": {
+          sessionFile: "cron-run.jsonl",
+          sessionId: "cron-run",
+        },
+        "agent:main:subagent:spawned-child": {
+          sessionFile: "spawned-child.jsonl",
+          sessionId: "spawned-child",
+          spawnedBy: "agent:main:cron:job-1:run:run-1",
+        },
+        "agent:main:subagent:keyed-child": {
+          parentSessionKey: "agent:main:subagent:spawned-child",
+          sessionFile: "keyed-child.jsonl",
+          sessionId: "keyed-child",
+        },
+        "agent:main:subagent:orphan-child": {
+          sessionFile: "orphan-child.jsonl",
+          sessionId: "orphan-child",
+          spawnedBy: "agent:main:cron:job-1:run:missing",
+        },
+        "agent:main:subagent:normal-child": {
+          sessionFile: "normal-child.jsonl",
+          sessionId: "normal-child",
+          spawnedBy: "agent:main:chat:manual",
+        },
+      }),
+    );
+
+    const classification = loadSessionTranscriptClassificationForAgent("main");
+
+    expect(classification.cronRunTranscriptPaths).toEqual(
+      new Set(
+        [cronPath, spawnedChildPath, keyedChildPath, orphanChildPath].map((filePath) =>
+          path.resolve(filePath),
+        ),
+      ),
+    );
+    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          generatedByCronRun: true,
+          sessionFile: spawnedChildPath,
+          sessionKey: "agent:main:subagent:spawned-child",
+        }),
+        expect.objectContaining({
+          generatedByCronRun: true,
+          sessionFile: keyedChildPath,
+          sessionKey: "agent:main:subagent:keyed-child",
+        }),
+        expect.objectContaining({
+          generatedByCronRun: true,
+          sessionFile: orphanChildPath,
+          sessionKey: "agent:main:subagent:orphan-child",
+        }),
+        expect.objectContaining({
+          sessionFile: normalPath,
+          sessionKey: "agent:main:subagent:normal-child",
+        }),
+      ]),
+    );
+    const entries = await listSessionTranscriptCorpusEntriesForAgent("main");
+    expect(entries.find((entry) => entry.sessionFile === normalPath)?.generatedByCronRun).toBe(
+      undefined,
+    );
+  });
+
   it("keeps archive classification when the active transcript is missing", async () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
     fsSync.mkdirSync(sessionsDir, { recursive: true });
@@ -694,29 +779,59 @@ describe("buildSessionEntry", () => {
     expect(checkpointEntry.lineMap).toStrictEqual([]);
   });
 
-  it("keeps cron-run deleted archives opaque when the live session store entry is gone", async () => {
-    const archivePath = path.join(tmpDir, "cron-run.jsonl.deleted.2026-02-16T22-27-33.000Z");
-    const jsonlLines = [
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "user",
-          content: "[cron:job-1 Codex Sessions Sync] Run internal sync.",
+  it.each([
+    [
+      "as the first message",
+      [],
+      [
+        "Assistant: The digest job failed because the API token expired.",
+        "User: Please remember: my preferred vendor is Acme Robotics and budget is 5000 USD.",
+        "Assistant: Noted. Acme Robotics, budget 5000 USD.",
+      ],
+      [2, 3, 4],
+    ],
+    [
+      "after ordinary messages",
+      [
+        { role: "user", content: "Remember before: project codename is Atlas." },
+        { role: "assistant", content: "Saved project codename Atlas." },
+      ],
+      [
+        "User: Remember before: project codename is Atlas.",
+        "Assistant: Saved project codename Atlas.",
+        "Assistant: The digest job failed because the API token expired.",
+        "User: Please remember: my preferred vendor is Acme Robotics and budget is 5000 USD.",
+        "Assistant: Noted. Acme Robotics, budget 5000 USD.",
+      ],
+      [1, 2, 4, 5, 6],
+    ],
+  ])(
+    "does not wipe an archive when a user message starts with [cron: %s (#98241)",
+    async (_position, precedingMessages, expectedContent, expectedLineMap) => {
+      const archivePath = path.join(tmpDir, "ordinary.jsonl.deleted.2026-02-16T22-27-33.000Z");
+      const messages = [
+        ...precedingMessages,
+        { role: "user", content: "[cron:daily-digest] why did my digest job fail last night?" },
+        {
+          role: "assistant",
+          content: "The digest job failed because the API token expired.",
         },
-      }),
-      JSON.stringify({
-        type: "message",
-        message: { role: "assistant", content: "Internal cron output that must stay out." },
-      }),
-    ];
-    fsSync.writeFileSync(archivePath, jsonlLines.join("\n"));
+        {
+          role: "user",
+          content: "Please remember: my preferred vendor is Acme Robotics and budget is 5000 USD.",
+        },
+        { role: "assistant", content: "Noted. Acme Robotics, budget 5000 USD." },
+      ];
+      const jsonlLines = messages.map((message) => JSON.stringify({ type: "message", message }));
+      fsSync.writeFileSync(archivePath, jsonlLines.join("\n"));
 
-    const entry = requireSessionEntry(await buildSessionEntry(archivePath));
+      const entry = requireSessionEntry(await buildSessionEntry(archivePath));
 
-    expect(entry.content).toBe("");
-    expect(entry.lineMap).toStrictEqual([]);
-    expect(entry.generatedByCronRun).toBe(true);
-  });
+      expect(entry.generatedByCronRun).toBeFalsy();
+      expect(entry.content).toBe(expectedContent.join("\n"));
+      expect(entry.lineMap).toStrictEqual(expectedLineMap);
+    },
+  );
 
   it("keeps cron-run reset archives opaque when session metadata preserves the cron key", async () => {
     const archivePath = path.join(tmpDir, "cron-run.jsonl.reset.2026-02-16T22-26-33.000Z");

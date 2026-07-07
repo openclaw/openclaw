@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   connectOk,
@@ -101,7 +102,7 @@ describe("gateway server chat", () => {
 
   const withMainSessionStore = async <T>(
     run: (dir: string) => Promise<T>,
-    options?: { sessionId?: string },
+    options?: { archivedAt?: number; sessionId?: string },
   ): Promise<T> => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     try {
@@ -113,6 +114,7 @@ describe("gateway server chat", () => {
             sessionId,
             sessionFile: path.join(dir, `${sessionId}.jsonl`),
             updatedAt: Date.now(),
+            ...(options?.archivedAt !== undefined ? { archivedAt: options.archivedAt } : {}),
           },
         },
       });
@@ -178,6 +180,26 @@ describe("gateway server chat", () => {
     expect(res.payload?.status).toBe("started");
     return res;
   };
+
+  test("chat.send rejects archived sessions before dispatch", async () => {
+    await withMainSessionStore(
+      async () => {
+        dispatchInboundMessageMock.mockClear();
+        const res = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "blocked while archived",
+          idempotencyKey: "proof-chat-archived-session",
+        });
+        expect(res.ok).toBe(false);
+        expect(res.error).toMatchObject({
+          code: "INVALID_REQUEST",
+          message: 'Session "agent:main:main" is archived. Restore it before starting new work.',
+        });
+        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      },
+      { archivedAt: Date.now() },
+    );
+  });
 
   const waitForAgentRunOk = async (runId: string, timeoutMs = 1_000) => {
     const res = await rpcReq(ws, "agent.wait", {
@@ -374,7 +396,7 @@ describe("gateway server chat", () => {
         expect(waitRes.ok).toBe(true);
         expectRecordFields(waitRes.payload, {
           runId: "idem-sessions-abort-1",
-          status: "timeout",
+          status: "error",
           stopReason: "rpc",
         });
       } else {
@@ -1533,8 +1555,8 @@ describe("gateway server chat", () => {
   test("chat.history persists assistant image data URLs as managed image blocks", async () => {
     await withMainSessionStore(
       async (dir) => {
-        const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-        process.env.OPENCLAW_STATE_DIR = dir;
+        const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+        setTestEnvValue("OPENCLAW_STATE_DIR", dir);
         const pngB64 =
           "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
         dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
@@ -1616,11 +1638,7 @@ describe("gateway server chat", () => {
           expect(serializedAssistant).not.toContain("data:image/png;base64");
           expect(serializedAssistant).not.toContain(pngB64);
         } finally {
-          if (previousStateDir == null) {
-            delete process.env.OPENCLAW_STATE_DIR;
-          } else {
-            process.env.OPENCLAW_STATE_DIR = previousStateDir;
-          }
+          envSnapshot.restore();
         }
       },
       { sessionId: "sess-managed-image-history" },
@@ -1741,6 +1759,41 @@ describe("gateway server chat", () => {
           scopedWs?.close();
         }
       });
+    });
+  });
+
+  test("chat.send does not persist one-turn thinking metadata", async () => {
+    await withMainSessionStore(async () => {
+      const sendRes = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "hello from phone",
+        thinking: "low",
+        idempotencyKey: "idem-chat-thinking-no-persist",
+      });
+      expect(sendRes.ok).toBe(true);
+
+      const waitRes = await rpcReq(ws, "agent.wait", {
+        runId: "idem-chat-thinking-no-persist",
+        timeoutMs: 1_000,
+      });
+      expect(waitRes.ok).toBe(true);
+      expect(waitRes.payload?.status).toBe("ok");
+
+      const sessionStorePath = testState.sessionStorePath;
+      if (!sessionStorePath) {
+        throw new Error("session store path was not initialized");
+      }
+      const raw = await fs.readFile(sessionStorePath, "utf-8");
+      const stored = JSON.parse(raw) as {
+        "agent:main:main"?: {
+          thinkingLevel?: string;
+        };
+        main?: {
+          thinkingLevel?: string;
+        };
+      };
+      expect(stored["agent:main:main"]?.thinkingLevel).toBeUndefined();
+      expect(stored.main?.thinkingLevel).toBeUndefined();
     });
   });
 

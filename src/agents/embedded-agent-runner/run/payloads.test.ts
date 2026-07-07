@@ -40,6 +40,48 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expect(payloads).toStrictEqual([]);
   });
 
+  it("strips provider reasoning close tags from streamed assistant payload text", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["</mm:think>Scan complete. No new actionable inbox items."],
+    });
+
+    expectSinglePayloadText(payloads, "Scan complete. No new actionable inbox items.");
+  });
+
+  it("suppresses streamed text that only contains hidden reasoning", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["<mm:think>private reasoning</mm:think>"],
+    });
+
+    expect(payloads).toStrictEqual([]);
+  });
+
+  it("sanitizes every streamed text while preserving multiple visible answers", () => {
+    const payloads = buildPayloads({
+      assistantTexts: [
+        '<tool_call>{"name":"exec","arguments":{"command":"secret"}}</tool_call>',
+        "</mm:think>First visible answer.",
+        "Second visible answer.",
+      ],
+    });
+
+    expect(payloads.map((payload) => payload.text)).toStrictEqual([
+      "First visible answer.",
+      "Second visible answer.",
+    ]);
+  });
+
+  it("keeps media directives while sanitizing streamed assistant text", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["</mm:think>MEDIA:/tmp/reply-image.png\nAttached image"],
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Attached image");
+    expect(payloads[0]?.mediaUrl).toBe("/tmp/reply-image.png");
+    expect(payloads[0]?.mediaUrls).toEqual(["/tmp/reply-image.png"]);
+  });
+
   it("falls back to final-answer assistant text when streamed text is unavailable", () => {
     const payloads = buildPayloads({
       lastAssistant: {
@@ -69,6 +111,103 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
 
     expectSinglePayloadText(payloads, "Done.");
+  });
+
+  it("marks runtime-persisted final replies as transcript owned", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Already persisted."],
+      assistantTranscriptOwned: true,
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
+      assistantTranscriptOwned: true,
+    });
+  });
+
+  it("does not revive signed unphased text when explicit final-answer text is empty", () => {
+    expectNoPayloads({
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "MEDIA:/tmp/old.png",
+            textSignature: JSON.stringify({ v: 1, id: "item_old" }),
+          },
+          {
+            type: "text",
+            text: "   ",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+  });
+
+  it("does not revive signed unphased text when explicit output_text final-answer text is empty", () => {
+    expectNoPayloads({
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "MEDIA:/tmp/old.png",
+            textSignature: JSON.stringify({ v: 1, id: "item_old" }),
+          },
+          {
+            type: "output_text",
+            text: "   ",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+  });
+
+  it("keeps literal mid-answer reasoning-looking tags in final-answer text", () => {
+    const text = "Before <think>literal tag text after";
+    const payloads = buildPayloads({
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text,
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+
+    expectSinglePayloadText(payloads, text);
+  });
+
+  it("keeps strict reasoning-tag stripping for legacy string fallback text", () => {
+    const payloads = buildPayloads({
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: "Visible prefix <think>private reasoning tail",
+      } as unknown as AssistantMessage,
+    });
+
+    expectSinglePayloadText(payloads, "Visible prefix");
   });
 
   it("falls back to final-answer assistant text when streamed text only contains blanks", () => {
