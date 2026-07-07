@@ -317,6 +317,17 @@ describe("cron store", () => {
     expect(preserved.jobs[0]?.raw).toBe("keep-me");
   });
 
+  it("rejects oversized quarantine files to prevent OOM", async () => {
+    const { storePath } = await makeStorePath();
+    const quarantinePath = resolveCronQuarantinePath(storePath);
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(quarantinePath, "x".repeat(8 * 1024 * 1024 + 1), "utf-8");
+
+    await expect(loadCronQuarantineFile(quarantinePath)).rejects.toThrow(
+      /File exceeds 8388608 bytes/,
+    );
+  });
+
   it("does not rewrite quarantine files when every entry is already present", async () => {
     const { storePath } = await makeStorePath();
     const quarantinePath = resolveCronQuarantinePath(storePath);

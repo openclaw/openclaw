@@ -6,7 +6,12 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { readRegularFile } from "../infra/regular-file.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
+
+// Cron quarantine sidecars are small JSON files; cap reads so a corrupted or
+// hostile file cannot OOM the cron load path.
+const CRON_QUARANTINE_MAX_BYTES = 8 * 1024 * 1024;
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -220,8 +225,11 @@ export async function saveCronStore(
 /** Loads the cron quarantine sidecar, validating its persisted v1 shape. */
 export async function loadCronQuarantineFile(pathLocal: string): Promise<CronQuarantineFile> {
   try {
-    const raw = await fs.promises.readFile(pathLocal, "utf-8");
-    const parsed = parseJsonWithJson5Fallback(raw);
+    const { buffer } = await readRegularFile({
+      filePath: pathLocal,
+      maxBytes: CRON_QUARANTINE_MAX_BYTES,
+    });
+    const parsed = parseJsonWithJson5Fallback(buffer.toString("utf-8"));
     if (!isRecord(parsed) || parsed.version !== 1 || !Array.isArray(parsed.jobs)) {
       throw new Error(`Unsupported cron quarantine file shape at ${pathLocal}`);
     }
