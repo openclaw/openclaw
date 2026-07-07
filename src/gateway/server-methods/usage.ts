@@ -869,6 +869,7 @@ async function loadAllAgentCostUsageSummary(params: {
   const SUMMARIES_CONCURRENCY = 8;
   const summariesResult = await runTasksWithConcurrency({
     limit: SUMMARIES_CONCURRENCY,
+    errorMode: "stop",
     tasks: agentIds.map(
       (agentId) => () =>
         loadCostUsageSummaryFromCache({
@@ -882,6 +883,9 @@ async function loadAllAgentCostUsageSummary(params: {
         }),
     ),
   });
+  if (summariesResult.hasError) {
+    throw summariesResult.firstError;
+  }
   const summaries = summariesResult.results;
   const dailyByDate = new Map<string, CostUsageTotals & { date: string }>();
   const totals = createEmptyCostUsageTotals();
