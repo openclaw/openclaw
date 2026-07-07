@@ -72,6 +72,7 @@ export async function startNgrokTunnel(config: {
     });
 
     let resolved = false;
+    let closed = false;
     let publicUrl: string | null = null;
     let outputBuffer = "";
 
@@ -82,6 +83,15 @@ export async function startNgrokTunnel(config: {
         reject(new Error("ngrok startup timed out (30s)"));
       }
     }, 30000);
+
+    const rejectIfPending = (message: string) => {
+      if (!resolved) {
+        resolved = true;
+        closed = true;
+        clearTimeout(timeout);
+        reject(new Error(message));
+      }
+    };
 
     const processLine = (line: string) => {
       try {
@@ -111,9 +121,16 @@ export async function startNgrokTunnel(config: {
             publicUrl: fullUrl,
             provider: "ngrok",
             stop: async () => {
+              if (closed) {
+                return;
+              }
               proc.kill("SIGTERM");
               await new Promise<void>((res) => {
-                proc.on("close", () => res());
+                if (closed) {
+                  res();
+                  return;
+                }
+                proc.once("close", () => res());
                 setTimeout(res, 2000); // Fallback timeout
               });
             },
@@ -137,29 +154,31 @@ export async function startNgrokTunnel(config: {
         }
       }
     });
+    proc.stdout.on("error", (err) => {
+      rejectIfPending(`ngrok stdout error: ${err.message}`);
+    });
 
     proc.stderr.on("data", (data: Buffer) => {
       const msg = data.toString();
       // Check for common errors
       if (msg.includes("ERR_NGROK")) {
-        if (!resolved) {
-          resolved = true;
-          clearTimeout(timeout);
-          const output = appendBoundedChildOutput(emptyBoundedChildOutput(), msg);
-          reject(new Error(`ngrok error: ${formatBoundedChildOutput(output)}`));
-        }
+        rejectIfPending(
+          `ngrok error: ${formatBoundedChildOutput(
+            appendBoundedChildOutput(emptyBoundedChildOutput(), msg),
+          )}`,
+        );
       }
+    });
+    proc.stderr.on("error", (err) => {
+      rejectIfPending(`ngrok stderr error: ${err.message}`);
     });
 
     proc.on("error", (err) => {
-      if (!resolved) {
-        resolved = true;
-        clearTimeout(timeout);
-        reject(new Error(`Failed to start ngrok: ${err.message}`));
-      }
+      rejectIfPending(`Failed to start ngrok: ${err.message}`);
     });
 
     proc.on("close", (code) => {
+      closed = true;
       if (!resolved) {
         resolved = true;
         clearTimeout(timeout);
@@ -222,23 +241,45 @@ export async function startTailscaleTunnel(config: {
     const proc = spawn("tailscale", [config.mode, "--bg", "--yes", "--set-path", path, localUrl], {
       stdio: ["ignore", "pipe", "pipe"],
     });
+    let resolved = false;
     let stdout = emptyBoundedChildOutput();
     let stderr = emptyBoundedChildOutput();
 
     const timeout = setTimeout(() => {
-      proc.kill("SIGKILL");
-      reject(new Error(`Tailscale ${config.mode} timed out`));
+      if (!resolved) {
+        resolved = true;
+        proc.kill("SIGKILL");
+        reject(new Error(`Tailscale ${config.mode} timed out`));
+      }
     }, 10000);
 
     proc.stdout.on("data", (data) => {
       stdout = appendBoundedChildOutput(stdout, data.toString());
     });
+    proc.stdout.on("error", (err) => {
+      if (!resolved) {
+        resolved = true;
+        clearTimeout(timeout);
+        reject(new Error(`Tailscale ${config.mode} stdout error: ${err.message}`));
+      }
+    });
     proc.stderr.on("data", (data) => {
       stderr = appendBoundedChildOutput(stderr, data.toString());
+    });
+    proc.stderr.on("error", (err) => {
+      if (!resolved) {
+        resolved = true;
+        clearTimeout(timeout);
+        reject(new Error(`Tailscale ${config.mode} stderr error: ${err.message}`));
+      }
     });
 
     proc.on("close", (code) => {
       clearTimeout(timeout);
+      if (resolved) {
+        return;
+      }
+      resolved = true;
       if (code === 0) {
         const publicUrl = `https://${dnsName}${path}`;
         console.log(`[voice-call] Tailscale ${config.mode} active: ${publicUrl}`);
@@ -259,7 +300,10 @@ export async function startTailscaleTunnel(config: {
 
     proc.on("error", (err) => {
       clearTimeout(timeout);
-      reject(err);
+      if (!resolved) {
+        resolved = true;
+        reject(err);
+      }
     });
   });
 }

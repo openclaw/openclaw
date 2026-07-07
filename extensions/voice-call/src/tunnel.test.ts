@@ -230,4 +230,38 @@ describe("voice-call tunnels", () => {
     // The stop promise must still resolve despite the error
     await expect(stopPromise).resolves.toBeUndefined();
   });
+
+  it("rejects when ngrok stdout emits an error before the tunnel is ready", async () => {
+    const proc = nextProcess();
+    const result = startNgrokTunnel({ port: 3334, path: "/hook" });
+    proc.stdout.emit("error", new Error("EPIPE"));
+    await expect(result).rejects.toThrow("ngrok stdout error: EPIPE");
+  });
+
+  it("rejects when ngrok stderr emits an error before the tunnel is ready", async () => {
+    const proc = nextProcess();
+    const result = startNgrokTunnel({ port: 3334, path: "/hook" });
+    proc.stderr.emit("error", new Error("EIO"));
+    await expect(result).rejects.toThrow("ngrok stderr error: EIO");
+  });
+
+  it("stops immediately when the ngrok process already exited", async () => {
+    const proc = nextProcess();
+    const result = startNgrokTunnel({ port: 3334, path: "/hook" });
+    emitNgrokUrl(proc, "https://early-exit.ngrok.io");
+    const tunnel = await result;
+    proc.emit("close", 0);
+    const start = Date.now();
+    await tunnel.stop();
+    expect(Date.now() - start).toBeLessThan(500);
+  });
+
+  it("rejects when Tailscale stdout emits an error before the tunnel is ready", async () => {
+    mocks.getTailscaleDnsName.mockResolvedValue("host.tailnet.ts.net");
+    const proc = nextProcess();
+    const result = startTailscaleTunnel({ mode: "serve", port: 3334, path: "/hook" });
+    await vi.waitFor(() => expect(mocks.spawn).toHaveBeenCalled());
+    proc.stdout.emit("error", new Error("EPIPE"));
+    await expect(result).rejects.toThrow("Tailscale serve stdout error: EPIPE");
+  });
 });
