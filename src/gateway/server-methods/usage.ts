@@ -64,8 +64,7 @@ import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const COST_USAGE_CACHE_TTL_MS = 30_000;
 const COST_USAGE_CACHE_MAX = 256;
-const SESSIONS_USAGE_AGENT_LOAD_CONCURRENCY = 12;
-const COST_USAGE_AGENT_LOAD_CONCURRENCY = 12;
+const USAGE_AGENT_LOAD_CONCURRENCY = 12;
 
 type DateRange = { startMs: number; endMs: number };
 // Keep validation and parsed timestamps in one result so handlers cannot forward
@@ -878,7 +877,7 @@ async function loadAllAgentCostUsageSummary(params: {
           refreshMode: "background",
         }),
     ),
-    limit: COST_USAGE_AGENT_LOAD_CONCURRENCY,
+    limit: USAGE_AGENT_LOAD_CONCURRENCY,
     errorMode: "stop",
   });
   if (agentLoadResult.hasError) {
@@ -1288,7 +1287,7 @@ export const usageHandlers: GatewayRequestHandlers = {
           dailyUtcOffsetMinutes,
         }),
       })),
-      limit: SESSIONS_USAGE_AGENT_LOAD_CONCURRENCY,
+      limit: USAGE_AGENT_LOAD_CONCURRENCY,
       errorMode: "stop",
     });
     if (agentLoadResult.hasError) {

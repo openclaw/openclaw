@@ -520,22 +520,35 @@ describe("gateway usage helpers", () => {
     });
   });
 
-  it("usage.cost all-agent scope bounds concurrency to COST_USAGE_AGENT_LOAD_CONCURRENCY", async () => {
-    const agentCount = 25;
+  it("bounds usage.cost all-agent cache loads", async () => {
+    const agentCount = 13;
     const concurrencyLimit = 12;
+    let releaseLoads!: () => void;
+    const loadsReleased = new Promise<void>((resolve) => {
+      releaseLoads = resolve;
+    });
+    let resolveFirstBatchStarted!: () => void;
+    const firstBatchStarted = new Promise<void>((resolve) => {
+      resolveFirstBatchStarted = resolve;
+    });
+    let started = 0;
     let inFlight = 0;
     let peakInFlight = 0;
 
     vi.mocked(loadCostUsageSummaryFromCache).mockImplementation(async () => {
-      inFlight++;
+      started += 1;
+      inFlight += 1;
       peakInFlight = Math.max(peakInFlight, inFlight);
-      await new Promise<void>((r) => { setTimeout(r, 0); });
-      inFlight--;
+      if (started === concurrencyLimit) {
+        resolveFirstBatchStarted();
+      }
+      await loadsReleased;
+      inFlight -= 1;
       return costSummary({ totalTokens: 1, totalCost: 0 });
     });
 
     const respond = vi.fn();
-    await usageHandlers["usage.cost"]({
+    const request = usageHandlers["usage.cost"]({
       respond,
       params: { startDate: "2026-02-01", endDate: "2026-02-02", agentScope: "all" },
       context: {
@@ -547,8 +560,14 @@ describe("gateway usage helpers", () => {
       },
     } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
 
-    expect(peakInFlight).toBeLessThanOrEqual(concurrencyLimit);
-    expect(peakInFlight).toBe(concurrencyLimit);
+    await firstBatchStarted;
+    const startedBeforeRelease = started;
+    const peakBeforeRelease = peakInFlight;
+    releaseLoads();
+    await request;
+
+    expect(startedBeforeRelease).toBe(concurrencyLimit);
+    expect(peakBeforeRelease).toBe(concurrencyLimit);
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
