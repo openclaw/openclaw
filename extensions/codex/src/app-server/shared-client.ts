@@ -242,7 +242,6 @@ async function acquireSharedCodexAppServerClient(
       authProfileId: usesNativeAuth ? undefined : authProfileId,
       config: options?.config,
     });
-    client.setActiveSharedLeaseCountProviderForUnscopedNotifications(() => entry.activeLeases);
     const release = leaseOptions?.leased ? retainSharedClientEntry(entry) : undefined;
     return release ? { client, release } : { client };
   } catch (error) {
