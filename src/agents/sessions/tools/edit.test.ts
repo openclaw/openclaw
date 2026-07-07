@@ -243,6 +243,23 @@ describe("edit tool", () => {
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("after\n");
   });
 
+  it("unwraps XML-RPC-style { item: ... } edit entries before validation", async () => {
+    const filePath = await createTempFile("before\n");
+    const tool = createEditTool(tmpDir);
+    const prepared = tool.prepareArguments?.({
+      path: filePath,
+      edits: [{ item: { oldText: "before", newText: "after" } }],
+    });
+
+    expect(prepared).toEqual({
+      path: filePath,
+      edits: [{ oldText: "before", newText: "after" }],
+    });
+    expect(Value.Check(tool.parameters, prepared)).toBe(true);
+    await tool.execute("call-xmlrpc", prepared as never, undefined);
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("after\n");
+  });
+
   it("renders previews through custom edit operations", async () => {
     // Preview rendering must use injected operations so remote/sandbox files are
     // shown without accidentally reading from the host filesystem.

@@ -130,11 +130,31 @@ function prepareEditArguments(input: unknown): EditToolInput {
 
   const edits = Array.isArray(args.edits)
     ? args.edits.map((edit) => {
-        if (!edit || typeof edit !== "object" || Array.isArray(edit)) {
-          return edit;
+        // XML-RPC-style array serialization wraps each element in { item: ... }.
+        // Unwrap it before extracting the strict edit fields.
+        let candidate = edit;
+        if (
+          candidate &&
+          typeof candidate === "object" &&
+          !Array.isArray(candidate) &&
+          "item" in candidate
+        ) {
+          const wrapper = candidate as Record<string, unknown>;
+          const inner = wrapper.item;
+          if (
+            inner &&
+            typeof inner === "object" &&
+            !Array.isArray(inner) &&
+            ("oldText" in inner || "newText" in inner)
+          ) {
+            candidate = inner;
+          }
         }
-        const candidate = edit as Record<string, unknown>;
-        return { oldText: candidate.oldText, newText: candidate.newText };
+        if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+          return candidate;
+        }
+        const record = candidate as Record<string, unknown>;
+        return { oldText: record.oldText, newText: record.newText };
       })
     : args.edits;
 
