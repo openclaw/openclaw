@@ -180,7 +180,7 @@ async function ensurePodmanContainer(params: {
   const expectedHash = computePodmanConfigHash(params.createParams);
   const state = await podmanContainerState(params.pluginConfig, containerName);
   let hasContainer = state.exists;
-  let running = state.running;
+  const running = state.running;
   if (hasContainer) {
     const currentHash = await readPodmanContainerLabel(
       params.pluginConfig,

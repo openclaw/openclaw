@@ -68,6 +68,10 @@
     "target": "OpenAI provider"
   },
   {
+    "source": "Podman plugin",
+    "target": "Podman 插件"
+  },
+  {
     "source": "Mantis",
     "target": "Mantis"
   },

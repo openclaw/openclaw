@@ -1,5 +1,7 @@
-import type { CreateSandboxBackendParams, SandboxConfig } from "openclaw/plugin-sdk/sandbox";
+import type { CreateSandboxBackendParams } from "openclaw/plugin-sdk/sandbox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+type SandboxConfig = CreateSandboxBackendParams["cfg"];
 
 const podmanMocks = vi.hoisted(() => ({
   execPodman: vi.fn(),
