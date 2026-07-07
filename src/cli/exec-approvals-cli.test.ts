@@ -6,6 +6,14 @@ import * as execApprovals from "../infra/exec-approvals.js";
 import type { ExecApprovalsFile } from "../infra/exec-approvals.js";
 import { registerExecApprovalsCli, testing } from "./exec-approvals-cli.js";
 
+describe("exec approvals CLI error formatting", () => {
+  it("keeps the bounded first line UTF-16 well-formed", () => {
+    const message = testing.formatCliError(`${"x".repeat(299)}🚀tail\nignored`);
+
+    expect(message).toBe(`${"x".repeat(299)}...`);
+  });
+});
+
 const mocks = vi.hoisted(() => {
   const runtimeErrors: string[] = [];
   const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");

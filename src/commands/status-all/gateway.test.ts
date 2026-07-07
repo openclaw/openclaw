@@ -23,6 +23,16 @@ describe("summarizeLogTail", () => {
 
     expect(lines).toEqual(["[openai] token refresh 401 invalid_grant · re-auth required"]);
   });
+
+  it("keeps bounded OAuth diagnostics UTF-16 well-formed", () => {
+    const lines = summarizeLogTail([
+      "[openai] Token refresh failed: 500 {",
+      `"error":${JSON.stringify({ code: "upstream", message: `${"x".repeat(50)}🚀tail` })}`,
+      "}",
+    ]);
+
+    expect(lines).toEqual([`[openai] token refresh 500 upstream · ${"x".repeat(50)}…`]);
+  });
 });
 
 describe("readFileTailLines", () => {

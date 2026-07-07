@@ -23,6 +23,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Bounded text rendering:** keep surrogate pairs intact when truncating CLI tables and errors, agent diagnostics, heartbeat/push previews, HTTP snippets, and bundled plugin text, preventing malformed UTF-16 output at emoji boundaries. Thanks @lsr911, @maweibin, and @wm0018.
 - **Lean local model shell access:** keep `exec` directly visible beside the default structured Tool Search controls so coding-tuned local models can use their shell fallback instead of searching for missing domain tools. (#87587) Thanks @vincentkoc.
 - **OAuth refresh contention diagnostics:** keep local lock paths out of user-facing refresh failures and avoid duplicate failure prefixes while preserving structured provider and profile classification. (#83383) Thanks @vincentkoc.
 - **Exec approval prompts:** keep background-disabled fallback warnings out of pending gateway/node approvals and show them only after a command actually runs in the foreground. (#78184) Thanks @vincentkoc.
