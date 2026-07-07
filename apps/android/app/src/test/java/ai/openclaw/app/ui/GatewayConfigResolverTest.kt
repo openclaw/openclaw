@@ -36,6 +36,19 @@ class GatewayConfigResolverTest {
   }
 
   @Test
+  fun manualTransportDoesNotRepeatSelectedPrivateLanTlsState() {
+    val presentation =
+      gatewayManualTransportPresentation(
+        hostInput = "192.168.1.20",
+        requestedTls = true,
+      )
+
+    assertEquals(false, presentation.requiresTls)
+    assertEquals(true, presentation.effectiveTls)
+    assertNull(presentation.helperText)
+  }
+
+  @Test
   fun parseGatewayEndpointUsesDefaultTlsPortForBareWssUrls() {
     val parsed = parseGatewayEndpoint("wss://gateway.example")
 

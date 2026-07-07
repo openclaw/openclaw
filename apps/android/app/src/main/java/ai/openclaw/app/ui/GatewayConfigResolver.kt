@@ -22,7 +22,7 @@ internal data class GatewayEndpointConfig(
 internal data class GatewayManualTransportPresentation(
   val requiresTls: Boolean,
   val effectiveTls: Boolean,
-  val helperText: String,
+  val helperText: String?,
 )
 
 /** Decoded setup-code payload; only one credential family is expected to be populated. */
@@ -424,7 +424,7 @@ private fun gatewayManualTransportPresentation(
     helperText =
       when {
         requiresTls -> "Secure connection is required for this host."
-        effectiveTls -> "Secure connection is enabled."
+        effectiveTls -> null
         else -> "Use only on a trusted private network."
       },
   )

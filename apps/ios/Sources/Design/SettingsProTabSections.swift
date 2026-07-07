@@ -975,9 +975,11 @@ extension SettingsProTab {
             }
             .pickerStyle(.segmented)
             .disabled(self.manualGatewayTransport.requiresTLS)
-            Text(self.manualGatewayTransport.helperText)
-                .font(OpenClawType.footnote)
-                .foregroundStyle(.secondary)
+            if let helperText = self.manualGatewayTransport.helperText {
+                Text(helperText)
+                    .font(OpenClawType.footnote)
+                    .foregroundStyle(.secondary)
+            }
             self.gatewayActionButton(
                 title: "Connect Manual",
                 icon: "network",

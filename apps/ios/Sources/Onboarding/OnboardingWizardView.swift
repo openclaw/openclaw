@@ -916,9 +916,11 @@ extension OnboardingWizardView {
         .pickerStyle(.segmented)
         .disabled(self.manualTransport.requiresTLS)
 
-        Text(self.manualTransport.helperText)
-            .font(OpenClawType.footnote)
-            .foregroundStyle(.secondary)
+        if let helperText = self.manualTransport.helperText {
+            Text(helperText)
+                .font(OpenClawType.footnote)
+                .foregroundStyle(.secondary)
+        }
     }
 
     private func onboardingLabeledContent(_ title: LocalizedStringKey, value: String) -> some View {

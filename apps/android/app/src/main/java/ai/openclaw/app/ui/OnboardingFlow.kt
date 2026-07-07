@@ -1639,11 +1639,13 @@ private fun ManualGatewaySetupScreen(
                 onClick = { onManualTlsChange(true) },
               )
             }
-            Text(
-              text = transport.helperText,
-              style = ClawTheme.type.caption,
-              color = ClawTheme.colors.textMuted,
-            )
+            transport.helperText?.let { helperText ->
+              Text(
+                text = helperText,
+                style = ClawTheme.type.caption,
+                color = ClawTheme.colors.textMuted,
+              )
+            }
           }
         }
         error?.let { message ->

@@ -1498,7 +1498,7 @@ private struct GatewayPendingTrustConnect {
 struct GatewayManualTransportPresentation: Equatable {
     let requiresTLS: Bool
     let effectiveTLS: Bool
-    let helperText: String
+    let helperText: String?
 }
 
 extension GatewayConnectionController {
@@ -1524,10 +1524,10 @@ extension GatewayConnectionController {
         let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
         let requiresTLS = !trimmedHost.isEmpty && !LoopbackHost.isLocalNetworkHost(trimmedHost)
         let effectiveTLS = requestedTLS || requiresTLS
-        let helperText = if requiresTLS {
+        let helperText: String? = if requiresTLS {
             "Secure connection is required for this host."
         } else if effectiveTLS {
-            "Secure connection is enabled."
+            nil
         } else {
             "Use only on a trusted private network."
         }

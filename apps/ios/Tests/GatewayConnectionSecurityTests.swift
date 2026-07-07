@@ -140,6 +140,16 @@ import Testing
         #expect(presentation.helperText == "Use only on a trusted private network.")
     }
 
+    @Test @MainActor func `manual transport presentation does not repeat selected private LAN TLS state`() {
+        let presentation = GatewayConnectionController.manualTransportPresentation(
+            host: "192.168.1.20",
+            requestedTLS: true)
+
+        #expect(!presentation.requiresTLS)
+        #expect(presentation.effectiveTLS)
+        #expect(presentation.helperText == nil)
+    }
+
     @Test @MainActor func `manual connections allow private lan plaintext`() {
         let controller = self.makeController()
 
