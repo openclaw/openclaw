@@ -6,6 +6,7 @@ import {
   describeNotificationActivity,
   isAssistantCompletionReleaseNotification,
   isCodexTurnAbortMarkerNotification,
+  isDispatchKnownNotificationMethod,
   isFileChangePatchUpdatedNotification,
   isAssistantCommentaryCompletionNotification,
   isNativeToolProgressNotification,
@@ -93,6 +94,7 @@ export function applyCodexTurnNotificationState(params: {
   turnWatches: CodexAttemptTurnWatchController;
   activeTurnItemIds: Set<string>;
   activeCompletionBlockerItemIds: Set<string>;
+  completedCompletionBlockerItemIds?: Set<string>;
   activeAppServerTurnRequests: number;
   pendingOpenClawDynamicToolCompletionIds: Set<string>;
   turnCrossedToolHandoff: boolean;
@@ -115,13 +117,19 @@ export function applyCodexTurnNotificationState(params: {
   let turnCrossedToolHandoff = params.turnCrossedToolHandoff;
 
   if (isCurrentTurnNotification) {
-    turnWatches.touchActivity(`notification:${notification.method}`, {
-      details: describeNotificationActivity(notification),
-      attemptProgress: true,
-    });
+    // Update item/blocker state before touchActivity so scheduling functions
+    // observe the current blocker count and request count.
     params.onReportExecutionNotification(notification);
     updateActiveTurnItemIds(notification, params.activeTurnItemIds);
-    updateActiveCompletionBlockerItemIds(notification, params.activeCompletionBlockerItemIds);
+    updateActiveCompletionBlockerItemIds(
+      notification,
+      params.activeCompletionBlockerItemIds,
+      params.completedCompletionBlockerItemIds,
+    );
+    turnWatches.touchActivity(`notification:${notification.method}`, {
+      details: describeNotificationActivity(notification),
+      attemptProgress: isDispatchKnownNotificationMethod(notification.method),
+    });
     if (notification.method === "item/completed" && params.activeTurnItemIds.size === 0) {
       params.onScheduleTerminalDynamicToolReleaseCheck();
     }

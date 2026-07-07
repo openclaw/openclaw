@@ -19,6 +19,12 @@ export const CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 5 * 60_0
 export const CODEX_POST_REASONING_REPLY_IDLE_TIMEOUT_MS = 5 * 60_000;
 /** Long terminal idle watch for app-server turns that never send completion. */
 export const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
+/**
+ * Absolute wall-clock ceiling per turn. Fires regardless of activity so a
+ * wedged turn that keeps emitting unrecognized notifications still terminates.
+ * Derived from the terminal idle timeout with a generous multiplier.
+ */
+export const CODEX_TURN_WALL_CLOCK_CEILING_MS = 2 * CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS;
 
 function resolvePositiveIntegerTimeoutMs(value: number | undefined, fallbackMs: number): number {
   const fallback = resolveTimerTimeoutMs(fallbackMs, 1);

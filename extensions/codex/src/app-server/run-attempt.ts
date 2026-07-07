@@ -1759,6 +1759,7 @@ export async function runCodexAppServerAttempt(
   const pendingOpenClawDynamicToolCompletionIds = new Set<string>();
   const activeTurnItemIds = new Set<string>();
   const activeCompletionBlockerItemIds = new Set<string>();
+  const completedCompletionBlockerItemIds = new Set<string>();
   const activeFinalizationHookRunIds = new Set<string>();
   const finalizationHookBatchStatuses = new Map<string, string | undefined>();
   let unsettledFinalizationHookCount = 0;
@@ -2109,6 +2110,7 @@ export async function runCodexAppServerAttempt(
       turnWatches,
       activeTurnItemIds,
       activeCompletionBlockerItemIds,
+      completedCompletionBlockerItemIds,
       activeAppServerTurnRequests,
       pendingOpenClawDynamicToolCompletionIds,
       turnCrossedToolHandoff,
@@ -3098,6 +3100,7 @@ export async function runCodexAppServerAttempt(
   turnWatches.armTerminalIdleWatch();
   turnWatches.touchActivity("turn:start", { arm: true });
   turnWatches.armAttemptIdleWatch();
+  turnWatches.armWallClockCeiling();
   turnWatches.touchActivity("turn:start", { attemptProgress: true });
   for (const failure of pendingNativePreToolUseFailures.splice(0)) {
     activeProjector.recordNativeToolPreToolUseFailure(failure);

@@ -62,6 +62,7 @@ export function updateActiveTurnItemIds(
 export function updateActiveCompletionBlockerItemIds(
   notification: CodexServerNotification,
   activeItemIds: Set<string>,
+  completedItemIds?: Set<string>,
 ): void {
   if (notification.method !== "item/started" && notification.method !== "item/completed") {
     return;
@@ -72,6 +73,11 @@ export function updateActiveCompletionBlockerItemIds(
   }
   if (notification.method === "item/completed") {
     activeItemIds.delete(itemId);
+    completedItemIds?.add(itemId);
+    return;
+  }
+  // Ignore late item/started for items that already completed (out-of-order).
+  if (completedItemIds?.has(itemId)) {
     return;
   }
   const item = readCodexNotificationItem(notification.params);
@@ -324,6 +330,39 @@ function readRawAssistantTextPreview(item: JsonObject): string | undefined {
 /** Returns true for app-server error notifications that will retry. */
 export function isRetryableErrorNotification(value: JsonValue | undefined): boolean {
   return isJsonObject(value) && value.willRetry === true;
+}
+
+/**
+ * Notification methods that the event-projector dispatch handles. Only these
+ * count as attempt progress; unknown methods still touch completion activity
+ * but must not reset the attempt-idle watchdog or a wedged turn that keeps
+ * emitting unrecognized notifications never times out.
+ */
+const DISPATCH_KNOWN_ATTEMPT_PROGRESS_METHODS = new Set([
+  "item/agentMessage/delta",
+  "item/reasoning/summaryTextDelta",
+  "item/reasoning/textDelta",
+  "item/reasoning/summaryPartAdded",
+  "item/plan/delta",
+  "turn/plan/updated",
+  "item/started",
+  "item/completed",
+  "item/commandExecution/outputDelta",
+  "item/autoApprovalReview/started",
+  "item/autoApprovalReview/completed",
+  "item/fileChange/patchUpdated",
+  "guardianWarning",
+  "hook/started",
+  "hook/completed",
+  "thread/tokenUsage/updated",
+  "turn/completed",
+  "rawResponseItem/completed",
+  "error",
+]);
+
+/** Returns true when a notification method is recognized by the projector dispatch. */
+export function isDispatchKnownNotificationMethod(method: string): boolean {
+  return DISPATCH_KNOWN_ATTEMPT_PROGRESS_METHODS.has(method);
 }
 
 /** Returns true for terminal app-server thread status strings. */
