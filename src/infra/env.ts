@@ -36,7 +36,7 @@ function formatEnvValue(value: string, redact?: boolean): string {
   if (singleLine.length <= 160) {
     return singleLine;
   }
-  return `${singleLine.slice(0, 160)}…`;
+  return `${Array.from(singleLine).slice(0, 160).join("")}…`;
 }
 
 /** Logs an accepted env option once, with optional redaction for sensitive values. */
