@@ -2367,7 +2367,13 @@ describe("runCodexAppServerAttempt", () => {
     const [, secondHookInput] = beforePromptBuild.mock.calls.map(
       ([event]) => event as HookInputForTest,
     );
-    expect(JSON.stringify(secondHookInput?.messages ?? [])).not.toContain("hook-side mutation 1");
+    const secondHookMessageTexts =
+      secondHookInput?.messages?.flatMap(
+        (message) => message.content?.map((part) => part.text ?? "") ?? [],
+      ) ?? [];
+    expect(secondHookMessageTexts).toContain("prior visible context");
+    expect(secondHookMessageTexts).toContain("prior assistant context");
+    expect(secondHookMessageTexts).not.toContain("hook-side mutation 1");
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
     const threadStartParams = threadStart?.params as { developerInstructions?: string } | undefined;
     expect(threadStartParams?.developerInstructions).toContain("custom codex system 1");
