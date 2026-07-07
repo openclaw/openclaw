@@ -10,7 +10,11 @@ import {
   TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
 } from "../trajectory/paths.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
-import { sessionsTailCommand, setSessionsTailFollowIntervalMsForTests } from "./sessions-tail.js";
+import {
+  sessionsTailCommand,
+  sessionsTailTesting,
+  setSessionsTailFollowIntervalMsForTests,
+} from "./sessions-tail.js";
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({})),
@@ -504,6 +508,34 @@ describe("sessionsTailCommand", () => {
 
     await expect(sessionsTailCommand({ store: storePath, sessionKey }, runtime)).rejects.toThrow(
       /File exceeds 52428800 bytes/,
+    );
+  });
+
+  it("rejects oversized follow-mode trajectory deltas", () => {
+    fs.writeFileSync(trajectoryPath, "event\n", "utf8");
+    const stat = fs.statSync(trajectoryPath);
+    const state = {
+      cursor: null,
+      fileState: { dev: stat.dev, ino: stat.ino, mtimeMs: stat.mtimeMs, size: stat.size },
+      offset: 0,
+      pending: "",
+      selection: {
+        agentId: "test",
+        key: sessionKey,
+        entry: {} as any,
+        storePath,
+        trajectoryPath,
+      },
+    };
+
+    fs.writeFileSync(
+      trajectoryPath,
+      Buffer.alloc(TRAJECTORY_RUNTIME_FILE_MAX_BYTES + 1, "x"),
+      "utf8",
+    );
+
+    expect(() => sessionsTailTesting.readNewFollowEvents(state)).toThrow(
+      /Trajectory delta exceeds 52428800 bytes/,
     );
   });
 });

@@ -85,6 +85,11 @@ export function setSessionsTailFollowIntervalMsForTests(intervalMs?: number): vo
   followIntervalMsForTests = intervalMs;
 }
 
+/** Test-only hooks for exercising internal follow-state helpers. */
+export const sessionsTailTesting = {
+  readNewFollowEvents,
+};
+
 function resolveFollowIntervalMs(): number {
   return followIntervalMsForTests ?? FOLLOW_INTERVAL_MS;
 }
@@ -513,7 +518,13 @@ function readNewFollowEvents(state: FollowState): TrajectoryEvent[] {
 
   const fd = fs.openSync(state.selection.trajectoryPath, "r");
   try {
-    const buffer = Buffer.alloc(fileState.size - state.offset);
+    const deltaBytes = fileState.size - state.offset;
+    if (deltaBytes > TRAJECTORY_RUNTIME_FILE_MAX_BYTES) {
+      throw new Error(
+        `Trajectory delta exceeds ${TRAJECTORY_RUNTIME_FILE_MAX_BYTES} bytes: ${deltaBytes}`,
+      );
+    }
+    const buffer = Buffer.alloc(deltaBytes);
     fs.readSync(fd, buffer, 0, buffer.length, state.offset);
     state.offset = fileState.size;
     state.fileState = fileState;
