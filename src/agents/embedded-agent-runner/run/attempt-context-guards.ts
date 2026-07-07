@@ -137,6 +137,7 @@ export function installEmbeddedAttemptContextGuards(input: {
       agent: activeSession.agent,
       contextWindowTokens: contextTokenBudget,
       ...midTurnPrecheckOptions,
+      ownsCompaction: true,
     });
     removeLoopGuard = () => {
       removeToolResultGuard();

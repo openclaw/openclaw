@@ -354,6 +354,24 @@ describe("installToolResultContextGuard", () => {
     ).toBe("y".repeat(500));
   });
 
+  it("skips preemptive overflow check when ownsCompaction=true, even under aggregate pressure", async () => {
+    const agent = makeGuardableAgent();
+    const contextForNextCall = [
+      makeUser("u".repeat(50_000)),
+      makeToolResult("call_big", "x".repeat(5_000)),
+    ];
+
+    installToolResultContextGuard({
+      agent,
+      contextWindowTokens: 1_000,
+      ownsCompaction: true,
+    });
+    // Should not throw PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE despite aggregate
+    // pressure, because the context engine handles overflow detection.
+    const result = await agent.transformContext?.(contextForNextCall, new AbortController().signal);
+    expect(result).toBeDefined();
+  });
+
   it("supports model-window-specific truncation for large but otherwise valid tool results", async () => {
     const agent = makeGuardableAgent();
     const contextForNextCall = [makeToolResult("call_big", "q".repeat(95_000))];

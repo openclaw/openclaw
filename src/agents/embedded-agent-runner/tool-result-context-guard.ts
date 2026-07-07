@@ -469,6 +469,13 @@ export function installToolResultContextGuard(params: {
   agent: GuardableAgent;
   contextWindowTokens: number;
   midTurnPrecheck?: MidTurnPrecheckOptions;
+  /**
+   * When true, the preemptive overflow check (char-based estimation) is
+   * skipped. The owning context engine (e.g. lossless-claw) handles overflow
+   * detection with accurate token counts, making the rough char heuristic
+   * redundant and prone to false positives in tool-heavy conversations.
+   */
+  ownsCompaction?: boolean;
 }): () => void {
   const contextWindowTokens = Math.max(1, Math.floor(params.contextWindowTokens));
   const maxContextChars = Math.max(
@@ -550,13 +557,15 @@ export function installToolResultContextGuard(params: {
       }
       lastSeenLength = contextMessages.length;
     }
-    if (
-      exceedsPreemptiveOverflowThreshold({
-        messages: contextMessages,
-        maxContextChars,
-      })
-    ) {
-      throw new Error(PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE);
+    if (!params.ownsCompaction) {
+      if (
+        exceedsPreemptiveOverflowThreshold({
+          messages: contextMessages,
+          maxContextChars,
+        })
+      ) {
+        throw new Error(PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE);
+      }
     }
 
     return contextMessages;
