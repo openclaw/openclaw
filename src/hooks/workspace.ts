@@ -6,6 +6,11 @@ import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+
+// Hook package manifests and HOOK.md files are small metadata; cap reads so a
+// malicious or runaway file cannot OOM workspace discovery.
+const HOOK_PACKAGE_JSON_MAX_BYTES = 1024 * 1024;
+const HOOK_MD_MAX_BYTES = 1024 * 1024;
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { resolveBundledHooksDir } from "./bundled-dir.js";
@@ -34,6 +39,7 @@ function readHookPackageManifest(dir: string): HookPackageManifest | null {
     absolutePath: manifestPath,
     rootPath: dir,
     boundaryLabel: "hook package directory",
+    maxBytes: HOOK_PACKAGE_JSON_MAX_BYTES,
   });
   if (raw === null) {
     return null;
@@ -73,6 +79,7 @@ function loadHookFromDir(params: {
     absolutePath: hookMdPath,
     rootPath: params.hookDir,
     boundaryLabel: "hook directory",
+    maxBytes: HOOK_MD_MAX_BYTES,
   });
   if (content === null) {
     return null;
@@ -293,9 +300,12 @@ function readRootFileUtf8(params: {
   absolutePath: string;
   rootPath: string;
   boundaryLabel: string;
+  maxBytes: number;
 }): string | null {
   return withOpenedRootFileSync(params, (opened) => {
     try {
+      // Read through the already-validated file descriptor so a parent-directory
+      // symlink swap cannot redirect the read outside the hook root.
       return fs.readFileSync(opened.fd, "utf-8");
     } catch {
       return null;
@@ -308,6 +318,7 @@ function withOpenedRootFileSync<T>(
     absolutePath: string;
     rootPath: string;
     boundaryLabel: string;
+    maxBytes?: number;
   },
   read: (opened: { fd: number; path: string }) => T,
 ): T | null {
@@ -315,6 +326,7 @@ function withOpenedRootFileSync<T>(
     absolutePath: params.absolutePath,
     rootPath: params.rootPath,
     boundaryLabel: params.boundaryLabel,
+    maxBytes: params.maxBytes,
   });
   if (!opened.ok) {
     return null;

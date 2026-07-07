@@ -100,6 +100,33 @@ describe("hooks workspace", () => {
     expect(hookNames(entries)).toContain("nested");
   });
 
+  it("ignores hook packages with an oversized package.json", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-oversized-manifest-"));
+    const hooksRoot = path.join(root, "hooks");
+    fs.mkdirSync(hooksRoot, { recursive: true });
+
+    const pkgDir = path.join(hooksRoot, "pkg");
+    fs.mkdirSync(pkgDir, { recursive: true });
+    fs.writeFileSync(path.join(pkgDir, "package.json"), "x".repeat(1024 * 1024 + 1), "utf8");
+
+    const entries = loadHookEntriesFromDir({ dir: hooksRoot, source: "openclaw-workspace" });
+    expect(hookNames(entries)).toHaveLength(0);
+  });
+
+  it("ignores hooks with an oversized HOOK.md", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-oversized-md-"));
+    const hooksRoot = path.join(root, "hooks");
+    fs.mkdirSync(hooksRoot, { recursive: true });
+
+    const hookDir = path.join(hooksRoot, "big-hook");
+    fs.mkdirSync(hookDir, { recursive: true });
+    fs.writeFileSync(path.join(hookDir, "HOOK.md"), "x".repeat(1024 * 1024 + 1), "utf8");
+    fs.writeFileSync(path.join(hookDir, "handler.js"), "export default async () => {};\n");
+
+    const entries = loadHookEntriesFromDir({ dir: hooksRoot, source: "openclaw-workspace" });
+    expect(hookNames(entries)).toHaveLength(0);
+  });
+
   it("ignores package.json hook paths that escape via symlink", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-workspace-link-"));
     const hooksRoot = path.join(root, "hooks");
