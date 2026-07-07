@@ -11,6 +11,7 @@ import type {
   OpenClawPluginNodeInvokePolicyResult,
   OpenClawPluginNodeInvokeTransportResult,
 } from "../plugins/types.js";
+import { truncateUtf16Safe } from "../utils.js";
 import type { NodeSession } from "./node-registry.js";
 import { resolveApprovalRequestRecipientConnIds } from "./server-methods/approval-shared.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
@@ -63,8 +64,8 @@ function createApprovalRuntime(params: {
       const timeoutMs = resolvePluginApprovalTimeoutMs(input.timeoutMs);
       const request: PluginApprovalRequestPayload = {
         pluginId: params.pluginId,
-        title: input.title.slice(0, 80),
-        description: input.description.slice(0, 256),
+        title: truncateUtf16Safe(input.title, 80),
+        description: truncateUtf16Safe(input.description, 256),
         severity: input.severity ?? "warning",
         toolName: normalizeOptionalString(input.toolName) ?? null,
         toolCallId: normalizeOptionalString(input.toolCallId) ?? null,
