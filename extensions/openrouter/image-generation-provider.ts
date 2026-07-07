@@ -117,6 +117,10 @@ export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvide
       kind: "json",
       body: buildRequestBody({ req, inputImages, model, count }),
     }),
+    // OpenRouter reports media_type only for non-PNG images, but live testing
+    // showed some upstream models return non-PNG bytes without it; fall back
+    // to magic-byte sniffing (explicit media_type still wins when present).
+    response: { sniffMimeType: true },
     missingApiKeyError: "OpenRouter API key missing",
     failureLabels: {
       generate: "OpenRouter image generation failed",

@@ -234,6 +234,26 @@ describe("openrouter image generation provider", () => {
     expect(result.images[0]?.mimeType).toBe("image/webp");
   });
 
+  it("sniffs the MIME type when media_type is absent from the response", async () => {
+    const jpegBytes = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46]);
+    postJsonRequestMock.mockResolvedValue({
+      response: jsonResponse({
+        data: [{ b64_json: jpegBytes.toString("base64") }],
+      }),
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildOpenRouterImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "openrouter",
+      model: "google/gemini-3.1-flash-image-preview",
+      prompt: "photo",
+      cfg: {},
+    } as any);
+
+    expect(result.images[0]?.mimeType).toBe("image/jpeg");
+  });
+
   it("does not include aspect_ratio or resolution for non-Gemini models", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: jsonResponse({
