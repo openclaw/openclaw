@@ -3,7 +3,12 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { classifyFailoverReason, isAuthErrorMessage } from "../agents/embedded-agent-helpers.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
-import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
+import {
+  asString,
+  extractTextFromMessage,
+  isCommandMessage,
+  sanitizeRenderableText,
+} from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 import type {
   AgentEvent,
@@ -11,6 +16,7 @@ import type {
   ChatEvent,
   SessionChangedEvent,
   SessionMessageEvent,
+  TuiHistoryLoadResult,
   TuiStateAccess,
 } from "./tui-types.js";
 
@@ -38,6 +44,20 @@ type EventHandlerBtwPresenter = {
   clear: () => void;
 };
 
+const MAX_ABORT_DIAGNOSTIC_LENGTH = 160;
+
+function formatAbortDiagnostic(value: string | undefined): string | undefined {
+  const diagnostic = sanitizeRenderableText(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!diagnostic) {
+    return undefined;
+  }
+  return diagnostic.length > MAX_ABORT_DIAGNOSTIC_LENGTH
+    ? `${diagnostic.slice(0, MAX_ABORT_DIAGNOSTIC_LENGTH - 1)}…`
+    : diagnostic;
+}
+
 type EventHandlerContext = {
   chatLog: EventHandlerChatLog;
   btw: EventHandlerBtwPresenter;
@@ -45,7 +65,7 @@ type EventHandlerContext = {
   state: TuiStateAccess;
   setActivityStatus: (text: string) => void;
   refreshSessionInfo?: () => Promise<void>;
-  loadHistory?: () => Promise<void>;
+  loadHistory?: () => Promise<TuiHistoryLoadResult>;
   noteLocalRunId?: (runId: string) => void;
   isLocalRunId?: (runId: string) => boolean;
   forgetLocalRunId?: (runId: string) => void;
@@ -84,16 +104,24 @@ export function createEventHandlers(context: EventHandlerContext) {
   const sessionRuns = new Map<string, number>();
   const finalizedRuns = new Map<string, number>();
   const finalizedRunsWithDisplay = new Map<string, number>();
+  const pendingNewSessionRunIds = new Set<string>();
+  const persistedTerminalRunIds = new Map<string, number>();
+  const historyReloadRunIds = new Set<string>();
+  const historyOwnedReloadRunIds = new Set<string>();
+  const historyDisplayedReloadRunIds = new Set<string>();
+  const queuedHistoryReloadRunIds = new Set<string>();
+  const deferredHistoryRunEvents = new Map<string, ChatEvent>();
+  let historyReloadInFlight = false;
+  let historyReloadGeneration = 0;
   const completedRuns = new Map<string, number>();
   const postFinalizingRuns = new Map<string, number>();
   let streamAssembler = new TuiStreamAssembler();
   let lastSessionKey = state.currentSessionKey;
   let pendingHistoryRefresh = false;
-  let pendingHistoryRefreshCanFlushAfterDisplayableFinal = false;
-  let queuedHistoryReload = false;
-  let queuedHistoryReloadSessionKey: string | null = null;
-  let queuedHistoryReloadAgentId: string | null = null;
-  let historyReloadInFlight = false;
+  let pendingSessionMessageRefresh = false;
+  // Run ids carry reconciliation ownership; this flag also queues run-less transcript
+  // invalidations so every event-driven history rebuild stays serialized.
+  let historyReloadQueued = false;
   let reconnectPendingRunId: string | null = null;
   const pendingTerminalLifecycleErrors = new Map<
     string,
@@ -109,80 +137,14 @@ export function createEventHandlers(context: EventHandlerContext) {
   let streamingWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
   let streamingWatchdogRunId: string | null = null;
 
-  const clearPendingHistoryRefresh = () => {
-    pendingHistoryRefresh = false;
-    pendingHistoryRefreshCanFlushAfterDisplayableFinal = false;
-  };
-
-  // A plain deferral (e.g. session.message) is dropped if the run ends with a displayable
-  // final, so an uncorrelated history rebuild cannot wipe a just-rendered answer; only
-  // silent finals flush it. `afterDisplayableFinal: "immediate"` (reconnect/optimistic
-  // reconcile) must reload even after a displayable final, so it sets a sticky flush flag
-  // that survives until clearPendingHistoryRefresh resets it.
-  const deferHistoryRefresh = (opts?: { afterDisplayableFinal?: "immediate" }) => {
-    pendingHistoryRefresh = true;
-    pendingHistoryRefreshCanFlushAfterDisplayableFinal =
-      pendingHistoryRefreshCanFlushAfterDisplayableFinal ||
-      opts?.afterDisplayableFinal === "immediate";
-  };
-
   const isHistoryRefreshIdle = () =>
     !state.activeChatRunId && !state.pendingChatRunId && !state.pendingOptimisticUserMessage;
 
-  const clearQueuedHistoryReload = () => {
-    queuedHistoryReload = false;
-    queuedHistoryReloadSessionKey = null;
-    queuedHistoryReloadAgentId = null;
-  };
-
-  const runQueuedHistoryReload = () => {
-    if (!queuedHistoryReload || historyReloadInFlight) {
-      return;
-    }
-    if (!loadHistory) {
-      clearQueuedHistoryReload();
-      return;
-    }
-    const reloadSessionKey = queuedHistoryReloadSessionKey;
-    const reloadAgentId = queuedHistoryReloadAgentId;
-    clearQueuedHistoryReload();
-    if (
-      !isSameSessionKey(reloadSessionKey ?? undefined, state.currentSessionKey) ||
-      normalizeAgentId(reloadAgentId ?? undefined) !== normalizeAgentId(state.currentAgentId)
-    ) {
-      return;
-    }
-    historyReloadInFlight = true;
-    void Promise.resolve(loadHistory()).finally(() => {
-      historyReloadInFlight = false;
-      if (queuedHistoryReload) {
-        runQueuedHistoryReload();
-      }
-    });
-  };
-
-  const queueHistoryReload = () => {
-    queuedHistoryReload = true;
-    queuedHistoryReloadSessionKey = state.currentSessionKey ?? null;
-    queuedHistoryReloadAgentId = state.currentAgentId ?? null;
-    if (historyReloadInFlight) {
-      return;
-    }
-    runQueuedHistoryReload();
-  };
-
-  const flushPendingHistoryRefreshIfIdle = (opts?: { afterDisplayableFinal?: boolean }) => {
+  const flushPendingHistoryRefreshIfIdle = () => {
     if (!pendingHistoryRefresh || !isHistoryRefreshIdle()) {
       return;
     }
-    if (
-      opts?.afterDisplayableFinal === true &&
-      !pendingHistoryRefreshCanFlushAfterDisplayableFinal
-    ) {
-      clearPendingHistoryRefresh();
-      return;
-    }
-    clearPendingHistoryRefresh();
+    pendingHistoryRefresh = false;
     queueHistoryReload();
   };
 
@@ -215,13 +177,23 @@ export function createEventHandlers(context: EventHandlerContext) {
   };
 
   const clearTrackedRunState = () => {
+    historyReloadGeneration += 1;
+    pendingNewSessionRunIds.clear();
+    persistedTerminalRunIds.clear();
+    historyReloadRunIds.clear();
+    historyOwnedReloadRunIds.clear();
+    historyDisplayedReloadRunIds.clear();
+    queuedHistoryReloadRunIds.clear();
+    historyReloadQueued = false;
+    deferredHistoryRunEvents.clear();
     finalizedRuns.clear();
     finalizedRunsWithDisplay.clear();
     completedRuns.clear();
     sessionRuns.clear();
     postFinalizingRuns.clear();
     streamAssembler = new TuiStreamAssembler();
-    clearPendingHistoryRefresh();
+    pendingHistoryRefresh = false;
+    pendingSessionMessageRefresh = false;
     state.pendingOptimisticUserMessage = false;
     state.pendingChatRunId = null;
     state.pendingSubmitDraft = null;
@@ -252,8 +224,8 @@ export function createEventHandlers(context: EventHandlerContext) {
         state.activeChatRunId = null;
         state.activityStatus = "idle";
         setActivityStatus("idle");
-        clearPendingHistoryRefresh();
-        void loadHistory?.();
+        pendingHistoryRefresh = false;
+        queueHistoryReload();
         tui.requestRender();
         return;
       }
@@ -450,7 +422,10 @@ export function createEventHandlers(context: EventHandlerContext) {
     noteFinalizedRun(params.runId, { displayedFinal: params.displayedFinal });
     clearActiveRunIfMatch(params.runId);
     const promotedRemainingRun = promoteMostRecentSessionRun();
-    flushPendingHistoryRefreshIfIdle({ afterDisplayableFinal: params.displayedFinal === true });
+    flushPendingHistoryRefreshIfIdle();
+    if (persistedTerminalRunIds.has(params.runId)) {
+      flushPendingSessionMessageRefreshIfIdle();
+    }
     if (!promotedRemainingRun) {
       if (params.wasActiveRun) {
         setActivityStatus(params.status);
@@ -477,6 +452,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     clearActiveRunIfMatch(params.runId);
     const promotedRemainingRun = promoteMostRecentSessionRun();
     flushPendingHistoryRefreshIfIdle();
+    if (persistedTerminalRunIds.has(params.runId)) {
+      flushPendingSessionMessageRefreshIfIdle();
+    }
     if (!promotedRemainingRun) {
       if (params.wasActiveRun) {
         setActivityStatus(params.status);
@@ -552,12 +530,12 @@ export function createEventHandlers(context: EventHandlerContext) {
       // Defer the reload if a newer run is active so we preserve the pending
       // user message, then flush once that active run finishes.
       if (state.activeChatRunId && state.activeChatRunId !== runId) {
-        deferHistoryRefresh({ afterDisplayableFinal: "immediate" });
+        pendingHistoryRefresh = true;
         return;
       }
     }
     if (!isPendingChatRun && (state.pendingChatRunId || state.pendingOptimisticUserMessage)) {
-      deferHistoryRefresh({ afterDisplayableFinal: "immediate" });
+      pendingHistoryRefresh = true;
       return;
     }
     // When the final event already produced displayable output, skip the
@@ -570,8 +548,8 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (hasConcurrentActiveRun(runId)) {
       return;
     }
-    clearPendingHistoryRefresh();
-    void loadHistory?.();
+    pendingHistoryRefresh = false;
+    queueHistoryReload();
   };
 
   const messageHasDisplayableNonTextContent = (message: unknown): boolean => {
@@ -636,33 +614,20 @@ export function createEventHandlers(context: EventHandlerContext) {
     return false;
   };
 
-  const isGlobalSessionKey = (sessionKey: string | undefined): boolean =>
-    normalizeLowercaseStringOrEmpty(sessionKey) === "global";
-
-  const normalizeAgentId = (agentId: string | undefined): string =>
-    normalizeLowercaseStringOrEmpty(agentId);
-
   const isMatchingGlobalAgentEvent = (
     sessionKey: string | undefined,
     agentId?: string,
   ): boolean => {
-    if (!isGlobalSessionKey(sessionKey)) {
+    if (normalizeLowercaseStringOrEmpty(sessionKey) !== "global") {
       return true;
     }
-    const selectedAgentId = normalizeAgentId(state.currentAgentId);
-    const defaultAgentId = normalizeAgentId(state.agentDefaultId);
-    const eventAgentId = normalizeAgentId(agentId);
+    const selectedAgentId = normalizeLowercaseStringOrEmpty(state.currentAgentId);
+    const defaultAgentId = normalizeLowercaseStringOrEmpty(state.agentDefaultId);
+    const eventAgentId = normalizeLowercaseStringOrEmpty(agentId);
     if (eventAgentId) {
       return eventAgentId === selectedAgentId;
     }
     return selectedAgentId === defaultAgentId;
-  };
-
-  const isCurrentSessionMessageEvent = (evt: SessionMessageEvent): boolean => {
-    if (!isMatchingGlobalAgentEvent(evt.sessionKey, evt.agentId)) {
-      return false;
-    }
-    return isSameSessionKey(evt.sessionKey, state.currentSessionKey);
   };
 
   const handleChatEvent = (payload: unknown) => {
@@ -675,6 +640,15 @@ export function createEventHandlers(context: EventHandlerContext) {
       return;
     }
     if (!isMatchingGlobalAgentEvent(evt.sessionKey, evt.agentId)) {
+      return;
+    }
+    if (historyReloadRunIds.has(evt.runId)) {
+      const previous = deferredHistoryRunEvents.get(evt.runId);
+      // Keep the latest delta until a terminal event arrives; terminal state
+      // stays authoritative if a delayed delta follows it.
+      if (!previous || previous.state === "delta" || evt.state !== "delta") {
+        deferredHistoryRunEvents.set(evt.runId, evt);
+      }
       return;
     }
     if (finalizedRuns.has(evt.runId)) {
@@ -800,7 +774,8 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (evt.state === "aborted") {
       forgetLocalBtwRunId?.(evt.runId);
       const wasActiveRun = state.activeChatRunId === evt.runId;
-      chatLog.addSystem("run aborted");
+      const diagnostic = formatAbortDiagnostic(evt.errorMessage);
+      chatLog.addSystem(diagnostic ? `run aborted: ${diagnostic}` : "run aborted");
       terminateRun({ runId: evt.runId, wasActiveRun, status: "aborted" });
       maybeRefreshHistoryForRun(evt.runId);
     }
@@ -812,6 +787,107 @@ export function createEventHandlers(context: EventHandlerContext) {
       });
     }
     tui.requestRender();
+  };
+
+  const drainHistoryReloadQueue = () => {
+    if (historyReloadInFlight || !historyReloadQueued || !loadHistory) {
+      return;
+    }
+    const reloadGeneration = historyReloadGeneration;
+    const runIds = Array.from(queuedHistoryReloadRunIds);
+    queuedHistoryReloadRunIds.clear();
+    historyReloadQueued = false;
+    historyReloadInFlight = true;
+    const finishReload = (result: TuiHistoryLoadResult) => {
+      if (reloadGeneration !== historyReloadGeneration) {
+        return;
+      }
+      for (const runId of runIds) {
+        historyReloadRunIds.delete(runId);
+        const deferred = deferredHistoryRunEvents.get(runId);
+        deferredHistoryRunEvents.delete(runId);
+        const historyOwned = historyOwnedReloadRunIds.delete(runId);
+        const previouslyDisplayed = historyDisplayedReloadRunIds.delete(runId);
+        const restoredInFlight = result.loaded && result.inFlightRunId === runId;
+        if (historyOwned && !restoredInFlight) {
+          // Rebuilt history owns the final row; after a failed rebuild retain
+          // the pre-reload display fact so late finals neither duplicate nor vanish.
+          finalizeRun({
+            runId,
+            wasActiveRun: state.activeChatRunId === runId,
+            status: "idle",
+            displayedFinal: result.loaded || previouslyDisplayed,
+          });
+        }
+        if (deferred && (!result.loaded || historyOwned || restoredInFlight)) {
+          handleChatEvent(deferred);
+        }
+      }
+    };
+    void loadHistory()
+      .then(finishReload, () => finishReload({ loaded: false }))
+      .finally(() => {
+        historyReloadInFlight = false;
+        drainHistoryReloadQueue();
+      });
+  };
+
+  function queueHistoryReload(
+    runIds?: Iterable<string>,
+    historyOwnedRunIds: Iterable<string> = [],
+    displayedRunIds: Iterable<string> = [],
+  ) {
+    const historyOwned = new Set(historyOwnedRunIds);
+    const displayed = new Set(displayedRunIds);
+    const queuedRunIds = runIds ?? [];
+    if (!loadHistory) {
+      for (const runId of queuedRunIds) {
+        if (historyOwned.has(runId)) {
+          noteFinalizedRun(runId, { displayedFinal: true });
+        }
+      }
+      void refreshSessionInfo?.();
+      return;
+    }
+    if (runIds === undefined) {
+      historyReloadQueued = true;
+    }
+    for (const runId of queuedRunIds) {
+      historyReloadQueued = true;
+      historyReloadRunIds.add(runId);
+      queuedHistoryReloadRunIds.add(runId);
+      if (historyOwned.has(runId)) {
+        historyOwnedReloadRunIds.add(runId);
+      }
+      if (displayed.has(runId)) {
+        historyDisplayedReloadRunIds.add(runId);
+      }
+    }
+    drainHistoryReloadQueue();
+  }
+
+  function flushPendingSessionMessageRefreshIfIdle() {
+    if (!pendingSessionMessageRefresh || !isHistoryRefreshIdle()) {
+      return;
+    }
+    pendingSessionMessageRefresh = false;
+    queueHistoryReload();
+  }
+
+  const collectTrackedSessionRunIds = () => {
+    const runIds = new Set(sessionRuns.keys());
+    if (state.activeChatRunId) {
+      runIds.add(state.activeChatRunId);
+    }
+    if (state.pendingChatRunId) {
+      runIds.add(state.pendingChatRunId);
+    }
+    const finalizedRunIds = new Set(finalizedRuns.keys());
+    const displayedRunIds = new Set(finalizedRunsWithDisplay.keys());
+    for (const runId of finalizedRunIds) {
+      runIds.add(runId);
+    }
+    return { runIds, finalizedRunIds, displayedRunIds };
   };
 
   const handleSessionsChangedEvent = (payload: unknown) => {
@@ -826,24 +902,72 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (!isMatchingGlobalAgentEvent(evt.sessionKey, evt.agentId)) {
       return;
     }
+
+    if (evt.runId && (evt.phase === "end" || evt.phase === "error")) {
+      persistedTerminalRunIds.set(evt.runId, Date.now());
+      pruneRunMap(persistedTerminalRunIds);
+      if (pendingNewSessionRunIds.delete(evt.runId)) {
+        if (evt.phase === "end") {
+          const displayedRunIds = finalizedRunsWithDisplay.has(evt.runId) ? [evt.runId] : [];
+          queueHistoryReload([evt.runId], [evt.runId], displayedRunIds);
+        } else {
+          void refreshSessionInfo?.();
+        }
+      }
+      flushPendingSessionMessageRefreshIfIdle();
+      return;
+    }
     if (evt.reason !== "new" && evt.reason !== "reset") {
       return;
     }
 
+    const nextSessionId = typeof evt.sessionId === "string" ? evt.sessionId : null;
+    const replacesKnownSession =
+      state.currentSessionId !== null &&
+      nextSessionId !== null &&
+      state.currentSessionId !== nextSessionId;
+    if (evt.reason === "new" && !replacesKnownSession) {
+      const { runIds, displayedRunIds } = collectTrackedSessionRunIds();
+      if (runIds.size > 0) {
+        if (nextSessionId) {
+          state.currentSessionId = nextSessionId;
+        }
+        if (typeof evt.updatedAt === "number" || evt.updatedAt === null) {
+          state.sessionInfo.updatedAt = evt.updatedAt;
+        }
+        const persistedRunIds: string[] = [];
+        for (const runId of runIds) {
+          if (persistedTerminalRunIds.has(runId)) {
+            persistedRunIds.push(runId);
+          } else {
+            pendingNewSessionRunIds.add(runId);
+          }
+        }
+        queueHistoryReload(persistedRunIds, persistedRunIds, displayedRunIds);
+        tui.requestRender();
+        return;
+      }
+    }
+
+    const {
+      runIds: reloadingRunIds,
+      finalizedRunIds,
+      displayedRunIds,
+    } = collectTrackedSessionRunIds();
     clearTrackedRunState();
     state.activeChatRunId = null;
     state.activityStatus = "idle";
     setActivityStatus("idle");
-    if (typeof evt.sessionId === "string") {
-      state.currentSessionId = evt.sessionId;
+    if (nextSessionId) {
+      state.currentSessionId = nextSessionId;
     }
     if (typeof evt.updatedAt === "number" || evt.updatedAt === null) {
       state.sessionInfo.updatedAt = evt.updatedAt;
     }
-    if (loadHistory) {
-      void loadHistory();
+    if (reloadingRunIds.size > 0) {
+      queueHistoryReload(reloadingRunIds, finalizedRunIds, displayedRunIds);
     } else {
-      void refreshSessionInfo?.();
+      queueHistoryReload();
     }
     tui.requestRender();
   };
@@ -854,7 +978,10 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     const evt = payload as SessionMessageEvent;
     syncSessionKey();
-    if (!isCurrentSessionMessageEvent(evt)) {
+    if (
+      !isSameSessionKey(evt.sessionKey, state.currentSessionKey) ||
+      !isMatchingGlobalAgentEvent(evt.sessionKey, evt.agentId)
+    ) {
       return;
     }
     if (typeof evt.sessionId === "string") {
@@ -864,13 +991,11 @@ export function createEventHandlers(context: EventHandlerContext) {
       state.sessionInfo.updatedAt = evt.updatedAt;
     }
     if (!isHistoryRefreshIdle()) {
-      deferHistoryRefresh();
+      pendingSessionMessageRefresh = true;
       void refreshSessionInfo?.();
       return;
     }
-    clearPendingHistoryRefresh();
     queueHistoryReload();
-    tui.requestRender();
   };
 
   const handleAgentEvent = (payload: unknown) => {
@@ -1000,12 +1125,14 @@ export function createEventHandlers(context: EventHandlerContext) {
         clearStreamingWatchdog();
         setActivityStatus("finishing context");
       }
+      let forceRender = false;
       if (phase === "end") {
         postFinalizingRuns.delete(evt.runId);
         if (!canUpdateActivityStatus) {
           return;
         }
         setActivityStatus("idle");
+        forceRender = true;
       }
       if (phase === "error") {
         postFinalizingRuns.delete(evt.runId);
@@ -1025,8 +1152,9 @@ export function createEventHandlers(context: EventHandlerContext) {
         } else {
           setActivityStatus("error");
         }
+        forceRender = true;
       }
-      tui.requestRender();
+      tui.requestRender(forceRender);
     }
   };
 
@@ -1059,6 +1187,16 @@ export function createEventHandlers(context: EventHandlerContext) {
   };
 
   const dispose = () => {
+    historyReloadGeneration += 1;
+    pendingNewSessionRunIds.clear();
+    persistedTerminalRunIds.clear();
+    historyReloadRunIds.clear();
+    historyOwnedReloadRunIds.clear();
+    historyDisplayedReloadRunIds.clear();
+    queuedHistoryReloadRunIds.clear();
+    historyReloadQueued = false;
+    pendingSessionMessageRefresh = false;
+    deferredHistoryRunEvents.clear();
     clearStreamingWatchdog();
     clearPendingTerminalLifecycleErrors();
   };
