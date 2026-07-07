@@ -123,12 +123,14 @@ function createExecApprovals(): ExecApprovalsResolved {
       ask: "off",
       askFallback: "full",
       autoAllowSkills: false,
+      denylist: [],
     },
     agent: {
       security: "full",
       ask: "off",
       askFallback: "full",
       autoAllowSkills: false,
+      denylist: [],
     },
     agentSources: {
       security: "defaults.security",
@@ -136,6 +138,7 @@ function createExecApprovals(): ExecApprovalsResolved {
       askFallback: "defaults.askFallback",
     },
     allowlist: [],
+    denylist: [],
     file: {
       version: 1,
       socket: { path: "/tmp/exec-approvals.sock", token: "token" },
