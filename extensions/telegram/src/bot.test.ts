@@ -4797,6 +4797,35 @@ describe("createTelegramBot", () => {
     }
   });
 
+  it("returns early for message_reaction without chat", async () => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "all" },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message_reaction") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      update: { update_id: 499 },
+      messageReaction: {
+        message_id: 42,
+        user: { id: 9, first_name: "Ada" },
+        date: 1736380800,
+        old_reaction: [],
+        new_reaction: [{ type: "emoji", emoji: THUMBS_UP_EMOJI }],
+      },
+    });
+
+    expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
+  });
+
   it("enqueues system event for reaction", async () => {
     onSpy.mockClear();
     enqueueSystemEventSpy.mockClear();

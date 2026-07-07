@@ -55,34 +55,3 @@ describe("buildTelegramInboundDebounceKey", () => {
     expect(buildTelegramInboundDebounceConversationKey({ chatId: 7 })).toBe("7");
   });
 });
-
-describe("message_reaction chat guard", () => {
-  it("guards reaction without chat field (negative control proves crash)", () => {
-    // Pre-fix handler without chat guard — crashes on missing chat.
-    const buggy = (reaction: unknown): string | null => {
-      if (!reaction) {
-        return null;
-      }
-      const r = reaction as { chat?: { id?: number }; message_id?: number };
-      return `telegram:${r.chat!.id}:msg_${r.message_id}`;
-    };
-    expect(() => {
-      buggy({ message_id: 789 });
-    }).toThrow(TypeError);
-
-    // Post-fix handler with chat guard — returns null safely.
-    const safe = (reaction: unknown): string | null => {
-      if (!reaction) {
-        return null;
-      }
-      const r = reaction as { chat?: { id?: number }; message_id?: number };
-      if (!r?.chat) {
-        return null;
-      }
-      return `telegram:${r.chat.id}:msg_${r.message_id}`;
-    };
-    expect(safe({ message_id: 789 })).toBeNull();
-    expect(safe({ chat: { id: 123 }, message_id: 456 })).toBe("telegram:123:msg_456");
-    expect(safe(null)).toBeNull();
-  });
-});
