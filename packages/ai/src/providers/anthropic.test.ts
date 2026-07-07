@@ -1648,6 +1648,56 @@ describe("Anthropic provider", () => {
     expect((capturedPayload as { output_config?: unknown }).output_config).toBeUndefined();
   });
 
+  it("resolves thinking as disabled when the legacy budget collapses below 1024", async () => {
+    // reasoning:true so the builder enters the thinking block, but an id that
+    // does not match the adaptive-thinking regex so the budget-based path is used.
+    const model = makeAnthropicModel({
+      id: "claude-haiku-4-5",
+      name: "Claude Haiku 4.5",
+      reasoning: true,
+      maxTokens: 1024,
+    });
+    let capturedPayload: unknown;
+    const stream = streamSimpleAnthropic(
+      model,
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      {
+        apiKey: "sk-ant-provider",
+        reasoning: "minimal",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+    await stream.result();
+    expect((capturedPayload as { thinking?: unknown }).thinking).toEqual({ type: "disabled" });
+  });
+
+  it("resolves thinking as disabled when the legacy budget is positive but sub-minimum", async () => {
+    const model = makeAnthropicModel({
+      id: "claude-haiku-4-5",
+      name: "Claude Haiku 4.5",
+      reasoning: true,
+      maxTokens: 1500,
+    });
+    let capturedPayload: unknown;
+    const stream = streamSimpleAnthropic(
+      model,
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      {
+        apiKey: "sk-ant-provider",
+        reasoning: "low",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+    await stream.result();
+    expect((capturedPayload as { thinking?: unknown }).thinking).toEqual({ type: "disabled" });
+  });
+
   it.each(["claude-opus-4-8", "claude-mythos-preview"])(
     "restores default sampling for %s after payload hooks",
     async (modelId) => {

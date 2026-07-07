@@ -1070,11 +1070,14 @@ export const streamSimpleAnthropic: StreamFunction<
     options?.thinkingBudgets,
   );
 
+  // Sub-minimum budgets (< 1024) resolve to thinking disabled so downstream
+  // consumers (payload, replay, temperature, tool-choice) see consistent state.
+  const thinkingEnabled = adjusted.thinkingBudget >= 1024;
   return streamAnthropic(model, context, {
     ...base,
     maxTokens: adjusted.maxTokens,
-    thinkingEnabled: true,
-    thinkingBudgetTokens: adjusted.thinkingBudget,
+    thinkingEnabled,
+    thinkingBudgetTokens: thinkingEnabled ? adjusted.thinkingBudget : undefined,
   } satisfies AnthropicOptions);
 };
 
@@ -1352,7 +1355,7 @@ function buildParams(
         // Budget-based thinking for older models
         params.thinking = {
           type: "enabled",
-          budget_tokens: options?.thinkingBudgetTokens || 1024,
+          budget_tokens: options?.thinkingBudgetTokens ?? 1024,
           display,
         };
       }
