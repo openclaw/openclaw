@@ -169,7 +169,7 @@ function isTarEofRaceError(err: unknown): boolean {
   return /(did not encounter expected|encountered unexpected) EOF|TAR_BAD_ARCHIVE/i.test(message);
 }
 
-export type BackupTarRetryLogger = (message: string) => void;
+type BackupTarRetryLogger = (message: string) => void;
 
 function resolveBackupTarAttemptTempPath(tempArchivePath: string, attempt: number): string {
   return attempt === 1 ? tempArchivePath : `${tempArchivePath}.retry-${attempt}`;
