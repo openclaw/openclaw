@@ -1352,12 +1352,20 @@ function buildParams(
               : { effort };
         }
       } else {
-        // Budget-based thinking for older models
-        params.thinking = {
-          type: "enabled",
-          budget_tokens: options?.thinkingBudgetTokens ?? 1024,
-          display,
-        };
+        // Budget-based thinking for older models.
+        // Anthropic SDK requires budget_tokens >= 1024. Sub-minimum budgets
+        // (including explicit zero) skip the thinking block instead of
+        // producing a request the API would reject. Option resolution already
+        // normalizes these for simple/transport paths; this guard protects
+        // direct streamAnthropic and bundled-plugin callers.
+        const budgetTokens = options?.thinkingBudgetTokens ?? 1024;
+        if (budgetTokens >= 1024) {
+          params.thinking = {
+            type: "enabled",
+            budget_tokens: budgetTokens,
+            display,
+          };
+        }
       }
     } else if (options?.thinkingEnabled === false) {
       params.thinking = { type: "disabled" };
