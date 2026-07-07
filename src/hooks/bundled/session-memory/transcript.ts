@@ -1,7 +1,8 @@
 // Session memory transcript helpers persist compact session transcript excerpts.
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { readRegularFile } from "../../../infra/regular-file.js";
+import { readRegularFile, statRegularFile } from "../../../infra/regular-file.js";
 import { sanitizeModelSpecialTokens } from "../../../security/external-content.js";
 import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
@@ -61,16 +62,54 @@ function extractTextMessageContent(content: unknown): string | undefined {
   return undefined;
 }
 
+async function readBoundedTranscriptContent(sessionFilePath: string): Promise<string | null> {
+  const statResult = await statRegularFile(sessionFilePath);
+  if (statResult.missing) {
+    return null;
+  }
+
+  if (statResult.stat.size <= SESSION_TRANSCRIPT_MAX_BYTES) {
+    const { buffer } = await readRegularFile({
+      filePath: sessionFilePath,
+      maxBytes: SESSION_TRANSCRIPT_MAX_BYTES,
+    });
+    return buffer.toString("utf-8");
+  }
+
+  // For oversized transcripts, read only the trailing cap bytes so recent
+  // session context is preserved without buffering the whole file.
+  const start = statResult.stat.size - SESSION_TRANSCRIPT_MAX_BYTES;
+  const flags =
+    fsConstants.O_RDONLY |
+    (typeof fsConstants.O_NOFOLLOW === "number" && process.platform !== "win32"
+      ? fsConstants.O_NOFOLLOW
+      : 0);
+  const fd = await fs.open(sessionFilePath, flags);
+  try {
+    const tailBuffer = Buffer.alloc(SESSION_TRANSCRIPT_MAX_BYTES);
+    const { bytesRead } = await fd.read(tailBuffer, 0, SESSION_TRANSCRIPT_MAX_BYTES, start);
+    const tail = tailBuffer.toString("utf-8", 0, bytesRead);
+    // The first line in the tail may start mid-record, so drop everything up
+    // to the first complete newline to avoid parsing a partial JSONL row.
+    const firstNewline = tail.indexOf("\n");
+    if (firstNewline === -1) {
+      return null;
+    }
+    return tail.slice(firstNewline + 1);
+  } finally {
+    await fd.close();
+  }
+}
+
 export async function getRecentSessionContent(
   sessionFilePath: string,
   messageCount = 15,
 ): Promise<string | null> {
   try {
-    const { buffer } = await readRegularFile({
-      filePath: sessionFilePath,
-      maxBytes: SESSION_TRANSCRIPT_MAX_BYTES,
-    });
-    const content = buffer.toString("utf-8");
+    const content = await readBoundedTranscriptContent(sessionFilePath);
+    if (content === null) {
+      return null;
+    }
     const lines = content.trim().split("\n");
 
     const allMessages: string[] = [];

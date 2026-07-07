@@ -81,10 +81,19 @@ describe("session-memory transcript extraction", () => {
     );
   });
 
-  it("returns null for oversized transcripts instead of buffering them", async () => {
-    const oversized = `${message("user", "x".repeat(1024))}\n${message("user", "x".repeat(16 * 1024 * 1024))}\n`;
-    const transcriptPath = await writeTranscript(oversized);
+  it("preserves recent messages from the tail of an oversized transcript", async () => {
+    // One huge message pushes the file over the 16 MiB cap; the small messages
+    // after it must still be reachable via a bounded tail read.
+    const huge = message("user", "x".repeat(17 * 1024 * 1024));
+    const recent = [
+      message("user", "recent user message"),
+      message("assistant", "recent assistant message"),
+    ].join("\n");
+    const transcriptPath = await writeTranscript(`${huge}\n${recent}\n`);
 
-    await expect(getRecentSessionContent(transcriptPath)).resolves.toBeNull();
+    const memoryContent = await getRecentSessionContent(transcriptPath);
+
+    expect(memoryContent).toContain("user: recent user message");
+    expect(memoryContent).toContain("assistant: recent assistant message");
   });
 });
