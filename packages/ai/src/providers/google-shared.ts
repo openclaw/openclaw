@@ -35,7 +35,7 @@ import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-bou
 import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
-export type GoogleApiType = "google-generative-ai" | "google-vertex";
+type GoogleApiType = "google-generative-ai" | "google-vertex";
 
 /**
  * Thinking level for Gemini 3 models.
@@ -48,9 +48,9 @@ export type GoogleThinkingLevel =
   | "MEDIUM"
   | "HIGH";
 
-export type GoogleToolChoice = "auto" | "none" | "any";
+type GoogleToolChoice = "auto" | "none" | "any";
 
-export type GoogleThinkingOptions = {
+type GoogleThinkingOptions = {
   enabled: boolean;
   budgetTokens?: number;
   level?: GoogleThinkingLevel;
