@@ -387,8 +387,8 @@ export type ChannelFocusedBindingContext = {
 export type ChannelOutboundSessionRoute = {
   sessionKey: string;
   baseSessionKey: string;
-  /** False for a best-effort route; omission keeps legacy plugin hooks authoritative. */
-  recipientSessionExact?: boolean;
+  /** True for exact routes; `direct-alias` guarantees only the chat kind; false is ambiguous. */
+  recipientSessionExact?: boolean | "direct-alias";
   peer: {
     kind: ChatType;
     id: string;
@@ -640,8 +640,9 @@ export type ChannelMessagingAdapter = {
   /**
    * Provider-specific session-route builder used after target resolution.
    * Keep session-key orchestration in core and channel-native routing rules here.
-   * Set `recipientSessionExact` only when the target maps unambiguously to the
-   * same canonical session that inbound delivery uses.
+   * Set `recipientSessionExact` to true only when the target maps unambiguously
+   * to the same canonical session that inbound delivery uses. `direct-alias`
+   * may be used when only the direct chat kind is authoritative.
    */
   resolveOutboundSessionRoute?: (params: {
     cfg: OpenClawConfig;

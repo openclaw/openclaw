@@ -98,7 +98,9 @@ vi.mock("./target-resolver.js", () => ({
 vi.mock("../../utils/message-channel.js", () => ({
   INTERNAL_MESSAGE_CHANNEL: "webchat",
   isDeliverableMessageChannel: (channel: string) =>
-    ["directchat", "line", "provider", "workspace", "telegram", "whatsapp"].includes(channel),
+    ["directchat", "line", "provider", "signal", "workspace", "telegram", "whatsapp"].includes(
+      channel,
+    ),
   isGatewayMessageChannel: (channel: string) =>
     ["directchat", "workspace", "telegram", "whatsapp", "webchat"].includes(channel),
   normalizeMessageChannel: (value: string) => value.trim().toLowerCase(),
@@ -393,6 +395,97 @@ describe("agent delivery helpers", () => {
 
     expect(result.sessionKey).toBeUndefined();
     expect(result.error?.message).toBe('Unable to resolve a session route for channel "provider"');
+  });
+
+  it("accepts best-effort direct aliases that collapse to the selected agent main session", async () => {
+    mocks.resolveOutboundChannelPlugin.mockReturnValue({
+      config: { listAccountIds: () => [] },
+      messaging: { resolveOutboundSessionRoute: vi.fn() },
+    });
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
+      sessionKey: "agent:ops:main",
+      baseSessionKey: "agent:ops:main",
+      recipientSessionExact: "direct-alias",
+      peer: { kind: "direct", id: "username:alice.01" },
+      chatType: "direct",
+      from: "signal:username:alice.01",
+      to: "username:alice.01",
+    });
+
+    const result = await resolveAgentExplicitRecipientSession({
+      cfg: {} as OpenClawConfig,
+      agentId: "ops",
+      channel: "signal",
+      to: "username:alice.01",
+    });
+
+    expect(result).toMatchObject({
+      sessionKey: "agent:ops:main",
+      channel: "signal",
+      to: "username:alice.01",
+    });
+    expect(result.error).toBeUndefined();
+  });
+
+  it("rejects main-session aliases when a channel binding can isolate direct peers", async () => {
+    mocks.resolveOutboundChannelPlugin.mockReturnValue({
+      config: { listAccountIds: () => [] },
+      messaging: { resolveOutboundSessionRoute: vi.fn() },
+    });
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
+      sessionKey: "agent:ops:main",
+      baseSessionKey: "agent:ops:main",
+      recipientSessionExact: "direct-alias",
+      peer: { kind: "direct", id: "username:alice.01" },
+      chatType: "direct",
+      from: "signal:username:alice.01",
+      to: "username:alice.01",
+    });
+
+    const result = await resolveAgentExplicitRecipientSession({
+      cfg: {
+        session: { dmScope: "main" },
+        bindings: [
+          {
+            agentId: "ops",
+            match: { channel: "signal", peer: { kind: "direct", id: "+15551234567" } },
+            session: { dmScope: "per-channel-peer" },
+          },
+        ],
+      } as OpenClawConfig,
+      agentId: "ops",
+      channel: "signal",
+      to: "username:alice.01",
+    });
+
+    expect(result.sessionKey).toBeUndefined();
+    expect(result.error?.message).toBe('Unable to resolve a session route for channel "signal"');
+  });
+
+  it("rejects best-effort aliases that do not use the configured main session key", async () => {
+    mocks.resolveOutboundChannelPlugin.mockReturnValue({
+      config: { listAccountIds: () => [] },
+      messaging: { resolveOutboundSessionRoute: vi.fn() },
+    });
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
+      sessionKey: "agent:ops:main",
+      baseSessionKey: "agent:ops:main",
+      recipientSessionExact: "direct-alias",
+      peer: { kind: "direct", id: "username:alice.01" },
+      chatType: "direct",
+      from: "signal:username:alice.01",
+      to: "username:alice.01",
+    });
+
+    const result = await resolveAgentExplicitRecipientSession({
+      cfg: { session: { mainKey: "work" } } as OpenClawConfig,
+      agentId: "ops",
+      channel: "signal",
+      to: "username:alice.01",
+    });
+
+    expect(result.sessionKey).toBeUndefined();
+    expect(result.error?.message).toBe('Unable to resolve a session route for channel "signal"');
   });
 
   it("preserves authoritative routes from legacy plugin hooks", async () => {

@@ -9,7 +9,7 @@ describe("Signal outbound session routing", () => {
       target: "username:alice.01",
     });
 
-    expect(route?.recipientSessionExact).toBe(false);
+    expect(route?.recipientSessionExact).toBe("direct-alias");
   });
 
   it("accepts canonical phone recipients", async () => {
@@ -29,6 +29,6 @@ describe("Signal outbound session routing", () => {
       target: "uuid:123e4567-e89b-12d3-a456-426614174000",
     });
 
-    expect(route?.recipientSessionExact).toBe(false);
+    expect(route?.recipientSessionExact).toBe("direct-alias");
   });
 });

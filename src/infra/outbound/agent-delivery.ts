@@ -4,8 +4,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
+import { listRouteBindings } from "../../config/bindings.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeRouteBindingChannelId } from "../../routing/binding-scope.js";
+import { buildAgentMainSessionKey } from "../../routing/session-key.js";
 import { normalizeAccountId } from "../../utils/account-id.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -222,12 +225,29 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
       return null;
     }
   })();
-  // Explicit recipient selection must not attach a run to a known best-effort route.
+  const knownNonExactRoute =
+    params.sessionRouteMode === "allow-fallback" &&
+    (route?.recipientSessionExact === false || route?.recipientSessionExact === "direct-alias");
+  // A best-effort alias is safe only when every direct recipient on this channel
+  // shares the selected agent's main session; binding overrides can isolate peers.
+  const usesCanonicalMainSession =
+    route?.recipientSessionExact === "direct-alias" &&
+    route?.chatType === "direct" &&
+    route.sessionKey === route.baseSessionKey &&
+    route.sessionKey ===
+      buildAgentMainSessionKey({
+        agentId: params.agentId,
+        mainKey: params.cfg.session?.mainKey,
+      }) &&
+    (params.cfg.session?.dmScope ?? "main") === "main" &&
+    !listRouteBindings(params.cfg).some(
+      (binding) =>
+        binding.session?.dmScope !== undefined &&
+        binding.session.dmScope !== "main" &&
+        normalizeRouteBindingChannelId(binding.match.channel) === resolvedChannel,
+    );
   // An omitted marker preserves the pre-existing contract for external plugin hooks.
-  const exactRoute =
-    params.sessionRouteMode !== "allow-fallback" || route?.recipientSessionExact !== false
-      ? route
-      : null;
+  const exactRoute = !knownNonExactRoute || usesCanonicalMainSession ? route : null;
   if (!exactRoute) {
     if (resolvedSessionRouteTarget) {
       return {
