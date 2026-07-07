@@ -1912,12 +1912,10 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
     const deferNextHistoryLoad = (loadHistory: MockFn) => {
       let resolveHistory: (result: TuiHistoryLoadResult) => void = () => {};
-      loadHistory.mockImplementationOnce(
-        () =>
-          new Promise<TuiHistoryLoadResult>((resolve) => {
-            resolveHistory = resolve;
-          }),
-      );
+      const result = new Promise<TuiHistoryLoadResult>((resolve) => {
+        resolveHistory = resolve;
+      });
+      loadHistory.mockReturnValueOnce(result);
       return (loaded: boolean, inFlightRunId: string | null = null) =>
         resolveHistory(loaded ? { loaded: true, inFlightRunId } : { loaded: false });
     };
