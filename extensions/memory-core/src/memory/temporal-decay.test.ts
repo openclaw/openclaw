@@ -64,6 +64,16 @@ describe("temporal decay", () => {
     expect(calculateTemporalDecayMultiplier({ ageInDays: 30, halfLifeDays: 30 })).toBeCloseTo(0.5);
   });
 
+  it("can keep a minimum long-tail recall multiplier", () => {
+    expect(
+      calculateTemporalDecayMultiplier({
+        ageInDays: 10_000,
+        halfLifeDays: 30,
+        minMultiplier: 0.05,
+      }),
+    ).toBeCloseTo(0.05);
+  });
+
   it("does not decay evergreen memory files", async () => {
     const dir = await createTempWorkspace("openclaw-temporal-decay-");
 

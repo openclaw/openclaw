@@ -5,11 +5,13 @@ import path from "node:path";
 export type TemporalDecayConfig = {
   enabled: boolean;
   halfLifeDays: number;
+  minMultiplier: number;
 };
 
 export const DEFAULT_TEMPORAL_DECAY_CONFIG: TemporalDecayConfig = {
   enabled: false,
   halfLifeDays: 30,
+  minMultiplier: 0,
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -25,19 +27,24 @@ function toDecayLambda(halfLifeDays: number): number {
 export function calculateTemporalDecayMultiplier(params: {
   ageInDays: number;
   halfLifeDays: number;
+  minMultiplier?: number;
 }): number {
   const lambda = toDecayLambda(params.halfLifeDays);
   const clampedAge = Math.max(0, params.ageInDays);
+  const floor = Number.isFinite(params.minMultiplier)
+    ? Math.max(0, Math.min(1, params.minMultiplier ?? 0))
+    : 0;
   if (lambda <= 0 || !Number.isFinite(clampedAge)) {
     return 1;
   }
-  return Math.exp(-lambda * clampedAge);
+  return Math.max(floor, Math.exp(-lambda * clampedAge));
 }
 
 export function applyTemporalDecayToScore(params: {
   score: number;
   ageInDays: number;
   halfLifeDays: number;
+  minMultiplier?: number;
 }): number {
   return params.score * calculateTemporalDecayMultiplier(params);
 }
@@ -157,6 +164,7 @@ export async function applyTemporalDecayToHybridResults<
         score: entry.score,
         ageInDays: ageInDaysFromTimestamp(timestamp, nowMs),
         halfLifeDays: config.halfLifeDays,
+        minMultiplier: config.minMultiplier,
       });
 
       return {
