@@ -4,11 +4,13 @@ import { formatDetailedPluginHealth } from "../../status/status-plugin-health.js
 import { buildStatusText } from "../../status/status-text.js";
 import type { BuildStatusTextParams } from "../../status/status-text.types.js";
 import type { ReplyPayload } from "../types.js";
+import type { MsgContext } from "../templating.js";
 import { requireCommandFlagEnabled } from "./command-gates.js";
 import type { CommandContext } from "./commands-types.js";
 export { buildStatusText } from "../../status/status-text.js";
 
 type BuildStatusReplyParams = Omit<BuildStatusTextParams, "statusChannel"> & {
+  ctx: MsgContext;
   command: CommandContext;
 };
 
@@ -27,6 +29,7 @@ export async function buildStatusReply(
       ...params,
       statusChannel: command.channel,
       statusAccountId: command.accountId,
+      statusNotes: params.ctx.StatusNotes,
     }),
   };
 }

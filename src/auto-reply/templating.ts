@@ -108,6 +108,8 @@ export type MsgContext = {
    */
   BodyForCommands?: string;
   CommandArgs?: CommandArgs;
+  /** Channel-supplied diagnostics appended to /status replies. */
+  StatusNotes?: string[];
   From?: string;
   To?: string;
   SessionKey?: string;

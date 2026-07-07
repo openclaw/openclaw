@@ -481,6 +481,7 @@ export async function handleInlineActions(params: {
     const { buildStatusReply } = await loadCommandsRuntime();
     const inlineStatusReply = await buildStatusReply({
       cfg,
+      ctx,
       command,
       sessionEntry: targetSessionEntry,
       sessionKey,

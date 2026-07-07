@@ -645,5 +645,6 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     channelFeatureLine,
     mediaDecisions: params.mediaDecisions,
     includeTranscriptUsage: params.includeTranscriptUsage ?? true,
+    statusNotes: params.statusNotes,
   });
 }
