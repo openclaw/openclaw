@@ -230,8 +230,14 @@ describe("Codex app-server native code mode config", () => {
     const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }));
 
     expect(instructions).toContain("Use Codex native `spawn_agent` for Codex subagents");
+    // Codex defers native collab tools behind tool_search on search-capable
+    // models; the instructions must teach the retrieval path or models fall
+    // back to the always-direct sessions_spawn.
     expect(instructions).toContain(
-      "Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation.",
+      "when `spawn_agent` is not directly listed, load it with `tool_search` before spawning",
+    );
+    expect(instructions).toContain(
+      "Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`.",
     );
   });
 
@@ -909,7 +915,6 @@ describe("Codex app-server turn params", () => {
       serviceTier: "flex",
       personality: "none",
       developerInstructions: resumeParams.developerInstructions,
-      persistExtendedHistory: true,
     });
     expect(resumeParams.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
     const turnParams = buildTurnStartParams(params, {

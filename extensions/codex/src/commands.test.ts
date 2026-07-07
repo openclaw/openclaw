@@ -435,7 +435,7 @@ describe("codex command", () => {
     expect(requests).toEqual([
       {
         method: "thread/resume",
-        params: { threadId: "thread-123", excludeTurns: true, persistExtendedHistory: true },
+        params: { threadId: "thread-123", excludeTurns: true },
         options: expect.objectContaining({
           agentDir: path.join(tempDir, "agents", "main", "agent"),
           sessionId: "session-1",
