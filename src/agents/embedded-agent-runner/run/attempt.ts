@@ -307,6 +307,7 @@ import {
 import { buildEmbeddedSandboxInfo, resolveEmbeddedSandboxInfoExecPolicy } from "../sandbox-info.js";
 import {
   mapSandboxSkillEntriesForPrompt,
+  mapSandboxSkillUsagePaths,
   resolveSandboxSkillRuntimeInputs,
 } from "../sandbox-skills.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
@@ -1123,6 +1124,11 @@ export async function runEmbeddedAttempt(
       skillsWorkspaceDir: effectiveSkillsWorkspace,
       skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
     });
+    const skillUsagePaths = mapSandboxSkillUsagePaths({
+      paths: sandbox?.skillUsagePaths,
+      skillsWorkspaceDir: effectiveSkillsWorkspace,
+      skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
+    });
 
     const skillsPrompt = resolveSkillsPromptForRun({
       skillsSnapshot: skillsSnapshotForRun,
@@ -1398,6 +1404,7 @@ export async function runEmbeddedAttempt(
             onToolOutcome: params.onToolOutcome,
             allocateToolOutcomeOrdinal: params.allocateToolOutcomeOrdinal,
             skillsSnapshot: skillsSnapshotForRun,
+            skillUsagePaths,
             conversationCapabilityProfile: runtimeCapabilityProfile,
             onYield: (message) => {
               yieldDetected = true;

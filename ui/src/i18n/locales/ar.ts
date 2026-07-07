@@ -1573,6 +1573,8 @@ export const ar: TranslationMap = {
       splitDown: "تقسيم إلى الأسفل",
       closePane: "إغلاق الجزء",
       sessionSelect: "جلسة الجزء",
+      dropSplit: "تقسيم",
+      dropOpenHere: "افتح هنا",
     },
     sidebar: {
       allSessions: "كل الجلسات",
