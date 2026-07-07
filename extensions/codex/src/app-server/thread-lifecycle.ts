@@ -14,6 +14,7 @@ import {
   isMaxReasoningCodexModel,
   isModernCodexModel,
   readCodexSupportedReasoningEfforts,
+  resolveCodexFallbackReasoningEfforts,
   resolveCodexSupportedReasoningEffort,
   type CodexReasoningEffort,
 } from "../../provider.js";
@@ -1868,13 +1869,10 @@ export function resolveCodexAppServerModelProvider(params: {
   return normalizedLower === "openai" ? "openai" : normalized;
 }
 
-// Modern Codex models (gpt-5.5, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex-spark) use the
-// none/low/medium/high/xhigh effort enum and reject "minimal". The CLI
-// defaults thinkLevel to "minimal", so without translation EVERY agent turn
-// on those models pays a wasted first request + retry-with-low fallback in
-// embedded-agent-runner. Map "minimal" -> "low" upfront for modern models so the
-// first request is accepted. Older Codex models still accept "minimal"
-// directly. (#71946)
+// Modern Codex models reject the legacy CLI `minimal` default. Prefer
+// app-server metadata, then use the provider-owned fallback effort contract
+// for Pro models whose minimum supported effort is `medium`.
+// Other modern models translate `minimal` to `low`. (#71946)
 // Exported for unit-test coverage of the model-aware translation path.
 export function resolveReasoningEffort(
   thinkLevel: EmbeddedRunAttemptParams["thinkLevel"],
@@ -1889,6 +1887,15 @@ export function resolveReasoningEffort(
       resolveCodexSupportedReasoningEffort({
         requested: thinkLevel,
         supportedReasoningEfforts,
+      }) ?? null
+    );
+  }
+  const fallbackReasoningEfforts = resolveCodexFallbackReasoningEfforts(modelId);
+  if (fallbackReasoningEfforts) {
+    return (
+      resolveCodexSupportedReasoningEffort({
+        requested: thinkLevel,
+        supportedReasoningEfforts: fallbackReasoningEfforts,
       }) ?? null
     );
   }
