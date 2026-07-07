@@ -2,22 +2,22 @@
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
+import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { shouldSuppressGoogleChatManualExecApprovalFollowupText } from "./approval-card-actions.js";
 import { getGoogleChatAccessToken } from "./auth.js";
-import type { GoogleChatCardV2, GoogleChatReaction } from "./types.js";
+import type { GoogleChatCardV2, GoogleChatReaction, GoogleChatSpace } from "./types.js";
 
 const CHAT_API_BASE = "https://chat.googleapis.com/v1";
 const CHAT_UPLOAD_BASE = "https://chat.googleapis.com/upload/v1";
 
 async function readGoogleChatJsonResponse<T>(response: Response, label: string): Promise<T> {
-  try {
-    return (await response.json()) as T;
-  } catch (cause) {
-    throw new Error(`${label}: malformed JSON response`, { cause });
-  }
+  return readProviderJsonResponse<T>(response, label);
 }
 
 const headersToObject = (headers?: HeadersInit): Record<string, string> =>
@@ -57,7 +57,7 @@ async function withGoogleChatResponse<T>(params: {
   });
   try {
     if (!response.ok) {
-      const text = await response.text().catch(() => "");
+      const text = await readResponseTextLimited(response).catch(() => "");
       throw new Error(`${errorPrefix} ${response.status}: ${text || response.statusText}`);
     }
     return await handleResponse(response);
@@ -316,11 +316,20 @@ export async function deleteGoogleChatReaction(params: {
 export async function findGoogleChatDirectMessage(params: {
   account: ResolvedGoogleChatAccount;
   userName: string;
-}): Promise<{ name?: string; displayName?: string } | null> {
+}): Promise<GoogleChatSpace | null> {
   const { account, userName } = params;
   const url = new URL(`${CHAT_API_BASE}/spaces:findDirectMessage`);
   url.searchParams.set("name", userName);
-  return await fetchJson<{ name?: string; displayName?: string }>(account, url.toString(), {
+  return await fetchJson<GoogleChatSpace>(account, url.toString(), {
+    method: "GET",
+  });
+}
+
+export async function getGoogleChatSpace(params: {
+  account: ResolvedGoogleChatAccount;
+  spaceName: string;
+}): Promise<GoogleChatSpace> {
+  return await fetchJson<GoogleChatSpace>(params.account, `${CHAT_API_BASE}/${params.spaceName}`, {
     method: "GET",
   });
 }

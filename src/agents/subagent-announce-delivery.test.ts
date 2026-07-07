@@ -229,6 +229,8 @@ async function deliverDiscordDirectMessageCompletion(params: {
   callGateway: typeof runtimeCallGateway;
   sendMessage?: typeof runtimeSendMessage;
   internalEvents?: AgentInternalEvent[];
+  isActive?: boolean;
+  queueEmbeddedAgentMessageWithOutcome?: QueueEmbeddedAgentMessageWithOutcome;
   sourceTool?: string;
 }) {
   const origin = {
@@ -240,10 +242,13 @@ async function deliverDiscordDirectMessageCompletion(params: {
     callGateway: params.callGateway,
     getRequesterSessionActivity: () => ({
       sessionId: "requester-session-dm",
-      isActive: false,
+      isActive: params.isActive === true,
     }),
     getRuntimeConfig: () => ({}) as never,
     sendMessage: params.sendMessage ?? runtimeSendMessage,
+    ...(params.queueEmbeddedAgentMessageWithOutcome
+      ? { queueEmbeddedAgentMessageWithOutcome: params.queueEmbeddedAgentMessageWithOutcome }
+      : {}),
   });
 
   return deliverSubagentAnnouncement({
@@ -390,6 +395,27 @@ async function deliverSlackChannelAnnouncement(params: {
 }
 
 describe("resolveAnnounceOrigin threaded route targets", () => {
+  it("does not inherit a target or thread from another account on the same channel", () => {
+    expect(
+      resolveAnnounceOrigin(
+        {
+          lastChannel: "telegram",
+          lastTo: "peer-b",
+          lastAccountId: "bot-b",
+          lastThreadId: 99,
+        },
+        {
+          channel: "telegram",
+          accountId: "bot-a",
+        },
+      ),
+    ).toEqual({
+      channel: "telegram",
+      to: undefined,
+      accountId: "bot-a",
+    });
+  });
+
   it("preserves stored thread ids when requester origin omits one for the same chat", () => {
     expect(
       resolveAnnounceOrigin(
@@ -1543,7 +1569,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
   );
 
-  it("accepts session-only completion handoff when the in-process agent intentionally replies NO_REPLY", async () => {
+  it("accepts non-subagent session-only completion handoff when the in-process agent intentionally replies NO_REPLY", async () => {
     const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
       result: {
         payloads: [{ text: "NO_REPLY" }],
@@ -1567,11 +1593,53 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expectsCompletionMessage: true,
       bestEffortDeliver: true,
       directIdempotencyKey: "announce-local-silent",
+      sourceTool: "agent_harness_task",
     });
 
     expectRecordFields(result, {
       delivered: true,
       path: "direct",
+    });
+    expectInProcessAgentParams(dispatchGatewayMethodInProcess, {
+      deliver: false,
+      channel: undefined,
+      to: undefined,
+      bestEffortDeliver: true,
+    });
+  });
+
+  it("rejects session-only subagent completion handoff when the parent only replies NO_REPLY", async () => {
+    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+      result: {
+        payloads: [{ text: "NO_REPLY" }],
+      },
+    });
+    testing.setDepsForTest({
+      dispatchGatewayMethodInProcess,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-local",
+        isActive: false,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:local-session",
+      targetRequesterSessionKey: "agent:main:local-session",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-local-subagent-silent",
+      sourceTool: "subagent_announce",
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      reason: "visible_reply_missing",
+      error: "completion agent did not produce a visible reply",
     });
     expectInProcessAgentParams(dispatchGatewayMethodInProcess, {
       deliver: false,
@@ -4786,6 +4854,58 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("retries active direct subagent completion wake without forced message-tool mode", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "The subagent is done: child completion output" }],
+        didSendViaMessagingTool: true,
+      },
+    });
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock([
+      "source_reply_delivery_mode_mismatch",
+      true,
+    ]);
+
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      isActive: true,
+      queueEmbeddedAgentMessageWithOutcome,
+      sourceTool: "subagent_announce",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "direct completion active wake",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "child completion output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "steered",
+    });
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(2);
+    expectRecordFields(mockCallArg(queueEmbeddedAgentMessageWithOutcome, 0, 2), {
+      sourceReplyDeliveryMode: "message_tool_only",
+      waitForTranscriptCommit: true,
+    });
+    const retryOptions = mockCallArg(queueEmbeddedAgentMessageWithOutcome, 1, 2);
+    expectRecordFields(retryOptions, {
+      waitForTranscriptCommit: true,
+    });
+    expect(
+      (retryOptions as { sourceReplyDeliveryMode?: unknown }).sourceReplyDeliveryMode,
+    ).toBeUndefined();
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
   it("falls back to the external requester route when completion origin is internal", async () => {
     const callGateway = createGatewayMock({
       result: {
@@ -4847,5 +4967,159 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       threadId: "171.222",
       bestEffortDeliver: true,
     });
+  });
+
+  it("does not retry session-file-changed failures with send evidence", async () => {
+    const sendErr = new OutboundDeliveryError("outbound delivery failed", {
+      cause: new Error("outbound delivery failed"),
+      results: [{ channel: "telegram", messageId: "msg-1" }],
+    });
+    const callGateway: typeof runtimeCallGateway = vi.fn(async () => {
+      throw new Error("session file changed while embedded prompt lock was released", {
+        cause: sendErr,
+      });
+    });
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock(["no_active_run"]);
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      queueEmbeddedAgentMessageWithOutcome,
+      sessionId: "requester-session-lock-race-evidence",
+      isActive: true,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-permanent-lock-error-evidence",
+    });
+
+    expect(result.delivered).toBe(false);
+    expect(result.path).toBe("direct");
+    expect(result.terminal).toBe(true);
+    expect(result.phases?.map((phase) => phase.phase)).toEqual(["direct-primary"]);
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fallback-steer after wrapped prompt-lock takeover with send evidence", async () => {
+    const takeoverErr = Object.assign(
+      new Error("session file changed while embedded prompt lock was released: /tmp/session.jsonl"),
+      { name: "EmbeddedAttemptSessionTakeoverError" },
+    );
+
+    const promptErr = Object.assign(new Error("some model error"), { visibleReplySent: true });
+    const wrapperErr = Object.assign(new Error("some model error", { cause: takeoverErr }), {
+      name: "EmbeddedAttemptSessionTakeoverError",
+      cleanupError: takeoverErr,
+      promptError: promptErr,
+    });
+
+    const callGateway: typeof runtimeCallGateway = vi.fn(async () => {
+      throw wrapperErr;
+    });
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock(["no_active_run"]);
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      queueEmbeddedAgentMessageWithOutcome,
+      sessionId: "requester-session-lock-race-wrapped-evidence",
+      isActive: true,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-permanent-wrapped-lock-error-evidence",
+    });
+
+    expect(result.delivered).toBe(false);
+    expect(result.path).toBe("direct");
+    expect(result.error).toBe("some model error");
+    expect(result.terminal).toBe(true);
+    expect(result.phases?.map((phase) => phase.phase)).toEqual(["direct-primary"]);
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries session-file-changed failures without send evidence", async () => {
+    let attempts = 0;
+    const callGatewaySpy = vi.fn();
+    const callGateway: typeof runtimeCallGateway = async <
+      T = Record<string, unknown>,
+    >(): Promise<T> => {
+      callGatewaySpy();
+      attempts++;
+      if (attempts <= 1) {
+        throw new Error("session file changed while embedded prompt lock was released");
+      }
+      return {
+        result: {
+          payloads: [{ text: "recovered after retry" }],
+        },
+      } as T;
+    };
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock(["no_active_run"]);
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      queueEmbeddedAgentMessageWithOutcome,
+      sessionId: "requester-session-lock-race-no-evidence",
+      isActive: true,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-retry-lock-error-no-evidence",
+    });
+
+    expect(result.delivered).toBe(true);
+    expect(result.path).toBe("direct");
+    expect(callGatewaySpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("detects send evidence from OutboundDeliveryError in the error chain", () => {
+    const err = new Error(
+      "session file changed while embedded prompt lock was released: /tmp/session.jsonl",
+      {
+        cause: new OutboundDeliveryError("outbound delivery failed", {
+          cause: new Error("outbound delivery failed"),
+          results: [{ channel: "telegram", messageId: "msg-1" }],
+        }),
+      },
+    );
+
+    expect(testing.isSessionFileChangedAnnounceError(err.message)).toBe(true);
+    expect(testing.hasAnnounceSendEvidence(err)).toBe(true);
+  });
+
+  it("classifies session-file-changed error as no-send-evidence when the error chain has no send markers", () => {
+    const err = new Error(
+      "session file changed while embedded prompt lock was released: /tmp/session.jsonl",
+    );
+
+    expect(testing.isSessionFileChangedAnnounceError(err.message)).toBe(true);
+    expect(testing.hasAnnounceSendEvidence(err)).toBe(false);
+  });
+
+  it("detects send evidence from visibleReplySent flag on session-file-changed error", () => {
+    const err = Object.assign(
+      new Error("session file changed while embedded prompt lock was released: /tmp/session.jsonl"),
+      { visibleReplySent: true },
+    );
+
+    expect(testing.hasAnnounceSendEvidence(err)).toBe(true);
+  });
+
+  it("detects send evidence from sentBeforeError flag on session-file-changed error", () => {
+    const err = Object.assign(
+      new Error("session file changed while embedded prompt lock was released: /tmp/session.jsonl"),
+      { sentBeforeError: true },
+    );
+
+    expect(testing.hasAnnounceSendEvidence(err)).toBe(true);
+  });
+
+  it("detects send evidence recursively through promptError", () => {
+    const takeoverErr = Object.assign(
+      new Error("session file changed while embedded prompt lock was released: /tmp/session.jsonl"),
+      { name: "EmbeddedAttemptSessionTakeoverError" },
+    );
+
+    const promptErr = Object.assign(new Error("some model error"), { visibleReplySent: true });
+
+    const wrapperErr = Object.assign(new Error("some model error", { cause: takeoverErr }), {
+      name: "EmbeddedAttemptSessionTakeoverError",
+      promptError: promptErr,
+    });
+
+    expect(testing.hasAnnounceSendEvidence(wrapperErr)).toBe(true);
+    expect(testing.hasSessionFileChangedAnnounceError(wrapperErr)).toBe(true);
   });
 });

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvOverride } from "../config/test-helpers.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
 import { registerGatewayCli } from "./gateway-cli.js";
@@ -147,6 +147,13 @@ function firstMockArg(mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown
 }
 
 describe("gateway-cli coverage", () => {
+  beforeAll(async () => {
+    // Gateway startup intentionally primes this large graph before installing
+    // signal handlers. Load it as suite setup so failure-path timings measure
+    // the lifecycle behavior rather than the one-time module parse.
+    await import("./gateway-cli/lifecycle.runtime.js");
+  });
+
   beforeEach(() => {
     gatewayProgram = createGatewayProgram();
     runtimeLogs.length = 0;
@@ -211,6 +218,55 @@ describe("gateway-cli coverage", () => {
       limit: 5,
       type: "payload.large",
     });
+  });
+
+  it("scopes usage-cost to a specific agent via --agent", async () => {
+    callGateway.mockClear();
+
+    await runGatewayCommand(["gateway", "usage-cost", "--agent", "alpha", "--days", "7", "--json"]);
+
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    const costCall = firstMockArg(callGateway) as { method?: string; params?: unknown };
+    expect(costCall?.method).toBe("usage.cost");
+    expect(costCall?.params).toEqual({ days: 7, agentId: "alpha" });
+  });
+
+  it("omits agentId from usage-cost when --agent is absent or blank", async () => {
+    callGateway.mockClear();
+
+    await runGatewayCommand(["gateway", "usage-cost", "--agent", "  ", "--days", "7", "--json"]);
+
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    const costCall = firstMockArg(callGateway) as { method?: string; params?: unknown };
+    expect(costCall?.method).toBe("usage.cost");
+    expect(costCall?.params).toEqual({ days: 7 });
+  });
+
+  it("aggregates usage-cost across agents via --all-agents", async () => {
+    callGateway.mockClear();
+
+    await runGatewayCommand(["gateway", "usage-cost", "--all-agents", "--days", "7", "--json"]);
+
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    const costCall = firstMockArg(callGateway) as { method?: string; params?: unknown };
+    expect(costCall?.method).toBe("usage.cost");
+    expect(costCall?.params).toEqual({ days: 7, agentScope: "all" });
+  });
+
+  it("rejects combining --agent with --all-agents for usage-cost", async () => {
+    callGateway.mockClear();
+
+    await expectGatewayExit([
+      "gateway",
+      "usage-cost",
+      "--agent",
+      "alpha",
+      "--all-agents",
+      "--json",
+    ]);
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).toContain("Use --agent or --all-agents, not both");
   });
 
   it("writes JSON for gateway health transport failures in JSON mode", async () => {

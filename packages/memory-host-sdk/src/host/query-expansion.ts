@@ -774,28 +774,3 @@ export function extractKeywords(
 
   return keywords;
 }
-
-/**
- * Expand a query for FTS search.
- * Returns both the original query and extracted keywords for OR-matching.
- *
- * @param query - User's original query
- * @returns Object with original query and extracted keywords
- */
-export function expandQueryForFts(
-  query: string,
-  opts?: { ftsTokenizer?: "unicode61" | "trigram" },
-): {
-  original: string;
-  keywords: string[];
-  expanded: string;
-} {
-  const original = query.trim();
-  const keywords = extractKeywords(original, opts);
-
-  // Build expanded query: original terms OR extracted keywords
-  // This ensures both exact matches and keyword matches are found
-  const expanded = keywords.length > 0 ? `${original} OR ${keywords.join(" OR ")}` : original;
-
-  return { original, keywords, expanded };
-}

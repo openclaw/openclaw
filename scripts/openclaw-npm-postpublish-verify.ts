@@ -24,8 +24,8 @@ import {
   win32 as pathWin32,
 } from "node:path";
 import { pathToFileURL } from "node:url";
-import { verify as verifySigstoreBundle } from "sigstore";
 import { formatErrorMessage } from "../src/infra/errors.ts";
+import { ALWAYS_ALLOWED_RUNTIME_DIR_NAMES } from "../src/plugin-sdk/facade-activation-contract.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
 import { readBoundedResponseText } from "./lib/bounded-response.ts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
@@ -36,7 +36,7 @@ import {
 } from "./lib/plugin-package-dependencies.mjs";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mjs";
 import { parseReleaseVersion, resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
-import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
+import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 type InstalledPackageJson = {
   version?: string;
@@ -99,6 +99,41 @@ export type PublishedInstallScenario = {
   installSpecs: string[];
   expectedVersion: string;
 };
+
+export type OpenClawNpmPostpublishVerifyArgs =
+  | {
+      help: false;
+      version: string;
+    }
+  | {
+      help: true;
+      version: "";
+    };
+
+export function openClawNpmPostpublishVerifyUsage(): string {
+  return "Usage: node --import tsx scripts/openclaw-npm-postpublish-verify.ts <version>";
+}
+
+export function parseOpenClawNpmPostpublishVerifyArgs(
+  argv: readonly string[],
+): OpenClawNpmPostpublishVerifyArgs {
+  const args = argv[0] === "--" ? argv.slice(1) : argv;
+  const version = args[0]?.trim() ?? "";
+  if (version === "--help" || version === "-h") {
+    return { help: true, version: "" };
+  }
+  if (!version) {
+    throw new Error(openClawNpmPostpublishVerifyUsage());
+  }
+  if (version.startsWith("-")) {
+    throw new Error(`Unknown openclaw npm postpublish verifier option: ${version}`);
+  }
+  const extraArg = args[1]?.trim();
+  if (extraArg) {
+    throw new Error(`Unexpected openclaw npm postpublish verifier argument: ${extraArg}`);
+  }
+  return { help: false, version };
+}
 
 export function buildPublishedInstallScenarios(version: string): PublishedInstallScenario[] {
   const parsed = parseReleaseVersion(version);
@@ -278,7 +313,8 @@ async function verifySigstoreNpmProvenanceBundle(
   bundle: unknown,
   policy: NpmProvenanceVerificationPolicy,
 ): Promise<void> {
-  await verifySigstoreBundle(bundle as Parameters<typeof verifySigstoreBundle>[0], policy);
+  const sigstore = require("sigstore") as { verify: VerifyNpmProvenanceBundle };
+  await sigstore.verify(bundle, policy);
 }
 
 export async function verifyNpmProvenanceAttestation(params: {
@@ -373,11 +409,32 @@ export function collectInstalledPackageErrors(params: {
     }
   }
 
+  errors.push(...collectInstalledBundledExtensionManifestErrors(params.packageRoot));
+  errors.push(...collectInstalledAlwaysAllowedRuntimeFacadeErrors(params.packageRoot));
   errors.push(...collectInstalledContextEngineRuntimeErrors(params.packageRoot));
   errors.push(...collectInstalledPluginSdkZodArtifactErrors(params.packageRoot));
   errors.push(...collectInstalledPluginSdkDeclarationErrors(params.packageRoot));
   errors.push(...collectInstalledRootDependencyManifestErrors(params.packageRoot));
 
+  return errors;
+}
+
+export function collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot: string): string[] {
+  const errors: string[] = [];
+  const activationRuntimePath = "dist/facade-activation-check.runtime.js";
+  if (!existsSync(join(packageRoot, activationRuntimePath))) {
+    errors.push(
+      `installed package is missing required facade activation runtime: ${activationRuntimePath}`,
+    );
+  }
+  for (const dirName of ALWAYS_ALLOWED_RUNTIME_DIR_NAMES) {
+    const relativePath = `dist/extensions/${dirName}/runtime-api.js`;
+    if (!existsSync(join(packageRoot, relativePath))) {
+      errors.push(
+        `installed package allows bundled runtime facade ${dirName}/runtime-api.js but is missing required runtime sidecar: ${relativePath}.`,
+      );
+    }
+  }
   return errors;
 }
 
@@ -404,6 +461,10 @@ export function collectInstalledBundledRuntimeSidecarPaths(packageRoot: string):
     const match = /^dist\/extensions\/([^/]+)\//u.exec(relativePath);
     return match !== null && installedExtensionIds.has(match[1]);
   });
+}
+
+export function collectInstalledBundledExtensionManifestErrors(packageRoot: string): string[] {
+  return readBundledExtensionPackageJsons(packageRoot).errors;
 }
 
 export function normalizeInstalledBinaryVersion(output: string): string {
@@ -818,7 +879,7 @@ export function resolveInstalledBinaryCommandInvocation(
   const binaryPath = resolveInstalledBinaryPath(prefixDir, platform);
   if (platform === "win32") {
     return {
-      command: params.comSpec ?? process.env.ComSpec ?? "cmd.exe",
+      command: params.comSpec ?? resolveWindowsCmdExePath(),
       args: ["/d", "/s", "/c", buildCmdExeCommandLine(binaryPath, args)],
       windowsVerbatimArguments: true,
     };
@@ -1147,14 +1208,14 @@ function verifyScenario(version: string, scenario: PublishedInstallScenario): vo
   }
 }
 
-async function main(): Promise<void> {
-  const version = process.argv[2]?.trim();
-  if (!version) {
-    throw new Error(
-      "Usage: node --import tsx scripts/openclaw-npm-postpublish-verify.ts <version>",
-    );
+async function main(argv = process.argv.slice(2)): Promise<void> {
+  const args = parseOpenClawNpmPostpublishVerifyArgs(argv);
+  if (args.help) {
+    console.log(openClawNpmPostpublishVerifyUsage());
+    return;
   }
 
+  const { version } = args;
   const scenarios = buildPublishedInstallScenarios(version);
   await verifyPublishedRegistryProvenance(version);
   for (const scenario of scenarios) {

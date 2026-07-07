@@ -8,9 +8,7 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  captureCompactionCheckpointSnapshotAsync,
-  cleanupCompactionCheckpointSnapshot,
-  persistSessionCompactionCheckpoint,
+  createFileBackedCompactionCheckpointStore,
   readSessionLeafStateFromTranscriptAsync,
   resolveCompactionCheckpointTranscriptPosition,
   resolveSessionCompactionCheckpointReason,
@@ -24,6 +22,7 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
+import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
@@ -84,6 +83,7 @@ import {
   isRealConversationMessage,
 } from "../compaction-real-conversation.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
+import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawReferencePaths } from "../docs-path.js";
@@ -107,6 +107,10 @@ import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../prompt-surface.js";
 import { applyPreparedRuntimeAuthToModel } from "../provider-request-config.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
+import {
+  applyAgentRunSessionTargetIdentity,
+  resolveAgentRunSessionTarget,
+} from "../run-session-target.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
@@ -135,6 +139,7 @@ import {
 } from "./compact-reasons.js";
 import type {
   CompactEmbeddedAgentSessionParams,
+  CompactEmbeddedAgentSessionRuntimeParams,
   CompactionMessageMetrics,
 } from "./compact.types.js";
 import { dedupeDuplicateUserMessagesForCompaction } from "./compaction-duplicate-user-messages.js";
@@ -172,6 +177,7 @@ import { resolveAttemptSpawnWorkspaceDir } from "./run/attempt.thread-helpers.js
 import { buildEmbeddedSandboxInfo, resolveEmbeddedSandboxInfoExecPolicy } from "./sandbox-info.js";
 import {
   mapSandboxSkillEntriesForPrompt,
+  mapSandboxSkillUsagePaths,
   resolveSandboxSkillRuntimeInputs,
 } from "./sandbox-skills.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
@@ -191,6 +197,11 @@ import type { EmbeddedAgentCompactResult } from "./types.js";
 import { mapThinkingLevel, normalizeContextTokenBudget } from "./utils.js";
 import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
 export type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
+
+const compactionCheckpointStore = createFileBackedCompactionCheckpointStore();
+type CompactEmbeddedAgentSessionParamsWithSessionFile = CompactEmbeddedAgentSessionRuntimeParams & {
+  sessionFile: string;
+};
 
 function hasRealConversationContent(
   msg: AgentMessage,
@@ -464,8 +475,17 @@ function fallbackFailureToCompactionResult(err: unknown): EmbeddedAgentCompactRe
  * Use this when already inside a session/global lane to avoid deadlocks.
  */
 export async function compactEmbeddedAgentSessionDirect(
-  params: CompactEmbeddedAgentSessionParams,
+  paramsInput: CompactEmbeddedAgentSessionRuntimeParams,
 ): Promise<EmbeddedAgentCompactResult> {
+  const paramsBase = applyAgentRunSessionTargetIdentity(paramsInput);
+  const runSessionTarget = await resolveAgentRunSessionTarget(paramsBase);
+  const params: CompactEmbeddedAgentSessionParamsWithSessionFile = {
+    ...paramsBase,
+    agentId: paramsBase.agentId ?? runSessionTarget.agentId,
+    sessionId: runSessionTarget.sessionId,
+    sessionKey: paramsBase.sessionKey ?? runSessionTarget.sessionKey,
+    sessionFile: runSessionTarget.sessionFile,
+  };
   if (hasExplicitCompactionModel(params) || !hasCompactionModelFallbackCandidates(params)) {
     return await compactEmbeddedAgentSessionDirectOnce(params);
   }
@@ -497,6 +517,7 @@ export async function compactEmbeddedAgentSessionDirect(
       agentId: fallbackAgentId,
       sessionId: params.sessionId,
       sessionKey: fallbackSessionKey,
+      abortSignal: params.abortSignal,
       prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
         await ensureSelectedAgentHarnessPlugin({
           config: params.config,
@@ -530,7 +551,7 @@ export async function compactEmbeddedAgentSessionDirect(
 }
 
 async function compactEmbeddedAgentSessionDirectOnce(
-  params: CompactEmbeddedAgentSessionParams,
+  params: CompactEmbeddedAgentSessionParamsWithSessionFile,
 ): Promise<EmbeddedAgentCompactResult> {
   const startedAt = Date.now();
   const diagId = params.diagId?.trim() || createCompactionDiagId();
@@ -770,6 +791,11 @@ async function compactEmbeddedAgentSessionDirectOnce(
       skillsWorkspaceDir: effectiveSkillsWorkspace,
       skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
     });
+    const skillUsagePaths = mapSandboxSkillUsagePaths({
+      paths: sandbox?.skillUsagePaths,
+      skillsWorkspaceDir: effectiveSkillsWorkspace,
+      skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
+    });
     const skillsPrompt = resolveSkillsPromptForRun({
       skillsSnapshot: skillsSnapshotForRun,
       entries: promptSkillEntries,
@@ -848,15 +874,15 @@ async function compactEmbeddedAgentSessionDirectOnce(
       });
 
     const runAbortController = new AbortController();
-    const toolsRaw = createOpenClawCodingTools({
-      exec: {
-        ...params.execOverrides,
-        config: params.config,
-        elevated: params.bashElevated,
-      },
-      sandbox,
-      messageProvider: resolvedMessageProvider,
-      agentAccountId: params.agentAccountId,
+    const spawnWorkspaceDir =
+      effectiveCwd !== effectiveWorkspace
+        ? resolvedWorkspace
+        : resolveAttemptSpawnWorkspaceDir({
+            sandbox,
+            resolvedWorkspace,
+          });
+    const runtimeCapabilityProfile = resolveConversationCapabilityProfile({
+      config: params.config,
       sessionKey: sandboxSessionKey,
       runSessionKey:
         params.sessionKey && params.sessionKey !== sandboxSessionKey
@@ -864,7 +890,10 @@ async function compactEmbeddedAgentSessionDirectOnce(
           : undefined,
       sessionId: params.sessionId,
       runId: params.runId,
-      oneShotCliRun: params.oneShotCliRun,
+      agentDir,
+      agentAccountId: params.agentAccountId,
+      messageProvider: resolvedMessageProvider,
+      chatType: params.chatType,
       groupId: params.groupId,
       groupChannel: params.groupChannel,
       groupSpace: params.groupSpace,
@@ -873,31 +902,66 @@ async function compactEmbeddedAgentSessionDirectOnce(
       senderName: params.senderName,
       senderUsername: params.senderUsername,
       senderE164: params.senderE164,
-      allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
-      agentDir,
-      cwd: effectiveCwd,
-      workspaceDir: effectiveWorkspace,
-      spawnWorkspaceDir:
-        effectiveCwd !== effectiveWorkspace
-          ? resolvedWorkspace
-          : resolveAttemptSpawnWorkspaceDir({
-              sandbox,
-              resolvedWorkspace,
-            }),
-      config: params.config,
-      abortSignal: runAbortController.signal,
-      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+      senderIsOwner: params.senderIsOwner,
       modelProvider: model.provider,
       modelId,
-      modelCompat: extractModelCompat(effectiveModel),
       modelApi: model.api,
       modelContextWindowTokens: contextTokenBudget,
+      workspaceDir: effectiveWorkspace,
+      cwd: effectiveCwd,
+      spawnWorkspaceDir,
       skillsSnapshot: skillsSnapshotForRun,
-      modelAuthMode: resolveModelAuthMode(model.provider, params.config, undefined, {
-        workspaceDir: effectiveWorkspace,
-      }),
+      sandboxToolPolicy: sandbox?.tools,
     });
     const toolsEnabled = supportsModelTools(runtimeModel);
+    const toolsRaw = toolsEnabled
+      ? createOpenClawCodingTools({
+          exec: {
+            ...params.execOverrides,
+            config: params.config,
+            elevated: params.bashElevated,
+          },
+          sandbox,
+          messageProvider: resolvedMessageProvider,
+          chatType: params.chatType,
+          agentAccountId: params.agentAccountId,
+          sessionKey: sandboxSessionKey,
+          runSessionKey:
+            params.sessionKey && params.sessionKey !== sandboxSessionKey
+              ? params.sessionKey
+              : undefined,
+          sessionId: params.sessionId,
+          runId: params.runId,
+          oneShotCliRun: params.oneShotCliRun,
+          groupId: params.groupId,
+          groupChannel: params.groupChannel,
+          groupSpace: params.groupSpace,
+          spawnedBy: params.spawnedBy,
+          senderId: params.senderId,
+          senderName: params.senderName,
+          senderUsername: params.senderUsername,
+          senderE164: params.senderE164,
+          allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
+          agentDir,
+          cwd: effectiveCwd,
+          workspaceDir: effectiveWorkspace,
+          spawnWorkspaceDir,
+          config: params.config,
+          abortSignal: runAbortController.signal,
+          sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+          modelProvider: model.provider,
+          modelId,
+          modelCompat: extractModelCompat(effectiveModel),
+          modelApi: model.api,
+          modelContextWindowTokens: contextTokenBudget,
+          skillsSnapshot: skillsSnapshotForRun,
+          skillUsagePaths,
+          conversationCapabilityProfile: runtimeCapabilityProfile,
+          modelAuthMode: resolveModelAuthMode(model.provider, params.config, undefined, {
+            workspaceDir: effectiveWorkspace,
+          }),
+        })
+      : [];
     const runtimePlanModelContext = {
       workspaceDir: effectiveWorkspace,
       modelApi: model.api,
@@ -910,6 +974,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
       diagnostics: normalizableToolProjection.diagnostics,
       tools: toolsEnabled ? toolsRaw : [],
       runId,
+      agentId: effectiveSkillAgentId,
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
     });
@@ -937,26 +1002,10 @@ async function compactEmbeddedAgentSessionDirectOnce(
     const filteredBundledTools = applyFinalEffectiveToolPolicy({
       bundledTools: [...(bundleMcpRuntime?.tools ?? []), ...(bundleLspRuntime?.tools ?? [])],
       config: params.config,
-      sandboxToolPolicy: sandbox?.tools,
-      sessionKey: sandboxSessionKey,
-      // Intentionally omit explicit agentId: the core tools just built with
-      // createOpenClawCodingTools(...) also omit it, so both paths resolve
-      // agentId the same way via resolveAgentIdFromSessionKey(sessionKey).
-      // Passing effectiveSkillAgentId here would diverge from the core-tool
-      // policy for legacy/non-agent session keys where the two sources fall
-      // back to different ids.
-      modelProvider: model.provider,
-      modelId,
-      messageProvider: resolvedMessageProvider,
-      agentAccountId: params.agentAccountId,
-      groupId: params.groupId,
-      groupChannel: params.groupChannel,
-      groupSpace: params.groupSpace,
-      spawnedBy: params.spawnedBy,
-      senderId: params.senderId,
-      senderName: params.senderName,
-      senderUsername: params.senderUsername,
-      senderE164: params.senderE164,
+      // The same profile constructed the core tool set above, so core and
+      // bundled tools cannot disagree about policy inputs (agentId included:
+      // both resolve it from the session key inside the profile).
+      conversationCapabilityProfile: runtimeCapabilityProfile,
       warn: (message) => log.warn(message),
     });
     const normalizableBundledToolProjection = filterProviderNormalizableTools(filteredBundledTools);
@@ -965,6 +1014,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
         diagnostics: normalizableBundledToolProjection.diagnostics,
         tools: filteredBundledTools,
         runId,
+        agentId: effectiveSkillAgentId,
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
       });
@@ -982,6 +1032,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
       diagnostics: toolSchemaProjection.diagnostics,
       tools: projectedEffectiveTools,
       runId,
+      agentId: effectiveSkillAgentId,
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
     });
@@ -1035,7 +1086,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
 
     const runtimeInfo = {
       host: machineName,
-      os: `${os.type()} ${os.release()}`,
+      os: resolveRuntimeOsLabel(),
       arch: os.arch(),
       node: process.version,
       model: `${provider}/${modelId}`,
@@ -1190,7 +1241,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
             : undefined,
         allowedToolNames,
       });
-      checkpointSnapshot = await captureCompactionCheckpointSnapshotAsync({
+      checkpointSnapshot = await compactionCheckpointStore.captureSnapshot({
         sessionManager,
         sessionFile: params.sessionFile,
       });
@@ -1546,7 +1597,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
                 preferredLeafId: activePostLeafId,
                 transcriptState,
               });
-              const storedCheckpoint = await persistSessionCompactionCheckpoint({
+              const storedCheckpoint = await compactionCheckpointStore.persistCheckpoint({
                 cfg: params.config,
                 sessionKey: params.sessionKey,
                 sessionId: activeSessionId,
@@ -1599,6 +1650,9 @@ async function compactEmbeddedAgentSessionDirectOnce(
             tokensAfter,
             compactedCount,
             sessionFile: activeSessionFile,
+            ...(activeSessionId !== params.sessionId
+              ? { previousSessionId: params.sessionId }
+              : {}),
             summaryLength: typeof result.summary === "string" ? result.summary.length : undefined,
             tokensBefore: result.tokensBefore,
             firstKeptEntryId: effectiveFirstKeptEntryId,
@@ -1670,7 +1724,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
     return fail(reason, err);
   } finally {
     if (!checkpointSnapshotRetained) {
-      await cleanupCompactionCheckpointSnapshot(checkpointSnapshot);
+      await compactionCheckpointStore.cleanupSnapshot(checkpointSnapshot);
     }
     restoreSkillEnv?.();
   }
@@ -1690,5 +1744,4 @@ export const testing = {
   runPostCompactionSideEffects,
 } as const;
 
-export { runPostCompactionSideEffects } from "./compaction-hooks.js";
 export { testing as __testing };

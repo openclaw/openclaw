@@ -1,5 +1,7 @@
 // Model-backed image understanding runtime for providers without a native media
 // provider hook.
+import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveModelAsync } from "../agents/embedded-agent-runner/model.js";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "../agents/minimax-vlm.js";
 import {
@@ -40,10 +42,6 @@ function resolveImageToolMaxTokens(modelMaxTokens: number | undefined, requested
     return requestedMaxTokens;
   }
   return Math.min(requestedMaxTokens, modelMaxTokens);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function isNativeResponsesReasoningPayload(model: Model): boolean {
@@ -237,6 +235,15 @@ async function prepareResolvedImageRuntime(
     preferredProfile: params.preferredProfile,
     store: params.authStore,
   });
+  // Bedrock's runtime client owns AWS credential-chain resolution. Keep the
+  // empty sentinel out of auth storage and pass it through to the stream.
+  if (
+    !apiKeyInfo.apiKey?.trim() &&
+    apiKeyInfo.mode === "aws-sdk" &&
+    model.api === "bedrock-converse-stream"
+  ) {
+    return { apiKey: "", model };
+  }
   let apiKey = requireApiKey(apiKeyInfo, model.provider);
   // Image tool bypasses prepareRuntimeAuth — exchange OAuth token for
   // a short-lived Copilot API token so the integrator scope (vscode-chat)
@@ -430,10 +437,7 @@ async function resolveMinimaxVlmFallbackRuntime(params: {
 }
 
 function resolveImageDescriptionTimeoutMs(timeoutMs: number | undefined) {
-  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    return undefined;
-  }
-  return Math.floor(timeoutMs);
+  return clampPositiveTimerTimeoutMs(timeoutMs);
 }
 
 function buildImageDescriptionTimeoutError(params: {
@@ -604,23 +608,8 @@ async function describeImagesWithModelInternal(
   return { text, model: model.id };
 }
 
-export async function describeImagesWithModel(
-  params: ImagesDescriptionRequest,
-): Promise<ImagesDescriptionResult> {
-  return await describeImagesWithModelInternal(params);
-}
-
-export async function describeImagesWithModelPayloadTransform(
-  params: ImagesDescriptionRequest,
-  onPayload: ProviderStreamOptions["onPayload"],
-): Promise<ImagesDescriptionResult> {
-  return await describeImagesWithModelInternal(params, { onPayload });
-}
-
-export async function describeImageWithModel(
-  params: ImageDescriptionRequest,
-): Promise<ImageDescriptionResult> {
-  return await describeImagesWithModel({
+function toImagesDescriptionRequest(params: ImageDescriptionRequest): ImagesDescriptionRequest {
+  return {
     images: [
       {
         buffer: params.buffer,
@@ -639,7 +628,26 @@ export async function describeImageWithModel(
     agentDir: params.agentDir,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     cfg: params.cfg,
-  });
+  };
+}
+
+export async function describeImagesWithModel(
+  params: ImagesDescriptionRequest,
+): Promise<ImagesDescriptionResult> {
+  return await describeImagesWithModelInternal(params);
+}
+
+export async function describeImagesWithModelPayloadTransform(
+  params: ImagesDescriptionRequest,
+  onPayload: ProviderStreamOptions["onPayload"],
+): Promise<ImagesDescriptionResult> {
+  return await describeImagesWithModelInternal(params, { onPayload });
+}
+
+export async function describeImageWithModel(
+  params: ImageDescriptionRequest,
+): Promise<ImageDescriptionResult> {
+  return await describeImagesWithModel(toImagesDescriptionRequest(params));
 }
 
 export async function describeImageWithModelPayloadTransform(
@@ -647,26 +655,7 @@ export async function describeImageWithModelPayloadTransform(
   onPayload: ProviderStreamOptions["onPayload"],
 ): Promise<ImageDescriptionResult> {
   return await describeImagesWithModelPayloadTransform(
-    {
-      images: [
-        {
-          buffer: params.buffer,
-          fileName: params.fileName,
-          mime: params.mime,
-        },
-      ],
-      model: params.model,
-      provider: params.provider,
-      prompt: params.prompt,
-      maxTokens: params.maxTokens,
-      timeoutMs: params.timeoutMs,
-      profile: params.profile,
-      preferredProfile: params.preferredProfile,
-      authStore: params.authStore,
-      agentDir: params.agentDir,
-      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-      cfg: params.cfg,
-    },
+    toImagesDescriptionRequest(params),
     onPayload,
   );
 }

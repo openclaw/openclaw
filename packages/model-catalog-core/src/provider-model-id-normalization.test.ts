@@ -47,6 +47,18 @@ describe("provider model id policy normalization", () => {
     expect(
       normalizeConfiguredProviderCatalogModelId("anthropic", "anthropic/claude-haiku-4-5"),
     ).toBe("claude-haiku-4-5");
+    expect(normalizeStaticProviderModelIdWithPolicies("anthropic", "sonnet")).toBe(
+      "claude-sonnet-5",
+    );
+    expect(normalizeStaticProviderModelIdWithPolicies("anthropic", "sonnet-5")).toBe(
+      "claude-sonnet-5",
+    );
+    expect(normalizeStaticProviderModelIdWithPolicies("vercel-ai-gateway", "sonnet")).toBe(
+      "anthropic/claude-sonnet-4-6",
+    );
+    expect(normalizeStaticProviderModelIdWithPolicies("vercel-ai-gateway", "sonnet-5")).toBe(
+      "anthropic/claude-sonnet-5",
+    );
   });
 
   it("normalizes provider-prefixed native catalog refs without stripping catalog prefixes", () => {
@@ -87,5 +99,36 @@ describe("provider model id policy normalization", () => {
     expect(stripSelfProviderModelPrefix("vercel-ai-gateway", "vercel-ai-gateway/opus-4.6")).toBe(
       "opus-4.6",
     );
+  });
+});
+
+describe("manifest stripPrefixes matches and slices on the same normalized value", () => {
+  function stripWith(stripPrefixes: string[], modelId: string): string {
+    const policies = collectManifestModelIdNormalizationPolicies([
+      {
+        modelIdNormalization: {
+          providers: {
+            openai: { stripPrefixes },
+          },
+        },
+      },
+    ]);
+    return normalizeStaticProviderModelIdWithPolicies("openai", modelId, policies);
+  }
+
+  it("strips a whitespace-free prefix exactly (control: no regression)", () => {
+    expect(stripWith(["openai/"], "openai/gpt-4")).toBe("gpt-4");
+  });
+
+  it("strips by the matched length when the manifest prefix has a leading space", () => {
+    expect(stripWith([" openai/"], "openai/gpt-4")).toBe("gpt-4");
+  });
+
+  it("strips by the matched length when the manifest prefix has a trailing space", () => {
+    expect(stripWith(["openai/ "], "openai/gpt-4")).toBe("gpt-4");
+  });
+
+  it("strips by the matched length when the manifest prefix differs in case and spacing", () => {
+    expect(stripWith([" OpenAI/ "], "openai/gpt-4")).toBe("gpt-4");
   });
 });

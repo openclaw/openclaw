@@ -25,6 +25,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { toErrorObject } from "../../infra/errors.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { privateFileStoreSync } from "../../infra/private-file-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -35,6 +36,7 @@ import {
   hasBeforeToolCallPolicy,
   requestDeferredPluginToolApproval,
   runBeforeToolCallHook,
+  type BeforeToolCallFailureDisposition,
   type DeferredPluginToolApproval,
 } from "../agent-tools.before-tool-call.js";
 import { stableStringify } from "../stable-stringify.js";
@@ -90,6 +92,7 @@ export type NativeHookRelayProcessResponse = {
   stdout: string;
   stderr: string;
   exitCode: number;
+  failureDisposition?: Exclude<BeforeToolCallFailureDisposition, "blocked">;
 };
 
 export type NativeHookRelayRegistration = {
@@ -106,6 +109,12 @@ export type NativeHookRelayRegistration = {
   allowedEvents: readonly NativeHookRelayEvent[];
   expiresAtMs: number;
   signal?: AbortSignal;
+  onPreToolUseFailure?: (failure: {
+    toolName: string;
+    toolCallId: string;
+    disposition: Exclude<BeforeToolCallFailureDisposition, "blocked">;
+    durationMs: number;
+  }) => void | Promise<void>;
 };
 
 export type NativeHookRelayRegistrationHandle = NativeHookRelayRegistration & {
@@ -134,6 +143,7 @@ export type RegisterNativeHookRelayParams = {
   ttlMs?: number;
   command?: NativeHookRelayCommandOptions;
   signal?: AbortSignal;
+  onPreToolUseFailure?: NativeHookRelayRegistration["onPreToolUseFailure"];
 };
 
 export type NativeHookRelayCommandOptions = {
@@ -182,7 +192,10 @@ type NativeHookRelayProviderAdapter = {
   readToolInput: (rawPayload: JsonValue) => Record<string, JsonValue>;
   readToolResponse: (rawPayload: JsonValue) => unknown;
   renderNoopResponse: (event: NativeHookRelayEvent) => NativeHookRelayProcessResponse;
-  renderPreToolUseBlockResponse: (reason: string) => NativeHookRelayProcessResponse;
+  renderPreToolUseBlockResponse: (
+    reason: string,
+    failureDisposition?: Exclude<BeforeToolCallFailureDisposition, "blocked">,
+  ) => NativeHookRelayProcessResponse;
   renderBeforeAgentFinalizeReviseResponse: (reason: string) => NativeHookRelayProcessResponse;
   renderBeforeAgentFinalizeStopResponse: (reason?: string) => NativeHookRelayProcessResponse;
   renderPermissionDecisionResponse: (
@@ -244,6 +257,7 @@ type NativeHookRelaySharedState = {
 
 type ActiveNativeHookRelayRegistration = NativeHookRelayRegistration & {
   generation: string;
+  preToolUseFailureProjections: Map<string, { promise: Promise<void>; settled: boolean }>;
 };
 
 type ActiveNativeHookRelayRegistrationHandle = NativeHookRelayRegistrationHandle & {
@@ -312,6 +326,7 @@ export type NativeHookRelayDeferredApprovalOutcome =
       handled: true;
       outcome: "denied";
       reason: string;
+      failureDisposition?: Exclude<BeforeToolCallFailureDisposition, "blocked">;
     };
 
 type NativeHookRelayBridgeRegistration = {
@@ -360,7 +375,7 @@ const nativeHookRelayProviderAdapters: Record<
       // Codex treats empty stdout plus exit 0 as no decision/no additional context.
       return { stdout: "", stderr: "", exitCode: 0 };
     },
-    renderPreToolUseBlockResponse: (reason) => ({
+    renderPreToolUseBlockResponse: (reason, failureDisposition) => ({
       stdout: `${JSON.stringify({
         hookSpecificOutput: {
           hookEventName: "PreToolUse",
@@ -370,6 +385,7 @@ const nativeHookRelayProviderAdapters: Record<
       })}\n`,
       stderr: "",
       exitCode: 0,
+      ...(failureDisposition ? { failureDisposition } : {}),
     }),
     renderBeforeAgentFinalizeReviseResponse: (reason) => ({
       stdout: `${JSON.stringify({
@@ -436,7 +452,9 @@ export function registerNativeHookRelay(
     ...(params.channelId ? { channelId: params.channelId } : {}),
     allowedEvents,
     expiresAtMs,
+    preToolUseFailureProjections: new Map(),
     ...(params.signal ? { signal: params.signal } : {}),
+    ...(params.onPreToolUseFailure ? { onPreToolUseFailure: params.onPreToolUseFailure } : {}),
   };
   relays.set(relayId, registration);
   registerNativeHookRelayBridge(registration);
@@ -473,7 +491,7 @@ export function registerNativeHookRelay(
       current.expiresAtMs = renewedExpiresAtMs;
       handle.expiresAtMs = renewedExpiresAtMs;
       const bridge = relayBridges.get(relayId);
-      if (bridge) {
+      if (bridge && bridge.server.listening) {
         writeNativeHookRelayBridgeRecordForRegistration(current, bridge);
       }
     },
@@ -655,11 +673,72 @@ export async function invokeNativeHookRelay(
     rawPayload: params.rawPayload,
   });
   recordNativeHookRelayInvocation(normalized);
-  return processNativeHookRelayInvocation({
+  const startedAt = Date.now();
+  const response = await processNativeHookRelayInvocation({
     registration,
     invocation: normalized,
     adapter: getNativeHookRelayProviderAdapter(provider),
   });
+  if (
+    normalized.toolUseId &&
+    response.failureDisposition &&
+    readNativeHookRelayApprovalMode(normalized.rawPayload) !== "report"
+  ) {
+    projectNativeHookRelayPreToolUseFailure(registration, {
+      toolName: normalizeNativeHookToolName(normalized.toolName),
+      toolCallId: normalized.toolUseId,
+      disposition: response.failureDisposition,
+      durationMs: Date.now() - startedAt,
+    });
+  }
+  return response;
+}
+
+function projectNativeHookRelayPreToolUseFailure(
+  registration: ActiveNativeHookRelayRegistration,
+  failure: Parameters<NonNullable<NativeHookRelayRegistration["onPreToolUseFailure"]>>[0],
+): void {
+  const callback = registration.onPreToolUseFailure;
+  if (!callback) {
+    return;
+  }
+  if (registration.preToolUseFailureProjections.has(failure.toolCallId)) {
+    return;
+  }
+  const record = {
+    promise: Promise.resolve().then(() => callback(failure)),
+    settled: false,
+  };
+  registration.preToolUseFailureProjections.set(failure.toolCallId, record);
+  void record.promise.then(
+    () => {
+      record.settled = true;
+    },
+    (error: unknown) => {
+      record.settled = true;
+      if (registration.preToolUseFailureProjections.get(failure.toolCallId) === record) {
+        registration.preToolUseFailureProjections.delete(failure.toolCallId);
+      }
+      log.debug("native pre-tool failure projection failed", {
+        error,
+        relayId: registration.relayId,
+        toolCallId: failure.toolCallId,
+      });
+    },
+  );
+  if (registration.preToolUseFailureProjections.size > MAX_NATIVE_HOOK_RELAY_INVOCATIONS) {
+    let oldestToolCallId: string | undefined;
+    for (const [toolCallId, candidate] of registration.preToolUseFailureProjections) {
+      oldestToolCallId ??= toolCallId;
+      if (candidate.settled) {
+        registration.preToolUseFailureProjections.delete(toolCallId);
+        return;
+      }
+    }
+    if (oldestToolCallId) {
+      registration.preToolUseFailureProjections.delete(oldestToolCallId);
+    }
+  }
 }
 
 export function hasNativeHookRelayInvocation(params: {
@@ -715,7 +794,14 @@ async function resolveNativeHookRelayPreToolUseApproval(
     signal,
   });
   if (outcome.blocked) {
-    return { handled: true, outcome: "denied", reason: outcome.reason };
+    return {
+      handled: true,
+      outcome: "denied",
+      reason: outcome.reason,
+      ...(outcome.kind === "failure" && outcome.disposition !== "blocked"
+        ? { failureDisposition: outcome.disposition }
+        : {}),
+    };
   }
   if (
     nativeHookRelayParamsWereRewritten(pendingApproval.originalParamsFingerprint, outcome.params)
@@ -991,9 +1077,6 @@ function registerNativeHookRelayBridge(registration: ActiveNativeHookRelayRegist
     }
     writeNativeHookRelayBridgeRecordForRegistration(registration, bridge);
   });
-  if (relayBridges.get(registration.relayId) === bridge) {
-    writeNativeHookRelayBridgeRecordForRegistration(registration, bridge);
-  }
   server.unref();
 }
 
@@ -1235,7 +1318,7 @@ function postNativeHookRelayBridgeRecord(params: {
     const rejectOnce = (error: unknown) => {
       if (!settled) {
         settled = true;
-        reject(toLintErrorObject(error, "Non-Error rejection"));
+        reject(toErrorObject(error, "Non-Error rejection"));
       }
     };
     const req = httpRequest(
@@ -1403,11 +1486,18 @@ async function runNativeHookRelayPreToolUse(params: {
       ...(params.registration.config ? { config: params.registration.config } : {}),
       runId: params.registration.runId,
       ...(params.registration.channelId ? { channelId: params.registration.channelId } : {}),
-      ...(params.invocation.cwd ? { cwd: params.invocation.cwd } : {}),
+      ...(params.invocation.cwd
+        ? { cwd: params.invocation.cwd, workspaceDir: params.invocation.cwd }
+        : {}),
     },
   });
   if (outcome.blocked) {
-    return params.adapter.renderPreToolUseBlockResponse(outcome.reason);
+    return params.adapter.renderPreToolUseBlockResponse(
+      outcome.reason,
+      outcome.kind === "failure" && outcome.disposition !== "blocked"
+        ? outcome.disposition
+        : undefined,
+    );
   }
   if (outcome.deferredApproval) {
     if (
@@ -2060,10 +2150,10 @@ async function waitForNativeHookRelayApprovalDecision(params: {
   let onAbort: (() => void) | undefined;
   const abortPromise = new Promise<never>((_, reject) => {
     if (params.signal!.aborted) {
-      reject(toLintErrorObject(params.signal!.reason, "Non-Error rejection"));
+      reject(toErrorObject(params.signal!.reason, "Non-Error rejection"));
       return;
     }
-    onAbort = () => reject(toLintErrorObject(params.signal!.reason, "Non-Error rejection"));
+    onAbort = () => reject(toErrorObject(params.signal!.reason, "Non-Error rejection"));
     params.signal!.addEventListener("abort", onAbort, { once: true });
   });
   try {
@@ -2380,17 +2470,3 @@ export const testing = {
   },
 } as const;
 export { testing as __testing };
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

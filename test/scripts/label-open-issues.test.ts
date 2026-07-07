@@ -16,6 +16,22 @@ describe("label-open-issues helpers", () => {
     vi.useRealTimers();
   });
 
+  it("parses CLI options strictly before external calls", () => {
+    expect(testing.parseArgs(["--dry-run", "--limit", "2", "--model", "gpt-5.5"])).toEqual({
+      dryRun: true,
+      limit: 2,
+      model: "gpt-5.5",
+    });
+
+    expect(() => testing.parseArgs(["--model", "--dry-run"])).toThrow("Missing --model value");
+    expect(() => testing.parseArgs(["--model", "-h"])).toThrow("Missing --model value");
+    expect(() => testing.parseArgs(["--limit", "--dry-run"])).toThrow(
+      "Missing/invalid --limit value",
+    );
+    expect(() => testing.parseArgs(["--limit", "-h"])).toThrow("Missing/invalid --limit value");
+    expect(() => testing.parseArgs(["--wat"])).toThrow("Unknown argument: --wat");
+  });
+
   it("classifies items from OpenAI structured response text", async () => {
     const response = new Response(
       JSON.stringify({

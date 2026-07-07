@@ -1,7 +1,7 @@
 // Small string normalization helpers kept local to memory-host-sdk for package
 // builds that should not depend on the full normalization package graph.
 /** Normalize a non-empty string or return null. */
-export function normalizeNullableString(value: unknown): string | null {
+function normalizeNullableString(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
   }

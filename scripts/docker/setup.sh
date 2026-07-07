@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-build.sh"
+source "$ROOT_DIR/scripts/lib/host-timeout.sh"
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 EXTRA_COMPOSE_FILE="$ROOT_DIR/docker-compose.extra.yml"
 IMAGE_NAME="${OPENCLAW_IMAGE:-openclaw:local}"
@@ -52,15 +53,7 @@ run_docker_build() {
 
 run_docker_pull() {
   local image="$1"
-  if command -v timeout >/dev/null 2>&1; then
-    if timeout --kill-after=1s 1s true >/dev/null 2>&1; then
-      timeout --kill-after=30s "$DOCKER_PULL_TIMEOUT" docker pull "$image"
-    else
-      timeout "$DOCKER_PULL_TIMEOUT" docker pull "$image"
-    fi
-    return
-  fi
-  docker pull "$image"
+  openclaw_host_timeout_cmd "$DOCKER_PULL_TIMEOUT" docker pull "$image"
 }
 
 require_local_docker_image() {
@@ -528,6 +521,9 @@ export OPENCLAW_IMAGE="$IMAGE_NAME"
 export OPENCLAW_IMAGE_APT_PACKAGES="${OPENCLAW_IMAGE_APT_PACKAGES-${OPENCLAW_DOCKER_APT_PACKAGES:-}}"
 export OPENCLAW_IMAGE_PIP_PACKAGES="${OPENCLAW_IMAGE_PIP_PACKAGES:-}"
 export OPENCLAW_EXTENSIONS="${OPENCLAW_EXTENSIONS:-}"
+export OPENCLAW_DOCKER_BUILD_NODE_OPTIONS="${OPENCLAW_DOCKER_BUILD_NODE_OPTIONS---max-old-space-size=8192}"
+export OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB="${OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB:-}"
+export OPENCLAW_DOCKER_BUILD_SKIP_DTS="${OPENCLAW_DOCKER_BUILD_SKIP_DTS:-1}"
 export OPENCLAW_INSTALL_BROWSER="${OPENCLAW_INSTALL_BROWSER:-}"
 export OPENCLAW_EXTRA_MOUNTS="$EXTRA_MOUNTS"
 export OPENCLAW_HOME_VOLUME="$HOME_VOLUME_NAME"
@@ -733,6 +729,9 @@ upsert_env "$ENV_FILE" \
   OPENCLAW_IMAGE_APT_PACKAGES \
   OPENCLAW_IMAGE_PIP_PACKAGES \
   OPENCLAW_EXTENSIONS \
+  OPENCLAW_DOCKER_BUILD_NODE_OPTIONS \
+  OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB \
+  OPENCLAW_DOCKER_BUILD_SKIP_DTS \
   OPENCLAW_INSTALL_BROWSER \
   OPENCLAW_SANDBOX \
   OPENCLAW_DOCKER_SOCKET \
@@ -759,6 +758,9 @@ elif [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
     --build-arg "OPENCLAW_IMAGE_APT_PACKAGES=${OPENCLAW_IMAGE_APT_PACKAGES}" \
     --build-arg "OPENCLAW_IMAGE_PIP_PACKAGES=${OPENCLAW_IMAGE_PIP_PACKAGES}" \
     --build-arg "OPENCLAW_EXTENSIONS=${OPENCLAW_EXTENSIONS}" \
+    --build-arg "OPENCLAW_DOCKER_BUILD_NODE_OPTIONS=${OPENCLAW_DOCKER_BUILD_NODE_OPTIONS}" \
+    --build-arg "OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB=${OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB}" \
+    --build-arg "OPENCLAW_DOCKER_BUILD_SKIP_DTS=${OPENCLAW_DOCKER_BUILD_SKIP_DTS}" \
     --build-arg "OPENCLAW_INSTALL_BROWSER=${OPENCLAW_INSTALL_BROWSER}" \
     --build-arg "OPENCLAW_INSTALL_DOCKER_CLI=${OPENCLAW_INSTALL_DOCKER_CLI:-}" \
     -t "$IMAGE_NAME" \

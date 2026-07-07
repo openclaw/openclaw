@@ -24,6 +24,7 @@ import {
   QA_CHANNEL_REQUIRED_PLUGIN_IDS,
 } from "./qa-channel-transport.js";
 import { buildQaGatewayConfig } from "./qa-gateway-config.js";
+import { resolveQaWindowsSystem32ExePath } from "./windows-system-tools.js";
 
 type ModelRow = {
   key: string;
@@ -120,10 +121,14 @@ function killProcessTree(pid: number | undefined, signal: NodeJS.Signals) {
   }
   try {
     if (process.platform === "win32") {
-      const killer = spawn("taskkill", ["/pid", String(pid), "/t", "/f"], {
-        stdio: "ignore",
-        windowsHide: true,
-      });
+      const killer = spawn(
+        resolveQaWindowsSystem32ExePath("taskkill.exe"),
+        ["/pid", String(pid), "/t", "/f"],
+        {
+          stdio: "ignore",
+          windowsHide: true,
+        },
+      );
       killer.once("error", () => {
         try {
           process.kill(pid, signal);
@@ -168,7 +173,12 @@ async function waitForProcessTreeExit(pid: number | undefined, timeoutMs: number
   return !processTreeIsAlive(pid);
 }
 
-export async function loadQaRunnerModelOptions(params: { repoRoot: string; signal?: AbortSignal }) {
+export async function loadQaRunnerModelOptions(params: {
+  repoRoot: string;
+  signal?: AbortSignal;
+  abortKillGraceMs?: number;
+}) {
+  const abortKillGraceMs = Math.max(1, params.abortKillGraceMs ?? CATALOG_ABORT_KILL_GRACE_MS);
   const tempRoot = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-qa-model-catalog-"),
   );
@@ -207,6 +217,7 @@ export async function loadQaRunnerModelOptions(params: { repoRoot: string; signa
     await new Promise<void>((resolve, reject) => {
       let aborted = params.signal?.aborted === true;
       let forceKillTimer: NodeJS.Timeout | undefined;
+      let forceKillAt: number | undefined;
       const child = spawn(nodeExecPath, ["dist/index.js", "models", "list", "--all", "--json"], {
         cwd: params.repoRoot,
         env: {
@@ -232,18 +243,30 @@ export async function loadQaRunnerModelOptions(params: { repoRoot: string; signa
         }
       };
       const finishAbortedCatalogLoad = async () => {
-        cleanup();
+        cleanupAbortListener();
+        const graceRemainingMs =
+          forceKillAt === undefined ? abortKillGraceMs : Math.max(0, forceKillAt - Date.now());
+        if (graceRemainingMs > 0) {
+          await waitForProcessTreeExit(child.pid, graceRemainingMs);
+        }
+        if (forceKillTimer) {
+          clearTimeout(forceKillTimer);
+          forceKillTimer = undefined;
+        }
         if (processTreeIsAlive(child.pid)) {
           killProcessTree(child.pid, "SIGKILL");
-          await waitForProcessTreeExit(child.pid, CATALOG_ABORT_KILL_GRACE_MS);
+          await waitForProcessTreeExit(child.pid, abortKillGraceMs);
         }
+        forceKillAt = undefined;
       };
       const abortCatalogLoad = () => {
         aborted = true;
         killProcessTree(child.pid, "SIGTERM");
+        forceKillAt = Date.now() + abortKillGraceMs;
         forceKillTimer ??= setTimeout(() => {
+          forceKillAt = undefined;
           killProcessTree(child.pid, "SIGKILL");
-        }, 1_000);
+        }, abortKillGraceMs);
         forceKillTimer.unref();
       };
       if (aborted) {

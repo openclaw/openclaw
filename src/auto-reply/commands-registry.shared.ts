@@ -1,6 +1,7 @@
 /** Shared command registry builders used by browser-safe and runtime command lists. */
 import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
+import { formatFastModeAutoLabel, resolveFastModeModelAutoOnSeconds } from "../shared/fast-mode.js";
 import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import type {
   ChatCommandDefinition,
@@ -28,6 +29,7 @@ type DefineChatCommandInput = {
   key: string;
   nativeName?: string;
   nativeAliases?: string[];
+  nativeProviders?: string[];
   description: string;
   args?: ChatCommandDefinition["args"];
   argsParsing?: ChatCommandDefinition["argsParsing"];
@@ -56,6 +58,9 @@ export function defineChatCommand(command: DefineChatCommandInput): ChatCommandD
     nativeName: command.nativeName,
     nativeAliases: command.nativeAliases
       ? normalizeStringEntries(command.nativeAliases)
+      : undefined,
+    nativeProviders: command.nativeProviders
+      ? normalizeStringEntries(command.nativeProviders)
       : undefined,
     description: command.description,
     acceptsArgs,
@@ -217,6 +222,23 @@ export function buildBuiltinChatCommands(
       ],
     }),
     defineChatCommand({
+      key: "learn",
+      nativeName: "learn",
+      description: "Draft a reusable skill from recent work or named sources.",
+      textAlias: "/learn",
+      category: "tools",
+      tier: "standard",
+      acceptsArgs: true,
+      args: [
+        {
+          name: "request",
+          description: "Sources and requirements for the skill draft",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+    }),
+    defineChatCommand({
       key: "status",
       nativeName: "status",
       description: "Show current status.",
@@ -236,9 +258,9 @@ export function buildBuiltinChatCommands(
       args: [
         {
           name: "action",
-          description: "status, start, pause, resume, complete, block, clear",
+          description: "status, start, edit, pause, resume, complete, block, clear",
           type: "string",
-          choices: ["status", "start", "pause", "resume", "complete", "block", "clear"],
+          choices: ["status", "start", "edit", "pause", "resume", "complete", "block", "clear"],
         },
         {
           name: "text",
@@ -262,6 +284,23 @@ export function buildBuiltinChatCommands(
           description: "Optional note for Codex feedback upload",
           type: "string",
           captureRemaining: true,
+        },
+      ],
+    }),
+    defineChatCommand({
+      key: "login",
+      nativeName: "login",
+      nativeProviders: ["telegram"],
+      description: "Pair Codex login.",
+      textAlias: "/login",
+      category: "management",
+      tier: "standard",
+      args: [
+        {
+          name: "provider",
+          description: "Provider to pair",
+          type: "string",
+          choices: ["codex", "openai"],
         },
       ],
     }),
@@ -835,9 +874,20 @@ export function buildBuiltinChatCommands(
       args: [
         {
           name: "mode",
-          description: "status, on, off, or default",
+          description: "on, off, auto, default, or status",
           type: "string",
-          choices: ["status", "on", "off", "default"],
+          choices: ({ cfg, provider, model }) => [
+            "on",
+            "off",
+            {
+              value: "auto",
+              label: formatFastModeAutoLabel({
+                fastAutoOnSeconds: resolveFastModeModelAutoOnSeconds({ cfg, provider, model }),
+              }),
+            },
+            "default",
+            "status",
+          ],
         },
       ],
       argsMenu: "auto",

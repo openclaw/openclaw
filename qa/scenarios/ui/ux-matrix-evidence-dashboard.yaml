@@ -29,6 +29,7 @@ scenario:
     kind: script
     path: scripts/qa/ux-matrix-evidence-producer.ts
     summary: Script-backed UX Matrix producer that emits QA Lab evidence artifacts.
+    allowBlockedEvidence: true
     args:
       - --artifact-base
       - ${outputDir}

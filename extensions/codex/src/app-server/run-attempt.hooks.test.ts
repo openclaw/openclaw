@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   abortAgentHarnessRun,
   onAgentEvent,
+  resolveActiveEmbeddedRunSessionId,
   type AgentEventPayload,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
@@ -33,6 +34,14 @@ import {
   threadStartResult,
   turnStartResult,
 } from "./run-attempt-test-harness.js";
+import {
+  readCodexAppServerBinding,
+  testCodexAppServerBindingStore,
+} from "./session-binding.test-helpers.js";
+
+type ReplyBackend = Parameters<
+  NonNullable<ReturnType<typeof createParams>["replyOperation"]>["attachBackend"]
+>[0];
 
 function flushDiagnosticEvents() {
   return waitForDiagnosticEventsDrained();
@@ -185,8 +194,14 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       (event) => event.stream === "lifecycle" && event.data.phase === "start",
     );
     expect(typeof lifecycleStart?.data.startedAt).toBe("number");
-    const assistantEvent = agentEvents.find((event) => event.stream === "assistant");
-    expect(assistantEvent?.data).toEqual({ text: "hello back" });
+    const assistantEvents = agentEvents.filter((event) => event.stream === "assistant");
+    expect(assistantEvents).toHaveLength(2);
+    expect(assistantEvents[0]?.data).toEqual({
+      text: "hello back",
+      delta: "hello back",
+      replaceable: true,
+    });
+    expect(assistantEvents[1]?.data).toEqual({ text: "hello back" });
     const lifecycleEnd = agentEvents.find(
       (event) => event.stream === "lifecycle" && event.data.phase === "end",
     );
@@ -202,10 +217,16 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     expect(startIndex).toBeGreaterThanOrEqual(0);
     expect(assistantIndex).toBeGreaterThan(startIndex);
     expect(endIndex).toBeGreaterThan(assistantIndex);
-    const globalAssistantEvent = globalAgentEvents.find((event) => event.stream === "assistant");
-    expect(globalAssistantEvent?.runId).toBe("run-1");
-    expect(globalAssistantEvent?.sessionKey).toBe("agent:main:session-1");
-    expect(globalAssistantEvent?.data).toEqual({ text: "hello back" });
+    const globalAssistantEvents = globalAgentEvents.filter((event) => event.stream === "assistant");
+    expect(globalAssistantEvents).toHaveLength(2);
+    expect(globalAssistantEvents[0]?.runId).toBe("run-1");
+    expect(globalAssistantEvents[0]?.sessionKey).toBe("agent:main:session-1");
+    expect(globalAssistantEvents[0]?.data).toEqual({
+      text: "hello back",
+      delta: "hello back",
+      replaceable: true,
+    });
+    expect(globalAssistantEvents[1]?.data).toEqual({ text: "hello back" });
     const globalEndEvent = globalAgentEvents.find(
       (event) => event.stream === "lifecycle" && event.data.phase === "end",
     );
@@ -423,6 +444,398 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     releaseAgentEnd();
     await expect(run).resolves.toMatchObject({ promptError: null });
     expect(settled).toBe(true);
+  });
+
+  it("freezes recovered timeout success locally before agent_end", async () => {
+    let releaseAgentEnd: () => void = () => undefined;
+    const agentEndSettled = new Promise<void>((resolve) => {
+      releaseAgentEnd = resolve;
+    });
+    const agentEnd = vi.fn(() => agentEndSettled);
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
+    );
+    const onRunAgentEvent = vi.fn();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.onAgentEvent = onRunAgentEvent;
+    params.timeoutMs = 200;
+    const attachBackend = vi.fn();
+    const detachBackend = vi.fn();
+    const freezeAbort = vi.fn();
+    params.replyOperation = {
+      attachBackend,
+      detachBackend,
+      freezeAbort,
+    } as unknown as NonNullable<typeof params.replyOperation>;
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(params, {
+      turnAssistantCompletionIdleTimeoutMs: 5,
+      turnTerminalIdleTimeoutMs: 500,
+    });
+
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "msg-final-1",
+          type: "agentMessage",
+          text: "Done.",
+          status: "completed",
+        },
+      },
+    });
+    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), fastWait);
+
+    const [replyBackend] = mockCall(attachBackend, "reply backend") as [
+      { isAbortable?: () => boolean },
+    ];
+    expect(replyBackend.isAbortable?.()).toBe(false);
+    expect(abortAgentHarnessRun("session-1")).toBe(false);
+    expect(resolveActiveEmbeddedRunSessionId("agent:main:session-1")).toBe("session-1");
+    releaseAgentEnd();
+
+    await expect(run).resolves.toMatchObject({
+      aborted: false,
+      timedOut: false,
+      promptError: null,
+    });
+    const [agentEndPayload] = mockCall(agentEnd, "agent_end") as [{ success?: boolean }, unknown];
+    expect(agentEndPayload.success).toBe(true);
+    expect(freezeAbort).not.toHaveBeenCalled();
+    const terminalLifecycleEvents = onRunAgentEvent.mock.calls
+      .map(([event]) => event)
+      .filter(
+        (event) =>
+          event.stream === "lifecycle" &&
+          (event.data.phase === "end" || event.data.phase === "error"),
+      );
+    expect(terminalLifecycleEvents).toHaveLength(1);
+    expect(terminalLifecycleEvents[0]?.data).toMatchObject({ phase: "end" });
+    expect(terminalLifecycleEvents[0]?.data.aborted).toBeUndefined();
+    expect(detachBackend).toHaveBeenCalledWith(replyBackend);
+    expect(resolveActiveEmbeddedRunSessionId("agent:main:session-1")).toBeUndefined();
+  });
+
+  it("freezes recovered client-close success locally before agent_end", async () => {
+    let releaseAgentEnd: () => void = () => undefined;
+    const agentEndSettled = new Promise<void>((resolve) => {
+      releaseAgentEnd = resolve;
+    });
+    const agentEnd = vi.fn(() => agentEndSettled);
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
+    );
+    const onAttemptAbort = vi.fn();
+    let replyBackend: Pick<ReplyBackend, "isAbortable"> | undefined;
+    const params = createParams(
+      path.join(tempDir, "recovered-client-close.jsonl"),
+      path.join(tempDir, "recovered-client-close-workspace"),
+    );
+    params.onAttemptAbort = onAttemptAbort;
+    params.replyOperation = {
+      attachBackend: (backend: ReplyBackend) => {
+        replyBackend = backend;
+      },
+      detachBackend: vi.fn(),
+      freezeAbort: vi.fn(),
+    } as unknown as NonNullable<typeof params.replyOperation>;
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(params, { turnTerminalIdleTimeoutMs: 60_000 });
+
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "msg-final-1",
+          type: "agentMessage",
+          text: "Done before restart.",
+          status: "completed",
+        },
+      },
+    });
+    harness.close();
+    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), fastWait);
+
+    expect(replyBackend?.isAbortable?.()).toBe(false);
+    expect(abortAgentHarnessRun("session-1")).toBe(false);
+    expect(onAttemptAbort).not.toHaveBeenCalled();
+
+    releaseAgentEnd();
+    await expect(run).resolves.toMatchObject({
+      aborted: false,
+      timedOut: false,
+      promptError: null,
+      assistantTexts: ["Done before restart."],
+    });
+    const [agentEndPayload] = mockCall(agentEnd, "agent_end") as [{ success?: boolean }, unknown];
+    expect(agentEndPayload.success).toBe(true);
+  });
+
+  it("keeps a successful memory preflight cancellable for the main turn", async () => {
+    let releaseAgentEnd: () => void = () => undefined;
+    const agentEndSettled = new Promise<void>((resolve) => {
+      releaseAgentEnd = resolve;
+    });
+    const agentEnd = vi.fn(() => agentEndSettled);
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
+    );
+    const onAttemptAbort = vi.fn();
+    let replyBackend: Pick<ReplyBackend, "cancel" | "isAbortable"> | undefined;
+    const params = createParams(
+      path.join(tempDir, "memory-preflight.jsonl"),
+      path.join(tempDir, "memory-preflight-workspace"),
+    );
+    params.trigger = "memory";
+    params.memoryFlushWritePath = "memory/notes.md";
+    params.onAttemptAbort = onAttemptAbort;
+    const freezeAbort = vi.fn();
+    params.replyOperation = {
+      attachBackend: (backend: ReplyBackend) => {
+        replyBackend = backend;
+      },
+      detachBackend: vi.fn(),
+      freezeAbort,
+    } as unknown as NonNullable<typeof params.replyOperation>;
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(params);
+
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), fastWait);
+
+    expect(replyBackend?.isAbortable?.()).toBe(true);
+    replyBackend?.cancel("user_abort");
+    expect(onAttemptAbort).toHaveBeenCalledTimes(1);
+
+    releaseAgentEnd();
+    await expect(run).resolves.toMatchObject({
+      aborted: false,
+      promptError: null,
+    });
+    expect(freezeAbort).not.toHaveBeenCalled();
+  });
+
+  it("keeps replay-safe client-close recovery cancellable during agent_end", async () => {
+    let releaseAgentEnd: () => void = () => undefined;
+    const agentEndSettled = new Promise<void>((resolve) => {
+      releaseAgentEnd = resolve;
+    });
+    const agentEnd = vi.fn(() => agentEndSettled);
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
+    );
+    const onAttemptAbort = vi.fn();
+    let replyBackend:
+      | {
+          isAbortable?: () => boolean;
+          cancel: (reason: "restart" | "superseded" | "user_abort") => void;
+        }
+      | undefined;
+    const params = createParams(
+      path.join(tempDir, "replay-safe-client-close.jsonl"),
+      path.join(tempDir, "replay-safe-client-close-workspace"),
+    );
+    params.onAttemptAbort = onAttemptAbort;
+    const freezeAbort = vi.fn();
+    params.replyOperation = {
+      attachBackend: (backend: ReplyBackend) => {
+        replyBackend = backend;
+      },
+      detachBackend: vi.fn(),
+      freezeAbort,
+    } as unknown as NonNullable<typeof params.replyOperation>;
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(params, { turnTerminalIdleTimeoutMs: 60_000 });
+
+    await harness.waitForMethod("turn/start");
+    harness.close();
+    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), fastWait);
+
+    expect(replyBackend?.isAbortable?.()).toBe(true);
+    replyBackend?.cancel("user_abort");
+    expect(onAttemptAbort).toHaveBeenCalledTimes(1);
+
+    releaseAgentEnd();
+    await expect(run).resolves.toMatchObject({
+      aborted: false,
+      promptError: "codex app-server client closed before turn completed",
+      codexAppServerFailure: {
+        kind: "client_closed_before_turn_completed",
+        replaySafe: true,
+      },
+    });
+    expect(freezeAbort).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      label: "failed",
+      status: "failed",
+      error: { message: "codex exploded" },
+      expectedPromptError: "codex exploded",
+      expectedClassification: undefined,
+    },
+    {
+      label: "interrupted",
+      status: "interrupted",
+      error: undefined,
+      expectedPromptError: null,
+      expectedClassification: "empty",
+    },
+    {
+      label: "empty completed",
+      status: "completed",
+      error: undefined,
+      expectedPromptError: null,
+      expectedClassification: "empty",
+    },
+  ] as const)(
+    "keeps ordinary $label turns cancellable until the orchestrator settles",
+    async ({ label, status, error, expectedPromptError, expectedClassification }) => {
+      let releaseAgentEnd: () => void = () => undefined;
+      const agentEndSettled = new Promise<void>((resolve) => {
+        releaseAgentEnd = resolve;
+      });
+      const agentEnd = vi.fn(() => agentEndSettled);
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
+      );
+      const onAttemptAbort = vi.fn();
+      let replyBackend: Pick<ReplyBackend, "cancel" | "isAbortable"> | undefined;
+      const params = createParams(
+        path.join(tempDir, `ordinary-${label}-turn.jsonl`),
+        path.join(tempDir, `ordinary-${label}-turn-workspace`),
+      );
+      params.onAttemptAbort = onAttemptAbort;
+      const freezeAbort = vi.fn();
+      params.replyOperation = {
+        attachBackend: (backend: ReplyBackend) => {
+          replyBackend = backend;
+        },
+        detachBackend: vi.fn(),
+        freezeAbort,
+      } as unknown as NonNullable<typeof params.replyOperation>;
+      const harness = createStartedThreadHarness();
+      const run = runCodexAppServerAttempt(params);
+
+      await harness.waitForMethod("turn/start");
+      await harness.notify({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status,
+            ...(error ? { error } : {}),
+          },
+        },
+      });
+      await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), fastWait);
+
+      expect(replyBackend?.isAbortable?.()).toBe(true);
+      replyBackend?.cancel("user_abort");
+      expect(onAttemptAbort).toHaveBeenCalledTimes(1);
+
+      releaseAgentEnd();
+      const result = await run;
+      expect(result).toMatchObject({
+        aborted: false,
+        promptError: expectedPromptError,
+      });
+      expect(result.agentHarnessResultClassification).toBe(expectedClassification);
+      expect(freezeAbort).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps websocket client-close failure cancellable until the orchestrator settles", async () => {
+    let releaseAgentEnd: () => void = () => undefined;
+    const agentEndSettled = new Promise<void>((resolve) => {
+      releaseAgentEnd = resolve;
+    });
+    const agentEnd = vi.fn(() => agentEndSettled);
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "agent_end", handler: agentEnd }]),
+    );
+    const onAttemptAbort = vi.fn();
+    let replyBackend:
+      | {
+          isAbortable?: () => boolean;
+          cancel: (reason: "restart" | "superseded" | "user_abort") => void;
+        }
+      | undefined;
+    const params = createParams(
+      path.join(tempDir, "websocket-client-close.jsonl"),
+      path.join(tempDir, "websocket-client-close-workspace"),
+    );
+    params.onAttemptAbort = onAttemptAbort;
+    params.replyOperation = {
+      attachBackend: (backend: ReplyBackend) => {
+        replyBackend = backend;
+      },
+      detachBackend: vi.fn(),
+      freezeAbort: vi.fn(),
+    } as unknown as NonNullable<typeof params.replyOperation>;
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: {
+        appServer: {
+          transport: "websocket",
+          url: "ws://127.0.0.1:39175",
+        },
+      },
+      turnTerminalIdleTimeoutMs: 60_000,
+    });
+
+    await harness.waitForMethod("turn/start");
+    harness.close();
+    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), fastWait);
+
+    expect(replyBackend?.isAbortable?.()).toBe(true);
+    replyBackend?.cancel("user_abort");
+    expect(onAttemptAbort).toHaveBeenCalledTimes(1);
+
+    releaseAgentEnd();
+    await expect(run).resolves.toMatchObject({
+      aborted: false,
+      promptError: "codex app-server client closed before turn completed",
+      codexAppServerFailure: {
+        transport: "websocket",
+      },
+    });
+  });
+
+  it("clears a stale binding when completed-turn coverage persistence fails", async () => {
+    const sessionFile = path.join(tempDir, "binding-coverage-failure.jsonl");
+    const workspaceDir = path.join(tempDir, "binding-coverage-workspace");
+    const harness = createStartedThreadHarness();
+    const bindingStore = {
+      ...testCodexAppServerBindingStore,
+      mutate: vi.fn(async (...args: Parameters<typeof testCodexAppServerBindingStore.mutate>) => {
+        const mutation = args[1];
+        if (mutation.kind === "patch" && mutation.patch.historyCoveredThrough) {
+          throw new Error("simulated binding coverage write failure");
+        }
+        return await testCodexAppServerBindingStore.mutate(...args);
+      }),
+    };
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), { bindingStore });
+    await harness.waitForMethod("turn/start");
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await expect(run).resolves.toMatchObject({ promptError: null, aborted: false });
+    expect(bindingStore.mutate).toHaveBeenCalled();
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
   });
 
   it("does not wait for agent_end hooks before resolving channel-backed codex turns", async () => {

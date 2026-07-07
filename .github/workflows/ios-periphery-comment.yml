@@ -27,10 +27,8 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
-            const fs = require("node:fs");
-            const os = require("node:os");
             const path = require("node:path");
-            const childProcess = require("node:child_process");
+            const zlib = require("node:zlib");
 
             const marker = "<!-- openclaw-ios-periphery-dead-code -->";
             const run = context.payload.workflow_run;
@@ -126,10 +124,7 @@ jobs:
                 archive_format: "zip",
               });
 
-              const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ios-periphery-"));
-              const archivePath = path.join(dir, "artifact.zip");
               const archiveBuffer = Buffer.from(archive.data);
-              fs.writeFileSync(archivePath, archiveBuffer);
 
               const allowedArtifactFiles = new Set([
                 "periphery.json",
@@ -240,19 +235,59 @@ jobs:
                   return;
                 }
 
-                entries.set(name, { uncompressedSize });
+                entries.set(name, {
+                  compressedSize,
+                  compressionMethod,
+                  localHeaderOffset: readUInt32(offset + 42),
+                  uncompressedSize,
+                });
                 offset = nextOffset;
               }
 
+              const readZipEntry = (name, entry) => {
+                const localHeaderOffset = entry.localHeaderOffset;
+                if (
+                  localHeaderOffset + 30 > archiveBuffer.length ||
+                  readUInt32(localHeaderOffset) !== 0x04034b50
+                ) {
+                  throw new Error(`${name} has an invalid local header.`);
+                }
+
+                const localNameLength = readUInt16(localHeaderOffset + 26);
+                const localExtraLength = readUInt16(localHeaderOffset + 28);
+                const dataStart = localHeaderOffset + 30 + localNameLength + localExtraLength;
+                const dataEnd = dataStart + entry.compressedSize;
+                if (dataEnd > archiveBuffer.length) {
+                  throw new Error(`${name} exceeds archive bounds.`);
+                }
+
+                const compressed = archiveBuffer.subarray(dataStart, dataEnd);
+                let contents;
+                if (entry.compressionMethod === 0) {
+                  contents = compressed;
+                } else {
+                  try {
+                    contents = zlib.inflateRawSync(compressed, { maxOutputLength: maxEntryBytes });
+                  } catch (error) {
+                    if (error && error.code === "ERR_BUFFER_TOO_LARGE") {
+                      throw new Error(`${name} exceeded the per-file size limit while reading.`);
+                    }
+                    throw error;
+                  }
+                }
+                if (contents.length !== entry.uncompressedSize || contents.length > maxEntryBytes) {
+                  throw new Error(`${name} exceeded the per-file size limit while reading.`);
+                }
+                return contents.toString("utf8");
+              };
+
               const files = new Map();
               for (const [name, entry] of entries) {
-                const contents = childProcess.execFileSync("unzip", ["-p", archivePath, name], {
-                  encoding: "utf8",
-                  maxBuffer: Math.max(1, entry.uncompressedSize + 1024),
-                  timeout: 5000,
-                });
-                if (Buffer.byteLength(contents, "utf8") > maxEntryBytes) {
-                  core.warning(`Skipping ${artifactName}; ${name} exceeded the per-file size limit while reading.`);
+                let contents;
+                try {
+                  contents = readZipEntry(name, entry);
+                } catch (error) {
+                  core.warning(`Skipping ${artifactName}; ${error instanceof Error ? error.message : String(error)}`);
                   return;
                 }
                 files.set(name, contents);
@@ -429,19 +464,31 @@ jobs:
               return;
             }
 
-            if (existing) {
-              await github.rest.issues.updateComment({
+            const writeComment = async () => {
+              if (existing) {
+                await github.rest.issues.updateComment({
+                  owner,
+                  repo,
+                  comment_id: existing.id,
+                  body,
+                });
+                return;
+              }
+
+              await github.rest.issues.createComment({
                 owner,
                 repo,
-                comment_id: existing.id,
+                issue_number: livePull.data.number,
                 body,
               });
-              return;
-            }
+            };
 
-            await github.rest.issues.createComment({
-              owner,
-              repo,
-              issue_number: livePull.data.number,
-              body,
-            });
+            try {
+              await writeComment();
+            } catch (error) {
+              if (error && typeof error === "object" && error.status === 403) {
+                core.warning(`Skipping Periphery PR comment for #${pr.number}; GitHub token cannot write issue comments for this workflow_run.`);
+                return;
+              }
+              throw error;
+            }

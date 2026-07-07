@@ -36,6 +36,7 @@ import {
   handleApprovalWaitDecision,
   handlePendingApprovalRequest,
   bindApprovalRequesterMetadata,
+  bindApprovalReviewerDeviceIds,
   buildRequestedApprovalEvent,
   handleApprovalResolve,
   isApprovalRecordVisibleToClient,
@@ -181,6 +182,7 @@ export function createExecApprovalHandlers(
         turnSourceTo?: string;
         turnSourceAccountId?: string;
         turnSourceThreadId?: string | number;
+        approvalReviewerDeviceIds?: string[];
         requireDeliveryRoute?: boolean;
         suppressDelivery?: boolean;
         timeoutMs?: number;
@@ -336,6 +338,14 @@ export function createExecApprovalHandlers(
       };
       const record = manager.create(request, timeoutMs, explicitId);
       bindApprovalRequesterMetadata({ record, client });
+      if (client?.internal?.approvalRuntime === true) {
+        // Reviewer ids widen approval visibility, so only the server-trusted
+        // approval runtime may bind them onto a pending exec approval.
+        bindApprovalReviewerDeviceIds({
+          record,
+          deviceIds: p.approvalReviewerDeviceIds,
+        });
+      }
       // Use register() to synchronously add to pending map before sending any response.
       // This ensures the approval ID is valid immediately after the "accepted" response.
       const decisionPromise = registerPendingApprovalRecord({

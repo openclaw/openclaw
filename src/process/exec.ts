@@ -3,6 +3,7 @@ import { execFile, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { StringDecoder } from "node:string_decoder";
 import { promisify } from "node:util";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { danger, shouldLogVerbose } from "../globals.js";
@@ -11,49 +12,20 @@ import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
 } from "../infra/windows-encoding.js";
-import { getWindowsInstallRoots } from "../infra/windows-install-roots.js";
+import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { logDebug, logError } from "../logger.js";
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
+import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
 import { killProcessTree as terminateProcessTree } from "./kill-tree.js";
 import { resolveCommandStdio } from "./spawn-utils.js";
-import { resolveWindowsCommandShim } from "./windows-command.js";
+import {
+  buildWindowsCmdExeCommandLine,
+  isWindowsBatchCommand,
+  resolveTrustedWindowsCmdExe,
+  resolveWindowsCommandShim,
+} from "./windows-command.js";
 
 const execFileAsync = promisify(execFile);
-
-const WINDOWS_UNSAFE_CMD_CHARS_RE = /[&|<>^%\r\n]/;
-
-function isWindowsBatchCommand(resolvedCommand: string): boolean {
-  if (process.platform !== "win32") {
-    return false;
-  }
-  const ext = normalizeLowercaseStringOrEmpty(path.extname(resolvedCommand));
-  return ext === ".cmd" || ext === ".bat";
-}
-
-function escapeForCmdExe(arg: string): string {
-  // Reject cmd metacharacters to avoid injection when we must pass a single command line.
-  if (WINDOWS_UNSAFE_CMD_CHARS_RE.test(arg)) {
-    throw new Error(
-      `Unsafe Windows cmd.exe argument detected: ${JSON.stringify(arg)}. ` +
-        "Pass an explicit shell-wrapper argv at the call site instead.",
-    );
-  }
-  // Quote when needed; double inner quotes for cmd parsing.
-  if (!arg.includes(" ") && !arg.includes('"')) {
-    return arg;
-  }
-  return `"${arg.replace(/"/g, '""')}"`;
-}
-
-function buildCmdExeCommandLine(resolvedCommand: string, args: string[]): string {
-  return [escapeForCmdExe(resolvedCommand), ...args.map(escapeForCmdExe)].join(" ");
-}
-
-function resolveTrustedWindowsCmdExe(): string {
-  if (process.platform !== "win32") {
-    return "cmd.exe";
-  }
-  return path.win32.join(getWindowsInstallRoots().systemRoot, "System32", "cmd.exe");
-}
 
 function assignChildEnvValue(params: {
   env: NodeJS.ProcessEnv;
@@ -154,7 +126,7 @@ function resolveChildProcessInvocation(params: {
   return {
     command: useCmdWrapper ? resolveTrustedWindowsCmdExe() : resolvedCommand,
     args: useCmdWrapper
-      ? ["/d", "/s", "/c", buildCmdExeCommandLine(resolvedCommand, finalArgv.slice(1))]
+      ? ["/d", "/s", "/c", buildWindowsCmdExeCommandLine(resolvedCommand, finalArgv.slice(1))]
       : finalArgv.slice(1),
     usesWindowsExitCodeShim:
       process.platform === "win32" && (useCmdWrapper || finalArgv !== params.argv),
@@ -184,9 +156,12 @@ export async function runExec(
 ): Promise<{ stdout: string; stderr: string }> {
   const options =
     typeof opts === "number"
-      ? { timeout: opts, encoding: "buffer" as const }
+      ? { timeout: resolveTimerTimeoutMs(opts, 1), encoding: "buffer" as const }
       : {
-          timeout: opts.timeoutMs,
+          timeout:
+            typeof opts.timeoutMs === "number"
+              ? resolveTimerTimeoutMs(opts.timeoutMs, 1)
+              : undefined,
           maxBuffer: opts.maxBuffer,
           cwd: opts.cwd,
           encoding: "buffer" as const,
@@ -240,6 +215,8 @@ export type SpawnResult = {
   stderr: string;
   stdoutTruncatedBytes?: number;
   stderrTruncatedBytes?: number;
+  preservedStdoutLines?: string[];
+  preservedStderrLines?: string[];
   code: number | null;
   signal: NodeJS.Signals | null;
   killed: boolean;
@@ -257,6 +234,8 @@ export type CommandOptions = {
   noOutputTimeoutMs?: number;
   signal?: AbortSignal;
   maxOutputBytes?: number;
+  maxPreservedOutputLines?: number;
+  preserveOutputLine?: (line: string, stream: "stdout" | "stderr") => boolean;
   killProcessTree?: boolean;
 };
 
@@ -265,11 +244,15 @@ const WINDOWS_CLOSE_STATE_POLL_MS = 10;
 const COMMAND_PROCESS_TREE_KILL_GRACE_MS = 300;
 const TIMEOUT_EXIT_CODE = 124;
 const DEFAULT_COMMAND_OUTPUT_MAX_BYTES = 16 * 1024 * 1024;
+const MAX_PRESERVED_PENDING_LINE_BYTES = 8 * 1024;
 
 type CapturedOutputBuffers = {
   chunks: Buffer[];
   bytes: number;
   truncatedBytes: number;
+  preservedLines: string[];
+  decoder: StringDecoder;
+  pendingLine: string;
 };
 
 function normalizeMaxOutputBytes(value: number | undefined): number {
@@ -306,6 +289,66 @@ function appendCapturedOutput(
       capture.bytes -= overflow;
       capture.truncatedBytes += overflow;
     }
+  }
+}
+
+function trimPreservedPendingLine(value: string, maxBytes: number): string {
+  return truncateUtf8Suffix(value, maxBytes);
+}
+
+function appendPreservedOutputLines(params: {
+  capture: CapturedOutputBuffers;
+  chunk: Buffer | string;
+  stream: "stdout" | "stderr";
+  preserveOutputLine?: CommandOptions["preserveOutputLine"];
+  maxPreservedOutputLines: number;
+  maxPendingLineBytes: number;
+}): void {
+  if (!params.preserveOutputLine || params.maxPreservedOutputLines <= 0) {
+    return;
+  }
+  const text = Buffer.isBuffer(params.chunk)
+    ? params.capture.decoder.write(params.chunk)
+    : params.chunk;
+  if (!text) {
+    return;
+  }
+  const lines = (params.capture.pendingLine + text).split(/\r?\n/);
+  params.capture.pendingLine = trimPreservedPendingLine(
+    lines.pop() ?? "",
+    params.maxPendingLineBytes,
+  );
+  for (const line of lines) {
+    if (
+      params.capture.preservedLines.length < params.maxPreservedOutputLines &&
+      params.preserveOutputLine(line, params.stream)
+    ) {
+      params.capture.preservedLines.push(line);
+    }
+  }
+}
+
+function flushPreservedOutputLine(params: {
+  capture: CapturedOutputBuffers;
+  stream: "stdout" | "stderr";
+  preserveOutputLine?: CommandOptions["preserveOutputLine"];
+  maxPreservedOutputLines: number;
+  maxPendingLineBytes: number;
+}): void {
+  if (!params.preserveOutputLine || params.maxPreservedOutputLines <= 0) {
+    return;
+  }
+  const trailing = trimPreservedPendingLine(
+    params.capture.pendingLine + params.capture.decoder.end(),
+    params.maxPendingLineBytes,
+  );
+  params.capture.pendingLine = "";
+  if (
+    trailing &&
+    params.capture.preservedLines.length < params.maxPreservedOutputLines &&
+    params.preserveOutputLine(trailing, params.stream)
+  ) {
+    params.capture.preservedLines.push(trailing);
   }
 }
 export function resolveProcessExitCode(params: {
@@ -373,6 +416,7 @@ export async function runCommandWithTimeout(
     typeof optionsOrTimeout === "number" ? { timeoutMs: optionsOrTimeout } : optionsOrTimeout;
   const { timeoutMs, cwd, input, baseEnv, env, noOutputTimeoutMs, signal, killProcessTree } =
     options;
+  const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
   const hasInput = input !== undefined;
   const resolvedEnv = resolveCommandEnv({ argv, baseEnv, env });
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
@@ -408,9 +452,25 @@ export async function runCommandWithTimeout(
   });
   // Spawn with inherited stdin (TTY) so interactive tools stay usable when needed.
   return await new Promise((resolve, reject) => {
-    const stdoutCapture: CapturedOutputBuffers = { chunks: [], bytes: 0, truncatedBytes: 0 };
-    const stderrCapture: CapturedOutputBuffers = { chunks: [], bytes: 0, truncatedBytes: 0 };
+    const stdoutCapture: CapturedOutputBuffers = {
+      chunks: [],
+      bytes: 0,
+      truncatedBytes: 0,
+      preservedLines: [],
+      decoder: new StringDecoder("utf8"),
+      pendingLine: "",
+    };
+    const stderrCapture: CapturedOutputBuffers = {
+      chunks: [],
+      bytes: 0,
+      truncatedBytes: 0,
+      preservedLines: [],
+      decoder: new StringDecoder("utf8"),
+      pendingLine: "",
+    };
     const maxOutputBytes = normalizeMaxOutputBytes(options.maxOutputBytes);
+    const maxPreservedPendingLineBytes = Math.min(maxOutputBytes, MAX_PRESERVED_PENDING_LINE_BYTES);
+    const maxPreservedOutputLines = Math.max(0, Math.floor(options.maxPreservedOutputLines ?? 16));
     const windowsEncoding = resolveWindowsConsoleEncoding();
     let settled = false;
     let timedOut = false;
@@ -425,6 +485,9 @@ export async function runCommandWithTimeout(
       typeof noOutputTimeoutMs === "number" &&
       Number.isFinite(noOutputTimeoutMs) &&
       noOutputTimeoutMs > 0;
+    const resolvedNoOutputTimeoutMs = shouldTrackOutputTimeout
+      ? resolveTimerTimeoutMs(noOutputTimeoutMs, 1)
+      : undefined;
     let removeAbortListener: (() => void) | null = null;
 
     const clearNoOutputTimer = () => {
@@ -451,6 +514,32 @@ export async function runCommandWithTimeout(
       processTreeForceKillTimer = null;
     };
 
+    const killDirectChild = () => {
+      if (
+        settled ||
+        childExitState != null ||
+        child.exitCode != null ||
+        child.signalCode != null
+      ) {
+        return;
+      }
+      child.kill("SIGKILL");
+    };
+
+    const spawnTaskkillOrFallback = (args: string[], onSpawnError: () => void): boolean => {
+      try {
+        const taskkillChild = spawn(getWindowsSystem32ExePath("taskkill.exe"), args, {
+          stdio: "ignore",
+          windowsHide: true,
+        });
+        taskkillChild.once("error", onSpawnError);
+        return true;
+      } catch {
+        onSpawnError();
+        return false;
+      }
+    };
+
     const killChild = (byTimeout = true) => {
       if (settled || typeof child?.kill !== "function") {
         return;
@@ -460,17 +549,16 @@ export async function runCommandWithTimeout(
       } else {
         killIssuedByAbort = true;
       }
-      if (
-        killProcessTree &&
-        typeof child.pid === "number" &&
-        child.pid > 0
-      ) {
+      if (killProcessTree && typeof child.pid === "number" && child.pid > 0) {
         if (process.platform === "win32") {
-          try {
-            spawn("taskkill", ["/PID", String(child.pid), "/T"], {
-              stdio: "ignore",
-              windowsHide: true,
-            });
+          const taskkillStarted = spawnTaskkillOrFallback(
+            ["/PID", String(child.pid), "/T"],
+            () => {
+              clearProcessTreeForceKillTimer();
+              killDirectChild();
+            },
+          );
+          if (taskkillStarted) {
             if (!processTreeForceKillTimer) {
               processTreeForceKillTimer = setTimeout(() => {
                 processTreeForceKillTimer = null;
@@ -482,37 +570,24 @@ export async function runCommandWithTimeout(
                 ) {
                   return;
                 }
-                try {
-                  spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
-                    stdio: "ignore",
-                    windowsHide: true,
-                  });
-                } catch {
-                  child.kill("SIGKILL");
-                }
+                spawnTaskkillOrFallback(
+                  ["/PID", String(child.pid), "/T", "/F"],
+                  killDirectChild,
+                );
               }, COMMAND_PROCESS_TREE_KILL_GRACE_MS);
               processTreeForceKillTimer.unref();
             }
-            return;
-          } catch {
-            // Fall through to Node's direct child kill as a last resort.
           }
+          return;
         }
         terminateProcessTree(child.pid, { graceMs: COMMAND_PROCESS_TREE_KILL_GRACE_MS });
         return;
       }
       if (process.platform === "win32" && typeof child.pid === "number" && child.pid > 0) {
-        try {
-          spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
-            stdio: "ignore",
-            windowsHide: true,
-          });
-          return;
-        } catch {
-          // Fall through to Node's direct child kill as a last resort.
-        }
+        spawnTaskkillOrFallback(["/PID", String(child.pid), "/T", "/F"], killDirectChild);
+        return;
       }
-      child.kill("SIGKILL");
+      killDirectChild();
     };
 
     const armNoOutputTimer = () => {
@@ -526,13 +601,13 @@ export async function runCommandWithTimeout(
         }
         noOutputTimedOut = true;
         killChild();
-      }, Math.floor(noOutputTimeoutMs));
+      }, resolvedNoOutputTimeoutMs);
     };
 
     const timer = setTimeout(() => {
       timedOut = true;
       killChild();
-    }, timeoutMs);
+    }, resolvedTimeoutMs);
     armNoOutputTimer();
     if (signal) {
       const onAbort = () => killChild(false);
@@ -548,11 +623,31 @@ export async function runCommandWithTimeout(
       child.stdin.end();
     }
 
+    // Output pipes may fail independently; child exit/close remains authoritative.
+    const ignoreOutputStreamError = () => {};
+    child.stdout?.on("error", ignoreOutputStreamError);
+    child.stderr?.on("error", ignoreOutputStreamError);
     child.stdout?.on("data", (d) => {
+      appendPreservedOutputLines({
+        capture: stdoutCapture,
+        chunk: d,
+        stream: "stdout",
+        preserveOutputLine: options.preserveOutputLine,
+        maxPreservedOutputLines,
+        maxPendingLineBytes: maxPreservedPendingLineBytes,
+      });
       appendCapturedOutput(stdoutCapture, d, maxOutputBytes);
       armNoOutputTimer();
     });
     child.stderr?.on("data", (d) => {
+      appendPreservedOutputLines({
+        capture: stderrCapture,
+        chunk: d,
+        stream: "stderr",
+        preserveOutputLine: options.preserveOutputLine,
+        maxPreservedOutputLines,
+        maxPendingLineBytes: maxPreservedPendingLineBytes,
+      });
       appendCapturedOutput(stderrCapture, d, maxOutputBytes);
       armNoOutputTimer();
     });
@@ -618,6 +713,20 @@ export async function runCommandWithTimeout(
             ? TIMEOUT_EXIT_CODE
             : resolvedCode
           : resolvedCode;
+      flushPreservedOutputLine({
+        capture: stdoutCapture,
+        stream: "stdout",
+        preserveOutputLine: options.preserveOutputLine,
+        maxPreservedOutputLines,
+        maxPendingLineBytes: maxPreservedPendingLineBytes,
+      });
+      flushPreservedOutputLine({
+        capture: stderrCapture,
+        stream: "stderr",
+        preserveOutputLine: options.preserveOutputLine,
+        maxPreservedOutputLines,
+        maxPendingLineBytes: maxPreservedPendingLineBytes,
+      });
       resolve({
         pid: child.pid ?? undefined,
         stdout: decodeWindowsOutputBuffer({
@@ -630,6 +739,10 @@ export async function runCommandWithTimeout(
         }),
         stdoutTruncatedBytes: stdoutCapture.truncatedBytes || undefined,
         stderrTruncatedBytes: stderrCapture.truncatedBytes || undefined,
+        preservedStdoutLines:
+          stdoutCapture.preservedLines.length > 0 ? stdoutCapture.preservedLines : undefined,
+        preservedStderrLines:
+          stderrCapture.preservedLines.length > 0 ? stderrCapture.preservedLines : undefined,
         code: normalizedCode,
         signal: resolvedSignal,
         killed: child.killed,

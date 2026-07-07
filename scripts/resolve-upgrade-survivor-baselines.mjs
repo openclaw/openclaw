@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { normalizeUpgradeSurvivorBaselineSpec } from "./lib/docker-e2e-plan.mjs";
 import { compareReleaseVersions, parseReleaseVersion } from "./lib/npm-publish-plan.mjs";
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const args = new Map();
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -14,7 +14,7 @@ function parseArgs(argv) {
     }
     const key = arg.slice(2);
     const value = argv[index + 1];
-    if (value === undefined || value.startsWith("--")) {
+    if (value === undefined || value.startsWith("-")) {
       throw new Error(`missing value for --${key}`);
     }
     args.set(key, value);

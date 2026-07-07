@@ -23,7 +23,6 @@ struct VoiceWakeSettings: View {
     @State private var meterStartupTask: Task<Void, Never>?
     @State private var availableLocales: [Locale] = []
     @State private var triggerEntries: [TriggerEntry] = []
-    private let fieldLabelWidth: CGFloat = 140
     private let controlWidth: CGFloat = 240
     private let isPreview = ProcessInfo.processInfo.isPreview
 

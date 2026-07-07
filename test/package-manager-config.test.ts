@@ -61,6 +61,7 @@ describe("package manager build policy", () => {
 
     expect(packageJson.pnpm).toBeUndefined();
     expect(workspace.allowBuilds?.["@discordjs/opus"]).toBe(false);
+    expect(workspace.allowBuilds?.["node-llama-cpp"]).toBe(false);
     expect(workspace.blockExoticSubdeps).toBe(true);
     expect(workspace.onlyBuiltDependencies).toBeUndefined();
   });
@@ -69,6 +70,17 @@ describe("package manager build policy", () => {
     const packageJson = readJson("package.json") as RootPackageJson;
 
     expect(packageJson.files).toContain("THIRD_PARTY_NOTICES.md");
+  });
+
+  it("includes the Crabbox wrapper runtime modules in the published root package", () => {
+    const packageJson = readJson("package.json") as RootPackageJson;
+
+    expect(packageJson.files).toEqual(
+      expect.arrayContaining([
+        "scripts/crabbox-wrapper.mjs",
+        "scripts/crabbox-wrapper-providers.mjs",
+      ]),
+    );
   });
 
   it("keeps npm shrinkwrap aligned with workspace overrides", () => {

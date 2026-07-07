@@ -1,8 +1,15 @@
 // Child adapter tests cover adapting child processes to supervisor runs.
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import {
+  getWindowsInstallRoots,
+  resetWindowsInstallRootsForTests,
+} from "../../../infra/windows-install-roots.js";
 import {
   expectRealExitWinsOverSigkillFallback,
   expectWaitStaysPendingUntilSigkillFallback,
@@ -32,6 +39,7 @@ vi.mock("../../../infra/windows-encoding.js", () => ({
 }));
 
 let createChildAdapter: typeof import("./child.js").createChildAdapter;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createStubChild(pid = 1234) {
   const child = new EventEmitter() as ChildProcess;
@@ -83,6 +91,8 @@ type SpawnWithFallbackParams = {
     detached?: boolean;
     env?: NodeJS.ProcessEnv | Record<string, string>;
     stdio?: string[];
+    windowsHide?: boolean;
+    windowsVerbatimArguments?: boolean;
   };
   fallbacks?: Array<{ options?: { detached?: boolean } }>;
 };
@@ -107,6 +117,10 @@ function firstMockArg(mock: { mock: { calls: readonly unknown[][] } }, label: st
   return call[0];
 }
 
+function expectedTrustedCmdExe(): string {
+  return path.win32.join(getWindowsInstallRoots().systemRoot, "System32", "cmd.exe");
+}
+
 describe("createChildAdapter", () => {
   const originalServiceMarker = process.env.OPENCLAW_SERVICE_MARKER;
   const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
@@ -123,6 +137,7 @@ describe("createChildAdapter", () => {
   });
 
   beforeEach(() => {
+    resetWindowsInstallRootsForTests({ queryRegistryValue: () => null });
     spawnWithFallbackMock.mockClear();
     signalProcessTreeMock.mockClear();
     createWindowsOutputDecoderMock.mockClear();
@@ -148,6 +163,25 @@ describe("createChildAdapter", () => {
     }
     vi.useRealTimers();
   });
+
+  const createWindowsNpmShim = async (params: { command: string; packagePath: string[] }) => {
+    const binDir = tempDirs.make("openclaw-child-shim-");
+    const entrypoint = path.join(binDir, "node_modules", ...params.packagePath);
+    await mkdir(path.dirname(entrypoint), { recursive: true });
+    await writeFile(entrypoint, "", "utf8");
+    const relativeEntrypoint = path.relative(binDir, entrypoint).replaceAll(path.sep, "\\");
+    const shimHead =
+      "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n";
+    const shimCommand = entrypoint.endsWith(".exe")
+      ? `"%dp0%\\${relativeEntrypoint}" %*\r\n`
+      : `IF EXIST "%dp0%\\node.exe" (\r\n  SET "_prog=%dp0%\\node.exe"\r\n) ELSE (\r\n  SET "_prog=node"\r\n)\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%" "%dp0%\\${relativeEntrypoint}" %*\r\n`;
+    await writeFile(
+      path.join(binDir, `${params.command}.cmd`),
+      `${shimHead}${shimCommand}`,
+      "utf8",
+    );
+    return { binDir, entrypoint };
+  };
 
   it("uses process-tree kill for default SIGKILL", async () => {
     const { adapter, killMock } = await createAdapterHarness({ pid: 4321 });
@@ -390,6 +424,71 @@ describe("createChildAdapter", () => {
     expect(spawnArgs.options?.env).toBeUndefined();
   });
 
+  it("wraps Windows command shims through trusted cmd.exe", async () => {
+    setPlatform("win32");
+
+    await createAdapterHarness({
+      pid: 3335,
+      argv: ["pnpm", "--version"],
+      env: { PATH: "", PATHEXT: ".EXE;.CMD;.BAT" },
+    });
+
+    const spawnArgs = firstSpawnWithFallbackParams();
+    expect(spawnArgs.argv).toEqual([
+      expectedTrustedCmdExe(),
+      "/d",
+      "/s",
+      "/c",
+      "pnpm.cmd --version",
+    ]);
+    expect(spawnArgs.options?.detached).toBe(false);
+    expect(spawnArgs.options?.windowsHide).toBe(true);
+    expect(spawnArgs.options?.windowsVerbatimArguments).toBe(true);
+    expect(spawnArgs.fallbacks).toStrictEqual([]);
+  });
+
+  it("unwraps Gemini's npm shim and preserves prompt argv on Windows", async () => {
+    setPlatform("win32");
+    const { binDir, entrypoint } = await createWindowsNpmShim({
+      command: "gemini",
+      packagePath: ["@google", "gemini-cli", "bundle", "gemini.js"],
+    });
+    const nodePath = path.join(binDir, "node.exe");
+    await writeFile(nodePath, "", "utf8");
+    const prompt = "explain A&B | C > D and 100% coverage";
+
+    await createAdapterHarness({
+      pid: 3336,
+      argv: ["gemini", "--prompt", prompt],
+      env: { PATH: binDir, PATHEXT: ".EXE;.CMD;.BAT" },
+    });
+
+    const spawnArgs = firstSpawnWithFallbackParams();
+    expect(spawnArgs.argv?.[0]?.toLowerCase()).toBe(nodePath.toLowerCase());
+    expect(spawnArgs.argv?.slice(1)).toEqual([entrypoint, "--prompt", prompt]);
+    expect(spawnArgs.options?.windowsVerbatimArguments).toBeUndefined();
+    expect(spawnArgs.fallbacks).toStrictEqual([]);
+  });
+
+  it("unwraps Claude's npm shim to its native executable on Windows", async () => {
+    setPlatform("win32");
+    const { binDir, entrypoint } = await createWindowsNpmShim({
+      command: "claude",
+      packagePath: ["@anthropic-ai", "claude-code", "bin", "claude.exe"],
+    });
+
+    await createAdapterHarness({
+      pid: 3337,
+      argv: ["claude", "--version"],
+      env: { PATH: binDir, PATHEXT: ".EXE;.CMD;.BAT" },
+    });
+
+    const spawnArgs = firstSpawnWithFallbackParams();
+    expect(spawnArgs.argv).toEqual([entrypoint, "--version"]);
+    expect(spawnArgs.options?.windowsVerbatimArguments).toBeUndefined();
+    expect(spawnArgs.fallbacks).toStrictEqual([]);
+  });
+
   it("wraps Linux child spawns and strips shell-init env", async () => {
     const originalBashEnv = process.env.BASH_ENV;
     const originalEnv = process.env.ENV;
@@ -476,5 +575,43 @@ describe("createChildAdapter", () => {
     expect(createWindowsOutputDecoderMock).toHaveBeenCalledTimes(2);
     expect(first).toHaveBeenCalledWith("first");
     expect(second).toHaveBeenCalledWith("second");
+  });
+
+  it("guards stream errors before output listeners are registered", async () => {
+    vi.useFakeTimers();
+    setPlatform("win32");
+    const { child, emitExit } = createStubChild(6666);
+    spawnWithFallbackMock.mockResolvedValue({
+      child,
+      usedFallback: false,
+    });
+    const adapter = await createChildAdapter({
+      argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
+      stdinMode: "pipe-open",
+    });
+
+    const stdoutErr = new Error("simulated stdout pipe error");
+    const stderrErr = new Error("simulated stderr pipe error");
+    const settled = vi.fn();
+    void adapter.wait().then(settled);
+
+    emitExit(0, null);
+    expect(() => child.stdout?.emit("error", stdoutErr)).not.toThrow();
+    expect(() => child.stderr?.emit("error", stderrErr)).not.toThrow();
+    await vi.advanceTimersByTimeAsync(300);
+    expect(settled).not.toHaveBeenCalled();
+
+    adapter.onStdout(() => {});
+    adapter.onStdout(() => {});
+    adapter.onStderr(() => {});
+    adapter.onStderr(() => {});
+
+    expect(child.stdout?.listenerCount("error")).toBe(1);
+    expect(child.stderr?.listenerCount("error")).toBe(1);
+
+    child.stdout?.emit("close");
+    child.stderr?.emit("close");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toHaveBeenCalledWith({ code: 0, signal: null });
   });
 });

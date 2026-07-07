@@ -8,6 +8,7 @@ import {
   FILE_TYPE_SNIFF_MAX_BYTES,
   imageMimeFromFormat,
   isAudioFileName,
+  isGifMedia,
   kindFromMime,
   mimeTypeFromFilePath,
   normalizeMimeType,
@@ -190,6 +191,8 @@ describe("mimeTypeFromFilePath", () => {
     { filePath: "photo.jpg", expected: "image/jpeg" },
     { filePath: "photo.JPG", expected: "image/jpeg" },
     { filePath: "voice.mp3", expected: "audio/mpeg" },
+    { filePath: "voice.m2a", expected: "audio/mpeg" },
+    { filePath: "voice.oga", expected: "audio/ogg" },
     { filePath: "voice.wav", expected: "audio/wav" },
     { filePath: "clip.avi", expected: "video/x-msvideo" },
     { filePath: "clip.mkv", expected: "video/x-matroska" },
@@ -265,9 +268,35 @@ describe("isAudioFileName", () => {
   it.each([
     { fileName: "voice.mp3", expected: true },
     { fileName: "voice.caf", expected: true },
+    { fileName: "voice.M2A", expected: true },
+    { fileName: "voice.oga", expected: true },
+    { fileName: "voice.webm", expected: false },
     { fileName: "voice.bin", expected: false },
   ] as const)("matches audio extension for $fileName", ({ fileName, expected }) => {
     expectAudioFileNameCase(fileName, expected);
+  });
+});
+
+describe("isGifMedia", () => {
+  it.each([
+    {
+      opts: { contentType: "image/gif; charset=binary" },
+      expected: true,
+    },
+    {
+      opts: { contentType: " IMAGE/GIF " },
+      expected: true,
+    },
+    {
+      opts: { contentType: "image/png" },
+      expected: false,
+    },
+    {
+      opts: { fileName: "animation.GIF" },
+      expected: true,
+    },
+  ] as const)("detects GIF media from normalized metadata %#", ({ opts, expected }) => {
+    expect(isGifMedia(opts)).toBe(expected);
   });
 });
 

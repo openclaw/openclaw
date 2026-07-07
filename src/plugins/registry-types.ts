@@ -39,10 +39,11 @@ type ImageGenerationProviderPlugin = import("./types.js").ImageGenerationProvide
 type MediaUnderstandingProviderPlugin = import("./types.js").MediaUnderstandingProviderPlugin;
 type TranscriptSourceProvider = import("./types.js").TranscriptSourceProvider;
 type MusicGenerationProviderPlugin = import("./types.js").MusicGenerationProviderPlugin;
-type OpenClawPluginChannelRegistration = import("./types.js").OpenClawPluginChannelRegistration;
 type OpenClawPluginCliCommandDescriptor = import("./types.js").OpenClawPluginCliCommandDescriptor;
 type OpenClawPluginCliRegistrar = import("./types.js").OpenClawPluginCliRegistrar;
 type OpenClawPluginCommandDefinition = import("./types.js").OpenClawPluginCommandDefinition;
+type PluginInteractiveHandlerRegistration =
+  import("./types.js").PluginInteractiveHandlerRegistration;
 type OpenClawPluginGatewayRuntimeScopeSurface =
   import("./types.js").OpenClawPluginGatewayRuntimeScopeSurface;
 type OpenClawGatewayDiscoveryService = import("./types.js").OpenClawGatewayDiscoveryService;
@@ -296,6 +297,12 @@ export type PluginCommandRegistration = {
   rootDir?: string;
 };
 
+export type PluginInteractiveHandlerRegistryRegistration = PluginInteractiveHandlerRegistration & {
+  pluginId: string;
+  pluginName?: string;
+  pluginRoot?: string;
+};
+
 export type PluginSessionExtensionRegistryRegistration = {
   pluginId: string;
   pluginName?: string;
@@ -441,7 +448,7 @@ export type PluginRegistry = {
   channelSetups: PluginChannelSetupRegistration[];
   providers: PluginProviderRegistration[];
   modelCatalogProviders: PluginModelCatalogProviderRegistration[];
-  cliBackends?: PluginCliBackendRegistration[];
+  cliBackends: PluginCliBackendRegistration[];
   textTransforms: PluginTextTransformsRegistration[];
   embeddingProviders: PluginEmbeddingProviderRegistration[];
   speechProviders: PluginSpeechProviderRegistration[];
@@ -461,25 +468,26 @@ export type PluginRegistry = {
   agentHarnesses: PluginAgentHarnessRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
   gatewayMethodDescriptors: GatewayMethodDescriptor[];
-  coreGatewayMethodNames?: string[];
+  coreGatewayMethodNames: string[];
   httpRoutes: PluginHttpRouteRegistration[];
-  hostedMediaResolvers?: PluginHostedMediaResolverRegistration[];
+  hostedMediaResolvers: PluginHostedMediaResolverRegistration[];
   cliRegistrars: PluginCliRegistration[];
-  reloads?: PluginReloadRegistration[];
-  nodeHostCommands?: PluginNodeHostCommandRegistration[];
-  nodeInvokePolicies?: PluginNodeInvokePolicyRegistration[];
-  securityAuditCollectors?: PluginSecurityAuditCollectorRegistration[];
+  reloads: PluginReloadRegistration[];
+  nodeHostCommands: PluginNodeHostCommandRegistration[];
+  nodeInvokePolicies: PluginNodeInvokePolicyRegistration[];
+  securityAuditCollectors: PluginSecurityAuditCollectorRegistration[];
   services: PluginServiceRegistration[];
   gatewayDiscoveryServices: PluginGatewayDiscoveryServiceRegistration[];
   commands: PluginCommandRegistration[];
-  sessionExtensions?: PluginSessionExtensionRegistryRegistration[];
-  trustedToolPolicies?: PluginTrustedToolPolicyRegistryRegistration[];
-  toolMetadata?: PluginToolMetadataRegistryRegistration[];
-  controlUiDescriptors?: PluginControlUiDescriptorRegistryRegistration[];
-  runtimeLifecycles?: PluginRuntimeLifecycleRegistryRegistration[];
-  agentEventSubscriptions?: PluginAgentEventSubscriptionRegistryRegistration[];
-  sessionSchedulerJobs?: PluginSessionSchedulerJobRegistryRegistration[];
-  sessionActions?: PluginSessionActionRegistryRegistration[];
+  interactiveHandlers: PluginInteractiveHandlerRegistryRegistration[];
+  sessionExtensions: PluginSessionExtensionRegistryRegistration[];
+  trustedToolPolicies: PluginTrustedToolPolicyRegistryRegistration[];
+  toolMetadata: PluginToolMetadataRegistryRegistration[];
+  controlUiDescriptors: PluginControlUiDescriptorRegistryRegistration[];
+  runtimeLifecycles: PluginRuntimeLifecycleRegistryRegistration[];
+  agentEventSubscriptions: PluginAgentEventSubscriptionRegistryRegistration[];
+  sessionSchedulerJobs: PluginSessionSchedulerJobRegistryRegistration[];
+  sessionActions: PluginSessionActionRegistryRegistration[];
   conversationBindingResolvedHandlers: PluginConversationBindingResolvedHandlerRegistration[];
   diagnostics: PluginDiagnostic[];
 };
@@ -503,5 +511,3 @@ export type OpenClawPluginHttpRouteParams = import("./types.js").OpenClawPluginH
 export type OpenClawPluginHookOptions = import("./types.js").OpenClawPluginHookOptions;
 export type PluginHookHandlerMap = import("./types.js").PluginHookHandlerMap;
 export type OpenClawPluginApi = import("./types.js").OpenClawPluginApi;
-export type TypedPluginHook = TypedPluginHookRegistration;
-export type OpenClawPluginChannelReg = OpenClawPluginChannelRegistration;

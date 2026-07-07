@@ -3,6 +3,10 @@ import { Type } from "typebox";
 import { GatewayClientIdSchema, GatewayClientModeSchema, NonEmptyString } from "./primitives.js";
 import { SnapshotSchema, StateVersionSchema } from "./snapshot.js";
 
+export const GATEWAY_SERVER_CAPS = {
+  CHAT_SEND_ROUTING_CONTRACT: "chat-send-routing-contract",
+} as const;
+
 /**
  * Top-level gateway frame schemas.
  *
@@ -70,6 +74,7 @@ export const ConnectParamsSchema = Type.Object(
           deviceToken: Type.Optional(Type.String()),
           password: Type.Optional(Type.String()),
           approvalRuntimeToken: Type.Optional(Type.String()),
+          agentRuntimeIdentityToken: Type.Optional(Type.String()),
         },
         { additionalProperties: false },
       ),
@@ -96,10 +101,29 @@ export const HelloOkSchema = Type.Object(
       {
         methods: Type.Array(NonEmptyString),
         events: Type.Array(NonEmptyString),
+        capabilities: Type.Optional(Type.Array(NonEmptyString)),
       },
       { additionalProperties: false },
     ),
     snapshot: SnapshotSchema,
+    // Additive: plugin-declared Control UI tabs (surface "tab" descriptors).
+    controlUiTabs: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            pluginId: NonEmptyString,
+            id: NonEmptyString,
+            label: NonEmptyString,
+            description: Type.Optional(Type.String()),
+            icon: Type.Optional(Type.String()),
+            path: Type.Optional(Type.String()),
+            group: Type.Optional(Type.Union([Type.Literal("control"), Type.Literal("agent")])),
+            order: Type.Optional(Type.Number()),
+          },
+          { additionalProperties: false },
+        ),
+      ),
+    ),
     pluginSurfaceUrls: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
     auth: Type.Object(
       {

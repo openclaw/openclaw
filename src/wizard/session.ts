@@ -1,16 +1,17 @@
 // Wizard session helpers track onboarding session ids and state.
 import { randomUUID } from "node:crypto";
+import { createDeferred, type Deferred } from "../shared/deferred.js";
 import { WizardCancelledError, type WizardProgress, type WizardPrompter } from "./prompts.js";
 
 // WizardSession exposes interactive setup as a step/answer protocol for remote
 // clients while reusing the same WizardPrompter contract as the local CLI.
-type WizardStepOption = {
+export type WizardStepOption = {
   value: unknown;
   label: string;
   hint?: string;
 };
 
-type WizardStep = {
+export type WizardStep = {
   id: string;
   type: "note" | "select" | "text" | "confirm" | "multiselect" | "progress" | "action";
   title?: string;
@@ -32,20 +33,17 @@ type WizardNextResult = {
   error?: string;
 };
 
-type Deferred<T> = {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-  reject: (err: unknown) => void;
-};
-
-function createDeferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  let reject!: (err: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
+function normalizeTextAnswer(value: unknown): string | undefined {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value);
+  }
+  return undefined;
 }
 
 class WizardSessionPrompter implements WizardPrompter {
@@ -122,14 +120,18 @@ class WizardSessionPrompter implements WizardPrompter {
     validate?: (value: string) => string | undefined;
     sensitive?: boolean;
   }): Promise<string> {
-    const res = await this.prompt({
-      type: "text",
-      message: params.message,
-      initialValue: params.initialValue,
-      placeholder: params.placeholder,
-      sensitive: params.sensitive,
-      executor: "client",
-    });
+    const res = await this.session.awaitAnswer(
+      {
+        type: "text",
+        message: params.message,
+        initialValue: params.initialValue,
+        placeholder: params.placeholder,
+        sensitive: params.sensitive,
+        executor: "client",
+        id: randomUUID(),
+      },
+      params.validate,
+    );
     const value =
       res === null || res === undefined
         ? ""
@@ -138,14 +140,10 @@ class WizardSessionPrompter implements WizardPrompter {
           : typeof res === "number" || typeof res === "boolean" || typeof res === "bigint"
             ? String(res)
             : "";
-    const error = params.validate?.(value);
-    if (error) {
-      throw new Error(error);
-    }
     return value;
   }
 
-  async confirm(params: { message: string; initialValue?: boolean }): Promise<boolean> {
+  async confirm(params: Parameters<WizardPrompter["confirm"]>[0]): Promise<boolean> {
     const res = await this.prompt({
       type: "confirm",
       message: params.message,
@@ -176,7 +174,14 @@ export class WizardSession {
   private currentStep: WizardStep | null = null;
   private stepDeferred: Deferred<WizardStep | null> | null = null;
   private pendingTerminalResolution = false;
-  private answerDeferred = new Map<string, Deferred<unknown>>();
+  private answerDeferred = new Map<
+    string,
+    {
+      deferred: Deferred<unknown>;
+      text: boolean;
+      validate?: (value: string) => string | undefined;
+    }
+  >();
   private status: WizardSessionStatus = "running";
   private error: string | undefined;
 
@@ -206,14 +211,23 @@ export class WizardSession {
     return { done: true, status: this.status, error: this.error };
   }
 
-  async answer(stepId: string, value: unknown): Promise<void> {
-    const deferred = this.answerDeferred.get(stepId);
-    if (!deferred) {
+  async answer(stepId: string, value: unknown): Promise<string | undefined> {
+    const pending = this.answerDeferred.get(stepId);
+    if (!pending) {
       throw new Error("wizard: no pending step");
+    }
+    const normalizedValue = pending.text ? normalizeTextAnswer(value) : value;
+    if (pending.text && normalizedValue === undefined) {
+      return "wizard: text answer must be a scalar value";
+    }
+    const validationError = pending.validate?.(normalizedValue as string) ?? undefined;
+    if (validationError) {
+      return validationError;
     }
     this.answerDeferred.delete(stepId);
     this.currentStep = null;
-    deferred.resolve(value);
+    pending.deferred.resolve(normalizedValue);
+    return undefined;
   }
 
   cancel() {
@@ -223,10 +237,10 @@ export class WizardSession {
     this.status = "cancelled";
     this.error = "cancelled";
     this.currentStep = null;
-    for (const [, deferred] of this.answerDeferred) {
+    for (const [, pending] of this.answerDeferred) {
       // Reject all pending prompt promises so the runner can unwind through its
       // normal cancellation path.
-      deferred.reject(new WizardCancelledError());
+      pending.deferred.reject(new WizardCancelledError());
     }
     this.answerDeferred.clear();
     this.resolveStep(null);
@@ -254,13 +268,16 @@ export class WizardSession {
     }
   }
 
-  async awaitAnswer(step: WizardStep): Promise<unknown> {
+  async awaitAnswer(
+    step: WizardStep,
+    validate?: (value: string) => string | undefined,
+  ): Promise<unknown> {
     if (this.status !== "running") {
       throw new Error("wizard: session not running");
     }
     this.pushStep(step);
     const deferred = createDeferred<unknown>();
-    this.answerDeferred.set(step.id, deferred);
+    this.answerDeferred.set(step.id, { deferred, text: step.type === "text", validate });
     return await deferred.promise;
   }
 

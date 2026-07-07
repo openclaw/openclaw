@@ -1,4 +1,5 @@
 // Plugin runtime types describe activated plugin capabilities exposed to core execution.
+import type { OperatorScope } from "../../gateway/operator-scopes.js";
 import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
 
 export type { RuntimeLogger };
@@ -17,6 +18,13 @@ export type SubagentRunParams = {
   lightContext?: boolean;
   deliver?: boolean;
   idempotencyKey?: string;
+  cwd?: string;
+};
+
+export type PluginManagedWorktree = {
+  id: string;
+  path: string;
+  branch: string;
 };
 
 export type SubagentRunResult = {
@@ -74,6 +82,8 @@ export type RuntimeNodeInvokeParams = {
   params?: unknown;
   timeoutMs?: number;
   idempotencyKey?: string;
+  /** Requested Gateway scopes. Honored only for bundled or trusted official plugins. */
+  scopes?: OperatorScope[];
 };
 
 /** Trusted in-process runtime surface injected into native plugins. */
@@ -91,6 +101,17 @@ export type PluginRuntime = PluginRuntimeCore & {
   nodes: {
     list: (params?: RuntimeNodeListParams) => Promise<RuntimeNodeListResult>;
     invoke: (params: RuntimeNodeInvokeParams) => Promise<unknown>;
+  };
+  worktrees: {
+    create: (params: {
+      repoRoot: string;
+      name: string;
+      baseRef?: string;
+      ownerKind: "workboard";
+      ownerId: string;
+    }) => Promise<PluginManagedWorktree>;
+    release: (params: { path: string }) => Promise<void>;
+    removeIfLossless: (params: { path: string }) => Promise<boolean>;
   };
   channel: PluginRuntimeChannel;
 };

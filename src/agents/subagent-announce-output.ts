@@ -19,8 +19,9 @@ import {
   resolveAgentIdFromSessionKey,
   resolveStorePath,
 } from "./subagent-announce.runtime.js";
+import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 import { assistantCallsSessionsYield, isSessionsYieldToolResult } from "./subagent-yield-output.js";
-import { extractAssistantText, sanitizeTextContent } from "./tools/session-message-text.js";
+import { extractAssistantText, sanitizeTextContent } from "./tools/chat-history-text.js";
 import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
 
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
@@ -290,7 +291,11 @@ export function applySubagentWaitOutcome(params: {
     outcome = { status: "timeout" };
   } else if (terminalOutcome?.reason === "aborted" || terminalOutcome?.reason === "cancelled") {
     outcome = { status: "error", error: "subagent run terminated" };
-  } else if (terminalOutcome?.reason === "blocked" || terminalOutcome?.reason === "failed") {
+  } else if (
+    terminalOutcome?.reason === "blocked" ||
+    terminalOutcome?.reason === "abandoned" ||
+    terminalOutcome?.reason === "failed"
+  ) {
     outcome = { status: "error", error: terminalOutcome.error ?? waitError };
   } else if (terminalOutcome?.reason === "completed") {
     outcome = { status: "ok" };
@@ -416,9 +421,11 @@ export function buildChildCompletionFindings(
 
 export function dedupeLatestChildCompletionRows(
   children: Array<{
+    runId: string;
     childSessionKey: string;
     task: string;
     label?: string;
+    generation?: number;
     createdAt: number;
     endedAt?: number;
     frozenResultText?: string | null;
@@ -438,7 +445,7 @@ export function dedupeLatestChildCompletionRows(
   const latestByChildSessionKey = new Map<string, (typeof children)[number]>();
   for (const child of children) {
     const existing = latestByChildSessionKey.get(child.childSessionKey);
-    if (!existing || child.createdAt > existing.createdAt) {
+    if (!existing || compareSubagentRunGeneration(child, existing) > 0) {
       latestByChildSessionKey.set(child.childSessionKey, child);
     }
   }

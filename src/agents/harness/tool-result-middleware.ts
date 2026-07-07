@@ -11,6 +11,12 @@ import type {
 } from "../../plugins/agent-tool-result-middleware-types.js";
 import { createLazyPromiseLoader } from "../../shared/lazy-promise.js";
 import { truncateUtf16Safe } from "../../utils.js";
+import {
+  hasMessagingDeliveryReceipt,
+  isDeliveredMessagingToolResult,
+} from "../embedded-agent-message-tool-source-reply.js";
+import { isMessagingToolSendAction } from "../embedded-agent-messaging.js";
+import { isToolResultError } from "../tool-result-error.js";
 
 const log = createSubsystemLogger("agents/harness");
 const MAX_MIDDLEWARE_CONTENT_BLOCKS = 200;
@@ -429,6 +435,42 @@ function buildMiddlewareFailureResult(): OpenClawAgentToolResult {
   };
 }
 
+function buildDeliveredMessagingFailureFallback(
+  event: AgentToolResultMiddlewareEvent,
+  result: OpenClawAgentToolResult,
+): OpenClawAgentToolResult | undefined {
+  if (
+    event.isError === true ||
+    isToolResultError(result) ||
+    !isMessagingToolSendAction(event.toolName, event.args) ||
+    !isDeliveredMessagingToolResult({
+      toolName: event.toolName,
+      args: event.args,
+      result,
+    }) ||
+    !hasMessagingDeliveryReceipt(result)
+  ) {
+    return undefined;
+  }
+  return {
+    content: [{ type: "text", text: "Message delivered, but result post-processing failed." }],
+    details: {
+      ok: true,
+      deliveryStatus: "sent",
+      middlewareWarning: "post-processing failed",
+    },
+  };
+}
+
+function reconcileDeliveredMessagingFailure(
+  result: OpenClawAgentToolResult,
+  fallback: OpenClawAgentToolResult | undefined,
+): OpenClawAgentToolResult {
+  return fallback && isRecord(result.details) && result.details.middlewareError === true
+    ? fallback
+    : result;
+}
+
 export function createAgentToolResultMiddlewareRunner(
   ctx: AgentToolResultMiddlewareContext,
   handlers?: AgentToolResultMiddleware[],
@@ -461,6 +503,12 @@ export function createAgentToolResultMiddlewareRunner(
       if (handlersForRun.length === 0) {
         return event.result;
       }
+      // Snapshot the confirmed side effect before legacy middleware can mutate
+      // or sanitization can collapse the receipt; never expose the raw result.
+      const deliveredMessagingFallback = buildDeliveredMessagingFailureFallback(
+        event,
+        event.result,
+      );
       let current = sanitizeToolResultForMiddleware(event.result);
       for (const handler of handlersForRun) {
         try {
@@ -479,7 +527,10 @@ export function createAgentToolResultMiddlewareRunner(
                 120,
               )}`,
             );
-            return buildMiddlewareFailureResult();
+            return reconcileDeliveredMessagingFailure(
+              buildMiddlewareFailureResult(),
+              deliveredMessagingFallback,
+            );
           }
         } catch {
           log.warn(
@@ -488,10 +539,13 @@ export function createAgentToolResultMiddlewareRunner(
               120,
             )}`,
           );
-          return buildMiddlewareFailureResult();
+          return reconcileDeliveredMessagingFailure(
+            buildMiddlewareFailureResult(),
+            deliveredMessagingFallback,
+          );
         }
       }
-      return current;
+      return reconcileDeliveredMessagingFailure(current, deliveredMessagingFallback);
     },
   };
 }

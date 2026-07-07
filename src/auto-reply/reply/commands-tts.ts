@@ -33,7 +33,10 @@ import {
 } from "../../tts/tts.js";
 import { isSilentReplyPayloadText } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
-import { persistSessionEntry } from "./commands-session-store.js";
+import {
+  persistSessionEntry,
+  sessionEntryPersistenceConflictReply,
+} from "./commands-session-store.js";
 import type { CommandHandler } from "./commands-types.js";
 
 type ParsedTtsCommand = {
@@ -228,17 +231,23 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     }
     if (requested === "on") {
       params.sessionEntry.ttsAuto = "always";
-      await persistSessionEntry(params);
+      if (!(await persistSessionEntry({ ...params, touchedFields: ["ttsAuto"] }))) {
+        return sessionEntryPersistenceConflictReply();
+      }
       return { shouldContinue: false, reply: { text: "🔊 TTS enabled for this chat." } };
     }
     if (requested === "off") {
       params.sessionEntry.ttsAuto = "off";
-      await persistSessionEntry(params);
+      if (!(await persistSessionEntry({ ...params, touchedFields: ["ttsAuto"] }))) {
+        return sessionEntryPersistenceConflictReply();
+      }
       return { shouldContinue: false, reply: { text: "🔇 TTS disabled for this chat." } };
     }
     if (requested === "default" || requested === "inherit" || requested === "clear") {
       delete params.sessionEntry.ttsAuto;
-      await persistSessionEntry(params);
+      if (!(await persistSessionEntry({ ...params, touchedFields: ["ttsAuto"] }))) {
+        return sessionEntryPersistenceConflictReply();
+      }
       return { shouldContinue: false, reply: { text: "🔊 TTS chat override cleared." } };
     }
     return { shouldContinue: false, reply: ttsUsage() };
@@ -289,7 +298,14 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
 
     params.sessionEntry.lastTtsReadLatestHash = hash;
     params.sessionEntry.lastTtsReadLatestAt = Date.now();
-    await persistSessionEntry(params);
+    if (
+      !(await persistSessionEntry({
+        ...params,
+        touchedFields: ["lastTtsReadLatestHash", "lastTtsReadLatestAt"],
+      }))
+    ) {
+      return sessionEntryPersistenceConflictReply();
+    }
     return { shouldContinue: false, reply: audio.reply };
   }
 

@@ -1,10 +1,11 @@
 // Memory Host SDK module implements qmd process behavior.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { statSync } from "node:fs";
+import path from "node:path";
 import { resolveSafeTimeoutDelayMs } from "../../../gateway-client/src/timeouts.js";
 import { materializeWindowsSpawnProgram, resolveWindowsSpawnProgram } from "./windows-spawn.js";
 
-export type CliSpawnInvocation = {
+type CliSpawnInvocation = {
   command: string;
   argv: string[];
   shell?: boolean;
@@ -15,6 +16,8 @@ type QmdChildProcess = {
   pid?: number;
   kill: (signal?: NodeJS.Signals) => boolean;
 };
+
+const DEFAULT_WINDOWS_SYSTEM_ROOT = "C:\\Windows";
 
 export type QmdBinaryUnavailableReason = "binary" | "workspace-cwd";
 
@@ -153,6 +156,22 @@ function validateQmdProbeCwd(cwd: string): QmdBinaryAvailability | null {
   }
 }
 
+/**
+ * Normalize an aborted signal into the error used to reject a killed command.
+ * Prefers the caller-supplied abort reason (so a deadline message survives) and
+ * falls back to a stable per-command abort error.
+ */
+function abortReason(signal: AbortSignal | undefined, commandSummary: string): Error {
+  const reason = signal?.reason;
+  if (reason instanceof Error) {
+    return reason;
+  }
+  if (typeof reason === "string" && reason.length > 0) {
+    return new Error(reason);
+  }
+  return new Error(`${commandSummary} aborted`);
+}
+
 export async function runCliCommand(params: {
   commandSummary: string;
   spawnInvocation: CliSpawnInvocation;
@@ -161,8 +180,20 @@ export async function runCliCommand(params: {
   timeoutMs?: number;
   maxOutputChars: number;
   discardStdout?: boolean;
+  /**
+   * Caller-owned cancellation. When the signal aborts, the spawned child is
+   * killed immediately and the call rejects, so a caller that already stopped
+   * waiting (for example after its own deadline) does not leave an orphaned
+   * process running for the full command timeout.
+   */
+  signal?: AbortSignal;
 }): Promise<{ stdout: string; stderr: string }> {
   return await new Promise((resolve, reject) => {
+    const { signal } = params;
+    if (signal?.aborted) {
+      reject(abortReason(signal, params.commandSummary));
+      return;
+    }
     const child = spawn(params.spawnInvocation.command, params.spawnInvocation.argv, {
       env: params.env,
       cwd: params.cwd,
@@ -174,15 +205,34 @@ export async function runCliCommand(params: {
     let stderr = "";
     let stdoutTruncated = false;
     let stderrTruncated = false;
+    let settled = false;
     const discardStdout = params.discardStdout === true;
     const timeoutMs =
       params.timeoutMs === undefined ? undefined : resolveSafeTimeoutDelayMs(params.timeoutMs);
     const timer = timeoutMs
       ? setTimeout(() => {
           signalQmdProcessTree(child, "SIGKILL");
-          reject(new Error(`${params.commandSummary} timed out after ${timeoutMs}ms`));
+          settle(() =>
+            reject(new Error(`${params.commandSummary} timed out after ${timeoutMs}ms`)),
+          );
         }, timeoutMs)
       : null;
+    const onAbort = () => {
+      signalQmdProcessTree(child, "SIGKILL");
+      settle(() => reject(abortReason(signal, params.commandSummary)));
+    };
+    function settle(run: () => void): void {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+      signal?.removeEventListener("abort", onAbort);
+      run();
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
     child.stdout.on("data", (data) => {
       if (discardStdout) {
         return;
@@ -196,43 +246,108 @@ export async function runCliCommand(params: {
       stderr = next.text;
       stderrTruncated = stderrTruncated || next.truncated;
     });
+
+    // Guard stdout/stderr against stream errors (e.g. EPIPE when the
+    // child exits before all pipe data is consumed). Without listeners,
+    // Node.js throws an uncaught exception that crashes the process.
+    for (const streamName of ["stdout", "stderr"] as const) {
+      child[streamName].on("error", (error: Error) => {
+        if (settled) {
+          return;
+        }
+        signalQmdProcessTree(child, "SIGKILL");
+        settle(() =>
+          reject(
+            new Error(`${params.commandSummary} ${streamName} error: ${error.message}`, {
+              cause: error,
+            }),
+          ),
+        );
+      });
+    }
+
     child.on("error", (err) => {
       if (timer) {
         clearTimeout(timer);
       }
-      reject(err);
+      settle(() => reject(err));
     });
-    child.on("close", (code, signal) => {
+    child.on("close", (code, closeSignal) => {
       if (timer) {
         clearTimeout(timer);
       }
-      if (!discardStdout && (stdoutTruncated || stderrTruncated)) {
-        reject(
-          new Error(
-            `${params.commandSummary} produced too much output (limit ${params.maxOutputChars} chars)`,
-          ),
-        );
-        return;
-      }
-      if (code === 0) {
-        resolve({ stdout, stderr });
-      } else {
-        reject(
-          new CliCommandError({
-            commandSummary: params.commandSummary,
-            code,
-            signal: signal ?? null,
-            stdout,
-            stderr,
-          }),
-        );
-      }
+      settle(() => {
+        if (!discardStdout && (stdoutTruncated || stderrTruncated)) {
+          reject(
+            new Error(
+              `${params.commandSummary} produced too much output (limit ${params.maxOutputChars} chars)`,
+            ),
+          );
+          return;
+        }
+        if (code === 0) {
+          resolve({ stdout, stderr });
+        } else {
+          reject(
+            new CliCommandError({
+              commandSummary: params.commandSummary,
+              code,
+              signal: closeSignal ?? null,
+              stdout,
+              stderr,
+            }),
+          );
+        }
+      });
     });
   });
 }
 
 function shouldUseQmdProcessGroup(): boolean {
   return process.platform !== "win32";
+}
+
+function getEnvValueCaseInsensitive(
+  env: Record<string, string | undefined>,
+  expectedKey: string,
+): string | undefined {
+  const direct = env[expectedKey];
+  if (direct !== undefined) {
+    return direct;
+  }
+  const expected = expectedKey.toUpperCase();
+  const actualKey = Object.keys(env).find((key) => key.toUpperCase() === expected);
+  return actualKey ? env[actualKey] : undefined;
+}
+
+function normalizeWindowsSystemRoot(raw: string | undefined): string | null {
+  const trimmed = raw?.trim();
+  if (
+    !trimmed ||
+    trimmed.includes("\0") ||
+    trimmed.includes("\r") ||
+    trimmed.includes("\n") ||
+    trimmed.includes(";")
+  ) {
+    return null;
+  }
+  const normalized = path.win32.normalize(trimmed);
+  if (!path.win32.isAbsolute(normalized) || normalized.startsWith("\\\\")) {
+    return null;
+  }
+  const parsed = path.win32.parse(normalized);
+  if (!/^[A-Za-z]:\\$/.test(parsed.root) || normalized.length <= parsed.root.length) {
+    return null;
+  }
+  return normalized.replace(/[\\/]+$/, "");
+}
+
+function resolveWindowsTaskkillPath(env: Record<string, string | undefined> = process.env): string {
+  const systemRoot =
+    normalizeWindowsSystemRoot(getEnvValueCaseInsensitive(env, "SystemRoot")) ??
+    normalizeWindowsSystemRoot(getEnvValueCaseInsensitive(env, "WINDIR")) ??
+    DEFAULT_WINDOWS_SYSTEM_ROOT;
+  return path.win32.join(systemRoot, "System32", "taskkill.exe");
 }
 
 function signalQmdProcessTree(child: QmdChildProcess, signal?: NodeJS.Signals): void {
@@ -246,6 +361,26 @@ function signalQmdProcessTree(child: QmdChildProcess, signal?: NodeJS.Signals): 
       return;
     } catch {
       // Fall back to the direct child if the process group already disappeared.
+    }
+  }
+  if (!shouldUseQmdProcessGroup() && typeof child.pid === "number") {
+    const taskkillPath = resolveWindowsTaskkillPath();
+    const args = ["/PID", String(child.pid), "/T"];
+    if (signal === "SIGKILL") {
+      args.push("/F");
+    }
+    const result = spawnSync(taskkillPath, args, { stdio: "ignore", windowsHide: true });
+    if (!result.error && result.status === 0) {
+      return;
+    }
+    if (signal !== "SIGKILL") {
+      const forceResult = spawnSync(taskkillPath, [...args, "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      if (!forceResult.error && forceResult.status === 0) {
+        return;
+      }
     }
   }
   if (signal === undefined) {

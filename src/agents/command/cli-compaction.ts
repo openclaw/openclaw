@@ -200,8 +200,9 @@ function isUnsupportedNativeHarnessCompaction(
   return result?.ok === false && result.failure?.reason === "unsupported_harness_compaction";
 }
 
-function isBelowCompactionTargetReason(reason: string | undefined): boolean {
-  return classifyCompactionReason(reason) === "below_threshold";
+function isBenignCliCompactionNoopReason(reason: string | undefined): boolean {
+  const classification = classifyCompactionReason(reason);
+  return classification === "below_threshold" || classification === "already_compacted_recently";
 }
 
 function isIntentionalNativeAutoCompactionSkip(
@@ -317,18 +318,23 @@ async function compactCliTranscript(params: {
       resolveCompactionTimeoutMs(params.cfg),
     );
   } catch (error) {
-    log.warn(
-      `CLI transcript compaction failed for ${params.provider}/${params.model}: ${error instanceof Error ? error.message : String(error)}`,
-    );
+    const reason = error instanceof Error ? error.message : String(error);
+    if (isBenignCliCompactionNoopReason(reason)) {
+      log.info(
+        `CLI transcript compaction skipped for ${params.provider}/${params.model}: ${reason}`,
+      );
+      return { compacted: false };
+    }
+    log.warn(`CLI transcript compaction failed for ${params.provider}/${params.model}: ${reason}`);
     return {
       compacted: false,
-      failureReason: error instanceof Error ? error.message : String(error),
+      failureReason: reason,
     };
   }
 
   if (!compactResult.compacted) {
     const reason = compactResult.reason ?? "nothing to compact";
-    if (isBelowCompactionTargetReason(reason)) {
+    if (isBenignCliCompactionNoopReason(reason)) {
       log.info(
         `CLI transcript compaction skipped for ${params.provider}/${params.model}: ${reason}`,
       );
@@ -466,7 +472,7 @@ async function compactNativeHarnessCliTranscript(params: {
 
   if (!result?.compacted) {
     const reason = result?.reason ?? "nothing to compact";
-    if (isBelowCompactionTargetReason(reason)) {
+    if (isBenignCliCompactionNoopReason(reason)) {
       log.info(
         `CLI native harness compaction skipped for ${params.provider}/${params.model}: ${reason}`,
       );

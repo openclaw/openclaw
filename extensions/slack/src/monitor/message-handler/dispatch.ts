@@ -97,35 +97,17 @@ import { finalizeSlackPreviewEdit } from "./preview-finalize.js";
 import { resolveSlackTimestampMs } from "./timestamp.js";
 import type { PreparedSlackMessage } from "./types.js";
 
-// Slack reactions.add/remove expect shortcode names, not raw unicode emoji.
-const UNICODE_TO_SLACK: Record<string, string> = {
-  "👀": "eyes",
-  "🤔": "thinking_face",
-  "🔥": "fire",
-  "👨‍💻": "male-technologist",
-  "👨💻": "male-technologist",
-  "👩‍💻": "female-technologist",
-  "⚡": "zap",
-  "🌐": "globe_with_meridians",
-  "✅": "white_check_mark",
-  "👍": "thumbsup",
-  "❌": "x",
-  "😱": "scream",
-  "🥱": "yawning_face",
-  "😨": "fearful",
-  "⏳": "hourglass_flowing_sand",
-  "⚠️": "warning",
-  "✍": "writing_hand",
-  "🗜️": "compression",
-  "🗜": "compression",
-  "🧠": "brain",
-  "🛠️": "hammer_and_wrench",
-  "💻": "computer",
-};
 const SLACK_REASONING_TAG_RE =
   /<\s*(\/?)\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/gi;
 const SLACK_REASONING_LABEL_PREFIX_RE = /^\s*(?:>\s*)?Reasoning:\s*/iu;
 const SLACK_THINKING_LABEL_PREFIX_RE = /^\s*(?:>\s*)?Thinking\.{0,3}(?=\s*(?:\n|_))/iu;
+
+const SLACK_THREAD_LOADING_MESSAGES = [
+  "Reading the thread...",
+  "Checking context...",
+  "Working through the request...",
+  "Putting it all together...",
+];
 
 function resolveSlackMessageTimestampMs(message: SlackMessageEvent): number | undefined {
   const ts = message.event_ts ?? message.ts;
@@ -160,17 +142,6 @@ function resolveSlackBotLoopProtection(
     defaultEnabled: true,
     nowMs: resolveSlackMessageTimestampMs(prepared.message),
   };
-}
-
-function toSlackEmojiName(emoji: string): string {
-  let trimmed = emoji.trim();
-  while (trimmed.startsWith(":")) {
-    trimmed = trimmed.slice(1);
-  }
-  while (trimmed.endsWith(":")) {
-    trimmed = trimmed.slice(0, -1);
-  }
-  return UNICODE_TO_SLACK[trimmed] ?? trimmed;
 }
 
 export function isSlackStreamingEnabled(params: {
@@ -466,7 +437,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         iconUrl: outboundIdentity.avatarUrl,
         iconEmoji: outboundIdentity.emoji,
       }
-    : undefined;
+    : prepared.relayIdentity;
 
   if (prepared.isDirectMessage) {
     const sessionCfg = cfg.session;
@@ -541,12 +512,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const incomingThreadTs = message.thread_ts;
   let didSetStatus = false;
   const statusReactionsEnabled =
+    prepared.ctxPayload.InboundEventKind !== "room_event" &&
     Boolean(prepared.ackReactionPromise) &&
     Boolean(reactionMessageTs) &&
-    cfg.messages?.statusReactions?.enabled !== false;
+    cfg.messages?.statusReactions?.enabled === true;
   const slackStatusAdapter: StatusReactionAdapter = {
     setReaction: async (emoji) => {
-      await reactSlackMessage(message.channel, reactionMessageTs ?? "", toSlackEmojiName(emoji), {
+      await reactSlackMessage(message.channel, reactionMessageTs ?? "", emoji, {
         token: ctx.botToken,
         client: ctx.app.client,
       }).catch((err: unknown) => {
@@ -557,7 +529,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       });
     },
     removeReaction: async (emoji) => {
-      await removeSlackReaction(message.channel, reactionMessageTs ?? "", toSlackEmojiName(emoji), {
+      await removeSlackReaction(message.channel, reactionMessageTs ?? "", emoji, {
         token: ctx.botToken,
         client: ctx.app.client,
       }).catch((err: unknown) => {
@@ -625,6 +597,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           channelId: message.channel,
           threadTs: statusThreadTs,
           status: "is typing...",
+          loadingMessages: SLACK_THREAD_LOADING_MESSAGES,
         });
         if (typingReaction && message.ts) {
           await reactSlackMessage(message.channel, message.ts, typingReaction, {
@@ -688,6 +661,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     shouldEnableSlackPreviewStreaming({
       mode: slackStreaming.mode,
     });
+  const hasSlackCustomIdentity = Boolean(
+    slackIdentity?.username || slackIdentity?.iconUrl || slackIdentity?.iconEmoji,
+  );
   const streamingEnabled =
     !sourceRepliesAreToolOnly &&
     isSlackStreamingEnabled({
@@ -699,10 +675,14 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     streamingEnabled,
     threadTs: streamThreadHint,
   });
-  const shouldUseDraftStream = shouldInitializeSlackDraftStream({
-    previewStreamingEnabled,
-    useStreaming,
-  });
+  // chat.update cannot preserve custom authorship. Use native streaming when
+  // possible; otherwise keep identity intact with one final postMessage.
+  const shouldUseDraftStream =
+    !hasSlackCustomIdentity &&
+    shouldInitializeSlackDraftStream({
+      previewStreamingEnabled,
+      useStreaming,
+    });
   const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(account.config);
   const disableBlockStreaming = sourceRepliesAreToolOnly
     ? true
@@ -1093,6 +1073,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           channel: message.channel,
           threadTs: streamThreadTs,
           text,
+          ...(slackIdentity ? { identity: slackIdentity } : {}),
           teamId: await resolveSlackStreamRecipientTeamId({
             client: ctx.app.client,
             token: ctx.botToken,
@@ -1598,6 +1579,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         threadTs: streamThreadTs,
         chunks,
         taskDisplayMode: "plan",
+        ...(slackIdentity ? { identity: slackIdentity } : {}),
         teamId: await resolveSlackStreamRecipientTeamId({
           client: ctx.app.client,
           token: ctx.botToken,
@@ -2043,11 +2025,17 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     } catch (err) {
       if (err instanceof SlackStreamNotDeliveredError) {
         streamFallbackDelivered = await deliverPendingStreamFallback(finalStream, err);
+        if (!streamFallbackDelivered) {
+          dispatchError ??= err;
+        }
       } else {
         const error = formatSlackError(err);
         emitAcknowledgedStreamedDeliveries();
         emitFailedPendingStreamedDeliveries(error);
         runtime.error?.(danger(`slack-stream: failed to stop stream: ${error}`));
+        if (!finalStream.delivered) {
+          dispatchError ??= err;
+        }
       }
     }
   }
@@ -2105,10 +2093,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
   }
 
-  if (dispatchError) {
-    throw toLintErrorObject(dispatchError, "Slack dispatch failed");
-  }
-
   // Record thread participation only when we actually delivered a reply and
   // know the thread ts that was used (set by deliverNormally, streaming start,
   // or draft stream). Falls back to statusThreadTs for edge cases.
@@ -2117,6 +2101,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     recordSlackThreadParticipation(account.accountId, message.channel, participationThreadTs, {
       agentId: route.agentId,
     });
+  }
+  if (dispatchError) {
+    throw toLintErrorObject(dispatchError, "Slack dispatch failed");
   }
   if (!anyReplyDelivered && !draftPreviewCommitted) {
     await draftStream?.clear();

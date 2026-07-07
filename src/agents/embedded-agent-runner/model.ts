@@ -455,8 +455,6 @@ function findInlineModelMatch(params: {
   );
 }
 
-export { buildInlineProviderModels };
-
 function resolveConfiguredProviderConfig(
   cfg: OpenClawConfig | undefined,
   provider: string,
@@ -1332,6 +1330,11 @@ function resolveConfiguredFallbackModel(params: {
     compat: fallbackCompat,
     reasoning: metadataModel?.reasoning,
   });
+  const resolvedFallbackMaxTokens =
+    configuredModel?.maxTokens ??
+    providerConfig?.maxTokens ??
+    providerConfig?.models?.[0]?.maxTokens ??
+    staticCatalogModel?.maxTokens;
   return normalizeResolvedModel({
     provider,
     cfg,
@@ -1367,12 +1370,11 @@ function resolveConfiguredFallbackModel(params: {
             providerConfig?.contextTokens ??
             providerConfig?.models?.[0]?.contextTokens ??
             staticCatalogModel?.contextTokens,
-          maxTokens:
-            configuredModel?.maxTokens ??
-            providerConfig?.maxTokens ??
-            providerConfig?.models?.[0]?.maxTokens ??
-            staticCatalogModel?.maxTokens ??
-            DEFAULT_CONTEXT_TOKENS,
+          // maxTokens is a wire-level output cap, not a context-budget fallback.
+          // Omit an unknown cap so strict providers can apply their own limit.
+          ...(resolvedFallbackMaxTokens !== undefined
+            ? { maxTokens: resolvedFallbackMaxTokens }
+            : {}),
           ...(resolvedParams ? { params: resolvedParams } : {}),
           ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
           headers: requestConfig.headers,
@@ -1910,16 +1912,32 @@ function buildMissingProviderModelRegistrationHint(params: {
   modelId: string;
   cfg?: OpenClawConfig;
 }): string | undefined {
+  // Legacy openai-codex refs can come from model selections, provider config,
+  // or persisted routes. All of them should be repaired by doctor rather than
+  // turned into a new models.providers[] registration.
+  if (normalizeProviderId(params.provider) === "openai-codex") {
+    return `"openai-codex" is a legacy provider ID. Run \`openclaw doctor --fix\` to migrate legacy model and provider config to the current OpenAI format. If the provider has no authenticated profile, run \`openclaw models status\` to check provider auth and re-authenticate if needed. See https://docs.openclaw.ai/concepts/model-providers.`;
+  }
   const configuredModels = params.cfg?.agents?.defaults?.models;
   if (!configuredModels) {
     return undefined;
   }
   const agentModelKey = modelKey(params.provider, params.modelId);
-  if (
-    !configuredModels[agentModelKey] &&
-    !configuredModels[`${params.provider}/${params.modelId}`]
-  ) {
+  const configuredEntry =
+    configuredModels[agentModelKey] ?? configuredModels[`${params.provider}/${params.modelId}`];
+  if (!configuredEntry) {
     return undefined;
+  }
+  // Models bound to an agent runtime (e.g. "codex") draw their catalog from that
+  // runtime and its linked account, not from models.providers[].models[].
+  // Advising a models.providers[] registration here is actively misleading: it
+  // makes resolution "succeed" only for the request to be rejected later by the
+  // runtime/provider (e.g. OpenAI returns 400 "model is not supported when using
+  // Codex with a ChatGPT account" once a deprecated model id is no longer
+  // offered). Point the user at the runtime's live catalog instead.
+  const agentRuntimeId = configuredEntry.agentRuntime?.id;
+  if (agentRuntimeId) {
+    return `Found agents.defaults.models["${agentModelKey}"] bound to the "${agentRuntimeId}" agent runtime. Models served by an agent runtime come from that runtime and its linked account, not from models.providers["${params.provider}"].models[] — registering it there will not make it usable. Confirm "${params.modelId}" is still offered by the "${agentRuntimeId}" runtime and switch agents.defaults.model.primary to a currently available model (run \`openclaw models list --provider ${params.provider}\` to list them). See https://docs.openclaw.ai/concepts/model-providers.`;
   }
   const providerConfig = findNormalizedProviderValue(
     params.cfg?.models?.providers,

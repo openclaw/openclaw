@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   readLatestRecentSessionUsageFromTranscriptAsync,
   readRecentSessionMessagesWithStats,
@@ -16,21 +17,17 @@ import {
 describe("session transcript reader facade", () => {
   let tempDir: string;
   let storePath: string;
-  let originalStateDir: string | undefined;
+  let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
-    originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-transcript-readers-"));
     storePath = path.join(tempDir, "sessions.json");
-    process.env.OPENCLAW_STATE_DIR = tempDir;
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
   });
 
   afterEach(() => {
-    if (originalStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = originalStateDir;
-    }
+    envSnapshot.restore();
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -41,7 +38,7 @@ describe("session transcript reader facade", () => {
       `${events.map((event) => JSON.stringify(event)).join("\n")}\n`,
       "utf-8",
     );
-    return { sessionId, storePath };
+    return { sessionId, sessionKey: `agent:main:${sessionId}`, storePath };
   }
 
   test("reads active-branch messages and message ids through a scope", async () => {
@@ -113,7 +110,11 @@ describe("session transcript reader facade", () => {
           content: "metered answer",
           provider: "openai",
           model: "gpt-5.5",
-          usage: { input: 11, output: 7 },
+          usage: {
+            input: 11,
+            output: 7,
+            contextUsage: { state: "unavailable" },
+          },
         },
       },
     ]);
@@ -126,6 +127,7 @@ describe("session transcript reader facade", () => {
       readLatestRecentSessionUsageFromTranscriptAsync(scope, 4096),
     ).resolves.toMatchObject({
       inputTokens: 11,
+      contextUsage: { state: "unavailable" },
       model: "gpt-5.5",
       modelProvider: "openai",
       outputTokens: 7,

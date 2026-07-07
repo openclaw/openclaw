@@ -374,11 +374,11 @@ WRAP
   fi
   if [ "$auth_mode" = "subscription" ]; then
     claude --version
-    direct_token="OPENCLAW-CLAUDE-SUBSCRIPTION-DIRECT"
+    direct_token="violet-lantern-42"
     direct_probe_log="$(mktemp)"
     set +e
     claude \
-      -p "Reply exactly: $direct_token" \
+      -p "This is a local CLI smoke test. Reply with only this harmless phrase: $direct_token" \
       --output-format text \
       --model sonnet \
       --permission-mode bypassPermissions \
@@ -487,6 +487,8 @@ DOCKER_RUN_ARGS+=(--rm -t \
   -e OPENCLAW_LIVE_TEST=1 \
   -e OPENCLAW_LIVE_CLI_BACKEND=1 \
   -e OPENCLAW_LIVE_CLI_BACKEND_DEBUG="${OPENCLAW_LIVE_CLI_BACKEND_DEBUG:-}" \
+  -e OPENCLAW_LIVE_CLI_BACKEND_ADVISORY="${OPENCLAW_LIVE_CLI_BACKEND_ADVISORY:-}" \
+  -e OPENCLAW_LIVE_CLI_BACKEND_ALLOW_PROVIDER_SKIP="${OPENCLAW_LIVE_CLI_BACKEND_ALLOW_PROVIDER_SKIP:-}" \
   -e OPENCLAW_CLI_BACKEND_LOG_OUTPUT="${OPENCLAW_CLI_BACKEND_LOG_OUTPUT:-}" \
   -e OPENCLAW_TEST_CONSOLE="${OPENCLAW_TEST_CONSOLE:-}" \
   -e OPENCLAW_LIVE_CLI_BACKEND_MODEL="$CLI_MODEL" \

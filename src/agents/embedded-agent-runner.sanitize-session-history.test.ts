@@ -7,6 +7,7 @@ import type {
   Usage,
 } from "openclaw/plugin-sdk/llm";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../shared/transcript-only-openclaw-assistant.js";
 import {
   expectOpenAIResponsesStrictSanitizeCall,
   loadSanitizeSessionHistoryWithCleanMocks,
@@ -113,6 +114,16 @@ vi.mock("../plugins/provider-runtime.js", async () => {
             ...context.messages,
           ];
         }
+        if (provider === "replay-poison") {
+          return context.messages.filter(
+            (message) =>
+              message.role !== "toolResult" ||
+              !(
+                (message as { isError?: unknown }).isError === true &&
+                JSON.stringify((message as { content?: unknown }).content).includes("aborted")
+              ),
+          );
+        }
         return context.messages;
       },
     ),
@@ -177,6 +188,70 @@ describe("sanitizeSessionHistory", () => {
 
   const getAssistantContentTypes = (messages: AgentMessage[]) =>
     getAssistantMessage(messages).content.map((block: { type: string }) => block.type);
+
+  it("preserves a validated context snapshot while normalizing replay usage", async () => {
+    const assistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "done" }],
+      api: "anthropic-messages",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      usage: {
+        input: 12,
+        output: 15_104,
+        cacheRead: 819_661,
+        cacheWrite: 93_130,
+        contextUsage: {
+          state: "available",
+          promptTokens: 148_874,
+          totalTokens: 163_978,
+        },
+      },
+      stopReason: "stop",
+      timestamp: 0,
+    } as unknown as AgentMessage;
+
+    const out = await sanitizeAnthropicHistory({
+      messages: [{ role: "user", content: "hello", timestamp: 0 } as AgentMessage, assistant],
+    });
+
+    expect(getAssistantMessage(out).usage).toMatchObject({
+      contextUsage: {
+        state: "available",
+        promptTokens: 148_874,
+        totalTokens: 163_978,
+      },
+      totalTokens: 927_907,
+    });
+  });
+
+  it("preserves an unavailable context snapshot while normalizing replay usage", async () => {
+    const assistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "done" }],
+      api: "anthropic-messages",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      usage: {
+        input: 12,
+        output: 15_104,
+        cacheRead: 819_661,
+        cacheWrite: 93_130,
+        contextUsage: { state: "unavailable" },
+      },
+      stopReason: "stop",
+      timestamp: 0,
+    } as unknown as AgentMessage;
+
+    const out = await sanitizeAnthropicHistory({
+      messages: [{ role: "user", content: "hello", timestamp: 0 } as AgentMessage, assistant],
+    });
+
+    expect(getAssistantMessage(out).usage).toMatchObject({
+      contextUsage: { state: "unavailable" },
+      totalTokens: 927_907,
+    });
+  });
 
   const makeThinkingAndTextAssistantMessages = (thinkingSignature = "some_sig"): AgentMessage[] => {
     const user: UserMessage = {
@@ -584,6 +659,7 @@ describe("sanitizeSessionHistory", () => {
               cacheRead: 0.25,
               cacheWrite: 0,
               total: 4,
+              totalOrigin: "provider-billed",
             },
           },
         },
@@ -603,6 +679,7 @@ describe("sanitizeSessionHistory", () => {
         cacheRead: 0.25,
         cacheWrite: 0,
         total: 4,
+        totalOrigin: "provider-billed",
       },
     });
   });
@@ -741,7 +818,214 @@ describe("sanitizeSessionHistory", () => {
     expect(JSON.stringify(result)).not.toContain("missing tool result");
   });
 
-  it("synthesizes Codex-style aborted tool results for openai-chatgpt-responses", async () => {
+  it("keeps OpenAI Responses real tool results paired when strict id sanitization rewrites aliases", async () => {
+    const messages = castAgentMessages([
+      makeUserMessage("generate"),
+      makeAssistantMessage(
+        [
+          {
+            type: "toolCall",
+            id: "call_mock_image_generate_1",
+            name: "image_generate",
+            arguments: { prompt: "QA lighthouse" },
+          },
+        ],
+        { stopReason: "toolUse" },
+      ),
+      {
+        role: "toolResult",
+        call_id: "call_mock_image_generate_1",
+        toolName: "image_generate",
+        content: [{ type: "text", text: "Background task started for image generation." }],
+        isError: false,
+      },
+      makeUserMessage("inspect the generated lighthouse attachment"),
+    ]);
+
+    const result = await sanitizeOpenAIHistory(messages);
+    const assistant = result[1] as Extract<AgentMessage, { role: "assistant" }>;
+    const toolCall = extractToolCallsFromAssistant(assistant)[0];
+    const toolResult = result[2] as Extract<AgentMessage, { role: "toolResult" }> & {
+      call_id?: string;
+    };
+
+    expect(result.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "user",
+    ]);
+    expect(toolCall?.id).toBe("callmockimagegenerate1");
+    expect(toolResult.toolCallId).toBe(toolCall?.id);
+    expect(toolResult.call_id).toBe(toolCall?.id);
+    expect(toolResult.content).toEqual([
+      { type: "text", text: "Background task started for image generation." },
+    ]);
+  });
+
+  it("repairs OpenAI Responses async image replay before assistant follow-up text", async () => {
+    const messages = castAgentMessages([
+      makeUserMessage("Image generation check. Generate an image of a QA lighthouse."),
+      makeAssistantMessage(
+        [
+          {
+            type: "toolCall",
+            id: "callmockimagegenerate0b27d8fa84",
+            name: "image_generate",
+            arguments: { prompt: "QA lighthouse" },
+          },
+        ],
+        { stopReason: "toolUse" },
+      ),
+      {
+        role: "toolResult",
+        toolCallId: "callmockimagegenerate0b27d8fa84",
+        toolName: "image_generate",
+        content: [{ type: "text", text: "Background task started for image generation." }],
+        isError: false,
+      },
+      {
+        role: "custom",
+        content: "Image generation started; wait for completion.",
+      },
+      makeUserMessage("The image is ready for the original chat."),
+      makeAssistantMessage(
+        [
+          {
+            type: "toolCall",
+            id: "callmockimagegenerate0b27d8fa842",
+            name: "image_generate",
+            arguments: { prompt: "QA lighthouse" },
+          },
+        ],
+        { stopReason: "toolUse" },
+      ),
+      makeAssistantMessage([{ type: "text", text: "Worked: the QA lighthouse image completed." }], {
+        stopReason: "stop",
+      }),
+    ]);
+
+    const result = await sanitizeOpenAIHistory(messages);
+
+    expect(result.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "custom",
+      "user",
+      "assistant",
+      "toolResult",
+      "assistant",
+    ]);
+    const repairedAssistant = result[5] as Extract<AgentMessage, { role: "assistant" }>;
+    const repairedToolCall = extractToolCallsFromAssistant(repairedAssistant)[0];
+    expect(result[6]).toMatchObject({
+      role: "toolResult",
+      toolCallId: repairedToolCall?.id,
+      toolName: "image_generate",
+      isError: true,
+      content: [{ type: "text", text: "aborted" }],
+    });
+  });
+
+  it("repairs OpenAI Responses replay again after provider hooks mutate history", async () => {
+    const messages = castAgentMessages([
+      makeUserMessage("generate"),
+      makeAssistantMessage(
+        [{ type: "toolCall", id: "call_1", name: "image_generate", arguments: {} }],
+        { stopReason: "toolUse" },
+      ),
+      makeAssistantMessage([{ type: "text", text: "done" }], { stopReason: "stop" }),
+    ]);
+
+    const result = await sanitizeOpenAIHistory(messages, { provider: "replay-poison" });
+
+    expect(result.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "assistant",
+    ]);
+    expect(result[2]).toMatchObject({
+      role: "toolResult",
+      toolName: "image_generate",
+      isError: true,
+      content: [{ type: "text", text: "aborted" }],
+    });
+  });
+
+  it("repairs a message-tool delivery-mirror poisoned replay", async () => {
+    const messages: AgentMessage[] = [
+      makeUserMessage("start"),
+      makeAssistantMessage(
+        [
+          {
+            type: "toolCall",
+            id: "call_message|fc_message",
+            name: "message",
+            arguments: { action: "send", message: "visible reply" },
+          },
+        ],
+        { stopReason: "toolUse" },
+      ),
+      castAgentMessage({
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
+        content: [{ type: "text", text: "visible reply" }],
+        stopReason: "stop",
+      }),
+      makeUserMessage("continue"),
+    ];
+
+    const result = await sanitizeOpenAIHistory(messages);
+
+    expect(result.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "user",
+    ]);
+    expect(
+      result.some((message) => (message as { model?: string }).model === "delivery-mirror"),
+    ).toBe(false);
+    expect((result[2] as { toolCallId?: string }).toolCallId).toBe("callmessage");
+    expect((result[2] as Extract<AgentMessage, { role: "toolResult" }>).content).toEqual([
+      { type: "text", text: "aborted" },
+    ]);
+  });
+
+  it("rejects dangling OpenAI Responses tool calls before provider replay when repair is disabled", async () => {
+    const messages: AgentMessage[] = [
+      makeUserMessage("start"),
+      makeAssistantMessage([{ type: "toolCall", id: "call_1", name: "read", arguments: {} }], {
+        stopReason: "toolUse",
+      }),
+      makeUserMessage("continue"),
+    ];
+
+    await expect(
+      sanitizeOpenAIHistory(messages, {
+        policy: {
+          sanitizeMode: "images-only",
+          sanitizeToolCallIds: false,
+          preserveNativeAnthropicToolUseIds: false,
+          repairToolUseResultPairing: false,
+          preserveSignatures: false,
+          sanitizeThinkingSignatures: false,
+          dropThinkingBlocks: false,
+          dropReasoningFromHistory: false,
+          applyGoogleTurnOrdering: false,
+          validateGeminiTurns: false,
+          validateAnthropicTurns: false,
+          allowSyntheticToolResults: false,
+        },
+      }),
+    ).rejects.toThrow(/invalid_replay_transcript.*dangling_tool_call.*call_1/);
+  });
+
+  it("synthesizes Codex-style aborted tool results for openai-codex-responses", async () => {
     const messages: AgentMessage[] = [
       makeAssistantMessage(
         [

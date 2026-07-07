@@ -471,7 +471,7 @@ const ENUM_EXPECTATIONS: Record<string, string[]> = {
   "logging.consoleStyle": ['"pretty"', '"compact"', '"json"'],
   "logging.redactSensitive": ['"off"', '"tools"'],
   "cli.banner.taglineMode": ['"random"', '"default"', '"off"'],
-  "update.channel": ['"stable"', '"beta"', '"dev"'],
+  "update.channel": ['"stable"', '"extended-stable"', '"beta"', '"dev"'],
   "agents.defaults.compaction.mode": ['"default"', '"safeguard"'],
   "agents.defaults.compaction.identifierPolicy": ['"strict"', '"off"', '"custom"'],
 };
@@ -936,6 +936,7 @@ describe("config help copy quality", () => {
 
     const compactionModel = FIELD_HELP["agents.defaults.compaction.model"];
     expect(/provider\/model|different model|primary agent model/i.test(compactionModel)).toBe(true);
+    expect(/alias/i.test(compactionModel)).toBe(true);
 
     const transcriptBytes = FIELD_HELP["agents.defaults.compaction.maxActiveTranscriptBytes"];
     expect(/transcript|bytes|compaction/i.test(transcriptBytes)).toBe(true);

@@ -1,5 +1,6 @@
 {
   "id": "stepfun",
+  "name": "StepFun",
   "activation": {
     "onStartup": false
   },
@@ -85,6 +86,7 @@
       "provider": "stepfun",
       "method": "standard-api-key-cn",
       "choiceId": "stepfun-standard-api-key-cn",
+      "appGuidedSecret": true,
       "choiceLabel": "StepFun Standard API key (China)",
       "choiceHint": "Endpoint: api.stepfun.com/v1",
       "groupId": "stepfun",
@@ -99,6 +101,7 @@
       "provider": "stepfun",
       "method": "standard-api-key-intl",
       "choiceId": "stepfun-standard-api-key-intl",
+      "appGuidedSecret": true,
       "choiceLabel": "StepFun Standard API key (Global/Intl)",
       "choiceHint": "Endpoint: api.stepfun.ai/v1",
       "groupId": "stepfun",
@@ -113,6 +116,7 @@
       "provider": "stepfun-plan",
       "method": "plan-api-key-cn",
       "choiceId": "stepfun-plan-api-key-cn",
+      "appGuidedSecret": true,
       "choiceLabel": "StepFun Step Plan API key (China)",
       "choiceHint": "Endpoint: api.stepfun.com/step_plan/v1",
       "groupId": "stepfun",
@@ -127,6 +131,7 @@
       "provider": "stepfun-plan",
       "method": "plan-api-key-intl",
       "choiceId": "stepfun-plan-api-key-intl",
+      "appGuidedSecret": true,
       "choiceLabel": "StepFun Step Plan API key (Global/Intl)",
       "choiceHint": "Endpoint: api.stepfun.ai/step_plan/v1",
       "groupId": "stepfun",
