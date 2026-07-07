@@ -3,6 +3,7 @@
 
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatLookupMiss } from "../cli/error-format.js";
@@ -205,12 +206,7 @@ function truncate(value: string, maxChars: number) {
   if (value.length <= maxChars) {
     return value;
   }
-  if (maxChars <= 1) {
-    return value.slice(0, maxChars);
-  }
-  return `${Array.from(value)
-    .slice(0, maxChars - 1)
-    .join("")}…`;
+  return maxChars <= 0 ? "" : `${truncateUtf16Safe(value, maxChars - 1)}…`;
 }
 
 function shortToken(value: string | undefined, maxChars = ID_PAD): string {
