@@ -35,6 +35,10 @@ const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
 const FEISHU_VOICE_FILE_NAME = "voice.ogg";
 const FEISHU_VOICE_SAMPLE_RATE_HZ = 48_000;
 const FEISHU_VOICE_BITRATE = "64k";
+// Feishu's documented default upload limit is 30 MB. Cap string-path reads to the
+// same bound so a huge or symlinked local file cannot OOM the gateway before the
+// SDK upload attempt.
+const FEISHU_UPLOAD_FILE_MAX_BYTES_DEFAULT = 30 * 1024 * 1024;
 
 const FEISHU_TRANSCODABLE_AUDIO_EXTS = new Set([
   ".aac",
@@ -422,6 +426,7 @@ export async function uploadImageFeishu(params: {
   image: Buffer | string; // Buffer or file path
   imageType?: "message" | "avatar";
   accountId?: string;
+  maxBytes?: number;
 }): Promise<UploadImageResult> {
   const { cfg, image, imageType = "message", accountId } = params;
   const { client } = createConfiguredFeishuMediaClient({ cfg, accountId });
@@ -429,8 +434,11 @@ export async function uploadImageFeishu(params: {
   // SDK accepts Buffer directly. Keep string path support on this helper, but
   // verify the path as a regular local file before uploading it.
   // See: https://github.com/larksuite/node-sdk/issues/121
+  const maxBytes = params.maxBytes ?? FEISHU_UPLOAD_FILE_MAX_BYTES_DEFAULT;
   const imageData =
-    typeof image === "string" ? (await readRegularFile({ filePath: image })).buffer : image;
+    typeof image === "string"
+      ? (await readRegularFile({ filePath: image, maxBytes })).buffer
+      : image;
 
   const response = await requestFeishuApi(
     () =>
@@ -477,6 +485,7 @@ export async function uploadFileFeishu(params: {
   fileType: "opus" | "mp4" | "pdf" | "doc" | "xls" | "ppt" | "stream";
   duration?: number; // Audio/video duration, in milliseconds.
   accountId?: string;
+  maxBytes?: number;
 }): Promise<UploadFileResult> {
   const { cfg, file, fileName, fileType, duration, accountId } = params;
   const { client } = createConfiguredFeishuMediaClient({ cfg, accountId });
@@ -484,8 +493,9 @@ export async function uploadFileFeishu(params: {
   // SDK accepts Buffer directly. Keep string path support on this helper, but
   // verify the path as a regular local file before uploading it.
   // See: https://github.com/larksuite/node-sdk/issues/121
+  const maxBytes = params.maxBytes ?? FEISHU_UPLOAD_FILE_MAX_BYTES_DEFAULT;
   const fileData =
-    typeof file === "string" ? (await readRegularFile({ filePath: file })).buffer : file;
+    typeof file === "string" ? (await readRegularFile({ filePath: file, maxBytes })).buffer : file;
 
   const safeFileName = sanitizeFileNameForUpload(fileName);
 
@@ -939,7 +949,12 @@ export async function sendMediaFeishu(params: {
   const voiceIntentDegradedToFile = audioAsVoice === true && routing.msgType !== "audio";
 
   if (routing.msgType === "image") {
-    const { imageKey } = await uploadImageFeishu({ cfg, image: buffer, accountId });
+    const { imageKey } = await uploadImageFeishu({
+      cfg,
+      image: buffer,
+      maxBytes: mediaMaxBytes,
+      accountId,
+    });
     const result = await sendImageFeishu({
       cfg,
       to,
@@ -964,6 +979,7 @@ export async function sendMediaFeishu(params: {
     file: buffer,
     fileName: name,
     fileType: routing.fileType ?? "stream",
+    maxBytes: mediaMaxBytes,
     ...(durationMs !== undefined ? { duration: durationMs } : {}),
     accountId,
   });

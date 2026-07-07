@@ -19,6 +19,7 @@ const imageCreateMock = vi.hoisted(() => vi.fn());
 const messageCreateMock = vi.hoisted(() => vi.fn());
 const messageResourceGetMock = vi.hoisted(() => vi.fn());
 const messageReplyMock = vi.hoisted(() => vi.fn());
+const readRegularFileMock = vi.hoisted(() => vi.fn());
 
 const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
 const emptyConfig: ClawdbotConfig = {};
@@ -54,10 +55,20 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
+  return {
+    ...actual,
+    readRegularFile: readRegularFileMock,
+  };
+});
+
 let saveMessageResourceFeishu: typeof import("./media.js").saveMessageResourceFeishu;
 let sanitizeFileNameForUpload: typeof import("./media.js").sanitizeFileNameForUpload;
 let sendMediaFeishu: typeof import("./media.js").sendMediaFeishu;
 let shouldSuppressFeishuTextForVoiceMedia: typeof import("./media.js").shouldSuppressFeishuTextForVoiceMedia;
+let uploadFileFeishu: typeof import("./media.js").uploadFileFeishu;
+let uploadImageFeishu: typeof import("./media.js").uploadImageFeishu;
 
 function expectMediaTimeoutClientConfigured(): void {
   const options = mockCallArg<{ httpTimeoutMs?: number }>(createFeishuClientMock, 0, 0);
@@ -123,6 +134,8 @@ describe("sendMediaFeishu msg_type routing", () => {
       sanitizeFileNameForUpload,
       sendMediaFeishu,
       shouldSuppressFeishuTextForVoiceMedia,
+      uploadFileFeishu,
+      uploadImageFeishu,
     } = await import("./media.js"));
   });
 
@@ -132,6 +145,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     vi.doUnmock("./targets.js");
     vi.doUnmock("./runtime.js");
     vi.doUnmock("openclaw/plugin-sdk/media-runtime");
+    vi.doUnmock("openclaw/plugin-sdk/security-runtime");
     vi.resetModules();
   });
 
@@ -187,6 +201,10 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     messageResourceGetMock.mockResolvedValue(Buffer.from("resource-bytes"));
+    readRegularFileMock.mockResolvedValue({
+      buffer: Buffer.from("local-file-data"),
+      stat: { size: 15 } as unknown as import("node:fs").Stats,
+    });
     runFfmpegMock.mockImplementation(async (args: string[]) => {
       await fs.writeFile(args.at(-1) ?? "", Buffer.from("opus-output"));
       return "";
@@ -647,6 +665,94 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     expect(callData<{ file_name?: string }>(fileCreateMock).file_name).toBe("报告—详情（2026）.md");
+  });
+});
+
+describe("uploadImageFeishu / uploadFileFeishu string-path bounds", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockResolvedFeishuAccount();
+
+    createFeishuClientMock.mockReturnValue({
+      im: {
+        file: { create: fileCreateMock },
+        image: { create: imageCreateMock },
+      },
+    });
+
+    fileCreateMock.mockResolvedValue({
+      code: 0,
+      data: { file_key: "file_key_path" },
+    });
+    imageCreateMock.mockResolvedValue({
+      code: 0,
+      data: { image_key: "image_key_path" },
+    });
+
+    readRegularFileMock.mockResolvedValue({
+      buffer: Buffer.from("local-file-data"),
+      stat: { size: 15 } as unknown as import("node:fs").Stats,
+    });
+  });
+
+  it("uploadImageFeishu passes maxBytes when reading a string path", async () => {
+    await uploadImageFeishu({
+      cfg: emptyConfig,
+      image: "/tmp/feishu-image.png",
+      accountId: "main",
+      maxBytes: 5 * 1024 * 1024,
+    });
+
+    expect(readRegularFileMock).toHaveBeenCalledWith({
+      filePath: "/tmp/feishu-image.png",
+      maxBytes: 5 * 1024 * 1024,
+    });
+    expect(imageCreateMock).toHaveBeenCalled();
+  });
+
+  it("uploadImageFeishu rejects oversized string paths", async () => {
+    readRegularFileMock.mockRejectedValueOnce(new Error("file exceeds limit of 10 bytes"));
+    await expect(
+      uploadImageFeishu({
+        cfg: emptyConfig,
+        image: "/tmp/huge-image.png",
+        accountId: "main",
+        maxBytes: 10,
+      }),
+    ).rejects.toThrow("file exceeds limit of 10 bytes");
+    expect(imageCreateMock).not.toHaveBeenCalled();
+  });
+
+  it("uploadFileFeishu passes maxBytes when reading a string path", async () => {
+    await uploadFileFeishu({
+      cfg: emptyConfig,
+      file: "/tmp/feishu-doc.pdf",
+      fileName: "doc.pdf",
+      fileType: "pdf",
+      accountId: "main",
+      maxBytes: 8 * 1024 * 1024,
+    });
+
+    expect(readRegularFileMock).toHaveBeenCalledWith({
+      filePath: "/tmp/feishu-doc.pdf",
+      maxBytes: 8 * 1024 * 1024,
+    });
+    expect(fileCreateMock).toHaveBeenCalled();
+  });
+
+  it("uploadFileFeishu rejects oversized string paths", async () => {
+    readRegularFileMock.mockRejectedValueOnce(new Error("file exceeds limit of 20 bytes"));
+    await expect(
+      uploadFileFeishu({
+        cfg: emptyConfig,
+        file: "/tmp/huge-doc.pdf",
+        fileName: "huge.pdf",
+        fileType: "pdf",
+        accountId: "main",
+        maxBytes: 20,
+      }),
+    ).rejects.toThrow("file exceeds limit of 20 bytes");
+    expect(fileCreateMock).not.toHaveBeenCalled();
   });
 });
 
