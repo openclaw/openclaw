@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import {
   acquireSessionWriteLock,
@@ -26,12 +27,15 @@ import {
   streamSessionTranscriptLinesReverse,
 } from "./transcript-stream.js";
 import { isCanonicalSessionTranscriptEntry } from "./transcript-tree.js";
-import { resolveOwnedSessionTranscriptWriteLockRunner } from "./transcript-write-context.js";
+import {
+  resolveOwnedSessionTranscriptWriteLockRunner,
+  type OwnedSessionTranscriptPublishedEntry,
+} from "./transcript-write-context.js";
 import { CURRENT_SESSION_VERSION } from "./version.js";
 
 const SESSION_MANAGER_APPEND_MAX_BYTES = 8 * 1024 * 1024;
 
-const transcriptAppendQueues = new Map<string, Promise<void>>();
+const transcriptAppendQueue = new KeyedAsyncQueue();
 
 type TranscriptLeafInfo = {
   leafId?: string;
@@ -220,7 +224,7 @@ async function resolveTranscriptLeafIdFromTrailingControls(
   return { appendMode: "active" };
 }
 
-async function readTranscriptLeafInfo(transcriptPath: string): Promise<TranscriptLeafInfo> {
+async function readTranscriptLeafInfoForward(transcriptPath: string): Promise<TranscriptLeafInfo> {
   let leafId: string | undefined;
   let hasParentLinkedEntries = false;
   let nonSessionEntryCount = 0;
@@ -261,6 +265,57 @@ async function readTranscriptLeafInfo(transcriptPath: string): Promise<Transcrip
     hasParentLinkedEntries,
     nonSessionEntryCount,
   };
+}
+
+async function readTranscriptLeafInfo(transcriptPath: string): Promise<TranscriptLeafInfo> {
+  let latestEntryId: string | undefined;
+  for await (const line of streamSessionTranscriptLinesReverse(transcriptPath)) {
+    const lineInfo = readTranscriptLineInfo(line);
+    if (!lineInfo.entryId) {
+      continue;
+    }
+    if (lineInfo.invalidLeafControl) {
+      break;
+    }
+    if (lineInfo.leafControl) {
+      if (latestEntryId) {
+        const valid = await validateTranscriptLeafControlReferences({
+          transcriptPath,
+          leafControlId: lineInfo.entryId,
+          leafControl: lineInfo.leafControl,
+        });
+        if (!valid) {
+          break;
+        }
+        return {
+          leafId: latestEntryId,
+          appendMode: lineInfo.leafControl.appendMode === "side" ? "side" : "active",
+          hasParentLinkedEntries: true,
+          nonSessionEntryCount: 0,
+        };
+      }
+      const resolvedLeaf = await resolveTranscriptLeafIdFromTrailingControls(transcriptPath);
+      return {
+        ...(resolvedLeaf.leafId ? { leafId: resolvedLeaf.leafId } : {}),
+        appendMode: resolvedLeaf.appendMode,
+        hasParentLinkedEntries: true,
+        nonSessionEntryCount: 0,
+      };
+    }
+    latestEntryId ??= lineInfo.entryId;
+    if (lineInfo.isCanonicalEntry && lineInfo.hasParentLinkedEntry) {
+      return {
+        leafId: latestEntryId,
+        appendMode: lineInfo.appendMode === "side" ? "side" : "active",
+        hasParentLinkedEntries: true,
+        nonSessionEntryCount: 0,
+      };
+    }
+    // A latest entry without parent linkage may be a legacy linear transcript.
+    // Fall back to the full scan only when migration detection needs it.
+    break;
+  }
+  return await readTranscriptLeafInfoForward(transcriptPath);
 }
 
 async function migrateLinearTranscriptToParentLinked(transcriptPath: string): Promise<{
@@ -343,24 +398,9 @@ export async function withSessionTranscriptAppendQueue<T>(
   fn: () => Promise<T>,
 ): Promise<T> {
   const queueKey = await resolveTranscriptAppendQueueKey(transcriptPath);
-  const previous = transcriptAppendQueues.get(queueKey) ?? Promise.resolve();
-  let releaseCurrent!: () => void;
-  const current = new Promise<void>((resolve) => {
-    releaseCurrent = resolve;
-  });
-  const tail = previous.catch(() => undefined).then(() => current);
   // Per-file queue is in-process only; the external session write lock still owns cross-process
   // ordering.
-  transcriptAppendQueues.set(queueKey, tail);
-  await previous.catch(() => undefined);
-  try {
-    return await fn();
-  } finally {
-    releaseCurrent();
-    if (transcriptAppendQueues.get(queueKey) === tail) {
-      transcriptAppendQueues.delete(queueKey);
-    }
-  }
+  return await transcriptAppendQueue.enqueue(queueKey, fn);
 }
 
 export type AppendSessionTranscriptMessageParams<TMessage = unknown> = {
@@ -383,6 +423,13 @@ export type AppendSessionTranscriptMessageResult<TMessage> = {
   messageId: string;
   message: TMessage;
   appended: boolean;
+};
+
+export type SessionTranscriptAppendTransactionContext = {
+  appendEvent: (event: unknown) => Promise<void>;
+  appendMessage: <TMessage>(
+    params: Omit<AppendSessionTranscriptMessageParams<TMessage>, "config" | "transcriptPath">,
+  ) => Promise<AppendSessionTranscriptMessageResult<TMessage> | undefined>;
 };
 
 function isTranscriptAgentMessage(value: unknown): value is AgentMessage {
@@ -462,6 +509,57 @@ export async function appendSessionTranscriptMessageWithOwnedWriteLock<TMessage>
     throw new Error("Owned transcript write lock is required for batch transcript append");
   }
   return await activeLockRunner(() => appendSessionTranscriptMessageLocked(params));
+}
+
+/**
+ * Runs a group of transcript appends through one append queue and write lock.
+ */
+export async function runSessionTranscriptAppendTransaction<T>(
+  params: Pick<AppendSessionTranscriptMessageParams, "config" | "transcriptPath">,
+  run: (context: SessionTranscriptAppendTransactionContext) => Promise<T> | T,
+): Promise<T> {
+  const publishedEntries: OwnedSessionTranscriptPublishedEntry[] = [];
+  const runTransaction = async (): Promise<T> =>
+    await run({
+      appendEvent: async (event) => {
+        const result = await appendSessionTranscriptEventLocked({
+          config: params.config,
+          event,
+          transcriptPath: params.transcriptPath,
+        });
+        publishedEntries.push({ kind: "serialized", serialized: result.serializedEntry });
+      },
+      appendMessage: async (messageParams) => {
+        const result = await appendSessionTranscriptMessageLocked({
+          ...messageParams,
+          config: params.config,
+          onHeaderCreated: (header) => {
+            publishedEntries.push({ kind: "header", serialized: header });
+          },
+          transcriptPath: params.transcriptPath,
+        });
+        if (result?.appended === true) {
+          publishedEntries.push({ kind: "id", id: result.messageId });
+        }
+        return result;
+      },
+    });
+  const activeLockRunner = resolveOwnedSessionTranscriptWriteLockRunner({
+    sessionFile: params.transcriptPath,
+  });
+  if (activeLockRunner) {
+    return await activeLockRunner(
+      () => withSessionTranscriptAppendQueue(params.transcriptPath, runTransaction),
+      {
+        publishOwnedWrite: true,
+        resolvePublishedEntries: () => publishedEntries,
+        resolvePublishedEntriesAfterFailure: () => publishedEntries,
+      },
+    );
+  }
+  return await withSessionTranscriptAppendQueue(params.transcriptPath, () =>
+    withSessionTranscriptWriteLock(params, runTransaction),
+  );
 }
 
 type AppendSessionTranscriptEventParams = {

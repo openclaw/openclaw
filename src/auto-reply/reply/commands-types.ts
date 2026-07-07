@@ -1,3 +1,4 @@
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 /** Shared command handler context and result contracts. */
 import type { BlockReplyChunking } from "../../agents/embedded-agent-block-chunker.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
@@ -48,6 +49,10 @@ export type HandleCommandsParams = {
     failures: Array<{ gate: string; key: string }>;
   };
   sessionEntry?: SessionEntry;
+  /** Snapshot captured before command handlers mutate the active entry. */
+  initialSessionEntry?: SessionEntry;
+  /** True only when the current command owns first creation of this session row. */
+  allowCreateSessionEntry?: boolean;
   previousSessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey: string;
@@ -57,7 +62,7 @@ export type HandleCommandsParams = {
   opts?: GetReplyOptions;
   defaultGroupActivation: () => "always" | "mention";
   resolvedThinkLevel?: ThinkLevel;
-  resolvedFastMode?: boolean;
+  resolvedFastMode?: FastMode;
   resolvedVerboseLevel: VerboseLevel;
   resolvedReasoningLevel: ReasoningLevel;
   resolvedElevatedLevel?: ElevatedLevel;

@@ -2,12 +2,7 @@
 // command scopes, and gateway enforcement around node client identity.
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import {
-  approveNodePairing,
-  getPairedNode,
-  listNodePairing,
-  requestNodePairing,
-} from "../infra/node-pairing.js";
+import { approveNodePairing, listNodePairing, requestNodePairing } from "../infra/node-pairing.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { callGateway } from "./call.js";
@@ -30,6 +25,11 @@ const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-node-pair-authz-
 
 async function makeNodePairingStateDir(): Promise<string> {
   return await tempDirs.make("case");
+}
+
+async function findPairedNode(nodeId: string, baseDir?: string) {
+  const pairing = await listNodePairing(baseDir);
+  return pairing.paired.find((node) => node.nodeId === nodeId) ?? null;
 }
 
 function requireApprovedPairing(
@@ -200,7 +200,7 @@ async function expectRpcNodePairingApprovalRejected(params: {
 
     expect(approve.ok).toBe(false);
     expect(approve.error?.message).toContain(params.expectedMessage);
-    await expect(getPairedNode(params.nodeId)).resolves.toBeNull();
+    await expect(findPairedNode(params.nodeId)).resolves.toBeNull();
   } finally {
     ws.close();
   }
@@ -264,7 +264,7 @@ describe("gateway node pairing authorization", () => {
         status: "forbidden",
         missingScope: "operator.admin",
       });
-      await expect(getPairedNode("node-approve-reject-admin", baseDir)).resolves.toBeNull();
+      await expect(findPairedNode("node-approve-reject-admin", baseDir)).resolves.toBeNull();
     });
 
     test("rejects node pairing approval without pairing scope", async () => {
@@ -289,7 +289,7 @@ describe("gateway node pairing authorization", () => {
         status: "forbidden",
         missingScope: "operator.pairing",
       });
-      await expect(getPairedNode("node-approve-reject-pairing", baseDir)).resolves.toBeNull();
+      await expect(findPairedNode("node-approve-reject-pairing", baseDir)).resolves.toBeNull();
     });
 
     test("approves commandless node pairing with pairing scope", async () => {
@@ -313,7 +313,7 @@ describe("gateway node pairing authorization", () => {
       expect(approved.requestId).toBe(request.request.requestId);
       expect(approved.node.nodeId).toBe("node-approve-target");
 
-      const pairedNode = await getPairedNode("node-approve-target", baseDir);
+      const pairedNode = await findPairedNode("node-approve-target", baseDir);
       expect(pairedNode?.nodeId).toBe("node-approve-target");
     });
   });
@@ -379,10 +379,15 @@ describe("gateway node pairing authorization", () => {
       );
     });
 
-    test("hides pending pairing records from read-only callers", async () => {
+    test("shows only the caller's pending request id to read-only callers", async () => {
       const pairedNodeId = "node-read-only-paired";
       const pendingOnlyNodeId = "node-read-only-pending";
       const visiblePendingNode = await pairDeviceIdentity({
+        name: "node-read-only-visible-pending",
+        role: "operator",
+        scopes: ["operator.read"],
+      });
+      await pairDeviceIdentity({
         name: "node-read-only-visible-pending",
         role: "node",
         scopes: [],
@@ -407,7 +412,7 @@ describe("gateway node pairing authorization", () => {
         platform: "macos",
         commands: ["system.run"],
       });
-      await requestNodePairing({
+      const visiblePending = await requestNodePairing({
         nodeId: visiblePendingNode.identity.deviceId,
         platform: "android",
         commands: ["device.status"],
@@ -483,6 +488,40 @@ describe("gateway node pairing authorization", () => {
         const pendingOnly = await rpcReq(ws, "node.describe", { nodeId: pendingOnlyNodeId });
         expect(pendingOnly.ok).toBe(false);
         expect(pendingOnly.error?.message).toContain("unknown nodeId");
+
+        const selfWs = await openTrackedWs(getStarted().port);
+        try {
+          await connectOk(selfWs, {
+            token: "secret",
+            scopes: ["operator.read"],
+            deviceIdentityPath: visiblePendingNode.identityPath,
+          });
+          const selfListed = await rpcReq<{ nodes?: NodeDiagnostics[] }>(selfWs, "node.list", {});
+          const selfNodes = selfListed.payload?.nodes ?? [];
+          expect(
+            selfNodes.find((node) => node.nodeId === visiblePendingNode.identity.deviceId),
+          ).toEqual(
+            expect.objectContaining({
+              approvalState: "pending-approval",
+              pendingRequestId: visiblePending.request.requestId,
+            }),
+          );
+          expect(selfNodes.find((node) => node.nodeId === pairedNodeId)).not.toHaveProperty(
+            "pendingRequestId",
+          );
+
+          const selfDescribed = await rpcReq<NodeDiagnostics>(selfWs, "node.describe", {
+            nodeId: visiblePendingNode.identity.deviceId,
+          });
+          expect(selfDescribed.payload).toEqual(
+            expect.objectContaining({
+              approvalState: "pending-approval",
+              pendingRequestId: visiblePending.request.requestId,
+            }),
+          );
+        } finally {
+          selfWs.close();
+        }
       } finally {
         ws.close();
       }

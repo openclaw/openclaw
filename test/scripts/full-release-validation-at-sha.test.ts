@@ -30,7 +30,10 @@ describe("full-release-validation-at-sha", () => {
 
   it("rejects missing option values", () => {
     expect(() => parseArgs(["--sha", "--dry-run"])).toThrow("--sha requires a value");
+    expect(() => parseArgs(["--sha", "-h"])).toThrow("--sha requires a value");
     expect(() => parseArgs(["--branch"])).toThrow("--branch requires a value");
+    expect(() => parseArgs(["--branch", "-h"])).toThrow("--branch requires a value");
     expect(() => parseArgs(["-f", "--dry-run"])).toThrow("-f requires a value");
+    expect(() => parseArgs(["-f", "-h"])).toThrow("-f requires a value");
   });
 });

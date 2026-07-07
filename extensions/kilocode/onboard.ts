@@ -19,10 +19,6 @@ const kilocodePresetAppliers = createModelCatalogPresetAppliers({
   }),
 });
 
-export function applyKilocodeProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return kilocodePresetAppliers.applyProviderConfig(cfg);
-}
-
 export function applyKilocodeConfig(cfg: OpenClawConfig): OpenClawConfig {
   return kilocodePresetAppliers.applyConfig(cfg);
 }

@@ -20,7 +20,7 @@ import {
   SAFE_BIN_PROFILES,
   resolveSafeBinProfiles,
 } from "./exec-safe-bin-policy.js";
-import { buildTrustedSafeBinDirs } from "./exec-safe-bin-trust.js";
+import { getTrustedSafeBinDirs } from "./exec-safe-bin-trust.js";
 
 describe("exec approvals safe bins", () => {
   type SafeBinCase = {
@@ -357,8 +357,9 @@ describe("exec approvals safe bins", () => {
         argv: ["jq", ".foo"],
         resolution,
         safeBins: normalizeSafeBins(["jq"]),
-        trustedSafeBinDirs: buildTrustedSafeBinDirs({
+        trustedSafeBinDirs: getTrustedSafeBinDirs({
           extraDirs: ["/opt/homebrew/Cellar/jq/1.7.1/bin"],
+          refresh: true,
         }),
       }),
     ).toBe(true);

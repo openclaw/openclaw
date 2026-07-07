@@ -1,11 +1,13 @@
 // Security Sensitive Guard Script tests cover sensitive file guard behavior.
 import { describe, expect, it } from "vitest";
 import {
+  GITHUB_RESPONSE_BODY_MAX_BYTES,
   allowSecuritySensitiveCommand,
   collectSecuritySensitiveChanges,
   findSecuritySensitiveOverrideCommand,
   findSecuritySensitiveOverrideCommandAsync,
   findTrustedSecuritySensitiveGuardActor,
+  githubApi,
   isSecuritySensitiveFile,
   isSecuritySensitiveGuardAuthorizedForHead,
   isSecuritySensitiveGuardMarkerComment,
@@ -244,5 +246,20 @@ describe("security-sensitive guard script", () => {
     expect(securityApproverSet("vincentkoc, steipete\njoshavant")).toEqual(
       new Set(["vincentkoc", "steipete", "joshavant"]),
     );
+  });
+
+  it("bounds successful GitHub API response bodies", async () => {
+    const request = githubApi("token", {
+      responseMaxBodyBytes: 64,
+      fetchImpl: (() =>
+        Promise.resolve(
+          new Response("x".repeat(65), {
+            headers: { "content-length": "65" },
+          }),
+        )) as typeof fetch,
+    }).request("/repos/openclaw/openclaw");
+
+    await expect(request).rejects.toThrow("GitHub response body exceeded 64 bytes");
+    expect(GITHUB_RESPONSE_BODY_MAX_BYTES).toBeGreaterThan(64);
   });
 });

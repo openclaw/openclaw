@@ -14,6 +14,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
+import { clampNumber } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {
@@ -151,7 +153,9 @@ type CodeModeWorkerResult =
 const activeRuns = new Map<string, CodeModeRunState>();
 const resumingRunIds = new Set<string>();
 let activeRunReservations = 0;
-let typescriptRuntimePromise: Promise<typeof import("typescript")> | null = null;
+const typescriptRuntimeLoader = createLazyPromiseLoader(() => import("typescript"), {
+  cacheRejections: true,
+});
 let typescriptRuntimeForTest: typeof import("typescript") | null = null;
 
 function normalizeCodeModeRawConfig(value: unknown): Record<string, unknown> | undefined {
@@ -183,10 +187,6 @@ function readPositiveInteger(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
-function clampInteger(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
-}
-
 function readLanguages(value: unknown): CodeModeLanguage[] {
   if (!Array.isArray(value)) {
     return ["javascript", "typescript"];
@@ -200,7 +200,7 @@ function readLanguages(value: unknown): CodeModeLanguage[] {
 /** Resolves Code Mode runtime limits and language support from config. */
 export function resolveCodeModeConfig(config?: OpenClawConfig, agentId?: string): CodeModeConfig {
   const raw = readCodeModeRawConfig(config, agentId);
-  const maxSearchLimit = clampInteger(
+  const maxSearchLimit = clampNumber(
     readPositiveInteger(raw.maxSearchLimit, DEFAULT_MAX_SEARCH_LIMIT),
     1,
     DEFAULT_MAX_SEARCH_LIMIT,
@@ -210,33 +210,33 @@ export function resolveCodeModeConfig(config?: OpenClawConfig, agentId?: string)
     runtime: "quickjs-wasi",
     mode: "only",
     languages: readLanguages(raw.languages),
-    timeoutMs: clampInteger(readPositiveInteger(raw.timeoutMs, DEFAULT_TIMEOUT_MS), 100, 60_000),
-    memoryLimitBytes: clampInteger(
+    timeoutMs: clampNumber(readPositiveInteger(raw.timeoutMs, DEFAULT_TIMEOUT_MS), 100, 60_000),
+    memoryLimitBytes: clampNumber(
       readPositiveInteger(raw.memoryLimitBytes, DEFAULT_MEMORY_LIMIT_BYTES),
       1024 * 1024,
       1024 * 1024 * 1024,
     ),
-    maxOutputBytes: clampInteger(
+    maxOutputBytes: clampNumber(
       readPositiveInteger(raw.maxOutputBytes, DEFAULT_MAX_OUTPUT_BYTES),
       1024,
       10 * 1024 * 1024,
     ),
-    maxSnapshotBytes: clampInteger(
+    maxSnapshotBytes: clampNumber(
       readPositiveInteger(raw.maxSnapshotBytes, DEFAULT_MAX_SNAPSHOT_BYTES),
       1024,
       256 * 1024 * 1024,
     ),
-    maxPendingToolCalls: clampInteger(
+    maxPendingToolCalls: clampNumber(
       readPositiveInteger(raw.maxPendingToolCalls, DEFAULT_MAX_PENDING_TOOL_CALLS),
       1,
       128,
     ),
-    snapshotTtlSeconds: clampInteger(
+    snapshotTtlSeconds: clampNumber(
       readPositiveInteger(raw.snapshotTtlSeconds, DEFAULT_SNAPSHOT_TTL_SECONDS),
       1,
       24 * 60 * 60,
     ),
-    searchDefaultLimit: clampInteger(
+    searchDefaultLimit: clampNumber(
       readPositiveInteger(raw.searchDefaultLimit, DEFAULT_SEARCH_LIMIT),
       1,
       maxSearchLimit,
@@ -305,11 +305,22 @@ class CodeModeLimitError extends ToolInputError {
   }
 }
 
+function isRuntimeInterruptedError(error: unknown): boolean {
+  return errorMessage(error) === "interrupted";
+}
+
 function codeModeFailureCode(error: unknown): CodeModeFailureCode {
   if (error instanceof CodeModeLimitError) {
     return error.code;
   }
+  if (isRuntimeInterruptedError(error)) {
+    return "timeout";
+  }
   return error instanceof ToolInputError ? "invalid_input" : "internal_error";
+}
+
+function codeModeFailureMessage(error: unknown): string {
+  return isRuntimeInterruptedError(error) ? "code mode timeout exceeded" : errorMessage(error);
 }
 
 function enforceOutputLimit(output: unknown[], config: CodeModeConfig): void {
@@ -427,8 +438,7 @@ async function loadTypeScriptRuntime(): Promise<typeof import("typescript")> {
   if (typescriptRuntimeForTest) {
     return typescriptRuntimeForTest;
   }
-  typescriptRuntimePromise ??= import("typescript");
-  return await typescriptRuntimePromise;
+  return await typescriptRuntimeLoader.load();
 }
 
 async function prepareSource(input: {
@@ -505,7 +515,10 @@ async function runBridgeRequest(params: {
         if (typeof id !== "string") {
           throw new ToolInputError("describe id must be a string.");
         }
-        value = await params.runtime.describe(id, { includeMcp: false });
+        value = await params.runtime.describe(id, {
+          includeMcp: false,
+          recoverySurface: "tools",
+        });
         break;
       }
       case "call": {
@@ -513,7 +526,10 @@ async function runBridgeRequest(params: {
         if (typeof id !== "string") {
           throw new ToolInputError("call id must be a string.");
         }
-        const described = await params.runtime.describe(id, { includeMcp: false });
+        const described = await params.runtime.describe(id, {
+          includeMcp: false,
+          recoverySurface: "tools",
+        });
         value = await params.runtime.callExactId(described.id, values[1] ?? {}, {
           parentToolCallId: params.parentToolCallId,
           signal: params.signal,
@@ -606,22 +622,24 @@ function failedCodeModeWorkerResult(
   };
 }
 
-function isQuickJsInterruptedWorkerError(error: unknown): boolean {
-  return String(error) === "interrupted";
-}
-
-function normalizeCodeModeWorkerResult(result: CodeModeWorkerResult): CodeModeWorkerResult {
+function normalizeCodeModeTimeoutResult<
+  T extends { status: string; code?: unknown; error?: unknown },
+>(result: T): T {
   if (
     result.status === "failed" &&
     result.code === "timeout" &&
-    isQuickJsInterruptedWorkerError(result.error)
+    !String(result.error).includes("timeout exceeded")
   ) {
     return {
       ...result,
       error: "code mode timeout exceeded",
-    };
+    } as T;
   }
   return result;
+}
+
+function normalizeCodeModeWorkerResult(result: CodeModeWorkerResult): CodeModeWorkerResult {
+  return normalizeCodeModeTimeoutResult(result);
 }
 
 async function runCodeModeWorker(
@@ -855,7 +873,7 @@ async function runExec(params: {
   } catch (error) {
     return {
       status: "failed" as const,
-      error: errorMessage(error),
+      error: codeModeFailureMessage(error),
       code: codeModeFailureCode(error),
       output: [],
       telemetry: telemetry(runtime),
@@ -889,7 +907,7 @@ async function runExec(params: {
   } catch (error) {
     return {
       status: "failed" as const,
-      error: errorMessage(error),
+      error: codeModeFailureMessage(error),
       code: codeModeFailureCode(error),
       output: [],
       telemetry: telemetry(runtime),
@@ -1094,7 +1112,7 @@ async function runWait(params: {
   } catch (error) {
     return {
       status: "failed" as const,
-      error: errorMessage(error),
+      error: codeModeFailureMessage(error),
       code: codeModeFailureCode(error),
       output: state.output,
       telemetry: telemetry(state.runtime),
@@ -1135,20 +1153,23 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
     ) => {
       const input = readCode(args);
       return jsonResult(
-        await runExec({
-          toolCallId,
-          ctx,
-          code: input.code,
-          language: input.language,
-          signal,
-          onUpdate,
-        }),
+        normalizeCodeModeTimeoutResult(
+          await runExec({
+            toolCallId,
+            ctx,
+            code: input.code,
+            language: input.language,
+            signal,
+            onUpdate,
+          }),
+        ),
       );
     },
   } as AnyAgentTool);
   const waitTool = markCodeModeControlTool({
     name: CODE_MODE_WAIT_TOOL_NAME,
     label: "wait",
+    hideFromChannelProgress: true,
     description: "Resume a suspended OpenClaw code mode run returned by exec.",
     parameters: Type.Object({
       runId: Type.String({ description: "Code mode run id returned by exec." }),
@@ -1160,13 +1181,15 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       onUpdate?: AgentToolUpdateCallback,
     ) =>
       jsonResult(
-        await runWait({
-          toolCallId,
-          ctx,
-          runId: readRunId(args),
-          signal,
-          onUpdate,
-        }),
+        normalizeCodeModeTimeoutResult(
+          await runWait({
+            toolCallId,
+            ctx,
+            runId: readRunId(args),
+            signal,
+            onUpdate,
+          }),
+        ),
       ),
   } as AnyAgentTool);
   return [execTool, waitTool];
@@ -1251,7 +1274,8 @@ export const testing = {
   runCodeModeWorker,
   resolveCodeModeWorkerUrl,
   resolveCodeModeConfig,
-  getTypescriptRuntimePromise: () => typescriptRuntimePromise,
+  getTypescriptRuntimePromise: (): Promise<typeof import("typescript")> | null =>
+    typescriptRuntimeLoader.peek() ?? null,
   setTypescriptRuntimeForTest: (runtime: typeof import("typescript") | null) => {
     typescriptRuntimeForTest = runtime;
   },

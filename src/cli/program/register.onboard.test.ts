@@ -36,7 +36,7 @@ vi.mock("../../commands/onboard-core-auth-flags.js", () => ({
 }));
 
 vi.mock("../../plugins/provider-auth-choices.js", () => ({
-  resolveManifestProviderOnboardAuthFlags: () => [
+  resolveProviderOnboardAuthFlags: () => [
     {
       cliOption: "--openai-api-key <key>",
       description: "OpenAI API key",

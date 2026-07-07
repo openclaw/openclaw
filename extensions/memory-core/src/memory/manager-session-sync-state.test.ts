@@ -66,6 +66,19 @@ describe("memory session sync state", () => {
     expect(plan.activePaths).toEqual(new Set(["sessions/incremental.jsonl"]));
   });
 
+  it("marks identity-targeted syncs as session work", async () => {
+    const { shouldSyncSessionsForReindex } = await import("./manager-session-reindex.js");
+
+    expect(
+      shouldSyncSessionsForReindex({
+        hasSessionSource: true,
+        sessionsDirty: false,
+        dirtySessionFileCount: 0,
+        sync: { sessions: [{ agentId: "main", sessionId: "targeted" }] },
+      }),
+    ).toBe(true);
+  });
+
   it("marks missing and changed startup session files dirty", () => {
     const dirtyFiles = resolveMemorySessionStartupDirtyFiles({
       files: [

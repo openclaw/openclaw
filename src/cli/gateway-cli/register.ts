@@ -1,4 +1,5 @@
 // Commander registration for gateway status, health, diagnostics, discovery, and run commands.
+import { formatByteSize } from "@openclaw/normalization-core";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
@@ -18,6 +19,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
+import { parseGatewayPortOption } from "../gateway-port-option.js";
 import { formatHelpExamples } from "../help-format.js";
 import type { GatewayRpcOpts } from "./call.js";
 import type { GatewayDiscoverOpts } from "./discover.js";
@@ -168,6 +170,34 @@ function resolveGatewayRpcOptions<T extends { token?: string; password?: string 
   };
 }
 
+async function resolveGatewayRpcOptionsWithLocalPort(
+  opts: GatewayRpcOpts & { port?: unknown },
+  command?: Command,
+): Promise<GatewayRpcOpts> {
+  const rpcOpts = resolveGatewayRpcOptions(opts, command);
+  const port = parseGatewayPortOption(opts.port ?? inheritOptionFromParent(command, "port"));
+  if (port === undefined) {
+    return rpcOpts;
+  }
+  if (typeof opts.url === "string" && opts.url.trim()) {
+    throw new Error("Use either --url or --port, not both.");
+  }
+  const { readBestEffortConfig } = await loadConfigModule();
+  const config = await readBestEffortConfig();
+  return {
+    ...rpcOpts,
+    localPortOverride: port,
+    config: {
+      ...config,
+      gateway: {
+        ...config.gateway,
+        mode: "local",
+        port,
+      },
+    },
+  };
+}
+
 async function renderCostUsageSummaryAsync(
   summary: CostUsageSummary,
   days: number,
@@ -203,15 +233,12 @@ function formatBytes(value: number | undefined): string {
   if (value === undefined) {
     return "n/a";
   }
-  const units = ["B", "KiB", "MiB", "GiB"];
-  let amount = value;
-  let unitIndex = 0;
-  while (amount >= 1024 && unitIndex < units.length - 1) {
-    amount /= 1024;
-    unitIndex += 1;
-  }
-  const digits = unitIndex === 0 || amount >= 100 ? 0 : 1;
-  return `${amount.toFixed(digits)} ${units[unitIndex]}`;
+  return formatByteSize(value, {
+    style: "iec",
+    maxUnit: "giga",
+    separator: " ",
+    fractionDigits: (amount, unit) => (unit === "byte" || amount >= 100 ? 0 : 1),
+  });
 }
 
 function formatStabilityEvent(record: DiagnosticStabilityEventRecord): string {
@@ -411,7 +438,7 @@ function renderSupportExportResult(
 
 function resolveSupportExportRpcOptions(
   rpc?: Pick<GatewayRpcOpts, "url" | "token" | "password" | "timeout">,
-): GatewayRpcOpts {
+): GatewayRpcOpts & { timeout: string } {
   return {
     url: rpc?.url,
     token: rpc?.token,
@@ -527,12 +554,24 @@ export function registerGatewayCli(program: Command) {
       .command("usage-cost")
       .description("Fetch usage cost summary from session logs")
       .option("--days <days>", "Number of days to include", "30")
+      .option("--agent <id>", "Scope the cost summary to a specific agent id")
+      .option("--all-agents", "Aggregate the cost summary across all agents", false)
       .action(async (opts, command) => {
         await runGatewayCommand(
           async () => {
             const rpcOpts = resolveGatewayRpcOptions(opts, command);
             const days = parseDaysOption(opts.days);
-            const result = await callGatewayCli("usage.cost", rpcOpts, { days });
+            const agentId = typeof opts.agent === "string" ? opts.agent.trim() : undefined;
+            // The gateway honors agentScope only when no agentId is set, so reject the
+            // ambiguous combination here instead of silently dropping --all-agents.
+            if (agentId && opts.allAgents) {
+              throw new Error("Use --agent or --all-agents, not both");
+            }
+            const result = await callGatewayCli("usage.cost", rpcOpts, {
+              days,
+              ...(agentId ? { agentId } : {}),
+              ...(opts.allAgents ? { agentScope: "all" } : {}),
+            });
             if (rpcOpts.json) {
               defaultRuntime.writeJson(result);
               return;
@@ -553,10 +592,11 @@ export function registerGatewayCli(program: Command) {
     gateway
       .command("health")
       .description("Fetch Gateway health")
+      .option("--port <port>", "Local Gateway port")
       .action(async (opts, command) => {
         await runGatewayCommand(
           async () => {
-            const rpcOpts = resolveGatewayRpcOptions(opts, command);
+            const rpcOpts = await resolveGatewayRpcOptionsWithLocalPort(opts, command);
             const [
               { emitReachableGatewayAuthDiagnostic, formatHealthChannelLines },
               { styleHealthChannelLine },
@@ -568,11 +608,12 @@ export function registerGatewayCli(program: Command) {
               const { readBestEffortConfig } = await loadConfigModule();
               const handled = await emitReachableGatewayAuthDiagnostic({
                 error,
-                config: await readBestEffortConfig(),
+                config: rpcOpts.config ?? (await readBestEffortConfig()),
                 runtime: defaultRuntime,
                 timeoutMs: parseGatewayRpcTimeoutOption(rpcOpts.timeout),
                 token: rpcOpts.token,
                 password: rpcOpts.password,
+                localPortOverride: rpcOpts.localPortOverride,
                 json: Boolean(rpcOpts.json),
               });
               if (handled) {
@@ -728,6 +769,7 @@ export function registerGatewayCli(program: Command) {
       "Show gateway reachability, auth capability, and read-probe summary (local + remote)",
     )
     .option("--url <url>", "Explicit Gateway WebSocket URL (still probes localhost)")
+    .option("--port <port>", "Local Gateway port")
     .option("--ssh <target>", "SSH target for remote gateway tunnel (user@host or user@host:port)")
     .option("--ssh-identity <path>", "SSH identity file path")
     .option("--ssh-auto", "Try to derive an SSH target from Bonjour discovery", false)
@@ -739,7 +781,13 @@ export function registerGatewayCli(program: Command) {
       await runGatewayCommand(async () => {
         const rpcOpts = resolveGatewayRpcOptions(opts, command);
         const { gatewayStatusCommand } = await loadGatewayStatusModule();
-        await gatewayStatusCommand(rpcOpts, defaultRuntime);
+        await gatewayStatusCommand(
+          {
+            ...rpcOpts,
+            port: opts.port ?? inheritOptionFromParent(command, "port"),
+          },
+          defaultRuntime,
+        );
       });
     });
 

@@ -42,10 +42,6 @@ function newStateDir(homedir: () => string = resolveDefaultHomeDir): string {
   return path.join(homedir(), NEW_STATE_DIRNAME);
 }
 
-export function resolveLegacyStateDir(homedir: () => string = resolveDefaultHomeDir): string {
-  return legacyStateDirs(homedir)[0] ?? newStateDir(homedir);
-}
-
 export function resolveLegacyStateDirs(homedir: () => string = resolveDefaultHomeDir): string[] {
   return legacyStateDirs(homedir);
 }

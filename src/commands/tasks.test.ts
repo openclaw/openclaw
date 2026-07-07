@@ -24,6 +24,7 @@ import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   tasksAuditCommand,
   tasksCancelCommand,
+  tasksListCommand,
   tasksMaintenanceCommand,
   tasksShowCommand,
 } from "./tasks.js";
@@ -88,7 +89,7 @@ async function withTaskCommandStateDir(
   await withOpenClawTestState(
     { layout: "state-only", prefix: "openclaw-tasks-command-" },
     async (state) => {
-      taskRegistryMaintenance.stopTaskRegistryMaintenanceForTests();
+      taskRegistryMaintenance.stopTaskRegistryMaintenance();
       taskRegistryMaintenance.resetTaskRegistryMaintenanceRuntimeForTests();
       resetConfigRuntimeState();
       resetDetachedTaskLifecycleRuntimeForTests();
@@ -99,7 +100,7 @@ async function withTaskCommandStateDir(
       try {
         await run(state);
       } finally {
-        taskRegistryMaintenance.stopTaskRegistryMaintenanceForTests();
+        taskRegistryMaintenance.stopTaskRegistryMaintenance();
         taskRegistryMaintenance.resetTaskRegistryMaintenanceRuntimeForTests();
         resetConfigRuntimeState();
         resetDetachedTaskLifecycleRuntimeForTests();
@@ -119,7 +120,7 @@ describe("tasks commands", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    taskRegistryMaintenance.stopTaskRegistryMaintenanceForTests();
+    taskRegistryMaintenance.stopTaskRegistryMaintenance();
     taskRegistryMaintenance.resetTaskRegistryMaintenanceRuntimeForTests();
     resetConfigRuntimeState();
     resetDetachedTaskLifecycleRuntimeForTests();
@@ -238,6 +239,80 @@ describe("tasks commands", () => {
       );
       expect(runtime.error).not.toHaveBeenCalled();
       expect(runtime.exit).not.toHaveBeenCalled();
+    });
+  });
+
+  it("routes ACP task cancellation through the live gateway before local fallback", async () => {
+    await withTaskCommandStateDir(async () => {
+      const task = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:jarvis:main",
+        scopeKind: "session",
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-acp-cancel",
+        task: "Cancel ACP child",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+      });
+      mocks.callGateway.mockResolvedValueOnce({
+        found: true,
+        cancelled: true,
+        task: {
+          taskId: task.taskId,
+          runtime: "acp",
+          runId: task.runId,
+        },
+      });
+      const runtime = createRuntime();
+
+      await tasksCancelCommand({ lookup: task.taskId }, runtime);
+
+      expect(mocks.callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "tasks.cancel",
+          params: { taskId: task.taskId },
+          timeoutMs: 5_000,
+        }),
+      );
+      expect(runtime.log).toHaveBeenCalledWith(
+        `Cancelled ${task.taskId} (acp) run run-acp-cancel.`,
+      );
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.exit).not.toHaveBeenCalled();
+    });
+  });
+
+  it("fails ACP task cancellation loudly when the live gateway is unavailable", async () => {
+    await withTaskCommandStateDir(async () => {
+      const task = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:jarvis:main",
+        scopeKind: "session",
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-acp-cancel-gateway-down",
+        task: "Cancel ACP child",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+      });
+      mocks.callGateway.mockRejectedValueOnce(new Error("gateway unavailable"));
+      const runtime = createRuntime();
+
+      await tasksCancelCommand({ lookup: task.taskId }, runtime);
+
+      expect(mocks.callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "tasks.cancel",
+          params: { taskId: task.taskId },
+          timeoutMs: 5_000,
+        }),
+      );
+      expect(runtime.error).toHaveBeenCalledWith(
+        "ACP task cancellation requires the live Gateway tasks.cancel path: gateway unavailable",
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(runtime.log).not.toHaveBeenCalled();
     });
   });
 
@@ -370,6 +445,125 @@ describe("tasks commands", () => {
     });
   });
 
+  it("preserves both cron-run session key shapes for a running non-slug job id", async () => {
+    await withTaskCommandStateDir(async (state) => {
+      const now = Date.now();
+      const old = now - 8 * 24 * 60 * 60_000;
+      await saveCronStore(state.statePath("cron", "jobs.json"), {
+        version: 1,
+        jobs: [
+          {
+            id: "Daily Report",
+            name: "Daily Report",
+            enabled: true,
+            schedule: { kind: "every", everyMs: 60_000 },
+            sessionTarget: "isolated",
+            sessionKey: "cron:daily-report",
+            wakeMode: "now",
+            payload: { kind: "agentTurn", message: "ping" },
+            delivery: { mode: "none" },
+            createdAtMs: now,
+            updatedAtMs: now,
+            state: { runningAtMs: now - 5_000 },
+          },
+        ],
+      });
+
+      const sessionsDir = state.sessionsDir("main");
+      const storePath = path.join(sessionsDir, "sessions.json");
+      await fs.mkdir(sessionsDir, { recursive: true });
+      // A running job can be retargeted after its session is created, so maintenance must preserve
+      // both the raw and slugged historical shapes.
+      const slugKey = "agent:main:cron:daily-report:run:old-run";
+      const rawKey = "agent:main:cron:daily report:run:old-run";
+      const retiredKey = "agent:main:cron:retired-job:run:old-run";
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            [slugKey]: { sessionId: "slug-run", updatedAt: old },
+            [rawKey]: { sessionId: "raw-run", updatedAt: old },
+            [retiredKey]: { sessionId: "retired-run", updatedAt: old },
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+
+      const runtime = createRuntime();
+      await tasksMaintenanceCommand({ json: true, apply: true }, runtime);
+
+      const payload = readFirstJsonLog(runtime) as {
+        maintenance: { sessions: { runningCronJobs: number } };
+      };
+      expect(payload.maintenance.sessions.runningCronJobs).toBe(1);
+      const updated = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
+      expect(updated[slugKey]).toBeDefined();
+      expect(updated[rawKey]).toBeDefined();
+      expect(updated[retiredKey]).toBeUndefined();
+    });
+  });
+
+  it("preserves a running cron session with an explicit session key", async () => {
+    await withTaskCommandStateDir(async (state) => {
+      const now = Date.now();
+      const old = now - 8 * 24 * 60 * 60_000;
+      await saveCronStore(state.statePath("cron", "jobs.json"), {
+        version: 1,
+        jobs: [
+          {
+            id: "job-uuid",
+            name: "Daily monitor",
+            enabled: true,
+            schedule: { kind: "every", everyMs: 60_000 },
+            sessionTarget: "isolated",
+            sessionKey: "cron:daily-monitor",
+            wakeMode: "now",
+            payload: { kind: "agentTurn", message: "ping" },
+            delivery: { mode: "none" },
+            createdAtMs: now,
+            updatedAtMs: now,
+            state: { runningAtMs: now - 5_000 },
+          },
+        ],
+      });
+
+      const sessionsDir = state.sessionsDir("main");
+      const storePath = path.join(sessionsDir, "sessions.json");
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            "agent:main:cron:daily-monitor:run:old-run": {
+              sessionId: "explicit-run",
+              updatedAt: old,
+            },
+            "agent:main:cron:job-uuid:run:old-run": {
+              sessionId: "job-id-run",
+              updatedAt: old,
+            },
+            "agent:main:cron:retired-job:run:old-run": {
+              sessionId: "retired-run",
+              updatedAt: old,
+            },
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+
+      const runtime = createRuntime();
+      await tasksMaintenanceCommand({ json: true, apply: true }, runtime);
+
+      const updated = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
+      expect(updated["agent:main:cron:daily-monitor:run:old-run"]).toBeDefined();
+      expect(updated["agent:main:cron:retired-job:run:old-run"]).toBeUndefined();
+    });
+  });
+
   it("does not build JSON-only diagnostics for text maintenance output", async () => {
     await withTaskCommandStateDir(async () => {
       const diagnosticsSpy = vi.spyOn(
@@ -405,6 +599,30 @@ describe("tasks commands", () => {
         .join("\n");
       expect(joined).toContain(`taskId: ${task.taskId}`);
       expect(joined).toContain("startedAt: n/a");
+    });
+  });
+
+  it("keeps task list summaries within their UTF-16 column limit", async () => {
+    await withTaskCommandStateDir(async () => {
+      createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "task-utf16-summary",
+        status: "succeeded",
+        task: "Inspect task summary",
+        terminalSummary: `${"y".repeat(78)}🚀xx`,
+      });
+      const runtime = createRuntime();
+
+      await tasksListCommand({}, runtime);
+
+      const output = vi
+        .mocked(runtime.log)
+        .mock.calls.map(([line]) => String(line))
+        .join("\n");
+      expect(output).toContain(`${"y".repeat(78)}…`);
+      expect(output).not.toContain("🚀");
     });
   });
 

@@ -17,10 +17,13 @@ import {
 } from "../agents/sandbox/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { runCommandWithTimeout, runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+
+const SANDBOX_REGISTRY_FILES_CHECK_ID = "core/doctor/sandbox/registry-files";
 
 type SandboxScriptInfo = {
   scriptPath: string;
@@ -358,8 +361,12 @@ export async function maybeRepairSandboxImages(
 
 function formatLegacyRegistryInspectionLine(file: LegacySandboxRegistryInspection): string {
   const status = file.valid ? `${file.entries} entr${file.entries === 1 ? "y" : "ies"}` : "invalid";
-  const sourcePath = file.source === "sharded" ? file.shardedDir : file.registryPath;
+  const sourcePath = legacySandboxRegistryInspectionSourcePath(file);
   return `- ${file.kind} ${file.source}: ${shortenHomePath(sourcePath)} (${status})`;
+}
+
+function legacySandboxRegistryInspectionSourcePath(file: LegacySandboxRegistryInspection): string {
+  return file.source === "sharded" ? file.shardedDir : file.registryPath;
 }
 
 function formatLegacyRegistryMigrationLine(result: LegacySandboxRegistryMigrationResult): string {
@@ -378,9 +385,44 @@ function formatLegacyRegistryMigrationLine(result: LegacySandboxRegistryMigratio
   return "";
 }
 
-/** Migrates legacy sandbox registry files and directories into SQLite. */
+export async function detectLegacySandboxRegistryFileIssues(): Promise<
+  readonly LegacySandboxRegistryInspection[]
+> {
+  return (await inspectLegacySandboxRegistryFiles()).filter((file) => file.exists);
+}
+
+export function legacySandboxRegistryInspectionToHealthFinding(
+  file: LegacySandboxRegistryInspection,
+): HealthFinding {
+  return {
+    checkId: SANDBOX_REGISTRY_FILES_CHECK_ID,
+    severity: "warning",
+    message: `Legacy sandbox registry file detected.
+${formatLegacyRegistryInspectionLine(file)}`,
+    path: legacySandboxRegistryInspectionSourcePath(file),
+    fixHint: `Run ${formatCliCommand("openclaw doctor --fix")} to migrate valid entries to SQLite.`,
+  };
+}
+
+export function legacySandboxRegistryInspectionToRepairEffect(
+  file: LegacySandboxRegistryInspection,
+): HealthRepairEffect {
+  const action = !file.valid
+    ? "would-quarantine-legacy-sandbox-registry"
+    : file.entries === 0
+      ? "would-remove-empty-legacy-sandbox-registry"
+      : "would-migrate-legacy-sandbox-registry";
+  return {
+    kind: "state",
+    action,
+    target: legacySandboxRegistryInspectionSourcePath(file),
+    dryRunSafe: false,
+  };
+}
+
+/** Migrates legacy sandbox registry files and directories. */
 export async function maybeRepairSandboxRegistryFiles(prompter: DoctorPrompter): Promise<void> {
-  const legacyFiles = (await inspectLegacySandboxRegistryFiles()).filter((file) => file.exists);
+  const legacyFiles = await detectLegacySandboxRegistryFileIssues();
   if (legacyFiles.length === 0) {
     return;
   }

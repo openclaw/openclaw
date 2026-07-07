@@ -80,12 +80,16 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
   private connectPromise: Promise<void> | null = null;
   private rejectPendingConnect: ((error: Error) => void) | null = null;
   private closePromise: Promise<void> | null = null;
+  private closed = false;
 
   constructor(options: GatewayClientTransportOptions = {}) {
     this.options = options;
   }
 
   connect(): Promise<void> {
+    if (this.closed) {
+      return Promise.reject(new Error("gateway transport is closed"));
+    }
     if (this.connectPromise) {
       return this.connectPromise;
     }
@@ -99,21 +103,27 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
           this.options.onEvent?.(normalized);
         },
         onHelloOk: (_hello: unknown) => {
-          this.options.onHelloOk?.(_hello);
-          this.rejectPendingConnect = null;
-          resolve();
+          try {
+            this.options.onHelloOk?.(_hello);
+          } finally {
+            this.rejectPendingConnect = null;
+            resolve();
+          }
         },
         onConnectError: (error: Error) => {
-          this.options.onConnectError?.(error);
-          if (this.client === client) {
-            this.client = null;
+          try {
+            this.options.onConnectError?.(error);
+          } finally {
+            if (this.client === client) {
+              this.client = null;
+            }
+            if (this.connectPromise) {
+              this.connectPromise = null;
+            }
+            void client.stopAndWait().catch(() => {});
+            this.rejectPendingConnect = null;
+            reject(error);
           }
-          if (this.connectPromise) {
-            this.connectPromise = null;
-          }
-          void client.stopAndWait().catch(() => {});
-          this.rejectPendingConnect = null;
-          reject(error);
         },
         onReconnectPaused: this.options.onReconnectPaused,
         onClose: this.options.onClose,
@@ -146,6 +156,10 @@ export class GatewayClientTransport implements ConnectableOpenClawTransport {
     if (this.closePromise) {
       return await this.closePromise;
     }
+    if (this.closed) {
+      return;
+    }
+    this.closed = true;
     this.eventsHub.close();
     const client = this.client;
     this.client = null;

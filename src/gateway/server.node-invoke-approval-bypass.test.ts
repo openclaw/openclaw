@@ -13,6 +13,7 @@ import {
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
+import { issueOperatorToken } from "./device-authz.test-helpers.js";
 import {
   connectReq,
   installGatewayTestHooks,
@@ -261,7 +262,7 @@ describe("node.invoke approval bypass", () => {
       gateway: {
         nodes: {
           pairing: { autoApproveCidrs: ["127.0.0.1/32", "::1/128"] },
-          allowCommands: ["system.run", "system.run.prepare", "system.which"],
+          allowCommands: ["system.run", "system.run.prepare", "system.which", "browser.proxy"],
         },
       },
     });
@@ -405,6 +406,29 @@ describe("node.invoke approval bypass", () => {
         nonce,
       };
     });
+  };
+
+  const connectDeviceTokenOperator = async (scopes: string[]) => {
+    const issued = await issueOperatorToken({
+      name: `browser-proxy-scope-${crypto.randomUUID()}`,
+      approvedScopes: scopes,
+      clientId: GATEWAY_CLIENT_NAMES.TEST,
+      clientMode: GATEWAY_CLIENT_MODES.TEST,
+    });
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+    trackConnectChallengeNonce(ws);
+    await new Promise<void>((resolve) => {
+      ws.once("open", resolve);
+    });
+    const res = await connectReq(ws, {
+      skipDefaultAuth: true,
+      deviceIdentityPath: issued.identityPath,
+      deviceToken: issued.token,
+      scopes,
+      timeoutMs: CONNECT_REQ_TIMEOUT_MS,
+    });
+    expect(res.ok).toBe(true);
+    return ws;
   };
 
   const connectLinuxNode = async (
@@ -553,6 +577,72 @@ describe("node.invoke approval bypass", () => {
         "node.invoke cannot mutate persistent browser profiles via browser.proxy",
       );
       await expectNoForwardedInvoke(() => sawInvoke);
+    } finally {
+      ws.close();
+      node.stop();
+    }
+  });
+
+  test("requires admin scope for direct browser.proxy node.invoke", async () => {
+    let sawInvoke = false;
+    const nodeIdentity = createDeviceIdentity();
+    const node = await connectLinuxNode(
+      () => {
+        sawInvoke = true;
+      },
+      nodeIdentity,
+      ["browser.proxy"],
+    );
+    const ws = await connectDeviceTokenOperator(["operator.write"]);
+    try {
+      const browserRequest = await rpcReq(ws, "browser.request", {
+        method: "GET",
+        path: "/profiles",
+      });
+      expect(browserRequest.ok).toBe(false);
+      expect(browserRequest.error?.message ?? "").toContain("missing scope: operator.admin");
+
+      const directProxy = await rpcReq(ws, "node.invoke", {
+        nodeId: nodeIdentity.deviceId,
+        command: "browser.proxy",
+        params: {
+          method: "GET",
+          path: "/profiles",
+        },
+        idempotencyKey: crypto.randomUUID(),
+      });
+      expect(directProxy.ok).toBe(false);
+      expect(directProxy.error?.message ?? "").toContain("missing scope: operator.admin");
+      await expectNoForwardedInvoke(() => sawInvoke);
+    } finally {
+      ws.close();
+      node.stop();
+    }
+  });
+
+  test("allows direct browser.proxy node.invoke for admin-scoped operators", async () => {
+    let sawInvoke = false;
+    const nodeIdentity = createDeviceIdentity();
+    const node = await connectLinuxNode(
+      () => {
+        sawInvoke = true;
+      },
+      nodeIdentity,
+      ["browser.proxy"],
+    );
+    const ws = await connectDeviceTokenOperator(["operator.admin"]);
+    try {
+      const directProxy = await rpcReq(ws, "node.invoke", {
+        nodeId: nodeIdentity.deviceId,
+        command: "browser.proxy",
+        params: {
+          method: "GET",
+          path: "/profiles",
+        },
+        idempotencyKey: crypto.randomUUID(),
+      });
+      expect(directProxy.ok, JSON.stringify(directProxy.error)).toBe(true);
+      expect(sawInvoke).toBe(true);
     } finally {
       ws.close();
       node.stop();

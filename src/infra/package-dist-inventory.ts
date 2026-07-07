@@ -509,28 +509,3 @@ export async function readPackageDistInventoryIfPresent(
 ): Promise<string[] | null> {
   return await readPackageDistInventoryOptional(packageRoot);
 }
-
-/** Compares recorded and current package dist inventory entries and returns human-readable errors. */
-export async function collectPackageDistInventoryErrors(packageRoot: string): Promise<string[]> {
-  const expectedFiles = await readPackageDistInventoryIfPresent(packageRoot);
-  if (expectedFiles === null) {
-    return [`missing package dist inventory ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`];
-  }
-
-  const actualFiles = await collectPackageDistInventory(packageRoot);
-  const expectedSet = new Set(expectedFiles);
-  const actualSet = new Set(actualFiles);
-  const errors: string[] = [];
-
-  for (const relativePath of expectedFiles) {
-    if (!actualSet.has(relativePath)) {
-      errors.push(`missing packaged dist file ${relativePath}`);
-    }
-  }
-  for (const relativePath of actualFiles) {
-    if (!expectedSet.has(relativePath)) {
-      errors.push(`unexpected packaged dist file ${relativePath}`);
-    }
-  }
-  return errors;
-}

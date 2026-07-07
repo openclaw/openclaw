@@ -99,7 +99,6 @@ const TARGET_KEYS = [
   "agents.defaults.memorySearch.remote.batch.pollIntervalMs",
   "agents.defaults.memorySearch.remote.batch.timeoutMinutes",
   "agents.defaults.memorySearch.local.modelPath",
-  "agents.defaults.memorySearch.store.path",
   "agents.defaults.memorySearch.inputType",
   "agents.defaults.memorySearch.queryInputType",
   "agents.defaults.memorySearch.documentInputType",
@@ -458,6 +457,7 @@ const ENUM_EXPECTATIONS: Record<string, string[]> = {
   "discovery.mdns.mode": ['"off"', '"minimal"', '"full"'],
   "wizard.lastRunMode": ['"local"', '"remote"'],
   "diagnostics.otel.protocol": ['"http/protobuf"', '"grpc"'],
+  "diagnostics.otel.logsExporter": ['"otlp"', '"stdout"', '"both"'],
   "logging.level": ['"silent"', '"fatal"', '"error"', '"warn"', '"info"', '"debug"', '"trace"'],
   "logging.consoleLevel": [
     '"silent"',
@@ -471,7 +471,7 @@ const ENUM_EXPECTATIONS: Record<string, string[]> = {
   "logging.consoleStyle": ['"pretty"', '"compact"', '"json"'],
   "logging.redactSensitive": ['"off"', '"tools"'],
   "cli.banner.taglineMode": ['"random"', '"default"', '"off"'],
-  "update.channel": ['"stable"', '"beta"', '"dev"'],
+  "update.channel": ['"stable"', '"extended-stable"', '"beta"', '"dev"'],
   "agents.defaults.compaction.mode": ['"default"', '"safeguard"'],
   "agents.defaults.compaction.identifierPolicy": ['"strict"', '"off"', '"custom"'],
 };
@@ -567,6 +567,7 @@ const FINAL_BACKLOG_TARGET_KEYS = [
   "diagnostics.otel.headers",
   "diagnostics.otel.logsEndpoint",
   "diagnostics.otel.logs",
+  "diagnostics.otel.logsExporter",
   "diagnostics.otel.metricsEndpoint",
   "diagnostics.otel.metrics",
   "diagnostics.otel.sampleRate",
@@ -733,9 +734,6 @@ describe("config help copy quality", () => {
     expect(FIELD_HELP["memory.qmd.paths.pattern"].includes("**/*.md")).toBe(true);
     expect(FIELD_HELP["memory.qmd.update.interval"].includes("5m")).toBe(true);
     expect(FIELD_HELP["memory.qmd.update.embedInterval"].includes("60m")).toBe(true);
-    expect(FIELD_HELP["agents.defaults.memorySearch.store.path"]).toContain(
-      "~/.openclaw/memory/{agentId}.sqlite",
-    );
   });
 
   it("documents cron deprecation, migration, and retention formats", () => {
@@ -938,6 +936,7 @@ describe("config help copy quality", () => {
 
     const compactionModel = FIELD_HELP["agents.defaults.compaction.model"];
     expect(/provider\/model|different model|primary agent model/i.test(compactionModel)).toBe(true);
+    expect(/alias/i.test(compactionModel)).toBe(true);
 
     const transcriptBytes = FIELD_HELP["agents.defaults.compaction.maxActiveTranscriptBytes"];
     expect(/transcript|bytes|compaction/i.test(transcriptBytes)).toBe(true);

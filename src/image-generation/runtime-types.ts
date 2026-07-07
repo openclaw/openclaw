@@ -26,6 +26,8 @@ export type GenerateImageParams = {
   size?: string;
   aspectRatio?: string;
   resolution?: ImageGenerationResolution;
+  /** Resolution inferred from reference images; omitted for incompatible fallback models. */
+  inferredResolution?: ImageGenerationResolution;
   quality?: ImageGenerationQuality;
   outputFormat?: ImageGenerationOutputFormat;
   background?: ImageGenerationBackground;
@@ -43,6 +45,7 @@ export type GenerateImageRuntimeResult = {
   provider: string;
   model: string;
   attempts: FallbackAttempt[];
+  appliedResolution?: ImageGenerationResolution;
   normalization?: ImageGenerationNormalization;
   metadata?: Record<string, unknown>;
   ignoredOverrides: ImageGenerationIgnoredOverride[];

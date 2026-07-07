@@ -78,7 +78,9 @@ export function validateSlackSigningSecretRequirements(
   value: SlackConfigLike,
   ctx: z.RefinementCtx,
 ): void {
-  const baseMode = value.mode === "http" || value.mode === "socket" ? value.mode : "socket";
+  const resolveMode = (mode: unknown) =>
+    mode === "http" || mode === "socket" || mode === "relay" ? mode : undefined;
+  const baseMode = resolveMode(value.mode) ?? "socket";
   if (baseMode === "http" && !hasConfiguredSecretInput(value.signingSecret)) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -87,8 +89,7 @@ export function validateSlackSigningSecretRequirements(
     });
   }
   forEachEnabledAccount(value.accounts, (accountId, account) => {
-    const accountMode =
-      account.mode === "http" || account.mode === "socket" ? account.mode : baseMode;
+    const accountMode = resolveMode(account.mode) ?? baseMode;
     if (accountMode !== "http") {
       return;
     }

@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { createReadStream, readFileSync, statSync } from "node:fs";
 import fs from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
+import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   type OwnedSessionTranscriptPublishedEntry,
@@ -13,6 +14,7 @@ import {
   type OwnedSessionTranscriptCacheSnapshot,
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
+import { toErrorObject } from "../../../infra/errors.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
 import { isSessionWriteLockAcquireError } from "../../session-write-lock-error.js";
@@ -246,6 +248,8 @@ type PromptReleasedSessionMetadataEntry = CustomEntry | LabelEntry | SessionInfo
 type PromptReleasedOpaqueEntry = {
   type: "prompt_released_opaque";
   record: unknown;
+  /** Unowned side-leaf rows may extend only the current delivery side branch. */
+  preserveActiveLeaf?: true;
 };
 
 type PromptReleasedSessionEntry =
@@ -318,6 +322,29 @@ function parsePromptReleasedOpaqueLine(line: string): PromptReleasedOpaqueEntry 
     return !isJsonRecord(record) || record.type !== "message"
       ? { type: "prompt_released_opaque", record }
       : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function parsePromptReleasedSideLeafControlLine(
+  line: string,
+): PromptReleasedOpaqueEntry | undefined {
+  try {
+    const record = JSON.parse(line) as unknown;
+    if (
+      !isJsonRecord(record) ||
+      record.type !== "leaf" ||
+      !hasSessionEntryBase(record) ||
+      (record.targetId !== null && typeof record.targetId !== "string") ||
+      (record.appendParentId !== undefined &&
+        record.appendParentId !== null &&
+        typeof record.appendParentId !== "string") ||
+      record.appendMode !== "side"
+    ) {
+      return undefined;
+    }
+    return { type: "prompt_released_opaque", record, preserveActiveLeaf: true };
   } catch {
     return undefined;
   }
@@ -428,7 +455,9 @@ function classifyPromptReleasedSessionLines(
       hasGlobalMetadata = true;
       continue;
     }
-    const opaqueEntry = options?.allowAnyMessage ? parsePromptReleasedOpaqueLine(line) : undefined;
+    const opaqueEntry = options?.allowAnyMessage
+      ? parsePromptReleasedOpaqueLine(line)
+      : parsePromptReleasedSideLeafControlLine(line);
     const opaqueId =
       opaqueEntry && isJsonRecord(opaqueEntry.record)
         ? normalizeTranscriptEntryId(opaqueEntry.record.id)
@@ -875,6 +904,13 @@ function abortOwnerWaitReason(signal: AbortSignal): unknown {
   return abortReason(signal) ?? new Error("operation aborted", { cause: signal });
 }
 
+function resolveSessionFileOwnerWaitTimeoutMs(timeoutMs: number | undefined): number | undefined {
+  if (timeoutMs === undefined) {
+    return undefined;
+  }
+  return clampTimerTimeoutMs(timeoutMs);
+}
+
 function waitForSessionFileOwnerRelease(params: {
   sessionFile: string;
   entry: SessionFileOwnerEntry;
@@ -883,7 +919,7 @@ function waitForSessionFileOwnerRelease(params: {
 }): Promise<void> {
   if (params.signal?.aborted) {
     return Promise.reject(
-      toLintErrorObject(abortOwnerWaitReason(params.signal), "Non-Error rejection"),
+      toErrorObject(abortOwnerWaitReason(params.signal), "Non-Error rejection"),
     );
   }
   return new Promise<void>((resolve, reject) => {
@@ -907,20 +943,15 @@ function waitForSessionFileOwnerRelease(params: {
     };
     waiter.reject = (error) => {
       cleanup();
-      reject(toLintErrorObject(error, "Non-Error rejection"));
+      reject(toErrorObject(error, "Non-Error rejection"));
     };
-    if (params.timeoutMs !== undefined && Number.isFinite(params.timeoutMs)) {
-      waiter.timer = setTimeout(
-        () => {
-          waiter.reject(
-            new EmbeddedAttemptSessionFileOwnerTimeoutError(
-              params.sessionFile,
-              params.timeoutMs ?? 0,
-            ),
-          );
-        },
-        Math.max(1, Math.floor(params.timeoutMs)),
-      );
+    const timeoutMs = resolveSessionFileOwnerWaitTimeoutMs(params.timeoutMs);
+    if (timeoutMs !== undefined) {
+      waiter.timer = setTimeout(() => {
+        waiter.reject(
+          new EmbeddedAttemptSessionFileOwnerTimeoutError(params.sessionFile, timeoutMs),
+        );
+      }, timeoutMs);
       waiter.timer.unref?.();
     }
     if (params.signal) {
@@ -1145,21 +1176,23 @@ export type EmbeddedAttemptSessionLockController = {
 
 export async function createEmbeddedAttemptSessionLockController(params: {
   acquireSessionWriteLock: AcquireSessionWriteLock;
+  initialAcquireSignal?: AbortSignal;
   lockOptions: LockOptions;
   mergePromptReleasedSessionEntries?: (
     entries: readonly PromptReleasedSessionEntry[],
   ) => Promise<PromptReleasedSessionMergeResult | void> | PromptReleasedSessionMergeResult | void;
   reloadPromptReleasedSessionFile?: () => Promise<void> | void;
 }): Promise<EmbeddedAttemptSessionLockController> {
-  const acquireLock = async (): Promise<SessionLock> =>
+  const acquireLock = async (signal?: AbortSignal): Promise<SessionLock> =>
     await params.acquireSessionWriteLock({
       sessionFile: params.lockOptions.sessionFile,
       timeoutMs: params.lockOptions.timeoutMs,
       staleMs: params.lockOptions.staleMs,
       maxHoldMs: params.lockOptions.maxHoldMs,
+      ...(signal ? { signal } : {}),
     });
 
-  let heldLock: SessionLock | undefined = await acquireLock();
+  let heldLock: SessionLock | undefined = await acquireLock(params.initialAcquireSignal);
   const activeWriteLock = new AsyncLocalStorage<ActiveWriteLockState>();
   let ownedPublicationQueue: Promise<void> = Promise.resolve();
   let fenceFingerprint: SessionFileFingerprint | undefined;
@@ -1167,6 +1200,12 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   let fenceGeneration = 0;
   let fenceActive = false;
   let takeoverDetected = false;
+  // An aborted prompt can settle after attempt teardown. Never let its finally
+  // path reacquire a retained lock that no owner remains to release.
+  let disposed = false;
+  // Set when an active retained write prevents immediate held-lock release.
+  // The scope completion path retries release after the retained use unwinds.
+  let releaseHeldLockDeferred = false;
   let retainedLockUseCount = 0;
   const retainedLockIdleWaiters = new Set<() => void>();
   let heldLockDraining = false;
@@ -1599,6 +1638,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     const drainOwner = await beginHeldLockDrain();
     try {
       if (!(await waitForRetainedLockIdle())) {
+        releaseHeldLockDeferred = true;
         return;
       }
       if (!heldLock) {
@@ -1635,6 +1675,8 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     const drainOwner = await beginHeldLockDrain();
     try {
       if (!(await waitForRetainedLockIdle())) {
+        // Do not wait for retained idle from inside the active scope; that
+        // scope must unwind before the retained-use waiter can resolve.
         return undefined;
       }
       if (!heldLock) {
@@ -1656,6 +1698,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     const drainOwner = await beginHeldLockDrain();
     try {
       if (!(await waitForRetainedLockIdle())) {
+        // Same active-scope self-deadlock guard as takeHeldLockAfterRetainedIdle.
         return;
       }
       if (!heldLock) {
@@ -1717,6 +1760,12 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       }
     }
     await releaseHeldLockAfterTakeover();
+    // Retained use has been released and the active scope is no longer live,
+    // so a prior active-scope release bailout can drain the held file lock now.
+    if (releaseHeldLockDeferred) {
+      releaseHeldLockDeferred = false;
+      await releaseHeldLockWithFence();
+    }
     if (!outcome.ok) {
       throw outcome.error;
     }
@@ -1977,10 +2026,14 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     },
     async reacquireAfterPrompt(): Promise<void> {
       await waitForHeldLockDrain();
-      if (takeoverDetected || heldLock) {
+      if (disposed || takeoverDetected || heldLock) {
         return;
       }
       const lock = await acquireLock();
+      if (disposed) {
+        await lock.release();
+        return;
+      }
       try {
         heldLock = lock;
         await assertSessionFileFence();
@@ -2018,6 +2071,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       return takeoverDetected;
     },
     async dispose(): Promise<void> {
+      disposed = true;
       try {
         await disposeHeldLockAfterRetainedIdle();
       } finally {
@@ -2074,18 +2128,4 @@ export function installPromptSubmissionLockRelease(params: {
   };
   wrappedStreamFn["__openclawSessionLockPromptReleaseInstalled"] = true;
   agent.streamFn = wrappedStreamFn;
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

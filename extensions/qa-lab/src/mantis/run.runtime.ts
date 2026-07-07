@@ -5,6 +5,7 @@ import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
 import { QA_EVIDENCE_FILENAME, validateQaEvidenceSummaryJson } from "../evidence-summary.js";
+import { trimToValue } from "../mantis-options.runtime.js";
 
 export type MantisBeforeAfterOptions = {
   allowFailures?: boolean;
@@ -133,11 +134,6 @@ const MANTIS_SCENARIO_CONFIGS: Record<string, MantisScenarioConfig> = {
     title: "Mantis Discord Thread Attachment QA",
   },
 };
-
-function trimToValue(value: string | undefined) {
-  const trimmed = value?.trim();
-  return trimmed && trimmed.length > 0 ? trimmed : undefined;
-}
 
 function normalizeRequiredLiteral<T extends string>(
   value: string | undefined,

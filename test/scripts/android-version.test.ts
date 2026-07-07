@@ -1,4 +1,5 @@
 // Android Version tests cover android version script behavior.
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -20,6 +21,85 @@ import {
 installAndroidFixtureCleanup();
 
 describe("resolveAndroidVersion", () => {
+  it("rejects missing CLI option values before reading version files", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/android-version.ts", "--field"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe("Missing value for --field.\n");
+
+    const shortFlagResult = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/android-version.ts", "--field", "-h"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(shortFlagResult.status).toBe(1);
+    expect(shortFlagResult.stderr).toBe("Missing value for --field.\n");
+  });
+
+  it("prints selected fields from the CLI", () => {
+    const rootDir = writeAndroidFixture({
+      version: "2026.6.2",
+      versionCode: 2026060201,
+    });
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "scripts/android-version.ts",
+        "--root",
+        rootDir,
+        "--field",
+        "canonicalVersion",
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("2026.6.2\n");
+    expect(result.stderr).toBe("");
+  });
+
+  it("rejects missing Android sync CLI root values before reading version files", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/android-sync-versioning.ts", "--root", "--check"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe("Missing value for --root.\n");
+
+    const shortFlagResult = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/android-sync-versioning.ts", "--root", "-h"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(shortFlagResult.status).toBe(1);
+    expect(shortFlagResult.stderr).toBe("Missing value for --root.\n");
+  });
+
   it("parses pinned release versions and Android version codes", () => {
     const rootDir = writeAndroidFixture({
       version: "2026.6.2",

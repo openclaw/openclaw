@@ -7,7 +7,6 @@ import { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } from "./device-
 import {
   approveBootstrapDevicePairing,
   approveDevicePairing,
-  clearDevicePairing,
   ensureDeviceToken,
   getPairedDevice,
   hasEffectivePairedDeviceRole,
@@ -294,6 +293,50 @@ describe("device pairing tokens", () => {
     expect(second.request.ts).toBe(originalTs);
   });
 
+  test("re-requests keep one pending request alive past the pending TTL without churning requestIds", async () => {
+    // Regression: a device retrying all night must not mint a new requestId (and a
+    // new approval prompt broadcast) every TTL window. Refreshes stamp refreshedAtMs
+    // as a TTL keepalive while ts stays the creation time for approval ordering.
+    const baseDir = await makeDevicePairingDir();
+    const req = {
+      deviceId: "device-1",
+      publicKey: "public-key-1",
+      role: "operator" as const,
+      scopes: ["operator.read"],
+    };
+    const first = await requestDevicePairing(req, baseDir);
+    const refreshed = await requestDevicePairing(req, baseDir);
+    expect(refreshed.created).toBe(false);
+
+    // Simulate hours of aging since creation while retries kept the keepalive fresh.
+    const paths = resolvePairingPaths(baseDir, "devices");
+    const pendingById = JSON.parse(await readFile(paths.pendingPath, "utf8")) as Record<
+      string,
+      { ts: number; refreshedAtMs?: number }
+    >;
+    const pending = requireValue(
+      pendingById[first.request.requestId],
+      "expected pending pairing request",
+    );
+    expect(pending.refreshedAtMs).toBeGreaterThanOrEqual(pending.ts);
+    const createdTs = Date.now() - 60 * 60 * 1000;
+    pending.ts = createdTs;
+    await writeFile(paths.pendingPath, JSON.stringify(pendingById, null, 2));
+
+    const third = await requestDevicePairing(req, baseDir);
+    expect(third.created).toBe(false);
+    expect(third.request.requestId).toBe(first.request.requestId);
+    expect(third.request.ts).toBe(createdTs);
+    // The keepalive is store-internal; it must not leak into protocol payloads.
+    expect("refreshedAtMs" in third.request).toBe(false);
+
+    // A stale keepalive still expires the request.
+    pending.refreshedAtMs = createdTs;
+    pendingById[first.request.requestId] = pending;
+    await writeFile(paths.pendingPath, JSON.stringify(pendingById, null, 2));
+    expect((await listDevicePairing(baseDir)).pending).toHaveLength(0);
+  });
+
   test("supersedes pending requests when requested roles/scopes change", async () => {
     const baseDir = await makeDevicePairingDir();
     const first = await requestDevicePairing(
@@ -317,6 +360,9 @@ describe("device pairing tokens", () => {
 
     expect(second.created).toBe(true);
     expect(second.request.requestId).not.toBe(first.request.requestId);
+    expect(second.superseded).toEqual([
+      { requestId: first.request.requestId, deviceId: "device-1" },
+    ]);
     expect(second.request.role).toBe("operator");
     expectArrayIncludesAll(second.request.roles, ["node", "operator"], "request roles");
     expectArrayIncludesAll(
@@ -1934,14 +1980,5 @@ describe("device pairing tokens", () => {
       approveDevicePairing(request.request.requestId, { callerScopes: [] }, baseDir),
     ).rejects.toThrow(/paired\.json/);
     await expect(readFile(pairedPath, "utf8")).resolves.toBe("{not-json}");
-  });
-
-  test("clears paired device state by device id", async () => {
-    const baseDir = await makeDevicePairingDir();
-    await setupPairedOperatorDevice(baseDir, ["operator.read"]);
-
-    await expect(clearDevicePairing("device-1", baseDir)).resolves.toBe(true);
-    await expect(getPairedDevice("device-1", baseDir)).resolves.toBeNull();
-    await expect(clearDevicePairing("device-1", baseDir)).resolves.toBe(false);
   });
 });

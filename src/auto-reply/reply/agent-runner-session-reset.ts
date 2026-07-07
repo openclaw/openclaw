@@ -1,17 +1,13 @@
 // Handles session reset requests produced during agent runner execution.
-import fs from "node:fs";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
   resolveAgentIdFromSessionKey,
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
   resolveSessionTranscriptPath,
-  updateSessionStore,
 } from "../../config/sessions.js";
+import { persistSessionResetLifecycle } from "../../config/sessions/session-accessor.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { defaultRuntime } from "../../runtime.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
-import { replayRecentUserAssistantMessages } from "./session-transcript-replay.js";
 
 type ResetSessionOptions = {
   failureLabel: string;
@@ -21,7 +17,7 @@ type ResetSessionOptions = {
 
 const deps = {
   generateSecureUuid,
-  updateSessionStore,
+  persistSessionResetLifecycle,
   refreshQueuedFollowupSession,
   error: (message: string) => defaultRuntime.error(message),
 };
@@ -29,7 +25,7 @@ const deps = {
 export function setAgentRunnerSessionResetTestDeps(overrides?: Partial<typeof deps>): void {
   Object.assign(deps, {
     generateSecureUuid,
-    updateSessionStore,
+    persistSessionResetLifecycle,
     refreshQueuedFollowupSession,
     error: (message: string) => defaultRuntime.error(message),
     ...overrides,
@@ -85,6 +81,13 @@ export async function resetReplyRunSession(params: {
     fallbackNoticeSelectedModel: undefined,
     fallbackNoticeActiveModel: undefined,
     fallbackNoticeReason: undefined,
+    compactionCount: 0,
+    memoryFlushAt: undefined,
+    memoryFlushCompactionCount: undefined,
+    memoryFlushContextHash: undefined,
+    memoryFlushFailureCount: undefined,
+    memoryFlushLastFailedAt: undefined,
+    memoryFlushLastFailureError: undefined,
   };
   const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
   const nextSessionFile = resolveSessionTranscriptPath(
@@ -95,21 +98,21 @@ export async function resetReplyRunSession(params: {
   nextEntry.sessionFile = nextSessionFile;
   params.activeSessionStore[params.sessionKey] = nextEntry;
   try {
-    await deps.updateSessionStore(params.storePath, (store) => {
-      store[params.sessionKey!] = nextEntry;
+    await deps.persistSessionResetLifecycle({
+      agentId,
+      cleanupPreviousTranscript: params.options.cleanupTranscripts,
+      nextEntry,
+      nextSessionFile,
+      previousEntry: prevEntry,
+      previousSessionId: prevSessionId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
     });
   } catch (err) {
     deps.error(
       `Failed to persist session reset after ${params.options.failureLabel} (${params.sessionKey}): ${String(err)}`,
     );
   }
-  // Silent rotations (compaction/role-ordering) fire without user intent, so
-  // preserve recent user/assistant turns for direct-chat continuity.
-  await replayRecentUserAssistantMessages({
-    sourceTranscript: prevEntry.sessionFile,
-    targetTranscript: nextSessionFile,
-    newSessionId: nextSessionId,
-  });
   params.followupRun.run.sessionId = nextSessionId;
   params.followupRun.run.sessionFile = nextSessionFile;
   deps.refreshQueuedFollowupSession({
@@ -121,24 +124,5 @@ export async function resetReplyRunSession(params: {
   params.onActiveSessionEntry(nextEntry);
   params.onNewSession(nextSessionId, nextSessionFile);
   deps.error(params.options.buildLogMessage(nextSessionId));
-  if (params.options.cleanupTranscripts && prevSessionId) {
-    const transcriptCandidates = new Set<string>();
-    const resolved = resolveSessionFilePath(
-      prevSessionId,
-      prevEntry,
-      resolveSessionFilePathOptions({ agentId, storePath: params.storePath }),
-    );
-    if (resolved) {
-      transcriptCandidates.add(resolved);
-    }
-    transcriptCandidates.add(resolveSessionTranscriptPath(prevSessionId, agentId));
-    for (const candidate of transcriptCandidates) {
-      try {
-        fs.unlinkSync(candidate);
-      } catch {
-        // Best-effort cleanup.
-      }
-    }
-  }
   return true;
 }

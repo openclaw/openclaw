@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { readPluginPackageVersion } from "openclaw/plugin-sdk/extension-shared";
+import {
+  readProviderTextResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
 import { withTrustedWebSearchEndpoint } from "openclaw/plugin-sdk/provider-web-search";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 // Free hosted Search MCP. This keyless transport is used only after the user
 // explicitly selects the `parallel-free` web_search provider. Docs:
@@ -11,6 +16,7 @@ export const PARALLEL_MCP_SEARCH_URL = "https://search.parallel.ai/mcp";
 // the server negotiates back on every follow-up request.
 const MCP_PROTOCOL_VERSION = "2025-06-18";
 const MCP_TIMEOUT_SECONDS = 30;
+const PARALLEL_MCP_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 
 const require = createRequire(import.meta.url);
 const PLUGIN_VERSION = readPluginPackageVersion({ require });
@@ -31,10 +37,6 @@ export type ParallelMcpSearchResponse = {
   warnings?: unknown;
   usage?: unknown;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function mcpHeaders(params: {
   sessionId?: string;
@@ -215,7 +217,9 @@ async function postMcp(params: {
       ok: response.ok,
       status: response.status,
       statusText: response.statusText,
-      text: await response.text(),
+      text: response.ok
+        ? await readProviderTextResponse(response, "Parallel MCP")
+        : await readResponseTextLimited(response, PARALLEL_MCP_ERROR_BODY_LIMIT_BYTES),
       sessionIdHeader: response.headers.get("mcp-session-id"),
     }),
   );

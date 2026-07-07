@@ -7,6 +7,7 @@ import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
 const command = process.argv[2];
 const SCENARIOS = new Set([
   "base",
+  "acpx-openclaw-tools-bridge",
   "feishu-channel",
   "bootstrap-persona",
   "channel-post-core-restore",
@@ -310,6 +311,16 @@ function assertConfigSurvived() {
     if (hasCoverage(coverage) && acceptsIntent(coverage, "feishu-channel")) {
       assert(pluginAllow.includes("feishu"), "feishu plugin allow entry missing");
     }
+  }
+
+  if (hasCoverage(coverage) && acceptsIntent(coverage, "acpx-openclaw-tools-bridge")) {
+    const pluginAllow = config.plugins?.allow ?? [];
+    assert(pluginAllow.includes("acpx"), "ACPX plugin allow entry missing");
+    assert(config.plugins?.entries?.acpx?.enabled === true, "ACPX plugin entry changed");
+    assert(
+      config.plugins?.entries?.acpx?.config?.openClawToolsMcpBridge === true,
+      "ACPX OpenClaw tools bridge config changed",
+    );
   }
 
   if (hasCoverage(coverage) && acceptsIntent(coverage, "configured-plugin-installs")) {

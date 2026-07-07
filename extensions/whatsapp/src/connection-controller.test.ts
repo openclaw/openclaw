@@ -669,4 +669,52 @@ describe("WhatsAppConnectionController", () => {
       vi.useRealTimers();
     }
   });
+
+  it("uses messageTimeoutMs * 4 as the app-silence window for fresh connections with no inbound", async () => {
+    // Verifies the watchdog respects appSilenceTimeoutMs = messageTimeoutMs * 4 on first open.
+    // Transport is kept well within its own timeout so only app-silence fires.
+    vi.useFakeTimers();
+    const msgTimeoutMs = 100;
+    const controllerLocal = new WhatsAppConnectionController({
+      accountId: "work",
+      authDir: "/tmp/wa-auth",
+      verbose: false,
+      keepAlive: true,
+      heartbeatSeconds: 1,
+      transportTimeoutMs: 10_000,
+      messageTimeoutMs: msgTimeoutMs,
+      watchdogCheckMs: 10,
+      reconnectPolicy: {
+        initialMs: 250,
+        maxMs: 1_000,
+        factor: 2,
+        jitter: 0,
+        maxAttempts: 5,
+      },
+    });
+
+    try {
+      const sock = createSocketWithTransportEmitter();
+      createWaSocketMock.mockResolvedValueOnce(sock as never);
+      waitForWaConnectionMock.mockResolvedValueOnce(undefined);
+
+      const timeouts: string[] = [];
+      await controllerLocal.openConnection({
+        connectionId: "conn-app-silence",
+        createListener: async () => createListenerStub() as never,
+        onWatchdogTimeout: () => timeouts.push("timeout"),
+      });
+
+      // Just before messageTimeoutMs * 4 — no force-close expected
+      await vi.advanceTimersByTimeAsync(msgTimeoutMs * 4 - 20);
+      expect(timeouts).toHaveLength(0);
+
+      // Past messageTimeoutMs * 4 — force-close must fire
+      await vi.advanceTimersByTimeAsync(40);
+      expect(timeouts.length).toBeGreaterThanOrEqual(1);
+    } finally {
+      await controllerLocal.shutdown();
+      vi.useRealTimers();
+    }
+  });
 });

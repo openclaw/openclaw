@@ -17,6 +17,7 @@ import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { fetchChannelMessage, stripHtmlFromTeamsMessage } from "./graph-thread.js";
 import type { GraphThreadMessage } from "./graph-thread.js";
 
@@ -138,7 +139,9 @@ export function summarizeParentMessage(
   return {
     sender,
     text:
-      text.length > PARENT_TEXT_MAX_CHARS ? `${text.slice(0, PARENT_TEXT_MAX_CHARS - 1)}…` : text,
+      text.length > PARENT_TEXT_MAX_CHARS
+        ? `${truncateUtf16Safe(text, PARENT_TEXT_MAX_CHARS - 1)}…`
+        : text,
   };
 }
 

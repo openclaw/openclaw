@@ -232,7 +232,7 @@ export function readConnectErrorDetailCode(details: unknown): string | null {
     return null;
   }
   const code = (details as { code?: unknown }).code;
-  return typeof code === "string" && code.trim().length > 0 ? code : null;
+  return typeof code === "string" && code.trim().length > 0 ? code.trim() : null;
 }
 
 /** Extracts normalized retry advice from untrusted connect-error details. */
@@ -438,20 +438,6 @@ export function readPairingConnectErrorDetails(
     approvedRoles,
     approvedScopes,
   });
-}
-
-/** Reads the compact pairing-required subset from untrusted connect details. */
-export function readConnectPairingRequiredDetails(
-  details: unknown,
-): ConnectPairingRequiredDetails | null {
-  const pairing = readPairingConnectErrorDetails(details);
-  if (!pairing) {
-    return null;
-  }
-  return {
-    ...(pairing.requestId ? { requestId: pairing.requestId } : {}),
-    ...(pairing.reason ? { reason: pairing.reason } : {}),
-  };
 }
 
 /** Parses legacy/string-only pairing-required messages into structured details. */

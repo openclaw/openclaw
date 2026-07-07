@@ -10,12 +10,12 @@ import type {
   ChannelPlugin,
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { runMessageAction } from "./message-action-runner.js";
-import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 
 type ChannelActionHandler = NonNullable<NonNullable<ChannelPlugin["actions"]>["handleAction"]>;
 
@@ -187,6 +187,7 @@ function createGatewayActionPlugin(params: {
   gatewayActions?: ChannelMessageActionName[];
   capabilities?: ChannelPlugin["capabilities"];
   messaging?: ChannelPlugin["messaging"];
+  threading?: ChannelPlugin["threading"];
   handleAction: ChannelActionHandler;
 }): ChannelPlugin {
   const actions = new Set(params.actions);
@@ -203,6 +204,7 @@ function createGatewayActionPlugin(params: {
     capabilities: params.capabilities ?? { chatTypes: ["direct"] },
     config: createAlwaysConfiguredPluginConfig(),
     messaging: params.messaging,
+    threading: params.threading,
     actions: {
       describeMessageTool: () => ({ actions: params.actions }),
       supportsAction: ({ action }) => actions.has(action),
@@ -401,6 +403,7 @@ describe("runMessageAction plugin dispatch", () => {
             messageId: "om_123",
           },
           defaultAccountId: "ops",
+          requesterAccountId: "ops",
           requesterSenderId: "trusted-user",
           sessionKey: "agent:alpha:main",
           sessionId: "session-123",
@@ -421,6 +424,7 @@ describe("runMessageAction plugin dispatch", () => {
           {
             action: "pin",
             accountId: "ops",
+            requesterAccountId: "ops",
             requesterSenderId: "trusted-user",
             sessionKey: "agent:alpha:main",
             sessionId: "session-123",
@@ -1568,13 +1572,112 @@ describe("runMessageAction plugin dispatch", () => {
     });
   });
 
-  describe("presentation-only send behavior", () => {
+  describe("threaded plugin actions", () => {
     const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
-      jsonResult({
-        ok: true,
-        presentation: params.presentation ?? null,
-        message: params.message ?? null,
-      }),
+      jsonResult({ ok: true, params }),
+    );
+    const cfg = { channels: { forumchat: { enabled: true } } } as OpenClawConfig;
+    const threading: ChannelPlugin["threading"] = {
+      resolveAutoThreadId: ({ toolContext, to }) =>
+        toolContext?.currentChannelId === to ? toolContext.currentThreadTs : undefined,
+    };
+    const createThreadedPlugin = (executionMode: "local" | "gateway") =>
+      createGatewayActionPlugin({
+        pluginId: "forumchat",
+        label: "Forum Chat",
+        blurb: "Forum chat threaded action dispatch test plugin.",
+        actions: ["sticker"],
+        gatewayActions: executionMode === "gateway" ? ["sticker"] : [],
+        capabilities: { chatTypes: ["channel"] },
+        threading,
+        handleAction,
+        messaging: {
+          targetResolver: {
+            looksLikeId: () => true,
+          },
+        },
+      });
+
+    afterEach(() => {
+      setActivePluginRegistry(createTestRegistry([]));
+      vi.clearAllMocks();
+    });
+
+    it.each(["local", "gateway"] as const)(
+      "applies auto threadId before %s plugin dispatch",
+      async (executionMode) => {
+        setActivePluginRegistry(
+          createTestRegistry([
+            {
+              pluginId: "forumchat",
+              source: "test",
+              plugin: createThreadedPlugin(executionMode),
+            },
+          ]),
+        );
+        mocks.callGatewayLeastPrivilege.mockResolvedValue({ ok: true });
+
+        await runMessageAction({
+          cfg,
+          action: "sticker",
+          params: {
+            channel: "forumchat",
+            target: "forum:123",
+            stickerName: "wave",
+          },
+          toolContext: {
+            currentChannelProvider: "forumchat",
+            currentChannelId: "forum:123",
+            currentThreadTs: "42",
+          },
+          gateway: executionMode === "gateway" ? { clientName: "cli", mode: "cli" } : undefined,
+          dryRun: false,
+        });
+
+        const dispatchedParams =
+          executionMode === "gateway"
+            ? readRecordField(
+                readRecordField(
+                  readMockCallArg(mocks.callGatewayLeastPrivilege, "gateway call"),
+                  "params",
+                  "gateway call params",
+                ),
+                "params",
+                "gateway action params",
+              )
+            : readRecordField(readFirstPluginCall(handleAction), "params", "plugin params");
+        expectRecordFields(
+          dispatchedParams,
+          { to: "forum:123", threadId: "42" },
+          `${executionMode} action params`,
+        );
+        expect(handleAction).toHaveBeenCalledTimes(executionMode === "local" ? 1 : 0);
+      },
+    );
+  });
+
+  describe("presentation-only send behavior", () => {
+    const handleAction = vi.fn(
+      async ({ cfg, params }: { cfg: OpenClawConfig; params: Record<string, unknown> }) => {
+        const message = typeof params.message === "string" ? params.message : "";
+        const responsePrefix = cfg.messages?.responsePrefix;
+        const rawMessage =
+          responsePrefix && message.startsWith(`${responsePrefix} `)
+            ? message.slice(responsePrefix.length + 1)
+            : message;
+        let detectedCard = false;
+        try {
+          detectedCard = isRecord((JSON.parse(rawMessage) as { body?: unknown }).body);
+        } catch {
+          // Non-JSON text remains a normal plugin message.
+        }
+        return jsonResult({
+          ok: true,
+          presentation: params.presentation ?? null,
+          message: params.message ?? null,
+          detectedCard,
+        });
+      },
     );
 
     const cardPlugin: ChannelPlugin = {
@@ -1648,6 +1751,44 @@ describe("runMessageAction plugin dispatch", () => {
         },
         "result payload",
       );
+    });
+
+    it("keeps prefixed JSON recoverable by plugin-owned card detection", async () => {
+      const cardJson = JSON.stringify({
+        body: {
+          elements: [{ tag: "markdown", content: "Card body" }],
+        },
+      });
+      const result = await runMessageAction({
+        cfg: {
+          channels: {
+            cardchat: {
+              enabled: true,
+            },
+          },
+          messages: { responsePrefix: "[Nexus]" },
+        } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "cardchat",
+          target: "channel:test-card",
+          message: cardJson,
+        },
+        dryRun: false,
+      });
+
+      expect(result.kind).toBe("send");
+      expect(result.handledBy).toBe("plugin");
+      expectRecordFields(
+        readRecordField(result, "payload", "result payload"),
+        {
+          ok: true,
+          detectedCard: true,
+        },
+        "result payload",
+      );
+      const pluginParams = readRecordField(readFirstPluginCall(handleAction), "params", "params");
+      expect(pluginParams.message).toBe(`[Nexus] ${cardJson}`);
     });
   });
 

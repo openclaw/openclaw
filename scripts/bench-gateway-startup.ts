@@ -8,7 +8,6 @@ import { pathToFileURL } from "node:url";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
 import { delay, stopChild } from "./lib/gateway-bench-child.ts";
 import {
-  classifyProbeErrorKind,
   getFreePort,
   parseProcessRssKb,
   readProcessRssMb,
@@ -108,6 +107,20 @@ const DEFAULT_RUNS = 5;
 const DEFAULT_WARMUP = 1;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_ENTRY = "dist/entry.js";
+const BOOLEAN_FLAGS = new Set(["--help", "-h", "--json"]);
+const VALUE_FLAGS = new Set([
+  "--case",
+  "--cpu-prof-dir",
+  "--entry",
+  "--output",
+  "--runs",
+  "--timeout-ms",
+  "--warmup",
+]);
+
+class CliArgumentError extends Error {
+  override name = "CliArgumentError";
+}
 
 const BASE_CONFIG = {
   browser: { enabled: false },
@@ -187,9 +200,31 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
 function readRequiredFlagValue(argv: string[], index: number, flag: string): string {
   const value = argv[index + 1];
   if (!value || value.startsWith("-")) {
-    throw new Error(`${flag} requires a value`);
+    throw new CliArgumentError(`${flag} requires a value`);
   }
   return value;
+}
+
+function validateCliArgs(argv: string[]): void {
+  const seenSingleValueFlags = new Set<string>();
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index] ?? "";
+    if (BOOLEAN_FLAGS.has(arg)) {
+      continue;
+    }
+    if (VALUE_FLAGS.has(arg)) {
+      if (arg !== "--case") {
+        if (seenSingleValueFlags.has(arg)) {
+          throw new CliArgumentError(`${arg} was provided more than once`);
+        }
+        seenSingleValueFlags.add(arg);
+      }
+      readRequiredFlagValue(argv, index, arg);
+      index += 1;
+      continue;
+    }
+    throw new CliArgumentError(`Unknown argument: ${arg}`);
+  }
 }
 
 function parseFlagValue(argv: string[], flag: string): string | undefined {
@@ -254,6 +289,13 @@ function resolveCases(caseIds: string[]): GatewayBenchCase[] {
   if (caseIds.length === 0) {
     return [...GATEWAY_CASES];
   }
+  const seenIds = new Set<string>();
+  for (const id of caseIds) {
+    if (seenIds.has(id)) {
+      throw new CliArgumentError(`Duplicate --case "${id}"`);
+    }
+    seenIds.add(id);
+  }
   const byId = new Map(GATEWAY_CASES.map((benchCase) => [benchCase.id, benchCase]));
   return caseIds.map((id) => {
     const benchCase = byId.get(id);
@@ -265,6 +307,7 @@ function resolveCases(caseIds: string[]): GatewayBenchCase[] {
 }
 
 function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
+  validateCliArgs(argv);
   return {
     cases: resolveCases(parseRepeatableFlag(argv, "--case")),
     cpuProfDir: parseFlagValue(argv, "--cpu-prof-dir"),
@@ -954,7 +997,6 @@ async function main() {
 
 export const testing = {
   classifyGatewayReadyLog,
-  classifyProbeErrorKind,
   collectResultFailures,
   collectStartupTrace,
   parseOptions,
@@ -965,12 +1007,18 @@ export const testing = {
   sanitizedEnv,
   stopChild,
   summarizeCase,
+  validateCliArgs,
   waitForProbe,
   writeConfig,
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   main().catch((err: unknown) => {
+    if (err instanceof CliArgumentError) {
+      console.error(err.message);
+      process.exitCode = 1;
+      return;
+    }
     console.error(err instanceof Error ? err.stack : String(err));
     process.exitCode = 1;
   });

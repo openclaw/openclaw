@@ -20,6 +20,11 @@ export type PluginAutoEnableCandidate =
     }
   | {
       pluginId: string;
+      kind: "speech-provider-selected";
+      providerId: string;
+    }
+  | {
+      pluginId: string;
       kind: "agent-harness-runtime-configured";
       runtime: string;
     }
@@ -44,6 +49,10 @@ export type PluginAutoEnableCandidate =
   | {
       pluginId: string;
       kind: "plugin-tool-configured";
+    }
+  | {
+      pluginId: string;
+      kind: "configured-plugin-repaired";
     }
   | {
       pluginId: string;

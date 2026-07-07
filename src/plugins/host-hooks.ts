@@ -2,7 +2,6 @@
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { AgentEventPayload, AgentEventStream } from "../infra/agent-events.js";
 import type {
-  PluginHookAgentContext,
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
   PluginHookToolContext,
@@ -67,14 +66,6 @@ export type PluginSessionExtensionProjection = {
   value: PluginJsonValue;
 };
 
-export type PluginSessionExtensionPatchParams = {
-  key: string;
-  pluginId: string;
-  namespace: string;
-  value?: PluginJsonValue;
-  unset?: boolean;
-};
-
 export type PluginToolPolicyDecision =
   | PluginHookBeforeToolCallResult
   | {
@@ -99,18 +90,28 @@ export type PluginToolMetadataRegistration = {
   tags?: string[];
 };
 
-export type PluginCommandContinuation = {
-  continueAgent?: boolean;
-};
+export type PluginControlUiTabGroup = "control" | "agent";
 
 export type PluginControlUiDescriptor = {
   id: string;
-  surface: "session" | "tool" | "run" | "settings";
+  /** "tab" adds a Control UI sidebar tab; other surfaces attach to existing views. */
+  surface: "session" | "tool" | "run" | "settings" | "tab";
   label: string;
   description?: string;
   placement?: string;
   schema?: PluginJsonValue;
   requiredScopes?: OperatorScope[];
+  /** Icon name hint for tab descriptors; unknown names fall back to a generic icon. */
+  icon?: string;
+  /**
+   * Gateway HTTP path (e.g. /plugins/<id>/panel) rendered in a sandboxed frame
+   * when the Control UI has no bundled view for this tab.
+   */
+  path?: string;
+  /** Sidebar group for tab descriptors; defaults to "control". */
+  group?: PluginControlUiTabGroup;
+  /** Sort order among plugin tabs; lower renders first. */
+  order?: number;
 };
 
 export type PluginSessionActionContext = {
@@ -258,11 +259,6 @@ export type PluginSessionAttachmentResult =
     }
   | { ok: false; error: string };
 
-export type PluginSessionTurnSchedule =
-  | { at: string | number | Date }
-  | { delayMs: number }
-  | { cron: string; tz?: string };
-
 type PluginSessionTurnScheduleCommonParams = {
   sessionKey: string;
   message: string;
@@ -331,5 +327,3 @@ export function buildPluginAgentTurnPrepareContext(params: {
     ...(append.length > 0 ? { appendContext: append.join("\n\n") } : {}),
   };
 }
-
-export type PluginHostHookRunContext = PluginHookAgentContext;

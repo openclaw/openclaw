@@ -1,10 +1,7 @@
 // Runtime import tests cover lazy runtime import caching and failure handling.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  importRuntimeModule,
-  resolveRuntimeImportSpecifier,
-  toSafeRuntimeImportPath,
-} from "./runtime-import.js";
+import { toSafeImportPath } from "./import-specifier.js";
+import { importRuntimeModule, resolveRuntimeImportSpecifier } from "./runtime-import.js";
 
 describe("runtime-import", () => {
   afterEach(() => {
@@ -14,13 +11,13 @@ describe("runtime-import", () => {
   it("converts Windows absolute import specifiers to file URLs", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
-    expect(toSafeRuntimeImportPath("C:\\Users\\alice\\plugin\\index.mjs")).toBe(
+    expect(toSafeImportPath("C:\\Users\\alice\\plugin\\index.mjs")).toBe(
       "file:///C:/Users/alice/plugin/index.mjs",
     );
-    expect(toSafeRuntimeImportPath("C:\\Users\\alice\\plugin folder\\x#y.mjs")).toBe(
+    expect(toSafeImportPath("C:\\Users\\alice\\plugin folder\\x#y.mjs")).toBe(
       "file:///C:/Users/alice/plugin%20folder/x%23y.mjs",
     );
-    expect(toSafeRuntimeImportPath("\\\\server\\share\\plugin\\index.mjs")).toBe(
+    expect(toSafeImportPath("\\\\server\\share\\plugin\\index.mjs")).toBe(
       "file://server/share/plugin/index.mjs",
     );
   });
@@ -58,7 +55,7 @@ describe("runtime-import", () => {
   it("keeps non-Windows import paths unchanged", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
 
-    expect(toSafeRuntimeImportPath("C:\\Users\\alice\\plugin\\index.mjs")).toBe(
+    expect(toSafeImportPath("C:\\Users\\alice\\plugin\\index.mjs")).toBe(
       "C:\\Users\\alice\\plugin\\index.mjs",
     );
   });

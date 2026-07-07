@@ -49,6 +49,15 @@ describe("sanitizeOutboundText", () => {
     expect(result).not.toMatch(/^assistant:$/m);
   });
 
+  it("preserves prose lines that merely end with 'user:'/'system:'", () => {
+    expect(sanitizeOutboundText("Please send this reply to the user:")).toBe(
+      "Please send this reply to the user:",
+    );
+    expect(sanitizeOutboundText("Here is a note for the system:")).toBe(
+      "Here is a note for the system:",
+    );
+  });
+
   it("collapses excessive blank lines after stripping", () => {
     const text = "Hello\n\n\n\n\nWorld";
     expect(sanitizeOutboundText(text)).toBe("Hello\n\nWorld");

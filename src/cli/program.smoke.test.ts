@@ -4,17 +4,12 @@ import { buildProgram } from "./program.js";
 import {
   configureCommand,
   ensureConfigReady,
-  installBaseProgramMocks,
-  installSmokeProgramMocks,
   runCrestodian,
   runTui,
   runtime,
   setupCommand,
   setupWizardCommand,
 } from "./program.test-mocks.js";
-
-installBaseProgramMocks();
-installSmokeProgramMocks();
 
 vi.mock("./config-cli.js", () => ({
   registerConfigCli: (program: {

@@ -734,7 +734,7 @@ describe("msteams monitor handler authz", () => {
     expect(ctxPayload.CommandAuthorized).toBe(true);
   });
 
-  it("marks skipped channel message system events as non-owner", async () => {
+  it("marks skipped channel message system events as non-owner without duplicating body text", async () => {
     resetThreadMocks();
     const { deps, enqueueSystemEvent } = createDeps({
       channels: {
@@ -768,15 +768,16 @@ describe("msteams monitor handler authz", () => {
 
     expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).not.toHaveBeenCalled();
     const systemEventCall = enqueueSystemEvent.mock.calls.find(
-      ([text]) => typeof text === "string" && text.includes("please run the deployment"),
+      ([text]) => text === "Teams message in channel from Member",
     );
     if (!systemEventCall) {
       throw new Error("expected skipped Teams message system event");
     }
     expect(systemEventCall[1]).toMatchObject({});
+    expect(systemEventCall[0]).not.toContain("please run the deployment");
   });
 
-  it("keeps dispatched primary message system events owner-neutral", async () => {
+  it("keeps dispatched primary message system events owner-neutral without duplicating body text", async () => {
     resetThreadMocks();
     const { deps, enqueueSystemEvent } = createDeps({
       channels: {
@@ -810,11 +811,14 @@ describe("msteams monitor handler authz", () => {
 
     expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalled();
     const systemEventCall = enqueueSystemEvent.mock.calls.find(
-      ([text]) => typeof text === "string" && text.includes("please check the build"),
+      ([text]) => text === "Teams message in channel from Member",
     );
     if (!systemEventCall) {
       throw new Error("expected active Teams message system event");
     }
+    expect(systemEventCall[0]).not.toContain("please check the build");
+    const dispatched = firstSettledDispatch();
+    expect(recordFromMockCall(dispatched.ctxPayload).BodyForAgent).toBe("please check the build");
   });
 
   it("authorizes text control commands from static access groups", async () => {

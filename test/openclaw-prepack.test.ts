@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   collectPreparedPrepackErrors,
+  resolvePrepackCommandStdio,
   resolvePrepackCommandTimeoutMs,
   runPrepackCommand,
 } from "../scripts/openclaw-prepack.ts";
@@ -26,6 +27,20 @@ describe("collectPreparedPrepackErrors", () => {
 });
 
 describe("runPrepackCommand", () => {
+  it("keeps prepack child stdout off npm pack JSON stdout", () => {
+    expect(resolvePrepackCommandStdio({ stdio: "inherit" }, { npm_config_json: "true" })).toEqual([
+      "inherit",
+      2,
+      "inherit",
+    ]);
+    expect(
+      resolvePrepackCommandStdio(
+        { stdio: ["ignore", "pipe", "pipe"] },
+        { npm_config_json: "true" },
+      ),
+    ).toEqual(["ignore", "pipe", "pipe"]);
+  });
+
   it("returns captured output for successful commands", () => {
     const result = runPrepackCommand(process.execPath, ["--eval", "process.stdout.write('ok')"], {
       encoding: "utf8",

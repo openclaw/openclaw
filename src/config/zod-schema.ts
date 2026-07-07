@@ -1,3 +1,4 @@
+import { isHttpsUrl, isHttpUrl } from "@openclaw/net-policy/url-protocol";
 // Assembles the canonical Zod schema for OpenClaw config parsing.
 import {
   normalizeLowercaseStringOrEmpty,
@@ -67,6 +68,7 @@ const GatewayRemoteSchemaShape = {
   tlsFingerprint: z.string().optional(),
   sshTarget: z.string().optional(),
   sshIdentity: z.string().optional(),
+  sshHostKeyPolicy: z.union([z.literal("strict"), z.literal("openssh")]).optional(),
 } satisfies ConfigSchemaShape<GatewayRemoteConfig>;
 
 const GatewayRemoteConfigSchema = z.object(GatewayRemoteSchemaShape).strict().optional();
@@ -240,20 +242,14 @@ const MemorySchema = z
   .strict()
   .optional();
 
-const HttpUrlSchema = z
-  .string()
-  .url()
-  .refine((value) => {
-    const protocol = new URL(value).protocol;
-    return protocol === "http:" || protocol === "https:";
-  }, "Expected http:// or https:// URL");
+const HttpUrlSchema = z.string().url().refine(isHttpUrl, "Expected http:// or https:// URL");
 
 const McpOAuthClientMetadataUrlSchema = z
   .string()
   .url()
   .refine((value) => {
     const url = new URL(value);
-    return url.protocol === "https:" && url.pathname !== "/";
+    return isHttpsUrl(url) && url.pathname !== "/";
   }, "Expected https:// URL with a non-root pathname");
 
 const ResponsesEndpointUrlFetchShape = {
@@ -322,6 +318,10 @@ const TalkRealtimeSchema = z
     instructions: z.string().optional(),
     mode: z.enum(["realtime", "stt-tts", "transcription"]).optional(),
     transport: z.enum(["webrtc", "provider-websocket", "gateway-relay", "managed-room"]).optional(),
+    vadThreshold: z.number().min(0).max(1).optional(),
+    silenceDurationMs: z.number().int().positive().optional(),
+    prefixPaddingMs: z.number().int().nonnegative().optional(),
+    reasoningEffort: z.string().min(1).optional(),
     brain: z.enum(["agent-consult", "direct-tools", "none"]).optional(),
     consultRouting: z.enum(["provider-direct", "force-agent-consult"]).optional(),
   })
@@ -330,7 +330,7 @@ const TalkRealtimeSchema = z
     const provider = normalizeLowercaseStringOrEmpty(realtime.provider ?? "");
     const providers = realtime.providers ? Object.keys(realtime.providers) : [];
 
-    if (provider && providers.length > 0 && !(provider in realtime.providers!)) {
+    if (provider && providers.length > 0 && !Object.hasOwn(realtime.providers!, provider)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["provider"],
@@ -366,7 +366,7 @@ const TalkSchema = z
     const provider = normalizeLowercaseStringOrEmpty(talk.provider ?? "");
     const providers = talk.providers ? Object.keys(talk.providers) : [];
 
-    if (provider && providers.length > 0 && !(provider in talk.providers!)) {
+    if (provider && providers.length > 0 && !Object.hasOwn(talk.providers!, provider)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["provider"],
@@ -392,7 +392,9 @@ const McpServerSchema = z
     cwd: z.string().optional(),
     workingDirectory: z.string().optional(),
     url: HttpUrlSchema.optional(),
-    transport: z.union([z.literal("sse"), z.literal("streamable-http")]).optional(),
+    transport: z
+      .union([z.literal("stdio"), z.literal("sse"), z.literal("streamable-http")])
+      .optional(),
     headers: z
       .record(
         z.string(),
@@ -445,6 +447,19 @@ const McpServerSchema = z
       .strict()
       .optional(),
   })
+  .superRefine((data, ctx) => {
+    // transport "stdio" requires a non-empty command — URL-only servers must use "sse" or "streamable-http"
+    if (
+      data.transport === "stdio" &&
+      (typeof data.command !== "string" || data.command.trim().length === 0)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: '"stdio" transport requires a non-empty command',
+        path: ["transport"],
+      });
+    }
+  })
   .catchall(z.unknown());
 
 const McpConfigSchema = z
@@ -465,6 +480,48 @@ const CrestodianSchema = z
       })
       .strict()
       .optional(),
+  })
+  .strict()
+  .optional();
+
+function isPlainHttpsUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && !url.username && !url.password && !url.search && !url.hash;
+  } catch {
+    return false;
+  }
+}
+
+const MarketplaceVerificationSchema = z
+  .object({
+    mode: z.literal("unsigned"),
+  })
+  .strict();
+
+const MarketplaceFeedProfileSchema = z
+  .object({
+    url: z
+      .string()
+      .url()
+      .refine(
+        (value) => isPlainHttpsUrl(value),
+        "Expected https:// URL without credentials, query, or fragment",
+      ),
+    verification: MarketplaceVerificationSchema.optional(),
+  })
+  .strict();
+
+const MarketplaceSourceProfileSchema = z.union([
+  z.object({ type: z.literal("npm") }).strict(),
+  z.object({ type: z.literal("clawhub") }).strict(),
+  z.object({ type: z.literal("git") }).strict(),
+]);
+
+const MarketplacesSchema = z
+  .object({
+    feeds: z.record(z.string().min(1), MarketplaceFeedProfileSchema).optional(),
+    sources: z.record(z.string().min(1), MarketplaceSourceProfileSchema).optional(),
   })
   .strict()
   .optional();
@@ -524,6 +581,7 @@ export const OpenClawSchema = z
         lastRunCommit: z.string().optional(),
         lastRunCommand: z.string().optional(),
         lastRunMode: z.union([z.literal("local"), z.literal("remote")]).optional(),
+        securityAcknowledgedAt: z.string().optional(),
       })
       .strict()
       .optional(),
@@ -547,6 +605,9 @@ export const OpenClawSchema = z
             traces: z.boolean().optional(),
             metrics: z.boolean().optional(),
             logs: z.boolean().optional(),
+            logsExporter: z
+              .union([z.literal("otlp"), z.literal("stdout"), z.literal("both")])
+              .optional(),
             sampleRate: z.number().min(0).max(1).optional(),
             flushIntervalMs: z.number().int().nonnegative().optional(),
             captureContent: z
@@ -581,6 +642,12 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    audit: z
+      .object({
+        enabled: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     logging: z
       .object({
         level: LoggingLevelSchema.optional(),
@@ -611,7 +678,14 @@ export const OpenClawSchema = z
     crestodian: CrestodianSchema,
     update: z
       .object({
-        channel: z.union([z.literal("stable"), z.literal("beta"), z.literal("dev")]).optional(),
+        channel: z
+          .union([
+            z.literal("stable"),
+            z.literal("extended-stable"),
+            z.literal("beta"),
+            z.literal("dev"),
+          ])
+          .optional(),
         checkOnStart: z.boolean().optional(),
         auto: z
           .object({
@@ -664,7 +738,12 @@ export const OpenClawSchema = z
                 mcpCommand: z.string().optional(),
                 mcpArgs: z.array(z.string()).optional(),
                 driver: z
-                  .union([z.literal("openclaw"), z.literal("clawd"), z.literal("existing-session")])
+                  .union([
+                    z.literal("openclaw"),
+                    z.literal("clawd"),
+                    z.literal("existing-session"),
+                    z.literal("extension"),
+                  ])
                   .optional(),
                 headless: z.boolean().optional(),
                 executablePath: z.string().optional(),
@@ -673,13 +752,21 @@ export const OpenClawSchema = z
               })
               .strict()
               .refine(
-                (value) => value.driver === "existing-session" || value.cdpPort || value.cdpUrl,
+                (value) =>
+                  value.driver === "existing-session" ||
+                  value.driver === "extension" ||
+                  value.cdpPort ||
+                  value.cdpUrl,
                 {
                   message: "Profile must set cdpPort or cdpUrl",
                 },
               )
               .refine((value) => value.driver === "existing-session" || !value.userDataDir, {
                 message: 'Profile userDataDir is only supported with driver="existing-session"',
+              })
+              .refine((value) => value.driver !== "extension" || !value.cdpUrl, {
+                message:
+                  'Profile cdpUrl is not supported with driver="extension" (the relay owns the endpoint)',
               }),
           )
           .optional(),
@@ -721,6 +808,7 @@ export const OpenClawSchema = z
       .strict()
       .optional(),
     secrets: SecretsConfigSchema,
+    marketplaces: MarketplacesSchema,
     auth: z
       .object({
         profiles: z
@@ -1029,6 +1117,14 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        terminal: z
+          .object({
+            enabled: z.boolean().optional(),
+            shell: z.string().optional(),
+            detachedSessionTimeoutSeconds: z.number().int().min(0).optional(),
+          })
+          .strict()
+          .optional(),
         auth: z
           .object({
             mode: z
@@ -1105,8 +1201,18 @@ export const OpenClawSchema = z
           .object({
             enabled: z.boolean().optional(),
             autoGenerate: z.boolean().optional(),
-            certPath: z.string().optional(),
-            keyPath: z.string().optional(),
+            // Reject blank values without transforming the string. Trimming here would
+            // silently rewrite a legitimate filesystem path that contains leading or
+            // trailing spaces and persist the trimmed value into validated config;
+            // runtime path resolution (resolveUserPath) owns all normalization.
+            certPath: z
+              .string()
+              .optional()
+              .refine((v) => v === undefined || v.trim().length > 0, "certPath must not be blank"),
+            keyPath: z
+              .string()
+              .optional()
+              .refine((v) => v === undefined || v.trim().length > 0, "keyPath must not be blank"),
             caPath: z.string().optional(),
           })
           .optional(),

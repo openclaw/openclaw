@@ -440,16 +440,15 @@ async function runShell(opts: {
   cwd: string;
   env: Record<string, string | undefined>;
   timeoutMs: number;
-}): Promise<{ status: number | null; stdout: string }> {
+}): Promise<{ status: number | null }> {
   return await new Promise((resolve) => {
     const child = spawn(opts.shell, [...opts.shellArgs, opts.command], {
       cwd: opts.cwd,
       detached: process.platform !== "win32",
       env: opts.env,
-      stdio: ["ignore", "pipe", "ignore"],
+      stdio: "ignore",
       windowsHide: true,
     });
-    let stdout = "";
     let settled = false;
     const finish = (status: number | null) => {
       if (settled) {
@@ -458,17 +457,12 @@ async function runShell(opts: {
       settled = true;
       clearTimeout(timeout);
       killProcessTree(child.pid ?? 0, { graceMs: 0 });
-      child.stdout.destroy();
-      resolve({ status, stdout });
+      resolve({ status });
     };
     const timeout = setTimeout(() => {
       killProcessTree(child.pid ?? 0, { graceMs: 250 });
       finish(null);
     }, opts.timeoutMs);
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
     child.on("error", () => {
       finish(null);
     });

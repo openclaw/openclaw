@@ -843,3 +843,21 @@ describe("googlechatPlugin security", () => {
     );
   });
 });
+
+describe("googlechatPlugin outbound sanitizeText", () => {
+  const sanitizeText = googlechatOutboundAdapter.base.sanitizeText;
+
+  it("strips internal tool-trace failure banners from outbound text (#90684)", () => {
+    const text =
+      "Visible answer.\n⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed";
+    const out = sanitizeText({ text });
+    expect(out).toBe("Visible answer.");
+    expect(out).not.toContain("failed");
+    expect(out).not.toContain("🛠️");
+  });
+
+  it("preserves ordinary assistant prose untouched", () => {
+    const text = "El pipeline tiene 3 deals abiertos por USD 12.000.";
+    expect(sanitizeText({ text })).toBe(text);
+  });
+});

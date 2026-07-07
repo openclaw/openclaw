@@ -19,6 +19,7 @@ import type {
   PluginHookBeforePromptBuildResult,
 } from "./hook-before-agent-start.types.js";
 import type { PluginHookBeforeToolCallResult } from "./hook-before-tool-call-result.js";
+import type { PluginHookChannelContext } from "./hook-channel-context.types.js";
 import type { InputGateDecision } from "./hook-decision-types.js";
 import type {
   PluginHookInboundClaimContext,
@@ -47,6 +48,11 @@ export type {
   PluginHookBeforePromptBuildEvent,
   PluginHookBeforePromptBuildResult,
 } from "./hook-before-agent-start.types.js";
+export type {
+  PluginHookChannelChatContext,
+  PluginHookChannelContext,
+  PluginHookChannelSenderContext,
+} from "./hook-channel-context.types.js";
 export {
   PLUGIN_PROMPT_MUTATION_RESULT_FIELDS,
   stripPromptMutationFieldsFromLegacyHookResult,
@@ -88,6 +94,7 @@ export type PluginHookName =
   | "after_compaction"
   | "before_reset"
   | "inbound_claim"
+  | "channel_pairing_requested"
   | "message_received"
   | "message_sending"
   | "reply_payload_sending"
@@ -135,6 +142,7 @@ export const PLUGIN_HOOK_NAMES = [
   "after_compaction",
   "before_reset",
   "inbound_claim",
+  "channel_pairing_requested",
   "message_received",
   "message_sending",
   "reply_payload_sending",
@@ -172,6 +180,25 @@ export type PluginHookDeprecation = {
   replacement: string;
   reason: string;
   removeAfter?: string;
+};
+
+type PluginHookChannelPairingRequestedEvent = {
+  /** Channel that created the pending pairing request. */
+  channel: string;
+  /** Provider account ID for multi-account channel setups. */
+  accountId?: string;
+  /** Channel-scoped sender ID awaiting operator approval. */
+  senderId: string;
+  /** Short-lived code accepted by `openclaw pairing approve`. */
+  code: string;
+  /** Sender-supplied channel metadata for operator notification/audit. Treat as untrusted. */
+  metadata?: Record<string, string | undefined>;
+};
+
+type PluginHookChannelPairingContext = {
+  channelId: string;
+  accountId?: string;
+  senderId: string;
 };
 
 export const DEPRECATED_PLUGIN_HOOKS = {
@@ -259,6 +286,13 @@ export type PluginHookAgentContext = {
   contextWindowSource?: PluginHookContextWindowSource;
   /** Native/configured reference window when a lower cap wins. */
   contextWindowReferenceTokens?: number;
+  /**
+   * @deprecated Core does not populate cross-app sender ids. Channel plugins
+   * should expose channel-specific identities by augmenting `channelContext.sender`.
+   */
+  senderExternalId?: string;
+  /** Channel-owned sender/chat details. Plugins may augment the nested interfaces. */
+  channelContext?: PluginHookChannelContext;
 };
 
 export type PluginHookContextWindowSource =
@@ -420,6 +454,8 @@ export type PluginHookAfterCompactionEvent = {
   tokenCount?: number;
   compactedCount: number;
   sessionFile?: string;
+  /** Physical session generation replaced by this compaction, when it rotated. */
+  previousSessionId?: string;
 };
 
 export type PluginHookInboundClaimResult = {
@@ -877,6 +913,11 @@ export type PluginHookGatewayCronJob = {
         kind: "every";
         everyMs?: number;
         anchorMs?: number;
+      }
+    | {
+        kind: "on-exit";
+        command?: string;
+        cwd?: string;
       };
   sessionTarget?: string;
   wakeMode?: string;
@@ -1126,6 +1167,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookInboundClaimEvent,
     ctx: PluginHookInboundClaimContext,
   ) => Promise<PluginHookInboundClaimResult | void> | PluginHookInboundClaimResult | void;
+  channel_pairing_requested: (
+    event: PluginHookChannelPairingRequestedEvent,
+    ctx: PluginHookChannelPairingContext,
+  ) => Promise<void> | void;
   before_dispatch: (
     event: PluginHookBeforeDispatchEvent,
     ctx: PluginHookBeforeDispatchContext,

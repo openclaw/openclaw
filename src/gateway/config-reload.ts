@@ -20,6 +20,7 @@ import {
   type GatewayReloadPlan,
 } from "./config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "./config-reload-settings.js";
+import type { GatewayHotReloadStatus } from "./config-reload-status.types.js";
 
 export {
   buildGatewayReloadPlan,
@@ -75,10 +76,6 @@ function firstSkillsChangedPath(changedPaths: string[]): string | undefined {
   return changedPaths.find(matchesSkillsInvalidationPrefix);
 }
 
-export function shouldInvalidateSkillsSnapshotForPaths(changedPaths: string[]): boolean {
-  return firstSkillsChangedPath(changedPaths) !== undefined;
-}
-
 function isNoopReloadPlan(plan: GatewayReloadPlan): boolean {
   return (
     !plan.restartGateway &&
@@ -93,11 +90,6 @@ function isNoopReloadPlan(plan: GatewayReloadPlan): boolean {
     plan.restartChannels.size === 0
   );
 }
-
-// Hot-reload stays "active" while a watcher is live. It flips to "disabled" only
-// after watcher re-creation fails past the retry budget, so operators/callers
-// can detect silent degradation instead of assuming reloads still fire.
-export type GatewayHotReloadStatus = "active" | "disabled";
 
 type GatewayConfigReloader = {
   stop: () => Promise<void>;
@@ -119,6 +111,9 @@ export function startGatewayConfigReloader(opts: {
   initialCompareConfig?: OpenClawConfig;
   initialInternalWriteHash?: string | null;
   readSnapshot: () => Promise<ConfigFileSnapshot>;
+  onConfigChange?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
+  onConfigApplied?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
+  onNoopConfigCommit: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => Promise<void>;
   onHotReload: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => Promise<void>;
   onRestart: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
   promoteSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
@@ -283,25 +278,30 @@ export function startGatewayConfigReloader(opts: {
       noopPaths: pluginInstallTimestampNoopPaths,
       forceChangedPaths: pluginInstallWholeRecordPaths,
     });
-    if (isNoopReloadPlan(plan) && !followUp.requiresRestart) {
-      return;
-    }
     if (settings.mode === "off") {
       opts.log.info("config reload disabled (gateway.reload.mode=off)");
       return;
     }
+    if (isNoopReloadPlan(plan) && !followUp.requiresRestart) {
+      await opts.onConfigChange?.(plan, nextConfig);
+      // No-op plans still change the runtime config snapshot. Commit before
+      // marking applied so getRuntimeConfig() readers do not stay stale until restart.
+      await opts.onNoopConfigCommit(plan, nextConfig);
+      await opts.onConfigApplied?.(plan, nextConfig);
+      return;
+    }
     if (followUp.requiresRestart) {
-      queueRestart(
-        {
-          ...plan,
-          restartGateway: true,
-          restartReasons: [...plan.restartReasons, followUp.reason],
-        },
-        nextConfig,
-      );
+      const restartPlan = {
+        ...plan,
+        restartGateway: true,
+        restartReasons: [...plan.restartReasons, followUp.reason],
+      };
+      await opts.onConfigChange?.(restartPlan, nextConfig);
+      queueRestart(restartPlan, nextConfig);
       return;
     }
     if (settings.mode === "restart") {
+      await opts.onConfigChange?.({ ...plan, restartGateway: true }, nextConfig);
       queueRestart(plan, nextConfig);
       return;
     }
@@ -314,11 +314,14 @@ export function startGatewayConfigReloader(opts: {
         );
         return;
       }
+      await opts.onConfigChange?.(plan, nextConfig);
       queueRestart(plan, nextConfig);
       return;
     }
 
+    await opts.onConfigChange?.(plan, nextConfig);
     await opts.onHotReload(plan, nextConfig);
+    await opts.onConfigApplied?.(plan, nextConfig);
   };
 
   const promoteAcceptedSnapshot = async (snapshot: ConfigFileSnapshot, reason: string) => {

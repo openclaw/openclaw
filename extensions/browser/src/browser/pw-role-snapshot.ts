@@ -131,37 +131,42 @@ function removeNthFromNonDuplicates(refs: RoleRefMap, tracker: RoleNameTracker) 
 
 function compactTree(tree: string) {
   const lines = tree.split("\n");
-  const result: string[] = [];
+  const entries: Array<{ line: string; keep: boolean; hasRef: boolean; indent: number }> = [];
+  const stack: Array<{ entry: (typeof entries)[number]; indent: number }> = [];
 
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i];
-    if (line.includes("[ref=")) {
-      result.push(line);
-      continue;
+  const finishEntry = () => {
+    const current = stack.pop();
+    if (!current) {
+      return;
     }
-    if (line.includes(":") && !line.trimEnd().endsWith(":")) {
-      result.push(line);
-      continue;
+    current.entry.keep ||= current.entry.hasRef;
+    if (current.entry.hasRef && stack.length > 0) {
+      stack[stack.length - 1].entry.hasRef = true;
     }
+  };
 
-    const currentIndent = getIndentLevel(line);
-    let hasRelevantChildren = false;
-    for (let j = i + 1; j < lines.length; j += 1) {
-      const childIndent = getIndentLevel(lines[j]);
-      if (childIndent <= currentIndent) {
-        break;
-      }
-      if (lines[j]?.includes("[ref=")) {
-        hasRelevantChildren = true;
-        break;
-      }
+  for (const line of lines) {
+    const indent = getIndentLevel(line);
+    while (stack.length > 0 && stack[stack.length - 1].indent >= indent) {
+      finishEntry();
     }
-    if (hasRelevantChildren) {
-      result.push(line);
-    }
+    const entry = {
+      line,
+      keep: line.includes("[ref=") || (line.includes(":") && !line.trimEnd().endsWith(":")),
+      hasRef: line.includes("[ref="),
+      indent,
+    };
+    entries.push(entry);
+    stack.push({ entry, indent });
+  }
+  while (stack.length > 0) {
+    finishEntry();
   }
 
-  return result.join("\n");
+  return entries
+    .filter((entry) => entry.keep)
+    .map((entry) => entry.line)
+    .join("\n");
 }
 
 function processLine(

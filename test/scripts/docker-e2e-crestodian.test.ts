@@ -8,19 +8,19 @@ function readScript(pathname: string): string {
 
 describe("Crestodian Docker E2E scripts", () => {
   it("keeps first-run checks wired to packaged CLI and Crestodian behavior", () => {
-    const source = readScript("scripts/e2e/crestodian-first-run-docker-client.ts");
+    const source = readScript("test/e2e/qa-lab/runtime/crestodian-first-run-docker-client.ts");
     const spec = readScript("scripts/e2e/crestodian-first-run-spec.json");
 
-    expect(source).toContain("../../dist/cli/run-main.js");
-    expect(source).toContain("../../dist/crestodian/crestodian.js");
+    expect(source).toContain("../../../../dist/cli/run-main.js");
+    expect(source).toContain("../../../../dist/crestodian/crestodian.js");
     expect(source).toContain("shouldStartOnboardingForFreshInstall");
     expect(source).toContain("shouldStartCrestodianForModernOnboard");
-    expect(source).toContain("runCli([\"node\", \"openclaw\", \"onboard\"");
+    expect(source).toContain('runCli(["node", "openclaw", "onboard"');
     expect(source).toContain("runCrestodian(");
     expect(source).toContain("Config: missing");
     expect(source).toContain("Crestodian first-run Docker E2E passed");
-    expect(spec).toContain("\"auditOperations\"");
-    expect(spec).toContain("\"crestodian.setup\"");
+    expect(spec).toContain('"auditOperations"');
+    expect(spec).toContain('"crestodian.setup"');
   });
 
   it("keeps planner fallback checks wired to packaged Crestodian assistant flow", () => {
@@ -37,8 +37,10 @@ describe("Crestodian Docker E2E scripts", () => {
   });
 
   it("keeps rescue checks wired through auto-reply command handling", () => {
+    const shell = readScript("scripts/e2e/crestodian-rescue-docker.sh");
     const source = readScript("scripts/e2e/crestodian-rescue-docker-client.ts");
 
+    expect(shell).toContain("OPENCLAW_GATEWAY_TOKEN=crestodian-rescue-token");
     expect(source).toContain("../../dist/auto-reply/reply/commands-crestodian.js");
     expect(source).toContain("../../dist/crestodian/rescue-message.js");
     expect(source).toContain("handleCrestodianCommand(");

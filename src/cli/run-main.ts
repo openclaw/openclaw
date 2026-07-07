@@ -6,11 +6,13 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { Command as CommanderCommand, Option as CommanderOption } from "commander";
 import { resolveStateDir } from "../config/paths.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import { isLoopbackAddress, isSecureWebSocketUrl } from "../gateway/net.js";
 import { FLAG_TERMINATOR, isValueToken } from "../infra/cli-root-options.js";
 import { isTruthyEnvValue, normalizeEnv } from "../infra/env.js";
 import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
+import { tryProcessCwd } from "../infra/safe-cwd.js";
 import type { PluginManifestCommandAliasRegistry } from "../plugins/manifest-command-aliases.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import {
@@ -32,7 +34,9 @@ import {
   resolveGatewayRunPreBootstrapOptions,
 } from "./gateway-run-argv.js";
 import { hasJsonOutputFlag, withConsoleLogsRoutedToStderrForJson } from "./json-output-mode.js";
+import { flushExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
+import { formatCliCommandSuggestions } from "./program/command-suggestions.js";
 import { getCoreCliCommandNames } from "./program/core-command-descriptors.js";
 import { getSubCliEntries } from "./program/subcli-descriptors.js";
 import {
@@ -49,6 +53,8 @@ import {
   shouldUseSecretsHelpFastPath,
   shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
+import { registerSignalExitBarrier, waitForSignalExitBarriers } from "./signal-exit-barrier.js";
+import { createGatewayStartupTrace } from "./startup-trace.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
 export {
@@ -64,8 +70,6 @@ export {
   shouldUseSecretsHelpFastPath,
   shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
-
-type Awaitable<T> = T | Promise<T>;
 
 const CLI_PROXY_ENV_KEYS = [
   "HTTP_PROXY",
@@ -85,40 +89,6 @@ const loadManifestCommandAliasesRuntimeModule = async () =>
 const loadProxyLifecycleModule = async () => await import("../infra/net/proxy/proxy-lifecycle.js");
 const loadCrestodianModule = async () => await import("../crestodian/crestodian.js");
 const loadProgressModule = async () => await import("./progress.js");
-
-function createGatewayCliMainStartupTrace(argv: string[]) {
-  // Startup trace is scoped to gateway invocations to avoid routine CLI stderr noise.
-  const enabled =
-    isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE) &&
-    argv.slice(2).includes("gateway");
-  const started = performance.now();
-  let last = started;
-  const emit = (name: string, durationMs: number, totalMs: number) => {
-    if (!enabled) {
-      return;
-    }
-    process.stderr.write(
-      `[gateway] startup trace: cli.main.${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms\n`,
-    );
-  };
-  return {
-    mark(name: string) {
-      const now = performance.now();
-      emit(name, now - last, now - started);
-      last = now;
-    },
-    async measure<T>(name: string, run: () => Awaitable<T>): Promise<T> {
-      const before = performance.now();
-      try {
-        return await run();
-      } finally {
-        const now = performance.now();
-        emit(name, now - before, now - started);
-        last = now;
-      }
-    },
-  };
-}
 
 function isRemoteAgentDispatchInvocation(argv: string[], primary: string | null): boolean {
   return primary === "agent" && !argv.includes("--local");
@@ -176,7 +146,7 @@ function isGatewayRunInvocationArgv(argv: string[]): boolean {
 
 async function tryRunGatewayRunFastPath(
   argv: string[],
-  startupTrace: ReturnType<typeof createGatewayCliMainStartupTrace>,
+  startupTrace: ReturnType<typeof createGatewayStartupTrace>,
 ): Promise<boolean> {
   if (!isGatewayRunFastPathArgv(argv)) {
     return false;
@@ -287,9 +257,9 @@ async function closeCliMemoryManagers(): Promise<void> {
 
 async function disposeCliAgentHarnesses(): Promise<void> {
   try {
-    const { listAgentHarnessIds, disposeRegisteredAgentHarnesses } =
+    const { listRegisteredAgentHarnesses, disposeRegisteredAgentHarnesses } =
       await import("../agents/harness/registry.js");
-    if (listAgentHarnessIds().length === 0) {
+    if (listRegisteredAgentHarnesses().length === 0) {
       return;
     }
     await disposeRegisteredAgentHarnesses();
@@ -324,6 +294,232 @@ export async function shouldStartOnboardingForFreshInstall(argv: string[]): Prom
   return isUnconfiguredConfigSnapshot(snapshot);
 }
 
+type BareRootLaunchTarget =
+  | { kind: "onboarding" }
+  | { kind: "tui"; local: boolean; gatewayUrl?: string; authSource?: "config" }
+  | { kind: "crestodian" };
+
+async function resolveBareRootLaunchTarget(argv: string[]): Promise<BareRootLaunchTarget | null> {
+  if (!shouldStartCrestodianForBareRoot(argv)) {
+    return null;
+  }
+  const { readConfigFileSnapshot } = await import("../config/config.js");
+  const snapshot = await readConfigFileSnapshot();
+  if (isUnconfiguredConfigSnapshot(snapshot)) {
+    return { kind: "onboarding" };
+  }
+  if (!snapshot.valid) {
+    return { kind: "crestodian" };
+  }
+  return resolveConfiguredTuiLaunchTarget(snapshot.config ?? snapshot.sourceConfig);
+}
+
+async function resolveConfiguredTuiLaunchTarget(
+  config: OpenClawConfig,
+): Promise<BareRootLaunchTarget> {
+  const gateway = await resolveReachableGateway(config);
+  if (gateway) {
+    const target: BareRootLaunchTarget = { kind: "tui", local: false, gatewayUrl: gateway.url };
+    if (gateway.authSource) {
+      target.authSource = gateway.authSource;
+    }
+    return target;
+  }
+  return { kind: "tui", local: true };
+}
+
+type GatewayProbeTarget = {
+  url: string;
+  auth: "local" | "remote";
+  scope: "local-loopback" | "local-configured" | "remote";
+};
+
+type ReachableGateway = {
+  url: string;
+  authSource?: "config";
+};
+
+type GatewayProbeAuth = {
+  token?: string;
+  password?: string;
+  authSource?: "config";
+};
+
+async function resolveReachableGateway(config: OpenClawConfig): Promise<ReachableGateway | null> {
+  const targets = await resolveGatewayProbeTargets(config);
+  if (targets.length === 0) {
+    return null;
+  }
+  const usesRemoteAuth = targets.some((target) => target.auth === "remote");
+  const auth = await resolveGatewayProbeAuth(config, usesRemoteAuth ? "remote" : "local");
+  const { probeGatewayReachable } = await import("../commands/onboard-helpers.js");
+  for (const target of targets) {
+    if (!isSafeGatewayProbeTarget(target)) {
+      continue;
+    }
+    const probeOptions: { url: string; token?: string; password?: string } = { url: target.url };
+    if (auth.token) {
+      probeOptions.token = auth.token;
+    }
+    if (auth.password) {
+      probeOptions.password = auth.password;
+    }
+    const probe = await probeGatewayReachable(probeOptions);
+    if (probe.ok) {
+      const reachable: ReachableGateway = { url: target.url };
+      if (auth.authSource) {
+        reachable.authSource = auth.authSource;
+      }
+      return reachable;
+    }
+  }
+  return null;
+}
+
+async function resolveGatewayProbeAuth(
+  config: OpenClawConfig,
+  auth: "local" | "remote",
+): Promise<GatewayProbeAuth> {
+  const gateway = config.gateway;
+  const remoteAuth = auth === "remote";
+  const [configToken, configPassword] = await Promise.all([
+    resolveGatewayProbeSecret({
+      config,
+      value: remoteAuth ? gateway?.remote?.token : gateway?.auth?.token,
+      path: remoteAuth ? "gateway.remote.token" : "gateway.auth.token",
+    }),
+    resolveGatewayProbeSecret({
+      config,
+      value: remoteAuth ? gateway?.remote?.password : gateway?.auth?.password,
+      path: remoteAuth ? "gateway.remote.password" : "gateway.auth.password",
+    }),
+  ]);
+  const resolved: GatewayProbeAuth = {};
+  const token = configToken ?? normalizeOptionalString(process.env.OPENCLAW_GATEWAY_TOKEN);
+  const password = configPassword ?? normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD);
+  if (token) {
+    resolved.token = token;
+  }
+  if (password) {
+    resolved.password = password;
+  }
+  if (configToken || configPassword) {
+    resolved.authSource = "config";
+  }
+  return resolved;
+}
+
+async function resolveGatewayProbeTargets(config: OpenClawConfig): Promise<GatewayProbeTarget[]> {
+  const remoteUrl = normalizeOptionalString(config.gateway?.remote?.url);
+  if (normalizeOptionalString(config.gateway?.mode) === "remote" && remoteUrl) {
+    const url = await resolveValidatedRemoteGatewayUrl(config);
+    return url ? [{ url, auth: "remote", scope: "remote" }] : [];
+  }
+  return (await resolveLocalGatewayWebSocketUrls(config)).map((url, index) => ({
+    url,
+    auth: "local",
+    scope: index === 0 ? "local-loopback" : "local-configured",
+  }));
+}
+
+function isSafeGatewayProbeTarget(target: GatewayProbeTarget): boolean {
+  if (target.scope === "remote") {
+    return isSafeRemoteGatewayProbeUrl(target.url);
+  }
+  return isSecureWebSocketUrl(target.url, {
+    allowPrivateWs: process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS === "1",
+  });
+}
+
+function isSafeRemoteGatewayProbeUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  const protocol =
+    parsed.protocol === "https:" ? "wss:" : parsed.protocol === "http:" ? "ws:" : parsed.protocol;
+  if (protocol === "wss:") {
+    return true;
+  }
+  if (protocol !== "ws:") {
+    return false;
+  }
+  if (isLoopbackGatewayHost(parsed.hostname)) {
+    return true;
+  }
+  return (
+    process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS === "1" &&
+    isSecureWebSocketUrl(url, { allowPrivateWs: true })
+  );
+}
+
+function isLoopbackGatewayHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/\.+$/, "");
+  if (normalized === "localhost") {
+    return true;
+  }
+  const hostForIpCheck =
+    normalized.startsWith("[") && normalized.endsWith("]") ? normalized.slice(1, -1) : normalized;
+  return isLoopbackAddress(hostForIpCheck);
+}
+
+async function resolveValidatedRemoteGatewayUrl(config: OpenClawConfig): Promise<string | null> {
+  try {
+    const { buildGatewayConnectionDetailsWithResolvers } =
+      await import("../gateway/connection-details.js");
+    return buildGatewayConnectionDetailsWithResolvers({
+      config,
+      ignoreEnvUrlOverride: true,
+    }).url;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveGatewayProbeSecret(params: {
+  config: OpenClawConfig;
+  value: unknown;
+  path: string;
+}): Promise<string | undefined> {
+  try {
+    const { resolveSetupSecretInputString } = await import("../wizard/setup.secret-input.js");
+    return await resolveSetupSecretInputString(params);
+  } catch {
+    return undefined;
+  }
+}
+
+async function resolveLocalGatewayWebSocketUrls(config: OpenClawConfig): Promise<string[]> {
+  const [{ resolveGatewayPort }, { resolveControlUiLinks }] = await Promise.all([
+    import("../config/paths.js"),
+    import("../gateway/control-ui-links.js"),
+  ]);
+  const gateway = config.gateway;
+  const baseParams = {
+    port: resolveGatewayPort(config),
+    basePath: gateway?.controlUi?.basePath,
+    tlsEnabled: gateway?.tls?.enabled === true,
+  };
+  const loopbackLinks = resolveControlUiLinks({
+    ...baseParams,
+    bind: "loopback",
+  });
+  const bind = gateway?.bind;
+  if (bind !== "tailnet" && bind !== "custom") {
+    return [loopbackLinks.wsUrl];
+  }
+  const configuredLinks = resolveControlUiLinks({
+    ...baseParams,
+    bind,
+    customBindHost: gateway?.customBindHost,
+  });
+  return configuredLinks.wsUrl === loopbackLinks.wsUrl
+    ? [loopbackLinks.wsUrl]
+    : [loopbackLinks.wsUrl, configuredLinks.wsUrl];
+}
+
 function pauseNonTtyStdinForCliExit(): void {
   const stdin = process.stdin;
   if (stdin.isTTY) {
@@ -349,7 +545,8 @@ export function resolveMissingPluginCommandMessage(
 }
 
 function shouldLoadCliDotEnv(env: NodeJS.ProcessEnv = process.env): boolean {
-  if (existsSync(path.join(process.cwd(), ".env"))) {
+  const cwd = tryProcessCwd();
+  if (cwd && existsSync(path.join(cwd, ".env"))) {
     return true;
   }
   return existsSync(path.join(resolveStateDir(env), ".env"));
@@ -600,18 +797,29 @@ async function resolveUnownedCliPrimaryMessage(params: {
   const { resolveManifestCommandAliasOwner, resolveManifestToolOwner } =
     await loadManifestCommandAliasesRuntimeModule();
   const cliCommandSurfaceOwner = await resolveCliCommandSurfaceOwner(params);
-  return (
-    resolveMissingPluginCommandMessageFromPolicy(params.primary, params.config, {
+  const pluginPolicyMessage = resolveMissingPluginCommandMessageFromPolicy(
+    params.primary,
+    params.config,
+    {
       resolveCommandAliasOwner: resolveManifestCommandAliasOwner,
       resolveToolOwner: resolveManifestToolOwner,
       resolveCliCommandSurfaceOwner: () => cliCommandSurfaceOwner,
-    }) ??
-    `Unknown command: openclaw ${params.primary}. No built-in command or plugin CLI metadata owns "${params.primary}".`
+    },
   );
+  if (pluginPolicyMessage) {
+    return pluginPolicyMessage;
+  }
+  const suggestion = formatCliCommandSuggestions(params.primary);
+  return [
+    `Unknown command: openclaw ${params.primary}. No built-in command or plugin CLI metadata owns "${params.primary}".`,
+    suggestion,
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 async function bootstrapCliProxyCaptureAndDispatcher(
-  startupTrace: ReturnType<typeof createGatewayCliMainStartupTrace>,
+  startupTrace: ReturnType<typeof createGatewayStartupTrace>,
   options: { ensureDispatcher?: boolean } = {},
 ): Promise<void> {
   const [
@@ -632,7 +840,7 @@ async function bootstrapCliProxyCaptureAndDispatcher(
 
 export async function runCli(argv: string[] = process.argv) {
   const originalArgv = normalizeWindowsArgv(argv);
-  const startupTrace = createGatewayCliMainStartupTrace(originalArgv);
+  const startupTrace = createGatewayStartupTrace(originalArgv, "cli.main");
   const parsedContainer = parseCliContainerArgs(originalArgv);
   if (!parsedContainer.ok) {
     throw new Error(parsedContainer.error);
@@ -699,6 +907,7 @@ export async function runCli(argv: string[] = process.argv) {
   let onSigterm: (() => void) | null = null;
   let onSigint: (() => void) | null = null;
   let onExit: (() => void) | null = null;
+  let unregisterProxySignalExitBarrier: (() => void) | null = null;
   let bestEffortConfigPromise: Promise<OpenClawConfig> | null = null;
   const isolateProxyConfigEnv = isGatewayRunInvocation;
   const readBestEffortCliConfig = async (): Promise<OpenClawConfig> => {
@@ -726,6 +935,8 @@ export async function runCli(argv: string[] = process.argv) {
     }
   };
   const stopStartedProxy = async () => {
+    unregisterProxySignalExitBarrier?.();
+    unregisterProxySignalExitBarrier = null;
     uninstallProxySignalHandlers();
     const handle = proxyHandle;
     proxyHandle = null;
@@ -743,8 +954,9 @@ export async function runCli(argv: string[] = process.argv) {
     if (!proxyHandle || onSigterm || onSigint || onExit) {
       return;
     }
+    unregisterProxySignalExitBarrier = registerSignalExitBarrier(stopStartedProxy);
     const shutdown = (exitCode: number) => {
-      void stopStartedProxy().finally(() => {
+      void waitForSignalExitBarriers().finally(() => {
         process.exit(exitCode);
       });
     };
@@ -859,14 +1071,17 @@ export async function runCli(argv: string[] = process.argv) {
       }
     }
 
-    const shouldRunBareRootCrestodian = shouldStartCrestodianForBareRoot(normalizedArgv);
+    const shouldRunBareRootCommand = shouldStartCrestodianForBareRoot(normalizedArgv);
     const shouldRunModernOnboardCrestodian = shouldStartCrestodianForModernOnboard(normalizedArgv);
-    if (shouldRunBareRootCrestodian || shouldRunModernOnboardCrestodian) {
+    if (shouldRunBareRootCommand || shouldRunModernOnboardCrestodian) {
       await ensureCliEnvProxyDispatcher();
     }
+    const bareRootLaunchTarget = shouldRunBareRootCommand
+      ? await resolveBareRootLaunchTarget(normalizedArgv)
+      : null;
 
-    if (shouldRunBareRootCrestodian) {
-      if (await shouldStartOnboardingForFreshInstall(normalizedArgv)) {
+    if (bareRootLaunchTarget) {
+      if (bareRootLaunchTarget.kind === "onboarding") {
         if (!process.stdin.isTTY || !process.stdout.isTTY) {
           console.error(
             "Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation.",
@@ -876,6 +1091,28 @@ export async function runCli(argv: string[] = process.argv) {
         }
         const { setupWizardCommand } = await import("../commands/onboard.js");
         await setupWizardCommand({});
+        return;
+      }
+      if (bareRootLaunchTarget.kind === "tui") {
+        if (!process.stdin.isTTY || !process.stdout.isTTY) {
+          console.error(
+            "OpenClaw TUI needs an interactive TTY. Use `openclaw agent --local ...` for automation.",
+          );
+          process.exitCode = 1;
+          return;
+        }
+        const { launchTuiCli } = await import("../tui/tui-launch.js");
+        const tuiOptions = bareRootLaunchTarget.local
+          ? { deliver: false, local: true }
+          : { deliver: false };
+        const tuiLaunchOptions: { gatewayUrl?: string; authSource?: "config" } = {};
+        if (bareRootLaunchTarget.gatewayUrl) {
+          tuiLaunchOptions.gatewayUrl = bareRootLaunchTarget.gatewayUrl;
+        }
+        if (bareRootLaunchTarget.authSource) {
+          tuiLaunchOptions.authSource = bareRootLaunchTarget.authSource;
+        }
+        await launchTuiCli(tuiOptions, tuiLaunchOptions);
         return;
       }
       if (!process.stdin.isTTY || !process.stdout.isTTY) {
@@ -1115,5 +1352,6 @@ export async function runCli(argv: string[] = process.argv) {
     await disposeCliAgentHarnesses();
     await closeCliMemoryManagers();
     pauseNonTtyStdinForCliExit();
+    flushExitAfterOneShotOutput();
   }
 }

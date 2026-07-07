@@ -32,19 +32,27 @@ class NodeForegroundServiceTest {
   }
 
   @Test
-  fun foregroundServiceTypesForVoiceMode_addsMicrophoneOnlyForTalkMode() {
+  fun foregroundServiceTypes_addsOnlyActiveSensitiveTypes() {
     assertEquals(
       ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
-      foregroundServiceTypesForVoiceMode(VoiceCaptureMode.Off),
-    )
-    assertEquals(
-      ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
-      foregroundServiceTypesForVoiceMode(VoiceCaptureMode.ManualMic),
+      foregroundServiceTypes(VoiceCaptureMode.Off, backgroundLocationActive = false),
     )
     assertEquals(
       ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
-      foregroundServiceTypesForVoiceMode(VoiceCaptureMode.TalkMode),
+      foregroundServiceTypes(VoiceCaptureMode.ManualMic, backgroundLocationActive = false),
     )
+    assertEquals(
+      ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
+        ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
+        ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION,
+      foregroundServiceTypes(VoiceCaptureMode.TalkMode, backgroundLocationActive = true),
+    )
+  }
+
+  @Test
+  fun backgroundLocationNotificationSuffix_disclosesActiveAlwaysMode() {
+    assertEquals("", backgroundLocationNotificationSuffix(active = false))
+    assertEquals(" · Location: Always", backgroundLocationNotificationSuffix(active = true))
   }
 
   @Test

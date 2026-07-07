@@ -31,6 +31,7 @@ import {
   normalizeProviderStatus,
 } from "./shared/call-status.js";
 import { guardedJsonApiRequest } from "./shared/guarded-json-api.js";
+import { resolveTwilioApiBaseUrl, type TwilioRegion } from "./twilio-region.js";
 import type { TwilioProviderOptions } from "./twilio.types.js";
 import { TwilioApiError, twilioApiRequest } from "./twilio/api.js";
 import { decideTwimlResponse, readTwimlRequestView } from "./twilio/twiml-policy.js";
@@ -72,6 +73,7 @@ type StreamSendResult = {
 type TwilioProviderConfig = {
   accountSid?: string;
   authToken?: string;
+  region?: TwilioRegion;
 };
 
 export class TwilioProvider implements VoiceCallProvider {
@@ -144,7 +146,10 @@ export class TwilioProvider implements VoiceCallProvider {
 
     this.accountSid = config.accountSid;
     this.authToken = config.authToken;
-    this.baseUrl = `https://api.twilio.com/2010-04-01/Accounts/${this.accountSid}`;
+    this.baseUrl = resolveTwilioApiBaseUrl({
+      accountSid: this.accountSid,
+      region: config.region,
+    });
     this.options = options;
 
     if (options.publicUrl) {
@@ -154,10 +159,6 @@ export class TwilioProvider implements VoiceCallProvider {
 
   setPublicUrl(url: string): void {
     this.currentPublicUrl = url;
-  }
-
-  getPublicUrl(): string | null {
-    return this.currentPublicUrl;
   }
 
   setTTSProvider(provider: TelephonyTtsProvider): void {
@@ -834,7 +835,7 @@ export class TwilioProvider implements VoiceCallProvider {
           Authorization: `Basic ${Buffer.from(`${this.accountSid}:${this.authToken}`).toString("base64")}`,
         },
         allowNotFound: true,
-        allowedHostnames: ["api.twilio.com"],
+        allowedHostnames: [new URL(this.baseUrl).hostname],
         auditContext: "twilio-get-call-status",
         errorPrefix: "Twilio get call status error",
       });

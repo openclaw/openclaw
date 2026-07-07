@@ -2,6 +2,9 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.R
+import ai.openclaw.app.gateway.GatewayCustomHeaders
+import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.ui.mobileCardSurface
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
@@ -22,17 +25,23 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
@@ -51,9 +60,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 
 private enum class ConnectInputMode {
@@ -65,23 +76,25 @@ private enum class ConnectInputMode {
 @Composable
 fun ConnectTabScreen(viewModel: MainViewModel) {
   val context = LocalContext.current
-  val statusText by viewModel.statusText.collectAsState()
-  val gatewayConnectionProblem by viewModel.gatewayConnectionProblem.collectAsState()
-  val isConnected by viewModel.isConnected.collectAsState()
+  val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
+  val statusText = gatewayConnectionDisplay.statusText
+  val gatewayConnectionProblem = gatewayConnectionDisplay.problem
+  val isConnected = gatewayConnectionDisplay.isConnected
   val remoteAddress by viewModel.remoteAddress.collectAsState()
   val manualHost by viewModel.manualHost.collectAsState()
   val manualPort by viewModel.manualPort.collectAsState()
   val manualTls by viewModel.manualTls.collectAsState()
   val manualEnabled by viewModel.manualEnabled.collectAsState()
-  val gatewayToken by viewModel.gatewayToken.collectAsState()
-  val gatewayBootstrapToken by viewModel.gatewayBootstrapToken.collectAsState()
   val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
+  val pairedGateways by viewModel.pairedGateways.collectAsState()
+  val activeGatewayStableId by viewModel.activeGatewayStableId.collectAsState()
 
   var advancedOpen by rememberSaveable { mutableStateOf(false) }
+  var gatewaySwitcherOpen by remember { mutableStateOf(false) }
   var inputMode by
-    remember(manualEnabled, manualHost, gatewayToken) {
+    remember(manualEnabled, manualHost) {
       mutableStateOf(
-        if (manualEnabled || manualHost.isNotBlank() || gatewayToken.trim().isNotEmpty()) {
+        if (manualEnabled || manualHost.isNotBlank()) {
           ConnectInputMode.Manual
         } else {
           ConnectInputMode.SetupCode
@@ -92,6 +105,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
   var manualHostInput by rememberSaveable { mutableStateOf(manualHost.ifBlank { "10.0.2.2" }) }
   var manualPortInput by rememberSaveable { mutableStateOf(manualPort.toString()) }
   var manualTlsInput by rememberSaveable { mutableStateOf(manualTls) }
+  var tokenInput by remember { mutableStateOf("") }
   var passwordInput by rememberSaveable { mutableStateOf("") }
   var validationText by rememberSaveable { mutableStateOf<String?>(null) }
 
@@ -100,13 +114,17 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
     AlertDialog(
       onDismissRequest = { viewModel.declineGatewayTrustPrompt() },
       containerColor = mobileCardSurface,
-      title = { Text("Trust this gateway?", style = mobileHeadline, color = mobileText) },
+      title = { Text(stringResource(R.string.trust_this_gateway), style = mobileHeadline, color = mobileText) },
       text = {
         val message =
           if (prompt.previousFingerprintSha256.isNullOrBlank()) {
-            "First-time TLS connection.\n\nVerify this SHA-256 fingerprint before trusting:\n${prompt.fingerprintSha256}"
+            stringResource(R.string.gateway_trust_first_seen, prompt.fingerprintSha256)
           } else {
-            "The gateway TLS certificate changed. Only continue if you expected this.\n\nOld SHA-256 fingerprint:\n${prompt.previousFingerprintSha256}\n\nNew SHA-256 fingerprint:\n${prompt.fingerprintSha256}"
+            stringResource(
+              R.string.gateway_trust_changed,
+              prompt.previousFingerprintSha256,
+              prompt.fingerprintSha256,
+            )
           }
         Text(
           message,
@@ -119,7 +137,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
           onClick = { viewModel.acceptGatewayTrustPrompt() },
           colors = ButtonDefaults.textButtonColors(contentColor = mobileAccent),
         ) {
-          Text("Trust and continue")
+          Text(stringResource(R.string.trust_and_continue))
         }
       },
       dismissButton = {
@@ -127,17 +145,18 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
           onClick = { viewModel.declineGatewayTrustPrompt() },
           colors = ButtonDefaults.textButtonColors(contentColor = mobileTextSecondary),
         ) {
-          Text("Cancel")
+          Text(stringResource(R.string.cancel))
         }
       },
     )
   }
 
   val setupResolvedEndpoint = remember(setupCode) { decodeGatewaySetupCode(setupCode)?.url?.let { parseGatewayEndpoint(it)?.displayUrl } }
-  val manualResolvedEndpoint =
+  val manualEndpointConfig =
     remember(manualHostInput, manualPortInput, manualTlsInput) {
-      composeGatewayManualUrl(manualHostInput, manualPortInput, manualTlsInput)?.let { parseGatewayEndpoint(it)?.displayUrl }
+      composeGatewayManualUrl(manualHostInput, manualPortInput, manualTlsInput)?.let(::parseGatewayEndpoint)
     }
+  val manualResolvedEndpoint = manualEndpointConfig?.displayUrl
 
   val activeEndpoint =
     remember(isConnected, remoteAddress, setupResolvedEndpoint, manualResolvedEndpoint, inputMode) {
@@ -158,9 +177,13 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
     verticalArrangement = Arrangement.spacedBy(14.dp),
   ) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-      Text("Gateway Connection", style = mobileTitle1, color = mobileText)
+      Text(stringResource(R.string.gateway_connection), style = mobileTitle1, color = mobileText)
       Text(
-        if (isConnected) "Your gateway is active and ready." else "Connect to your gateway to get started.",
+        if (isConnected) {
+          stringResource(R.string.connected_gateway_ready)
+        } else {
+          stringResource(R.string.connect_gateway_get_started)
+        },
         style = mobileCallout,
         color = mobileTextSecondary,
       )
@@ -191,7 +214,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
             )
           }
           Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text("Endpoint", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
+            Text(stringResource(R.string.endpoint), style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
             Text(activeEndpoint, style = mobileBody.copy(fontFamily = FontFamily.Monospace), color = mobileText)
           }
         }
@@ -213,8 +236,59 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
             )
           }
           Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text("Status", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
+            Text(stringResource(R.string.status), style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
             Text(statusText, style = mobileBody, color = if (isConnected) mobileSuccess else mobileText)
+          }
+        }
+      }
+    }
+
+    if (pairedGateways.size > 1) {
+      Box(modifier = Modifier.fillMaxWidth()) {
+        Surface(
+          modifier = Modifier.fillMaxWidth(),
+          shape = RoundedCornerShape(14.dp),
+          color = mobileCardSurface,
+          border = BorderStroke(1.dp, mobileBorder),
+          onClick = { gatewaySwitcherOpen = true },
+        ) {
+          Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+          ) {
+            Icon(Icons.Default.SwapHoriz, contentDescription = null, tint = mobileAccent)
+            Column(modifier = Modifier.weight(1f)) {
+              Text(stringResource(R.string.switch_gateway), style = mobileCaption1, color = mobileTextSecondary)
+              Text(
+                pairedGateways.firstOrNull { it.stableId == activeGatewayStableId }?.name
+                  ?: stringResource(R.string.select_gateway),
+                style = mobileHeadline,
+                color = mobileText,
+              )
+            }
+            Icon(Icons.Default.ExpandMore, contentDescription = null, tint = mobileTextSecondary)
+          }
+        }
+        DropdownMenu(
+          expanded = gatewaySwitcherOpen,
+          onDismissRequest = { gatewaySwitcherOpen = false },
+        ) {
+          pairedGateways.forEach { entry ->
+            DropdownMenuItem(
+              text = { Text(entry.name) },
+              leadingIcon = {
+                if (entry.stableId == activeGatewayStableId) {
+                  Icon(Icons.Default.Check, contentDescription = stringResource(R.string.active_gateway))
+                }
+              },
+              onClick = {
+                gatewaySwitcherOpen = false
+                if (entry.stableId != activeGatewayStableId) {
+                  viewModel.switchToGateway(entry.stableId)
+                }
+              },
+            )
           }
         }
       }
@@ -238,7 +312,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
       ) {
         Icon(Icons.Default.PowerSettingsNew, contentDescription = null, modifier = Modifier.size(18.dp))
         Spacer(modifier = Modifier.width(8.dp))
-        Text("Disconnect", style = mobileHeadline.copy(fontWeight = FontWeight.SemiBold))
+        Text(stringResource(R.string.disconnect), style = mobileHeadline.copy(fontWeight = FontWeight.SemiBold))
       }
     } else {
       Button(
@@ -249,8 +323,8 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
             return@Button
           }
 
-          val config =
-            resolveGatewayConnectConfig(
+          val plan =
+            resolveGatewayConnectPlan(
               useSetupCode = inputMode == ConnectInputMode.SetupCode,
               setupCode = setupCode,
               savedManualHost = manualHost,
@@ -259,12 +333,12 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
               manualHostInput = manualHostInput,
               manualPortInput = manualPortInput,
               manualTlsInput = manualTlsInput,
-              fallbackBootstrapToken = gatewayBootstrapToken,
-              fallbackToken = gatewayToken,
-              fallbackPassword = passwordInput,
+              bootstrapTokenInput = "",
+              tokenInput = tokenInput,
+              passwordInput = passwordInput,
             )
 
-          if (config == null) {
+          if (plan == null) {
             validationText =
               if (inputMode == ConnectInputMode.SetupCode) {
                 val parsedSetup = decodeGatewaySetupCode(setupCode)
@@ -289,15 +363,8 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
           }
 
           validationText = null
-          viewModel.saveGatewayConfigAndConnect(
-            host = config.host,
-            port = config.port,
-            tls = config.tls,
-            token = config.token,
-            bootstrapToken = config.bootstrapToken,
-            password = config.password,
-            resetSetupAuth = inputMode == ConnectInputMode.SetupCode,
-          )
+          viewModel.saveGatewayConfigAndConnect(plan)
+          tokenInput = ""
         },
         modifier = Modifier.fillMaxWidth().height(52.dp),
         shape = RoundedCornerShape(14.dp),
@@ -307,7 +374,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
             contentColor = Color.White,
           ),
       ) {
-        Text("Connect Gateway", style = mobileHeadline.copy(fontWeight = FontWeight.Bold))
+        Text(stringResource(R.string.connect_gateway), style = mobileHeadline.copy(fontWeight = FontWeight.Bold))
       }
     }
 
@@ -354,7 +421,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
           ) {
             Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(modifier = Modifier.width(8.dp))
-            Text("Copy Report for Claw", style = mobileCallout.copy(fontWeight = FontWeight.Bold))
+            Text(stringResource(R.string.copy_report_for_claw), style = mobileCallout.copy(fontWeight = FontWeight.Bold))
           }
         }
       }
@@ -373,7 +440,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
         horizontalArrangement = Arrangement.SpaceBetween,
       ) {
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-          Text("Advanced controls", style = mobileHeadline, color = mobileText)
+          Text(stringResource(R.string.advanced_controls), style = mobileHeadline, color = mobileText)
           Text("Setup code, endpoint, TLS, token, password, onboarding.", style = mobileCaption1, color = mobileTextSecondary)
         }
         Icon(
@@ -395,15 +462,15 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
           modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 14.dp),
           verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-          Text("Connection method", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
+          Text(stringResource(R.string.connection_method), style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
           Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             MethodChip(
-              label = "Setup Code",
+              label = stringResource(R.string.setup_code),
               active = inputMode == ConnectInputMode.SetupCode,
               onClick = { inputMode = ConnectInputMode.SetupCode },
             )
             MethodChip(
-              label = "Manual",
+              label = stringResource(R.string.manual),
               active = inputMode == ConnectInputMode.Manual,
               onClick = { inputMode = ConnectInputMode.Manual },
             )
@@ -419,14 +486,14 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
           )
 
           if (inputMode == ConnectInputMode.SetupCode) {
-            Text("Setup Code", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
+            Text(stringResource(R.string.setup_code), style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
             OutlinedTextField(
               value = setupCode,
               onValueChange = {
                 setupCode = it
                 validationText = null
               },
-              placeholder = { Text("Paste setup code", style = mobileBody, color = mobileTextTertiary) },
+              placeholder = { Text(stringResource(R.string.paste_setup_code), style = mobileBody, color = mobileTextTertiary) },
               modifier = Modifier.fillMaxWidth(),
               minLines = 3,
               maxLines = 5,
@@ -460,7 +527,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
               )
             }
 
-            Text("Host", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
+            Text(stringResource(R.string.host), style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
             OutlinedTextField(
               value = manualHostInput,
               onValueChange = {
@@ -502,7 +569,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
               horizontalArrangement = Arrangement.SpaceBetween,
             ) {
               Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text("Use TLS", style = mobileHeadline, color = mobileText)
+                Text(stringResource(R.string.use_tls), style = mobileHeadline, color = mobileText)
                 Text(
                   "Turn this on for Tailscale or public hosts. Private LAN ws:// remains supported.",
                   style = mobileCallout,
@@ -525,11 +592,11 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
               )
             }
 
-            Text("Token (optional)", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
+            Text(stringResource(R.string.token_optional), style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
             OutlinedTextField(
-              value = gatewayToken,
-              onValueChange = { viewModel.setGatewayToken(it) },
-              placeholder = { Text("token", style = mobileBody, color = mobileTextTertiary) },
+              value = tokenInput,
+              onValueChange = { tokenInput = it },
+              placeholder = { Text("Leave blank to keep saved token", style = mobileBody, color = mobileTextTertiary) },
               modifier = Modifier.fillMaxWidth(),
               singleLine = true,
               keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
@@ -546,7 +613,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
             OutlinedTextField(
               value = passwordInput,
               onValueChange = { passwordInput = it },
-              placeholder = { Text("password", style = mobileBody, color = mobileTextTertiary) },
+              placeholder = { Text(stringResource(R.string.password), style = mobileBody, color = mobileTextTertiary) },
               modifier = Modifier.fillMaxWidth(),
               singleLine = true,
               keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
@@ -558,12 +625,21 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
             if (!manualResolvedEndpoint.isNullOrBlank()) {
               EndpointPreview(endpoint = manualResolvedEndpoint)
             }
+
+            // Proxy credentials are unavailable on cleartext ws:// routes, including pasted URLs
+            // whose explicit scheme overrides the TLS toggle. The transport enforces this too.
+            manualEndpointConfig?.takeIf { it.tls }?.let { endpoint ->
+              ManualGatewayCustomHeadersEditor(
+                viewModel = viewModel,
+                stableId = GatewayEndpoint.manual(host = endpoint.host, port = endpoint.port).stableId,
+              )
+            }
           }
 
           HorizontalDivider(color = mobileBorder)
 
           TextButton(onClick = { viewModel.setOnboardingCompleted(false) }) {
-            Text("Run onboarding again", style = mobileCallout.copy(fontWeight = FontWeight.SemiBold), color = mobileAccent)
+            Text(stringResource(R.string.run_onboarding_again), style = mobileCallout.copy(fontWeight = FontWeight.SemiBold), color = mobileAccent)
           }
         }
       }
@@ -571,6 +647,107 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
 
     if (!validationText.isNullOrBlank()) {
       Text(validationText!!, style = mobileCaption1, color = mobileWarning)
+    }
+  }
+}
+
+/**
+ * Per-gateway proxy credential headers for the manual endpoint (Cloudflare Access-style
+ * service tokens). Values are secrets: masked while typing, hidden once saved, stored
+ * encrypted, and applied on the next reconnect.
+ */
+@Composable
+private fun ManualGatewayCustomHeadersEditor(
+  viewModel: MainViewModel,
+  stableId: String,
+) {
+  var headers by remember(stableId) { mutableStateOf(viewModel.gatewayCustomHeaders(stableId)) }
+  var nameInput by rememberSaveable(stableId) { mutableStateOf("") }
+  // Not rememberSaveable: header values are credentials and must not land in saved instance state.
+  var valueInput by remember(stableId) { mutableStateOf("") }
+
+  val trimmedName = nameInput.trim()
+  val nameIsReserved = GatewayCustomHeaders.isReservedName(trimmedName)
+  val nameIsDuplicate = headers.keys.any { it.equals(trimmedName, ignoreCase = true) }
+
+  fun persist(updated: Map<String, String>) {
+    viewModel.setGatewayCustomHeaders(stableId, updated)
+    headers = viewModel.gatewayCustomHeaders(stableId)
+  }
+
+  Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Text(
+      stringResource(R.string.custom_headers_optional),
+      style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
+      color = mobileTextSecondary,
+    )
+    Text(
+      stringResource(R.string.custom_headers_explainer),
+      style = mobileCaption1,
+      color = mobileTextSecondary,
+    )
+
+    for (name in headers.keys.sorted()) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+      ) {
+        Text(name, style = mobileBody.copy(fontFamily = FontFamily.Monospace), color = mobileText)
+        IconButton(onClick = { persist(headers - name) }) {
+          Icon(
+            Icons.Default.Close,
+            contentDescription = stringResource(R.string.remove_custom_header, name),
+            tint = mobileTextSecondary,
+          )
+        }
+      }
+    }
+
+    OutlinedTextField(
+      value = nameInput,
+      onValueChange = { nameInput = it },
+      placeholder = { Text("CF-Access-Client-Id", style = mobileBody, color = mobileTextTertiary) },
+      modifier = Modifier.fillMaxWidth(),
+      singleLine = true,
+      keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
+      textStyle = mobileBody.copy(fontFamily = FontFamily.Monospace, color = mobileText),
+      shape = RoundedCornerShape(14.dp),
+      colors = outlinedColors(),
+    )
+    OutlinedTextField(
+      value = valueInput,
+      onValueChange = { valueInput = it },
+      placeholder = { Text(stringResource(R.string.custom_header_value), style = mobileBody, color = mobileTextTertiary) },
+      modifier = Modifier.fillMaxWidth(),
+      singleLine = true,
+      visualTransformation = PasswordVisualTransformation(),
+      keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+      textStyle = mobileBody.copy(color = mobileText),
+      shape = RoundedCornerShape(14.dp),
+      colors = outlinedColors(),
+    )
+    if (nameIsReserved) {
+      Text(stringResource(R.string.custom_header_reserved), style = mobileCaption1, color = mobileWarning)
+    }
+    Button(
+      onClick = {
+        persist(headers + (trimmedName to valueInput))
+        nameInput = ""
+        valueInput = ""
+      },
+      enabled = trimmedName.isNotEmpty() && !nameIsReserved && !nameIsDuplicate,
+      modifier = Modifier.height(40.dp),
+      shape = RoundedCornerShape(12.dp),
+      contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+      colors =
+        ButtonDefaults.buttonColors(
+          containerColor = mobileSurface,
+          contentColor = mobileText,
+        ),
+      border = BorderStroke(1.dp, mobileBorderStrong),
+    ) {
+      Text(stringResource(R.string.add_custom_header), style = mobileCaption1.copy(fontWeight = FontWeight.Bold))
     }
   }
 }
@@ -648,7 +825,11 @@ private fun CommandBlock(command: String) {
 private fun EndpointPreview(endpoint: String) {
   Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
     HorizontalDivider(color = mobileBorder)
-    Text("Resolved endpoint", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
+    Text(
+      stringResource(R.string.resolved_endpoint),
+      style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
+      color = mobileTextSecondary,
+    )
     Text(endpoint, style = mobileCallout.copy(fontFamily = FontFamily.Monospace), color = mobileText)
     HorizontalDivider(color = mobileBorder)
   }

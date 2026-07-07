@@ -20,7 +20,6 @@ const listExplicitlyDisabledChannelIdsForConfig = vi.hoisted(() =>
   }),
 );
 const listPotentialConfiguredChannelPresenceSignals = vi.hoisted(() => vi.fn());
-const hasPotentialConfiguredChannels = vi.hoisted(() => vi.fn());
 const hasMeaningfulChannelConfig = vi.hoisted(() =>
   vi.fn((value: unknown) => {
     return (
@@ -40,7 +39,6 @@ vi.mock("../channels/config-presence.js", () => ({
   listPotentialConfiguredChannelIds,
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelPresenceSignals,
-  hasPotentialConfiguredChannels,
   hasMeaningfulChannelConfig,
 }));
 
@@ -151,6 +149,15 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         providers: [],
         cliBackends: [],
         contracts: { speechProviders: ["tts-local-cli", "cli"] },
+      },
+      {
+        id: "gradium",
+        channels: [],
+        origin: "global",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+        contracts: { speechProviders: ["gradium"] },
       },
       {
         id: "anthropic",
@@ -730,12 +737,6 @@ describe("resolveGatewayStartupPluginIds", () => {
           source: "config",
         }));
       });
-    hasPotentialConfiguredChannels.mockReset().mockImplementation((config: OpenClawConfig) => {
-      if (Object.hasOwn(config, "channels")) {
-        return Object.keys(config.channels ?? {}).length > 0;
-      }
-      return true;
-    });
     useManifestRegistryFixture();
     loadPluginManifestRegistryForInstalledIndex
       .mockReset()
@@ -808,6 +809,15 @@ describe("resolveGatewayStartupPluginIds", () => {
         messages: { tts: { provider: "edge" } },
       } as OpenClawConfig,
       ["browser", "microsoft", "memory-core"],
+    ],
+    [
+      "includes explicitly enabled external speech providers at startup",
+      {
+        channels: {},
+        messages: { tts: { provider: "gradium" } },
+        plugins: { entries: { gradium: { enabled: true } } },
+      } as OpenClawConfig,
+      ["browser", "gradium", "memory-core"],
     ],
     [
       "includes active persona speech providers at startup",
@@ -1892,6 +1902,7 @@ describe("resolveGatewayStartupPluginIds", () => {
             defaults: {
               model: "amazon-bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
             },
+            list: [{ id: "ops", utilityModel: "openai/gpt-5.5-nano" }],
           },
           channels: {},
           plugins: {
@@ -1904,7 +1915,7 @@ describe("resolveGatewayStartupPluginIds", () => {
         env: createPluginPlanningTestEnv(),
         index,
       }),
-    ).toEqual(["amazon-bedrock", "browser"]);
+    ).toEqual(["amazon-bedrock", "browser", "openai"]);
   });
 
   it("keeps configured memory embedding providers in restrictive startup metadata scopes", () => {
@@ -2795,12 +2806,6 @@ describe("resolveConfiguredChannelPluginIds", () => {
           source: "config",
         }));
       });
-    hasPotentialConfiguredChannels.mockReset().mockImplementation((config: OpenClawConfig) => {
-      if (Object.hasOwn(config, "channels")) {
-        return Object.keys(config.channels ?? {}).length > 0;
-      }
-      return false;
-    });
     useManifestRegistryFixture();
   });
 
@@ -2977,7 +2982,6 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
   beforeEach(() => {
     listPotentialConfiguredChannelIds.mockReset().mockReturnValue([]);
     listPotentialConfiguredChannelPresenceSignals.mockReset().mockReturnValue([]);
-    hasPotentialConfiguredChannels.mockReset().mockReturnValue(false);
     hasMeaningfulChannelConfig.mockClear();
     useManifestRegistryFixture();
   });
@@ -3417,6 +3421,185 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
     ).toEqual(["demo-other-channel"]);
   });
 
+  it("announces explicit configured channels without installed owners", () => {
+    expect(
+      listConfiguredAnnounceChannelIdsForConfig({
+        config: {
+          channels: {
+            clickclack: {
+              token: "configured",
+            },
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {},
+      }),
+    ).toStrictEqual(["clickclack"]);
+  });
+
+  it("does not announce ownerless explicit channels suppressed by plugin policy", () => {
+    const ownerlessChannelConfig = {
+      channels: {
+        clickclack: {
+          token: "configured",
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      listConfiguredAnnounceChannelIdsForConfig({
+        config: {
+          ...ownerlessChannelConfig,
+          plugins: {
+            enabled: false,
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {},
+      }),
+    ).toStrictEqual([]);
+
+    expect(
+      listConfiguredAnnounceChannelIdsForConfig({
+        config: {
+          ...ownerlessChannelConfig,
+          plugins: {
+            deny: ["clickclack"],
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {},
+      }),
+    ).toStrictEqual([]);
+
+    expect(
+      listConfiguredAnnounceChannelIdsForConfig({
+        config: {
+          ...ownerlessChannelConfig,
+          plugins: {
+            entries: {
+              clickclack: {
+                enabled: false,
+              },
+            },
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {},
+      }),
+    ).toStrictEqual([]);
+
+    expect(
+      listConfiguredAnnounceChannelIdsForConfig({
+        config: {
+          ...ownerlessChannelConfig,
+          plugins: {
+            allow: ["slack"],
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {},
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("does not announce explicit channels suppressed by plugin policy", () => {
+    const baseConfig = {
+      channels: {
+        "demo-channel": {
+          token: "configured",
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      listConfiguredAnnounceChannelIdsForConfig({
+        config: {
+          ...baseConfig,
+          plugins: {
+            enabled: false,
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {},
+      }),
+    ).toStrictEqual([]);
+
+    expect(
+      listConfiguredAnnounceChannelIdsForConfig({
+        config: {
+          ...baseConfig,
+          plugins: {
+            deny: ["demo-channel"],
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {},
+      }),
+    ).toStrictEqual([]);
+
+    expect(
+      listConfiguredAnnounceChannelIdsForConfig({
+        config: {
+          ...baseConfig,
+          plugins: {
+            entries: {
+              "demo-channel": {
+                enabled: false,
+              },
+            },
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {},
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("keeps announce channels with another effective owner", () => {
+    expect(
+      listConfiguredAnnounceChannelIdsForConfig({
+        config: {
+          channels: {
+            shared: {
+              token: "configured",
+            },
+          },
+          plugins: {
+            entries: {
+              "shared-good": {
+                enabled: true,
+              },
+              "shared-disabled": {
+                enabled: false,
+              },
+            },
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {},
+        manifestRecords: [
+          {
+            id: "shared-good",
+            channels: ["shared"],
+            origin: "config",
+            enabledByDefault: undefined,
+            providers: [],
+            cliBackends: [],
+          } as never,
+          {
+            id: "shared-disabled",
+            channels: ["shared"],
+            origin: "config",
+            enabledByDefault: undefined,
+            providers: [],
+            cliBackends: [],
+          } as never,
+        ],
+      }),
+    ).toStrictEqual(["shared"]);
+  });
+
   it("does not treat activation-only declarations as channel ownership", () => {
     listPotentialConfiguredChannelIds.mockReturnValue(["activation-only-channel"]);
     listPotentialConfiguredChannelPresenceSignals.mockReturnValue([
@@ -3574,7 +3757,6 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
   it("uses manifest env vars for read-only channel presence checks", () => {
     listPotentialConfiguredChannelIds.mockReturnValue([]);
     listPotentialConfiguredChannelPresenceSignals.mockReturnValue([]);
-    hasPotentialConfiguredChannels.mockReturnValue(false);
 
     expect(
       hasConfiguredChannelsForReadOnlyScope({

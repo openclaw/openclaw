@@ -9,28 +9,28 @@ import {
 } from "./thinking.shared.js";
 import type { ThinkLevel, ThinkingCatalogEntry } from "./thinking.shared.js";
 export {
-  formatXHighModelHint,
   isSessionDefaultDirectiveValue,
   normalizeElevatedLevel,
   normalizeFastMode,
-  normalizeNoticeLevel,
   normalizeReasoningLevel,
   normalizeTraceLevel,
   normalizeThinkLevel,
   normalizeUsageDisplay,
   normalizeVerboseLevel,
+  resolveEffectiveResponseUsage,
+  resolveMessagesResponseUsageDefault,
   resolveResponseUsageMode,
-  resolveElevatedMode,
 } from "./thinking.shared.js";
 export type {
   ElevatedLevel,
-  ElevatedMode,
+  FastMode,
   NoticeLevel,
   ReasoningLevel,
+  ResponseUsageDefaultConfig,
+  ResponseUsageInput,
   TraceLevel,
   ThinkLevel,
   ThinkingCatalogEntry,
-  UsageDisplayLevel,
   VerboseLevel,
 } from "./thinking.shared.js";
 import {
@@ -268,11 +268,6 @@ function supportsThinkingLevel(
   );
 }
 
-/** Return whether provider/model supports the xhigh thinking level. */
-export function supportsXHighThinking(provider?: string | null, model?: string | null): boolean {
-  return supportsThinkingLevel(provider, model, "xhigh");
-}
-
 /** List thinking level ids supported by provider/model. */
 export function listThinkingLevels(
   provider?: string | null,
@@ -355,7 +350,7 @@ function resolveSupportedThinkingLevelFromProfile(
   const ranked = profile.levels.toSorted((a, b) => b.rank - a.rank);
   return (
     ranked.find((entry) => entry.id !== "off" && entry.rank <= requestedRank)?.id ??
-    ranked.find((entry) => entry.id !== "off")?.id ??
+    ranked.findLast((entry) => entry.id !== "off")?.id ??
     "off"
   );
 }

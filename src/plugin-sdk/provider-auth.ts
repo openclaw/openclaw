@@ -23,6 +23,7 @@ import {
   buildCopilotIdeHeaders,
 } from "../agents/copilot-dynamic-headers.js";
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
+import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
@@ -200,6 +201,12 @@ function parseCopilotTokenResponse(value: unknown): {
   return { token, expiresAt: expiresAtMs };
 }
 
+async function cancelUnreadResponseBody(response: Response): Promise<void> {
+  if (!response.bodyUsed) {
+    await response.body?.cancel().catch(() => undefined);
+  }
+}
+
 function resolveCopilotProxyHost(proxyEp: string): string | null {
   const trimmed = proxyEp.trim();
   if (!trimmed) {
@@ -300,10 +307,13 @@ export async function resolveCopilotApiToken(params: {
   });
 
   if (!res.ok) {
+    await cancelUnreadResponseBody(res);
     throw new Error(`Copilot token exchange failed: HTTP ${res.status}`);
   }
 
-  const json = parseCopilotTokenResponse(await res.json());
+  const json = parseCopilotTokenResponse(
+    await readProviderJsonResponse(res, "github-copilot.token"),
+  );
   const payload: CachedCopilotToken = {
     token: json.token,
     expiresAt: json.expiresAt,

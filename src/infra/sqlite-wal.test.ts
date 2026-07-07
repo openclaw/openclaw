@@ -29,6 +29,7 @@ function statfsFixture(type: number): ReturnType<typeof fs.statfsSync> {
     bfree: 1,
     bavail: 1,
     files: 0,
+    frsize: 1024,
     ffree: 0,
   };
 }
@@ -41,6 +42,7 @@ describe("sqlite WAL maintenance", () => {
 
   it("enables WAL mode and explicit autocheckpointing", () => {
     const db = createMockDb();
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
 
     configureSqliteWalMaintenance(db, { checkpointIntervalMs: 0 });
 
@@ -51,10 +53,44 @@ describe("sqlite WAL maintenance", () => {
     );
   });
 
+  it("enables fullfsync barriers for WAL checkpoints on macOS", () => {
+    const db = createMockDb();
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+
+    configureSqliteWalMaintenance(db, { checkpointIntervalMs: 0 });
+
+    expect(db["exec"]).toHaveBeenNthCalledWith(1, "PRAGMA journal_mode = WAL;");
+    expect(db["exec"]).toHaveBeenNthCalledWith(2, "PRAGMA checkpoint_fullfsync = 1;");
+    expect(db["exec"]).toHaveBeenNthCalledWith(
+      3,
+      `PRAGMA wal_autocheckpoint = ${DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES};`,
+    );
+  });
+
+  it("continues WAL setup if macOS checkpoint fullfsync is unavailable", () => {
+    const db = createMockDb();
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    vi.mocked(db["exec"]).mockImplementation((sql) => {
+      if (sql.includes("checkpoint_fullfsync")) {
+        throw new Error("unsupported pragma");
+      }
+    });
+
+    configureSqliteWalMaintenance(db, { checkpointIntervalMs: 0 });
+
+    expect(db["exec"]).toHaveBeenNthCalledWith(1, "PRAGMA journal_mode = WAL;");
+    expect(db["exec"]).toHaveBeenNthCalledWith(2, "PRAGMA checkpoint_fullfsync = 1;");
+    expect(db["exec"]).toHaveBeenNthCalledWith(
+      3,
+      `PRAGMA wal_autocheckpoint = ${DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES};`,
+    );
+  });
+
   it("uses rollback journaling for databases on NFS-backed volumes", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-nfs-"));
     try {
       const db = createMockDb();
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
       const statfs = vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0x6969));
 
       const maintenance = configureSqliteWalMaintenance(db, {
@@ -62,7 +98,7 @@ describe("sqlite WAL maintenance", () => {
         databasePath: path.join(tempDir, "missing", "openclaw.sqlite"),
       });
 
-      expect(statfs).toHaveBeenCalledWith(tempDir);
+      expect(statfs).toHaveBeenCalledWith(fs.realpathSync(tempDir));
       expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode = DELETE;");
       expect(db["exec"]).not.toHaveBeenCalled();
       expect(maintenance.checkpoint()).toBe(true);
@@ -81,6 +117,7 @@ describe("sqlite WAL maintenance", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-network-"));
     try {
       const db = createMockDb();
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
       vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(fsType));
 
       configureSqliteWalMaintenance(db, {
@@ -188,6 +225,7 @@ describe("sqlite WAL maintenance", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-nfs-"));
     try {
       const db = createMockDb();
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
       vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
       vi.spyOn(fs, "readFileSync").mockReturnValue(
         `42 12 0:41 / ${tempDir} rw,relatime - nfs4 server:/share rw\n`,
@@ -208,6 +246,7 @@ describe("sqlite WAL maintenance", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-sshfs-"));
     try {
       const db = createMockDb();
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
       vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
       vi.spyOn(fs, "readFileSync").mockReturnValue(
         `42 12 0:41 / ${tempDir} rw,relatime - fuse.sshfs user@host:/share rw\n`,
@@ -238,9 +277,10 @@ describe("sqlite WAL maintenance", () => {
     try {
       fs.mkdirSync(mountDir);
       fs.symlinkSync(mountDir, linkedDir);
+      const canonicalMountDir = fs.realpathSync(mountDir);
       vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
       vi.spyOn(fs, "readFileSync").mockReturnValue(
-        `42 12 0:41 / ${mountDir} rw,relatime - fuse.sshfs user@host:/share rw\n`,
+        `42 12 0:41 / ${canonicalMountDir} rw,relatime - fuse.sshfs user@host:/share rw\n`,
       );
 
       expect(() =>
@@ -284,6 +324,7 @@ describe("sqlite WAL maintenance", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-nfs-"));
     try {
       const db = createMockDb();
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
       vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
       vi.spyOn(fs, "readFileSync").mockImplementation(() => {
         throw new Error("no proc mountinfo");
@@ -307,6 +348,7 @@ describe("sqlite WAL maintenance", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-smb-"));
     try {
       const db = createMockDb();
+      vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
       vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
       vi.spyOn(fs, "readFileSync").mockImplementation(() => {
         throw new Error("no proc mountinfo");
@@ -336,6 +378,7 @@ describe("sqlite WAL maintenance", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-sshfs-macfuse-"));
     try {
       const db = createMockDb();
+      vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
       vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
       vi.spyOn(fs, "readFileSync").mockImplementation(() => {
         throw new Error("no proc mountinfo");
@@ -361,6 +404,7 @@ describe("sqlite WAL maintenance", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-macfuse-"));
     try {
       const db = createMockDb();
+      vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
       vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
       vi.spyOn(fs, "readFileSync").mockImplementation(() => {
         throw new Error("no proc mountinfo");
@@ -384,6 +428,7 @@ describe("sqlite WAL maintenance", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-nfs-"));
     try {
       const db = createMockDb();
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
       vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
       vi.spyOn(fs, "readFileSync").mockImplementation(() => {
         throw new Error("no proc mountinfo");
@@ -406,6 +451,7 @@ describe("sqlite WAL maintenance", () => {
   it("runs lightweight periodic PASSIVE checkpoints and TRUNCATE on close", () => {
     vi.useFakeTimers();
     const db = createMockDb();
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
 
     const maintenance = configureSqliteWalMaintenance(db, { checkpointIntervalMs: 100 });
     expect(db["exec"]).toHaveBeenCalledTimes(2);
@@ -426,6 +472,7 @@ describe("sqlite WAL maintenance", () => {
     vi.useFakeTimers();
     const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
     const db = createMockDb();
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
 
     const maintenance = configureSqliteWalMaintenance(db, {
       checkpointIntervalMs: Number.MAX_SAFE_INTEGER,
@@ -438,6 +485,7 @@ describe("sqlite WAL maintenance", () => {
   it("honors explicit checkpoint mode overrides for periodic and close checkpoints", () => {
     vi.useFakeTimers();
     const db = createMockDb();
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
 
     const maintenance = configureSqliteWalMaintenance(db, {
       checkpointIntervalMs: 100,
@@ -455,6 +503,7 @@ describe("sqlite WAL maintenance", () => {
     const db = createMockDb();
     const error = new Error("busy");
     const onCheckpointError = vi.fn();
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     vi.mocked(db["exec"]).mockImplementation((sql) => {
       if (sql.includes("wal_checkpoint")) {
         throw error;
@@ -472,6 +521,7 @@ describe("sqlite WAL maintenance", () => {
 
   it("configures connection pragmas before WAL maintenance", () => {
     const db = createMockDb();
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
 
     configureSqliteConnectionPragmas(db, {
       busyTimeoutMs: 30_000,

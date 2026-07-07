@@ -5,7 +5,7 @@ import type {
 } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
-import { whatsappApprovalCapability, whatsappNativeApprovalAdapter } from "./approval-native.js";
+import { whatsappApprovalCapability } from "./approval-native.js";
 
 type WhatsAppConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["whatsapp"]>;
 
@@ -87,7 +87,7 @@ describe("whatsapp approval capability", () => {
     const pluginRequest = buildPluginRequest("+15551230000");
 
     expect(
-      whatsappNativeApprovalAdapter.auth?.getActionAvailabilityState?.({
+      whatsappApprovalCapability?.getActionAvailabilityState?.({
         cfg,
         accountId: "default",
         action: "approve",
@@ -95,7 +95,7 @@ describe("whatsapp approval capability", () => {
       }),
     ).toEqual({ kind: "disabled" });
     expect(
-      whatsappNativeApprovalAdapter.auth?.getActionAvailabilityState?.({
+      whatsappApprovalCapability?.getActionAvailabilityState?.({
         cfg,
         accountId: "default",
         action: "approve",
@@ -182,7 +182,7 @@ describe("whatsapp approval capability", () => {
     const request = buildExecRequest("+15551230000");
 
     expect(
-      whatsappNativeApprovalAdapter.auth?.getActionAvailabilityState?.({
+      whatsappApprovalCapability?.getActionAvailabilityState?.({
         cfg,
         accountId: "default",
         action: "approve",
@@ -288,7 +288,7 @@ describe("whatsapp approval capability", () => {
     });
 
     expect(
-      whatsappNativeApprovalAdapter.auth?.getActionAvailabilityState?.({
+      whatsappApprovalCapability?.getActionAvailabilityState?.({
         cfg,
         accountId: "default",
         action: "approve",
@@ -330,7 +330,7 @@ describe("whatsapp approval capability", () => {
     });
 
     expect(
-      whatsappNativeApprovalAdapter.auth?.getActionAvailabilityState?.({
+      whatsappApprovalCapability?.getActionAvailabilityState?.({
         cfg,
         accountId: "default",
         action: "approve",
@@ -338,7 +338,7 @@ describe("whatsapp approval capability", () => {
       }),
     ).toEqual({ kind: "disabled" });
     expect(
-      whatsappNativeApprovalAdapter.auth?.getActionAvailabilityState?.({
+      whatsappApprovalCapability?.getActionAvailabilityState?.({
         cfg,
         accountId: "work",
         action: "approve",

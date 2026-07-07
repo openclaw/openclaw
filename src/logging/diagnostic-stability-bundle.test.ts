@@ -281,10 +281,20 @@ describe("diagnostic stability bundles", () => {
           chatId: "chat-id-secret",
           error: "event-error-secret",
         },
+        {
+          seq: 2,
+          ts: 2,
+          type: "exec.approval.followup_suppressed",
+          approvalId: "approval-imported-123",
+          reason: "session_rebound",
+          phase: "gateway_preflight",
+          command: "raw command secret",
+        },
       ],
       summary: {
         byType: {
           "webhook.error": 1,
+          "exec.approval.followup_suppressed": 1,
           "private summary type": 1,
         },
         privateSummary: "summary-secret",
@@ -312,7 +322,18 @@ describe("diagnostic stability bundles", () => {
       type: "webhook.error",
       channel: "telegram",
     });
-    expect(result.bundle.snapshot.summary.byType).toEqual({ "webhook.error": 1 });
+    expect(result.bundle.snapshot.events[1]).toEqual({
+      seq: 2,
+      ts: 2,
+      type: "exec.approval.followup_suppressed",
+      approvalId: "approval-imported-123",
+      reason: "session_rebound",
+      phase: "gateway_preflight",
+    });
+    expect(result.bundle.snapshot.summary.byType).toEqual({
+      "webhook.error": 1,
+      "exec.approval.followup_suppressed": 1,
+    });
     const sanitized = JSON.stringify(result.bundle);
     for (const secret of [
       "private reason",
@@ -327,6 +348,7 @@ describe("diagnostic stability bundles", () => {
       "raw-secret-session",
       "chat-id-secret",
       "event-error-secret",
+      "raw command secret",
       "private summary type",
       "summary-secret",
     ]) {

@@ -45,33 +45,6 @@ function getBundledChannelSetupPromotionSurface(
 }
 
 /**
- * Returns whether one root-level channel key should move into account config.
- */
-export function shouldMoveSingleAccountChannelKey(params: {
-  channelKey: string;
-  key: string;
-}): boolean {
-  // Common keys move for every channel; channel-owned setup surfaces can add
-  // plugin-specific keys without teaching core about that channel's schema.
-  if (isCommonSingleAccountPromotionKey(params.key)) {
-    return true;
-  }
-  const loadedContractKeys = getLoadedChannelSetupPromotionSurface(
-    params.channelKey,
-  )?.singleAccountKeysToMove;
-  if (loadedContractKeys?.includes(params.key)) {
-    return true;
-  }
-  const bundledContractKeys = getBundledChannelSetupPromotionSurface(
-    params.channelKey,
-  )?.singleAccountKeysToMove;
-  if (bundledContractKeys?.includes(params.key)) {
-    return true;
-  }
-  return false;
-}
-
-/**
  * Resolves all root-level keys eligible for single-account promotion.
  */
 export function resolveSingleAccountKeysToMove(params: {

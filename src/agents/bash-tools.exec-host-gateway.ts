@@ -35,7 +35,7 @@ import {
   type ExecAutoReviewInput,
 } from "../infra/exec-auto-review.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
-import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../utils/message-channel.js";
+import { isNativeApprovalChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
 import {
   buildExecApprovalRequesterContext,
@@ -95,6 +95,7 @@ type ProcessGatewayAllowlistParams = {
   /** Session-store template, so the direct/denied followup can detect a rebind. */
   sessionStore?: string;
   bashElevated?: ExecElevatedDefaults;
+  approvalReviewerDeviceId?: string;
   turnSourceChannel?: string;
   turnSourceTo?: string;
   turnSourceAccountId?: string;
@@ -400,7 +401,13 @@ function shouldAwaitGatewayApprovalInline(params: {
   if (params.approvalFollowupMode !== undefined) {
     return false;
   }
-  return normalizeMessageChannel(params.turnSourceChannel) === INTERNAL_MESSAGE_CHANNEL;
+  // Native chat approval clients (Telegram /approve, Discord buttons,
+  // etc.) resolve the approval back into the same session, so the agent can
+  // wait inline and return the real exec output as the tool result. This
+  // mirrors the webchat path that PR #85239 fixed; without it the agent run
+  // terminates on the "approval-pending" tool result and the operator must
+  // send a follow-up chat message to recover the turn (issue #93918).
+  return isNativeApprovalChannel(normalizeMessageChannel(params.turnSourceChannel));
 }
 
 function buildGatewayExecApprovalDeniedToolResult(params: {
@@ -689,6 +696,9 @@ export async function processGatewayAllowlist(
           agentId: params.agentId,
           sessionKey: params.sessionKey,
         }),
+        approvalReviewerDeviceIds: params.approvalReviewerDeviceId
+          ? [params.approvalReviewerDeviceId]
+          : undefined,
         resolvedPath: resolveApprovalAuditTrustPath(
           allowlistEval.segments[0]?.resolution ?? null,
           params.workdir,

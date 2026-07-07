@@ -9,12 +9,15 @@ import {
   setCurrentPluginMetadataSnapshot,
 } from "./current-plugin-metadata-snapshot.js";
 import type { PluginCandidate } from "./discovery.js";
+import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 import {
   loadInstalledPluginIndex,
   resolveInstalledPluginIndexPolicyHash,
   type InstalledPluginIndex,
 } from "./installed-plugin-index.js";
+import { markRetainedManagedNpmInstall } from "./managed-npm-retention.js";
+import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry-snapshot.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -46,23 +49,32 @@ function writeManifestlessClaudeBundle(rootDir: string) {
   fs.writeFileSync(path.join(rootDir, "skills", "SKILL.md"), "# Workspace skill\n", "utf8");
 }
 
-function writePackagePlugin(rootDir: string, options: { configPaths?: readonly string[] } = {}) {
+function writePackagePlugin(
+  rootDir: string,
+  options: {
+    configPaths?: readonly string[];
+    pluginId?: string;
+    requiresPlugins?: readonly string[];
+  } = {},
+) {
+  const pluginId = options.pluginId ?? "demo";
   fs.mkdirSync(rootDir, { recursive: true });
   fs.writeFileSync(path.join(rootDir, "index.ts"), "export default { register() {} };\n", "utf8");
   fs.writeFileSync(
     path.join(rootDir, "openclaw.plugin.json"),
     JSON.stringify({
-      id: "demo",
-      name: "Demo",
+      id: pluginId,
+      name: pluginId,
       description: "one",
       configSchema: { type: "object" },
       ...(options.configPaths ? { activation: { onConfigPaths: options.configPaths } } : {}),
+      ...(options.requiresPlugins ? { requiresPlugins: options.requiresPlugins } : {}),
     }),
     "utf8",
   );
   fs.writeFileSync(
     path.join(rootDir, "package.json"),
-    JSON.stringify({ name: "demo", version: "1.0.0" }),
+    JSON.stringify({ name: pluginId, version: "1.0.0" }),
     "utf8",
   );
 }
@@ -437,6 +449,69 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     expect(whatsappPlugin.origin).toBe("global");
   });
 
+  it("does not recover retained managed npm generations as install records", async () => {
+    const tempRoot = makeTempDir();
+    const stateDir = path.join(tempRoot, "state");
+    const env = {
+      ...createHermeticEnv(tempRoot),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    const config = {};
+    const codexDir = writeManagedNpmPlugin({
+      stateDir,
+      packageName: "@openclaw/codex",
+      pluginId: "codex",
+      version: "2026.6.10-beta.1",
+    });
+    await markRetainedManagedNpmInstall({
+      packageDir: codexDir,
+      pluginId: "codex",
+      retainedAt: "2026-06-21T00:00:00.000Z",
+      reason: "test-retained-generation",
+    });
+    const staleIndex = loadInstalledPluginIndex({
+      config,
+      env,
+      stateDir,
+      installRecords: {},
+    });
+    writePersistedInstalledPluginIndexSync(staleIndex, { stateDir });
+
+    expect(loadInstalledPluginIndexInstallRecordsSync({ env, stateDir }).codex).toBeUndefined();
+    const result = loadPluginRegistrySnapshotWithMetadata({
+      config,
+      env,
+      stateDir,
+    });
+
+    expect(result.snapshot.installRecords.codex).toBeUndefined();
+    expect(result.snapshot.plugins.map((plugin) => plugin.pluginId)).not.toContain("codex");
+  });
+
+  it("does not trust package-owned retained npm marker files during recovery", () => {
+    const tempRoot = makeTempDir();
+    const stateDir = path.join(tempRoot, "state");
+    const env = {
+      ...createHermeticEnv(tempRoot),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    const codexDir = writeManagedNpmPlugin({
+      stateDir,
+      packageName: "@openclaw/codex",
+      pluginId: "codex",
+      version: "2026.6.10-beta.1",
+    });
+    fs.writeFileSync(
+      path.join(codexDir, ".openclaw-retained-npm-install.json"),
+      '{"version":1,"pluginId":"codex"}\n',
+      "utf8",
+    );
+
+    expect(loadInstalledPluginIndexInstallRecordsSync({ env, stateDir }).codex).toBeDefined();
+  });
+
   it("keeps vanished recovered install records on the persisted fast path", () => {
     const tempRoot = makeTempDir();
     const stateDir = path.join(tempRoot, "state");
@@ -542,6 +617,96 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
 
     expect(result.source).toBe("persisted");
     expect(result.diagnostics).toStrictEqual([]);
+  });
+
+  it("derives a complete index when a configured load-path plugin is missing", () => {
+    const tempRoot = makeTempDir();
+    const firstRoot = path.join(tempRoot, "first");
+    const secondRoot = path.join(tempRoot, "second");
+    const stateDir = path.join(tempRoot, "state");
+    const env = { ...createHermeticEnv(tempRoot), OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
+    const staleConfig = {
+      plugins: {
+        load: { paths: [firstRoot] },
+      },
+    };
+    const config = {
+      plugins: {
+        load: { paths: [firstRoot, secondRoot] },
+      },
+    };
+    writePackagePlugin(firstRoot, {
+      pluginId: "first",
+      requiresPlugins: ["second"],
+    });
+    writePackagePlugin(secondRoot, { pluginId: "second" });
+    const staleIndex = loadInstalledPluginIndex({ config: staleConfig, env });
+    expect(staleIndex.policyHash).toBe(resolveInstalledPluginIndexPolicyHash(config));
+    writePersistedInstalledPluginIndexSync(staleIndex, { stateDir });
+
+    const result = loadPluginRegistrySnapshotWithMetadata({
+      config,
+      env,
+      stateDir,
+    });
+
+    expect(result.source).toBe("derived");
+    expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
+    expect(result.snapshot.plugins.map((plugin) => plugin.pluginId)).toEqual(["first", "second"]);
+    expect(result.snapshot.plugins.map((plugin) => plugin.origin)).toEqual(["config", "config"]);
+    const scopedRegistry = loadPluginManifestRegistryForInstalledIndex({
+      index: result.snapshot,
+      config,
+      env,
+      pluginIds: ["first"],
+      includeDisabled: true,
+    });
+    expect(scopedRegistry.plugins.map((plugin) => plugin.id)).toEqual(["first"]);
+    expect(scopedRegistry.diagnostics).not.toContainEqual(
+      expect.objectContaining({
+        pluginId: "first",
+        message: expect.stringContaining('requires plugin "second"'),
+      }),
+    );
+  });
+
+  it("rebuilds when configured load-path precedence changes", () => {
+    const tempRoot = makeTempDir();
+    const firstRoot = path.join(tempRoot, "first");
+    const secondRoot = path.join(tempRoot, "second");
+    const stateDir = path.join(tempRoot, "state");
+    const env = { ...createHermeticEnv(tempRoot), OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
+    const originalConfig = {
+      plugins: {
+        load: { paths: [firstRoot, secondRoot] },
+      },
+    };
+    const reorderedConfig = {
+      plugins: {
+        load: { paths: [secondRoot, firstRoot] },
+      },
+    };
+    writePackagePlugin(firstRoot, { pluginId: "duplicate" });
+    writePackagePlugin(secondRoot, { pluginId: "duplicate" });
+    const originalIndex = loadInstalledPluginIndex({ config: originalConfig, env });
+    expect(originalIndex.plugins.map((plugin) => plugin.rootDir)).toEqual([firstRoot]);
+    writePersistedInstalledPluginIndexSync(originalIndex, { stateDir });
+
+    const unchanged = loadPluginRegistrySnapshotWithMetadata({
+      config: originalConfig,
+      env,
+      stateDir,
+    });
+    expect(unchanged.source).toBe("persisted");
+
+    const reordered = loadPluginRegistrySnapshotWithMetadata({
+      config: reorderedConfig,
+      env,
+      stateDir,
+    });
+    expect(reordered.source).toBe("derived");
+    expectDiagnosticsContainCode(reordered.diagnostics, "persisted-registry-stale-source");
+    expect(reordered.snapshot.plugins.map((plugin) => plugin.rootDir)).toEqual([secondRoot]);
   });
 
   it("rebuilds legacy config-path persisted registries before startup scoping", () => {

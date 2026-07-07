@@ -1,6 +1,8 @@
 // Codex tests cover config plugin behavior.
 import fs from "node:fs/promises";
+import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import {
   CODEX_APP_SERVER_CONFIG_KEYS,
@@ -13,6 +15,7 @@ import {
   fingerprintCodexAppServerNetworkProxyConfigPatch,
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
+  resolveCodexAppServerUserHomeDir,
   resolveCodexComputerUseConfig,
   resolveCodexModelBackedReviewerPolicyContext,
   resolveOpenClawExecModeForCodexAppServer,
@@ -26,6 +29,10 @@ type RuntimeOptionsParams = NonNullable<Parameters<typeof resolveCodexAppServerR
 
 function resolveRuntimeForTest(params: RuntimeOptionsParams = {}) {
   return resolveCodexAppServerRuntimeOptions({ env: {}, requirementsToml: null, ...params });
+}
+
+function envRef(id: string) {
+  return { source: "env" as const, provider: "default", id };
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -413,6 +420,65 @@ describe("Codex app-server config", () => {
     });
   });
 
+  it("passes resolved app-server SecretInput strings through to auth token and headers", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: {
+          transport: "websocket",
+          url: "wss://codex-app-server.example.internal/ws",
+          authToken: " resolved-capability-token ",
+          headers: {
+            " x-codex-client-session-token ": " resolved-session-token ",
+            Authorization: " Bearer explicit-token ",
+          },
+        },
+      },
+    });
+
+    expectFields(runtime.start, "runtime start", {
+      authToken: "resolved-capability-token",
+      headers: {
+        "x-codex-client-session-token": "resolved-session-token",
+        Authorization: "Bearer explicit-token",
+      },
+    });
+  });
+
+  it("rejects unresolved app-server auth token SecretRefs at runtime option resolution", () => {
+    expect(() =>
+      resolveRuntimeForTest({
+        pluginConfig: {
+          appServer: {
+            transport: "websocket",
+            url: "wss://codex-app-server.example.internal/ws",
+            authToken: envRef("CODEX_APP_SERVER_TOKEN"),
+          },
+        },
+      }),
+    ).toThrow(
+      'plugins.entries.codex.config.appServer.authToken: unresolved SecretRef "env:default:CODEX_APP_SERVER_TOKEN"',
+    );
+  });
+
+  it("rejects unresolved app-server header SecretRefs at runtime option resolution", () => {
+    expect(() =>
+      resolveRuntimeForTest({
+        pluginConfig: {
+          appServer: {
+            transport: "websocket",
+            url: "wss://codex-app-server.example.internal/ws",
+            authToken: "capability-token",
+            headers: {
+              "x-codex-client-session-token": envRef("CODEX_CLIENT_SESSION_TOKEN"),
+            },
+          },
+        },
+      }),
+    ).toThrow(
+      'plugins.entries.codex.config.appServer.headers.x-codex-client-session-token: unresolved SecretRef "env:default:CODEX_CLIENT_SESSION_TOKEN"',
+    );
+  });
+
   it("treats IPv6 loopback websocket app-servers as local loopback", () => {
     const runtime = resolveRuntimeForTest({
       pluginConfig: {
@@ -457,6 +523,55 @@ describe("Codex app-server config", () => {
     expectFields(runtime.start, "runtime start", {
       command: "codex",
       commandSource: "managed",
+      homeScope: "agent",
+    });
+  });
+
+  it("resolves opt-in user-home coexistence only for local stdio", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: { appServer: { homeScope: "user" } },
+    });
+
+    expect(runtime.start.homeScope).toBe("user");
+    expect(() =>
+      resolveRuntimeForTest({
+        pluginConfig: {
+          appServer: {
+            transport: "websocket",
+            url: "ws://127.0.0.1:39175",
+            homeScope: "user",
+          },
+        },
+      }),
+    ).toThrow(
+      "plugins.entries.codex.config.appServer.homeScope=user requires appServer.transport=stdio",
+    );
+  });
+
+  it("resolves the native user Codex home from CODEX_HOME or the OS home", () => {
+    expect(resolveCodexAppServerUserHomeDir({ CODEX_HOME: "/tmp/custom-codex" })).toBe(
+      "/tmp/custom-codex",
+    );
+    expect(resolveCodexAppServerUserHomeDir({}, () => "/Users/tester")).toBe(
+      "/Users/tester/.codex",
+    );
+  });
+
+  it("checks shared user config before enabling model-backed approval review", async () => {
+    await withTempDir("openclaw-codex-user-home-", async (codexHome) => {
+      await fs.writeFile(
+        path.join(codexHome, "config.toml"),
+        'openai_base_url = "http://localhost:8080/v1"\n',
+      );
+
+      expect(
+        canUseCodexModelBackedApprovalsReviewerForModel({
+          modelProvider: "openai",
+          model: "gpt-5.5",
+          env: { CODEX_HOME: codexHome },
+          homeScope: "user",
+        }),
+      ).toBe(false);
     });
   });
 
@@ -879,8 +994,8 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
       env: {},
       modelProvider: "openai",
       requirementsPath: "/custom/codex/requirements.toml",
-      readRequirementsFile: (path) => {
-        readPaths.push(path);
+      readRequirementsFile: (requirementsPath) => {
+        readPaths.push(requirementsPath);
         return 'allowed_sandbox_modes = ["read-only", "workspace-write"]\n';
       },
     });
@@ -900,8 +1015,8 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
       env: { ProgramData: "D:\\ManagedData" },
       modelProvider: "openai",
       platform: "win32",
-      readRequirementsFile: (path) => {
-        readPaths.push(path);
+      readRequirementsFile: (requirementsPath) => {
+        readPaths.push(requirementsPath);
         return 'allowed_sandbox_modes = ["read-only", "workspace-write"]\n';
       },
     });
@@ -1047,6 +1162,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(policy).toEqual({
       configured: true,
       enabled: true,
+      allowAllPlugins: false,
       allowDestructiveActions: false,
       destructiveApprovalMode: "deny",
       pluginPolicies: [
@@ -1098,6 +1214,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(resolveCodexPluginsPolicy(config)).toEqual({
       configured: true,
       enabled: true,
+      allowAllPlugins: false,
       allowDestructiveActions: true,
       destructiveApprovalMode: "auto",
       pluginPolicies: [
@@ -1129,11 +1246,60 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     });
   });
 
+  it("parses ask native Codex plugin destructive policy", () => {
+    const config = readCodexPluginConfig({
+      appServer: { mode: "guardian" },
+      codexPlugins: {
+        enabled: true,
+        allow_destructive_actions: "ask",
+        plugins: {
+          "google-calendar": {
+            marketplaceName: "openai-curated",
+            pluginName: "google-calendar",
+          },
+          slack: {
+            marketplaceName: "openai-curated",
+            pluginName: "slack",
+            allow_destructive_actions: "auto",
+          },
+        },
+      },
+    });
+
+    expect(config.appServer?.mode).toBe("guardian");
+    expect(config.codexPlugins?.allow_destructive_actions).toBe("ask");
+    expect(resolveCodexPluginsPolicy(config)).toEqual({
+      configured: true,
+      enabled: true,
+      allowAllPlugins: false,
+      allowDestructiveActions: true,
+      destructiveApprovalMode: "ask",
+      pluginPolicies: [
+        {
+          configKey: "google-calendar",
+          marketplaceName: "openai-curated",
+          pluginName: "google-calendar",
+          enabled: true,
+          allowDestructiveActions: true,
+          destructiveApprovalMode: "ask",
+        },
+        {
+          configKey: "slack",
+          marketplaceName: "openai-curated",
+          pluginName: "slack",
+          enabled: true,
+          allowDestructiveActions: true,
+          destructiveApprovalMode: "auto",
+        },
+      ],
+    });
+  });
+
   it("rejects unsupported native Codex plugin destructive policy strings", () => {
     const config = readCodexPluginConfig({
       codexPlugins: {
         enabled: true,
-        allow_destructive_actions: "ask",
+        allow_destructive_actions: "always",
         plugins: {
           slack: {
             marketplaceName: "openai-curated",
@@ -1162,6 +1328,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(policy).toEqual({
       configured: true,
       enabled: true,
+      allowAllPlugins: false,
       allowDestructiveActions: true,
       destructiveApprovalMode: "allow",
       pluginPolicies: [
@@ -1192,6 +1359,44 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
 
     expect(config.codexPlugins).toBeUndefined();
     expect(resolveCodexPluginsPolicy(config).pluginPolicies).toStrictEqual([]);
+  });
+
+  it("parses opt-in access to all connected account apps", () => {
+    const config = readCodexPluginConfig({
+      codexPlugins: {
+        enabled: true,
+        allow_all_plugins: true,
+        allow_destructive_actions: "auto",
+      },
+    });
+
+    expect(config.codexPlugins).toEqual({
+      enabled: true,
+      allow_all_plugins: true,
+      allow_destructive_actions: "auto",
+    });
+    expect(resolveCodexPluginsPolicy(config)).toEqual({
+      configured: true,
+      enabled: true,
+      allowAllPlugins: true,
+      allowDestructiveActions: true,
+      destructiveApprovalMode: "auto",
+      pluginPolicies: [],
+    });
+  });
+
+  it("requires native plugin support before exposing all connected account apps", () => {
+    expect(resolveCodexPluginsPolicy({ codexPlugins: { allow_all_plugins: true } })).toEqual({
+      configured: true,
+      enabled: false,
+      allowAllPlugins: false,
+      allowDestructiveActions: true,
+      destructiveApprovalMode: "allow",
+      pluginPolicies: [],
+    });
+    expect(
+      readCodexPluginConfig({ codexPlugins: { enabled: true, allow_all_plugins: "yes" } }),
+    ).toEqual({});
   });
 
   it("treats configured and environment commands as explicit overrides", () => {
@@ -1715,6 +1920,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
         commandSource: "config",
         args: ["app-server", "--listen", "stdio://"],
         headers: {},
+        homeScope: "agent",
       },
     });
   });
@@ -2312,6 +2518,47 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     ).toEqual(first);
     expect(first).not.toContain("sk-first");
     expect(second).not.toContain("sk-second");
+  });
+
+  it("derives distinct shared-client keys for distinct headers without exposing them", () => {
+    const first = codexAppServerStartOptionsKey({
+      transport: "websocket",
+      command: "codex",
+      args: [],
+      url: "ws://127.0.0.1:39175",
+      headers: {
+        Authorization: "Bearer first",
+        "x-codex-client-session-token": "session-first",
+      },
+    });
+    const second = codexAppServerStartOptionsKey({
+      transport: "websocket",
+      command: "codex",
+      args: [],
+      url: "ws://127.0.0.1:39175",
+      headers: {
+        Authorization: "Bearer second",
+        "x-codex-client-session-token": "session-second",
+      },
+    });
+
+    expect(first).not.toEqual(second);
+    expect(
+      codexAppServerStartOptionsKey({
+        transport: "websocket",
+        command: "codex",
+        args: [],
+        url: "ws://127.0.0.1:39175",
+        headers: {
+          Authorization: "Bearer first",
+          "x-codex-client-session-token": "session-first",
+        },
+      }),
+    ).toEqual(first);
+    expect(first).not.toContain("Bearer first");
+    expect(first).not.toContain("session-first");
+    expect(second).not.toContain("Bearer second");
+    expect(second).not.toContain("session-second");
   });
 
   it("keeps secret-derived shared-client keys stable across module reloads", async () => {

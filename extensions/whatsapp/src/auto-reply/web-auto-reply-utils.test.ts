@@ -365,6 +365,15 @@ describe("web auto-reply util", () => {
   });
 
   describe("elide", () => {
+    const hasLoneSurrogate = (value: string): boolean =>
+      Array.from(value).some((char) => {
+        if (char.length !== 1) {
+          return false;
+        }
+        const codeUnit = char.charCodeAt(0);
+        return codeUnit >= 0xd800 && codeUnit <= 0xdfff;
+      });
+
     it("returns undefined for undefined input", () => {
       expect(elide(undefined)).toBe(undefined);
     });
@@ -375,6 +384,20 @@ describe("web auto-reply util", () => {
 
     it("truncates and annotates when over limit", () => {
       expect(elide("abcdef", 3)).toBe("abc… (truncated 3 chars)");
+    });
+
+    it("does not split surrogate pairs when the limit lands inside an emoji", () => {
+      const output = elide("😀😀😀", 5);
+
+      expect(output).toBe("😀😀… (truncated 2 chars)");
+      expect(hasLoneSurrogate(output ?? "")).toBe(false);
+    });
+
+    it("keeps a complete astral character when it fits before the limit", () => {
+      const output = elide("ab😀cd", 4);
+
+      expect(output).toBe("ab😀… (truncated 2 chars)");
+      expect(hasLoneSurrogate(output ?? "")).toBe(false);
     });
   });
 

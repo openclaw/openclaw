@@ -8,7 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
-import { deleteMediaBuffer, saveMediaBuffer } from "../media/store.js";
+import { deleteMediaBuffer, saveMediaBuffer, type SavedMedia } from "../media/store.js";
 
 export type ChatAttachment = {
   type?: string;
@@ -50,7 +50,7 @@ type NormalizedAttachment = {
   base64: string;
 };
 
-type SavedMedia = {
+type SavedMediaRef = {
   id: string;
   path: string;
 };
@@ -59,6 +59,58 @@ const OFFLOAD_THRESHOLD_BYTES = 2_000_000;
 const TEXT_ONLY_OFFLOAD_LIMIT = 10;
 
 export const DEFAULT_CHAT_ATTACHMENT_MAX_MB = 20;
+
+export async function persistInboundImagesForTranscript(params: {
+  images: ChatImageContent[];
+  imageOrder: PromptImageOrderEntry[];
+  offloadedRefs: OffloadedRef[];
+  log: Pick<AttachmentLog, "warn">;
+  logContext: string;
+}): Promise<SavedMedia[]> {
+  const inline: SavedMedia[] = [];
+  for (const image of params.images) {
+    try {
+      inline.push(
+        await saveMediaBuffer(Buffer.from(image.data, "base64"), image.mimeType, "inbound"),
+      );
+    } catch (err) {
+      params.log.warn(
+        `${params.logContext}: failed to persist inbound image (${image.mimeType}): ${formatErrorMessage(err)}`,
+      );
+    }
+  }
+
+  const imageOffloaded: SavedMedia[] = [];
+  const nonImageOffloaded: SavedMedia[] = [];
+  for (const ref of params.offloadedRefs) {
+    const saved = {
+      id: ref.id,
+      path: ref.path,
+      size: ref.sizeBytes,
+      contentType: ref.mimeType,
+    };
+    (ref.mimeType.startsWith("image/") ? imageOffloaded : nonImageOffloaded).push(saved);
+  }
+  if (params.imageOrder.length === 0) {
+    return [...inline, ...imageOffloaded, ...nonImageOffloaded];
+  }
+
+  const ordered: SavedMedia[] = [];
+  let inlineIndex = 0;
+  let offloadedIndex = 0;
+  for (const entry of params.imageOrder) {
+    const media = entry === "inline" ? inline[inlineIndex++] : imageOffloaded[offloadedIndex++];
+    if (media) {
+      ordered.push(media);
+    }
+  }
+  ordered.push(
+    ...inline.slice(inlineIndex),
+    ...imageOffloaded.slice(offloadedIndex),
+    ...nonImageOffloaded,
+  );
+  return ordered;
+}
 
 /** Resolve the maximum decoded attachment size accepted for chat image inputs. */
 export function resolveChatAttachmentMaxBytes(cfg: OpenClawConfig): number {
@@ -146,11 +198,38 @@ function resolveAttachmentMime(params: {
   );
 }
 
+function isBase64DataCharCode(code: number): boolean {
+  return (
+    (code >= 0x41 && code <= 0x5a) ||
+    (code >= 0x61 && code <= 0x7a) ||
+    (code >= 0x30 && code <= 0x39) ||
+    code === 0x2b ||
+    code === 0x2f
+  );
+}
+
 function isValidBase64(value: string): boolean {
   if (value.length === 0 || value.length % 4 !== 0) {
     return false;
   }
-  return /^[A-Za-z0-9+/]+={0,2}$/.test(value);
+
+  let padding = 0;
+  let sawPadding = false;
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code === 0x3d) {
+      padding += 1;
+      if (padding > 2) {
+        return false;
+      }
+      sawPadding = true;
+      continue;
+    }
+    if (sawPadding || !isBase64DataCharCode(code)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function verifyDecodedSize(buffer: Buffer, estimatedBytes: number, label: string): void {
@@ -170,7 +249,7 @@ function ensureExtension(label: string, mime: string): string {
   return ext ? `${label}${ext}` : label;
 }
 
-function assertSavedMedia(value: unknown, label: string): SavedMedia {
+function assertSavedMedia(value: unknown, label: string): SavedMediaRef {
   if (
     value === null ||
     typeof value !== "object" ||
@@ -220,22 +299,6 @@ function normalizeAttachment(
     }
   }
   return { label, mime, base64 };
-}
-
-function validateAttachmentBase64OrThrow(
-  normalized: NormalizedAttachment,
-  opts: { maxBytes: number },
-): number {
-  if (!isValidBase64(normalized.base64)) {
-    throw new Error(`attachment ${normalized.label}: invalid base64 content`);
-  }
-  const sizeBytes = estimateBase64DecodedBytes(normalized.base64);
-  if (sizeBytes <= 0 || sizeBytes > opts.maxBytes) {
-    throw new Error(
-      `attachment ${normalized.label}: exceeds size limit (${sizeBytes} > ${opts.maxBytes} bytes)`,
-    );
-  }
-  return sizeBytes;
 }
 
 export async function parseMessageWithAttachments(
@@ -371,7 +434,7 @@ export async function parseMessageWithAttachments(
       const buffer = Buffer.from(b64, "base64");
       verifyDecodedSize(buffer, sizeBytes, label);
 
-      let savedMedia: SavedMedia;
+      let savedMedia: SavedMediaRef;
       try {
         const labelWithExt = ensureExtension(label, finalMime);
         const rawResult = await saveMediaBuffer(
@@ -429,45 +492,4 @@ export async function parseMessageWithAttachments(
     imageOrder,
     offloadedRefs,
   };
-}
-
-/**
- * @deprecated Use parseMessageWithAttachments instead.
- * This function converts images to markdown data URLs which Claude API cannot process as images.
- */
-export function buildMessageWithAttachments(
-  message: string,
-  attachments: ChatAttachment[] | undefined,
-  opts?: { maxBytes?: number },
-): string {
-  const maxBytes = opts?.maxBytes ?? 2_000_000;
-
-  if (!attachments || attachments.length === 0) {
-    return message;
-  }
-
-  const blocks: string[] = [];
-
-  for (const [idx, att] of attachments.entries()) {
-    if (!att) {
-      continue;
-    }
-
-    const normalized = normalizeAttachment(att, idx, {
-      stripDataUrlPrefix: false,
-      requireImageMime: true,
-    });
-    validateAttachmentBase64OrThrow(normalized, { maxBytes });
-
-    const { base64, label, mime } = normalized;
-    const safeLabel = label.replace(/\s+/g, "_");
-    blocks.push(`![${safeLabel}](data:${mime};base64,${base64})`);
-  }
-
-  if (blocks.length === 0) {
-    return message;
-  }
-
-  const separator = message.trim().length > 0 ? "\n\n" : "";
-  return `${message}${separator}${blocks.join("\n\n")}`;
 }

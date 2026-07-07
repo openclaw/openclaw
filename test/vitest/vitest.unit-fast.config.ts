@@ -1,7 +1,7 @@
 // Vitest unit fast config wires the unit fast test shard.
 import { defineConfig } from "vitest/config";
 import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pattern-file.ts";
-import { sharedVitestConfig } from "./vitest.shared.config.ts";
+import { resolveRepoRootPath, sharedVitestConfig } from "./vitest.shared.config.ts";
 import { getUnitFastTestFiles, getUnitFastTimerTestFiles } from "./vitest.unit-fast-paths.mjs";
 
 export function createUnitFastVitestConfig(
@@ -21,7 +21,9 @@ export function createUnitFastVitestConfig(
       name: "unit-fast",
       isolate: false,
       runner: undefined,
-      setupFiles: [],
+      // Env isolation only (no shared-setup mocks): membership is auto-curated,
+      // so tests must never read the developer's real config/state.
+      setupFiles: [resolveRepoRootPath("test/setup.env.ts")],
       include: includeFromEnv ?? cliInclude ?? unitFastTestFiles,
       exclude: sharedTest.exclude ?? [],
       passWithNoTests: true,

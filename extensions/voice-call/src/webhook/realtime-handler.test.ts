@@ -6,7 +6,7 @@ import type {
   RealtimeVoiceToolCallEvent,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WebSocket } from "ws";
+import { WebSocket, type RawData } from "ws";
 import type { VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
 import type { VoiceCallProvider } from "../providers/base.js";
@@ -42,20 +42,38 @@ function makeBridge(overrides: Partial<RealtimeVoiceBridge> = {}): RealtimeVoice
 
 function makeRealtimeProvider(
   createBridge: RealtimeVoiceProviderPlugin["createBridge"],
+  overrides: Partial<RealtimeVoiceProviderPlugin> = {},
 ): RealtimeVoiceProviderPlugin {
   return {
     id: "openai",
     label: "OpenAI",
     isConfigured: () => true,
     createBridge,
+    ...overrides,
   };
 }
+
+const PROVIDER_BARGE_IN_CAPABILITIES = {
+  transports: ["gateway-relay"],
+  inputAudioFormats: [{ encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 }],
+  outputAudioFormats: [{ encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 }],
+  supportsBargeIn: true,
+  handlesInputAudioBargeIn: true,
+} satisfies NonNullable<RealtimeVoiceProviderPlugin["capabilities"]>;
+
+const PROVIDER_WITH_LOCAL_BARGE_IN_CAPABILITIES = {
+  transports: ["gateway-relay"],
+  inputAudioFormats: [{ encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 }],
+  outputAudioFormats: [{ encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 }],
+  supportsBargeIn: true,
+} satisfies NonNullable<RealtimeVoiceProviderPlugin["capabilities"]>;
 
 function makeHandler(
   overrides?: Partial<VoiceCallRealtimeConfig>,
   deps?: {
     manager?: Partial<CallManager>;
     provider?: Partial<VoiceCallProvider>;
+    providerConfig?: Record<string, unknown>;
     realtimeProvider?: RealtimeVoiceProviderPlugin;
   },
 ) {
@@ -104,7 +122,7 @@ function makeHandler(
       ...deps?.provider,
     } as unknown as VoiceCallProvider,
     deps?.realtimeProvider ?? makeRealtimeProvider(() => makeBridge()),
-    { apiKey: "test-key" },
+    deps?.providerConfig ?? { apiKey: "test-key" },
     "/voice/webhook",
   );
 }
@@ -157,6 +175,124 @@ function requireFirstMockCall(calls: readonly unknown[][], label: string): unkno
     throw new Error(`expected ${label} call`);
   }
   return call;
+}
+
+type RealtimeBridgeRequest = Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0];
+type RecentTalkEvent = { turnId?: string; type: string };
+
+function makeCallRecord(providerCallId: string): CallRecord {
+  return {
+    callId: "call-1",
+    providerCallId,
+    provider: "twilio",
+    direction: "inbound",
+    state: "ringing",
+    from: "+15550001234",
+    to: "+15550009999",
+    startedAt: Date.now(),
+    transcript: [],
+    processedEventIds: [],
+    metadata: {},
+  };
+}
+
+function parseWebSocketMessage(data: RawData): Record<string, unknown> {
+  const bytes = Buffer.isBuffer(data)
+    ? data
+    : Array.isArray(data)
+      ? Buffer.concat(data)
+      : Buffer.from(data);
+  return JSON.parse(bytes.toString("utf8")) as Record<string, unknown>;
+}
+
+async function withBargeInHarness(
+  params: {
+    handlesProviderBargeIn?: boolean;
+    interruptResponseOnInputAudio?: boolean;
+    providerCallId: string;
+  },
+  run: (harness: {
+    callbacks: RealtimeBridgeRequest;
+    call: CallRecord;
+    createBridge: ReturnType<typeof vi.fn>;
+    handleBargeIn: ReturnType<typeof vi.fn>;
+    outboundMessages: Array<Record<string, unknown>>;
+    sendAudio: ReturnType<typeof vi.fn>;
+    ws: WebSocket;
+  }) => Promise<void>,
+): Promise<void> {
+  let callbacks: RealtimeBridgeRequest | undefined;
+  const sendAudio = vi.fn();
+  const handleBargeIn = vi.fn();
+  const call = makeCallRecord(params.providerCallId);
+  const createBridge = vi.fn((request: RealtimeBridgeRequest) => {
+    callbacks = request;
+    return makeBridge({ handleBargeIn, sendAudio });
+  });
+  const capabilities = params.handlesProviderBargeIn
+    ? PROVIDER_BARGE_IN_CAPABILITIES
+    : PROVIDER_WITH_LOCAL_BARGE_IN_CAPABILITIES;
+  const handler = makeHandler(undefined, {
+    manager: {
+      getCallByProviderCallId: vi.fn((): CallRecord => call),
+    },
+    providerConfig: {
+      apiKey: "test-key",
+      ...(params.interruptResponseOnInputAudio === undefined
+        ? {}
+        : { interruptResponseOnInputAudio: params.interruptResponseOnInputAudio }),
+    },
+    realtimeProvider: makeRealtimeProvider(createBridge, {
+      capabilities,
+      id: params.handlesProviderBargeIn ? "openai" : "test",
+    }),
+  });
+  const server = await startRealtimeServer(handler);
+
+  try {
+    const ws = await connectWs(server.url);
+    const outboundMessages: Array<Record<string, unknown>> = [];
+    ws.on("message", (data) => outboundMessages.push(parseWebSocketMessage(data)));
+    try {
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          start: { streamSid: `MZ-${params.providerCallId}`, callSid: params.providerCallId },
+        }),
+      );
+      await waitForRealtimeTest(() => expect(createBridge).toHaveBeenCalled());
+      if (!callbacks) {
+        throw new Error("expected realtime bridge callbacks");
+      }
+      await run({
+        callbacks,
+        call,
+        createBridge,
+        handleBargeIn,
+        outboundMessages,
+        sendAudio,
+        ws,
+      });
+    } finally {
+      if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+        ws.close();
+      }
+    }
+  } finally {
+    await server.close();
+  }
+}
+
+function recentTalkEvents(call: CallRecord): RecentTalkEvent[] {
+  return (call.metadata?.recentTalkEvents as RecentTalkEvent[] | undefined) ?? [];
+}
+
+function requireCancelledTurn(call: CallRecord): RecentTalkEvent & { turnId: string } {
+  const cancelled = recentTalkEvents(call).find((event) => event.type === "turn.cancelled");
+  if (!cancelled?.turnId) {
+    throw new Error("expected barge-in to cancel the active turn");
+  }
+  return cancelled as RecentTalkEvent & { turnId: string };
 }
 
 describe("RealtimeCallHandler path routing", () => {
@@ -719,84 +855,139 @@ describe("RealtimeCallHandler path routing", () => {
     }
   });
 
-  it("emits barge-in cancellation with a turn before provider speech_started", async () => {
-    let callbacks:
-      | {
-          onAudio?: (audio: Buffer) => void;
-        }
-      | undefined;
-    const sendAudio = vi.fn();
-    const call: CallRecord = {
-      callId: "call-1",
-      providerCallId: "CA-barge-in",
-      provider: "twilio",
-      direction: "inbound",
-      state: "ringing",
-      from: "+15550001234",
-      to: "+15550009999",
-      startedAt: Date.now(),
-      transcript: [],
-      processedEventIds: [],
-      metadata: {},
-    };
-    const createBridge = vi.fn(
-      (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
-        callbacks = request;
-        return makeBridge({ sendAudio });
+  it("cancels the active turn when the provider confirms barge-in", async () => {
+    await withBargeInHarness(
+      { providerCallId: "CA-barge-in", handlesProviderBargeIn: true },
+      async ({ callbacks, call }) => {
+        callbacks?.onAudio?.(Buffer.from([1, 2, 3]));
+        expect(recentTalkEvents(call).some((event) => event.type === "turn.cancelled")).toBe(false);
+        callbacks?.onClearAudio("barge-in");
+
+        await waitForRealtimeTest(() => {
+          expect(requireCancelledTurn(call).turnId).toMatch(/^turn-\d+$/);
+        });
+
+        const cancelled = requireCancelledTurn(call);
+        expect(
+          recentTalkEvents(call).findLast((event) => event.type === "output.audio.done")?.turnId,
+        ).toBe(cancelled.turnId);
       },
     );
-    const handler = makeHandler(undefined, {
-      manager: {
-        getCallByProviderCallId: vi.fn((): CallRecord => call),
-      },
-      realtimeProvider: makeRealtimeProvider(createBridge),
-    });
-    const server = await startRealtimeServer(handler);
+  });
 
-    try {
-      const ws = await connectWs(server.url);
-      try {
-        ws.send(
-          JSON.stringify({
-            event: "start",
-            start: { streamSid: "MZ-barge-in", callSid: "CA-barge-in" },
-          }),
-        );
-        await waitForRealtimeTest(() => {
-          expect(createBridge).toHaveBeenCalled();
-        });
+  it("passes the disabled input-interruption policy without cancelling speech-start", async () => {
+    await withBargeInHarness(
+      {
+        providerCallId: "CA-disabled-barge-in",
+        handlesProviderBargeIn: true,
+        interruptResponseOnInputAudio: false,
+      },
+      async ({ callbacks, call, createBridge, outboundMessages }) => {
+        expect(createBridge.mock.calls[0]?.[0].interruptResponseOnInputAudio).toBe(false);
 
         callbacks?.onAudio?.(Buffer.from([1, 2, 3]));
-        const speechPayload = Buffer.alloc(160, 0x00).toString("base64");
-        ws.send(JSON.stringify({ event: "media", media: { payload: speechPayload } }));
-        ws.send(JSON.stringify({ event: "media", media: { payload: speechPayload } }));
-
         await waitForRealtimeTest(() => {
-          expect(sendAudio).toHaveBeenCalledTimes(2);
+          expect(outboundMessages.some((message) => message.event === "media")).toBe(true);
         });
 
-        const recent = call.metadata?.recentTalkEvents as
-          | Array<{
-              turnId?: string;
-              type: string;
-            }>
-          | undefined;
-        const cancelled = recent?.find((event) => event.type === "turn.cancelled");
-        if (!cancelled) {
-          throw new Error("expected barge-in to cancel the active turn");
+        callbacks?.onEvent?.({ direction: "server", type: "input_audio_buffer.speech_started" });
+
+        await Promise.resolve();
+        expect(outboundMessages.some((message) => message.event === "clear")).toBe(false);
+        expect(recentTalkEvents(call).some((event) => event.type === "turn.cancelled")).toBe(false);
+      },
+    );
+  });
+
+  it("clears queued telephony audio when provider barge-in follows response.done", async () => {
+    await withBargeInHarness(
+      { providerCallId: "CA-late-barge-in", handlesProviderBargeIn: true },
+      async ({ callbacks, call, outboundMessages }) => {
+        callbacks?.onAudio?.(Buffer.alloc(320, 0xff));
+        await waitForRealtimeTest(() => {
+          expect(outboundMessages.some((message) => message.event === "media")).toBe(true);
+        });
+        callbacks?.onEvent?.({ direction: "server", type: "response.done" });
+        const clearCountBeforeBargeIn = outboundMessages.filter(
+          (message) => message.event === "clear",
+        ).length;
+
+        callbacks?.onClearAudio("barge-in");
+
+        await waitForRealtimeTest(() => {
+          expect(outboundMessages.filter((message) => message.event === "clear").length).toBe(
+            clearCountBeforeBargeIn + 1,
+          );
+        });
+        expect(
+          recentTalkEvents(call).filter((event) => event.type === "turn.cancelled"),
+        ).toHaveLength(0);
+      },
+    );
+  });
+
+  it("keeps local barge-in fallback for providers without speech-started events", async () => {
+    await withBargeInHarness(
+      { providerCallId: "CA-local-barge-in" },
+      async ({ callbacks, call, handleBargeIn, outboundMessages, sendAudio, ws }) => {
+        callbacks?.onAudio?.(Buffer.from([1, 2, 3]));
+        for (let i = 0; i < 4; i += 1) {
+          ws.send(
+            JSON.stringify({
+              event: "media",
+              media: { payload: Buffer.alloc(160, 0x00).toString("base64") },
+            }),
+          );
         }
-        expect(cancelled.turnId).toMatch(/^turn-\d+$/);
-        expect(recent?.findLast((event) => event.type === "input.audio.delta")?.turnId).not.toBe(
-          cancelled.turnId,
-        );
-      } finally {
-        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
-          ws.close();
+
+        await waitForRealtimeTest(() => {
+          expect(sendAudio).toHaveBeenCalledTimes(4);
+          expect(requireCancelledTurn(call).turnId).toMatch(/^turn-\d+$/);
+          expect(outboundMessages.some((message) => message.event === "clear")).toBe(true);
+        });
+
+        const cancelled = requireCancelledTurn(call);
+        expect(handleBargeIn).toHaveBeenCalledWith({ audioPlaybackActive: true });
+        expect(
+          recentTalkEvents(call).findLast((event) => event.type === "output.audio.done")?.turnId,
+        ).toBe(cancelled.turnId);
+      },
+    );
+  });
+
+  it("clears remote playback after local pacing and output state have finished", async () => {
+    await withBargeInHarness(
+      { providerCallId: "CA-late-local-barge-in" },
+      async ({ callbacks, call, handleBargeIn, outboundMessages, ws }) => {
+        callbacks?.onAudio?.(Buffer.from([1, 2, 3]));
+        await waitForRealtimeTest(() => {
+          expect(outboundMessages.some((message) => message.event === "media")).toBe(true);
+        });
+        callbacks?.onEvent?.({ direction: "server", type: "response.done" });
+        const clearCountBeforeBargeIn = outboundMessages.filter(
+          (message) => message.event === "clear",
+        ).length;
+
+        for (let i = 0; i < 4; i += 1) {
+          ws.send(
+            JSON.stringify({
+              event: "media",
+              media: { payload: Buffer.alloc(160, 0x00).toString("base64") },
+            }),
+          );
         }
-      }
-    } finally {
-      await server.close();
-    }
+
+        await waitForRealtimeTest(() => {
+          expect(handleBargeIn).toHaveBeenCalledWith({ audioPlaybackActive: false });
+          expect(outboundMessages.filter((message) => message.event === "clear").length).toBe(
+            clearCountBeforeBargeIn + 1,
+          );
+        });
+        expect(
+          recentTalkEvents(call).filter((event) => event.type === "turn.cancelled"),
+        ).toHaveLength(0);
+      },
+    );
   });
 
   it("submits continuing responses only for realtime agent consult calls", async () => {

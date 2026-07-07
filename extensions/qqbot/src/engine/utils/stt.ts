@@ -8,13 +8,20 @@
 import * as fs from "node:fs";
 import path from "node:path";
 import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
+import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   normalizeOptionalString,
   asOptionalObjectRecord as asRecord,
   readStringField as readString,
   sanitizeFileName,
 } from "./string-normalize.js";
+
+const STT_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 
 interface STTConfig {
   baseUrl: string;
@@ -91,11 +98,13 @@ export async function transcribeAudio(
   });
   try {
     if (!resp.ok) {
-      const detail = await resp.text().catch(() => "");
-      throw new Error(`STT failed (HTTP ${resp.status}): ${detail.slice(0, 300)}`);
+      const detail = await readResponseTextLimited(resp, STT_ERROR_BODY_LIMIT_BYTES).catch(
+        () => "",
+      );
+      throw new Error(`STT failed (HTTP ${resp.status}): ${truncateUtf16Safe(detail, 300)}`);
     }
 
-    const result = (await resp.json()) as { text?: string };
+    const result = await readProviderJsonResponse<{ text?: string }>(resp, "qqbot.stt");
     return normalizeOptionalString(result.text) ?? null;
   } finally {
     await release();

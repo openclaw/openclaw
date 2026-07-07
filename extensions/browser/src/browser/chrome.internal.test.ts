@@ -30,7 +30,9 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", () => ({
   registerManagedProxyBrowserCdpBypass: registerManagedProxyBrowserCdpBypassMock,
 }));
 
-const ensurePortAvailableMock = vi.hoisted(() => vi.fn(async () => {}));
+const ensurePortAvailableMock = vi.hoisted(() =>
+  vi.fn<(port: number, host?: string) => Promise<void>>(async () => {}),
+);
 
 vi.mock("../infra/ports.js", () => ({
   ensurePortAvailable: ensurePortAvailableMock,
@@ -416,18 +418,36 @@ describe("chrome.ts internal", () => {
     });
 
     it("adds --disable-dev-shm-usage on linux", () => {
-      const originalPlatform = process.platform;
-      Object.defineProperty(process, "platform", { value: "linux" });
-      try {
-        const args = buildOpenClawChromeLaunchArgs({
-          resolved: baseResolved(),
-          profile: baseProfile,
-          userDataDir: "/tmp/foo",
-        });
-        expect(args).toContain("--disable-dev-shm-usage");
-      } finally {
-        Object.defineProperty(process, "platform", { value: originalPlatform });
-      }
+      const args = buildOpenClawChromeLaunchArgs({
+        resolved: baseResolved(),
+        profile: baseProfile,
+        userDataDir: "/tmp/foo",
+        platform: "linux",
+      });
+      expect(args).toContain("--disable-dev-shm-usage");
+      expect(args).not.toContain("--use-mock-keychain");
+    });
+
+    it("uses a non-interactive keychain for isolated managed profiles on macOS", () => {
+      const args = buildOpenClawChromeLaunchArgs({
+        resolved: baseResolved(),
+        profile: baseProfile,
+        userDataDir: "/tmp/foo",
+        platform: "darwin",
+        useMockKeychain: true,
+      });
+      expect(args).toContain("--use-mock-keychain");
+      expect(args).not.toContain("--disable-dev-shm-usage");
+    });
+
+    it("keeps existing macOS profiles on their original keychain", () => {
+      const args = buildOpenClawChromeLaunchArgs({
+        resolved: baseResolved(),
+        profile: baseProfile,
+        userDataDir: "/tmp/foo",
+        platform: "darwin",
+      });
+      expect(args).not.toContain("--use-mock-keychain");
     });
 
     it("propagates extraArgs", () => {
@@ -524,6 +544,7 @@ describe("chrome.ts internal", () => {
         color: "#FF4500",
         cdpPort,
         cdpUrl: `http://127.0.0.1:${cdpPort}`,
+        cdpHost: "127.0.0.1",
         cdpIsLoopback: true,
       }) as unknown as ResolvedBrowserProfile;
 
@@ -559,7 +580,32 @@ describe("chrome.ts internal", () => {
       await expect(launchOpenClawChrome(makeResolved(), profile)).rejects.toThrow(
         /No supported browser found/,
       );
+      expect(ensurePortAvailableMock).toHaveBeenCalledWith(51111, "127.0.0.1");
     });
+
+    it.each([
+      { cdpUrl: "http://[::1]:51111", configuredProbeHost: "::1" },
+      { cdpUrl: "http://localhost:51111", configuredProbeHost: "localhost" },
+    ])(
+      "checks Chrome's IPv4 bind and the configured $configuredProbeHost endpoint",
+      async ({ cdpUrl, configuredProbeHost }) => {
+        vi.spyOn(fs, "existsSync").mockReturnValue(false);
+        const portBusy = new Error("Port is already in use.");
+        portBusy.name = "PortInUseError";
+        ensurePortAvailableMock.mockImplementation(async (_port, host) => {
+          if (host === configuredProbeHost) {
+            throw portBusy;
+          }
+        });
+        const profile = { ...makeProfile(51111), cdpUrl };
+
+        await expect(launchOpenClawChrome(makeResolved(), profile)).rejects.toThrow(portBusy);
+        expect(ensurePortAvailableMock.mock.calls).toEqual([
+          [51111, "127.0.0.1"],
+          [51111, configuredProbeHost],
+        ]);
+      },
+    );
 
     it("completes successfully when Chrome reports /json/version and CDP is reachable", async () => {
       // Mock executable discovery to a truthy path.
@@ -1110,10 +1156,12 @@ describe("chrome.ts internal", () => {
     it("escalates to SIGKILL when CDP keeps reporting reachable past the deadline", async () => {
       vi.stubGlobal(
         "fetch",
-        vi.fn().mockResolvedValue({
-          ok: true,
-          json: async () => ({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" }),
-        } as unknown as Response),
+        vi.fn(
+          async () =>
+            new Response(JSON.stringify({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" }), {
+              headers: { "content-type": "application/json" },
+            }),
+        ),
       );
       const proc = makeFakeProc();
       await stopOpenClawChrome(

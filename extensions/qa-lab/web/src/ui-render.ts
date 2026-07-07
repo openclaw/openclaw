@@ -1,3 +1,12 @@
+import type {
+  QaEvidenceArtifactView,
+  QaEvidenceGalleryEntryView,
+  QaEvidenceGalleryModel,
+  QaEvidenceMatrixCellView,
+  QaEvidenceProducerContext,
+  QaEvidenceProducerContextFile,
+} from "../../shared/evidence-gallery-types.js";
+
 /* ===== Shared types (unchanged from the bus protocol) ===== */
 
 type Conversation = {
@@ -138,6 +147,7 @@ type RunnerSnapshot = {
   startedAt?: string;
   finishedAt?: string;
   artifacts: null | {
+    evidencePath: string;
     outputDir: string;
     reportPath: string;
     summaryPath: string;
@@ -250,6 +260,18 @@ export type CaptureStartupStatusEnvelope = {
   status: CaptureStartupStatus;
 };
 
+type EvidenceStatus = QaEvidenceGalleryEntryView["status"];
+type EvidenceArtifactView = QaEvidenceArtifactView;
+type EvidenceEntryView = QaEvidenceGalleryEntryView;
+type EvidenceProducerContextFile = QaEvidenceProducerContextFile;
+type EvidenceMatrixCell = QaEvidenceMatrixCellView;
+type EvidenceProducerContext = QaEvidenceProducerContext;
+type EvidenceGalleryModel = QaEvidenceGalleryModel;
+
+export type EvidenceEnvelope = {
+  evidence: EvidenceGalleryModel | null;
+};
+
 export type CaptureSavedView = {
   id: string;
   name: string;
@@ -271,7 +293,7 @@ export type CaptureSavedView = {
   payloadExtent: "preview" | "full";
 };
 
-export type TabId = "chat" | "results" | "report" | "events" | "capture";
+export type TabId = "chat" | "results" | "report" | "events" | "capture" | "evidence";
 
 export type UiState = {
   theme: "light" | "dark";
@@ -321,6 +343,13 @@ export type UiState = {
   captureErrorsOnly: boolean;
   captureCoverage: CaptureCoverageSummary | null;
   captureStartupStatus: CaptureStartupStatus | null;
+  evidence: EvidenceGalleryModel | null;
+  evidenceArtifactFilter: "all" | EvidenceArtifactView["mediaKind"];
+  evidenceError: string | null;
+  evidenceLoading: boolean;
+  evidencePathDraft: string;
+  evidenceSearchText: string;
+  evidenceStatusFilter: "all" | EvidenceStatus;
   captureControlsExpanded: boolean;
   captureSummaryExpanded: boolean;
   captureSavedViews: CaptureSavedView[];
@@ -331,6 +360,7 @@ export type UiState = {
   capturePinnedLaneIds: string[];
   selectedCaptureSessionIds: string[];
   selectedCaptureEventKey: string | null;
+  selectedEvidenceEntryId: string | null;
   selectedConversationId: string | null;
   selectedThreadId: string | null;
   selectedScenarioId: string | null;
@@ -501,9 +531,32 @@ function renderCaptureHeaders(raw: string | undefined, mode: UiState["captureHea
   );
 }
 
+const NON_SECRET_CAPTURE_TOKEN_FIELDS = new Set([
+  "completiontokens",
+  "inputtokens",
+  "maxcompletiontokens",
+  "maxtokens",
+  "outputtokens",
+  "prompttokens",
+  "reasoningtokens",
+  "totaltokens",
+]);
+
 function isSensitiveCaptureField(label: string): boolean {
-  return /authorization|proxy-authorization|cookie|set-cookie|api[-_]?key|x[-_]?api[-_]?key|token|secret|password|session/i.test(
-    label,
+  const normalized = label.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const tokenMarker =
+    !NON_SECRET_CAPTURE_TOKEN_FIELDS.has(normalized) &&
+    normalized !== "tokenizer" &&
+    normalized.includes("token");
+  return (
+    normalized.includes("authorization") ||
+    normalized.includes("cookie") ||
+    normalized.includes("apikey") ||
+    normalized.includes("accesskey") ||
+    normalized.includes("secret") ||
+    normalized.includes("password") ||
+    normalized.includes("session") ||
+    tokenMarker
   );
 }
 
@@ -528,6 +581,9 @@ function redactCaptureValue(value: unknown, label?: string): unknown {
   if (typeof value === "string") {
     return redactCaptureScalar(value, label);
   }
+  if (label && isSensitiveCaptureField(label)) {
+    return "[redacted]";
+  }
   if (Array.isArray(value)) {
     return value.map((entry) => redactCaptureValue(entry, label));
   }
@@ -539,6 +595,115 @@ function redactCaptureValue(value: unknown, label?: string): unknown {
     out[key] = redactCaptureValue(entry, key);
   }
   return out;
+}
+
+function readCaptureQuotedSpan(
+  value: string,
+  start: number,
+): { closed: boolean; end: number; raw: string; text: string } {
+  const quote = value[start];
+  let text = "";
+  let index = start + 1;
+  while (index < value.length) {
+    const char = value[index];
+    if (char === "\\") {
+      text += value.slice(index, Math.min(index + 2, value.length));
+      index += 2;
+      continue;
+    }
+    if (char === quote) {
+      return {
+        closed: true,
+        end: index + 1,
+        raw: value.slice(start, index + 1),
+        text,
+      };
+    }
+    text += char;
+    index += 1;
+  }
+  return {
+    closed: false,
+    end: value.length,
+    raw: value.slice(start),
+    text,
+  };
+}
+
+function skipCaptureInlineWhitespace(value: string, start: number): number {
+  let index = start;
+  while (/\s/.test(value[index] ?? "")) {
+    index += 1;
+  }
+  return index;
+}
+
+function consumeCaptureJsonishValue(value: string, start: number): number {
+  const opener = value[start];
+  if (opener === '"' || opener === "'") {
+    return readCaptureQuotedSpan(value, start).end;
+  }
+  if (opener === "{" || opener === "[") {
+    const stack = [opener === "{" ? "}" : "]"];
+    let index = start + 1;
+    while (index < value.length && stack.length > 0) {
+      const char = value[index];
+      if (char === '"' || char === "'") {
+        index = readCaptureQuotedSpan(value, index).end;
+        continue;
+      }
+      if (char === "{" || char === "[") {
+        stack.push(char === "{" ? "}" : "]");
+      } else if (char === stack.at(-1)) {
+        stack.pop();
+      }
+      index += 1;
+    }
+    return index;
+  }
+  let index = start;
+  while (index < value.length && !/[,\n\r}\]]/.test(value[index] ?? "")) {
+    index += 1;
+  }
+  return index;
+}
+
+function redactCaptureJsonishSecretFields(value: string): string {
+  let redacted = "";
+  let index = 0;
+  while (index < value.length) {
+    const char = value[index];
+    if (char !== '"' && char !== "'") {
+      redacted += char;
+      index += 1;
+      continue;
+    }
+    const key = readCaptureQuotedSpan(value, index);
+    const colonIndex = skipCaptureInlineWhitespace(value, key.end);
+    if (!key.closed || value[colonIndex] !== ":" || !isSensitiveCaptureField(key.text)) {
+      redacted += key.raw;
+      index = key.end;
+      continue;
+    }
+    const valueStart = skipCaptureInlineWhitespace(value, colonIndex + 1);
+    const valueEnd = consumeCaptureJsonishValue(value, valueStart);
+    const valueQuote =
+      value[valueStart] === "'" || value[valueStart] === '"' ? value[valueStart] : '"';
+    redacted += `${key.raw}${value.slice(key.end, valueStart)}${valueQuote}[redacted]${valueQuote}`;
+    index = valueEnd;
+  }
+  return redacted;
+}
+
+function redactCaptureInlineSecretPairs(value: string): string {
+  return redactCaptureJsonishSecretFields(value).replace(
+    /\b([A-Za-z][A-Za-z0-9_-]{0,64})=([^&\s"',}\]]+)/gu,
+    (match: string, key: string) => (isSensitiveCaptureField(key) ? `${key}=[redacted]` : match),
+  );
+}
+
+function redactCapturePayloadPreview(payload: string): string {
+  return redactCaptureScalar(redactCaptureInlineSecretPairs(payload));
 }
 
 function formatCaptureFieldValue(value: unknown, label?: string): string {
@@ -566,7 +731,7 @@ function renderCaptureFormPayload(payload: string): string {
   }));
   return rows.length > 0
     ? renderCaptureKeyValueGrid(rows)
-    : `<pre class="report-pre capture-pre">${esc(redactCaptureScalar(payload))}</pre>`;
+    : `<pre class="report-pre capture-pre">${esc(redactCapturePayloadPreview(payload))}</pre>`;
 }
 
 function renderCaptureSsePayload(
@@ -591,7 +756,10 @@ function renderCaptureSsePayload(
           const label =
             separatorIndex >= 0 ? line.slice(0, separatorIndex).trim() || "field" : "line";
           const value = separatorIndex >= 0 ? line.slice(separatorIndex + 1).trim() : line;
-          return { label, value: redactCaptureScalar(value, label) };
+          return {
+            label,
+            value: redactCaptureScalar(redactCaptureInlineSecretPairs(value), label),
+          };
         });
       const eventName = rows.find((row) => row.label === "event")?.value || "message";
       const dataText = rows
@@ -628,7 +796,7 @@ function renderCaptureSsePayload(
   });
   if (frames.length === 0) {
     return {
-      body: `<pre class="report-pre capture-pre">${esc(redactCaptureScalar(payload))}</pre>`,
+      body: `<pre class="report-pre capture-pre">${esc(redactCapturePayloadPreview(payload))}</pre>`,
       eventCount: 0,
       visibleCount: 0,
     };
@@ -723,7 +891,7 @@ function renderCapturePayload(
     }
   }
   return {
-    body: `<pre class="report-pre capture-pre">${esc(redactCaptureScalar(payload))}</pre>`,
+    body: `<pre class="report-pre capture-pre">${esc(redactCapturePayloadPreview(payload))}</pre>`,
     mode: "text",
     byteLength,
     looksStructured: false,
@@ -766,7 +934,7 @@ pnpm openclaw gateway --port 18789 --bind loopback`;
   const qaStart = "pnpm qa:lab:ui --port 43124 --control-ui-url http://127.0.0.1:18789/";
   const caInstall = "pnpm proxy:install-ca";
   const caTrust =
-    "sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain /Users/thoffman/.openclaw/debug-proxy/certs/root-ca.pem";
+    'sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "$HOME/.openclaw/debug-proxy/certs/root-ca.pem"';
   return `<div class="capture-startup-state">
     <div class="capture-startup-title">Proxy capture is not running yet.</div>
     <div class="text-dimmed text-sm capture-startup-copy">
@@ -963,8 +1131,24 @@ function statusDotClass(status: ScenarioOutcome["status"] | "pending"): string {
   return `scenario-item-dot scenario-item-dot-${status}`;
 }
 
+function statusTone(status: string): string {
+  if (status === "failed") {
+    return "fail";
+  }
+  if (status === "completed") {
+    return "pass";
+  }
+  if (status === "skipped") {
+    return "skip";
+  }
+  if (status === "blocked") {
+    return "pending";
+  }
+  return status;
+}
+
 function badgeHtml(status: string): string {
-  const tone = status === "failed" ? "fail" : status === "completed" ? "pass" : status;
+  const tone = statusTone(status);
   return `<span class="badge badge-${esc(tone)}">${esc(status)}</span>`;
 }
 
@@ -1168,6 +1352,7 @@ function renderTabBar(state: UiState): string {
   const tabs: Array<{ id: TabId; label: string }> = [
     { id: "chat", label: "Chat" },
     { id: "results", label: "Results" },
+    { id: "evidence", label: "Evidence Archive" },
     { id: "report", label: "Report" },
     { id: "events", label: "Events" },
     { id: "capture", label: "Capture" },
@@ -1439,6 +1624,7 @@ function renderResultsView(state: UiState): string {
 
 function renderInspector(state: UiState, scenario: SeedScenario): string {
   const outcome = findScenarioOutcome(state, scenario);
+  const evidencePath = state.bootstrap?.runner.artifacts?.evidencePath ?? null;
 
   return `
     <div class="inspector-layout">
@@ -1448,6 +1634,11 @@ function renderInspector(state: UiState, scenario: SeedScenario): string {
             <div class="inspector-title">${esc(scenario.title)}</div>
             ${badgeHtml(outcome?.status ?? "pending")}
           </div>
+          ${
+            evidencePath
+              ? `<button class="btn-sm" data-action="open-run-evidence" title="${esc(evidencePath)}">Open evidence</button>`
+              : ""
+          }
         </div>
         <div class="inspector-objective">${esc(scenario.objective)}</div>
         <div class="inspector-meta">
@@ -1526,6 +1717,441 @@ function renderReportView(state: UiState): string {
         <pre class="report-pre">${esc(state.latestReport?.markdown ?? "Run the suite or self-check to generate a report.")}</pre>
       </div>
     </div>`;
+}
+
+/* ===== Render: Evidence tab ===== */
+
+function evidenceEntryMatches(state: UiState, entry: EvidenceEntryView): boolean {
+  if (state.evidenceStatusFilter !== "all" && entry.status !== state.evidenceStatusFilter) {
+    return false;
+  }
+  if (
+    state.evidenceArtifactFilter !== "all" &&
+    !entry.artifacts.some((artifact) => artifact.mediaKind === state.evidenceArtifactFilter)
+  ) {
+    return false;
+  }
+  const query = state.evidenceSearchText.trim().toLowerCase();
+  if (!query) {
+    return true;
+  }
+  const haystack = [
+    entry.id,
+    entry.title,
+    entry.kind,
+    entry.sourcePath ?? "",
+    ...entry.coverage.map((coverage) => `${coverage.id} ${coverage.role}`),
+    ...entry.artifacts.map((artifact) => `${artifact.kind} ${artifact.source} ${artifact.path}`),
+  ]
+    .join("\n")
+    .toLowerCase();
+  return haystack.includes(query);
+}
+
+function renderEvidenceMetric(label: string, value: string | number, tone?: string): string {
+  return `<div class="evidence-metric${tone ? ` evidence-metric-${esc(tone)}` : ""}">
+    <span>${esc(label)}</span>
+    <strong>${esc(String(value))}</strong>
+  </div>`;
+}
+
+function renderEvidenceCoverage(entry: EvidenceEntryView): string {
+  if (entry.coverage.length === 0) {
+    return '<span class="text-dimmed text-sm">No coverage IDs</span>';
+  }
+  return entry.coverage
+    .map(
+      (coverage) =>
+        `<span class="capture-chip">${esc(coverage.id)} <em>${esc(coverage.role)}</em></span>`,
+    )
+    .join("");
+}
+
+function renderEvidenceArtifactBadge(artifact: EvidenceArtifactView): string {
+  const missing = artifact.exists ? "" : " evidence-artifact-badge-missing";
+  return `<span class="evidence-artifact-badge${missing}" title="${esc(artifact.path)}">${esc(artifact.kind)}</span>`;
+}
+
+function renderEvidenceEntryButton(entry: EvidenceEntryView, selected: boolean): string {
+  const artifactSummary =
+    entry.artifacts.length > 0
+      ? entry.artifacts.map(renderEvidenceArtifactBadge).join("")
+      : '<span class="text-dimmed text-sm">No artifacts</span>';
+  return `<button class="evidence-entry-card${selected ? " selected" : ""}" data-evidence-entry-id="${esc(entry.id)}" type="button">
+    <div class="evidence-entry-card-top">
+      <span class="result-card-dot scenario-item-dot-${statusTone(entry.status)}"></span>
+      <div>
+        <div class="evidence-entry-title">${esc(entry.title)}</div>
+        <div class="evidence-entry-meta">${esc(entry.kind)} · ${esc(entry.id)}</div>
+      </div>
+      ${badgeHtml(entry.status)}
+    </div>
+    <div class="evidence-entry-artifacts">${artifactSummary}</div>
+  </button>`;
+}
+
+function renderEvidenceArtifactBody(artifact: EvidenceArtifactView): string {
+  if (!artifact.exists || !artifact.href) {
+    return `<div class="empty-state">Artifact unavailable: ${esc(artifact.error ?? "missing")}</div>`;
+  }
+  const isInlineScreenshot =
+    artifact.mediaKind === "image" && artifact.kind.toLowerCase().includes("screenshot");
+  if (isInlineScreenshot) {
+    return `<a href="${esc(artifact.href)}" target="_blank" rel="noopener noreferrer"><img src="${esc(artifact.href)}" alt="${esc(artifact.kind)} artifact" loading="lazy" /></a>`;
+  }
+  if (artifact.mediaKind === "image" || artifact.mediaKind === "video") {
+    const noun = artifact.mediaKind === "video" ? "Video" : "Media";
+    return `<div class="evidence-artifact-deferred">
+      <span>${noun} preview is deferred to keep the evidence view responsive.</span>
+      <a class="btn-sm" href="${esc(artifact.href)}" target="_blank" rel="noopener noreferrer">Open ${noun.toLowerCase()} artifact</a>
+    </div>`;
+  }
+  if (artifact.preview !== null) {
+    return `<details class="evidence-artifact-preview-shell">
+      <summary>Preview ${esc(artifact.kind)}</summary>
+      <pre class="report-pre evidence-artifact-preview">${esc(artifact.preview)}</pre>
+    </details>`;
+  }
+  return `<a class="btn-sm" href="${esc(artifact.href)}" target="_blank" rel="noopener noreferrer">Open artifact</a>`;
+}
+
+function renderEvidenceArtifactCard(artifact: EvidenceArtifactView): string {
+  return `<article class="evidence-artifact-card evidence-artifact-card-${artifact.mediaKind}">
+    <header>
+      <div>
+        <div class="evidence-artifact-title">${esc(artifact.kind)}</div>
+        <div class="evidence-artifact-source">${esc(artifact.source)}</div>
+      </div>
+      ${artifact.href ? `<a class="btn-sm btn-ghost" href="${esc(artifact.href)}" target="_blank" rel="noopener noreferrer">Open</a>` : ""}
+    </header>
+    ${renderEvidenceArtifactBody(artifact)}
+    <footer title="${esc(artifact.path)}">${esc(artifact.path)}</footer>
+  </article>`;
+}
+
+function renderEvidenceDetail(entry: EvidenceEntryView | null): string {
+  if (!entry) {
+    return '<div class="inspector-empty">Select an evidence entry</div>';
+  }
+  return `<div class="evidence-detail">
+    <header class="evidence-detail-header">
+      <div>
+        <div class="inspector-section-title">${esc(entry.kind)}</div>
+        <h2>${esc(entry.title)}</h2>
+        <div class="evidence-entry-meta">${esc(entry.id)}</div>
+      </div>
+      ${badgeHtml(entry.status)}
+    </header>
+    ${entry.failureReason ? `<div class="capture-error">${esc(entry.failureReason)}</div>` : ""}
+    <section class="evidence-detail-section">
+      <div class="inspector-section-title">Coverage</div>
+      <div class="capture-chip-row">${renderEvidenceCoverage(entry)}</div>
+    </section>
+    ${
+      entry.sourcePath
+        ? `<section class="evidence-detail-section">
+            <div class="inspector-section-title">Source</div>
+            <div class="capture-mono evidence-source-path">${esc(entry.sourcePath)}</div>
+          </section>`
+        : ""
+    }
+    <section class="evidence-detail-section evidence-detail-section-artifacts">
+      <div class="inspector-section-title">Artifacts</div>
+      ${
+        entry.artifacts.length > 0
+          ? `<div class="evidence-artifact-grid">${entry.artifacts.map(renderEvidenceArtifactCard).join("")}</div>`
+          : '<div class="empty-state">No execution artifacts recorded for this entry.</div>'
+      }
+    </section>
+  </div>`;
+}
+
+function renderProducerContextMetric(label: string, value: string | number): string {
+  return `<div class="evidence-producer-metric">
+    <span>${esc(label)}</span>
+    <strong>${esc(String(value))}</strong>
+  </div>`;
+}
+
+function renderProducerCountChips(counts: Record<string, number>): string {
+  const entries = Object.entries(counts).toSorted(
+    (left, right) => right[1] - left[1] || left[0].localeCompare(right[0]),
+  );
+  if (entries.length === 0) {
+    return '<span class="text-dimmed text-sm">No counts recorded</span>';
+  }
+  return entries
+    .map(
+      ([status, count]) =>
+        `<span class="capture-chip">${esc(status)} <em>${esc(String(count))}</em></span>`,
+    )
+    .join("");
+}
+
+function renderProducerContextFile(params: {
+  file: EvidenceProducerContextFile | null;
+  open?: boolean;
+  title: string;
+}): string {
+  if (!params.file) {
+    return "";
+  }
+  return `<details class="evidence-producer-drilldown" ${params.open ? "open" : ""}>
+    <summary>
+      <span>${esc(params.title)}</span>
+      <span class="capture-mono">${esc(params.file.path)}</span>
+    </summary>
+    <div class="evidence-producer-drilldown-body">
+      ${
+        params.file.preview !== null
+          ? `<pre class="report-pre evidence-producer-preview">${esc(params.file.preview)}</pre>`
+          : '<div class="empty-state">Preview unavailable for this artifact.</div>'
+      }
+      <a class="btn-sm btn-ghost" href="${esc(params.file.href)}" target="_blank" rel="noopener noreferrer">Open artifact</a>
+    </div>
+  </details>`;
+}
+
+function formatMatrixLabel(id: string): string {
+  return id
+    .split("-")
+    .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
+    .join(" ");
+}
+
+function matrixCellClass(status: string): string {
+  return status.replace(/[^a-z0-9-]/gi, "-").toLowerCase();
+}
+
+function renderEvidenceMatrixCell(
+  cell: EvidenceMatrixCell | undefined,
+  surface: string,
+  stage: string,
+): string {
+  if (!cell) {
+    return '<span class="evidence-matrix-cell evidence-matrix-cell-missing" title="No matrix cell was recorded for this surface and stage.">-</span>';
+  }
+  const isProofGap = cell.status === "proof-gap";
+  const artifactText =
+    cell.artifactPaths.length > 0 ? ` Artifacts: ${cell.artifactPaths.join(", ")}` : "";
+  const proofText =
+    cell.artifactKinds.length > 0
+      ? ` Proof: ${cell.artifactKinds.join(" + ")} (${cell.artifactPaths.length})`
+      : "";
+  const coverageText =
+    cell.coverageIds.length > 0 ? ` Coverage: ${cell.coverageIds.join(", ")}` : "";
+  const runnerText = cell.runner?.lane
+    ? ` Runner: ${cell.runner.lane}${cell.runner.workflow ? ` via ${cell.runner.workflow}` : ""}${cell.runner.command ? `; ${cell.runner.command}` : ""}`
+    : "";
+  const title = `${surface} / ${stage}: ${cell.status}${isProofGap ? " (not executed in this run)" : ""}.${coverageText}${runnerText ? ` ${runnerText}` : ""}${proofText}${artifactText}`;
+  const className = `evidence-matrix-cell evidence-matrix-cell-${matrixCellClass(cell.status)}${cell.testId ? " evidence-matrix-cell-action" : ""}`;
+  const label = isProofGap ? "gap" : cell.status;
+  if (!cell.testId) {
+    return `<span class="${className}" title="${esc(title)}">${esc(label)}</span>`;
+  }
+  return `<button class="${className}" data-evidence-entry-id="${esc(cell.testId)}" type="button" title="${esc(cell.title ?? title)}">${esc(label)}</button>`;
+}
+
+function renderEvidenceMatrixMiniGrid(matrix: EvidenceProducerContext["matrix"]): string {
+  if (!matrix || matrix.cells.length === 0) {
+    return "";
+  }
+  const cellsByKey = new Map(
+    matrix.cells.map((cell) => [`${cell.surface}:${cell.stage}`, cell] as const),
+  );
+  return `<div class="evidence-matrix-mini" aria-label="UX Matrix surface by stage evidence grid">
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">Surface</th>
+          ${matrix.stages.map((stage) => `<th scope="col" title="${esc(stage)}">${esc(formatMatrixLabel(stage))}</th>`).join("")}
+        </tr>
+      </thead>
+      <tbody>
+        ${matrix.surfaces
+          .map(
+            (surface) => `<tr>
+              <th scope="row" title="${esc(surface)}">${esc(formatMatrixLabel(surface))}</th>
+              ${matrix.stages
+                .map(
+                  (stage) =>
+                    `<td>${renderEvidenceMatrixCell(cellsByKey.get(`${surface}:${stage}`), surface, stage)}</td>`,
+                )
+                .join("")}
+            </tr>`,
+          )
+          .join("")}
+      </tbody>
+    </table>
+  </div>`;
+}
+
+function renderEvidenceProducerContext(producer: EvidenceProducerContext | null): string {
+  if (!producer) {
+    return "";
+  }
+  const matrix = producer.matrix;
+  const counts = matrix?.counts ?? {};
+  const proofGaps = counts["proof-gap"] ?? 0;
+  const issueCount =
+    (counts.fail ?? 0) +
+    (counts.blocked ?? 0) +
+    (counts["automation-issue"] ?? 0) +
+    (counts["environment-issue"] ?? 0);
+  return `<section class="evidence-producer-panel">
+    <div class="evidence-producer-head">
+      <div>
+        <div class="inspector-section-title">Producer context</div>
+        <h2>UX journey matrix</h2>
+        <p>Matrix context from the evidence producer. Proof gaps mean this run did not execute those cells.</p>
+      </div>
+      <div class="evidence-producer-run">
+        ${producer.manifest?.runStatus ? badgeHtml(producer.manifest.runStatus) : ""}
+        ${producer.manifest?.runId ? `<span class="capture-mono">${esc(producer.manifest.runId)}</span>` : ""}
+      </div>
+    </div>
+    <div class="evidence-producer-grid">
+      ${renderProducerContextMetric("Cells", matrix?.cells.length ?? 0)}
+      ${renderProducerContextMetric("Pass", counts.pass ?? 0)}
+      ${renderProducerContextMetric("Proof gaps", proofGaps)}
+      ${renderProducerContextMetric("Issues", issueCount)}
+      ${renderProducerContextMetric("Surfaces", matrix?.surfaces.length ?? 0)}
+      ${renderProducerContextMetric("Stages", matrix?.stages.length ?? 0)}
+    </div>
+    <div class="evidence-producer-status-row">
+      <div>
+        <div class="inspector-section-title">Matrix counts</div>
+        <div class="capture-chip-row">${renderProducerCountChips(matrix?.counts ?? {})}</div>
+      </div>
+      ${
+        producer.releaseLedger
+          ? `<div>
+              <div class="inspector-section-title">Release ledger counts</div>
+              <div class="capture-chip-row">${renderProducerCountChips(producer.releaseLedger.counts)}</div>
+            </div>`
+          : ""
+      }
+    </div>
+    <div class="evidence-producer-drilldowns">
+      ${renderProducerContextFile({ title: "Scorecard", file: producer.scorecard, open: true })}
+      ${renderProducerContextFile({ title: "Commands", file: producer.commands })}
+      ${renderProducerContextFile({ title: "Preflight memory", file: producer.preflight.memory })}
+      ${renderProducerContextFile({
+        title: "Preflight adb devices",
+        file: producer.preflight.adbDevices,
+      })}
+      ${renderProducerContextFile({ title: "Manifest", file: producer.manifest })}
+      ${renderProducerContextFile({ title: "Release ledger", file: producer.releaseLedger })}
+    </div>
+    ${
+      matrix
+        ? `<div class="evidence-producer-links">
+      <span class="ref-tag">${esc(matrix.path)}</span>
+    </div>`
+        : ""
+    }
+    ${renderEvidenceMatrixMiniGrid(matrix)}
+  </section>`;
+}
+
+function renderEvidenceView(state: UiState): string {
+  const evidence = state.evidence;
+  const entries = evidence?.entries.filter((entry) => evidenceEntryMatches(state, entry)) ?? [];
+  const selected =
+    entries.find((entry) => entry.id === state.selectedEvidenceEntryId) ??
+    evidence?.entries.find((entry) => entry.id === state.selectedEvidenceEntryId) ??
+    entries[0] ??
+    null;
+  const artifactCount =
+    evidence?.entries.reduce((sum, entry) => sum + entry.artifacts.length, 0) ?? 0;
+  const missingCount =
+    evidence?.entries.reduce(
+      (sum, entry) => sum + entry.artifacts.filter((artifact) => !artifact.exists).length,
+      0,
+    ) ?? 0;
+  return `<div class="evidence-view">
+    <div class="evidence-toolbar">
+      <div class="evidence-toolbar-intro">
+        <div class="inspector-section-title">Evidence Archive</div>
+        <p>Saved QA evidence bundles, proof artifacts, logs, and producer context.</p>
+      </div>
+      <div class="evidence-toolbar-main">
+        <label class="capture-search-field">Evidence path
+          <input id="evidence-path" value="${esc(state.evidencePathDraft)}" placeholder=".artifacts/qa-e2e/suite-.../qa-evidence.json" />
+        </label>
+        <button class="btn-primary" data-action="load-evidence"${state.evidenceLoading ? " disabled" : ""}>Load</button>
+      </div>
+      <div class="evidence-filters">
+        <label>Status
+          <select id="evidence-status-filter">
+            ${(["all", "fail", "blocked", "pass", "skipped"] as const)
+              .map(
+                (status) =>
+                  `<option value="${status}"${state.evidenceStatusFilter === status ? " selected" : ""}>${status}</option>`,
+              )
+              .join("")}
+          </select>
+        </label>
+        <label>Artifact
+          <select id="evidence-artifact-filter">
+            ${(["all", "image", "video", "json", "text", "file"] as const)
+              .map(
+                (kind) =>
+                  `<option value="${kind}"${state.evidenceArtifactFilter === kind ? " selected" : ""}>${kind}</option>`,
+              )
+              .join("")}
+          </select>
+        </label>
+        <label class="capture-search-field">Search
+          <input id="evidence-search" value="${esc(state.evidenceSearchText)}" placeholder="coverage, title, artifact..." />
+        </label>
+      </div>
+    </div>
+    ${state.evidenceError ? `<div class="error-banner">${esc(state.evidenceError)}</div>` : ""}
+    ${
+      evidence
+        ? `<div class="evidence-summary-row">
+            ${renderEvidenceMetric("Pass", evidence.counts.pass, "pass")}
+            ${renderEvidenceMetric("Fail", evidence.counts.fail, "fail")}
+            ${renderEvidenceMetric("Blocked", evidence.counts.blocked, "blocked")}
+            ${renderEvidenceMetric("Skipped", evidence.counts.skipped, "skipped")}
+            ${renderEvidenceMetric("Artifacts", artifactCount)}
+            ${renderEvidenceMetric("Missing", missingCount, missingCount > 0 ? "fail" : undefined)}
+          </div>
+          ${renderEvidenceProducerContext(evidence.producerContext)}
+          <div class="evidence-meta-line">
+            <span class="capture-mono">${esc(evidence.evidencePath)}</span>
+            <span>schema v${evidence.schemaVersion}</span>
+            <span>${esc(evidence.evidenceMode)}</span>
+            ${evidence.profile ? `<span>profile ${esc(evidence.profile)}</span>` : ""}
+            <span>${esc(formatIso(evidence.generatedAt))}</span>
+          </div>
+          <div class="evidence-workspace">
+            <aside class="evidence-list">
+              <div class="evidence-list-header">
+                <span>${entries.length} visible</span>
+                <span>${evidence.entries.length} total</span>
+              </div>
+              <div class="evidence-list-scroll">
+                ${
+                  entries.length > 0
+                    ? entries
+                        .map((entry) => renderEvidenceEntryButton(entry, entry.id === selected?.id))
+                        .join("")
+                    : '<div class="empty-state">No evidence entries match these filters.</div>'
+                }
+              </div>
+            </aside>
+            <section class="evidence-inspector">
+              ${renderEvidenceDetail(selected)}
+            </section>
+          </div>`
+        : `<div class="evidence-empty">
+            <h2>No evidence loaded</h2>
+            <p>Load a QA Lab <code>qa-evidence.json</code> file or a suite artifact directory to inspect entries, coverage IDs, screenshots, video, logs, and machine-validation artifacts.</p>
+          </div>`
+    }
+  </div>`;
 }
 
 /* ===== Render: Events tab ===== */
@@ -2159,7 +2785,9 @@ function renderCaptureView(state: UiState): string {
       ].filter((row) => row.value.trim().length > 0)
     : [];
   const rawPayloadBody = selectedEvent?.dataText?.length
-    ? `<pre class="report-pre capture-pre">${esc(redactCaptureScalar(selectedEvent.dataText))}</pre>`
+    ? `<pre class="report-pre capture-pre">${esc(
+        redactCapturePayloadPreview(selectedEvent.dataText),
+      )}</pre>`
     : '<div class="empty-state">No inline payload preview for this event.</div>';
   const availableDetailViews: Array<{
     value: UiState["captureDetailView"];
@@ -3190,7 +3818,11 @@ function renderCaptureView(state: UiState): string {
                                       selectedLaneEvent.errorText
                                         ? `<div class="capture-timeline-quick-preview-error">${esc(selectedLaneEvent.errorText)}</div>`
                                         : selectedLaneEvent.payloadPreview
-                                          ? `<div class="capture-timeline-quick-preview-snippet">${esc(selectedLaneEvent.payloadPreview)}</div>`
+                                          ? `<div class="capture-timeline-quick-preview-snippet">${esc(
+                                              redactCapturePayloadPreview(
+                                                selectedLaneEvent.payloadPreview,
+                                              ),
+                                            )}</div>`
                                           : ""
                                     }
                                   </div>`
@@ -3380,7 +4012,11 @@ function renderCaptureView(state: UiState): string {
                                             ${paired ? '<div class="capture-pair-badge">paired counterpart</div>' : ""}
                                             ${
                                               event.payloadPreview
-                                                ? `<div class="capture-event-card-preview">${esc(event.payloadPreview)}</div>`
+                                                ? `<div class="capture-event-card-preview">${esc(
+                                                    redactCapturePayloadPreview(
+                                                      event.payloadPreview,
+                                                    ),
+                                                  )}</div>`
                                                 : ""
                                             }
                                           </div>
@@ -3429,7 +4065,9 @@ function renderCaptureView(state: UiState): string {
                                     }
                                     ${
                                       event.payloadPreview
-                                        ? `<div class="capture-event-card-preview">${esc(event.payloadPreview)}</div>`
+                                        ? `<div class="capture-event-card-preview">${esc(
+                                            redactCapturePayloadPreview(event.payloadPreview),
+                                          )}</div>`
                                         : ""
                                     }
                                     ${event.errorText ? `<div class="capture-error" style="margin-top:8px">${esc(event.errorText)}</div>` : ""}
@@ -3530,6 +4168,8 @@ function renderActiveTab(state: UiState): string {
       return renderChatView(state);
     case "results":
       return renderResultsView(state);
+    case "evidence":
+      return renderEvidenceView(state);
     case "report":
       return renderReportView(state);
     case "events":
@@ -3544,8 +4184,15 @@ function renderActiveTab(state: UiState): string {
 /* ===== Main render ===== */
 
 export function renderQaLabUi(state: UiState): string {
+  const shellClasses = [
+    "app-shell",
+    state.sidebarCollapsed ? "app-shell--sidebar-collapsed" : "",
+    state.activeTab === "evidence" ? "app-shell--evidence-focus" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
   return `
-    <div class="app-shell${state.sidebarCollapsed ? " app-shell--sidebar-collapsed" : ""}" data-theme="${state.theme}">
+    <div class="${shellClasses}" data-theme="${state.theme}">
       ${renderHeader(state)}
       <div class="layout">
         ${renderSidebar(state)}

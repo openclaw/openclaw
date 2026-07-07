@@ -28,11 +28,9 @@ type QaRuntimeGatewayClient = {
   ) => Promise<unknown>;
 };
 
-type QaRuntimeTransport = QaTransportAdapter;
-
 export type QaSuiteRuntimeEnv = {
   gateway: QaRuntimeGatewayClient;
-  transport: QaRuntimeTransport;
+  transport: QaTransportAdapter;
   repoRoot: string;
   providerMode: QaProviderMode;
   primaryModel: string;

@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { captureEnv } from "../test-utils/env.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 
 const mocks = vi.hoisted(() => ({
@@ -95,83 +95,83 @@ function expectEnabledClaudeBundleCommands(
 
 describe("loadEnabledClaudeBundleCommands", () => {
   it("loads enabled Claude bundle markdown commands and skips disabled-model-invocation entries", async () => {
-    const env = captureEnv(["HOME", "USERPROFILE", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
-    try {
-      const homeDir = await createTempDir("openclaw-bundle-commands-home-");
-      const workspaceDir = await createTempDir("openclaw-bundle-commands-workspace-");
-      process.env.HOME = homeDir;
-      process.env.USERPROFILE = homeDir;
-      delete process.env.OPENCLAW_HOME;
-      delete process.env.OPENCLAW_STATE_DIR;
-
-      await writeClaudeBundleCommandFixture({
-        homeDir,
-        pluginId: "compound-bundle",
-        commands: [
-          {
-            relativePath: "commands/office-hours.md",
-            contents: [
-              "---",
-              "description: Help with scoping and architecture",
-              "---",
-              "Give direct engineering advice.",
-            ],
-          },
-          {
-            relativePath: "commands/workflows/review.md",
-            contents: [
-              "---",
-              "name: workflows:review",
-              "description: Run a structured review",
-              "---",
-              "Review the code. $ARGUMENTS",
-            ],
-          },
-          {
-            relativePath: "commands/disabled.md",
-            contents: ["---", "disable-model-invocation: true", "---", "Do not load me."],
-          },
-        ],
-      });
-
-      const commands = loadEnabledClaudeBundleCommands({
-        workspaceDir,
-        cfg: {
-          plugins: {
-            entries: { "compound-bundle": { enabled: true } },
-          },
-        },
-      });
-
-      expectEnabledClaudeBundleCommands(commands, [
-        {
+    const homeDir = await createTempDir("openclaw-bundle-commands-home-");
+    const workspaceDir = await createTempDir("openclaw-bundle-commands-workspace-");
+    await withEnvAsync(
+      {
+        HOME: homeDir,
+        USERPROFILE: homeDir,
+        OPENCLAW_HOME: undefined,
+        OPENCLAW_STATE_DIR: undefined,
+      },
+      async () => {
+        await writeClaudeBundleCommandFixture({
+          homeDir,
           pluginId: "compound-bundle",
-          rawName: "office-hours",
-          description: "Help with scoping and architecture",
-          promptTemplate: "Give direct engineering advice.",
-          sourceFilePath: path.join(
-            resolveBundlePluginRoot(homeDir, "compound-bundle"),
-            "commands",
-            "office-hours.md",
-          ),
-        },
-        {
-          pluginId: "compound-bundle",
-          rawName: "workflows:review",
-          description: "Run a structured review",
-          promptTemplate: "Review the code. $ARGUMENTS",
-          sourceFilePath: path.join(
-            resolveBundlePluginRoot(homeDir, "compound-bundle"),
-            "commands",
-            "workflows",
-            "review.md",
-          ),
-        },
-      ]);
-      const rawNames = commands.map((entry) => entry.rawName);
-      expect(rawNames).not.toContain("disabled");
-    } finally {
-      env.restore();
-    }
+          commands: [
+            {
+              relativePath: "commands/office-hours.md",
+              contents: [
+                "---",
+                "description: Help with scoping and architecture",
+                "---",
+                "Give direct engineering advice.",
+              ],
+            },
+            {
+              relativePath: "commands/workflows/review.md",
+              contents: [
+                "---",
+                "name: workflows:review",
+                "description: Run a structured review",
+                "---",
+                "Review the code. $ARGUMENTS",
+              ],
+            },
+            {
+              relativePath: "commands/disabled.md",
+              contents: ["---", "disable-model-invocation: true", "---", "Do not load me."],
+            },
+          ],
+        });
+
+        const commands = loadEnabledClaudeBundleCommands({
+          workspaceDir,
+          cfg: {
+            plugins: {
+              entries: { "compound-bundle": { enabled: true } },
+            },
+          },
+        });
+
+        expectEnabledClaudeBundleCommands(commands, [
+          {
+            pluginId: "compound-bundle",
+            rawName: "office-hours",
+            description: "Help with scoping and architecture",
+            promptTemplate: "Give direct engineering advice.",
+            sourceFilePath: path.join(
+              resolveBundlePluginRoot(homeDir, "compound-bundle"),
+              "commands",
+              "office-hours.md",
+            ),
+          },
+          {
+            pluginId: "compound-bundle",
+            rawName: "workflows:review",
+            description: "Run a structured review",
+            promptTemplate: "Review the code. $ARGUMENTS",
+            sourceFilePath: path.join(
+              resolveBundlePluginRoot(homeDir, "compound-bundle"),
+              "commands",
+              "workflows",
+              "review.md",
+            ),
+          },
+        ]);
+        const rawNames = commands.map((entry) => entry.rawName);
+        expect(rawNames).not.toContain("disabled");
+      },
+    );
   });
 });

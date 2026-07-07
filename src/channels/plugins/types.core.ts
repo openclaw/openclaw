@@ -129,6 +129,7 @@ export type ChannelSetupInput = {
   deviceName?: string;
   avatarUrl?: string;
   initialSyncLimit?: number;
+  profile?: string;
   ship?: string;
   url?: string;
   baseUrl?: string;
@@ -212,6 +213,7 @@ export type ChannelAccountSnapshot = {
   lastTransportActivityAt?: number | null;
   lastError?: string | null;
   healthState?: string;
+  terminalDisconnect?: boolean;
   lastStartAt?: number | null;
   lastStopAt?: number | null;
   lastInboundAt?: number | null;
@@ -385,6 +387,8 @@ export type ChannelFocusedBindingContext = {
 export type ChannelOutboundSessionRoute = {
   sessionKey: string;
   baseSessionKey: string;
+  /** Route authority for explicit recipient session selection. */
+  recipientSessionExact?: boolean | "direct-alias" | "delivery-identity";
   peer: {
     kind: ChatType;
     id: string;
@@ -457,6 +461,8 @@ export type ChannelThreadingContext = {
   To?: string;
   ChatType?: string;
   CurrentMessageId?: string | number;
+  /** Effective channel reply mode prepared for this turn. */
+  ReplyToMode?: MsgContext["ReplyToMode"];
   ReplyToId?: string;
   ReplyToIdFull?: string;
   ThreadLabel?: string;
@@ -607,6 +613,8 @@ export type ChannelMessagingAdapter = {
   targetResolver?: {
     looksLikeId?: (raw: string, normalized?: string) => boolean;
     hint?: string;
+    /** Bare words that are command/session references for this channel, not literal destinations. */
+    reservedLiterals?: readonly string[];
     /**
      * Plugin-owned fallback for explicit/native targets or post-directory-miss
      * resolution. This should complement directory lookup, not duplicate it.
@@ -632,6 +640,11 @@ export type ChannelMessagingAdapter = {
   /**
    * Provider-specific session-route builder used after target resolution.
    * Keep session-key orchestration in core and channel-native routing rules here.
+   * Set `recipientSessionExact` to true only when the target maps unambiguously
+   * to the same canonical session that inbound delivery uses. `direct-alias`
+   * may be used when only the direct chat kind is authoritative.
+   * `delivery-identity` requires a stable outbound-only recipient identity and
+   * a provider-keyed session that stays isolated from the agent main session.
    */
   resolveOutboundSessionRoute?: (params: {
     cfg: OpenClawConfig;
@@ -692,6 +705,8 @@ export type ChannelMessageActionContext = {
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   accountId?: string | null;
+  /** Trusted originating account id paired with requesterSenderId. */
+  requesterAccountId?: string | null;
   /**
    * Trusted sender id from inbound context. This is server-injected and must
    * never be sourced from tool/model-controlled params.
@@ -760,6 +775,8 @@ export type ChannelMessageActionAdapter = {
         aliases: string[];
         /** Alias fields that identify the destination conversation, not an existing message. */
         deliveryTargetAliases?: string[];
+        /** Convert typed owner fields such as chatId into the canonical shared target shape. */
+        resolveDeliveryTarget?: (params: { args: Record<string, unknown> }) => string | undefined;
       }
     >
   >;

@@ -36,3 +36,30 @@ export async function runInteractiveSetup(
     }
   }
 }
+
+/**
+ * Default interactive onboarding: no step wizard, just the Crestodian
+ * conversation. The first-run greeting proposes a full setup plan (detected
+ * inference, workspace, gateway) and a plain "yes" applies it; channels and
+ * the agent handoff continue in the same conversation.
+ */
+export async function runConversationalOnboarding(
+  opts: OnboardOptions,
+  runtime: RuntimeEnv = defaultRuntime,
+) {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    runtime.error(
+      "Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation.",
+    );
+    runtime.exit(1);
+    return;
+  }
+  const { runCrestodian } = await import("../crestodian/crestodian.js");
+  await runCrestodian(
+    {
+      welcomeVariant: "onboarding",
+      ...(opts.workspace ? { setupWorkspace: opts.workspace } : {}),
+    },
+    runtime,
+  );
+}

@@ -7,7 +7,10 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
-import { clearNvidiaFeaturedModelCacheForTests } from "./provider-catalog.js";
+import {
+  clearNvidiaFeaturedModelCacheForTests,
+  NVIDIA_FEATURED_MODELS_URL,
+} from "./provider-catalog.js";
 
 const ssrfRuntimeMocks = vi.hoisted(() => ({
   fetchWithSsrFGuard: vi.fn(),
@@ -44,6 +47,7 @@ afterEach(() => {
 function mockFeaturedCatalogResponse(payload: unknown, status = 200) {
   ssrfRuntimeMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
     response: Response.json(payload, { status }),
+    finalUrl: NVIDIA_FEATURED_MODELS_URL,
     release: vi.fn(),
   });
 }

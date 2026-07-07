@@ -8,12 +8,18 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
+  pinActivePluginChannelRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
+import {
+  filterLegacyNodeProtocolFeatures,
   isForegroundRestrictedPluginNodeCommand,
   isNodeCommandAllowed,
   normalizeDeclaredNodeCommands,
   resolveNodeCommandAllowlist,
+  resolveNodePairingCommandAllowlist,
 } from "./node-command-policy.js";
 
 describe("gateway/node-command-policy", () => {
@@ -23,7 +29,7 @@ describe("gateway/node-command-policy", () => {
 
   function installCanvasPluginDefaults() {
     const registry = createEmptyPluginRegistry();
-    (registry.nodeInvokePolicies ??= []).push({
+    registry.nodeInvokePolicies.push({
       pluginId: "canvas",
       pluginName: "Canvas",
       source: "/extensions/canvas/index.ts",
@@ -37,6 +43,7 @@ describe("gateway/node-command-policy", () => {
       },
     });
     setActivePluginRegistry(registry);
+    return registry;
   }
 
   it("normalizes declared node commands against the allowlist", () => {
@@ -109,6 +116,49 @@ describe("gateway/node-command-policy", () => {
     expect(allowlist.has("canvas.present")).toBe(true);
   });
 
+  it("suppresses plugin-owned features for legacy protocol nodes", () => {
+    installCanvasPluginDefaults();
+
+    expect(
+      filterLegacyNodeProtocolFeatures({
+        caps: ["canvas", "device"],
+        commands: ["canvas.snapshot", "device.info"],
+        pluginSurfaces: ["canvas"],
+      }),
+    ).toEqual({
+      caps: ["device"],
+      commands: ["device.info"],
+    });
+  });
+
+  it("keeps plugin node defaults from the pinned Gateway registry", () => {
+    const startupRegistry = installCanvasPluginDefaults();
+    pinActivePluginChannelRegistry(startupRegistry);
+    const transientRegistry = createEmptyPluginRegistry();
+    const startupPolicy = startupRegistry.nodeInvokePolicies[0];
+    if (!startupPolicy) {
+      throw new Error("expected canvas node policy");
+    }
+    transientRegistry.nodeInvokePolicies.push({
+      ...startupPolicy,
+      pluginId: "transient",
+      policy: {
+        ...startupPolicy.policy,
+        commands: ["transient.read"],
+      },
+    });
+    setActivePluginRegistry(transientRegistry);
+
+    const allowlist = resolveNodeCommandAllowlist({} as OpenClawConfig, {
+      platform: "macos",
+      deviceFamily: "Mac",
+    });
+
+    expect(allowlist.has("canvas.snapshot")).toBe(true);
+    expect(allowlist.has("canvas.present")).toBe(true);
+    expect(allowlist.has("transient.read")).toBe(false);
+  });
+
   it("does not grant host command defaults for platform prefix aliases", () => {
     const cfg = {} as OpenClawConfig;
     const cases = [
@@ -142,10 +192,32 @@ describe("gateway/node-command-policy", () => {
       expect(allowlist.has("system.run")).toBe(false);
       expect(allowlist.has("system.run.prepare")).toBe(false);
       expect(allowlist.has("system.which")).toBe(false);
+      expect(allowlist.has("system.execApprovals.get")).toBe(false);
+      expect(allowlist.has("system.execApprovals.set")).toBe(false);
       expect(allowlist.has("browser.proxy")).toBe(false);
       expect(allowlist.has("screen.snapshot")).toBe(false);
       expect(allowlist.has("system.notify")).toBe(true);
     }
+  });
+
+  it("allows exec approval commands only through desktop node pairing approval", () => {
+    const cfg = {} as OpenClawConfig;
+    const desktopNode = { platform: "windows", deviceFamily: "Windows" };
+
+    const pairingAllowlist = resolveNodePairingCommandAllowlist(cfg, desktopNode);
+    expect(pairingAllowlist.has("system.execApprovals.get")).toBe(true);
+    expect(pairingAllowlist.has("system.execApprovals.set")).toBe(true);
+
+    const unapprovedRuntimeAllowlist = resolveNodeCommandAllowlist(cfg, desktopNode);
+    expect(unapprovedRuntimeAllowlist.has("system.execApprovals.get")).toBe(false);
+    expect(unapprovedRuntimeAllowlist.has("system.execApprovals.set")).toBe(false);
+
+    const approvedRuntimeAllowlist = resolveNodeCommandAllowlist(cfg, {
+      ...desktopNode,
+      approvedCommands: ["system.execApprovals.get", "system.execApprovals.set"],
+    });
+    expect(approvedRuntimeAllowlist.has("system.execApprovals.get")).toBe(true);
+    expect(approvedRuntimeAllowlist.has("system.execApprovals.set")).toBe(true);
   });
 
   it("keeps defaults for first-party native platform labels with matching families", () => {

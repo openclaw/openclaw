@@ -2,7 +2,6 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLlmStreamSimpleMock } from "../../../test/helpers/agents/llm-stream-simple-mock.js";
-import { isOpenRouterAnthropicModelRef } from "../../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
 import { testing as extraParamsTesting, applyExtraParamsToAgent } from "./extra-params.js";
 import { resolveCacheRetention } from "./prompt-cache-retention.js";
 
@@ -322,13 +321,5 @@ describe("cacheRetention default behavior", () => {
         "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/z27qyso459da",
       ),
     ).toBeUndefined();
-  });
-});
-
-describe("anthropic-family cache semantics", () => {
-  it("classifies OpenRouter Anthropic model refs centrally", () => {
-    expect(isOpenRouterAnthropicModelRef("openrouter", "anthropic/claude-opus-4-6")).toBe(true);
-    expect(isOpenRouterAnthropicModelRef("openrouter", "google/gemini-2.5-pro")).toBe(false);
-    expect(isOpenRouterAnthropicModelRef("OpenRouter", "Anthropic/Claude-Sonnet-4")).toBe(true);
   });
 });

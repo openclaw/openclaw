@@ -15,6 +15,7 @@ import {
   fetchNpmRegistryVersionForChannel,
   fetchNpmTagVersion,
   formatGitInstallLabel,
+  resolveExtendedStablePackage,
   resolveNpmChannelTag,
 } from "./update-check.js";
 
@@ -196,13 +197,16 @@ describe("resolveNpmChannelTag", () => {
 
   it("uses the public registry when no npm command is available", async () => {
     const fetch = vi.fn(async () => {
-      return {
-        ok: true,
-        json: async () => ({
+      return new Response(
+        JSON.stringify({
           version: "2026.6.8",
           engines: { node: ">=22.19.0" },
         }),
-      } as Response;
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
     });
     vi.stubGlobal("fetch", fetch);
 
@@ -217,6 +221,95 @@ describe("resolveNpmChannelTag", () => {
       "https://registry.npmjs.org/openclaw/latest",
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
+  });
+
+  it("cancels public registry HTTP failure bodies", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const fetch = vi.fn(
+      async () => ({ ok: false, status: 503, body: { cancel } }) as unknown as Response,
+    );
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(
+      fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 1000 }),
+    ).resolves.toEqual({
+      target: "latest",
+      version: null,
+      nodeEngine: null,
+      error: "HTTP 503",
+    });
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns error on oversized public registry response exceeding 16 MiB", async () => {
+    const ONE_MIB = 1024 * 1024;
+    const fetch = vi.fn(async () => {
+      const oversizedBody = new Uint8Array(16 * ONE_MIB + 1).fill(0x41);
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(oversizedBody);
+            controller.close();
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+    vi.stubGlobal("fetch", fetch);
+
+    const result = await fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 5000 });
+    expect(result.version).toBeNull();
+    expect(result.nodeEngine).toBeNull();
+    expect(result.error).toContain("JSON response exceeds");
+    expect(result.error).toContain("16777216");
+  });
+
+  it("parses a valid public registry response just under 16 MiB", async () => {
+    const targetSize = 16 * 1024 * 1024 - 1024; // just under 16 MiB
+    const innerLen = targetSize - 14; // '{"version":"'.length(12) + '"}"'.length(2)
+    const body = `{"version":"${"0".repeat(innerLen)}"}`;
+
+    const fetch = vi.fn(async () => {
+      return new Response(body, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetch);
+
+    const result = await fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 5000 });
+    // The version field is a giant string — it exists, confirming parse succeeded
+    expect(result.version).toContain("0");
+    expect(result.nodeEngine).toBeNull();
+    expect(result.error).toBeUndefined();
+  });
+
+  it("returns error on malformed JSON from registry", async () => {
+    const fetch = vi.fn(async () => {
+      return new Response("not-json-at-all{{{", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetch);
+
+    const result = await fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 1000 });
+    expect(result.version).toBeNull();
+    expect(result.error).toContain("malformed JSON");
+  });
+
+  it("returns error on non-200 status from registry", async () => {
+    const fetch = vi.fn(async () => {
+      return new Response(null, {
+        status: 404,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetch);
+
+    const result = await fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 1000 });
+    expect(result.version).toBeNull();
+    expect(result.error).toBe("HTTP 404");
   });
 
   it("falls back to latest when beta is older", async () => {
@@ -298,6 +391,199 @@ describe("resolveNpmChannelTag", () => {
       version: null,
       error: "npm view failed: npm ERR! 404 Not Found",
     });
+  });
+
+  it("adds context to malformed npm view JSON errors", async () => {
+    const badRunCommand = vi.fn(async () => ({
+      stdout: "not valid json {",
+      stderr: "",
+      code: 0,
+    }));
+
+    const result = await fetchNpmPackageTargetStatus({
+      target: "openclaw",
+      timeoutMs: 1000,
+      runCommand: badRunCommand as unknown as typeof runCommandWithTimeout,
+    });
+
+    expect(result.version).toBeNull();
+    expect(result.nodeEngine).toBeNull();
+    expect(result.error).toContain("npm view returned invalid JSON");
+    expect(result.error).toContain("SyntaxError");
+  });
+});
+
+describe("resolveExtendedStablePackage", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("resolves and verifies an exact public package without falling back", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ version: "2026.6.33" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ version: "2026.6.33" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(
+      resolveExtendedStablePackage({ installKind: "package", timeoutMs: 1000, env: {} }),
+    ).resolves.toEqual({
+      status: "resolved",
+      selector: "extended-stable",
+      version: "2026.6.33",
+      packageSpec: "openclaw@2026.6.33",
+    });
+    expect(fetch.mock.calls.map((call) => call[0])).toEqual([
+      "https://registry.npmjs.org/openclaw/extended-stable",
+      "https://registry.npmjs.org/openclaw/2026.6.33",
+    ]);
+  });
+
+  it("supports an explicit scoped-package override on a loopback test registry", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ version: "2000.4.34" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ version: "2000.4.34" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(
+      resolveExtendedStablePackage({
+        installKind: "package",
+        timeoutMs: 1000,
+        packageName: "@kevins8/openclaw",
+        env: {
+          OPENCLAW_UPDATE_PACKAGE_SPEC: "@kevins8/openclaw",
+          NPM_CONFIG_REGISTRY: "http://127.0.0.1:4873/",
+        },
+      }),
+    ).resolves.toEqual({
+      status: "resolved",
+      selector: "extended-stable",
+      version: "2000.4.34",
+      packageSpec: "@kevins8/openclaw@2000.4.34",
+    });
+    expect(fetch.mock.calls.map((call) => call[0])).toEqual([
+      "http://127.0.0.1:4873/%40kevins8%2Fopenclaw/extended-stable",
+      "http://127.0.0.1:4873/%40kevins8%2Fopenclaw/2000.4.34",
+    ]);
+  });
+
+  it("ignores package overrides that do not use a loopback registry", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ version: "2026.6.33" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ version: "2026.6.33" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(
+      resolveExtendedStablePackage({
+        installKind: "package",
+        timeoutMs: 1000,
+        packageName: "@kevins8/openclaw",
+        env: {
+          OPENCLAW_UPDATE_PACKAGE_SPEC: "@kevins8/openclaw",
+          NPM_CONFIG_REGISTRY: "https://registry.example.com/",
+        },
+      }),
+    ).resolves.toMatchObject({
+      status: "resolved",
+      packageSpec: "openclaw@2026.6.33",
+    });
+    expect(fetch.mock.calls.map((call) => call[0])).toEqual([
+      "https://registry.npmjs.org/openclaw/extended-stable",
+      "https://registry.npmjs.org/openclaw/2026.6.33",
+    ]);
+  });
+
+  it("returns selector_missing for an absent public selector", async () => {
+    const fetch = vi.fn(async () => new Response("not found", { status: 404 }));
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(
+      resolveExtendedStablePackage({ installKind: "package", timeoutMs: 1000 }),
+    ).resolves.toEqual({ status: "failed", reason: "selector_missing" });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns selector_query_failed for unusable selector metadata", async () => {
+    const fetch = vi.fn(
+      async () =>
+        new Response("{", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(
+      resolveExtendedStablePackage({ installKind: "package", timeoutMs: 1000 }),
+    ).resolves.toEqual({ status: "failed", reason: "selector_query_failed" });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns exact_package_mismatch when exact readback differs", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ version: "2026.6.33" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ version: "2026.6.34" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(
+      resolveExtendedStablePackage({ installKind: "package", timeoutMs: 1000 }),
+    ).resolves.toEqual({ status: "failed", reason: "exact_package_mismatch" });
+    expect(fetch.mock.calls.map((call) => String(call[0]))).not.toContain(
+      "https://registry.npmjs.org/openclaw/latest",
+    );
+  });
+
+  it("rejects Git installs before making a registry request", async () => {
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(
+      resolveExtendedStablePackage({ installKind: "git", timeoutMs: 1000 }),
+    ).resolves.toEqual({ status: "failed", reason: "unsupported_git_channel" });
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
 
@@ -487,6 +773,38 @@ describe("checkUpdateStatus", () => {
       expect(status.root).toBe(linkedRoot);
       expect(status.installKind).toBe("git");
       expect(status.git?.root).toBe(linkedRoot);
+    });
+  });
+
+  it("reports unsupported_git_channel for Git status without querying npm", async () => {
+    await withTempDir({ prefix: "openclaw-update-check-git-channel-" }, async (root) => {
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ name: "openclaw", packageManager: "pnpm@10.0.0" }),
+        "utf8",
+      );
+      await runCommandWithTimeout(["git", "init"], { cwd: root, timeoutMs: 1000 });
+      const fetch = vi.fn();
+      vi.stubGlobal("fetch", fetch);
+      try {
+        const status = await checkUpdateStatus({
+          root,
+          includeRegistry: true,
+          registryChannel: "extended-stable",
+          fetchGit: false,
+          timeoutMs: 1000,
+        });
+
+        expect(status.registry).toEqual({
+          latestVersion: null,
+          tag: "extended-stable",
+          error: "unsupported_git_channel",
+          reason: "unsupported_git_channel",
+        });
+        expect(fetch).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllGlobals();
+      }
     });
   });
 });

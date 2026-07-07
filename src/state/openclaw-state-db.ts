@@ -11,6 +11,7 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import {
   configureSqliteConnectionPragmas,
   type SqliteWalMaintenance,
@@ -57,11 +58,6 @@ export type OpenClawStateDatabaseSchemaMigration = {
 const cachedDatabases = new Map<string, OpenClawStateDatabase>();
 
 type OpenClawStateMetadataDatabase = Pick<OpenClawStateKyselyDatabase, "schema_meta">;
-
-function readSqliteUserVersion(db: DatabaseSync): number {
-  const row = db.prepare("PRAGMA user_version").get() as { user_version?: unknown } | undefined;
-  return Number(row?.user_version ?? 0);
-}
 
 function assertSupportedSchemaVersion(db: DatabaseSync, pathname: string): void {
   const userVersion = readSqliteUserVersion(db);
@@ -411,6 +407,46 @@ function failureDestinationField(
   return typeof value === "string" && value.trim() ? value : "";
 }
 
+function migrateLegacyCronDeliveryThreadIds(db: DatabaseSync): void {
+  const rows = db
+    .prepare(
+      `SELECT store_key, job_id, job_json, delivery_thread_id
+         FROM cron_jobs
+        WHERE delivery_thread_id_type IS NULL`,
+    )
+    .all() as Array<{
+    store_key: string;
+    job_id: string;
+    job_json: string;
+    delivery_thread_id: string | null;
+  }>;
+  const update = db.prepare(
+    `UPDATE cron_jobs
+        SET delivery_thread_id = ?, delivery_thread_id_type = ?
+      WHERE store_key = ? AND job_id = ? AND delivery_thread_id_type IS NULL`,
+  );
+  for (const row of rows) {
+    const job = parseJsonRecord(row.job_json);
+    const delivery = job ? recordField(job, "delivery") : null;
+    const typed = delivery?.threadId;
+    if (row.delivery_thread_id === null) {
+      // The first normalized cron migration could not project numeric thread IDs.
+      // Recover only that known lost shape while this type column is first added.
+      if (typeof typed === "number" && Number.isFinite(typed)) {
+        update.run(String(typed), "number", row.store_key, row.job_id);
+      }
+      continue;
+    }
+    const type =
+      typeof typed === "number" &&
+      Number.isFinite(typed) &&
+      String(typed) === row.delivery_thread_id
+        ? "number"
+        : "string";
+    update.run(row.delivery_thread_id, type, row.store_key, row.job_id);
+  }
+}
+
 function backfillCronJobsFromJobJson(db: DatabaseSync): void {
   if (
     !tableExists(db, "cron_jobs") ||
@@ -691,6 +727,10 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "cron_run_logs", "created_at INTEGER NOT NULL DEFAULT 0");
   backfillCronRunLogEntryJson(db);
   ensureColumn(db, "cron_jobs", "description TEXT");
+  ensureColumn(db, "cron_jobs", "declaration_key TEXT");
+  ensureColumn(db, "cron_jobs", "display_name TEXT");
+  ensureColumn(db, "cron_jobs", "owner_agent_id TEXT");
+  ensureColumn(db, "cron_jobs", "owner_session_key TEXT");
   ensureColumn(db, "cron_jobs", "name TEXT NOT NULL DEFAULT ''");
   ensureColumn(db, "cron_jobs", "enabled INTEGER NOT NULL DEFAULT 1");
   ensureColumn(db, "cron_jobs", "delete_after_run INTEGER");
@@ -716,6 +756,7 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "cron_jobs", "payload_external_content_source_json TEXT");
   ensureColumn(db, "cron_jobs", "payload_light_context INTEGER");
   ensureColumn(db, "cron_jobs", "payload_tools_allow_json TEXT");
+  ensureColumn(db, "cron_jobs", "payload_tools_allow_is_default INTEGER");
   ensureColumn(db, "cron_jobs", "delivery_mode TEXT");
   ensureColumn(db, "cron_jobs", "delivery_channel TEXT");
   ensureColumn(db, "cron_jobs", "delivery_to TEXT");
@@ -754,6 +795,12 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "cron_jobs", "schedule_identity TEXT");
   ensureColumn(db, "cron_jobs", "sort_order INTEGER NOT NULL DEFAULT 0");
   backfillCronJobsFromJobJson(db);
+  runSqliteImmediateTransactionSync(db, () => {
+    const addedDeliveryThreadIdType = ensureColumn(db, "cron_jobs", "delivery_thread_id_type TEXT");
+    if (addedDeliveryThreadIdType) {
+      migrateLegacyCronDeliveryThreadIds(db);
+    }
+  });
   ensureColumn(db, "sandbox_registry_entries", "session_key TEXT");
   ensureColumn(db, "sandbox_registry_entries", "backend_id TEXT");
   ensureColumn(db, "sandbox_registry_entries", "runtime_label TEXT");
@@ -814,6 +861,7 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "gateway_restart_sentinel", "continuation_json TEXT");
   ensureColumn(db, "gateway_restart_sentinel", "doctor_hint TEXT");
   ensureColumn(db, "gateway_restart_sentinel", "stats_json TEXT");
+  ensureColumn(db, "gateway_boot_lifecycle", "startup_reason TEXT");
   runSqliteImmediateTransactionSync(db, () => {
     const addedTaskRequesterAgentId = ensureColumn(db, "task_runs", "requester_agent_id TEXT");
     if (addedTaskRequesterAgentId) {

@@ -340,7 +340,7 @@ export async function deliverWebReply(params: {
         return;
       }
       const warning = "⚠️ Media failed.";
-      const fallbackTextParts = [remainingText.shift() ?? caption ?? "", warning].filter(Boolean);
+      const fallbackTextParts = [caption ?? "", warning].filter(Boolean);
       const fallbackText = fallbackTextParts.join("\n");
       if (!fallbackText) {
         return;

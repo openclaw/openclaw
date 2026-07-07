@@ -1,6 +1,6 @@
 // Slack plugin module implements slash behavior.
 import type { SlackActionMiddlewareArgs, SlackCommandMiddlewareArgs } from "@slack/bolt";
-import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
+import { loadModelCatalog, resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import {
   formatCommandArgMenuTitle,
@@ -12,6 +12,7 @@ import {
   resolveNativeCommandSessionTargets,
 } from "openclaw/plugin-sdk/command-auth-native";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
@@ -20,7 +21,7 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
-import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -67,36 +68,22 @@ const SLACK_COMMAND_ARG_CONFIRM_TEXT_MAX = 300;
 const SLACK_HEADER_TEXT_MAX = 150;
 const SLACK_COMMAND_ARG_CHROME_BLOCKS = 3;
 const SLACK_COMMAND_ARG_ACTION_BLOCKS_MAX = SLACK_MAX_BLOCKS - SLACK_COMMAND_ARG_CHROME_BLOCKS;
-let slashCommandsRuntimePromise: Promise<typeof import("./slash-commands.runtime.js")> | null =
-  null;
-let slashDispatchRuntimePromise: Promise<typeof import("./slash-dispatch.runtime.js")> | null =
-  null;
-let slackPluginCommandsRuntimePromise: Promise<
-  typeof import("./slash-plugin-commands.runtime.js")
-> | null = null;
-let slashSkillCommandsRuntimePromise: Promise<
-  typeof import("./slash-skill-commands.runtime.js")
-> | null = null;
 
-function loadSlashCommandsRuntime() {
-  slashCommandsRuntimePromise ??= import("./slash-commands.runtime.js");
-  return slashCommandsRuntimePromise;
-}
+const loadSlashCommandsRuntime = createLazyRuntimeModule(
+  () => import("./slash-commands.runtime.js"),
+);
 
-function loadSlashDispatchRuntime() {
-  slashDispatchRuntimePromise ??= import("./slash-dispatch.runtime.js");
-  return slashDispatchRuntimePromise;
-}
+const loadSlashDispatchRuntime = createLazyRuntimeModule(
+  () => import("./slash-dispatch.runtime.js"),
+);
 
-function loadSlackPluginCommandsRuntime() {
-  slackPluginCommandsRuntimePromise ??= import("./slash-plugin-commands.runtime.js");
-  return slackPluginCommandsRuntimePromise;
-}
+const loadSlackPluginCommandsRuntime = createLazyRuntimeModule(
+  () => import("./slash-plugin-commands.runtime.js"),
+);
 
-function loadSlashSkillCommandsRuntime() {
-  slashSkillCommandsRuntimePromise ??= import("./slash-skill-commands.runtime.js");
-  return slashSkillCommandsRuntimePromise;
-}
+const loadSlashSkillCommandsRuntime = createLazyRuntimeModule(
+  () => import("./slash-skill-commands.runtime.js"),
+);
 
 function resolveSlackCommandMenuModelContext(params: {
   cfg: SlackMonitorContext["cfg"];
@@ -112,14 +99,13 @@ function resolveSlackCommandMenuModelContext(params: {
       agentId: params.agentId,
     });
     const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
-    const store = loadSessionStore(storePath);
-    const entry = store[params.sessionKey];
+    const entry = getSessionEntry({ storePath, sessionKey: params.sessionKey });
     if (entry?.modelOverrideSource === "auto" && normalizeOptionalString(entry.modelOverride)) {
       return { provider: defaultModel.provider, model: defaultModel.model };
     }
     const override = resolveStoredModelOverride({
       sessionEntry: entry,
-      sessionStore: store,
+      loadSessionEntry: (sessionKey) => getSessionEntry({ storePath, sessionKey }),
       sessionKey: params.sessionKey,
       defaultProvider: defaultModel.provider,
     });
@@ -596,11 +582,17 @@ export async function registerSlackMonitorSlashCommands(params: {
               sessionKey: menuRoute.sessionKey,
             })
           : {};
+        // Native /think choices need live-discovery metadata; empty keeps config fallback.
+        const menuModelCatalog =
+          commandDefinition.key === "think" && menuNeedsModelContext
+            ? await loadModelCatalog({ config: cfg })
+            : undefined;
         const menu = resolveCommandArgMenu({
           command: commandDefinition,
           args: commandArgs,
           cfg,
           ...menuModelContext,
+          ...(menuModelCatalog?.length ? { catalog: menuModelCatalog } : {}),
         });
         if (menu) {
           const commandLabel = commandDefinition.nativeName ?? commandDefinition.key;
@@ -926,7 +918,13 @@ export async function registerSlackMonitorSlashCommands(params: {
         .filter((choice) => !query || normalizeLowercaseStringOrEmpty(choice.label).includes(query))
         .slice(0, SLACK_COMMAND_ARG_SELECT_OPTIONS_MAX)
         .map((choice) => ({
-          text: { type: "plain_text", text: choice.label.slice(0, 75) },
+          // Surrogate-safe cap (matches the static-select path above) so an emoji
+          // straddling the 75-char Slack plain_text limit is dropped whole rather
+          // than serialized as a lone `\uD83D` half that Slack rejects.
+          text: {
+            type: "plain_text",
+            text: truncateSlackText(choice.label, SLACK_COMMAND_ARG_SELECT_OPTION_TEXT_MAX),
+          },
           value: choice.value,
         }));
       await ack({ options });

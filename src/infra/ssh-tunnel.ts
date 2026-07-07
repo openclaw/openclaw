@@ -4,7 +4,7 @@ import net from "node:net";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { formatErrorMessage, isErrno } from "./errors.js";
 import { parseStrictPositiveInteger } from "./parse-finite-number.js";
-import { ensurePortAvailable } from "./ports.js";
+import { ensurePortAvailable, PortInUseError } from "./ports.js";
 
 export type SshParsedTarget = {
   user?: string;
@@ -20,6 +20,13 @@ export type SshTunnel = {
   stderr: string[];
   stop: () => Promise<void>;
 };
+
+// Reject hosts that would corrupt the SSH HostName field or enable argument
+// injection: a leading '-' becomes an ssh option, and a stray leading/trailing
+// ':' (e.g. sliced from "host::22") produces an invalid HostName.
+function isMalformedHost(host: string): boolean {
+  return host.startsWith("-") || host.startsWith(":") || host.endsWith(":");
+}
 
 export function parseSshTarget(raw: string): SshParsedTarget | null {
   const trimmed = raw.trim().replace(/^ssh\s+/, "");
@@ -44,8 +51,7 @@ export function parseSshTarget(raw: string): SshParsedTarget | null {
     if (!host || port === undefined || port > 65535) {
       return null;
     }
-    // Security: Reject hostnames starting with '-' to prevent argument injection
-    if (host.startsWith("-")) {
+    if (isMalformedHost(host)) {
       return null;
     }
     return { user: userPart, host, port };
@@ -54,8 +60,7 @@ export function parseSshTarget(raw: string): SshParsedTarget | null {
   if (!hostPart) {
     return null;
   }
-  // Security: Reject hostnames starting with '-' to prevent argument injection
-  if (hostPart.startsWith("-")) {
+  if (isMalformedHost(hostPart)) {
     return null;
   }
   return { user: userPart, host: hostPart, port: 22 };
@@ -119,9 +124,9 @@ export async function startSshPortForward(opts: {
 
   let localPort = opts.localPortPreferred;
   try {
-    await ensurePortAvailable(localPort);
+    await ensurePortAvailable(localPort, "127.0.0.1");
   } catch (err) {
-    if (isErrno(err) && err.code === "EADDRINUSE") {
+    if (err instanceof PortInUseError || (isErrno(err) && err.code === "EADDRINUSE")) {
       localPort = await pickEphemeralPort();
     } else {
       throw err;
@@ -132,7 +137,7 @@ export async function startSshPortForward(opts: {
   const args = [
     "-N",
     "-L",
-    `${localPort}:127.0.0.1:${opts.remotePort}`,
+    `127.0.0.1:${localPort}:127.0.0.1:${opts.remotePort}`,
     "-p",
     String(parsed.port),
     "-o",
@@ -160,17 +165,20 @@ export async function startSshPortForward(opts: {
   const child = spawn("/usr/bin/ssh", args, {
     stdio: ["ignore", "ignore", "pipe"],
   });
-  child.stderr?.setEncoding("utf8");
-  child.stderr?.on("data", (chunk) => {
+  const stderrStream = child.stderr;
+  // Child events own tunnel failure. Keep the diagnostic pipe observed so a
+  // stream error cannot become an uncaught exception during active use or teardown.
+  stderrStream?.on("error", () => {});
+  stderrStream?.setEncoding("utf8");
+  stderrStream?.on("data", (chunk) => {
     const lines = normalizeStringEntries(String(chunk).split("\n"));
     stderr.push(...lines);
   });
 
   const stop = async () => {
-    if (child.killed) {
+    if (child.killed || !child.kill("SIGTERM")) {
       return;
     }
-    child.kill("SIGTERM");
     await new Promise<void>((resolve) => {
       const t = setTimeout(() => {
         try {
@@ -190,6 +198,7 @@ export async function startSshPortForward(opts: {
     await Promise.race([
       waitForLocalListener(localPort, Math.max(250, opts.timeoutMs)),
       new Promise<void>((_, reject) => {
+        child.once("error", (err) => reject(err));
         child.once("exit", (code, signal) => {
           reject(new Error(`ssh exited (${code ?? "null"}${signal ? `/${signal}` : ""})`));
         });

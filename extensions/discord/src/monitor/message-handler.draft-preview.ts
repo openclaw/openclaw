@@ -44,8 +44,10 @@ export function createDiscordDraftPreviewController(params: {
   const accountBlockStreamingEnabled =
     resolveChannelStreamingBlockEnabled(params.discordConfig) ??
     params.cfg.agents?.defaults?.blockStreamingDefault === "on";
+  const canStreamProgressDraftForToolOnlySource =
+    params.sourceRepliesAreToolOnly && discordStreamMode === "progress";
   const canStreamDraft =
-    !params.sourceRepliesAreToolOnly &&
+    (!params.sourceRepliesAreToolOnly || canStreamProgressDraftForToolOnlySource) &&
     discordStreamMode !== "off" &&
     !accountBlockStreamingEnabled;
   const draftStream = canStreamDraft
@@ -72,6 +74,9 @@ export function createDiscordDraftPreviewController(params: {
   let hasStreamedMessage = false;
   let finalizedViaPreviewMessage = false;
   let finalReplyDelivered = false;
+  // Final delivery cancels the compositor gate before Discord decides whether
+  // to edit the progress preview, so keep the pre-final eligibility bit.
+  let progressDraftStartedBeforeFinal = false;
   const previewToolProgressEnabled =
     Boolean(draftStream) && resolveChannelStreamingPreviewToolProgress(params.discordConfig);
   const suppressDefaultToolProgressMessages =
@@ -86,6 +91,10 @@ export function createDiscordDraftPreviewController(params: {
     mode: discordStreamMode,
     active: Boolean(draftStream),
     seed: progressSeed,
+    reasoningLinePrefix: "🧠 ",
+    commentaryLinePrefix: "💬 ",
+    reasoningGate: true,
+    commentaryItalics: false,
     update: async (previewText, options) => {
       lastPartialText = previewText;
       draftText = previewText;
@@ -132,12 +141,13 @@ export function createDiscordDraftPreviewController(params: {
       return discordStreamMode === "progress";
     },
     get hasProgressDraftStarted() {
-      return progressDraft.hasStarted;
+      return progressDraft.hasStarted || progressDraftStartedBeforeFinal;
     },
     get finalizedViaPreviewMessage() {
       return finalizedViaPreviewMessage;
     },
     markFinalReplyStarted() {
+      progressDraftStartedBeforeFinal ||= progressDraft.hasStarted;
       progressDraft.markFinalReplyStarted();
     },
     markFinalReplyDelivered() {
@@ -148,12 +158,6 @@ export function createDiscordDraftPreviewController(params: {
       finalizedViaPreviewMessage = true;
     },
     disableBlockStreamingForDraft: draftStream ? true : undefined,
-    async startProgressDraft() {
-      if (!draftStream || discordStreamMode !== "progress") {
-        return;
-      }
-      await progressDraft.start();
-    },
     async pushToolProgress(
       line?: string | ChannelProgressDraftLine,
       options?: { toolName?: string },
@@ -256,6 +260,8 @@ export function createDiscordDraftPreviewController(params: {
       });
     },
     handleAssistantMessageBoundary() {
+      // Queued/followup turns need a fresh progress draft after the primary final.
+      progressDraft.beginNewTurn();
       if (discordStreamMode === "progress") {
         return;
       }

@@ -11,7 +11,7 @@ import {
   makeTempDir,
   parseBoolEnv,
   parseMode,
-  parsePositiveInt,
+  parseTcpPort,
   parseProvider,
   readPositiveIntEnv,
   modelProviderConfigBatchJson,
@@ -202,7 +202,7 @@ export function parseArgs(argv: string[]): LinuxOptions {
         i++;
         break;
       case "--host-port":
-        options.hostPort = parsePositiveInt(ensureValue(args, i, arg), arg);
+        options.hostPort = parseTcpPort(ensureValue(args, i, arg), arg);
         options.hostPortExplicit = true;
         i++;
         break;
@@ -331,7 +331,7 @@ class LinuxSmoke extends SmokeRunController<LinuxOptions> {
     );
     this.status.freshVersion = await this.extractLastVersion("fresh.install-main");
     await this.phase("fresh.verify-main-version", 90, () => this.verifyTargetVersion());
-    await this.phase("fresh.onboard-ref", 180, () => this.runRefOnboard());
+    await this.phase("fresh.onboard-ref", 420, () => this.runRefOnboard());
     await this.phase("fresh.inject-bad-plugin", 90, () =>
       this.maybeInjectBadPluginFixture("fresh"),
     );
@@ -366,7 +366,7 @@ class LinuxSmoke extends SmokeRunController<LinuxOptions> {
     await this.phase("upgrade.inject-bad-plugin", 90, () =>
       this.maybeInjectBadPluginFixture("upgrade"),
     );
-    await this.phase("upgrade.onboard-ref", 180, () => this.runRefOnboard());
+    await this.phase("upgrade.onboard-ref", 420, () => this.runRefOnboard());
     await this.phase("upgrade.gateway-start", 240, () => this.startGatewayBackground());
     await this.phase("upgrade.bad-plugin-diagnostic", 90, () =>
       this.maybeVerifyBadPluginDiagnostic("upgrade"),
@@ -510,9 +510,11 @@ run_apt_with_lock_retry apt-get -o DPkg::Lock::Timeout=30 install -y curl ca-cer
     this.guest.bash(`
 set -e
 if command -v curl >/dev/null 2>&1; then
-  curl -fsSL ${shellQuote(url)} -o ${shellQuote(outputPath)}
+  curl -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 ${shellQuote(
+    url,
+  )} -o ${shellQuote(outputPath)}
 else
-  wget -q -O ${shellQuote(outputPath)} ${shellQuote(url)}
+  wget -q --timeout=10 --read-timeout=120 --tries=3 -O ${shellQuote(outputPath)} ${shellQuote(url)}
 fi`);
   }
 

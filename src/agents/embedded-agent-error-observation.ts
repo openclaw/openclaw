@@ -13,8 +13,6 @@ import {
 } from "./embedded-agent-helpers.js";
 import { stableStringify } from "./stable-stringify.js";
 
-export { sanitizeForConsole } from "./console-sanitize.js";
-
 const MAX_OBSERVATION_INPUT_CHARS = 64_000;
 const MAX_FINGERPRINT_MESSAGE_CHARS = 8_000;
 const RAW_ERROR_PREVIEW_MAX_CHARS = 400;
@@ -29,6 +27,7 @@ const RAW_ERROR_CONSOLE_SUPPRESSED_FAILURE_KINDS = new Set<ProviderRuntimeFailur
   "auth_html",
   "auth_refresh",
   "auth_scope",
+  "upstream_html",
 ]);
 
 function resolveConfiguredRedactPatterns(): string[] {

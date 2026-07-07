@@ -7,14 +7,16 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayConfig } from "../config/types.gateway.js";
 import {
-  loadOrCreateDeviceIdentity,
+  loadOrCreateProcessDeviceIdentity,
   signDevicePayload,
   type DeviceIdentity,
 } from "./device-identity.js";
 import { formatErrorMessage } from "./errors.js";
+import { readResponseWithLimit } from "./http-body.js";
 import { normalizeHostname } from "./net/hostname.js";
 
 type ApnsRelayPushType = "alert" | "background";
+type ApnsRelayEnvironment = "production" | "sandbox";
 
 /** Resolved APNs relay endpoint and client timeout for gateway-originated sends. */
 export type ApnsRelayConfig = {
@@ -36,7 +38,7 @@ export type ApnsRelayPushResponse = {
   status: number;
   apnsId?: string;
   reason?: string;
-  environment: "production";
+  environment?: ApnsRelayEnvironment;
   tokenSuffix?: string;
 };
 
@@ -56,7 +58,12 @@ export type ApnsRelayRequestSender = (params: {
 
 /** Hosted APNs relay origin used only when registrations prove they were minted there. */
 export const DEFAULT_APNS_RELAY_BASE_URL = "https://ios-push-relay.openclaw.ai";
+export const DEFAULT_APNS_SANDBOX_RELAY_BASE_URL = "https://ios-push-relay-sandbox.openclaw.ai";
 const DEFAULT_APNS_RELAY_TIMEOUT_MS = 10_000;
+// Hard cap on the relay response body. The hosted relay reply is a tiny JSON status object;
+// without a cap a buggy/hostile/compromised relay could stream an unbounded body and exhaust
+// gateway memory (the existing AbortSignal.timeout only bounds connection latency, not body size).
+const APNS_RELAY_MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 const GATEWAY_DEVICE_ID_HEADER = "x-openclaw-gateway-device-id";
 const GATEWAY_SIGNATURE_HEADER = "x-openclaw-gateway-signature";
 const GATEWAY_SIGNED_AT_HEADER = "x-openclaw-gateway-signed-at-ms";
@@ -99,6 +106,14 @@ function isLoopbackRelayHostname(hostname: string): boolean {
 
 function parseReason(value: unknown): string | undefined {
   return typeof value === "string" ? normalizeOptionalString(value) : undefined;
+}
+
+function parseRelayEnvironment(value: unknown): ApnsRelayEnvironment | undefined {
+  const normalized = typeof value === "string" ? normalizeLowercaseStringOrEmpty(value) : "";
+  if (normalized === "sandbox" || normalized === "production") {
+    return normalized;
+  }
+  return undefined;
 }
 
 /** Validate and canonicalize an APNs relay base URL for config and registration origins. */
@@ -169,11 +184,13 @@ export function resolveApnsRelayConfigFromEnv(
     };
   }
 
-  const baseUrl =
-    explicitBaseUrl ??
-    (normalizedRegistrationOrigin?.value === DEFAULT_APNS_RELAY_BASE_URL
+  const hostedRelayBaseUrl =
+    normalizedRegistrationOrigin?.value === DEFAULT_APNS_RELAY_BASE_URL
       ? DEFAULT_APNS_RELAY_BASE_URL
-      : undefined);
+      : normalizedRegistrationOrigin?.value === DEFAULT_APNS_SANDBOX_RELAY_BASE_URL
+        ? DEFAULT_APNS_SANDBOX_RELAY_BASE_URL
+        : undefined;
+  const baseUrl = explicitBaseUrl ?? hostedRelayBaseUrl;
   const baseUrlSource = envBaseUrl
     ? "OPENCLAW_APNS_RELAY_BASE_URL"
     : configBaseUrl
@@ -214,6 +231,19 @@ export function resolveApnsRelayConfigFromEnv(
   };
 }
 
+// Sentinel marking an over-cap relay body. Carried as a distinct type so the response-read
+// catch path can fail closed on overflow instead of swallowing it into the malformed-JSON
+// (treat-as-empty-body) fallback that would otherwise report a successful send.
+class ApnsRelayResponseTooLargeError extends Error {
+  constructor(
+    readonly size: number,
+    readonly maxBytes: number,
+  ) {
+    super(`APNs relay response exceeded ${maxBytes} bytes (${size} bytes received)`);
+    this.name = "ApnsRelayResponseTooLargeError";
+  }
+}
+
 async function sendApnsRelayRequest(params: {
   relayConfig: ApnsRelayConfig;
   sendGrant: string;
@@ -245,14 +275,27 @@ async function sendApnsRelayRequest(params: {
       ok: false,
       status: response.status,
       reason: "RelayRedirectNotAllowed",
-      environment: "production",
     };
   }
 
   let json: unknown;
   try {
-    json = (await response.json()) as unknown;
-  } catch {
+    // Bound the relay body before buffering it; cancel the stream past the cap.
+    const buffer = await readResponseWithLimit(response, APNS_RELAY_MAX_RESPONSE_BYTES, {
+      onOverflow: ({ size, maxBytes }) => new ApnsRelayResponseTooLargeError(size, maxBytes),
+    });
+    json = JSON.parse(new TextDecoder("utf-8").decode(buffer)) as unknown;
+  } catch (err) {
+    if (err instanceof ApnsRelayResponseTooLargeError) {
+      // Fail closed: an oversized relay body must never be reported as a delivered push.
+      return {
+        ok: false,
+        status: response.status,
+        reason: "RelayResponseTooLarge",
+      };
+    }
+    // Malformed/empty JSON (or a non-overflow body read error) keeps the prior behaviour:
+    // treat the body as absent and derive status/ok from the HTTP response.
     json = null;
   }
   const body =
@@ -264,12 +307,13 @@ async function sendApnsRelayRequest(params: {
     typeof body.status === "number" && Number.isFinite(body.status)
       ? Math.trunc(body.status)
       : response.status;
+  const environment = parseRelayEnvironment(body.environment);
   return {
     ok: typeof body.ok === "boolean" ? body.ok : response.ok && status >= 200 && status < 300,
     status,
     apnsId: parseReason(body.apnsId),
     reason: parseReason(body.reason),
-    environment: "production",
+    ...(environment ? { environment } : {}),
     tokenSuffix: parseReason(body.tokenSuffix),
   };
 }
@@ -286,7 +330,7 @@ export async function sendApnsRelayPush(params: {
   requestSender?: ApnsRelayRequestSender;
 }): Promise<ApnsRelayPushResponse> {
   const sender = params.requestSender ?? sendApnsRelayRequest;
-  const gatewayIdentity = params.gatewayIdentity ?? loadOrCreateDeviceIdentity();
+  const gatewayIdentity = params.gatewayIdentity ?? loadOrCreateProcessDeviceIdentity();
   const signedAtMs = Date.now();
   const bodyJson = JSON.stringify({
     relayHandle: params.relayHandle,

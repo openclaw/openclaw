@@ -6,6 +6,7 @@
   "contracts": {
     "mediaUnderstandingProviders": ["codex"],
     "migrationProviders": ["codex"],
+    "tools": ["codex_threads"],
     "webSearchProviders": ["codex"]
   },
   "mediaUnderstandingProviderMetadata": {
@@ -100,8 +101,12 @@
             "type": "boolean",
             "default": false
           },
+          "allow_all_plugins": {
+            "type": "boolean",
+            "default": false
+          },
           "allow_destructive_actions": {
-            "oneOf": [{ "type": "boolean" }, { "const": "auto" }],
+            "oneOf": [{ "type": "boolean" }, { "const": "auto" }, { "const": "ask" }],
             "default": true
           },
           "plugins": {
@@ -121,7 +126,7 @@
                   "type": "string"
                 },
                 "allow_destructive_actions": {
-                  "oneOf": [{ "type": "boolean" }, { "const": "auto" }]
+                  "oneOf": [{ "type": "boolean" }, { "const": "auto" }, { "const": "ask" }]
                 }
               }
             }
@@ -141,6 +146,11 @@
             "enum": ["stdio", "websocket"],
             "default": "stdio"
           },
+          "homeScope": {
+            "type": "string",
+            "enum": ["agent", "user"],
+            "default": "agent"
+          },
           "command": { "type": "string" },
           "args": {
             "oneOf": [
@@ -152,10 +162,10 @@
             ]
           },
           "url": { "type": "string" },
-          "authToken": { "type": "string" },
+          "authToken": { "type": ["string", "object"] },
           "headers": {
             "type": "object",
-            "additionalProperties": { "type": "string" }
+            "additionalProperties": { "type": ["string", "object"] }
           },
           "clearEnv": {
             "type": "array",
@@ -254,6 +264,14 @@
       }
     }
   },
+  "configContracts": {
+    "secretInputs": {
+      "paths": [
+        { "path": "appServer.authToken", "expected": "string" },
+        { "path": "appServer.headers.*", "expected": "string" }
+      ]
+    }
+  },
   "uiHints": {
     "codexDynamicToolsLoading": {
       "label": "Dynamic Tools Loading",
@@ -333,9 +351,14 @@
       "help": "Expose explicit migrated Codex plugin entries to Codex harness turns.",
       "advanced": true
     },
+    "codexPlugins.allow_all_plugins": {
+      "label": "Allow All Connected Apps",
+      "help": "Expose every currently accessible app connected to the authenticated Codex account when a new Codex thread starts.",
+      "advanced": true
+    },
     "codexPlugins.allow_destructive_actions": {
       "label": "Allow Destructive Plugin Actions",
-      "help": "Default policy for plugin app write or destructive action elicitations. Use true to accept safe schemas without prompting, false to decline, or auto to ask through plugin approvals.",
+      "help": "Default policy for plugin app write or destructive action elicitations. Use true to accept safe schemas without prompting, false to decline, auto to ask through plugin approvals when Codex requires approval, or ask to prompt for every write/destructive action without durable approval.",
       "advanced": true
     },
     "codexPlugins.plugins": {
@@ -356,6 +379,11 @@
     "appServer.transport": {
       "label": "Transport",
       "help": "Use stdio to spawn Codex locally, or websocket to connect to an already-running app-server.",
+      "advanced": true
+    },
+    "appServer.homeScope": {
+      "label": "Codex Home Scope",
+      "help": "Use agent for isolated Codex state, or user to share native Codex threads, config, and authentication with Codex Desktop and the CLI.",
       "advanced": true
     },
     "appServer.command": {
@@ -382,6 +410,7 @@
     "appServer.headers": {
       "label": "Headers",
       "help": "Additional headers sent to the WebSocket app-server.",
+      "sensitive": true,
       "advanced": true
     },
     "appServer.clearEnv": {

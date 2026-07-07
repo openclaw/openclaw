@@ -1,5 +1,6 @@
 {
   "id": "perplexity",
+  "icon": "https://cdn.simpleicons.org/perplexity",
   "activation": {
     "onStartup": false
   },

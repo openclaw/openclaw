@@ -13,6 +13,86 @@ function envRef(id: string) {
 }
 
 describe("collectPluginConfigAssignments bundled plugin manifests", () => {
+  it("collects Codex app-server SecretRefs from bundled manifest contracts", () => {
+    expect(
+      findBundledPluginMetadataById("codex", {
+        includeChannelConfigs: false,
+        includeSyntheticChannelConfigs: false,
+      })?.manifest.configContracts?.secretInputs?.paths,
+    ).toEqual([
+      { path: "appServer.authToken", expected: "string" },
+      { path: "appServer.headers.*", expected: "string" },
+    ]);
+    const config = {
+      plugins: {
+        entries: {
+          codex: {
+            enabled: true,
+            config: {
+              appServer: {
+                transport: "websocket",
+                url: "wss://codex-app-server.example.internal/ws",
+                authToken: "$CODEX_APP_SERVER_TOKEN",
+                headers: {
+                  Authorization: "Bearer literal-token",
+                  "x-codex-client-session-token": envRef("CODEX_CLIENT_SESSION_TOKEN"),
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    expect(
+      resolvePluginConfigContractsById({
+        config,
+        workspaceDir: resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)),
+        env: {},
+        fallbackToBundledMetadata: true,
+        fallbackToBundledMetadataForResolvedBundled: true,
+        pluginIds: ["codex"],
+        fallbackBundledPluginIds: ["codex"],
+      }).get("codex")?.configContracts.secretInputs?.paths,
+    ).toEqual([
+      { path: "appServer.authToken", expected: "string" },
+      { path: "appServer.headers.*", expected: "string" },
+    ]);
+    const context = createResolverContext({
+      sourceConfig: config,
+      env: {},
+    });
+
+    collectPluginConfigAssignments({
+      config,
+      defaults: undefined,
+      context,
+      loadablePluginOrigins: new Map([["codex", "bundled"]]),
+    });
+
+    expect({
+      assignments: context.assignments.map((assignment) => assignment.path).toSorted(),
+      warnings: context.warnings,
+    }).toEqual({
+      assignments: [
+        "plugins.entries.codex.config.appServer.authToken",
+        "plugins.entries.codex.config.appServer.headers.x-codex-client-session-token",
+      ],
+      warnings: [],
+    });
+
+    context.assignments[0]?.apply("resolved-app-server-token");
+    context.assignments[1]?.apply("resolved-session-token");
+    expect(config.plugins?.entries?.codex?.config).toMatchObject({
+      appServer: {
+        authToken: "resolved-app-server-token",
+        headers: {
+          Authorization: "Bearer literal-token",
+          "x-codex-client-session-token": "resolved-session-token",
+        },
+      },
+    });
+  });
+
   it("collects voice-call SecretRef assignments from bundled manifest contracts", () => {
     expect(
       findBundledPluginMetadataById("voice-call", {

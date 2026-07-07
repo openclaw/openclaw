@@ -32,28 +32,49 @@ describe("check-database-first-legacy-stores", () => {
     }
   });
 
-  it("skips generated extension asset bundles", async () => {
+  it("skips generated extension asset and dist bundles", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-db-first-guard-"));
     try {
       await fs.mkdir(path.join(root, "extensions", "diffs", "assets"), { recursive: true });
+      await fs.mkdir(path.join(root, "extensions", "diffs", "dist", "assets"), {
+        recursive: true,
+      });
       await fs.mkdir(path.join(root, "extensions", "diffs", "src"), { recursive: true });
+      await fs.mkdir(path.join(root, "packages", "plugin-sdk", "dist"), { recursive: true });
+      await fs.mkdir(path.join(root, "packages", "plugin-sdk", "src"), { recursive: true });
       await fs.writeFile(
         path.join(root, "extensions", "diffs", "assets", "viewer-runtime.js"),
+        "export const bundled = true;\n",
+      );
+      await fs.writeFile(
+        path.join(root, "extensions", "diffs", "dist", "assets", "viewer-runtime.js"),
         "export const bundled = true;\n",
       );
       await fs.writeFile(
         path.join(root, "extensions", "diffs", "src", "runtime.js"),
         "export const runtime = true;\n",
       );
+      await fs.writeFile(
+        path.join(root, "packages", "plugin-sdk", "dist", "index.js"),
+        "export const bundled = true;\n",
+      );
+      await fs.writeFile(
+        path.join(root, "packages", "plugin-sdk", "src", "index.js"),
+        "export const runtime = true;\n",
+      );
 
       const files = await collectDatabaseFirstLegacyStoreSourceFiles([
         path.join(root, "extensions"),
+        path.join(root, "packages"),
       ]);
       const relativeFiles = files
         .map((file) => path.relative(root, file).replaceAll(path.sep, "/"))
         .toSorted();
 
-      expect(relativeFiles).toEqual(["extensions/diffs/src/runtime.js"]);
+      expect(relativeFiles).toEqual([
+        "extensions/diffs/src/runtime.js",
+        "packages/plugin-sdk/src/index.js",
+      ]);
     } finally {
       await fs.rm(root, { force: true, recursive: true });
     }
@@ -8348,7 +8369,7 @@ describe("check-database-first-legacy-stores", () => {
         import fs from "node:fs";
         fs.writeFileSync("sessions.json", "{}\\n");
       `,
-      "extensions/matrix/src/matrix/client/storage.ts",
+      "extensions/memory-wiki/src/compile.ts",
     );
 
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 3 }]);
@@ -8358,74 +8379,49 @@ describe("check-database-first-legacy-stores", () => {
     const content = `import fs from "node:fs";${"\n".repeat(667)}fs.writeFileSync("sessions.json", "{}\\n");`;
     const violations = collectDatabaseFirstLegacyStoreViolations(
       content,
-      "extensions/matrix/src/matrix/client/storage.ts",
+      "extensions/memory-wiki/src/compile.ts",
     );
 
     expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 668 }]);
   });
 
   it("allows current legacy-debt writes after harmless line movement", () => {
-    const content = `
-      import path from "node:path";
-      import { writeJson } from "../infra/json-files.js";
-      const STORAGE_META_FILENAME = "storage-meta.json";
-      function writeStoredRootMetadata(filePath: string, metadata: unknown) {
-        return writeJson(filePath, metadata);
-      }
-      ${"\n".repeat(8)}
-      writeStoredRootMetadata(path.join(params.rootDir, STORAGE_META_FILENAME), {
-        homeserver: metadata.homeserver,
-        userId: metadata.userId,
-        accountId: metadata.accountId ?? DEFAULT_ACCOUNT_KEY,
-        accessTokenHash: metadata.accessTokenHash,
-        deviceId: metadata.deviceId ?? null,
-        currentTokenStateClaimed: true,
-        createdAt: metadata.createdAt ?? new Date().toISOString(),
-      });
-    `;
+    const content = [
+      `import { fsRoot } from "@openclaw/fs-safe/root";`,
+      `const relativePath = ".openclaw-wiki/cache/claims.jsonl";`,
+      `const root = await fsRoot(rootDir);`,
+      ...Array.from({ length: 8 }, () => ""),
+      `await root.write(relativePath, content);`,
+    ].join("\n");
     const violations = collectDatabaseFirstLegacyStoreViolations(
       content,
-      "extensions/matrix/src/matrix/client/storage.ts",
+      "extensions/memory-wiki/src/compile.ts",
     );
 
     expect(violations).toEqual([]);
   });
 
   it("flags duplicate copies of current legacy-debt writes", () => {
-    const allowedWrite = `
-      writeStoredRootMetadata(path.join(params.rootDir, STORAGE_META_FILENAME), {
-        homeserver: metadata.homeserver,
-        userId: metadata.userId,
-        accountId: metadata.accountId ?? DEFAULT_ACCOUNT_KEY,
-        accessTokenHash: metadata.accessTokenHash,
-        deviceId: metadata.deviceId ?? null,
-        currentTokenStateClaimed: true,
-        createdAt: metadata.createdAt ?? new Date().toISOString(),
-      });
-    `;
+    const relativePath = "extensions/memory-wiki/src/compile.ts";
+    const allowedWrite = `fs.writeFileSync("sessions.json", "{}\\n")`;
+    const currentLegacyWriteAllowances = new Map([
+      [`${relativePath}:legacy store filesystem write:${allowedWrite}`, 1],
+    ]);
     const violations = collectDatabaseFirstLegacyStoreViolations(
-      `
-        import path from "node:path";
-        import { writeJson } from "../infra/json-files.js";
-        const STORAGE_META_FILENAME = "storage-meta.json";
-        function writeStoredRootMetadata(filePath: string, metadata: unknown) {
-          return writeJson(filePath, metadata);
-        }
-        ${allowedWrite}
-        ${allowedWrite}
-      `,
-      "extensions/matrix/src/matrix/client/storage.ts",
+      [`import fs from "node:fs";`, `${allowedWrite};`, `${allowedWrite};`].join("\n"),
+      relativePath,
+      { currentLegacyWriteAllowances },
     );
 
-    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 20 }]);
+    expect(violations).toEqual([{ kind: "legacy store filesystem write", line: 3 }]);
   });
 
   it("flags stale current legacy-debt allowlist entries during full scans", () => {
     const violations = collectDatabaseFirstLegacyStoreViolations(
       `
-        export const STORAGE_META_FILENAME = "storage-meta.json";
+        export const CLAIMS_DIGEST_PATH = ".openclaw-wiki/cache/claims.jsonl";
       `,
-      "extensions/matrix/src/matrix/client/storage.ts",
+      "extensions/memory-wiki/src/compile.ts",
       { enforceCurrentLegacyAllowlist: true },
     );
 

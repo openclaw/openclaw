@@ -62,13 +62,21 @@ Archive locally without upload:
 pnpm android:release:archive
 ```
 
+This command is for local archive validation only. It is not a fallback upload
+path after `pnpm android:release:upload` fails.
+
 Generate deterministic Google Play screenshots:
 
 ```bash
-pnpm android:screenshots
+ANDROID_SCREENSHOT_AVD=OpenClaw_QA_API35 pnpm android:screenshots
 ```
 
-Upload metadata, release notes, and the Play AAB to the internal testing track:
+If exactly one ADB device is already connected, `pnpm android:screenshots`
+uses it. With `ANDROID_SCREENSHOT_AVD` or `--avd <name>`, the script can boot a
+headless emulator, wait for boot completion, stabilize animation settings,
+capture screenshots, and shut down only the emulator it started.
+
+Upload metadata, release notes, and the Play AAB to the configured Google Play track:
 
 ```bash
 pnpm android:release:upload
@@ -81,6 +89,10 @@ cd apps/android
 fastlane android release_upload
 ```
 
+Use the direct Fastlane entry point only for maintainer debugging when explicitly
+requested. Agent-driven releases must use `pnpm android:release:upload` and stop
+if it fails.
+
 Release rules:
 
 - `apps/android/version.json` is the pinned Android release version source.
@@ -88,6 +100,7 @@ Release rules:
 - `apps/android/CHANGELOG.md` is the Android-only changelog and release-note source.
 - `apps/android/fastlane/metadata/android/en-US/release_notes.txt` is generated from that changelog by `pnpm android:version:sync`.
 - `apps/android/Config/ReleaseSigning.json` pins the encrypted Android signing assets in the shared signing repo.
+- `apkCertificateSha256` in that manifest pins the upload certificate accepted for standalone release APKs; rotate it only with the encrypted keystore.
 - `MATCH_PASSWORD` enables Fastlane to pull encrypted Android signing assets into `apps/android/build/release-signing/` before release validation or archive builds.
 - Supported pinned Android versions use CalVer: `YYYY.M.D`.
 - `versionCode` uses `YYYYMMDDNN`, where `NN` is a two-digit build number for the pinned version.
@@ -101,7 +114,9 @@ Release rules:
 - `pnpm android:screenshots` builds and installs the Play debug app, launches deterministic screenshot scenes, and captures raw PNGs.
 - `pnpm android:release:archive` builds the signed Play AAB and third-party APK into `apps/android/build/release-artifacts/`.
 - `pnpm android:release:upload` uploads the Play AAB to the configured Google Play track. The default track is `internal`.
+- Stable GitHub Release APK publication is separate from Google Play: `OpenClaw Release Publish` dispatches `.github/workflows/android-release.yml`, whose protected `android-release` environment provides `MATCH_PASSWORD`; the repository GitHub App reads the encrypted signing repo.
 - Production promotion remains manual in Google Play Console.
+- If `pnpm android:release:upload` fails, agent-driven releases must stop and report the failing step. Do not fall back to `pnpm android:release:archive`, `pnpm android:release:metadata`, direct Fastlane lanes, Gradle release artifacts plus Google Play upload commands, or mobile release ref recording.
 
 Screenshots:
 

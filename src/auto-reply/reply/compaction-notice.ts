@@ -2,27 +2,23 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ReplyPayload } from "../types.js";
 
-export type CompactionNoticePhase = "start" | "end" | "incomplete" | "skipped";
+export type CompactionNoticePhase =
+  | "start"
+  | "end"
+  | "incomplete"
+  | "skipped"
+  | "memory_flush_degraded";
+
+const COMPACTION_NOTICE_TEXT: Record<CompactionNoticePhase, string> = {
+  start: "🧹 Compacting context...",
+  end: "🧹 Compaction complete",
+  incomplete: "🧹 Compaction incomplete",
+  skipped: "🧹 Compaction not needed",
+  memory_flush_degraded: "⚠️ Memory maintenance temporarily failed; continuing your reply.",
+};
 
 export function shouldNotifyUserAboutCompaction(cfg?: OpenClawConfig): boolean {
   return cfg?.agents?.defaults?.compaction?.notifyUser === true;
-}
-
-export function formatCompactionNoticeText(phase: CompactionNoticePhase): string {
-  switch (phase) {
-    case "start":
-      return "🧹 Compacting context...";
-    case "end":
-      return "🧹 Compaction complete";
-    case "incomplete":
-      return "🧹 Compaction incomplete";
-    case "skipped":
-      return "🧹 Compaction not needed";
-    default: {
-      phase satisfies never;
-      throw new Error("unknown compaction notice phase");
-    }
-  }
 }
 
 export function createCompactionNoticePayload(params: {
@@ -31,7 +27,7 @@ export function createCompactionNoticePayload(params: {
   applyReplyToMode?: (payload: ReplyPayload) => ReplyPayload;
 }): ReplyPayload {
   const payload: ReplyPayload = {
-    text: formatCompactionNoticeText(params.phase),
+    text: COMPACTION_NOTICE_TEXT[params.phase],
     ...(params.currentMessageId ? { replyToId: params.currentMessageId } : {}),
     replyToCurrent: true,
     isCompactionNotice: true,

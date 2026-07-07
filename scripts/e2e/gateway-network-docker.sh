@@ -12,6 +12,22 @@ NET_NAME="openclaw-net-e2e-$$"
 GW_NAME="openclaw-gateway-e2e-$$"
 DOCKER_COMMAND_TIMEOUT="${OPENCLAW_GATEWAY_NETWORK_DOCKER_COMMAND_TIMEOUT:-600s}"
 CLIENT_TIMEOUT="${OPENCLAW_GATEWAY_NETWORK_CLIENT_TIMEOUT:-90s}"
+CLIENT_LIMIT_ENV_ARGS=()
+if [[ -n "${OPENCLAW_GATEWAY_NETWORK_CLIENT_CONNECT_TIMEOUT_MS+x}" ]]; then
+  CLIENT_CONNECT_TIMEOUT_MS="$(
+    docker_e2e_read_positive_int_env OPENCLAW_GATEWAY_NETWORK_CLIENT_CONNECT_TIMEOUT_MS 80000
+  )"
+  CLIENT_LIMIT_ENV_ARGS+=(
+    -e "OPENCLAW_GATEWAY_NETWORK_CLIENT_CONNECT_TIMEOUT_MS=$CLIENT_CONNECT_TIMEOUT_MS"
+  )
+elif [[ -n "${OPENCLAW_GATEWAY_NETWORK_CONNECT_READY_TIMEOUT_MS+x}" ]]; then
+  CONNECT_READY_TIMEOUT_MS="$(
+    docker_e2e_read_positive_int_env OPENCLAW_GATEWAY_NETWORK_CONNECT_READY_TIMEOUT_MS 80000
+  )"
+  CLIENT_LIMIT_ENV_ARGS+=(
+    -e "OPENCLAW_GATEWAY_NETWORK_CONNECT_READY_TIMEOUT_MS=$CONNECT_READY_TIMEOUT_MS"
+  )
+fi
 
 cleanup() {
   docker_e2e_docker_cmd rm -f "$GW_NAME" >/dev/null 2>&1 || true
@@ -49,6 +65,7 @@ echo "Running client container (connect + health)..."
 DOCKER_COMMAND_TIMEOUT="$CLIENT_TIMEOUT" run_logged gateway-network-client docker_e2e_docker_run_cmd run --rm \
   "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   --network "$NET_NAME" \
+  "${CLIENT_LIMIT_ENV_ARGS[@]}" \
   -e "GW_URL=ws://$GW_NAME:$PORT" \
   -e "GW_TOKEN=$TOKEN" \
   "$IMAGE_NAME" \

@@ -49,6 +49,25 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   throw new Error(`expected missing path: ${targetPath}`);
 }
 
+function cancelTrackedResponse(init?: ResponseInit): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode("ignored"));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
+}
+
 describe("nodes camera helpers", () => {
   beforeAll(async () => {
     ({
@@ -288,6 +307,52 @@ describe("nodes camera helpers", () => {
       ).rejects.toThrow(expectedMessage);
     },
   );
+
+  it.each([
+    {
+      name: "non-ok status",
+      response: () => cancelTrackedResponse({ status: 503, statusText: "Service Unavailable" }),
+      expectedMessage: /503/i,
+    },
+    {
+      name: "oversized content-length",
+      response: () =>
+        cancelTrackedResponse({
+          status: 200,
+          headers: { "content-length": String(999_999_999) },
+        }),
+      expectedMessage: /exceeds max/i,
+    },
+  ] as const)(
+    "cancels rejected url response bodies: $name",
+    async ({ response, expectedMessage }) => {
+      const tracked = response();
+      stubFetchResponse(tracked.response);
+
+      await expect(
+        writeUrlToFile("/tmp/ignored", "https://198.51.100.42/down.bin", {
+          expectedHost: "198.51.100.42",
+        }),
+      ).rejects.toThrow(expectedMessage);
+      expect(tracked.wasCanceled()).toBe(true);
+    },
+  );
+
+  it("cancels response bodies when a redirect changes host", async () => {
+    const tracked = cancelTrackedResponse({ status: 200 });
+    fetchGuardMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: tracked.response,
+      finalUrl: "https://198.51.100.43/clip.mp4",
+      release: async () => {},
+    });
+
+    await expect(
+      writeUrlToFile("/tmp/ignored", "https://198.51.100.42/clip.mp4", {
+        expectedHost: "198.51.100.42",
+      }),
+    ).rejects.toThrow(/redirect host/i);
+    expect(tracked.wasCanceled()).toBe(true);
+  });
 
   it("removes partially written file when url stream fails", async () => {
     const stream = new ReadableStream<Uint8Array>({

@@ -10,12 +10,13 @@ import {
   normalizeStringEntriesLower,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { vectorToBlob } from "./vector-blob.js";
 
-const vectorToBlob = (embedding: number[]): Buffer =>
-  Buffer.from(new Float32Array(embedding).buffer);
 const FTS_QUERY_TOKEN_RE = /[\p{L}\p{N}_]+/gu;
 const SHORT_CJK_TRIGRAM_RE = /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af\u3131-\u3163]/u;
 const VECTOR_KNN_OVERSAMPLE_FACTOR = 8;
+// sqlite-vec v0.1.9 rejects KNN queries with k above 4096.
+const MAX_VECTOR_KNN_K = 4096;
 
 // Scan fallback vector rows in bounded batches so large chunk tables (no usable
 // vec0 index) cannot pin the main thread for multi-second windows and starve
@@ -84,7 +85,7 @@ function buildMatchQueryFromTerms(terms: string[]): string | null {
   return quoted.join(" AND ");
 }
 
-function readCount(row: { count?: number | bigint } | undefined): number {
+function readCount(row: Record<string, unknown> | undefined): number {
   if (typeof row?.count === "bigint") {
     return Number(row.count);
   }
@@ -154,12 +155,22 @@ export async function searchVector(params: {
   }
   const providerModels = resolveProviderModels(params.providerModel, params.providerModelAliases);
   const vectorModelFilter = buildModelFilter("c.model", providerModels);
+  const searchFallback = () =>
+    searchChunksByEmbedding({
+      db: params.db,
+      providerModel: params.providerModel,
+      providerModelAliases: params.providerModelAliases,
+      sourceFilter: params.sourceFilterChunks,
+      queryVec: params.queryVec,
+      limit: params.limit,
+      snippetMaxChars: params.snippetMaxChars,
+    });
   if (await params.ensureVectorReady(params.queryVec.length)) {
     // Use sqlite-vec's native KNN (MATCH ? AND k = ?) for candidate selection,
     // which runs in ~O(log N + k) via the vec0 index, instead of the previous
     // full-table scan over vec_distance_cosine(). Keep vec_distance_cosine() in
     // the SELECT so `score = 1 - dist` stays in the cosine [0, 1] range the
-    // downstream merge/minScore pipeline expects. (chunks_vec is created with
+    // downstream merge/minScore pipeline expects. (memory_index_chunks_vec is created with
     // sqlite-vec's default L2 distance, so v.distance cannot be used directly
     // for scoring.)
     const qBlob = vectorToBlob(params.queryVec);
@@ -170,7 +181,7 @@ export async function searchVector(params: {
             `       c.source,\n` +
             `       vec_distance_cosine(v.embedding, ?) AS dist\n` +
             `  FROM ${params.vectorTable} v\n` +
-            `  JOIN chunks c ON c.id = v.id\n` +
+            `  JOIN memory_index_chunks c ON c.id = v.id\n` +
             ` WHERE v.embedding MATCH ? AND k = ? AND ${vectorModelFilter}${params.sourceFilterVec.sql}\n` +
             ` ORDER BY dist ASC\n` +
             ` LIMIT ?`,
@@ -192,26 +203,29 @@ export async function searchVector(params: {
         dist: number;
       }>;
 
-    const candidateLimit = params.limit * VECTOR_KNN_OVERSAMPLE_FACTOR;
+    const candidateLimit = Math.min(params.limit * VECTOR_KNN_OVERSAMPLE_FACTOR, MAX_VECTOR_KNN_K);
     let rows = runVectorQuery(candidateLimit);
     if (rows.length < params.limit) {
       const matchingChunkCount = readCount(
         params.db
           .prepare(
-            `SELECT COUNT(*) AS count FROM chunks c WHERE ${vectorModelFilter}${params.sourceFilterVec.sql}`,
+            `SELECT COUNT(*) AS count FROM memory_index_chunks c WHERE ${vectorModelFilter}${params.sourceFilterVec.sql}`,
           )
-          .get(...providerModels, ...params.sourceFilterVec.params) as
-          | { count?: number | bigint }
-          | undefined,
+          .get(...providerModels, ...params.sourceFilterVec.params),
       );
       if (matchingChunkCount > rows.length) {
         const vectorCount = readCount(
-          params.db.prepare(`SELECT COUNT(*) AS count FROM ${params.vectorTable}`).get() as
-            | { count?: number | bigint }
-            | undefined,
+          params.db.prepare(`SELECT COUNT(*) AS count FROM ${params.vectorTable}`).get(),
         );
-        if (vectorCount > candidateLimit) {
-          rows = runVectorQuery(vectorCount);
+        const widenedLimit = Math.min(vectorCount, MAX_VECTOR_KNN_K);
+        if (widenedLimit > candidateLimit) {
+          rows = runVectorQuery(widenedLimit);
+        }
+        const requiredMatches = Math.min(params.limit, matchingChunkCount);
+        if (vectorCount > MAX_VECTOR_KNN_K && rows.length < requiredMatches) {
+          // Post-KNN model/source filters can hide every eligible row beyond
+          // sqlite-vec's ceiling; the bounded scan preserves filtered recall.
+          return await searchFallback();
         }
       }
     }
@@ -227,15 +241,7 @@ export async function searchVector(params: {
     }));
   }
 
-  return await searchChunksByEmbedding({
-    db: params.db,
-    providerModel: params.providerModel,
-    providerModelAliases: params.providerModelAliases,
-    sourceFilter: params.sourceFilterChunks,
-    queryVec: params.queryVec,
-    limit: params.limit,
-    snippetMaxChars: params.snippetMaxChars,
-  });
+  return await searchFallback();
 }
 
 async function searchChunksByEmbedding(params: {
@@ -257,7 +263,7 @@ async function searchChunksByEmbedding(params: {
   // below. The rowid cursor keeps memory bounded without OFFSET rescans.
   const stmt = params.db.prepare(
     `SELECT rowid, id, path, start_line, end_line, text, embedding, source\n` +
-      `  FROM chunks\n` +
+      `  FROM memory_index_chunks\n` +
       ` WHERE ${modelFilter} AND rowid > ?${params.sourceFilter.sql}\n` +
       ` ORDER BY rowid ASC\n` +
       ` LIMIT ?`,
@@ -348,7 +354,7 @@ export async function searchKeyword(params: {
 
   // Lexical FTS is model-agnostic (issue #48300), but old databases may
   // already contain orphaned FTS rows from prior model-scoped cleanup.
-  const liveChunkClause = ` AND EXISTS (SELECT 1 FROM chunks c WHERE c.id = ${params.ftsTable}.id)`;
+  const liveChunkClause = ` AND EXISTS (SELECT 1 FROM memory_index_chunks c WHERE c.id = ${params.ftsTable}.id)`;
   const substringClause = plan.substringTerms.map(() => " AND text LIKE ? ESCAPE '\\'").join("");
   const substringParams = plan.substringTerms.map((term) => `%${escapeLikePattern(term)}%`);
 

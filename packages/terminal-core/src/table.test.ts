@@ -1,7 +1,9 @@
 // Terminal Core tests cover table behavior.
+import path from "node:path";
+import { note as clackNote } from "@clack/prompts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { visibleWidth } from "./ansi.js";
-import { resolveNoteColumns, wrapNoteMessage } from "./note.js";
+import { resolveNoteColumns, resolveNoteOutputColumns, wrapNoteMessage } from "./note.js";
 import { renderTable } from "./table.js";
 
 function mockProcessPlatform(platform: NodeJS.Platform): void {
@@ -176,6 +178,30 @@ describe("renderTable", () => {
     expect(line2Index).toBe(line1Index + 1);
   });
 
+  it("shortens only exact home paths and child paths in table cells", () => {
+    const home = path.resolve("test-home", "alice");
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("USERPROFILE", "");
+    vi.stubEnv("OPENCLAW_HOME", "");
+
+    const out = renderTable({
+      border: "none",
+      columns: [{ key: "Path", header: "Path" }],
+      rows: [
+        { Path: home },
+        { Path: `${home}/project` },
+        { Path: `${home}2/project` },
+        { Path: `Workspace: ${home}/project` },
+      ],
+    });
+
+    expect(out).toContain("~\n");
+    expect(out).toContain("~/project");
+    expect(out).toContain(`${home}2/project`);
+    expect(out).toContain("Workspace: ~/project");
+    expect(out).not.toContain("~2/project");
+  });
+
   it("keeps table borders aligned when cells contain wide emoji graphemes", () => {
     const width = 72;
     const out = renderTable({
@@ -348,11 +374,50 @@ describe("wrapNoteMessage", () => {
     expect(resolveNoteColumns(120)).toBe(120);
   });
 
+  it("widens note output columns so clack does not re-wrap copy-sensitive lines", () => {
+    const wrapped = wrapNoteMessage(
+      [
+        "- Found 1 session lock file.",
+        "- ~/.openclaw/agents/main/sessions/9c2acae5-841f-4aea-936b-fdb513b60202.jsonl.lock pid=86519 (alive) age=2m47s stale=no",
+      ].join("\n"),
+      { columns: 80 },
+    );
+    const writes: string[] = [];
+    const output = {
+      columns: resolveNoteOutputColumns(wrapped, 80),
+      write(chunk: string) {
+        writes.push(chunk);
+        return true;
+      },
+    } as unknown as NodeJS.WriteStream;
+
+    clackNote(wrapped, "Session locks", { output, format: (line) => line });
+
+    const rendered = writes.join("");
+    expect(rendered).toContain(".jsonl.lock");
+    expect(rendered).not.toContain(".js\n");
+    expect(rendered).toContain(
+      "- ~/.openclaw/agents/main/sessions/9c2acae5-841f-4aea-936b-fdb513b60202.jsonl.lock",
+    );
+  });
+
   it("coerces nullish and non-string note messages before wrapping", () => {
     expect(wrapNoteMessage(undefined, { maxWidth: 20, columns: 80 })).toBe("");
     expect(wrapNoteMessage(null, { maxWidth: 20, columns: 80 })).toBe("");
     expect(wrapNoteMessage(12345, { maxWidth: 20, columns: 80 })).toBe("12345");
     expect(wrapNoteMessage(new Error("boom"), { maxWidth: 20, columns: 80 })).toBe("Error: boom");
     expect(wrapNoteMessage({ message: "boom" }, { maxWidth: 20, columns: 80 })).toBe("");
+  });
+
+  it("keeps wrapped lines within the visible-column budget for wide (CJK) words", () => {
+    // A long CJK run with no separators reaches splitLongWord; each fullwidth char is 2 columns,
+    // so splitting by code-point count would emit lines up to 2x the budget.
+    const input = "東京特許許可局長今日休暇許可局長今日休暇東京特許";
+    const lines = wrapNoteMessage(input, { maxWidth: 20, columns: 80 }).split("\n");
+
+    for (const line of lines) {
+      expect(visibleWidth(line)).toBeLessThanOrEqual(20);
+    }
+    expect(lines.join("")).toBe(input);
   });
 });

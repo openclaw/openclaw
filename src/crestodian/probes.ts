@@ -19,6 +19,9 @@ export type LocalCommandProbe = {
 const LOCAL_COMMAND_PROBE_OUTPUT_MAX_CHARS = 16 * 1024;
 const LOCAL_COMMAND_PROBE_KILL_GRACE_MS = 500;
 
+// The child close/error events own the probe result; pipe errors must not escape and crash setup.
+const ignoreOutputStreamError = () => {};
+
 function appendBounded(previous: string, chunk: string, limit: number): string {
   const next = previous + chunk;
   return next.length > limit ? next.slice(-limit) : next;
@@ -79,9 +82,11 @@ export async function probeLocalCommand(
     child.stdout.on("data", (chunk) => {
       stdout = appendBounded(stdout, String(chunk), outputLimit);
     });
+    child.stdout.on("error", ignoreOutputStreamError);
     child.stderr.on("data", (chunk) => {
       stderr = appendBounded(stderr, String(chunk), outputLimit);
     });
+    child.stderr.on("error", ignoreOutputStreamError);
     child.on("error", (err: NodeJS.ErrnoException) => {
       finish({
         command,
@@ -116,8 +121,9 @@ export async function probeGatewayUrl(
   const timeoutMs = resolveTimerTimeoutMs(opts.timeoutMs, 900);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let response: Response | undefined;
   try {
-    const response = await fetch(healthUrl, {
+    response = await fetch(healthUrl, {
       method: "GET",
       signal: controller.signal,
     });
@@ -130,5 +136,6 @@ export async function probeGatewayUrl(
     };
   } finally {
     clearTimeout(timeout);
+    await response?.body?.cancel().catch(() => undefined);
   }
 }

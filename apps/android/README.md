@@ -1,8 +1,8 @@
 ## OpenClaw Android App
 
-Status: **extremely alpha**. The app is actively being rebuilt from the ground up.
+OpenClaw Android is the officially released Google Play app. It connects to an OpenClaw Gateway as a companion node for chat, voice, approvals, screen, and device-aware automation.
 
-### Rebuild Checklist
+### Current App Surface
 
 - [x] New 4-step onboarding flow
 - [x] Connect tab with `Setup Code` + `Manual` modes
@@ -18,7 +18,6 @@ Status: **extremely alpha**. The app is actively being rebuilt from the ground u
 - [x] Authenticated background presence beacons
 - [x] Voice tab full functionality
 - [x] Screen tab full functionality
-- [ ] Full end-to-end QA and release hardening
 
 ## Open in Android Studio
 
@@ -62,6 +61,7 @@ MATCH_PASSWORD=<signing repo password> pnpm android:release:signing:check
 ```
 
 The signing sync pulls encrypted Android upload-key assets from the shared `apps-signing` repo and materializes decrypted files under `apps/android/build/release-signing/`.
+Standalone release APK verification also requires that key's public certificate SHA-256 fingerprint to match `Config/ReleaseSigning.json`.
 
 Generate raw Google Play screenshots:
 
@@ -69,12 +69,36 @@ Generate raw Google Play screenshots:
 pnpm android:screenshots
 ```
 
+To make screenshot capture own emulator startup, pass a named AVD:
+
+```bash
+ANDROID_SCREENSHOT_AVD=OpenClaw_QA_API35 pnpm android:screenshots
+```
+
+The screenshot script uses one connected ADB device when available. If none is
+connected and `ANDROID_SCREENSHOT_AVD` is set, it boots that emulator
+headlessly, waits for Android to finish booting, disables animations, captures
+the screenshots, then shuts down the emulator it started.
+
 `pnpm android:release:archive` builds signed release artifacts into `apps/android/build/release-artifacts/` and writes `.sha256` checksum files:
 
 - Play build: `openclaw-<version>-play-release.aab`
 - Third-party build: `openclaw-<version>-third-party-release.apk`
 
 `pnpm android:bundle:release` is an alias for the same Fastlane archive lane.
+
+Regular final and correction OpenClaw releases publish the signed third-party APK as `OpenClaw-Android.apk` with a checksum manifest and GitHub Actions provenance. `.github/workflows/android-release.yml` is the only automated GitHub Release upload path; `OpenClaw Release Publish` dispatches it while the canonical release is still a draft and blocks publication until the uploaded asset contract verifies.
+
+The protected `android-release` environment supplies `MATCH_PASSWORD`; the repository's read-only GitHub App token checks out encrypted material from `openclaw/apps-signing`. The workflow builds the exact release tag, refuses to replace different existing bytes, and re-downloads the APK for checksum, certificate, and provenance verification.
+
+`pnpm android:release:archive` is for local archive validation only. It is not a
+fallback upload path after `pnpm android:release:upload` fails.
+
+Agent-driven Google Play uploads must use `pnpm android:release:upload` as the
+only release path. If that command fails, stop and fix the failing screenshot,
+metadata, signing, validation, archive, or upload step before trying again. Do
+not upload archived artifacts through direct Fastlane lanes, Gradle artifacts,
+Google Play API commands, or Play Console mutation commands.
 
 See `apps/android/VERSIONING.md` and `apps/android/fastlane/SETUP.md` for the release workflow.
 
@@ -105,7 +129,7 @@ Direct Gradle tasks:
 cd apps/android
 ./gradlew :app:ktlintCheck :benchmark:ktlintCheck
 ./gradlew :app:ktlintFormat :benchmark:ktlintFormat
-./gradlew :app:lintDebug
+./gradlew :app:lintPlayDebug :app:lintThirdPartyDebug
 ```
 
 `gradlew` auto-detects the Android SDK at `~/Library/Android/sdk` (macOS default) if `ANDROID_SDK_ROOT` / `ANDROID_HOME` are unset.
@@ -221,6 +245,9 @@ More details: `docs/platforms/android.md`.
 - Discovery:
   - Android 13+ (`API 33+`): `NEARBY_WIFI_DEVICES`
   - Android 12 and below: `ACCESS_FINE_LOCATION` (required for NSD scanning)
+- Location:
+  - Both flavors: `ACCESS_FINE_LOCATION` / `ACCESS_COARSE_LOCATION` for foreground checks.
+  - Third-party flavor only: `ACCESS_BACKGROUND_LOCATION` plus `FOREGROUND_SERVICE_LOCATION` for user-enabled `Always` checks.
 - Foreground service notification (Android 13+): `POST_NOTIFICATIONS`
 - Camera:
   - `CAMERA` for `camera.snap` and `camera.clip`
@@ -246,9 +273,9 @@ Current OpenClaw Android implication:
 - APK / sideload build can keep SMS, Call Log, and recent-photo features.
 - Google Play build excludes SMS send/search, Call Log search, and recent-photo access unless the product is intentionally positioned and approved under the relevant policy exception.
 - The repo now ships this split as Android product flavors:
-  - `play`: removes `READ_SMS`, `SEND_SMS`, `READ_CALL_LOG`, `READ_MEDIA_IMAGES`, `READ_MEDIA_VISUAL_USER_SELECTED`, and `READ_EXTERNAL_STORAGE`; hides SMS, Call Log, and Photos surfaces in onboarding, settings, and advertised node capabilities.
+  - `play`: removes `READ_SMS`, `SEND_SMS`, `READ_CALL_LOG`, `READ_MEDIA_IMAGES`, `READ_MEDIA_VISUAL_USER_SELECTED`, `READ_EXTERNAL_STORAGE`, and background location; hides SMS, Call Log, Photos, and `Always` location surfaces.
   - Installed-app listing is user controlled. `device.apps` is advertised only after the user enables **Settings > Phone Capabilities > Installed Apps**. The command defaults to launcher-visible apps and does not require `QUERY_ALL_PACKAGES`.
-  - `thirdParty`: keeps the full permission set and the existing SMS / Call Log / Photos functionality.
+  - `thirdParty`: keeps the full permission set and the existing SMS / Call Log / Photos functionality, and offers explicit `Always` location opt-in through Android settings.
 
 Policy links:
 
@@ -323,5 +350,4 @@ Common failure quick-fixes:
 
 ## Contributions
 
-This Android app is currently being rebuilt.
 Maintainer: @obviyus. For issues/questions/contributions, please open an issue or reach out on Discord.

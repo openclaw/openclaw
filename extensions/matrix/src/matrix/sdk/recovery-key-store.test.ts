@@ -148,6 +148,7 @@ describe("MatrixRecoveryKeyStore", () => {
     expect(fs.existsSync(recoveryKeyPath)).toBe(false);
     expect(fs.existsSync(`${recoveryKeyPath}.migrated`)).toBe(true);
     const callbacks = store.buildCryptoCallbacks();
+    expect(store.getSecretStorageKeyCandidate("SSSS")).toEqual(new Uint8Array([1, 2, 3, 4]));
     const resolved = await callbacks.getSecretStorageKey?.(
       { keys: { SSSS: { name: "test" } } },
       "m.cross_signing.master",
@@ -155,6 +156,12 @@ describe("MatrixRecoveryKeyStore", () => {
 
     expect(resolved?.[0]).toBe("SSSS");
     expect(Array.from(resolved?.[1] ?? [])).toEqual([1, 2, 3, 4]);
+
+    const resolvedFromMultipleKeys = await callbacks.getSecretStorageKey?.(
+      { keys: { OLD: { name: "old" }, SSSS: { name: "active" } } },
+      "m.cross_signing.master",
+    );
+    expect(resolvedFromMultipleKeys?.[0]).toBe("SSSS");
   });
 
   it("keeps a readable legacy recovery key usable when SQLite migration fails", async () => {
@@ -231,6 +238,15 @@ describe("MatrixRecoveryKeyStore", () => {
     const saved = readStoredRecoveryKey(recoveryKeyPath);
     expect(saved.keyId).toBe("KEY123");
     expect(saved.privateKeyBase64).toBe(Buffer.from([9, 8, 7]).toString("base64"));
+  });
+
+  it("does not authorize destructive reset from an ephemeral cached key", () => {
+    const store = new MatrixRecoveryKeyStore();
+    const callbacks = store.buildCryptoCallbacks();
+
+    callbacks.cacheSecretStorageKey?.("KEY123", { name: "openclaw" }, new Uint8Array([9, 8, 7]));
+
+    expect(store.getSecretStorageKeyCandidate("KEY123")).toBeNull();
   });
 
   it("creates and persists a recovery key when secret storage is missing", async () => {

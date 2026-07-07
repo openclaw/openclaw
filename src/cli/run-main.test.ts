@@ -320,6 +320,12 @@ describe("resolvePrecomputedSubcommandHelpFastPath", () => {
       resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "plugins", "--help"]),
     ).toBe("plugins");
     expect(
+      resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "sessions", "--help"]),
+    ).toBe("sessions");
+    expect(resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "tasks", "-h"])).toBe(
+      "tasks",
+    );
+    expect(
       resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "doctor", "--version"]),
     ).toBeNull();
     expect(

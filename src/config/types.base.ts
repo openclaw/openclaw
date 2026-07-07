@@ -303,6 +303,8 @@ export type DiagnosticsOtelConfig = {
   traces?: boolean;
   metrics?: boolean;
   logs?: boolean;
+  /** Log export sink: OTLP by default, stdout JSONL, or both. */
+  logsExporter?: "otlp" | "stdout" | "both";
   /** Trace sample rate (0.0 - 1.0). */
   sampleRate?: number;
   /** Metric export interval (ms). */
@@ -336,6 +338,15 @@ export type DiagnosticsCacheTraceConfig = {
   includePrompt?: boolean;
   /** Include system-message content in cache trace output. */
   includeSystem?: boolean;
+};
+
+export type AuditConfig = {
+  /**
+   * Record metadata-only audit events (agent runs and tool actions) into the
+   * shared state database. Content is never stored. Default: true. Disabling
+   * stops new writes; existing records stay readable until they expire.
+   */
+  enabled?: boolean;
 };
 
 export type DiagnosticsConfig = {

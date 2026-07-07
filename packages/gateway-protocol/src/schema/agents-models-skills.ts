@@ -43,6 +43,7 @@ export const AgentSummarySchema = Type.Object(
       ),
     ),
     workspace: Type.Optional(NonEmptyString),
+    workspaceGit: Type.Optional(Type.Boolean()),
     model: Type.Optional(
       Type.Object(
         {
@@ -344,6 +345,7 @@ export const SkillsInstallParamsSchema = Type.Union([
       slug: NonEmptyString,
       version: Type.Optional(NonEmptyString),
       force: Type.Optional(Type.Boolean()),
+      acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
       timeoutMs: Type.Optional(Type.Integer({ minimum: 1000 })),
     },
     { additionalProperties: false },
@@ -379,6 +381,7 @@ export const SkillsUpdateParamsSchema = Type.Union([
       source: Type.Literal("clawhub"),
       slug: Type.Optional(NonEmptyString),
       all: Type.Optional(Type.Boolean()),
+      acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
     },
     { additionalProperties: false },
   ),
@@ -439,6 +442,8 @@ export const SkillsDetailResultSchema = Type.Object(
           displayName: NonEmptyString,
           summary: Type.Optional(Type.String()),
           tags: Type.Optional(Type.Record(NonEmptyString, Type.String())),
+          channel: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+          isOfficial: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
           createdAt: Type.Integer(),
           updatedAt: Type.Integer(),
         },
@@ -478,6 +483,9 @@ export const SkillsDetailResultSchema = Type.Object(
             handle: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
             displayName: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
             image: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+            official: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
+            channel: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+            isOfficial: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
           },
           { additionalProperties: false },
         ),
@@ -787,7 +795,13 @@ export const SkillsProposalRequestRevisionParamsSchema = Type.Object(
 export const SkillsProposalRequestRevisionResultSchema = Type.Object(
   {
     runId: NonEmptyString,
-    status: Type.Union([Type.Literal("started"), Type.Literal("in_flight"), Type.Literal("ok")]),
+    status: Type.Union([
+      Type.Literal("started"),
+      Type.Literal("in_flight"),
+      Type.Literal("ok"),
+      Type.Literal("timeout"),
+      Type.Literal("error"),
+    ]),
   },
   { additionalProperties: true },
 );
@@ -813,6 +827,67 @@ export const SkillsProposalApplyResultSchema = Type.Object(
 
 /** Proposal record result returned after non-apply proposal actions. */
 export const SkillsProposalRecordResultSchema = SkillProposalRecordSchema;
+
+const SkillLifecycleStateSchema = Type.Union([
+  Type.Literal("active"),
+  Type.Literal("stale"),
+  Type.Literal("archived"),
+]);
+
+const SkillCuratorEntrySchema = Type.Object(
+  {
+    skillFile: NonEmptyString,
+    skillKey: NonEmptyString,
+    skillName: NonEmptyString,
+    state: SkillLifecycleStateSchema,
+    pinned: Type.Boolean(),
+    createdAtMs: Type.Number(),
+    stateChangedAtMs: Type.Number(),
+    lastUsedAtMs: Type.Union([Type.Number(), Type.Null()]),
+    useCount: Type.Number(),
+    archivedReason: Type.Union([Type.String(), Type.Null()]),
+  },
+  { additionalProperties: false },
+);
+
+const SkillOverlapCandidateSchema = Type.Object(
+  {
+    left: NonEmptyString,
+    right: NonEmptyString,
+    score: Type.Number(),
+  },
+  { additionalProperties: false },
+);
+
+/** Reads persisted skill lifecycle curation state. */
+export const SkillsCuratorStatusParamsSchema = Type.Object({}, { additionalProperties: false });
+
+export const SkillsCuratorStatusResultSchema = Type.Object(
+  {
+    lastAttemptAtMs: Type.Union([Type.Number(), Type.Null()]),
+    lastSuccessAtMs: Type.Union([Type.Number(), Type.Null()]),
+    lastError: Type.Union([Type.String(), Type.Null()]),
+    counts: Type.Object(
+      {
+        active: Type.Number(),
+        stale: Type.Number(),
+        archived: Type.Number(),
+      },
+      { additionalProperties: false },
+    ),
+    skills: Type.Array(SkillCuratorEntrySchema),
+    overlaps: Type.Array(SkillOverlapCandidateSchema),
+  },
+  { additionalProperties: false },
+);
+
+/** Pins, unpins, or explicitly restores one curated skill. */
+export const SkillsCuratorActionParamsSchema = Type.Object(
+  { skill: NonEmptyString },
+  { additionalProperties: false },
+);
+
+export const SkillsCuratorActionResultSchema = SkillCuratorEntrySchema;
 
 /** Reads the configured tool catalog for an agent. */
 export const ToolsCatalogParamsSchema = Type.Object(

@@ -16,8 +16,6 @@ type WebProviderKind = "fetch" | "search";
 
 type WebProviderRuntimeMetadata = RuntimeWebFetchMetadata | RuntimeWebSearchMetadata;
 
-type WebProviderContract = "webFetchProviders" | "webSearchProviders";
-
 type ResolvedWebToolRuntimeContext<TMetadata extends WebProviderRuntimeMetadata> = {
   config?: OpenClawConfig;
   preferRuntimeProviders: boolean;
@@ -36,23 +34,21 @@ function resolveRuntimeWebProviderId(metadata: WebProviderRuntimeMetadata | unde
   return metadata?.selectedProvider ?? metadata?.providerConfigured ?? "";
 }
 
-function resolveWebProviderContract(kind: WebProviderKind): WebProviderContract {
-  return kind === "fetch" ? "webFetchProviders" : "webSearchProviders";
-}
-
 function shouldPreferRuntimeProviders(params: {
   config?: OpenClawConfig;
   kind: WebProviderKind;
   providerSelectionId: string;
 }): boolean {
-  if (!params.providerSelectionId) {
+  // Agent-side web_search must use the live runtime registry; runWebSearch
+  // applies manifest ownership only as a load-scope hint after that.
+  if (!params.providerSelectionId || params.kind === "search") {
     return true;
   }
   // Built-in providers are handled by core; plugin-owned selections should route through plugins.
   return !resolveManifestContractOwnerPluginId({
-    contract: resolveWebProviderContract(params.kind),
+    contract: "webFetchProviders",
     value: params.providerSelectionId,
-    ...(params.kind === "fetch" ? { origin: "bundled" as const } : {}),
+    origin: "bundled",
     config: params.config,
   });
 }

@@ -4,6 +4,7 @@
  * Wraps Docker spawn, environment sanitization, container inspection, creation, and exec behavior.
  */
 import { spawn } from "node:child_process";
+import { createAbortError } from "../../infra/abort-signal.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   materializeWindowsSpawnProgram,
@@ -32,12 +33,6 @@ type ExecDockerRawError = Error & {
   stdout: Buffer;
   stderr: Buffer;
 };
-
-function createAbortError(): Error {
-  const err = new Error("Aborted");
-  err.name = "AbortError";
-  return err;
-}
 
 type DockerSpawnRuntime = {
   platform: NodeJS.Platform;
@@ -86,6 +81,7 @@ export function execDockerRaw(
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
     let aborted = false;
+    let outputStreamError: Error | undefined;
 
     const signal = opts?.signal;
     const handleAbort = () => {
@@ -103,9 +99,20 @@ export function execDockerRaw(
       }
     }
 
+    const handleStreamError = (error: Error) => {
+      if (outputStreamError) {
+        return;
+      }
+      // Broken stdio means the command exchange is incomplete, so it cannot
+      // report success even if Docker later exits with code 0.
+      outputStreamError = error;
+      child.kill("SIGTERM");
+    };
+    child.stdout?.on("error", handleStreamError);
     child.stdout?.on("data", (chunk) => {
       stdoutChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     });
+    child.stderr?.on("error", handleStreamError);
     child.stderr?.on("data", (chunk) => {
       stderrChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     });
@@ -139,7 +146,11 @@ export function execDockerRaw(
       const stdout = Buffer.concat(stdoutChunks);
       const stderr = Buffer.concat(stderrChunks);
       if (aborted || signal?.aborted) {
-        reject(createAbortError());
+        reject(createAbortError("Aborted"));
+        return;
+      }
+      if (outputStreamError) {
+        reject(outputStreamError);
         return;
       }
       const exitCode = code ?? 0;
@@ -161,6 +172,7 @@ export function execDockerRaw(
 
     const stdin = child.stdin;
     if (stdin) {
+      stdin.on("error", handleStreamError);
       if (opts?.input !== undefined) {
         stdin.end(opts.input);
       } else {
@@ -195,7 +207,7 @@ const log = createSubsystemLogger("docker");
 
 const HOT_CONTAINER_WINDOW_MS = 5 * 60 * 1000;
 
-export type ExecDockerOptions = ExecDockerRawOptions;
+type ExecDockerOptions = ExecDockerRawOptions;
 
 function envRecordsEqual(left: Record<string, string>, right: Record<string, string>): boolean {
   const leftEntries = Object.entries(left).toSorted(([leftKey], [rightKey]) =>
@@ -266,37 +278,6 @@ export async function readDockerContainerEnvVar(
     }
   }
   return null;
-}
-
-export async function readDockerNetworkDriver(network: string): Promise<string | null> {
-  const result = await execDocker(["network", "inspect", "-f", "{{.Driver}}", network], {
-    allowFailure: true,
-  });
-  if (result.code !== 0) {
-    return null;
-  }
-  const driver = result.stdout.trim();
-  return driver || null;
-}
-
-export async function readDockerNetworkGateway(network: string): Promise<string | null> {
-  const result = await execDocker(
-    ["network", "inspect", "-f", "{{range .IPAM.Config}}{{println .Gateway}}{{end}}", network],
-    { allowFailure: true },
-  );
-  if (result.code !== 0) {
-    return null;
-  }
-  // Filter valid, non-empty gateways (handles dual-stack / multi-subnet networks
-  // and filters Docker's "<no value>" sentinel for nil IPAM entries).
-  const gateways = result.stdout
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l && l !== "<no value>");
-  // Prefer IPv4: the CDP relay binds on 0.0.0.0 so an IPv6-only range would
-  // reject forwarded IPv4 traffic from the bridge gateway.
-  const gw = gateways.find((g) => !g.includes(":")) ?? gateways[0] ?? "";
-  return gw || null;
 }
 
 export async function readDockerPort(containerName: string, port: number) {

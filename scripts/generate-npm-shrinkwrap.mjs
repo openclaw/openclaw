@@ -382,6 +382,17 @@ function readShrinkwrapOverrides() {
 function packageJsonForShrinkwrap(packageJson, shrinkwrapOverrides) {
   const normalized = { ...packageJson };
   delete normalized.devDependencies;
+  for (const field of ["dependencies", "optionalDependencies", "peerDependencies"]) {
+    const dependencies = normalized[field];
+    if (!dependencies || typeof dependencies !== "object" || Array.isArray(dependencies)) {
+      continue;
+    }
+    normalized[field] = Object.fromEntries(
+      Object.entries(dependencies).filter(
+        ([, spec]) => typeof spec !== "string" || !spec.startsWith("workspace:"),
+      ),
+    );
+  }
   normalized.overrides = mergeOverrides(packageJson.overrides, shrinkwrapOverrides, {});
   return normalized;
 }
@@ -1065,10 +1076,14 @@ function shrinkwrapPathForPackage(packageDir) {
 }
 
 function listPublishablePluginPackageDirs() {
-  const extensionsDir = path.join(ROOT_DIR, "extensions");
-  return readdirSync(extensionsDir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => path.posix.join("extensions", entry.name))
+  // Published workspace packages (packages/*) ship npm-shrinkwrap.json just
+  // like publishable plugins so their transitive dependency tree stays pinned.
+  return ["extensions", "packages"]
+    .flatMap((parentDir) =>
+      readdirSync(path.join(ROOT_DIR, parentDir), { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => path.posix.join(parentDir, entry.name)),
+    )
     .filter((packageDir) => {
       const packageJsonPath = path.join(ROOT_DIR, packageDir, "package.json");
       if (!existsSync(packageJsonPath)) {
@@ -1098,11 +1113,11 @@ function shrinkwrapPackageDirsForChangedPaths(changedPaths) {
       packageDirs.add(ROOT_DIR);
       continue;
     }
-    const extensionMatch = changedPath.match(
-      /^(extensions\/[^/]+)\/(?:package\.json|npm-shrinkwrap\.json)$/u,
+    const workspacePackageMatch = changedPath.match(
+      /^((?:extensions|packages)\/[^/]+)\/(?:package\.json|npm-shrinkwrap\.json)$/u,
     );
-    if (extensionMatch && publishablePluginPackageDirs.has(extensionMatch[1])) {
-      packageDirs.add(path.resolve(ROOT_DIR, extensionMatch[1]));
+    if (workspacePackageMatch && publishablePluginPackageDirs.has(workspacePackageMatch[1])) {
+      packageDirs.add(path.resolve(ROOT_DIR, workspacePackageMatch[1]));
       continue;
     }
     if (changedPath === "pnpm-lock.yaml") {
@@ -1170,7 +1185,7 @@ function listCheckChangedPaths() {
   }
 }
 
-function resolvePackageDirs(args) {
+export function resolvePackageDirs(args) {
   const packageDirs = [];
   const check = args.includes("--check");
   const all = args.includes("--all");
@@ -1199,7 +1214,7 @@ function resolvePackageDirs(args) {
     }
     if (arg === "--package-dir") {
       const value = args[index + 1];
-      if (!value || value.startsWith("--")) {
+      if (!value || value.startsWith("-")) {
         throw new Error("--package-dir requires a package directory.");
       }
       packageDirs.push(path.resolve(ROOT_DIR, value));
@@ -1208,7 +1223,7 @@ function resolvePackageDirs(args) {
     }
     if (arg === "--base" || arg === "--head") {
       const value = args[index + 1];
-      if (!value || value.startsWith("--")) {
+      if (!value || value.startsWith("-")) {
         throw new Error(`${arg} requires a git ref.`);
       }
       index += 1;

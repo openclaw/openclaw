@@ -10,6 +10,7 @@ export {
 export { getRuntimeConfig } from "../config/config.js";
 export { loadSessionStore, mergeSessionEntry, updateSessionStore } from "../config/sessions.js";
 export {
+  forkSessionEntryFromParent,
   forkSessionFromParent,
   resolveParentForkDecision,
   type ParentForkDecision,
@@ -21,7 +22,10 @@ export {
   dispatchGatewayMethodInProcess,
   hasInProcessGatewayContext,
 } from "../gateway/server-plugins.js";
-export { ADMIN_SCOPE, isAdminOnlyMethod } from "../gateway/method-scopes.js";
+export {
+  ADMIN_SCOPE,
+  resolveLeastPrivilegeOperatorScopesForMethod,
+} from "../gateway/method-scopes.js";
 export { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 export {
   pruneLegacyStoreKeys,

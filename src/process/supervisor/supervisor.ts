@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getShellConfig } from "../../agents/shell-utils.js";
+import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { createChildAdapter } from "./adapters/child.js";
 import { createPtyAdapter } from "./adapters/pty.js";
 import { createRunRegistry } from "./registry.js";
@@ -15,8 +16,6 @@ import type {
   TerminationReason,
 } from "./types.js";
 
-type SupervisorLogRuntime = typeof import("./supervisor-log.runtime.js");
-
 type ActiveRun = {
   run: ManagedRun;
   scopeKey?: string;
@@ -25,12 +24,9 @@ type ActiveRun = {
 const GRACEFUL_CANCEL_TIMEOUT_MS = 5000;
 const DEFAULT_MAX_CAPTURED_OUTPUT_CHARS = 1024 * 1024;
 
-let supervisorLogRuntimePromise: Promise<SupervisorLogRuntime> | undefined;
-
-function loadSupervisorLogRuntime(): Promise<SupervisorLogRuntime> {
-  supervisorLogRuntimePromise ??= import("./supervisor-log.runtime.js");
-  return supervisorLogRuntimePromise;
-}
+const loadSupervisorLogRuntime = createLazyRuntimeModule(
+  () => import("./supervisor-log.runtime.js"),
+);
 
 function clampTimeout(value?: number): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
@@ -360,10 +356,6 @@ export function createProcessSupervisor(): ProcessSupervisor {
     spawn,
     cancel,
     cancelScope,
-    reconcileOrphans: async () => {
-      // Deliberate no-op: this supervisor uses in-memory ownership only.
-      // Active runs are not recovered after process restart in the current model.
-    },
     getRecord: (runId: string) => registry.get(runId),
   };
 }

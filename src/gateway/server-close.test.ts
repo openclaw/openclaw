@@ -7,7 +7,7 @@ import type { InternalHookEvent } from "../hooks/internal-hooks.js";
 
 type TriggerInternalHookMock = (event: InternalHookEvent) => Promise<void>;
 
-const mocks = {
+const mocks = vi.hoisted(() => ({
   logInfo: vi.fn(),
   logWarn: vi.fn(),
   listChannelPlugins: vi.fn((): Array<{ id: "telegram" | "discord" }> => []),
@@ -15,7 +15,7 @@ const mocks = {
   disposeAllSessionMcpRuntimes: vi.fn(async () => undefined),
   triggerInternalHook: vi.fn<TriggerInternalHookMock>(async (_eventValue) => undefined),
   disposeAllBundleLspRuntimes: vi.fn(async () => undefined),
-};
+}));
 const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
 const WEBSOCKET_CLOSE_FORCE_CONTINUE_MS = 250;
 const HTTP_CLOSE_GRACE_MS = 1_000;
@@ -70,7 +70,7 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 const { createGatewayCloseHandler } = await import("./server-close.js");
-const { createChatRunState } = await import("./server-chat-state.js");
+const { createChatRunState, isChatAbortMarkerCurrent } = await import("./server-chat-state.js");
 const {
   finishGatewayRestartTrace,
   recordGatewayRestartTraceSpan,
@@ -116,12 +116,16 @@ function createGatewayCloseTestDeps(
     healthInterval: setInterval(() => undefined, 60_000),
     dedupeCleanup: setInterval(() => undefined, 60_000),
     mediaCleanup: null,
+    worktreeCleanup: null,
+    skillCuratorCleanup: vi.fn(),
     agentUnsub: null,
+    taskUnsub: null,
     heartbeatUnsub: null,
     transcriptUnsub: null,
     lifecycleUnsub: null,
     chatRunState: createTestChatRunState(),
     chatAbortControllers: new Map(),
+    chatQueuedTurns: new Map(),
     restartRecoveryCandidates: new Map(),
     removeChatRun: vi.fn(),
     agentRunSeq: new Map(),
@@ -548,7 +552,12 @@ describe("createGatewayCloseHandler", () => {
         nodeSendToSession,
         chatRunState,
         chatAbortControllers,
-        removeChatRun: vi.fn(() => ({ sessionKey: "session-1", clientRunId: "run-1" })),
+        removeChatRun: vi.fn(() => ({
+          sessionKey: "session-1",
+          clientRunId: "run-1",
+          registeredAtMs: 1_000,
+          registeredSequence: 1,
+        })),
       }),
     );
 
@@ -609,6 +618,40 @@ describe("createGatewayCloseHandler", () => {
         stopReason: "restart",
       }),
     );
+  });
+
+  it("aborts queued turns before restart shutdown continues", async () => {
+    const controller = new AbortController();
+    const chatQueuedTurns = new Map([
+      [
+        "queued-1",
+        {
+          controller,
+          sessionId: "session-1",
+          sessionKey: "session-1",
+        },
+      ],
+    ]);
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        chatQueuedTurns,
+      }),
+    );
+
+    const result = await close({
+      reason: "gateway restarting",
+      restartExpectedMs: 123,
+      drainTimeoutMs: 0,
+    });
+
+    expect(result.warnings).toContain("restart-reply-drain");
+    expect(controller.signal.aborted).toBe(true);
+    expect(chatQueuedTurns.size).toBe(0);
+    expect(
+      mocks.logWarn.mock.calls.some(([message]) =>
+        String(message).includes("aborted 1 queued turn(s) during restart shutdown"),
+      ),
+    ).toBe(true);
   });
 
   it("does not drain or abort active runs for normal shutdown", async () => {
@@ -673,6 +716,39 @@ describe("createGatewayCloseHandler", () => {
         String(message).includes("restart reply drain timed out after 0ms"),
       ),
     ).toBe(true);
+  });
+
+  it("does not abort a finalizing completed run when restart drain expires", async () => {
+    const controller = new AbortController();
+    const chatAbortControllers = new Map([
+      [
+        "run-finalizing",
+        {
+          controller,
+          sessionId: "run-finalizing",
+          sessionKey: "session-finalizing",
+          projectSessionActive: false,
+          isAbortable: () => false,
+          startedAtMs: Date.now(),
+          expiresAtMs: Date.now() + 60_000,
+        },
+      ],
+    ]);
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        chatAbortControllers,
+      }),
+    );
+
+    const result = await close({
+      reason: "gateway restarting",
+      restartExpectedMs: 123,
+      drainTimeoutMs: 0,
+    });
+
+    expect(result.warnings).toContain("restart-reply-drain");
+    expect(controller.signal.aborted).toBe(false);
+    expect(chatAbortControllers.has("run-finalizing")).toBe(true);
   });
 
   it("marks active main sessions for restart recovery before aborting restart-drained runs", async () => {
@@ -746,16 +822,24 @@ describe("createGatewayCloseHandler", () => {
         },
       ],
     ]);
+    const chatRunState = createTestChatRunState();
+    const abortedRunsSet = vi.spyOn(chatRunState.abortedRuns, "set");
     const markMainSessionsAbortedForRestart = vi.fn<MarkMainSessionsAbortedForRestart>(async () => {
       events.push("marker");
     });
     const removeChatRun = vi.fn(() => {
       events.push("abort");
-      return { sessionKey: "agent:main:main", clientRunId: "run-1" };
+      return {
+        sessionKey: "agent:main:main",
+        clientRunId: "run-1",
+        registeredAtMs: 1_000,
+        registeredSequence: 1,
+      };
     });
     const close = createGatewayCloseHandler(
       createGatewayCloseTestDeps({
         chatAbortControllers,
+        chatRunState,
         markMainSessionsAbortedForRestart,
         removeChatRun,
         resolveActiveSessionIdForKey: (sessionKey) => {
@@ -807,6 +891,20 @@ describe("createGatewayCloseHandler", () => {
     expect(agentController.signal.aborted).toBe(true);
     expect(completedController.signal.aborted).toBe(true);
     expect(hiddenController.signal.aborted).toBe(true);
+    const completedMarker = abortedRunsSet.mock.calls.find(
+      ([runId]) => runId === "completed-run",
+    )?.[1];
+    expect(completedMarker).toEqual({
+      abortedAtMs: expect.any(Number),
+      sequence: expect.any(Number),
+    });
+    chatRunState.registry.add("completed-run", {
+      sessionKey: "agent:main:fresh",
+      clientRunId: "completed-run",
+    });
+    expect(
+      isChatAbortMarkerCurrent(completedMarker, chatRunState.registry.peek("completed-run")),
+    ).toBe(false);
   });
 
   it("keeps post-terminal caller work in restart drain and recovery", async () => {
@@ -882,7 +980,7 @@ describe("createGatewayCloseHandler", () => {
       createGatewayCloseTestDeps({
         broadcast,
         chatAbortControllers,
-        getPendingReplyCount: () => 1,
+        getPendingReplyCount: vi.fn().mockReturnValueOnce(1).mockReturnValue(0),
         markMainSessionsAbortedForRestart,
         nodeSendToSession,
       }),
@@ -936,7 +1034,7 @@ describe("createGatewayCloseHandler", () => {
     const close = createGatewayCloseHandler(
       createGatewayCloseTestDeps({
         chatAbortControllers,
-        getPendingReplyCount: () => 1,
+        getPendingReplyCount: vi.fn().mockReturnValueOnce(1).mockReturnValue(0),
         markMainSessionsAbortedForRestart,
       }),
     );
@@ -1201,12 +1299,14 @@ describe("createGatewayCloseHandler", () => {
 
   it("unsubscribes lifecycle listeners and disposes bundle runtimes during shutdown", async () => {
     const lifecycleUnsub = vi.fn();
+    const taskUnsub = vi.fn();
     const transcriptUnsub = vi.fn();
     const stopTaskRegistryMaintenance = vi.fn();
     const close = createGatewayCloseHandler(
       createGatewayCloseTestDeps({
         stopTaskRegistryMaintenance,
         lifecycleUnsub,
+        taskUnsub,
         transcriptUnsub,
       }),
     );
@@ -1214,6 +1314,7 @@ describe("createGatewayCloseHandler", () => {
     await close({ reason: "test shutdown" });
 
     expect(lifecycleUnsub).toHaveBeenCalledTimes(1);
+    expect(taskUnsub).toHaveBeenCalledTimes(1);
     expect(transcriptUnsub).toHaveBeenCalledTimes(1);
     expect(stopTaskRegistryMaintenance).toHaveBeenCalledTimes(1);
     expect(mocks.disposeAgentHarnesses).toHaveBeenCalledTimes(1);

@@ -695,6 +695,9 @@ function readRunPackageDir(argv) {
 }
 
 export function parseRunArgs(argv) {
+  if (argv[0] === "--help" || argv[0] === "-h") {
+    return { help: true, packageDir: "", command: "", args: [] };
+  }
   if (argv[0] !== "--run") {
     throw new Error(RUN_USAGE);
   }
@@ -702,6 +705,9 @@ export function parseRunArgs(argv) {
   const separatorIndex = argv.indexOf("--", 2);
   if (!packageDir || separatorIndex === -1 || separatorIndex === argv.length - 1) {
     throw new Error(RUN_USAGE);
+  }
+  if (separatorIndex !== 2) {
+    throw new Error(`unexpected plugin npm package manifest run argument: ${argv[2]}`);
   }
   return {
     packageDir,
@@ -711,7 +717,12 @@ export function parseRunArgs(argv) {
 }
 
 function main(argv = process.argv.slice(2)) {
-  const { packageDir, command, args } = parseRunArgs(argv);
+  const parsedArgs = parseRunArgs(argv);
+  if (parsedArgs.help) {
+    console.log(RUN_USAGE);
+    return 0;
+  }
+  const { packageDir, command, args } = parsedArgs;
   return withAugmentedPluginNpmManifestForPackage(
     {
       packageDir,

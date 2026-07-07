@@ -1,8 +1,20 @@
 /** Tests SecretRef provider resolution for env, file, and exec sources. */
+import type { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+const spawnMock = vi.hoisted(() => vi.fn());
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    spawn: (...args: Parameters<typeof actual.spawn>) =>
+      spawnMock(...args) ?? actual.spawn(...args),
+  };
+});
 import type { OpenClawConfig } from "../config/config.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import {
@@ -267,19 +279,35 @@ describe("secret ref resolver", () => {
     const scriptPath = await writeForkingNoOutputScript(root);
     const pidPath = path.join(root, "forked.pid");
     let childPid: number | undefined;
+    const nativeSetTimeout = globalThis.setTimeout;
+    const noOutputTimeouts: Array<() => void> = [];
+    const setTimeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((callback, delay, ...args) => {
+        if (delay === 1_000) {
+          noOutputTimeouts.push(() => callback(...args));
+          return nativeSetTimeout(() => undefined, 60_000);
+        }
+        return nativeSetTimeout(callback, delay, ...args);
+      });
 
     try {
-      await expect(
-        resolveExecSecret(scriptPath, {
-          env: { NODE_BINARY: process.execPath, PID_FILE: pidPath },
-          noOutputTimeoutMs: 150,
-          timeoutMs: 2000,
-        }),
-      ).rejects.toThrow('Exec provider "execmain" produced no output');
-
+      const resultPromise = resolveExecSecret(scriptPath, {
+        env: { NODE_BINARY: process.execPath, PID_FILE: pidPath },
+        // Preserve production-like startup headroom; the test fires the
+        // re-armed timer only after the readiness byte arrives.
+        noOutputTimeoutMs: 1_000,
+        timeoutMs: 10_000,
+      });
+      await vi.waitFor(() => {
+        expect(noOutputTimeouts.length).toBeGreaterThanOrEqual(2);
+      });
       childPid = await readPidFile(pidPath);
-      expect(await waitForPidToExit(childPid)).toBe(true);
+      noOutputTimeouts.at(-1)?.();
+      await expect(resultPromise).rejects.toThrow('Exec provider "execmain" produced no output');
+      expect(await waitForPidToExit(childPid, 5_000)).toBe(true);
     } finally {
+      setTimeoutSpy.mockRestore();
       killPidIfAlive(childPid);
     }
   });
@@ -505,6 +533,35 @@ describe("secret ref resolver", () => {
     }
   });
 
+  it("rejects invalid env, file, and provider refs before provider resolution", async () => {
+    await expect(
+      resolveSecretRefValue(
+        { source: "env", provider: "default", id: "bad id" },
+        {
+          config: {},
+        },
+      ),
+    ).rejects.toThrow("Env secret reference id must match");
+
+    await expect(
+      resolveSecretRefValue(
+        { source: "file", provider: "default", id: "providers/openai/apiKey" },
+        {
+          config: {},
+        },
+      ),
+    ).rejects.toThrow("File secret reference id must be an absolute JSON pointer");
+
+    await expect(
+      resolveSecretRefValue(
+        { source: "env", provider: "Default", id: "OPENAI_API_KEY" },
+        {
+          config: {},
+        },
+      ),
+    ).rejects.toThrow("Secret reference provider must match");
+  });
+
   it("strips UTF-8 BOM from file provider payload before JSON parse", async () => {
     const dir = await createCaseDir("bom-file");
     const filePath = path.join(dir, "secrets-with-bom.json");
@@ -599,5 +656,72 @@ describe("secret ref resolver", () => {
         /ACL verification unavailable on Windows/,
       );
     });
+  });
+});
+
+describe("runExecResolver stream error handling", () => {
+  function createFakeChild(): ChildProcess {
+    const child = new EventEmitter() as EventEmitter & ChildProcess;
+    child.stdout = new EventEmitter() as EventEmitter & NonNullable<ChildProcess["stdout"]>;
+    child.stderr = new EventEmitter() as EventEmitter & NonNullable<ChildProcess["stderr"]>;
+    child.stdin = new EventEmitter() as EventEmitter & NonNullable<ChildProcess["stdin"]>;
+    child.stdin.write = vi.fn(() => true) as NonNullable<ChildProcess["stdin"]>["write"];
+    child.stdin.end = vi.fn() as NonNullable<ChildProcess["stdin"]>["end"];
+    Object.defineProperties(child, {
+      pid: { configurable: true, enumerable: true, get: () => 1234 },
+      killed: { configurable: true, enumerable: true, get: () => false },
+    });
+    child.kill = vi.fn(() => true) as ChildProcess["kill"];
+    return child;
+  }
+
+  beforeEach(() => {
+    spawnMock.mockReset();
+  });
+
+  it("swallows stdout and stderr stream errors without rejecting", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-stream-"));
+    const scriptPath = path.join(dir, "resolver.cjs");
+    await fs.writeFile(scriptPath, "module.exports = {};", "utf8");
+    await fs.chmod(scriptPath, 0o700);
+
+    spawnMock.mockImplementation(() => {
+      const child = createFakeChild();
+      const response = Buffer.from(
+        JSON.stringify({ protocolVersion: 1, values: { "openai/api-key": "ok" } }),
+      );
+      queueMicrotask(() => {
+        child.stdout?.emit("error", new Error("stdout read failed"));
+        child.stdout?.emit("data", response);
+        child.stderr?.emit("error", new Error("stderr read failed"));
+        child.emit("close", 0, null);
+      });
+      return child;
+    });
+
+    await expect(
+      resolveSecretRefString(
+        { source: "exec", provider: "execmain", id: "openai/api-key" },
+        {
+          config: {
+            secrets: {
+              providers: {
+                execmain: {
+                  source: "exec",
+                  command: scriptPath,
+                  args: [],
+                  allowInsecurePath: true,
+                  timeoutMs: 5_000,
+                  noOutputTimeoutMs: 5_000,
+                  maxOutputBytes: 16 * 1024,
+                },
+              },
+            },
+          },
+        },
+      ),
+    ).resolves.toBe("ok");
+
+    await fs.rm(dir, { recursive: true, force: true });
   });
 });

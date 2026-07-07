@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 
@@ -209,5 +210,57 @@ describe("e2e helper numeric env limits", () => {
     } finally {
       server.close();
     }
+  });
+
+  it("cancels Open WebUI HTTP probe response bodies", async () => {
+    const { probeHttpStatus } = await import("../../scripts/e2e/lib/openwebui/http-probe.mjs");
+    let canceled = false;
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      expect(init.headers).toEqual({ authorization: "Bearer token-123" });
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          cancel() {
+            canceled = true;
+          },
+        }),
+        { status: 200 },
+      );
+    }) as typeof fetch;
+
+    await expect(
+      probeHttpStatus({
+        bearer: "token-123",
+        fetchImpl,
+        timeoutMs: 500,
+        url: "http://127.0.0.1/probe",
+      }),
+    ).resolves.toBe(true);
+    expect(canceled).toBe(true);
+  });
+
+  it("clamps oversized Open WebUI HTTP probe timers before scheduling", async () => {
+    const { probeHttpStatus } = await import("../../scripts/e2e/lib/openwebui/http-probe.mjs");
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(resolve, 25);
+        init.signal?.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(timer);
+            reject(new Error("aborted"));
+          },
+          { once: true },
+        );
+      });
+      return new Response(null, { status: 200 });
+    }) as typeof fetch;
+
+    await expect(
+      probeHttpStatus({
+        fetchImpl,
+        timeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
+        url: "http://127.0.0.1/probe",
+      }),
+    ).resolves.toBe(true);
   });
 });

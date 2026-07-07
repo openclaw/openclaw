@@ -87,7 +87,8 @@ async function waitRegistry() {
 
 function registryHealthy() {
   return new Promise((resolve) => {
-    const req = http.get("http://127.0.0.1:4873/@example%2flossless-claw", (res) => {
+    const registry = process.env.NPM_CONFIG_REGISTRY ?? "http://127.0.0.1:4873";
+    const req = http.get(`${registry.replace(/\/$/u, "")}/@example%2flossless-claw`, (res) => {
       resolve(res.statusCode === 200);
       res.resume();
     });

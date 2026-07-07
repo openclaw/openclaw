@@ -25,6 +25,7 @@ import {
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   writePackageDistInventory,
 } from "../src/infra/package-dist-inventory.ts";
+import { escapeRegExp } from "../src/shared/regexp.js";
 import { checkCliBootstrapExternalImports } from "./check-cli-bootstrap-imports.mjs";
 import {
   collectBundledExtensionManifestErrors,
@@ -94,6 +95,7 @@ const requiredPathGroups = [
   "dist/plugin-sdk/root-alias.cjs",
   "dist/agents/compaction-planning.worker.js",
   "dist/agents/model-provider-auth.worker.js",
+  "dist/audit/audit-event-writer.worker.js",
   "dist/task-registry-control.runtime.js",
   "dist/telegram-ingress-worker.runtime.js",
   "dist/build-info.json",
@@ -958,7 +960,7 @@ export function collectForbiddenPackContentPaths(
 export { collectPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mjs";
 
 function extractTag(item: string, tag: string): string | null {
-  const escapedTag = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedTag = escapeRegExp(tag);
   const regex = new RegExp(`<${escapedTag}>([^<]+)</${escapedTag}>`);
   return regex.exec(item)?.[1]?.trim() ?? null;
 }
