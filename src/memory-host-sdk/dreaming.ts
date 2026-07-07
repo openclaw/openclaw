@@ -133,6 +133,7 @@ export type MemoryDreamingConfig = {
   enabled: boolean;
   frequency: string;
   timezone?: string;
+  language?: string;
   verboseLogging: boolean;
   storage: MemoryDreamingStorageConfig;
   execution: {
@@ -363,6 +364,7 @@ export function resolveMemoryDreamingConfig(params: {
     normalizeTrimmedString(dreaming?.timezone) ??
     normalizeTrimmedString(params.cfg?.agents?.defaults?.userTimezone) ??
     DEFAULT_MEMORY_DREAMING_TIMEZONE;
+  const language = normalizeTrimmedString(dreaming?.language);
   const storage = asNullableRecord(dreaming?.storage);
   const execution = asNullableRecord(dreaming?.execution);
   const phases = asNullableRecord(dreaming?.phases);
@@ -386,6 +388,7 @@ export function resolveMemoryDreamingConfig(params: {
     enabled: normalizeBoolean(dreaming?.enabled, DEFAULT_MEMORY_DREAMING_ENABLED),
     frequency,
     ...(timezone ? { timezone } : {}),
+    ...(language ? { language } : {}),
     verboseLogging: normalizeBoolean(
       dreaming?.verboseLogging,
       DEFAULT_MEMORY_DREAMING_VERBOSE_LOGGING,

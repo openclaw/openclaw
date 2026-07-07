@@ -16,6 +16,7 @@ import { resolveStateDir } from "openclaw/plugin-sdk/memory-core-host-runtime-co
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { cleanupSessionLifecycleArtifacts } from "openclaw/plugin-sdk/session-store-runtime";
 import { readDreamsFile, resolveDreamsPath, updateDreamsFile } from "./dreaming-dreams-file.js";
+import { getDreamingTranslations, type DreamingLanguage } from "./dreaming-i18n.js";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -419,19 +420,20 @@ export function formatNarrativeDate(epochMs: number, timezone?: string): string 
 
 // ── DREAMS.md file I/O ─────────────────────────────────────────────────
 
-function ensureDiarySection(existing: string): string {
+function ensureDiarySection(existing: string, language: DreamingLanguage = 'en'): string {
   if (existing.includes(DIARY_START_MARKER) && existing.includes(DIARY_END_MARKER)) {
     return existing;
   }
-  const diarySection = `# Dream Diary\n\n${DIARY_START_MARKER}\n${DIARY_END_MARKER}\n`;
+  const t = getDreamingTranslations(language);
+  const diarySection = `# ${t.dreamDiary}\n\n${DIARY_START_MARKER}\n${DIARY_END_MARKER}\n`;
   if (existing.trim().length === 0) {
     return diarySection;
   }
   return diarySection + "\n" + existing;
 }
 
-function replaceDiaryContent(existing: string, diaryContent: string): string {
-  const ensured = ensureDiarySection(existing);
+function replaceDiaryContent(existing: string, diaryContent: string, language: DreamingLanguage = 'en'): string {
+  const ensured = ensureDiarySection(existing, language);
   const startIdx = ensured.indexOf(DIARY_START_MARKER);
   const endIdx = ensured.indexOf(DIARY_END_MARKER);
   if (startIdx < 0 || endIdx < 0 || endIdx < startIdx) {
