@@ -497,4 +497,34 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
       expect(sendCall).toBeDefined();
     },
   );
+
+  it("runs one target ping-pong turn when requester !== target and skips requester round", async () => {
+    vi.mocked(runAgentStep).mockResolvedValueOnce("Target second reply");
+
+    await runSessionsSendA2AFlow({
+      targetSessionKey: "agent:main:discord:group:dev",
+      displayKey: "agent:main:discord:group:dev",
+      message: "Request task",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 2,
+      requesterSessionKey: "agent:requester:cron:job:run:abc",
+      requesterChannel: "telegram",
+      roundOneReply: "Target first reply",
+    });
+
+    // primaryReply delivered via gateway send before ping-pong
+    const primarySend = gatewayCalls.find(
+      (c) => c.method === "send" && c.params?.message === "Target first reply",
+    );
+    expect(primarySend).toBeDefined();
+
+    // ping-pong: one target turn, requester round skipped by guard
+    expect(runAgentStep).toHaveBeenCalledTimes(1);
+    const stepInput = firstMockArg(vi.mocked(runAgentStep), "agent step");
+    expect(stepInput.sessionKey).toBe("agent:main:discord:group:dev");
+    expect(stepInput.message).toBe("Target first reply");
+
+    // announce skipped because primaryReply was delivered
+    expect(gatewayCalls.filter((c) => c.method === "send")).toHaveLength(1);
+  });
 });
