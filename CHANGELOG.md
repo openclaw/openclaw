@@ -24,6 +24,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - **Control UI typed approvals:** send `/approve` commands immediately through the authorized Gateway command path while an agent run is blocked instead of queueing the command behind that run. (#77672) Thanks @vincentkoc.
+- **iOS screen recording:** drain pending ReplayKit sample writes before finalizing the video, preventing `screen.record` from racing AVAssetWriter shutdown and crashing the app. (#99056)
 - **Microsoft Teams Graph response bounds:** cap successful file-upload and chat JSON reads so oversized Microsoft Graph responses cannot be buffered without limit. (#97784) Thanks @Alix-007.
 - **Packaged speech runtime:** stop treating package-backed `speech-core` as a bundled plugin sidecar, restoring TTS startup in npm installs while release checks keep true activation-bypassing facades package-complete. (#89899, #89425) Thanks @zhangguiping-xydt.
 - **Codex app-server protocol:** require app-server 0.142 or newer, remove pre-0.142 wire-shape compatibility, and teach Codex to retrieve deferred native `spawn_agent` through `tool_search` so native subagent task mirroring works on search-capable models. (#101221)
