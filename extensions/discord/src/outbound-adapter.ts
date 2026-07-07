@@ -109,7 +109,11 @@ export const discordOutbound: ChannelOutboundAdapter = {
       maxLines: ctx?.formatting?.maxLinesPerMessage,
     }),
   textChunkLimit: DISCORD_TEXT_CHUNK_LIMIT,
-  sanitizeText: ({ text }) => stripDiscordInternalRuntimeScaffolding(text),
+  sanitizeText: ({ text }) =>
+    // Chunks carry separator newlines so joined text reconstructs the original.
+    // Discord message bodies should not start with a visible blank line, so drop
+    // synthetic leading newlines before the transport sees the payload.
+    stripDiscordInternalRuntimeScaffolding(text).replace(/^\n+/, ""),
   pollMaxOptions: 10,
   normalizePayload: ({ payload }) => normalizeDiscordApprovalPayload(payload),
   presentationCapabilities: {
