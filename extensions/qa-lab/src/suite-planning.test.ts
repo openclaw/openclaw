@@ -25,7 +25,7 @@ function makePlaywrightQaSuiteTestScenario(id: string): ReturnType<typeof makeQa
     ...makeQaSuiteTestScenario(id),
     execution: {
       kind: "playwright",
-      path: `ui/src/ui/e2e/${id}.e2e.test.ts`,
+      path: `ui/src/e2e/${id}.e2e.test.ts`,
     },
   };
 }
@@ -593,7 +593,7 @@ describe("qa suite planning helpers", () => {
     ).toEqual(["generic", "crabline-only"]);
   });
 
-  it("keeps explicitly requested channel-driver-specific scenarios", () => {
+  it("rejects explicitly requested scenarios that do not match the current lane", () => {
     const scenarios = [
       makeQaSuiteTestScenario("generic"),
       makeQaSuiteTestScenario("qa-channel-only", {
@@ -601,13 +601,24 @@ describe("qa suite planning helpers", () => {
       }),
     ];
 
-    expect(
+    expect(() =>
       selectQaFlowSuiteScenarios({
         scenarios,
         scenarioIds: ["qa-channel-only"],
         providerMode: "mock-openai",
         primaryModel: "mock-openai/gpt-5.5",
         channelDriver: "crabline",
+      }),
+    ).toThrow(
+      "selected QA scenario(s) do not match the current QA lane: qa-channel-only (channelDriver=qa-channel)",
+    );
+
+    expect(
+      selectQaFlowSuiteScenarios({
+        scenarios,
+        scenarioIds: ["qa-channel-only"],
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
       }).map((scenario) => scenario.id),
     ).toEqual(["qa-channel-only"]);
   });

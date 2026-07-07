@@ -1266,7 +1266,7 @@ describe("loadOpenClawPlugins", () => {
       },
     });
 
-    expect(registry.trustedToolPolicies ?? []).toHaveLength(0);
+    expect(registry.trustedToolPolicies).toHaveLength(0);
     const loaded = registry.plugins.find((entry) => entry.id === "trusted-policy-register-fail");
     expect(loaded?.status).toBe("error");
     expect(loaded?.error).toContain("register boom");
@@ -1302,9 +1302,9 @@ describe("loadOpenClawPlugins", () => {
       },
     });
 
-    expect(
-      (registry.trustedToolPolicies ?? []).map((entry) => [entry.pluginId, entry.policy.id]),
-    ).toEqual([["trusted-policy-success", "declared-policy"]]);
+    expect(registry.trustedToolPolicies.map((entry) => [entry.pluginId, entry.policy.id])).toEqual([
+      ["trusted-policy-success", "declared-policy"],
+    ]);
     expect(registry.diagnostics).not.toContainEqual(
       expect.objectContaining({
         pluginId: "trusted-policy-success",
@@ -1347,9 +1347,9 @@ describe("loadOpenClawPlugins", () => {
 
     const registry = loadRegistryFromAllowedPlugins([stablePlugin, failingPlugin]);
 
-    expect(
-      (registry.trustedToolPolicies ?? []).map((entry) => [entry.pluginId, entry.policy.id]),
-    ).toEqual([["stable-trusted-policy", "stable-policy"]]);
+    expect(registry.trustedToolPolicies.map((entry) => [entry.pluginId, entry.policy.id])).toEqual([
+      ["stable-trusted-policy", "stable-policy"],
+    ]);
     const failed = registry.plugins.find(
       (entry) => entry.id === "later-trusted-policy-register-fail",
     );
@@ -3208,6 +3208,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(registry.nodeHostCommands).toStrictEqual([]);
     expect(registry.nodeInvokePolicies).toStrictEqual([]);
     expect(registry.securityAuditCollectors).toStrictEqual([]);
+    expect(registry.interactiveHandlers).toStrictEqual([]);
     expect(resolvePluginInteractiveNamespaceMatch("slack", "failme:payload")).toBeNull();
     expect(getContextEngineFactory("failme-context")).toBeUndefined();
     expect(listContextEngineIds()).not.toContain("failme-context");
@@ -3828,9 +3829,16 @@ module.exports = { id: "throws-after-import", register() {} };`,
       onlyPluginIds: ["cached-command-interactive"],
     } satisfies Parameters<typeof loadOpenClawPlugins>[0];
 
-    loadOpenClawPlugins(loadOptions);
+    const registry = loadOpenClawPlugins(loadOptions);
     expect(getPluginCommandSpecs()).toEqual([
       { name: "hue", description: "Control Hue lights", acceptsArgs: false },
+    ]);
+    expect(registry.interactiveHandlers).toEqual([
+      expect.objectContaining({
+        channel: "telegram",
+        namespace: "hue",
+        pluginId: "cached-command-interactive",
+      }),
     ]);
     const match = resolvePluginInteractiveNamespaceMatch("telegram", "hue:on");
     expect(match?.namespace).toBe("hue");

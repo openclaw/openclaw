@@ -1,6 +1,7 @@
 // Memory Wiki plugin module implements markdown behavior.
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { fromMarkdown } from "mdast-util-from-markdown";
 import {
   asFiniteNumber,
   normalizeLowercaseStringOrEmpty,
@@ -134,6 +135,7 @@ const MAX_WIKI_SAFE_WRITE_FILENAME_COMPONENT_BYTES =
   Buffer.byteLength(FS_SAFE_PINNED_WRITE_TEMP_SUFFIX) -
   Buffer.byteLength(".");
 const WIKI_SEGMENT_HASH_BYTES = 12;
+const WIKI_RESERVED_PAGE_STEMS = new Set(["index"]);
 const HUMAN_START_MARKER = "<!-- openclaw:human:start -->";
 const HUMAN_END_MARKER = "<!-- openclaw:human:end -->";
 
@@ -172,6 +174,15 @@ export function slugifyWikiSegment(raw: string): string {
     return "page";
   }
   return capWikiValueWithHash(slug, MAX_WIKI_SEGMENT_BYTES, "page");
+}
+
+export function slugifyWikiPageStem(raw: string): string {
+  const slug = slugifyWikiSegment(raw);
+  if (!WIKI_RESERVED_PAGE_STEMS.has(slug)) {
+    return slug;
+  }
+  const suffix = createHash("sha1").update(slug).digest("hex").slice(0, WIKI_SEGMENT_HASH_BYTES);
+  return `${slug}-${suffix}`;
 }
 
 export function createWikiPageFilename(stem: string, extension = ".md"): string {
@@ -398,13 +409,41 @@ function normalizeMarkdownLinkTarget(sourceRelativePath: string, target: string)
   return path.posix.normalize(path.posix.join(path.posix.dirname(sourceRelativePath), target));
 }
 
-function extractWikiLinks(markdown: string, sourceRelativePath: string): string[] {
-  // Strip fenced code blocks and inline code before link extraction to avoid
-  // false positives from [[...]] patterns in code (bash tests, Scala generics).
-  const searchable = markdown
-    .replace(/(^|\n)(`{3,})[^\n]*\n[\s\S]*?\n\2(?=\n|$)/g, "\n")
-    .replace(/`[^`]+`/g, "``")
-    .replace(RELATED_BLOCK_PATTERN, "");
+type MarkdownAstNode = {
+  type?: string;
+  position?: {
+    start?: { offset?: number };
+    end?: { offset?: number };
+  };
+  children?: MarkdownAstNode[];
+};
+
+function maskMarkdownCode(markdown: string): string {
+  const masked = markdown.split("");
+  const visit = (node: MarkdownAstNode): void => {
+    if (node.type === "code" || node.type === "inlineCode") {
+      const start = node.position?.start?.offset;
+      const end = node.position?.end?.offset;
+      if (start !== undefined && end !== undefined) {
+        for (let index = start; index < end; index++) {
+          if (masked[index] !== "\n" && masked[index] !== "\r") {
+            masked[index] = " ";
+          }
+        }
+      }
+      return;
+    }
+    for (const child of node.children ?? []) {
+      visit(child);
+    }
+  };
+  visit(fromMarkdown(markdown) as MarkdownAstNode);
+  return masked.join("");
+}
+
+export function extractWikiLinks(markdown: string, sourceRelativePath: string): string[] {
+  const withoutRelatedBlock = markdown.replace(RELATED_BLOCK_PATTERN, "");
+  const searchable = maskMarkdownCode(withoutRelatedBlock);
   const links: string[] = [];
   for (const match of searchable.matchAll(OBSIDIAN_LINK_PATTERN)) {
     const target = match[1]?.trim();

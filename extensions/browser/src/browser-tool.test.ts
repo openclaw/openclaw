@@ -1898,6 +1898,48 @@ describe("browser tool act stale target recovery", () => {
     expect((result?.details as { ok?: unknown } | undefined)?.ok).toBe(true);
   });
 
+  it("retries stale targetIds returned through the node browser proxy", async () => {
+    mockSingleBrowserProxyNode();
+    setResolvedBrowserProfiles({
+      user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+    });
+    gatewayMocks.callGatewayTool
+      .mockRejectedValueOnce(new Error("INVALID_REQUEST: Error: 404: tab not found"))
+      .mockResolvedValueOnce({
+        ok: true,
+        payload: { result: { tabs: [{ targetId: "only-tab" }] } },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        payload: { result: { ok: true, targetId: "only-tab" } },
+      });
+
+    const tool = createBrowserTool();
+    const result = await tool.execute?.("call-1", {
+      action: "act",
+      target: "node",
+      profile: "user",
+      request: {
+        kind: "wait",
+        targetId: "stale-tab",
+        timeMs: 1,
+      },
+    });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledTimes(3);
+    expect(nodeInvokeCall(0).request.params).toMatchObject({
+      path: "/act",
+      body: { kind: "wait", targetId: "stale-tab", timeMs: 1 },
+    });
+    expect(nodeInvokeCall(1).request.params?.path).toBe("/tabs");
+    expect(nodeInvokeCall(2).request.params).toMatchObject({
+      path: "/act",
+      body: { kind: "wait", timeMs: 1 },
+    });
+    expect(nodeInvokeCall(2).request.params?.body).not.toHaveProperty("targetId");
+    expect(result?.details).toMatchObject({ ok: true, targetId: "only-tab" });
+  });
+
   it("does not retry mutating user-browser act requests without targetId", async () => {
     browserActionsMocks.browserAct.mockRejectedValueOnce(new Error("404: tab not found"));
     browserClientMocks.browserTabs.mockResolvedValueOnce([{ targetId: "only-tab" }]);

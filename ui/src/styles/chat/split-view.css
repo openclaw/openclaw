@@ -1,0 +1,87 @@
+openclaw-chat-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+.chat-split-view {
+  display: flex;
+  flex: 1 1 0;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.chat-split-view__column {
+  display: flex;
+  flex-direction: column;
+  min-width: 320px;
+  min-height: 0;
+}
+
+.chat-split-view__pane {
+  min-width: 0;
+  min-height: 200px;
+  overflow: hidden;
+}
+
+.chat-split-view--narrow .chat-split-view__pane {
+  min-height: 0;
+}
+
+.chat-pane__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  min-width: 0;
+  min-height: 36px;
+  padding: 4px 6px 4px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.chat-pane__header.chat-pane--active {
+  border-top: 2px solid var(--accent);
+  padding-top: 2px;
+}
+
+.chat-pane__session-label {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.chat-pane__session-select {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  color: var(--text);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  text-overflow: ellipsis;
+}
+
+.chat-pane__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.chat-pane__actions .btn--icon,
+.chat-open-split-view.btn--icon {
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 5px;
+}
+
+@media (max-width: 1099px) {
+  .chat-open-split-view {
+    display: none;
+  }
+}

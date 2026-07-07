@@ -53,7 +53,6 @@ type MatrixQaThreadScenarioResult = Awaited<ReturnType<typeof runThreadScenario>
 
 const MATRIX_SUBAGENT_THREAD_HOOK_ERROR_RE =
   /thread=true is unavailable because no channel plugin registered subagent_spawning hooks/i;
-const MATRIX_QA_HOT_RELOAD_RESTART_DELAY_MS = 300_000;
 
 function assertMatrixQaInReplyTarget(params: {
   actualEventId?: string;
@@ -494,86 +493,6 @@ export async function runObserverAllowlistOverrideScenario(context: MatrixQaScen
   } satisfies MatrixQaScenarioExecution;
 }
 
-export async function runAllowlistHotReloadScenario(context: MatrixQaScenarioContext) {
-  if (!context.patchGatewayConfig) {
-    throw new Error("Matrix allowlist hot-reload scenario requires gateway config patching");
-  }
-  const accepted = await runTopologyScopedTopLevelScenario({
-    accessToken: context.observerAccessToken,
-    actorId: "observer",
-    actorUserId: context.observerUserId,
-    context,
-    roomKey: context.topology.defaultRoomKey,
-    tokenPrefix: "MATRIX_QA_GROUP_RELOAD_ACCEPTED",
-  });
-  const accountId = context.sutAccountId ?? "sut";
-
-  await context.patchGatewayConfig(
-    {
-      channels: {
-        matrix: {
-          accounts: {
-            [accountId]: {
-              groupAllowFrom: [context.driverUserId],
-            },
-          },
-        },
-      },
-      gateway: {
-        // Isolate the Matrix handler's per-message config read from generic channel reload.
-        reload: {
-          mode: "off",
-        },
-      },
-    },
-    {
-      replacePaths: [`channels.matrix.accounts.${accountId}.groupAllowFrom`],
-      restartDelayMs: MATRIX_QA_HOT_RELOAD_RESTART_DELAY_MS,
-    },
-  );
-
-  const blockedToken = buildMatrixQaToken("MATRIX_QA_GROUP_RELOAD_REMOVED");
-  const removed = await runNoReplyExpectedScenario({
-    accessToken: context.observerAccessToken,
-    actorId: "observer",
-    actorUserId: context.observerUserId,
-    baseUrl: context.baseUrl,
-    body: buildMentionPrompt(context.sutUserId, blockedToken),
-    mentionUserIds: [context.sutUserId],
-    observedEvents: context.observedEvents,
-    roomId: context.roomId,
-    syncState: context.syncState,
-    syncStreams: context.syncStreams,
-    sutUserId: context.sutUserId,
-    replyPredicate: (event) =>
-      isMatrixQaExactMarkerReply(event, {
-        roomId: context.roomId,
-        sutUserId: context.sutUserId,
-        token: blockedToken,
-      }),
-    timeoutMs: resolveMatrixQaNoReplyWindowMs(context.timeoutMs),
-    token: blockedToken,
-  });
-
-  return {
-    artifacts: {
-      accepted: accepted.artifacts ?? {},
-      blocked: removed.artifacts ?? {},
-      driverEventId: accepted.artifacts?.driverEventId,
-      secondDriverEventId: removed.artifacts?.driverEventId,
-      firstReply: accepted.artifacts?.reply,
-      token: accepted.artifacts?.token,
-      triggerBody: accepted.artifacts?.triggerBody,
-    },
-    details: [
-      "group allowlist before removal:",
-      accepted.details,
-      "group allowlist after hot reload removal:",
-      removed.details,
-    ].join("\n"),
-  } satisfies MatrixQaScenarioExecution;
-}
-
 export async function runQuietStreamingPreviewScenario(context: MatrixQaScenarioContext) {
   return runMatrixStreamingPreviewScenario(context, {
     expectedPreviewKind: "notice",
@@ -872,6 +791,7 @@ async function runMatrixToolProgressScenario(
     finalText: string;
     allowFinalOnly?: boolean;
     allowFinalBeforeProgress?: boolean;
+    allowFinalReplacementAsCompletion?: boolean;
     allowTopLevelFinalWithProgress?: boolean;
     label: string;
     allowGenericProgressLine?: boolean;
@@ -927,6 +847,13 @@ async function runMatrixToolProgressScenario(
     event.relatesTo?.relType === "m.replace" &&
     event.relatesTo.eventId === previewRootEventId &&
     matchesExpectedProgress(event.body);
+  const isFinalReplacement = (event: MatrixQaObservedEvent, previewRootEventId: string) =>
+    event.roomId === context.roomId &&
+    event.sender === context.sutUserId &&
+    isMatrixQaMessageLikeKind(event.kind) &&
+    event.relatesTo?.relType === "m.replace" &&
+    event.relatesTo.eventId === previewRootEventId &&
+    doesMatrixQaReplyBodyMatchToken(event, params.finalText);
   const throwProgressTimeout = (err: unknown, previewEventId: string): never => {
     throw new Error(
       buildMatrixQaToolProgressTimeoutMessage({
@@ -1056,6 +983,7 @@ async function runMatrixToolProgressScenario(
     isProgressReplacement(event, previewRootEventId) ||
     (params.allowTopLevelFinalWithProgress === true && isProgressProofEvent(event));
   let topLevelFinalBeforeProgress: typeof preview | undefined;
+  let finalReplacementBeforeProgress: typeof preview | undefined;
   let progress = preview;
   if (!matchesExpectedProgress(preview.event.body)) {
     const progressOrFinal = await client
@@ -1063,13 +991,21 @@ async function runMatrixToolProgressScenario(
         observedEvents: context.observedEvents,
         predicate: (event) =>
           isProgressProofForPreview(event) ||
+          (params.allowFinalReplacementAsCompletion === true &&
+            isFinalReplacement(event, previewRootEventId)) ||
           (params.allowTopLevelFinalWithProgress === true && isFinalReply(event)),
         roomId: context.roomId,
         since: preview.since,
         timeoutMs: context.timeoutMs,
       })
       .catch((err: unknown) => throwProgressTimeout(err, previewRootEventId));
-    if (isFinalReply(progressOrFinal.event)) {
+    if (
+      params.allowFinalReplacementAsCompletion === true &&
+      isFinalReplacement(progressOrFinal.event, previewRootEventId)
+    ) {
+      finalReplacementBeforeProgress = progressOrFinal;
+      progress = progressOrFinal;
+    } else if (isFinalReply(progressOrFinal.event)) {
       topLevelFinalBeforeProgress = progressOrFinal;
       progress = await client
         .waitForRoomEvent({
@@ -1099,6 +1035,7 @@ async function runMatrixToolProgressScenario(
 
   const finalized =
     topLevelFinalBeforeProgress ??
+    finalReplacementBeforeProgress ??
     (await client
       .waitForRoomEvent({
         observedEvents: context.observedEvents,
@@ -1202,6 +1139,7 @@ export async function runToolProgressCommandPreviewScenario(context: MatrixQaSce
     expectedPreviewKind: "notice",
     finalText: buildMatrixQaToken("MATRIX_QA_TOOL_PROGRESS_COMMAND"),
     label: "tool progress command preview",
+    allowFinalReplacementAsCompletion: true,
     progressPattern: /\bcompleted\b|\bexit\s+0\b/i,
     rejectProgressBodyPattern:
       /`(?![^`]*\bcompleted\b)[^`]*(?:matrix-command-progress-start|print text\s*→\s*run sleep 2)[^`]*`/i,

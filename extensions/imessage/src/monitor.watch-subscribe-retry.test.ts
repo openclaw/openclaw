@@ -8,6 +8,7 @@ import {
   describeIMessageInboundDropDiagnostic,
   shouldThrottleIMessageInboundDropDiagnostic,
 } from "./monitor/monitor-provider.js";
+import { clearIMessageRuntime } from "./runtime.js";
 
 const waitForTransportReadyMock = vi.hoisted(() =>
   vi.fn<typeof waitForTransportReady>(async () => {}),
@@ -67,6 +68,10 @@ function createRpcClient(overrides?: {
 describe("monitorIMessageProvider watch.subscribe startup retry", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    // Sibling suites install the imessage runtime singleton without clearing
+    // it; a leaked runtime resurrects another file's recovery cursor and
+    // watch.subscribe then gains an unexpected since_rowid.
+    clearIMessageRuntime();
     waitForTransportReadyMock.mockReset().mockResolvedValue(undefined);
     createIMessageRpcClientMock.mockReset();
     attachIMessageMonitorAbortHandlerMock.mockReset().mockReturnValue(() => {});

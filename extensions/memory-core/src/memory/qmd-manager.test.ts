@@ -4184,6 +4184,41 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("wraps non-JSON mcporter stdout as a typed error instead of a raw SyntaxError", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        // mcporter exits 0 but prints non-JSON to stdout (daemon warning, truncated
+        // output, or CLI flag mismatch). Without the guard this throws a raw
+        // SyntaxError out of runQmdSearchViaMcporter; the guard wraps it.
+        emitAndClose(child, "stdout", "mcporter: daemon warning: connection unstable\n");
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+    await expect(
+      manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).rejects.toThrow(/non-JSON stdout/i);
+    await manager.close();
+  });
+
   it("falls back to QMD <1.1 tool names when query tool is not found", async () => {
     // qmdMcpToolVersion is an instance field — each createManager() starts fresh.
 

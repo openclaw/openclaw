@@ -127,6 +127,7 @@ describe("qa runner model catalog", () => {
         const runPromise = loadQaRunnerModelOptions({
           repoRoot,
           signal: controller.signal,
+          abortKillGraceMs: 100,
         });
 
         await waitForFile(pidPath, 2_000);

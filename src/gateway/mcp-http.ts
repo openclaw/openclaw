@@ -40,6 +40,7 @@ import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
 // bearer-token HTTP endpoint bound to 127.0.0.1. Only one active server/runtime
 // is registered per process.
 export {
+  createMcpAttachGrantServerConfig,
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
   resolveMcpLoopbackBearerToken,
@@ -284,13 +285,10 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
                   }
                 : undefined,
               onToolCallResult: cliCaptureHandle
-                ? ({ toolName: resultToolName, args, result, isError }) => {
+                ? (result) => {
                     recordMcpLoopbackToolCallResult({
                       captureHandle: cliCaptureHandle,
-                      toolName: resultToolName,
-                      args,
-                      result,
-                      isError,
+                      ...result,
                     });
                   }
                 : undefined,

@@ -37,6 +37,8 @@ export function createCodexAttemptTurnWatchController(params: {
   getActiveAppServerTurnRequests: () => number;
   getActiveTurnItemCount: () => number;
   getActiveCompletionBlockerItemCount: () => number;
+  getActiveFinalizationHookCount: () => number;
+  canReleaseAssistantCompletionIdle: () => boolean;
   turnCompletionIdleTimeoutMs: number;
   turnAssistantCompletionIdleTimeoutMs: number;
   turnAttemptIdleTimeoutMs: number;
@@ -136,7 +138,12 @@ export function createCodexAttemptTurnWatchController(params: {
 
   function scheduleAssistantCompletionIdleWatch() {
     clearAssistantCompletionIdleTimer();
-    if (params.isCompleted() || params.signal.aborted || !assistantCompletionIdleWatchArmed) {
+    if (
+      params.isCompleted() ||
+      params.signal.aborted ||
+      !assistantCompletionIdleWatchArmed ||
+      params.getActiveFinalizationHookCount() > 0
+    ) {
       return;
     }
     const elapsedMs = Math.max(0, Date.now() - assistantCompletionLastActivityAt);
@@ -216,8 +223,18 @@ export function createCodexAttemptTurnWatchController(params: {
     if (params.isCompleted() || params.signal.aborted || !assistantCompletionIdleWatchArmed) {
       return;
     }
-    if (params.getActiveAppServerTurnRequests() > 0 || params.getActiveTurnItemCount() > 0) {
+    if (
+      params.getActiveAppServerTurnRequests() > 0 ||
+      params.getActiveTurnItemCount() > 0 ||
+      params.getActiveFinalizationHookCount() > 0
+    ) {
       scheduleAssistantCompletionIdleWatch();
+      return;
+    }
+    if (!params.canReleaseAssistantCompletionIdle()) {
+      assistantCompletionIdleWatchArmed = false;
+      assistantCompletionLastActivityDetails = undefined;
+      clearAssistantCompletionIdleTimer();
       return;
     }
     const idleMs = Math.max(0, Date.now() - assistantCompletionLastActivityAt);

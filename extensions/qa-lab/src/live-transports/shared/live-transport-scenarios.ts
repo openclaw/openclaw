@@ -110,3 +110,32 @@ export function buildLiveTransportCoverageLaneSummaries(
     })
     .toSorted((left, right) => left.transportId.localeCompare(right.transportId));
 }
+
+export async function loadNonYamlScenarioRefs() {
+  const [discord, slack, telegram, whatsapp] = await Promise.all([
+    import("../discord/discord-live.runtime.js"),
+    import("../slack/slack-live.runtime.js"),
+    import("../telegram/telegram-live.runtime.js"),
+    import("../whatsapp/whatsapp-live.runtime.js"),
+  ]);
+  const refs = (sourcePath: string, scenarios: readonly { id: string }[]) =>
+    scenarios.map(({ id }) => ({ id, sourcePath }));
+  return [
+    ...refs(
+      "extensions/qa-lab/src/live-transports/discord/discord-live.runtime.ts",
+      discord.listDiscordQaScenarioCatalog(),
+    ),
+    ...refs(
+      "extensions/qa-lab/src/live-transports/slack/slack-live.runtime.ts",
+      slack.listSlackQaScenarioCatalog(),
+    ),
+    ...refs(
+      "extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime.ts",
+      telegram.listTelegramQaScenarioCatalog(),
+    ),
+    ...refs(
+      "extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.runtime.ts",
+      whatsapp.listWhatsAppQaScenarioCatalog(),
+    ),
+  ].toSorted((left, right) => left.id.localeCompare(right.id));
+}

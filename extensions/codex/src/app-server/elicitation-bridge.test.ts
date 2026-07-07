@@ -157,7 +157,7 @@ function buildConnectorPluginApprovalElicitation(overrides: Record<string, unkno
 function createPluginAppPolicyContext(
   params: {
     allowDestructiveActions?: boolean;
-    destructiveApprovalMode?: "allow" | "deny" | "auto" | "always";
+    destructiveApprovalMode?: "allow" | "deny" | "auto" | "ask";
     apps?: Array<{ appId: string; pluginName: string; mcpServerNames: string[] }>;
   } = {},
 ) {
@@ -188,6 +188,29 @@ function createPluginAppPolicyContext(
     pluginAppIds: Object.fromEntries(
       apps.map((app) => [app.pluginName, appsForPlugin(apps, app.pluginName)]),
     ),
+  };
+}
+
+function createAccountAppPolicyContext(params: {
+  appId: string;
+  appName: string;
+  allowDestructiveActions: boolean;
+  destructiveApprovalMode?: "allow" | "deny" | "auto" | "ask";
+}) {
+  return {
+    fingerprint: "account-app-policy-1",
+    apps: {
+      [params.appId]: {
+        source: "account" as const,
+        appName: params.appName,
+        allowDestructiveActions: params.allowDestructiveActions,
+        ...(params.destructiveApprovalMode
+          ? { destructiveApprovalMode: params.destructiveApprovalMode }
+          : {}),
+        mcpServerNames: [],
+      },
+    },
+    pluginAppIds: {},
   };
 }
 
@@ -835,6 +858,61 @@ describe("Codex app-server elicitation bridge", () => {
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 
+  it("routes approvals for account-connected apps through the configured policy", async () => {
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-meetings", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-meetings", decision: "allow-once" });
+
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildConnectorPluginApprovalElicitation({
+        message: "Allow ChatGPT Meetings to import a meeting?",
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          source: "connector",
+          connector_id: "chatgpt_meetings",
+          connector_name: "ChatGPT Meetings",
+          tool_title: "import_meeting",
+        },
+      }),
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+      pluginAppPolicyContext: createAccountAppPolicyContext({
+        appId: "chatgpt_meetings",
+        appName: "ChatGPT Meetings",
+        allowDestructiveActions: true,
+        destructiveApprovalMode: "auto",
+      }),
+    });
+
+    expect(result).toEqual({ action: "accept", content: null, _meta: null });
+    expect(gatewayToolArg(0, 2)).toMatchObject({
+      allowedDecisions: ["allow-once", "deny"],
+      title: "Allow ChatGPT Meetings to import a meeting?",
+      twoPhase: true,
+    });
+  });
+
+  it("does not trust account app ids from non-connector MCP servers", async () => {
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildPluginApprovalElicitation({
+        _meta: { app_id: "chatgpt_meetings" },
+      }),
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+      pluginAppPolicyContext: createAccountAppPolicyContext({
+        appId: "chatgpt_meetings",
+        appName: "ChatGPT Meetings",
+        allowDestructiveActions: true,
+        destructiveApprovalMode: "auto",
+      }),
+    });
+
+    expect(result).toEqual({ action: "decline", content: null, _meta: null });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
   for (const { name, requestedSchema } of [
     {
       name: "declines connector-id plugin app elicitations with non-object schemas",
@@ -1017,7 +1095,7 @@ describe("Codex app-server elicitation bridge", () => {
     });
   });
 
-  it("does not expose allow-always for always plugin policy", async () => {
+  it("does not expose allow-always for ask plugin policy", async () => {
     mockCallGatewayTool
       .mockResolvedValueOnce({ id: "plugin:approval-calendar-always-policy", status: "accepted" })
       .mockResolvedValueOnce({
@@ -1041,7 +1119,7 @@ describe("Codex app-server elicitation bridge", () => {
       turnId: "turn-1",
       pluginAppPolicyContext: createPluginAppPolicyContext({
         allowDestructiveActions: true,
-        destructiveApprovalMode: "always",
+        destructiveApprovalMode: "ask",
         apps: [
           {
             appId: "connector_google_calendar",
@@ -1062,7 +1140,7 @@ describe("Codex app-server elicitation bridge", () => {
     });
   });
 
-  it("maps unexpected allow-always decisions to one-shot for always plugin policy", async () => {
+  it("maps unexpected allow-always decisions to one-shot for ask plugin policy", async () => {
     mockCallGatewayTool
       .mockResolvedValueOnce({
         id: "plugin:approval-calendar-unexpected-always",
@@ -1089,7 +1167,7 @@ describe("Codex app-server elicitation bridge", () => {
       turnId: "turn-1",
       pluginAppPolicyContext: createPluginAppPolicyContext({
         allowDestructiveActions: true,
-        destructiveApprovalMode: "always",
+        destructiveApprovalMode: "ask",
         apps: [
           {
             appId: "connector_google_calendar",

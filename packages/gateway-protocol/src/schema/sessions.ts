@@ -77,6 +77,7 @@ export const SessionFileRelevanceSchema = Type.Union([
 export const SessionFileEntrySchema = Type.Object(
   {
     path: NonEmptyString,
+    workspacePath: Type.Optional(NonEmptyString),
     name: NonEmptyString,
     kind: SessionFileKindSchema,
     missing: Type.Boolean(),
@@ -185,6 +186,8 @@ export const SessionsListParamsSchema = Type.Object(
     spawnedBy: Type.Optional(NonEmptyString),
     agentId: Type.Optional(NonEmptyString),
     search: Type.Optional(Type.String()),
+    /** True lists archived sessions; false or omitted lists active sessions. */
+    archived: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
@@ -246,11 +249,37 @@ export const SessionsCreateParamsSchema = Type.Object(
     label: Type.Optional(SessionLabelString),
     model: Type.Optional(NonEmptyString),
     parentSessionKey: Type.Optional(NonEmptyString),
+    fork: Type.Optional(
+      Type.Boolean({ description: "Fork the parent transcript; requires parentSessionKey." }),
+    ),
     emitCommandHooks: Type.Optional(Type.Boolean()),
     task: Type.Optional(Type.String()),
     message: Type.Optional(Type.String()),
+    worktree: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
+);
+
+export const SessionWorktreeInfoSchema = Type.Object(
+  {
+    id: NonEmptyString,
+    path: NonEmptyString,
+    branch: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+/** Result returned after creating or adopting a session. */
+export const SessionsCreateResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    key: NonEmptyString,
+    sessionId: Type.Optional(NonEmptyString),
+    entry: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+    runStarted: Type.Optional(Type.Boolean()),
+    worktree: Type.Optional(SessionWorktreeInfoSchema),
+  },
+  { additionalProperties: true },
 );
 
 /** Sends one message into an existing session. */
@@ -301,6 +330,13 @@ export const SessionsPatchParamsSchema = Type.Object(
     key: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
     label: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
+    /** User-defined organization bucket ("category", not chat-group); null clears it. */
+    category: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
+    archived: Type.Optional(Type.Boolean()),
+    pinned: Type.Optional(Type.Boolean()),
+    unread: Type.Optional(
+      Type.Boolean({ description: "Set true to mark unread; false records the session as read." }),
+    ),
     thinkingLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Null()])),
     verboseLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
@@ -382,6 +418,10 @@ export const SessionsDeleteParamsSchema = Type.Object(
     key: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
     deleteTranscript: Type.Optional(Type.Boolean()),
+    // Internal compare-and-delete guard for lifecycle-owned cleanup.
+    expectedSessionId: Type.Optional(NonEmptyString),
+    expectedLifecycleRevision: Type.Optional(NonEmptyString),
+    expectedSessionUpdatedAt: Type.Optional(Type.Number({ minimum: 0 })),
     // Internal control: when false, still unbind thread bindings but skip hook emission.
     emitLifecycleHooks: Type.Optional(Type.Boolean()),
   },

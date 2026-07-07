@@ -24,7 +24,8 @@ import {
   openUrl,
   probeGatewayReachable,
   waitForGatewayReachable,
-  resolveControlUiLinks,
+  resolveAdvertisedControlUiLinks,
+  resolveLocalControlUiProbeLinks,
 } from "../commands/onboard-helpers.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
@@ -34,7 +35,9 @@ import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
 import { isContainerEnvironment } from "../infra/container-environment.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { launchTuiCli } from "../tui/tui-launch.js";
 import { resolveUserPath } from "../utils.js";
 import { listConfiguredWebSearchProviders } from "../web-search/runtime.js";
@@ -56,9 +59,6 @@ type FinalizeOnboardingOptions = {
   runtime: RuntimeEnv;
 };
 
-type OnboardSearchModule = typeof import("../commands/onboard-search.js");
-
-let onboardSearchModulePromise: Promise<OnboardSearchModule> | undefined;
 const HATCH_TUI_TIMEOUT_MS = 5 * 60 * 1000;
 
 function buildSessionGatewayAuthOverride(params: {
@@ -184,19 +184,26 @@ function getLocalizedGatewayDaemonRuntimeOptions() {
   }));
 }
 
-function loadOnboardSearchModule(): Promise<OnboardSearchModule> {
-  onboardSearchModulePromise ??= import("../commands/onboard-search.js");
-  return onboardSearchModulePromise;
-}
+const loadOnboardSearchModule = createLazyRuntimeModule(
+  () => import("../commands/onboard-search.js"),
+);
 
-export async function finalizeSetupWizard(
-  options: FinalizeOnboardingOptions,
-): Promise<{ launchedTui: boolean }> {
-  const { flow, opts, baseConfig, nextConfig, settings, prompter, runtime } = options;
-  const suppressGatewayTokenOutput = opts.suppressGatewayTokenOutput === true;
-  let gatewayProbe: { ok: boolean; detail?: string } = { ok: true };
-  let resolvedGatewayPassword = "";
-  let sessionGateway: import("../gateway/server.js").GatewayServer | undefined;
+/**
+ * Ensure the gateway service matches the onboarding decision: prompt/decide
+ * whether to install the daemon, then install/restart/reinstall it. Shared by
+ * the classic wizard finalize and the bootstrap onboarding flow.
+ */
+export async function ensureGatewayServiceForOnboarding(params: {
+  flow: WizardFlow;
+  opts: Pick<OnboardOptions, "installDaemon" | "daemonRuntime">;
+  nextConfig: OpenClawConfig;
+  settings: Pick<GatewayWizardSettings, "port">;
+  prompter: WizardPrompter;
+  runtime: RuntimeEnv;
+  /** Pre-answer the "service already installed" prompt (conversational flows). */
+  loadedAction?: "restart";
+}): Promise<{ installDaemon: boolean; containerWithoutUserSystemd: boolean }> {
+  const { flow, opts, nextConfig, settings, prompter, runtime } = params;
 
   const withWizardProgress = async <T>(
     label: string,
@@ -286,14 +293,16 @@ export async function finalizeSetupWizard(
     const loaded = await service.isLoaded({ env: process.env });
     let restartWasScheduled = false;
     if (loaded) {
-      const action = await prompter.select({
-        message: t("wizard.finalize.alreadyInstalled"),
-        options: [
-          { value: "restart", label: t("wizard.finalize.restart") },
-          { value: "reinstall", label: t("wizard.finalize.reinstall") },
-          { value: "skip", label: t("common.skip") },
-        ],
-      });
+      const action =
+        params.loadedAction ??
+        (await prompter.select({
+          message: t("wizard.finalize.alreadyInstalled"),
+          options: [
+            { value: "restart", label: t("wizard.finalize.restart") },
+            { value: "reinstall", label: t("wizard.finalize.reinstall") },
+            { value: "skip", label: t("common.skip") },
+          ],
+        }));
       if (action === "restart") {
         let restartDoneMessage = t("wizard.finalize.gatewayServiceRestarted");
         await withWizardProgress(
@@ -346,8 +355,8 @@ export async function finalizeSetupWizard(
             t("wizard.finalize.gatewayInstallFixAuth"),
           ].join(" ");
         } else {
-          const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan(
-            {
+          const { programArguments, workingDirectory, environment, environmentValueSources } =
+            await buildGatewayInstallPlan({
               env: process.env,
               port: settings.port,
               runtime: daemonRuntime,
@@ -355,8 +364,7 @@ export async function finalizeSetupWizard(
                 void prompter.note(message, title);
               },
               config: nextConfig,
-            },
-          );
+            });
 
           progress.update(t("wizard.finalize.gatewayServiceInstalling"));
           await service.install({
@@ -365,6 +373,7 @@ export async function finalizeSetupWizard(
             programArguments,
             workingDirectory,
             environment,
+            environmentValueSources,
           });
         }
       } catch (err) {
@@ -385,6 +394,27 @@ export async function finalizeSetupWizard(
       }
     }
   }
+
+  return { installDaemon, containerWithoutUserSystemd };
+}
+
+export async function finalizeSetupWizard(
+  options: FinalizeOnboardingOptions,
+): Promise<{ launchedTui: boolean }> {
+  const { flow, opts, baseConfig, nextConfig, settings, prompter, runtime } = options;
+  const suppressGatewayTokenOutput = opts.suppressGatewayTokenOutput === true;
+  let gatewayProbe: { ok: boolean; detail?: string } = { ok: true };
+  let resolvedGatewayPassword = "";
+  let sessionGateway: import("../gateway/server.js").GatewayServer | undefined;
+
+  const { installDaemon, containerWithoutUserSystemd } = await ensureGatewayServiceForOnboarding({
+    flow,
+    opts,
+    nextConfig,
+    settings,
+    prompter,
+    runtime,
+  });
 
   if (settings.authMode === "password") {
     try {
@@ -417,7 +447,7 @@ export async function finalizeSetupWizard(
 
   try {
     if (!opts.skipHealth) {
-      const probeLinks = resolveControlUiLinks({
+      const probeLinks = resolveLocalControlUiProbeLinks({
         bind: nextConfig.gateway?.bind ?? "loopback",
         port: settings.port,
         customBindHost: nextConfig.gateway?.customBindHost,
@@ -525,7 +555,14 @@ export async function finalizeSetupWizard(
 
     const controlUiBasePath =
       nextConfig.gateway?.controlUi?.basePath ?? baseConfig.gateway?.controlUi?.basePath;
-    const links = resolveControlUiLinks({
+    const displayLinks = await resolveAdvertisedControlUiLinks({
+      bind: settings.bind,
+      port: settings.port,
+      customBindHost: settings.customBindHost,
+      basePath: controlUiBasePath,
+      tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
+    });
+    const probeLinks = resolveLocalControlUiProbeLinks({
       bind: settings.bind,
       port: settings.port,
       customBindHost: settings.customBindHost,
@@ -534,11 +571,11 @@ export async function finalizeSetupWizard(
     });
     const authedUrl =
       settings.authMode === "token" && settings.gatewayToken && !suppressGatewayTokenOutput
-        ? `${links.httpUrl}#token=${encodeURIComponent(settings.gatewayToken)}`
-        : links.httpUrl;
+        ? `${displayLinks.httpUrl}#token=${encodeURIComponent(settings.gatewayToken)}`
+        : displayLinks.httpUrl;
     if (opts.skipHealth || !gatewayProbe.ok) {
       gatewayProbe = await probeGatewayReachable({
-        url: links.wsUrl,
+        url: probeLinks.wsUrl,
         token: settings.authMode === "token" ? settings.gatewayToken : undefined,
         password: settings.authMode === "password" ? resolvedGatewayPassword : "",
       });
@@ -548,6 +585,9 @@ export async function finalizeSetupWizard(
       : t("wizard.finalize.gatewayNotDetectedStatus", {
           detail: gatewayProbe.detail ? ` (${gatewayProbe.detail})` : "",
         });
+    const windowsFirewallLines = formatWindowsGatewayFirewallGuidance({
+      bind: settings.bind,
+    });
     const bootstrapPath = path.join(
       resolveUserPath(options.workspaceDir),
       DEFAULT_BOOTSTRAP_FILENAME,
@@ -560,12 +600,13 @@ export async function finalizeSetupWizard(
 
     await prompter.note(
       [
-        t("wizard.finalize.webUiUrl", { url: links.httpUrl }),
+        t("wizard.finalize.webUiUrl", { url: displayLinks.httpUrl }),
         settings.authMode === "token" && settings.gatewayToken && !suppressGatewayTokenOutput
           ? t("wizard.finalize.webUiWithTokenUrl", { url: authedUrl })
           : undefined,
-        t("wizard.finalize.gatewayWsUrl", { url: links.wsUrl }),
+        t("wizard.finalize.gatewayWsUrl", { url: displayLinks.wsUrl }),
         gatewayStatusLine,
+        ...windowsFirewallLines,
         t("wizard.finalize.controlUiDocs"),
       ]
         .filter(Boolean)
@@ -811,7 +852,7 @@ export async function finalizeSetupWizard(
               : undefined,
             timeoutMs: HATCH_TUI_TIMEOUT_MS,
           },
-          gatewayProbe.ok ? { gatewayUrl: links.wsUrl, authSource: "config" } : {},
+          gatewayProbe.ok ? { gatewayUrl: displayLinks.wsUrl, authSource: "config" } : {},
         );
       } finally {
         restoreTerminalState("post-setup tui", { resumeStdinIfPaused: false });

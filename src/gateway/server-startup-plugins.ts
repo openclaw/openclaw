@@ -3,8 +3,10 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { initSubagentRegistry } from "../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { collectUnregisteredConfiguredMemoryEmbeddingProviders } from "../plugins/channel-plugin-ids.js";
-import { listRegisteredEmbeddingProviders } from "../plugins/embedding-providers.js";
+import {
+  collectRegisteredEmbeddingProviderIds,
+  collectUnregisteredConfiguredMemoryEmbeddingProviders,
+} from "../plugins/channel-plugin-ids.js";
 import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginRegistry, PluginRegistryParams } from "../plugins/registry-types.js";
@@ -194,16 +196,9 @@ export function warnUnregisteredConfiguredMemoryEmbeddingProviders(params: {
   pluginRegistry: Partial<Pick<PluginRegistry, "embeddingProviders" | "memoryEmbeddingProviders">>;
   log: Pick<GatewayPluginBootstrapLog, "warn">;
 }): void {
-  const registeredProviderIds = new Set(
-    [
-      ...(params.pluginRegistry.memoryEmbeddingProviders ?? []),
-      ...(params.pluginRegistry.embeddingProviders ?? []),
-      ...listRegisteredEmbeddingProviders().map((entry) => ({ provider: entry.adapter })),
-    ].map((entry) => entry.provider.id),
-  );
   const unregistered = collectUnregisteredConfiguredMemoryEmbeddingProviders({
     config: params.config,
-    registeredProviderIds,
+    registeredProviderIds: collectRegisteredEmbeddingProviderIds(params.pluginRegistry),
   });
   for (const provider of unregistered) {
     const path = `memorySearch.${provider.source}`;

@@ -734,6 +734,88 @@ describe("ensureOnboardingPluginInstalled", () => {
     );
   });
 
+  it("installs trusted official plugins at the exact extended-stable core version", async () => {
+    installPluginFromNpmSpec.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "discord",
+      targetDir: "/tmp/discord",
+      version: VERSION,
+      npmResolution: {
+        name: "@openclaw/discord",
+        version: VERSION,
+        resolvedSpec: `@openclaw/discord@${VERSION}`,
+      },
+    });
+
+    await ensureOnboardingPluginInstalled({
+      cfg: { update: { channel: "extended-stable" } },
+      entry: {
+        pluginId: "discord",
+        label: "Discord",
+        install: { npmSpec: "@openclaw/discord" },
+        trustedSourceLinkedOfficialInstall: true,
+      },
+      prompter: {
+        select: vi.fn(async () => "npm"),
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      } as never,
+      runtime: {} as never,
+      promptInstall: false,
+    });
+
+    const [npmCall] = readFirstMockCall(installPluginFromNpmSpec, "installPluginFromNpmSpec") as [
+      NpmSpecInstallCall,
+    ];
+    expect(npmCall.spec).toBe(`@openclaw/discord@${VERSION}`);
+    const [, recordUpdate] = readFirstMockCall(recordPluginInstall, "recordPluginInstall") as [
+      OpenClawConfig,
+      PluginInstallRecord,
+    ];
+    expect(recordUpdate.spec).toBe("@openclaw/discord");
+    expect(resolveNpmInstallRecordSpec).toHaveBeenCalledWith(
+      expect.objectContaining({ pinResolvedRegistrySpec: false }),
+    );
+  });
+
+  it("preserves default intent for trusted official stable installs", async () => {
+    installPluginFromNpmSpec.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "discord",
+      targetDir: "/tmp/discord",
+      version: "2026.7.21",
+      npmResolution: {
+        name: "@openclaw/discord",
+        version: "2026.7.21",
+        resolvedSpec: "@openclaw/discord@2026.7.21",
+      },
+    });
+
+    await ensureOnboardingPluginInstalled({
+      cfg: { update: { channel: "stable" } },
+      entry: {
+        pluginId: "discord",
+        label: "Discord",
+        install: { npmSpec: "@openclaw/discord" },
+        trustedSourceLinkedOfficialInstall: true,
+      },
+      prompter: {
+        select: vi.fn(async () => "npm"),
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      } as never,
+      runtime: {} as never,
+      promptInstall: false,
+    });
+
+    const [, recordUpdate] = readFirstMockCall(recordPluginInstall, "recordPluginInstall") as [
+      OpenClawConfig,
+      PluginInstallRecord,
+    ];
+    expect(recordUpdate.spec).toBe("@openclaw/discord");
+    expect(resolveNpmInstallRecordSpec).toHaveBeenCalledWith(
+      expect.objectContaining({ pinResolvedRegistrySpec: false }),
+    );
+  });
+
   it("logs npm install warnings once while shortening the progress label", async () => {
     const warning =
       "npm rejected managed npm alias overrides; retrying plugin install without alias overrides for this npm version.";

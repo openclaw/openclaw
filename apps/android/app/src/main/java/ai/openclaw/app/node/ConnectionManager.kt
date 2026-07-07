@@ -29,9 +29,36 @@ class ConnectionManager(
   private val photosAvailable: () -> Boolean,
   private val hasRecordAudioPermission: () -> Boolean,
   private val installedAppsSharingEnabled: () -> Boolean,
-  private val manualTls: () -> Boolean,
+  private val manualTls: (GatewayEndpoint) -> Boolean,
 ) {
   companion object {
+    internal val legacyOperatorScopes: List<String> =
+      listOf(
+        "operator.approvals",
+        "operator.read",
+        "operator.write",
+      )
+
+    internal val nativeClientOperatorScopes: List<String> =
+      listOf(
+        // admin matches iOS fresh token/password connects and is required for
+        // sessions.patch (model switching); stored tokens keep their granted scopes.
+        "operator.admin",
+        "operator.approvals",
+        "operator.read",
+        "operator.talk.secrets",
+        "operator.write",
+      )
+
+    internal fun operatorScopesForStoredDeviceToken(storedScopes: List<String>): List<String> {
+      val normalized =
+        storedScopes
+          .map { it.trim() }
+          .filter { it.isNotEmpty() }
+          .distinct()
+      return normalized.ifEmpty { legacyOperatorScopes }
+    }
+
     /**
      * Decide whether a discovered/manual endpoint must use pinned TLS or can stay local cleartext.
      */
@@ -187,15 +214,12 @@ class ConnectionManager(
     )
 
   /** Connect options for the Android operator session that drives approvals and UI actions. */
-  fun buildOperatorConnectOptions(): GatewayConnectOptions =
+  fun buildOperatorConnectOptions(
+    scopes: List<String> = nativeClientOperatorScopes,
+  ): GatewayConnectOptions =
     GatewayConnectOptions(
       role = "operator",
-      scopes =
-        listOf(
-          "operator.approvals",
-          "operator.read",
-          "operator.write",
-        ),
+      scopes = scopes,
       caps = emptyList(),
       commands = emptyList(),
       permissions = emptyMap(),
@@ -206,6 +230,6 @@ class ConnectionManager(
   /** Resolves persisted TLS pin policy for a concrete gateway endpoint. */
   fun resolveTlsParams(endpoint: GatewayEndpoint): GatewayTlsParams? {
     val stored = prefs.loadGatewayTlsFingerprint(endpoint.stableId)
-    return resolveTlsParamsForEndpoint(endpoint, storedFingerprint = stored, manualTlsEnabled = manualTls())
+    return resolveTlsParamsForEndpoint(endpoint, storedFingerprint = stored, manualTlsEnabled = manualTls(endpoint))
   }
 }
