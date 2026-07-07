@@ -1,6 +1,5 @@
 package ai.openclaw.app.ui.chat
 
-import android.view.KeyEvent as AndroidKeyEvent
 import androidx.compose.ui.input.key.KeyEvent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -9,6 +8,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import android.view.KeyEvent as AndroidKeyEvent
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
