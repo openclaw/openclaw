@@ -1528,11 +1528,15 @@ extension GatewayConnectionController {
         let requiresTLS = !trimmedHost.isEmpty && !LoopbackHost.isLocalNetworkHost(trimmedHost)
         let effectiveTLS = requestedTLS || requiresTLS
         let endpoint: String? = {
-            guard !trimmedHost.isEmpty, (1...65535).contains(port) else { return nil }
+            guard !trimmedHost.isEmpty,
+                  let resolvedPort = Self.resolvedManualPort(host: trimmedHost, port: port)
+            else {
+                return nil
+            }
             var components = URLComponents()
             components.scheme = effectiveTLS ? "wss" : "ws"
             components.host = trimmedHost
-            components.port = port
+            components.port = resolvedPort
             return components.url?.absoluteString
         }()
         let helperText = if requiresTLS {
