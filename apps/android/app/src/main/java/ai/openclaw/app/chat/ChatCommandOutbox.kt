@@ -110,6 +110,9 @@ interface ChatCommandOutbox {
     sessionKey: String,
   )
 
+  /** Drops every queued command owned by one gateway identity. */
+  suspend fun clearGateway(gatewayId: String)
+
   /** Crash safety: rows stuck in 'sending' from a killed process become 'queued' again. */
   suspend fun requeueSendingAfterRestart()
 
@@ -195,6 +198,9 @@ internal interface ChatOutboxDao {
     gatewayId: String,
     sessionKey: String,
   )
+
+  @Query("DELETE FROM outbox_commands WHERE gatewayId = :gatewayId")
+  suspend fun deleteGateway(gatewayId: String)
 
   @Query("DELETE FROM outbox_commands")
   suspend fun deleteAll()
@@ -305,6 +311,11 @@ class RoomChatCommandOutbox internal constructor(
     val gateway = scopedGatewayId(gatewayId) ?: return
     val key = sessionKey.trim().takeIf { it.isNotEmpty() } ?: return
     database.outboxDao().deleteForSession(gateway, key)
+  }
+
+  override suspend fun clearGateway(gatewayId: String) {
+    val gateway = scopedGatewayId(gatewayId) ?: return
+    database.outboxDao().deleteGateway(gateway)
   }
 
   override suspend fun requeueSendingAfterRestart() {

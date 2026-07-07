@@ -18,7 +18,7 @@ export type ChatRunUiStatus = {
   occurredAt: number;
 };
 
-export type LocalTerminalReconcile = {
+type LocalTerminalReconcile = {
   sessionKey: string;
   runId: string | null;
   phase: ChatRunUiStatus["phase"];
@@ -112,7 +112,7 @@ export function isChatStopCommand(text: string) {
   return CHAT_STOP_COMMANDS.has(normalizeLowercaseStringOrEmpty(text.trim()));
 }
 
-export type ChatAbortOptions = { preserveDraft?: boolean };
+type ChatAbortOptions = { preserveDraft?: boolean };
 
 export async function abortChatRun(state: ChatAbortRunState): Promise<boolean> {
   if (!state.client || !state.connected) {
@@ -404,6 +404,12 @@ export function reconcileChatRunFromSessionRow(
     return false;
   }
   if (isSessionRunActive(row)) {
+    return false;
+  }
+  // Transcript snapshots can briefly lose the active-run projection while the
+  // persisted lifecycle is still running. Wait for a real terminal status so
+  // tool updates cannot flash an interrupted composer state mid-turn.
+  if (row.hasActiveRun !== false && row.status === "running") {
     return false;
   }
   const terminalStatus = row.status !== undefined;

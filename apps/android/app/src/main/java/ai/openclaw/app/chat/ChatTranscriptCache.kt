@@ -83,6 +83,9 @@ interface ChatTranscriptCache {
     sessionKey: String,
   )
 
+  /** Removes every cached transcript row owned by one gateway identity. */
+  suspend fun clearGateway(gatewayId: String)
+
   /** Purges every cached row for all gateways; used when pairing/auth state is reset. */
   suspend fun clearAll()
 }
@@ -140,6 +143,9 @@ internal interface ChatCacheDao {
 
   @Query("DELETE FROM cached_sessions WHERE gatewayId = :gatewayId")
   suspend fun deleteSessions(gatewayId: String)
+
+  @Query("DELETE FROM cached_messages WHERE gatewayId = :gatewayId")
+  suspend fun deleteMessages(gatewayId: String)
 
   @Query("DELETE FROM cached_sessions")
   suspend fun deleteAllSessions()
@@ -234,10 +240,11 @@ class RoomChatTranscriptCache internal constructor(
   ): List<ChatMessage> {
     val gateway = scopedGatewayId(gatewayId) ?: return emptyList()
     val key = sessionKey.trim().takeIf { it.isNotEmpty() } ?: return emptyList()
-    return database.dao().messages(gateway, key).map { row ->
+    return database.dao().messages(gateway, key).mapNotNull { row ->
+      val role = normalizeVisibleChatMessageRole(row.role) ?: return@mapNotNull null
       ChatMessage(
         id = UUID.randomUUID().toString(),
-        role = row.role,
+        role = role,
         content = decodeTextParts(row.textPartsJson).map { ChatMessageContent(type = "text", text = it) },
         timestampMs = row.timestampMs,
         idempotencyKey = row.idempotencyKey,
@@ -300,16 +307,17 @@ class RoomChatTranscriptCache internal constructor(
     val rows =
       messages
         .mapNotNull { message ->
+          val role = normalizeVisibleChatMessageRole(message.role) ?: return@mapNotNull null
           val textParts = message.content.filter { it.type == "text" }.mapNotNull { it.text }
           if (textParts.isEmpty()) return@mapNotNull null
-          message to textParts
+          Triple(message, role, textParts)
         }.takeLast(MAX_CACHED_MESSAGES_PER_SESSION)
-        .mapIndexed { index, (message, textParts) ->
+        .mapIndexed { index, (message, role, textParts) ->
           CachedMessageEntity(
             gatewayId = gateway,
             sessionKey = key,
             rowOrder = index,
-            role = message.role,
+            role = role,
             textPartsJson = json.encodeToString(textPartsSerializer, textParts),
             timestampMs = message.timestampMs,
             idempotencyKey = message.idempotencyKey,
@@ -340,6 +348,15 @@ class RoomChatTranscriptCache internal constructor(
     database.withTransaction {
       dao.deleteAllSessions()
       dao.deleteAllMessages()
+    }
+  }
+
+  override suspend fun clearGateway(gatewayId: String) {
+    val gateway = scopedGatewayId(gatewayId) ?: return
+    val dao = database.dao()
+    database.withTransaction {
+      dao.deleteMessages(gateway)
+      dao.deleteSessions(gateway)
     }
   }
 

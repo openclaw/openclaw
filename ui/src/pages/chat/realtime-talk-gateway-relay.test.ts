@@ -20,6 +20,7 @@ type MockProcessor = {
 
 const listeners = new Set<GatewayListener>();
 const processors: MockProcessor[] = [];
+let getUserMedia: ReturnType<typeof vi.fn>;
 
 class MockAudioContext {
   readonly currentTime = 0;
@@ -116,12 +117,13 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     listeners.clear();
     processors.length = 0;
     vi.stubGlobal("AudioContext", MockAudioContext);
+    getUserMedia = vi.fn(async () => ({
+      getTracks: () => [{ stop: vi.fn() }],
+    }));
     Object.defineProperty(globalThis.navigator, "mediaDevices", {
       configurable: true,
       value: {
-        getUserMedia: vi.fn(async () => ({
-          getTracks: () => [{ stop: vi.fn() }],
-        })),
+        getUserMedia,
       },
     });
   });
@@ -130,6 +132,27 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     vi.unstubAllGlobals();
     listeners.clear();
     processors.length = 0;
+  });
+
+  it("preserves audio processing while selecting the exact microphone", async () => {
+    const transport = new GatewayRelayRealtimeTalkTransport(createSession(), {
+      callbacks: {},
+      client: createClient(),
+      sessionKey: "main",
+      inputDeviceId: "usb-mic",
+    });
+
+    await transport.start();
+
+    expect(getUserMedia).toHaveBeenCalledWith({
+      audio: {
+        autoGainControl: true,
+        echoCancellation: true,
+        noiseSuppression: true,
+        deviceId: { exact: "usb-mic" },
+      },
+    });
+    transport.stop();
   });
 
   it("forwards common Talk events from Gateway relay frames", async () => {

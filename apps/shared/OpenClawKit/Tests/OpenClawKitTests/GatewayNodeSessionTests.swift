@@ -94,6 +94,7 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     private var connectAuth: [String: Any]?
     private var connectDevice: [String: Any]?
     private var sentRequestMethods: [String] = []
+    private var sentRequestPayloads: [[String: Any]] = []
     private var receivePhase = 0
     private var pendingReceiveHandler:
         (@Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)?
@@ -142,7 +143,10 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
            obj["type"] as? String == "req",
            let method = obj["method"] as? String
         {
-            self.lock.withLock { self.sentRequestMethods.append(method) }
+            self.lock.withLock {
+                self.sentRequestMethods.append(method)
+                self.sentRequestPayloads.append(obj)
+            }
             guard method == "connect", let id = obj["id"] as? String else { return }
             let params = obj["params"] as? [String: Any]
             let auth = (params?["auth"] as? [String: Any]) ?? [:]
@@ -165,6 +169,16 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
 
     func sentRequestCount(method: String) -> Int {
         self.lock.withLock { self.sentRequestMethods.count(where: { $0 == method }) }
+    }
+
+    func sentRequests(method: String) -> [[String: Any]] {
+        self.lock.withLock {
+            self.sentRequestPayloads.filter { $0["method"] as? String == method }
+        }
+    }
+
+    func hasPendingReceiveHandler() -> Bool {
+        self.lock.withLock { self.pendingReceiveHandler != nil }
     }
 
     func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void) {
@@ -215,6 +229,10 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
     }
 
     func emitInvokeRequest(id: String, command: String) {
+        self.emitInvokeRequest(id: id, command: command, paramsJSON: "{}")
+    }
+
+    func emitInvokeRequest(id: String, command: String, paramsJSON: String?) {
         let handler = self.lock.withLock { () -> (@Sendable (Result<
             URLSessionWebSocketTask.Message,
             Error,
@@ -222,7 +240,10 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
             defer { self.pendingReceiveHandler = nil }
             return self.pendingReceiveHandler
         }
-        handler?(.success(.data(Self.invokeRequestData(id: id, command: command))))
+        handler?(.success(.data(Self.invokeRequestData(
+            id: id,
+            command: command,
+            paramsJSON: paramsJSON))))
     }
 
     private static func connectChallengeData(nonce: String) -> Data {
@@ -284,16 +305,17 @@ private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Senda
         return (try? JSONSerialization.data(withJSONObject: frame)) ?? Data()
     }
 
-    private static func invokeRequestData(id: String, command: String) -> Data {
+    private static func invokeRequestData(id: String, command: String, paramsJSON: String?) -> Data {
+        let payload: [String: Any] = [
+            "id": id,
+            "nodeId": "test-node",
+            "command": command,
+            "paramsJSON": paramsJSON ?? NSNull(),
+        ]
         let frame: [String: Any] = [
             "type": "event",
             "event": "node.invoke.request",
-            "payload": [
-                "id": id,
-                "nodeId": "test-node",
-                "command": command,
-                "paramsJSON": "{}",
-            ],
+            "payload": payload,
         ]
         return (try? JSONSerialization.data(withJSONObject: frame)) ?? Data()
     }
@@ -305,6 +327,7 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, @unchecked
     private let connectError: [String: Any]?
     private let cancelGate: FirstCancelGate?
     private var tasks: [FakeGatewayWebSocketTask] = []
+    private var requests: [URLRequest] = []
     private var makeCount = 0
 
     init(
@@ -325,10 +348,18 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, @unchecked
         self.lock.withLock { self.tasks.last }
     }
 
+    func latestRequest() -> URLRequest? {
+        self.lock.withLock { self.requests.last }
+    }
+
     func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
-        _ = url
-        return self.lock.withLock {
+        self.makeWebSocketTask(request: URLRequest(url: url))
+    }
+
+    func makeWebSocketTask(request: URLRequest) -> WebSocketTaskBox {
+        self.lock.withLock {
             self.makeCount += 1
+            self.requests.append(request)
             let task = FakeGatewayWebSocketTask(
                 helloAuth: self.helloAuth,
                 connectError: self.connectError,
@@ -336,6 +367,31 @@ private final class FakeGatewayWebSocketSession: WebSocketSessioning, @unchecked
             self.tasks.append(task)
             return WebSocketTaskBox(task: task)
         }
+    }
+}
+
+private final class MutableHeaderValue: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: String
+    private var reads = 0
+
+    init(value: String) {
+        self.value = value
+    }
+
+    func get() -> String {
+        self.lock.withLock {
+            self.reads += 1
+            return self.value
+        }
+    }
+
+    func set(_ value: String) {
+        self.lock.withLock { self.value = value }
+    }
+
+    func readCount() -> Int {
+        self.lock.withLock { self.reads }
     }
 }
 
@@ -435,9 +491,66 @@ struct GatewayNodeSessionTests {
     }
 
     @Test
-    func `route bound operations never use a replacement channel`() async throws {
+    func `upgrade request carries sanitized custom headers read per connect`() async throws {
         let session = FakeGatewayWebSocketSession()
         let gateway = GatewayNodeSession()
+        let secret = MutableHeaderValue(value: "first-secret")
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-ios-test",
+            clientMode: "node",
+            clientDisplayName: "iOS Test",
+            includeDeviceIdentity: false)
+        let url = try #require(URL(string: "wss://gateway.example.invalid"))
+        let provider: @Sendable () -> [String: String] = {
+            [
+                "CF-Access-Client-Id": "client-id",
+                "CF-Access-Client-Secret": secret.get(),
+                "Host": "smuggled.example.invalid",
+            ]
+        }
+        let connectOnce: () async throws -> Void = {
+            try await gateway.connect(
+                url: url,
+                token: nil,
+                bootstrapToken: nil,
+                password: nil,
+                connectOptions: options,
+                sessionBox: WebSocketSessionBox(session: session),
+                extraHeadersProvider: provider,
+                onConnected: {},
+                onDisconnected: { _ in },
+                onInvoke: { req in
+                    BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil)
+                })
+        }
+
+        try await connectOnce()
+        let request = try #require(session.latestRequest())
+        #expect(request.url == url)
+        #expect(request.value(forHTTPHeaderField: "CF-Access-Client-Id") == "client-id")
+        #expect(request.value(forHTTPHeaderField: "CF-Access-Client-Secret") == "first-secret")
+        #expect(request.value(forHTTPHeaderField: "Host") == nil)
+
+        // Header edits must ride the next upgrade without re-pairing or a new channel identity.
+        secret.set("second-secret")
+        await gateway.disconnect()
+        try await connectOnce()
+        let reconnectRequest = try #require(session.latestRequest())
+        #expect(reconnectRequest.value(forHTTPHeaderField: "CF-Access-Client-Secret") == "second-secret")
+
+        await gateway.disconnect()
+    }
+
+    @Test
+    func `cleartext upgrade never reads or attaches custom headers`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let secret = MutableHeaderValue(value: "must-not-be-read")
         let options = GatewayConnectOptions(
             role: "node",
             scopes: [],
@@ -450,6 +563,42 @@ struct GatewayNodeSessionTests {
             includeDeviceIdentity: false)
 
         try await gateway.connect(
+            url: #require(URL(string: "ws://gateway.example.invalid")),
+            token: nil,
+            bootstrapToken: nil,
+            password: nil,
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            extraHeadersProvider: { [secret] in ["Authorization": secret.get()] },
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { req in
+                BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil)
+            })
+
+        let request = try #require(session.latestRequest())
+        #expect(secret.readCount() == 0)
+        #expect(request.value(forHTTPHeaderField: "Authorization") == nil)
+        await gateway.disconnect()
+    }
+
+    @Test
+    func `route bound operations never use a replacement channel`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: [],
+            commands: [],
+            permissions: [:],
+            clientId: "openclaw-ios-test",
+            clientMode: "node",
+            clientDisplayName: "iOS Test",
+            includeDeviceIdentity: false,
+            deviceAuthGatewayID: "gw-a")
+
+        try await gateway.connect(
             url: #require(URL(string: "ws://first.example.invalid")),
             token: nil,
             bootstrapToken: nil,
@@ -459,7 +608,8 @@ struct GatewayNodeSessionTests {
             onConnected: {},
             onDisconnected: { _ in },
             onInvoke: { req in BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: nil, error: nil) })
-        let firstRoute = try #require(await gateway.currentRoute())
+        let firstRoute = try #require(await gateway.currentRoute(ifGatewayID: "gw-a"))
+        #expect(await gateway.currentRoute(ifGatewayID: "GW-A") == nil)
 
         try await gateway.connect(
             url: #require(URL(string: "ws://second.example.invalid")),
@@ -485,6 +635,16 @@ struct GatewayNodeSessionTests {
             Issue.record("stale route request unexpectedly reached the replacement channel")
         } catch is CancellationError {
             // Expected: the route lease belongs to the first channel.
+        }
+        do {
+            _ = try await gateway.request(
+                method: "exec.approval.get",
+                paramsJSON: "{}",
+                ifCurrentRoute: firstRoute,
+                distinguishPreDispatchRouteChange: true)
+            Issue.record("typed stale route request unexpectedly reached the replacement channel")
+        } catch is GatewayNodeSessionRequestError {
+            // Expected: callers can distinguish a request rejected before dispatch.
         }
         let replacementTask = try #require(session.latestTask())
         #expect(replacementTask.sentRequestCount(method: "node.event") == 0)
@@ -617,6 +777,86 @@ struct GatewayNodeSessionTests {
 
         #expect(firstTask.sentRequestCount(method: "node.invoke.result") == 0)
         #expect(replacementTask.sentRequestCount(method: "node.invoke.result") == 0)
+        await gateway.disconnect()
+    }
+
+    @Test
+    func `node invoke requests keep receiving while system run is blocked`() async throws {
+        let session = FakeGatewayWebSocketSession()
+        let gateway = GatewayNodeSession()
+        let systemRunStarted = AsyncStream<Void>.makeStream()
+        var startedIterator = systemRunStarted.stream.makeAsyncIterator()
+        let systemRunRelease = AsyncStream<Void>.makeStream()
+        let options = GatewayConnectOptions(
+            role: "node",
+            scopes: [],
+            caps: [],
+            commands: ["system.run"],
+            permissions: [:],
+            clientId: "openclaw-macos",
+            clientMode: "node",
+            clientDisplayName: "macOS Test",
+            includeDeviceIdentity: false)
+
+        try await gateway.connect(
+            url: #require(URL(string: "ws://example.invalid")),
+            token: nil,
+            bootstrapToken: nil,
+            password: nil,
+            connectOptions: options,
+            sessionBox: WebSocketSessionBox(session: session),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { request in
+                if request.id == "system-run-blocked" {
+                    systemRunStarted.continuation.yield()
+                    for await _ in systemRunRelease.stream {
+                        return BridgeInvokeResponse(
+                            id: request.id,
+                            ok: false,
+                            error: OpenClawNodeError(
+                                code: .unavailable,
+                                message: "UNSUPPORTED: system.run unavailable"))
+                    }
+                }
+                return BridgeInvokeResponse(id: request.id, ok: true, payloadJSON: #"{"ok":true}"#)
+            })
+        let task = try #require(session.latestTask())
+
+        task.emitInvokeRequest(
+            id: "system-run-blocked",
+            command: "system.run",
+            paramsJSON: #"{"command":["/bin/echo","ok"]}"#)
+        _ = await startedIterator.next()
+        try await waitUntil("receive loop rearmed during system.run") {
+            task.hasPendingReceiveHandler()
+        }
+        task.emitInvokeRequest(id: "camera-after-system-run", command: "camera.snap")
+
+        try await waitUntil("second invoke result while system.run is blocked") {
+            task.sentRequestCount(method: "node.invoke.result") == 1
+        }
+        let earlyResults = task.sentRequests(method: "node.invoke.result")
+        #expect(earlyResults.count == 1)
+        let earlyParams = try #require(earlyResults.first?["params"] as? [String: Any])
+        #expect(earlyParams["id"] as? String == "camera-after-system-run")
+        #expect(earlyParams["ok"] as? Bool == true)
+
+        systemRunRelease.continuation.yield()
+        systemRunRelease.continuation.finish()
+        try await waitUntil("blocked system.run result") {
+            task.sentRequestCount(method: "node.invoke.result") == 2
+        }
+        let finalResults = task.sentRequests(method: "node.invoke.result")
+        #expect(finalResults.count == 2)
+        let blockedResult = try #require(finalResults.first {
+            ($0["params"] as? [String: Any])?["id"] as? String == "system-run-blocked"
+        })
+        let blockedParams = try #require(blockedResult["params"] as? [String: Any])
+        #expect(blockedParams["ok"] as? Bool == false)
+        let error = try #require(blockedParams["error"] as? [String: Any])
+        #expect(error["code"] as? String == OpenClawNodeErrorCode.unavailable.rawValue)
+
         await gateway.disconnect()
     }
 

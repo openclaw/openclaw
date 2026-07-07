@@ -11,6 +11,10 @@ import {
   type SlashCommandDef,
 } from "../../lib/chat/commands.ts";
 import { scopedAgentIdForSession, type SessionCapability } from "../../lib/sessions/index.ts";
+import {
+  resolveUiDefaultAgentId,
+  type UiSessionDefaultsHost,
+} from "../../lib/sessions/session-key.ts";
 import { executeSlashCommand } from "./chat-command-executor.ts";
 import { clearChatHistory } from "./chat-history.ts";
 import { enqueuePendingRunMessage } from "./chat-queue.ts";
@@ -36,7 +40,7 @@ export type ChatCommandResetOptions = {
   restoreDraft?: boolean;
 };
 
-export type ChatCommandSendOptions = ChatCommandResetOptions & {
+type ChatCommandSendOptions = ChatCommandResetOptions & {
   sendResetMessage: (message: string, opts: ChatCommandResetOptions) => Promise<void>;
 };
 
@@ -46,11 +50,12 @@ export type ChatCommandHost = Parameters<typeof handleAbortChat>[0] &
     chatQueue: ChatQueueItem[];
     chatModelCatalog: ModelCatalogEntry[];
     sessionsResult?: SessionsListResult | null;
+    sessionsResultAgentId?: string | null;
     createChatSession?: () => Promise<void>;
     exportCurrentChat?: () => Promise<void> | void;
     refreshCurrentSessionTools?: () => Promise<void>;
     refreshCurrentChat?: () => Promise<void>;
-  };
+  } & UiSessionDefaultsHost;
 
 function setChatCommandError(
   host: { lastError?: string | null; chatError?: string | null },
@@ -157,18 +162,19 @@ export function applyRemoteSlashCommandsResult(params: {
 export async function refreshSlashCommands(params: {
   client: GatewayBrowserClient | null;
   agentId?: string | null;
+  shouldApply?: () => boolean;
 }): Promise<void> {
   const seq = ++refreshSeq;
   const agentId = params.agentId?.trim();
   if (!params.client) {
-    if (seq !== refreshSeq) {
+    if (seq !== refreshSeq || params.shouldApply?.() === false) {
       return;
     }
     replaceSlashCommands(buildFallbackSlashCommands());
     return;
   }
   const commands = await loadRemoteSlashCommands(params.client, agentId);
-  if (seq !== refreshSeq) {
+  if (seq !== refreshSeq || params.shouldApply?.() === false) {
     return;
   }
   replaceSlashCommands(commands);
@@ -218,7 +224,9 @@ export async function dispatchChatSlashCommand(
       host,
       `Cannot run \`/${name}\`: Control UI is not connected to the Gateway.`,
     );
-    scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+    scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], false, false, {
+      contentChanged: true,
+    });
     return;
   }
 
@@ -229,12 +237,16 @@ export async function dispatchChatSlashCommand(
       sessions: host.sessions,
       chatModelCatalog: host.chatModelCatalog,
       sessionsResult: host.sessionsResult,
+      sessionsResultAgentId: host.sessionsResultAgentId,
+      defaultAgentId: resolveUiDefaultAgentId(host),
       agentId: scopedAgentIdForSession(host, targetSessionKey),
     });
   } catch (err) {
     setChatCommandError(host, String(err));
     injectCommandResult(host, `Command \`/${name}\` failed unexpectedly.`);
-    scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+    scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], false, false, {
+      contentChanged: true,
+    });
     return;
   }
 
@@ -264,7 +276,9 @@ export async function dispatchChatSlashCommand(
     await host.refreshCurrentChat?.();
   }
 
-  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], false, false, {
+    contentChanged: Boolean(result.content),
+  });
 }
 
 function injectCommandResult(host: ChatCommandHost, content: string) {

@@ -6,6 +6,7 @@
     <string name="trust_this_gateway">Faire confiance à cette passerelle ?</string>
     <string name="trust_and_continue">Faire confiance et continuer</string>
     <string name="cancel">Annuler</string>
+    <string name="new_chat_in_worktree">Nouveau chat dans le worktree</string>
     <string name="endpoint">Point de terminaison</string>
     <string name="status">État</string>
     <string name="connected_gateway_ready">Votre passerelle est active et prête.</string>
@@ -20,8 +21,17 @@
     <string name="use_tls">Utiliser TLS</string>
     <string name="token_optional">Jeton (facultatif)</string>
     <string name="password">Mot de passe</string>
+    <string name="custom_headers_optional">En-têtes personnalisés (facultatif)</string>
+    <string name="custom_headers_explainer">Envoyés à chaque connexion à cette Gateway, par exemple les en-têtes de jeton de service Cloudflare Access. Stockés de manière chiffrée et appliqués lors de la prochaine reconnexion.</string>
+    <string name="custom_header_value">Valeur de l’en-tête</string>
+    <string name="custom_header_reserved">Cet en-tête est géré par la connexion et ne peut pas être remplacé.</string>
+    <string name="add_custom_header">Ajouter un en-tête</string>
+    <string name="remove_custom_header">Supprimer %1$s</string>
     <string name="run_onboarding_again">Relancer l’intégration</string>
     <string name="resolved_endpoint">Point de terminaison résolu</string>
     <string name="gateway_trust_first_seen">Vérifiez l’empreinte du certificat avant d’accorder votre confiance à cette passerelle.\n\n%1$s</string>
     <string name="gateway_trust_changed">Le certificat de la passerelle a changé. Continuez uniquement si vous vous attendiez à ce changement.\n\nAncien SHA-256 :\n%1$s\n\nNouveau SHA-256 :\n%2$s</string>
+    <string name="switch_gateway">Changer de Gateway</string>
+    <string name="select_gateway">Sélectionner un Gateway</string>
+    <string name="active_gateway">Gateway actif</string>
 </resources>

@@ -1,7 +1,9 @@
 // Gateway maintenance tests cover periodic cleanup for media, dedupe records,
 // stale chat buffers, expired runs, health summaries, and timer disposal.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { managedWorktrees } from "../agents/worktrees/service.js";
 import type { HealthSummary } from "../commands/health.js";
+import { CURATOR_INITIAL_DELAY_MS, CURATOR_SWEEP_INTERVAL_MS } from "../skills/workshop/curator.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
@@ -107,6 +109,7 @@ function stopMaintenanceTimers(timers: {
   dedupeCleanup: NodeJS.Timeout;
   mediaCleanup: NodeJS.Timeout | null;
   worktreeCleanup: NodeJS.Timeout;
+  skillCuratorCleanup: () => void;
 }) {
   clearInterval(timers.tickInterval);
   clearInterval(timers.healthInterval);
@@ -115,11 +118,13 @@ function stopMaintenanceTimers(timers: {
   if (timers.mediaCleanup) {
     clearInterval(timers.mediaCleanup);
   }
+  timers.skillCuratorCleanup();
 }
 
 describe("startGatewayMaintenanceTimers", () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
     vi.clearAllMocks();
   });
 
@@ -148,6 +153,61 @@ describe("startGatewayMaintenanceTimers", () => {
     await vi.advanceTimersByTimeAsync(60 * 60_000);
     expect(deps.runWorktreeGc).toHaveBeenCalledTimes(2);
 
+    stopMaintenanceTimers(timers);
+  });
+
+  it("delays curator startup, skips overlap, and unregisters on cleanup", async () => {
+    vi.useFakeTimers();
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    let resolveSweep = () => {};
+    const sweep = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSweep = resolve;
+        }),
+    );
+    const unregister = vi.fn();
+    const register = vi.fn(() => unregister);
+    const timers = startGatewayMaintenanceTimers({
+      ...createMaintenanceTimerDeps(),
+      enableSkillCurator: true,
+      runSkillCuratorSweep: sweep,
+      registerSkillUsageTracking: register,
+    });
+
+    expect(register).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(CURATOR_INITIAL_DELAY_MS - 1);
+    expect(sweep).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(sweep).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(CURATOR_SWEEP_INTERVAL_MS);
+    expect(sweep).toHaveBeenCalledTimes(1);
+
+    resolveSweep();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(CURATOR_SWEEP_INTERVAL_MS);
+    expect(sweep).toHaveBeenCalledTimes(2);
+    resolveSweep();
+    await vi.advanceTimersByTimeAsync(0);
+
+    stopMaintenanceTimers(timers);
+    expect(unregister).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes owner activity to default managed worktree cleanup", async () => {
+    vi.useFakeTimers();
+    const gc = vi.spyOn(managedWorktrees, "gc").mockResolvedValue({
+      removed: [],
+      orphansDeleted: 0,
+      snapshotsPruned: 0,
+    });
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const { runWorktreeGc: _runWorktreeGc, ...deps } = createMaintenanceTimerDeps();
+
+    const timers = startGatewayMaintenanceTimers(deps);
+    await Promise.resolve();
+
+    expect(gc).toHaveBeenCalledWith({ isOwnerActive: expect.any(Function) });
     stopMaintenanceTimers(timers);
   });
 

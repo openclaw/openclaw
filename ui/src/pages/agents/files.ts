@@ -7,7 +7,7 @@ import type {
   AgentsFilesSetResult,
 } from "../../api/types.ts";
 
-export type AgentFilesState = {
+type AgentFilesState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   agentFilesLoading: boolean;

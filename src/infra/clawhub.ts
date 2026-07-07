@@ -11,7 +11,10 @@ import {
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { sha256Base64, sha256Hex as digestSha256Hex } from "./crypto-digest.js";
 import { readResponseTextSnippet, readResponseWithLimit } from "./http-body.js";
-import { parseStrictPositiveInteger } from "./parse-finite-number.js";
+import {
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+} from "./parse-finite-number.js";
 import { isAtLeast, parseSemver } from "./runtime-guard.js";
 import { compareComparableSemver, parseComparableSemver } from "./semver-compare.js";
 import { createTempDownloadTarget } from "./temp-download.js";
@@ -21,6 +24,8 @@ const DEFAULT_CLAWHUB_URL = "https://clawhub.ai";
 const DEFAULT_GITHUB_CODELOAD_URL = "https://codeload.github.com";
 const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
 const SKILL_CARD_MAX_BYTES = 256 * 1024;
+// Align with marketplace archive downloads (src/plugins/marketplace.ts).
+const CLAWHUB_ARCHIVE_MAX_BYTES = 256 * 1024 * 1024;
 // ClawHub is an external marketplace: bound untrusted JSON and error bodies so
 // a hostile or malfunctioning host cannot exhaust memory with an endless stream.
 const CLAWHUB_JSON_MAX_BYTES = 16 * 1024 * 1024;
@@ -139,13 +144,6 @@ export type ClawHubPackageSecurityResponse = {
   } | null;
   trust: ClawHubPackageSecurityTrust;
 };
-export type ClawHubPackageReadiness = {
-  ok?: boolean;
-  ready?: boolean;
-  status?: string | null;
-  reasons?: string[];
-  checks?: Record<string, unknown>;
-} & Record<string, unknown>;
 export type ClawHubPackageClawPackSummary = {
   available: boolean;
   specVersion?: number | null;
@@ -805,15 +803,36 @@ async function readClawHubResponseBytes(params: {
   resourceLabel: string;
 }): Promise<Uint8Array> {
   const timeoutMs = resolveClawHubRequestTimeoutMs(params.timeoutMs);
-  return await readResponseWithLimit(params.response, params.maxBytes ?? Number.MAX_SAFE_INTEGER, {
+  const maxBytes = params.maxBytes ?? CLAWHUB_ARCHIVE_MAX_BYTES;
+  const contentEncoding = normalizeOptionalString(params.response.headers.get("content-encoding"));
+  const declaredSize =
+    !contentEncoding || contentEncoding.toLowerCase() === "identity"
+      ? parseStrictNonNegativeInteger(params.response.headers.get("content-length"))
+      : undefined;
+  if (declaredSize !== undefined && declaredSize > maxBytes) {
+    // Fetch may decode encoded bodies while retaining their wire length, so
+    // only identity lengths can safely short-circuit the decoded stream cap.
+    await params.response.body?.cancel().catch(() => undefined);
+    throw createClawHubBodyLimitError(params.resourceLabel, declaredSize, maxBytes, "declared");
+  }
+  return await readResponseWithLimit(params.response, maxBytes, {
     chunkTimeoutMs: timeoutMs,
-    onOverflow: ({ size, maxBytes }) =>
-      new Error(
-        `ClawHub ${params.resourceLabel} exceeded ${maxBytes} bytes (${size} bytes received)`,
-      ),
+    onOverflow: ({ size, maxBytes: limitBytes }) =>
+      createClawHubBodyLimitError(params.resourceLabel, size, limitBytes),
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`ClawHub ${params.resourceLabel} body stalled after ${chunkTimeoutMs}ms`),
   });
+}
+
+function createClawHubBodyLimitError(
+  resourceLabel: string,
+  size: number,
+  maxBytes: number,
+  measurement: "declared" | "received" = "received",
+): Error {
+  return new Error(
+    `ClawHub ${resourceLabel} exceeded ${maxBytes} bytes (${size} bytes ${measurement})`,
+  );
 }
 
 function isJsonObject(value: unknown): value is Record<string, unknown> {
@@ -1114,22 +1133,6 @@ export async function fetchClawHubPackageSecurity(params: {
     fetchImpl: params.fetchImpl,
   });
   return parseClawHubPackageSecurityResponse(response);
-}
-
-export async function fetchClawHubPackageReadiness(params: {
-  name: string;
-  baseUrl?: string;
-  token?: string;
-  timeoutMs?: number;
-  fetchImpl?: FetchLike;
-}): Promise<ClawHubPackageReadiness> {
-  return await fetchJson<ClawHubPackageReadiness>({
-    baseUrl: params.baseUrl,
-    path: `/api/v1/packages/${encodeURIComponent(params.name)}/readiness`,
-    token: params.token,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
-  });
 }
 
 export async function searchClawHubPackages(params: {

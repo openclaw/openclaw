@@ -52,6 +52,7 @@ import {
   releaseCodexSandboxExecServerEnvironment,
   type CodexSandboxExecEnvironment,
 } from "./sandbox-exec-server.js";
+import type { CodexAppServerBindingStore } from "./session-binding.js";
 import {
   clearSharedCodexAppServerClientIfCurrent,
   releaseLeasedSharedCodexAppServerClient,
@@ -86,6 +87,7 @@ export type StartCodexAttemptThreadResult = {
  */
 export async function startCodexAttemptThread(params: {
   attemptClientFactory: CodexAppServerClientFactory;
+  bindingStore: CodexAppServerBindingStore;
   appServer: CodexAppServerRuntimeOptions;
   pluginConfig: CodexPluginConfig;
   computerUseConfig: CodexComputerUseConfig;
@@ -155,7 +157,8 @@ export async function startCodexAttemptThread(params: {
           : undefined;
         const computerUseMcpElicitationDelegationRequired = params.computerUseConfig.enabled;
         const mcpElicitationDelegationRequired =
-          resolvedPluginPolicy?.enabled === true || computerUseMcpElicitationDelegationRequired;
+          resolvedPluginPolicy?.enabled === true ||
+          computerUseMcpElicitationDelegationRequired;
         const enabledPluginConfigKeys = resolvedPluginPolicy
           ? resolvedPluginPolicy.pluginPolicies
               .filter((plugin) => plugin.enabled)
@@ -311,6 +314,7 @@ export async function startCodexAttemptThread(params: {
             const buildThreadLifecycleParams = (signal: AbortSignal) =>
               ({
                 client: activeStartupClient,
+                bindingStore: params.bindingStore,
                 params: params.buildAttemptParams(),
                 agentId: params.sessionAgentId,
                 cwd: startupExecutionCwd,

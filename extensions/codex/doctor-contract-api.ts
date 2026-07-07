@@ -121,3 +121,5 @@ export const sessionRouteStateOwners: DoctorSessionRouteStateOwner[] = [
     authProfilePrefixes: ["codex:", "codex-cli:", "openai-codex:"],
   },
 ];
+
+export { stateMigrations } from "./src/migration/session-binding-sidecars.js";

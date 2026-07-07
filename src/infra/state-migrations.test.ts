@@ -449,6 +449,42 @@ describe("state migrations", () => {
     detectionCase = { ...detected, stateDir, env };
   });
 
+  it("uses the requested environment for plugin migration refresh and writes", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, "custom-state");
+    const customHome = path.join(root, "custom-home");
+    const env = { ...process.env, HOME: customHome, OPENCLAW_STATE_DIR: stateDir };
+    const observed: string[] = [];
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "fixture",
+        migration: {
+          id: "fixture-env",
+          label: "Fixture environment",
+          detectLegacyState(params) {
+            observed.push(`detect:${params.env.HOME}`);
+            return { preview: ["- Fixture environment"] };
+          },
+          migrateLegacyState(params) {
+            observed.push(`migrate:${params.env.HOME}`);
+            return { changes: ["Migrated fixture environment"], warnings: [] };
+          },
+        },
+      },
+    ];
+
+    const config = createConfig();
+    const detected = await detectLegacyStateMigrations({ cfg: config, env, homedir: () => root });
+    const result = await runLegacyStateMigrations({ detected, config, env });
+
+    expect(observed).toEqual([
+      `detect:${customHome}`,
+      `detect:${customHome}`,
+      `migrate:${customHome}`,
+    ]);
+    expect(result.changes).toContain("Migrated fixture environment");
+  });
+
   it("detects legacy sessions, agent files, channel auth, and allowFrom copies", () => {
     expect(detectionCase.targetAgentId).toBe("worker-1");
     expect(detectionCase.targetMainKey).toBe("desk");

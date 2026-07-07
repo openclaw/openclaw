@@ -4268,6 +4268,7 @@ describe("openai transport stream", () => {
         id?: string;
         call_id?: string;
         phase?: string;
+        status?: string;
         encrypted_content?: string;
         summary?: unknown;
       }>;
@@ -4290,6 +4291,7 @@ describe("openai transport stream", () => {
       phase: "commentary",
     });
     expect(assistantMessage?.id).toBeUndefined();
+    expect(assistantMessage?.status).toBeUndefined();
     const functionCall = params.input?.find((item) => item.type === "function_call");
     expectRecordFields(functionCall, {
       type: "function_call",
@@ -4376,6 +4378,7 @@ describe("openai transport stream", () => {
         id?: string;
         call_id?: string;
         phase?: string;
+        status?: string;
         encrypted_content?: string;
         summary?: unknown;
       }>;
@@ -4395,6 +4398,7 @@ describe("openai transport stream", () => {
       role: "assistant",
       id: "msg_prior",
       phase: "commentary",
+      status: "completed",
     });
     const functionCall = params.input?.find((item) => item.type === "function_call");
     expectRecordFields(functionCall, {
@@ -7660,6 +7664,31 @@ describe("openai transport stream", () => {
     );
 
     expect(params.max_completion_tokens).toBe(65_536);
+    expect(params).not.toHaveProperty("max_tokens");
+  });
+
+  it("omits output-token fields when the resolved model has no known cap", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "mimo-v2.5-pro",
+        name: "MiMo V2.5 Pro",
+        api: "openai-completions",
+        provider: "xiaomi",
+        baseUrl: "https://api.xiaomimimo.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_048_576,
+      } as Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    );
+
+    expect(params).not.toHaveProperty("max_completion_tokens");
     expect(params).not.toHaveProperty("max_tokens");
   });
 

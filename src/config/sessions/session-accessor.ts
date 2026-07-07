@@ -8,6 +8,7 @@ import {
   acquireSessionWriteLock,
   resolveSessionWriteLockOptions,
 } from "../../agents/session-write-lock.js";
+import type { MsgContext } from "../../auto-reply/templating.js";
 import {
   resolveSessionStoreAgentId,
   resolveSessionStoreKey,
@@ -21,6 +22,7 @@ import type {
   SessionTranscriptUpdateTarget,
 } from "../../sessions/transcript-events.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { formatSessionArchiveTimestamp } from "./artifacts.js";
 import { extractGeneratedTranscriptSessionId } from "./generated-transcript-session-id.js";
@@ -56,8 +58,10 @@ import {
   purgeDeletedAgentSessionEntries as purgeFileDeletedAgentSessionEntries,
   projectSessionEntryForPersistenceRevision,
   readSessionUpdatedAt as readFileSessionUpdatedAt,
+  recordSessionMetaFromInbound as recordFileSessionMetaFromInbound,
   resolveSessionStoreEntry,
   resetSessionEntryLifecycle as resetFileSessionEntryLifecycle,
+  updateLastRoute as updateFileSessionLastRoute,
   updateSessionStore,
   updateSessionStoreEntry as updateFileSessionStoreEntry,
   type DeleteSessionEntryLifecycleResult,
@@ -90,7 +94,7 @@ import {
 } from "./transcript-append.js";
 import { resolveSessionTranscriptFile } from "./transcript-file-resolve.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
-import { writeJsonlLines } from "./transcript-jsonl.js";
+import { serializeJsonlLine, writeJsonlLines } from "./transcript-jsonl.js";
 import { replayRecentUserAssistantMessages } from "./transcript-replay.js";
 import { streamSessionTranscriptLines } from "./transcript-stream.js";
 import {
@@ -102,7 +106,7 @@ import {
   resolveOwnedSessionTranscriptWriteLockRunner,
   withOwnedSessionTranscriptWrites,
 } from "./transcript-write-context.js";
-import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
+import type { GroupKeyResolution, SessionCompactionCheckpoint, SessionEntry } from "./types.js";
 
 /**
  * Session access API for callers that need entries or transcripts without
@@ -257,6 +261,13 @@ export type SessionEntrySummary = {
   entry: SessionEntry;
 };
 
+export type SessionEntryReadView = {
+  /** Row stored under the exact persisted key; no alias or canonical-key resolution. */
+  get(sessionKey: string): SessionEntry | undefined;
+  /** Every persisted row; call only when exact-key probes cannot settle the lookup. */
+  entries(): SessionEntrySummary[];
+};
+
 /** Raw transcript record for non-message events; message records use appendTranscriptMessage. */
 export type TranscriptEvent = unknown;
 
@@ -406,11 +417,6 @@ export type SessionAbortTargetResult = SessionAbortTargetIdentity & {
 export type SessionLifecycleTranscriptInfo = {
   sessionFile?: string;
   transcriptArchived?: boolean;
-};
-
-export type SessionLifecycleRolloverResult = {
-  previousSessionTranscript: SessionLifecycleTranscriptInfo;
-  sessionEntry: SessionEntry;
 };
 
 export type ReplySessionInitializationSnapshot = {
@@ -929,14 +935,29 @@ export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | unde
 /** Lists entries from the resolved store, preserving the persisted key for each row. */
 export function listSessionEntries(scope: SessionEntryListScope = {}): SessionEntrySummary[] {
   if (scope.clone === false) {
-    return Object.entries(
-      loadSessionStore(resolveSessionStorePathForScope({ ...scope, sessionKey: "" }), {
-        clone: false,
-        ...(scope.hydrateSkillPromptRefs === false ? { hydrateSkillPromptRefs: false } : {}),
-      }),
-    ).map(([sessionKey, entry]) => ({ sessionKey, entry }));
+    return openSessionEntryReadView(scope).entries();
   }
   return listFileSessionEntries(scope);
+}
+
+/**
+ * Borrowed keyed view over one resolved store for synchronous read-only hot paths.
+ * Unlike loadSessionEntry, `get` is a raw exact persisted-key probe with no alias
+ * or canonical-key resolution and no row scans, so large stores stay cheap until
+ * `entries` is called. Rows are borrowed, not cloned: callers must not mutate them
+ * and must drop the view before any await.
+ */
+export function openSessionEntryReadView(
+  scope: Omit<SessionEntryListScope, "clone" | "readConsistency"> = {},
+): SessionEntryReadView {
+  const store = loadSessionStore(resolveSessionStorePathForScope({ ...scope, sessionKey: "" }), {
+    clone: false,
+    ...(scope.hydrateSkillPromptRefs === false ? { hydrateSkillPromptRefs: false } : {}),
+  });
+  return {
+    get: (sessionKey) => (Object.hasOwn(store, sessionKey) ? store[sessionKey] : undefined),
+    entries: () => Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry })),
+  };
 }
 
 /** Reads the last activity timestamp for one session entry, or undefined when absent. */
@@ -1339,6 +1360,57 @@ function ensureCreatedSessionTranscript(params: {
   }
 }
 
+/** Fork target identity generated by createForkedSessionTranscript. */
+export type ForkedSessionTranscriptTarget = {
+  sessionFile: string;
+  sessionId: string;
+};
+
+export type CreateForkedSessionTranscriptParams = {
+  /** Working directory recorded in the forked transcript header. */
+  cwd: string;
+  /** Source transcript recorded as the fork's parentSession lineage. */
+  parentSessionFile: string;
+  /** Directory that owns the forked transcript artifact. */
+  sessionsDir: string;
+  /**
+   * Builds the non-header records copied into the fork, in transcript order.
+   * Receives the generated fork identity so records can share its timestamp.
+   */
+  buildEntries?: (fork: { sessionId: string; timestamp: string }) => readonly unknown[];
+};
+
+/**
+ * Creates a forked transcript artifact under a fresh session id as one storage
+ * operation. File-backed storage writes header plus copied records as a new
+ * JSONL artifact; SQLite implements the same fork as transcript row copies
+ * inside one write transaction (#88838).
+ */
+export async function createForkedSessionTranscript(
+  params: CreateForkedSessionTranscriptParams,
+): Promise<ForkedSessionTranscriptTarget> {
+  const sessionId = randomUUID();
+  const timestamp = new Date().toISOString();
+  // Fork artifacts keep the timestamp-prefixed file name so sibling transcripts
+  // in one sessions dir sort by creation time.
+  const fileTimestamp = timestamp.replace(/[:.]/g, "-");
+  const sessionFile = path.join(params.sessionsDir, `${fileTimestamp}_${sessionId}.jsonl`);
+  const header = createSessionTranscriptHeader({
+    sessionId,
+    cwd: params.cwd,
+    parentSession: params.parentSessionFile,
+    timestamp,
+  });
+  const entries = params.buildEntries?.({ sessionId, timestamp }) ?? [];
+  fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+  // "wx" keeps create-only semantics: a fork must never clobber an existing transcript.
+  await writeJsonlLines(sessionFile, [header, ...entries].map(serializeJsonlLine), {
+    flag: "wx",
+    mode: 0o600,
+  });
+  return { sessionFile, sessionId };
+}
+
 /** Updates an existing entry only; returns null when the session is absent. */
 export async function updateSessionEntry(
   scope: SessionAccessScope,
@@ -1355,6 +1427,69 @@ export async function updateSessionEntry(
     requireWriteSuccess: options.requireWriteSuccess,
     update,
   });
+}
+
+export type RecordInboundSessionMetaParams = {
+  /** Set false to only patch existing entries; missing sessions stay absent. */
+  createIfMissing?: boolean;
+  /** Inbound message context whose stable metadata is derived and persisted. */
+  ctx: MsgContext;
+  /** Group routing resolution for group-owned session keys. */
+  groupResolution?: GroupKeyResolution | null;
+  /** Canonical or alias session key for the inbound conversation. */
+  sessionKey: string;
+  /** Explicit store target for file-backed stores and SQLite migration adapters. */
+  storePath: string;
+};
+
+export type UpdateSessionLastRouteParams = {
+  /** Account owning the delivery route when the channel is multi-account. */
+  accountId?: string;
+  /** Delivery channel id persisted as the last route channel. */
+  channel?: SessionEntry["lastChannel"];
+  /** Set false to only patch existing entries; missing sessions stay absent. */
+  createIfMissing?: boolean;
+  /** Optional inbound context whose session metadata is derived alongside the route. */
+  ctx?: MsgContext;
+  /** Explicit delivery context merged over the persisted session fallback. */
+  deliveryContext?: DeliveryContext;
+  /** Group routing resolution for group-owned session keys. */
+  groupResolution?: GroupKeyResolution | null;
+  /** Canonical channel route persisted as the session route slot. */
+  route?: SessionEntry["route"];
+  /** Canonical or alias session key for the routed conversation. */
+  sessionKey: string;
+  /** Explicit store target for file-backed stores and SQLite migration adapters. */
+  storePath: string;
+  /** Thread/topic id for the delivery route, when the transport has one. */
+  threadId?: string | number;
+  /** Delivery target persisted as the last route recipient. */
+  to?: string;
+};
+
+/**
+ * Records stable conversation metadata derived from one inbound message as a
+ * single storage-sized upsert (createIfMissing by default). Inbound metadata
+ * must not refresh activity timestamps — idle reset relies on updatedAt from
+ * real session turns — so existing rows merge with preserve-activity
+ * semantics while legacy alias keys collapse onto the canonical row.
+ */
+export async function recordInboundSessionMeta(
+  params: RecordInboundSessionMetaParams,
+): Promise<SessionEntry | null> {
+  return await recordFileSessionMetaFromInbound(params);
+}
+
+/**
+ * Persists the last known delivery route for one session as a single
+ * storage-sized patch. Route updates preserve activity timestamps (#49515)
+ * and merge explicit route/delivery input over the persisted session
+ * fallback before normalizing the derived last* fields.
+ */
+export async function updateSessionLastRoute(
+  params: UpdateSessionLastRouteParams,
+): Promise<SessionEntry | null> {
+  return await updateFileSessionLastRoute(params);
 }
 
 /** Resolves one abort target identity without exposing the mutable store. */
@@ -1759,54 +1894,6 @@ export async function persistSessionResetLifecycle(params: {
     throw persistError;
   }
   return { replayedMessages };
-}
-
-/**
- * Persists a reply session rollover and returns stable previous-transcript
- * data for lifecycle hooks. Non-storage runtime cleanup remains with callers.
- */
-export async function persistSessionRolloverLifecycle(params: {
-  activeSessionKey: string;
-  agentId: string;
-  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
-  onArchiveError?: (error: unknown, sourcePath: string) => void;
-  onMaintenanceWarning?: (warning: SessionMaintenanceWarning) => void | Promise<void>;
-  previousEntry?: SessionEntry;
-  retiredEntry?: SessionEntryRetirement;
-  sessionEntry: SessionEntry;
-  sessionKey: string;
-  storePath: string;
-}): Promise<SessionLifecycleRolloverResult> {
-  await updateSessionStore(
-    params.storePath,
-    (store) => {
-      store[params.sessionKey] = {
-        ...store[params.sessionKey],
-        ...params.sessionEntry,
-      };
-      if (params.retiredEntry) {
-        store[params.retiredEntry.key] = params.retiredEntry.entry;
-      }
-      return store[params.sessionKey] ?? params.sessionEntry;
-    },
-    {
-      activeSessionKey: params.activeSessionKey,
-      maintenanceConfig: params.maintenanceConfig,
-      onWarn: params.onMaintenanceWarning,
-    },
-  );
-
-  const previousSessionTranscript = await archivePreviousSessionTranscript({
-    agentId: params.agentId,
-    onArchiveError: params.onArchiveError,
-    previousEntry: params.previousEntry,
-    storePath: params.storePath,
-  });
-
-  return {
-    previousSessionTranscript,
-    sessionEntry: params.sessionEntry,
-  };
 }
 
 /** Loads the reply-session initialization rows without exposing a mutable store. */

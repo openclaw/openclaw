@@ -63,12 +63,14 @@ command -v "${npm_cmd}" >/dev/null 2>&1 || {
 
 if [[ ! -f "${loader_path}" ]]; then
   mkdir -p "${tool_dir}"
+  # The loader only needs tsx's packaged JS and esbuild platform package.
+  # Skipping lifecycle scripts avoids npm child-shell drift on Windows runners.
   if [[ -n "${npm_cli_js}" ]]; then
-    if ! "${node_cmd}" "${npm_cli_arg}" install --prefix "${npm_tool_dir}" --no-save --no-package-lock "tsx@${tsx_version}" >/dev/null; then
+    if ! "${node_cmd}" "${npm_cli_arg}" install --prefix "${npm_tool_dir}" --no-save --no-package-lock --ignore-scripts "tsx@${tsx_version}" >/dev/null; then
       echo "failed to install cross-OS release-check loader with ${node_cmd} ${npm_cli_arg}." >&2
       exit 127
     fi
-  elif ! "${npm_cmd}" install --prefix "${npm_tool_dir}" --no-save --no-package-lock "tsx@${tsx_version}" >/dev/null; then
+  elif ! "${npm_cmd}" install --prefix "${npm_tool_dir}" --no-save --no-package-lock --ignore-scripts "tsx@${tsx_version}" >/dev/null; then
     echo "failed to install cross-OS release-check loader with ${npm_cmd}." >&2
     exit 127
   fi

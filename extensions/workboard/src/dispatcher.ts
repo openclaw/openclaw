@@ -12,7 +12,7 @@ const DEFAULT_DISPATCH_MODEL = "default";
 export type WorkboardSubagentRuntime = Pick<PluginRuntime["subagent"], "run">;
 export type WorkboardWorktreeRuntime = PluginRuntime["worktrees"];
 
-export type WorkboardDispatchStartOptions = {
+type WorkboardDispatchStartOptions = {
   maxStarts?: number;
   model?: string;
   provider?: string;
@@ -22,20 +22,20 @@ export type WorkboardDispatchStartOptions = {
   allowManagedWorktrees?: boolean;
 };
 
-export type WorkboardStartedRun = {
+type WorkboardStartedRun = {
   cardId: string;
   title: string;
   sessionKey: string;
   runId: string;
 };
 
-export type WorkboardStartFailure = {
+type WorkboardStartFailure = {
   cardId: string;
   title: string;
   error: string;
 };
 
-export type WorkboardDispatchAndStartResult = WorkboardDispatchResult & {
+type WorkboardDispatchAndStartResult = WorkboardDispatchResult & {
   started: WorkboardStartedRun[];
   startFailures: WorkboardStartFailure[];
 };

@@ -80,6 +80,7 @@ import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
 import { isResetAuthorizedForContext } from "./reset-authorization.js";
+import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import {
   maybeRetireLegacyMainDeliveryRoute,
   resolveLastChannelRaw,
@@ -684,7 +685,9 @@ async function initSessionStateAttemptLocked(
     previousSessionId: previousSessionEntry?.sessionId,
   });
   if (previousSessionEntry) {
-    clearSessionResetRuntimeState([sessionKey, previousSessionEntry.sessionId]);
+    clearSessionResetRuntimeState([sessionKey, previousSessionEntry.sessionId], {
+      activeReplySessionId: previousSessionEntry.sessionId,
+    });
   }
 
   const recoveredTerminalEntry =
@@ -1049,14 +1052,19 @@ async function initSessionStateAttemptLocked(
       },
     });
     await resetRegisteredAgentHarnessSessions({
+      agentId,
       sessionId: previousSessionEntry.sessionId,
       sessionKey,
       sessionFile: previousSessionEntry.sessionFile,
       reason: previousSessionEndReason ?? "unknown",
     });
+    // Direct-message browser tabs use a peer-scoped runtime identity even when
+    // their transcript aliases main; cleanup must carry both exact keys.
+    const runtimePolicySessionKey =
+      resolveRuntimePolicySessionKey({ cfg, ctx: sessionCtxForState, sessionKey }) ?? sessionKey;
     void cleanupBrowserSessionsForLifecycleEnd({
       cfg,
-      sessionKeys: [previousSessionEntry.sessionId, sessionKey],
+      sessionKeys: [previousSessionEntry.sessionId, sessionKey, runtimePolicySessionKey],
       onWarn: (message) => log.warn(message),
       onError: (error) => log.warn(`browser tab cleanup failed: ${String(error)}`),
     });

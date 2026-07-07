@@ -140,14 +140,15 @@ describe("isRecoverableTelegramNetworkError", () => {
     expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "polling" })).toBe(true);
   });
 
-  it("treats delete/react/edit (idempotent) contexts like polling, not send", () => {
+  it("treats delete/react/edit/action (idempotent) contexts like polling, not send", () => {
     const undiciSnippetErr = new Error("Undici: socket failure");
-    // delete, react, and edit are idempotent Telegram operations; a transient
-    // snippet-only error must be retried (allowMessageMatch defaults true),
+    // delete, react, edit, and action are idempotent or non-message operations;
+    // a transient snippet-only error must be retried (allowMessageMatch defaults true),
     // matching polling/webhook. send stays strict as the regression guard.
     expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "delete" })).toBe(true);
     expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "react" })).toBe(true);
     expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "edit" })).toBe(true);
+    expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "action" })).toBe(true);
     expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "send" })).toBe(false);
   });
 

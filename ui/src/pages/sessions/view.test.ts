@@ -39,7 +39,6 @@ function buildProps(result: SessionsListResult): SessionsProps {
     includeUnknown: false,
     showArchived: false,
     mainKey: "main",
-    filtersCollapsed: false,
     basePath: "",
     searchQuery: "",
     agentIdentityById: {},
@@ -50,13 +49,12 @@ function buildProps(result: SessionsListResult): SessionsProps {
     page: 0,
     pageSize: 10,
     selectedKeys: new Set<string>(),
-    expandedCheckpointKey: null,
+    expandedSessionKey: null,
     checkpointItemsByKey: {},
     checkpointLoadingKey: null,
     checkpointBusyKey: null,
     checkpointErrorByKey: {},
     onFiltersChange: () => undefined,
-    onToggleFiltersCollapsed: () => undefined,
     onClearFilters: () => undefined,
     onSearchChange: () => undefined,
     onSortChange: () => undefined,
@@ -72,7 +70,8 @@ function buildProps(result: SessionsListResult): SessionsProps {
     onDeselectPage: () => undefined,
     onDeselectAll: () => undefined,
     onDeleteSelected: () => undefined,
-    onToggleCheckpointDetails: () => undefined,
+    onFork: () => undefined,
+    onToggleDetails: () => undefined,
     onBranchFromCheckpoint: () => undefined,
     onRestoreCheckpoint: () => undefined,
   };
@@ -94,17 +93,11 @@ function sessionTableHeaders(container: HTMLElement): Array<string | undefined> 
 const SESSION_TABLE_HEADERS = [
   "",
   "Key",
-  "Label",
   "Kind",
   "Status",
   "Runtime",
   "Updated",
   "Tokens",
-  "Compaction",
-  "Thinking",
-  "Fast",
-  "Verbose",
-  "Reasoning",
   "Actions",
 ];
 
@@ -424,29 +417,6 @@ describe("sessions view", () => {
     expect(toggleGroup?.querySelector(".session-filter-check__box")).toBeNull();
   });
 
-  it("collapses the whole session filter section from the header", async () => {
-    const container = document.createElement("div");
-    const onToggleFiltersCollapsed = vi.fn();
-    render(
-      renderSessions({
-        ...buildProps(buildMultiResult([])),
-        filtersCollapsed: true,
-        onToggleFiltersCollapsed,
-      }),
-      container,
-    );
-    await Promise.resolve();
-
-    const toggle = container.querySelector<HTMLButtonElement>(".sessions-filter-panel__toggle");
-    expect(toggle?.getAttribute("aria-expanded")).toBe("false");
-    expect(container.querySelector(".sessions-filter-bar")).toBeNull();
-
-    expect(toggle).toBeInstanceOf(HTMLButtonElement);
-    toggle!.click();
-
-    expect(onToggleFiltersCollapsed).toHaveBeenCalledTimes(1);
-  });
-
   it("renders and patches provider-owned thinking ids", async () => {
     const container = document.createElement("div");
     const onPatch = vi.fn();
@@ -465,6 +435,7 @@ describe("sessions view", () => {
             ],
           }),
         ),
+        expandedSessionKey: "agent:main:main",
         onPatch,
       }),
       container,
@@ -494,8 +465,8 @@ describe("sessions view", () => {
   it("labels inherited thinking with the resolved session default", async () => {
     const container = document.createElement("div");
     render(
-      renderSessions(
-        buildProps(
+      renderSessions({
+        ...buildProps(
           buildResult({
             key: "agent:main:main",
             kind: "direct",
@@ -507,7 +478,8 @@ describe("sessions view", () => {
             ],
           }),
         ),
-      ),
+        expandedSessionKey: "agent:main:main",
+      }),
       container,
     );
     await Promise.resolve();
@@ -525,8 +497,8 @@ describe("sessions view", () => {
   it("labels inherited thinking from list defaults when lightweight rows omit row defaults", async () => {
     const container = document.createElement("div");
     render(
-      renderSessions(
-        buildProps(
+      renderSessions({
+        ...buildProps(
           buildResult(
             {
               key: "agent:main:main",
@@ -544,7 +516,8 @@ describe("sessions view", () => {
             },
           ),
         ),
-      ),
+        expandedSessionKey: "agent:main:main",
+      }),
       container,
     );
     await Promise.resolve();
@@ -571,6 +544,7 @@ describe("sessions view", () => {
             thinkingOptions: ["off", "on"],
           }),
         ),
+        expandedSessionKey: "agent:main:main",
         onPatch,
       }),
       container,
@@ -860,9 +834,9 @@ describe("sessions view", () => {
     expect(text.trim()).toBe("agent:constructor:telegram:abc123");
   });
 
-  it("expands checkpoint details from row activation when checkpoints exist", async () => {
+  it("opens session details from row activation", async () => {
     const container = document.createElement("div");
-    const onToggleCheckpointDetails = vi.fn();
+    const onToggleDetails = vi.fn();
     render(
       renderSessions({
         ...buildProps(
@@ -880,7 +854,7 @@ describe("sessions view", () => {
             },
           }),
         ),
-        onToggleCheckpointDetails,
+        onToggleDetails,
       }),
       container,
     );
@@ -890,14 +864,14 @@ describe("sessions view", () => {
     expect(row).toBeInstanceOf(HTMLTableRowElement);
     row!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-    expect(onToggleCheckpointDetails).toHaveBeenCalledWith("agent:main:main");
+    expect(onToggleDetails).toHaveBeenCalledWith("agent:main:main");
     const tokenCell = container.querySelector(".session-token-cell");
     expect(tokenCell?.textContent?.trim()).toBe("123456 / 200000");
   });
 
-  it("renders the checkpoint count as the compaction disclosure", async () => {
+  it("renders the checkpoint count on the details disclosure", async () => {
     const container = document.createElement("div");
-    const onToggleCheckpointDetails = vi.fn();
+    const onToggleDetails = vi.fn();
     render(
       renderSessions({
         ...buildProps(
@@ -913,23 +887,40 @@ describe("sessions view", () => {
             },
           }),
         ),
-        onToggleCheckpointDetails,
+        onToggleDetails,
       }),
       container,
     );
     await Promise.resolve();
 
-    const trigger = container.querySelector<HTMLButtonElement>(".session-compaction-trigger");
-    expect(trigger?.querySelector(".session-compaction-count")?.textContent?.trim()).toBe(
-      "1 Checkpoint",
-    );
-    expect(trigger?.textContent?.trim()).toBe("1 Checkpoint");
+    const trigger = container.querySelector<HTMLButtonElement>(".session-details-toggle");
+    expect(trigger?.querySelector(".session-compaction-count")?.textContent?.trim()).toBe("1");
     expect(trigger?.getAttribute("aria-expanded")).toBe("false");
-    expect(container.querySelector(".session-checkpoint-toggle")).toBeNull();
 
     expect(trigger).toBeInstanceOf(HTMLButtonElement);
     trigger!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(onToggleCheckpointDetails).toHaveBeenCalledWith("agent:main:main");
+    expect(onToggleDetails).toHaveBeenCalledWith("agent:main:main");
+  });
+
+  it("omits the checkpoint count pill when a session has no checkpoints", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const trigger = container.querySelector<HTMLButtonElement>(".session-details-toggle");
+    expect(trigger).toBeInstanceOf(HTMLButtonElement);
+    expect(trigger?.querySelector(".session-compaction-count")).toBeNull();
   });
 
   it("renders expanded session details with compaction history", async () => {
@@ -968,7 +959,7 @@ describe("sessions view", () => {
             },
           }),
         ),
-        expandedCheckpointKey: "agent:main:main",
+        expandedSessionKey: "agent:main:main",
         checkpointItemsByKey: {
           "agent:main:main": [
             {
@@ -1015,7 +1006,18 @@ describe("sessions view", () => {
     );
     expect(stats.get("Goal note")).toBe("Waiting for owner review");
 
-    const compactionSection = details?.querySelector(".session-details-section");
+    const sections = Array.from(details?.querySelectorAll(".session-details-section") ?? []);
+    expect(sections).toHaveLength(2);
+    const [overridesSection, compactionSection] = sections;
+    expect(
+      overridesSection?.querySelector(".session-details-panel__eyebrow")?.textContent?.trim(),
+    ).toBe("Overrides");
+    expect(
+      Array.from(overridesSection?.querySelectorAll(".session-override-field__label") ?? []).map(
+        (label) => label.textContent?.trim(),
+      ),
+    ).toEqual(["Label", "Thinking", "Fast", "Verbose", "Reasoning"]);
+
     expect(
       compactionSection?.querySelector(".session-details-panel__eyebrow")?.textContent?.trim(),
     ).toBe("Compaction history");
@@ -1027,9 +1029,9 @@ describe("sessions view", () => {
     ).toBe("123,456 to 38,920 tokens");
   });
 
-  it("does not expand checkpoint details when the row has none or a nested control was used", async () => {
+  it("opens details for sessions without checkpoints but ignores nested control clicks", async () => {
     const container = document.createElement("div");
-    const onToggleCheckpointDetails = vi.fn();
+    const onToggleDetails = vi.fn();
     render(
       renderSessions({
         ...buildProps(
@@ -1053,7 +1055,7 @@ describe("sessions view", () => {
             },
           ]),
         ),
-        onToggleCheckpointDetails,
+        onToggleDetails,
       }),
       container,
     );
@@ -1064,12 +1066,15 @@ describe("sessions view", () => {
     expect(checkbox).toBeInstanceOf(HTMLInputElement);
     expect(rows[1]).toBeInstanceOf(HTMLTableRowElement);
     if (!(checkbox instanceof HTMLInputElement) || !(rows[1] instanceof HTMLTableRowElement)) {
-      throw new Error("Expected checkpoint toggle row controls");
+      throw new Error("Expected details toggle row controls");
     }
+    // Nested controls (like the select checkbox) must not toggle the drawer.
     checkbox.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    rows[1].dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onToggleDetails).not.toHaveBeenCalled();
 
-    expect(onToggleCheckpointDetails).not.toHaveBeenCalled();
+    // Sessions without checkpoints still open the drawer for overrides and stats.
+    rows[1].dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onToggleDetails).toHaveBeenCalledWith("agent:main:no-checkpoint");
   });
 
   it("filters rows by agent identity name", async () => {
@@ -1113,8 +1118,8 @@ describe("sessions view", () => {
   it("keeps session selects stable and deselects only the current page", async () => {
     const container = document.createElement("div");
     render(
-      renderSessions(
-        buildProps(
+      renderSessions({
+        ...buildProps(
           buildResult({
             key: "agent:main:main",
             kind: "direct",
@@ -1124,12 +1129,13 @@ describe("sessions view", () => {
             reasoningLevel: "custom-mode",
           }),
         ),
-      ),
+        expandedSessionKey: "agent:main:main",
+      }),
       container,
     );
     await Promise.resolve();
 
-    // Scope to row selects; the toolbar also renders a group-by select.
+    // Scope to drawer selects; the toolbar also renders a group-by select.
     const selects = container.querySelectorAll("tbody select");
     const fast = selects[1] as HTMLSelectElement | undefined;
     const verbose = selects[2] as HTMLSelectElement | undefined;
