@@ -398,6 +398,44 @@ describe("processGatewayAllowlist", () => {
     });
   }
 
+  it("forces approval at security=full when the config exec denylist matches", async () => {
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "full",
+      hostAsk: "off",
+      askFallback: "deny",
+    });
+
+    const result = await runGatewayAllowlist({
+      command: "rm -rf /tmp/scratch",
+      security: "full",
+      ask: "off",
+      execConfigDenylist: [{ pattern: "rm **", reason: "destructive" }],
+    });
+
+    expect(createAndRegisterDefaultExecApprovalRequestMock).toHaveBeenCalledTimes(1);
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+  });
+
+  it("does not gate security=full commands that miss the config exec denylist", async () => {
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: "full",
+      hostAsk: "off",
+      askFallback: "deny",
+    });
+
+    const result = await runGatewayAllowlist({
+      command: "echo ok",
+      security: "full",
+      ask: "off",
+      execConfigDenylist: [{ pattern: "rm *" }],
+    });
+
+    expect(createAndRegisterDefaultExecApprovalRequestMock).not.toHaveBeenCalled();
+    expect(result.pendingResult ?? null).toBeNull();
+  });
+
   it("still requires approval when allowlist execution plan is unavailable despite durable trust", async () => {
     const result = await runGatewayAllowlist({
       command: "echo ok",

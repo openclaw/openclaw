@@ -9,6 +9,10 @@ import {
 } from "../infra/command-analysis/inline-eval.js";
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
 import {
+  evaluateExecDenylist,
+  resolveEffectiveExecDenylist,
+} from "../infra/exec-approvals-denylist.js";
+import {
   commandRequiresSecurityAuditSuppressionApproval,
   hasDurableExecApproval,
   maxAsk,
@@ -516,6 +520,24 @@ async function evaluateSystemRunPolicyPhase(
   const inlineEvalExecutableTrusted =
     inlineEvalHit !== null &&
     segmentAllowlistEntries.some((entry) => entry?.source === "allow-always");
+  // Deny-over-allow screening: union the openclaw.json layers (global +
+  // per-agent) with the exec-approvals.json file layer, then force approval on
+  // any hit. Unanalyzable commands with a configured denylist fail closed.
+  const effectiveDenylist = resolveEffectiveExecDenylist({
+    layers: [cfg.tools?.exec?.denylist, agentExec?.denylist, approvals.denylist],
+  });
+  const denylistEvaluation = evaluateExecDenylist({
+    command: parsed.commandText,
+    segments,
+    denylist: effectiveDenylist,
+    analysisOk,
+  });
+  const denylisted = denylistEvaluation.match !== null || denylistEvaluation.conservativeApproval;
+  const denylistReason = denylistEvaluation.match
+    ? `${denylistEvaluation.match.pattern}${denylistEvaluation.match.reason ? `: ${denylistEvaluation.match.reason}` : ""}`
+    : denylistEvaluation.conservativeApproval
+      ? "command could not be screened against the configured exec denylist"
+      : null;
   let approvalDecision = parsed.approvalDecision;
   let policy = evaluateSystemRunPolicy({
     security,
@@ -530,6 +552,8 @@ async function evaluateSystemRunPolicyPhase(
     // Keep cmd.exe approval gating scoped to inline shell-wrapper transport.
     // Env sanitization uses broader shell-wrapper detection in parse phase.
     shellWrapperInvocation: parsed.shellPayload !== null,
+    denylisted,
+    denylistReason,
   });
   const requiresSecurityAuditSuppressionApproval =
     commandRequiresSecurityAuditSuppressionApproval({
@@ -589,6 +613,9 @@ async function evaluateSystemRunPolicyPhase(
       parsed.approvalPlan !== null &&
       inlineEvalHit === null &&
       !requiresSecurityAuditSuppressionApproval &&
+      // A denylist hit must reach a HUMAN reviewer; the model auto-reviewer
+      // cannot clear an operator STOP rule.
+      !denylisted &&
       policy.eventReason !== "security=deny";
     if (canAutoReviewApprovalMiss) {
       const reviewer = await resolveSystemRunAutoReviewer({
@@ -630,6 +657,8 @@ async function evaluateSystemRunPolicyPhase(
           isWindows,
           cmdInvocation,
           shellWrapperInvocation: parsed.shellPayload !== null,
+          denylisted,
+          denylistReason,
         });
       } else {
         autoReviewDeferredMessage = `${policy.errorMessage} (exec auto-review deferred to human approval: ${decision.rationale})`;

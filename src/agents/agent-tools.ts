@@ -17,6 +17,7 @@ import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
+import { resolveEffectiveExecDenylist } from "../infra/exec-approvals-denylist.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logWarn } from "../logger.js";
@@ -340,6 +341,11 @@ function resolveExecConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
     pathPrepend: agentExec?.pathPrepend ?? globalExec?.pathPrepend,
     safeBins: agentExec?.safeBins ?? globalExec?.safeBins,
     strictInlineEval: agentExec?.strictInlineEval ?? globalExec?.strictInlineEval,
+    // Deny-over-allow: config denylists UNION across layers instead of the
+    // agent layer overriding the global layer.
+    denylist: resolveEffectiveExecDenylist({
+      layers: [globalExec?.denylist, agentExec?.denylist],
+    }),
     commandHighlighting: resolveExecCommandHighlighting({
       config: cfg,
       agentId: params.agentId,
@@ -815,6 +821,9 @@ export function createOpenClawCodingTools(options?: {
         pathPrepend: options?.exec?.pathPrepend ?? execConfig.pathPrepend,
         safeBins: options?.exec?.safeBins ?? execConfig.safeBins,
         strictInlineEval: options?.exec?.strictInlineEval ?? execConfig.strictInlineEval,
+        denylist: resolveEffectiveExecDenylist({
+          layers: [execConfig.denylist, options?.exec?.denylist],
+        }),
         commandHighlighting: options?.exec?.commandHighlighting ?? execConfig.commandHighlighting,
         safeBinTrustedDirs: options?.exec?.safeBinTrustedDirs ?? execConfig.safeBinTrustedDirs,
         safeBinProfiles: options?.exec?.safeBinProfiles ?? execConfig.safeBinProfiles,

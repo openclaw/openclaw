@@ -23,11 +23,21 @@ export const ExecApprovalsAllowlistEntrySchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** One persisted deny-over-allow STOP entry forcing explicit approval. */
+export const ExecApprovalsDenylistEntrySchema = Type.Object(
+  {
+    pattern: NonEmptyString,
+    reason: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
 const ExecApprovalsPolicyFields = {
   security: Type.Optional(Type.String()),
   ask: Type.Optional(Type.String()),
   askFallback: Type.Optional(Type.String()),
   autoAllowSkills: Type.Optional(Type.Boolean()),
+  denylist: Type.Optional(Type.Array(ExecApprovalsDenylistEntrySchema)),
 };
 
 /** Default exec approval policy shared by all agents unless overridden. */

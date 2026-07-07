@@ -503,6 +503,7 @@ const TOOLS_HOOKS_TARGET_KEYS = [
   "tools.alsoAllow",
   "tools.byProvider",
   "tools.exec.approvalRunningNoticeMs",
+  "tools.exec.denylist",
   "tools.exec.strictInlineEval",
   "tools.exec.commandHighlighting",
   "tools.links.enabled",

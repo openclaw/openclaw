@@ -564,6 +564,18 @@ const ToolExecBaseShape = {
   commandHighlighting: z.boolean().optional(),
   safeBinTrustedDirs: z.array(z.string()).optional(),
   safeBinProfiles: z.record(z.string(), ToolExecSafeBinProfileSchema).optional(),
+  denylist: z
+    .array(
+      z
+        .object({
+          pattern: z.string().refine((value) => value.trim().length > 0, {
+            message: "pattern must be a non-empty string",
+          }),
+          reason: z.string().optional(),
+        })
+        .strict(),
+    )
+    .optional(),
   reviewer: z
     .object({
       model: AgentModelSchema.optional(),

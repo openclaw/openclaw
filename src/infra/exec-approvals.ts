@@ -732,6 +732,9 @@ function sanitizeExecApprovalPolicy(
   const security = toStringOrUndefined(policy?.security)?.trim();
   const ask = toStringOrUndefined(policy?.ask)?.trim();
   const askFallback = toStringOrUndefined(policy?.askFallback)?.trim();
+  // Preserve the deny-over-allow STOP list through persistence. Dropping it here
+  // would let a routine policy write silently disarm an operator denylist.
+  const denylist = normalizeExecDenylist(policy?.denylist);
   return {
     security:
       security === "deny" || security === "allowlist" || security === "full" ? security : undefined,
@@ -741,6 +744,7 @@ function sanitizeExecApprovalPolicy(
         ? askFallback
         : undefined,
     autoAllowSkills: policy?.autoAllowSkills,
+    ...(denylist.length > 0 ? { denylist } : {}),
   };
 }
 

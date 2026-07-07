@@ -1951,4 +1951,86 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       },
     });
   });
+
+  it("denies system.run at security=full when the file-layer denylist matches", async () => {
+    await withTempApprovalsHome({
+      approvals: {
+        version: 1,
+        defaults: {
+          security: "full",
+          ask: "off",
+          askFallback: "deny",
+          denylist: [{ pattern: "echo *", reason: "stop" }],
+        },
+        agents: {},
+      },
+      run: async () => {
+        const { runCommand, sendInvokeResult, sendNodeEvent } = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command: ["echo", "ok"],
+          security: "full",
+          ask: "off",
+        });
+
+        expect(runCommand).not.toHaveBeenCalled();
+        const eventCall = sendNodeEvent.mock.calls[0];
+        expect(eventCall?.[1]).toBe("exec.denied");
+        expect((eventCall?.[2] as { reason?: string }).reason).toBe("denylist-hit");
+        expectInvokeErrorMessage(sendInvokeResult, {
+          message: "SYSTEM_RUN_DENIED: command matches exec denylist",
+        });
+      },
+    });
+  });
+
+  it("denies system.run when tools.exec.denylist from openclaw.json matches", async () => {
+    setRuntimeConfigSnapshot({
+      tools: {
+        exec: {
+          denylist: [{ pattern: "echo *" }],
+        },
+      },
+    });
+    try {
+      const { runCommand, sendInvokeResult, sendNodeEvent } = await runSystemInvoke({
+        preferMacAppExecHost: false,
+        command: ["echo", "ok"],
+        security: "full",
+        ask: "off",
+      });
+
+      expect(runCommand).not.toHaveBeenCalled();
+      const eventCall = sendNodeEvent.mock.calls[0];
+      expect(eventCall?.[1]).toBe("exec.denied");
+      expect((eventCall?.[2] as { reason?: string }).reason).toBe("denylist-hit");
+      expectInvokeErrorMessage(sendInvokeResult, {
+        message: "SYSTEM_RUN_DENIED: command matches exec denylist",
+      });
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
+  });
+
+  it("runs non-matching commands at security=full with a denylist configured", async () => {
+    setRuntimeConfigSnapshot({
+      tools: {
+        exec: {
+          denylist: [{ pattern: "rm *" }],
+        },
+      },
+    });
+    try {
+      const { runCommand, sendInvokeResult } = await runSystemInvoke({
+        preferMacAppExecHost: false,
+        command: ["echo", "ok"],
+        security: "full",
+        ask: "off",
+      });
+
+      expect(runCommand).toHaveBeenCalledTimes(1);
+      expectInvokeOk(sendInvokeResult);
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
+  });
 });

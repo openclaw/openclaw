@@ -1914,6 +1914,7 @@ export function createExecTool(
             safeBins,
             safeBinProfiles,
             strictInlineEval: defaults?.strictInlineEval,
+            execConfigDenylist: defaults?.denylist,
             commandHighlighting: defaults?.commandHighlighting,
             trigger: defaults?.trigger,
             agentId,

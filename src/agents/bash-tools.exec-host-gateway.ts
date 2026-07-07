@@ -588,6 +588,11 @@ export async function processGatewayAllowlist(
   const requiresDenylistApproval =
     denylistEvaluation.match !== null || denylistEvaluation.conservativeApproval;
   const requiresAsk =
+    // A denylist hit is its own standalone STOP gate: force approval even if the
+    // base policy would otherwise auto-run the command. Kept independent of
+    // requiresExecApproval so the deny-over-allow guarantee cannot regress if
+    // that helper's denylist handling changes.
+    requiresDenylistApproval ||
     requiresExecApproval({
       ask: hostAsk,
       security: hostSecurity,
