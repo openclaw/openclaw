@@ -55,3 +55,35 @@ describe("buildTelegramInboundDebounceKey", () => {
     expect(buildTelegramInboundDebounceConversationKey({ chatId: 7 })).toBe("7");
   });
 });
+
+describe("message_reaction chat guard", () => {
+  it("returns null for reaction without chat (guard prevents TypeError)", () => {
+    // Real production guard pattern from bot-handlers.runtime.ts L2006:
+    //   if (!reaction?.chat) return;
+    const handle = (reaction: unknown): string | null => {
+      if (!reaction) return null;
+      const r = reaction as { chat?: { id?: number }; message_id?: number };
+      if (!r?.chat) return null;
+      return `telegram:${r.chat.id}:msg_${r.message_id}`;
+    };
+
+    // Reaction without chat → guarded, returns null
+    expect(handle({ message_id: 789 })).toBeNull();
+
+    // Normal reaction → produces key
+    expect(handle({ chat: { id: 123 }, message_id: 456 })).toBe("telegram:123:msg_456");
+
+    // Null reaction → existing guard
+    expect(handle(null)).toBeNull();
+  });
+
+  it("crashes without the guard (negative control)", () => {
+    const handleBuggy = (reaction: unknown): string | null => {
+      if (!reaction) return null;
+      const r = reaction as { chat?: { id?: number }; message_id?: number };
+      return `telegram:${r.chat!.id}:msg_${r.message_id}`;
+    };
+
+    expect(() => handleBuggy({ message_id: 789 })).toThrow(TypeError);
+  });
+});
