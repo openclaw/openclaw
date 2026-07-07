@@ -40,6 +40,7 @@ let loginWeb: typeof import("./login.js").loginWeb;
 let loginWebWithPhoneCode: typeof import("./login.js").loginWebWithPhoneCode;
 let normalizeWhatsAppPairingPhoneNumber: typeof import("./login.js").normalizeWhatsAppPairingPhoneNumber;
 let createWaSocket: typeof import("./session.js").createWaSocket;
+let clearStalePhoneCodePairingAuthIfNeeded: typeof import("./auth-store.js").clearStalePhoneCodePairingAuthIfNeeded;
 let restoreCredsFromBackupIfNeeded: typeof import("./auth-store.js").restoreCredsFromBackupIfNeeded;
 
 function createPhoneCodeSocket(pairingCode: string) {
@@ -71,7 +72,8 @@ describe("web login", () => {
     ({ loginWeb, loginWebWithPhoneCode, normalizeWhatsAppPairingPhoneNumber } =
       await import("./login.js"));
     ({ createWaSocket } = await import("./session.js"));
-    ({ restoreCredsFromBackupIfNeeded } = await import("./auth-store.js"));
+    ({ clearStalePhoneCodePairingAuthIfNeeded, restoreCredsFromBackupIfNeeded } =
+      await import("./auth-store.js"));
   });
 
   beforeEach(() => {
@@ -230,6 +232,14 @@ describe("web login", () => {
 
     expect(firstSock.requestPairingCode).toHaveBeenCalledWith("15551234567");
     expect(secondSock.requestPairingCode).toHaveBeenCalledWith("15551234567");
+    expect(clearStalePhoneCodePairingAuthIfNeeded).toHaveBeenCalledTimes(2);
+    const cleanupBeforeReplacement = vi.mocked(clearStalePhoneCodePairingAuthIfNeeded).mock
+      .invocationCallOrder[1];
+    const replacementCreate = vi.mocked(createWaSocket).mock.invocationCallOrder[1];
+    if (cleanupBeforeReplacement === undefined || replacementCreate === undefined) {
+      throw new Error("expected cleanup and replacement socket calls");
+    }
+    expect(cleanupBeforeReplacement).toBeLessThan(replacementCreate);
     expect(runtime.log).toHaveBeenCalledWith(success("WhatsApp pairing code: 1111 2222"));
     expect(runtime.log).toHaveBeenCalledWith(success("WhatsApp pairing code: 3333 4444"));
     expect(waiter).toHaveBeenCalledTimes(2);

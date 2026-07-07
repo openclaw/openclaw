@@ -77,8 +77,10 @@ function isValidJson(raw: string): boolean {
 }
 
 type WhatsAppWebCredsPayload = {
+  account?: unknown;
   registered?: unknown;
   pairingCode?: unknown;
+  signalIdentities?: unknown;
   me?: {
     id?: unknown;
     lid?: unknown;
@@ -110,12 +112,20 @@ function isLinkedWebCredsRaw(raw: string): boolean {
   );
 }
 
+function hasSuccessfulPhoneCodePairingMaterial(payload: WhatsAppWebCredsPayload): boolean {
+  return Boolean(
+    (payload.account && typeof payload.account === "object") ||
+    (Array.isArray(payload.signalIdentities) && payload.signalIdentities.length > 0),
+  );
+}
+
 function isPartialPhoneCodePairingCredsPayload(payload: WhatsAppWebCredsPayload): boolean {
   return (
     payload.registered === false &&
     typeof payload.pairingCode === "string" &&
     payload.pairingCode.trim().length > 0 &&
-    hasUsableWebIdentity(payload)
+    hasUsableWebIdentity(payload) &&
+    !hasSuccessfulPhoneCodePairingMaterial(payload)
   );
 }
 
@@ -310,6 +320,13 @@ export async function clearStalePhoneCodePairingAuthIfNeeded(params: {
   runtime?: RuntimeEnv;
 }): Promise<boolean> {
   const resolvedAuthDir = resolveUserPath(params.authDir);
+  const barrierResult = await waitForWebAuthBarrier(
+    resolvedAuthDir,
+    "clearStalePhoneCodePairingAuthIfNeeded",
+  );
+  if (barrierResult === "timed_out") {
+    return false;
+  }
   const raw = await readWebCredsJsonRaw(resolveWebCredsPath(resolvedAuthDir));
   if (!raw || !isPartialPhoneCodePairingCredsRaw(raw)) {
     return false;

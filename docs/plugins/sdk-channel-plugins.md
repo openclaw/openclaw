@@ -189,6 +189,29 @@ Most channel plugins do not need approval-specific code. Core owns same-chat
 facts on one `approvalCapability` object instead. `plugin.auth` is login/logout
 only - core no longer reads approval auth hooks from that object.
 
+### Auth login methods
+
+Channel plugins can expose `auth.login(...)` for local account linking. The
+default login path receives no `loginMethod`; use that path for the channel's
+normal login flow, such as QR, browser, or token-based setup.
+
+If a channel supports a channel-specific CLI login helper, declare it with
+`auth.supportedLoginMethodKinds`. Core validates the method before invoking the
+plugin, then passes the typed `loginMethod` to `auth.login(...)`. The current
+shared method is:
+
+```typescript
+type ChannelLoginMethod = {
+  kind: "phone-number";
+  phoneNumber: string;
+};
+```
+
+Plugins that do not declare `"phone-number"` never receive that method; the CLI
+fails before adapter dispatch instead of letting a plugin silently ignore an
+unsupported helper. Keep provider-specific validation and side effects inside
+the channel plugin.
+
 Use `approvalCapability.delivery` only for native approval routing or fallback
 suppression, and `approvalCapability.render` only when a channel truly needs
 custom approval payloads instead of the shared renderer.

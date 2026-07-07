@@ -235,6 +235,62 @@ describe("auth-store", () => {
     });
   });
 
+  it("treats completed phone-code pairing creds as linked", async () => {
+    const authDir = createTempAuthDir("openclaw-wa-auth-phone-code-linked");
+    fsSync.writeFileSync(
+      path.join(authDir, "creds.json"),
+      JSON.stringify({
+        registered: false,
+        pairingCode: "12345678",
+        me: { id: "15551234567@s.whatsapp.net" },
+        account: {},
+        signalIdentities: [{ identifier: { name: "15551234567", deviceId: 0 } }],
+      }),
+      "utf-8",
+    );
+
+    await expect(webAuthExists(authDir)).resolves.toBe(true);
+    await expect(readWebAuthState(authDir)).resolves.toBe("linked");
+  });
+
+  it("preserves completed phone-code creds saved before stale cleanup reads", async () => {
+    await withOwnedOAuthAuthDir("openclaw-wa-auth-phone-code-save-race", async (authDir) => {
+      const credsPath = path.join(authDir, "creds.json");
+      fsSync.writeFileSync(
+        credsPath,
+        JSON.stringify({
+          registered: false,
+          pairingCode: "12345678",
+          me: { id: "15551234567@s.whatsapp.net" },
+        }),
+        "utf-8",
+      );
+      hoisted.waitForCredsSaveQueueWithTimeout.mockImplementationOnce(async () => {
+        fsSync.writeFileSync(
+          credsPath,
+          JSON.stringify({
+            registered: false,
+            pairingCode: "12345678",
+            me: { id: "15551234567@s.whatsapp.net" },
+            account: {},
+            signalIdentities: [{ identifier: { name: "15551234567", deviceId: 0 } }],
+          }),
+          "utf-8",
+        );
+        return "drained";
+      });
+
+      await expect(
+        clearStalePhoneCodePairingAuthIfNeeded({
+          authDir,
+          isLegacyAuthDir: false,
+        }),
+      ).resolves.toBe(false);
+      expect(fsSync.existsSync(credsPath)).toBe(true);
+      await expect(webAuthExists(authDir)).resolves.toBe(true);
+    });
+  });
+
   it.runIf(process.platform !== "win32")(
     "treats symlinked creds as missing across auth readers",
     async () => {
