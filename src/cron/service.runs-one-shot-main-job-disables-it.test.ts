@@ -7,7 +7,6 @@ import {
 } from "../infra/heartbeat-wake.js";
 import {
   consumeSelectedSystemEventEntries,
-  drainSystemEventEntries,
   enqueueSystemEventEntry,
   peekSystemEventEntries,
   resetSystemEventsForTest,
@@ -270,12 +269,6 @@ function getPostedSystemEventSessionKeys(enqueueSystemEvent: ReturnType<typeof v
     .filter((sessionKey): sessionKey is string => Boolean(sessionKey));
 }
 
-function expectNoQueuedEvents(sessionKeys: readonly string[]) {
-  for (const sessionKey of sessionKeys) {
-    expect(peekSystemEventEntries(sessionKey)).toHaveLength(0);
-  }
-}
-
 async function stopCronAndCleanup(cron: CronService, store: { cleanup: () => Promise<void> }) {
   await cron.status();
   cron.stop();
@@ -490,67 +483,45 @@ describe("CronService", () => {
     await stopCronAndCleanup(cron, store);
   });
 
-  it("retries disabled one-shot main wakes without leaving failed-attempt system events", async () => {
+  it("keeps system event queued when disabled-heartbeat one-shot cannot wake", async () => {
     resetSystemEventsForTest();
     const atMs = Date.parse("2025-12-13T00:00:02.000Z");
-    let now = atMs;
-    const consumedTexts: string[] = [];
-    const runHeartbeatOnce = vi.fn(
-      async (opts?: Parameters<NonNullable<CronServiceDeps["runHeartbeatOnce"]>>[0]) => {
-        if (runHeartbeatOnce.mock.calls.length < 3) {
-          return { status: "skipped" as const, reason: "disabled" };
-        }
-        const sessionKey = opts?.sessionKey;
-        if (sessionKey) {
-          consumedTexts.push(...drainSystemEventEntries(sessionKey).map((event) => event.text));
-        }
-        return { status: "ran" as const, durationMs: 1 };
-      },
-    );
+    const runHeartbeatOnce = vi.fn(async () => ({
+      status: "skipped" as const,
+      reason: "disabled",
+    }));
     const { store, cron, enqueueSystemEvent, requestHeartbeat } = await createCronHarness({
       runHeartbeatOnce,
-      nowMs: () => now,
       useRemovableSystemEventQueue: true,
       withEvents: false,
     });
     const job = await addMainOneShotHelloJob(cron, {
       atMs,
-      name: "one-shot disabled heartbeat retries cleanly",
+      name: "one-shot disabled heartbeat keeps event",
     });
 
-    await cron.run(job.id, "due");
-    let jobs = await cron.list({ includeDisabled: true });
-    let updated = jobs.find((j) => j.id === job.id);
-    expect(updated?.enabled).toBe(true);
-    expect(updated?.state.lastStatus).toBe("skipped");
-    expect(updated?.state.lastError).toBe("disabled");
-    expect(updated?.state.consecutiveSkipped).toBe(1);
-    expect(updated?.state.nextRunAtMs).toBe(atMs + 30_000);
-    expectNoQueuedEvents(getPostedSystemEventSessionKeys(enqueueSystemEvent));
+    await cron.run(job.id, "force");
 
-    now = updated?.state.nextRunAtMs ?? now;
-    await cron.run(job.id, "due");
-    jobs = await cron.list({ includeDisabled: true });
-    updated = jobs.find((j) => j.id === job.id);
-    expect(updated?.enabled).toBe(true);
-    expect(updated?.state.consecutiveSkipped).toBe(2);
-    expect(updated?.state.nextRunAtMs).toBe(atMs + 90_000);
-    expectNoQueuedEvents(getPostedSystemEventSessionKeys(enqueueSystemEvent));
-
-    now = updated?.state.nextRunAtMs ?? now;
-    await cron.run(job.id, "due");
-
-    jobs = await cron.list({ includeDisabled: true });
+    // The system event was enqueued but the heartbeat could not wake the session.
+    // Instead of removing the event and retrying, the event stays queued and a
+    // background heartbeat is requested. The one-shot job is then deleted (ok
+    // status + deleteAfterRun=true).
+    const jobs = await cron.list({ includeDisabled: true });
     expect(jobs.find((j) => j.id === job.id)).toBeUndefined();
-    expect(runHeartbeatOnce).toHaveBeenCalledTimes(3);
-    expect(requestHeartbeat).not.toHaveBeenCalled();
-    expect(consumedTexts).toEqual(["hello"]);
-    expectNoQueuedEvents(getPostedSystemEventSessionKeys(enqueueSystemEvent));
+    expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
+    expect(requestHeartbeat).toHaveBeenCalledTimes(1);
+
+    // The system event should remain in the queue, not be removed.
+    const sessionKeys = getPostedSystemEventSessionKeys(enqueueSystemEvent);
+    for (const sessionKey of sessionKeys) {
+      const entries = peekSystemEventEntries(sessionKey);
+      expect(entries).not.toHaveLength(0);
+    }
 
     await stopCronAndCleanup(cron, store);
   });
 
-  it("disables exhausted disabled-heartbeat one-shots without leaving queued events", async () => {
+  it("keeps system event queued when disabled-heartbeat one-shot is exhausted", async () => {
     resetSystemEventsForTest();
     const atMs = Date.parse("2025-12-13T00:00:02.000Z");
     const runHeartbeatOnce = vi.fn(async () => ({
@@ -569,18 +540,22 @@ describe("CronService", () => {
       name: "one-shot disabled heartbeat exhausted",
     });
 
-    await cron.run(job.id, "due");
+    await cron.run(job.id, "force");
 
+    // With a disabled heartbeat, the system event stays queued and the job is
+    // deleted (ok status + deleteAfterRun=true for one-shots). The event will be
+    // delivered on the next heartbeat cycle or when the user interacts.
     const jobs = await cron.list({ includeDisabled: true });
-    const updated = jobs.find((j) => j.id === job.id);
-    expect(updated?.enabled).toBe(false);
-    expect(updated?.state.lastStatus).toBe("skipped");
-    expect(updated?.state.lastError).toBe("disabled");
-    expect(updated?.state.consecutiveSkipped).toBe(1);
-    expect(updated?.state.nextRunAtMs).toBeUndefined();
+    expect(jobs.find((j) => j.id === job.id)).toBeUndefined();
     expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
-    expect(requestHeartbeat).not.toHaveBeenCalled();
-    expectNoQueuedEvents(getPostedSystemEventSessionKeys(enqueueSystemEvent));
+    expect(requestHeartbeat).toHaveBeenCalledTimes(1);
+
+    // The system event should remain in the queue, not be removed.
+    const sessionKeys = getPostedSystemEventSessionKeys(enqueueSystemEvent);
+    for (const sessionKey of sessionKeys) {
+      const entries = peekSystemEventEntries(sessionKey);
+      expect(entries).not.toHaveLength(0);
+    }
 
     await stopCronAndCleanup(cron, store);
   });

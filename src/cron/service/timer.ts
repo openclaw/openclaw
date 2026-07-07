@@ -2061,22 +2061,20 @@ async function executeMainSessionCronJob(
     if (heartbeatResult.status === "ran") {
       return { status: "ok", summary: text, sessionKey: cronRunSessionKey };
     }
-    if (heartbeatResult.status === "skipped") {
-      removeQueuedSystemEventHandle(state, job, queuedSystemEvent);
-      return {
-        status: "skipped",
-        error: heartbeatResult.reason,
-        summary: text,
-        sessionKey: cronRunSessionKey,
-      };
-    }
-    removeQueuedSystemEventHandle(state, job, queuedSystemEvent);
-    return {
-      status: "error",
-      error: heartbeatResult.reason,
-      summary: text,
+    // Heartbeat was skipped (non-retryable reason) or errored — the system event
+    // was already enqueued above.  Instead of removing it and marking the run as
+    // skipped/errored (which would mean the event is never delivered), keep the
+    // event queued and request a background heartbeat.  The event will be picked
+    // up on the next heartbeat cycle or when the user next interacts.
+    state.deps.requestHeartbeat({
+      source: "cron",
+      intent: "immediate",
+      reason: `cron:${job.id}`,
+      agentId: job.agentId,
       sessionKey: cronRunSessionKey,
-    };
+      heartbeat: { target: "last" },
+    });
+    return { status: "ok", summary: text, sessionKey: cronRunSessionKey };
   }
 
   if (abortSignal?.aborted) {
