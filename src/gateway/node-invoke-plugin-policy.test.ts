@@ -119,11 +119,13 @@ function createDemoPolicy(handle: NodeInvokePolicyHandler): NodeInvokePolicyRegi
 
 function createApprovalRequestPolicy(params?: {
   timeoutMs?: number;
+  title?: string;
+  description?: string;
 }): NodeInvokePolicyRegistration {
   return createDemoPolicy(async (ctx: OpenClawPluginNodeInvokePolicyContext) => {
     const approval = await ctx.approvals?.request({
-      title: "Sensitive action",
-      description: "Needs approval",
+      title: params?.title ?? "Sensitive action",
+      description: params?.description ?? "Needs approval",
       ...(params?.timeoutMs === undefined ? {} : { timeoutMs: params.timeoutMs }),
     });
     return { ok: true, payload: approval ?? null };
@@ -326,24 +328,30 @@ describe("applyPluginNodeInvokePolicy", () => {
     expect(result).toBeNull();
   });
 
-  it("does not cut approval title with an emoji straddling the truncation boundary", async () => {
-    // "🚀" is a surrogate pair (2 UTF-16 code units). A title with 79 'a'
-    // plus the emoji has 81 code units. slice(0, 80) splits between the
-    // high and low surrogate halves, leaving a lone surrogate that renders
-    // as U+FFFD in UI/frontend consumers of the approval payload.
-    //
-    // truncateUtf16Safe detects the incomplete pair and backs out to the
-    // previous whole character.
-    const title = "a".repeat(79) + "🚀";
-    const sliced = title.slice(0, 80);
-    // Lone surrogate: the high half (0xD83D) is left without its pair
-    expect(sliced.length).toBe(80);
-    const lastChar = sliced.charCodeAt(79);
-    expect(lastChar).toBe(0xd83d); // high surrogate, not a complete character
+  it("keeps approval payload fields on UTF-16 boundaries", async () => {
+    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
+    setDangerousDemoCommandRegistry([
+      createApprovalRequestPolicy({
+        title: `${"a".repeat(79)}🚀tail`,
+        description: `${"b".repeat(255)}🚀tail`,
+      }),
+    ]);
+    const { context } = createContext({
+      pluginApprovalManager: manager,
+      getApprovalClientConnIds: createApprovalClientLookup([
+        createApprovalClient({
+          connId: "conn-owner-approval",
+          clientId: "client-owner",
+          deviceId: "device-owner",
+        }),
+      ]),
+    });
+    const resultPromise = invokeDemoPolicy(context, createOperatorClient());
 
-    // truncateUtf16Safe drops the incomplete pair entirely
-    const { truncateUtf16Safe } = await import("../utils.js");
-    const safe = truncateUtf16Safe(title, 80);
-    expect(safe).toBe("a".repeat(79));
+    const record = await expectSinglePendingApproval(manager);
+    expect(record.request.title).toBe("a".repeat(79));
+    expect(record.request.description).toBe("b".repeat(255));
+
+    await expectApprovalResolution(resultPromise, manager, record);
   });
 });
