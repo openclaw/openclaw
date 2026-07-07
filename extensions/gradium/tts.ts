@@ -45,6 +45,7 @@ export async function gradiumTTS(params: {
       }),
     },
     timeoutMs,
+    requireHttps: true,
     policy: { hostnameAllowlist: [hostname] },
     auditContext: "gradium.tts",
   });
