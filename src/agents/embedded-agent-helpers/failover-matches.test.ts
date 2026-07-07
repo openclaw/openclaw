@@ -258,4 +258,43 @@ describe("Anthropic invalid_request_error classification without leading HTTP st
       '{"type":"error","error":{"type":"invalid_request_error","message":"invalid api key"}}';
     expect(classifyFailoverReason(body)).toBe("auth");
   });
+
+  it("handles OpenAI-compatible error format (no outer type wrapper)", () => {
+    // Some providers return {"error":{"type":"invalid_request_error",...}} without
+    // the outer {"type":"error",...} wrapper that Anthropic uses.
+    const body =
+      '{"error":{"type":"invalid_request_error","message":"model not found for inference"}}';
+    expect(classifyFailoverReason(body)).toBe("format");
+  });
+
+  it("is case-insensitive for error type matching", () => {
+    const body =
+      '{"type":"error","error":{"type":"INVALID_REQUEST_ERROR","message":"bad request"}}';
+    expect(classifyFailoverReason(body)).toBe("format");
+  });
+
+  it("does not crash on incomplete or malformed JSON bodies", () => {
+    expect(() => classifyFailoverReason("{}")).not.toThrow();
+    expect(() => classifyFailoverReason('{"type":"error"}')).not.toThrow();
+    expect(() => classifyFailoverReason('{"error":{}}')).not.toThrow();
+    expect(() => classifyFailoverReason("")).not.toThrow();
+  });
+
+  it("does not misclassify rate_limit or overloaded errors as 'format'", () => {
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"rate_limit_error","message":"too fast"}}',
+      ),
+    ).not.toBe("format");
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"overloaded_error","message":"server busy"}}',
+      ),
+    ).not.toBe("format");
+  });
+
+  it("maintains format classification with HTTP 400 prefix", () => {
+    const body = `400 {"type":"error","error":{"type":"invalid_request_error","message":"bad payload"}}`;
+    expect(classifyFailoverReason(body)).toBe("format");
+  });
 });

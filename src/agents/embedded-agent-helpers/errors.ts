@@ -590,20 +590,34 @@ function isSandboxBlockedErrorMessage(raw: string): boolean {
   return Boolean(formatExecDeniedUserMessage(raw)) || SANDBOX_BLOCKED_RE.test(raw);
 }
 
+/**
+ * Checks if the raw error message is a structured API error JSON body with an
+ * invalid_request error type (e.g. Anthropic-style invalid_request_error).
+ *
+ * These payloads have no leading HTTP status prefix but contain structured
+ * error info that the failover classifier maps to "format", advancing the
+ * configured model fallback chain (#99174).
+ *
+ * This helper is used in two places:
+ * 1. isSchemaErrorMessage — excludes these bodies so internal error formatting
+ *    keeps provider detail instead of collapsing to generic schema copy.
+ * 2. classifyFailoverClassificationFromMessage — classifies as "format" so the
+ *    fallback chain is consulted.
+ */
+function isStructuredInvalidRequestError(raw: string): boolean {
+  const type = normalizeOptionalLowercaseString(parseApiErrorInfo(raw)?.type);
+  return Boolean(type && type.includes("invalid_request"));
+}
+
 function isSchemaErrorMessage(raw: string): boolean {
   if (!raw || isReplayInvalidErrorMessage(raw) || isContextOverflowError(raw)) {
     return false;
   }
-  const apiErrorInfo = parseApiErrorInfo(raw);
-  // Exclude structured API error JSON bodies (e.g. Anthropic-style invalid_request_error)
-  // which are explicitly classified as "format" in classifyFailoverClassificationFromMessage.
-  // Without this exclusion, isSchemaErrorMessage would match via classifyFailoverReason(raw) === "format"
-  // and classifyProviderRuntimeFailureKind would incorrectly return "schema" instead of "format".
-  if (apiErrorInfo) {
-    const apiErrorType = normalizeOptionalLowercaseString(apiErrorInfo.type);
-    if (apiErrorType?.includes("invalid_request")) {
-      return false;
-    }
+  // Exclude structured API error JSON bodies. Without this exclusion,
+  // isSchemaErrorMessage would match via classifyFailoverReason(raw) === "format"
+  // and classifyProviderRuntimeFailureKind would incorrectly return "schema".
+  if (isStructuredInvalidRequestError(raw)) {
+    return false;
   }
   return classifyFailoverReason(raw) === "format" || matchesFormatErrorPattern(raw);
 }
@@ -1093,14 +1107,8 @@ function classifyFailoverClassificationFromMessage(
   if (isTimeoutErrorMessage(raw)) {
     return toReasonClassification("timeout");
   }
-  // Structured API error JSON bodies (e.g. Anthropic-style invalid_request_error)
-  // without a leading HTTP status prefix classify as "format" so the configured
-  // model fallback chain is consulted instead of returning null.
-  {
-    const apiErrorType = normalizeOptionalLowercaseString(parseApiErrorInfo(raw)?.type);
-    if (apiErrorType?.includes("invalid_request")) {
-      return toReasonClassification("format");
-    }
+  if (isStructuredInvalidRequestError(raw)) {
+    return toReasonClassification("format");
   }
   // Provider-specific patterns as a final catch (Bedrock, Groq, Together AI, etc.)
   const providerSpecific = classifyProviderSpecificError(
