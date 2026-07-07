@@ -1015,6 +1015,8 @@ export async function processGatewayAllowlist(
         sentApproverDms,
         unavailableReason,
         allowedDecisions: approvalAllowedDecisions,
+        nonPersistableCommand:
+          effectiveAllowAlwaysPersistence.kind === "one-shot" && hostAsk !== "always",
       }),
     };
   }

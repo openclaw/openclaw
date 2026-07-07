@@ -692,6 +692,7 @@ async function emitToolResultOutput(params: {
           approvalId: approvalPending.approvalId,
           approvalSlug: approvalPending.approvalSlug,
           allowedDecisions: approvalPending.allowedDecisions,
+          nonPersistableCommand: approvalPending.nonPersistableCommand,
           command: approvalPending.command,
           cwd: approvalPending.cwd,
           host: approvalPending.host,

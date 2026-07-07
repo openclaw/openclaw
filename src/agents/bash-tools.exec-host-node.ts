@@ -456,6 +456,8 @@ export async function executeNodeHostCommand(
           sentApproverDms,
           unavailableReason,
           allowedDecisions,
+          nonPersistableCommand:
+            allowAlwaysPersistence.kind === "one-shot" && approvalDecisionAsk !== "always",
           nodeId: target.nodeId,
         });
       }

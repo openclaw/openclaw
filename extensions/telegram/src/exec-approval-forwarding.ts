@@ -31,6 +31,10 @@ export function buildTelegramExecApprovalPendingPayload(params: {
   request: ExecApprovalRequest;
   nowMs: number;
 }) {
+  const allowedDecisions = resolveExecApprovalRequestAllowedDecisions(params.request.request);
+  // allow-always excluded by persistence (one-shot command) vs. by ask=always policy
+  const nonPersistableCommand =
+    !allowedDecisions.includes("allow-always") && params.request.request.ask !== "always";
   return buildExecApprovalPendingReplyPayload({
     approvalId: params.request.id,
     approvalSlug: params.request.id.slice(0, 8),
@@ -40,7 +44,8 @@ export function buildTelegramExecApprovalPendingPayload(params: {
     cwd: params.request.request.cwd ?? undefined,
     host: params.request.request.host === "node" ? "node" : "gateway",
     nodeId: params.request.request.nodeId ?? undefined,
-    allowedDecisions: resolveExecApprovalRequestAllowedDecisions(params.request.request),
+    allowedDecisions,
+    nonPersistableCommand,
     expiresAtMs: params.request.expiresAtMs,
     nowMs: params.nowMs,
   });
