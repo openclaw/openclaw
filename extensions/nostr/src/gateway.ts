@@ -198,12 +198,13 @@ export const startNostrGatewayAccount: NostrGatewayStart = async (ctx) => {
               if (!outboundText.trim()) {
                 return;
               }
+              const sanitizedText = sanitizeAssistantVisibleText(outboundText);
               const tableMode = runtime.channel.text.resolveMarkdownTableMode({
                 cfg: ctx.cfg,
                 channel: "nostr",
                 accountId: account.accountId,
               });
-              await reply(runtime.channel.text.convertMarkdownTables(outboundText, tableMode));
+              await reply(runtime.channel.text.convertMarkdownTables(sanitizedText, tableMode));
             },
             onRecordError: (err) => {
               ctx.log?.error?.(

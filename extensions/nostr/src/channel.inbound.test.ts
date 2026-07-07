@@ -228,4 +228,44 @@ describe("nostr inbound gateway path", () => {
 
     await cleanup.stop();
   });
+
+  it("strips internal tool-trace banners before inbound DM replies", async () => {
+    const toolTraceText = "Done.\n⚠️ 🛠️ `search repos (agent)` failed";
+    const { harness, cleanup } = await startGatewayHarness({
+      account: buildResolvedNostrAccount({
+        publicKey: "bot-pubkey",
+        config: { dmPolicy: "allowlist", allowFrom: ["nostr:sender-pubkey"] },
+      }),
+      cfg: {
+        session: { store: { type: "jsonl" } },
+        commands: { useAccessGroups: true },
+      } as never,
+    });
+
+    harness.dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver({ text: toolTraceText });
+      },
+    );
+
+    const options = mockCallArg(mocks.startNostrBus) as {
+      onMessage: (
+        senderPubkey: string,
+        text: string,
+        reply: (text: string) => Promise<void>,
+        meta: { eventId: string; createdAt: number },
+      ) => Promise<void>;
+    };
+    const sendReply = vi.fn(async (_text: string) => {});
+
+    await options.onMessage("sender-pubkey", "hello from nostr", sendReply, {
+      eventId: "event-456",
+      createdAt: 1_710_000_001,
+    });
+
+    expect(sendReply).toHaveBeenCalledWith("converted:Done.");
+    expect(mockCallArg(sendReply)).not.toContain("⚠️");
+
+    await cleanup.stop();
+  });
 });
