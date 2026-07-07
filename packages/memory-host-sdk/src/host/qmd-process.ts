@@ -172,17 +172,6 @@ function abortReason(signal: AbortSignal | undefined, commandSummary: string): E
   return new Error(`${commandSummary} aborted`);
 }
 
-type ChildOutputStreamName = "stdout" | "stderr";
-
-function listenForChildOutputErrors(
-  child: ReturnType<typeof spawn>,
-  onError: (stream: ChildOutputStreamName, error: Error) => void,
-): void {
-  for (const streamName of ["stdout", "stderr"] as const) {
-    child[streamName]?.on("error", (error: Error) => onError(streamName, error));
-  }
-}
-
 export async function runCliCommand(params: {
   commandSummary: string;
   spawnInvocation: CliSpawnInvocation;
@@ -261,13 +250,21 @@ export async function runCliCommand(params: {
     // Guard stdout/stderr against stream errors (e.g. EPIPE when the
     // child exits before all pipe data is consumed). Without listeners,
     // Node.js throws an uncaught exception that crashes the process.
-    listenForChildOutputErrors(child, (stream, error) => {
-      if (settled) {
-        return;
-      }
-      signalQmdProcessTree(child, "SIGKILL");
-      settle(() => reject(new Error(`${params.commandSummary} ${stream} error: ${error.message}`)));
-    });
+    for (const streamName of ["stdout", "stderr"] as const) {
+      child[streamName].on("error", (error: Error) => {
+        if (settled) {
+          return;
+        }
+        signalQmdProcessTree(child, "SIGKILL");
+        settle(() =>
+          reject(
+            new Error(`${params.commandSummary} ${streamName} error: ${error.message}`, {
+              cause: error,
+            }),
+          ),
+        );
+      });
+    }
 
     child.on("error", (err) => {
       if (timer) {

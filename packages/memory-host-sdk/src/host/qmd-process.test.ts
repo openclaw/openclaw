@@ -530,6 +530,7 @@ describe("runCliCommand", () => {
     async (streamName) => {
       const child = createMockChild();
       spawnMock.mockReturnValueOnce(child);
+      const streamError = new Error(`${streamName} EPIPE`);
 
       const pending = runCliCommand({
         commandSummary: "qmd query test",
@@ -539,11 +540,14 @@ describe("runCliCommand", () => {
         maxOutputChars: 10_000,
       });
 
-      child[streamName].emit("error", new Error(`${streamName} EPIPE`));
+      child[streamName].emit("error", streamError);
 
-      await expect(pending).rejects.toThrow(
-        `qmd query test ${streamName} error: ${streamName} EPIPE`,
-      );
+      await expect(pending).rejects.toMatchObject({
+        message: `qmd query test ${streamName} error: ${streamName} EPIPE`,
+        cause: streamError,
+      });
+      expect(child.kill).toHaveBeenCalledOnce();
+      expect(child.kill).toHaveBeenCalledWith("SIGKILL");
     },
   );
 
@@ -566,5 +570,6 @@ describe("runCliCommand", () => {
     }).not.toThrow();
 
     await expect(pending).rejects.toThrow("qmd query test stdout error: stdout EPIPE");
+    expect(child.kill).toHaveBeenCalledOnce();
   });
 });
