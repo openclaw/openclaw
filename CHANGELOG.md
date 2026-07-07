@@ -53,6 +53,7 @@ Docs: https://docs.openclaw.ai
 - **Control UI connection errors:** preserve structured pairing and authentication failures for pending RPC callers while keeping generic disconnect behavior unchanged. (#54758) Thanks @ruanrrn.
 - **iOS embedded terminal:** open the terminal-only Control surface directly while native Gateway authentication connects instead of exposing the Web UI login screen.
 - **TUI startup status:** show `starting up` during post-connect initialization without overwriting active-run or reconnect state. (#93999) Thanks @ml12580.
+- **TUI live session history:** refresh the selected transcript when another Gateway client appends a message, while preserving local runs and preventing stale history loads from repainting a newly selected session. (#96252, #38829) Thanks @harjothkhara.
 - **Control UI restart recovery:** recover stale bundle pages through a bounded whole-document refresh after Gateway updates or restarts. (#99111) Thanks @ZengWen-DT.
 - **TUI active Gateway ports:** follow the verified active local Gateway port when no explicit URL, port, or remote target is configured. (#73338, #42461) Thanks @haishmg and @vincentkoc.
 - **Apple chat run recovery:** restore active responses from canonical Gateway history after reconnects, foreground resumes, and event gaps, while preserving gateway user-turn identity across Codex and Copilot transcript mirrors to prevent duplicate rows. (#100277)

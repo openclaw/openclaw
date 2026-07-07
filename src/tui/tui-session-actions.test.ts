@@ -1230,6 +1230,73 @@ describe("tui session actions", () => {
     expect(rememberSessionKey).toHaveBeenCalledWith("agent:main:main");
   });
 
+  it("does not apply history after the selected session changes", async () => {
+    let resolveHistory!: (value: unknown) => void;
+    const loadHistory = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveHistory = resolve;
+        }),
+    );
+    const state = createBaseState();
+    const chatLog = {
+      addSystem: vi.fn(),
+      addUser: vi.fn(),
+      finalizeAssistant: vi.fn(),
+      clearAll: vi.fn(),
+    };
+    const { loadHistory: runLoadHistory } = createTestSessionActions({
+      client: { loadHistory } as unknown as TuiBackend,
+      state,
+      chatLog: chatLog as unknown as import("./components/chat-log.js").ChatLog,
+    });
+
+    const pending = runLoadHistory();
+    state.currentAgentId = "work";
+    state.currentSessionKey = "agent:work:other";
+    resolveHistory({
+      sessionId: "stale-session",
+      sessionInfo: { key: "agent:main:main", sessionId: "stale-session" },
+      messages: [{ role: "assistant", content: "stale answer" }],
+    });
+
+    await expect(pending).resolves.toEqual({ loaded: false });
+    expect(state.currentSessionKey).toBe("agent:work:other");
+    expect(state.currentSessionId).toBeNull();
+    expect(chatLog.clearAll).not.toHaveBeenCalled();
+    expect(chatLog.finalizeAssistant).not.toHaveBeenCalled();
+  });
+
+  it("does not apply a session-info refresh after the selection changes", async () => {
+    let resolveSessions!: (value: unknown) => void;
+    const listSessions = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveSessions = resolve;
+        }),
+    );
+    const state = createBaseState();
+    const updateHeader = vi.fn();
+    const { refreshSessionInfo } = createTestSessionActions({
+      client: { listSessions } as unknown as TuiBackend,
+      state,
+      updateHeader,
+    });
+
+    const pending = refreshSessionInfo();
+    state.currentAgentId = "work";
+    state.currentSessionKey = "agent:work:other";
+    resolveSessions({
+      defaults: {},
+      sessions: [{ key: "agent:main:main", sessionId: "stale-session" }],
+    });
+    await pending;
+
+    expect(state.currentSessionKey).toBe("agent:work:other");
+    expect(state.currentSessionId).toBeNull();
+    expect(updateHeader).not.toHaveBeenCalled();
+  });
+
   it("preserves optimistic user messages across stale history rebuilds", async () => {
     const listSessions = vi.fn().mockResolvedValue({
       ts: Date.now(),
