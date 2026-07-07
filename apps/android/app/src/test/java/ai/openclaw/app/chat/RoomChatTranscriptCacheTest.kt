@@ -66,6 +66,28 @@ class RoomChatTranscriptCacheTest {
     }
 
   @Test
+  fun transcriptRoundTripDropsInternalRoleRows() =
+    runTest {
+      val store = cache()
+      store.saveTranscript(
+        gatewayId = "gateway-a",
+        sessionKey = "main",
+        messages =
+          listOf(
+            message("hello", role = "user"),
+            message("private tool output", role = "toolResult"),
+            message("visible plugin notice", role = "custom"),
+            message("reply", role = "assistant"),
+          ),
+      )
+
+      val loaded = store.loadTranscript("gateway-a", "main")
+
+      assertEquals(listOf("hello", "visible plugin notice", "reply"), loaded.map { it.content.single().text })
+      assertEquals(listOf("user", "custom", "assistant"), loaded.map { it.role })
+    }
+
+  @Test
   fun transcriptWriteKeepsOnlyNewestBoundedMessages() =
     runTest {
       val store = cache()
@@ -127,6 +149,58 @@ class RoomChatTranscriptCacheTest {
     }
 
   @Test
+  fun activeDeepTranscriptSurvivesSessionListRefresh() =
+    runTest {
+      val store = cache()
+      val listedSessions =
+        (0 until MAX_CACHED_SESSIONS).map { index ->
+          ChatSessionEntry(key = "session-$index", updatedAtMs = 1000L - index)
+        }
+      store.saveSessions(gatewayId = "gateway-a", sessions = listedSessions)
+      store.saveTranscript(
+        gatewayId = "gateway-a",
+        sessionKey = "deep-session",
+        messages = listOf(message("deep text")),
+      )
+
+      store.saveSessions(
+        gatewayId = "gateway-a",
+        sessions = listedSessions,
+        retainedSessionKey = "deep-session",
+      )
+
+      assertEquals(MAX_CACHED_SESSIONS, store.loadSessions("gateway-a").size)
+      assertTrue(store.loadSessions("gateway-a").any { it.key == "deep-session" })
+      assertEquals(
+        listOf("deep text"),
+        store.loadTranscript("gateway-a", "deep-session").map { it.content.single().text },
+      )
+    }
+
+  @Test
+  fun completeSessionListRefreshDropsMissingDeepTranscript() =
+    runTest {
+      val store = cache()
+      store.saveSessions(
+        gatewayId = "gateway-a",
+        sessions = listOf(ChatSessionEntry(key = "deep-session", updatedAtMs = 1)),
+      )
+      store.saveTranscript(
+        gatewayId = "gateway-a",
+        sessionKey = "deep-session",
+        messages = listOf(message("deleted remotely")),
+      )
+
+      store.saveSessions(
+        gatewayId = "gateway-a",
+        sessions = listOf(ChatSessionEntry(key = "main", updatedAtMs = 2)),
+      )
+
+      assertEquals(listOf("main"), store.loadSessions("gateway-a").map { it.key })
+      assertTrue(store.loadTranscript("gateway-a", "deep-session").isEmpty())
+    }
+
+  @Test
   fun deleteSessionRemovesSessionRowAndTranscript() =
     runTest {
       val store = cache()
@@ -161,22 +235,6 @@ class RoomChatTranscriptCacheTest {
 
       assertEquals(listOf("gateway a text"), store.loadTranscript("gateway-a", "main").map { it.content.single().text })
       assertEquals(listOf("main"), store.loadSessions("gateway-a").map { it.key })
-    }
-
-  @Test
-  fun clearAllPurgesEveryGatewayScope() =
-    runTest {
-      val store = cache()
-      store.saveSessions("gateway-a", listOf(ChatSessionEntry(key = "main", updatedAtMs = 1)))
-      store.saveTranscript(gatewayId = "gateway-a", sessionKey = "main", messages = listOf(message("a text")))
-      store.saveTranscript(gatewayId = "gateway-b", sessionKey = "main", messages = listOf(message("b text")))
-
-      store.clearAll()
-
-      assertEquals(emptyList<ChatMessage>(), store.loadTranscript("gateway-b", "main"))
-      assertEquals(emptyList<ChatSessionEntry>(), store.loadSessions("gateway-b"))
-      assertEquals(emptyList<ChatMessage>(), store.loadTranscript("gateway-a", "main"))
-      assertEquals(emptyList<ChatSessionEntry>(), store.loadSessions("gateway-a"))
     }
 
   @Test

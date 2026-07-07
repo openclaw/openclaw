@@ -47,6 +47,8 @@ For `ssh` and OpenShell `remote`, recreate matters more than with Docker: the re
 
 Inspect the effective sandbox mode/scope/workspace access, sandbox tool policy, and elevated-tool gates (with fix-it config key paths).
 
+The report keeps `workspaceRoot` as the configured sandbox root and separately shows the effective host workspace, backend runtime workdir, and Docker mount table. For `workspaceAccess: "rw"`, the effective host workspace is the agent workspace rather than a directory below `workspaceRoot`.
+
 ```bash
 openclaw sandbox explain
 openclaw sandbox explain --session agent:main:main

@@ -2,27 +2,24 @@
 import { describe, expect, it } from "vitest";
 import {
   SETTINGS_NAVIGATION_ROUTES,
-  SIDEBAR_SECTIONS,
+  SIDEBAR_NAV_ROUTES,
   navigationIconForRoute,
   subtitleForRoute,
   titleForRoute,
 } from "./app-navigation.ts";
+import { normalizePath } from "./app-route-paths.ts";
 import {
   inferBasePathFromPathname,
   normalizeBasePath,
-  normalizePath,
   pathForRoute,
   routeIdFromPath,
   type RouteId,
 } from "./app-routes.ts";
 import { pluginTabKey, pluginTabRefFromSearch, pluginTabSearch } from "./pages/plugin/route.ts";
 
-/** All route identifiers derived from visible groups plus routed settings slices. */
+/** All route identifiers derived from sidebar nav routes plus routed settings slices. */
 const ALL_ROUTES: RouteId[] = Array.from(
-  new Set<RouteId>([
-    ...(SIDEBAR_SECTIONS.flatMap((group) => group.routes) as RouteId[]),
-    ...SETTINGS_NAVIGATION_ROUTES,
-  ]),
+  new Set<RouteId>(["chat", ...SIDEBAR_NAV_ROUTES, ...SETTINGS_NAVIGATION_ROUTES]),
 );
 
 const leadingSlashNormalizerCases = [
@@ -38,13 +35,15 @@ describe("navigationIconForRoute", () => {
       chat: "messageSquare",
       overview: "barChart",
       activity: "activity",
-      workboard: "folder",
+      workboard: "kanban",
+      worktrees: "folder",
       channels: "link",
       instances: "radio",
       sessions: "fileText",
       usage: "barChart",
       cron: "loader",
-      agents: "folder",
+      tasks: "loader",
+      agents: "bot",
       skills: "zap",
       "skill-workshop": "wrench",
       nodes: "monitor",
@@ -77,11 +76,13 @@ describe("titleForRoute", () => {
       overview: "Overview",
       activity: "Activity",
       workboard: "Workboard",
+      worktrees: "Worktrees",
       channels: "Channels",
       instances: "Instances",
       sessions: "Sessions",
       usage: "Usage",
       cron: "Cron Jobs",
+      tasks: "Tasks",
       agents: "Agents",
       skills: "Skills",
       "skill-workshop": "Skill Workshop",
@@ -109,11 +110,13 @@ describe("subtitleForRoute", () => {
       overview: "Status, entry points, health.",
       activity: "Browser-local tool activity summaries.",
       workboard: "Agent work queue and session handoff.",
+      worktrees: "Isolated agent task checkouts and recovery snapshots.",
       channels: "Channels and settings.",
       instances: "Connected clients and nodes.",
       sessions: "Active sessions and defaults.",
       usage: "API usage and costs.",
       cron: "Wakeups and recurring runs.",
+      tasks: "Background tasks: subagents, cron runs, CLI.",
       agents: "Workspaces, tools, identities.",
       skills: "Skills and API keys.",
       "skill-workshop": "Review, refine, and apply proposals before they become live skills.",
@@ -174,6 +177,7 @@ describe("pathForRoute", () => {
   it("returns correct path without base", () => {
     expect(pathForRoute("chat")).toBe("/chat");
     expect(pathForRoute("overview")).toBe("/overview");
+    expect(pathForRoute("worktrees")).toBe("/worktrees");
   });
 
   it("prepends base path", () => {
@@ -187,6 +191,7 @@ describe("routeIdFromPath", () => {
     expect(routeIdFromPath("/chat")).toBe("chat");
     expect(routeIdFromPath("/overview")).toBe("overview");
     expect(routeIdFromPath("/activity")).toBe("activity");
+    expect(routeIdFromPath("/worktrees")).toBe("worktrees");
     expect(routeIdFromPath("/sessions")).toBe("sessions");
     expect(routeIdFromPath("/dreaming")).toBe("dreams");
     expect(routeIdFromPath("/dreams")).toBe("dreams");
@@ -261,25 +266,18 @@ describe("plugin tabs route", () => {
     expect(pluginTabKey({ pluginId: "other", id: "logbook" })).not.toBe(pluginTabKey(ref));
   });
 
-  it("stays out of the static sidebar sections", () => {
-    expect(SIDEBAR_SECTIONS.flatMap((g) => g.routes)).not.toContain("plugin");
+  it("stays out of the customizable static sidebar routes", () => {
+    expect(SIDEBAR_NAV_ROUTES).not.toContain("plugin");
   });
 });
 
-describe("SIDEBAR_SECTIONS", () => {
-  it("contains all expected groups", () => {
-    expect(SIDEBAR_SECTIONS.map((g) => g.label)).toEqual(["chat", "control", "agent", "settings"]);
-  });
-
+describe("SIDEBAR_NAV_ROUTES", () => {
   it("all routes are unique", () => {
-    const allRoutes = SIDEBAR_SECTIONS.flatMap((g) => g.routes);
-    const uniqueRoutes = new Set(allRoutes);
-    expect(uniqueRoutes.size).toBe(allRoutes.length);
+    expect(new Set(SIDEBAR_NAV_ROUTES).size).toBe(SIDEBAR_NAV_ROUTES.length);
   });
 
-  it("keeps detailed settings slices routed but out of the root sidebar", () => {
-    const settings = SIDEBAR_SECTIONS.find((group) => group.label === "settings");
-    expect(settings?.routes).toEqual(["config"]);
+  it("keeps detailed settings slices routed but out of the customizable sidebar", () => {
+    expect(SIDEBAR_NAV_ROUTES).not.toContain("config");
     expect(SETTINGS_NAVIGATION_ROUTES).toEqual([
       "config",
       "channels",
@@ -288,6 +286,7 @@ describe("SIDEBAR_SECTIONS", () => {
       "automation",
       "mcp",
       "infrastructure",
+      "worktrees",
       "ai-agents",
       "debug",
       "logs",

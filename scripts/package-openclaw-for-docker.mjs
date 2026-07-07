@@ -133,6 +133,7 @@ export function parseArgs(argv) {
   const options = {
     outputDir: "",
     outputName: "",
+    packJson: "",
     skipBuild: false,
     sourceDir: ROOT_DIR,
   };
@@ -163,6 +164,15 @@ export function parseArgs(argv) {
         "--output-name",
         "outputName",
         readEqualsOptionValue(arg.slice("--output-name=".length), "--output-name"),
+      );
+    } else if (arg === "--pack-json") {
+      setOnce("--pack-json", "packJson", readOptionValue(argv, index, arg));
+      index += 1;
+    } else if (arg?.startsWith("--pack-json=")) {
+      setOnce(
+        "--pack-json",
+        "packJson",
+        readEqualsOptionValue(arg.slice("--pack-json=".length), "--pack-json"),
       );
     } else if (arg === "--skip-build") {
       setOnce(arg, "skipBuild", true);
@@ -373,6 +383,20 @@ async function runCapture(command, args, cwd, options = {}) {
 
 async function newestOpenClawTarball(outputDir, packOutput) {
   let fromOutput = "";
+  try {
+    const parsed = JSON.parse(packOutput);
+    if (Array.isArray(parsed)) {
+      for (const entry of parsed) {
+        if (typeof entry?.filename !== "string") {
+          continue;
+        }
+        const filename = resolvePackedOpenClawFileName(entry.filename);
+        if (filename) {
+          fromOutput = filename;
+        }
+      }
+    }
+  } catch {}
   for (const line of packOutput.split(/\r?\n/u)) {
     const filename = resolvePackedOpenClawFileName(line);
     if (filename) {
@@ -398,6 +422,30 @@ async function newestOpenClawTarball(outputDir, packOutput) {
     throw new Error(`missing packed OpenClaw tarball in ${outputDir}`);
   }
   return path.join(outputDir, packed);
+}
+
+async function writePackJson(packOutput, tarball, packJsonPath, sourceDir) {
+  if (!packJsonPath) {
+    return;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(packOutput);
+  } catch (error) {
+    throw new Error("npm pack --json output was not valid JSON", { cause: error });
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error("npm pack --json output must be an array");
+  }
+  const filename = path.basename(tarball);
+  for (const entry of parsed) {
+    if (entry && typeof entry === "object" && typeof entry.filename === "string") {
+      entry.filename = filename;
+    }
+  }
+  const target = path.resolve(sourceDir, packJsonPath);
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await fs.writeFile(target, `${JSON.stringify(parsed, null, 2)}\n`);
 }
 
 async function cleanPackedOpenClawTarballs(outputDir) {
@@ -435,6 +483,7 @@ export async function prepareBundledAiRuntimePackage(
   options = {},
 ) {
   const packageJsonPath = path.join(sourceDir, "package.json");
+  const aiRuntimePackageJsonPath = path.join(sourceDir, "packages", "ai", "package.json");
   const aiRuntimePath = path.join(sourceDir, "node_modules", "@openclaw", "ai");
   const aiRuntimeBackupPath = path.join(
     sourceDir,
@@ -453,7 +502,24 @@ export async function prepareBundledAiRuntimePackage(
   } catch (error) {
     throw new Error(`failed to parse ${packageJsonPath}`, { cause: error });
   }
-  if (typeof packageJson.dependencies?.[AI_RUNTIME_PACKAGE] !== "string") {
+  const aiRuntimeDependency = packageJson.dependencies?.[AI_RUNTIME_PACKAGE];
+  let hasAiRuntimeWorkspace = false;
+  try {
+    await fs.access(aiRuntimePackageJsonPath);
+    hasAiRuntimeWorkspace = true;
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      throw error;
+    }
+  }
+  // Release checks can package refs from before the AI runtime was split into a workspace package.
+  if (!hasAiRuntimeWorkspace && aiRuntimeDependency === undefined) {
+    return async () => {};
+  }
+  if (!hasAiRuntimeWorkspace) {
+    throw new Error("@openclaw/ai dependency requires the packages/ai workspace");
+  }
+  if (typeof aiRuntimeDependency !== "string") {
     throw new Error("root package.json must declare @openclaw/ai as a dependency");
   }
 
@@ -579,9 +645,17 @@ export async function packOpenClawPackageForDocker(sourceDir, outputDir, options
   try {
     await cleanPackedOpenClawTarballs(outputDir);
     cleanupBundledAiRuntime = await prepareBundledAiRuntime(sourceDir, outputDir, runCaptureImpl);
+    const packArgs = [
+      "pack",
+      ...(options.packJsonPath ? ["--json"] : []),
+      "--silent",
+      "--ignore-scripts",
+      "--pack-destination",
+      outputDir,
+    ];
     packOutput = await runCaptureImpl(
       "npm",
-      ["pack", "--silent", "--ignore-scripts", "--pack-destination", outputDir],
+      packArgs,
       sourceDir,
       {
         deferForwardedSignalExit: true,
@@ -598,7 +672,17 @@ export async function packOpenClawPackageForDocker(sourceDir, outputDir, options
       await restoreChangelog(sourceDir);
     }
   }
-  return await newestOpenClawTarball(outputDir, packOutput);
+  let tarball = await newestOpenClawTarball(outputDir, packOutput);
+  if (options.outputName) {
+    const target = path.join(outputDir, options.outputName);
+    if (target !== tarball) {
+      await fs.rm(target, { force: true });
+      await fs.rename(tarball, target);
+      tarball = target;
+    }
+  }
+  await writePackJson(packOutput, tarball, options.packJsonPath, sourceDir);
+  return tarball;
 }
 
 async function main() {
@@ -633,16 +717,10 @@ async function main() {
     },
   );
 
-  let tarball = await packOpenClawPackageForDocker(sourceDir, outputDir);
-
-  if (options.outputName) {
-    const target = path.join(outputDir, options.outputName);
-    if (target !== tarball) {
-      await fs.rm(target, { force: true });
-      await fs.rename(tarball, target);
-      tarball = target;
-    }
-  }
+  const tarball = await packOpenClawPackageForDocker(sourceDir, outputDir, {
+    outputName: options.outputName,
+    packJsonPath: options.packJson,
+  });
 
   console.error("==> Checking OpenClaw package tarball");
   const checkStartedAt = Date.now();

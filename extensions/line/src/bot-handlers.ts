@@ -190,6 +190,7 @@ async function sendLinePairingReply(params: {
   })();
   await createChannelPairingChallengeIssuer({
     channel: "line",
+    accountId: context.account.accountId,
     upsertPairingRequest: async ({ id, meta }) =>
       await upsertChannelPairingRequest({
         channel: "line",

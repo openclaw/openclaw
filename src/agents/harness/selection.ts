@@ -90,6 +90,7 @@ type PluginHarnessToolPolicyContext = Pick<
   | "senderName"
   | "senderUsername"
   | "senderE164"
+  | "senderIsOwner"
 >;
 
 type PluginHarnessToolPolicy = { allow?: string[]; deny?: string[] };
@@ -201,6 +202,16 @@ export function selectAgentHarness(params: {
   agentHarnessRuntimeOverride?: string;
 }): AgentHarness {
   return selectAgentHarnessDecision(params).harness;
+}
+
+/** Returns whether a plugin harness constructs OpenClaw tools inside its runtime. */
+export function agentHarnessBuildsOpenClawTools(harnessId: string): boolean {
+  return harnessId === "codex" || harnessId === "copilot";
+}
+
+/** Returns whether the selected harness exposes OpenClaw's agent-tool surface. */
+export function agentHarnessExposesOpenClawTools(harnessId: string): boolean {
+  return harnessId === "openclaw" || agentHarnessBuildsOpenClawTools(harnessId);
 }
 
 function selectAgentHarnessDecision(params: {
@@ -453,6 +464,7 @@ function resolvePluginHarnessToolPolicies(
     senderName: params.senderName,
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
+    senderIsOwner: params.senderIsOwner,
   });
   const groupPolicyParams = {
     config: params.config,

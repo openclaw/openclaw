@@ -301,7 +301,8 @@ export function readFiniteNumberParam(
     strict: true,
   });
   if (value === undefined) {
-    if (readParamRaw(params, key) != null) {
+    const raw = readParamRaw(params, key);
+    if (raw != null && !isBlankParamValue(raw)) {
       throw new ToolInputError(options.message ?? `${key} must be a finite number`);
     }
     return undefined;

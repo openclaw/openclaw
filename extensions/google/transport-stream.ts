@@ -160,7 +160,7 @@ function requiresToolCallId(modelId: string): boolean {
 }
 
 function requiresToolCallThoughtSignature(modelId: string): boolean {
-  return normalizeLowercaseStringOrEmpty(modelId).includes("gemini-3");
+  return isGoogleGemini3ProModel(modelId) || isGoogleGemini3FlashModel(modelId);
 }
 
 function supportsMultimodalFunctionResponse(modelId: string): boolean {
@@ -487,7 +487,7 @@ function resolveGoogleThinkingConfig(
     }
     return normalizeGoogleThinkingConfig(model.id, config);
   }
-  if (!options?.reasoning) {
+  if (!options?.reasoning || options.reasoning === "off") {
     return getDisabledThinkingConfig(model.id);
   }
   if (isAdaptiveReasoningLevel(options.reasoning)) {

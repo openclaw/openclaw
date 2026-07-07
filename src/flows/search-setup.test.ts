@@ -265,7 +265,7 @@ describe("runSearchSetupFlow", () => {
 
     expect(grokOption).toEqual(
       expect.objectContaining({
-        label: "Grok (Search with xAI · API key required)",
+        label: "Grok (Search with xAI · xAI API key required)",
       }),
     );
     expect(grokOption).not.toHaveProperty("hint");

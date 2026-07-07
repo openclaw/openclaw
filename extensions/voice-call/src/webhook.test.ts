@@ -31,7 +31,14 @@ const mocks = vi.hoisted(() => {
   };
 
   return {
-    generateVoiceResponse: vi.fn(async (): Promise<{ text: string | null }> => ({ text: null })),
+    generateVoiceResponse: vi.fn(
+      async (_params?: {
+        onEarlyText?: (text: string) => Promise<boolean>;
+      }): Promise<{ text: string | null; deliveredEarly: boolean }> => ({
+        text: null,
+        deliveredEarly: false,
+      }),
+    ),
     getRealtimeTranscriptionProvider: vi.fn<(...args: unknown[]) => unknown>(
       () => realtimeTranscriptionProvider,
     ),
@@ -1676,7 +1683,9 @@ describe("VoiceCallWebhookServer classic response routing", () => {
       undefined,
       {} as never,
     );
-    mocks.generateVoiceResponse.mockReset().mockResolvedValue({ text: "Hello back" });
+    mocks.generateVoiceResponse
+      .mockReset()
+      .mockResolvedValue({ text: "Hello back", deliveredEarly: false });
 
     await (
       server as unknown as {
@@ -1692,6 +1701,40 @@ describe("VoiceCallWebhookServer classic response routing", () => {
     expect(speak).toHaveBeenCalledWith(call.callId, "Hello back", {
       listenAfterPlayback: true,
     });
+  });
+
+  it("does not replay a completed response after early playback", async () => {
+    const call = createCall(Date.now());
+    const speak = vi.fn(async () => ({ success: true }));
+    const manager = {
+      getCall: (callId: string) => (callId === call.callId ? call : undefined),
+      speak,
+    } as unknown as CallManager;
+    const server = new VoiceCallWebhookServer(
+      createConfig({ agentId: "main" }),
+      manager,
+      provider,
+      {} as never,
+      undefined,
+      {} as never,
+    );
+    mocks.generateVoiceResponse.mockReset().mockImplementationOnce(async (params) => {
+      await params?.onEarlyText?.("Spoken before compaction. Final detail.");
+      return {
+        text: "Spoken before compaction. Final detail.",
+        deliveredEarly: true,
+      };
+    });
+
+    await (
+      server as unknown as {
+        handleInboundResponse: (callId: string, message: string) => Promise<void>;
+      }
+    ).handleInboundResponse(call.callId, "hello");
+
+    expect(speak.mock.calls).toEqual([
+      [call.callId, "Spoken before compaction. Final detail.", { listenAfterPlayback: true }],
+    ]);
   });
 });
 
@@ -1886,6 +1929,48 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
         onTranscript?: (providerCallId: string, transcript: string) => void;
       };
     };
+
+  it("logs streaming transcripts without splitting UTF-16 surrogate pairs", async () => {
+    const manager = {
+      getActiveCalls: () => [],
+      getCallByProviderCallId: vi.fn(() => undefined),
+      endCall: vi.fn(async () => ({ success: true })),
+      speakInitialMessage: vi.fn(async () => {}),
+      processEvent: vi.fn(),
+    } as unknown as CallManager;
+    const config = createConfig({
+      provider: "twilio",
+      streaming: {
+        ...createConfig().streaming,
+        enabled: true,
+        providers: {
+          openai: {
+            apiKey: "test-key", // pragma: allowlist secret
+          },
+        },
+      },
+    });
+    const server = new VoiceCallWebhookServer(config, manager, createTwilioProvider(vi.fn()));
+    await server.start();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const transcript = `${"a".repeat(199)}\uD83D\uDE80tail`;
+      getMediaCallbacks(server).config.onTranscript?.("CA-utf16", transcript);
+
+      const transcriptLog = logSpy.mock.calls
+        .map(([message]) => String(message))
+        .find((message) => message.includes("Transcript for CA-utf16"));
+      expect(transcriptLog).toContain(`${"a".repeat(199)}...`);
+      expect(transcriptLog).not.toContain("\uD83D");
+      expect(transcriptLog).not.toContain("\uDE80");
+    } finally {
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
+      await server.stop();
+    }
+  });
 
   it("suppresses barge-in clear while outbound conversation initial message is pending", async () => {
     const call = createCall(Date.now() - 1_000);

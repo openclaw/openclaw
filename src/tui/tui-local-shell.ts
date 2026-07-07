@@ -128,6 +128,10 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
 
       let stdout = "";
       let stderr = "";
+      // Output pipes may fail independently; child close/error remains authoritative.
+      const ignoreOutputStreamError = () => {};
+      child.stdout.on("error", ignoreOutputStreamError);
+      child.stderr.on("error", ignoreOutputStreamError);
       child.stdout.on("data", (buf) => {
         stdout = appendWithCap(stdout, buf.toString("utf8"));
       });

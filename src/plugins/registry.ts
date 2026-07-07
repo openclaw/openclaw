@@ -931,7 +931,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    (registry.hostedMediaResolvers ??= []).push({
+    registry.hostedMediaResolvers.push({
       pluginId: record.id,
       pluginName: record.name,
       resolver,
@@ -1143,7 +1143,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    const existing = (registry.cliBackends ?? []).find((entry) => entry.backend.id === id);
+    const existing = registry.cliBackends.find((entry) => entry.backend.id === id);
     if (existing) {
       pushDiagnostic({
         level: "error",
@@ -1153,7 +1153,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    (registry.cliBackends ??= []).push({
+    registry.cliBackends.push({
       pluginId: record.id,
       pluginName: record.name,
       backend: {
@@ -1587,7 +1587,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    registry.reloads ??= [];
     registry.reloads.push({
       pluginId: record.id,
       pluginName: record.name,
@@ -1620,7 +1619,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    registry.nodeHostCommands ??= [];
     const existing = registry.nodeHostCommands.find((entry) => entry.command.command === command);
     if (existing) {
       pushDiagnostic({
@@ -1670,7 +1668,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    registry.nodeInvokePolicies ??= [];
     for (const command of commands) {
       const existing = registry.nodeInvokePolicies.find((entry) =>
         entry.policy.commands.includes(command),
@@ -1699,7 +1696,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record: PluginRecord,
     collector: OpenClawPluginSecurityAuditCollector,
   ) => {
-    registry.securityAuditCollectors ??= [];
     registry.securityAuditCollectors.push({
       pluginId: record.id,
       pluginName: record.name,
@@ -1988,7 +1984,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    const existing = (registry.sessionExtensions ?? []).find(
+    const existing = registry.sessionExtensions.find(
       (entry) => entry.pluginId === record.id && entry.extension.namespace === namespace,
     );
     if (existing) {
@@ -2001,7 +1997,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       return;
     }
     if (normalizedSessionEntrySlotKey) {
-      const existingSlot = (registry.sessionExtensions ?? []).find((entry) => {
+      const existingSlot = registry.sessionExtensions.find((entry) => {
         const existingSlotKey = entry.extension.sessionEntrySlotKey;
         if (existingSlotKey === undefined) {
           return false;
@@ -2022,7 +2018,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         return;
       }
     }
-    (registry.sessionExtensions ??= []).push({
+    registry.sessionExtensions.push({
       pluginId: record.id,
       pluginName: record.name,
       extension: {
@@ -2083,7 +2079,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    const policies = (registry.trustedToolPolicies ??= []);
+    const policies = registry.trustedToolPolicies;
     const existing = policies.find(
       (entry) => entry.pluginId === record.id && entry.policy.id === id,
     );
@@ -2151,7 +2147,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     // (tools-effective-inventory.ts, tools-catalog.ts) the metadata is matched
     // back to the tool's owning pluginId so plugin-X cannot decorate plugin-Y's
     // tool (or a core tool) by registering metadata with the same name.
-    const existing = (registry.toolMetadata ?? []).find(
+    const existing = registry.toolMetadata.find(
       (entry) => entry.pluginId === record.id && entry.metadata.toolName === toolName,
     );
     if (existing) {
@@ -2180,7 +2176,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    (registry.toolMetadata ??= []).push({
+    registry.toolMetadata.push({
       pluginId: record.id,
       pluginName: record.name,
       metadata: {
@@ -2249,7 +2245,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    const existing = (registry.controlUiDescriptors ?? []).find(
+    const existing = registry.controlUiDescriptors.find(
       (entry) => entry.pluginId === record.id && entry.descriptor.id === id,
     );
     if (existing) {
@@ -2284,7 +2280,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       typeof descriptor.order === "number" && Number.isFinite(descriptor.order)
         ? descriptor.order
         : undefined;
-    (registry.controlUiDescriptors ??= []).push({
+    registry.controlUiDescriptors.push({
       pluginId: record.id,
       pluginName: record.name,
       descriptor: {
@@ -2321,7 +2317,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    const existing = (registry.runtimeLifecycles ?? []).find(
+    const existing = registry.runtimeLifecycles.find(
       (entry) => entry.pluginId === record.id && entry.lifecycle.id === id,
     );
     if (existing) {
@@ -2342,7 +2338,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    (registry.runtimeLifecycles ??= []).push({
+    registry.runtimeLifecycles.push({
       pluginId: record.id,
       pluginName: record.name,
       lifecycle: { ...lifecycle, id },
@@ -2375,7 +2371,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    const existing = (registry.agentEventSubscriptions ?? []).find(
+    const existing = registry.agentEventSubscriptions.find(
       (entry) => entry.pluginId === record.id && entry.subscription.id === id,
     );
     if (existing) {
@@ -2387,7 +2383,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    (registry.agentEventSubscriptions ??= []).push({
+    registry.agentEventSubscriptions.push({
       pluginId: record.id,
       pluginName: record.name,
       subscription: { ...subscription, id, ...(streams !== undefined ? { streams } : {}) },
@@ -2405,7 +2401,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     const kind = normalizeHostHookString(job.kind);
     if (
       jobId &&
-      (registry.sessionSchedulerJobs ?? []).some(
+      registry.sessionSchedulerJobs.some(
         (entry) => entry.pluginId === record.id && entry.job.id === jobId,
       )
     ) {
@@ -2436,7 +2432,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       return undefined;
     }
     if (registryParams.activateGlobalSideEffects === false) {
-      (registry.sessionSchedulerJobs ??= []).push({
+      registry.sessionSchedulerJobs.push({
         pluginId: record.id,
         pluginName: record.name,
         job: { ...job, id: jobId, sessionKey, kind },
@@ -2460,7 +2456,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return undefined;
     }
-    (registry.sessionSchedulerJobs ??= []).push({
+    registry.sessionSchedulerJobs.push({
       pluginId: record.id,
       pluginName: record.name,
       job: { ...job, id: handle.id, sessionKey: handle.sessionKey, kind: handle.kind },
@@ -2508,7 +2504,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     if (!validateSessionActionSchema(record, id, action.schema)) {
       return;
     }
-    const existing = (registry.sessionActions ?? []).find(
+    const existing = registry.sessionActions.find(
       (entry) => entry.pluginId === record.id && entry.action.id === id,
     );
     if (existing) {
@@ -2520,7 +2516,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    (registry.sessionActions ??= []).push({
+    registry.sessionActions.push({
       pluginId: record.id,
       pluginName: record.name,
       action: {
@@ -2902,7 +2898,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   });
                   return;
                 }
-                registry.interactiveHandlers ??= [];
                 registry.interactiveHandlers.push({
                   ...registration,
                   pluginId: record.id,

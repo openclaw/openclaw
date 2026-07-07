@@ -110,13 +110,6 @@ export const en = {
       serveHint: "Private HTTPS for your tailnet (devices on Tailscale)",
       warningTitle: "Tailscale Warning",
     },
-    hooks: {
-      configuredTitle: "Hooks Configured",
-      enable: "Enable hooks?",
-      introTitle: "Hooks",
-      noHooksMessage: "No eligible hooks found. You can configure hooks later in your config.",
-      noHooksTitle: "No Hooks Available",
-    },
     completion: {
       cacheFailed: "Failed to generate completion cache. Run `{command}` later.",
       enable: "Enable {shell} shell completion for {cli}?",
@@ -241,6 +234,8 @@ export const en = {
       websocketUrl: "Gateway WebSocket URL",
     },
     setup: {
+      authChoiceFailedRetry: "Pick another provider or auth method, or choose Skip for now.",
+      authChoiceFailedTitle: "Provider setup failed",
       authChoiceRequired: "auth choice is required",
       channelsTitle: "Channels",
       configHandling: "Config handling",
@@ -481,6 +476,7 @@ export const en = {
       tokenHelpCopyToken: "3) Copy the token (looks like 123456:ABC...)",
       tokenHelpNewBot: "2) Run /newbot (or /mybots)",
       tokenHelpOpenBotFather: "1) Open Telegram and chat with @BotFather",
+      tokenHelpWebApp: "Prefer a UI? BotFather's web app: {url} (create a bot, copy its token)",
       tokenInputPrompt: "Enter Telegram bot token",
       tokenKeepPrompt: "Telegram token already configured. Keep it?",
       userIdHelpGetUpdates:
@@ -912,6 +908,7 @@ export const en = {
     },
     search: {
       apiKeyRequired: "API key required",
+      credentialRequired: "{label} required",
       chooseProvider: "Choose a provider. Some providers need an API key, and some work key-free.",
       configured: "configured",
       configureLaterHint: "Configure later with openclaw configure --section web",
@@ -981,6 +978,10 @@ export const en = {
       managedWebSearchSkipped: "Managed web search provider was skipped.",
       noBackgroundGatewayExpected:
         "Setup was run without Gateway service install, so no background gateway is expected.",
+      noModelAuth:
+        'No credentials are configured for provider "{provider}", so chat turns will fail until auth is added.',
+      noModelAuthNext: "Add a provider any time with {command}.",
+      noModelAuthTitle: "Model auth missing",
       nodeAndroid: "Android app (camera/canvas)",
       nodeIos: "iOS app (camera/canvas)",
       nodeMac: "macOS app (system + notifications)",

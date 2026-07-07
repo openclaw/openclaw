@@ -2004,9 +2004,10 @@ describe("doctor config flow", () => {
     });
     const browser = (result.cfg as { browser?: Record<string, unknown> }).browser ?? {};
     expect(browser.relayBindHost).toBeUndefined();
+    // driver "extension" is the live Chrome extension relay driver; repair keeps it.
     expect(
       ((browser.profiles as Record<string, { driver?: string }>)?.chromeLive ?? {}).driver,
-    ).toBe("existing-session");
+    ).toBe("extension");
     expect(result.cfg.plugins?.allow).toEqual(["telegram", "browser", "codex"]);
     expect(result.cfg.plugins?.entries?.browser?.enabled).toBe(true);
     expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);

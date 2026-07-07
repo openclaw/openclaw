@@ -229,6 +229,21 @@ describe("talk normalization", () => {
     });
   });
 
+  it.each(["constructor", "__proto__"])(
+    "does not resolve inherited Object.prototype provider key %s",
+    (provider) => {
+      const payload = buildTalkConfigResponse({
+        provider,
+        providers: {
+          elevenlabs: { voiceId: "voice-123" },
+        },
+      });
+
+      expect(payload?.resolved).toBeUndefined();
+      expect(payload?.provider).toBeUndefined();
+    },
+  );
+
   it("preserves SecretRef apiKey values during normalization", () => {
     const normalized = normalizeTalkSection({
       provider: TALK_TEST_PROVIDER_ID,

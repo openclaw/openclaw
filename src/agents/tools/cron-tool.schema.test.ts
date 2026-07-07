@@ -45,12 +45,15 @@ describe("createCronToolSchema", () => {
     expect(keysAt(schemaRecord, "job")).toEqual(
       [
         "agentId",
+        "declarationKey",
         "deleteAfterRun",
         "delivery",
         "description",
+        "displayName",
         "enabled",
         "failureAlert",
         "name",
+        "owner",
         "payload",
         "schedule",
         "sessionKey",
@@ -67,6 +70,7 @@ describe("createCronToolSchema", () => {
         "deleteAfterRun",
         "delivery",
         "description",
+        "displayName",
         "enabled",
         "failureAlert",
         "name",
@@ -217,9 +221,25 @@ describe("createCronToolSchema", () => {
         jobId: "job-1",
         patch: {
           agentId: null,
+          displayName: null,
           sessionKey: null,
           payload: {
             toolsAllow: null,
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts payload.model and payload.fallbacks null in patch (clear-to-inherit)", () => {
+    expect(
+      Value.Check(createCronToolSchema(), {
+        action: "update",
+        jobId: "job-1",
+        patch: {
+          payload: {
+            model: null,
+            fallbacks: null,
           },
         },
       }),

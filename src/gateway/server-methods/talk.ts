@@ -34,10 +34,7 @@ import type {
 } from "../../config/types.gateway.js";
 import type { OpenClawConfig, TtsConfig, TtsProviderConfigMap } from "../../config/types.js";
 import { resolveProviderRawConfig } from "../../plugin-sdk/provider-selection-runtime.js";
-import {
-  canonicalizeRealtimeTranscriptionProviderId,
-  listRealtimeTranscriptionProviders,
-} from "../../realtime-transcription/provider-registry.js";
+import { canonicalizeRealtimeTranscriptionProviderId } from "../../realtime-transcription/provider-registry.js";
 import {
   canonicalizeRealtimeVoiceProviderId,
   listRealtimeVoiceProviders,
@@ -57,12 +54,14 @@ import {
 import { ADMIN_SCOPE, TALK_SECRETS_SCOPE } from "../operator-scopes.js";
 import { resolveConfiguredSecretInputString } from "../resolve-configured-secret-input-string.js";
 import { formatForLog } from "../ws-log.js";
+import { inferSpeechMimeType } from "./speech-mime.js";
 import { talkClientHandlers } from "./talk-client.js";
 import { talkSessionHandlers } from "./talk-session.js";
 import {
   buildTalkRealtimeConfig,
   buildTalkTranscriptionConfig,
   configuredOrFalse,
+  listTalkTranscriptionProviders,
   resolveConfiguredRealtimeTranscriptionProvider,
 } from "./talk-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -286,12 +285,19 @@ function buildTalkCatalog(config: OpenClawConfig) {
     transcription: {
       ready: transcriptionSelection.ready,
       ...(activeTranscriptionProvider ? { activeProvider: activeTranscriptionProvider } : {}),
-      providers: listRealtimeTranscriptionProviders(config).map((provider) => {
+      providers: listTalkTranscriptionProviders(config, [
+        transcriptionConfig.provider,
+        ...Object.keys(transcriptionConfig.providers),
+      ]).map((provider) => {
         const rawConfig = getVoiceProviderConfig({
           providerConfigs: transcriptionConfig.providers,
           provider,
           configuredProviderId:
-            provider.id === activeTranscriptionProvider ? transcriptionConfig.provider : undefined,
+            activeTranscriptionProvider &&
+            normalizeOptionalLowercaseString(provider.id) ===
+              normalizeOptionalLowercaseString(activeTranscriptionProvider)
+              ? transcriptionConfig.provider
+              : undefined,
         });
         const rawConfigWithModel =
           transcriptionConfig.model && rawConfig.model === undefined
@@ -446,37 +452,6 @@ function buildTalkSpeakOverrides(
       [provider]: providerOverrides,
     },
   };
-}
-
-function inferMimeType(
-  outputFormat: string | undefined,
-  fileExtension: string | undefined,
-): string | undefined {
-  const normalizedOutput = normalizeOptionalLowercaseString(outputFormat);
-  const normalizedExtension = normalizeOptionalLowercaseString(fileExtension);
-  if (
-    normalizedOutput === "mp3" ||
-    normalizedOutput?.startsWith("mp3_") ||
-    normalizedOutput?.endsWith("-mp3") ||
-    normalizedExtension === ".mp3"
-  ) {
-    return "audio/mpeg";
-  }
-  if (
-    normalizedOutput === "opus" ||
-    normalizedOutput?.startsWith("opus_") ||
-    normalizedExtension === ".opus" ||
-    normalizedExtension === ".ogg"
-  ) {
-    return "audio/ogg";
-  }
-  if (normalizedOutput?.endsWith("-wav") || normalizedExtension === ".wav") {
-    return "audio/wav";
-  }
-  if (normalizedOutput?.endsWith("-webm") || normalizedExtension === ".webm") {
-    return "audio/webm";
-  }
-  return undefined;
 }
 
 async function resolveTalkResponseFromConfig(params: {
@@ -870,7 +845,7 @@ export const talkHandlers: GatewayRequestHandlers = {
           provider: result.provider ?? setup.provider,
           outputFormat: result.outputFormat,
           voiceCompatible: result.voiceCompatible,
-          mimeType: inferMimeType(result.outputFormat, result.fileExtension),
+          mimeType: inferSpeechMimeType(result.outputFormat, result.fileExtension),
           fileExtension: result.fileExtension,
         },
         undefined,

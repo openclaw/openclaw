@@ -73,7 +73,8 @@ function resolveDocsLabel(href: string): string {
   return t("login.failure.docsAuth");
 }
 
-function redactLoginFailureError(value: string): string {
+// Shared with the connection banner so no offline surface prints credentials.
+export function redactLoginFailureError(value: string): string {
   return value
     .replace(
       /([?#&])(?:access_token|auth|deviceToken|password|refresh_token|token)=([^&#\s]+)/gi,

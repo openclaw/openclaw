@@ -3,7 +3,6 @@ import net from "node:net";
 import tls from "node:tls";
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   parseIrcLine,
   parseIrcPrefix,
@@ -11,19 +10,39 @@ import {
   sanitizeIrcTarget,
 } from "./protocol.js";
 
-function sliceIrcPrivmsgChunk(text: string, end: number): string {
-  const sliced = sliceUtf16Safe(text, 0, end);
-  if (sliced || end <= 0) {
-    return sliced;
-  }
-  // A one-unit budget cannot contain an astral code point. Emit that point
-  // whole so chunking advances without changing one-unit behavior for BMP text.
-  const firstCodePoint = text.codePointAt(0);
-  return firstCodePoint !== undefined && firstCodePoint > 0xffff ? text.slice(0, 2) : sliced;
-}
-
 const IRC_ERROR_CODES = new Set(["432", "464", "465"]);
 const IRC_NICK_COLLISION_CODES = new Set(["433", "436"]);
+const IRC_MAX_LINE_BYTES = 512;
+
+function takeIrcPrivmsgChunk(text: string, maxChars: number, maxBytes: number): string {
+  let end = 0;
+  let bytes = 0;
+  for (const codePoint of text) {
+    const codePointBytes = Buffer.byteLength(codePoint, "utf8");
+    const exceedsCharCap = end > 0 && end + codePoint.length > maxChars;
+    if (exceedsCharCap || bytes + codePointBytes > maxBytes) {
+      break;
+    }
+    end += codePoint.length;
+    bytes += codePointBytes;
+  }
+  if (end === 0) {
+    throw new Error("IRC target leaves no room for message text within the 512-byte line limit");
+  }
+  if (end === text.length) {
+    return text;
+  }
+  const fitted = text.slice(0, end);
+  // A delimiter just beyond the cap already gives this chunk a clean word boundary.
+  if (text[end] === " ") {
+    return fitted;
+  }
+  const splitAt = fitted.lastIndexOf(" ");
+  if (splitAt >= Math.floor(fitted.length / 2)) {
+    return fitted.slice(0, splitAt);
+  }
+  return fitted;
+}
 
 type IrcPrivmsgEvent = {
   senderNick: string;
@@ -50,6 +69,7 @@ export type IrcClientOptions = {
   onPrivmsg?: (event: IrcPrivmsgEvent) => void | Promise<void>;
   onNotice?: (text: string, target?: string) => void;
   onError?: (error: Error) => void;
+  onDisconnect?: () => void;
   onLine?: (line: string) => void;
 };
 
@@ -223,19 +243,11 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
     if (!cleaned) {
       return;
     }
+    const lineOverheadBytes = Buffer.byteLength(`PRIVMSG ${normalizedTarget} :\r\n`, "utf8");
+    const maxChunkBytes = IRC_MAX_LINE_BYTES - lineOverheadBytes;
     let remaining = cleaned;
     while (remaining.length > 0) {
-      let chunk = remaining;
-      if (chunk.length > messageChunkMaxChars) {
-        let splitAt = chunk.lastIndexOf(" ", messageChunkMaxChars);
-        if (splitAt < Math.floor(messageChunkMaxChars / 2)) {
-          splitAt = messageChunkMaxChars;
-        }
-        chunk = sliceIrcPrivmsgChunk(chunk, splitAt).trim();
-      }
-      if (!chunk) {
-        break;
-      }
+      const chunk = takeIrcPrivmsgChunk(remaining, messageChunkMaxChars, maxChunkBytes).trim();
       sendRaw(`PRIVMSG ${normalizedTarget} :${chunk}`);
       remaining = remaining.slice(chunk.length).trimStart();
     }
@@ -419,8 +431,12 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
   socket.once("close", () => {
     if (!closed) {
       closed = true;
+      removeAbortListener?.();
+      removeAbortListener = null;
       if (!ready) {
         fail(new Error("IRC connection closed before ready"));
+      } else {
+        options.onDisconnect?.();
       }
     }
   });
@@ -441,7 +457,12 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
     }
   }
 
-  await withTimeout(readyPromise, timeoutMs, "IRC connect");
+  try {
+    await withTimeout(readyPromise, timeoutMs, "IRC connect");
+  } catch (error) {
+    close();
+    throw error;
+  }
 
   return {
     get nick() {

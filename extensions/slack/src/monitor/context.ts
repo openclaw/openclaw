@@ -47,7 +47,7 @@ export type SlackAssistantThreadContext = {
   updatedAt: number;
 };
 
-export const SLACK_ASSISTANT_THREAD_CONTEXT_METADATA_EVENT = "assistant_thread_context";
+const SLACK_ASSISTANT_THREAD_CONTEXT_METADATA_EVENT = "assistant_thread_context";
 
 export function buildSlackAssistantThreadMetadata(
   context: Omit<SlackAssistantThreadContext, "updatedAt">,

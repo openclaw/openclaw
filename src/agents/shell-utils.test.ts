@@ -12,9 +12,28 @@ import {
   resolveShellFromPath,
   resolveShellFromWhich,
   resolveWindowsBashPath,
+  sanitizeBinaryOutput,
 } from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
+
+describe("sanitizeBinaryOutput", () => {
+  it("removes ANSI wrappers while retaining printable output", () => {
+    expect(sanitizeBinaryOutput("\u001b[31mred\u001b[0m")).toBe("red");
+    expect(sanitizeBinaryOutput("\u009b31mred\u009b0m")).toBe("red");
+  });
+
+  it("preserves printable text after an incomplete ANSI sequence", () => {
+    expect(sanitizeBinaryOutput("\u001b]unterminated")).toBe("\\x1b]unterminated");
+    expect(sanitizeBinaryOutput("\u009bdone")).toBe("\\x9bdone");
+  });
+
+  it("escapes residual C0, DEL, and C1 controls", () => {
+    expect(sanitizeBinaryOutput("a\u0000\u0007\u007f\u0080b\t\n")).toBe(
+      "a\\x00\\x07\\x7f\\x80b\t\n",
+    );
+  });
+});
 
 function createTempCommandDir(
   tempDirs: string[],

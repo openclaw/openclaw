@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   assert,
+  assertGatewayScopes,
   ClaudeChannelNotificationSchema,
   ClaudePermissionNotificationSchema,
   connectGateway,
@@ -103,6 +104,10 @@ async function main() {
   assert(gatewayToken, "missing GW_TOKEN");
 
   const gateway = await connectGateway({ url: gatewayUrl, token: gatewayToken });
+  assertGatewayScopes(gateway, {
+    include: ["operator.admin", "operator.pairing", "operator.write"],
+    label: "owner gateway",
+  });
   let nonOwnerGateway: GatewayRpcClient | undefined;
   let mcpHandle: Awaited<ReturnType<typeof connectMcpClient>> | undefined;
   const mcpTempState = createMcpClientTempState({ gatewayToken });
@@ -367,6 +372,19 @@ async function main() {
       url: gatewayUrl,
       token: gatewayToken,
       scopes: ["operator.read", "operator.write"],
+      client: {
+        id: "test",
+        displayName: "docker-mcp-channels-non-owner",
+        version: "1.0.0",
+        platform: process.platform,
+        mode: "test",
+      },
+      bindFreshDevice: true,
+    });
+    assertGatewayScopes(nonOwnerGateway, {
+      include: ["operator.read", "operator.write"],
+      exclude: ["operator.admin", "operator.pairing"],
+      label: "non-owner gateway",
     });
     await nonOwnerGateway.request("chat.send", {
       sessionKey: "agent:main:main",

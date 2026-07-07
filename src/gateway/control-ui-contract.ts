@@ -9,6 +9,28 @@ export const CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE = "data-openclaw-terminal-ena
 /** Sandbox policy for assistant-provided embed surfaces inside Control UI. */
 export type ControlUiEmbedSandboxMode = "strict" | "scripts" | "trusted";
 
+/** Public GitHub metadata rendered by Control UI link hover cards. */
+export type ControlUiGitHubPreview = {
+  additions?: number;
+  avatarDataUrl?: string;
+  changedFiles?: number;
+  closedAt?: string;
+  comments?: number;
+  createdAt: string;
+  deletions?: number;
+  draft?: boolean;
+  kind: "issue" | "pull";
+  login: string;
+  mergedAt?: string;
+  number: number;
+  owner: string;
+  repo: string;
+  state: string;
+  stateReason?: string;
+  title: string;
+  updatedAt: string;
+};
+
 /** Runtime config consumed by the browser Control UI during bootstrap. */
 export type ControlUiBootstrapConfig = {
   basePath: string;

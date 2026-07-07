@@ -43,6 +43,7 @@ describe("PluginPage", () => {
     const snapshot: ApplicationGatewaySnapshot = {
       client,
       connected: true,
+      reconnecting: false,
       hello,
       assistantAgentId: null,
       sessionKey: "main",

@@ -6,6 +6,7 @@ import type {
 } from "../../packages/gateway-protocol/src/index.js";
 import { buildAgentMainSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { notifyListeners } from "../shared/listeners.js";
 import type {
   ChatSendOptions,
   TuiAgentsList,
@@ -256,7 +257,12 @@ class CrestodianTuiBackend implements TuiBackend {
   }
 
   private emit(event: string, payload: unknown): void {
-    this.onEvent?.({
+    const listener = this.onEvent;
+    if (!listener) {
+      return;
+    }
+    // A renderer failure must not reject the backend's fire-and-forget response path.
+    notifyListeners([listener], {
       event,
       payload,
       seq: this.nextSeq(),

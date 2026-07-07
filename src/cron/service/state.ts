@@ -269,7 +269,12 @@ export type CronRunResult =
 export type CronRemoveResult = { ok: true; removed: boolean } | { ok: false; removed: false };
 
 /** Created cron job returned by service mutation calls. */
-export type CronAddResult = CronJob;
+export type CronDeclarativeAddResult = CronJob & {
+  created: boolean;
+  updated?: boolean;
+  job: CronJob;
+};
+export type CronAddResult = CronJob | CronDeclarativeAddResult;
 /** Updated cron job returned by service mutation calls. */
 export type CronUpdateResult = CronJob;
 
@@ -277,5 +282,12 @@ export type CronUpdateResult = CronJob;
 export type CronListResult = CronJob[];
 /** Normalized create input accepted by the cron service. */
 export type CronAddInput = CronJobCreate;
+/** Caller-specific declaration-key visibility and explicit enablement metadata. */
+export type CronAddOptions = {
+  matchesExisting?: (job: CronJob) => boolean;
+  enabledExplicit?: boolean;
+};
 /** Normalized patch input accepted by cron service updates. */
 export type CronUpdateInput = CronJobPatch;
+/** Cron-store-locked guard evaluated against the current job before an update applies. */
+export type CronUpdatePrecondition = (job: CronJob, nowMs: number) => void | Promise<void>;

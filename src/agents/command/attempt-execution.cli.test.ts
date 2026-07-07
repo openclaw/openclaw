@@ -13,6 +13,7 @@ import { saveAuthProfileStore } from "../auth-profiles/store.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
 import {
+  persistAcpTurnTranscript,
   persistCliTurnTranscript,
   runAgentAttempt as runAgentAttemptImpl,
 } from "./attempt-execution.js";
@@ -1370,6 +1371,46 @@ describe("CLI attempt execution", () => {
       expect.objectContaining({
         role: "assistant",
         content: [{ type: "text", text: "hello from cli" }],
+      }),
+    );
+  });
+
+  it("persists a media-only ACP user turn when the reply is empty", async () => {
+    const sessionKey = "agent:main:direct:acp-media-only";
+    const sessionFile = path.join(tmpDir, "session-acp-media-only.jsonl");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-acp-media-only",
+      sessionFile,
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+    await persistAcpTurnTranscript({
+      body: "[media attached: media://inbound/image-1]",
+      transcriptBody: "",
+      userInput: {
+        text: "",
+        media: [{ path: "/media/inbound/image-1.png", contentType: "image/png" }],
+        mediaOnlyText: "[User sent media without caption]",
+      },
+      finalText: "",
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      sessionCwd: tmpDir,
+      config: {},
+    });
+
+    expect(await readSessionMessages(sessionFile)).toContainEqual(
+      expect.objectContaining({
+        role: "user",
+        content: "[User sent media without caption]",
+        MediaPath: "/media/inbound/image-1.png",
+        MediaType: "image/png",
       }),
     );
   });

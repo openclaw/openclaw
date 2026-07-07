@@ -213,6 +213,11 @@ export function resolveTerminalMainSessionTranscriptRegistryCheck(
   if (!hasTerminalLifecycle) {
     return undefined;
   }
+  if (params.entry.status === "done") {
+    // Successful rows stay reusable: transcript writes can land after registry
+    // updates without making the session stale.
+    return undefined;
+  }
   if (params.entry.status === "failed") {
     // Failed rows with a present transcript stay reusable for retry/recovery.
     // Callers already rotate failed rows when the transcript is missing.

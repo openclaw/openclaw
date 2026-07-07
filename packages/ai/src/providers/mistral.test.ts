@@ -89,6 +89,29 @@ describe("Mistral provider", () => {
     expect((mistralMockState.payloads[0] as { stop?: unknown }).stop).toEqual(["STOP"]);
   });
 
+  it("uses reasoning effort for Mistral Medium 3.5", async () => {
+    const stream = streamSimpleMistral(
+      {
+        ...makeMistralModel(),
+        id: "mistral-medium-3-5",
+        name: "Mistral Medium 3.5",
+        reasoning: true,
+      },
+      context,
+      {
+        apiKey: "sk-mistral-provider",
+        reasoning: "high",
+      },
+    );
+
+    const result = await stream.result();
+    const payload = mistralMockState.payloads[0] as Record<string, unknown>;
+
+    expect(result.stopReason).toBe("error");
+    expect(payload.reasoningEffort).toBe("high");
+    expect(payload).not.toHaveProperty("promptMode");
+  });
+
   it("skips unreadable tool schemas while preserving healthy Mistral tools", async () => {
     const stream = streamMistral(
       makeMistralModel(),

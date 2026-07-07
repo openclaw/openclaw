@@ -21,6 +21,31 @@ enum SettingsLayout {
     static let rowHeight: CGFloat = 58
 }
 
+/// Canonical label/value list row for Settings and Talk surfaces. Keep every
+/// detail row on this view so row typography cannot drift between sections;
+/// plain `LabeledContent(String, value:)` renders unbranded system fonts.
+struct SettingsDetailRow: View {
+    let label: String
+    let value: String
+
+    init(_ label: String, value: String) {
+        self.label = label
+        self.value = value
+    }
+
+    var body: some View {
+        LabeledContent {
+            Text(self.value)
+                .font(OpenClawType.subhead)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        } label: {
+            Text(self.label)
+                .font(OpenClawType.body)
+        }
+    }
+}
+
 struct SettingsApprovalItem: Identifiable {
     let id: String
     let icon: String

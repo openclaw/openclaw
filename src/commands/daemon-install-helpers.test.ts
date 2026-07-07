@@ -1307,6 +1307,78 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe("TELEGRAM_DEFAULT_BOTTOKEN");
   });
 
+  it("retains existing generated env-file SecretRef values for macOS LaunchAgent regeneration", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: "/from-service",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: tmpDir },
+      port: 3000,
+      runtime: "node",
+      platform: "darwin",
+      existingEnvironment: {
+        TELEGRAM_DEFAULT_BOTTOKEN: "telegram-existing-env-file-token",
+        TELEGRAM_HERMES_BOTTOKEN: "telegram-existing-hermes-env-file-token",
+        RETIRED_BOTTOKEN: "retired-env-file-token",
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS:
+          "RETIRED_BOTTOKEN,TELEGRAM_DEFAULT_BOTTOKEN,TELEGRAM_HERMES_BOTTOKEN",
+      },
+      existingEnvironmentValueSources: {
+        TELEGRAM_DEFAULT_BOTTOKEN: "file",
+        TELEGRAM_HERMES_BOTTOKEN: "file",
+        RETIRED_BOTTOKEN: "file",
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "inline",
+      },
+      config: {
+        env: {
+          vars: {
+            OPENROUTER_API_KEY: "openrouter-config-key",
+            TELEGRAM_DEFAULT_BOTTOKEN: "your-real-telegram-default-token-here",
+            TELEGRAM_HERMES_BOTTOKEN: "your-real-telegram-hermes-token-here",
+          },
+        },
+        channels: {
+          telegram: {
+            accounts: {
+              default: {
+                botToken: {
+                  source: "env",
+                  provider: "default",
+                  id: "TELEGRAM_DEFAULT_BOTTOKEN",
+                },
+              },
+              hermes: {
+                botToken: {
+                  source: "env",
+                  provider: "default",
+                  id: "TELEGRAM_HERMES_BOTTOKEN",
+                },
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+    });
+
+    expect(plan.environment.TELEGRAM_DEFAULT_BOTTOKEN).toBe("telegram-existing-env-file-token");
+    expect(plan.environment.TELEGRAM_HERMES_BOTTOKEN).toBe(
+      "telegram-existing-hermes-env-file-token",
+    );
+    expect(plan.environmentValueSources?.TELEGRAM_DEFAULT_BOTTOKEN).toBe("file");
+    expect(plan.environmentValueSources?.TELEGRAM_HERMES_BOTTOKEN).toBe("file");
+    expect(plan.environment.RETIRED_BOTTOKEN).toBeUndefined();
+    expect(plan.environmentValueSources?.RETIRED_BOTTOKEN).toBeUndefined();
+    expect(plan.environment.OPENROUTER_API_KEY).toBeUndefined();
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe(
+      "OPENROUTER_API_KEY,TELEGRAM_DEFAULT_BOTTOKEN,TELEGRAM_HERMES_BOTTOKEN",
+    );
+  });
+
   it("retains .env values when config env has an unresolved self reference", async () => {
     await writeStateDirDotEnv("MINIMAX_API_KEY=minimax-dotenv-key\n", {
       stateDir: path.join(tmpDir, ".openclaw"),
@@ -1363,6 +1435,14 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       port: 3000,
       runtime: "node",
       platform: "darwin",
+      existingEnvironment: {
+        BRAVE_API_KEY: "stale-generated-value",
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "BRAVE_API_KEY",
+      },
+      existingEnvironmentValueSources: {
+        BRAVE_API_KEY: "file",
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "inline",
+      },
       config: {
         env: {
           vars: {

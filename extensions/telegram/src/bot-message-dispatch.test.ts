@@ -913,6 +913,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
     const pipelineArgs = expectRecordFields(mockCallArg(createChannelMessageReplyPipeline), {});
     const typing = expectRecordFields(pipelineArgs.typing, {});
+    expect(typing.maxConsecutiveFailures).toBe(5);
     await (typing.start as () => Promise<void>)();
     expect(sendChatAction).toHaveBeenCalledWith(-1003774691294, "typing", {
       message_thread_id: 3731,
@@ -1859,6 +1860,38 @@ describe("dispatchTelegramMessage draft streaming", () => {
     mockDefaultSessionEntry();
     readLatestAssistantTextByIdentity.mockResolvedValue({
       text: "Final answer",
+      timestamp: transcriptTimestamp,
+    });
+    deliverInboundReplyWithMessageSendContext.mockResolvedValue({
+      status: "handled_visible",
+      delivery: {
+        messageIds: ["2001"],
+        visibleReplySent: true,
+      },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context, streamMode: "off" });
+
+    const outbound = expectRecordFields(mockCallArg(deliverInboundReplyWithMessageSendContext), {
+      payload: expect.objectContaining({ text: "Final answer" }),
+    });
+    expectRecordFields(expectRecordFields(outbound.payload, {}).channelData, {
+      telegram: { promptContextTimestampMs: transcriptTimestamp },
+    });
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("marks directive-tagged durable finals with the transcript prompt-context timestamp", async () => {
+    const transcriptTimestamp = Date.now() + 1_000;
+    const context = createContext();
+    context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
+    mockDefaultSessionEntry();
+    readLatestAssistantTextByIdentity.mockResolvedValue({
+      text: "[[reply_to_current]]Final answer",
       timestamp: transcriptTimestamp,
     });
     deliverInboundReplyWithMessageSendContext.mockResolvedValue({

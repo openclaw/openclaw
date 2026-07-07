@@ -1,4 +1,4 @@
-import { html } from "lit";
+import { html, nothing } from "lit";
 import type { ModelAuthStatusResult } from "../api/types.ts";
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
@@ -20,7 +20,7 @@ export function renderProviderQuotaPill(props: ProviderQuotaPillProps) {
   );
   const primary = windows[0];
   if (!primary) {
-    return "";
+    return nothing;
   }
   const secondary = windows.find(
     (entry) => entry.displayName !== primary.displayName || entry.label !== primary.label,
@@ -44,7 +44,7 @@ export function renderProviderQuotaPill(props: ProviderQuotaPillProps) {
       aria-label=${`Provider usage: ${title}`}
       data-chat-provider-usage="true"
     >
-      <span class="chat-controls__quota-label">${t("tabs.usage")}</span>
+      <span class="chat-controls__quota-label">${t("chat.usageRemaining")}</span>
       <span class="chat-controls__quota-value">${primary.remaining}%</span>
     </a>
   `;

@@ -218,6 +218,11 @@ export type SessionGoal = {
   budgetLimitedAt?: number;
 };
 
+export type PendingSkillSuggestion = {
+  skillName: string;
+  detectedAt: number;
+};
+
 export type RestartRecoveryRun = {
   runId: string;
   lifecycleGeneration: string;
@@ -258,6 +263,12 @@ export type SessionEntry = {
   archivedAt?: number;
   /** Timestamp (ms) when the session was pinned for quick access. */
   pinnedAt?: number;
+  /** Timestamp (ms) when an operator client last marked the session read. */
+  lastReadAt?: number;
+  /** Timestamp (ms) when an operator explicitly marked the session unread; cleared on read. */
+  markedUnreadAt?: number;
+  /** Timestamp (ms) of the latest completed agent run; metadata patches do not update it. */
+  lastActivityAt?: number;
   sessionFile?: string;
   /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
   spawnedBy?: string;
@@ -291,6 +302,10 @@ export type SessionEntry = {
   quotaSuspension?: QuotaSuspension;
   /** Core-owned durable goal state for this thread/session. */
   goal?: SessionGoal;
+  /** Durable one-shot Skill Workshop suggestion for the next interactive turn. */
+  pendingSkillSuggestion?: PendingSkillSuggestion;
+  /** Recent durable-instruction fingerprints already processed by Skill Workshop capture. */
+  skillCaptureSignalHashes?: string[];
   /** Timestamp (ms) when the current sessionId first became active. */
   sessionStartedAt?: number;
   /** Stable usage lineage key for transcript-backed rollups across sessionId rotations. */

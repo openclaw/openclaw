@@ -7,7 +7,7 @@ import type { LogbookCard, LogbookCardDraft, LogbookDistraction } from "./types.
 /** Cards within this window before a batch are treated as a revisable draft. */
 export const CARD_LOOKBACK_MS = 45 * 60 * 1000;
 /** Frame gap that splits one analysis window into separate batches. */
-export const BATCH_MAX_GAP_MS = 2 * 60 * 1000;
+const BATCH_MAX_GAP_MS = 2 * 60 * 1000;
 /** Upper bound of images sent to the vision model per batch. */
 export const MAX_FRAMES_PER_CALL = 16;
 
@@ -243,7 +243,7 @@ export function parseCardsJson(params: {
 }
 
 /** Sub-minute slack so minute-rounded model times do not fail coverage checks. */
-export const COVERAGE_TOLERANCE_MS = 2 * 60 * 1000;
+const COVERAGE_TOLERANCE_MS = 2 * 60 * 1000;
 
 function formatClockForError(ms: number): string {
   const date = new Date(ms);

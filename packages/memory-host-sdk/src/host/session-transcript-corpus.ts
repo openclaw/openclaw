@@ -18,7 +18,7 @@ import {
   type SessionEntry,
 } from "./openclaw-runtime-session.js";
 
-export type SessionTranscriptCorpusArtifactKind =
+type SessionTranscriptCorpusArtifactKind =
   | "active-session"
   | "archive-artifact"
   | "orphan-file-artifact";

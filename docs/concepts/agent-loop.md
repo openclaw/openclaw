@@ -116,6 +116,11 @@ Auto-compaction emits `compaction` stream events and can trigger a retry. On ret
 - `assistant`: streamed deltas from the agent runtime.
 - `tool`: streamed tool events from the agent runtime.
 
+The Gateway projects lifecycle and tool start/terminal events into the bounded,
+metadata-only [audit ledger](/cli/audit). This projection records provenance and
+result codes without copying prompts, messages, tool arguments, tool results,
+or raw errors out of the transcript/runtime path.
+
 ## Chat channel handling
 
 Assistant deltas buffer into chat `delta` messages. A chat `final` is emitted on **lifecycle end/error**.

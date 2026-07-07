@@ -1,4 +1,5 @@
 // Imessage tests cover send plugin behavior.
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -28,6 +29,13 @@ const IMESSAGE_TEST_CFG = {
     },
   },
 };
+
+const spawnMock = vi.hoisted(() => vi.fn());
+
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  spawn: spawnMock,
+}));
 
 function createClient(result: Record<string, unknown>): IMessageRpcClient {
   return {
@@ -79,6 +87,7 @@ describe("sendMessageIMessage receipts", () => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     vi.useRealTimers();
+    spawnMock.mockReset();
   });
 
   it("attaches a text receipt for native send ids", async () => {
@@ -143,6 +152,72 @@ describe("sendMessageIMessage receipts", () => {
     expect(sendParams).not.toHaveProperty("reply_to");
     expect(result.receipt.replyToId).toBeUndefined();
     expect(result.receipt.parts[0]?.replyToId).toBeUndefined();
+  });
+
+  it("resends unthreaded when the transport cannot deliver a threaded reply (#99638)", async () => {
+    const sendParams: Array<Record<string, unknown>> = [];
+    const client = {
+      request: vi.fn(async (_method: string, params: Record<string, unknown>) => {
+        sendParams.push(params);
+        if (params.reply_to) {
+          throw new Error(
+            "reply_to requires bridge transport; AppleScript fallback cannot send threaded replies",
+          );
+        }
+        return { guid: "p:0/imsg-plain-fallback" };
+      }),
+      stop: vi.fn(async () => {}),
+    } as unknown as IMessageRpcClient;
+
+    const result = await sendMessageIMessage("chat_id:42", "hello", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+      replyToId: "reply-1",
+    });
+
+    // First attempt carried reply_to and hard-failed on the AppleScript-only
+    // transport; the retry drops reply_to and delivers rather than losing it.
+    expect(sendParams).toHaveLength(2);
+    expect(sendParams[0]).toHaveProperty("reply_to", "reply-1");
+    expect(sendParams[1]).not.toHaveProperty("reply_to");
+    expect(result.messageId).toBe("p:0/imsg-plain-fallback");
+    expect(result.sentText).toBe("hello");
+    // The receipt reflects the unthreaded send that was actually delivered.
+    expect(result.receipt.replyToId).toBeUndefined();
+    expect(result.receipt.parts[0]?.replyToId).toBeUndefined();
+  });
+
+  it("resends a media reply unthreaded when threaded replies are unsupported (#99638)", async () => {
+    const sendParams: Array<Record<string, unknown>> = [];
+    const client = {
+      request: vi.fn(async (_method: string, params: Record<string, unknown>) => {
+        sendParams.push(params);
+        if (params.reply_to) {
+          throw new Error(
+            "reply_to requires bridge transport; AppleScript fallback cannot send threaded replies",
+          );
+        }
+        return { guid: "p:0/media-plain-fallback" };
+      }),
+      stop: vi.fn(async () => {}),
+    } as unknown as IMessageRpcClient;
+
+    // A media reply (file + reply_to) takes the main send path, not send-attachment.
+    const result = await sendMessageIMessage("chat_id:42", "caption", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+      replyToId: "reply-1",
+      mediaUrl: "/tmp/image.png",
+      resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
+    });
+
+    expect(sendParams).toHaveLength(2);
+    expect(sendParams[0]).toMatchObject({ reply_to: "reply-1", file: "/tmp/image.png" });
+    expect(sendParams[1]).not.toHaveProperty("reply_to");
+    // The media itself is still delivered on the retry, just unthreaded.
+    expect(sendParams[1]).toHaveProperty("file", "/tmp/image.png");
+    expect(result.messageId).toBe("p:0/media-plain-fallback");
+    expect(result.receipt.replyToId).toBeUndefined();
   });
 
   it("passes the default RPC send transport", async () => {
@@ -1197,5 +1272,68 @@ describe("sendMessageIMessage receipts", () => {
     ).rejects.toThrow("imsg rpc error (send)");
 
     expect(runCliJson).not.toHaveBeenCalled();
+  });
+});
+
+function mockSpawnWithStreamError(stream: "stdout" | "stderr", error: Error) {
+  const kill = vi.fn();
+  spawnMock.mockImplementationOnce(() => {
+    const child = new EventEmitter() as EventEmitter & {
+      stdout: EventEmitter & { setEncoding: (encoding: string) => void };
+      stderr: EventEmitter & { setEncoding: (encoding: string) => void };
+      kill: (signal: string) => void;
+    };
+    child.stdout = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
+    child.stderr = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
+    child.kill = kill;
+    queueMicrotask(() => {
+      child[stream].emit("error", error);
+    });
+    return child;
+  });
+  return kill;
+}
+
+describe("sendMessageIMessage CLI stream errors", () => {
+  beforeEach(() => {
+    installIMessageStateRuntimeForTest();
+    resetIMessageShortIdState();
+    resetPersistedIMessageEchoCacheForTest();
+  });
+
+  afterEach(() => {
+    clearIMessageApprovalReactionTargetsForTest();
+    resetIMessageShortIdState();
+    resetPersistedIMessageEchoCacheForTest();
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
+    spawnMock.mockReset();
+  });
+
+  it("rejects on stdout stream error during attachment send", async () => {
+    const kill = mockSpawnWithStreamError("stdout", new Error("stdout pipe broken"));
+
+    await expect(
+      sendMessageIMessage("chat_guid:chat-1", "", {
+        config: IMESSAGE_TEST_CFG,
+        mediaUrl: "/tmp/image.png",
+        resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
+      }),
+    ).rejects.toThrow("iMessage CLI stdout stream error: stdout pipe broken");
+    expect(kill).toHaveBeenCalledWith("SIGKILL");
+  });
+
+  it("rejects on stderr stream error during attachment send", async () => {
+    const kill = mockSpawnWithStreamError("stderr", new Error("stderr pipe broken"));
+
+    await expect(
+      sendMessageIMessage("chat_guid:chat-1", "", {
+        config: IMESSAGE_TEST_CFG,
+        mediaUrl: "/tmp/image.png",
+        resolveAttachmentImpl: async () => ({ path: "/tmp/image.png", contentType: "image/png" }),
+      }),
+    ).rejects.toThrow("iMessage CLI stderr stream error: stderr pipe broken");
+    expect(kill).toHaveBeenCalledWith("SIGKILL");
   });
 });

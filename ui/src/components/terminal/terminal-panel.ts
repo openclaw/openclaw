@@ -9,6 +9,7 @@ import { LitElement, css, html, nothing, svg } from "lit";
 import { property, state } from "lit/decorators.js";
 import { t } from "../../i18n/index.ts";
 import { TerminalConnection, type TerminalGatewayClient } from "./terminal-connection.ts";
+import { createIsolatedGhosttyTerminal } from "./terminal-runtime.ts";
 import { terminalTheme } from "./terminal-theme.ts";
 
 // Inline icon set (self-contained; the Control UI blocks external asset loads).
@@ -341,7 +342,6 @@ export class OpenClawTerminalPanel extends LitElement {
     if (!this.client) {
       throw new Error("terminal client unavailable");
     }
-    const { createGhosttyTerminal } = await import("@openclaw/libterminal/browser");
     if (!this.connection) {
       this.connection = new TerminalConnection(this.client);
     }
@@ -362,7 +362,7 @@ export class OpenClawTerminalPanel extends LitElement {
     const tabRef = { current: undefined as TerminalTabState | undefined };
     let controller: GhosttyTerminalController;
     try {
-      controller = await createGhosttyTerminal({
+      controller = await createIsolatedGhosttyTerminal({
         parent: host,
         readOnly: false,
         terminalOptions: {

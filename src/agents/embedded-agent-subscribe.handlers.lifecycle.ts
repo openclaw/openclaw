@@ -255,7 +255,7 @@ export function handleAgentEnd(
     const postMediaFlushResult = ctx.flushBlockReplyBuffer();
     if (isPromiseLike<void>(postMediaFlushResult)) {
       return postMediaFlushResult.then(() => {
-        const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.();
+        const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.({ reason: "terminal" });
         if (isPromiseLike<void>(onBlockReplyFlushResult)) {
           return onBlockReplyFlushResult;
         }
@@ -263,7 +263,7 @@ export function handleAgentEnd(
       });
     }
 
-    const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.();
+    const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.({ reason: "terminal" });
     if (isPromiseLike<void>(onBlockReplyFlushResult)) {
       return onBlockReplyFlushResult;
     }

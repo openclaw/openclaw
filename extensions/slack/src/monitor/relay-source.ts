@@ -35,7 +35,7 @@ type RelayConnectionState = {
 const SLACK_RELAY_ROUTE_KINDS = new Set(["user_group", "thread_affinity", "channel_default"]);
 export const SLACK_RELAY_MAX_PAYLOAD_BYTES = 1024 * 1024;
 
-export type SlackRelayRoute = {
+type SlackRelayRoute = {
   kind: "user_group" | "thread_affinity" | "channel_default";
   key: string;
 };

@@ -97,7 +97,7 @@ function readWikiPagePreview(value: unknown, lookup: string): WikiPagePreview {
   };
 }
 
-export class DreamsPage extends LitElement {
+class DreamsPage extends LitElement {
   override createRenderRoot() {
     return this;
   }

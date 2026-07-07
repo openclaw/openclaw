@@ -7,6 +7,11 @@ import {
   readAcpSessionMeta,
   writeAcpSessionMetaForMigration,
 } from "../acp/runtime/session-meta.js";
+import {
+  listRegisteredAgentHarnesses,
+  registerAgentHarness,
+  restoreRegisteredAgentHarnesses,
+} from "../agents/harness/registry.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import { enqueueSystemEvent, peekSystemEvents } from "../infra/system-events.js";
 import {
@@ -187,6 +192,36 @@ test("sessions.reset aborts active runs and clears queues", async () => {
     targetSessionKey: "agent:main:main",
     reason: "session-reset",
   });
+});
+
+test("sessions.reset forwards the retired generation to registered agent harnesses", async () => {
+  const registeredHarnesses = listRegisteredAgentHarnesses();
+  const reset = vi.fn(async () => undefined);
+  registerAgentHarness({
+    id: "reset-observer",
+    label: "Reset observer",
+    supports: () => ({ supported: false }),
+    runAttempt: async () => {
+      throw new Error("not used");
+    },
+    reset,
+  });
+  try {
+    await seedWaitingActiveMainSession();
+
+    const response = await resetMainSession();
+
+    expect(response.ok).toBe(true);
+    expect(reset).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionId: "sess-main",
+      sessionKey: "agent:main:main",
+      sessionFile: undefined,
+      reason: "reset",
+    });
+  } finally {
+    restoreRegisteredAgentHarnesses(registeredHarnesses);
+  }
 });
 
 test("sessions.reset interrupts work admitted before runtime registration", async () => {

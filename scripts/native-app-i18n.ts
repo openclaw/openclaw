@@ -86,10 +86,10 @@ const APPLE_MODIFIER_MULTILINE_CALLS =
   /\.(?:navigationTitle|accessibilityLabel|accessibilityHint|help|alert|confirmationDialog)\s*\(\s*"""([\s\S]*?)"""/gu;
 const ANDROID_CALLS =
   /\b(?:Text|OutlinedTextField|BasicTextField|Button|IconButton|TopAppBar|Snackbar|AlertDialog)\s*\(\s*(?:text\s*=\s*)?"((?:\\.|[^"\\])*)"/gu;
-const ANDROID_NAMED_LITERALS =
-  /\b(?:contentDescription|label|placeholder|title|message|supportingText|text)\s*=\s*"((?:\\.|[^"\\])*)"/gu;
+const ANDROID_NAMED_LITERALS = /\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"((?:\\.|[^"\\])*)"/gu;
 const ANDROID_TOAST_ARGS =
   /\b(?:Toast\.makeText|Snackbar\.make)\s*\([^,\n]*,\s*"((?:\\.|[^"\\])*)"/gu;
+const ANDROID_CHOOSER_ARGS = /\bIntent\.createChooser\s*\([^,\n]*,\s*"((?:\\.|[^"\\])*)"/gu;
 const ANDROID_DIALOG_CALLS =
   /\.(?:setTitle|setMessage|setPositiveButton|setNegativeButton|setNeutralButton)\s*\(\s*"((?:\\.|[^"\\])*)"/gu;
 const ANDROID_UI_STATE_TEXT =
@@ -104,6 +104,7 @@ const ANDROID_BUILTIN_UI_CALLS = new Set([
   "Card",
   "Checkbox",
   "Column",
+  "combinedClickable",
   "DropdownMenuItem",
   "Icon",
   "IconButton",
@@ -127,7 +128,7 @@ const CONDITIONAL_BRANCHES = [
   /\?\s*"((?:\\.|[^"\\])*)"\s*:\s*"((?:\\.|[^"\\])*)"/gu,
 ];
 const UI_STRING_NAME_RE =
-  /(?:title|subtitle|body|message|label|text|description|detail|prompt|help)$/iu;
+  /(?:title|subtitle|body|message|label|text|description|detail|prompt|placeholder|help)$/iu;
 const APPLE_STRING_PROPERTY = /\bvar\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*String\s*\{/gu;
 const APPLE_SWITCH_BRANCH =
   /(?:\bcase\b[^:\n]+|\bdefault)\s*:\s*(?:return\s+)?"((?:\\.|[^"\\])*)"/gu;
@@ -658,6 +659,7 @@ function extractCandidates(
       : [
           [ANDROID_CALLS, "ui-call"],
           [ANDROID_TOAST_ARGS, "ui-toast"],
+          [ANDROID_CHOOSER_ARGS, "ui-chooser"],
           [ANDROID_DIALOG_CALLS, "ui-dialog"],
           [ANDROID_UI_STATE_TEXT, "ui-state-text"],
           ...CONDITIONAL_BRANCHES.map((pattern) => [pattern, "conditional-branch"] as const),
@@ -795,15 +797,22 @@ function extractCandidates(
       }
     }
     for (const match of source.matchAll(ANDROID_NAMED_LITERALS)) {
+      const argumentName = match[1];
       const callName = enclosingCallName(source, match.index ?? 0);
-      if (!callName || !uiCallNames.has(callName) || !match[1]) {
+      if (
+        !argumentName ||
+        !UI_STRING_NAME_RE.test(argumentName) ||
+        !callName ||
+        !uiCallNames.has(callName) ||
+        !match[2]
+      ) {
         continue;
       }
       addCandidate(
         entries,
         surface,
         repoPath,
-        match[1],
+        match[2],
         "ui-named-argument",
         lineNumber(source, match.index ?? 0),
       );

@@ -24,7 +24,7 @@ import type { PluginKind } from "./plugin-kind.types.js";
 
 /** Canonical plugin manifest filename inside plugin roots. */
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
-export const PLUGIN_MANIFEST_FILENAMES = [PLUGIN_MANIFEST_FILENAME] as const;
+const PLUGIN_MANIFEST_FILENAMES = [PLUGIN_MANIFEST_FILENAME] as const;
 export const MAX_PLUGIN_MANIFEST_BYTES = 256 * 1024;
 const MAX_PLUGIN_MANIFEST_LOAD_CACHE_ENTRIES = 512;
 const MAX_SECRET_PROVIDER_EXEC_ARGS = 128;
@@ -358,6 +358,8 @@ export type PluginManifest = {
    * compatibility adapter during the deprecation window.
    */
   providerAuthEnvVars?: Record<string, string[]>;
+  /** Usage/billing credentials excluded from inference auth but included in secret scrubbing. */
+  providerUsageAuthEnvVars?: Record<string, string[]>;
   /** Provider ids that should reuse another provider id for auth lookup. */
   providerAuthAliases?: Record<string, string>;
   /** Cheap channel env lookup without booting plugin runtime. */
@@ -427,6 +429,8 @@ export type PluginManifestContracts = {
   webContentExtractors?: string[];
   webFetchProviders?: string[];
   webSearchProviders?: string[];
+  /** Provider ids whose plugin owns usage auth and snapshot hooks. */
+  usageProviders?: string[];
   migrationProviders?: string[];
   gatewayMethodDispatch?: string[];
   tools?: string[];
@@ -521,6 +525,8 @@ export type PluginManifestProviderAuthChoice = {
   cliFlag?: string;
   cliOption?: string;
   cliDescription?: string;
+  /** One pasted secret plus provider defaults is sufficient for app-guided setup. */
+  appGuidedSecret?: boolean;
   /**
    * Interactive onboarding surfaces where this auth choice should appear.
    * Defaults to `["text-inference"]` when omitted.
@@ -866,6 +872,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   const webContentExtractors = normalizeTrimmedStringList(value.webContentExtractors);
   const webFetchProviders = normalizeTrimmedStringList(value.webFetchProviders);
   const webSearchProviders = normalizeTrimmedStringList(value.webSearchProviders);
+  const usageProviders = normalizeTrimmedStringList(value.usageProviders);
   const migrationProviders = normalizeTrimmedStringList(value.migrationProviders);
   const gatewayMethodDispatch = normalizeTrimmedStringList(value.gatewayMethodDispatch);
   const tools = normalizeTrimmedStringList(value.tools);
@@ -888,6 +895,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
     ...(webContentExtractors.length > 0 ? { webContentExtractors } : {}),
     ...(webFetchProviders.length > 0 ? { webFetchProviders } : {}),
     ...(webSearchProviders.length > 0 ? { webSearchProviders } : {}),
+    ...(usageProviders.length > 0 ? { usageProviders } : {}),
     ...(migrationProviders.length > 0 ? { migrationProviders } : {}),
     ...(gatewayMethodDispatch.length > 0 ? { gatewayMethodDispatch } : {}),
     ...(tools.length > 0 ? { tools } : {}),
@@ -1530,6 +1538,7 @@ function normalizeProviderAuthChoices(
     const cliFlag = normalizeOptionalString(entry.cliFlag) ?? "";
     const cliOption = normalizeOptionalString(entry.cliOption) ?? "";
     const cliDescription = normalizeOptionalString(entry.cliDescription) ?? "";
+    const appGuidedSecret = entry.appGuidedSecret === true;
     const onboardingScopes = normalizeTrimmedStringList(entry.onboardingScopes).filter(
       (scope): scope is PluginManifestOnboardingScope =>
         scope === "text-inference" || scope === "image-generation" || scope === "music-generation",
@@ -1551,6 +1560,7 @@ function normalizeProviderAuthChoices(
       ...(cliFlag ? { cliFlag } : {}),
       ...(cliOption ? { cliOption } : {}),
       ...(cliDescription ? { cliDescription } : {}),
+      ...(appGuidedSecret ? { appGuidedSecret: true } : {}),
       ...(onboardingScopes.length > 0 ? { onboardingScopes } : {}),
     });
   }
@@ -1793,6 +1803,7 @@ export function loadPluginManifest(
   const nonSecretAuthMarkers = normalizeTrimmedStringList(raw.nonSecretAuthMarkers);
   const commandAliases = normalizeManifestCommandAliases(raw.commandAliases);
   const providerAuthEnvVars = normalizeStringListRecord(raw.providerAuthEnvVars);
+  const providerUsageAuthEnvVars = normalizeStringListRecord(raw.providerUsageAuthEnvVars);
   const providerAuthAliases = normalizeStringRecord(raw.providerAuthAliases);
   const channelEnvVars = normalizeStringListRecord(raw.channelEnvVars);
   const providerAuthChoices = normalizeProviderAuthChoices(raw.providerAuthChoices);
@@ -1850,6 +1861,7 @@ export function loadPluginManifest(
       nonSecretAuthMarkers,
       commandAliases,
       providerAuthEnvVars,
+      providerUsageAuthEnvVars,
       providerAuthAliases,
       channelEnvVars,
       providerAuthChoices,

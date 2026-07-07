@@ -191,14 +191,13 @@ class GatewayConfigResolverTest {
   @Test
   fun parseGatewayEndpointReportsUnsupportedIpv6ZoneIds() {
     listOf(
-        "ws://[fe80::1%25eth0]",
-        "wss://[fe80::1%25wlan0]:443",
-      )
-      .forEach { url ->
-        val parsed = parseGatewayEndpointResult(url)
-        assertNull(url, parsed.config)
-        assertEquals(url, GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED, parsed.error)
-      }
+      "ws://[fe80::1%25eth0]",
+      "wss://[fe80::1%25wlan0]:443",
+    ).forEach { url ->
+      val parsed = parseGatewayEndpointResult(url)
+      assertNull(url, parsed.config)
+      assertEquals(url, GatewayEndpointValidationError.IPV6_ZONE_ID_UNSUPPORTED, parsed.error)
+    }
   }
 
   @Test
@@ -661,6 +660,7 @@ class GatewayConfigResolverTest {
     assertEquals("token", plan?.config?.token)
     assertEquals("", plan?.config?.bootstrapToken)
     assertEquals("", plan?.config?.password)
+    assertEquals(GatewaySavedAuthAction.REPLACE_CREDENTIALS, plan?.savedAuthAction)
   }
 
   @Test

@@ -767,4 +767,51 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
       },
     );
   });
+
+  it("preserves explicit off for a prepared Claude Sonnet 5 alias", async () => {
+    const model = {
+      provider: "anthropic",
+      id: "production-sonnet",
+      name: "Production Sonnet",
+      api: "anthropic-messages",
+      baseUrl: "https://api.anthropic.com",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      params: { canonicalModelId: "claude-sonnet-5" },
+    } satisfies Model<"anthropic-messages">;
+    const preparedModel = {
+      ...model,
+      api: "openclaw-provider-simple:anthropic:production-sonnet",
+    } satisfies Model;
+    hoisted.prepareModelForSimpleCompletionMock.mockReturnValueOnce(preparedModel);
+
+    await completeWithPreparedSimpleCompletionModel({
+      model,
+      auth: {
+        apiKey: "sk-test",
+        source: "env:ANTHROPIC_API_KEY",
+        mode: "api-key",
+      },
+      context: {
+        messages: [{ role: "user", content: "pong", timestamp: 1 }],
+      },
+      options: {
+        reasoning: "off",
+      },
+    });
+
+    expect(hoisted.completeMock).toHaveBeenCalledWith(
+      preparedModel,
+      {
+        messages: [{ role: "user", content: "pong", timestamp: 1 }],
+      },
+      {
+        reasoning: "off",
+        apiKey: "sk-test",
+      },
+    );
+  });
 });

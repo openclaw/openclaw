@@ -133,6 +133,15 @@ function makeUserInput(text: string) {
   };
 }
 
+const TEST_RUNTIME_CONTEXT_CARRIER = [
+  "OpenClaw runtime context for the immediately preceding user message.",
+  "This context is runtime-generated, not user-authored. Keep internal details private.",
+  "",
+  "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+  "runtime metadata",
+  "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+].join("\n");
+
 function makeDeveloperInput(text: string) {
   return {
     role: "developer" as const,
@@ -145,9 +154,7 @@ function buildWhatsAppPendingHistoryContextFixture(
 ) {
   return [
     "Chat history since last reply (untrusted, for context):",
-    "```json",
-    JSON.stringify(history, null, 2),
-    "```",
+    ...history.map((entry, index) => `#history-${index + 1} ${entry.sender}: ${entry.body}`),
   ].join("\n");
 }
 
@@ -1302,7 +1309,9 @@ describe("qa mock openai server", () => {
     const withStructuredHistory = await expectResponsesJson(server, {
       stream: false,
       model: "gpt-5.5",
-      input: [makeUserInput([historyContext, WHATSAPP_PENDING_HISTORY_TRIGGER_PROMPT].join("\n"))],
+      input: [
+        makeUserInput([historyContext, WHATSAPP_PENDING_HISTORY_TRIGGER_PROMPT].join("\n\n")),
+      ],
     });
 
     expect(outputText(withStructuredHistory)).toBe(WHATSAPP_PENDING_HISTORY_OK_MARKER);
@@ -1339,12 +1348,34 @@ describe("qa mock openai server", () => {
             WHATSAPP_PENDING_HISTORY_TRIGGER_PROMPT,
             `The current trigger text mentions ${WHATSAPP_PENDING_HISTORY_QUIET_MARKER}.`,
             `It also mentions ${WHATSAPP_PENDING_HISTORY_CONTEXT_SENTINEL}.`,
-          ].join("\n"),
+          ].join("\n\n"),
         ),
       ],
     });
 
     expect(outputText(currentMessageOnlySentinel)).not.toBe(WHATSAPP_PENDING_HISTORY_OK_MARKER);
+
+    const currentPromptBeforeTrigger = await expectResponsesJson(server, {
+      stream: false,
+      model: "gpt-5.5",
+      input: [
+        makeUserInput(
+          [
+            buildWhatsAppPendingHistoryContextFixture([
+              {
+                sender: "Alice",
+                timestamp: 1_786_000_000_000,
+                body: "unrelated prior context",
+              },
+            ]),
+            `Current request: ${WHATSAPP_PENDING_HISTORY_QUIET_MARKER} ${WHATSAPP_PENDING_HISTORY_CONTEXT_SENTINEL}`,
+            WHATSAPP_PENDING_HISTORY_TRIGGER_PROMPT,
+          ].join("\n\n"),
+        ),
+      ],
+    });
+
+    expect(outputText(currentPromptBeforeTrigger)).not.toBe(WHATSAPP_PENDING_HISTORY_OK_MARKER);
 
     const contextWithoutCurrentTrigger = await expectResponsesJson(server, {
       stream: false,
@@ -3554,6 +3585,21 @@ describe("qa mock openai server", () => {
 
     expect(response.status).toBe(200);
     expect(outputText(await response.json())).toBe("CURRENT_REPLY");
+  });
+
+  it("uses the previous user instruction when the tail user item is runtime context", async () => {
+    const server = await startMockServer();
+
+    const response = await postResponses(server, {
+      stream: false,
+      input: [
+        makeUserInput("Reply exactly: QA_RUNTIME_CONTEXT_CARRIER_OK"),
+        makeUserInput(TEST_RUNTIME_CONTEXT_CARRIER),
+      ],
+    });
+
+    expect(response.status).toBe(200);
+    expect(outputText(await response.json())).toBe("QA_RUNTIME_CONTEXT_CARRIER_OK");
   });
 
   it("uses WhatsApp location markers only for the matching coordinate body", async () => {
