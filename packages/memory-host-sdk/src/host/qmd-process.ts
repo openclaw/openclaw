@@ -246,6 +246,20 @@ export async function runCliCommand(params: {
       stderr = next.text;
       stderrTruncated = stderrTruncated || next.truncated;
     });
+
+    // Guard stdout/stderr against stream errors (e.g. EPIPE when the
+    // child exits before all pipe data is consumed). Without listeners,
+    // Node.js throws an uncaught exception that crashes the process.
+    const onStreamError = (stream: "stdout" | "stderr", error: Error) => {
+      if (settled) {
+        return;
+      }
+      signalQmdProcessTree(child, "SIGKILL");
+      settle(() => reject(new Error(`${params.commandSummary} ${stream} error: ${error.message}`)));
+    };
+    child.stdout.on("error", (e) => onStreamError("stdout", e));
+    child.stderr.on("error", (e) => onStreamError("stderr", e));
+
     child.on("error", (err) => {
       if (timer) {
         clearTimeout(timer);
