@@ -1139,7 +1139,12 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
     const wrapped = wrapStreamFnSanitizeMalformedToolCalls(
       baseFn as never,
       undefined,
-      { validateAnthropicTurns: true },
+      {
+        validateAnthropicTurns: true,
+        validateGeminiTurns: false,
+        preserveSignatures: false,
+        dropThinkingBlocks: false,
+      },
       "anthropic",
     );
 
