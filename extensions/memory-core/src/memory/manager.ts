@@ -1364,14 +1364,23 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         }
       }
     };
+    const reportPendingWorkError = (err: unknown) => {
+      log.warn(`memory close: pending manager work failed: ${formatErrorMessage(err)}`);
+    };
     const awaitCurrentSync = async () => {
       const pendingSync = this.syncing;
       if (!pendingSync) {
         return;
       }
-      await awaitPendingManagerWork({ pendingSync });
+      await awaitPendingManagerWork({
+        pendingSync,
+        onError: reportPendingWorkError,
+      });
     };
-    await awaitPendingManagerWork({ pendingProviderInit });
+    await awaitPendingManagerWork({
+      pendingProviderInit,
+      onError: reportPendingWorkError,
+    });
     rememberCurrentProvider();
     try {
       await awaitCurrentSync();

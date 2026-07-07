@@ -83,6 +83,7 @@ async function writeTuiPtyFixtureScript(dir: string) {
 
       const actionLogPath = process.env.OPENCLAW_TUI_PTY_LOG_PATH;
       const gatewayStatus = process.env.OPENCLAW_TUI_PTY_GATEWAY_STATUS ?? "fixture gateway ok";
+      const startupDelayMs = Number(process.env.OPENCLAW_TUI_PTY_STARTUP_DELAY_MS ?? 0);
       const xaiLimitError = '403 {"code":"The caller does not have permission to execute the specified operation","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}';
       let currentModel = "fixture-provider/fixture-model";
       let fastMode = process.env.OPENCLAW_TUI_PTY_FAST_MODE === "true";
@@ -271,6 +272,9 @@ async function writeTuiPtyFixtureScript(dir: string) {
 
         async loadHistory() {
           record("loadHistory");
+          if (startupDelayMs > 0) {
+            await new Promise((resolve) => setTimeout(resolve, startupDelayMs));
+          }
           return { messages: [], fastMode };
         }
 
@@ -444,6 +448,22 @@ describe.sequential("TUI PTY harness", () => {
     expect(fixture.run.output()).toContain("local ready");
     expect(fixture.run.output()).not.toContain("host local");
   });
+
+  it(
+    "shows startup activity while post-connect initialization is pending",
+    async () => {
+      const slow = await startTuiFixture({
+        env: { OPENCLAW_TUI_PTY_STARTUP_DELAY_MS: "400" },
+      });
+      try {
+        await slow.run.waitForOutput("starting up", STARTUP_TIMEOUT_MS);
+        await slow.run.waitForOutput("local ready | idle", STARTUP_TIMEOUT_MS);
+      } finally {
+        await slow.cleanup();
+      }
+    },
+    STARTUP_TEST_TIMEOUT_MS,
+  );
 
   it("refreshes pending approvals before loading history", async () => {
     await fixture.waitForLogEntry((entry) => entry.method === "listPluginApprovals");

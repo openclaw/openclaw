@@ -1,5 +1,6 @@
 // Google tests cover realtime voice provider plugin behavior.
 import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "openclaw/plugin-sdk/realtime-voice";
+import type { RealtimeVoiceTool } from "openclaw/plugin-sdk/realtime-voice";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildGoogleRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
@@ -90,6 +91,35 @@ function requireFirstAudio(mock: ReturnType<typeof vi.fn>): unknown {
   return requireFirstMockArg(mock, "Google Live audio");
 }
 
+function createRealtimeTool(name: string): RealtimeVoiceTool {
+  return {
+    type: "function",
+    name,
+    description: "Contract test tool",
+    parameters: { type: "object", properties: {} },
+  };
+}
+
+function createUnreadableToolName(): RealtimeVoiceTool {
+  return {
+    type: "function",
+    get name(): string {
+      throw new Error("unreadable tool name");
+    },
+    description: "Contract test tool",
+    parameters: { type: "object", properties: {} },
+  };
+}
+
+function createMalformedToolName(name: unknown): RealtimeVoiceTool {
+  return {
+    type: "function",
+    name,
+    description: "Contract test tool",
+    parameters: { type: "object", properties: {} },
+  } as unknown as RealtimeVoiceTool;
+}
+
 describe("buildGoogleRealtimeVoiceProvider", () => {
   beforeEach(() => {
     envSnapshot = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
@@ -136,6 +166,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       ],
       supportsBrowserSession: true,
       supportsBargeIn: true,
+      handlesInputAudioBargeIn: true,
       supportsToolCalls: true,
       supportsVideoFrames: true,
       supportsSessionResumption: true,
@@ -302,6 +333,35 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(declarations[1]?.behavior).toBe("NON_BLOCKING");
   });
 
+  it("omits tool names that Google Live cannot accept", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      tools: [
+        createRealtimeTool("_lookup"),
+        createRealtimeTool("calendar.lookup:next"),
+        createRealtimeTool("1_lookup"),
+        createRealtimeTool("bad/name"),
+        createRealtimeTool(`x${"a".repeat(128)}`),
+        createMalformedToolName(undefined),
+        createMalformedToolName(null),
+        createMalformedToolName(42),
+        createUnreadableToolName(),
+      ],
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await bridge.connect();
+
+    const config = lastConnectParams().config as {
+      tools?: Array<{ functionDeclarations?: Array<{ name?: string }> }>;
+    };
+    expect(config.tools?.[0]?.functionDeclarations?.map((declaration) => declaration.name)).toEqual(
+      ["_lookup", "calendar.lookup:next"],
+    );
+  });
+
   it("omits zero temperature for native audio responses", async () => {
     const provider = buildGoogleRealtimeVoiceProvider();
     const bridge = provider.createBridge({
@@ -374,9 +434,13 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       providerConfig: {
         apiKey: "gemini-key",
         model: "gemini-live-2.5-flash-preview",
+        prefixPaddingMs: 100,
+        silenceDurationMs: 300,
         voice: "Puck",
         temperature: 0.4,
       },
+      prefixPaddingMs: 250,
+      silenceDurationMs: 650,
       instructions: "Speak briefly.",
       tools: [
         {
@@ -399,6 +463,12 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       config?: {
         liveConnectConstraints?: {
           config?: {
+            realtimeInputConfig?: {
+              automaticActivityDetection?: {
+                prefixPaddingMs?: number;
+                silenceDurationMs?: number;
+              };
+            };
             responseModalities?: string[];
             speechConfig?: { voiceConfig?: { prebuiltVoiceConfig?: { voiceName?: string } } };
             systemInstruction?: string;
@@ -423,6 +493,12 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(liveConstraints?.config?.responseModalities).toEqual(["AUDIO"]);
     expect(liveConstraints?.config?.temperature).toBe(0.4);
     expect(liveConstraints?.config?.systemInstruction).toBe("Speak briefly.");
+    expect(
+      liveConstraints?.config?.realtimeInputConfig?.automaticActivityDetection?.prefixPaddingMs,
+    ).toBe(250);
+    expect(
+      liveConstraints?.config?.realtimeInputConfig?.automaticActivityDetection?.silenceDurationMs,
+    ).toBe(650);
     expect(liveConstraints?.config?.speechConfig?.voiceConfig?.prebuiltVoiceConfig?.voiceName).toBe(
       "Puck",
     );
@@ -800,6 +876,24 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     });
 
     expect(onTranscript).not.toHaveBeenCalled();
+  });
+
+  it("reports provider-confirmed input interruption as barge-in", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const onClearAudio = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio,
+    });
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onmessage({
+      setupComplete: {},
+      serverContent: { interrupted: true },
+    });
+
+    expect(onClearAudio).toHaveBeenCalledWith("barge-in");
   });
 
   it("forwards Live API tool calls and submits matching function responses", async () => {

@@ -24,13 +24,15 @@ export function coercePairingStateRecord<T>(value: unknown): Record<string, T> {
 }
 
 /** Remove pending requests older than the caller's pairing TTL. */
-export function pruneExpiredPending<T extends { ts: number }>(
+export function pruneExpiredPending<T extends { ts: number; refreshedAtMs?: number }>(
   pendingById: Record<string, T>,
   nowMs: number,
   ttlMs: number,
 ) {
   for (const [id, req] of Object.entries(pendingById)) {
-    if (nowMs - req.ts > ttlMs) {
+    // refreshedAtMs is a TTL keepalive: expiry counts from the device's last
+    // re-request, while ts stays the creation time for approval ordering.
+    if (nowMs - (req.refreshedAtMs ?? req.ts) > ttlMs) {
       delete pendingById[id];
     }
   }

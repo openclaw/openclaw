@@ -594,10 +594,18 @@ describe("script-specific dev tooling hardening", () => {
   });
 
   it("formats OpenAI realtime smoke help without launching live checks", () => {
-    expect(realtimeSmokeTesting.parseRealtimeSmokeArgs(["--help"])).toEqual({ help: true });
+    expect(realtimeSmokeTesting.parseRealtimeSmokeArgs(["--help"])).toEqual({
+      help: true,
+      openAIOnly: false,
+    });
+    expect(realtimeSmokeTesting.parseRealtimeSmokeArgs(["--openai-only"])).toEqual({
+      help: false,
+      openAIOnly: true,
+    });
     expect(realtimeSmokeTesting.usage()).toContain(
       "Usage: node --import tsx scripts/dev/realtime-talk-live-smoke.ts",
     );
+    expect(realtimeSmokeTesting.usage()).toContain("--openai-only");
   });
 
   it("rejects unknown OpenAI realtime smoke args before runtime setup", () => {
@@ -740,33 +748,23 @@ describe("script-specific dev tooling hardening", () => {
       const descendantPidPath = path.join(tempRoot, "descendant.pid");
       let descendantPid = 0;
       const fakeClaudeBin = await writeFakePromptCli(tempRoot, descendantPidPath);
-      const probe = spawn(
-        process.execPath,
-        ["--import", "tsx", "scripts/anthropic-prompt-probe.ts"],
-        {
-          cwd: process.cwd(),
-          env: {
-            ...process.env,
-            CLAUDE_BIN: fakeClaudeBin,
-            OPENCLAW_PROMPT_TEXT: "timeout cleanup proof",
-            OPENCLAW_PROMPT_TIMEOUT_MS: "500",
-            OPENCLAW_PROMPT_TRANSPORT: "direct",
-          },
-          stdio: "ignore",
-        },
-      );
+      const probe = promptProbeTesting.runDirectPrompt("timeout cleanup proof", {
+        claudeBin: fakeClaudeBin,
+        timeoutMs: 500,
+      });
 
       try {
         descendantPid = await waitForPidFile(descendantPidPath);
         expect(Number.isInteger(descendantPid)).toBe(true);
         expect(isProcessAlive(descendantPid)).toBe(true);
 
-        await expect(waitForChildExit(probe)).resolves.toEqual({ status: 0, signal: null });
+        await expect(probe).resolves.toMatchObject({
+          exitCode: null,
+          ok: false,
+          signal: "SIGKILL",
+        });
         await waitForCondition(() => !isProcessAlive(descendantPid));
       } finally {
-        if (probe.pid && isProcessAlive(probe.pid)) {
-          process.kill(probe.pid, "SIGKILL");
-        }
         if (descendantPid && isProcessAlive(descendantPid)) {
           process.kill(descendantPid, "SIGKILL");
         }

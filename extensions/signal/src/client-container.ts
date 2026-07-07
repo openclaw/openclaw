@@ -54,6 +54,9 @@ export type ContainerWebSocketMessage = {
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_ATTACHMENT_RESPONSE_MAX_BYTES = 1_048_576;
+// Receive envelopes contain JSON metadata; attachment bytes are fetched separately.
+// Keep the ws pre-buffer limit narrow so a container cannot force 100 MiB frames.
+const SIGNAL_CONTAINER_WS_MAX_PAYLOAD_BYTES = 1024 * 1024;
 const CONTAINER_TEXT_STYLE_MARKERS: Record<string, string> = {
   BOLD: "**",
   ITALIC: "*",
@@ -176,7 +179,7 @@ function containerReceiveCheck(
       resolve(result);
     };
     try {
-      ws = new WebSocket(wsUrl);
+      ws = new WebSocket(wsUrl, { maxPayload: SIGNAL_CONTAINER_WS_MAX_PAYLOAD_BYTES });
     } catch (err) {
       settle({
         ok: false,
@@ -328,7 +331,7 @@ export async function streamContainerEvents(params: {
     };
 
     try {
-      ws = new WebSocket(wsUrl);
+      ws = new WebSocket(wsUrl, { maxPayload: SIGNAL_CONTAINER_WS_MAX_PAYLOAD_BYTES });
     } catch (err) {
       logError(
         `[signal-ws] failed to create WebSocket: ${err instanceof Error ? err.message : String(err)}`,
@@ -463,6 +466,14 @@ function parseContainerSendTimestamp(raw: unknown): number | undefined {
   return timestamp;
 }
 
+function normalizeContainerQuoteTimestamp(raw: unknown): number | undefined {
+  return parseStrictNonNegativeInteger(raw) ?? undefined;
+}
+
+function normalizeContainerQuoteText(raw: unknown): string | undefined {
+  return typeof raw === "string" ? raw : undefined;
+}
+
 /**
  * Send message via bbernhard container REST API.
  */
@@ -473,6 +484,9 @@ export async function containerSendMessage(params: {
   message: string;
   textStyles?: Array<{ start: number; length: number; style: string }>;
   attachments?: string[];
+  quoteTimestamp?: number;
+  quoteAuthor?: string;
+  quoteMessage?: string;
   timeoutMs?: number;
 }): Promise<{ timestamp?: number }> {
   const payload: Record<string, unknown> = {
@@ -489,6 +503,11 @@ export async function containerSendMessage(params: {
   if (params.attachments && params.attachments.length > 0) {
     // Container API only accepts base64-encoded attachments, not file paths.
     payload.base64_attachments = await filesToBase64DataUris(params.attachments);
+  }
+  if (params.quoteTimestamp !== undefined && params.quoteAuthor) {
+    payload.quote_timestamp = params.quoteTimestamp;
+    payload.quote_author = params.quoteAuthor;
+    payload.quote_message = params.quoteMessage ?? "";
   }
 
   const result = await containerRestRequest<{ timestamp?: unknown }>(
@@ -665,6 +684,10 @@ export async function containerRpcRequest<T = unknown>(
         return { start: Number(start), length: Number(length), style };
       });
 
+      const quoteTimestamp = normalizeContainerQuoteTimestamp(
+        p.quoteTimestamp ?? p["quote-timestamp"],
+      );
+      const quoteAuthor = normalizeContainerQuoteText(p.quoteAuthor ?? p["quote-author"]);
       const result = await containerSendMessage({
         baseUrl: opts.baseUrl,
         account: (p.account as string) ?? "",
@@ -672,6 +695,9 @@ export async function containerRpcRequest<T = unknown>(
         message: (p.message as string) ?? "",
         textStyles,
         attachments: p.attachments as string[] | undefined,
+        quoteTimestamp,
+        quoteAuthor: quoteAuthor ? stripUuidPrefix(quoteAuthor) : undefined,
+        quoteMessage: normalizeContainerQuoteText(p.quoteMessage ?? p["quote-message"]),
         timeoutMs: opts.timeoutMs,
       });
       return result as T;

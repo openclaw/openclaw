@@ -3,6 +3,7 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { RECOVERY_REPLAY_SPACING_MS } from "../delivery-recovery.shared.js";
 import { OutboundDeliveryError, type OutboundPayloadDeliveryOutcome } from "./deliver-types.js";
 import { attachOutboundDeliveryCommitHook } from "./delivery-commit-hooks.js";
 import {
@@ -117,6 +118,81 @@ describe("delivery-queue recovery", () => {
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
   });
 
+  it("paces startup replay instead of draining eligible entries back-to-back", async () => {
+    vi.useFakeTimers();
+    const startedAt = new Date("2026-04-23T00:00:00.000Z");
+    vi.setSystemTime(startedAt);
+    try {
+      await enqueueCrashRecoveryEntries();
+      let firstDelivered!: () => void;
+      const firstDeliveredPromise = new Promise<void>((resolve) => {
+        firstDelivered = resolve;
+      });
+      const deliveryTimes: number[] = [];
+      const deliver = vi.fn(async () => {
+        deliveryTimes.push(Date.now());
+        if (deliveryTimes.length === 1) {
+          firstDelivered();
+        }
+        return [];
+      });
+
+      const recovery = runRecovery({ deliver, maxRecoveryMs: 60_000 });
+      await firstDeliveredPromise;
+      expect(deliver).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(RECOVERY_REPLAY_SPACING_MS - 1);
+      expect(deliver).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      const { result } = await recovery;
+
+      expect(deliver).toHaveBeenCalledTimes(2);
+      expect(deliveryTimes[1]).toBe(startedAt.getTime() + RECOVERY_REPLAY_SPACING_MS);
+      expect(result).toMatchObject({ recovered: 2, deferredBackoff: 0 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("counts replay pacing against the recovery budget and defers the backlog tail", async () => {
+    vi.useFakeTimers();
+    const startedAt = new Date("2026-04-23T00:00:00.000Z");
+    vi.setSystemTime(startedAt);
+    try {
+      await enqueueCrashRecoveryEntries();
+      await enqueueDelivery(
+        { channel: "demo-channel-c", to: "#c", payloads: [{ text: "c" }] },
+        tmpDir(),
+      );
+      let firstDelivered!: () => void;
+      const firstDeliveredPromise = new Promise<void>((resolve) => {
+        firstDelivered = resolve;
+      });
+      const deliveryTimes: number[] = [];
+      const deliver = vi.fn(async () => {
+        deliveryTimes.push(Date.now());
+        if (deliveryTimes.length === 1) {
+          firstDelivered();
+        }
+        return [];
+      });
+
+      const recovery = runRecovery({ deliver, maxRecoveryMs: 1 });
+      await firstDeliveredPromise;
+
+      await vi.advanceTimersByTimeAsync(1);
+      const { result } = await recovery;
+
+      expect(deliver).toHaveBeenCalledTimes(1);
+      expect(deliveryTimes).toEqual([startedAt.getTime()]);
+      expect(result).toMatchObject({ recovered: 1, deferredBackoff: 0 });
+      expect(await loadPendingDeliveries(tmpDir())).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("moves entries that exceeded max retries to failed/", async () => {
     const id = await enqueueDelivery(
       { channel: "demo-channel-a", to: "+1", payloads: [{ text: "a" }] },
@@ -149,6 +225,30 @@ describe("delivery-queue recovery", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]?.retryCount).toBe(1);
     expect(entries[0]?.lastError).toBe("network down");
+  });
+
+  it("keeps a repeated pre-connect recovery failure replayable", async () => {
+    const id = await enqueueDelivery(
+      { channel: "demo-channel-c", to: "#ch", payloads: [{ text: "x" }] },
+      tmpDir(),
+    );
+    const connectError = Object.assign(new Error("connect ECONNREFUSED"), {
+      code: "ECONNREFUSED",
+      syscall: "connect",
+    });
+    const deliver = vi.fn(async () => {
+      await markDeliveryPlatformSendAttemptStarted(id, tmpDir());
+      throw connectError;
+    });
+
+    const { result } = await runRecovery({ deliver });
+
+    expect(result).toMatchObject({ recovered: 0, failed: 1 });
+    const entries = await loadPendingDeliveries(tmpDir());
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.retryCount).toBe(1);
+    expect(entries[0]?.recoveryState).toBeUndefined();
+    expect(entries[0]?.platformSendStartedAt).toBeUndefined();
   });
 
   it("does not replay a recovery batch that rejected after an earlier send succeeded", async () => {
@@ -216,6 +316,94 @@ describe("delivery-queue recovery", () => {
     expect(entries[0]?.recoveryState).toBeUndefined();
     expect(entries[0]?.retryCount).toBe(1);
     expect(entries[0]?.lastError).toBe("network down");
+  });
+
+  it("clears send evidence for an all-pre-connect best-effort recovery failure", async () => {
+    const id = await enqueueDelivery(
+      {
+        channel: "demo-channel-c",
+        to: "#ch",
+        payloads: [{ text: "first" }],
+        bestEffort: true,
+      },
+      tmpDir(),
+    );
+    const deliver = vi.fn(
+      async (params: {
+        onPayloadDeliveryOutcome?: (outcome: OutboundPayloadDeliveryOutcome) => void;
+      }) => {
+        await markDeliveryPlatformSendAttemptStarted(id, tmpDir());
+        params.onPayloadDeliveryOutcome?.({
+          index: 0,
+          status: "failed",
+          error: Object.assign(new Error("getaddrinfo EAI_AGAIN"), {
+            code: "EAI_AGAIN",
+            syscall: "getaddrinfo",
+          }),
+          sentBeforeError: false,
+          stage: "platform_send",
+        });
+        return [];
+      },
+    );
+
+    const { result } = await runRecovery({ deliver });
+
+    expect(result).toMatchObject({ recovered: 0, failed: 1 });
+    const entries = await loadPendingDeliveries(tmpDir());
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.retryCount).toBe(1);
+    expect(entries[0]?.recoveryState).toBeUndefined();
+    expect(entries[0]?.platformSendStartedAt).toBeUndefined();
+  });
+
+  it("preserves send evidence when any best-effort recovery failure is ambiguous", async () => {
+    const id = await enqueueDelivery(
+      {
+        channel: "demo-channel-c",
+        to: "#ch",
+        payloads: [{ text: "first" }, { text: "second" }],
+        bestEffort: true,
+      },
+      tmpDir(),
+    );
+    const deliver = vi.fn(
+      async (params: {
+        onPayloadDeliveryOutcome?: (outcome: OutboundPayloadDeliveryOutcome) => void;
+      }) => {
+        await markDeliveryPlatformSendAttemptStarted(id, tmpDir());
+        params.onPayloadDeliveryOutcome?.({
+          index: 0,
+          status: "failed",
+          error: Object.assign(new Error("connect ECONNREFUSED"), {
+            code: "ECONNREFUSED",
+            syscall: "connect",
+          }),
+          sentBeforeError: false,
+          stage: "platform_send",
+        });
+        params.onPayloadDeliveryOutcome?.({
+          index: 1,
+          status: "failed",
+          error: Object.assign(new Error("read ECONNRESET"), {
+            code: "ECONNRESET",
+            syscall: "read",
+          }),
+          sentBeforeError: false,
+          stage: "platform_send",
+        });
+        return [];
+      },
+    );
+
+    const { result } = await runRecovery({ deliver });
+
+    expect(result).toMatchObject({ recovered: 0, failed: 1 });
+    const entries = await loadPendingDeliveries(tmpDir());
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.retryCount).toBe(1);
+    expect(entries[0]?.recoveryState).toBe("send_attempt_started");
+    expect(typeof entries[0]?.platformSendStartedAt).toBe("number");
   });
 
   it("does not ack a partially sent best-effort recovery batch", async () => {

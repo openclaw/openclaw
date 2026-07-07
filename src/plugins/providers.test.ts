@@ -41,6 +41,7 @@ let resolveProviderRefOwnership: typeof import("./providers.js").resolveProvider
 let resolveActivatableProviderOwnerPluginIds: typeof import("./providers.js").resolveActivatableProviderOwnerPluginIds;
 let resolveEnabledProviderPluginIds: typeof import("./providers.js").resolveEnabledProviderPluginIds;
 let resolveCatalogHookProviderPluginIds: typeof import("./providers.js").resolveCatalogHookProviderPluginIds;
+let resolveUsageHookProviderPluginContracts: typeof import("./providers.js").resolveUsageHookProviderPluginContracts;
 let resolveExternalAuthProfileCompatFallbackPluginIds: typeof import("./providers.js").resolveExternalAuthProfileCompatFallbackPluginIds;
 let resolveExternalAuthProfileProviderPluginIds: typeof import("./providers.js").resolveExternalAuthProfileProviderPluginIds;
 let resolveDiscoveredProviderPluginIds: typeof import("./providers.js").resolveDiscoveredProviderPluginIds;
@@ -524,6 +525,7 @@ describe("resolvePluginProviders", () => {
       resolveProviderRefOwnership,
       resolveEnabledProviderPluginIds,
       resolveCatalogHookProviderPluginIds,
+      resolveUsageHookProviderPluginContracts,
       resolveExternalAuthProfileCompatFallbackPluginIds,
       resolveExternalAuthProfileProviderPluginIds,
       resolveDiscoveredProviderPluginIds,
@@ -896,6 +898,27 @@ describe("resolvePluginProviders", () => {
     expect(
       resolveCatalogHookProviderPluginIds({ config: {}, env: {} as NodeJS.ProcessEnv }),
     ).toEqual(["ollama"]);
+  });
+
+  it("loads usage hooks only for manifest-declared providers", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "usage-owner",
+        providerIds: ["usage-provider"],
+        enabledByDefault: true,
+        contracts: { usageProviders: ["usage-provider"] },
+      }),
+      createManifestProviderPlugin({
+        id: "regular-provider",
+        providerIds: ["regular-provider"],
+        enabledByDefault: true,
+      }),
+    ]);
+
+    expect(
+      resolveUsageHookProviderPluginContracts({ config: {}, env: {} as NodeJS.ProcessEnv }),
+    ).toEqual([{ pluginId: "usage-owner", providerIds: ["usage-provider"] }]);
+    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
   });
 
   it("resolves external auth hook plugin ids from manifest contracts without runtime loading", () => {

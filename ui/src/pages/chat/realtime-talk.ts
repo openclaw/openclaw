@@ -34,6 +34,38 @@ export type RealtimeTalkLaunchOptions = {
   reasoningEffort?: string;
 };
 
+type RealtimeTalkLocalOptions = {
+  inputDeviceId?: string;
+};
+
+type RealtimeTalkLaunchTransport = NonNullable<RealtimeTalkLaunchOptions["transport"]>;
+
+type RealtimeTalkConfigResult = {
+  config?: {
+    talk?: {
+      realtime?: {
+        transport?: unknown;
+      };
+    };
+  };
+};
+
+function normalizeLaunchTransport(value: unknown): RealtimeTalkLaunchTransport | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const transport = normalizeTalkTransport(value);
+  if (
+    transport === "webrtc" ||
+    transport === "provider-websocket" ||
+    transport === "gateway-relay" ||
+    transport === "managed-room"
+  ) {
+    return transport;
+  }
+  return undefined;
+}
+
 function createTransport(
   session: RealtimeTalkSessionResult,
   ctx: RealtimeTalkTransportContext,
@@ -80,6 +112,7 @@ export class RealtimeTalkSession {
     private readonly sessionKey: string,
     private readonly callbacks: RealtimeTalkCallbacks = {},
     private readonly options: RealtimeTalkLaunchOptions = {},
+    private readonly localOptions: RealtimeTalkLocalOptions = {},
   ) {}
 
   async start(): Promise<void> {
@@ -93,6 +126,7 @@ export class RealtimeTalkSession {
       client: this.client,
       sessionKey: this.sessionKey,
       callbacks: this.callbacks,
+      inputDeviceId: this.localOptions.inputDeviceId,
       consultThinkingLevel: session.consultThinkingLevel,
       consultFastMode: session.consultFastMode,
     });
@@ -109,7 +143,26 @@ export class RealtimeTalkSession {
         }),
       );
     } catch (error) {
-      if (this.options.transport && this.options.transport !== "gateway-relay") {
+      let transport = this.options.transport;
+      if (!transport) {
+        let result: RealtimeTalkConfigResult;
+        try {
+          result = await this.client.request<RealtimeTalkConfigResult>("talk.config", {});
+        } catch {
+          throw error;
+        }
+        if (!result.config || typeof result.config !== "object") {
+          throw error;
+        }
+        const configuredTransport = result.config?.talk?.realtime?.transport;
+        if (configuredTransport !== undefined) {
+          transport = normalizeLaunchTransport(configuredTransport);
+          if (!transport) {
+            throw error;
+          }
+        }
+      }
+      if (transport && transport !== "gateway-relay") {
         throw error;
       }
       try {
@@ -119,7 +172,7 @@ export class RealtimeTalkSession {
             sessionKey: this.sessionKey,
             ...this.options,
             mode: "realtime",
-            transport: this.options.transport ?? "gateway-relay",
+            transport: transport ?? "gateway-relay",
             brain: "agent-consult",
           }),
         );

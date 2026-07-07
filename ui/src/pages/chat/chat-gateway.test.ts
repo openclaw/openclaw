@@ -816,6 +816,7 @@ describe("handleChatEvent", () => {
             kind: "direct",
             updatedAt: 1,
             hasActiveRun: true,
+            activeRunIds: ["run-1"],
             status: "running",
             startedAt: 100,
           },

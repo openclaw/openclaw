@@ -6,6 +6,7 @@
  */
 
 import { html, nothing, type TemplateResult } from "lit";
+import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
 import type { FastMode } from "../../api/types.ts";
 import { controlUiPublicAssetPath } from "../../app/public-assets.ts";
@@ -19,7 +20,9 @@ import {
 } from "../../app/user-identity.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { formatBytes } from "../../lib/agents/display.ts";
 import { resolveAssistantTextAvatar, resolveChatAvatarRenderUrl } from "../../lib/avatar.ts";
+import { formatDurationHuman } from "../../lib/format.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import {
   CONFIG_PRESETS,
@@ -37,7 +40,7 @@ export type QuickSettingsChannel = {
   detail?: string;
 };
 
-export type QuickSettingsAutomation = {
+type QuickSettingsAutomation = {
   cronJobCount: number;
   skillCount: number;
   mcpServerCount: number;
@@ -77,6 +80,10 @@ export type QuickSettingsProps = {
   onPairMobile?: () => void;
   onBrowserEnabledToggle?: (enabled: boolean) => void;
   onToolProfileChange?: (profile: string) => void;
+
+  // Gateway host
+  systemInfo?: SystemInfoResult | null;
+  systemInfoUnavailable?: boolean;
 
   // Appearance
   theme: ThemeName;
@@ -590,6 +597,57 @@ function renderSecurityCard(props: QuickSettingsProps) {
   `;
 }
 
+function renderSystemRow(label: string, value: string, title?: string) {
+  return html`
+    <div class="qs-row">
+      <span class="qs-row__label">${label}</span>
+      <span class="qs-row__value" title=${title ?? ""}>${value}</span>
+    </div>
+  `;
+}
+
+function renderSystemCard(props: QuickSettingsProps) {
+  if (props.systemInfoUnavailable) {
+    return nothing;
+  }
+  const info = props.systemInfo;
+  const placeholder = "—";
+  const hostTitle = info && info.hostname !== info.machineName ? info.hostname : undefined;
+  const address = info?.lanAddress
+    ? `${info.lanAddress}${info.port == null ? "" : `:${info.port}`}`
+    : placeholder;
+  const osLabel = info ? `${info.osLabel} · ${info.arch}` : placeholder;
+  const runtime = info ? `Node ${info.nodeVersion} · PID ${info.pid}` : placeholder;
+  const cpu = info
+    ? `${info.cpuCount} cores${info.loadAverage ? ` · load ${info.loadAverage[0].toFixed(1)}` : ""}`
+    : placeholder;
+  const loadTitle = info?.loadAverage
+    ? `Load average: ${info.loadAverage.map((value) => value.toFixed(1)).join(" · ")}`
+    : undefined;
+  const cpuTitle = [info?.cpuModel, loadTitle].filter(Boolean).join(" · ") || undefined;
+  const memory = info
+    ? `${formatBytes(info.memoryFreeBytes)} free of ${formatBytes(info.memoryTotalBytes)}`
+    : placeholder;
+  const hasDisk = info?.diskAvailableBytes != null && info.diskTotalBytes != null;
+  const disk = hasDisk
+    ? `${formatBytes(info.diskAvailableBytes)} free of ${formatBytes(info.diskTotalBytes)}`
+    : placeholder;
+
+  return html`
+    <div class="qs-card qs-card--system">
+      ${renderCardHeader(icons.monitor, "Gateway Host")}
+      <div class="qs-card__body">
+        ${renderSystemRow("Host", info?.machineName ?? placeholder, hostTitle)}
+        ${renderSystemRow("Address", address)} ${renderSystemRow("OS", osLabel)}
+        ${renderSystemRow("Runtime", runtime)}
+        ${renderSystemRow("Uptime", info ? formatDurationHuman(info.uptimeMs) : placeholder)}
+        ${renderSystemRow("CPU", cpu, cpuTitle)} ${renderSystemRow("Memory", memory)}
+        ${info == null || hasDisk ? renderSystemRow("Disk", disk, info?.diskPath) : nothing}
+      </div>
+    </div>
+  `;
+}
+
 function renderAppearanceCard(props: QuickSettingsProps) {
   const importedThemeName = props.hasCustomTheme
     ? (props.customThemeLabel ?? "Imported theme")
@@ -996,8 +1054,8 @@ export function renderQuickSettings(props: QuickSettingsProps) {
     <div class="qs-container">
       <div class="qs-grid">
         ${renderModelCard(props)} ${renderChannelsCard(props)} ${renderSecurityCard(props)}
-        ${renderAppearanceCard(props)} ${renderPersonalCard(props)} ${renderAutomationsCard(props)}
-        ${renderPresetsCard(props)}
+        ${renderSystemCard(props)} ${renderAppearanceCard(props)} ${renderPersonalCard(props)}
+        ${renderAutomationsCard(props)} ${renderPresetsCard(props)}
       </div>
 
       ${renderConnectionFooter(props)}

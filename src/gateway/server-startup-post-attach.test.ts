@@ -245,6 +245,8 @@ vi.mock("./server-tailscale.js", () => ({
 const { startGatewayPostAttachRuntime, startGatewaySidecars, testing } =
   await import("./server-startup-post-attach.js");
 const { STARTUP_UNAVAILABLE_GATEWAY_METHODS } = await import("./methods/core-descriptors.js");
+const { createGatewayCloseHandler } = await import("./server-close.js");
+const { createChatRunState } = await import("./server-chat-state.js");
 
 type PostAttachParams = Parameters<typeof startGatewayPostAttachRuntime>[0];
 type PostAttachRuntimeDeps = NonNullable<Parameters<typeof startGatewayPostAttachRuntime>[1]>;
@@ -1014,7 +1016,7 @@ describe("startGatewayPostAttachRuntime", () => {
       await startGatewayPostAttachRuntime({
         ...createPostAttachParams(),
         log,
-        deferSidecars: true,
+        sidecarStartup: "defer",
         providerAuthPrewarm: { enabled: true, delayMs: 1_000 },
         onPostReadySidecars,
         onGatewayLifetimeSidecars,
@@ -1045,15 +1047,15 @@ describe("startGatewayPostAttachRuntime", () => {
     }
   });
 
-  it("skips provider auth startup prewarm without disabling failure rewarm", async () => {
+  it("keeps provider auth failure rewarm without default startup prewarm", async () => {
     vi.useFakeTimers();
     const onGatewayLifetimeSidecars = vi.fn();
 
     try {
       await startGatewayPostAttachRuntime({
         ...createPostAttachParams(),
-        deferSidecars: true,
-        providerAuthPrewarm: { startupEnabled: false },
+        sidecarStartup: "defer",
+        providerAuthPrewarm: {},
         onGatewayLifetimeSidecars,
       });
 
@@ -1132,7 +1134,7 @@ describe("startGatewayPostAttachRuntime", () => {
           } as never,
         }),
         log,
-        deferSidecars: true,
+        sidecarStartup: "defer",
         providerAuthPrewarm: { enabled: true, delayMs: 1_000 },
         onPostReadySidecars,
         onGatewayLifetimeSidecars,
@@ -1238,6 +1240,7 @@ describe("startGatewayPostAttachRuntime", () => {
         getConfig: () => ({ marker: "current" }) as never,
         log,
         delayMs: 1_000,
+        startupWarmEnabled: true,
       });
       await vi.dynamicImportSettled();
       await vi.waitFor(() => {
@@ -1258,7 +1261,7 @@ describe("startGatewayPostAttachRuntime", () => {
     }
   });
 
-  it("keeps the default provider auth prewarm out of the early post-ready window", async () => {
+  it("delays explicit provider auth prewarm beyond the early post-ready window", async () => {
     expect(testing.providerAuthPrewarmStartDelayMs).toBe(5_000);
   });
 
@@ -1275,6 +1278,7 @@ describe("startGatewayPostAttachRuntime", () => {
         getConfig: () => currentCfg,
         log,
         delayMs: 0,
+        startupWarmEnabled: true,
       });
       currentCfg = reloadedCfg;
       await vi.dynamicImportSettled();
@@ -1373,7 +1377,7 @@ describe("startGatewayPostAttachRuntime", () => {
 
         await startGatewayPostAttachRuntime({
           ...createPostAttachParams({
-            deferSidecars: true,
+            sidecarStartup: "defer",
             onChannelsStarted: async () => {
               events.push("channels-started");
             },
@@ -1427,7 +1431,7 @@ describe("startGatewayPostAttachRuntime", () => {
 
         await startGatewayPostAttachRuntime({
           ...createPostAttachParams({
-            deferSidecars: true,
+            sidecarStartup: "defer",
             onPluginServices,
             onSidecarsReady,
           }),
@@ -1532,7 +1536,7 @@ describe("startGatewayPostAttachRuntime", () => {
         const runtimePromise = startGatewayPostAttachRuntime(
           {
             ...createPostAttachParams({
-              deferSidecars: true,
+              sidecarStartup: "defer",
               onPluginServices,
               onSidecarsReady,
             }),
@@ -1894,9 +1898,6 @@ describe("startGatewayPostAttachRuntime", () => {
     const postReadySidecars = [{ stop: vi.fn() }];
     const stopChannel = vi.fn(async () => {});
     const pluginServices = { stop: vi.fn(async () => {}) };
-    const { createGatewayCloseHandler } = await import("./server-close.js");
-    const { createChatRunState } = await import("./server-chat-state.js");
-
     const close = createGatewayCloseHandler({
       bonjourStop: null,
       tailscaleCleanup: null,
@@ -1912,7 +1913,10 @@ describe("startGatewayPostAttachRuntime", () => {
       healthInterval: setInterval(() => {}, 1 << 30),
       dedupeCleanup: setInterval(() => {}, 1 << 30),
       mediaCleanup: null,
+      worktreeCleanup: null,
+      skillCuratorCleanup: vi.fn(),
       agentUnsub: null,
+      taskUnsub: null,
       heartbeatUnsub: null,
       transcriptUnsub: null,
       lifecycleUnsub: null,
@@ -1984,7 +1988,7 @@ describe("startGatewayPostAttachRuntime", () => {
       {
         ...createPostAttachParams(),
         unavailableGatewayMethods,
-        deferSidecars: true,
+        sidecarStartup: "defer",
       },
       createPostAttachRuntimeDeps({ startGatewaySidecars: startGatewaySidecarsValue }),
     );
@@ -2026,7 +2030,7 @@ describe("startGatewayPostAttachRuntime", () => {
     await startGatewayPostAttachRuntime(
       {
         ...createPostAttachParams({
-          deferSidecars: true,
+          sidecarStartup: "defer",
           loadStartupPlugins,
           onStartupPluginsLoaded,
         }),

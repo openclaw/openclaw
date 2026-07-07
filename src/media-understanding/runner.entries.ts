@@ -7,6 +7,7 @@ import {
   normalizeNullableString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { MediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
 import { extractGeminiResponse } from "../../packages/media-understanding-common/src/output-extract.js";
 import {
@@ -100,7 +101,7 @@ function trimOutput(text: string, maxChars?: number): string {
   if (!maxChars || trimmed.length <= maxChars) {
     return trimmed;
   }
-  return trimmed.slice(0, maxChars).trim();
+  return truncateUtf16Safe(trimmed, maxChars).trim();
 }
 
 function extractSherpaOnnxText(raw: string): { matched: boolean; text: string } {
@@ -397,7 +398,13 @@ function resolveEntryRunOptions(params: {
   entry: MediaUnderstandingModelConfig;
   cfg: OpenClawConfig;
   config?: MediaUnderstandingConfig;
-}): { maxBytes: number; maxChars?: number; timeoutMs: number; prompt: string } {
+}): {
+  maxBytes: number;
+  maxChars?: number;
+  timeoutMs: number;
+  prompt: string;
+  hasConfiguredPrompt: boolean;
+} {
   const { capability, entry, cfg } = params;
   const maxBytes = resolveMaxBytes({ capability, entry, cfg, config: params.config });
   const maxChars = resolveMaxChars({ capability, entry, cfg, config: params.config });
@@ -407,12 +414,16 @@ function resolveEntryRunOptions(params: {
       cfg.tools?.media?.[capability]?.timeoutSeconds,
     DEFAULT_TIMEOUT_SECONDS[capability],
   );
-  const prompt = resolvePrompt(
-    capability,
-    entry.prompt ?? params.config?.prompt ?? cfg.tools?.media?.[capability]?.prompt,
+  const configuredPrompt =
+    entry.prompt ?? params.config?.prompt ?? cfg.tools?.media?.[capability]?.prompt;
+  const prompt = resolvePrompt(capability, configuredPrompt, maxChars);
+  return {
+    maxBytes,
     maxChars,
-  );
-  return { maxBytes, maxChars, timeoutMs, prompt };
+    timeoutMs,
+    prompt,
+    hasConfiguredPrompt: Boolean(configuredPrompt?.trim()),
+  };
 }
 
 function resolveMediaRequestOverrides(config: MediaUnderstandingConfig | undefined): {
@@ -427,6 +438,28 @@ function resolveMediaRequestOverrides(config: MediaUnderstandingConfig | undefin
     prompt: overrides["_requestPromptOverride"],
     language: overrides["_requestLanguageOverride"],
   };
+}
+
+function resolveAudioProviderPrompt(params: {
+  prompt: string;
+  hasConfiguredPrompt: boolean;
+  language?: string;
+}): string | undefined {
+  const language = params.language?.trim().toLowerCase();
+  const isEnglish =
+    !language ||
+    language === "en" ||
+    language === "eng" ||
+    language === "english" ||
+    language.startsWith("en-") ||
+    language.startsWith("en_");
+  if (params.hasConfiguredPrompt || isEnglish) {
+    return params.prompt;
+  }
+  // OpenAI-compatible transcription prompts guide style/context and should
+  // match the audio language; omit OpenClaw's English default for non-English
+  // language hints unless the user supplied an explicit prompt.
+  return undefined;
 }
 
 type ProviderExecutionAuth =
@@ -727,7 +760,7 @@ export async function runProviderEntry(params: {
   }
   const providerId = normalizeMediaProviderId(providerIdRaw);
   const requestProviderId = normalizeMediaExecutionProviderId(providerIdRaw);
-  const { maxBytes, maxChars, timeoutMs, prompt } = resolveEntryRunOptions({
+  const { maxBytes, maxChars, timeoutMs, prompt, hasConfiguredPrompt } = resolveEntryRunOptions({
     capability,
     entry,
     cfg,
@@ -803,6 +836,18 @@ export async function runProviderEntry(params: {
       timeoutMs,
     });
     assertMinAudioSize({ size: media.size, attachmentIndex: params.attachmentIndex });
+    const audioLanguage =
+      requestOverrides.language ??
+      entry.language ??
+      params.config?.language ??
+      cfg.tools?.media?.audio?.language;
+    const audioPrompt =
+      requestOverrides.prompt ??
+      resolveAudioProviderPrompt({
+        prompt,
+        hasConfiguredPrompt,
+        language: audioLanguage,
+      });
     const { auth, baseUrl, headers, request } = await resolveProviderExecutionContext({
       capability,
       providerId,
@@ -841,12 +886,8 @@ export async function runProviderEntry(params: {
       headers,
       request,
       model,
-      language:
-        requestOverrides.language ??
-        entry.language ??
-        params.config?.language ??
-        cfg.tools?.media?.audio?.language,
-      prompt: requestOverrides.prompt ?? prompt,
+      language: audioLanguage,
+      prompt: audioPrompt,
       query: providerQuery,
       timeoutMs,
       fetchFn,

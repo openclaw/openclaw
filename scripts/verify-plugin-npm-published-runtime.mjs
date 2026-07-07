@@ -129,6 +129,10 @@ export function collectPluginNpmPublishedRuntimeErrors(params) {
   if (errors.length > 0) {
     return errors;
   }
+  if (!hasPackedFile(packageFiles, "openclaw.plugin.json")) {
+    errors.push(`${packageLabel} plugin npm package must include openclaw.plugin.json`);
+    return errors;
+  }
   const extensions = extensionsResult.entries;
   const runtimeExtensions = runtimeExtensionsResult.entries;
   const setupEntry = setupEntryResult.entry;

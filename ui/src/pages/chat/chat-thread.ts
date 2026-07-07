@@ -55,8 +55,8 @@ type CachedChatItems = {
   items: ReturnType<typeof buildChatItems>;
 };
 
-export type RenderChatItem = ReturnType<typeof buildChatItems>[number];
-export type StreamRunRenderItem = {
+type RenderChatItem = ReturnType<typeof buildChatItems>[number];
+type StreamRunRenderItem = {
   kind: "stream-run";
   key: string;
   parts: Array<Extract<ChatItem, { kind: "stream" } | { kind: "reading-indicator" }>>;
@@ -382,6 +382,13 @@ function assistantGroupHasReplyText(group: MessageGroup): boolean {
   return group.messages.some(({ message }) => Boolean(extractTextCached(message)?.trim()));
 }
 
+function assistantGroupIsForwardedBoundary(group: MessageGroup): boolean {
+  return group.messages.some(({ message }) => {
+    const provenance = asRecord(asRecord(message)?.provenance);
+    return provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send";
+  });
+}
+
 function annotateToolTurnOutcome(
   items: Array<ChatItem | MessageGroup>,
 ): Array<ChatItem | MessageGroup> {
@@ -395,7 +402,11 @@ function annotateToolTurnOutcome(
     if (role === "user") {
       sawAssistantReply = false;
     } else if (role === "assistant") {
-      if (assistantGroupHasReplyText(item)) {
+      if (assistantGroupIsForwardedBoundary(item)) {
+        // Gateway preserves sessions_send provenance when projecting inputs as assistant groups.
+        // Those groups start a new autonomous turn; they are not replies to an earlier tool.
+        sawAssistantReply = false;
+      } else if (assistantGroupHasReplyText(item)) {
         sawAssistantReply = true;
       }
     } else if (role === "tool") {
@@ -663,9 +674,32 @@ function timestampAfterVisibleItems(items: ChatItem[], desiredTimestamp: number)
     : desiredTimestamp;
 }
 
-function sortChatItemsByVisibleTime(items: ChatItem[]): ChatItem[] {
+function sortChatItemsByVisibleTime(
+  items: ChatItem[],
+  toolStreamPredecessors: ReadonlyMap<string, string>,
+): ChatItem[] {
+  const timestampsByKey = new Map<string, number>();
+  for (const item of items) {
+    const timestamp = chatItemTimestamp(item);
+    if (timestamp != null) {
+      timestampsByKey.set(item.key, timestamp);
+    }
+  }
   return items
-    .map((item, index) => ({ item, index, timestamp: chatItemTimestamp(item) }))
+    .map((item, index) => {
+      const timestamp = chatItemTimestamp(item);
+      const predecessorKey = toolStreamPredecessors.get(item.key);
+      const predecessorTimestamp = predecessorKey ? timestampsByKey.get(predecessorKey) : null;
+      return {
+        item,
+        index,
+        predecessorKey,
+        timestamp:
+          timestamp != null && predecessorTimestamp != null
+            ? Math.max(timestamp, predecessorTimestamp)
+            : timestamp,
+      };
+    })
     .toSorted((a, b) => {
       if (a.timestamp == null && b.timestamp == null) {
         return a.index - b.index;
@@ -678,6 +712,12 @@ function sortChatItemsByVisibleTime(items: ChatItem[]): ChatItem[] {
       }
       if (a.timestamp !== b.timestamp) {
         return a.timestamp - b.timestamp;
+      }
+      if (a.predecessorKey === b.item.key) {
+        return 1;
+      }
+      if (b.predecessorKey === a.item.key) {
+        return -1;
       }
       return a.index - b.index;
     })
@@ -944,8 +984,20 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   const segments = props.streamSegments ?? [];
   const keyedSegments = segments.filter(streamSegmentHasItemId);
   const indexedSegments = segments.filter((segment) => !streamSegmentHasItemId(segment));
+  const toolItems = tools.map((message, index) => ({
+    key: messageKey(message, index + history.length),
+    message,
+  }));
+  const toolKeysByCallId = new Map<string, string>();
+  for (const tool of toolItems) {
+    const toolCallId = asRecord(tool.message)?.toolCallId;
+    if (typeof toolCallId === "string" && toolCallId.trim()) {
+      toolKeysByCallId.set(toolCallId.trim(), tool.key);
+    }
+  }
   const maxLen = Math.max(indexedSegments.length, tools.length);
   let previousAccumulatedStreamText: string | null = null;
+  const toolStreamPredecessors = new Map<string, string>();
   for (let i = 0; i < maxLen; i++) {
     if (i < indexedSegments.length) {
       const segment = indexedSegments[i];
@@ -958,20 +1010,29 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         previousAccumulatedStreamText = text;
       }
       if (visibleText.length > 0) {
+        const streamKey = `stream-seg:${props.sessionKey}:${i}`;
         items.push({
           kind: "stream",
-          key: `stream-seg:${props.sessionKey}:${i}`,
+          key: streamKey,
           text: visibleText,
           startedAt: segment.ts,
           isStreaming: false,
         });
+        const toolCallId = segment.toolCallId?.trim();
+        const toolKey = toolCallId ? toolKeysByCallId.get(toolCallId) : undefined;
+        if (toolKey) {
+          // Gateway and browser clocks can disagree. Keep the assistant text that
+          // introduced a tool causally before its card even when timestamps do not.
+          toolStreamPredecessors.set(toolKey, streamKey);
+        }
       }
     }
-    if (i < tools.length && props.showToolCalls) {
+    const tool = toolItems[i];
+    if (tool && props.showToolCalls) {
       items.push({
         kind: "message",
-        key: messageKey(tools[i], i + history.length),
-        message: tools[i],
+        key: tool.key,
+        message: tool.message,
       });
     }
   }
@@ -1037,7 +1098,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   return annotateToolTurnOutcome(
     groupMessages(
       collapseSequentialDuplicateMessages(
-        coalesceToolActivityMessages(sortChatItemsByVisibleTime(items)),
+        coalesceToolActivityMessages(sortChatItemsByVisibleTime(items, toolStreamPredecessors)),
       ),
     ),
   );

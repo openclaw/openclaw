@@ -29,6 +29,7 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../diagnostic-events.js";
+import { retryAsync } from "../retry.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 
 const mocks = vi.hoisted(() => ({
@@ -57,6 +58,7 @@ const queueMocks = vi.hoisted(() => ({
   ackDelivery: vi.fn(async () => {}),
   failDelivery: vi.fn(async () => {}),
   failDeliveryAfterPlatformSend: vi.fn(async () => {}),
+  failDeliveryBeforePlatformSend: vi.fn(async () => {}),
   markDeliveryPlatformOutcomeUnknown: vi.fn(async () => {}),
   markDeliveryPlatformSendDispatched: vi.fn(async () => {}),
   markDeliveryPlatformSendAttemptStarted: vi.fn(async () => {}),
@@ -101,6 +103,7 @@ vi.mock("./delivery-queue.js", () => ({
   ackDelivery: queueMocks.ackDelivery,
   failDelivery: queueMocks.failDelivery,
   failDeliveryAfterPlatformSend: queueMocks.failDeliveryAfterPlatformSend,
+  failDeliveryBeforePlatformSend: queueMocks.failDeliveryBeforePlatformSend,
   markDeliveryPlatformOutcomeUnknown: queueMocks.markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendDispatched: queueMocks.markDeliveryPlatformSendDispatched,
   markDeliveryPlatformSendAttemptStarted: queueMocks.markDeliveryPlatformSendAttemptStarted,
@@ -326,6 +329,8 @@ describe("deliverOutboundPayloads", () => {
     queueMocks.failDelivery.mockResolvedValue(undefined);
     queueMocks.failDeliveryAfterPlatformSend.mockClear();
     queueMocks.failDeliveryAfterPlatformSend.mockResolvedValue(undefined);
+    queueMocks.failDeliveryBeforePlatformSend.mockClear();
+    queueMocks.failDeliveryBeforePlatformSend.mockResolvedValue(undefined);
     queueMocks.markDeliveryPlatformOutcomeUnknown.mockClear();
     queueMocks.markDeliveryPlatformOutcomeUnknown.mockResolvedValue(undefined);
     queueMocks.markDeliveryPlatformSendAttemptStarted.mockClear();
@@ -1495,6 +1500,361 @@ describe("deliverOutboundPayloads", () => {
       "first payload send failed",
     );
     expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["ECONNREFUSED", "connect"],
+    ["ENOTFOUND", "getaddrinfo"],
+    ["EAI_AGAIN", "getaddrinfo"],
+    ["ENETDOWN", "connect"],
+    ["ENETUNREACH", "connect"],
+    ["EHOSTUNREACH", "connect"],
+    ["UND_ERR_CONNECT_TIMEOUT", undefined],
+    ["UND_ERR_DNS_RESOLVE_FAILED", undefined],
+  ])("clears queued send evidence after a proven pre-connect %s failure", async (code, syscall) => {
+    const networkError = Object.assign(new Error(`${syscall ?? "connect"} ${code}`), {
+      code,
+      ...(syscall ? { syscall } : {}),
+    });
+    const sendMatrix = vi.fn().mockRejectedValueOnce(networkError);
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "hello" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+      }),
+    ).rejects.toThrow(code);
+
+    expect(queueMocks.failDeliveryBeforePlatformSend).toHaveBeenCalledWith(
+      "mock-queue-id",
+      expect.stringContaining(code),
+    );
+    expect(queueMocks.failDelivery).not.toHaveBeenCalled();
+  });
+
+  it("finds proven pre-connect failures nested in an aggregate cause", async () => {
+    const aggregateError = Object.assign(
+      new AggregateError([
+        Object.assign(new Error("connect refused"), {
+          code: "ECONNREFUSED",
+          syscall: "connect",
+        }),
+      ]),
+      { code: "ECONNREFUSED" },
+    );
+    const networkError = new TypeError("fetch failed", { cause: aggregateError });
+    const sendMatrix = vi.fn().mockRejectedValueOnce(networkError);
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "hello" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+      }),
+    ).rejects.toThrow();
+
+    expect(queueMocks.failDeliveryBeforePlatformSend).toHaveBeenCalledWith(
+      "mock-queue-id",
+      expect.any(String),
+    );
+    expect(queueMocks.failDelivery).not.toHaveBeenCalled();
+  });
+
+  it("preserves send evidence for an aggregate with any ambiguous transport failure", async () => {
+    const mixedError = Object.assign(
+      new AggregateError([
+        Object.assign(new Error("connect refused"), {
+          code: "ECONNREFUSED",
+          syscall: "connect",
+        }),
+        Object.assign(new Error("connection reset"), {
+          code: "ECONNRESET",
+          syscall: "read",
+        }),
+      ]),
+      { code: "ECONNREFUSED" },
+    );
+    const sendMatrix = vi.fn().mockRejectedValueOnce(mixedError);
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "hello" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+      }),
+    ).rejects.toThrow();
+
+    expect(queueMocks.failDeliveryBeforePlatformSend).not.toHaveBeenCalled();
+    expect(queueMocks.failDelivery).toHaveBeenCalledWith("mock-queue-id", expect.any(String));
+  });
+
+  it("preserves send evidence when a safe terminal retry hides an ambiguous attempt", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error("connection reset after write"), {
+          code: "ECONNRESET",
+          syscall: "read",
+        }),
+      )
+      .mockRejectedValueOnce(
+        Object.assign(new Error("connect refused"), {
+          code: "ECONNREFUSED",
+          syscall: "connect",
+        }),
+      );
+    const sendMatrix = vi.fn(() =>
+      retryAsync(request, { attempts: 2, minDelayMs: 0, maxDelayMs: 0 }),
+    );
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "hello" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+      }),
+    ).rejects.toThrow("connect refused");
+
+    expect(queueMocks.failDeliveryBeforePlatformSend).not.toHaveBeenCalled();
+    expect(queueMocks.failDelivery).toHaveBeenCalledWith(
+      "mock-queue-id",
+      expect.stringContaining("connect refused"),
+    );
+  });
+
+  it("clears send evidence only when every retry attempt failed before connect", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error("dns unavailable"), {
+          code: "EAI_AGAIN",
+          syscall: "getaddrinfo",
+        }),
+      )
+      .mockRejectedValueOnce(
+        Object.assign(new Error("connect refused"), {
+          code: "ECONNREFUSED",
+          syscall: "connect",
+        }),
+      );
+    const sendMatrix = vi.fn(() =>
+      retryAsync(request, { attempts: 2, minDelayMs: 0, maxDelayMs: 0 }),
+    );
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "hello" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+      }),
+    ).rejects.toThrow("connect refused");
+
+    expect(queueMocks.failDeliveryBeforePlatformSend).toHaveBeenCalledWith(
+      "mock-queue-id",
+      expect.stringContaining("connect refused"),
+    );
+    expect(queueMocks.failDelivery).not.toHaveBeenCalled();
+  });
+
+  it("preserves send evidence for an ambiguous cause on the terminal retry wrapper", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error("connect refused"), {
+          code: "ECONNREFUSED",
+          syscall: "connect",
+        }),
+      )
+      .mockRejectedValueOnce(
+        new TypeError("fetch failed", {
+          cause: Object.assign(new Error("connection reset after write"), {
+            code: "ECONNRESET",
+            syscall: "read",
+          }),
+        }),
+      );
+    const sendMatrix = vi.fn(() =>
+      retryAsync(request, { attempts: 2, minDelayMs: 0, maxDelayMs: 0 }),
+    );
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "hello" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+      }),
+    ).rejects.toThrow("fetch failed");
+
+    expect(queueMocks.failDeliveryBeforePlatformSend).not.toHaveBeenCalled();
+    expect(queueMocks.failDelivery).toHaveBeenCalledWith(
+      "mock-queue-id",
+      expect.stringContaining("connection reset after write"),
+    );
+  });
+
+  it("trusts Undici's connect-timeout classification over its raw timeout cause", async () => {
+    const connectTimeout = Object.assign(new Error("Connect Timeout Error"), {
+      code: "UND_ERR_CONNECT_TIMEOUT",
+      cause: new AggregateError([
+        Object.assign(new Error("connect ETIMEDOUT"), {
+          code: "ETIMEDOUT",
+          syscall: "connect",
+        }),
+      ]),
+    });
+    const sendMatrix = vi.fn().mockRejectedValueOnce(connectTimeout);
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "hello" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+      }),
+    ).rejects.toThrow("Connect Timeout Error");
+
+    expect(queueMocks.failDeliveryBeforePlatformSend).toHaveBeenCalledWith(
+      "mock-queue-id",
+      expect.stringContaining("Connect Timeout Error"),
+    );
+    expect(queueMocks.failDelivery).not.toHaveBeenCalled();
+  });
+
+  it("finds a DNS failure in the Slack Web API request-error wrapper", async () => {
+    const networkError = Object.assign(new Error("getaddrinfo EAI_AGAIN slack.com"), {
+      code: "EAI_AGAIN",
+      syscall: "getaddrinfo",
+    });
+    const slackRequestError = Object.assign(new Error("A request error occurred"), {
+      code: "slack_webapi_request_error",
+      original: networkError,
+    });
+    const sendMatrix = vi.fn().mockRejectedValueOnce(slackRequestError);
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "hello" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+      }),
+    ).rejects.toThrow("A request error occurred");
+
+    expect(queueMocks.failDeliveryBeforePlatformSend).toHaveBeenCalledWith(
+      "mock-queue-id",
+      expect.stringContaining("A request error occurred"),
+    );
+    expect(queueMocks.failDelivery).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["ECONNREFUSED", undefined],
+    ["ECONNRESET", "connect"],
+  ])("retains queued send evidence for ambiguous %s failures", async (code, syscall) => {
+    const networkError = Object.assign(new Error(`${syscall ?? "socket"} ${code}`), {
+      code,
+      ...(syscall ? { syscall } : {}),
+    });
+    const sendMatrix = vi.fn().mockRejectedValueOnce(networkError);
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "hello" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+      }),
+    ).rejects.toThrow(code);
+
+    expect(queueMocks.failDeliveryBeforePlatformSend).not.toHaveBeenCalled();
+    expect(queueMocks.failDelivery).toHaveBeenCalledWith(
+      "mock-queue-id",
+      expect.stringContaining(code),
+    );
+  });
+
+  it("clears queued send evidence for a best-effort pre-connect failure", async () => {
+    const networkError = Object.assign(new Error("connect ECONNREFUSED"), {
+      code: "ECONNREFUSED",
+      syscall: "connect",
+    });
+    const sendMatrix = vi.fn().mockRejectedValueOnce(networkError);
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "hello" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+        bestEffort: true,
+      }),
+    ).resolves.toEqual([]);
+
+    expect(queueMocks.failDeliveryBeforePlatformSend).toHaveBeenCalledWith(
+      "mock-queue-id",
+      "partial delivery failure (bestEffort)",
+    );
+    expect(queueMocks.failDelivery).not.toHaveBeenCalled();
+  });
+
+  it("preserves queued send evidence when any best-effort failure is ambiguous", async () => {
+    const ambiguousError = Object.assign(new Error("connect ECONNRESET"), {
+      code: "ECONNRESET",
+      syscall: "connect",
+    });
+    const preConnectError = Object.assign(new Error("connect ECONNREFUSED"), {
+      code: "ECONNREFUSED",
+      syscall: "connect",
+    });
+    const sendMatrix = vi
+      .fn()
+      .mockRejectedValueOnce(ambiguousError)
+      .mockRejectedValueOnce(preConnectError);
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "first" }, { text: "second" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+        bestEffort: true,
+      }),
+    ).resolves.toEqual([]);
+
+    expect(queueMocks.failDeliveryBeforePlatformSend).not.toHaveBeenCalled();
+    expect(queueMocks.failDelivery).toHaveBeenCalledWith(
+      "mock-queue-id",
+      "partial delivery failure (bestEffort)",
+    );
   });
 
   it("directly acks a sent delivery when the post-send unknown marker cannot be written", async () => {

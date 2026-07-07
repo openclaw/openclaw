@@ -6,6 +6,7 @@
     <string name="trust_this_gateway">¿Confiar en este gateway?</string>
     <string name="trust_and_continue">Confiar y continuar</string>
     <string name="cancel">Cancelar</string>
+    <string name="new_chat_in_worktree">Nuevo chat en worktree</string>
     <string name="endpoint">Endpoint</string>
     <string name="status">Estado</string>
     <string name="connected_gateway_ready">Tu gateway está activo y listo.</string>
@@ -20,8 +21,17 @@
     <string name="use_tls">Usar TLS</string>
     <string name="token_optional">Token (opcional)</string>
     <string name="password">Contraseña</string>
+    <string name="custom_headers_optional">Encabezados personalizados (opcional)</string>
+    <string name="custom_headers_explainer">Se envía con cada conexión a este Gateway, por ejemplo, encabezados de token de servicio de Cloudflare Access. Se almacena cifrado y se aplica en la próxima reconexión.</string>
+    <string name="custom_header_value">Valor del encabezado</string>
+    <string name="custom_header_reserved">Este encabezado lo gestiona la conexión y no se puede sobrescribir.</string>
+    <string name="add_custom_header">Añadir encabezado</string>
+    <string name="remove_custom_header">Eliminar %1$s</string>
     <string name="run_onboarding_again">Ejecutar la incorporación de nuevo</string>
     <string name="resolved_endpoint">Endpoint resuelto</string>
     <string name="gateway_trust_first_seen">Verifica la huella digital del certificado antes de confiar en este gateway.\n\n%1$s</string>
     <string name="gateway_trust_changed">El certificado del gateway cambió. Continúa solo si esperabas este cambio.\n\nSHA-256 anterior:\n%1$s\n\nSHA-256 nuevo:\n%2$s</string>
+    <string name="switch_gateway">Cambiar de gateway</string>
+    <string name="select_gateway">Seleccionar gateway</string>
+    <string name="active_gateway">Gateway activo</string>
 </resources>

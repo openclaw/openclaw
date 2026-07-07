@@ -78,14 +78,14 @@ export function resolveThinkingDefaultForModel(params: {
 
 type ThinkingSessionDefaults = SessionsListResult["defaults"] | undefined;
 
-export type ChatThinkingSelectState = {
+type ChatThinkingSelectState = {
   currentOverride: string;
   defaultLabel: string;
   defaultValue: string;
   options: Array<{ value: string; label: string }>;
 };
 
-export function resolveThinkingLevelOptionsForSession(
+function resolveThinkingLevelOptionsForSession(
   session: GatewaySessionRow | undefined,
   defaults: ThinkingSessionDefaults,
 ): GatewayThinkingLevelOption[] {

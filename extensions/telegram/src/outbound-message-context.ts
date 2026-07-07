@@ -10,7 +10,7 @@ type TelegramPromptContextChannelData = {
   promptContextTimestampMs?: unknown;
 };
 
-export type TelegramOutboundPromptContextMessage = {
+type TelegramOutboundPromptContextMessage = {
   message_id?: number;
   chat?: { id?: string | number; type?: string; title?: string; username?: string };
   date?: number;
