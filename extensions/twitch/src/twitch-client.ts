@@ -301,13 +301,22 @@ export class TwitchClientManager {
       }
     });
 
-    // Persistent transport-liveness listeners. These are separate from the
-    // connect-phase handshake listeners in connectClient(), which unbind once
-    // auth settles; without a listener that survives the handshake, a later
-    // ChatClient disconnect leaves channel status stuck reporting connected and
-    // the shared health monitor never sees the dead transport.
-    client.onConnect(() => {
+    // Persistent readiness listeners. These are separate from the connect-phase
+    // handshake listeners in connectClient(), which unbind once auth settles;
+    // without a listener that survives the handshake, a later ChatClient
+    // disconnect leaves channel status stuck reporting connected and the shared
+    // health monitor never sees the dead transport.
+    //
+    // Gate connected on auth readiness, not raw transport: Twurple fires
+    // onConnect on socket open before authentication/registration, so a
+    // reconnect whose auth then fails would latch connected:true (false
+    // healthy). Mirror the connect-phase handshake by driving connected:true
+    // from onAuthenticationSuccess and surfacing auth failures as disconnected.
+    client.onAuthenticationSuccess(() => {
       this.connectionHandlers.get(key)?.({ connected: true });
+    });
+    client.onAuthenticationFailure((text) => {
+      this.connectionHandlers.get(key)?.({ connected: false, reason: text });
     });
     client.onDisconnect((_manually, reason) => {
       this.connectionHandlers.get(key)?.({

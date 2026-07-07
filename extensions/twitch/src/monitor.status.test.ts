@@ -107,4 +107,33 @@ describe("monitorTwitchProvider transport-status bridge", () => {
 
     stop();
   });
+
+  it("preserves the auth-failure error across Twurple's reasonless retry disconnect", async () => {
+    const patches: Array<Record<string, unknown>> = [];
+    const abort = new AbortController();
+
+    const { stop } = await monitorTwitchProvider({
+      account: buildAccount(),
+      accountId: "default",
+      config: {},
+      runtime: { error: vi.fn() } as never,
+      abortSignal: abort.signal,
+      statusSink: (patch) => patches.push({ ...patch }),
+    });
+    const notify = hoisted.connectionHandlers.at(-1);
+
+    // onAuthenticationFailure surfaces the auth error as disconnected+error.
+    notify?.({ connected: false, reason: "Login authentication failed" });
+    expect(patches.at(-1)?.lastError).toBe("Login authentication failed");
+
+    // Twurple's auth-retry immediately fires a reasonless manual onDisconnect
+    // (reconnect = quit()+connect()). Its patch must omit lastError so the merge
+    // preserves the auth-failure text rather than nulling it out.
+    notify?.({ connected: false });
+    const retryDrop = patches.at(-1);
+    expect(retryDrop?.connected).toBe(false);
+    expect(retryDrop).not.toHaveProperty("lastError");
+
+    stop();
+  });
 });

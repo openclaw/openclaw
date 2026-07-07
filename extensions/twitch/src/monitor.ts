@@ -279,13 +279,21 @@ export async function monitorTwitchProvider(
     if (stopped) {
       return;
     }
-    statusSink?.({
-      connected: status.connected,
+    if (status.connected) {
       // Runtime status patches merge, so clear the prior disconnect error on
       // reconnect; otherwise a recovered transport keeps surfacing a stale
       // lastError in the channel summary and status issues.
-      lastError: status.connected ? null : (status.reason ?? null),
-    });
+      statusSink?.({ connected: true, lastError: null });
+      return;
+    }
+    // Surface the reason when Twurple gives one (transport error or auth
+    // failure). Twurple's auth-retry path fires a reasonless manual onDisconnect
+    // right after onAuthenticationFailure, so omit lastError on a reasonless
+    // disconnect (patch-merge preserves it) — otherwise that follow-up close
+    // would erase the auth-failure text we just surfaced.
+    statusSink?.(
+      status.reason ? { connected: false, lastError: status.reason } : { connected: false },
+    );
   });
 
   const unregisterHandler = clientManager.onMessage(account, (message) => {
