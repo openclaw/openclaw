@@ -11,6 +11,7 @@ import {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 function makeRuntimeParityCell(
