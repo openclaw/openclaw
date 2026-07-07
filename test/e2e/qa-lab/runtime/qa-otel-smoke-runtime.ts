@@ -1645,10 +1645,15 @@ function assertSmoke(params: {
   const failedRunSpans = params.spans.filter(
     (span) =>
       (span.name === "openclaw.run" || span.name === "openclaw.harness.run") &&
-      span.attributes["openclaw.error"] === `${DIRECT_ERROR_MESSAGE} OPENAI_API_KEY=sk-123…cdef`,
+      span.attributes["openclaw.error"] === `${DIRECT_ERROR_MESSAGE} OPENAI_API_KEY=***`,
   );
   if (failedRunSpans.length !== 2) {
-    failures.push("run and harness spans did not export the redacted failure message");
+    const observed = params.spans
+      .filter((span) => span.name === "openclaw.run" || span.name === "openclaw.harness.run")
+      .map((span) => ({ name: span.name, error: span.attributes["openclaw.error"] }));
+    failures.push(
+      `run and harness spans did not export the redacted failure message: ${JSON.stringify(observed)}`,
+    );
   }
   if ((params.bodyText.metrics ?? []).some((body) => body.includes(DIRECT_ERROR_MESSAGE))) {
     failures.push("run failure message leaked into OTLP metric attributes");

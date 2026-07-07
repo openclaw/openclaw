@@ -95,14 +95,14 @@ describe("qa-otel-smoke receiver bounds", () => {
           name: "openclaw.run",
           parent: false,
           attributes: {
-            "openclaw.error": "QA OTEL provider stream failed OPENAI_API_KEY=sk-123…cdef",
+            "openclaw.error": "QA OTEL provider stream failed OPENAI_API_KEY=***",
           },
         },
         {
           name: "openclaw.harness.run",
           parent: true,
           attributes: {
-            "openclaw.error": "QA OTEL provider stream failed OPENAI_API_KEY=sk-123…cdef",
+            "openclaw.error": "QA OTEL provider stream failed OPENAI_API_KEY=***",
           },
         },
         { name: "openclaw.context.assembled", parent: true, attributes: {} },
