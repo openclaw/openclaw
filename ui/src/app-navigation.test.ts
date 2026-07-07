@@ -7,10 +7,10 @@ import {
   subtitleForRoute,
   titleForRoute,
 } from "./app-navigation.ts";
+import { normalizePath } from "./app-route-paths.ts";
 import {
   inferBasePathFromPathname,
   normalizeBasePath,
-  normalizePath,
   pathForRoute,
   routeIdFromPath,
   type RouteId,
