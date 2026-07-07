@@ -160,6 +160,14 @@ const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, 
   message_sending: 15_000,
   reply_payload_sending: 15_000,
   resolve_exec_env: 15_000,
+  // before_tool_call gates every tool call (block / requireApproval). It is
+  // fail-closed (hook-runner-global.ts), so a timeout throws and the tool is
+  // denied rather than silently allowed. Without a budget an unresponsive
+  // handler leaves the tool call awaited forever, and the only backstop is the
+  // run-level lane idle watchdog (default agent timeout, up to 48h), which does
+  // not cancel the stuck hook — wedging that session's turn far longer than any
+  // sibling modifying hook.
+  before_tool_call: 15_000,
 };
 
 type ModifyingHookPolicy<K extends PluginHookName, TResult> = {
