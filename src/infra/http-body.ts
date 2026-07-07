@@ -188,8 +188,8 @@ function validateMaxBytes(maxBytes: number): void {
 }
 
 function parseResponseContentLengthHeader(response: Response): number | undefined {
-  const raw = response.headers.get("content-length");
-  if (raw === null) {
+  const raw = response.headers?.get?.("content-length");
+  if (raw === null || raw === undefined) {
     return undefined;
   }
   return parseStrictNonNegativeInteger(raw);
