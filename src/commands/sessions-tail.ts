@@ -85,11 +85,6 @@ export function setSessionsTailFollowIntervalMsForTests(intervalMs?: number): vo
   followIntervalMsForTests = intervalMs;
 }
 
-/** Test-only hooks for exercising internal follow-state helpers. */
-export const sessionsTailTesting = {
-  readNewFollowEvents,
-};
-
 function resolveFollowIntervalMs(): number {
   return followIntervalMsForTests ?? FOLLOW_INTERVAL_MS;
 }
@@ -286,10 +281,9 @@ function formatProgressLine(event: TrajectoryEvent): string {
 
 function readTrajectorySnapshot(filePath: string): TrajectorySnapshot {
   try {
-    const stat = fs.statSync(filePath);
     // Use the runtime trajectory limit so tail accepts any file the runtime
     // would have written and rejects anything larger.
-    const { buffer } = readRegularFileSync({
+    const { buffer, stat } = readRegularFileSync({
       filePath,
       maxBytes: TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
     });
