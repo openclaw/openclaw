@@ -49,15 +49,30 @@ function createHistoryEntryFromMemo(params: {
 
 const messageCache = new Map<string, TlonHistoryEntry[]>();
 const MAX_CACHED_MESSAGES = 100;
+export const MAX_CACHED_CHANNEL_HISTORY_NAMESPACES = 100;
+
+function cachedMessagesForChannel(channelNest: string): TlonHistoryEntry[] {
+  const cached = messageCache.get(channelNest);
+  if (cached) {
+    messageCache.delete(channelNest);
+    messageCache.set(channelNest, cached);
+    return cached;
+  }
+
+  const cache: TlonHistoryEntry[] = [];
+  messageCache.set(channelNest, cache);
+  while (messageCache.size > MAX_CACHED_CHANNEL_HISTORY_NAMESPACES) {
+    const oldestChannelNest = messageCache.keys().next().value;
+    if (oldestChannelNest === undefined) {
+      break;
+    }
+    messageCache.delete(oldestChannelNest);
+  }
+  return cache;
+}
 
 export function cacheMessage(channelNest: string, message: TlonHistoryEntry) {
-  if (!messageCache.has(channelNest)) {
-    messageCache.set(channelNest, []);
-  }
-  const cache = messageCache.get(channelNest);
-  if (!cache) {
-    return;
-  }
+  const cache = cachedMessagesForChannel(channelNest);
   cache.unshift(message);
   if (cache.length > MAX_CACHED_MESSAGES) {
     cache.pop();
@@ -225,3 +240,17 @@ export async function fetchThreadHistory(
     return [];
   }
 }
+
+export const testing = {
+  clearMessageCacheForTests() {
+    messageCache.clear();
+  },
+  getCachedChannelCountForTests() {
+    return messageCache.size;
+  },
+  hasCachedChannelForTests(channelNest: string) {
+    return messageCache.has(channelNest);
+  },
+};
+
+export { testing as __testing };
