@@ -79,7 +79,6 @@ vi.mock("./session-fork.js", () => ({
       entry: SessionEntry;
       parentEntry: SessionEntry;
     }) => Partial<SessionEntry>;
-    sessionsDir: string;
   }) => {
     const store = JSON.parse(await fs.readFile(params.storePath, "utf-8")) as Record<
       string,
@@ -116,7 +115,7 @@ vi.mock("./session-fork.js", () => ({
     }
     const fork = await sessionForkMocks.forkSessionFromParent({
       parentEntry,
-      sessionsDir: params.sessionsDir,
+      storePath: params.storePath,
     });
     if (!fork) {
       return { status: "failed" };
