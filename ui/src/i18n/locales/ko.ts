@@ -63,7 +63,7 @@ export const ko: TranslationMap = {
     docs: "문서",
     theme: "테마",
     colorMode: "색상 모드",
-    colorModeOption: "Color mode: {mode}",
+    colorModeOption: "색상 모드: {mode}",
     resources: "리소스",
     search: "검색",
     save: "저장",
