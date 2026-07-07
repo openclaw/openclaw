@@ -257,7 +257,7 @@ export const zh_TW = {
         "OpenClaw 設定無效。正在開啟 Crestodian，以便在 onboarding 寫入任何內容前檢查並修復設定。",
       manualChoice: "你想如何連接 AI？",
       nextSteps:
-        "工作區：{workspace}\n新增頻道：`openclaw channels add`\n開啟 dashboard：`openclaw dashboard`\n稍後聊天：`openclaw`",
+        "工作區：{workspace}\n新增頻道：`openclaw channels add`\n偏好聊天？執行 `openclaw crestodian`，然後說 `connect telegram`（或 `connect slack`）。\n開啟 dashboard：`openclaw dashboard`\n稍後聊天：`openclaw`",
       nextStepsTitle: "下一步",
       openChatNow: "現在開啟聊天？",
       openCrestodian: "開啟 Crestodian 聊天（用自然語言取得協助）",

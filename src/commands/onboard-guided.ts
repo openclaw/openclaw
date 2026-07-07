@@ -29,7 +29,11 @@ export type GuidedOnboardingDeps = {
   detect?: DetectSetupInference;
   activate?: ActivateSetupInference;
   runClassicSetup?: (opts: OnboardOptions, runtime: RuntimeEnv) => Promise<void>;
-  runCrestodianChat?: (workspace: string, runtime: RuntimeEnv) => Promise<void>;
+  runCrestodianChat?: (
+    workspace: string,
+    runtime: RuntimeEnv,
+    acceptRisk: boolean,
+  ) => Promise<void>;
   applySetup?: (params: CrestodianSetupApplyParams) => Promise<CrestodianSetupApplyResult>;
   createPrompter?: () => WizardPrompter | Promise<WizardPrompter>;
   launchTui?: () => Promise<void>;
@@ -49,14 +53,21 @@ async function openCrestodianChat(
   deps: GuidedOnboardingDeps,
   workspace: string,
   runtime: RuntimeEnv,
+  acceptRisk: boolean,
 ): Promise<void> {
   const runChat =
     deps.runCrestodianChat ??
-    (async (setupWorkspace: string, chatRuntime: RuntimeEnv) => {
+    (async (setupWorkspace: string, chatRuntime: RuntimeEnv, riskAccepted: boolean) => {
       const { runConversationalOnboarding } = await import("./onboard-interactive.js");
-      await runConversationalOnboarding({ workspace: setupWorkspace }, chatRuntime);
+      await runConversationalOnboarding(
+        {
+          workspace: setupWorkspace,
+          ...(riskAccepted ? { acceptRisk: true } : {}),
+        },
+        chatRuntime,
+      );
     });
-  await runChat(workspace, runtime);
+  await runChat(workspace, runtime, acceptRisk);
 }
 
 const SETUP_FAILURE_REASON_KEYS: Record<SetupInferenceStatus, string> = {
@@ -169,7 +180,7 @@ async function runManualStage(params: {
     });
 
     if (choice === MANUAL_CRESTODIAN) {
-      await openCrestodianChat(params.deps, params.workspace, params.runtime);
+      await openCrestodianChat(params.deps, params.workspace, params.runtime, true);
       return { kind: "delegated" };
     }
     if (choice === MANUAL_CLASSIC) {
@@ -277,6 +288,7 @@ async function runGuidedOnboardingFlow(
       deps,
       opts.workspace?.trim() || onboardHelpers.DEFAULT_WORKSPACE,
       runtime,
+      false,
     );
     return;
   }

@@ -47,6 +47,7 @@ export async function runConversationalOnboarding(
     {
       welcomeVariant: "onboarding",
       ...(opts.workspace ? { setupWorkspace: opts.workspace } : {}),
+      ...(opts.acceptRisk === true ? { setupAcceptRisk: true } : {}),
     },
     runtime,
   );

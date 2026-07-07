@@ -16,7 +16,7 @@ The terminal flow also offers the full classic wizard for detailed setup.
 |                | CLI onboarding                         | macOS app onboarding        |
 | -------------- | -------------------------------------- | --------------------------- |
 | **Platforms**  | macOS, Linux, Windows (native or WSL2) | macOS only                  |
-| **Interface**  | Guided AI check + classic wizard       | Guided UI + Crestodian chat |
+| **Interface**  | Guided, classic, and Crestodian chat   | Guided UI + Crestodian chat |
 | **Best for**   | Servers, headless, full control        | Desktop Mac, visual setup   |
 | **Automation** | `--non-interactive` for scripts        | Manual only                 |
 | **Command**    | `openclaw onboard`                     | Launch the app              |
@@ -53,6 +53,10 @@ falls through on failure, and offers masked manual key entry. It saves the
 model and credential only after a passing completion. From the same flow you
 can open Crestodian chat, switch to `openclaw onboard --classic`, or skip AI
 setup for now.
+
+These CLI interfaces switch both ways: guided onboarding offers Crestodian and
+the classic wizard, while Crestodian can open guided setup, classic setup, or a
+masked channel wizard without making you restart the command manually.
 
 Use `openclaw onboard --classic` for detailed model/auth, channel, skill,
 remote Gateway, or import setup. Adding `--install-daemon` also selects the

@@ -74,6 +74,12 @@ create agent work workspace ~/Projects/work
 models
 configure model provider
 set default model openai/gpt-5.5
+channels
+channel info slack
+connect slack
+open setup wizard
+open classic wizard
+open channel wizard for slack
 plugins list
 plugins search slack
 plugin install clawhub:openclaw-codex-app-server
@@ -98,10 +104,27 @@ Approval is given in your own words: unambiguous replies ("yes", "sure", "go ahe
 
 Applied writes are recorded in `~/.openclaw/audit/crestodian.jsonl`. Discovery is not audited; only applied operations and writes are.
 
-Channel setup can run as a hosted conversation when the host supports masked
-input. The local Crestodian TUI does not accept sensitive wizard answers;
-instead it directs you to `openclaw channels add --channel <channel>`, whose
-interactive prompts mask credentials.
+Channel setup can run as a hosted conversation until it reaches a secret. The
+local Crestodian TUI does not accept sensitive wizard answers because terminal
+chat input is visible. It offers `open channel wizard` immediately, carrying
+the selected channel into the masked terminal wizard; you can also run
+`openclaw channels add --channel <channel>` later.
+
+### Switching to the menu wizards
+
+The local chat can hand control back to any terminal menu flow:
+
+```text
+open setup wizard
+open classic wizard
+open channel wizard for slack
+channel info slack
+```
+
+`open setup wizard` opens guided onboarding. `open classic wizard` opens the
+full classic setup. `open channel wizard for <channel>` opens masked channel
+setup after the chat TUI closes. Use `channel info <channel>` first for the
+channel label, setup state, prerequisites summary, and docs link.
 
 Model-provider setup uses the same provider/auth and default-model steps as
 `openclaw onboard`. In the local Crestodian TUI, approval exits the chat shell,

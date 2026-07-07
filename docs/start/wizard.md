@@ -22,6 +22,12 @@ The guided flow offers the classic wizard for provider sign-in, remote Gateway
 setup, channel pairing, daemon controls, skills, and imports. You can also open
 Crestodian chat or skip AI setup and return later.
 
+Guided setup, the classic wizard, and Crestodian chat are interchangeable. The
+guided flow offers chat and classic choices; inside Crestodian, use `open setup
+wizard`, `open classic wizard`, or `open channel wizard for <channel>` to switch
+back. Channel setup that needs secrets always continues in a masked terminal
+wizard.
+
 <Info>
 Fastest first chat: finish guided setup, run `openclaw dashboard`, and chat in
 the browser through the Control UI. Docs: [Dashboard](/web/dashboard).

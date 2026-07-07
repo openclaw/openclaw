@@ -392,7 +392,7 @@ describe("runGuidedOnboarding", () => {
 
     await runGuidedOnboarding({ acceptRisk: true }, runtime, deps);
 
-    expect(runCrestodianChat).toHaveBeenCalledWith("/tmp/work", runtime);
+    expect(runCrestodianChat).toHaveBeenCalledWith("/tmp/work", runtime, true);
   });
 
   it("cancels before detection or activation when risk is declined", async () => {
@@ -420,7 +420,7 @@ describe("runGuidedOnboarding", () => {
 
     await runGuidedOnboarding({ workspace: "/tmp/repair" }, runtime, deps);
 
-    expect(runCrestodianChat).toHaveBeenCalledWith("/tmp/repair", runtime);
+    expect(runCrestodianChat).toHaveBeenCalledWith("/tmp/repair", runtime, false);
     expect(deps.detect).not.toHaveBeenCalled();
     expect(deps.activate).not.toHaveBeenCalled();
   });

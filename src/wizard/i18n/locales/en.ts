@@ -260,7 +260,7 @@ export const en = {
         "OpenClaw config is invalid. Opening Crestodian to inspect and repair it before onboarding writes anything.",
       manualChoice: "How would you like to connect AI?",
       nextSteps:
-        "Workspace: {workspace}\nAdd a channel: `openclaw channels add`\nOpen the dashboard: `openclaw dashboard`\nChat later: `openclaw`",
+        "Workspace: {workspace}\nAdd a channel: `openclaw channels add`\nPrefer chatting? Run `openclaw crestodian` and say `connect telegram` (or `connect slack`).\nOpen the dashboard: `openclaw dashboard`\nChat later: `openclaw`",
       nextStepsTitle: "Next steps",
       openChatNow: "Open the chat now?",
       openCrestodian: "Open Crestodian chat (help in plain language)",

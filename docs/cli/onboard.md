@@ -67,6 +67,11 @@ same live completion path. OpenClaw persists the selected model, workspace, and
 QuickStart Gateway settings only after the test succeeds; a failed candidate
 does not replace the configured model or save the attempted credential.
 
+Guided setup, the classic wizard, and Crestodian chat are interchangeable. The
+guided flow offers chat and classic choices; inside Crestodian, use `open setup
+wizard`, `open classic wizard`, or `open channel wizard for <channel>` to switch
+back. Channel credentials are always collected in a masked terminal wizard.
+
 On a configured install, running `openclaw onboard` again verifies the current
 default model first, so the same flow acts as a verification and repair pass.
 If that check fails, the configured model is never replaced automatically —
