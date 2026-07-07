@@ -95,8 +95,9 @@ programmatic delivery. Full flag and behavior reference:
   original transcript.
 - Session selection: `--to` derives the session key (group/channel targets
   preserve isolation; direct chats collapse to `main`). With `--agent`,
-  `--channel`, and `--to` together, direct-chat routing follows
-  `session.dmScope`.
+  `--channel`, and `--to` together, routing follows the channel's canonical
+  recipient and `session.dmScope`. Stable outbound-only identities use a
+  provider-owned session isolated from the agent's main session.
 - `--session-key` selects an explicit key. Agent-prefixed keys must use
   `agent:<agent-id>:<session-key>`, and `--agent` must match that agent id when
   both are supplied. Bare non-sentinel keys are scoped to `--agent` when

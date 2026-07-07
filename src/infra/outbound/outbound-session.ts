@@ -21,8 +21,8 @@ import type { ResolvedMessagingTarget } from "./target-resolver.js";
 export type OutboundSessionRoute = {
   sessionKey: string;
   baseSessionKey: string;
-  /** True for exact routes; `direct-alias` guarantees only the chat kind; false is ambiguous. */
-  recipientSessionExact?: boolean | "direct-alias";
+  /** Route authority for explicit recipient session selection. */
+  recipientSessionExact?: boolean | "direct-alias" | "delivery-identity";
   peer: RoutePeer;
   chatType: "direct" | "group" | "channel";
   from: string;

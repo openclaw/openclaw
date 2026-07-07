@@ -98,9 +98,16 @@ vi.mock("./target-resolver.js", () => ({
 vi.mock("../../utils/message-channel.js", () => ({
   INTERNAL_MESSAGE_CHANNEL: "webchat",
   isDeliverableMessageChannel: (channel: string) =>
-    ["directchat", "line", "provider", "signal", "workspace", "telegram", "whatsapp"].includes(
-      channel,
-    ),
+    [
+      "directchat",
+      "line",
+      "provider",
+      "signal",
+      "synology-chat",
+      "workspace",
+      "telegram",
+      "whatsapp",
+    ].includes(channel),
   isGatewayMessageChannel: (channel: string) =>
     ["directchat", "workspace", "telegram", "whatsapp", "webchat"].includes(channel),
   normalizeMessageChannel: (value: string) => value.trim().toLowerCase(),
@@ -553,46 +560,126 @@ describe("agent delivery helpers", () => {
     expect(result.sessionKey).toBe("agent:main:provider:direct:user-1");
   });
 
-  it("rejects inferred fallback routes for explicit recipient sessions", async () => {
+  it("accepts stable outbound-only identities that stay isolated from main", async () => {
     const plugin = {
-      capabilities: { chatTypes: ["direct", "group"] },
+      capabilities: { chatTypes: ["direct"] },
       config: {
         listAccountIds: () => [],
       },
-      messaging: { inferTargetChatType: vi.fn(() => "direct") },
+      messaging: { resolveOutboundSessionRoute: vi.fn() },
     };
-    const lineUserId = `U${"a".repeat(32)}`;
     mocks.resolveOutboundChannelPlugin.mockReturnValue(plugin);
-    mocks.resolveOutboundTarget.mockReturnValueOnce({ ok: true, to: lineUserId });
+    mocks.resolveOutboundTarget.mockReturnValueOnce({ ok: true, to: "42" });
     mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
-      sessionKey: `agent:ops:line:direct:${lineUserId.toLowerCase()}`,
-      baseSessionKey: `agent:ops:line:direct:${lineUserId.toLowerCase()}`,
-      recipientSessionExact: false,
-      peer: { kind: "direct", id: lineUserId },
+      sessionKey: "agent:ops:synology-chat:default:direct:chat-api-42",
+      baseSessionKey: "agent:ops:synology-chat:default:direct:chat-api-42",
+      recipientSessionExact: "delivery-identity",
+      peer: { kind: "direct", id: "chat-api-42" },
       chatType: "direct",
-      from: `line:${lineUserId}`,
-      to: `user:${lineUserId}`,
+      from: "synology-chat:chat-api:42",
+      to: "42",
     });
 
     const result = await resolveAgentExplicitRecipientSession({
       cfg: {} as OpenClawConfig,
       agentId: "ops",
-      channel: "line",
-      to: lineUserId,
+      channel: "synology-chat",
+      to: "42",
     });
 
     expect(mocks.resolveOutboundSessionRoute).toHaveBeenCalledWith({
       cfg: {},
-      channel: "line",
+      channel: "synology-chat",
       plugin,
       agentId: "ops",
       accountId: "default",
-      target: lineUserId,
+      target: "42",
       currentSessionKey: undefined,
       threadId: undefined,
     });
+    expect(result).toMatchObject({
+      sessionKey: "agent:ops:synology-chat:default:direct:chat-api-42",
+      channel: "synology-chat",
+      to: "42",
+      accountId: "default",
+      error: undefined,
+    });
+  });
+
+  it("rejects outbound-only identities that collapse to the agent main session", async () => {
+    mocks.resolveOutboundChannelPlugin.mockReturnValue({
+      config: { listAccountIds: () => [] },
+      messaging: { resolveOutboundSessionRoute: vi.fn() },
+    });
+    mocks.resolveOutboundTarget.mockReturnValueOnce({ ok: true, to: "42" });
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
+      sessionKey: "agent:ops:main",
+      baseSessionKey: "agent:ops:main",
+      recipientSessionExact: "delivery-identity",
+      peer: { kind: "direct", id: "chat-api-42" },
+      chatType: "direct",
+      from: "synology-chat:chat-api:42",
+      to: "42",
+    });
+
+    const result = await resolveAgentExplicitRecipientSession({
+      cfg: {} as OpenClawConfig,
+      agentId: "ops",
+      channel: "synology-chat",
+      to: "42",
+    });
+
     expect(result.sessionKey).toBeUndefined();
-    expect(result.error?.message).toBe('Unable to resolve a session route for channel "line"');
+    expect(result.error?.message).toBe(
+      'Unable to resolve a session route for channel "synology-chat"',
+    );
+  });
+
+  it("rejects outbound-only identities outside the real provider namespace", async () => {
+    mocks.resolveOutboundChannelPlugin.mockReturnValue({
+      config: { listAccountIds: () => [] },
+      messaging: { resolveOutboundSessionRoute: vi.fn() },
+    });
+    mocks.resolveOutboundTarget.mockReturnValueOnce({ ok: true, to: "42" });
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
+      sessionKey: "agent:ops:synthetic:direct:42",
+      baseSessionKey: "agent:ops:synthetic:direct:42",
+      recipientSessionExact: "delivery-identity",
+      peer: { kind: "direct", id: "42" },
+      chatType: "direct",
+      from: "synthetic:42",
+      to: "42",
+    });
+
+    const result = await resolveAgentExplicitRecipientSession({
+      cfg: {} as OpenClawConfig,
+      agentId: "ops",
+      channel: "synology-chat",
+      to: "42",
+    });
+
+    expect(result.sessionKey).toBeUndefined();
+    expect(result.error?.message).toBe(
+      'Unable to resolve a session route for channel "synology-chat"',
+    );
+  });
+
+  it("rejects explicit recipients when no usable route can be inferred", async () => {
+    mocks.resolveOutboundChannelPlugin.mockReturnValue({
+      config: { listAccountIds: () => [] },
+    });
+    mocks.resolveOutboundTarget.mockReturnValueOnce({ ok: true, to: "missing" });
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce(null);
+
+    const result = await resolveAgentExplicitRecipientSession({
+      cfg: {} as OpenClawConfig,
+      agentId: "ops",
+      channel: "provider",
+      to: "missing",
+    });
+
+    expect(result.sessionKey).toBeUndefined();
+    expect(result.error?.message).toBe('Unable to resolve a session route for channel "provider"');
   });
 
   it("uses the channel default account when recipient routing omits an account", async () => {

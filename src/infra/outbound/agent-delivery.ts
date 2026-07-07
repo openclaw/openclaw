@@ -274,15 +274,15 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
       bindingAwareRoute?.recipientSessionExact === "direct-alias");
   // A best-effort alias is safe only when every direct recipient on this channel
   // shares the selected agent's main session; binding overrides can isolate peers.
+  const canonicalMainSessionKey = buildAgentMainSessionKey({
+    agentId: params.agentId,
+    mainKey: params.cfg.session?.mainKey,
+  });
   const usesCanonicalMainSession =
     bindingAwareRoute?.recipientSessionExact === "direct-alias" &&
     bindingAwareRoute.chatType === "direct" &&
     bindingAwareRoute.sessionKey === bindingAwareRoute.baseSessionKey &&
-    bindingAwareRoute.sessionKey ===
-      buildAgentMainSessionKey({
-        agentId: params.agentId,
-        mainKey: params.cfg.session?.mainKey,
-      }) &&
+    bindingAwareRoute.sessionKey === canonicalMainSessionKey &&
     globalDmScope === "main" &&
     !listRouteBindings(params.cfg).some(
       (binding) =>
@@ -290,12 +290,24 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
         binding.session.dmScope !== "main" &&
         normalizeRouteBindingChannelId(binding.match.channel) === resolvedChannel,
     );
-  // An omitted marker preserves the pre-existing contract for external plugin hooks.
-  const exactRoute =
-    bindingAwareRoute && (!knownNonExactRoute || usesCanonicalMainSession)
+  // Stable outbound-only identities may resume each other, but never the shared
+  // agent main session. Omitted markers retain the external plugin contract.
+  const usesIsolatedDeliveryIdentity =
+    bindingAwareRoute?.recipientSessionExact === "delivery-identity" &&
+    bindingAwareRoute.baseSessionKey !== canonicalMainSessionKey &&
+    bindingAwareRoute.baseSessionKey.startsWith(
+      `agent:${normalizeAgentId(params.agentId)}:${resolvedChannel}:`,
+    ) &&
+    (bindingAwareRoute.sessionKey === bindingAwareRoute.baseSessionKey ||
+      bindingAwareRoute.sessionKey.startsWith(`${bindingAwareRoute.baseSessionKey}:`));
+  const selectedRoute =
+    bindingAwareRoute &&
+    (bindingAwareRoute.recipientSessionExact === "delivery-identity"
+      ? usesIsolatedDeliveryIdentity
+      : !knownNonExactRoute || usesCanonicalMainSession)
       ? bindingAwareRoute
       : null;
-  if (!exactRoute) {
+  if (!selectedRoute) {
     if (resolvedSessionRouteTarget) {
       return {
         ...routedPlan,
@@ -310,21 +322,21 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
   }
   return {
     ...routedPlan,
-    resolvedSessionKey: exactRoute.sessionKey,
+    resolvedSessionKey: selectedRoute.sessionKey,
     // Generic routes use portable user/channel prefixes. Delivery still needs the
     // plugin-normalized target; only provider-owned route hooks may replace it.
     resolvedTo: hasPluginSessionRoute
-      ? exactRoute.to
+      ? selectedRoute.to
       : (resolvedSessionRouteTarget?.to ?? sessionRouteTarget),
     resolvedThreadId:
-      exactRoute.threadId ??
+      selectedRoute.threadId ??
       (routedPlan.deliveryTargetMode === "explicit"
         ? explicitThreadId
         : routedPlan.resolvedThreadId),
   };
 }
 
-/** Resolves an explicit agent/channel/recipient into the same canonical session used by delivery. */
+/** Resolves an explicit recipient into its canonical or stable provider-owned session. */
 export async function resolveAgentExplicitRecipientSession(params: {
   cfg: OpenClawConfig;
   agentId: string;
