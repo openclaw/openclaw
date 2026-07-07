@@ -24,6 +24,9 @@ import {
 
 export type { ChatEventPayload, ChatState } from "./chat-history.ts";
 
+const CHAT_EVENT_DEDUPE_LIMIT = 200;
+const acceptedChatEventKeys = new WeakMap<object, Map<string, number>>();
+
 type AssistantMessageNormalizationOptions = {
   roleRequirement: "required" | "optional";
   roleCaseSensitive?: boolean;
@@ -152,10 +155,56 @@ function appendCachedChatMessage(
   appendChatMessageToCache(state.chatMessagesBySession, state, { sessionKey, agentId }, message);
 }
 
-export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
-  if (!payload) {
+function chatEventDedupeKey(state: ChatState, payload: ChatEventPayload): string | null {
+  if (typeof payload.runId !== "string" || !payload.runId.trim()) {
     return null;
   }
+  if (typeof payload.seq !== "number" || !Number.isFinite(payload.seq)) {
+    return null;
+  }
+  // Gateway chat frames are ordered per run; use frame identity so legitimate
+  // repeated assistant text from later turns is still rendered. Include the
+  // selected UI surface and blocking active run so a frame ignored before a
+  // session/run switch can still be consumed when that surface becomes active.
+  const blockingRunId = state.chatRunId && state.chatRunId !== payload.runId ? state.chatRunId : "";
+  return [
+    state.sessionKey,
+    blockingRunId,
+    payload.sessionKey,
+    typeof payload.agentId === "string" ? payload.agentId : "",
+    payload.runId,
+    payload.seq,
+    payload.state,
+  ].join("\0");
+}
+
+function acceptChatEventFrame(state: ChatState, payload: ChatEventPayload): boolean {
+  const key = chatEventDedupeKey(state, payload);
+  if (!key) {
+    return true;
+  }
+  const stateKey = state as object;
+  let accepted = acceptedChatEventKeys.get(stateKey);
+  if (!accepted) {
+    accepted = new Map();
+    acceptedChatEventKeys.set(stateKey, accepted);
+  }
+  if (accepted.has(key)) {
+    return false;
+  }
+  accepted.set(key, Date.now());
+  if (accepted.size > CHAT_EVENT_DEDUPE_LIMIT) {
+    for (const staleKey of accepted.keys()) {
+      accepted.delete(staleKey);
+      if (accepted.size <= CHAT_EVENT_DEDUPE_LIMIT) {
+        break;
+      }
+    }
+  }
+  return true;
+}
+
+function handleChatEventInner(state: ChatState, payload: ChatEventPayload) {
   const hadActiveRunBeforeEvent = state.chatRunId !== null;
   const sessionMatches = chatEventSessionMatches(state, payload);
   const activeRunMatches =
@@ -233,7 +282,9 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
         });
         clearToolStreamSegments(state);
       }
-      state.chatMessages = appendTerminalAssistantMessage(state.chatMessages, finalMessage);
+      state.chatMessages = appendTerminalAssistantMessage(state.chatMessages, finalMessage, {
+        replacementTexts: typeof state.chatStream === "string" ? [state.chatStream] : [],
+      });
     } else {
       state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
     }
@@ -277,6 +328,16 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     setChatError(state, payload.errorMessage ?? "chat error");
   }
   return payload.state;
+}
+
+export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
+  if (!payload) {
+    return null;
+  }
+  if (!acceptChatEventFrame(state, payload)) {
+    return null;
+  }
+  return handleChatEventInner(state, payload);
 }
 
 export function handleChatGatewayEvent(state: ChatState, payload?: ChatEventPayload) {
