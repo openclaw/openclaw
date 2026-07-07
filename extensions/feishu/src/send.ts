@@ -25,6 +25,7 @@ import type { FeishuChatType, FeishuMessageInfo, FeishuSendResult } from "./type
 export { resolveFeishuCardTemplate };
 
 const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003]);
+export { isWithdrawnReplyError, shouldFallbackFromReplyTarget };
 const INTERACTIVE_CARD_FALLBACK_TEXT = "[Interactive Card]";
 const POST_FALLBACK_TEXT = "[Rich text message]";
 function shouldFallbackFromReplyTarget(response: { code?: number; msg?: string }): boolean {
