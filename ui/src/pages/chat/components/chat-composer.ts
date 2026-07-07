@@ -2093,7 +2093,6 @@ export function renderChatComposer(props: ChatComposerProps) {
         return;
       }
       event.preventDefault();
-      const target = event.target as HTMLTextAreaElement;
       commitComposerDraft(props, target.value);
       props.onSend();
       syncComposerDraftAfterSend(target);
