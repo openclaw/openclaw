@@ -795,7 +795,7 @@ Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing
     defaults: {
       sandbox: {
         mode: "non-main", // off (default) | non-main | all
-        backend: "docker", // docker (default) | ssh | openshell
+        backend: "docker", // docker (default) | openshell | podman | ssh
         scope: "agent", // session | agent (default) | shared
         workspaceAccess: "none", // none (default) | ro | rw
         workspaceRoot: "~/.openclaw/sandboxes",
@@ -1014,7 +1014,7 @@ noVNC observer access uses VNC auth by default and OpenClaw emits a short-lived 
 
 </Accordion>
 
-Browser sandboxing and `sandbox.docker.binds` are Docker-only.
+Browser sandboxing is Docker-only. `sandbox.docker.binds` applies to Docker and Podman container sandboxes.
 
 Build images (from a source checkout):
 

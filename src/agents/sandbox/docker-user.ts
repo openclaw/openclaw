@@ -2,12 +2,16 @@ import fs from "node:fs/promises";
 import type { SandboxDockerConfig } from "./types.js";
 
 export async function resolveSandboxDockerUser(params: {
+  backend: string;
   docker: SandboxDockerConfig;
   workspaceDir: string;
   stat?: (workspaceDir: string) => Promise<{ uid: number; gid: number }>;
 }): Promise<SandboxDockerConfig> {
   const configuredUser = params.docker.user?.trim();
   if (configuredUser) {
+    return params.docker;
+  }
+  if (params.backend.trim().toLowerCase() !== "docker") {
     return params.docker;
   }
   const stat = params.stat ?? ((workspaceDir: string) => fs.stat(workspaceDir));

@@ -300,6 +300,7 @@
           - "scripts/**/*docker*"
           - "scripts/**/Dockerfile*"
           - "scripts/sandbox-*.sh"
+          - "extensions/podman/**"
           - "src/agents/sandbox*.ts"
           - "src/commands/sandbox*.ts"
           - "src/cli/sandbox-cli.ts"
@@ -308,6 +309,7 @@
           - "docs/cli/sandbox.md"
           - "docs/gateway/sandbox*.md"
           - "docs/install/docker.md"
+          - "docs/install/podman.md"
           - "docs/tools/multi-agent-sandbox-tools.md"
 
 "agents":
@@ -675,6 +677,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/openshell/**"
+"extensions: podman":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/podman/**"
 "extensions: parallel":
   - changed-files:
       - any-glob-to-any-file:

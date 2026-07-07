@@ -46,15 +46,15 @@ Three independent settings control sandbox behavior:
 
 **Backend** controls which runtime executes sandboxed tools. SSH-specific config lives under `agents.defaults.sandbox.ssh`; OpenShell-specific config lives under `plugins.entries.openshell.config`.
 
-|                     | Docker                           | SSH                            | OpenShell                                           |
-| ------------------- | -------------------------------- | ------------------------------ | --------------------------------------------------- |
-| **Where it runs**   | Local container                  | Any SSH-accessible host        | OpenShell managed sandbox                           |
-| **Setup**           | `scripts/sandbox-setup.sh`       | SSH key + target host          | OpenShell plugin enabled                            |
-| **Workspace model** | Bind-mount or copy               | Remote-canonical (seed once)   | `mirror` or `remote`                                |
-| **Network control** | `docker.network` (default: none) | Depends on remote host         | Depends on OpenShell                                |
-| **Browser sandbox** | Supported                        | Not supported                  | Not supported yet                                   |
-| **Bind mounts**     | `docker.binds`                   | N/A                            | N/A                                                 |
-| **Best for**        | Local dev, full isolation        | Offloading to a remote machine | Managed remote sandboxes with optional two-way sync |
+|                     | Docker                           | Podman                           | SSH                            | OpenShell                                           |
+| ------------------- | -------------------------------- | -------------------------------- | ------------------------------ | --------------------------------------------------- |
+| **Where it runs**   | Local container                  | Local Podman container           | Any SSH-accessible host        | OpenShell managed sandbox                           |
+| **Setup**           | `scripts/sandbox-setup.sh`       | Podman plugin + sandbox image    | SSH key + target host          | OpenShell plugin enabled                            |
+| **Workspace model** | Bind-mount or copy               | Bind-mount or copy               | Remote-canonical (seed once)   | `mirror` or `remote`                                |
+| **Network control** | `docker.network` (default: none) | `docker.network` (default: none) | Depends on remote host         | Depends on OpenShell                                |
+| **Browser sandbox** | Supported                        | Not supported yet                | Not supported                  | Not supported yet                                   |
+| **Bind mounts**     | `docker.binds`                   | `docker.binds`                   | N/A                            | N/A                                                 |
+| **Best for**        | Local dev, full isolation        | Rootless/local Podman installs   | Offloading to a remote machine | Managed remote sandboxes with optional two-way sync |
 
 ## Docker backend
 
@@ -84,6 +84,58 @@ On Ubuntu/AppArmor hosts with Docker sandbox mode enabled, Codex app-server `wor
 - noVNC observer access is password-protected by default; OpenClaw emits a short-lived token URL that serves a local bootstrap page and opens noVNC with the password in the URL fragment (not query string or header logs).
 - `agents.defaults.sandbox.browser.allowHostControl` (default `false`) lets sandboxed sessions target the host browser explicitly.
 - Optional allowlists gate `target: "custom"`: `allowedControlUrls`, `allowedControlHosts`, `allowedControlPorts`.
+
+## Podman backend
+
+Use `backend: "podman"` when you want local container sandboxing through Podman instead of Docker. The Podman sandbox backend is implemented as a bundled plugin and reuses the same `sandbox.docker.*` container settings as the Docker backend: image, workdir, network, read-only root, tmpfs, capabilities, environment, resource limits, custom binds, and setup command.
+
+For rootless Podman, the backend creates default-user containers with Podman's `keep-id` user namespace and the current uid/gid so writable workspace bind mounts remain writable from inside the sandbox. If you set `sandbox.docker.user`, OpenClaw leaves that user mapping to your Podman/image configuration.
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: {
+        mode: "all",
+        backend: "podman",
+        scope: "session",
+        workspaceAccess: "rw",
+        docker: {
+          image: "openclaw-sandbox:bookworm-slim",
+          network: "none",
+          readOnlyRoot: true,
+          capDrop: ["ALL"],
+        },
+      },
+    },
+  },
+  plugins: {
+    entries: {
+      podman: {
+        enabled: true,
+        config: {
+          command: "podman",
+          // Optional: use one Podman remote connection style.
+          // connection: "dev",
+          // url: "unix:///run/user/1000/podman/podman.sock",
+        },
+      },
+    },
+  },
+}
+```
+
+Build or pull the sandbox image into the Podman store selected by the plugin config before enabling the backend. From a source checkout, the same Dockerfile can be built with Podman:
+
+```bash
+podman build -t openclaw-sandbox:bookworm-slim -f scripts/docker/sandbox/Dockerfile .
+```
+
+Podman backend limits:
+
+- Browser sandboxing is not supported yet; keep `sandbox.browser.enabled` off or use the Docker backend.
+- `sandbox.docker.gpus` is Docker-only; Podman GPU/device setup is host-specific and should be handled with a custom image/runtime outside this backend for now.
+- `connection` and `url` are mutually exclusive plugin config options because Podman accepts only one remote target selection for a command invocation.
 
 ## SSH backend
 

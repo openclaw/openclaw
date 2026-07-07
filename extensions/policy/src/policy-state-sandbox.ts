@@ -87,10 +87,14 @@ function pushSandboxPostureEvidence(
     inherited: localBackend === undefined && inheritedBackend !== undefined,
   });
 
-  if (effectiveBackend === "docker") {
+  if (isObservableContainerSandboxBackend(effectiveBackend)) {
     pushSandboxDockerPosture(entries, effectiveParams);
   }
   pushSandboxBrowserPosture(entries, effectiveParams);
+}
+
+function isObservableContainerSandboxBackend(backend: string): boolean {
+  return backend === "docker" || backend === "podman";
 }
 
 function pushSandboxDockerPosture(

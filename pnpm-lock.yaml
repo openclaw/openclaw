@@ -1457,6 +1457,15 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/podman:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/policy:
     dependencies:
       json5:

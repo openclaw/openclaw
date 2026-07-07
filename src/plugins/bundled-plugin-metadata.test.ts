@@ -55,6 +55,7 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "opencode",
   "openshell",
   "phone-control",
+  "podman",
   "policy",
   "reef",
   "talk-voice",
