@@ -698,6 +698,31 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
+  it("routes cron targeted wakes to agents without explicit heartbeat config", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = await expectWakeDispatch({
+      cfg: {
+        ...heartbeatConfig([{ id: "worker", heartbeat: { every: "5m" } }, { id: "main" }]),
+      } as OpenClawConfig,
+      runSpy,
+      wake: {
+        source: "cron",
+        intent: "event",
+        reason: "cron:job-main-wake",
+        agentId: "main",
+        sessionKey: "agent:main:cron:job-main-wake:run:1",
+        coalesceMs: 0,
+      },
+      expectedCall: {
+        agentId: "main",
+        reason: "cron:job-main-wake",
+      },
+    });
+
+    runner.stop();
+  });
+
   // Regression for runaway heartbeat loop: backgrounded `process.start` exits
   // call `requestHeartbeat({reason: "exec-event"})` from
   // `bash-tools.exec-runtime.ts:347` (`maybeNotifyOnExit`). If a heartbeat run

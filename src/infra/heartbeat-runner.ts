@@ -2619,6 +2619,27 @@ export function startHeartbeatRunner(opts: {
         const targetAgentId = requestedAgentId ?? resolveAgentIdFromSessionKey(requestedSessionKey);
         const targetAgent = state.agents.get(targetAgentId);
         if (!targetAgent) {
+          // Cron-triggered wakes may target agents that are not in the
+          // heartbeat scheduler (no explicit heartbeat config). Call
+          // runOnce directly so the agent can process the queued
+          // systemEvent. Scheduler bookkeeping is skipped — cron manages
+          // its own scheduling.
+          if (params.source === "cron") {
+            const res = await runOnce({
+              cfg: wakeConfig,
+              agentId: targetAgentId,
+              source: params.source,
+              intent,
+              reason,
+              runScope: "global",
+              sessionKey: requestedSessionKey,
+              heartbeat: requestedHeartbeat,
+              deps: { runtime: state.runtime },
+            });
+            return res.status === "ran"
+              ? { status: "ran", durationMs: Date.now() - startedAt }
+              : res;
+          }
           return { status: "skipped", reason: "disabled" };
         }
         const deferral = evaluateWakeDeferral(targetAgent, now, reason, intent);
