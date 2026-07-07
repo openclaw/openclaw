@@ -910,6 +910,7 @@ export async function getReplyFromConfig(
       sessionKey,
       sessionEntry,
       previousSessionEntry,
+      storePath,
       workspaceDir,
     });
   };

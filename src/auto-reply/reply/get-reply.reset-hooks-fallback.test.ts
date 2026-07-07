@@ -94,4 +94,16 @@ describe("getReplyFromConfig reset-hook fallback", () => {
 
     expect(mocks.emitResetCommandHooks).not.toHaveBeenCalled();
   });
+
+  it("forwards storePath into fallback reset hook calls", async () => {
+    mocks.handleInlineActions.mockResolvedValue({ kind: "reply", reply: undefined });
+
+    await getReplyFromConfig(buildNativeResetContext(), undefined, {});
+
+    expect(mocks.emitResetCommandHooks).toHaveBeenCalledTimes(1);
+    const [[hookParams]] = mocks.emitResetCommandHooks.mock.calls as unknown as Array<
+      [{ storePath?: string }]
+    >;
+    expect(hookParams.storePath).toBe("/tmp/sessions.json");
+  });
 });
