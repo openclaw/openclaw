@@ -39,6 +39,7 @@ apps/android/benchmark/results/
 *.bun-build
 apps/macos/.build/
 apps/macos-mlx-tts/.build/
+apps/shared/ClawdisKit/.build/
 apps/shared/MoltbotKit/.build/
 apps/shared/OpenClawKit/.build/
 apps/shared/OpenClawKit/Package.resolved
@@ -61,6 +62,7 @@ apps/ios/Clawdbot.xcodeproj/
 apps/ios/Clawdbot.xcodeproj/**
 apps/macos/.build/**
 apps/macos-mlx-tts/.build/**
+apps/shared/ClawdisKit/.build/**
 **/*.bun-build
 apps/ios/*.xcfilelist
 
