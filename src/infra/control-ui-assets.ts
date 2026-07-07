@@ -285,7 +285,7 @@ function summarizeCommandOutput(text: string): string | undefined {
   if (!last) {
     return undefined;
   }
-  return last.length > 240 ? `${last.slice(0, 239)}…` : last;
+  return last.length > 240 ? `${Array.from(last).slice(0, 239).join("")}…` : last;
 }
 
 export async function ensureControlUiAssetsBuilt(
