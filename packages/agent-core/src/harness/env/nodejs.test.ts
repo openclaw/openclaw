@@ -4,12 +4,11 @@ import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NodeExecutionEnv, resolveExecTimeoutMs } from "./nodejs.js";
 
-let spawnMock: ReturnType<typeof vi.fn>;
+const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
 
-vi.mock("node:child_process", () => {
-  spawnMock = vi.fn();
-  return { spawn: spawnMock };
-});
+vi.mock("node:child_process", () => ({
+  spawn: spawnMock,
+}));
 
 afterEach(() => {
   vi.clearAllMocks();

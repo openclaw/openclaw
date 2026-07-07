@@ -375,7 +375,9 @@ export class NodeExecutionEnv implements ExecutionEnv {
       // child exits before all pipe data is consumed). Without listeners,
       // Node.js throws an uncaught exception that crashes the process.
       const onStreamError = (stream: "stdout" | "stderr", error: Error) => {
-        if (settled) return;
+        if (settled) {
+          return;
+        }
         onAbort();
         settle(
           err(new ExecutionError("spawn_error", `${stream} read error: ${error.message}`, error)),
