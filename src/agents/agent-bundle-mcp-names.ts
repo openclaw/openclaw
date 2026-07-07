@@ -1,4 +1,5 @@
 /** Sanitizes MCP server/tool names into stable model-facing tool ids. */
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -18,7 +19,7 @@ function sanitizeToolFragment(raw: string, fallback: string, maxChars?: number):
   if (!maxChars) {
     return providerSafe;
   }
-  return providerSafe.length > maxChars ? providerSafe.slice(0, maxChars) : providerSafe;
+  return providerSafe.length > maxChars ? truncateUtf16Safe(providerSafe, maxChars) : providerSafe;
 }
 
 /** Sanitize one MCP server name and reserve it in the provided set. */
@@ -28,7 +29,7 @@ export function sanitizeServerName(raw: string, usedNames: Set<string>): string 
   let n = 2;
   while (usedNames.has(normalizeLowercaseStringOrEmpty(candidate))) {
     const suffix = `-${n}`;
-    candidate = `${base.slice(0, Math.max(1, TOOL_NAME_MAX_PREFIX - suffix.length))}${suffix}`;
+    candidate = `${truncateUtf16Safe(base, Math.max(1, TOOL_NAME_MAX_PREFIX - suffix.length))}${suffix}`;
     n += 1;
   }
   usedNames.add(normalizeLowercaseStringOrEmpty(candidate));
@@ -59,7 +60,7 @@ export function buildSafeToolName(params: {
     1,
     TOOL_NAME_MAX_TOTAL - params.serverName.length - TOOL_NAME_SEPARATOR.length,
   );
-  const truncatedToolName = cleanedToolName.slice(0, maxToolChars);
+  const truncatedToolName = truncateUtf16Safe(cleanedToolName, maxToolChars);
   let candidateToolName = truncatedToolName || "tool";
   let candidate = `${params.serverName}${TOOL_NAME_SEPARATOR}${candidateToolName}`;
   let n = 2;
@@ -67,7 +68,7 @@ export function buildSafeToolName(params: {
     // Keep the suffix inside the total tool-name budget while preserving the
     // server prefix as the namespace boundary.
     const suffix = `-${n}`;
-    candidateToolName = `${(truncatedToolName || "tool").slice(0, Math.max(1, maxToolChars - suffix.length))}${suffix}`;
+    candidateToolName = `${truncateUtf16Safe(truncatedToolName || "tool", Math.max(1, maxToolChars - suffix.length))}${suffix}`;
     candidate = `${params.serverName}${TOOL_NAME_SEPARATOR}${candidateToolName}`;
     n += 1;
   }
