@@ -36,7 +36,7 @@ function requireSpawnCall(callIndex = 0): SpawnCall {
 afterEach(() => {
   spawnMock.mockReset();
   unrefMock.mockReset();
-  spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock });
+  spawnMock.mockReturnValue({ pid: 4242, on: vi.fn(), unref: unrefMock });
 });
 
 describe("scheduleDetachedLaunchdRestartHandoff", () => {
@@ -45,7 +45,7 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
       HOME: "/Users/test",
       OPENCLAW_PROFILE: "default",
     };
-    spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock });
+    spawnMock.mockReturnValue({ pid: 4242, on: vi.fn(), unref: unrefMock });
 
     const result = scheduleDetachedLaunchdRestartHandoff({
       env,
@@ -74,7 +74,7 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
   });
 
   it("passes the plain label separately for start-after-exit mode", () => {
-    spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock });
+    spawnMock.mockReturnValue({ pid: 4242, on: vi.fn(), unref: unrefMock });
 
     scheduleDetachedLaunchdRestartHandoff({
       env: {
@@ -96,7 +96,7 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
   });
 
   it("polls after bootout and falls back to kickstart on bootstrap failure for reload mode", () => {
-    spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock });
+    spawnMock.mockReturnValue({ pid: 4242, on: vi.fn(), unref: unrefMock });
 
     scheduleDetachedLaunchdRestartHandoff({
       env: {
@@ -120,7 +120,7 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
   });
 
   it("sanitizes restart helper environment overrides before spawning", () => {
-    spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock });
+    spawnMock.mockReturnValue({ pid: 4242, on: vi.fn(), unref: unrefMock });
 
     scheduleDetachedLaunchdRestartHandoff({
       env: {

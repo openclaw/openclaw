@@ -248,6 +248,7 @@ export function scheduleDetachedLaunchdRestartHandoff(params: {
         env: restartEnv,
       },
     );
+    child.on("error", () => {});
     child.unref();
     return { ok: true, pid: child.pid ?? undefined };
   } catch (err) {
