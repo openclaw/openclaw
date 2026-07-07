@@ -200,6 +200,22 @@ describe("generateThreadTitle", () => {
     expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 60_000);
   });
 
+  it("preserves code points when prompt fields hit truncation boundaries", async () => {
+    await generateThreadTitle({
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
+      agentId: "main",
+      messageText: `${"m".repeat(599)}😀tail`,
+      channelName: `${"n".repeat(119)}😀tail`,
+      channelDescription: `${"d".repeat(319)}😀tail`,
+    });
+
+    expect(firstCompletionArgs().context.messages.at(0)?.content).toBe(
+      `Channel: ${"n".repeat(119)}...\n\n` +
+        `Channel description: ${"d".repeat(319)}...\n\n` +
+        `Message:\n${"m".repeat(599)}...`,
+    );
+  });
+
   it("clamps completion budget to the selected model output cap", async () => {
     prepareSimpleCompletionModelForAgentMock.mockResolvedValueOnce({
       selection: {
