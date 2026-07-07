@@ -451,7 +451,7 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
   });
 
-  it("skips requester steps when ping-pong is disabled but still announces from the target", async () => {
+  it("skips announce when primaryReply is already delivered and ping-pong is disabled", async () => {
     const targetSessionKey = "agent:other:discord:group:ops";
 
     await runSessionsSendA2AFlow({
@@ -465,15 +465,20 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
       roundOneReply: "Worker completed successfully",
     });
 
-    expect(runAgentStep).toHaveBeenCalledOnce();
-    expect(firstMockArg(vi.mocked(runAgentStep), "agent step")).toMatchObject({
-      sessionKey: targetSessionKey,
-      message: "Agent-to-agent announce step.",
-    });
+    // primaryReply delivered via gateway send; announce step is skipped
+    expect(runAgentStep).not.toHaveBeenCalled();
+    const sendCall = gatewayCalls.find((c) => c.method === "send");
+    expect(sendCall).toBeDefined();
+    if (sendCall) {
+      const p = sendCall.params;
+      expect(p).toMatchObject({
+        message: "Worker completed successfully",
+      });
+    }
   });
 
   it.each(["NO_REPLY", "HEARTBEAT_OK", "ANNOUNCE_SKIP"])(
-    "suppresses exact announce control reply %s before channel delivery",
+    "skips announce when primaryReply is present regardless of reply content",
     async (announceReply) => {
       vi.mocked(runAgentStep).mockResolvedValueOnce(announceReply);
 
@@ -486,10 +491,10 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
         roundOneReply: "Worker completed successfully",
       });
 
-      const stepInput = firstMockArg(vi.mocked(runAgentStep), "agent step");
-      expect(stepInput.message).toBe("Agent-to-agent announce step.");
-      expect(stepInput.transcriptMessage).toBe("");
-      expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
+      // announce skipped; primaryReply delivered via gateway send
+      expect(runAgentStep).not.toHaveBeenCalled();
+      const sendCall = gatewayCalls.find((call) => call.method === "send");
+      expect(sendCall).toBeDefined();
     },
   );
 });
