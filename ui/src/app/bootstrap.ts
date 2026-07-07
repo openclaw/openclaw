@@ -2,9 +2,7 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import {
   createApplicationRouter,
-  inferBasePathFromPathname,
   locationForRoute,
-  normalizeBasePath,
   pathForRoute,
   routeIdFromPath,
   startApplicationRouter,
@@ -18,7 +16,7 @@ import { createRuntimeConfigCapability } from "../lib/config/index.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
 import { createWorkboardCapability } from "../lib/workboard/capability.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
-import { createBrowserHistory } from "./browser.ts";
+import { createBrowserHistory, resolveControlUiBasePath } from "./browser.ts";
 import { createApplicationConfigCapability } from "./config.ts";
 import type {
   ApplicationNavigationOptions,
@@ -235,8 +233,8 @@ export function bootstrapApplication(): ApplicationRuntime {
   if (startup.changed) {
     saveSettings(startup.settings);
   }
-  const basePath = normalizeBasePath(
-    inferBasePathFromPathname(startup.location.pathname || globalThis.location?.pathname || "/"),
+  const basePath = resolveControlUiBasePath(
+    startup.location.pathname || globalThis.location?.pathname || "/",
   );
   const initialLocation = normalizeInitialApplicationLocation(
     startup.location,

@@ -34,7 +34,7 @@ function isOpus46BedrockModelRef(modelRef: string): boolean {
 }
 
 /** Return whether a Bedrock model ref names Claude Opus 4.7. */
-export function isOpus47BedrockModelRef(modelRef: string): boolean {
+function isOpus47BedrockModelRef(modelRef: string): boolean {
   return /(?:^|[/.:])(?:(?:us|eu|ap|apac|au|jp|global)\.)?(?:anthropic\.)?claude-opus-4[.-]7(?:$|[-.:/])/i.test(
     modelRef,
   );

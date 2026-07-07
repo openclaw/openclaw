@@ -95,7 +95,7 @@ export type BrowserObservedDialogRecord = {
 };
 
 /** Pending and recent dialog state for a page. */
-export type BrowserObservedDialogState = {
+type BrowserObservedDialogState = {
   pending: BrowserObservedDialogRecord[];
   recent: BrowserObservedDialogRecord[];
 };

@@ -15,6 +15,7 @@ import { normalizeWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import { z } from "zod";
 import { TtsConfigSchema } from "../api.js";
 import { deepMergeDefined } from "./deep-merge.js";
+import { TWILIO_REGIONS } from "./providers/twilio-region.js";
 import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
 
 // -----------------------------------------------------------------------------
@@ -66,6 +67,8 @@ const TwilioConfigSchema = z
     accountSid: z.string().min(1).optional(),
     /** Twilio Auth Token */
     authToken: SecretInputSchema.optional(),
+    /** Twilio processing Region (for example, ie1) */
+    region: z.enum(TWILIO_REGIONS).optional(),
   })
   .strict();
 
@@ -97,7 +100,7 @@ const VoiceCallNumberRouteConfigSchema = z
     responseTimeoutMs: z.number().int().positive().optional(),
   })
   .strict();
-export type VoiceCallNumberRouteConfig = z.infer<typeof VoiceCallNumberRouteConfigSchema>;
+type VoiceCallNumberRouteConfig = z.infer<typeof VoiceCallNumberRouteConfigSchema>;
 
 // -----------------------------------------------------------------------------
 // Webhook Server Configuration
@@ -287,7 +290,7 @@ const VoiceCallRealtimeAgentContextConfigSchema = z
     files: ["SOUL.md", "IDENTITY.md", "USER.md"],
   });
 
-export const VoiceCallRealtimeConsultThinkingLevelSchema = z.enum([
+const VoiceCallRealtimeConsultThinkingLevelSchema = z.enum([
   "off",
   "minimal",
   "low",

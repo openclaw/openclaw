@@ -228,8 +228,8 @@ struct OpenClawTypographyTests {
         #expect(onboardingWizard.contains("self.developerModeEnabled = true"))
 
         #expect(settingsSections.contains(".font(OpenClawType.body)"))
-        #expect(settingsSections.contains("Toggle(isOn: self.$talkButtonEnabled)"))
-        #expect(settingsSections.contains("Text(\"Show Talk Control\")"))
+        #expect(settingsSections.contains("self.settingsToggle(\"Show Talk Control\", isOn: self.$talkButtonEnabled)"))
+        #expect(settingsSections.contains("OpenClawToggleIndicator(isOn: isOn.wrappedValue)"))
         #expect(settingsSections.contains("TextField(\"Default Share Instruction\""))
         #expect(settingsSections.contains(".font(OpenClawType.subhead)"))
         #expect(settingsSections.contains("private struct AppearanceSettingsScreen"))

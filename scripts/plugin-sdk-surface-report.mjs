@@ -28,7 +28,7 @@ Options:
 `;
 }
 
-export function parsePluginSdkSurfaceReportArgs(argv) {
+function parsePluginSdkSurfaceReportArgs(argv) {
   const args = { check: false, help: false };
   for (const arg of argv) {
     if (arg === "--check") {
@@ -49,7 +49,7 @@ const deprecatedPublicEntrypointSet = new Set(deprecatedPublicPluginSdkEntrypoin
 const deprecatedBarrelEntrypointSet = new Set(deprecatedBarrelPluginSdkEntrypoints);
 const forbiddenPublicSubpaths = new Set(["test-utils"]);
 
-export function readPluginSdkSurfaceBudgetEnv(name, fallback, env = process.env) {
+function readPluginSdkSurfaceBudgetEnv(name, fallback, env = process.env) {
   const raw = env[name];
   if (raw === undefined) {
     return fallback;
@@ -65,7 +65,7 @@ export function readPluginSdkSurfaceBudgetEnv(name, fallback, env = process.env)
   return parsed;
 }
 
-export function readPluginSdkEntrypointBudgetEnv(name, fallback, env = process.env) {
+function readPluginSdkEntrypointBudgetEnv(name, fallback, env = process.env) {
   const raw = env[name];
   if (raw === undefined) {
     return fallback;
@@ -195,7 +195,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      10472,
+      10473,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

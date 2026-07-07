@@ -661,6 +661,7 @@ class NodeRuntime private constructor(
   val gatewayDefaultAgentId: StateFlow<String?> = _gatewayDefaultAgentId.asStateFlow()
   private val _gatewayAgents = MutableStateFlow<List<GatewayAgentSummary>>(emptyList())
   val gatewayAgents: StateFlow<List<GatewayAgentSummary>> = _gatewayAgents.asStateFlow()
+
   // Preserve an explicit user choice across metadata refreshes. Gateway reconnects
   // clear it so the newly connected gateway's canonical main agent wins again.
   @Volatile private var selectedChatAgentId: String? = null
@@ -1741,7 +1742,11 @@ class NodeRuntime private constructor(
     // Only attempt the stored preferred gateway once per runtime lifetime; users
     // can still reconnect explicitly from the UI after a failed auto attempt.
     didAutoConnect = true
-    connect(endpoint)
+    // Cold-start fallback only: discovery can emit late, so atomically claim the very first
+    // lifecycle intent. If any explicit connect/disconnect/switch intent already exists, stand
+    // down permanently instead of overriding the user's decision with a stale auto-connect.
+    if (!gatewayLifecycleIntentSeq.compareAndSet(0L, 1L)) return
+    launchConnect(endpoint, explicitAuth = null)
   }
 
   private fun reconnectPreferredGatewayOnForeground() {
@@ -2630,10 +2635,7 @@ class NodeRuntime private constructor(
 
   fun connect(endpoint: GatewayEndpoint) {
     gatewayLifecycleIntentSeq.incrementAndGet()
-    launchGatewayLifecycle {
-      prepareGatewayTarget(endpoint)
-      beginConnect(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint))
-    }
+    launchConnect(endpoint, explicitAuth = null)
   }
 
   fun connect(
@@ -2641,9 +2643,16 @@ class NodeRuntime private constructor(
     auth: GatewayConnectAuth,
   ) {
     gatewayLifecycleIntentSeq.incrementAndGet()
+    launchConnect(endpoint, explicitAuth = auth)
+  }
+
+  private fun launchConnect(
+    endpoint: GatewayEndpoint,
+    explicitAuth: GatewayConnectAuth?,
+  ) {
     launchGatewayLifecycle {
       prepareGatewayTarget(endpoint)
-      beginConnect(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint, auth))
+      beginConnect(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint, explicitAuth))
     }
   }
 

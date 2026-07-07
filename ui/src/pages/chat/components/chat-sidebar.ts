@@ -592,7 +592,7 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
   `;
 }
 
-export class ChatDetailPanel extends LitElement {
+class ChatDetailPanel extends LitElement {
   @property({ attribute: false }) content: SidebarContent | null = null;
   @property({ attribute: false }) loadFullMessage?:
     | ((request: SidebarFullMessageRequest) => Promise<DetailFullMessageResult | null | undefined>)

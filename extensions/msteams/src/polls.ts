@@ -73,7 +73,7 @@ export const MSTEAMS_SQLITE_MAX_POLL_ROWS = MSTEAMS_MAX_POLLS + 1000;
 export const MSTEAMS_POLL_VOTE_BUCKET_COUNT = 32;
 export const MSTEAMS_MAX_POLL_VOTE_BUCKET_ROWS =
   (MSTEAMS_MAX_POLLS + 1) * MSTEAMS_POLL_VOTE_BUCKET_COUNT;
-export const MSTEAMS_POLL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const MSTEAMS_POLL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const POLL_LOCK_FILENAME = "msteams-polls.sqlite.lock";
 
 function normalizeChoiceValue(value: unknown): string | null {

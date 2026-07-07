@@ -2,6 +2,7 @@
 // Lets plugin policies gate dangerous node commands before transport dispatch.
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { resolvePluginApprovalTimeoutMs } from "../infra/plugin-approvals.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
@@ -63,8 +64,8 @@ function createApprovalRuntime(params: {
       const timeoutMs = resolvePluginApprovalTimeoutMs(input.timeoutMs);
       const request: PluginApprovalRequestPayload = {
         pluginId: params.pluginId,
-        title: input.title.slice(0, 80),
-        description: input.description.slice(0, 256),
+        title: truncateUtf16Safe(input.title, 80),
+        description: truncateUtf16Safe(input.description, 256),
         severity: input.severity ?? "warning",
         toolName: normalizeOptionalString(input.toolName) ?? null,
         toolCallId: normalizeOptionalString(input.toolCallId) ?? null,

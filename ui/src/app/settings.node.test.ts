@@ -6,7 +6,6 @@ import {
   loadGatewaySessionSelection,
   loadLocalUserIdentity,
   loadSettings,
-  saveLocalUserIdentity,
   saveSettings,
   type UiSettings,
 } from "./settings.ts";
@@ -837,14 +836,16 @@ describe("loadSettings default gateway URL derivation", () => {
     });
   });
 
-  it("persists local user identity separately from gateway settings", () => {
+  it("loads local user identity separately from gateway settings", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
       pathname: "/",
     });
-
-    saveLocalUserIdentity({ name: "Buns", avatar: "🦞" });
+    localStorage.setItem(
+      "openclaw.control.user.v1",
+      JSON.stringify({ name: "Buns", avatar: "🦞" }),
+    );
 
     expect(loadLocalUserIdentity()).toEqual({
       name: "Buns",
@@ -869,16 +870,5 @@ describe("loadSettings default gateway URL derivation", () => {
       name: null,
       avatar: null,
     });
-  });
-
-  it("removes the persisted local user identity when cleared", () => {
-    saveLocalUserIdentity({ name: "Buns", avatar: "data:image/png;base64,AAA" });
-    saveLocalUserIdentity({ name: null, avatar: null });
-
-    expect(loadLocalUserIdentity()).toEqual({
-      name: null,
-      avatar: null,
-    });
-    expect(localStorage.getItem("openclaw.control.user.v1")).toBeNull();
   });
 });

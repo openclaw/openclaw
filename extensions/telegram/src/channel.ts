@@ -55,6 +55,7 @@ import {
 import type { TelegramBotInfo } from "./bot-info.js";
 import { buildTelegramGroupPeerId } from "./bot/helpers.js";
 import { telegramMessageActions as telegramMessageActionsImpl } from "./channel-actions.js";
+import { resolveTelegramConversationBaseSessionKey } from "./conversation-route.js";
 import {
   listTelegramDirectoryGroupsFromConfig,
   listTelegramDirectoryPeersFromConfig,
@@ -534,22 +535,26 @@ function resolveTelegramOutboundSessionRoute(params: {
     return null;
   }
   const resolvedThreadId = parsed.messageThreadId ?? parseTelegramThreadId(params.threadId);
+  const resolvedKind = params.resolvedTarget?.kind;
   const isGroup =
     parsed.chatType === "group" ||
-    (parsed.chatType === "unknown" &&
-      params.resolvedTarget?.kind &&
-      params.resolvedTarget.kind !== "user");
+    (parsed.chatType === "unknown" && resolvedKind !== undefined && resolvedKind !== "user");
+  // Telegram private chat ids are the sender's stable numeric user id, while
+  // group ids are negative. Usernames remain aliases and cannot key replies.
+  const recipientSessionExact = /^-?\d+$/.test(chatId);
   const peerId =
     isGroup && resolvedThreadId ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : chatId;
   const peer: RoutePeer = {
     kind: isGroup ? "group" : "direct",
     id: peerId,
   };
+  const accountId = params.accountId ?? resolveDefaultTelegramAccountId(params.cfg);
   const baseRoute = buildChannelOutboundSessionRoute({
     cfg: params.cfg,
     agentId: params.agentId,
     channel: "telegram",
-    accountId: params.accountId,
+    accountId,
+    recipientSessionExact,
     peer,
     chatType: isGroup ? ("group" as const) : ("direct" as const),
     from: isGroup
@@ -563,12 +568,29 @@ function resolveTelegramOutboundSessionRoute(params: {
   if (isGroup) {
     return baseRoute;
   }
+  const inboundBaseSessionKey = resolveTelegramConversationBaseSessionKey({
+    cfg: params.cfg,
+    route: {
+      agentId: params.agentId,
+      accountId,
+      matchedBy: "default",
+      sessionKey: baseRoute.sessionKey,
+    },
+    chatId,
+    isGroup: false,
+    senderId: chatId,
+  });
+  const directBaseRoute = {
+    ...baseRoute,
+    sessionKey: inboundBaseSessionKey,
+    baseSessionKey: inboundBaseSessionKey,
+  };
   const canonicalThreadId =
     resolvedThreadId !== undefined
       ? buildTelegramCanonicalTopicThreadId({ chatId, topicId: resolvedThreadId })
       : undefined;
   const route = buildThreadAwareOutboundSessionRoute({
-    route: baseRoute,
+    route: directBaseRoute,
     threadId: canonicalThreadId,
     currentSessionKey: params.currentSessionKey,
     precedence: ["threadId", "currentSession"],

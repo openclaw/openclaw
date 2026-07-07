@@ -3,6 +3,7 @@ import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { until } from "lit/directives/until.js";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
+import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
 import {
   toSanitizedMarkdownHtml,
@@ -18,17 +19,6 @@ import type {
   NormalizedMessage,
   ToolCard,
 } from "../../../lib/chat/chat-types.ts";
-import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
-import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
-import { resolveUiHourCycleOptions } from "../../../lib/format.ts";
-import { openExternalUrlSafe } from "../../../lib/open-external-url.ts";
-import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
-import { detectTextDirection } from "../../../lib/text-direction.ts";
-import { getSafeLocalStorage } from "../../../local-storage.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
-export { resolveAssistantTextAvatar } from "../../../lib/agents/display.ts";
-import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";
-import "../../../components/tooltip.ts";
 import {
   extractThinkingCached,
   formatReasoningMarkdown,
@@ -45,8 +35,17 @@ import {
   formatCollapsedToolSummaryText,
   isToolCardError,
 } from "../../../lib/chat/tool-cards.ts";
+import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
+import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
+import { resolveUiHourCycleOptions } from "../../../lib/format.ts";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
+import "../../../components/tooltip.ts";
+import { openExternalUrlSafe } from "../../../lib/open-external-url.ts";
+import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
+import { detectTextDirection } from "../../../lib/text-direction.ts";
+import { getSafeLocalStorage } from "../../../local-storage.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
+import type { SidebarContent } from "./chat-sidebar.ts";
 import {
   renderExpandedToolCardContent,
   renderRawOutputToggle,

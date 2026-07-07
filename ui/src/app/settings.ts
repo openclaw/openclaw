@@ -7,11 +7,6 @@ const LEGACY_TOKEN_SESSION_KEY = "openclaw.control.token.v1";
 const TOKEN_SESSION_KEY_PREFIX = "openclaw.control.token.v1:";
 const MAX_SCOPED_SESSION_ENTRIES = 10;
 
-type WindowWithControlUiBasePath = Window &
-  typeof globalThis & {
-    [key: string]: unknown;
-  };
-
 function settingsKeyForGateway(gatewayUrl: string): string {
   return `${SETTINGS_KEY_PREFIX}${normalizeGatewayTokenScope(gatewayUrl)}`;
 }
@@ -37,18 +32,15 @@ import {
   normalizeSidebarPinnedRoutes,
   type SidebarNavRoute,
 } from "../app-navigation.ts";
-import { inferBasePathFromPathname, normalizeBasePath } from "../app-route-paths.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { getSafeLocalStorage, getSafeSessionStorage } from "../local-storage.ts";
 import { normalizeChatSplitLayout, type ChatSplitLayout } from "../pages/chat/split-layout.ts";
+import { resolveControlUiBasePath } from "./browser.ts";
 import { parseImportedCustomTheme, type ImportedCustomTheme } from "./custom-theme.ts";
+import { normalizeGatewayTokenScope } from "./gateway-scope.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
-import {
-  hasLocalUserIdentity,
-  normalizeLocalUserIdentity,
-  type LocalUserIdentity,
-} from "./user-identity.ts";
+import { normalizeLocalUserIdentity, type LocalUserIdentity } from "./user-identity.ts";
 
 export const BORDER_RADIUS_STOPS = [0, 25, 50, 75, 100] as const;
 export type BorderRadiusStop = (typeof BORDER_RADIUS_STOPS)[number];
@@ -56,7 +48,7 @@ export type BorderRadiusStop = (typeof BORDER_RADIUS_STOPS)[number];
 export const TEXT_SCALE_STOPS = [90, 100, 110, 125, 140] as const;
 export type TextScaleStop = (typeof TEXT_SCALE_STOPS)[number];
 
-export const CHAT_AUTO_SCROLL_MODES = ["always", "near-bottom", "off"] as const;
+const CHAT_AUTO_SCROLL_MODES = ["always", "near-bottom", "off"] as const;
 export type ChatAutoScrollMode = (typeof CHAT_AUTO_SCROLL_MODES)[number];
 
 export function normalizeChatAutoScrollMode(value: unknown): ChatAutoScrollMode {
@@ -65,7 +57,7 @@ export function normalizeChatAutoScrollMode(value: unknown): ChatAutoScrollMode 
     : "near-bottom";
 }
 
-export const CHAT_SEND_SHORTCUTS = ["enter", "modifier-enter"] as const;
+const CHAT_SEND_SHORTCUTS = ["enter", "modifier-enter"] as const;
 export type ChatSendShortcut = (typeof CHAT_SEND_SHORTCUTS)[number];
 
 export function normalizeChatSendShortcut(value: unknown): ChatSendShortcut {
@@ -128,8 +120,6 @@ export type UiSettings = {
   locale?: string;
 };
 
-export type { LocalUserIdentity } from "./user-identity.ts";
-
 type LastActiveSessionHost = {
   settings: UiSettings;
   applySettings(next: UiSettings): void;
@@ -143,7 +133,7 @@ export function setLastActiveSessionKey(host: LastActiveSessionHost, next: strin
   host.applySettings({ ...host.settings, lastActiveSessionKey: trimmed });
 }
 
-export type ApplicationStartupLocation = {
+type ApplicationStartupLocation = {
   pathname: string;
   search: string;
   hash: string;
@@ -331,14 +321,7 @@ function formatHostWithPort(hostname: string, port: string): string {
 
 function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  const configured =
-    typeof window !== "undefined" &&
-    normalizeOptionalString(
-      (window as WindowWithControlUiBasePath)["__OPENCLAW_CONTROL_UI_BASE_PATH__"],
-    );
-  const basePath = configured
-    ? normalizeBasePath(configured)
-    : inferBasePathFromPathname(location.pathname);
+  const basePath = resolveControlUiBasePath(location.pathname);
   const pageUrl = `${proto}://${location.host}${basePath}`;
   if (!isViteDevPage()) {
     return { pageUrl, effectiveUrl: pageUrl };
@@ -349,25 +332,6 @@ function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
 
 function getSessionStorage(): Storage | null {
   return getSafeSessionStorage();
-}
-
-function normalizeGatewayTokenScope(gatewayUrl: string): string {
-  const trimmed = normalizeOptionalString(gatewayUrl) ?? "";
-  if (!trimmed) {
-    return "default";
-  }
-  try {
-    const base =
-      typeof location !== "undefined"
-        ? `${location.protocol}//${location.host}${location.pathname || "/"}`
-        : undefined;
-    const parsed = base ? new URL(trimmed, base) : new URL(trimmed);
-    const pathname =
-      parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/+$/, "") || parsed.pathname;
-    return `${parsed.protocol}//${parsed.host}${pathname}`;
-  } catch {
-    return trimmed;
-  }
 }
 
 type PersistedSettingsSource = {
@@ -683,21 +647,6 @@ export function loadLocalUserIdentity(): LocalUserIdentity {
     return normalizeLocalUserIdentity(JSON.parse(raw) as Partial<LocalUserIdentity>);
   } catch {
     return normalizeLocalUserIdentity();
-  }
-}
-
-export function saveLocalUserIdentity(next: LocalUserIdentity) {
-  const storage = getSafeLocalStorage();
-  const normalized = normalizeLocalUserIdentity(next);
-  try {
-    if (!hasLocalUserIdentity(normalized)) {
-      storage?.removeItem(LOCAL_USER_IDENTITY_KEY);
-      return;
-    }
-    storage?.setItem(LOCAL_USER_IDENTITY_KEY, JSON.stringify(normalized));
-  } catch {
-    // best-effort — quota exceeded or security restrictions should not
-    // prevent in-memory identity updates from being applied
   }
 }
 

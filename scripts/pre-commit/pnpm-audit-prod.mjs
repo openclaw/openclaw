@@ -41,7 +41,7 @@ const AUDIT_ADVISORY_VERSION_OVERRIDES = [
   },
 ];
 
-export function normalizeAuditLevel(level) {
+function normalizeAuditLevel(level) {
   const normalized = String(level ?? "").toLowerCase();
   if (normalized in SEVERITY_RANK) {
     return normalized;
