@@ -114,7 +114,7 @@ export function compareUnusedFilesToAllowlist(
 /**
  * Formats unused-file allowlist drift for CLI output.
  */
-export function formatUnusedFileComparison(comparison) {
+function formatUnusedFileComparison(comparison) {
   const lines = [];
   if (!comparison.allowlistIsSorted) {
     lines.push("deadcode unused-file allowlist is not sorted.");
