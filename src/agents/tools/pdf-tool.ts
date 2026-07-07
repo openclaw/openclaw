@@ -19,6 +19,7 @@ import { extractPdfContent, type PdfExtractedContent } from "../../media/pdf-ext
 import { loadWebMediaRaw } from "../../media/web-media.js";
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import { resolveModelAsync } from "../embedded-agent-runner/model.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import { optionalFiniteNumberSchema } from "../schema/typebox.js";
 import { readFiniteNumberParam, ToolInputError } from "./common.js";
@@ -27,7 +28,6 @@ import {
   applyImageModelConfigDefaults,
   buildTextToolResult,
   REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS,
-  resolveModelFromRegistry,
   resolveMediaToolLocalRoots,
   resolveModelRuntimeApiKey,
   resolvePromptAndModelOverride,
@@ -46,8 +46,6 @@ import {
 import { resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
 import {
   createSandboxBridgeReadFile,
-  discoverAuthStorage,
-  discoverModels,
   ensureOpenClawModelsJson,
   resolveSandboxedBridgeMediaPath,
   runWithImageModelFallback,
@@ -161,8 +159,6 @@ async function runPdfPrompt(params: {
 
   const modelsOptions = params.workspaceDir ? { workspaceDir: params.workspaceDir } : undefined;
   await ensureOpenClawModelsJson(effectiveCfg, params.agentDir, modelsOptions);
-  const authStorage = discoverAuthStorage(params.agentDir);
-  const modelRegistry = discoverModels(authStorage, params.agentDir, modelsOptions);
 
   let extractionCache: PdfExtractedContent[] | null = null;
   const getExtractions = async (): Promise<PdfExtractedContent[]> => {
@@ -176,7 +172,22 @@ async function runPdfPrompt(params: {
     cfg: effectiveCfg,
     modelOverride: params.modelOverride,
     run: async (provider, modelId) => {
-      const model = resolveModelFromRegistry({ modelRegistry, provider, modelId });
+      // Resolve each fallback candidate through resolveModelAsync (not
+      // discoverModels/registry.find) so plugin-provided providers and bundled
+      // static-catalog models resolve like the image tool and main agent loop.
+      const { model, error, authStorage } = await resolveModelAsync(
+        provider,
+        modelId,
+        params.agentDir,
+        effectiveCfg,
+        {
+          allowBundledStaticCatalogFallback: true,
+          ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+        },
+      );
+      if (!model) {
+        throw new Error(error ?? `Unknown model: ${provider}/${modelId}`);
+      }
       const apiKey = await resolveModelRuntimeApiKey({
         model,
         cfg: effectiveCfg,

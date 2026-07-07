@@ -1053,6 +1053,35 @@ describe("resolveModel", () => {
     });
   });
 
+  it("resolves provider-prefixed registry model ids from the short local id", async () => {
+    // Registries can store custom model ids provider-prefixed (e.g. "custom/vision-1")
+    // while callers pass the short local id, so the registry lookup must retry the
+    // prefixed form. Regression guard for the removed resolveModelFromRegistry retry.
+    mockDiscoveredModel(discoverModels, {
+      provider: "custom",
+      modelId: "custom/vision-1",
+      templateModel: {
+        id: "custom/vision-1",
+        name: "Custom Vision 1",
+        provider: "custom",
+        api: "openai-responses",
+        baseUrl: "https://models.example.com/v1",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 1024,
+      },
+    });
+
+    const result = await resolveModelAsyncForTest("custom", "vision-1", "/tmp/agent");
+
+    expectRecordFields(expectResolvedModel(result), {
+      provider: "custom",
+      id: "custom/vision-1",
+    });
+  });
+
   it("does not use bundled static catalog rows unless the caller opts in", async () => {
     const result = await resolveModelAsync(
       "mistral",

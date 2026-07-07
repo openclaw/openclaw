@@ -963,7 +963,13 @@ function resolveExplicitModelWithRegistry(params: {
   ) {
     return { kind: "suppressed" };
   }
-  const model = modelRegistry.find(provider, modelId) as Model | null;
+  // Registries can store custom model ids provider-prefixed (e.g. "kimchi/vision-1")
+  // while callers pass the short local id; retry the prefixed form so those models
+  // stay resolvable, matching the removed resolveModelFromRegistry helper.
+  let model = modelRegistry.find(provider, modelId) as Model | null;
+  if (!model && !modelId.includes("/")) {
+    model = modelRegistry.find(provider, `${provider}/${modelId}`) as Model | null;
+  }
 
   if (model) {
     const configuredBaseUrl =
