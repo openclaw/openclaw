@@ -159,6 +159,9 @@ struct OpenClawTypographyTests {
         let settingsSupport = try String(
             contentsOf: Self.sourceURL("Design/SettingsProTabSupport.swift"),
             encoding: .utf8)
+        let typographyDebug = try String(
+            contentsOf: Self.sourceURL("Design/SettingsTypographyDebugView.swift"),
+            encoding: .utf8)
         let privacyAccess = try String(
             contentsOf: Self.sourceURL("Settings/PrivacyAccessSectionView.swift"),
             encoding: .utf8)
@@ -295,6 +298,17 @@ struct OpenClawTypographyTests {
         #expect(settingsSupport.contains("private func previewButton"))
         #expect(settingsSupport
             .contains("Label(title, systemImage: systemImage)\n                .font(OpenClawType.captionMedium)"))
+        #expect(typographyDebug.contains("self.debugSection(\"Guideline Tokens\")"))
+        #expect(typographyDebug.contains("self.debugSection(\"Hard-Coded Baselines\")"))
+        #expect(typographyDebug.contains("self.debugSection(\"Large Glyph Comparison\")"))
+        #expect(typographyDebug.contains("Hamburgefonstiv 012345"))
+        #expect(typographyDebug.contains("Il1 O0 ag Q&"))
+        #expect(typographyDebug.contains("OpenClawType.subheadMedium"))
+        #expect(typographyDebug.contains("Font.system 15 semibold"))
+        #expect(typographyDebug.contains("Font.system 34 semibold"))
+        #expect(typographyDebug.contains(".system(size: 15, weight: .semibold, design: .default)"))
+        #expect(typographyDebug.contains(".custom(\"Inter-Regular\", size: 15"))
+        #expect(typographyDebug.contains(".custom(\"RedHatDisplay-Regular\", size: 15"))
 
         #expect(!privacyAccess.contains("DisclosureGroup(\"Privacy & Access\")"))
         #expect(privacyAccess.contains("Text(\"Privacy & Access\")"))
@@ -543,6 +557,9 @@ struct OpenClawTypographyTests {
         switch self.relativePath(url) {
         case "apps/ios/Sources/Design/OpenClawProComponents.swift":
             window.contains(".font(self.titleFont)") || window.contains(".font(self.subtitleFont)")
+        case "apps/ios/Sources/Design/SettingsTypographyDebugView.swift":
+            window.contains(".font(font)") || window.contains(".font(titleFont)") || window
+                .contains(".font(detailFont)")
         case "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownRenderer.swift":
             window.contains(".font(self.font)")
         default:

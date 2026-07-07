@@ -10,6 +10,9 @@ enum SettingsRoute: Hashable {
     case channels
     case voice
     case diagnostics
+    #if DEBUG
+    case typographyDebug
+    #endif
     case privacy
     case notifications
     case licenses

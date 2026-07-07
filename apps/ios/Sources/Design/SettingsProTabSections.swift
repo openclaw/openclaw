@@ -237,6 +237,10 @@ extension SettingsProTab {
                     self.voiceDestination
                 case .diagnostics:
                     self.diagnosticsDestination
+                #if DEBUG
+                case .typographyDebug:
+                    SettingsTypographyDebugView()
+                #endif
                 case .privacy:
                     self.privacyDestination
                 case .notifications:
@@ -1153,6 +1157,11 @@ extension SettingsProTab {
                 self.gatewayController.setDiscoveryDebugLoggingEnabled(enabled)
             }
             self.settingsToggle("Debug Screen Status", isOn: self.$canvasDebugStatusEnabled)
+            #if DEBUG
+            NavigationLink(value: SettingsRoute.typographyDebug) {
+                SettingsDetailRow("Typography Debug", value: "compare")
+            }
+            #endif
             NavigationLink {
                 GatewayDiscoveryDebugLogView()
             } label: {
