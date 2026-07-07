@@ -77,6 +77,7 @@ type SystemRunDeniedReason =
   | "security=deny"
   | "approval-required"
   | "allowlist-miss"
+  | "denylist-hit"
   | "execution-plan-miss"
   | "companion-unavailable"
   | "permission:screenRecording";
@@ -166,6 +167,7 @@ function normalizeDeniedReason(reason: string | null | undefined): SystemRunDeni
     case "security=deny":
     case "approval-required":
     case "allowlist-miss":
+    case "denylist-hit":
     case "execution-plan-miss":
     case "companion-unavailable":
     case "permission:screenRecording":

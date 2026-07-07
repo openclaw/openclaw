@@ -16,7 +16,11 @@ import {
   resolveAllowAlwaysPatternEntries,
 } from "./exec-approvals-allowlist.js";
 import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
-import { type ExecDenylistEntry, resolveEffectiveExecDenylist } from "./exec-approvals-denylist.js";
+import {
+  type ExecDenylistEntry,
+  normalizeExecDenylist,
+  resolveEffectiveExecDenylist,
+} from "./exec-approvals-denylist.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import type { ExecAuthorizationPlan } from "./exec-authorization-plan.js";
 import {
@@ -1167,6 +1171,7 @@ export function resolveExecApprovalsFromFile(params: {
       fallbackAskFallback,
     ),
     autoAllowSkills: defaults.autoAllowSkills ?? fallbackAutoAllowSkills,
+    denylist: normalizeExecDenylist(rawFile.defaults?.denylist),
   };
   const resolvedAgentSecurity = resolveAgentSecurityField({
     field: "security",
@@ -1203,6 +1208,9 @@ export function resolveExecApprovalsFromFile(params: {
     askFallback: resolvedAgentAskFallback.value,
     autoAllowSkills:
       agent.autoAllowSkills ?? wildcard.autoAllowSkills ?? resolvedDefaults.autoAllowSkills,
+    denylist: resolveEffectiveExecDenylist({
+      layers: [rawWildcard.denylist, rawAgent.denylist],
+    }),
   };
   const allowlist = [
     ...(Array.isArray(wildcard.allowlist) ? wildcard.allowlist : []),
