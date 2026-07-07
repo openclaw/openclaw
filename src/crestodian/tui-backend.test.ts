@@ -139,7 +139,6 @@ describe("runCrestodianTui", () => {
 
   it("exits to masked model setup and then resumes Crestodian", async () => {
     const runModelSetup = vi.fn(async () => ({
-      configPath: "/tmp/openclaw.json",
       model: "openai/gpt-5.5",
     }));
     let runTuiCalls = 0;
@@ -191,7 +190,6 @@ describe("runCrestodianTui", () => {
 
   it("consumes a returned model-setup request before resuming after the wizard", async () => {
     const runModelSetup = vi.fn(async () => ({
-      configPath: "/tmp/openclaw.json",
       model: "openai/gpt-5.5",
     }));
     const runAgentTui = vi.fn(async () => ({

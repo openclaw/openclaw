@@ -78,7 +78,7 @@ export type CrestodianOperationResult = {
   exitsInteractive?: boolean;
   message?: string;
   nextInput?: string;
-  followUp?: CrestodianOperation;
+  followUp?: Extract<CrestodianOperation, { kind: "model-setup" }>;
 };
 
 /** Injectable command dependencies used by tests and alternate runners. */
@@ -733,7 +733,7 @@ async function executeSetup(
         ? `Model choice: ${setupModel.model} (${setupModel.source}).`
         : setupModel.source === "existing default model"
           ? `Model choice: keep existing default ${overview.defaultModel}.`
-          : "Model choice: none found yet. I will only set the workspace; install/login Codex or Claude Code, or set OPENAI_API_KEY/ANTHROPIC_API_KEY, then run setup again.",
+          : "Model choice: none found yet. I will set the workspace first, then offer guided model-provider setup.",
     ].join("\n");
     runtime.log(message);
     return { applied: false, message };

@@ -124,9 +124,6 @@ describe("runCrestodianModelSetup", () => {
         },
       }),
     );
-    expect(result).toEqual({
-      configPath: "/tmp/openclaw.json",
-      model: "openai/gpt-5.5",
-    });
+    expect(result).toEqual({ model: "openai/gpt-5.5" });
   });
 });

@@ -696,16 +696,25 @@ describe("parseCrestodianOperation", () => {
       configPath: path.join(tempDir, "openclaw.json"),
       lines: ["Workspace: /tmp/work"],
     }));
+    const deps = {
+      applySetup,
+      detectInferenceBackends: async () => [],
+    };
+
+    const plan = await executeCrestodianOperation(
+      { kind: "setup", workspace: "/tmp/work" },
+      runtime,
+      { deps },
+    );
+
+    expect(plan.message).toContain("then offer guided model-provider setup");
 
     const result = await executeCrestodianOperation(
       { kind: "setup", workspace: "/tmp/work" },
       runtime,
       {
         approved: true,
-        deps: {
-          applySetup,
-          detectInferenceBackends: async () => [],
-        },
+        deps,
       },
     );
 

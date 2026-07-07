@@ -8,7 +8,6 @@ import { mergeWizardConfigOntoLatest } from "../wizard/setup.shared.js";
 import { appendCrestodianAuditEntry } from "./audit.js";
 
 export type CrestodianModelSetupResult = {
-  configPath: string;
   model?: string;
 };
 
@@ -65,7 +64,6 @@ export async function runCrestodianModelSetup(params: {
   });
 
   return {
-    configPath: committed.path,
     ...(model ? { model } : {}),
   };
 }
