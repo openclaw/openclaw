@@ -1016,6 +1016,7 @@ export function convertMessages(
   }
 
   let lastRole: string | null = null;
+  const supportsImageInput = model.input.includes("image");
 
   for (let i = 0; i < transformedMessages.length; i++) {
     const msg = transformedMessages[i];
@@ -1044,8 +1045,8 @@ export function convertMessages(
         }
         params.push(userParam);
       } else {
-        const content: ChatCompletionContentPart[] = msg.content.map(
-          (item): ChatCompletionContentPart => {
+        const content: ChatCompletionContentPart[] = msg.content
+          .map((item): ChatCompletionContentPart => {
             if (item.type === "text") {
               return {
                 type: "text",
@@ -1058,8 +1059,8 @@ export function convertMessages(
                 url: `data:${item.mimeType};base64,${item.data}`,
               },
             } satisfies ChatCompletionContentPartImage;
-          },
-        );
+          })
+          .filter((item) => supportsImageInput || item.type !== "image_url");
         if (content.length === 0) {
           continue;
         }
@@ -1204,7 +1205,7 @@ export function convertMessages(
         }
         params.push(toolResultMsg);
 
-        if (hasImages && model.input.includes("image")) {
+        if (hasImages && supportsImageInput) {
           for (const block of toolMsg.content) {
             if (isImageContentBlock(block)) {
               imageBlocks.push({

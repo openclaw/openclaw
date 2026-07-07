@@ -571,6 +571,102 @@ describe("OpenAI-compatible completions params", () => {
     });
   });
 
+  it("omits replayed user image_url parts for text-only models", async () => {
+    let capturedMessages: Array<{ role?: string; content?: unknown }> | undefined;
+    const stream = streamOpenAICompletions(
+      model,
+      {
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "browser snapshot text" },
+              { type: "image_url", image_url: { url: "data:image/png;base64,aW1n" } },
+            ],
+            timestamp: 1,
+          },
+        ],
+      } as never,
+      {
+        apiKey: "sk-test",
+        onPayload(payload) {
+          capturedMessages = (payload as { messages?: typeof capturedMessages }).messages;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedMessages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "browser snapshot text" }],
+      },
+    ]);
+  });
+
+  it("keeps image-bearing tool results textual for text-only models", async () => {
+    let capturedMessages:
+      | Array<{ role?: string; content?: unknown; tool_call_id?: string }>
+      | undefined;
+    const stream = streamOpenAICompletions(
+      model,
+      {
+        messages: [
+          {
+            role: "assistant",
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            content: [
+              { type: "toolCall", id: "call_snapshot", name: "browser_snapshot", arguments: {} },
+            ],
+            timestamp: 1,
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_snapshot",
+            toolName: "browser_snapshot",
+            content: [
+              { type: "text", text: "snapshot text" },
+              { type: "image", mimeType: "image/png", data: "aW1n" },
+            ],
+            isError: false,
+            timestamp: 2,
+          },
+        ],
+      } as never,
+      {
+        apiKey: "sk-test",
+        onPayload(payload) {
+          capturedMessages = (payload as { messages?: typeof capturedMessages }).messages;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedMessages?.find((message) => message.role === "tool")).toMatchObject({
+      role: "tool",
+      content: "snapshot text\n(tool image omitted: model does not support images)",
+      tool_call_id: "call_snapshot",
+    });
+    expect(capturedMessages?.some((message) => Array.isArray(message.content))).toBe(false);
+  });
+
   it("does not reread an unreadable tool inventory length", async () => {
     let capturedPayload: Record<string, unknown> | undefined;
     const tools = new Proxy([], {
