@@ -411,20 +411,38 @@ function assertAllowedResolvedAddressesOrThrow(
   }
 }
 
+function isLoopbackIpAddressIncludingEmbeddedIpv4(address: string): boolean {
+  // Keep this stricter SSRF classifier local: locality/auth callers intentionally
+  // recognize only canonical loopback forms, while DNS answers need all encodings.
+  if (isLoopbackIpAddress(address)) {
+    return true;
+  }
+  const parsed = parseCanonicalIpAddress(address);
+  if (!parsed || isIpv4Address(parsed)) {
+    return false;
+  }
+  const embeddedIpv4 = extractEmbeddedIpv4FromIpv6(parsed);
+  return embeddedIpv4?.range() === "loopback";
+}
+
+function isExplicitLoopbackHostname(hostname: string): boolean {
+  return (
+    hostname === "localhost" ||
+    hostname === "localhost.localdomain" ||
+    hostname.endsWith(".localhost") ||
+    isLoopbackIpAddressIncludingEmbeddedIpv4(hostname)
+  );
+}
+
 function assertAllowedTrustedHostnameResolvedAddressesOrThrow(
   results: readonly LookupAddress[],
   hostname: string,
 ): void {
-  const isLoopbackAllowed =
-    hostname === "localhost" ||
-    hostname === "127.0.0.1" ||
-    hostname === "::1" ||
-    hostname.endsWith(".localhost") ||
-    isLoopbackIpAddress(hostname);
+  const isLoopbackAllowed = isExplicitLoopbackHostname(hostname);
 
   for (const entry of results) {
     if (
-      (!isLoopbackAllowed && isLoopbackIpAddress(entry.address)) ||
+      (!isLoopbackAllowed && isLoopbackIpAddressIncludingEmbeddedIpv4(entry.address)) ||
       isLinkLocalIpAddress(entry.address) ||
       isCloudMetadataIpAddress(entry.address)
     ) {
