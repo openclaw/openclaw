@@ -1,10 +1,10 @@
 // Exec approvals CLI tests cover approval command registration and output handling.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as execApprovals from "../infra/exec-approvals.js";
 import type { ExecApprovalsFile } from "../infra/exec-approvals.js";
 import { registerExecApprovalsCli, testing } from "./exec-approvals-cli.js";
@@ -67,6 +67,7 @@ const mocks = vi.hoisted(() => {
 });
 
 const { callGatewayFromCli, defaultRuntime, readBestEffortConfig, runtimeErrors } = mocks;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const localSnapshot = {
   path: "/tmp/local-exec-approvals.json",
@@ -403,7 +404,7 @@ describe("exec approvals CLI", () => {
   });
 
   it("writes host-native node approvals with the current hash", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-native-approvals-"));
+    const dir = tempDirs.make("openclaw-native-approvals-");
     const policyPath = path.join(dir, "policy.json");
     fs.writeFileSync(
       policyPath,
@@ -426,19 +427,15 @@ describe("exec approvals CLI", () => {
       },
     );
 
-    try {
-      await runApprovalsCommand([
-        "approvals",
-        "set",
-        "--node",
-        "windows",
-        "--file",
-        policyPath,
-        "--json",
-      ]);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    await runApprovalsCommand([
+      "approvals",
+      "set",
+      "--node",
+      "windows",
+      "--file",
+      policyPath,
+      "--json",
+    ]);
 
     expect(callGatewayFromCli.mock.calls[1]?.[0]).toBe("exec.approvals.node.set");
     expect(callGatewayFromCli.mock.calls[1]?.[2]).toEqual({
@@ -454,7 +451,7 @@ describe("exec approvals CLI", () => {
   });
 
   it("rejects unknown host-native policy fields instead of dropping them", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-native-approvals-"));
+    const dir = tempDirs.make("openclaw-native-approvals-");
     const policyPath = path.join(dir, "policy.json");
     fs.writeFileSync(
       policyPath,
@@ -467,13 +464,9 @@ describe("exec approvals CLI", () => {
       rules: [],
     } as never);
 
-    try {
-      await expect(
-        runApprovalsCommand(["approvals", "set", "--node", "windows", "--file", policyPath]),
-      ).rejects.toThrow("__exit__:1");
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    await expect(
+      runApprovalsCommand(["approvals", "set", "--node", "windows", "--file", policyPath]),
+    ).rejects.toThrow("__exit__:1");
 
     expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
     expect(runtimeErrors[0]).toContain("Unknown host-native exec approval rule 1 field: shell");
