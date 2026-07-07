@@ -47,7 +47,7 @@ function signedEnvelope(params?: {
         })
       : {
           publicKey: crypto
-            .createPublicKey(crypto.createPrivateKey(params.privateKeyPem))
+            .createPublicKey(params.privateKeyPem)
             .export({ type: "spki", format: "pem" }) as string,
           privateKey: params.privateKeyPem,
         };
