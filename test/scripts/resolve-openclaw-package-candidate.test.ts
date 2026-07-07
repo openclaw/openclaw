@@ -1,9 +1,11 @@
 // Resolve Openclaw Package Candidate tests cover resolve openclaw package candidate script behavior.
 import { execFile, spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { existsSync, readFileSync } from "node:fs";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
@@ -461,6 +463,32 @@ describe("resolve-openclaw-package-candidate", () => {
       ),
     ).rejects.toThrow(/produced more than \d+ captured stdout chars/u);
   });
+
+  it.each(["stdout", "stderr"] as const)(
+    "rejects captured command %s stream errors",
+    async (streamName) => {
+      const child = new EventEmitter() as ReturnType<typeof spawn> & {
+        kill: ReturnType<typeof vi.fn>;
+        stderr: PassThrough;
+        stdout: PassThrough;
+      };
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      child.kill = vi.fn(() => true);
+      child.exitCode = null;
+      child.signalCode = null;
+      const spawnImpl = vi.fn(() => child);
+
+      const pending = runCommandForTest("fake-cmd", ["arg"], {
+        capture: true,
+        spawnImpl,
+      });
+      child[streamName].emit("error", new Error("EPIPE"));
+
+      await expect(pending).rejects.toThrow(`fake-cmd arg ${streamName} stream error: EPIPE`);
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    },
+  );
 
   it("clamps oversized package runner command timers before scheduling", async () => {
     await expect(

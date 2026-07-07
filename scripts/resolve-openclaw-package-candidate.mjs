@@ -228,7 +228,8 @@ function run(command, args, options = {}) {
         : {}),
       detached: useProcessGroup,
     };
-    const child = spawn(command, args, {
+    const spawnImpl = options.spawnImpl ?? spawn;
+    const child = spawnImpl(command, args, {
       ...spawnOptions,
     });
     let timedOut = false;
@@ -243,6 +244,7 @@ function run(command, args, options = {}) {
         forceKillAt = undefined;
         killChild("SIGKILL");
       }, resolvedKillAfterMs);
+      killTimer.unref?.();
     };
     const timeout =
       resolvedTimeoutMs === undefined
@@ -253,21 +255,63 @@ function run(command, args, options = {}) {
           }, resolvedTimeoutMs);
     timeout?.unref?.();
     ACTIVE_CHILD_KILLERS.add(killChild);
+    let settled = false;
+    const rejectRun = (error, options = {}) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      if (killTimer && !options.keepKillTimer) {
+        clearTimeout(killTimer);
+        killTimer = undefined;
+        forceKillAt = undefined;
+      }
+      ACTIVE_CHILD_KILLERS.delete(killChild);
+      reject(error);
+    };
     let stdout = { text: "", truncatedChars: 0 };
     let stderr = { text: "", truncatedChars: 0 };
     if (options.capture) {
       child.stdout.on("data", (chunk) => {
         stdout = appendBoundedCommandOutput(stdout, chunk, COMMAND_STDOUT_CAPTURE_MAX_CHARS);
       });
+      child.stdout.on("error", (error) => {
+        const streamError = toLintErrorObject(error, "stdout stream error");
+        terminateChild();
+        rejectRun(
+          new Error(`${command} ${args.join(" ")} stdout stream error: ${streamError.message}`),
+          { keepKillTimer: true },
+        );
+      });
       child.stderr.on("data", (chunk) => {
         stderr = appendBoundedCommandOutput(stderr, chunk, COMMAND_STDERR_CAPTURE_MAX_CHARS);
       });
+      child.stderr.on("error", (error) => {
+        const streamError = toLintErrorObject(error, "stderr stream error");
+        terminateChild();
+        rejectRun(
+          new Error(`${command} ${args.join(" ")} stderr stream error: ${streamError.message}`),
+          { keepKillTimer: true },
+        );
+      });
     }
     child.on("error", (error) => {
-      ACTIVE_CHILD_KILLERS.delete(killChild);
-      reject(toLintErrorObject(error, "Non-Error rejection"));
+      rejectRun(toLintErrorObject(error, "Non-Error rejection"));
     });
     child.on("close", (status, signal) => {
+      if (settled) {
+        if (killTimer) {
+          clearTimeout(killTimer);
+          killTimer = undefined;
+          forceKillAt = undefined;
+        }
+        ACTIVE_CHILD_KILLERS.delete(killChild);
+        return;
+      }
+      settled = true;
       if (timeout) {
         clearTimeout(timeout);
       }
