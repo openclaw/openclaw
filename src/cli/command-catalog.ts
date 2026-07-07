@@ -45,10 +45,6 @@ export type CliCommandPathPolicy = {
 export type CliCommandCatalogEntry = {
   commandPath: readonly string[];
   exact?: boolean;
-  argvMatch?: {
-    booleanFlags?: readonly string[];
-    valueFlags?: readonly string[];
-  };
   policy?: Partial<CliCommandPathPolicy>;
   route?: {
     id: CliRoutedCommandId;
@@ -266,19 +262,6 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["acp"],
     exact: true,
-    argvMatch: {
-      booleanFlags: ["--require-existing", "--reset-session", "--no-prefix-cwd", "--verbose", "-v"],
-      valueFlags: [
-        "--url",
-        "--token",
-        "--token-file",
-        "--password",
-        "--password-file",
-        "--session",
-        "--session-label",
-        "--provenance",
-      ],
-    },
     policy: { ownsProtocolStdout: true },
   },
   { commandPath: ["approvals"], policy: { networkProxy: "bypass" } },

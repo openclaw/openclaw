@@ -111,35 +111,23 @@ describe("command-execution-startup", () => {
     ).toBe(true);
   });
 
-  it("distinguishes ACP bridge options from the interactive client in raw argv", () => {
-    for (const argv of [
-      ["node", "openclaw", "acp", "--url", "wss://gateway.example.test"],
-      ["node", "openclaw", "acp", "--session", "client"],
-      ["node", "openclaw", "--profile", "work", "acp", "--reset-session", "--verbose"],
-    ]) {
-      expect(
-        mod.resolveCliExecutionStartupContext({
-          argv,
-          jsonOutputMode: false,
-          env: {},
-        }).startupPolicy.suppressDoctorStdout,
-        argv.join(" "),
-      ).toBe(true);
-    }
-
-    for (const argv of [
-      ["node", "openclaw", "acp", "client", "--cwd", "/tmp/workspace"],
-      ["node", "openclaw", "acp", "--verbose", "client", "--server", "openclaw"],
-    ]) {
-      expect(
-        mod.resolveCliExecutionStartupContext({
-          argv,
-          jsonOutputMode: false,
-          env: {},
-        }).startupPolicy.suppressDoctorStdout,
-        argv.join(" "),
-      ).toBe(false);
-    }
+  it("uses the resolved action command path for protocol startup policy", () => {
+    expect(
+      mod.resolveCliExecutionStartupContext({
+        argv: ["node", "openclaw", "acp", "--token", "-secret"],
+        protocolCommandPath: ["acp"],
+        jsonOutputMode: false,
+        env: {},
+      }).startupPolicy.suppressDoctorStdout,
+    ).toBe(true);
+    expect(
+      mod.resolveCliExecutionStartupContext({
+        argv: ["node", "openclaw", "acp", "--verbose", "client"],
+        protocolCommandPath: ["acp", "client"],
+        jsonOutputMode: false,
+        env: {},
+      }).startupPolicy.suppressDoctorStdout,
+    ).toBe(false);
   });
 
   it("routes logs to stderr and emits banner only when allowed", async () => {

@@ -16,6 +16,7 @@ const hasVersionFlag = (argv: readonly string[]) =>
 
 export function resolveCliExecutionStartupContext(params: {
   argv: string[];
+  protocolCommandPath?: string[];
   jsonOutputMode: boolean;
   env?: NodeJS.ProcessEnv;
   routeMode?: boolean;
@@ -29,6 +30,7 @@ export function resolveCliExecutionStartupContext(params: {
     startupPolicy: resolveCliStartupPolicy({
       argv: params.argv,
       commandPath,
+      protocolCommandPath: params.protocolCommandPath,
       jsonOutputMode: params.jsonOutputMode,
       env: params.env,
       routeMode: params.routeMode,
