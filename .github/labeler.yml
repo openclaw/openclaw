@@ -378,6 +378,11 @@
       - any-glob-to-any-file:
           - "extensions/deepinfra/**"
           - "docs/providers/deepinfra.md"
+"extensions: featherless":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/featherless/**"
+          - "docs/providers/featherless.md"
 "extensions: gmi":
   - changed-files:
       - any-glob-to-any-file:
@@ -448,6 +453,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/kimi-coding/**"
+"extensions: longcat":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/longcat/**"
+          - "docs/providers/longcat.md"
 "extensions: minimax":
   - changed-files:
       - any-glob-to-any-file:

@@ -71,6 +71,7 @@ on:
 
 permissions:
   actions: write
+  attestations: read
   contents: write
 
 concurrency:
@@ -461,6 +462,11 @@ jobs:
   publish:
     name: Publish plugins, then OpenClaw
     needs: [resolve_release_target]
+    permissions:
+      actions: write
+      attestations: write
+      contents: write
+      id-token: write
     runs-on: ubuntu-latest
     timeout-minutes: 120
     environment: npm-release
@@ -487,6 +493,51 @@ jobs:
         with:
           install-bun: "false"
 
+      - name: Write Android release approval
+        if: ${{ !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') }}
+        env:
+          RELEASE_PUBLISH_BRANCH: ${{ github.ref_name }}
+          RELEASE_PUBLISH_RUN_ID: ${{ github.run_id }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
+        run: |
+          set -euo pipefail
+          approval_dir="${RUNNER_TEMP}/android-release-approval"
+          mkdir -p "${approval_dir}"
+          node --input-type=module <<'NODE'
+          import { writeFileSync } from "node:fs";
+          import { join } from "node:path";
+
+          const approval = {
+            version: 1,
+            repository: process.env.GITHUB_REPOSITORY,
+            workflow: "OpenClaw Release Publish",
+            parentRunId: process.env.RELEASE_PUBLISH_RUN_ID,
+            workflowBranch: process.env.RELEASE_PUBLISH_BRANCH,
+            releaseTag: process.env.RELEASE_TAG,
+            targetSha: process.env.TARGET_SHA,
+          };
+          writeFileSync(
+            join(process.env.RUNNER_TEMP, "android-release-approval", "approval.json"),
+            `${JSON.stringify(approval, null, 2)}\n`,
+          );
+          NODE
+
+      - name: Attest Android release approval
+        if: ${{ !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') }}
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        with:
+          subject-path: ${{ runner.temp }}/android-release-approval/approval.json
+
+      - name: Upload Android release approval
+        if: ${{ !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: android-release-approval-${{ github.run_id }}
+          path: ${{ runner.temp }}/android-release-approval/approval.json
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Dispatch publish workflows
         env:
           GH_TOKEN: ${{ github.token }}
@@ -511,6 +562,10 @@ jobs:
 
           is_stable_release() {
             [[ "${RELEASE_TAG}" != *"-alpha."* && "${RELEASE_TAG}" != *"-beta."* ]]
+          }
+
+          is_android_release() {
+            [[ "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*)?$ ]]
           }
 
           dispatch_workflow_at_ref() {
@@ -942,11 +997,62 @@ jobs:
           }
 
           publish_github_release() {
+            if is_android_release; then
+              verify_android_release_asset_contract
+            fi
             if is_stable_release; then
               verify_windows_release_asset_contract
             fi
             gh release edit "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --draft=false
             echo "- GitHub release: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}" >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          verify_android_release_asset_contract() {
+            local actual_android_assets actual_digest expected_android_assets expected_digest expected_hash release_json verify_dir
+            local -a required_assets=(
+              "OpenClaw-Android.apk"
+              "OpenClaw-Android-SHA256SUMS.txt"
+            )
+
+            release_json="$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json assets,url)"
+            expected_android_assets="$(printf '%s\n' "${required_assets[@]}" | jq -R . | jq -sc 'sort')"
+            actual_android_assets="$(printf '%s' "${release_json}" | jq -c '
+              [.assets[]? | select(.name | startswith("OpenClaw-Android")) | .name] | sort
+            ')"
+            if [[ "${actual_android_assets}" != "${expected_android_assets}" ]]; then
+              echo "Stable release Android asset names do not match the canonical contract." >&2
+              return 1
+            fi
+
+            verify_dir="${RUNNER_TEMP}/openclaw-android-release-contract"
+            rm -rf "${verify_dir}"
+            mkdir -p "${verify_dir}"
+            gh release download "${RELEASE_TAG}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern "OpenClaw-Android.apk" \
+              --pattern "OpenClaw-Android-SHA256SUMS.txt" \
+              --dir "${verify_dir}"
+            (
+              cd "${verify_dir}"
+              sha256sum --strict --check OpenClaw-Android-SHA256SUMS.txt
+            )
+            expected_hash="$(awk '$2 == "OpenClaw-Android.apk" { print $1 }' "${verify_dir}/OpenClaw-Android-SHA256SUMS.txt")"
+            if [[ ! "${expected_hash}" =~ ^[a-f0-9]{64}$ ]]; then
+              echo "Android checksum manifest does not contain the canonical APK entry." >&2
+              return 1
+            fi
+            expected_digest="sha256:${expected_hash}"
+            actual_digest="$(printf '%s' "${release_json}" | jq -r '.assets[]? | select(.name == "OpenClaw-Android.apk") | .digest // empty')"
+            if [[ "${actual_digest}" != "${expected_digest}" ]]; then
+              echo "Android release APK digest does not match its checksum manifest." >&2
+              return 1
+            fi
+            gh attestation verify "${verify_dir}/OpenClaw-Android.apk" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/android-release.yml" \
+              --source-ref "refs/tags/${RELEASE_TAG}" \
+              --deny-self-hosted-runners
+            echo "- Android APK asset contract: verified" >> "${GITHUB_STEP_SUMMARY}"
           }
 
           verify_windows_release_asset_contract() {
@@ -1039,6 +1145,21 @@ jobs:
               -f expected_installer_digests="${WINDOWS_NODE_INSTALLER_DIGESTS}")"
             echo "- Windows Node release run ID: \`${windows_node_run_id}\`" >> "$GITHUB_STEP_SUMMARY"
             wait_for_run windows-node-release.yml "${windows_node_run_id}"
+          }
+
+          promote_android_release_asset() {
+            if ! is_android_release; then
+              return 0
+            fi
+
+            android_release_run_id="$(dispatch_workflow_at_ref "${RELEASE_TAG}" android-release.yml \
+              -f tag="${RELEASE_TAG}" \
+              -f release_publish_run_id="${GITHUB_RUN_ID}" \
+              -f release_publish_branch="${CHILD_WORKFLOW_REF}" \
+              -f release_target_sha="${TARGET_SHA}" \
+              -f direct_release_recovery=false)"
+            echo "- Android release run ID: \`${android_release_run_id}\`" >> "${GITHUB_STEP_SUMMARY}"
+            wait_for_run android-release.yml "${android_release_run_id}"
           }
 
           upload_dependency_evidence_release_asset() {
@@ -1180,7 +1301,7 @@ jobs:
           }
 
           append_release_proof_to_github_release() {
-            local release_version body_file notes_file evidence_path tarball integrity telegram_line clawhub_line clawhub_bootstrap_line clawhub_runtime_state_path windows_line
+            local release_version body_file notes_file evidence_path tarball integrity telegram_line clawhub_line clawhub_bootstrap_line clawhub_runtime_state_path android_line windows_line
 
             release_version="${RELEASE_TAG#v}"
             body_file="${RUNNER_TEMP}/release-body.md"
@@ -1203,6 +1324,10 @@ jobs:
             if [[ -n "${windows_node_run_id// }" ]]; then
               windows_line="- Windows Hub promotion: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${windows_node_run_id} from openclaw/openclaw-windows-node@${WINDOWS_NODE_TAG}"
             fi
+            android_line=""
+            if [[ -n "${android_release_run_id// }" ]]; then
+              android_line="- Android APK: https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/OpenClaw-Android.apk (https://github.com/${GITHUB_REPOSITORY}/actions/runs/${android_release_run_id})"
+            fi
 
             RELEASE_BODY_FILE="${body_file}" \
               RELEASE_NOTES_FILE="${notes_file}" \
@@ -1220,6 +1345,7 @@ jobs:
               CLAWHUB_LINE="${clawhub_line}" \
               CLAWHUB_BOOTSTRAP_LINE="${clawhub_bootstrap_line}" \
               TELEGRAM_LINE="${telegram_line}" \
+              ANDROID_LINE="${android_line}" \
               WINDOWS_LINE="${windows_line}" \
               node --input-type=module <<'NODE'
           import { readFileSync, writeFileSync } from "node:fs";
@@ -1247,6 +1373,7 @@ jobs:
             process.env.CLAWHUB_BOOTSTRAP_LINE,
             `- OpenClaw npm publish: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.OPENCLAW_NPM_RUN_ID}`,
             process.env.TELEGRAM_LINE,
+            ...(process.env.ANDROID_LINE ? [process.env.ANDROID_LINE] : []),
             ...(process.env.WINDOWS_LINE ? [process.env.WINDOWS_LINE] : []),
           ].join("\n");
 
@@ -1271,6 +1398,9 @@ jobs:
               echo "- OpenClaw npm publish: starts after plugin npm succeeds"
             else
               echo "- OpenClaw npm publish: skipped by input"
+            fi
+            if is_android_release && [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
+              echo "- Android APK: required before the GitHub release can be published"
             fi
             if is_stable_release && [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
               echo "- Windows Hub promotion: required before the GitHub release can be published"
@@ -1420,6 +1550,7 @@ jobs:
           failed=0
           openclaw_failed=0
           windows_node_run_id=""
+          android_release_run_id=""
           if [[ -n "${openclaw_pid}" ]] && ! wait "${openclaw_pid}"; then
             failed=1
             openclaw_failed=1
@@ -1449,6 +1580,9 @@ jobs:
               verify_published_release true
             fi
             create_or_update_github_release
+            if ! promote_android_release_asset; then
+              failed=1
+            fi
             upload_dependency_evidence_release_asset
             upload_release_evidence_assets
             if ! promote_windows_release_assets; then

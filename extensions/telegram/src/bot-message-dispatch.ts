@@ -246,9 +246,7 @@ type DispatchTelegramMessageParams = {
   suppressFailureFallback?: boolean;
 };
 
-export type TelegramDispatchResult =
-  | { kind: "completed" }
-  | { kind: "failed-retryable"; error: unknown };
+type TelegramDispatchResult = { kind: "completed" } | { kind: "failed-retryable"; error: unknown };
 
 type TelegramReasoningLevel = "off" | "on" | "stream";
 

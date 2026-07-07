@@ -71,9 +71,11 @@ export const FIELD_HELP: Record<string, string> = {
   update:
     "Update-channel and startup-check behavior for keeping OpenClaw runtime versions current. Use conservative channels in production and more experimental channels only in controlled environments.",
   "update.channel":
-    'Update channel for git + npm installs ("stable", "extended-stable", "beta", or "dev"). Extended-stable is package-only and foreground-only.',
-  "update.checkOnStart": "Check for npm updates when the gateway starts (default: true).",
-  "update.auto.enabled": "Enable background auto-update for package installs (default: false).",
+    'Update channel for git + npm installs ("stable", "extended-stable", "beta", or "dev"). Extended-stable is package-only: installation is foreground-only, with optional read-only startup hints.',
+  "update.checkOnStart":
+    "Check for npm updates when the gateway starts, including read-only extended-stable hints (default: true).",
+  "update.auto.enabled":
+    "Enable background auto-update for stable and beta package installs; extended-stable never auto-applies (default: false).",
   "update.auto.stableDelayHours":
     "Minimum delay before stable-channel auto-apply starts (default: 6).",
   "update.auto.stableJitterHours":

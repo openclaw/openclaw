@@ -22,6 +22,16 @@ export const CRESTODIAN_AGENT_ID = "crestodian";
 
 const AGENT_TURN_TIMEOUT_MS = 120_000;
 
+export type CrestodianAgentTurnDirective =
+  import("../agents/tools/crestodian-tool.js").CrestodianToolDirective;
+
+export type CrestodianAgentTurnReply = {
+  text: string;
+  modelLabel?: string;
+  /** Interactive handoff the tool requested; the host chat executes it. */
+  directive?: CrestodianAgentTurnDirective;
+};
+
 export type CrestodianAgentTurnRunner = (params: {
   input: string;
   overview: CrestodianOverview;
@@ -29,7 +39,7 @@ export type CrestodianAgentTurnRunner = (params: {
   /** Host-verified: the user's current message is an explicit approval. */
   approvalArmed: boolean;
   session: CrestodianAgentSession;
-}) => Promise<{ text: string; modelLabel?: string } | null>;
+}) => Promise<CrestodianAgentTurnReply | null>;
 
 export type CrestodianAgentSession = {
   sessionId: string;
@@ -153,21 +163,26 @@ async function planCrestodianAgentTurn(
 
 /**
  * CLI harnesses run the crestodian tool in a stdio MCP subprocess, so the
- * in-process proposalRef cannot be shared with the host. Mirror the tool's
- * proposal transitions from the harness tool events instead: a denial
- * registers the exact-operation hash, a mismatch voids it, and an executed
- * mutation consumes it — same lifecycle as crestodian-tool.ts enforces.
+ * in-process proposalRef/directiveRef cannot be shared with the host. Mirror
+ * the tool's transitions from the harness tool events instead: a denial
+ * registers the exact-operation hash, a mismatch voids it, an executed
+ * mutation consumes it, and directive actions replay the interactive handoff —
+ * same lifecycle as crestodian-tool.ts enforces.
  */
-async function mirrorCrestodianProposalFromToolEvents(params: {
+async function mirrorCrestodianToolStateFromEvents(params: {
   runId: string;
   proposalRef: { current?: string };
+  directiveRef: { current?: CrestodianAgentTurnDirective };
 }): Promise<() => void> {
-  const [{ onAgentEvent }, { extractToolResultText }, { resolveCrestodianProposalTransition }] =
-    await Promise.all([
-      import("../infra/agent-events.js"),
-      import("../agents/embedded-agent-subscribe.tools.js"),
-      import("../agents/tools/crestodian-tool.js"),
-    ]);
+  const [
+    { onAgentEvent },
+    { extractToolResultText },
+    { resolveCrestodianProposalTransition, resolveCrestodianDirectiveTransition },
+  ] = await Promise.all([
+    import("../infra/agent-events.js"),
+    import("../agents/embedded-agent-subscribe.tools.js"),
+    import("../agents/tools/crestodian-tool.js"),
+  ]);
   return onAgentEvent((evt) => {
     if (evt.runId !== params.runId || evt.stream !== "tool" || evt.data.phase !== "result") {
       return;
@@ -181,12 +196,14 @@ async function mirrorCrestodianProposalFromToolEvents(params: {
       typeof evt.data.args === "object" && evt.data.args !== null
         ? (evt.data.args as Record<string, unknown>)
         : {};
-    const transition = resolveCrestodianProposalTransition({
-      args,
-      resultText: extractToolResultText(evt.data.result) ?? "",
-    });
+    const resultText = extractToolResultText(evt.data.result) ?? "";
+    const transition = resolveCrestodianProposalTransition({ args, resultText });
     if (transition) {
       params.proposalRef.current = transition.proposal;
+    }
+    const directive = resolveCrestodianDirectiveTransition({ args, resultText });
+    if (directive) {
+      params.directiveRef.current = directive;
     }
   });
 }
@@ -199,7 +216,7 @@ async function mirrorCrestodianProposalFromToolEvents(params: {
 export async function runCrestodianAgentTurnWithDeps(
   params: CrestodianAgentTurnParams,
   deps: CrestodianAgentTurnDeps = {},
-): Promise<{ text: string; modelLabel?: string } | null> {
+): Promise<CrestodianAgentTurnReply | null> {
   const { workspaceDir, sessionFile } = await ensureCrestodianDirs(params.session.sessionId);
   const plan = await planCrestodianAgentTurn(params, deps, workspaceDir);
   if (!plan) {
@@ -221,19 +238,24 @@ export async function runCrestodianAgentTurnWithDeps(
     messageChannel: "crestodian",
     messageProvider: "crestodian",
   };
+  // Directives are per-turn: the tool records at most one interactive handoff
+  // and the engine executes it after the reply.
+  const directiveRef: { current?: CrestodianAgentTurnDirective } = {};
   const crestodianTool = {
     surface: params.surface,
     approvalArmed: params.approvalArmed,
     proposalRef: params.session.proposalRef,
+    directiveRef,
   };
 
   try {
     let result: EmbeddedRunResult;
     if (plan.runner === "cli") {
       const runCli = deps.runCliAgent ?? (await import("../agents/cli-runner.js")).runCliAgent;
-      const stopProposalMirror = await mirrorCrestodianProposalFromToolEvents({
+      const stopToolStateMirror = await mirrorCrestodianToolStateFromEvents({
         runId,
         proposalRef: params.session.proposalRef,
+        directiveRef,
       });
       try {
         result = (await runCli({
@@ -247,7 +269,7 @@ export async function runCrestodianAgentTurnWithDeps(
           cleanupCliLiveSessionOnRunEnd: true,
         })) as EmbeddedRunResult;
       } finally {
-        stopProposalMirror();
+        stopToolStateMirror();
       }
       // Thread the harness's own session forward so the next turn resumes the
       // native CLI transcript instead of reseeding from scratch.
@@ -277,7 +299,11 @@ export async function runCrestodianAgentTurnWithDeps(
     if (!text) {
       return null;
     }
-    return { text, modelLabel: plan.modelLabel };
+    return {
+      text,
+      modelLabel: plan.modelLabel,
+      ...(directiveRef.current ? { directive: directiveRef.current } : {}),
+    };
   } catch {
     // Loop unavailable for this backend (missing CLI, auth failure, timeout):
     // the conversation must keep working, so degrade to the planner path.

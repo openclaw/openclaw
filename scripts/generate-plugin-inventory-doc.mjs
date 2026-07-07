@@ -131,6 +131,7 @@ function humanizeId(value) {
     ["litellm", "LiteLLM"],
     ["llm", "LLM"],
     ["lmstudio", "LM Studio"],
+    ["longcat", "LongCat"],
     ["mdns", "mDNS"],
     ["minimax", "MiniMax"],
     ["modelstudio", "Model Studio"],
