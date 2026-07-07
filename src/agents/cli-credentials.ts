@@ -312,10 +312,13 @@ function readCodexKeychainCredentials(options?: {
 
     // No explicit expiry stored; treat as fresh for an hour from last_refresh or now.
     const lastRefreshRaw = parsed.last_refresh;
-    const lastRefresh =
+    let lastRefresh =
       typeof lastRefreshRaw === "string" || typeof lastRefreshRaw === "number"
         ? new Date(lastRefreshRaw).getTime()
         : Date.now();
+    if (Number.isNaN(lastRefresh)) {
+      lastRefresh = Date.now();
+    }
     const fallbackExpiry =
       resolveCodexFallbackExpiryMs(lastRefresh) ?? resolveCodexFallbackExpiryMs();
     const expires = decodeJwtExpiryMs(accessToken) ?? fallbackExpiry;

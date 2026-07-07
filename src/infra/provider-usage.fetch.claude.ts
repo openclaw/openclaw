@@ -38,18 +38,20 @@ function buildClaudeUsageWindows(data: ClaudeUsageResponse): UsageWindow[] {
   const windows: UsageWindow[] = [];
 
   if (data.five_hour?.utilization !== undefined) {
+    const resetMs = new Date(data.five_hour.resets_at ?? "").getTime();
     windows.push({
       label: "5h",
       usedPercent: clampPercent(data.five_hour.utilization),
-      resetAt: data.five_hour.resets_at ? new Date(data.five_hour.resets_at).getTime() : undefined,
+      resetAt: Number.isFinite(resetMs) ? resetMs : undefined,
     });
   }
 
   if (data.seven_day?.utilization !== undefined) {
+    const resetMs = new Date(data.seven_day.resets_at ?? "").getTime();
     windows.push({
       label: "Week",
       usedPercent: clampPercent(data.seven_day.utilization),
-      resetAt: data.seven_day.resets_at ? new Date(data.seven_day.resets_at).getTime() : undefined,
+      resetAt: Number.isFinite(resetMs) ? resetMs : undefined,
     });
   }
 
@@ -72,10 +74,11 @@ function buildClaudeUsageWindows(data: ClaudeUsageResponse): UsageWindow[] {
       continue;
     }
     knownLabels.add(label.toLowerCase());
+    const resetMs = new Date(limit.resets_at ?? "").getTime();
     windows.push({
       label,
       usedPercent: clampPercent(limit.percent ?? 0),
-      resetAt: limit.resets_at ? new Date(limit.resets_at).getTime() : undefined,
+      resetAt: Number.isFinite(resetMs) ? resetMs : undefined,
     });
   }
 

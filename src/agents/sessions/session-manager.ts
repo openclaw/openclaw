@@ -2700,9 +2700,14 @@ export class SessionManager {
     const stack: SessionTreeNode[] = [...roots];
     while (stack.length > 0) {
       const node = stack.pop()!;
-      node.children.sort(
-        (a, b) => new Date(a.entry.timestamp).getTime() - new Date(b.entry.timestamp).getTime(),
-      );
+      node.children.sort((a, b) => {
+        const aTs = new Date(a.entry.timestamp).getTime();
+        const bTs = new Date(b.entry.timestamp).getTime();
+        if (Number.isNaN(aTs) && Number.isNaN(bTs)) return 0;
+        if (Number.isNaN(aTs)) return 1;
+        if (Number.isNaN(bTs)) return -1;
+        return aTs - bTs;
+      });
       stack.push(...node.children);
     }
 

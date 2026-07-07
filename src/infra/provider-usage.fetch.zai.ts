@@ -71,7 +71,8 @@ export async function fetchZaiUsage(
 
   for (const limit of limits) {
     const percent = clampPercent(limit.percentage || 0);
-    const nextReset = limit.nextResetTime ? new Date(limit.nextResetTime).getTime() : undefined;
+    const resetMs = new Date(limit.nextResetTime ?? "").getTime();
+    const nextReset = Number.isFinite(resetMs) ? resetMs : undefined;
     let windowLabel = "Limit";
     if (limit.unit === 1) {
       windowLabel = `${limit.number}d`;

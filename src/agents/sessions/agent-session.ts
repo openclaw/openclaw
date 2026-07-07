@@ -2073,9 +2073,10 @@ export class AgentSession {
     // compaction boundary. This prevents a stale pre-compaction usage/error
     // from retriggering compaction on the first prompt after compaction.
     const compactionEntry = getLatestCompactionEntry(this.sessionManager.getBranch());
+    const compactionMs =
+      compactionEntry !== null ? new Date(compactionEntry.timestamp).getTime() : Number.NaN;
     const assistantIsFromBeforeCompaction =
-      compactionEntry !== null &&
-      assistantMessage.timestamp <= new Date(compactionEntry.timestamp).getTime();
+      Number.isFinite(compactionMs) && assistantMessage.timestamp <= compactionMs;
     if (assistantIsFromBeforeCompaction) {
       return false;
     }
@@ -2120,9 +2121,9 @@ export class AgentSession {
       // trigger compaction right after one just finished.
       const usageMsg = messages[estimate.lastUsageIndex];
       if (
-        compactionEntry &&
+        Number.isFinite(compactionMs) &&
         usageMsg.role === "assistant" &&
-        usageMsg.timestamp <= new Date(compactionEntry.timestamp).getTime()
+        usageMsg.timestamp <= compactionMs
       ) {
         return false;
       }
