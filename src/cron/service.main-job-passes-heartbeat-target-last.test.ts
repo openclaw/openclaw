@@ -187,4 +187,46 @@ describe("cron main job passes heartbeat target=last", () => {
     const enqueueOptions = enqueueSystemEvent.mock.calls[0]?.[1] as { sessionKey?: string };
     expect(enqueueOptions.sessionKey).toBe(heartbeatRequest.sessionKey);
   });
+
+  it("does not skip with 'disabled' when the agent has no explicit heartbeat config", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.now();
+
+    const job = createMainCronJob({
+      now,
+      id: "test-main-no-heartbeat-config",
+      wakeMode: "now",
+    });
+
+    await writeCronStoreSnapshot({ storePath, jobs: [job] });
+
+    // When the agent has no explicit heartbeat config, the real
+    // runHeartbeatOnce should still return "ran" (not "disabled")
+    // because cron-triggered wakes bypass per-agent heartbeat gates.
+    // This test simulates the case where runHeartbeatOnce previously
+    // would have returned "disabled" but now returns "ran".
+    const runHeartbeatOnce = vi.fn<RunHeartbeatOnce>(async () => ({
+      status: "ran" as const,
+      durationMs: 50,
+    }));
+
+    const { cron, requestHeartbeat } = createCronWithSpies({
+      storePath,
+      runHeartbeatOnce,
+    });
+
+    await runSingleTick(cron);
+
+    // The cron job should NOT skip with "disabled" — the wake completed.
+    expect(runHeartbeatOnce).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "cron",
+        sessionKey: expect.stringMatching(
+          /^agent:main:cron:test-main-no-heartbeat-config:run:\d+$/,
+        ),
+      }),
+    );
+    // No requestHeartbeat fallback — the wake succeeded.
+    expect(requestHeartbeat).not.toHaveBeenCalled();
+  });
 });
