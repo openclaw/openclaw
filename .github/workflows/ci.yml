@@ -1139,7 +1139,7 @@ jobs:
       fail-fast: false
       # The canonical main path waits for the admission debounce above, so
       # widen this large matrix within the current runner-registration budget.
-      max-parallel: 24
+      max-parallel: 28
       matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}
     steps:
       - *linux_node_checkout_step
