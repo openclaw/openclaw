@@ -52,7 +52,7 @@ import {
 } from "./subagent-announce.runtime.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
-import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
+import type { SpawnSubagentMode, SubagentAnnounceTarget } from "./subagent-spawn.types.js";
 import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
 
 type SubagentAnnounceDeps = {
@@ -256,6 +256,7 @@ export async function runSubagentAnnounceFlow(params: {
   outcome?: SubagentRunOutcome;
   announceType?: SubagentAnnounceType;
   expectsCompletionMessage?: boolean;
+  announceTarget?: SubagentAnnounceTarget;
   spawnMode?: SpawnSubagentMode;
   wakeOnDescendantSettle?: boolean;
   signal?: AbortSignal;
@@ -592,6 +593,7 @@ export async function runSubagentAnnounceFlow(params: {
       sourceTool: "subagent_announce",
       targetRequesterSessionKey,
       requesterIsSubagent,
+      announceTarget: params.announceTarget,
       expectsCompletionMessage,
       bestEffortDeliver: params.bestEffortDeliver,
       directIdempotencyKey,
