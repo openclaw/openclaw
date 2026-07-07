@@ -23,6 +23,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Agent wait hard-timeout snapshots:** preserve canonical hard-timeout phase and timestamps when the outer `agent.wait` timer wins the retry-grace race, while leaving queue, draining, and restart-cancelled waits correctable. (#89367) Thanks @Pick-cat.
 - **Control UI typed approvals:** send `/approve` commands immediately through the authorized Gateway command path while an agent run is blocked instead of queueing the command behind that run. (#77672) Thanks @vincentkoc.
 - **Microsoft Teams Graph response bounds:** cap successful file-upload and chat JSON reads so oversized Microsoft Graph responses cannot be buffered without limit. (#97784) Thanks @Alix-007.
 - **Packaged speech runtime:** stop treating package-backed `speech-core` as a bundled plugin sidecar, restoring TTS startup in npm installs while release checks keep true activation-bypassing facades package-complete. (#89899, #89425) Thanks @zhangguiping-xydt.
