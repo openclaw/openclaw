@@ -2,7 +2,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { MsgContext } from "../templating.js";
 import { maybeHandleResetCommand } from "./commands-reset.js";
 import type { HandleCommandsParams } from "./commands-types.js";
