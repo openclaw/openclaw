@@ -1,5 +1,5 @@
-import { existsSync, lstatSync, readlinkSync } from "node:fs";
-import { join, relative, resolve, sep } from "node:path";
+import { existsSync, realpathSync } from "node:fs";
+import { join, relative, sep } from "node:path";
 import ignore from "ignore";
 import { readRegularFileSync } from "../infra/regular-file.js";
 
@@ -38,37 +38,23 @@ export function addIgnoreRules(dir: string, rootDir: string, ig = ignore()) {
 }
 
 function readIgnoreFileContent(ignorePath: string): string | null {
+  // readRegularFileSync rejects symlink final paths, but legacy ignore-file
+  // loading followed symlinks. Resolve any symlink chain to the final regular
+  // target so the bounded read still honors the original semantics.
+  let resolvedPath: string;
+  try {
+    resolvedPath = realpathSync(ignorePath);
+  } catch {
+    return null;
+  }
   try {
     const { buffer } = readRegularFileSync({
-      filePath: ignorePath,
+      filePath: resolvedPath,
       maxBytes: IGNORE_FILE_MAX_BYTES,
     });
     return buffer.toString("utf-8");
   } catch {
-    // readRegularFileSync rejects symlinks. Preserve the legacy behavior of
-    // following symlinks for ignore files by resolving the target and reading
-    // it with the same bounded regular-file helper.
-    let linkTarget: string | undefined;
-    try {
-      const stat = lstatSync(ignorePath);
-      if (stat.isSymbolicLink()) {
-        linkTarget = resolve(join(ignorePath, ".."), readlinkSync(ignorePath));
-      }
-    } catch {
-      return null;
-    }
-    if (!linkTarget) {
-      return null;
-    }
-    try {
-      const { buffer } = readRegularFileSync({
-        filePath: linkTarget,
-        maxBytes: IGNORE_FILE_MAX_BYTES,
-      });
-      return buffer.toString("utf-8");
-    } catch {
-      return null;
-    }
+    return null;
   }
   return ig;
 }
