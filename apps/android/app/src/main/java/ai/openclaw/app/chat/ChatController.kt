@@ -280,15 +280,6 @@ class ChatController internal constructor(
     scope.launch { publishOutbox() }
   }
 
-  /** Purges cached transcripts and queued sends after old-scope writes finish. */
-  internal suspend fun clearTranscriptCache() {
-    val cache = transcriptCache ?: return
-    cacheMutationMutex.withLock {
-      cache.clearAll()
-      commandOutbox?.clearAll()
-    }
-  }
-
   /** Purges cached transcripts and queued sends for one retired authentication scope. */
   internal suspend fun clearGatewayCache(gatewayId: String) {
     cacheMutationMutex.withLock {

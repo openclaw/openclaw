@@ -14835,15 +14835,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 57,
-      "path": "apps/macos/Sources/OpenClaw/AboutSettings.swift",
-      "source": "GitHub",
-      "surface": "apple",
-      "id": "native.apple.953dd3deb91be186"
-    },
-    {
-      "kind": "ui-named-argument",
-      "line": 59,
+      "line": 56,
       "path": "apps/macos/Sources/OpenClaw/AboutSettings.swift",
       "source": "Website",
       "surface": "apple",
@@ -14851,23 +14843,31 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 60,
+      "line": 57,
       "path": "apps/macos/Sources/OpenClaw/AboutSettings.swift",
-      "source": "Twitter",
+      "source": "Docs",
       "surface": "apple",
-      "id": "native.apple.6630b4b90765bc97"
+      "id": "native.apple.a6ce39368a3dcba9"
     },
     {
       "kind": "ui-named-argument",
-      "line": 61,
+      "line": 60,
       "path": "apps/macos/Sources/OpenClaw/AboutSettings.swift",
-      "source": "Email",
+      "source": "GitHub",
       "surface": "apple",
-      "id": "native.apple.f8b7aeee98661fef"
+      "id": "native.apple.953dd3deb91be186"
+    },
+    {
+      "kind": "ui-named-argument",
+      "line": 64,
+      "path": "apps/macos/Sources/OpenClaw/AboutSettings.swift",
+      "source": "Discord",
+      "surface": "apple",
+      "id": "native.apple.3f2971f0141e1cf6"
     },
     {
       "kind": "ui-call",
-      "line": 73,
+      "line": 77,
       "path": "apps/macos/Sources/OpenClaw/AboutSettings.swift",
       "source": "Check for updates automatically",
       "surface": "apple",
@@ -14875,7 +14875,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 77,
+      "line": 81,
       "path": "apps/macos/Sources/OpenClaw/AboutSettings.swift",
       "source": "Check for Updates…",
       "surface": "apple",
@@ -14883,7 +14883,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 80,
+      "line": 84,
       "path": "apps/macos/Sources/OpenClaw/AboutSettings.swift",
       "source": "Updates unavailable in this build.",
       "surface": "apple",
@@ -14891,7 +14891,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 86,
+      "line": 90,
       "path": "apps/macos/Sources/OpenClaw/AboutSettings.swift",
       "source": "© 2026 OpenClaw Foundation — MIT License.",
       "surface": "apple",
