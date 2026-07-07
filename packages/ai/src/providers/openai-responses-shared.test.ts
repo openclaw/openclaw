@@ -1967,6 +1967,15 @@ describe("processResponsesStream", () => {
       cacheWrite: 30,
       totalTokens: 110,
     });
+    // Cost must be computed too: session accounting sums usage.cost.total, so an
+    // early-terminated stream with nonzero tokens must not persist a zero cost.
+    // Use enough precision that a zero cost would fail (sub-cent values).
+    expect(output.usage.cost.total).toBeGreaterThan(0);
+    expect(output.usage.cost.input).toBeCloseTo(0.00025, 7);
+    expect(output.usage.cost.output).toBeCloseTo(0.0003, 7);
+    expect(output.usage.cost.cacheRead).toBeCloseTo(0.00001, 7);
+    expect(output.usage.cost.cacheWrite).toBeCloseTo(0.0001875, 7);
+    expect(output.usage.cost.total).toBeCloseTo(0.0007475, 7);
   });
 
   it("collapses cumulative message snapshot items into one text block (#91959)", async () => {

@@ -1239,37 +1239,20 @@ export async function processResponsesStream<TApi extends Api>(
         throw new Error("Responses stream completed with unresolved tool calls");
       }
       const response = event.response;
-      if (response?.id) {
-        output.responseId = response.id;
-      }
-      if (response?.usage) {
-        output.usage = mapResponsesUsage(response.usage);
-      }
-      calculateCost(model, output.usage);
-      if (options?.applyServiceTierPricing) {
-        const serviceTier = options.resolveServiceTier
-          ? options.resolveServiceTier(response?.service_tier, options.serviceTier)
-          : (response?.service_tier ?? options.serviceTier);
-        options.applyServiceTierPricing(output.usage, serviceTier);
-      }
+      recordResponsesTerminalUsage(output, response, model, options);
       // Map status to stop reason
       output.stopReason = mapStopReason(response?.status);
       if (output.content.some((b) => b.type === "toolCall") && output.stopReason === "stop") {
         output.stopReason = "toolUse";
       }
     } else if (event.type === "response.incomplete") {
-      // Early abort (e.g. max_output_tokens reached, content filter): the server
-      // ends the stream with response.incomplete and never sends response.completed.
-      // Record the partial usage it reports so cache-hit and other billed tokens
-      // are not dropped from telemetry (#100954). Cost/service-tier/stop-reason
-      // mapping stays specific to response.completed.
-      const response = event.response;
-      if (response?.id) {
-        output.responseId = response.id;
-      }
-      if (response?.usage) {
-        output.usage = mapResponsesUsage(response.usage);
-      }
+      // Early terminal event (e.g. max_output_tokens reached, content filter): the
+      // server ends the stream with response.incomplete and never sends
+      // response.completed. Route it through the same terminal usage+cost path so
+      // billed tokens AND their cost are preserved for telemetry and session
+      // accounting (#100954) — session cost sums usage.cost.total, so usage alone
+      // is not enough. Stop-reason mapping stays specific to response.completed.
+      recordResponsesTerminalUsage(output, event.response, model, options);
     } else if (event.type === "error") {
       throw new Error(
         event.message ? `Error Code ${event.code}: ${event.message}` : "Unknown error",
@@ -1306,6 +1289,30 @@ function mapResponsesUsage(usage: NonNullable<OpenAI.Responses.Response["usage"]
     totalTokens: usage.total_tokens || 0,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
+}
+
+// Record usage and cost for a terminal Responses event (response.completed or
+// response.incomplete). Both carry the same Response shape, and session
+// accounting sums usage.cost.total, so cost must be computed for either path.
+function recordResponsesTerminalUsage<TApi extends Api>(
+  output: AssistantMessage,
+  response: OpenAI.Responses.Response | undefined,
+  model: Model<TApi>,
+  options: OpenAIResponsesProcessStreamOptions | undefined,
+): void {
+  if (response?.id) {
+    output.responseId = response.id;
+  }
+  if (response?.usage) {
+    output.usage = mapResponsesUsage(response.usage);
+  }
+  calculateCost(model, output.usage);
+  if (options?.applyServiceTierPricing) {
+    const serviceTier = options.resolveServiceTier
+      ? options.resolveServiceTier(response?.service_tier, options.serviceTier)
+      : (response?.service_tier ?? options.serviceTier);
+    options.applyServiceTierPricing(output.usage, serviceTier);
+  }
 }
 
 function mapStopReason(status: OpenAI.Responses.ResponseStatus | undefined): StopReason {

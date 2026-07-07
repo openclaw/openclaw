@@ -1193,6 +1193,65 @@ function convertResponsesTools(
   };
 }
 
+// Record usage and cost for a terminal Responses event (response.completed or
+// response.incomplete). Both carry the same Response shape, and session
+// accounting sums usage.cost.total, so cost must be computed for either terminal
+// path — recording usage alone leaves an early-terminated stream at zero cost (#100954).
+function recordResponsesTerminalUsage(
+  output: MutableAssistantOutput,
+  response: Record<string, unknown> | undefined,
+  model: Model,
+  options:
+    | {
+        serviceTier?: ResponseCreateParamsStreaming["service_tier"];
+        applyServiceTierPricing?: (
+          usage: MutableAssistantOutput["usage"],
+          serviceTier?: ResponseCreateParamsStreaming["service_tier"],
+        ) => void;
+      }
+    | undefined,
+): void {
+  if (typeof response?.id === "string") {
+    output.responseId = response.id;
+  }
+  const usage = response?.usage as
+    | {
+        input_tokens?: number;
+        output_tokens?: number;
+        total_tokens?: number;
+        input_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
+        output_tokens_details?: { reasoning_tokens?: number };
+      }
+    | undefined;
+  if (usage) {
+    const cachedTokens = usage.input_tokens_details?.cached_tokens || 0;
+    const cacheWriteTokens = usage.input_tokens_details?.cache_write_tokens || 0;
+    const inputTokens = usage.input_tokens || 0;
+    const outputTokens = usage.output_tokens || 0;
+    const reasoningTokens = usage.output_tokens_details?.reasoning_tokens;
+    const input = Math.max(0, inputTokens - cachedTokens - cacheWriteTokens);
+    output.usage = {
+      input,
+      output: outputTokens,
+      cacheRead: cachedTokens,
+      cacheWrite: cacheWriteTokens,
+      ...(typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens)
+        ? { reasoningTokens }
+        : {}),
+      totalTokens: input + outputTokens + cachedTokens + cacheWriteTokens,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    };
+  }
+  calculateCost(model as never, output.usage as never);
+  if (options?.applyServiceTierPricing) {
+    options.applyServiceTierPricing(
+      output.usage,
+      (response?.service_tier as ResponseCreateParamsStreaming["service_tier"] | undefined) ??
+        options.serviceTier,
+    );
+  }
+}
+
 async function processResponsesStream(
   openaiStream: AsyncIterable<unknown>,
   output: MutableAssistantOutput,
@@ -1811,48 +1870,8 @@ async function processResponsesStream(
         throw new Error("Responses stream completed with unresolved tool calls");
       }
       const response = event.response as Record<string, unknown> | undefined;
-      if (typeof response?.id === "string") {
-        output.responseId = response.id;
-      }
       backfillCompletedResponseOutput(response);
-      const usage = response?.usage as
-        | {
-            input_tokens?: number;
-            output_tokens?: number;
-            total_tokens?: number;
-            input_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
-            output_tokens_details?: { reasoning_tokens?: number };
-            service_tier?: ResponseCreateParamsStreaming["service_tier"];
-            status?: string;
-          }
-        | undefined;
-      if (usage) {
-        const cachedTokens = usage.input_tokens_details?.cached_tokens || 0;
-        const cacheWriteTokens = usage.input_tokens_details?.cache_write_tokens || 0;
-        const inputTokens = usage.input_tokens || 0;
-        const outputTokens = usage.output_tokens || 0;
-        const reasoningTokens = usage.output_tokens_details?.reasoning_tokens;
-        const input = Math.max(0, inputTokens - cachedTokens - cacheWriteTokens);
-        output.usage = {
-          input,
-          output: outputTokens,
-          cacheRead: cachedTokens,
-          cacheWrite: cacheWriteTokens,
-          ...(typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens)
-            ? { reasoningTokens }
-            : {}),
-          totalTokens: input + outputTokens + cachedTokens + cacheWriteTokens,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        };
-      }
-      calculateCost(model as never, output.usage as never);
-      if (options?.applyServiceTierPricing) {
-        options.applyServiceTierPricing(
-          output.usage,
-          (response?.service_tier as ResponseCreateParamsStreaming["service_tier"] | undefined) ??
-            options.serviceTier,
-        );
-      }
+      recordResponsesTerminalUsage(output, response, model, options);
       output.stopReason = mapResponsesStopReason(response?.status as string | undefined);
       if (
         output.content.some((block) => block.type === "toolCall") &&
@@ -1860,6 +1879,18 @@ async function processResponsesStream(
       ) {
         output.stopReason = "toolUse";
       }
+    } else if (type === "response.incomplete") {
+      // Early terminal event (e.g. max_output_tokens reached, content filter): the
+      // server ends the stream with response.incomplete and never sends
+      // response.completed. Route it through the same terminal usage+cost path so
+      // billed tokens AND their cost are preserved for telemetry and session
+      // accounting (#100954). Stop-reason mapping stays specific to response.completed.
+      recordResponsesTerminalUsage(
+        output,
+        event.response as Record<string, unknown> | undefined,
+        model,
+        options,
+      );
     } else if (type === "error") {
       throw new Error(
         `Error Code ${stringifyUnknown(event.code, "unknown")}: ${stringifyUnknown(event.message, "Unknown error")}`,
