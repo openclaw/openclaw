@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "../utils.js";
 // Defines task terminal outcome contracts used by completion handling.
 import type { TaskTerminalOutcome } from "./task-registry.types.js";
 
@@ -25,7 +26,7 @@ function normalizeCompletionFailureReason(value: string | null | undefined): str
   if (!normalized) {
     return "";
   }
-  return normalized.length <= 160 ? normalized : `${normalized.slice(0, 159)}...`;
+  return normalized.length <= 160 ? normalized : `${truncateUtf16Safe(normalized, 159)}...`;
 }
 
 function matchesProgressOnlyPrefix(value: string): boolean {
