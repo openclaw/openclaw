@@ -11,8 +11,13 @@ describe("hasUnbackedReminderCommitment", () => {
     expect(hasUnbackedReminderCommitment("I'll remember to check on that tomorrow.")).toBe(true);
     expect(hasUnbackedReminderCommitment("I'll remember and remind you tomorrow.")).toBe(true);
     expect(hasUnbackedReminderCommitment("I will remember, then follow up next week.")).toBe(true);
+    expect(hasUnbackedReminderCommitment("I'll remember that and remind you tomorrow.")).toBe(true);
+    expect(hasUnbackedReminderCommitment("I'll remember this, then follow up next week.")).toBe(
+      true,
+    );
     expect(hasUnbackedReminderCommitment("I'll remember that preference.")).toBe(false);
     expect(hasUnbackedReminderCommitment("I'll remember the specifics.")).toBe(false);
+    expect(hasUnbackedReminderCommitment("I'll remember to use metric units for you.")).toBe(false);
   });
 });
 
