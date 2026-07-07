@@ -33,6 +33,7 @@ import { tryNormalizeBotFrameworkServiceUrl } from "../bot-framework-service-url
 import type { StoredConversationReference } from "../conversation-store.js";
 import { formatUnknownError } from "../errors.js";
 import {
+  fetchChatMessageText,
   fetchThreadReplies,
   formatThreadContext,
   resolveTeamGroupId,
@@ -589,6 +590,25 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       }
     }
 
+    // The inbound Teams blockquote only carries a truncated `preview` snippet for
+    // quote replies. When we have the quoted message id, fetch the complete text
+    // via the app-only `GET /chats/{chatId}/messages/{id}` endpoint (allowed with
+    // Chat.Read.All). Restricted to chats (DMs + group chats) whose Graph chat id
+    // is a `19:` id — channel quote context is covered by the thread-parent path
+    // below. Any failure degrades to the truncated preview from fix 1, so message
+    // handling never breaks.
+    let quoteBodyFull: string | undefined;
+    if (quoteInfo?.id && !isChannel && graphConversationId.startsWith("19:")) {
+      try {
+        const graphToken = await tokenProvider.getAccessToken("https://graph.microsoft.com");
+        quoteBodyFull = await fetchChatMessageText(graphToken, graphConversationId, quoteInfo.id);
+      } catch (err) {
+        log.debug?.("failed to fetch full quoted message text", {
+          error: formatUnknownError(err),
+        });
+      }
+    }
+
     const mediaList = await resolveMSTeamsInboundMedia({
       attachments,
       htmlSummary: htmlSummary ?? undefined,
@@ -776,8 +796,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       supplemental: {
         quote: quoteInfo
           ? {
-              id: activity.replyToId ?? undefined,
-              body: quoteInfo.body,
+              id: quoteInfo.id ?? activity.replyToId ?? undefined,
+              body: quoteBodyFull ?? quoteInfo.body,
               sender: quoteInfo.sender,
               senderAllowed: quoteSenderAllowed,
               isQuote: true,
