@@ -43,6 +43,7 @@ import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import { isPreConnectNetworkError } from "../delivery-recovery.shared.js";
 import { diagnosticErrorCategory } from "../diagnostic-error-metadata.js";
 import {
   emitInternalDiagnosticEvent as emitDiagnosticEvent,
@@ -68,6 +69,7 @@ import {
   enqueueDelivery,
   failDelivery,
   failDeliveryAfterPlatformSend,
+  failDeliveryBeforePlatformSend,
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendDispatched,
   markDeliveryPlatformSendAttemptStarted,
@@ -1414,6 +1416,7 @@ async function deliverOutboundPayloadsWithQueueCleanup(
   // payload failed so we can call failDelivery instead of ackDelivery.
   let hadPartialFailure = false;
   let lastPayloadError: unknown;
+  let partialFailuresArePreConnect = true;
   const queuePolicy = params.queuePolicy ?? "best_effort";
   const platformQueueId = queueId ?? params.deliveryQueueId;
   const platformQueuePolicy = queueId ? queuePolicy : (params.queuePolicy ?? "required");
@@ -1483,6 +1486,7 @@ async function deliverOutboundPayloadsWithQueueCleanup(
     onError: (err: unknown, payload: NormalizedOutboundPayload) => {
       hadPartialFailure = true;
       lastPayloadError = err;
+      partialFailuresArePreConnect &&= isPreConnectNetworkError(err);
       params.onError?.(err, payload);
     },
     onDeliveryResult: async (result) => {
@@ -1518,7 +1522,11 @@ async function deliverOutboundPayloadsWithQueueCleanup(
             : undefined);
         const error = "partial delivery failure (bestEffort)";
         if (postSendState === undefined || postSendState === "marked") {
-          await failDelivery(queueId, error).catch((err: unknown) => {
+          const recordFailure =
+            !partialSendEvidence && partialFailuresArePreConnect
+              ? failDeliveryBeforePlatformSend
+              : failDelivery;
+          await recordFailure(queueId, error).catch((err: unknown) => {
             log.warn(
               `failed to mark queued delivery ${queueId} as failed after partial failure; continuing best-effort delivery: ${formatErrorMessage(err)}`,
             );
@@ -1611,7 +1619,10 @@ async function deliverOutboundPayloadsWithQueueCleanup(
           }
           await runCommitHooksAfterAck();
         } else {
-          await failDelivery(queueId, formatErrorMessage(err)).catch((failErr: unknown) => {
+          const recordFailure = isPreConnectNetworkError(err)
+            ? failDeliveryBeforePlatformSend
+            : failDelivery;
+          await recordFailure(queueId, formatErrorMessage(err)).catch((failErr: unknown) => {
             log.warn(
               `failed to mark queued delivery ${queueId} as failed: ${formatErrorMessage(failErr)}`,
             );

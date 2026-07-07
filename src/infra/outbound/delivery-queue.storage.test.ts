@@ -8,6 +8,7 @@ import {
   enqueueDelivery,
   failDelivery,
   failDeliveryAfterPlatformSend,
+  failDeliveryBeforePlatformSend,
   loadPendingDeliveries,
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendDispatched,
@@ -225,6 +226,23 @@ describe("delivery-queue storage", () => {
       expect(entry.lastError).toBe("state update failed");
       expect(entry.recoveryState).toBe("unknown_after_send");
       expect(typeof entry.platformSendStartedAt).toBe("number");
+    });
+
+    it("atomically records a pre-send failure without retaining send evidence", async () => {
+      const id = await enqueueTextDelivery({
+        channel: "forum",
+        to: "123",
+        payloads: [{ text: "test" }],
+      });
+      await markDeliveryPlatformSendAttemptStarted(id, tmpDir());
+
+      await failDeliveryBeforePlatformSend(id, "connect refused", tmpDir());
+
+      const entry = readQueuedEntry(tmpDir(), id);
+      expect(entry.retryCount).toBe(1);
+      expect(entry.lastError).toBe("connect refused");
+      expect(entry.recoveryState).toBeUndefined();
+      expect(entry.platformSendStartedAt).toBeUndefined();
     });
   });
 

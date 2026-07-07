@@ -404,6 +404,7 @@ jobs:
                     { check_name: "android-test-play", task: "test-play" },
                     { check_name: "android-test-third-party", task: "test-third-party" },
                     { check_name: "android-build-play", task: "build-play" },
+                    { check_name: "android-ktlint", task: "ktlint" },
                   ]
                 : [],
             ),
@@ -1138,7 +1139,7 @@ jobs:
       fail-fast: false
       # The canonical main path waits for the admission debounce above, so
       # widen this large matrix within the current runner-registration budget.
-      max-parallel: 24
+      max-parallel: 28
       matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}
     steps:
       - *linux_node_checkout_step
@@ -2038,7 +2039,7 @@ jobs:
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: ~/.android-sdk
-          key: ${{ runner.os }}-android-sdk-v1-cmdline-14742923-platform-36-build-tools-36.0.0
+          key: ${{ runner.os }}-android-sdk-v1-cmdline-14742923-platform-37.0-build-tools-36.0.0
           restore-keys: |
             ${{ runner.os }}-android-sdk-v1-
 
@@ -2068,7 +2069,7 @@ jobs:
           yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null
           sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --install \
             "platform-tools" \
-            "platforms;android-36" \
+            "platforms;android-37.0" \
             "build-tools;36.0.0"
 
       - name: Run Android ${{ matrix.task }}
@@ -2086,7 +2087,16 @@ jobs:
               ./gradlew --no-daemon --build-cache :app:testThirdPartyDebugUnitTest
               ;;
             build-play)
-              ./gradlew --no-daemon --build-cache :app:assemblePlayDebug
+              ./gradlew --no-daemon --build-cache \
+                :app:assemblePlayDebug \
+                :app:assembleThirdPartyDebug \
+                :app:lintPlayDebug \
+                :app:lintThirdPartyDebug \
+                :benchmark:assembleDebug
+              ;;
+            ktlint)
+              # Mirrors `pnpm android:lint`; keeps formatting drift out of main (see PR #100304 sweep).
+              ./gradlew --no-daemon --build-cache :app:ktlintCheck :benchmark:ktlintCheck
               ;;
             *)
               echo "Unsupported Android task: $TASK" >&2

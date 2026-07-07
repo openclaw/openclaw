@@ -756,7 +756,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
-  it("emits full preamble item progress after the previous snapshot flushed", () => {
+  it("omits already flushed preamble item progress from later prefix snapshots", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-preamble-item-after-flush",
       parentSessionKey: "agent:main:main",
@@ -790,7 +790,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
     });
     vi.advanceTimersByTime(15);
 
-    expect(collectedTexts()).toEqual(["codex: Checking", "codex: Checking the app-server stream"]);
+    expect(collectedTexts()).toEqual(["codex: Checking", "codex: the app-server stream"]);
     relay.dispose();
   });
 

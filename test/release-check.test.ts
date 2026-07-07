@@ -729,6 +729,18 @@ describe("collectMissingPackPaths", () => {
       const packageRoot = join(root, "openclaw");
       const distDir = join(packageRoot, "dist");
       mkdirSync(distDir, { recursive: true });
+      for (const relativePath of [
+        "facade-activation-check.runtime.js",
+        "extensions/image-generation-core/runtime-api.js",
+        "extensions/media-understanding-core/runtime-api.js",
+      ]) {
+        const filePath = join(distDir, relativePath);
+        mkdirSync(dirname(filePath), { recursive: true });
+        writeFileSync(filePath, "export {};\n");
+      }
+      for (const pluginId of ["image-generation-core", "media-understanding-core"]) {
+        writeFileSync(join(distDir, "extensions", pluginId, "package.json"), "{}\n");
+      }
       writeFileSync(
         join(packageRoot, "package.json"),
         `${JSON.stringify({ name: "openclaw", version: "2026.5.14-beta.3", dependencies: {} })}\n`,

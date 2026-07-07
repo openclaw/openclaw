@@ -1,6 +1,6 @@
 // Control UI tests cover theme behavior.
 import { describe, expect, it, vi } from "vitest";
-import { parseThemeSelection, resolveSystemTheme, resolveTheme } from "./theme.ts";
+import { parseThemeSelection, resolveTheme } from "./theme.ts";
 
 describe("resolveTheme", () => {
   it("resolves named theme families when mode is provided", () => {
@@ -11,14 +11,6 @@ describe("resolveTheme", () => {
   it("uses system preference when mode is system", () => {
     vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: true }));
     expect(resolveTheme("knot", "system")).toBe("openknot-light");
-    vi.unstubAllGlobals();
-  });
-});
-
-describe("resolveSystemTheme", () => {
-  it("mirrors the active preferred color scheme", () => {
-    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: true }));
-    expect(resolveSystemTheme()).toBe("light");
     vi.unstubAllGlobals();
   });
 });

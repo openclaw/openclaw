@@ -531,17 +531,6 @@ class SecurePrefs(
     defaultValue: Int,
   ): Int = plainPrefs.getInt(key, defaultValue)
 
-  internal fun putPlainString(
-    key: String,
-    value: String,
-  ) {
-    plainPrefs.edit { putString(key, value) }
-  }
-
-  internal fun removePlainKey(key: String) {
-    plainPrefs.edit { remove(key) }
-  }
-
   internal fun movePlainString(
     sourceKey: String,
     destinationKey: String?,

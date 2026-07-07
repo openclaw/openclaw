@@ -63,6 +63,7 @@ export const hi: TranslationMap = {
     docs: "दस्तावेज़",
     theme: "थीम",
     colorMode: "रंग मोड",
+    colorModeOption: "रंग मोड: {mode}",
     resources: "संसाधन",
     search: "खोजें",
     save: "सहेजें",

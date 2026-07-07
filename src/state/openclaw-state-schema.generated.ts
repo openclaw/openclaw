@@ -533,6 +533,24 @@ CREATE TABLE IF NOT EXISTS config_health_entries (
   updated_at_ms INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS clawhub_promotions_feed_state (
+  state_key TEXT NOT NULL PRIMARY KEY,
+  etag TEXT,
+  payload_json TEXT,
+  feed_sequence INTEGER,
+  last_checked_at_ms INTEGER,
+  notified_slugs_json TEXT NOT NULL DEFAULT '[]',
+  updated_at_ms INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS clawhub_promotion_claims (
+  slug TEXT NOT NULL PRIMARY KEY,
+  provider TEXT,
+  model_keys_json TEXT NOT NULL,
+  ends_at_ms INTEGER NOT NULL,
+  claimed_at_ms INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS installed_plugin_index (
   index_key TEXT NOT NULL PRIMARY KEY,
   version INTEGER NOT NULL,

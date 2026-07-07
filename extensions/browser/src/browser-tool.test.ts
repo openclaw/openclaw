@@ -59,8 +59,26 @@ const browserActionsMocks = vi.hoisted(() => ({
     ],
   })),
   browserNavigate: vi.fn(async () => ({ ok: true })),
+  browserDownload: vi.fn(async () => ({
+    ok: true,
+    targetId: "tab-1",
+    download: {
+      path: "/tmp/openclaw/downloads/report.pdf",
+      suggestedFilename: "report.pdf",
+      url: "https://example.com/report.pdf",
+    },
+  })),
   browserPdfSave: vi.fn(async () => ({ ok: true, path: "/tmp/test.pdf" })),
   browserScreenshotAction: vi.fn(async () => ({ ok: true, path: "/tmp/test.png" })),
+  browserWaitForDownload: vi.fn(async () => ({
+    ok: true,
+    targetId: "tab-1",
+    download: {
+      path: "/tmp/openclaw/downloads/export.csv",
+      suggestedFilename: "export.csv",
+      url: "https://example.com/export.csv",
+    },
+  })),
 }));
 vi.mock("./browser/client-actions.js", () => browserActionsMocks);
 
@@ -161,6 +179,7 @@ const toolCommonMocks = vi.hoisted(() => ({
   describeImageFile: vi.fn(async () => ({ text: undefined, decision: { outcome: "skipped" } })),
   normalizeBrowserScreenshot: vi.fn(async (buffer: Buffer) => ({ buffer })),
   saveMediaBuffer: vi.fn(async () => ({ path: "/tmp/openclaw-media/resized.jpg" })),
+  stageBrowserScreenshotForSharing: vi.fn(async () => "/tmp/openclaw-media/outbound/share.png"),
 }));
 vi.mock("./sdk-setup-tools.js", async () => {
   const actual =
@@ -171,6 +190,7 @@ vi.mock("./sdk-setup-tools.js", async () => {
     imageResultFromFile: toolCommonMocks.imageResultFromFile,
     describeImageFile: toolCommonMocks.describeImageFile,
     saveMediaBuffer: toolCommonMocks.saveMediaBuffer,
+    stageBrowserScreenshotForSharing: toolCommonMocks.stageBrowserScreenshotForSharing,
     listNodes: nodesUtilsMocks.listNodes,
   };
 });
@@ -215,6 +235,7 @@ vi.mock("./browser-tool.runtime.js", () => {
     }),
     describeImageFile: toolCommonMocks.describeImageFile,
     saveMediaBuffer: toolCommonMocks.saveMediaBuffer,
+    stageBrowserScreenshotForSharing: toolCommonMocks.stageBrowserScreenshotForSharing,
     imageResultFromFile: toolCommonMocks.imageResultFromFile,
     jsonResult: (result: unknown) => ({
       content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
@@ -296,6 +317,9 @@ function resetBrowserToolMocks() {
     buffer,
   }));
   toolCommonMocks.saveMediaBuffer.mockResolvedValue({ path: "/tmp/openclaw-media/resized.jpg" });
+  toolCommonMocks.stageBrowserScreenshotForSharing.mockResolvedValue(
+    "/tmp/openclaw-media/outbound/share.png",
+  );
   browserToolTesting.setDepsForTest({
     browserAct: browserActionsMocks.browserAct as never,
     browserArmDialog: browserActionsMocks.browserArmDialog as never,
@@ -318,14 +342,17 @@ function resetBrowserToolMocks() {
     callGatewayTool: gatewayMocks.callGatewayTool as never,
     normalizeBrowserScreenshot: toolCommonMocks.normalizeBrowserScreenshot as never,
     saveMediaBuffer: toolCommonMocks.saveMediaBuffer as never,
+    stageBrowserScreenshotForSharing: toolCommonMocks.stageBrowserScreenshotForSharing as never,
     trackSessionBrowserTab: sessionTabRegistryMocks.trackSessionBrowserTab as never,
     untrackSessionBrowserTab: sessionTabRegistryMocks.untrackSessionBrowserTab as never,
   });
   browserToolActionsTesting.setDepsForTest({
     browserAct: browserActionsMocks.browserAct as never,
     browserConsoleMessages: browserActionsMocks.browserConsoleMessages as never,
+    browserDownload: browserActionsMocks.browserDownload as never,
     browserSnapshot: browserClientMocks.browserSnapshot as never,
     browserTabs: browserClientMocks.browserTabs as never,
+    browserWaitForDownload: browserActionsMocks.browserWaitForDownload as never,
     getRuntimeConfig: configMocks.loadConfig as never,
     imageResultFromFile: toolCommonMocks.imageResultFromFile as never,
   });
@@ -480,6 +507,128 @@ describe("browser tool description", () => {
     expect(tool.description).toContain("omit timeoutMs on act:type");
     expect(tool.description).toContain("existing-session profiles");
     expect(tool.description).toContain("browser-automation skill");
+    expect(tool.description).toContain("trigger ref with paths in the same upload call");
+    expect(tool.description).toContain("paths-only arming");
+  });
+});
+
+describe("browser tool download actions", () => {
+  registerBrowserToolAfterEachReset();
+
+  it("downloads a snapshot ref through the host client", async () => {
+    const tool = createBrowserTool({ agentSessionKey: "agent:main:main" });
+
+    const result = await tool.execute?.("call-1", {
+      action: "download",
+      target: "host",
+      profile: "openclaw",
+      ref: "e12",
+      path: "report.pdf",
+      targetId: "tab-1",
+      timeoutMs: "30000",
+    });
+
+    expect(browserActionsMocks.browserDownload).toHaveBeenCalledWith(undefined, {
+      ref: "e12",
+      path: "report.pdf",
+      targetId: "tab-1",
+      timeoutMs: 30_000,
+      profile: "openclaw",
+    });
+    expect(result?.details).toMatchObject({
+      download: { path: "/tmp/openclaw/downloads/report.pdf" },
+    });
+    expect(sessionTabRegistryMocks.touchSessionBrowserTab).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey: "agent:main:main", targetId: "tab-1" }),
+    );
+  });
+
+  it("waits for the next host download without requiring a path", async () => {
+    const tool = createBrowserTool();
+
+    await tool.execute?.("call-1", {
+      action: "waitfordownload",
+      target: "host",
+      targetId: "tab-1",
+    });
+
+    expect(browserActionsMocks.browserWaitForDownload).toHaveBeenCalledWith(undefined, {
+      path: undefined,
+      targetId: "tab-1",
+      timeoutMs: undefined,
+      profile: undefined,
+    });
+  });
+
+  it("keeps requested download waits open across node and Gateway timeouts", async () => {
+    mockSingleBrowserProxyNode();
+    gatewayMocks.callGatewayTool.mockResolvedValueOnce({
+      ok: true,
+      payload: {
+        result: {
+          ok: true,
+          targetId: "tab-1",
+          download: { path: "/tmp/openclaw/downloads/export.csv" },
+        },
+      },
+    });
+    const tool = createBrowserTool();
+
+    await tool.execute?.("call-1", {
+      action: "waitfordownload",
+      target: "node",
+      path: "export.csv",
+      targetId: "tab-1",
+      timeoutMs: 30_000,
+    });
+
+    const { options, request } = lastNodeInvokeCall();
+    expect(options.timeoutMs).toBe(40_000);
+    expect(request.params?.path).toBe("/wait/download");
+    expect(request.params?.timeoutMs).toBe(35_000);
+    expect(request.params?.body).toEqual({
+      path: "export.csv",
+      targetId: "tab-1",
+      timeoutMs: 30_000,
+    });
+  });
+
+  it("keeps the default node download wait beyond the legacy proxy ceiling", async () => {
+    mockSingleBrowserProxyNode();
+    gatewayMocks.callGatewayTool.mockResolvedValueOnce({
+      ok: true,
+      payload: {
+        result: {
+          ok: true,
+          targetId: "tab-1",
+          download: { path: "/tmp/openclaw/downloads/report.pdf" },
+        },
+      },
+    });
+    const tool = createBrowserTool();
+
+    await tool.execute?.("call-1", {
+      action: "download",
+      target: "node",
+      ref: "e12",
+      path: "report.pdf",
+    });
+
+    const { options, request } = lastNodeInvokeCall();
+    expect(options.timeoutMs).toBe(130_000);
+    expect(request.params?.timeoutMs).toBe(125_000);
+    expect(request.params?.path).toBe("/download");
+    expect(request.params?.body).toMatchObject({ ref: "e12", path: "report.pdf" });
+  });
+
+  it.each([
+    [{ action: "download", ref: "e12" }, "path required"],
+    [{ action: "download", path: "report.pdf" }, "ref required"],
+  ])("rejects incomplete download input %#", async (input, message) => {
+    const tool = createBrowserTool();
+
+    await expect(tool.execute?.("call-1", { target: "host", ...input })).rejects.toThrow(message);
+    expect(browserActionsMocks.browserDownload).not.toHaveBeenCalled();
   });
 });
 
@@ -976,8 +1125,19 @@ describe("browser tool snapshot maxChars", () => {
 
     const imageParams = lastMockCallArg<{
       imageSanitization?: { maxDimensionPx?: number };
+      extraText?: string;
+      details?: { media?: { outbound?: boolean } };
     }>(toolCommonMocks.imageResultFromFile, 0);
     expect(imageParams.imageSanitization).toEqual({ maxDimensionPx: 2000 });
+    expect(imageParams.extraText).toContain(
+      JSON.stringify("/tmp/openclaw-media/outbound/share.png"),
+    );
+    expect(imageParams.extraText).toContain("message tool");
+    expect(imageParams.details?.media).toEqual({ outbound: false });
+    expect(toolCommonMocks.stageBrowserScreenshotForSharing).toHaveBeenCalledWith(
+      "/tmp/test.png",
+      2000,
+    );
   });
 
   it("defangs vision MEDIA-looking text and does not attach media", async () => {
@@ -1009,6 +1169,8 @@ describe("browser tool snapshot maxChars", () => {
     const joined = textBlocks.map((entry) => entry.text).join("\n");
     expect(joined).toContain("[neutralized] MEDIA:/tmp/secret.png");
     expect(joined).toContain("/tmp/secret.png");
+    expect(joined).toContain(JSON.stringify("/tmp/openclaw-media/outbound/share.png"));
+    expect(joined).toContain("message tool");
     // The vision-success path must not surface raw screenshot media via
     // details.media so channel auto-delivery cannot grab the screenshot.
     expect((out?.details as Record<string, unknown>)?.media).toBeUndefined();
@@ -1044,10 +1206,16 @@ describe("browser tool snapshot maxChars", () => {
     const imageParams = lastMockCallArg<{
       path: string;
       extraText?: string;
+      details?: { media?: { outbound?: boolean } };
     }>(toolCommonMocks.imageResultFromFile, 0);
     expect(imageParams.path).toBe("/tmp/screen.png");
     expect(imageParams.extraText).toContain("[neutralized] MEDIA:/tmp/secret.png");
     expect(imageParams.extraText).toContain("/tmp/secret.png");
+    expect(imageParams.extraText).toContain(
+      JSON.stringify("/tmp/openclaw-media/outbound/share.png"),
+    );
+    expect(imageParams.extraText).toContain("message tool");
+    expect(imageParams.details?.media).toEqual({ outbound: false });
   });
 
   it("preserves screenshot image sanitization on vision failure fallback", async () => {
@@ -1084,6 +1252,33 @@ describe("browser tool snapshot maxChars", () => {
     // bypassed whenever vision fails.
     expect(imageParams.imageSanitization).toEqual({ maxDimensionPx: 1600 });
     expect(imageParams.extraText).toContain("browser screenshot vision failed");
+  });
+
+  it("keeps the screenshot usable when explicit-share staging fails", async () => {
+    toolCommonMocks.stageBrowserScreenshotForSharing.mockRejectedValueOnce(
+      new Error("outbound store unavailable"),
+    );
+    toolCommonMocks.imageResultFromFile.mockResolvedValueOnce({
+      content: [{ type: "image", data: "base64", mimeType: "image/png" }],
+      details: { path: "/tmp/test.png" },
+    });
+
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "screenshot",
+      target: "host",
+      targetId: "tab-1",
+    });
+
+    const imageParams = lastMockCallArg<{
+      path: string;
+      extraText?: string;
+      details?: { media?: { outbound?: boolean } };
+    }>(toolCommonMocks.imageResultFromFile, 0);
+    expect(imageParams.path).toBe("/tmp/test.png");
+    expect(imageParams.extraText).toContain("Screenshot sharing is unavailable");
+    expect(imageParams.extraText).not.toContain("/tmp/test.png");
+    expect(imageParams.details?.media).toEqual({ outbound: false });
   });
 
   it("passes screenshot timeoutMs through the node browser proxy", async () => {

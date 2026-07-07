@@ -660,6 +660,7 @@ describe("waitForAgentJob", () => {
     expect(agentJobTesting.getAgentRunCacheSize()).toBe(max);
     agentJobTesting.resetAgentRunCache();
   });
+
 });
 
 describe("augmentChatHistoryWithCanvasBlocks", () => {
