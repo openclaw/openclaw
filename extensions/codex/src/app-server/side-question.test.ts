@@ -762,7 +762,10 @@ describe("runCodexAppServerSideQuestion", () => {
   it.each([
     { name: "deny all", toolsAllow: [] },
     { name: "narrow allowlist", toolsAllow: ["message"] },
-  ])("rejects /btw before forking when effective toolsAllow is $name", async ({ toolsAllow }) => {
+  ])("forks a tool-less side thread when effective toolsAllow is $name", async ({ toolsAllow }) => {
+    const client = createFakeClient();
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
     await expect(
       runCodexAppServerSideQuestion(
         sideParams({
@@ -772,11 +775,22 @@ describe("runCodexAppServerSideQuestion", () => {
           toolsAllow,
         }),
       ),
-    ).rejects.toThrow(
-      "Codex-native /btw side-question mode is unavailable because the effective tool policy restricts Codex native tools for this session.",
-    );
+    ).resolves.toEqual({ text: "Side answer." });
 
-    expect(getSharedCodexAppServerClientMock).not.toHaveBeenCalled();
+    const forkParams = mockCall(client.request)[1] as Record<string, unknown> | undefined;
+    expect(forkParams?.config).toMatchObject({
+      "features.code_mode": false,
+      "features.code_mode_only": false,
+      "features.standalone_web_search": false,
+      web_search: "disabled",
+    });
+    expect(
+      client.request.mock.calls.some(([method]) => method === "thread/fork"),
+    ).toBe(true);
+    expect(
+      client.request.mock.calls.some(([method]) => method === "turn/start"),
+    ).toBe(true);
+    expect(createOpenClawCodingToolsMock).not.toHaveBeenCalled();
     expect(resolveCodexProviderWebSearchSupportForClientMock).not.toHaveBeenCalled();
   });
 

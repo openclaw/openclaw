@@ -237,11 +237,6 @@ export async function runCodexAppServerSideQuestion(
     throw new Error(nativeExecutionBlock);
   }
   const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(sideRunParams);
-  if (!nativeToolSurfaceEnabled) {
-    throw new Error(
-      "Codex-native /btw side-question mode is unavailable because the effective tool policy restricts Codex native tools for this session.",
-    );
-  }
   const client = await getLeasedSharedCodexAppServerClient({
     startOptions: appServer.start,
     timeoutMs: appServer.requestTimeoutMs,
@@ -797,7 +792,7 @@ async function createCodexSideToolBridge(input: {
     ({ id: input.params.model, provider: input.params.provider } as never);
   const messageToolProvider = resolveCodexMessageToolProvider(input.params);
   let tools: AnyAgentTool[] = [];
-  if (supportsModelTools(runtimeModel)) {
+  if (input.nativeToolSurfaceEnabled && supportsModelTools(runtimeModel)) {
     const createOpenClawCodingTools = (await import("openclaw/plugin-sdk/agent-harness"))
       .createOpenClawCodingTools;
     const sandboxSessionKey =
