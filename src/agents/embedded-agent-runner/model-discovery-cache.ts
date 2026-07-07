@@ -188,7 +188,12 @@ export function discoverCachedAgentStores(
   return stores;
 }
 
+/** Clears process-local discovery snapshots after config/model/auth sources are refreshed. */
+export function resetModelDiscoveryCache(): void {
+  DISCOVERY_STORE_CACHE.clear();
+}
+
 /** Clears the process-local discovery cache between tests that mutate model/auth fixtures. */
 export function resetModelDiscoveryCacheForTest(): void {
-  DISCOVERY_STORE_CACHE.clear();
+  resetModelDiscoveryCache();
 }

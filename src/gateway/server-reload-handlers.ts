@@ -2,6 +2,7 @@
 // Applies config reload plans to hooks, cron, heartbeat, plugins, channels, and restarts.
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
 import { refreshContextWindowCache } from "../agents/context.js";
+import { resetModelDiscoveryCache } from "../agents/embedded-agent-runner/model-discovery-cache.js";
 import {
   getActiveEmbeddedRunCount,
   listActiveEmbeddedRunSessionIds,
@@ -112,6 +113,7 @@ const CHANNEL_RELOAD_STILL_PENDING_WARN_MS = 30_000;
 
 function resetPreparedModelRuntimeStateForHotReload(): void {
   resetModelCatalogCache();
+  resetModelDiscoveryCache();
   clearCurrentProviderAuthState();
   markGatewayModelCatalogStaleForReload();
 }

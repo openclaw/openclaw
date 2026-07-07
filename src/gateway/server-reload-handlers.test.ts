@@ -60,6 +60,7 @@ const hoisted = vi.hoisted(() => ({
   reloadEvents: [] as string[],
   loadModelCatalog: vi.fn(async (_params: { config: OpenClawConfig }) => []),
   resetModelCatalogCache: vi.fn(() => {}),
+  resetModelDiscoveryCache: vi.fn(() => {}),
   refreshContextWindowCache: vi.fn(async (_cfg: OpenClawConfig) => {}),
   clearCurrentProviderAuthState: vi.fn(() => {}),
   warmCurrentProviderAuthStateOffMainThread: vi.fn(async (_cfg: OpenClawConfig) => {}),
@@ -134,6 +135,13 @@ vi.mock("../agents/model-catalog.js", () => ({
   resetModelCatalogCache: () => {
     hoisted.reloadEvents.push("reset-model-catalog");
     hoisted.resetModelCatalogCache();
+  },
+}));
+
+vi.mock("../agents/embedded-agent-runner/model-discovery-cache.js", () => ({
+  resetModelDiscoveryCache: () => {
+    hoisted.reloadEvents.push("reset-model-discovery");
+    hoisted.resetModelDiscoveryCache();
   },
 }));
 
@@ -243,6 +251,7 @@ afterEach(() => {
   hoisted.reloadEvents.length = 0;
   hoisted.loadModelCatalog.mockClear();
   hoisted.resetModelCatalogCache.mockClear();
+  hoisted.resetModelDiscoveryCache.mockClear();
   hoisted.refreshContextWindowCache.mockClear();
   hoisted.clearCurrentProviderAuthState.mockClear();
   hoisted.warmCurrentProviderAuthStateOffMainThread.mockClear();
@@ -354,9 +363,11 @@ describe("gateway hot reload model state", () => {
     expect(firstResetIndex).toBeGreaterThanOrEqual(0);
     expect(hoisted.reloadEvents.slice(firstResetIndex)).toEqual([
       "reset-model-catalog",
+      "reset-model-discovery",
       "clear-provider-auth",
       "reload-plugins",
       "reset-model-catalog",
+      "reset-model-discovery",
       "clear-provider-auth",
       "refresh-context-window",
       "load-model-catalog",
@@ -365,6 +376,52 @@ describe("gateway hot reload model state", () => {
     expect(hoisted.refreshContextWindowCache).toHaveBeenCalledWith(nextConfig);
     expect(hoisted.loadModelCatalog).toHaveBeenCalledWith({ config: nextConfig });
     expect(hoisted.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledWith(nextConfig);
+  });
+
+  it("clears embedded model discovery stores on non-plugin model hot reloads", async () => {
+    const { applyHotReload } = createReloadHandlersForTest();
+    const nextConfig = {
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com/v1",
+            apiKey: "${ANTHROPIC_API_KEY}",
+            api: "anthropic",
+            models: [{ id: "claude-opus-4-6" }],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await applyHotReload(
+      {
+        changedPaths: ["models.providers.anthropic.models.0.id"],
+        restartGateway: false,
+        restartReasons: [],
+        hotReasons: ["models.providers.anthropic.models.0.id"],
+        reloadHooks: false,
+        restartGmailWatcher: false,
+        restartCron: false,
+        restartHeartbeat: false,
+        restartHealthMonitor: false,
+        reloadPlugins: false,
+        restartChannels: new Set(),
+        disposeMcpRuntimes: false,
+        noopPaths: [],
+      },
+      nextConfig,
+    );
+
+    expect(hoisted.resetModelDiscoveryCache).toHaveBeenCalledTimes(1);
+    expect(hoisted.reloadEvents).toEqual([
+      "reset-model-catalog",
+      "reset-model-discovery",
+      "clear-provider-auth",
+      "refresh-context-window",
+      "load-model-catalog",
+      "warm-provider-auth",
+    ]);
+    expect(hoisted.refreshContextWindowCache).toHaveBeenCalledWith(nextConfig);
   });
 
   it("disposes cached MCP runtimes on MCP config hot reloads", async () => {
