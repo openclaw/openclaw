@@ -207,8 +207,8 @@ export async function readResponsePrefix(
     // arrayBuffer() without a known bound risks an unbounded allocation.
     const contentLength = response.headers?.get?.("content-length") ?? null;
     if (contentLength !== null) {
-      const cl = Number.parseInt(contentLength, 10);
-      if (Number.isNaN(cl)) {
+      const cl = parseStrictNonNegativeInteger(contentLength);
+      if (cl === undefined) {
         throw new Error(
           "Cannot safely read response body: no ReadableStream reader and Content-Length is invalid",
         );

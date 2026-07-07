@@ -347,6 +347,25 @@ describe("readResponsePrefix", () => {
     expect(arrayBufferCalled).toBe(false);
   });
 
+  it("throws on malformed Content-Length that parseInt would accept", async () => {
+    // Number.parseInt('1junk') → 1, but parseStrictNonNegativeInteger rejects it.
+    // This guards against headers like "1junk" or "1, 2" that parseInt
+    // would silently accept.
+    for (const malformed of ["1junk", "1, 2", "0x10"]) {
+      let arrayBufferCalled = false;
+      const response = {
+        body: {} as ReadableStream,
+        headers: { get: () => malformed },
+        arrayBuffer: async () => {
+          arrayBufferCalled = true;
+          return new ArrayBuffer(0);
+        },
+      } as unknown as Response;
+      await expect(readResponsePrefix(response, 100)).rejects.toThrow("Content-Length is invalid");
+      expect(arrayBufferCalled).toBe(false);
+    }
+  });
+
   it("skips arrayBuffer when Content-Length exceeds maxBytes", async () => {
     let arrayBufferCalled = false;
     const response = {
