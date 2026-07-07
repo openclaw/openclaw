@@ -137,16 +137,13 @@ export async function startNgrokTunnel(config: {
                 return;
               }
               await new Promise<void>((res) => {
-                let fallback: ReturnType<typeof setTimeout> | undefined;
                 let finished = false;
                 const finish = () => {
                   if (finished) {
                     return;
                   }
                   finished = true;
-                  if (fallback) {
-                    clearTimeout(fallback);
-                  }
+                  clearTimeout(fallback);
                   proc.off("close", finish);
                   res();
                 };
@@ -155,7 +152,7 @@ export async function startNgrokTunnel(config: {
                   return;
                 }
                 proc.once("close", finish);
-                fallback = setTimeout(finish, 2000);
+                const fallback = setTimeout(finish, 2000);
                 proc.kill("SIGTERM");
                 if (closed) {
                   finish();

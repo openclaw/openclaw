@@ -42,19 +42,16 @@ function runTailscaleCommand(
 
     let stdout: TailscaleCommandStdout = { bytes: 0, exceeded: false, text: "" };
     let settled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
     const finish = (result: { code: number; stdout: string }) => {
       if (settled) {
         return;
       }
       settled = true;
-      if (timer) {
-        clearTimeout(timer);
-      }
+      clearTimeout(timer);
       resolve(result);
     };
 
-    timer = setTimeout(() => {
+    const timer = setTimeout(() => {
       proc.kill("SIGKILL");
       finish({ code: -1, stdout: "" });
     }, timeoutMs);
