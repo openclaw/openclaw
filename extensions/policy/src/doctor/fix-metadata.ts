@@ -16,11 +16,11 @@ export type PolicyFixMetadata = {
   readonly summary: string;
 };
 
-const m = (
+export const m = (
   checkId: (typeof POLICY_CHECK_IDS)[number],
   fixClass: PolicyFixClass,
   summary: string,
-  options: Omit<PolicyFixMetadata, "checkId" | "fixClass" | "summary"> = {},
+  options: Omit<PolicyFixMetadata, "summary"> = {},
 ): PolicyFixMetadata => ({
   checkId,
   fixClass,

@@ -1,6 +1,7 @@
 // Policy doctor metadata tests cover rule metadata.
 import { describe, expect, it } from "vitest";
 import {
+  m,
   POLICY_FIX_METADATA,
   POLICY_FIX_METADATA_BY_CHECK_ID,
   type PolicyFixMetadata,
@@ -182,6 +183,18 @@ describe("policy doctor metadata", () => {
     expect(
       POLICY_FIX_METADATA_BY_CHECK_ID.get(CHECK_IDS.policyToolsRequiredDenyMissing)?.configTargets,
     ).toEqual(["tools.deny", "agents.list[].tools.deny"]);
+  });
+
+  it("allows policy fix metadata overrides to replace checkId and fixClass", () => {
+    const derived = m(CHECK_IDS.policyToolsRequiredDenyMissing, "automatic", "Base summary.", {
+      checkId: CHECK_IDS.policyAgentsToolNotDenied,
+      fixClass: "manual",
+      policyPath: ["tools", "denyTools"],
+    });
+    expect(derived.checkId).toBe(CHECK_IDS.policyAgentsToolNotDenied);
+    expect(derived.fixClass).toBe("manual");
+    expect(derived.summary).toBe("Base summary.");
+    expect(derived.policyPath).toEqual(["tools", "denyTools"]);
   });
 
   it("keeps policy fix class assignments explicit", () => {
