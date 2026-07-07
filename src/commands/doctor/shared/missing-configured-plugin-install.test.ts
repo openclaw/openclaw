@@ -3474,9 +3474,8 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       diagnostics: [],
     });
 
-    const { detectConfiguredPluginInstallHealthIssues } = await import(
-      "./missing-configured-plugin-install.js"
-    );
+    const { detectConfiguredPluginInstallHealthIssues } =
+      await import("./missing-configured-plugin-install.js");
     const issues = await detectConfiguredPluginInstallHealthIssues({ cfg: {}, env: {} });
 
     expect(issues).toEqual([]);

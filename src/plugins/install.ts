@@ -73,10 +73,6 @@ import {
   type OpenClawPackageManifest,
   type PackageManifest as PluginPackageManifest,
 } from "./manifest.js";
-import {
-  buildPluginDependencyStatus,
-  normalizePluginDependencySpecs,
-} from "./status-dependencies-core.js";
 import { resolvePackagePluginApiRange } from "./package-compat.js";
 import { validatePackageExtensionEntriesForInstall } from "./package-entry-resolution.js";
 import {
@@ -89,6 +85,10 @@ import {
   pluginAuditOutcomeForReason,
   type PluginSecuritySourceFamily,
 } from "./security-events.js";
+import {
+  buildPluginDependencyStatus,
+  normalizePluginDependencySpecs,
+} from "./status-dependencies-core.js";
 
 export { resolvePluginInstallDir } from "./install-paths.js";
 

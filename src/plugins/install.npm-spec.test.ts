@@ -236,9 +236,7 @@ function writeInstalledNpmPlugin(params: {
       ...(params.dependency || params.declaredDependency
         ? {
             dependencies: {
-              ...(params.dependency
-                ? { [params.dependency.name]: params.dependency.version }
-                : {}),
+              ...(params.dependency ? { [params.dependency.name]: params.dependency.version } : {}),
               // Declared in package.json only; materialization is controlled by
               // the other knobs (absent everywhere = hollow dependency tree,
               // paired with hoistedDependency = resolvable from the npm root).
