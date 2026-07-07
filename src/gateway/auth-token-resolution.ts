@@ -46,6 +46,17 @@ export async function resolveGatewayAuthToken(params: {
   if (!tokenRef) {
     const configToken = trimToUndefined(tokenInput);
     if (configToken) {
+      // A literal `${...}` placeholder in config is not a SecretRef
+      // and cannot be resolved here. Treat it as "no usable token" so
+      // the caller can surface a clear error instead of embedding the
+      // unresolved placeholder into a URL.
+      if (/^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(configToken) && envToken) {
+        return {
+          token: envToken,
+          source: "env",
+          secretRefConfigured: false,
+        };
+      }
       return {
         token: configToken,
         source: "config",
