@@ -23,13 +23,11 @@ export {
   runTasksWithConcurrency,
   shortenHomeInString,
   shortenHomePath,
-  shouldIgnoreWarning,
   splitShellArgs,
   truncateUtf16Safe,
 } from "./openclaw-runtime.js";
 
 export type {
-  ProcessWarning,
   ResolveWindowsSpawnProgramCandidateParams,
   ResolveWindowsSpawnProgramParams,
   SqliteConnectionPragmaOptions,

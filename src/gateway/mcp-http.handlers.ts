@@ -2,6 +2,7 @@
 // Implements initialize, tools/list, tools/call, and notification handling.
 import crypto from "node:crypto";
 import { ContentBlockSchema, type ContentBlock } from "@modelcontextprotocol/sdk/types.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runBeforeToolCallHook, type HookContext } from "../agents/agent-tools.before-tool-call.js";
 import {
   formatToolExecutionErrorMessage,
@@ -99,7 +100,11 @@ export async function handleMcpJsonRpc(params: {
       return jsonRpcResult(id, { tools: params.toolSchema });
     case "tools/call": {
       const toolName = typeof methodParams?.name === "string" ? methodParams.name.trim() : "";
-      const toolArgs = (methodParams?.arguments ?? {}) as Record<string, unknown>;
+      const rawToolArgs = methodParams?.arguments;
+      if (rawToolArgs !== undefined && !isRecord(rawToolArgs)) {
+        return jsonRpcError(id, -32602, "Invalid params: tools/call arguments must be an object");
+      }
+      const toolArgs = rawToolArgs ?? {};
       if (!toolName) {
         return jsonRpcResult(id, {
           content: [{ type: "text", text: "Tool not available: unknown" }],
