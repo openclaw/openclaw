@@ -91,7 +91,11 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
         OpenClawChatSendResponse(runId: idempotencyKey, status: "ok")
     }
 
-    func listSessions(limit _: Int?) async throws -> OpenClawChatSessionsListResponse {
+    func listSessions(
+        limit _: Int?,
+        search _: String?,
+        archived _: Bool) async throws -> OpenClawChatSessionsListResponse
+    {
         OpenClawChatSessionsListResponse(
             ts: 0,
             path: nil,
@@ -235,7 +239,7 @@ private struct OpenClawChatPreviewTransport: OpenClawChatTransport {
         showsSessionSwitcher: false,
         style: .onboarding,
         markdownVariant: .standard,
-        userAccent: .blue)
+        userAccent: OpenClawChatTheme.accent)
 }
 
 private struct OpenClawChatPreview: View {
@@ -250,7 +254,7 @@ private struct OpenClawChatPreview: View {
             showsSessionSwitcher: true,
             style: .standard,
             markdownVariant: .standard,
-            userAccent: .blue,
+            userAccent: OpenClawChatTheme.accent,
             showsAssistantTrace: true)
     }
 }

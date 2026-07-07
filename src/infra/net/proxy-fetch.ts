@@ -3,6 +3,7 @@
 import { logWarn } from "../../logger.js";
 import { formatErrorMessage } from "../errors.js";
 import { normalizeHeadersInitForFetch } from "../fetch-headers.js";
+import { isFormDataLike } from "./form-data.js";
 import {
   addActiveManagedProxyTlsOptions,
   resolveManagedEnvHttpProxyAgentOptions,
@@ -14,15 +15,6 @@ export const PROXY_FETCH_PROXY_URL = Symbol.for("openclaw.proxyFetch.proxyUrl");
 type ProxyFetchWithMetadata = typeof fetch & {
   [PROXY_FETCH_PROXY_URL]?: string;
 };
-
-function isFormDataLike(value: unknown): value is FormData {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as FormData).entries === "function" &&
-    (value as { [Symbol.toStringTag]?: unknown })[Symbol.toStringTag] === "FormData"
-  );
-}
 
 type UndiciFormDataCtor = NonNullable<UndiciRuntimeDeps["FormData"]>;
 type UndiciFormDataInstance = InstanceType<UndiciFormDataCtor>;

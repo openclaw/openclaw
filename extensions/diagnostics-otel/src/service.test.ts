@@ -1,4 +1,7 @@
 // Diagnostics Otel tests cover service plugin behavior.
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const telemetryState = vi.hoisted(() => {
@@ -60,6 +63,8 @@ const traceExporterCtor = vi.hoisted(() => vi.fn());
 const metricExporterCtor = vi.hoisted(() => vi.fn());
 const logExporterCtor = vi.hoisted(() => vi.fn());
 const spanProcessorCtor = vi.hoisted(() => vi.fn());
+const nodeProxyAgent = vi.hoisted(() => ({ kind: "node-proxy-agent" }));
+const createNodeProxyAgentMock = vi.hoisted(() => vi.fn());
 const unhandledRejectionHandlerState = vi.hoisted(() => {
   let handlers: Array<(reason: unknown) => boolean> = [];
   return {
@@ -126,6 +131,10 @@ vi.mock("@opentelemetry/exporter-logs-otlp-proto", () => ({
 
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   registerUnhandledRejectionHandler: unhandledRejectionHandlerState.register,
+}));
+
+vi.mock("openclaw/plugin-sdk/fetch-runtime", () => ({
+  createNodeProxyAgent: createNodeProxyAgentMock,
 }));
 
 vi.mock("@opentelemetry/sdk-logs", () => ({
@@ -206,6 +215,23 @@ const ORIGINAL_OTEL_EXPORTER_OTLP_METRICS_ENDPOINT =
   process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT;
 const ORIGINAL_OTEL_EXPORTER_OTLP_LOGS_ENDPOINT = process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT;
 const ORIGINAL_OTEL_SEMCONV_STABILITY_OPT_IN = process.env.OTEL_SEMCONV_STABILITY_OPT_IN;
+const OTEL_CERT_ENV_KEYS = [
+  "OTEL_EXPORTER_OTLP_CERTIFICATE",
+  "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE",
+  "OTEL_EXPORTER_OTLP_CLIENT_KEY",
+  "OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE",
+  "OTEL_EXPORTER_OTLP_TRACES_CLIENT_CERTIFICATE",
+  "OTEL_EXPORTER_OTLP_TRACES_CLIENT_KEY",
+  "OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE",
+  "OTEL_EXPORTER_OTLP_METRICS_CLIENT_CERTIFICATE",
+  "OTEL_EXPORTER_OTLP_METRICS_CLIENT_KEY",
+  "OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE",
+  "OTEL_EXPORTER_OTLP_LOGS_CLIENT_CERTIFICATE",
+  "OTEL_EXPORTER_OTLP_LOGS_CLIENT_KEY",
+] as const;
+const ORIGINAL_OTEL_CERT_ENV = Object.fromEntries(
+  OTEL_CERT_ENV_KEYS.map((key) => [key, process.env[key]]),
+) as Record<(typeof OTEL_CERT_ENV_KEYS)[number], string | undefined>;
 
 function createLogger() {
   return {
@@ -318,8 +344,46 @@ function mockCallArg(mock: { mock: { calls: unknown[][] } }, argIndex: number, c
   return mockCall(mock, callIndex)[argIndex];
 }
 
-function firstExporterOptions(mock: { mock: { calls: unknown[][] } }): { url?: string } {
-  return mockCallArg(mock, 0) as { url?: string };
+type TestExporterOptions = {
+  url?: string;
+  httpAgentOptions?: (protocol: string) => unknown;
+};
+
+function firstExporterOptions(mock: { mock: { calls: unknown[][] } }): TestExporterOptions {
+  return mockCallArg(mock, 0) as TestExporterOptions;
+}
+
+function createNodeProxyAgentCalls(): Array<{
+  mode?: string;
+  targetUrl?: string;
+  agentOptions?: {
+    keepAlive?: boolean;
+    ca?: Buffer;
+    cert?: Buffer;
+    key?: Buffer;
+  };
+}> {
+  return createNodeProxyAgentMock.mock.calls.map(
+    ([options]) =>
+      options as {
+        mode?: string;
+        targetUrl?: string;
+        agentOptions?: {
+          keepAlive?: boolean;
+          ca?: Buffer;
+          cert?: Buffer;
+          key?: Buffer;
+        };
+      },
+  );
+}
+
+function findCreateNodeProxyAgentCall(targetUrl: string) {
+  const call = createNodeProxyAgentCalls().find((candidate) => candidate.targetUrl === targetUrl);
+  if (!call) {
+    throw new Error(`Expected createNodeProxyAgent call for ${targetUrl}`);
+  }
+  return call;
 }
 
 function firstSpanProcessorOptions(): { scheduledDelayMillis?: number } {
@@ -489,6 +553,7 @@ afterAll(() => {
   vi.doUnmock("@opentelemetry/sdk-logs");
   vi.doUnmock("@opentelemetry/sdk-metrics");
   vi.doUnmock("@opentelemetry/sdk-trace-base");
+  vi.doUnmock("openclaw/plugin-sdk/fetch-runtime");
   vi.doUnmock("@opentelemetry/resources");
   vi.doUnmock("@opentelemetry/semantic-conventions");
   vi.resetModules();
@@ -514,11 +579,16 @@ describe("diagnostics-otel service", () => {
     metricExporterCtor.mockClear();
     logExporterCtor.mockClear();
     spanProcessorCtor.mockClear();
+    createNodeProxyAgentMock.mockReset();
+    createNodeProxyAgentMock.mockReturnValue(undefined);
     unhandledRejectionHandlerState.reset();
     unhandledRejectionHandlerState.register.mockClear();
     delete process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
     delete process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT;
     delete process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT;
+    for (const key of OTEL_CERT_ENV_KEYS) {
+      delete process.env[key];
+    }
   });
 
   afterEach(() => {
@@ -548,6 +618,14 @@ describe("diagnostics-otel service", () => {
       delete process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT;
     } else {
       process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT = ORIGINAL_OTEL_EXPORTER_OTLP_LOGS_ENDPOINT;
+    }
+    for (const key of OTEL_CERT_ENV_KEYS) {
+      const value = ORIGINAL_OTEL_CERT_ENV[key];
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
     }
   });
 
@@ -1576,6 +1654,162 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("passes env proxy agents to OTLP HTTP exporters", async () => {
+    createNodeProxyAgentMock.mockReturnValue(nodeProxyAgent);
+
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext("https://collector.example.com/otlp", {
+      traces: true,
+      metrics: true,
+      logs: true,
+    });
+    await service.start(ctx);
+
+    const traceOptions = firstExporterOptions(traceExporterCtor);
+    const metricOptions = firstExporterOptions(metricExporterCtor);
+    const logOptions = firstExporterOptions(logExporterCtor);
+    expect(traceOptions.httpAgentOptions?.("https:")).toBe(nodeProxyAgent);
+    expect(metricOptions.httpAgentOptions?.("https:")).toBe(nodeProxyAgent);
+    expect(logOptions.httpAgentOptions?.("https:")).toBe(nodeProxyAgent);
+    expect(createNodeProxyAgentCalls()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          mode: "env",
+          targetUrl: "https://collector.example.com/otlp/v1/traces",
+          agentOptions: expect.objectContaining({ keepAlive: true }),
+        }),
+        expect.objectContaining({
+          mode: "env",
+          targetUrl: "https://collector.example.com/otlp/v1/metrics",
+          agentOptions: expect.objectContaining({ keepAlive: true }),
+        }),
+        expect.objectContaining({
+          mode: "env",
+          targetUrl: "https://collector.example.com/otlp/v1/logs",
+          agentOptions: expect.objectContaining({ keepAlive: true }),
+        }),
+      ]),
+    );
+    await service.stop?.(ctx);
+  });
+
+  test("preserves OTLP TLS env options when passing env proxy agents", async () => {
+    const certDir = mkdtempSync(path.join(tmpdir(), "openclaw-otel-tls-"));
+    try {
+      const rootCertificatePath = path.join(certDir, "root.pem");
+      const clientCertificatePath = path.join(certDir, "client.pem");
+      const clientKeyPath = path.join(certDir, "client-key.pem");
+      writeFileSync(rootCertificatePath, "root-certificate");
+      writeFileSync(clientCertificatePath, "trace-client-certificate");
+      writeFileSync(clientKeyPath, "client-key");
+      process.env.OTEL_EXPORTER_OTLP_CERTIFICATE = rootCertificatePath;
+      process.env.OTEL_EXPORTER_OTLP_TRACES_CLIENT_CERTIFICATE = clientCertificatePath;
+      process.env.OTEL_EXPORTER_OTLP_CLIENT_KEY = clientKeyPath;
+      createNodeProxyAgentMock.mockReturnValue(nodeProxyAgent);
+
+      const service = createDiagnosticsOtelService();
+      const ctx = createOtelContext("https://collector.example.com/otlp", {
+        traces: true,
+        metrics: true,
+        logs: true,
+      });
+      await service.start(ctx);
+
+      const traceCall = findCreateNodeProxyAgentCall(
+        "https://collector.example.com/otlp/v1/traces",
+      );
+      const metricCall = findCreateNodeProxyAgentCall(
+        "https://collector.example.com/otlp/v1/metrics",
+      );
+      expect(traceCall.agentOptions).toEqual({
+        keepAlive: true,
+        ca: Buffer.from("root-certificate"),
+        cert: Buffer.from("trace-client-certificate"),
+        key: Buffer.from("client-key"),
+      });
+      expect(metricCall.agentOptions).toEqual({
+        keepAlive: true,
+        ca: Buffer.from("root-certificate"),
+        key: Buffer.from("client-key"),
+      });
+      await service.stop?.(ctx);
+    } finally {
+      rmSync(certDir, { force: true, recursive: true });
+    }
+  });
+
+  test("falls back to shared OTLP TLS env options when signal-specific values are empty", async () => {
+    const certDir = mkdtempSync(path.join(tmpdir(), "openclaw-otel-tls-"));
+    try {
+      const rootCertificatePath = path.join(certDir, "root.pem");
+      writeFileSync(rootCertificatePath, "shared-root-certificate");
+      process.env.OTEL_EXPORTER_OTLP_CERTIFICATE = rootCertificatePath;
+      process.env.OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE = "   ";
+      createNodeProxyAgentMock.mockReturnValue(nodeProxyAgent);
+
+      const service = createDiagnosticsOtelService();
+      const ctx = createOtelContext("https://collector.example.com/otlp", {
+        traces: true,
+      });
+      await service.start(ctx);
+
+      const traceCall = findCreateNodeProxyAgentCall(
+        "https://collector.example.com/otlp/v1/traces",
+      );
+      expect(traceCall.agentOptions).toEqual({
+        keepAlive: true,
+        ca: Buffer.from("shared-root-certificate"),
+      });
+      await service.stop?.(ctx);
+    } finally {
+      rmSync(certDir, { force: true, recursive: true });
+    }
+  });
+
+  test("falls back to default OTLP agents when env proxy agent creation fails", async () => {
+    createNodeProxyAgentMock.mockImplementation(() => {
+      throw new Error("unsupported proxy protocol");
+    });
+
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext("https://collector.example.com/otlp", {
+      traces: true,
+      metrics: true,
+      logs: true,
+    });
+    await service.start(ctx);
+
+    expect(firstExporterOptions(traceExporterCtor).httpAgentOptions).toBeUndefined();
+    expect(firstExporterOptions(metricExporterCtor).httpAgentOptions).toBeUndefined();
+    expect(firstExporterOptions(logExporterCtor).httpAgentOptions).toBeUndefined();
+    expect(ctx.logger.warn).toHaveBeenCalledWith(
+      "diagnostics-otel: env proxy agent unavailable for OTLP traces exporter; falling back to default Node agent",
+    );
+    expect(ctx.logger.warn).toHaveBeenCalledWith(
+      "diagnostics-otel: env proxy agent unavailable for OTLP metrics exporter; falling back to default Node agent",
+    );
+    expect(ctx.logger.warn).toHaveBeenCalledWith(
+      "diagnostics-otel: env proxy agent unavailable for OTLP logs exporter; falling back to default Node agent",
+    );
+    await service.stop?.(ctx);
+  });
+
+  test("leaves OTLP HTTP exporters on their default agents when env proxy is bypassed", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext("https://collector.example.com/otlp", {
+      traces: true,
+      metrics: true,
+      logs: true,
+    });
+    await service.start(ctx);
+
+    expect(firstExporterOptions(traceExporterCtor).httpAgentOptions).toBeUndefined();
+    expect(firstExporterOptions(metricExporterCtor).httpAgentOptions).toBeUndefined();
+    expect(firstExporterOptions(logExporterCtor).httpAgentOptions).toBeUndefined();
+    expect(createNodeProxyAgentMock).toHaveBeenCalledTimes(3);
+    await service.stop?.(ctx);
+  });
+
   test("exports diagnostic logs as stdout JSONL without constructing the OTLP log exporter", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext("", {
@@ -2120,7 +2354,7 @@ describe("diagnostics-otel service", () => {
       sessionKey: "session-key",
       sessionId: "session-id",
       provider: "anthropic",
-      model: "claude-sonnet-4.6",
+      model: "anthropic/claude-sonnet-4.6",
       usage: {
         input: 100,
         output: 40,
@@ -2136,7 +2370,9 @@ describe("diagnostics-otel service", () => {
     const modelUsageOptions = startedSpanOptions("openclaw.model.usage");
     expect(modelUsageOptions?.attributes?.["gen_ai.operation.name"]).toBe("chat");
     expect(modelUsageOptions?.attributes?.["gen_ai.system"]).toBe("anthropic");
-    expect(modelUsageOptions?.attributes?.["gen_ai.request.model"]).toBe("claude-sonnet-4.6");
+    expect(modelUsageOptions?.attributes?.["gen_ai.request.model"]).toBe(
+      "anthropic/claude-sonnet-4.6",
+    );
     expect(modelUsageOptions?.attributes?.["gen_ai.usage.input_tokens"]).toBe(150);
     expect(modelUsageOptions?.attributes?.["gen_ai.usage.output_tokens"]).toBe(40);
     expect(modelUsageOptions?.attributes?.["gen_ai.usage.cache_read.input_tokens"]).toBe(30);
@@ -2163,8 +2399,8 @@ describe("diagnostics-otel service", () => {
       runId: "run-1",
       callId: "call-1",
       sessionKey: "session-key",
-      provider: "openai",
-      model: "gpt-5.4",
+      provider: "anthropic",
+      model: "anthropic/claude-sonnet-4.6",
       api: "openai-completions",
       durationMs: 250,
     });
@@ -2193,8 +2429,8 @@ describe("diagnostics-otel service", () => {
     expect(genAiOperationDuration?.record).toHaveBeenCalledTimes(2);
     expect(genAiOperationDuration?.record).toHaveBeenCalledWith(0.25, {
       "gen_ai.operation.name": "text_completion",
-      "gen_ai.provider.name": "openai",
-      "gen_ai.request.model": "gpt-5.4",
+      "gen_ai.provider.name": "anthropic",
+      "gen_ai.request.model": "unknown",
     });
     expect(genAiOperationDuration?.record).toHaveBeenCalledWith(1.25, {
       "gen_ai.operation.name": "generate_content",
@@ -2282,6 +2518,23 @@ describe("diagnostics-otel service", () => {
       requestPayloadBytes: 1234,
       responseStreamBytes: 567,
       timeToFirstByteMs: 45,
+      promptStats: {
+        inputMessagesCount: 2,
+        inputMessagesChars: 3456,
+        systemPromptChars: 789,
+        toolDefinitionsCount: 4,
+        toolDefinitionsChars: 2345,
+        totalChars: 6590,
+      },
+      usage: {
+        input: 100,
+        output: 20,
+        cacheRead: 30,
+        cacheWrite: 5,
+        reasoningTokens: 8,
+        promptTokens: 135,
+        total: 155,
+      },
       trace: {
         traceId: TRACE_ID,
         spanId: CHILD_SPAN_ID,
@@ -2416,6 +2669,21 @@ describe("diagnostics-otel service", () => {
     expect(modelSpanAttributes["openclaw.model_call.request_bytes"]).toBe(1234);
     expect(modelSpanAttributes["openclaw.model_call.response_bytes"]).toBe(567);
     expect(modelSpanAttributes["openclaw.model_call.time_to_first_byte_ms"]).toBe(45);
+    expect(modelSpanAttributes["openclaw.model_call.prompt.input_messages_count"]).toBe(2);
+    expect(modelSpanAttributes["openclaw.model_call.prompt.input_messages_chars"]).toBe(3456);
+    expect(modelSpanAttributes["openclaw.model_call.prompt.system_prompt_chars"]).toBe(789);
+    expect(modelSpanAttributes["openclaw.model_call.prompt.tool_definitions_count"]).toBe(4);
+    expect(modelSpanAttributes["openclaw.model_call.prompt.tool_definitions_chars"]).toBe(2345);
+    expect(modelSpanAttributes["openclaw.model_call.prompt.total_chars"]).toBe(6590);
+    expect(modelSpanAttributes["openclaw.model_call.usage.input_tokens"]).toBe(100);
+    expect(modelSpanAttributes["openclaw.model_call.usage.output_tokens"]).toBe(20);
+    expect(modelSpanAttributes["openclaw.model_call.usage.cache_read_input_tokens"]).toBe(30);
+    expect(modelSpanAttributes["openclaw.model_call.usage.cache_creation_input_tokens"]).toBe(5);
+    expect(modelSpanAttributes["openclaw.model_call.usage.reasoning_output_tokens"]).toBe(8);
+    expect(modelSpanAttributes["openclaw.model_call.usage.prompt_tokens"]).toBe(135);
+    expect(modelSpanAttributes["openclaw.model_call.usage.total_tokens"]).toBe(155);
+    expect(modelSpanAttributes["gen_ai.usage.input_tokens"]).toBe(135);
+    expect(modelSpanAttributes["gen_ai.usage.output_tokens"]).toBe(20);
     const runDuration = lastHistogramRecord("openclaw.run.duration_ms");
     expect(runDuration?.[0]).toBe(100);
     expect(Object.hasOwn(runDuration?.[1] ?? {}, "openclaw.runId")).toBe(false);

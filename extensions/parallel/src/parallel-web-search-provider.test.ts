@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 
 type EndpointCall = {
   url: string;
@@ -581,6 +582,70 @@ describe("parallel web search provider", () => {
     expect((error as Error).message).not.toContain("tail");
     expect(tracked.wasCanceled()).toBe(true);
     expect(textSpy).not.toHaveBeenCalled();
+  });
+
+  it("bounds successful Parallel JSON bodies instead of buffering the whole response", async () => {
+    // 200-chunk x 1 MiB body (~200 MiB) caps at 16 MiB: the bounded reader must
+    // stop pulling chunks and cancel the stream well before draining it, then
+    // surface a bounded error rather than buffering the whole payload.
+    const streamed = createStreamingResponse({
+      chunkCount: 200,
+      chunkSize: 1024 * 1024,
+      text: "a",
+      headers: { "Content-Type": "application/json" },
+    });
+    endpointMockState.responses.push(streamed.response);
+    const provider = createParallelWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: { parallel: { apiKey: "par-secret" } },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    const error = await tool
+      .execute({
+        objective: `parallel-success-body-${Date.now()}-${Math.random()}`,
+        search_queries: ["openclaw"],
+      })
+      .catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(
+      new RegExp(
+        `Parallel API: JSON response exceeds ${testing.PARALLEL_SEARCH_RESPONSE_LIMIT_BYTES} bytes`,
+      ),
+    );
+    // Stopped well before draining all 200 chunks, and cancelled the stream.
+    expect(streamed.getReadCount()).toBeLessThan(200);
+    expect(streamed.wasCanceled()).toBe(true);
+  });
+
+  it("parses a well-formed Parallel JSON body under the byte cap", async () => {
+    endpointMockState.responses.push(
+      new Response(
+        JSON.stringify({
+          search_id: "ok",
+          session_id: "ok-session",
+          results: [{ url: "https://example.com/a", title: "A", excerpts: ["alpha"] }],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    const provider = createParallelWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: { parallel: { apiKey: "par-secret" } },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+    const result = (await tool.execute({
+      objective: `parallel-success-ok-${Date.now()}-${Math.random()}`,
+      search_queries: ["openclaw"],
+    })) as { provider?: string; searchId?: string; count?: number };
+    expect(result).toMatchObject({ provider: "parallel", searchId: "ok", count: 1 });
   });
 
   it("does not surface a Parallel-generated sessionId on a cache hit", async () => {

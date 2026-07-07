@@ -10,6 +10,7 @@ import {
   type APIVoiceState,
   type Client,
   getGuildVoiceState,
+  isUnknownDiscordVoiceStateError,
   ReadyListener,
   ResumedListener,
   VoiceStateUpdateListener,
@@ -35,6 +36,7 @@ import {
   resolveDiscordVoiceIngressContext,
   runDiscordVoiceAgentTurn,
 } from "./ingress.js";
+import { formatVoiceLogPreview } from "./log-preview.js";
 import {
   DiscordRealtimeVoiceSession,
   type DiscordVoiceMode,
@@ -67,7 +69,6 @@ import {
 import { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
 
 const logger = createSubsystemLogger("discord/voice");
-const VOICE_LOG_PREVIEW_CHARS = 500;
 const FOLLOW_USERS_RECONCILE_INTERVAL_MS = 10_000;
 const FOLLOW_USERS_RECONCILE_MAX_GUILDS_PER_RUN = 4;
 const FOLLOW_USERS_RECONCILE_MAX_REST_LOOKUPS_PER_RUN = 32;
@@ -95,14 +96,6 @@ type VoiceChannelResidency = {
   guildId: string;
   channelId: string;
 };
-
-function formatVoiceLogPreview(text: string): string {
-  const oneLine = text.replace(/\s+/g, " ").trim();
-  if (oneLine.length <= VOICE_LOG_PREVIEW_CHARS) {
-    return oneLine;
-  }
-  return `${oneLine.slice(0, VOICE_LOG_PREVIEW_CHARS)}...`;
-}
 
 function isVoiceConnectionDestroyed(
   connection: DiscordVoiceConnection,
@@ -211,20 +204,16 @@ function isFatalAutoJoinFailure(message: string): boolean {
   );
 }
 
-function isUnknownDiscordVoiceStateError(err: unknown): boolean {
-  const status =
-    err && typeof err === "object" && "status" in err && typeof err.status === "number"
-      ? err.status
-      : undefined;
-  return status === 404 || /unknown voice state/i.test(formatErrorMessage(err));
-}
-
 function startAutoJoin(manager: Pick<DiscordVoiceManager, "autoJoin">) {
   void manager
     .autoJoin()
     .catch((err: unknown) =>
       logger.warn(`discord voice: autoJoin failed: ${formatErrorMessage(err)}`),
     );
+}
+
+function resolveVoiceConnectionGroup(accountId: string): string {
+  return `openclaw:${accountId}`;
 }
 
 function resolveDiscordVoiceAgentRoute(params: {
@@ -569,7 +558,8 @@ export class DiscordVoiceManager {
       existingEntry.stop();
       this.sessions.delete(guildId);
     }
-    const staleConnection = voiceSdk.getVoiceConnection(guildId);
+    const voiceConnectionGroup = resolveVoiceConnectionGroup(this.params.accountId);
+    const staleConnection = voiceSdk.getVoiceConnection(guildId, voiceConnectionGroup);
     if (staleConnection) {
       destroyVoiceConnectionSafely({
         connection: staleConnection,
@@ -583,6 +573,7 @@ export class DiscordVoiceManager {
       const joinedConnection = voiceSdk.joinVoiceChannel({
         channelId,
         guildId,
+        group: voiceConnectionGroup,
         adapterCreator,
         selfDeaf: false,
         selfMute: false,
@@ -1010,7 +1001,10 @@ export class DiscordVoiceManager {
       await this.leave({ guildId });
     } else {
       const voiceSdk = loadDiscordVoiceSdk();
-      const connection = voiceSdk.getVoiceConnection(guildId);
+      const connection = voiceSdk.getVoiceConnection(
+        guildId,
+        resolveVoiceConnectionGroup(this.params.accountId),
+      );
       if (connection) {
         destroyVoiceConnectionSafely({
           connection,

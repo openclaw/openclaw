@@ -2,6 +2,7 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../infra/parse-finite-number.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { withEnv } from "../test-utils/env.js";
 import { getSlashCommands, parseCommand } from "./commands.js";
@@ -22,7 +23,7 @@ import {
   isTuiBusyActivityStatus,
   resolveLocalAuthCliInvocation,
   resolveLocalAuthSpawnCwd,
-  resolveLocalAuthSpawnOptions,
+  resolveLocalAuthSpawnInvocation,
   resolveTuiCtrlCAction,
   resolveTuiFooterHostLabel,
   resolveTuiShutdownHardExitMs,
@@ -130,38 +131,26 @@ describe("canSubmitTuiChatMessage", () => {
     expect(canSubmitTuiChatMessage({})).toBe(true);
   });
 
-  it("allows local submit while a run is active", () => {
+  it("allows submit while a run is active so the backend owns queue policy", () => {
     expect(
       canSubmitTuiChatMessage({
-        local: true,
         activeChatRunId: "run-active",
       }),
     ).toBe(true);
   });
 
-  it("blocks gateway submit while a run is active", () => {
+  it("allows stop text while a run is active", () => {
     expect(
       canSubmitTuiChatMessage({
-        local: false,
-        activeChatRunId: "run-active",
-      }),
-    ).toBe(false);
-  });
-
-  it("allows gateway stop text while a run is active", () => {
-    expect(
-      canSubmitTuiChatMessage({
-        local: false,
         activeChatRunId: "run-active",
         message: "please stop",
       }),
     ).toBe(true);
   });
 
-  it("allows local stop text while a queued run is pending", () => {
+  it("allows stop text while a queued run is pending", () => {
     expect(
       canSubmitTuiChatMessage({
-        local: true,
         activeChatRunId: "run-active",
         pendingChatRunId: "run-queued",
         message: "please stop",
@@ -184,11 +173,24 @@ describe("canSubmitTuiChatMessage", () => {
       }),
     ).toBe(false);
   });
+
+  it("blocks submit while optimistic state is pending during an active run", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        activeChatRunId: "run-active",
+        pendingOptimisticUserMessage: true,
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("isTuiBusyActivityStatus", () => {
   it("treats finishing context as a visible busy status", () => {
     expect(isTuiBusyActivityStatus("finishing context")).toBe(true);
+  });
+
+  it("treats post-connect initialization as a visible busy status", () => {
+    expect(isTuiBusyActivityStatus("starting up")).toBe(true);
   });
 });
 
@@ -235,6 +237,12 @@ describe("resolveTuiShutdownHardExitMs", () => {
   it("ignores partial local run shutdown grace values", () => {
     withEnv({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "3456abc" }, () => {
       expect(resolveTuiShutdownHardExitMs({ localMode: true })).toBe(122000);
+    });
+  });
+
+  it("clamps oversized local run shutdown grace values", () => {
+    withEnv({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: String(Number.MAX_SAFE_INTEGER) }, () => {
+      expect(resolveTuiShutdownHardExitMs({ localMode: true })).toBe(MAX_TIMER_TIMEOUT_MS + 2000);
     });
   });
 });
@@ -334,14 +342,39 @@ describe("resolveInitialTuiAgentId", () => {
       }),
     ).toBe("main");
   });
+
+  it("falls back when the working directory was deleted", () => {
+    const cwdSpy = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw new Error("ENOENT: uv_cwd");
+    });
+
+    try {
+      expect(resolveInitialTuiAgentId({ cfg, fallbackAgentId: "main" })).toBe("main");
+    } finally {
+      cwdSpy.mockRestore();
+    }
+  });
 });
 
 describe("resolveGatewayDisconnectState", () => {
-  it("returns pairing recovery guidance when disconnect reason requires pairing", () => {
+  it("returns scope-upgrade recovery guidance when disconnect reason requires pairing", () => {
     const state = resolveGatewayDisconnectState("gateway closed (1008): pairing required");
     expect(state.connectionStatus).toContain("pairing required");
-    expect(state.activityStatus).toBe("pairing required: run openclaw devices list");
-    expect(state.pairingHint).toContain("openclaw devices list");
+    expect(state.activityStatus).toBe("device approval needed: preview latest request");
+    expect(state.pairingHint).toContain("openclaw devices approve --latest");
+    expect(state.pairingHint).toContain("openclaw devices approve <requestId>");
+    expect(state.pairingHint).toContain("--token");
+    // Must steer users to `devices`, not the unrelated chat-DM `pairing` command.
+    expect(state.pairingHint).not.toContain("openclaw pairing");
+  });
+
+  it("returns the same guidance when the gateway reports a pending scope upgrade", () => {
+    const state = resolveGatewayDisconnectState(
+      "gateway closed (1008): scope upgrade pending approval",
+    );
+    expect(state.activityStatus).toBe("device approval needed: preview latest request");
+    expect(state.pairingHint).toContain("openclaw devices approve --latest");
+    expect(state.pairingHint).toContain("openclaw devices approve <requestId>");
   });
 
   it("falls back to idle for generic disconnect reasons", () => {
@@ -643,38 +676,50 @@ describe("resolveLocalAuthCliInvocation", () => {
   });
 });
 
-describe("resolveLocalAuthSpawnOptions", () => {
-  it("enables shell mode for Windows cmd shims", () => {
+describe("resolveLocalAuthSpawnInvocation", () => {
+  it("wraps Windows cmd shims through cmd.exe", () => {
     expect(
-      resolveLocalAuthSpawnOptions({
+      resolveLocalAuthSpawnInvocation({
         command: "C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd",
+        args: ["login"],
         platform: "win32",
       }),
-    ).toEqual({ shell: true });
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: ["/d", "/s", "/c", "C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd login"],
+      options: { windowsHide: true, windowsVerbatimArguments: true },
+    });
   });
 
-  it("enables shell mode for Windows bat shims", () => {
+  it("wraps spaced Windows bat shim paths with outer command-line quoting", () => {
     expect(
-      resolveLocalAuthSpawnOptions({
-        command: "C:\\tools\\codex.bat",
+      resolveLocalAuthSpawnInvocation({
+        command: "C:\\Program Files\\Codex\\codex.bat",
+        args: ["login"],
         platform: "win32",
       }),
-    ).toEqual({ shell: true });
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: ["/d", "/s", "/c", '""C:\\Program Files\\Codex\\codex.bat" login"'],
+      options: { windowsHide: true, windowsVerbatimArguments: true },
+    });
   });
 
   it("keeps direct execution for non-wrapper commands", () => {
     expect(
-      resolveLocalAuthSpawnOptions({
+      resolveLocalAuthSpawnInvocation({
         command: "/usr/local/bin/codex",
+        args: ["login"],
         platform: "linux",
       }),
-    ).toStrictEqual({});
+    ).toStrictEqual({ command: "/usr/local/bin/codex", args: ["login"], options: {} });
     expect(
-      resolveLocalAuthSpawnOptions({
+      resolveLocalAuthSpawnInvocation({
         command: "C:\\tools\\codex.exe",
+        args: ["login"],
         platform: "win32",
       }),
-    ).toStrictEqual({});
+    ).toStrictEqual({ command: "C:\\tools\\codex.exe", args: ["login"], options: {} });
   });
 });
 

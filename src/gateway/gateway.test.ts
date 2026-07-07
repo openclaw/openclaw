@@ -9,7 +9,7 @@ import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.j
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import { resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { clearGatewaySubagentRuntime } from "../plugins/runtime/index.js";
-import { captureEnv } from "../test-utils/env.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { startGatewayServer } from "./server.js";
 import {
   connectDeviceAuthReq,
@@ -70,7 +70,7 @@ async function startLoopbackTokenGateway(token: string) {
     bind: "loopback",
     auth: { mode: "token", token },
     controlUiEnabled: false,
-    deferStartupSidecars: true,
+    sidecarStartup: "defer",
   });
   return { port, server };
 }
@@ -136,25 +136,25 @@ async function setupGatewayTempHome(params: { prefix: string; minimalGateway?: b
   ]);
 
   const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), params.prefix));
-  process.env.HOME = tempHome;
-  process.env.OPENCLAW_STATE_DIR = path.join(tempHome, ".openclaw");
-  delete process.env.OPENCLAW_CONFIG_PATH;
-  process.env.OPENCLAW_SKIP_CHANNELS = "1";
-  process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
-  process.env.OPENCLAW_SKIP_CRON = "1";
-  process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
-  process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
-  process.env.OPENCLAW_SKIP_PROVIDERS = "1";
+  setTestEnvValue("HOME", tempHome);
+  setTestEnvValue("OPENCLAW_STATE_DIR", path.join(tempHome, ".openclaw"));
+  deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
+  setTestEnvValue("OPENCLAW_SKIP_CHANNELS", "1");
+  setTestEnvValue("OPENCLAW_SKIP_GMAIL_WATCHER", "1");
+  setTestEnvValue("OPENCLAW_SKIP_CRON", "1");
+  setTestEnvValue("OPENCLAW_SKIP_CANVAS_HOST", "1");
+  setTestEnvValue("OPENCLAW_SKIP_BROWSER_CONTROL_SERVER", "1");
+  setTestEnvValue("OPENCLAW_SKIP_PROVIDERS", "1");
   if (params.minimalGateway) {
-    process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "1";
+    setTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY", "1");
   } else {
-    delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
+    deleteTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY");
   }
 
   const workspaceDir = path.join(tempHome, "openclaw");
   await fs.mkdir(workspaceDir, { recursive: true });
-  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = await createEmptyBundledPluginsDir(tempHome);
-  process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
+  setTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR", await createEmptyBundledPluginsDir(tempHome));
+  setTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
   return { envSnapshot, tempHome, workspaceDir };
 }
 
@@ -187,7 +187,7 @@ describe("gateway e2e", () => {
       });
 
       const token = nextGatewayId("test-token");
-      process.env.OPENCLAW_GATEWAY_TOKEN = token;
+      setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
 
       const configPath = await createGatewayConfigPath(tempHome);
       const mockProvider = buildMockOpenAiResponsesProvider(openaiBaseUrl);
@@ -206,6 +206,9 @@ describe("gateway e2e", () => {
               },
             },
           },
+          // The request below runs sessionKey "agent:dev:mock-openai"; the
+          // gateway rejects session keys whose agent id is not declared.
+          list: [{ id: "dev", default: true }],
         },
         models: {
           mode: "replace",
@@ -266,7 +269,7 @@ describe("gateway e2e", () => {
       });
 
       const token = nextGatewayId("http-tools-token");
-      process.env.OPENCLAW_GATEWAY_TOKEN = token;
+      setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
       const registerCountPath = path.join(tempHome, "workspace-plugin-register-count.txt");
       await writeWorkspacePlugin({
         workspaceDir,
@@ -299,7 +302,7 @@ module.exports = {
         gateway: { auth: { token } },
       };
       await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`);
-      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
 
       const { port, server } = await startLoopbackTokenGateway(token);
 
@@ -344,10 +347,10 @@ module.exports = {
         prefix: "openclaw-wizard-home-",
         minimalGateway: true,
       });
-      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
 
       const configPath = await createGatewayConfigPath(tempHome);
-      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
       clearRuntimeConfigSnapshot();
       clearConfigCache();
 
@@ -481,21 +484,21 @@ module.exports = {
       const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-minimal-gateway-home-"));
       const configPath = await createGatewayConfigPath(tempHome);
       const bundledPluginsDir = path.join(tempHome, "openclaw-test-no-bundled-extensions");
-      process.env.HOME = tempHome;
-      process.env.OPENCLAW_STATE_DIR = path.join(tempHome, ".openclaw");
-      process.env.OPENCLAW_CONFIG_PATH = configPath;
-      process.env.OPENCLAW_SKIP_CHANNELS = "1";
-      process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
-      process.env.OPENCLAW_SKIP_CRON = "1";
-      process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
-      process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
-      process.env.OPENCLAW_SKIP_PROVIDERS = "1";
-      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
-      process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "1";
-      process.env.DISCORD_BOT_TOKEN = "discord-test-token";
+      setTestEnvValue("HOME", tempHome);
+      setTestEnvValue("OPENCLAW_STATE_DIR", path.join(tempHome, ".openclaw"));
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+      setTestEnvValue("OPENCLAW_SKIP_CHANNELS", "1");
+      setTestEnvValue("OPENCLAW_SKIP_GMAIL_WATCHER", "1");
+      setTestEnvValue("OPENCLAW_SKIP_CRON", "1");
+      setTestEnvValue("OPENCLAW_SKIP_CANVAS_HOST", "1");
+      setTestEnvValue("OPENCLAW_SKIP_BROWSER_CONTROL_SERVER", "1");
+      setTestEnvValue("OPENCLAW_SKIP_PROVIDERS", "1");
+      setTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR", bundledPluginsDir);
+      setTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY", "1");
+      setTestEnvValue("DISCORD_BOT_TOKEN", "discord-test-token");
 
       const token = nextGatewayId("minimal-token");
-      process.env.OPENCLAW_GATEWAY_TOKEN = token;
+      setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
       await fs.mkdir(bundledPluginsDir, { recursive: true });
       await fs.writeFile(
         configPath,

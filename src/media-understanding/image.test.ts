@@ -1,5 +1,7 @@
 // Image runtime tests cover model-backed image routing, auth/profile handling,
 // provider payload transforms, and MiniMax/Copilot special paths.
+import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
@@ -137,24 +139,23 @@ const { describeImageWithModel } = await import("./image.js");
 describe("describeImageWithModel", () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllEnvs();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
   beforeEach(() => {
+    // Provider endpoint policy comes from manifests. Pin source manifests so a
+    // prior local build cannot make this source-checkout test read partial dist output.
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(process.cwd(), "extensions"));
     vi.stubGlobal("fetch", fetchMock);
     vi.clearAllMocks();
-    fetchMock.mockResolvedValue({
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      headers: { get: vi.fn(() => null) },
-      json: vi.fn(async () => ({
+    fetchMock.mockImplementation(async () =>
+      Response.json({
         base_resp: { status_code: 0 },
         content: "portal ok",
-      })),
-      text: vi.fn(async () => ""),
-    });
+      }),
+    );
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({
         provider: "minimax-portal",
@@ -829,6 +830,47 @@ describe("describeImageWithModel", () => {
       data: Buffer.from("png-bytes").toString("base64"),
       mimeType: "image/png",
     });
+  });
+
+  it("clamps oversized image description timeouts before scheduling", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "openai",
+        id: "gpt-5.4",
+        input: ["text", "image"],
+        baseUrl: "https://chatgpt.com/backend-api",
+      })),
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "openai-chatgpt-responses",
+      provider: "openai",
+      model: "gpt-5.4",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "codex ok" }],
+    });
+
+    const result = await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "openai",
+      model: "gpt-5.4",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(result).toEqual({
+      text: "codex ok",
+      model: "gpt-5.4",
+    });
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    const firstCall = requireFirstMockCall(completeMock, "image completion");
+    expect(firstCall[2].timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
   it("places OpenRouter image prompts in user content before images", async () => {

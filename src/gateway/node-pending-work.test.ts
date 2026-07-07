@@ -81,6 +81,31 @@ describe("node pending work", () => {
     expect(getNodePendingWorkStateCountForTests()).toBe(0);
   });
 
+  it("assigns default expiry to queued work without explicit ttl", () => {
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const expiresAtMs = (() => {
+      try {
+        const { item } = enqueueNodePendingWork({
+          nodeId: "node-default-expiry",
+          type: "location.request",
+        });
+        const queuedExpiresAtMs = item.expiresAtMs;
+        expect(queuedExpiresAtMs).toBe(1_000 + 24 * 60 * 60_000);
+        if (typeof queuedExpiresAtMs !== "number") {
+          throw new Error("expected queued work expiry");
+        }
+        return queuedExpiresAtMs;
+      } finally {
+        dateNow.mockRestore();
+      }
+    })();
+
+    const drained = drainNodePendingWork("node-default-expiry", { nowMs: expiresAtMs });
+
+    expect(drained.items.map((item) => item.id)).toEqual(["baseline-status"]);
+    expect(getNodePendingWorkStateCountForTests()).toBe(0);
+  });
+
   it("prunes the state entry when all items expire naturally via drain", () => {
     const queued = enqueueNodePendingWork({
       nodeId: "node-7",

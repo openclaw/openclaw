@@ -1,5 +1,6 @@
 /** Implementation of `openclaw models status`. */
 import path from "node:path";
+import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import {
@@ -44,6 +45,7 @@ import {
 } from "../../agents/openai-routing.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
+import { requestExitAfterOneShotOutput } from "../../cli/one-shot-exit.js";
 import { createConfigIO } from "../../config/config.js";
 import {
   resolveAgentModelFallbackValues,
@@ -239,6 +241,20 @@ function syntheticAuthCredential(
     refresh: "",
     expires: auth.expiresAt,
   };
+}
+
+function finishModelsStatusOutput(
+  runtime: RuntimeEnv,
+  check: boolean | undefined,
+  checkStatus: number,
+): void {
+  if (check) {
+    if (!requestExitAfterOneShotOutput(runtime, checkStatus)) {
+      runtime.exit(checkStatus);
+    }
+    return;
+  }
+  requestExitAfterOneShotOutput(runtime);
 }
 
 /** Prints model default, auth, provider, and optional probe status. */
@@ -572,21 +588,6 @@ export async function modelsStatusCommand(
     };
     const resolveProviderAuthHealthId = (provider: string): string =>
       resolveProviderIdForAuth(provider, envLookupParams);
-    const resolveStatusAuthOrder = (
-      order: Record<string, string[]> | undefined,
-      provider: string,
-    ): string[] | undefined => {
-      if (!order) {
-        return undefined;
-      }
-      const providerKey = normalizeProviderId(provider);
-      for (const [key, value] of Object.entries(order)) {
-        if (normalizeProviderId(key) === providerKey) {
-          return value;
-        }
-      }
-      return undefined;
-    };
     const listRuntimeAuthProviderCandidates = (
       provider: string,
       options?: { includeLegacyOpenAICodex?: boolean },
@@ -613,10 +614,10 @@ export async function modelsStatusCommand(
       const providerKey = normalizeProviderId(provider);
       const providerAuthKey = resolveProviderAuthHealthId(providerKey);
       const explicitOrder =
-        resolveStatusAuthOrder(store.order, providerAuthKey) ??
-        resolveStatusAuthOrder(store.order, providerKey) ??
-        resolveStatusAuthOrder(cfg.auth?.order, providerAuthKey) ??
-        resolveStatusAuthOrder(cfg.auth?.order, providerKey);
+        findNormalizedProviderValue(store.order, providerAuthKey) ??
+        findNormalizedProviderValue(store.order, providerKey) ??
+        findNormalizedProviderValue(cfg.auth?.order, providerAuthKey) ??
+        findNormalizedProviderValue(cfg.auth?.order, providerKey);
       const isEligibleOrHealthRescued = (profileId: string): boolean => {
         const credential = store.profiles[profileId];
         if (!credential) {
@@ -1034,17 +1035,13 @@ export async function modelsStatusCommand(
           probes: probeSummary,
         },
       });
-      if (opts.check) {
-        runtime.exit(checkStatus);
-      }
+      finishModelsStatusOutput(runtime, opts.check, checkStatus);
       return;
     }
 
     if (opts.plain) {
       runtime.log(resolvedLabel);
-      if (opts.check) {
-        runtime.exit(checkStatus);
-      }
+      finishModelsStatusOutput(runtime, opts.check, checkStatus);
       return;
     }
 
@@ -1396,10 +1393,7 @@ export async function modelsStatusCommand(
         runtime.log(colorize(rich, theme.muted, describeProbeSummary(probeSummary)));
       }
     }
-
-    if (opts.check) {
-      runtime.exit(checkStatus);
-    }
+    finishModelsStatusOutput(runtime, opts.check, checkStatus);
   } finally {
     cleanupPluginMetadataSnapshot();
   }

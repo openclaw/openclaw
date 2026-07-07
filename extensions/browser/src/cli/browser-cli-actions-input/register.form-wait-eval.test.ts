@@ -71,6 +71,19 @@ describe("browser action input fill command", () => {
       targetId: "tab-1",
     });
   });
+
+  it("reports malformed fields without sending a browser request", async () => {
+    const program = createActionInputProgram();
+
+    await expect(
+      program.parseAsync(["browser", "fill", "--fields", "NOT JSON {{{"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(getBrowserCliRuntimeCapture().runtimeErrors.join("\n")).toContain(
+      "fields must be valid JSON.",
+    );
+    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+  });
 });
 
 describe("browser action input wait command", () => {

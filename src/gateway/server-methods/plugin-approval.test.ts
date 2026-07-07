@@ -34,6 +34,7 @@ function createClient(
     displayName?: string;
     deviceId?: string;
     scopes?: string[];
+    approvalRuntime?: boolean;
   } = {},
 ): GatewayRequestHandlerOptions["client"] {
   const connect: Record<string, unknown> = {
@@ -51,6 +52,7 @@ function createClient(
   return {
     connId: params.connId ?? "conn-test-client",
     connect,
+    ...(params.approvalRuntime ? { internal: { approvalRuntime: true } } : {}),
   } as unknown as GatewayRequestHandlerOptions["client"];
 }
 
@@ -240,7 +242,7 @@ const invalidRequestCases = [
   },
   {
     name: "description exceeding max length",
-    params: { title: "T", description: "x".repeat(257) },
+    params: { title: "T", description: "x".repeat(513) },
   },
   {
     name: "timeoutMs exceeding max",
@@ -374,6 +376,7 @@ describe("createPluginApprovalHandlers", () => {
 
         const requestPromise = handlers["plugin.approval.request"](opts);
         const approvalId = await waitForAcceptedApproval(respond);
+        expect(acceptedResult(respond).deliveryRoute).toBe("turn-source");
         manager.resolve(approvalId, "allow-once");
 
         await requestPromise;
@@ -459,6 +462,112 @@ describe("createPluginApprovalHandlers", () => {
       ]);
       manager.resolve(approvalId, "deny");
       await handlerPromise;
+    });
+
+    it("binds an initiating TUI as the least-privilege approval reviewer", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const reviewerClient = createClient({
+        connId: "conn-tui-reviewer",
+        clientId: "openclaw-tui",
+        deviceId: "device-tui-reviewer",
+        scopes: ["operator.approvals"],
+      });
+      const broadcastToConnIds = vi.fn();
+      const context = {
+        ...createApprovalContext(),
+        broadcastToConnIds,
+        getApprovalClientConnIds: ({
+          filter,
+        }: {
+          filter: (client: GatewayRequestHandlerOptions["client"]) => boolean;
+        }) =>
+          filter(reviewerClient)
+            ? new Set([reviewerClient?.connId ?? "conn-tui-reviewer"])
+            : new Set<string>(),
+      } as unknown as GatewayRequestHandlerOptions["context"];
+      const respond = vi.fn();
+      const requestClient = createClient({
+        connId: "conn-approval-runtime",
+        clientId: "gateway-client",
+        deviceId: "device-approval-runtime",
+        scopes: ["operator.approvals"],
+        approvalRuntime: true,
+      });
+      const requestOpts = createMockOptions(
+        "plugin.approval.request",
+        {
+          title: "Apply workspace skill proposal",
+          description: "Apply the pending proposal",
+          twoPhase: true,
+          approvalReviewerDeviceIds: ["device-tui-reviewer"],
+        },
+        { client: requestClient, context, respond },
+      );
+
+      const requestPromise = handlers["plugin.approval.request"](requestOpts);
+      const approvalId = await waitForAcceptedApproval(respond);
+
+      expect(manager.getSnapshot(approvalId)?.approvalReviewerDeviceIds).toEqual([
+        "device-tui-reviewer",
+      ]);
+      expect(broadcastToConnIds).toHaveBeenCalledWith(
+        "plugin.approval.requested",
+        expect.objectContaining({ id: approvalId }),
+        new Set(["conn-tui-reviewer"]),
+        { dropIfSlow: true },
+      );
+
+      const listRespond = vi.fn();
+      await handlers["plugin.approval.list"](
+        createMockOptions(
+          "plugin.approval.list",
+          {},
+          { client: reviewerClient, respond: listRespond },
+        ),
+      );
+      const approvals = requireArray(responseCall(listRespond).result, "approval list");
+      expect(approvals.map((entry) => requireRecord(entry, "approval").id)).toEqual([approvalId]);
+
+      const resolveRespond = vi.fn();
+      await handlers["plugin.approval.resolve"](
+        createMockOptions(
+          "plugin.approval.resolve",
+          { id: approvalId, decision: "allow-once" },
+          { client: reviewerClient, context, respond: resolveRespond },
+        ),
+      );
+      expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+      await requestPromise;
+    });
+
+    it("ignores reviewer devices from non-runtime plugin approval clients", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const respond = vi.fn();
+      const requestOpts = createMockOptions(
+        "plugin.approval.request",
+        {
+          title: "Apply workspace skill proposal",
+          description: "Apply the pending proposal",
+          twoPhase: true,
+          approvalReviewerDeviceIds: ["device-tui-reviewer"],
+        },
+        {
+          client: createClient({
+            connId: "conn-untrusted",
+            clientId: "untrusted-client",
+            deviceId: "device-untrusted",
+            scopes: ["operator.approvals"],
+          }),
+          respond,
+        },
+      );
+
+      const requestPromise = handlers["plugin.approval.request"](requestOpts);
+      const approvalId = await waitForAcceptedApproval(respond);
+
+      expect(manager.getSnapshot(approvalId)?.approvalReviewerDeviceIds).toBeUndefined();
+      manager.resolve(approvalId, "deny");
+      await requestPromise;
     });
   });
 

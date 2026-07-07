@@ -5,6 +5,30 @@ import { describe, expect, it } from "vitest";
 
 const SCRIPT = path.join(process.cwd(), "scripts", "ios-release-signing.mjs");
 
+function runSigningResult(args: string[]): { ok: boolean; stdout: string; stderr: string } {
+  try {
+    const stdout = execFileSync(process.execPath, [SCRIPT, ...args], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return { ok: true, stdout, stderr: "" };
+  } catch (error) {
+    const e = error as { stdout?: unknown; stderr?: unknown };
+    return {
+      ok: false,
+      stdout: formatProcessOutput(e.stdout),
+      stderr: formatProcessOutput(e.stderr),
+    };
+  }
+}
+
+function formatProcessOutput(value: unknown): string {
+  if (Buffer.isBuffer(value)) {
+    return value.toString("utf8");
+  }
+  return typeof value === "string" ? value : "";
+}
+
 function runSigning(mode: string): string {
   return execFileSync(process.execPath, [SCRIPT, "--mode", mode], {
     encoding: "utf8",
@@ -13,6 +37,21 @@ function runSigning(mode: string): string {
 }
 
 describe("scripts/ios-release-signing.mjs", () => {
+  it.each([
+    ["--mode"],
+    ["--mode", "--manifest"],
+    ["--mode", "-h"],
+    ["--manifest"],
+    ["--manifest", "-h"],
+  ])("rejects missing values for %s before reading signing manifests", (...args) => {
+    const result = runSigningResult(args);
+
+    expect(result.ok).toBe(false);
+    expect(result.stderr).toContain(`Missing value for ${args[0]}.`);
+    expect(result.stderr).not.toContain("ENOENT");
+    expect(result.stdout).toBe("");
+  });
+
   it("emits manual App Store profile settings for every signed target", () => {
     const output = runSigning("xcconfig");
 
@@ -40,7 +79,7 @@ describe("scripts/ios-release-signing.mjs", () => {
     expect(output).toContain("Signing branch: main");
     expect(output).toContain("Signing setup and sync: Fastlane match");
     expect(output).not.toContain("OpenClawWatchExtension");
-    expect(output).toContain("capabilities: PUSH_NOTIFICATIONS, APP_GROUPS");
+    expect(output).toContain("capabilities: PUSH_NOTIFICATIONS, APP_GROUPS, APP_ATTEST");
     expect(output).toContain("app groups: group.ai.openclawfoundation.app.shared");
   });
 });

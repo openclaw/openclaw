@@ -443,6 +443,7 @@ function nodeInvokeCall(callIndex: number): {
       body?: Record<string, unknown>;
     };
   };
+  extra?: { scopes?: string[] };
 } {
   const toolName = mockCallArg<string>(gatewayMocks.callGatewayTool, callIndex, 0);
   const options = mockCallArg<{ timeoutMs?: number }>(gatewayMocks.callGatewayTool, callIndex, 1);
@@ -458,8 +459,13 @@ function nodeInvokeCall(callIndex: number): {
       body?: Record<string, unknown>;
     };
   }>(gatewayMocks.callGatewayTool, callIndex, 2);
+  const extra = mockCallArg<{ scopes?: string[] } | undefined>(
+    gatewayMocks.callGatewayTool,
+    callIndex,
+    3,
+  );
   expect(toolName).toBe("node.invoke");
-  return { options, request };
+  return { options, request, extra };
 }
 
 function lastNodeInvokeCall(): ReturnType<typeof nodeInvokeCall> {
@@ -747,6 +753,7 @@ describe("browser tool snapshot maxChars", () => {
           timeoutMs: 7777,
         }),
       }),
+      { scopes: ["operator.admin"] },
     );
   });
 
@@ -855,11 +862,27 @@ describe("browser tool snapshot maxChars", () => {
     const tool = createBrowserTool();
     await tool.execute?.("call-1", { action: "status", target: "node" });
 
-    const { options, request } = lastNodeInvokeCall();
+    const { options, request, extra } = lastNodeInvokeCall();
     expect(options.timeoutMs).toBe(25_000);
+    expect(extra?.scopes).toEqual(["operator.admin"]);
     expect(request.nodeId).toBe("node-1");
     expect(request.command).toBe("browser.proxy");
     expect(request.params?.timeoutMs).toBe(20_000);
+    expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["target=node", { target: "node" }],
+    ["an explicit node pin", { node: "node-1" }],
+    ["automatic node routing", {}],
+  ])("blocks %s when host control is disabled", async (_label, route) => {
+    mockSingleBrowserProxyNode();
+    const tool = createBrowserTool({ allowHostControl: false });
+
+    await expect(tool.execute?.("call-1", { action: "status", ...route })).rejects.toThrow(
+      /browser control is disabled by sandbox policy/i,
+    );
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
     expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
   });
 
@@ -1239,7 +1262,7 @@ describe("browser tool snapshot maxChars", () => {
     setResolvedBrowserProfiles({
       user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
     });
-    const tool = createBrowserTool();
+    const tool = createBrowserTool({ allowHostControl: true });
     await tool.execute?.("call-1", { action: "status", profile: "user", target: "node" });
 
     const { options, request } = lastNodeInvokeCall();
@@ -1873,6 +1896,48 @@ describe("browser tool act stale target recovery", () => {
     const secondOptions = mockCallArg<{ profile?: string }>(browserActionsMocks.browserAct, 1, 2);
     expect(secondOptions.profile).toBe("user");
     expect((result?.details as { ok?: unknown } | undefined)?.ok).toBe(true);
+  });
+
+  it("retries stale targetIds returned through the node browser proxy", async () => {
+    mockSingleBrowserProxyNode();
+    setResolvedBrowserProfiles({
+      user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+    });
+    gatewayMocks.callGatewayTool
+      .mockRejectedValueOnce(new Error("INVALID_REQUEST: Error: 404: tab not found"))
+      .mockResolvedValueOnce({
+        ok: true,
+        payload: { result: { tabs: [{ targetId: "only-tab" }] } },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        payload: { result: { ok: true, targetId: "only-tab" } },
+      });
+
+    const tool = createBrowserTool();
+    const result = await tool.execute?.("call-1", {
+      action: "act",
+      target: "node",
+      profile: "user",
+      request: {
+        kind: "wait",
+        targetId: "stale-tab",
+        timeMs: 1,
+      },
+    });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledTimes(3);
+    expect(nodeInvokeCall(0).request.params).toMatchObject({
+      path: "/act",
+      body: { kind: "wait", targetId: "stale-tab", timeMs: 1 },
+    });
+    expect(nodeInvokeCall(1).request.params?.path).toBe("/tabs");
+    expect(nodeInvokeCall(2).request.params).toMatchObject({
+      path: "/act",
+      body: { kind: "wait", timeMs: 1 },
+    });
+    expect(nodeInvokeCall(2).request.params?.body).not.toHaveProperty("targetId");
+    expect(result?.details).toMatchObject({ ok: true, targetId: "only-tab" });
   });
 
   it("does not retry mutating user-browser act requests without targetId", async () => {

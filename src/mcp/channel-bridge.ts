@@ -1,6 +1,7 @@
 // Channel MCP bridge translates MCP tool calls into channel runtime operations.
 import { randomUUID } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -49,6 +50,10 @@ type ServerNotification = {
 
 const CLAUDE_PERMISSION_REPLY_RE = /^(yes|no)\s+([a-km-z]{5})$/i;
 const QUEUE_LIMIT = 1_000;
+const CONVERSATIONS_LIST_LIMIT = 500;
+const MESSAGES_READ_LIMIT = 200;
+const EVENTS_POLL_LIMIT = 200;
+const EVENTS_WAIT_TIMEOUT_LIMIT_MS = 300_000;
 const PENDING_CLAUDE_PERMISSION_TTL_MS = 60 * 60 * 1_000;
 const PENDING_APPROVAL_DEFAULT_TTL_MS = 30 * 60 * 1_000;
 const PENDING_SWEEP_INTERVAL_MS = 5 * 60 * 1_000;
@@ -143,7 +148,7 @@ export class OpenClawChannelBridge {
       scopes: [READ_SCOPE, WRITE_SCOPE, APPROVALS_SCOPE],
       requestTimeoutMs: 180_000,
       onEvent: (event) => {
-        void this.handleGatewayEvent(event);
+        void this.dispatchGatewayEvent(event);
       },
       onHelloOk: () => {
         this.retryingInitialConnect = false;
@@ -212,8 +217,12 @@ export class OpenClawChannelBridge {
     includeLastMessage?: boolean;
   }): Promise<ConversationDescriptor[]> {
     await this.waitUntilReady();
+    const limit = resolveIntegerOption(params?.limit, 50, {
+      min: 1,
+      max: CONVERSATIONS_LIST_LIMIT,
+    });
     const response: SessionListResult = await this.requestGateway("sessions.list", {
-      limit: params?.limit ?? 50,
+      limit,
       search: params?.search,
       includeDerivedTitles: params?.includeDerivedTitles ?? true,
       includeLastMessage: params?.includeLastMessage ?? true,
@@ -250,9 +259,10 @@ export class OpenClawChannelBridge {
     limit = 20,
   ): Promise<NonNullable<ChatHistoryResult["messages"]>> {
     await this.waitUntilReady();
+    const requestLimit = resolveIntegerOption(limit, 20, { min: 1, max: MESSAGES_READ_LIMIT });
     const response: ChatHistoryResult = await this.requestGateway("sessions.get", {
       key: sessionKey,
-      limit,
+      limit: requestLimit,
     });
     return response.messages ?? [];
   }
@@ -307,7 +317,10 @@ export class OpenClawChannelBridge {
 
   /** Poll queued events after a cursor without consuming them. */
   pollEvents(filter: WaitFilter, limit = 20): { events: QueueEvent[]; nextCursor: number } {
-    const events = this.queue.filter((event) => matchEventFilter(event, filter)).slice(0, limit);
+    const eventLimit = resolveIntegerOption(limit, 20, { min: 1, max: EVENTS_POLL_LIMIT });
+    const events = this.queue
+      .filter((event) => matchEventFilter(event, filter))
+      .slice(0, eventLimit);
     const nextCursor = events.at(-1)?.cursor ?? filter.afterCursor;
     return { events, nextCursor };
   }
@@ -318,6 +331,10 @@ export class OpenClawChannelBridge {
     if (existing) {
       return existing;
     }
+    const waitTimeoutMs = resolveIntegerOption(timeoutMs, 30_000, {
+      min: 1,
+      max: EVENTS_WAIT_TIMEOUT_LIMIT_MS,
+    });
     return await new Promise<QueueEvent | null>((resolve) => {
       const waiter: PendingWaiter = {
         filter,
@@ -327,11 +344,9 @@ export class OpenClawChannelBridge {
         },
         timeout: null,
       };
-      if (timeoutMs > 0) {
-        waiter.timeout = setTimeout(() => {
-          waiter.resolve(null);
-        }, timeoutMs);
-      }
+      waiter.timeout = setTimeout(() => {
+        waiter.resolve(null);
+      }, waitTimeoutMs);
       this.pendingWaiters.add(waiter);
     });
   }
@@ -506,6 +521,21 @@ export class OpenClawChannelBridge {
     }
   }
 
+  private async dispatchGatewayEvent(event: EventFrame): Promise<void> {
+    try {
+      await this.handleGatewayEvent(event);
+    } catch (error) {
+      // Always surface a single low-noise record so swallowed gateway event
+      // failures remain observable; the spammy error detail stays behind --verbose.
+      process.stderr.write(`openclaw mcp: gateway event ${event.event} failed\n`);
+      if (this.verbose) {
+        process.stderr.write(
+          `openclaw mcp: gateway event ${event.event} error: ${String(error)}\n`,
+        );
+      }
+    }
+  }
+
   private async handleGatewayEvent(event: EventFrame): Promise<void> {
     switch (event.event) {
       case "session.message":
@@ -569,7 +599,9 @@ export class OpenClawChannelBridge {
     const role = toText(payload.message?.role);
     const text = extractFirstTextBlock(payload.message);
     const permissionMatch = text ? CLAUDE_PERMISSION_REPLY_RE.exec(text) : null;
-    if (permissionMatch) {
+    // Ownership is decided at authenticated channel ingress and carried on the
+    // live transcript event. Missing metadata fails closed for approvals.
+    if (role === "user" && payload.senderIsOwner === true && permissionMatch) {
       const requestId = normalizeOptionalLowercaseString(permissionMatch[2]);
       if (requestId && this.pendingClaudePermissions.has(requestId)) {
         this.pendingClaudePermissions.delete(requestId);

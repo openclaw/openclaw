@@ -3,9 +3,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createDeferred } from "../../test-utils/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createDeferred } from "../test-helpers.deferred.js";
 import { expectGatewayErrorResponse } from "./gateway-response.test-helpers.js";
 import { modelsHandlers } from "./models.js";
 import type { RespondFn } from "./types.js";
@@ -332,6 +332,74 @@ describe("models.list", () => {
         );
       },
     );
+  });
+
+  it("marks catalog models available through their configured CLI runtime", async () => {
+    await withEnvAsync({ ANTHROPIC_API_KEY: undefined }, async () => {
+      await withOpenClawTestState(
+        {
+          layout: "state-only",
+          prefix: "openclaw-models-list-cli-runtime-",
+          agentEnv: "main",
+        },
+        async (state) => {
+          await state.writeAuthProfiles({
+            version: 1,
+            profiles: {
+              "anthropic:claude-cli": {
+                type: "oauth",
+                provider: "claude-cli",
+                access: "claude-cli-access",
+                refresh: "claude-cli-refresh",
+                expires: Date.now() + 30 * 60_000,
+              },
+            },
+          });
+
+          const runtimeConfig = {
+            agents: {
+              defaults: {
+                models: {
+                  "anthropic/claude-opus-4-8": {
+                    agentRuntime: { id: "claude-cli" },
+                  },
+                },
+              },
+            },
+          } as unknown as OpenClawConfig;
+          const { request, respond } = requestModelsList({
+            view: "all",
+            runtimeConfig,
+            loadGatewayModelCatalog: vi.fn(() =>
+              Promise.resolve([
+                {
+                  id: "claude-opus-4-8",
+                  name: "Claude Opus 4.8",
+                  provider: "anthropic",
+                },
+              ]),
+            ),
+            reqId: "req-models-list-cli-runtime",
+          });
+          await request;
+
+          expect(respond).toHaveBeenCalledWith(
+            true,
+            {
+              models: [
+                {
+                  id: "claude-opus-4-8",
+                  name: "Claude Opus 4.8",
+                  provider: "anthropic",
+                  available: true,
+                },
+              ],
+            },
+            undefined,
+          );
+        },
+      );
+    });
   });
 
   it("marks file SecretRef provider unavailable when read-only auth cannot prove availability", async () => {

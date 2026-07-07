@@ -3,7 +3,7 @@
 # Run via cron or systemd timer to get proactive notifications
 # before Claude Code auth expires.
 #
-# Suggested cron: */30 * * * * /home/admin/openclaw/scripts/auth-monitor.sh
+# Suggested cron: */30 * * * * /path/to/openclaw/scripts/auth-monitor.sh
 #
 # Environment variables:
 #   NOTIFY_PHONE - Phone number to send OpenClaw notification (e.g., +1234567890)
@@ -78,7 +78,7 @@ HOURS_LEFT=$((DIFF_MS / 3600000))
 MINS_LEFT=$(((DIFF_MS % 3600000) / 60000))
 
 if [ "$DIFF_MS" -lt 0 ]; then
-    send_notification "Claude Code auth EXPIRED! OpenClaw is down. Run: ssh l36 '~/openclaw/scripts/mobile-reauth.sh'" "urgent"
+    send_notification "Claude Code auth EXPIRED! OpenClaw is down. Run on the OpenClaw host: ${SCRIPT_DIR}/mobile-reauth.sh" "urgent"
     exit 1
 elif [ "$HOURS_LEFT" -lt "$WARN_HOURS" ]; then
     send_notification "Claude Code auth expires in ${HOURS_LEFT}h ${MINS_LEFT}m. Consider re-auth soon." "high"

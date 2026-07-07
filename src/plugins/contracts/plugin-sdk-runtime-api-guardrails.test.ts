@@ -43,6 +43,14 @@ const UNGUARDED_RUNTIME_API_PLUGIN_IDS = [
 ] as const;
 
 const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
+  [bundledPluginFile({
+    rootDir: ROOT_DIR,
+    pluginId: "diagnostics-otel",
+    relativePath: "runtime-api.ts",
+  })]: [
+    'export { createDiagnosticsOtelService } from "./src/service.js";',
+    'export type { OpenClawPluginServiceContext } from "./api.js";',
+  ],
   [bundledPluginFile({ rootDir: ROOT_DIR, pluginId: "discord", relativePath: "runtime-api.ts" })]: [
     'export { discordMessageActions, handleDiscordAction, isDiscordModerationAction, readDiscordChannelCreateParams, readDiscordChannelEditParams, readDiscordChannelMoveParams, readDiscordModerationCommand, readDiscordParentIdParam, requiredGuildPermissionForModerationAction, type DiscordModerationAction, type DiscordModerationCommand } from "./runtime-api.actions.js";',
     'export { auditDiscordChannelPermissions, collectDiscordAuditChannelIds, fetchDiscordApplicationId, fetchDiscordApplicationSummary, listDiscordDirectoryGroupsLive, listDiscordDirectoryPeersLive, parseApplicationIdFromToken, probeDiscord, resolveDiscordChannelAllowlist, resolveDiscordPrivilegedIntentsFromFlags, resolveDiscordUserAllowlist, setDiscordRuntime, type DiscordApplicationSummary, type DiscordChannelResolution, type DiscordPrivilegedIntentsSummary, type DiscordPrivilegedIntentStatus, type DiscordProbe, type DiscordUserResolution } from "./runtime-api.lookup.js";',
@@ -353,6 +361,22 @@ describe("runtime api guardrails", () => {
         `${pluginId} runtime api should use generic sdk subpaths or local exports`,
       ).not.toContain(`'openclaw/plugin-sdk/${pluginId}'`);
     }
+  });
+
+  it("keeps the composed hook-runner registry internal", () => {
+    const pluginRuntime = readFileSync(resolve(ROOT_DIR, "plugin-sdk/plugin-runtime.ts"), "utf8");
+    const hookRunnerGlobal = readFileSync(
+      resolve(ROOT_DIR, "plugins/hook-runner-global.ts"),
+      "utf8",
+    );
+    const hookRegistryTypes = readFileSync(
+      resolve(ROOT_DIR, "plugins/hook-registry.types.ts"),
+      "utf8",
+    );
+
+    expect(pluginRuntime).toContain('export * from "../plugins/hook-runner-global.js";');
+    expect(hookRunnerGlobal).not.toContain("getGlobalHookRunnerRegistry");
+    expect(hookRegistryTypes).not.toContain("trustedToolPolicies");
   });
 
   it("keeps Slack's narrow runtime-setter entrypoint pinned to a single export", () => {

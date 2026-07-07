@@ -134,6 +134,7 @@ describe("parseArgs", () => {
     for (const flag of ["--source-dir", "--baseline-source-dir", "--output"]) {
       expect(() => parseArgs([flag])).toThrow(`${flag} requires a value`);
       expect(() => parseArgs([flag, ""])).toThrow(`${flag} requires a value`);
+      expect(() => parseArgs([flag, "-h"])).toThrow(`${flag} requires a value`);
       expect(() => parseArgs([flag, "--source-dir", "reports/current"])).toThrow(
         `${flag} requires a value`,
       );

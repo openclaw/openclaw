@@ -74,12 +74,12 @@ export function sanitizeCompactionMessages(messages: AgentMessage[]): AgentMessa
 }
 
 /** Estimates one message using the same sanitization path as multi-message planning. */
-export function estimateCompactionMessageTokens(message: AgentMessage): number {
+function estimateCompactionMessageTokens(message: AgentMessage): number {
   return estimateMessagesTokens([message]);
 }
 
 /** Clamps requested split parts to a usable count for the available messages. */
-export function normalizeCompactionParts(parts: number, messageCount: number): number {
+function normalizeCompactionParts(parts: number, messageCount: number): number {
   if (!Number.isFinite(parts) || parts <= 1) {
     return 1;
   }

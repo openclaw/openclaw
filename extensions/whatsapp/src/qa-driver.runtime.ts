@@ -11,6 +11,7 @@ import { resolveInboundMediaMimetype } from "./inbound/media-mimetype.js";
 import { normalizeMessageContent } from "./inbound/runtime-api.js";
 import { createWebSendApi } from "./inbound/send-api.js";
 import type { ActiveWebSendOptions } from "./inbound/types.js";
+import { isWhatsAppGroupJid } from "./normalize-target.js";
 import { createWaSocket, formatError, getStatusCode, waitForWaConnection } from "./session.js";
 import {
   DEFAULT_WHATSAPP_SOCKET_TIMING,
@@ -53,6 +54,7 @@ export type WhatsAppQaDriverObservedMessage = {
   mediaType?: string;
   messageId?: string;
   observedAt: string;
+  participantJid?: string;
   poll?: WhatsAppQaDriverObservedPoll;
   quoted?: WhatsAppQaDriverQuotedMessage;
   reaction?: WhatsAppQaDriverObservedReaction;
@@ -306,15 +308,19 @@ function normalizeObservedMessage(
     return null;
   }
   const fromJid = message.key.remoteJid ?? undefined;
+  const senderJid =
+    fromJid && isWhatsAppGroupJid(fromJid) ? (message.key.participant ?? fromJid) : fromJid;
+  const participantJid = message.key.participant ?? undefined;
   return {
     fromJid,
-    fromPhoneE164: fromJid ? jidToE164(fromJid, { authDir }) : null,
+    fromPhoneE164: senderJid ? jidToE164(senderJid, { authDir }) : null,
     hasMedia: media ? true : undefined,
     kind,
     mediaFileName: media?.fileName,
     mediaType: media?.mediaType,
     messageId: message.key.id ?? undefined,
     observedAt: new Date().toISOString(),
+    ...(participantJid ? { participantJid } : {}),
     poll,
     quoted,
     reaction,

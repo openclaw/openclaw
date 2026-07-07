@@ -299,6 +299,8 @@ prepare_update_tarball() {
   local baseline_pack_json
   local pack_json_file
   local baseline_pack_json_file
+  local package_args
+  local package_tgz
   local packed_update_version
   pack_json_file="${UPDATE_DIR}/pack.json"
   baseline_pack_json_file="${UPDATE_DIR}/baseline-pack.json"
@@ -316,13 +318,20 @@ prepare_update_tarball() {
     UPDATE_EXPECT_VERSION="$(
       node -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).version'
     )"
-    node --import tsx scripts/write-package-dist-inventory.ts
-    node scripts/check-package-dist-imports.mjs "$ROOT_DIR"
-    quiet_npm pack --ignore-scripts --json --pack-destination "$UPDATE_DIR" >"$pack_json_file"
+    package_args=(
+      --output-dir "$UPDATE_DIR"
+      --pack-json "$pack_json_file"
+      --skip-build
+    )
+    package_tgz="$(node scripts/package-openclaw-for-docker.mjs "${package_args[@]}")"
+    UPDATE_TGZ_FILE="$(basename "$package_tgz")"
   fi
-  UPDATE_TGZ_FILE="$(read_pack_tarball_filename "$pack_json_file")"
   if [[ -z "$UPDATE_PACKAGE_SPEC" ]]; then
-    node scripts/check-openclaw-package-tarball.mjs "${UPDATE_DIR}/${UPDATE_TGZ_FILE}"
+    node scripts/check-openclaw-package-tarball.mjs \
+      --require-bundled-workspace-deps \
+      "${UPDATE_DIR}/${UPDATE_TGZ_FILE}"
+  else
+    UPDATE_TGZ_FILE="$(read_pack_tarball_filename "$pack_json_file")"
   fi
   print_pack_audit "update" "$pack_json_file"
   assert_pack_unpacked_size_budget "update" "$pack_json_file"

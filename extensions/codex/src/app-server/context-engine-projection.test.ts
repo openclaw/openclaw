@@ -249,8 +249,62 @@ describe("projectContextEngineAssemblyForCodex", () => {
     // The user's actual request is the priority tail and must survive truncation.
     expect(fitted).toContain("Current user request:");
     expect(fitted.endsWith("q".repeat(40))).toBe(true);
-    // The dropped older context is reported, not silently lost.
+    // Current context still survives even when an earlier projection is dropped.
+    expect(fitted).toContain("older context");
+    // The dropped older content is reported, not silently lost.
     expect(fitted).toContain("[truncated ");
+  });
+
+  it("keeps the current request and fitting hook context after projecting history", () => {
+    const before = "OpenClaw assembled context for this turn:\n<conversation_context>\n";
+    const context = `recent context ${"c".repeat(800)}`;
+    const request = "\n</conversation_context>\n\nCurrent user request:\nkeep this request";
+    const hookAppend = "\n\nhook context survives";
+    const promptText = `${before}${context}${request}${hookAppend}`;
+    const maxChars = 420;
+
+    const fitted = fitCodexProjectedContextForTurnStart({
+      promptText,
+      contextRange: { start: before.length, end: before.length + context.length },
+      requestRange: {
+        start: before.length + context.length,
+        end: before.length + context.length + request.length,
+      },
+      maxChars,
+    });
+
+    expect(fitted.length).toBeLessThanOrEqual(maxChars);
+    expect(fitted).toContain("[truncated ");
+    expect(fitted).toContain("Current user request:\nkeep this request");
+    expect(fitted).toContain("hook context survives");
+  });
+
+  it("keeps the original input when a hook appends context without a projection", () => {
+    const prompt = "current prompt survives";
+    const hookAppend = `\n\nhook context ${"h".repeat(800)}`;
+    const maxChars = 420;
+
+    const fitted = fitCodexProjectedContextForTurnStart({
+      promptText: `${prompt}${hookAppend}`,
+      preservedRange: { start: 0, end: prompt.length },
+      maxChars,
+    });
+
+    expect(fitted.length).toBeLessThanOrEqual(maxChars);
+    expect(fitted).toContain(prompt);
+    expect(fitted).not.toContain("hook context");
+  });
+
+  it("bounds hook output for an empty original input", () => {
+    const maxChars = 420;
+    const fitted = fitCodexProjectedContextForTurnStart({
+      promptText: `hook context ${"h".repeat(800)} hook tail`,
+      preservedRange: { start: 0, end: 0 },
+      maxChars,
+    });
+
+    expect(fitted.length).toBeLessThanOrEqual(maxChars);
+    expect(fitted).toContain("hook tail");
   });
 
   it("bounds output for a large request under the default Codex turn limit", () => {

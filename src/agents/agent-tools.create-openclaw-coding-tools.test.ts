@@ -440,6 +440,83 @@ describe("createOpenClawCodingTools", () => {
     expect(toolNameList(tools)).toContain("message");
   });
 
+  it("preserves configured media tools through local model lean filtering", () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        agents: {
+          defaults: {
+            experimental: {
+              localModelLean: true,
+            },
+          },
+          list: [
+            {
+              id: "artist",
+              tools: {
+                alsoAllow: ["video_generate"],
+                byProvider: {
+                  ollama: {
+                    alsoAllow: ["tts"],
+                  },
+                },
+              },
+            },
+          ],
+        },
+        tools: {
+          alsoAllow: ["pdf"],
+          byProvider: {
+            "ollama/qwen3.5:9b": {
+              alsoAllow: ["image_generate"],
+            },
+          },
+        },
+      },
+      agentId: "artist",
+      modelProvider: "ollama",
+      modelId: "qwen3.5:9b",
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    });
+
+    expect(toolNameList(tools)).toEqual(
+      expect.arrayContaining(["image_generate", "pdf", "tts", "video_generate"]),
+    );
+  });
+
+  it("does not treat built-in profile tools as lean-mode overrides", () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        agents: {
+          defaults: {
+            experimental: {
+              localModelLean: true,
+            },
+          },
+        },
+        tools: {
+          profile: "coding",
+        },
+      },
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    });
+
+    expect(toolNameList(tools)).not.toEqual(
+      expect.arrayContaining(["image_generate", "video_generate"]),
+    );
+  });
+
   it("preserves forced message through local model lean filtering without runtime allowlist", () => {
     const tools = createOpenClawCodingTools({
       config: {
@@ -615,6 +692,33 @@ describe("createOpenClawCodingTools", () => {
       const pluginToolOptions = resolvePluginToolsSpy.mock.calls[0]?.[0].options;
       expect(pluginToolOptions?.modelProvider).toBe("openrouter");
       expect(pluginToolOptions?.modelId).toBe("openrouter/auto");
+    } finally {
+      resolvePluginToolsSpy.mockRestore();
+    }
+  });
+
+  it("forwards owner identity to plugin-only tool construction", () => {
+    const resolvePluginToolsSpy = vi
+      .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions")
+      .mockReturnValue([]);
+
+    try {
+      createOpenClawCodingTools({
+        config: testConfig,
+        includeCoreTools: false,
+        runtimeToolAllowlist: ["codex_threads"],
+        senderIsOwner: true,
+        toolConstructionPlan: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: false,
+          includePluginTools: true,
+        },
+      });
+
+      expect(resolvePluginToolsSpy).toHaveBeenCalledTimes(1);
+      expect(resolvePluginToolsSpy.mock.calls[0]?.[0].options?.senderIsOwner).toBe(true);
     } finally {
       resolvePluginToolsSpy.mockRestore();
     }

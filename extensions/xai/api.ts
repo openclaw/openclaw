@@ -12,7 +12,7 @@ import {
 } from "./model-compat.js";
 
 export { buildXaiProvider } from "./provider-catalog.js";
-export { applyXaiConfig, applyXaiProviderConfig } from "./onboard.js";
+export { applyXaiConfig, applyXaiProviderConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
 export { buildXaiImageGenerationProvider } from "./image-generation-provider.js";
 export {
   buildXaiCatalogModels,
@@ -22,7 +22,6 @@ export {
   XAI_DEFAULT_CONTEXT_WINDOW,
   XAI_DEFAULT_IMAGE_MODEL,
   XAI_DEFAULT_MODEL_ID,
-  XAI_DEFAULT_MODEL_REF,
   XAI_DEFAULT_MAX_TOKENS,
   XAI_IMAGE_MODELS,
 } from "./model-definitions.js";
@@ -90,19 +89,4 @@ export function resolveXaiTransport(params: {
     api: "openai-responses",
     baseUrl: readStringValue(params.baseUrl),
   };
-}
-
-export function resolveXaiBaseUrl(baseUrlOrConfig?: unknown): string {
-  let candidate = baseUrlOrConfig;
-  if (
-    baseUrlOrConfig &&
-    typeof baseUrlOrConfig === "object" &&
-    !Array.isArray(baseUrlOrConfig) &&
-    "cfg" in baseUrlOrConfig
-  ) {
-    candidate =
-      (baseUrlOrConfig as { cfg?: { models?: { providers?: { xai?: { baseUrl?: unknown } } } } })
-        .cfg?.models?.providers?.xai?.baseUrl ?? baseUrlOrConfig;
-  }
-  return readStringValue(candidate) || "https://api.x.ai/v1";
 }

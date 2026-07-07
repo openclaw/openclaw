@@ -656,7 +656,10 @@ fun SettingsSheet(viewModel: MainViewModel) {
               colors = listItemColors,
               headlineContent = { Text("SMS", style = mobileHeadline) },
               supportingContent = {
-                Text("Send and search SMS from this device.", style = mobileCallout)
+                Text(
+                  "Grants Android SMS access. The Gateway must separately allow `sms.search` and, only if needed, `sms.send`.",
+                  style = mobileCallout,
+                )
               },
               trailingContent = {
                 Button(
@@ -1250,16 +1253,6 @@ private fun settingsPrimaryButtonColors() =
     containerColor = mobileAccent,
     contentColor = Color.White,
     disabledContainerColor = mobileAccent.copy(alpha = 0.45f),
-    disabledContentColor = Color.White.copy(alpha = 0.9f),
-  )
-
-/** Destructive button colors for permission and capability settings actions. */
-@Composable
-private fun settingsDangerButtonColors() =
-  ButtonDefaults.buttonColors(
-    containerColor = mobileDanger,
-    contentColor = Color.White,
-    disabledContainerColor = mobileDanger.copy(alpha = 0.45f),
     disabledContentColor = Color.White.copy(alpha = 0.9f),
   )
 

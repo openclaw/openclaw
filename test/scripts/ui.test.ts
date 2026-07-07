@@ -111,6 +111,20 @@ describe("scripts/ui windows spawn behavior", () => {
     ).toThrow(/unsafe windows cmd\.exe argument/i);
   });
 
+  it("uses a trusted cmd.exe path when no explicit Windows launcher is injected", () => {
+    expect(
+      resolveSpawnCall(
+        "C:\\tools\\pnpm.cmd",
+        ["run", "build"],
+        {
+          ComSpec: "C:\\Users\\test\\bin\\cmd.exe",
+          SystemRoot: "D:\\Windows",
+        },
+        { cwd: "C:\\repo\\ui", platform: "win32" },
+      ).command,
+    ).toBe("D:\\Windows\\System32\\cmd.exe");
+  });
+
   it("routes Windows Corepack pnpm entrypoints through node", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pnpm-runner-"));
     const npmExecPath = path.join(tempDir, "pnpm.mjs");
@@ -243,4 +257,72 @@ describe("scripts/ui windows spawn behavior", () => {
       }
     },
   );
+
+  it.runIf(process.platform !== "win32")(
+    "cleans pnpm descendants before forwarding wrapper SIGTERM",
+    async () => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ui-wrapper-tree-"));
+      const runnerPath = path.join(tempDir, "pnpm.mjs");
+      const readyFile = path.join(tempDir, "ready");
+      const descendantPidFile = path.join(tempDir, "descendant.pid");
+      let descendantPid: number | undefined;
+
+      fs.writeFileSync(
+        runnerPath,
+        [
+          "import { spawn } from 'node:child_process';",
+          "import fs from 'node:fs';",
+          "fs.writeFileSync(process.env.READY_FILE, 'ready');",
+          "const child = spawn(process.execPath, ['-e', \"process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);\"], { stdio: 'ignore' });",
+          "child.unref();",
+          "fs.writeFileSync(process.env.DESCENDANT_PID_FILE, String(child.pid));",
+          "process.on('SIGTERM', () => process.exit(0));",
+          "setInterval(() => {}, 1000);",
+        ].join("\n"),
+      );
+
+      const wrapper = spawn(process.execPath, ["scripts/ui.js", "install"], {
+        cwd: path.resolve("."),
+        env: {
+          ...process.env,
+          DESCENDANT_PID_FILE: descendantPidFile,
+          npm_execpath: runnerPath,
+          READY_FILE: readyFile,
+        },
+        stdio: "ignore",
+      });
+
+      try {
+        await waitFor(() => fs.existsSync(descendantPidFile), "UI runner descendant readiness");
+        descendantPid = Number(fs.readFileSync(descendantPidFile, "utf8"));
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 25);
+        });
+
+        wrapper.kill("SIGTERM");
+        const exit = await waitForExit(wrapper, 8_000);
+
+        expect(exit).toEqual({ code: null, signal: "SIGTERM" });
+        await waitFor(
+          () => !descendantPid || !pidAlive(descendantPid),
+          "UI runner descendant exit",
+        );
+      } finally {
+        wrapper.kill("SIGKILL");
+        if (descendantPid && pidAlive(descendantPid)) {
+          process.kill(descendantPid, "SIGKILL");
+        }
+        fs.rmSync(tempDir, { force: true, recursive: true });
+      }
+    },
+  );
 });
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}

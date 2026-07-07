@@ -209,9 +209,9 @@ async function writeMainSessionStore(options?: SessionStoreEntryOptions) {
 function expectMainPatchBroadcast(
   result: Awaited<ReturnType<typeof invokeSessionsPatch>>,
   expected: Record<string, unknown>,
-) {
+): Record<string, unknown> {
   expectFields(result.responsePayload, { ok: true, key: "agent:main:main" });
-  expectChangedBroadcast(result.broadcastToConnIds, {
+  return expectChangedBroadcast(result.broadcastToConnIds, {
     sessionKey: "agent:main:main",
     reason: "patch",
     ...expected,
@@ -320,6 +320,7 @@ async function expectListedSessionActiveRun(
   const payload = expectRespondPayload(respond);
   const session = findSession(payload, "agent:main:main");
   expect(session.hasActiveRun).toBe(expected);
+  expect(session.activeRunIds).toEqual(expected ? ["run-1"] : undefined);
 }
 
 test("sessions.list keeps bulk rows lightweight and uses persisted model fields", async () => {
@@ -445,8 +446,103 @@ test("sessions.list uses the gateway model catalog for effective thinking defaul
   });
 });
 
+test("sessions.list exposes effective fast auto defaults from the selected model", async () => {
+  testState.agentConfig = {
+    model: { primary: "openai/gpt-5.5" },
+    models: {
+      "openai/gpt-5.5": { params: { fastMode: "auto", fastAutoOnSeconds: 30 } },
+    },
+  };
+  await writeMainSessionStore({
+    modelProvider: "openai",
+    model: "gpt-5.5",
+  });
+
+  const { respond } = await invokeSessionsList({
+    requestId: "req-sessions-list-fast-default",
+  });
+
+  const payload = expectRespondPayload(respond);
+  const session = findSession(payload, "agent:main:main");
+  expectFields(session, {
+    fastMode: undefined,
+    effectiveFastMode: "auto",
+    effectiveFastModeSource: "config",
+    fastAutoOnSeconds: 30,
+  });
+});
+
+test("sessions.list resolves effective fast metadata from the raw runtime provider", async () => {
+  testState.agentConfig = {
+    model: { primary: "openai-codex/gpt-5.5" },
+    models: {
+      "openai/gpt-5.5": { params: { fastMode: "auto", fastAutoOnSeconds: 30 } },
+      "openai-codex/gpt-5.5": { params: { fastMode: false, fastAutoOnSeconds: 45 } },
+    },
+  };
+  await writeMainSessionStore({
+    modelProvider: "openai-codex",
+    model: "gpt-5.5",
+  });
+
+  const { respond } = await invokeSessionsList({
+    requestId: "req-sessions-list-fast-raw-provider",
+  });
+
+  const payload = expectRespondPayload(respond);
+  const session = findSession(payload, "agent:main:main");
+  expectFields(session, {
+    effectiveFastMode: false,
+    effectiveFastModeSource: "config",
+    fastAutoOnSeconds: 45,
+  });
+});
+
+test("sessions.changed mutation events refresh effective fast metadata", async () => {
+  testState.agentConfig = {
+    model: { primary: "openai/gpt-5.5" },
+    models: {
+      "openai/gpt-5.5": { params: { fastMode: "auto", fastAutoOnSeconds: 30 } },
+    },
+  };
+  await writeMainSessionStore({
+    modelProvider: "openai",
+    model: "gpt-5.5",
+  });
+
+  const result = await invokeSessionsPatch({
+    key: "main",
+    fastMode: false,
+  });
+
+  expectMainPatchBroadcast(result, {
+    fastMode: false,
+    effectiveFastMode: false,
+    effectiveFastModeSource: "session",
+    fastAutoOnSeconds: 30,
+  });
+});
+
 test("sessions.list marks sessions with active abortable runs", async () => {
   await expectListedSessionActiveRun("req-sessions-list-active-run", {}, true);
+});
+
+test("sessions.changed publishes visible active run ids", async () => {
+  await writeMainSessionStore();
+  const result = await invokeSessionMutation({
+    method: "sessions.patch",
+    params: { key: "main", label: "Active main" },
+    context: {
+      chatAbortControllers: new Map([["run-1", { sessionKey: "agent:main:main" }]]),
+    },
+  });
+
+  expectChangedBroadcast(result.broadcastToConnIds, {
+    sessionKey: "agent:main:main",
+    reason: "patch",
+    hasActiveRun: true,
+    activeRunIds: ["run-1"],
+  });
 });
 
 test("sessions.list ignores terminal abortable runs kept for retry guards", async () => {
@@ -608,7 +704,31 @@ test("sessions.changed mutation events include live session setting metadata", a
     verboseLevel: "on",
   });
 
-  expectMainPatchBroadcast(result, sessionSettings);
+  expectMainPatchBroadcast(result, {
+    ...sessionSettings,
+    // An explicit session override resolves to the same effective mode and the
+    // sessions.changed builder carries the row-built channel-aware value.
+    effectiveResponseUsage: "full",
+  });
+});
+
+test("sessions.changed mutation events carry the resolved effectiveResponseUsage when the session has no override", async () => {
+  // No explicit responseUsage and no configured default → the row builder resolves
+  // effectiveResponseUsage to "off". The event must carry that resolved value, not
+  // the absent raw responseUsage, so a UI consumer's effective display stays fresh.
+  await writeMainSessionStore({ verboseLevel: "on" });
+
+  const result = await invokeSessionsPatch({
+    key: "main",
+    verboseLevel: "on",
+  });
+
+  const payload = expectMainPatchBroadcast(result, {
+    effectiveResponseUsage: "off",
+  });
+  // Raw responseUsage is genuinely absent (no override), proving the event does not
+  // merely echo the raw field.
+  expect(payload.responseUsage).toBeUndefined();
 });
 
 test("sessions.changed mutation events include sendPolicy metadata", async () => {
@@ -623,6 +743,103 @@ test("sessions.changed mutation events include sendPolicy metadata", async () =>
 
   expectMainPatchBroadcast(result, {
     sendPolicy: "deny",
+  });
+});
+
+test("sessions.changed mutation events include session management metadata", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      "discord:group:dev": sessionStoreEntry("sess-dev", {
+        pinnedAt: 10,
+        lastReadAt: 20,
+        lastActivityAt: 5,
+      }),
+    },
+  });
+
+  const archived = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    archived: true,
+  });
+  expectChangedBroadcast(archived.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    archived: true,
+    archivedAt: expect.any(Number),
+    pinned: false,
+    pinnedAt: null,
+    unread: false,
+    lastReadAt: 20,
+    lastActivityAt: 5,
+  });
+
+  const restored = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    archived: false,
+  });
+  expectChangedBroadcast(restored.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    archived: false,
+    archivedAt: null,
+  });
+
+  const pinned = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    pinned: true,
+  });
+  expectChangedBroadcast(pinned.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    pinned: true,
+    pinnedAt: expect.any(Number),
+  });
+
+  const unpinned = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    pinned: false,
+  });
+  expectChangedBroadcast(unpinned.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    pinned: false,
+    pinnedAt: null,
+  });
+
+  const unread = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    unread: true,
+  });
+  expectChangedBroadcast(unread.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    unread: true,
+    lastReadAt: 20,
+    lastActivityAt: 5,
+  });
+
+  const read = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    unread: false,
+  });
+  expectChangedBroadcast(read.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    unread: false,
+    lastReadAt: expect.any(Number),
+    lastActivityAt: 5,
+  });
+});
+
+test("sessions.changed mutation events clear label-derived display names", async () => {
+  await writeMainSessionStore({ label: "Dev" });
+
+  const result = await invokeSessionsPatch({ key: "main", label: null });
+
+  expectMainPatchBroadcast(result, {
+    label: null,
+    displayName: null,
   });
 });
 

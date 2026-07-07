@@ -29,7 +29,6 @@ import {
   isMainPackageTarget,
   OPENCLAW_MAIN_PACKAGE_SPEC,
   resolveGlobalInstallCommand,
-  resolveGlobalPackageRoot,
   resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
   resolveGlobalRoot,
@@ -132,9 +131,28 @@ describe("update global helpers", () => {
     await expect(resolveGlobalRoot("bun", runCommand, 1000)).resolves.toContain(
       path.join(".bun", "install", "global", "node_modules"),
     );
-    await expect(resolveGlobalPackageRoot("npm", runCommand, 1000)).resolves.toBe(
-      path.join("/tmp/npm-root", "openclaw"),
-    );
+  });
+
+  it("resolves scoped package paths from the package manager global root", async () => {
+    const globalRoot = path.join("tmp", "npm-root");
+    const runCommand: CommandRunner = async () => ({
+      stdout: `${globalRoot}\n`,
+      stderr: "",
+      code: 0,
+    });
+
+    await expect(
+      resolveGlobalInstallTarget({
+        manager: "npm",
+        runCommand,
+        timeoutMs: 1000,
+        packageName: "@kevins8/openclaw",
+      }),
+    ).resolves.toMatchObject({
+      manager: "npm",
+      globalRoot,
+      packageRoot: path.join(globalRoot, "@kevins8", "openclaw"),
+    });
   });
 
   it("maps main and explicit install specs for global installs", () => {
@@ -318,9 +336,6 @@ describe("update global helpers", () => {
           "npm",
         );
         await expect(resolveGlobalRoot("npm", runCommand, 1000, pkgRoot)).resolves.toBe(brewRoot);
-        await expect(resolveGlobalPackageRoot("npm", runCommand, 1000, pkgRoot)).resolves.toBe(
-          pkgRoot,
-        );
         await expect(
           resolveGlobalInstallTarget({
             manager: "npm",

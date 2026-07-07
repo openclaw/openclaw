@@ -9,7 +9,7 @@ import { buildLegacyBundledRootPath } from "./bundled-load-path-aliases.js";
 import { listBundledSourceOverlayDirs } from "./bundled-source-overlays.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
-import type { PluginDiscoveryResult } from "./discovery.js";
+import { discoverConfiguredPluginLoadPaths, type PluginDiscoveryResult } from "./discovery.js";
 import { fileSignatureMatches, hashJson } from "./installed-plugin-index-hash.js";
 import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
@@ -33,8 +33,10 @@ import {
   type LoadInstalledPluginIndexParams,
   type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index.js";
+import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import type { PluginRegistrySnapshotSource } from "./plugin-registry-snapshot.types.js";
+import { fileFingerprint } from "./plugin-snapshot-fingerprint.js";
 import { resolvePluginCacheInputs } from "./roots.js";
 
 export type PluginRegistrySnapshot = InstalledPluginIndex;
@@ -205,16 +207,6 @@ function directoryChildFingerprint(directoryPath: string): unknown {
   }
 }
 
-function fileFingerprint(filePath: string): unknown {
-  try {
-    const stat = fs.statSync(filePath, { bigint: true });
-    const kind = stat.isFile() ? "file" : stat.isDirectory() ? "dir" : "other";
-    return [filePath, kind, stat.size.toString(), stat.mtimeNs.toString(), stat.ctimeNs.toString()];
-  } catch {
-    return [filePath, "missing"];
-  }
-}
-
 function findPluginRegistrySnapshotMemo(
   key: string | undefined,
 ): PluginRegistrySnapshotResult | undefined {
@@ -295,6 +287,34 @@ function hasMissingPersistedPluginSource(index: InstalledPluginIndex): boolean {
       (plugin.setupSource ? !fs.existsSync(plugin.setupSource) : false)
     );
   });
+}
+
+function hasMismatchedPersistedConfigPathPlugins(
+  index: InstalledPluginIndex,
+  params: LoadPluginRegistryParams,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  const loadPaths = normalizePluginsConfig(params.config?.plugins).loadPaths;
+  const discovery = discoverConfiguredPluginLoadPaths({
+    loadPaths,
+    workspaceDir: params.workspaceDir,
+    env,
+  });
+  const configuredRoots = loadPluginManifestRegistry({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env,
+    candidates: discovery.candidates,
+    diagnostics: discovery.diagnostics,
+    installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(index),
+  }).plugins.map((plugin) => resolveComparablePath(plugin.rootDir));
+  const persistedRoots = index.plugins
+    .filter((plugin) => plugin.origin === "config")
+    .map((plugin) => resolveComparablePath(plugin.rootDir));
+  if (configuredRoots.length !== persistedRoots.length) {
+    return true;
+  }
+  return configuredRoots.some((rootDir, position) => rootDir !== persistedRoots[position]);
 }
 
 function resolveComparablePath(filePath: string): string {
@@ -548,6 +568,13 @@ export function loadPluginRegistrySnapshotWithMetadata(
           code: "persisted-registry-stale-source",
           message:
             "Persisted plugin registry points at a different bundled plugin tree; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
+        });
+      } else if (hasMismatchedPersistedConfigPathPlugins(persistedIndex, params, env)) {
+        diagnostics.push({
+          level: "warn",
+          code: "persisted-registry-stale-source",
+          message:
+            "Persisted plugin registry does not match configured load-path plugins; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
         });
       } else if (hasStalePersistedPluginDiagnostics(persistedIndex)) {
         diagnostics.push({

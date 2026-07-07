@@ -163,15 +163,6 @@ export function buildStableCachePrefix(tag: string, sections = 160): string {
   return lines.join("\n");
 }
 
-/** Extract normalized assistant text from a streamed/completed assistant message. */
-export function extractAssistantText(message: AssistantMessage): string {
-  return message.content
-    .filter((block) => block.type === "text")
-    .map((block) => block.text.trim())
-    .filter(Boolean)
-    .join(" ");
-}
-
 /** Build a zero-usage assistant history turn for cache fixture setup. */
 export function buildAssistantHistoryTurn(
   text: string,

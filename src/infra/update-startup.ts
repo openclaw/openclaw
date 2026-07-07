@@ -9,14 +9,26 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
-import { resolveStateDir } from "../config/paths.js";
+import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { VERSION } from "../version.js";
 import { isTruthyEnvValue } from "./env.js";
-import { writeJson } from "./json-files.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "./kysely-sync.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
-import { scheduleGatewaySigusr1Restart } from "./restart.js";
+import {
+  resolveGatewayRestartDeferralTimeoutMs,
+  scheduleGatewaySigusr1Restart,
+} from "./restart.js";
 import { detectRespawnSupervisor, type RespawnSupervisor } from "./supervisor-markers.js";
 import { normalizeUpdateChannel, DEFAULT_PACKAGE_CHANNEL } from "./update-channels.js";
 import { compareSemverStrings, resolveNpmChannelTag, checkUpdateStatus } from "./update-check.js";
@@ -54,7 +66,6 @@ type AutoUpdateRunResult = {
   reason?: string;
   command?: string;
   logPath?: string;
-  restartDelayMs?: number;
 };
 
 export type UpdateAvailable = {
@@ -73,7 +84,7 @@ export function resetUpdateAvailableStateForTest(): void {
   updateAvailableCache = null;
 }
 
-const UPDATE_CHECK_FILENAME = "update-check.json";
+const UPDATE_CHECK_STATE_KEY = "default";
 const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const AUTO_UPDATE_COMMAND_TIMEOUT_MS = 45 * 60 * 1000;
@@ -81,6 +92,8 @@ const AUTO_STABLE_DELAY_HOURS_DEFAULT = 6;
 const AUTO_STABLE_JITTER_HOURS_DEFAULT = 12;
 const AUTO_BETA_CHECK_INTERVAL_HOURS_DEFAULT = 1;
 const MANAGED_AUTO_UPDATE_SYSTEMD_RESTART_GRACE_MS = 2000;
+
+type UpdateCheckStateDatabase = Pick<OpenClawStateKyselyDatabase, "update_check_state">;
 
 function shouldSkipCheck(allowInTests: boolean): boolean {
   if (allowInTests) {
@@ -130,18 +143,69 @@ function resolveCheckIntervalMs(cfg: OpenClawConfig): number {
   return UPDATE_CHECK_INTERVAL_MS;
 }
 
-async function readState(statePath: string): Promise<UpdateCheckState> {
-  try {
-    const raw = await fs.readFile(statePath, "utf-8");
-    const parsed = JSON.parse(raw) as UpdateCheckState;
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
+function presentString(value: string | null): string | undefined {
+  return value ?? undefined;
 }
 
-async function writeState(statePath: string, state: UpdateCheckState): Promise<void> {
-  await writeJson(statePath, state);
+async function readState(): Promise<UpdateCheckState> {
+  const database = openOpenClawStateDatabase();
+  const stateDb = getNodeSqliteKysely<UpdateCheckStateDatabase>(database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    stateDb
+      .selectFrom("update_check_state")
+      .selectAll()
+      .where("state_key", "=", UPDATE_CHECK_STATE_KEY),
+  );
+  if (!row) {
+    return {};
+  }
+  return {
+    lastCheckedAt: presentString(row.last_checked_at),
+    lastNotifiedVersion: presentString(row.last_notified_version),
+    lastNotifiedTag: presentString(row.last_notified_tag),
+    lastAvailableVersion: presentString(row.last_available_version),
+    lastAvailableTag: presentString(row.last_available_tag),
+    autoInstallId: presentString(row.auto_install_id),
+    autoFirstSeenVersion: presentString(row.auto_first_seen_version),
+    autoFirstSeenTag: presentString(row.auto_first_seen_tag),
+    autoFirstSeenAt: presentString(row.auto_first_seen_at),
+    autoLastAttemptVersion: presentString(row.auto_last_attempt_version),
+    autoLastAttemptAt: presentString(row.auto_last_attempt_at),
+    autoLastSuccessVersion: presentString(row.auto_last_success_version),
+    autoLastSuccessAt: presentString(row.auto_last_success_at),
+  };
+}
+
+async function writeState(state: UpdateCheckState): Promise<void> {
+  const updatedAtMs = Date.now();
+  runOpenClawStateWriteTransaction(({ db }) => {
+    const stateDb = getNodeSqliteKysely<UpdateCheckStateDatabase>(db);
+    executeSqliteQuerySync(
+      db,
+      stateDb.deleteFrom("update_check_state").where("state_key", "=", UPDATE_CHECK_STATE_KEY),
+    );
+    executeSqliteQuerySync(
+      db,
+      stateDb.insertInto("update_check_state").values({
+        state_key: UPDATE_CHECK_STATE_KEY,
+        last_checked_at: state.lastCheckedAt ?? null,
+        last_notified_version: state.lastNotifiedVersion ?? null,
+        last_notified_tag: state.lastNotifiedTag ?? null,
+        last_available_version: state.lastAvailableVersion ?? null,
+        last_available_tag: state.lastAvailableTag ?? null,
+        auto_install_id: state.autoInstallId ?? null,
+        auto_first_seen_version: state.autoFirstSeenVersion ?? null,
+        auto_first_seen_tag: state.autoFirstSeenTag ?? null,
+        auto_first_seen_at: state.autoFirstSeenAt ?? null,
+        auto_last_attempt_version: state.autoLastAttemptVersion ?? null,
+        auto_last_attempt_at: state.autoLastAttemptAt ?? null,
+        auto_last_success_version: state.autoLastSuccessVersion ?? null,
+        auto_last_success_at: state.autoLastSuccessAt ?? null,
+        updated_at_ms: updatedAtMs,
+      }),
+    );
+  });
 }
 
 function sameUpdateAvailable(a: UpdateAvailable | null, b: UpdateAvailable | null): boolean {
@@ -275,6 +339,7 @@ function resolveManagedAutoUpdateRestartDelayMs(supervisor: RespawnSupervisor): 
 async function startManagedServiceAutoUpdateHandoff(params: {
   channel: "stable" | "beta";
   timeoutMs: number;
+  restartDrainTimeoutMs: number | undefined;
   root?: string;
   supervisor: RespawnSupervisor;
 }): Promise<AutoUpdateRunResult> {
@@ -284,6 +349,7 @@ async function startManagedServiceAutoUpdateHandoff(params: {
     const started = await startManagedServiceUpdateHandoff({
       root: resolveAutoUpdateHandoffRoot(params.root),
       timeoutMs: params.timeoutMs,
+      restartDrainTimeoutMs: params.restartDrainTimeoutMs,
       channel: params.channel,
       restartDelayMs,
       supervisor: params.supervisor,
@@ -293,13 +359,20 @@ async function startManagedServiceAutoUpdateHandoff(params: {
         note: "background auto-update",
       },
     });
+    // Pair helper creation with restart scheduling before any state persistence
+    // can fail and leave an indefinite handoff waiting on a live parent.
+    scheduleGatewaySigusr1Restart({
+      delayMs: restartDelayMs,
+      reason: "update.auto",
+      skipCooldown: true,
+      skipDeferral: true,
+    });
     return {
       ok: true,
       code: 0,
       reason: CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON,
       command: started.command,
       logPath: started.logPath,
-      restartDelayMs,
     };
   } catch (err) {
     return {
@@ -313,6 +386,7 @@ async function startManagedServiceAutoUpdateHandoff(params: {
 async function runAutoUpdateCommand(params: {
   channel: "stable" | "beta";
   timeoutMs: number;
+  restartDrainTimeoutMs: number | undefined;
   root?: string;
 }): Promise<AutoUpdateRunResult> {
   const supervisor = detectRespawnSupervisor(process.env, process.platform, {
@@ -322,6 +396,7 @@ async function runAutoUpdateCommand(params: {
     return await startManagedServiceAutoUpdateHandoff({
       channel: params.channel,
       timeoutMs: params.timeoutMs,
+      restartDrainTimeoutMs: params.restartDrainTimeoutMs,
       root: params.root,
       supervisor,
     });
@@ -400,6 +475,7 @@ export async function runGatewayUpdateCheck(params: {
   runAutoUpdate?: (params: {
     channel: "stable" | "beta";
     timeoutMs: number;
+    restartDrainTimeoutMs: number | undefined;
     root?: string;
   }) => Promise<AutoUpdateRunResult>;
 }): Promise<void> {
@@ -407,6 +483,15 @@ export async function runGatewayUpdateCheck(params: {
     return;
   }
   if (params.isNixMode) {
+    return;
+  }
+  const configuredChannel =
+    normalizeUpdateChannel(params.cfg.update?.channel) ?? DEFAULT_PACKAGE_CHANNEL;
+  if (configuredChannel === "extended-stable") {
+    setUpdateAvailableCache({
+      next: null,
+      onUpdateAvailableChange: params.onUpdateAvailableChange,
+    });
     return;
   }
   const auto = resolveAutoUpdatePolicy(params.cfg);
@@ -417,8 +502,7 @@ export async function runGatewayUpdateCheck(params: {
     return;
   }
 
-  const statePath = path.join(resolveStateDir(), UPDATE_CHECK_FILENAME);
-  const state = await readState(statePath);
+  const state = await readState();
   const rawNow = Date.now();
   const now = resolveUpdateCheckNowMs(rawNow);
   const rawNowIsValid = asDateTimestampMs(rawNow) !== undefined;
@@ -460,8 +544,6 @@ export async function runGatewayUpdateCheck(params: {
     ...state,
     lastCheckedAt: resolveUpdateCheckTimestamp(now),
   };
-  let pendingAutoUpdateRestartDelayMs: number | null = null;
-
   if (status.installKind !== "package") {
     delete nextState.lastAvailableVersion;
     delete nextState.lastAvailableTag;
@@ -470,15 +552,15 @@ export async function runGatewayUpdateCheck(params: {
       next: null,
       onUpdateAvailableChange: params.onUpdateAvailableChange,
     });
-    await writeState(statePath, nextState);
+    await writeState(nextState);
     return;
   }
 
-  const channel = normalizeUpdateChannel(params.cfg.update?.channel) ?? DEFAULT_PACKAGE_CHANNEL;
+  const channel = configuredChannel;
   const resolved = await resolveNpmChannelTag({ channel, timeoutMs: 2500 });
   const tag = resolved.tag;
   if (!resolved.version) {
-    await writeState(statePath, nextState);
+    await writeState(nextState);
     return;
   }
 
@@ -559,10 +641,12 @@ export async function runGatewayUpdateCheck(params: {
         const outcome = await runAuto({
           channel,
           timeoutMs: AUTO_UPDATE_COMMAND_TIMEOUT_MS,
+          restartDrainTimeoutMs: resolveGatewayRestartDeferralTimeoutMs(
+            getRuntimeConfig().gateway?.reload?.deferralTimeoutMs,
+          ),
           root: root ?? status.root ?? undefined,
         });
         if (outcome.ok && outcome.reason === CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON) {
-          pendingAutoUpdateRestartDelayMs = outcome.restartDelayMs ?? 0;
           params.log.info("auto-update handoff started", {
             channel,
             version: resolved.version,
@@ -598,15 +682,7 @@ export async function runGatewayUpdateCheck(params: {
     });
   }
 
-  await writeState(statePath, nextState);
-  if (pendingAutoUpdateRestartDelayMs !== null) {
-    scheduleGatewaySigusr1Restart({
-      delayMs: pendingAutoUpdateRestartDelayMs,
-      reason: "update.auto",
-      skipCooldown: true,
-      skipDeferral: true,
-    });
-  }
+  await writeState(nextState);
 }
 
 export function scheduleGatewayUpdateCheck(params: {
@@ -615,6 +691,10 @@ export function scheduleGatewayUpdateCheck(params: {
   isNixMode: boolean;
   onUpdateAvailableChange?: (updateAvailable: UpdateAvailable | null) => void;
 }): () => void {
+  const channel = normalizeUpdateChannel(params.cfg.update?.channel) ?? DEFAULT_PACKAGE_CHANNEL;
+  if (channel === "extended-stable") {
+    return () => {};
+  }
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let running = false;

@@ -19,7 +19,7 @@ scenario:
           anthropic/claude-sonnet-4-6:
             params: {}
   successCriteria:
-    - Anthropic Claude Sonnet 4.6 advertises adaptive but not OpenAI-only xhigh or Opus max.
+    - Anthropic Claude Sonnet 4.6 advertises adaptive and native max, but not OpenAI-only xhigh.
     - A stored adaptive level remaps to medium when switching to OpenAI GPT-5.5.
     - OpenAI GPT-5.5 advertises xhigh but not adaptive or max.
     - A stored xhigh level remaps to high when switching to an Anthropic model without xhigh support.
@@ -36,7 +36,7 @@ scenario:
     - extensions/openai/openai-provider.ts
   execution:
     kind: flow
-    summary: Select Anthropic, set adaptive, switch to OpenAI and verify medium fallback, then set xhigh and verify high fallback on a non-xhigh model.
+    summary: Select Anthropic, set adaptive, switch to OpenAI and verify medium fallback, then set xhigh and verify high fallback on a model without xhigh support.
     config:
       requiredProviderMode: live-frontier
       requiredProvider: openai
@@ -70,15 +70,14 @@ flow:
         - set: cursor
           value:
             expr: state.getSnapshot().messages.length
-        - call: state.addInboundMessage
-          args:
-            - conversation:
-                id:
-                  expr: config.conversationId
-                kind: direct
-              senderId: qa-operator
-              senderName: QA Operator
-              text: /think
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: direct
+            senderId: qa-operator
+            senderName: QA Operator
+            text: /think
         - call: waitForCondition
           saveAs: anthropicThinkStatus
           args:
@@ -90,24 +89,23 @@ flow:
             message:
               expr: "`expected Anthropic /think options to include adaptive, got ${anthropicThinkStatus.text}`"
         - assert:
-            expr: "!/Options: .*\\bxhigh\\b/i.test(anthropicThinkStatus.text) && !/Options: .*\\bmax\\b/i.test(anthropicThinkStatus.text)"
+            expr: "!/Options: .*\\bxhigh\\b/i.test(anthropicThinkStatus.text) && /Options: .*\\bmax\\b/i.test(anthropicThinkStatus.text)"
             message:
-              expr: "`expected Sonnet /think options to omit xhigh/max, got ${anthropicThinkStatus.text}`"
+              expr: "`expected Sonnet /think options to include max and omit xhigh, got ${anthropicThinkStatus.text}`"
       detailsExpr: "`model=${JSON.stringify(anthropicModelAck.resolved)}; think=${anthropicThinkStatus.text}`"
     - name: maps adaptive to medium when switching to OpenAI
       actions:
         - set: cursor
           value:
             expr: state.getSnapshot().messages.length
-        - call: state.addInboundMessage
-          args:
-            - conversation:
-                id:
-                  expr: config.conversationId
-                kind: direct
-              senderId: qa-operator
-              senderName: QA Operator
-              text: /think adaptive
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: direct
+            senderId: qa-operator
+            senderName: QA Operator
+            text: /think adaptive
         - call: waitForCondition
           saveAs: adaptiveAck
           args:
@@ -124,15 +122,14 @@ flow:
         - set: cursor
           value:
             expr: state.getSnapshot().messages.length
-        - call: state.addInboundMessage
-          args:
-            - conversation:
-                id:
-                  expr: config.conversationId
-                kind: direct
-              senderId: qa-operator
-              senderName: QA Operator
-              text: /think
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: direct
+            senderId: qa-operator
+            senderName: QA Operator
+            text: /think
         - call: waitForCondition
           saveAs: openAiThinkStatus
           args:
@@ -149,15 +146,14 @@ flow:
         - set: cursor
           value:
             expr: state.getSnapshot().messages.length
-        - call: state.addInboundMessage
-          args:
-            - conversation:
-                id:
-                  expr: config.conversationId
-                kind: direct
-              senderId: qa-operator
-              senderName: QA Operator
-              text: /think xhigh
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: direct
+            senderId: qa-operator
+            senderName: QA Operator
+            text: /think xhigh
         - call: waitForCondition
           saveAs: xhighAck
           args:
@@ -174,15 +170,14 @@ flow:
         - set: cursor
           value:
             expr: state.getSnapshot().messages.length
-        - call: state.addInboundMessage
-          args:
-            - conversation:
-                id:
-                  expr: config.conversationId
-                kind: direct
-              senderId: qa-operator
-              senderName: QA Operator
-              text: /think
+        - sendInbound:
+            conversation:
+              id:
+                expr: config.conversationId
+              kind: direct
+            senderId: qa-operator
+            senderName: QA Operator
+            text: /think
         - call: waitForCondition
           saveAs: noXhighThinkStatus
           args:
@@ -190,7 +185,7 @@ flow:
                 expr: "state.getSnapshot().messages.slice(cursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId && /Current thinking level: high/i.test(candidate.text)).at(-1)"
             - expr: liveTurnTimeoutMs(env, 20000)
         - assert:
-            expr: "/Options: .*\\badaptive\\b/i.test(noXhighThinkStatus.text) && !/Options: .*\\bxhigh\\b/i.test(noXhighThinkStatus.text) && !/Options: .*\\bmax\\b/i.test(noXhighThinkStatus.text)"
+            expr: "/Options: .*\\badaptive\\b/i.test(noXhighThinkStatus.text) && /Options: .*\\bmax\\b/i.test(noXhighThinkStatus.text) && !/Options: .*\\bxhigh\\b/i.test(noXhighThinkStatus.text)"
             message:
-              expr: "`expected non-xhigh model /think options to include adaptive and omit xhigh/max, got ${noXhighThinkStatus.text}`"
+              expr: "`expected non-xhigh model /think options to include adaptive/max and omit xhigh, got ${noXhighThinkStatus.text}`"
       detailsExpr: "`xhigh=${xhighAck.text}; switch=${JSON.stringify(noXhighModelAck.resolved)}; think=${noXhighThinkStatus.text}`"

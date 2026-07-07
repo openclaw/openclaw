@@ -144,7 +144,7 @@ function lineNumberForOffset(logs: string, offset: number) {
   return logs.slice(0, offset).split(/\r?\n/u).length;
 }
 
-function extractMessageText(message: Record<string, unknown>) {
+export function extractGatewayMessageText(message: Record<string, unknown>) {
   const rawContent = message.content;
   if (typeof rawContent === "string") {
     return rawContent.trim();
@@ -169,9 +169,13 @@ function extractMessageText(message: Record<string, unknown>) {
       continue;
     }
     const nestedText = readNonEmptyString(block.content);
+    const normalizedType = readNonEmptyString(block.type)?.toLowerCase().replace(/_/g, "");
     if (
       nestedText &&
-      (block.type === "output_text" || block.type === "text" || block.type === "message")
+      (normalizedType === "outputtext" ||
+        normalizedType === "text" ||
+        normalizedType === "message" ||
+        normalizedType === "toolresult")
     ) {
       parts.push(nestedText);
     }
@@ -274,7 +278,7 @@ export function createDirectReplyTranscriptSentinelScanner() {
       if (message.role !== "assistant") {
         return;
       }
-      const text = extractMessageText(message);
+      const text = extractGatewayMessageText(message);
       if (text) {
         lastAssistantText = text;
       }

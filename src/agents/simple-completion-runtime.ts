@@ -1,3 +1,5 @@
+import { supportsOpenAIReasoningEffort } from "@openclaw/ai/internal/openai";
+import { resolveClaudeSonnet5ModelIdentity } from "@openclaw/llm-core";
 /**
  * Simple completion runtime preparation.
  *
@@ -10,10 +12,15 @@ import { completeSimple } from "../llm/stream.js";
 import type {
   AssistantMessage,
   Model,
+  ModelThinkingLevel,
   ThinkingLevel as SimpleCompletionThinkingLevel,
 } from "../llm/types.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.js";
-import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "./agent-scope.js";
+import {
+  resolveAgentConfig,
+  resolveAgentDir,
+  resolveAgentEffectiveModelPrimary,
+} from "./agent-scope.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
 import { resolveModel, resolveModelAsync } from "./embedded-agent-runner/model.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
@@ -85,14 +92,21 @@ export type PreparedSimpleCompletionModelForAgent =
 export function resolveSimpleCompletionSelectionForAgent(params: {
   cfg: OpenClawConfig;
   agentId: string;
+  agentDir?: string;
   modelRef?: string;
+  useUtilityModel?: boolean;
 }): AgentSimpleCompletionSelection | null {
   const fallbackRef = resolveDefaultModelForAgent({
     cfg: params.cfg,
     agentId: params.agentId,
   });
   const modelRef =
-    params.modelRef?.trim() || resolveAgentEffectiveModelPrimary(params.cfg, params.agentId);
+    params.modelRef?.trim() ||
+    (params.useUtilityModel
+      ? resolveAgentConfig(params.cfg, params.agentId)?.utilityModel?.trim() ||
+        params.cfg.agents?.defaults?.utilityModel?.trim()
+      : undefined) ||
+    resolveAgentEffectiveModelPrimary(params.cfg, params.agentId);
   const split = modelRef ? splitTrailingAuthProfile(modelRef) : null;
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
@@ -120,7 +134,7 @@ export function resolveSimpleCompletionSelectionForAgent(params: {
       modelId,
     }),
     profileId: split?.profile || undefined,
-    agentDir: resolveAgentDir(params.cfg, params.agentId),
+    agentDir: params.agentDir?.trim() || resolveAgentDir(params.cfg, params.agentId),
   };
 }
 
@@ -152,7 +166,7 @@ async function setRuntimeApiKeyForCompletion(params: {
   profileId?: string;
 }): Promise<CompletionRuntimeCredential> {
   if (params.model.provider === "github-copilot") {
-    const { resolveCopilotApiToken } = await import("./github-copilot-token.js");
+    const { resolveCopilotApiToken } = await import("../plugin-sdk/provider-auth.js");
     const copilotToken = await resolveCopilotApiToken({
       githubToken: params.apiKey,
     });
@@ -291,7 +305,9 @@ export async function prepareSimpleCompletionModel(params: {
 export async function prepareSimpleCompletionModelForAgent(params: {
   cfg: OpenClawConfig;
   agentId: string;
+  agentDir?: string;
   modelRef?: string;
+  useUtilityModel?: boolean;
   preferredProfile?: string;
   allowMissingApiKeyModes?: ReadonlyArray<AllowedMissingApiKeyMode>;
   allowBundledStaticCatalogFallback?: boolean;
@@ -302,7 +318,9 @@ export async function prepareSimpleCompletionModelForAgent(params: {
   const selection = resolveSimpleCompletionSelectionForAgent({
     cfg: params.cfg,
     agentId: params.agentId,
+    agentDir: params.agentDir,
     modelRef: params.modelRef,
+    useUtilityModel: params.useUtilityModel,
   });
   if (!selection) {
     return {
@@ -346,7 +364,7 @@ export async function completeWithPreparedSimpleCompletionModel(params: {
 }): Promise<AssistantMessage> {
   const completionModel = prepareModelForSimpleCompletion({ model: params.model, cfg: params.cfg });
   const { reasoning: rawReasoning, ...options } = params.options ?? {};
-  const reasoning = normalizeSimpleCompletionReasoning(rawReasoning);
+  const reasoning = normalizeSimpleCompletionReasoning(rawReasoning, completionModel);
   return await completeSimple(completionModel, params.context, {
     ...options,
     ...(reasoning ? { reasoning } : {}),
@@ -356,15 +374,19 @@ export async function completeWithPreparedSimpleCompletionModel(params: {
 
 function normalizeSimpleCompletionReasoning(
   reasoning: SimpleCompletionModelOptions["reasoning"],
-): SimpleCompletionThinkingLevel | undefined {
+  model: Model,
+): ModelThinkingLevel | undefined {
   switch (reasoning) {
     case undefined:
-    case "off":
       return undefined;
+    case "off":
+      return resolveClaudeSonnet5ModelIdentity(model) ? "off" : undefined;
     case "adaptive":
       return "medium";
     case "max":
-      return "xhigh";
+      return isOpenAIProvider(model.provider) && supportsOpenAIReasoningEffort(model, "max")
+        ? "max"
+        : "xhigh";
     default:
       return reasoning;
   }

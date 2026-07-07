@@ -1,5 +1,6 @@
 {
   "id": "mistral",
+  "icon": "https://cdn.simpleicons.org/mistralai",
   "activation": {
     "onStartup": false
   },
@@ -151,6 +152,7 @@
       "provider": "mistral",
       "method": "api-key",
       "choiceId": "mistral-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "Mistral API key",
       "groupId": "mistral",
       "groupLabel": "Mistral AI",

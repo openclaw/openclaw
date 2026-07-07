@@ -4,7 +4,8 @@
  * Downscales and recompresses oversized base64 image blocks before provider replay.
  */
 import { canonicalizeBase64 } from "@openclaw/media-core/base64";
-import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import { formatByteSize, resolveIntegerOption } from "@openclaw/normalization-core";
+import { toErrorObject } from "../infra/errors.js";
 import type { ImageContent } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -96,10 +97,12 @@ function formatBytesShort(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 1024) {
     return `${Math.max(0, Math.round(bytes))}B`;
   }
-  if (bytes < 1024 * 1024) {
-    return `${(bytes / 1024).toFixed(1)}KB`;
-  }
-  return `${(bytes / (1024 * 1024)).toFixed(2)}MB`;
+  return formatByteSize(bytes, {
+    style: "legacy-binary",
+    maxUnit: "mega",
+    separator: "",
+    fractionDigits: (_value, unit) => (unit === "kilo" ? 1 : 2),
+  });
 }
 
 function fileNameFromPathLike(pathLike: string): string | undefined {
@@ -275,7 +278,7 @@ async function resizeImageBase64IfNeeded(params: {
   }
 
   if (processorUnavailableError) {
-    throw toLintErrorObject(processorUnavailableError, "Non-Error thrown");
+    throw toErrorObject(processorUnavailableError, "Non-Error thrown");
   }
 
   const best = smallest?.buffer ?? buf;
@@ -396,18 +399,4 @@ export async function sanitizeToolResultImages(
 
   const next = await sanitizeContentBlocksImages(content, label, opts);
   return { ...result, content: next };
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

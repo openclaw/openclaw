@@ -30,6 +30,7 @@ export type IMessageActionConfig = {
   removeParticipant?: boolean;
   leaveGroup?: boolean;
   sendAttachment?: boolean;
+  polls?: boolean;
 };
 
 /** Inbound tapback notification policy. */
@@ -116,10 +117,11 @@ export type IMessageAccountConfig = {
   /**
    * Merge consecutive same-sender DM rows from `chat.db` into a single agent
    * turn, so Apple's split-send (`<command> <URL>` arriving as two separate
-   * rows ~0.8-2.0 s apart) lands as one merged message. DM-only — group chats
+   * rows several seconds apart) lands as one merged message. DM-only — group chats
    * keep instant per-message dispatch. Widens the default inbound debounce
-   * window to 2500 ms when enabled without an explicit
-   * `messages.inbound.byChannel.imessage`. Default: `false`.
+   * window to 7000 ms when enabled without an explicit
+   * `messages.inbound.byChannel.imessage` or global
+   * `messages.inbound.debounceMs`. Default: `false`.
    */
   coalesceSameSenderDms?: boolean;
   groups?: Record<

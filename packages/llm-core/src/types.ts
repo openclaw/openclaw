@@ -185,7 +185,7 @@ export type ProviderImagesOptions = ImagesOptions & Record<string, unknown>;
 
 /** Unified text options used by simple completion helpers. */
 export interface SimpleStreamOptions extends StreamOptions {
-  reasoning?: ThinkingLevel;
+  reasoning?: ModelThinkingLevel;
   /** Custom token budgets for thinking levels (token-based providers only) */
   thinkingBudgets?: ThinkingBudgets;
 }
@@ -263,6 +263,10 @@ export interface Usage {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  /** Exact context snapshot for the final provider iteration. */
+  contextUsage?:
+    | { state: "available"; promptTokens: number; totalTokens: number }
+    | { state: "unavailable" };
   totalTokens: number;
   cost: {
     input: number;
