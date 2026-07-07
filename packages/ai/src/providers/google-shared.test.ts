@@ -6,6 +6,7 @@ import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 import {
   buildGoogleGenerateContentParams,
+  buildGoogleSimpleThinking,
   consumeGoogleGenerateContentStream,
 } from "./google-shared.js";
 
@@ -52,6 +53,30 @@ function createOutput(): AssistantMessage {
     timestamp: 0,
   };
 }
+
+describe("buildGoogleSimpleThinking", () => {
+  it.each(["xhigh", "max"] as const)(
+    "keeps thinking disabled when reasoning=%s clamps to off",
+    (reasoning) => {
+      const offOnlyThinkingModel = {
+        ...model,
+        id: "gemini-3-flash-preview",
+        thinkingLevelMap: {
+          minimal: null,
+          low: null,
+          medium: null,
+          high: null,
+          xhigh: null,
+          max: null,
+        },
+      } satisfies Model<"google-generative-ai">;
+
+      expect(buildGoogleSimpleThinking(offOnlyThinkingModel, { reasoning })).toEqual({
+        enabled: false,
+      });
+    },
+  );
+});
 
 async function* chunks(items: GenerateContentResponse[]) {
   yield* items;
