@@ -227,7 +227,7 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
   });
 
-  it("keeps the announce decider for same-session sends from a different channel", async () => {
+  it("delivers primaryReply via gateway for same-session sends from a different channel and skips announce", async () => {
     vi.mocked(runAgentStep).mockResolvedValueOnce("ANNOUNCE_SKIP");
 
     await runSessionsSendA2AFlow({
@@ -241,10 +241,14 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
       roundOneReply: "Substantive channel reply",
     });
 
-    expect(runAgentStep).toHaveBeenCalledTimes(1);
-    const stepInput = firstMockArg(vi.mocked(runAgentStep), "agent step");
-    expect(stepInput.message).toBe("Agent-to-agent announce step.");
-    expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
+    // pre-ping-pong delivery sends primaryReply directly; announce skipped
+    expect(runAgentStep).not.toHaveBeenCalled();
+    const sendCall = gatewayCalls.find((call) => call.method === "send");
+    expect(sendCall).toBeDefined();
+    if (sendCall) {
+      const p = sendCall.params as Record<string, unknown>;
+      expect(p.message).toBe("Substantive channel reply");
+    }
   });
 
   it.each([
@@ -525,6 +529,52 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     expect(stepInput.message).toBe("Target first reply");
 
     // announce skipped because primaryReply was delivered
+    expect(gatewayCalls.filter((c) => c.method === "send")).toHaveLength(1);
+  });
+
+  it("uses requester-derived target for pre-ping-pong delivery when requester session resolves", async () => {
+    vi.mocked(runAgentStep).mockResolvedValueOnce("Target second reply");
+
+    // Set up session list so requester session key resolves to Telegram channel
+    sessionListRows = [
+      {
+        key: "agent:requester:telegram:user:6278285192",
+        kind: "dm",
+        channel: "telegram",
+        lastChannel: "telegram",
+        lastTo: "6278285192",
+        lastAccountId: "primary",
+      } satisfies SessionListRow,
+    ];
+
+    await runSessionsSendA2AFlow({
+      targetSessionKey: "agent:main:discord:group:dev",
+      displayKey: "agent:main:discord:group:dev",
+      message: "Request task",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 2,
+      requesterSessionKey: "agent:requester:telegram:user:6278285192",
+      requesterChannel: "telegram",
+      roundOneReply: "Target first reply",
+    });
+
+    // pre-ping-pong delivery should use requester session route (Telegram), not target (Discord)
+    const primarySend = gatewayCalls.find(
+      (c) => c.method === "send" && c.params?.message === "Target first reply",
+    );
+    expect(primarySend).toBeDefined();
+    if (primarySend) {
+      const p = primarySend.params as Record<string, unknown>;
+      expect(p.channel).toBe("telegram");
+      expect(p.to).toBe("6278285192");
+    }
+
+    // ping-pong: one target turn
+    expect(runAgentStep).toHaveBeenCalledTimes(1);
+    const stepInput = firstMockArg(vi.mocked(runAgentStep), "agent step");
+    expect(stepInput.sessionKey).toBe("agent:main:discord:group:dev");
+
+    // announce skipped
     expect(gatewayCalls.filter((c) => c.method === "send")).toHaveLength(1);
   });
 });

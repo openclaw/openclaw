@@ -153,6 +153,18 @@ export async function runSessionsSendA2AFlow(params: {
     });
     const targetChannel = announceTarget?.channel ?? "unknown";
 
+    // Resolve a requester-side target for pre-ping-pong delivery so the first
+    // round-trip reply reaches the requester's channel even in cross-channel
+    // A2A (e.g., Discord requester → Telegram target).
+    let requesterTarget: AnnounceTarget | null = null;
+    if (params.requesterSessionKey && params.requesterSessionKey !== params.targetSessionKey) {
+      requesterTarget = await resolveAnnounceTarget({
+        sessionKey: params.requesterSessionKey,
+        displayKey: params.requesterSessionKey,
+      }).catch(() => null);
+    }
+    const preDeliveryTarget = requesterTarget ?? announceTarget;
+
     // A same-session send is a human-facing source-channel reply, not a true
     // agent-to-agent announcement. Asking the same session to decide whether to
     // announce can learn stale ANNOUNCE_SKIP patterns from its own history and
@@ -174,13 +186,16 @@ export async function runSessionsSendA2AFlow(params: {
       return;
     }
 
-    // Deliver the first reply back to the requester's channel before entering
-    // ping-pong. In cross-agent scenarios, this is the only reliable delivery
-    // point: the ping-pong loop consumes messages within agent sessions, and
-    // the final announce step depends on the target agent choosing to announce.
-    if (announceTarget && primaryReply) {
+    // Deliver the first reply before entering ping-pong. Uses requester-derived
+    // target (when available) so cross-channel A2A delivers to the correct chat,
+    // falling back to the target-derived announce target if the requester session
+    // is not resolvable (e.g., cron job keys). In cross-agent scenarios this is
+    // the only reliable delivery point: the ping-pong loop consumes messages
+    // within agent sessions, and the final announce step depends on the target
+    // agent choosing to announce.
+    if (preDeliveryTarget && primaryReply) {
       await deliverAnnounceReply({
-        announceTarget,
+        announceTarget: preDeliveryTarget,
         message: primaryReply,
         runContextId,
       });
@@ -229,7 +244,7 @@ export async function runSessionsSendA2AFlow(params: {
       }
     }
 
-    if (!(announceTarget && primaryReply)) {
+    if (!(preDeliveryTarget && primaryReply)) {
       const announcePrompt = buildAgentToAgentAnnounceContext({
         requesterSessionKey: params.requesterSessionKey,
         requesterChannel: params.requesterChannel,
