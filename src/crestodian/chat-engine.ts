@@ -637,7 +637,8 @@ export class CrestodianChatEngine {
           action: "none",
         };
       }
-      if (operation.target === "channels" && !operation.channel) {
+      let handoff = operation;
+      if (handoff.target === "channels" && !handoff.channel) {
         const channel = this.lastSensitiveChannel;
         if (!channel) {
           this.awaitingSetupChannel = true;
@@ -647,19 +648,19 @@ export class CrestodianChatEngine {
           };
         }
         this.lastSensitiveChannel = undefined;
-        operation = { ...operation, channel };
+        handoff = { ...handoff, channel };
       }
       this.awaitingSetupChannel = false;
       const label =
-        operation.target === "guided"
+        handoff.target === "guided"
           ? "guided setup"
-          : operation.target === "classic"
+          : handoff.target === "classic"
             ? "classic setup"
-            : `${operation.channel ?? "channel"} setup`;
+            : `${handoff.channel ?? "channel"} setup`;
       return {
         text: `Opening the ${label} wizard.`,
         action: "open-setup",
-        handoff: operation,
+        handoff,
       };
     }
 
