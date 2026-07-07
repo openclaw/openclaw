@@ -2153,7 +2153,11 @@ function readPreRegisteredAgentDedupePayloadForSession(params: {
       ? payload.sessionKeyAliases.map(normalizeUnknownText)
       : []),
   ]);
-  if (!payloadSessionKeys.has(params.sessionKey)) {
+  const hasPayloadSessionKey = [...payloadSessionKeys].some(Boolean);
+  if (
+    (hasPayloadSessionKey && !payloadSessionKeys.has(params.sessionKey)) ||
+    (!hasPayloadSessionKey && payloadRunId !== params.runId)
+  ) {
     return undefined;
   }
   const agentId = normalizeOptionalText(params.agentId)?.toLowerCase();
@@ -2245,7 +2249,7 @@ function resolveStoredGlobalRunAgentId(
 function writePreRegisteredAgentAbort(params: {
   context: GatewayRequestContext;
   runId: string;
-  sessionKey: string;
+  sessionKey?: string;
   payload: PreRegisteredAgentDedupePayload;
   stopReason: string;
   endedAt?: number;
@@ -2261,7 +2265,7 @@ function writePreRegisteredAgentAbort(params: {
         ok: true,
         payload: {
           runId: params.runId,
-          sessionKey: params.sessionKey,
+          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
           ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
           ...(params.payload.controlUiVisible === false ? { controlUiVisible: false } : {}),
           status: "timeout" as const,
@@ -3637,7 +3641,12 @@ export const chatHandlers: GatewayRequestHandlers = {
           includeHidden: true,
         });
         if (canonicalMatch) {
-          return { sessionKey: canonicalAbortSessionKey, payload: canonicalMatch };
+          return {
+            sessionKey: normalizeUnknownText(canonicalMatch.sessionKey)
+              ? canonicalAbortSessionKey
+              : undefined,
+            payload: canonicalMatch,
+          };
         }
         if (rawSessionKey === canonicalAbortSessionKey) {
           return undefined;
@@ -3650,7 +3659,12 @@ export const chatHandlers: GatewayRequestHandlers = {
           defaultAgentId,
           includeHidden: true,
         });
-        return aliasMatch ? { sessionKey: rawSessionKey, payload: aliasMatch } : undefined;
+        return aliasMatch
+          ? {
+              sessionKey: normalizeUnknownText(aliasMatch.sessionKey) ? rawSessionKey : undefined,
+              payload: aliasMatch,
+            }
+          : undefined;
       };
       const pendingChatMatch = readPendingRunForAbort(
         context.dedupe.get(pendingChatSendDedupeKey(runId)),
