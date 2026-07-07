@@ -2035,4 +2035,24 @@ tasks:
       replySpy.mockReset();
     }
   });
+
+  it("does not return disabled for cron source even when the agent is not in the heartbeat list", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { heartbeat: { every: "30m" } },
+        list: [{ id: "main" }, { id: "ops", heartbeat: { every: "1h" } }],
+      },
+    };
+
+    const res = await runHeartbeatOnce({
+      cfg,
+      agentId: "main",
+      source: "cron",
+      heartbeat: { target: "last" },
+    });
+    // Cron source bypasses per-agent heartbeat gates. The result may be
+    // "ran" or a different skip reason (e.g. "cron-in-progress"), but
+    // must not be "disabled" from the per-agent gate.
+    expect(res.status === "skipped" && res.reason === "disabled").toBe(false);
+  });
 });

@@ -1442,11 +1442,16 @@ export async function runHeartbeatOnce(opts: {
   if (!areHeartbeatsEnabled()) {
     return { status: "skipped", reason: "disabled" };
   }
-  if (!isHeartbeatEnabledForAgent(cfg, agentId)) {
-    return { status: "skipped", reason: "disabled" };
-  }
-  if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {
-    return { status: "skipped", reason: "disabled" };
+  // Cron manages its own scheduling and should be able to wake any agent
+  // regardless of per-agent heartbeat configuration. Only the global
+  // heartbeat disable gate (above) blocks cron-triggered wakes.
+  if (opts.source !== "cron") {
+    if (!isHeartbeatEnabledForAgent(cfg, agentId)) {
+      return { status: "skipped", reason: "disabled" };
+    }
+    if (!resolveHeartbeatIntervalMs(cfg, undefined, heartbeat)) {
+      return { status: "skipped", reason: "disabled" };
+    }
   }
 
   const startedAt = opts.deps?.nowMs?.() ?? Date.now();
@@ -2614,6 +2619,27 @@ export function startHeartbeatRunner(opts: {
         const targetAgentId = requestedAgentId ?? resolveAgentIdFromSessionKey(requestedSessionKey);
         const targetAgent = state.agents.get(targetAgentId);
         if (!targetAgent) {
+          // Cron-triggered wakes may target agents that are not in the
+          // heartbeat scheduler (no explicit heartbeat config). Call
+          // runOnce directly so the agent can process the queued
+          // systemEvent. Scheduler bookkeeping is skipped — cron manages
+          // its own scheduling.
+          if (params.source === "cron") {
+            const res = await runOnce({
+              cfg: wakeConfig,
+              agentId: targetAgentId,
+              source: params.source,
+              intent,
+              reason,
+              runScope: "global",
+              sessionKey: requestedSessionKey,
+              heartbeat: requestedHeartbeat,
+              deps: { runtime: state.runtime },
+            });
+            return res.status === "ran"
+              ? { status: "ran", durationMs: Date.now() - startedAt }
+              : res;
+          }
           return { status: "skipped", reason: "disabled" };
         }
         const deferral = evaluateWakeDeferral(targetAgent, now, reason, intent);
