@@ -1659,6 +1659,16 @@ describe("cron cli", () => {
     );
   });
 
+  it("rejects failure alert cooldowns that floor to zero on cron edit", async () => {
+    await expectCronCommandExit(["cron", "edit", "job-1", "--failure-alert-cooldown", "0.1ms"]);
+    expectRuntimeErrorContaining("Invalid --failure-alert-cooldown");
+    expect(callGatewayFromCli).not.toHaveBeenCalledWith(
+      "cron.update",
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
   it("supports --no-failure-alert on cron edit", async () => {
     callGatewayFromCli.mockClear();
 
