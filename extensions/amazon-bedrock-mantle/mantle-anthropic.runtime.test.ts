@@ -85,6 +85,7 @@ describe("createMantleAnthropicStreamFn", () => {
     expect(defaultHeaders["anthropic-beta"]).toBe("fine-grained-tool-streaming-2025-05-14");
     expect(defaultHeaders["X-Test"]).toBe("model-header");
     expect(defaultHeaders["X-Caller"]).toBe("caller-header");
+    expect(clientOptions.fetch).toEqual(expect.any(Function));
 
     expectFirstStreamCall(deps, model, context);
     const streamOptions = firstStreamOptions(deps);

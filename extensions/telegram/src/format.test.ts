@@ -94,6 +94,12 @@ describe("markdownToTelegramHtml", () => {
     expect(markdownToTelegramRichHtml("<sup>1</sup>")).toBe("<sup>1</sup>");
   });
 
+  it("renders bold spans that close before CJK punctuation in rich markdown", () => {
+    expect(markdownToTelegramRichHtml("边界：**社区显示：**Fable 与 **有效**。")).toBe(
+      "边界：<b>社区显示：</b>Fable 与 <b>有效</b>。",
+    );
+  });
+
   it("materializes inline and paragraph newlines as <br> for rich messages", () => {
     // The exact reported symptom: literal "• " bullets (not Markdown list markers)
     // joined by soft breaks, which Bot API 10.1 rich messages collapse without <br>.

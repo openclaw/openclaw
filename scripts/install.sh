@@ -2487,6 +2487,20 @@ warn_shell_path_missing_dir() {
         return 0
     fi
 
+    # persist_shell_path_prepend may already have written the export line; in
+    # that case new shells are fine and the user only needs to reload this one.
+    # RC lines may spell the home dir as $HOME instead of the expanded path.
+    local dir_home_form="\$HOME${dir#"$HOME"}"
+    for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+        if [[ -f "$rc" ]] && { grep -Fq "$dir" "$rc" || grep -Fq "$dir_home_form" "$rc"; }; then
+            echo ""
+            ui_info "PATH updated in ${rc}: added ${label} (${dir})"
+            echo "  New terminals pick this up automatically."
+            echo "  For this shell, run: source ${rc}"
+            return 0
+        fi
+    done
+
     echo ""
     ui_warn "PATH missing ${label}: ${dir}"
     echo "  This can make openclaw show as \"command not found\" in new terminals."
