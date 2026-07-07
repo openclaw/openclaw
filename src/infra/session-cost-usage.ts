@@ -2733,10 +2733,10 @@ export async function loadSessionLogs(params: {
         continue;
       }
 
-      // Truncate very long content
+      // Truncate very long content, keeping emoji / surrogate pairs intact.
       const maxLen = 2000;
       if (content.length > maxLen) {
-        content = content.slice(0, maxLen) + "…";
+        content = [...content].slice(0, maxLen).join("") + "…";
       }
 
       // Get timestamp
