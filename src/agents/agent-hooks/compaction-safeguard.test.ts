@@ -459,7 +459,7 @@ describe("compaction-safeguard summary budgets", () => {
       "\n\n<workspace-critical-rules>\n## Session Startup\nRead AGENTS.md\n</workspace-critical-rules>";
     const body = "x".repeat(MAX_COMPACTION_SUMMARY_CHARS);
 
-    const capped = capCompactionSummaryPreservingSuffix(body, suffix);
+    const capped = capper(body, suffix);
 
     expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
     expect(capped).toContain("<workspace-critical-rules>");
@@ -534,11 +534,11 @@ describe("compaction-safeguard summary budgets", () => {
   it("preserves emoji when capCompactionSummaryPreservingSuffix truncates body with surrogate pair at boundary", () => {
     // When the body + suffix exceeds the cap, the body is truncated. An emoji
     // at the cut point must stay intact.
-    const { capCompactionSummaryPreservingSuffix } = testing;
+    const capper = testing.capCompactionSummaryPreservingSuffix;
     const suffix = "\n\n## Tool Failures\n- exec: failed";
     const body = "x".repeat(MAX_COMPACTION_SUMMARY_CHARS - 1) + "🧠extra";
 
-    const capped = capCompactionSummaryPreservingSuffix(body, suffix);
+    const capped = capper(body, suffix);
 
     expect(capped).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
     expect(capped).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
