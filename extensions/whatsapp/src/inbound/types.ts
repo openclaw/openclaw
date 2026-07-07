@@ -30,6 +30,7 @@ export type ActiveWebSendOptions = {
 };
 
 export type ActiveWebListener = {
+  assertSendReady?: (to: string) => Promise<void>;
   sendMessage: (
     to: string,
     text: string,
@@ -86,6 +87,7 @@ export type WhatsAppInboundGroupContext = {
 
 export type WhatsAppInboundPayload = {
   body: string;
+  commandBody?: string;
   media?: {
     path?: string;
     type?: string;
@@ -207,6 +209,10 @@ type WebInboundCallbackMessageCommon = {
   quote?: WhatsAppInboundQuote;
   group?: WhatsAppInboundGroupContext;
   wasMentioned?: boolean;
+  groupMention?: {
+    wasMentioned: boolean;
+    requireMention: boolean;
+  };
 };
 
 type WebInboundCallbackAdmissionFields =

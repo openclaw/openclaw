@@ -57,7 +57,7 @@ async function drainMatrixReconnect(opts: { deliver: DeliverFn; stateDir: string
     log: createRecoveryLog(),
     stateDir: opts.stateDir,
     deliver: opts.deliver,
-    selectEntry: (entry) => ({ match: entry.channel === "matrix" }),
+    selectEntry: (entry) => ({ match: entry.channel === "matrix", bypassBackoff: true }),
   });
 }
 
@@ -109,16 +109,26 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
   });
 
   it("advances queued entry to unknown_after_send when a later payload fails after an earlier one succeeded", async () => {
-    const sendMatrix = createPartialSendFailure();
+    let sendCount = 0;
+    let stateBeforeSecondSend: string | undefined;
+    const sendMatrix = vi.fn(async () => {
+      sendCount += 1;
+      if (sendCount === 1) {
+        return { messageId: "m1" };
+      }
+      stateBeforeSecondSend = (await loadPendingDeliveries(tmpDir))[0]?.recoveryState;
+      throw new Error("second payload send failed");
+    });
 
     await deliverPartialMatrixBatch(sendMatrix, tmpDir);
 
+    expect(stateBeforeSecondSend).toBe("unknown_after_send");
     const entries = await loadPendingDeliveries(tmpDir);
     expect(entries).toHaveLength(1);
     const entry = entries[0];
     expect(entry.recoveryState).toBe("unknown_after_send");
-    expect(entry.retryCount).toBe(0);
-    expect(entry.lastError).toBeUndefined();
+    expect(entry.retryCount).toBe(1);
+    expect(entry.lastError).toContain("second payload send failed");
     expect(sendMatrix).toHaveBeenCalledTimes(2);
   });
 
@@ -137,7 +147,7 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     expect(await loadPendingDeliveries(tmpDir)).toHaveLength(0);
   });
 
-  it("leaves entry for retry in send_attempt_started when no send evidence exists", async () => {
+  it("retains retryable send-attempt state when an adapter fails before returning a result", async () => {
     process.env.OPENCLAW_STATE_DIR = tmpDir;
     const sendMatrix = vi.fn().mockRejectedValueOnce(new Error("first payload send failed"));
 
@@ -160,5 +170,59 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     expect(entry.retryCount).toBe(1);
     expect(entry.recoveryState).toBe("send_attempt_started");
     expect(entry.lastError).toContain("first payload send failed");
+  });
+
+  it("replays an entry after a proven pre-connect failure clears send evidence", async () => {
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    const connectError = Object.assign(new Error("connect ECONNREFUSED"), {
+      code: "ECONNREFUSED",
+      syscall: "connect",
+    });
+    const sendMatrix = vi.fn().mockRejectedValueOnce(connectError);
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {} as OpenClawConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "first" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+      }),
+    ).rejects.toThrow("ECONNREFUSED");
+
+    const beforeDrain = await loadPendingDeliveries(tmpDir);
+    expect(beforeDrain).toHaveLength(1);
+    expect(beforeDrain[0]).toMatchObject({
+      retryCount: 1,
+      lastError: expect.stringContaining("ECONNREFUSED"),
+    });
+    expect(beforeDrain[0]?.recoveryState).toBeUndefined();
+    expect(beforeDrain[0]?.platformSendStartedAt).toBeUndefined();
+
+    const recoverySendMatrix = vi
+      .fn()
+      .mockRejectedValueOnce(connectError)
+      .mockResolvedValueOnce({ messageId: "recovered" });
+    const deliver = vi.fn<DeliverFn>(async (params) =>
+      deliverOutboundPayloads({
+        ...params,
+        deps: { matrix: recoverySendMatrix },
+      }),
+    );
+    await drainMatrixReconnect({ deliver, stateDir: tmpDir });
+
+    expect(deliver).toHaveBeenCalledTimes(1);
+    const afterRepeatedFailure = await loadPendingDeliveries(tmpDir);
+    expect(afterRepeatedFailure).toHaveLength(1);
+    expect(afterRepeatedFailure[0]?.retryCount).toBe(2);
+    expect(afterRepeatedFailure[0]?.recoveryState).toBeUndefined();
+    expect(afterRepeatedFailure[0]?.platformSendStartedAt).toBeUndefined();
+
+    await drainMatrixReconnect({ deliver, stateDir: tmpDir });
+
+    expect(deliver).toHaveBeenCalledTimes(2);
+    expect(recoverySendMatrix).toHaveBeenCalledTimes(2);
+    expect(await loadPendingDeliveries(tmpDir)).toHaveLength(0);
   });
 });

@@ -55,6 +55,7 @@ import {
   RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
   shouldKeepSubagentRunChildLink,
 } from "../agents/subagent-run-liveness.js";
+import { insideGitCheckout } from "../agents/worktrees/git.js";
 import { listThinkingLevelOptions, resolveEffectiveResponseUsage } from "../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
@@ -244,6 +245,11 @@ export function deriveSessionTitle(
     return undefined;
   }
 
+  const label = normalizeOptionalString(entry.label);
+  if (label) {
+    return label;
+  }
+
   if (normalizeOptionalString(entry.displayName)) {
     return normalizeOptionalString(entry.displayName);
   }
@@ -273,6 +279,19 @@ function resolveSessionRuntimeMs(
 
 function resolvePositiveNumber(value: number | null | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+export function deriveSessionUnread(
+  entry?: Pick<
+    SessionEntry,
+    "lastReadAt" | "markedUnreadAt" | "lastInteractionAt" | "lastActivityAt"
+  >,
+): boolean {
+  return (
+    entry?.markedUnreadAt !== undefined ||
+    (entry?.lastReadAt !== undefined &&
+      Math.max(entry.lastInteractionAt ?? 0, entry.lastActivityAt ?? 0) > entry.lastReadAt)
+  );
 }
 
 type SessionCompactionCheckpointEntry = NonNullable<SessionEntry["compactionCheckpoints"]>[number];
@@ -1274,12 +1293,17 @@ export function listAgentsForGateway(
       resolvedModel.model,
       modelCatalog,
     );
+    const workspace = resolveAgentWorkspaceDir(cfg, id);
+    // Must mirror the sessions.create worktree preflight: subdirectory workspaces inside a
+    // repo are worktree-capable, so the UI toggle and the create path cannot diverge.
+    const workspaceGit = insideGitCheckout(workspace);
     return Object.assign(
       {
         id,
         name: meta?.name,
         identity: meta?.identity,
-        workspace: resolveAgentWorkspaceDir(cfg, id),
+        workspace,
+        workspaceGit,
         agentRuntime: resolveModelAgentRuntimeMetadata({
           cfg,
           agentId: id,
@@ -1874,7 +1898,10 @@ export function buildGatewaySessionRow(params: {
   const origin = entry?.origin;
   const originLabel = origin?.label;
   const isGroupSession = isGroupOrChannelDisplaySession(entry, parsed);
+  // A user-assigned label is an explicit rename; it must win over stored
+  // channel-derived display names or renames silently vanish on refresh.
   const displayName =
+    entry?.label ??
     entry?.displayName ??
     (isGroupSession && channel
       ? buildGroupDisplayName({
@@ -1886,7 +1913,6 @@ export function buildGatewaySessionRow(params: {
           key,
         })
       : undefined) ??
-    entry?.label ??
     originLabel;
   const deliveryFields = normalizeSessionDeliveryFields(entry);
   const parsedAgent = parseAgentSessionKey(key);
@@ -2152,6 +2178,7 @@ export function buildGatewaySessionRow(params: {
     subagentControlScope: entry?.subagentControlScope,
     kind: classifySessionKey(key, entry),
     label: entry?.label,
+    category: entry?.category,
     displayName,
     derivedTitle,
     lastMessagePreview,
@@ -2162,6 +2189,13 @@ export function buildGatewaySessionRow(params: {
     chatType: entry?.chatType,
     origin,
     updatedAt,
+    archived: entry?.archivedAt !== undefined,
+    archivedAt: entry?.archivedAt,
+    pinned: entry?.pinnedAt !== undefined,
+    pinnedAt: entry?.pinnedAt,
+    unread: deriveSessionUnread(entry),
+    lastReadAt: entry?.lastReadAt,
+    lastActivityAt: entry?.lastActivityAt,
     sessionId: entry?.sessionId,
     systemSent: entry?.systemSent,
     abortedLastRun: entry?.abortedLastRun,
@@ -2420,8 +2454,19 @@ type SessionEntrySelection = {
   hasMore: boolean;
 };
 
-function compareSessionEntryPairsByUpdatedAt(a: SessionEntryPair, b: SessionEntryPair): number {
-  return (b[1]?.updatedAt ?? 0) - (a[1]?.updatedAt ?? 0);
+function compareSessionEntryPairs(a: SessionEntryPair, b: SessionEntryPair): number {
+  const aPinnedAt = a[1]?.pinnedAt ?? 0;
+  const bPinnedAt = b[1]?.pinnedAt ?? 0;
+  if (aPinnedAt !== bPinnedAt) {
+    return bPinnedAt - aPinnedAt;
+  }
+  const byUpdatedAt = (b[1]?.updatedAt ?? 0) - (a[1]?.updatedAt ?? 0);
+  if (byUpdatedAt !== 0) {
+    return byUpdatedAt;
+  }
+  // Timestamp ties fall back to the key so list order (and offset paging) stays
+  // deterministic across calls; locale-independent code-unit comparison.
+  return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
 }
 
 function resolveSessionsListLimit(
@@ -2456,7 +2501,7 @@ function selectNewestLimitedEntries(
   const selected: SessionEntryPair[] = [];
   for (const entry of entries) {
     const insertAt = selected.findIndex(
-      (candidate) => compareSessionEntryPairsByUpdatedAt(entry, candidate) < 0,
+      (candidate) => compareSessionEntryPairs(entry, candidate) < 0,
     );
     if (insertAt >= 0) {
       selected.splice(insertAt, 0, entry);
@@ -2477,7 +2522,7 @@ function sortAndLimitSessionEntries(
   if (limit !== undefined && limit <= SESSIONS_LIST_TOP_N_LIMIT) {
     return selectNewestLimitedEntries(entries, limit);
   }
-  const sorted = entries.toSorted(compareSessionEntryPairsByUpdatedAt);
+  const sorted = entries.toSorted(compareSessionEntryPairs);
   return limit === undefined ? sorted : sorted.slice(0, limit);
 }
 
@@ -2559,6 +2604,10 @@ function filterSessionEntries(params: {
         shouldKeepStoreOnlyChildLink(entry, now) &&
         (entry?.spawnedBy === spawnedBy || entry?.parentSessionKey === spawnedBy)
       );
+    })
+    .filter(([, entry]) => {
+      const archived = entry?.archivedAt !== undefined;
+      return opts.archived === true ? archived : !archived;
     })
     .filter(([, entry]) => {
       if (!label) {

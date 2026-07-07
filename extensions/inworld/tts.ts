@@ -245,7 +245,7 @@ export async function listInworldVoices(params: {
           new Error(`Inworld voices response stalled: no data received for ${chunkTimeoutMs}ms`),
       })
     ).toString("utf8");
-    const json = JSON.parse(voicesBody) as {
+    let json: {
       voices?: Array<{
         voiceId?: string;
         displayName?: string;
@@ -255,6 +255,11 @@ export async function listInworldVoices(params: {
         source?: string;
       }>;
     };
+    try {
+      json = JSON.parse(voicesBody) as typeof json;
+    } catch {
+      throw new Error("Inworld voices API returned malformed JSON");
+    }
 
     return Array.isArray(json.voices)
       ? json.voices

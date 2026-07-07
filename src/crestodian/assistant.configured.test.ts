@@ -36,6 +36,7 @@ describe("Crestodian configured-model planner", () => {
           tools: {
             codex: { command: "codex", found: false },
             claude: { command: "claude", found: false },
+            gemini: { command: "gemini", found: false },
             apiKeys: { openai: false, anthropic: false },
           },
           gateway: {

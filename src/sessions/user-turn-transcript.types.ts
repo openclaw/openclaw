@@ -23,8 +23,11 @@ export type UserTurnInput = {
   media?: readonly PersistedUserTurnMediaInput[] | null;
   timestamp?: number;
   idempotencyKey?: string;
+  senderIsOwner?: boolean;
   provenance?: InputProvenance;
   mediaOnlyText?: string;
+  /** Durable participant attribution. Callers must opt in at the product boundary. */
+  sender?: { id?: string | null; name?: string | null; username?: string | null } | null;
 };
 
 export type UserTurnTranscriptUpdateMode = "inline" | "none";

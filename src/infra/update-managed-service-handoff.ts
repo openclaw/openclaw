@@ -11,6 +11,7 @@ import {
 } from "../daemon/constants.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { SUPERVISOR_HINT_ENV_VARS, type RespawnSupervisor } from "./supervisor-markers.js";
+import type { UpdateChannel } from "./update-channels.js";
 import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
   type ControlPlaneUpdateSentinelMetaFile,
@@ -18,7 +19,9 @@ import {
 import { MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX } from "./update-managed-service-handoff-cleanup.js";
 import type { UpdateRestartSentinelMeta } from "./update-restart-sentinel-payload.js";
 
-const PARENT_EXIT_GRACE_MS = 60_000;
+// The Gateway may spend its full restart-drain budget before entering the
+// bounded shutdown phase. Keep the helper alive through both phases. (#99666)
+const PARENT_EXIT_SHUTDOWN_RESERVE_MS = 30_000;
 const SYSTEMD_RUN_CANDIDATE_PATHS = ["/usr/bin/systemd-run", "/bin/systemd-run"] as const;
 const SERVICE_IDENTITY_ENV_VARS = new Set<string>([
   "OPENCLAW_LAUNCHD_LABEL",
@@ -370,11 +373,14 @@ function startGatewayServiceBestEffort() {
 }
 
 (async () => {
-  const deadline = Date.now() + params.parentExitTimeoutMs;
-  while (isPidAlive(params.parentPid) && Date.now() < deadline) {
+  const deadline =
+    typeof params.parentExitTimeoutMs === "number"
+      ? Date.now() + params.parentExitTimeoutMs
+      : null;
+  while (isPidAlive(params.parentPid) && (deadline === null || Date.now() < deadline)) {
     await sleep(250);
   }
-  if (isPidAlive(params.parentPid)) {
+  if (deadline !== null && isPidAlive(params.parentPid)) {
     appendLog("gateway parent pid " + params.parentPid + " did not exit before handoff timeout");
     markUpdateSentinelFailureIfPending("managed-service-handoff-parent-timeout");
     cleanupSensitiveFiles();
@@ -465,7 +471,7 @@ function isNodeLikeRuntime(execPath: string | undefined): boolean {
 
 function resolveUpdateCliArgv(params: {
   timeoutMs?: number;
-  channel?: "stable" | "beta" | "dev";
+  channel?: UpdateChannel;
   execPath?: string;
   argv1?: string;
 }): string[] {
@@ -490,7 +496,7 @@ function resolveUpdateCliArgv(params: {
 
 export function formatManagedServiceUpdateCommand(params?: {
   timeoutMs?: number;
-  channel?: "stable" | "beta" | "dev";
+  channel?: UpdateChannel;
 }): string {
   const args = ["openclaw", "update", "--yes"];
   if (params?.channel) {
@@ -654,7 +660,8 @@ async function resolveHandoffSpawn(params: {
 export async function startManagedServiceUpdateHandoff(params: {
   root: string;
   timeoutMs?: number;
-  channel?: "stable" | "beta" | "dev";
+  restartDrainTimeoutMs: number | undefined;
+  channel?: UpdateChannel;
   restartDelayMs?: number;
   meta: UpdateRestartSentinelMeta;
   handoffId?: string;
@@ -686,7 +693,13 @@ export async function startManagedServiceUpdateHandoff(params: {
   };
   const helperParams = {
     parentPid: params.parentPid ?? process.pid,
-    parentExitTimeoutMs: Math.max(0, params.restartDelayMs ?? 0) + PARENT_EXIT_GRACE_MS,
+    // An undefined drain timeout is the configured indefinite-wait contract.
+    parentExitTimeoutMs:
+      params.restartDrainTimeoutMs === undefined
+        ? null
+        : Math.max(0, params.restartDelayMs ?? 0) +
+          Math.max(0, params.restartDrainTimeoutMs) +
+          PARENT_EXIT_SHUTDOWN_RESERVE_MS,
     cwd: handoffCwd,
     commandArgv,
     commandLabel,

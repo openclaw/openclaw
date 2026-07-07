@@ -92,6 +92,40 @@ describe("resolveMemoryWikiStatus", () => {
     expect(status.warnings.map((warning) => warning.code)).toContain("bridge-artifacts-missing");
   });
 
+  it("skips artifact enumeration when readMemoryArtifacts is disabled", async () => {
+    const config = resolveMemoryWikiConfig(
+      {
+        vaultMode: "bridge",
+        bridge: {
+          enabled: true,
+          readMemoryArtifacts: false,
+        },
+      },
+      { homedir: "/Users/tester" },
+    );
+
+    let listCalls = 0;
+    const status = await resolveMemoryWikiStatus(config, {
+      appConfig: {
+        agents: {
+          list: [{ id: "main", default: true, workspace: "/tmp/workspace" }],
+        },
+      } as OpenClawConfig,
+      listPublicArtifacts: async () => {
+        listCalls += 1;
+        return [];
+      },
+      pathExists: async () => true,
+      resolveCommand: async () => null,
+    });
+
+    expect(listCalls).toBe(0);
+    expect(status.bridgePublicArtifactCount).toBeNull();
+    expect(status.warnings.map((warning) => warning.code)).not.toContain(
+      "bridge-artifacts-missing",
+    );
+  });
+
   it("discovers pages in nested subdirectories", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-nested-",
@@ -123,6 +157,43 @@ describe("resolveMemoryWikiStatus", () => {
 
     expect(status.pageCounts.source).toBe(2);
     expect(status.sourceCounts.native).toBe(2);
+  });
+
+  it("excludes malformed pages from status counts (#96125)", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-status-invalid-frontmatter-",
+      initialize: true,
+    });
+    await fs.writeFile(
+      path.join(rootDir, "sources", "broken.md"),
+      [
+        "---",
+        "pageType: source",
+        "id: source.broken",
+        "sourceIds:",
+        '  - **MEMORY.md line 235**:"some quoted, value"',
+        "---",
+        "",
+        "# Broken",
+      ].join("\n"),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "sources", "healthy.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.healthy", title: "Healthy" },
+        body: "# Healthy\n",
+      }),
+      "utf8",
+    );
+
+    const status = await resolveMemoryWikiStatus(config, {
+      pathExists: async () => true,
+      resolveCommand: async () => null,
+    });
+
+    expect(status.pageCounts.source).toBe(1);
+    expect(status.sourceCounts.native).toBe(1);
   });
 
   it("counts source provenance from the vault", async () => {

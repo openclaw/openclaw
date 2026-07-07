@@ -1,6 +1,9 @@
 // Gateway Bench Child script supports OpenClaw repository automation.
 import { spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { sleep as delay } from "./sleep.mjs";
 import { resolveWindowsTaskkillPath } from "./windows-taskkill.mjs";
+
+export { delay };
 
 const TEARDOWN_GRACE_MS = 2_000;
 const TEARDOWN_KILL_GRACE_MS = 1_000;
@@ -21,12 +24,6 @@ export type StopChildOptions = {
   runTaskkill?: typeof spawnSync;
   teardownGraceMs?: number;
 };
-
-export function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
 
 export async function stopChild(
   child: ChildProcessWithoutNullStreams,

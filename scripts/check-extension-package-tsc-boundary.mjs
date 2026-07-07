@@ -24,10 +24,13 @@ import {
 const require = createRequire(import.meta.url);
 const repoRoot = resolve(import.meta.dirname, "..");
 const tscBin = require.resolve("typescript/bin/tsc");
-const tsgoBin = join(
-  dirname(require.resolve("@typescript/native-preview/package.json")),
-  "bin/tsgo.js",
-);
+const nativePreviewPackageJsonPath = require.resolve("@typescript/native-preview/package.json");
+const nativePreviewPackageJson = JSON.parse(readFileSync(nativePreviewPackageJsonPath, "utf8"));
+const nativePreviewBin = nativePreviewPackageJson.bin?.tsgo;
+if (typeof nativePreviewBin !== "string") {
+  throw new Error("@typescript/native-preview does not declare the tsgo binary");
+}
+const tsgoBin = resolve(dirname(nativePreviewPackageJsonPath), nativePreviewBin);
 const prepareBoundaryArtifactsBin = resolve(
   repoRoot,
   "scripts/prepare-extension-package-boundary-artifacts.mjs",

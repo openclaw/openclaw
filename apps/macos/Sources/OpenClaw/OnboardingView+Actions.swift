@@ -6,22 +6,25 @@ import SwiftUI
 
 extension OnboardingView {
     func selectLocalGateway() {
+        self.defaultsToLocalGateway = false
         self.state.connectionMode = .local
         self.preferredGatewayID = nil
         self.showAdvancedConnection = false
+        self.showRemoteChoices = false
         GatewayDiscoveryPreferences.setPreferredStableID(nil)
     }
 
     func selectUnconfiguredGateway() {
-        Task { await self.onboardingWizard.cancelIfRunning() }
+        self.defaultsToLocalGateway = false
         self.state.connectionMode = .unconfigured
         self.preferredGatewayID = nil
         self.showAdvancedConnection = false
+        self.showRemoteChoices = false
         GatewayDiscoveryPreferences.setPreferredStableID(nil)
     }
 
     func selectRemoteGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) {
-        Task { await self.onboardingWizard.cancelIfRunning() }
+        self.defaultsToLocalGateway = false
         self.preferredGatewayID = gateway.stableID
         GatewayDiscoveryPreferences.setPreferredStableID(gateway.stableID)
         GatewayDiscoverySelectionSupport.applyRemoteSelection(gateway: gateway, state: self.state)
@@ -41,7 +44,9 @@ extension OnboardingView {
     }
 
     func handleNext() {
-        if self.isWizardBlocking { return }
+        // All callers (Next button, chat handoff) honor the same page gates.
+        guard self.canAdvance else { return }
+        self.commitRecommendedConnectionIfNeeded(for: self.activePageIndex)
         if self.currentPage < self.pageCount - 1 {
             withAnimation { self.currentPage += 1 }
         } else {
@@ -49,9 +54,23 @@ extension OnboardingView {
         }
     }
 
+    func commitRecommendedConnectionIfNeeded(for pageIndex: Int) {
+        if pageIndex == self.connectionPageIndex,
+           self.defaultsToLocalGateway,
+           self.state.connectionMode == .unconfigured
+        {
+            self.selectLocalGateway()
+        }
+    }
+
     func finish() {
         OnboardingController.markComplete()
         OnboardingController.shared.close()
+        // Land people in the real conversation, not on an empty desktop: the
+        // agent chat is the product, and it is verified working by now.
+        if self.state.connectionMode != .unconfigured {
+            AppNavigationActions.openChat()
+        }
     }
 
     func copyToPasteboard(_ text: String) {
