@@ -520,17 +520,29 @@ describe("handleToolExecutionEnd cron mutation tracking", () => {
     expect(ctx.state.itemActiveIds.size).toBe(0);
   });
 
-  it("increments successfulCronAdds when shell cron add succeeds", async () => {
+  it.each([
+    ["exec", "openclaw cron add --at +1h --message 'follow up' --name reminder"],
+    ["bash", "pnpm openclaw cron add --cron '0 9 * * *' --message 'daily reminder'"],
+    ["exec", "npx openclaw cron add --at=+1h --message 'follow up'"],
+    ["exec", "bunx openclaw cron add --at +1h --message 'follow up'"],
+    ["exec", "/usr/local/bin/openclaw cron add --at +1h --message 'follow up'"],
+    ["bash", "corepack pnpm openclaw cron add --at +1h --message 'follow up'"],
+    ["exec", "env OPENCLAW_PROFILE=test openclaw cron add --at +1h --message 'follow up'"],
+    ["exec", "openclaw cron create --at +1h --message 'follow up'"],
+    ["exec", "openclaw --profile work cron create --at +1h --message 'follow up'"],
+    ["exec", "openclaw --dev cron add --at +1h --message 'follow up'"],
+    ["exec", "openclaw --log-level debug --no-color cron add --at +1h --message 'follow up'"],
+    ["exec", "openclaw --container helper cron add --at +1h --message 'follow up'"],
+    ["exec", "openclaw cron add --at +1h --message 'follow up || wait'"],
+  ] as const)("increments successfulCronAdds when %s runs %s", async (toolName, command) => {
     const { ctx } = createTestContext();
     await handleToolExecutionStart(
       ctx as never,
       {
         type: "tool_execution_start",
-        toolName: "exec",
-        toolCallId: "tool-exec-cron-add",
-        args: {
-          command: "  openclaw cron add --at +1h --message 'follow up' --name reminder",
-        },
+        toolName,
+        toolCallId: "tool-shell-cron-add",
+        args: { command },
       } as never,
     );
 
@@ -538,66 +550,15 @@ describe("handleToolExecutionEnd cron mutation tracking", () => {
       ctx as never,
       {
         type: "tool_execution_end",
-        toolName: "exec",
-        toolCallId: "tool-exec-cron-add",
+        toolName,
+        toolCallId: "tool-shell-cron-add",
         isError: false,
         result: {
           details: {
             status: "completed",
             exitCode: 0,
-            aggregated: JSON.stringify({
-              ok: true,
-              params: {
-                id: "job-shell-cron",
-                schedule: { kind: "once", atMs: 1_713_000_000_000 },
-                payload: { kind: "agentTurn", message: "follow up" },
-              },
-            }),
-          },
-        },
-      } as never,
-    );
-
-    expect(ctx.state.successfulCronAdds).toBe(1);
-  });
-
-  it("increments successfulCronAdds when shell cron add emits warning text with JSON", async () => {
-    const { ctx } = createTestContext();
-    await handleToolExecutionStart(
-      ctx as never,
-      {
-        type: "tool_execution_start",
-        toolName: "bash",
-        toolCallId: "tool-bash-cron-add-warning-json",
-        args: {
-          command: "openclaw cron add --at +1h --message 'follow up' --name reminder",
-        },
-      } as never,
-    );
-
-    await handleToolExecutionEnd(
-      ctx as never,
-      {
-        type: "tool_execution_end",
-        toolName: "bash",
-        toolCallId: "tool-bash-cron-add-warning-json",
-        isError: false,
-        result: {
-          details: {
-            status: "completed",
-            exitCode: 0,
-            aggregated: [
-              "No --agent specified; using configured default agent.",
-              JSON.stringify({
-                ok: true,
-                params: {
-                  id: "job-shell-cron",
-                  schedule: { kind: "once", atMs: 1_713_000_000_000 },
-                  payload: { kind: "agentTurn", message: "follow up" },
-                },
-              }),
-              "Scheduled reminder using the configured default agent.",
-            ].join("\n"),
+            durationMs: 12,
+            aggregated: "warning text and human-readable success output",
           },
         },
       } as never,
@@ -640,15 +601,28 @@ describe("handleToolExecutionEnd cron mutation tracking", () => {
     expect(ctx.state.successfulCronAdds).toBe(0);
   });
 
-  it("does not increment successfulCronAdds for unrelated shell commands", async () => {
+  it.each([
+    ["openclaw cron list --json", "a different cron action"],
+    ["echo openclaw cron add --at +1h", "a command that only mentions cron add"],
+    ["openclaw cron add --at '+1h", "an unterminated shell argument"],
+    ["cd /tmp && openclaw cron add --at +1h", "a compound command"],
+    ["openclaw cron add --help", "the add command help"],
+    ["openclaw cron create -h", "the create alias help"],
+    ["openclaw cron add --bad||true", "a masked cron failure"],
+    ["openclaw cron add --at +1h; true", "a semicolon suffix"],
+    ["openclaw cron add --at +1h | cat", "a pipeline suffix"],
+    ["openclaw cron add --at +1h & true", "a background suffix"],
+    ["openclaw cron add --at +1h\ntrue", "a newline-separated suffix"],
+    ["openclaw cron add --bad # ignored\ntrue", "a comment-masked cron failure"],
+  ])("does not count %s (%s)", async (command) => {
     const { ctx } = createTestContext();
     await handleToolExecutionStart(
       ctx as never,
       {
         type: "tool_execution_start",
         toolName: "exec",
-        toolCallId: "tool-exec-cron-list",
-        args: { command: "openclaw cron list --json" },
+        toolCallId: "tool-exec-not-cron-add",
+        args: { command },
       } as never,
     );
 
@@ -657,13 +631,14 @@ describe("handleToolExecutionEnd cron mutation tracking", () => {
       {
         type: "tool_execution_end",
         toolName: "exec",
-        toolCallId: "tool-exec-cron-list",
+        toolCallId: "tool-exec-not-cron-add",
         isError: false,
         result: {
           details: {
             status: "completed",
             exitCode: 0,
-            aggregated: JSON.stringify({ jobs: [] }),
+            durationMs: 12,
+            aggregated: "completed",
           },
         },
       } as never,

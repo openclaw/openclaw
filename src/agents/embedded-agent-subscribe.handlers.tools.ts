@@ -29,6 +29,7 @@ import {
   emitAgentItemEvent,
   emitAgentPatchSummaryEvent,
 } from "../infra/agent-events.js";
+import { consumeRootOptionToken } from "../infra/cli-root-options.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import {
   parseInteractiveParam,
@@ -38,6 +39,7 @@ import { hasReplyPayloadContent } from "../interactive/payload.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { truncateUtf16Safe } from "../utils.js";
+import { hasTopLevelShellControlOperator, splitShellArgs } from "../utils/shell-argv.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
 import {
   consumeAdjustedParamsForToolCall,
@@ -276,9 +278,6 @@ function isExecToolName(toolName: string): boolean {
   return toolName === "exec" || toolName === "bash";
 }
 
-const SHELL_CRON_ADD_COMMAND_PATTERN =
-  /(?:^|(?:&&|\|\||;))\s*(?:env\s+)?(?:(?:[A-Za-z_][A-Za-z0-9_]*=\S+)\s+)*(?:(?:corepack\s+)?pnpm\s+)?(?:[\w./-]*openclaw)\s+cron\s+add(?:\s|$)/;
-
 function isPatchToolName(toolName: string): boolean {
   return toolName === "apply_patch";
 }
@@ -456,122 +455,64 @@ function extractLiveExecOutput(result: unknown): string | undefined {
   return typeof output === "string" ? truncateLiveExecOutput(output) : undefined;
 }
 
-function readCronAddShellCommand(args: unknown): string | undefined {
+function isOpenClawExecutable(token: string | undefined): boolean {
+  const executable = normalizeOptionalLowercaseString(token);
+  return executable?.split(/[\\/]/).at(-1) === "openclaw";
+}
+
+function isOpenClawCronAddShellCommand(args: unknown): boolean {
   const record = asOptionalObjectRecord(args);
   const command = readStringValue(record?.command) ?? readStringValue(record?.cmd);
-  if (!command || !SHELL_CRON_ADD_COMMAND_PATTERN.test(command)) {
-    return undefined;
+  if (!command || hasTopLevelShellControlOperator(command)) {
+    return false;
   }
-  return command;
-}
+  const tokens = splitShellArgs(command);
+  if (!tokens || tokens.length < 3) {
+    return false;
+  }
 
-function readJsonObjectAt(
-  text: string,
-  startIndex: number,
-): { record: Record<string, unknown>; endIndex: number } | undefined {
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let index = startIndex; index < text.length; index += 1) {
-    const char = text[index];
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (char === "\\") {
-        escaped = true;
-      } else if (char === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (char === '"') {
-      inString = true;
-      continue;
-    }
-    if (char === "{") {
-      depth += 1;
-      continue;
-    }
-    if (char !== "}") {
-      continue;
-    }
-    depth -= 1;
-    if (depth !== 0) {
-      continue;
-    }
-    try {
-      const parsed: unknown = JSON.parse(text.slice(startIndex, index + 1));
-      const record = asOptionalObjectRecord(parsed);
-      return record ? { record, endIndex: index } : undefined;
-    } catch {
-      return undefined;
-    }
+  // Compound shell programs need a real shell AST; only count direct CLI invocations.
+  let commandIndex = 0;
+  if (normalizeOptionalLowercaseString(tokens[commandIndex]) === "env") {
+    commandIndex += 1;
   }
-  return undefined;
-}
+  while (/^[A-Za-z_][A-Za-z0-9_]*=/u.test(tokens[commandIndex] ?? "")) {
+    commandIndex += 1;
+  }
+  const executable = normalizeOptionalLowercaseString(tokens[commandIndex]);
+  if (
+    executable === "corepack" &&
+    normalizeOptionalLowercaseString(tokens[commandIndex + 1]) === "pnpm"
+  ) {
+    commandIndex += 2;
+  } else if (executable === "pnpm" || executable === "npx" || executable === "bunx") {
+    commandIndex += 1;
+  }
 
-function readCronAddResultRecords(output: string | undefined): Record<string, unknown>[] {
-  if (!output) {
-    return [];
+  let cliArgIndex = commandIndex + 1;
+  for (
+    let consumed = consumeRootOptionToken(tokens, cliArgIndex);
+    consumed > 0;
+    consumed = consumeRootOptionToken(tokens, cliArgIndex)
+  ) {
+    cliArgIndex += consumed;
   }
-  try {
-    const parsed: unknown = JSON.parse(output);
-    const record = asOptionalObjectRecord(parsed);
-    if (record) {
-      return [record];
-    }
-  } catch {
-    // Exec aggregated output can contain stderr warnings around JSON stdout.
-  }
-  const records: Record<string, unknown>[] = [];
-  for (let index = 0; index < output.length; index += 1) {
-    if (output[index] !== "{") {
-      continue;
-    }
-    const parsed = readJsonObjectAt(output, index);
-    if (!parsed) {
-      continue;
-    }
-    records.push(parsed.record);
-    index = parsed.endIndex;
-  }
-  return records;
-}
-
-function isCronJobRecord(value: unknown): boolean {
-  const record = asOptionalObjectRecord(value);
-  return Boolean(
-    record &&
-    readStringValue(record.id) &&
-    asOptionalObjectRecord(record.schedule) &&
-    asOptionalObjectRecord(record.payload),
+  const action = normalizeOptionalLowercaseString(tokens[cliArgIndex + 1]);
+  const actionArgs = tokens.slice(cliArgIndex + 2);
+  return (
+    isOpenClawExecutable(tokens[commandIndex]) &&
+    normalizeOptionalLowercaseString(tokens[cliArgIndex]) === "cron" &&
+    (action === "add" || action === "create") &&
+    !actionArgs.some((token) => token === "-h" || token === "--help")
   );
 }
 
-function isCronAddResponseRecord(value: unknown): boolean {
-  const record = asOptionalObjectRecord(value);
-  if (!record) {
-    return false;
-  }
-  if (isCronJobRecord(record) || isCronJobRecord(record.job)) {
-    return true;
-  }
-  if (record.ok === true) {
-    return isCronJobRecord(record.params) || isCronJobRecord(record.result);
-  }
-  return false;
-}
-
 function didShellCronAddSucceed(args: unknown, result: unknown): boolean {
-  if (!readCronAddShellCommand(args)) {
+  if (!isOpenClawCronAddShellCommand(args)) {
     return false;
   }
   const details = readExecToolDetails(result);
-  if (details?.status !== "completed" || details.exitCode !== 0) {
-    return false;
-  }
-  const output = extractExecOutput(result);
-  return readCronAddResultRecords(output).some(isCronAddResponseRecord);
+  return details?.status === "completed" && details.exitCode === 0;
 }
 
 function readChannelToolProgress(result: unknown): ChannelToolProgress | undefined {
