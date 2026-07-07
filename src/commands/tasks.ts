@@ -206,10 +206,7 @@ function truncate(value: string, maxChars: number) {
   if (value.length <= maxChars) {
     return value;
   }
-  if (maxChars <= 1) {
-    return truncateUtf16Safe(value, maxChars);
-  }
-  return `${truncateUtf16Safe(value, maxChars - 1)}…`;
+  return maxChars <= 0 ? "" : `${truncateUtf16Safe(value, maxChars - 1)}…`;
 }
 
 function shortToken(value: string | undefined, maxChars = ID_PAD): string {
