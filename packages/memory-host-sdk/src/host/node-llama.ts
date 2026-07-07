@@ -33,7 +33,7 @@ export type Llama = {
 };
 
 /** Imported node-llama-cpp module shape used by local embeddings. */
-export type NodeLlamaCppModule = {
+type NodeLlamaCppModule = {
   LlamaLogLevel: {
     error: number;
   };

@@ -5,7 +5,7 @@ import path from "node:path";
 import { resolveSafeTimeoutDelayMs } from "../../../gateway-client/src/timeouts.js";
 import { materializeWindowsSpawnProgram, resolveWindowsSpawnProgram } from "./windows-spawn.js";
 
-export type CliSpawnInvocation = {
+type CliSpawnInvocation = {
   command: string;
   argv: string[];
   shell?: boolean;
