@@ -2008,6 +2008,71 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(binding?.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
   });
 
+  it("fails closed when revalidation of a tool-policy binding fails", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const basePolicyContext = createPluginAppPolicyContext();
+    const pluginAppPolicyContext = {
+      ...basePolicyContext,
+      apps: {
+        ...basePolicyContext.apps,
+        "google-calendar-app": {
+          ...basePolicyContext.apps["google-calendar-app"],
+          tools: { "calendar.calendar_read": false },
+        },
+      },
+    };
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-existing",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      dynamicToolsFingerprint: "[]",
+      pluginAppsFingerprint: "plugin-apps-config-1",
+      pluginAppsInputFingerprint: "plugin-apps-input-1",
+      pluginAppPolicyContext,
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-fresh");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const safeConfig = {
+      enabled: true,
+      configPatch: createPluginAppConfigPatch(),
+      fingerprint: "plugin-apps-config-2",
+      inputFingerprint: "plugin-apps-input-1",
+      policyContext: createPluginAppPolicyContext(),
+      diagnostics: [],
+    };
+    const buildPluginThreadConfig = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("plugin inventory unavailable"))
+      .mockResolvedValueOnce(safeConfig);
+
+    const binding = await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+      pluginThreadConfig: {
+        enabled: true,
+        inputFingerprint: "plugin-apps-input-1",
+        enabledPluginConfigKeys: ["google-calendar"],
+        build: buildPluginThreadConfig,
+      },
+    });
+
+    expect(buildPluginThreadConfig).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
+    expect(binding.threadId).toBe("thread-fresh");
+    expect(binding.lifecycle).toEqual({ action: "started" });
+  });
+
   it("rebuilds an empty plugin app binding after app inventory recovers", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

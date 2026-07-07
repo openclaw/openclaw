@@ -1186,6 +1186,58 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     });
   });
 
+  it("parses exact native plugin tool overrides in deterministic key order", () => {
+    const config = readCodexPluginConfig({
+      codexPlugins: {
+        enabled: true,
+        plugins: {
+          slack: {
+            marketplaceName: "openai-curated",
+            pluginName: "slack",
+            tools: {
+              "slack.slack_send_message": { enabled: false },
+              "slack.slack_read_channel": { enabled: true },
+            },
+          },
+        },
+      },
+    });
+
+    expect(resolveCodexPluginsPolicy(config).pluginPolicies[0]?.tools).toEqual({
+      "slack.slack_read_channel": true,
+      "slack.slack_send_message": false,
+    });
+  });
+
+  it.each([
+    ["missing enabled", { "slack.tool": {} }],
+    ["non-boolean enabled", { "slack.tool": { enabled: "yes" } }],
+    ["app field", { "slack.tool": { enabled: true, app: "slack" } }],
+    ["unknown field", { "slack.tool": { enabled: true, extra: false } }],
+    ["array map", []],
+    ["array rule", { "slack.tool": [] }],
+    ["null rule", { "slack.tool": null }],
+    ["blank key", { "": { enabled: true } }],
+    ["leading whitespace", { " slack.tool": { enabled: true } }],
+    ["trailing whitespace", { "slack.tool ": { enabled: true } }],
+    ["internal newline", { "slack.tool\nnext": { enabled: true } }],
+  ])("rejects invalid native plugin tool config: %s", (_name, tools) => {
+    expect(
+      readCodexPluginConfig({
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            slack: {
+              marketplaceName: "openai-curated",
+              pluginName: "slack",
+              tools,
+            },
+          },
+        },
+      }).codexPlugins,
+    ).toBeUndefined();
+  });
+
   it("parses auto native Codex plugin destructive policy", () => {
     const config = readCodexPluginConfig({
       codexPlugins: {
@@ -2651,6 +2703,24 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(Object.keys(pluginEntryProperties).toSorted()).toEqual(
       [...CODEX_PLUGIN_ENTRY_CONFIG_KEYS].toSorted(),
     );
+    const tools = pluginEntryProperties.tools as {
+      propertyNames: { minLength: number; pattern: string };
+      additionalProperties: {
+        additionalProperties: boolean;
+        required: string[];
+        properties: { enabled: { type: string } };
+      };
+    };
+    expect(tools.propertyNames).toEqual({
+      type: "string",
+      minLength: 1,
+      pattern: "^\\S(?:.*\\S)?$",
+    });
+    expect(tools.additionalProperties).toMatchObject({
+      additionalProperties: false,
+      required: ["enabled"],
+      properties: { enabled: { type: "boolean" } },
+    });
   });
 
   it("does not schema-default mode-derived policy fields", async () => {

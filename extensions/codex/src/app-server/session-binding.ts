@@ -102,6 +102,7 @@ const destructiveApprovalModeSchema = z
   .enum(["allow", "deny", "auto", "ask"])
   .optional()
   .catch(undefined);
+const pluginToolPolicySchema = z.record(z.string().regex(/^\S(?:.*\S)?$/), z.boolean()).optional();
 // Account-connected apps are admitted without a plugin package; both entry
 // shapes must round-trip or stored policy context silently drops on read.
 const accountAppPolicyEntrySchema = z
@@ -122,8 +123,18 @@ const pluginAppPolicyEntrySchema = z
     allowDestructiveActions: z.boolean(),
     destructiveApprovalMode: destructiveApprovalModeSchema,
     mcpServerNames: z.array(z.string()),
+    tools: pluginToolPolicySchema,
   })
-  .strict();
+  .strict()
+  .superRefine((entry, ctx) => {
+    if (!entry.allowDestructiveActions && Object.values(entry.tools ?? {}).some(Boolean)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["tools"],
+        message: "enabled tool policy exceeds the destructive-action ceiling",
+      });
+    }
+  });
 const pluginAppPolicyContextSchema = z
   .object({
     fingerprint: z.string(),
@@ -900,6 +911,7 @@ function readPluginAppPolicyContext(
     if (entry.source === "account") {
       if (
         "appId" in entry ||
+        "tools" in entry ||
         typeof entry.appName !== "string" ||
         typeof entry.allowDestructiveActions !== "boolean" ||
         destructiveApprovalMode === "invalid" ||
@@ -916,6 +928,7 @@ function readPluginAppPolicyContext(
       };
       continue;
     }
+    const tools = readPluginToolPolicy(entry.tools);
     if (
       "appId" in entry ||
       (entry.source !== undefined && entry.source !== "plugin") ||
@@ -924,6 +937,10 @@ function readPluginAppPolicyContext(
       typeof entry.pluginName !== "string" ||
       typeof entry.allowDestructiveActions !== "boolean" ||
       destructiveApprovalMode === "invalid" ||
+      tools === "invalid" ||
+      (entry.allowDestructiveActions === false &&
+        tools !== undefined &&
+        Object.values(tools).some(Boolean)) ||
       !mcpServerNamesValid
     ) {
       return undefined;
@@ -935,6 +952,7 @@ function readPluginAppPolicyContext(
       allowDestructiveActions: entry.allowDestructiveActions,
       ...(destructiveApprovalMode ? { destructiveApprovalMode } : {}),
       mcpServerNames: entry.mcpServerNames as string[],
+      ...(tools ? { tools } : {}),
     };
   }
   const parsedPluginAppIds: PluginAppPolicyContext["pluginAppIds"] = {};
@@ -959,6 +977,30 @@ function readPluginAppPolicyContext(
     apps: parsedApps,
     pluginAppIds: parsedPluginAppIds,
   };
+}
+
+function readPluginToolPolicy(value: unknown): Record<string, boolean> | undefined | "invalid" {
+  if (value === undefined) {
+    return undefined;
+  }
+  const record = asRecord(value);
+  if (!record) {
+    return "invalid";
+  }
+  const entries = Object.entries(record);
+  if (
+    entries.some(
+      ([toolKey, enabled]) => !/^\S(?:.*\S)?$/.test(toolKey) || typeof enabled !== "boolean",
+    )
+  ) {
+    return "invalid";
+  }
+  if (entries.length === 0) {
+    return undefined;
+  }
+  return Object.fromEntries(
+    entries.toSorted(([left], [right]) => left.localeCompare(right)),
+  ) as Record<string, boolean>;
 }
 
 function readDestructiveApprovalMode(

@@ -40,6 +40,7 @@ export type PluginAppPolicyContextEntry = {
   allowDestructiveActions: boolean;
   destructiveApprovalMode?: CodexPluginDestructiveApprovalMode;
   mcpServerNames: string[];
+  tools?: Record<string, boolean>;
 };
 
 /** Policy context for one account-connected app admitted without a plugin package. */
@@ -52,9 +53,7 @@ export type AccountAppPolicyContextEntry = {
 };
 
 /** Policy context for any app exposed to a native Codex thread. */
-export type CodexAppPolicyContextEntry =
-  | PluginAppPolicyContextEntry
-  | AccountAppPolicyContextEntry;
+export type CodexAppPolicyContextEntry = PluginAppPolicyContextEntry | AccountAppPolicyContextEntry;
 
 /** Stable app-to-plugin ownership context persisted with Codex thread bindings. */
 export type PluginAppPolicyContext = {
@@ -71,8 +70,15 @@ export type CodexPluginThreadConfigDiagnostic =
         | "plugin_activation_failed"
         | "app_not_ready"
         | "account_app_inventory_unavailable"
-        | "approval_overrides_clear_failed";
+        | "approval_overrides_clear_failed"
+        | "tool_policy_destructive_conflict"
+        | "tool_policy_ownership_conflict";
       plugin?: ResolvedCodexPluginPolicy;
+      appId?: string;
+      toolKey?: string;
+      enabled?: boolean;
+      status?: "blocked";
+      remediation?: string;
       message: string;
     };
 
@@ -97,7 +103,7 @@ export type BuildCodexPluginThreadConfigParams = {
   nowMs?: number;
 };
 
-const CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION = 3;
+const CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION = 4;
 const CODEX_PLUGIN_THREAD_CONFIG_FINGERPRINT_VERSION = 2;
 
 /** Returns true when plugin config exists and thread config may need app patches. */
@@ -136,17 +142,18 @@ export async function buildCodexPluginThreadConfig(
     });
   }
 
-  let inventory = policy.pluginPolicies.length > 0
-    ? await readCodexPluginInventory({
-        pluginConfig: params.pluginConfig,
-        policy,
-        request: params.request,
-        appCache,
-        appCacheKey: params.appCacheKey,
-        nowMs: params.nowMs,
-        suppressAppInventoryRefresh: true,
-      })
-    : emptyCodexPluginInventory(policy);
+  let inventory =
+    policy.pluginPolicies.length > 0
+      ? await readCodexPluginInventory({
+          pluginConfig: params.pluginConfig,
+          policy,
+          request: params.request,
+          appCache,
+          appCacheKey: params.appCacheKey,
+          nowMs: params.nowMs,
+          suppressAppInventoryRefresh: true,
+        })
+      : emptyCodexPluginInventory(policy);
   const appInventoryRefreshDeferredForActivation =
     inventory.records.some((record) => record.activationRequired) &&
     shouldRefreshMissingAppInventory(params, policy, inventory);
@@ -243,9 +250,7 @@ export async function buildCodexPluginThreadConfig(
   }
 
   const accountAppsResult: Awaited<ReturnType<typeof readAccessibleAccountApps>> =
-    policy.allowAllPlugins
-    ? await readAccessibleAccountApps(params, appCache)
-    : { apps: [] };
+    policy.allowAllPlugins ? await readAccessibleAccountApps(params, appCache) : { apps: [] };
 
   const diagnostics: CodexPluginThreadConfigDiagnostic[] = [
     ...inventory.diagnostics,
@@ -261,6 +266,20 @@ export async function buildCodexPluginThreadConfig(
   };
   const policyApps: Record<string, CodexAppPolicyContextEntry> = {};
   const pluginAppIds: Record<string, string[]> = {};
+  const pluginClaimsByAppId = collectPluginClaimsByAppId(inventory.records);
+  const toolPolicyConfigKeys = new Set(
+    inventory.records
+      .filter((record) => Object.keys(record.policy.tools ?? {}).length > 0)
+      .map((record) => record.policy.configKey),
+  );
+  const conflictedAppIds = new Set(
+    [...pluginClaimsByAppId.entries()]
+      .filter(
+        ([, configKeys]) =>
+          configKeys.length > 1 && configKeys.some((key) => toolPolicyConfigKeys.has(key)),
+      )
+      .map(([appId]) => appId),
+  );
   const pluginOwnedAppIds = new Set(
     inventory.records.flatMap((record) =>
       record.appOwnership === "proven" ? record.ownedAppIds : [],
@@ -277,7 +296,39 @@ export async function buildCodexPluginThreadConfig(
       continue;
     }
     pluginAppIds[record.policy.configKey] = [...record.ownedAppIds].toSorted();
+    const enabledToolKeys = Object.entries(record.policy.tools ?? {})
+      .filter(([, enabled]) => enabled)
+      .map(([toolKey]) => toolKey)
+      .toSorted();
+    if (!record.policy.allowDestructiveActions && enabledToolKeys.length > 0) {
+      for (const toolKey of enabledToolKeys) {
+        diagnostics.push({
+          code: "tool_policy_destructive_conflict",
+          plugin: record.policy,
+          toolKey,
+          enabled: true,
+          status: "blocked",
+          remediation:
+            "Set enabled to false or allow destructive actions for this configured plugin.",
+          message: `${record.policy.configKey} tool ${toolKey} cannot be enabled while destructive actions are disabled; all apps owned by this plugin were excluded.`,
+        });
+      }
+      continue;
+    }
     for (const app of resolveThreadConfigAppsForRecord({ record, inventory })) {
+      if (conflictedAppIds.has(app.id)) {
+        diagnostics.push({
+          code: "tool_policy_ownership_conflict",
+          plugin: record.policy,
+          appId: app.id,
+          status: "blocked",
+          remediation: "Remove the duplicate configured plugin claim for this app.",
+          message: `${app.id} is claimed by configured plugins ${
+            pluginClaimsByAppId.get(app.id)?.join(", ") ?? "unknown"
+          }; it was excluded from every claimant.`,
+        });
+        continue;
+      }
       if (!isPluginAppReadyForThreadStart(app)) {
         diagnostics.push({
           code: "app_not_ready",
@@ -298,7 +349,7 @@ export async function buildCodexPluginThreadConfig(
       ) {
         continue;
       }
-      apps[app.id] = buildEnabledAppConfig(record.policy);
+      apps[app.id] = buildEnabledAppConfig(record.policy, record.policy.tools);
       policyApps[app.id] = {
         configKey: record.policy.configKey,
         marketplaceName: record.policy.marketplaceName,
@@ -306,6 +357,7 @@ export async function buildCodexPluginThreadConfig(
         allowDestructiveActions: record.policy.allowDestructiveActions,
         destructiveApprovalMode: record.policy.destructiveApprovalMode,
         mcpServerNames: [...(record.detail?.mcpServers ?? [])].toSorted(),
+        ...(record.policy.tools ? { tools: { ...record.policy.tools } } : {}),
       };
     }
   }
@@ -427,16 +479,21 @@ function buildDisabledAppsConfigPatch(): JsonObject {
   };
 }
 
-function buildEnabledAppConfig(policy: {
-  allowDestructiveActions: boolean;
-  destructiveApprovalMode: CodexPluginDestructiveApprovalMode;
-}): JsonObject {
+function buildEnabledAppConfig(
+  policy: {
+    allowDestructiveActions: boolean;
+    destructiveApprovalMode: CodexPluginDestructiveApprovalMode;
+  },
+  tools?: Record<string, boolean>,
+): JsonObject {
+  const toolConfig = buildToolConfigPatch(tools);
   return {
     enabled: true,
     destructive_enabled: policy.allowDestructiveActions,
     open_world_enabled: true,
     default_tools_approval_mode: "auto",
     ...(policy.destructiveApprovalMode === "ask" ? { approvals_reviewer: "user" } : {}),
+    ...(toolConfig ? { tools: toolConfig } : {}),
   };
 }
 
@@ -454,13 +511,17 @@ export function buildCodexPluginAppsConfigPatchFromPolicyContext(
   for (const [appId, policy] of Object.entries(policyContext.apps).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
-    apps[appId] = {
-      enabled: true,
-      destructive_enabled: policy.allowDestructiveActions,
-      open_world_enabled: true,
-      default_tools_approval_mode: "auto",
-      ...(policy.destructiveApprovalMode === "ask" ? { approvals_reviewer: "user" } : {}),
-    };
+    if (
+      policy.source !== "account" &&
+      !policy.allowDestructiveActions &&
+      Object.values(policy.tools ?? {}).some(Boolean)
+    ) {
+      continue;
+    }
+    apps[appId] = buildEnabledAppConfig(
+      policy,
+      policy.source === "account" ? undefined : policy.tools,
+    );
   }
   return { apps };
 }
@@ -649,9 +710,9 @@ async function readAccessibleAccountApps(
     };
   }
   return {
-    apps: snapshot.apps.filter((app) => app.isAccessible).toSorted((left, right) =>
-      left.id.localeCompare(right.id),
-    ),
+    apps: snapshot.apps
+      .filter((app) => app.isAccessible)
+      .toSorted((left, right) => left.id.localeCompare(right.id)),
   };
 }
 
@@ -707,6 +768,13 @@ function policyFingerprint(policy: ResolvedCodexPluginsPolicy): JsonValue {
     allowAllPlugins: policy.allowAllPlugins,
     allowDestructiveActions: policy.allowDestructiveActions,
     destructiveApprovalMode: policy.destructiveApprovalMode,
+    toolRules: policy.pluginPolicies.flatMap((plugin) =>
+      Object.entries(plugin.tools ?? {}).map(([toolKey, enabled]) => ({
+        configKey: plugin.configKey,
+        toolKey,
+        enabled,
+      })),
+    ),
     plugins: policy.pluginPolicies.map((plugin) => ({
       configKey: plugin.configKey,
       marketplaceName: plugin.marketplaceName,
@@ -716,6 +784,37 @@ function policyFingerprint(policy: ResolvedCodexPluginsPolicy): JsonValue {
       destructiveApprovalMode: plugin.destructiveApprovalMode,
     })),
   };
+}
+
+function buildToolConfigPatch(tools?: Record<string, boolean>): JsonObject | undefined {
+  const entries = Object.entries(tools ?? {}).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  );
+  if (entries.length === 0) {
+    return undefined;
+  }
+  return Object.fromEntries(entries.map(([toolKey, enabled]) => [toolKey, { enabled }]));
+}
+
+function collectPluginClaimsByAppId(
+  records: readonly CodexPluginInventoryRecord[],
+): Map<string, string[]> {
+  const claims = new Map<string, Set<string>>();
+  for (const record of records) {
+    if (record.appOwnership !== "proven") {
+      continue;
+    }
+    for (const appId of record.ownedAppIds) {
+      const configKeys = claims.get(appId) ?? new Set<string>();
+      configKeys.add(record.policy.configKey);
+      claims.set(appId, configKeys);
+    }
+  }
+  return new Map(
+    [...claims.entries()]
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([appId, configKeys]) => [appId, [...configKeys].toSorted()]),
+  );
 }
 
 function mergeJsonObjects(left: JsonObject, right: JsonObject): JsonObject {

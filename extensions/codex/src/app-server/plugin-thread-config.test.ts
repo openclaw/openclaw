@@ -336,6 +336,10 @@ describe("Codex plugin thread config", () => {
           allowDestructiveActions: true,
           destructiveApprovalMode: "ask",
           mcpServerNames: ["ask"],
+          tools: {
+            "calendar.calendar_read": true,
+            "calendar.calendar_write": false,
+          },
         },
         "auto-app": {
           configKey: "auto",
@@ -365,6 +369,10 @@ describe("Codex plugin thread config", () => {
           destructive_enabled: true,
           open_world_enabled: true,
           default_tools_approval_mode: "auto",
+          tools: {
+            "calendar.calendar_read": { enabled: true },
+            "calendar.calendar_write": { enabled: false },
+          },
         },
         "auto-app": {
           enabled: true,
@@ -793,9 +801,7 @@ describe("Codex plugin thread config", () => {
             apps: {
               "chatgpt-meetings": {
                 tools:
-                  configReadCount === 1
-                    ? { import_meeting: { approval_mode: "approve" } }
-                    : {},
+                  configReadCount === 1 ? { import_meeting: { approval_mode: "approve" } } : {},
               },
             },
           },
@@ -1671,6 +1677,327 @@ describe("Codex plugin thread config", () => {
     });
     expect(second).toBe(first);
     expect(third).not.toBe(second);
+    expect(first).not.toBe("59d881b67ea73b224718de2cbc767fc6262554eaeaaa3ebd155e13f00db02be3");
+  });
+
+  it("copies exact tool selectors to every admitted app owned by one plugin", async () => {
+    const appCache = new CodexAppInventoryCache();
+    await appCache.refreshNow({
+      key: "runtime",
+      nowMs: 0,
+      request: async () => ({
+        data: [appInfo("slack-primary", true), appInfo("slack-secondary", true)],
+        nextCursor: null,
+      }),
+    });
+    const tools = {
+      "slack.unknown_future_tool": { enabled: true },
+      "slack.slack_send_message": { enabled: false },
+    };
+
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            slack: {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "slack",
+              tools,
+            },
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      nowMs: 1,
+      request: async (method) => {
+        if (method === "plugin/list") {
+          return pluginList([pluginSummary("slack", { installed: true, enabled: true })]);
+        }
+        if (method === "plugin/read") {
+          return pluginDetail(
+            "slack",
+            [appSummary("slack-primary"), appSummary("slack-secondary")],
+            ["slack"],
+          );
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    const expectedTools = {
+      "slack.slack_send_message": { enabled: false },
+      "slack.unknown_future_tool": { enabled: true },
+    };
+    expect(config.configPatch).toMatchObject({
+      apps: {
+        "slack-primary": { default_tools_approval_mode: "auto", tools: expectedTools },
+        "slack-secondary": { default_tools_approval_mode: "auto", tools: expectedTools },
+      },
+    });
+    expect(config.policyContext.apps["slack-primary"]).toMatchObject({
+      tools: {
+        "slack.slack_send_message": false,
+        "slack.unknown_future_tool": true,
+      },
+    });
+    expect(config.policyContext.apps["slack-secondary"]).toMatchObject({
+      tools: {
+        "slack.slack_send_message": false,
+        "slack.unknown_future_tool": true,
+      },
+    });
+  });
+
+  it("fails closed on enabled selectors under a disabled destructive ceiling", async () => {
+    const blocked = await buildReadyGoogleCalendarThreadConfig({
+      codexPlugins: {
+        enabled: true,
+        plugins: {
+          "google-calendar": {
+            marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+            pluginName: "google-calendar",
+            allow_destructive_actions: false,
+            tools: { "calendar.read": { enabled: true } },
+          },
+        },
+      },
+    });
+    expect(blocked.configPatch?.apps).toEqual({
+      _default: {
+        enabled: false,
+        destructive_enabled: false,
+        open_world_enabled: false,
+      },
+    });
+    expect(blocked.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "tool_policy_destructive_conflict",
+        toolKey: "calendar.read",
+        enabled: true,
+        status: "blocked",
+      }),
+    );
+
+    const denied = await buildReadyGoogleCalendarThreadConfig({
+      codexPlugins: {
+        enabled: true,
+        plugins: {
+          "google-calendar": {
+            marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+            pluginName: "google-calendar",
+            allow_destructive_actions: false,
+            tools: { "calendar.write": { enabled: false } },
+          },
+        },
+      },
+    });
+    expect(denied.configPatch).toMatchObject({
+      apps: {
+        "google-calendar-app": {
+          destructive_enabled: false,
+          tools: { "calendar.write": { enabled: false } },
+        },
+      },
+    });
+  });
+
+  it("excludes an app claimed by multiple configured plugins", async () => {
+    const appCache = new CodexAppInventoryCache();
+    await appCache.refreshNow({
+      key: "runtime",
+      nowMs: 0,
+      request: async () => ({ data: [appInfo("shared-app", true)], nextCursor: null }),
+    });
+    const pluginConfig = {
+      codexPlugins: {
+        enabled: true,
+        plugins: {
+          alpha: {
+            marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+            pluginName: "alpha",
+            tools: { "shared.tool": { enabled: false } },
+          },
+          beta: {
+            marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+            pluginName: "beta",
+            tools: { "shared.tool": { enabled: true } },
+          },
+        },
+      },
+    };
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig,
+      appCache,
+      appCacheKey: "runtime",
+      nowMs: 1,
+      request: async (method, requestParams) => {
+        if (method === "plugin/list") {
+          return pluginList([
+            pluginSummary("alpha", { installed: true, enabled: true }),
+            pluginSummary("beta", { installed: true, enabled: true }),
+          ]);
+        }
+        if (method === "plugin/read") {
+          const pluginName = (requestParams as { pluginName: string }).pluginName;
+          return pluginDetail(pluginName, [appSummary("shared-app")]);
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    expect(config.configPatch?.apps).toEqual({
+      _default: {
+        enabled: false,
+        destructive_enabled: false,
+        open_world_enabled: false,
+      },
+    });
+    expect(
+      config.diagnostics.filter(({ code }) => code === "tool_policy_ownership_conflict"),
+    ).toHaveLength(2);
+
+    const reversed = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          ...pluginConfig.codexPlugins,
+          plugins: {
+            beta: pluginConfig.codexPlugins.plugins.beta,
+            alpha: pluginConfig.codexPlugins.plugins.alpha,
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      nowMs: 1,
+      request: async (method, requestParams) => {
+        if (method === "plugin/list") {
+          return pluginList([
+            pluginSummary("beta", { installed: true, enabled: true }),
+            pluginSummary("alpha", { installed: true, enabled: true }),
+          ]);
+        }
+        if (method === "plugin/read") {
+          const pluginName = (requestParams as { pluginName: string }).pluginName;
+          return pluginDetail(pluginName, [appSummary("shared-app")]);
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+    expect(reversed.configPatch).toEqual(config.configPatch);
+    expect(reversed.diagnostics).toEqual(config.diagnostics);
+  });
+
+  it("preserves duplicate ownership behavior when no claimant has tool policy", async () => {
+    const appCache = new CodexAppInventoryCache();
+    await appCache.refreshNow({
+      key: "runtime",
+      nowMs: 0,
+      request: async () => ({ data: [appInfo("shared-app", true)], nextCursor: null }),
+    });
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            alpha: {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "alpha",
+            },
+            beta: {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "beta",
+            },
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      nowMs: 1,
+      request: async (method, requestParams) => {
+        if (method === "plugin/list") {
+          return pluginList([
+            pluginSummary("alpha", { installed: true, enabled: true }),
+            pluginSummary("beta", { installed: true, enabled: true }),
+          ]);
+        }
+        if (method === "plugin/read") {
+          const pluginName = (requestParams as { pluginName: string }).pluginName;
+          return pluginDetail(pluginName, [appSummary("shared-app")]);
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    expect(config.configPatch?.apps).toHaveProperty("shared-app");
+    expect(config.policyContext.apps["shared-app"]).toMatchObject({ configKey: "beta" });
+    expect(config.diagnostics).not.toContainEqual(
+      expect.objectContaining({ code: "tool_policy_ownership_conflict" }),
+    );
+  });
+
+  it("fingerprints exact tool rules independent of insertion order", () => {
+    const base = {
+      enabled: true,
+      plugins: {
+        slack: {
+          marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+          pluginName: "slack",
+        },
+      },
+    };
+    const fingerprint = (tools: Record<string, { enabled: boolean }>) =>
+      buildCodexPluginThreadConfigInputFingerprint({
+        pluginConfig: {
+          codexPlugins: {
+            ...base,
+            plugins: { slack: { ...base.plugins.slack, tools } },
+          },
+        },
+        appCacheKey: "runtime-a",
+      });
+    const first = fingerprint({
+      "slack.b": { enabled: false },
+      "slack.a": { enabled: true },
+    });
+    expect(
+      fingerprint({
+        "slack.a": { enabled: true },
+        "slack.b": { enabled: false },
+      }),
+    ).toBe(first);
+    expect(
+      fingerprint({
+        "slack.a": { enabled: false },
+        "slack.b": { enabled: false },
+      }),
+    ).not.toBe(first);
+    expect(
+      fingerprint({
+        "slack.a": { enabled: true },
+        "slack.c": { enabled: false },
+      }),
+    ).not.toBe(first);
+    expect(
+      buildCodexPluginThreadConfigInputFingerprint({
+        pluginConfig: {
+          codexPlugins: {
+            enabled: true,
+            plugins: {
+              "slack-renamed": {
+                ...base.plugins.slack,
+                tools: {
+                  "slack.a": { enabled: true },
+                  "slack.b": { enabled: false },
+                },
+              },
+            },
+          },
+        },
+        appCacheKey: "runtime-a",
+      }),
+    ).not.toBe(first);
   });
 
   it("uses app-level destructive policy for plugins without OpenClaw tool-name knowledge", async () => {

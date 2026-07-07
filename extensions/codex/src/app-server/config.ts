@@ -107,6 +107,7 @@ export type CodexPluginEntryConfig = {
   marketplaceName?: string;
   pluginName?: string;
   allow_destructive_actions?: CodexPluginDestructivePolicy;
+  tools?: Record<string, { enabled: boolean }>;
 };
 
 export type CodexPluginsConfig = {
@@ -155,6 +156,7 @@ export type ResolvedCodexPluginPolicy = {
   enabled: boolean;
   allowDestructiveActions: boolean;
   destructiveApprovalMode: CodexPluginDestructiveApprovalMode;
+  tools?: Record<string, boolean>;
 };
 
 export type ResolvedCodexPluginsPolicy = {
@@ -300,6 +302,7 @@ export const CODEX_PLUGIN_ENTRY_CONFIG_KEYS = [
   "marketplaceName",
   "pluginName",
   "allow_destructive_actions",
+  "tools",
 ] as const;
 
 const DEFAULT_CODEX_COMPUTER_USE_PLUGIN_NAME = "computer-use";
@@ -360,12 +363,20 @@ const codexAppServerNetworkProxySchema = z
   })
   .strict();
 
+const codexPluginToolKeySchema = z.string().regex(/^\S(?:.*\S)?$/, "invalid tool key");
+const codexPluginToolConfigSchema = z
+  .object({
+    enabled: z.boolean(),
+  })
+  .strict();
+
 const codexPluginEntryConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
     marketplaceName: z.literal(CODEX_PLUGINS_MARKETPLACE_NAME).optional(),
     pluginName: z.string().trim().min(1).optional(),
     allow_destructive_actions: codexPluginDestructivePolicySchema.optional(),
+    tools: z.record(codexPluginToolKeySchema, codexPluginToolConfigSchema).optional(),
   })
   .strict();
 
@@ -485,6 +496,9 @@ export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodex
       const entryDestructivePolicy = resolveCodexPluginDestructivePolicy(
         entry.allow_destructive_actions ?? config?.allow_destructive_actions ?? true,
       );
+      const toolEntries = Object.entries(entry.tools ?? {}).toSorted(([left], [right]) =>
+        left.localeCompare(right),
+      );
       return [
         {
           configKey,
@@ -493,6 +507,13 @@ export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodex
           enabled: enabled && entry.enabled !== false,
           allowDestructiveActions: entryDestructivePolicy.allowDestructiveActions,
           destructiveApprovalMode: entryDestructivePolicy.destructiveApprovalMode,
+          ...(toolEntries.length > 0
+            ? {
+                tools: Object.fromEntries(
+                  toolEntries.map(([toolKey, tool]) => [toolKey, tool.enabled]),
+                ),
+              }
+            : {}),
         },
       ];
     })

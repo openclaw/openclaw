@@ -15,6 +15,7 @@ import {
 export type CodexPluginsManagementIO = {
   readConfig: () => Promise<{
     enabled?: boolean;
+    allow_destructive_actions?: boolean | "auto" | "ask";
     plugins?: Record<string, CodexPluginConfigEntry>;
   }>;
   mutate: (update: (block: CodexPluginsConfigBlock) => void) => Promise<void>;
@@ -25,10 +26,12 @@ export type CodexPluginConfigEntry = {
   marketplaceName?: string;
   pluginName?: string;
   allow_destructive_actions?: boolean | "auto" | "ask";
+  tools?: Record<string, { enabled: boolean }>;
 };
 
 export type CodexPluginsConfigBlock = {
   enabled?: boolean;
+  allow_destructive_actions?: boolean | "auto" | "ask";
   plugins?: Record<string, CodexPluginConfigEntry>;
 };
 
@@ -67,7 +70,10 @@ export async function handleCodexPluginsSubcommand(
     }
     const current = await io.readConfig();
     return {
-      text: formatPluginList(current.plugins ?? {}, { globalEnabled: current.enabled === true }),
+      text: formatPluginList(current.plugins ?? {}, {
+        globalEnabled: current.enabled === true,
+        globalDestructivePolicy: current.allow_destructive_actions,
+      }),
     };
   }
 
@@ -210,7 +216,10 @@ export function buildPluginsHelp(): string {
 
 export function formatPluginList(
   plugins: Record<string, CodexPluginConfigEntry>,
-  options: { globalEnabled?: boolean } = {},
+  options: {
+    globalEnabled?: boolean;
+    globalDestructivePolicy?: boolean | "auto" | "ask";
+  } = {},
 ): string {
   const globalEnabled = options.globalEnabled === true;
   const keys = Object.keys(plugins).toSorted();
@@ -223,17 +232,26 @@ export function formatPluginList(
     const displayKey = formatCodexDisplayText(key);
     const pluginName = formatCodexDisplayText(entry.pluginName ?? key);
     const marketplace = formatCodexDisplayText(entry.marketplaceName ?? "?");
-    return { displayKey, state, pluginName, marketplace };
+    const destructivePolicy =
+      entry.allow_destructive_actions ?? options.globalDestructivePolicy ?? true;
+    const tools = Object.entries(entry.tools ?? {})
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([toolKey, tool]) => ({
+        displayKey: formatCodexDisplayText(toolKey),
+        enabled: tool.enabled,
+        status: tool.enabled && destructivePolicy === false ? "blocked" : "configured",
+      }));
+    return { displayKey, state, pluginName, marketplace, tools };
   });
   const keyW = Math.max(...rows.map((r) => r.displayKey.length));
   const pluginW = Math.max(...rows.map((r) => r.pluginName.length));
   return [
     "Codex sub-plugins in Openclaw config (~/.openclaw/openclaw.json):",
     "",
-    ...rows.map(
-      (r) =>
-        `  ${r.state}  ${r.displayKey.padEnd(keyW)}  ${r.pluginName.padEnd(pluginW)}  [${r.marketplace}]`,
-    ),
+    ...rows.flatMap((r) => [
+      `  ${r.state}  ${r.displayKey.padEnd(keyW)}  ${r.pluginName.padEnd(pluginW)}  [${r.marketplace}]`,
+      ...r.tools.map((tool) => `        ${tool.displayKey}: ${tool.enabled} [${tool.status}]`),
+    ]),
     "",
     ...(globalEnabled
       ? []

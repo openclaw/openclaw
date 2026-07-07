@@ -10,13 +10,17 @@ import {
 
 function inMemoryIO(
   initial: Record<string, CodexPluginConfigEntry> = {},
-  options: { enabled?: boolean } = { enabled: true },
+  options: {
+    enabled?: boolean;
+    allow_destructive_actions?: boolean | "auto" | "ask";
+  } = { enabled: true },
 ): CodexPluginsManagementIO & {
   current: () => Record<string, CodexPluginConfigEntry>;
   currentConfig: () => CodexPluginsConfigBlock;
 } {
   const store: CodexPluginsConfigBlock = {
     enabled: options.enabled,
+    allow_destructive_actions: options.allow_destructive_actions,
     plugins: structuredClone(initial),
   };
   return {
@@ -81,6 +85,32 @@ describe("Codex /codex plugins subcommand", () => {
     const result = await handleCodexPluginsSubcommand(fakeCtx, ["list"], io);
     expect(result.text).toContain("OFF  google-calendar");
     expect(result.text).toContain("Global codexPlugins.enabled is off");
+  });
+
+  it("lists exact tool selectors with only configured or blocked policy status", async () => {
+    const io = inMemoryIO(
+      {
+        slack: {
+          enabled: true,
+          marketplaceName: "openai-curated",
+          pluginName: "slack",
+          tools: {
+            "slack.slack_send_message": { enabled: true },
+            "slack.slack_read_channel": { enabled: false },
+          },
+        },
+      },
+      { enabled: true, allow_destructive_actions: false },
+    );
+
+    const result = await handleCodexPluginsSubcommand(fakeCtx, ["list"], io);
+    const text = result.text ?? "";
+    expect(text).toContain("slack.slack_read_channel: false [configured]");
+    expect(text).toContain("slack.slack_send_message: true [blocked]");
+    expect(text.indexOf("slack.slack_read_channel")).toBeLessThan(
+      text.indexOf("slack.slack_send_message"),
+    );
+    expect(text).not.toMatch(/matched|resolved|inert/);
   });
 
   it("renders the plugins menu as portable slash-command buttons", async () => {

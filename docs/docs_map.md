@@ -5428,6 +5428,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: App inventory and ownership
   - H2: Connected account apps
   - H2: Thread app config
+  - H3: Tool overrides
+  - H3: Upgrade and rollback
   - H2: Destructive action policy
   - H2: Troubleshooting
   - H2: Related

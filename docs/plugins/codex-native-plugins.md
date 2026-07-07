@@ -76,6 +76,10 @@ config looks like this:
                 enabled: true,
                 marketplaceName: "openai-curated",
                 pluginName: "google-calendar",
+                tools: {
+                  "google_calendar.read_event": { enabled: true },
+                  "google_calendar.create_event": { enabled: false },
+                },
               },
             },
           },
@@ -104,8 +108,11 @@ same chat where you operate the Codex harness:
 ```
 
 `/codex plugins` is an alias for `/codex plugins list`. The list shows each
-configured plugin's key, on/off state, Codex plugin name, and marketplace
-from `plugins.entries.codex.config.codexPlugins.plugins`.
+configured plugin's key, on/off state, Codex plugin name, marketplace, and
+exact tool overrides from
+`plugins.entries.codex.config.codexPlugins.plugins`. Tool status is
+`configured` or `blocked`; the command does not claim that a key currently
+matches a live Codex tool.
 
 `enable`/`disable` write only to `~/.openclaw/openclaw.json`; they never edit
 `~/.codex/config.toml` or install new Codex plugins. Only the owner or a
@@ -235,12 +242,63 @@ all set `destructive_enabled: true`, and `false` sets it `false`. Codex still
 enforces destructive tool metadata from its native app tool annotations.
 `_default` is disabled with `open_world_enabled: false`; enabled plugin apps
 get `open_world_enabled: true`. OpenClaw does not expose a separate
-plugin-level open-world policy knob and does not maintain per-plugin
-destructive tool-name deny lists.
+plugin-level open-world policy knob.
 
 Tool approval mode defaults to automatic for admitted apps, so non-destructive
 read tools run without a same-thread approval prompt. Destructive tools stay
 controlled by each app's `destructive_enabled` policy.
+
+### Tool overrides
+
+Each configured plugin can pass exact Codex per-app tool keys through to its
+owned apps:
+
+```json5
+tools: {
+  "slack.slack_read_channel": { enabled: true },
+  "slack.slack_send_message": { enabled: false },
+}
+```
+
+Keys are case-sensitive and must already be trimmed. There is no `app` field:
+OpenClaw copies the complete map to every admitted app whose ownership is
+proven for that plugin. Codex then checks a tool's raw name first and its
+normalized title second inside each app bucket. OpenClaw does not rewrite keys
+or use a lossy tool inventory to infer one target app.
+
+Run `openclaw config validate --json` before deployment. Static validation
+rejects blank or untrimmed keys, missing or non-boolean `enabled`, `app`, and
+other unknown rule properties without contacting Codex.
+
+`tools` is an override map, not an allowlist. A missing key keeps Codex's
+normal behavior. A configured key with no current exact match has no effect,
+but remains a durable selector if that owned app later exposes the key. If the
+same key matches tools in two apps owned by the plugin, the one rule applies to
+both. When at least one claimant has tool rules, apps claimed by multiple
+enabled configured plugins are excluded instead of choosing one plugin's map.
+
+Duplicate JSON or JSON5 source keys follow the existing config parser: the
+last value is retained before validation. Do not use duplicate keys for policy
+layering.
+
+An explicit `enabled: true` can precede Codex's annotation gates, so OpenClaw
+rejects the plugin's whole app set when any enabled override is combined with
+an effective `allow_destructive_actions: false`. All-false maps remain valid.
+Tool maps and ownership are persisted with the thread binding; edits take
+effect on a new binding, or immediately after `/new` or `/reset`. If live
+ownership revalidation fails for a binding with tool rules, OpenClaw rotates
+or blocks instead of resuming the stale grant.
+
+### Upgrade and rollback
+
+The tool-policy fingerprint update rotates every existing native-plugin
+binding once after upgrade, including configurations without `tools`. Tool
+rule edits then rotate stale bindings automatically before the next turn;
+`/new` and `/reset` force a fresh binding immediately.
+
+Older OpenClaw builds with the strict plugin schema reject `tools`. To roll
+back, remove every `tools` block, run `openclaw config validate --json`, deploy
+the older build, and start a new conversation.
 
 ## Destructive action policy
 
@@ -279,11 +337,16 @@ plugins, while unsafe schemas and ambiguous ownership fail closed:
 | `marketplace_missing`, `plugin_missing`           | The target Codex app-server cannot see the expected `openai-curated` marketplace or plugin.                                          | Rerun migration against the target runtime, or inspect Codex app-server plugin status.                                 |
 | `app_inventory_missing`, `app_inventory_stale`    | App readiness came from an empty or stale cache.                                                                                     | OpenClaw schedules an async refresh automatically; plugin apps stay excluded until ownership and readiness are known.  |
 | `app_ownership_ambiguous`                         | App inventory only matched by display name.                                                                                          | The app stays hidden from the Codex thread until a later refresh proves ownership.                                     |
+| `tool_policy_destructive_conflict`                | An enabled tool override exceeds an effective `allow_destructive_actions: false` ceiling.                                            | Set the override to `false` or allow destructive actions for that configured plugin.                                   |
+| `tool_policy_ownership_conflict`                  | Multiple enabled configured plugins claim one app while at least one claimant has tool rules.                                        | Remove the duplicate configured plugin claim for that app.                                                             |
 
 **Config changed but the agent cannot see the plugin:** run `/codex plugins
 list` to confirm the configured state, then `/new` or `/reset`. Existing
 Codex thread bindings keep the app config they started with until OpenClaw
 establishes a new harness session or replaces a stale binding.
+`/codex plugins list` reports only statically knowable `configured` or
+`blocked` tool state; it does not inspect live tool matches or app-ownership
+conflicts.
 
 **Destructive action is declined:** check the global and per-plugin
 `allow_destructive_actions` values. Even with `true`, `"auto"`, or `"ask"`,

@@ -111,6 +111,36 @@ describe("Codex app-server binding store", () => {
     expect(imported?.binding.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
   });
 
+  it("round-trips active plugin tool policy context", async () => {
+    const { state } = createStateStore();
+    const store = createCodexAppServerBindingStore(state);
+    const identity = { kind: "session" as const, agentId: "main", sessionId: "session-tools" };
+    const pluginAppPolicyContext = {
+      fingerprint: "tool-policy-1",
+      apps: {
+        slack: {
+          configKey: "slack",
+          marketplaceName: "openai-curated" as const,
+          pluginName: "slack",
+          allowDestructiveActions: true,
+          mcpServerNames: ["slack"],
+          tools: {
+            "slack.slack_read_channel": true,
+            "slack.slack_send_message": false,
+          },
+        },
+      },
+      pluginAppIds: { slack: ["slack"] },
+    };
+
+    await store.mutate(identity, {
+      kind: "set",
+      binding: { threadId: "thread-tools", cwd: "/repo", pluginAppPolicyContext },
+    });
+
+    await expect(store.read(identity)).resolves.toMatchObject({ pluginAppPolicyContext });
+  });
+
   it("canonicalizes undefined fields before writing to JSON-only plugin state", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-binding-state-"));
     try {
@@ -764,6 +794,50 @@ describe("Codex app-server binding store", () => {
 
     expect(stored?.binding.pluginAppPolicyContext?.apps.app?.destructiveApprovalMode).toBe("ask");
     expect(invalid?.binding.pluginAppPolicyContext).toBeUndefined();
+  });
+
+  it("round-trips exact plugin tool policy and drops unsafe persisted grants", () => {
+    const policyContext = {
+      fingerprint: "policy-tools",
+      apps: {
+        slack: {
+          configKey: "slack",
+          marketplaceName: "openai-curated",
+          pluginName: "slack",
+          allowDestructiveActions: true,
+          mcpServerNames: ["slack"],
+          tools: {
+            "slack.slack_read_channel": true,
+            "slack.slack_send_message": false,
+          },
+        },
+      },
+      pluginAppIds: { slack: ["slack"] },
+    };
+    const stored = createStoredCodexAppServerBinding({
+      schemaVersion: 2,
+      threadId: "thread-tools",
+      cwd: "/repo",
+      pluginAppPolicyContext: policyContext,
+    });
+    const unsafe = createStoredCodexAppServerBinding({
+      schemaVersion: 2,
+      threadId: "thread-unsafe-tools",
+      cwd: "/repo",
+      pluginAppPolicyContext: {
+        ...policyContext,
+        apps: {
+          slack: {
+            ...policyContext.apps.slack,
+            allowDestructiveActions: false,
+            tools: { "slack.slack_send_message": true },
+          },
+        },
+      },
+    });
+
+    expect(stored?.binding.pluginAppPolicyContext).toEqual(policyContext);
+    expect(unsafe?.binding.pluginAppPolicyContext).toBeUndefined();
   });
 
   it("serializes writes from another facade behind a native-compaction lease", async () => {

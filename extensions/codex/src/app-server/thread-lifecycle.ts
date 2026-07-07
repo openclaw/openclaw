@@ -631,10 +631,15 @@ export async function startOrResumeThread(params: {
           pluginBindingStale =
             prebuiltPluginThreadConfig?.fingerprint !== binding.pluginAppsFingerprint;
         } catch (error) {
+          const failClosed = bindingHasPluginToolPolicy(binding);
           embeddedAgentLog.warn("codex app-server plugin app config recovery check failed", {
             error,
+            failClosed,
             threadId: binding.threadId,
           });
+          if (failClosed) {
+            pluginBindingStale = true;
+          }
         }
       }
       if (pluginBindingStale) {
@@ -871,6 +876,31 @@ export async function startOrResumeThread(params: {
           params.pluginThreadConfig?.build(),
         )))
       : undefined;
+    if (pluginThreadConfig) {
+      embeddedAgentLog.debug("codex app-server plugin app policy resolved", {
+        fingerprint: pluginThreadConfig.fingerprint,
+        inputFingerprint: pluginThreadConfig.inputFingerprint,
+        diagnostics: pluginThreadConfig.diagnostics.map((diagnostic) => ({
+          code: diagnostic.code,
+          ...(diagnostic.plugin ? { pluginConfigKey: diagnostic.plugin.configKey } : {}),
+          ...("appId" in diagnostic && typeof diagnostic.appId === "string"
+            ? { appId: diagnostic.appId }
+            : {}),
+          ...("toolKey" in diagnostic && typeof diagnostic.toolKey === "string"
+            ? { toolKey: diagnostic.toolKey }
+            : {}),
+          ...("enabled" in diagnostic && typeof diagnostic.enabled === "boolean"
+            ? { enabled: diagnostic.enabled }
+            : {}),
+          ...("status" in diagnostic && typeof diagnostic.status === "string"
+            ? { status: diagnostic.status }
+            : {}),
+          ...("remediation" in diagnostic && typeof diagnostic.remediation === "string"
+            ? { remediation: diagnostic.remediation }
+            : {}),
+        })),
+      });
+    }
     const finalConfigPatch = params.buildFinalConfigPatch?.({ action: "start" }) ?? {
       configPatch: params.finalConfigPatch,
       nativeHookRelayGeneration: params.nativeHookRelayGeneration,
@@ -1174,6 +1204,12 @@ function shouldRecheckRecoverablePluginBinding(params: {
   }
   const expectedPluginConfigKeys = params.pluginThreadConfig.enabledPluginConfigKeys ?? [];
   return Object.keys(policyContext.apps).length === 0 || expectedPluginConfigKeys.length > 0;
+}
+
+function bindingHasPluginToolPolicy(binding: CodexAppServerThreadBinding): boolean {
+  return Object.values(binding.pluginAppPolicyContext?.apps ?? {}).some(
+    (app) => app.source !== "account" && Object.keys(app.tools ?? {}).length > 0,
+  );
 }
 
 export function buildThreadStartParams(
