@@ -225,4 +225,41 @@ describe("searchMessagesMSTeams", () => {
       `/chats/${encodeURIComponent("19:dm-chat@thread.tacv2")}/messages?`,
     );
   });
+
+  it("fetches from cursor URL when a valid Graph API cursor is provided", async () => {
+    mockState.fetchGraphAbsoluteUrl.mockResolvedValue({
+      value: [
+        {
+          id: "msg-2",
+          body: { content: "second page result" },
+          from: { user: { id: "u2", displayName: "Bob" } },
+          createdDateTime: "2026-03-25T11:00:00Z",
+        },
+      ],
+    });
+
+    const result = await searchMessagesMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      query: "hello",
+      cursor: "https://graph.microsoft.com/v1.0/chats/19:abc/messages?$skiptoken=abc123",
+    });
+
+    expect(mockState.fetchGraphAbsoluteUrl).toHaveBeenCalledTimes(1);
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]?.text).toBe("second page result");
+  });
+
+  it("rejects cursor URLs that do not target a Microsoft Graph API origin", async () => {
+    await expect(
+      searchMessagesMSTeams({
+        cfg: {} as OpenClawConfig,
+        to: CHAT_ID,
+        query: "hello",
+        cursor: "https://evil.example.com/steal-token",
+      }),
+    ).rejects.toThrow("MSTeams cursor must be a Microsoft Graph API URL");
+
+    expect(mockState.fetchGraphAbsoluteUrl).not.toHaveBeenCalled();
+  });
 });

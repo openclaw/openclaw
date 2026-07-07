@@ -342,12 +342,14 @@ describe("msteamsPlugin message actions", () => {
       runtimeParams: { teamId: "team-1" },
       details: okMSTeamsActionDetails("channel-list", {
         channels: [{ id: "channel-1" }],
+        _pagination: { hasMore: false },
       }),
       contentDetails: {
         ok: true,
         channel: "msteams",
         action: "channel-list",
         channels: [{ id: "channel-1" }],
+        _pagination: { hasMore: false },
       },
     });
   });

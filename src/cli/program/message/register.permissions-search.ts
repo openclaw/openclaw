@@ -27,6 +27,7 @@ export function registerMessageSearchCommand(message: Command, helpers: MessageC
     .option("--author-id <id>", "Author id")
     .option("--author-ids <id>", "Author id (repeat)", collectOption, [] as string[])
     .option("--limit <n>", "Result limit")
+    .option("--cursor <token>", "Pagination cursor from previous result")
     .action(async (opts) => {
       await helpers.runMessageAction("search", opts);
     });
