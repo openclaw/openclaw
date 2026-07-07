@@ -23,6 +23,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Per-agent voice calls:** preserve the invoking agent across Google Meet and direct Voice Call tools, freeze that owner on each call record, and use the same agent for classic responses, realtime consults, and realtime persona context without allowing external Gateway callers to spoof routing. (#77763, #77753) Thanks @quangtran88.
 - **Lean local model shell access:** keep `exec` directly visible beside the default structured Tool Search controls so coding-tuned local models can use their shell fallback instead of searching for missing domain tools. (#87587) Thanks @vincentkoc.
 - **OAuth refresh contention diagnostics:** keep local lock paths out of user-facing refresh failures and avoid duplicate failure prefixes while preserving structured provider and profile classification. (#83383) Thanks @vincentkoc.
 - **Exec approval prompts:** keep background-disabled fallback warnings out of pending gateway/node approvals and show them only after a command actually runs in the foreground. (#78184) Thanks @vincentkoc.

@@ -387,6 +387,7 @@ const fullWorkspacePluginLoaderCacheState = new PluginLoaderCacheState<CachedPlu
 );
 const LAZY_RUNTIME_REFLECTION_KEYS = [
   "version",
+  "gateway",
   "config",
   "agent",
   "subagent",

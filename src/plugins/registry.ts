@@ -2757,6 +2757,14 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               withPluginRuntimePluginIdScope(pluginId, () => llm.complete(params)),
           } satisfies PluginRuntime["llm"];
         }
+        if (prop === "gateway") {
+          const gateway = getRuntimeProperty();
+          return {
+            isAvailable: () => runWithPluginScope(() => gateway.isAvailable()),
+            request: (method, params, options) =>
+              runWithPluginScope(() => gateway.request(method, params, options)),
+          } satisfies PluginRuntime["gateway"];
+        }
         if (prop === "nodes") {
           const nodes = getRuntimeProperty();
           return {
