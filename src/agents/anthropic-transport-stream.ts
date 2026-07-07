@@ -1091,7 +1091,7 @@ function buildAnthropicParams(
       } else {
         params.thinking = {
           type: "enabled",
-          budget_tokens: options?.thinkingBudgetTokens || 1024,
+          budget_tokens: options?.thinkingBudgetTokens ?? 1024,
         };
       }
     } else if (options?.thinkingEnabled === false) {

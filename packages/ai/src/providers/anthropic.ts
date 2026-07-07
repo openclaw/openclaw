@@ -1346,7 +1346,7 @@ function buildParams(
         // Budget-based thinking for older models
         params.thinking = {
           type: "enabled",
-          budget_tokens: options?.thinkingBudgetTokens || 1024,
+          budget_tokens: options?.thinkingBudgetTokens ?? 1024,
           display,
         };
       }
