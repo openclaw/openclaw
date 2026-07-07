@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { formatCliFailureLines } from "./cli/failure-output.js";
 import { formatUncaughtError } from "./infra/errors.js";
 import { runFatalErrorHooks } from "./infra/fatal-error-hooks.js";
+import { shutdown } from "./infra/graceful-shutdown.js";
 import { isMainModule } from "./infra/is-main.js";
 import {
   installUnhandledRejectionHandler,
@@ -114,7 +115,7 @@ if (isMain) {
       console.error("[openclaw]", message);
     }
     restoreTerminalState("uncaught exception", { resumeStdinIfPaused: false });
-    process.exit(1);
+    shutdown(1);
   });
 
   void runLegacyCliEntry(process.argv).catch((err: unknown) => {
@@ -129,6 +130,6 @@ if (isMain) {
       console.error("[openclaw]", message);
     }
     restoreTerminalState("legacy cli failure", { resumeStdinIfPaused: false });
-    process.exit(1);
+    shutdown(1);
   });
 }

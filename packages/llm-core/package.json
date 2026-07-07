@@ -33,6 +33,11 @@
       "types": "./dist/validation.d.mts",
       "import": "./dist/validation.mjs",
       "default": "./dist/validation.mjs"
+    },
+    "./llm-format": {
+      "types": "./dist/llm-format.d.mts",
+      "import": "./dist/llm-format.mjs",
+      "default": "./dist/llm-format.mjs"
     }
   },
   "dependencies": {

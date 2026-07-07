@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { shutdown } from "../../infra/graceful-shutdown.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 export const QA_PARENT_PID_ENV = "OPENCLAW_QA_PARENT_PID";
@@ -93,7 +94,7 @@ export function installQaParentWatchdog(
     ((activeTimer: QaParentWatchdogTimer) => {
       clearInterval(activeTimer as ReturnType<typeof setInterval>);
     });
-  const exit = deps.exit ?? ((code?: number) => process.exit(code));
+  const exit = deps.exit ?? ((code?: number) => shutdown(code));
   const kill =
     deps.kill ?? ((pid: number, signal?: NodeJS.Signals | 0) => process.kill(pid, signal));
   const logger = deps.logger ?? createSubsystemLogger("gateway");

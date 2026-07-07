@@ -532,26 +532,14 @@ async function waitForAcpRuntimeBackendReady(params: {
   timeoutMs?: number;
   pollMs?: number;
 }): Promise<boolean> {
-  const { getAcpRuntimeBackend } = await import("../acp/runtime/registry.js");
+  const { whenAcpBackendReady } = await import("../acp/runtime/registry.js");
   const timeoutMs = params.timeoutMs ?? ACP_BACKEND_READY_TIMEOUT_MS;
-  const pollMs = params.pollMs ?? ACP_BACKEND_READY_POLL_MS;
-  const deadline = Date.now() + timeoutMs;
-
-  do {
-    const backend = getAcpRuntimeBackend(params.backendId);
-    if (backend) {
-      try {
-        if (!backend.healthy || backend.healthy()) {
-          return true;
-        }
-      } catch {
-        // Treat transient backend health probe errors like "not ready yet".
-      }
-    }
-    await sleep(pollMs, undefined, { ref: false });
-  } while (Date.now() < deadline);
-
-  return false;
+  try {
+    await whenAcpBackendReady(params.backendId, timeoutMs);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function prewarmConfiguredPrimaryModel(params: {

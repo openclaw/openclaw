@@ -19,6 +19,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import { resolveGatewayClientBootstrap } from "../gateway/client-bootstrap.js";
 import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import { GatewayClient } from "../gateway/client.js";
+import { shutdown } from "../infra/graceful-shutdown.js";
 import { isMainModule } from "../infra/is-main.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -314,7 +315,7 @@ function parseArgs(args: string[]): AcpServerOptions {
     }
     if (arg === "--help" || arg === "-h") {
       printHelp();
-      process.exit(0);
+      shutdown(0);
     }
   }
   const gatewayToken = normalizeOptionalString(opts.gatewayToken);
@@ -373,6 +374,6 @@ if (isMainModule({ currentFile: fileURLToPath(import.meta.url) })) {
   const opts = parseArgs(argv);
   serveAcpGateway(opts).catch((err: unknown) => {
     console.error(String(err));
-    process.exit(1);
+    shutdown(1);
   });
 }

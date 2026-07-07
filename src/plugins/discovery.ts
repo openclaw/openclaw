@@ -1504,6 +1504,47 @@ export function discoverConfiguredPluginLoadPaths(params: {
   return result;
 }
 
+function tryReadPluginRegistryCache(
+  extraPaths: string[] | undefined,
+  installRecords: Record<string, PluginInstallRecord> | undefined,
+  roots: { stock?: string },
+  env: NodeJS.ProcessEnv,
+): PluginDiscoveryResult | null {
+  // Only use cache for pure bundled startup (no extra paths or custom installs)
+  if ((extraPaths?.length ?? 0) > 0 || (installRecords && Object.keys(installRecords).length > 0)) {
+    return null;
+  }
+  if (!roots.stock) {
+    return null;
+  }
+  const distRoot = path.dirname(roots.stock);
+  const cachePath = path.join(distRoot, ".plugin-registry.json");
+  if (!fs.existsSync(cachePath)) {
+    return null;
+  }
+  try {
+    const raw = fs.readFileSync(cachePath, "utf8");
+    const registry = JSON.parse(raw);
+    if (!Array.isArray(registry.candidates)) {
+      return null;
+    }
+    const candidates: PluginCandidate[] = registry.candidates
+      .map((c: Record<string, unknown>) => ({
+        idHint: String(c.idHint ?? ""),
+        source: String(c.source ?? ""),
+        rootDir: String(c.rootDir ?? ""),
+        origin: (c.origin as PluginOrigin) ?? "bundled",
+        format: (c.format as PluginFormat) ?? "openclaw",
+        packageName: c.packageName ? String(c.packageName) : undefined,
+        packageVersion: c.packageVersion ? String(c.packageVersion) : undefined,
+      }))
+      .filter((c: PluginCandidate) => c.idHint && c.source);
+    return { candidates, diagnostics: [] };
+  } catch {
+    return null;
+  }
+}
+
 export function discoverOpenClawPlugins(params: {
   workspaceDir?: string;
   extraPaths?: string[];
@@ -1515,6 +1556,14 @@ export function discoverOpenClawPlugins(params: {
   const workspaceDir = normalizeOptionalString(params.workspaceDir);
   const workspaceRoot = workspaceDir ? resolveUserPath(workspaceDir, env) : undefined;
   const roots = resolvePluginSourceRoots({ workspaceDir: workspaceRoot, env });
+
+  // Fast path: read pre-built plugin registry cache (Phase 2)
+  if (env.OPENCLAW_USE_PLUGIN_CACHE !== "0") {
+    const cached = tryReadPluginRegistryCache(params.extraPaths, params.installRecords, roots, env);
+    if (cached) {
+      return cached;
+    }
+  }
   const realpathCache = new Map<string, string>();
   const packageManifestCache = new Map<string, PackageManifest | null>();
   const scopedResult = tracePluginLifecyclePhase(

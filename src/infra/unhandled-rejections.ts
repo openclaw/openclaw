@@ -10,6 +10,7 @@ import {
   readErrorName,
 } from "./errors.js";
 import { runFatalErrorHooks } from "./fatal-error-hooks.js";
+import { shutdown } from "./graceful-shutdown.js";
 
 type UnhandledRejectionHandler = (reason: unknown) => boolean;
 type UncaughtExceptionHandler = (error: unknown) => boolean;
@@ -523,7 +524,7 @@ export function installUnhandledRejectionHandler(): void {
       console.error("[openclaw]", message);
     }
     restoreTerminalState(reason, { resumeStdinIfPaused: false });
-    process.exit(exitCode);
+    shutdown(exitCode);
   };
 
   process.on("unhandledRejection", (reason, _promise) => {

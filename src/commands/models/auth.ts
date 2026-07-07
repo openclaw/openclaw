@@ -102,7 +102,7 @@ function resolveManualTokenExpiryMs(expiresIn: string | undefined): number | und
 function guardCancel<T>(value: T | symbol): T {
   if (typeof value === "symbol" || isCancel(value)) {
     cancel("Cancelled.");
-    process.exit(0);
+    shutdown(0);
   }
   return value;
 }

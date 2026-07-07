@@ -34,7 +34,11 @@ import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-h
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { DedupeEntry } from "./server-shared.js";
 import type { HookClientIpConfig, HooksRequestHandler } from "./server/hooks-request-handler.js";
-import { listenGatewayHttpServer } from "./server/http-listen.js";
+import {
+  listenGatewayHttpServer,
+  registerEarlyHealthHandler,
+  markGatewayReady,
+} from "./server/http-listen.js";
 import type { PluginRoutePathContext } from "./server/plugins-http/path-context.js";
 import { shouldEnforceGatewayAuthForPluginPath } from "./server/plugins-http/route-auth.js";
 import { findMatchingPluginNodeCapabilityRoute } from "./server/plugins-http/route-capability.js";
@@ -272,6 +276,8 @@ export async function createGatewayRuntimeState(params: {
         isTerminalEnabled: params.isTerminalEnabled,
         tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
       });
+      // Phase 8: register early health endpoint before full init completes
+      registerEarlyHealthHandler(httpServer);
       // Attach upgrade handler BEFORE listening to prevent race condition
       attachGatewayUpgradeHandler({
         httpServer,

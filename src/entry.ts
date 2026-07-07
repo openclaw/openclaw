@@ -21,6 +21,7 @@ import {
 import { buildCliRespawnPlan, runCliRespawnPlan } from "./entry.respawn.js";
 import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
 import { normalizeEnv } from "./infra/env.js";
+import { shutdown } from "./infra/graceful-shutdown.js";
 import { isMainModule } from "./infra/is-main.js";
 import { ensureOpenClawExecMarkerOnProcess } from "./infra/openclaw-exec-env.js";
 import { installProcessWarningFilter } from "./infra/warning-filter.js";
@@ -104,20 +105,20 @@ if (
       const parsedContainer = parseCliContainerArgs(process.argv);
       if (!parsedContainer.ok) {
         console.error(`[openclaw] ${parsedContainer.error}`);
-        process.exit(2);
+        shutdown(2);
       }
 
       const parsed = parseCliProfileArgs(parsedContainer.argv);
       if (!parsed.ok) {
         // Keep it simple; Commander will handle rich help/errors after we strip flags.
         console.error(`[openclaw] ${parsed.error}`);
-        process.exit(2);
+        shutdown(2);
       }
 
       const containerTargetName = resolveCliContainerTarget(process.argv);
       if (containerTargetName && parsed.profile) {
         console.error("[openclaw] --container cannot be combined with --profile/--dev");
-        process.exit(2);
+        shutdown(2);
       }
 
       if (parsed.profile) {
@@ -159,7 +160,7 @@ export async function tryHandleRootHelpFastPath(
         "[openclaw] Failed to display help:",
         error instanceof Error ? (error.stack ?? error.message) : error,
       );
-      process.exit(1);
+      shutdown(1);
     });
   try {
     const loadRootHelpRenderOptionsForConfigSensitivePlugins =
@@ -290,6 +291,6 @@ async function runMainOrRootHelp(argv: string[]): Promise<void> {
     })) {
       console.error(line);
     }
-    process.exit(1);
+    shutdown(1);
   }
 }

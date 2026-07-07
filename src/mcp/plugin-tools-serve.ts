@@ -1,11 +1,3 @@
-/**
- * Standalone MCP server that exposes OpenClaw plugin-registered tools
- * (e.g. memory-lancedb's memory_recall, memory_store, memory_forget)
- * so ACP sessions running Claude Code can use them.
- *
- * Run via: node --import tsx src/mcp/plugin-tools-serve.ts
- * Or: bun src/mcp/plugin-tools-serve.ts
- */
 import { pathToFileURL } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
@@ -19,6 +11,15 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+/**
+ * Standalone MCP server that exposes OpenClaw plugin-registered tools
+ * (e.g. memory-lancedb's memory_recall, memory_store, memory_forget)
+ * so ACP sessions running Claude Code can use them.
+ *
+ * Run via: node --import tsx src/mcp/plugin-tools-serve.ts
+ * Or: bun src/mcp/plugin-tools-serve.ts
+ */
+import { shutdown } from "../infra/graceful-shutdown.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { ensureStandalonePluginToolRegistryLoaded, resolvePluginTools } from "../plugins/tools.js";
 import { connectToolsMcpServerToStdio, createToolsMcpServer } from "./tools-stdio-server.js";
@@ -83,6 +84,6 @@ export async function servePluginToolsMcp(): Promise<void> {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   servePluginToolsMcp().catch((err: unknown) => {
     process.stderr.write(`plugin-tools-serve: ${formatErrorMessage(err)}\n`);
-    process.exit(1);
+    shutdown(1);
   });
 }

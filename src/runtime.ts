@@ -1,6 +1,7 @@
 // Re-exports terminal runtime helpers used by CLI command implementations.
 import { clearActiveProgressLine } from "../packages/terminal-core/src/progress-line.js";
 import { restoreTerminalState } from "../packages/terminal-core/src/restore.js";
+import { shutdown } from "./infra/graceful-shutdown.js";
 
 export type RuntimeEnv = {
   log: (...args: unknown[]) => void;
@@ -90,7 +91,7 @@ export const defaultRuntime: OutputRuntimeEnv = {
   ...createRuntimeIo(),
   exit: (code) => {
     restoreTerminalState("runtime exit", { resumeStdinIfPaused: false });
-    process.exit(code);
+    shutdown(code);
     throw new Error("unreachable"); // satisfies tests when mocked
   },
 };

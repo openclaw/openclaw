@@ -5,6 +5,7 @@
 import { modelsAreEqual } from "@openclaw/ai/internal/runtime";
 import chalk from "chalk";
 import { minimatch } from "minimatch";
+import { shutdown } from "../../infra/graceful-shutdown.js";
 import type { Model } from "../../llm/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import type { ThinkingLevel } from "../runtime/index.js";
@@ -510,7 +511,7 @@ export async function findInitialModel(options: {
     });
     if (resolved.error) {
       console.error(chalk.red(resolved.error));
-      process.exit(1);
+      shutdown(1);
     }
     if (resolved.model) {
       return {

@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import process from "node:process";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { shutdown } from "../infra/graceful-shutdown.js";
 import {
   runProxyValidation,
   type ProxyValidationResult,
@@ -44,7 +45,7 @@ export async function runDebugProxyStartCommand(opts: { host?: string; port?: nu
   process.stdout.write(`CA cert: ${ca.certPath}\n`);
   process.stdout.write(`Capture DB: ${store.dbPath}\n`);
   process.stdout.write("Press Ctrl+C to stop.\n");
-  const shutdown = async () => {
+  const stopProxy = async () => {
     process.off("SIGINT", onSignal);
     process.off("SIGTERM", onSignal);
     await server.stop();
@@ -54,10 +55,10 @@ export async function runDebugProxyStartCommand(opts: { host?: string; port?: nu
       store.endSession(settings.sessionId);
       closeDebugProxyCaptureStore();
     }
-    process.exit(0);
+    shutdown(0);
   };
   const onSignal = () => {
-    void shutdown();
+    void stopProxy();
   };
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);

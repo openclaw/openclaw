@@ -541,6 +541,7 @@ function buildLlmCoreDistEntries(): Record<string, string> {
     "utils/diagnostics": "packages/llm-core/src/utils/diagnostics.ts",
     "utils/event-stream": "packages/llm-core/src/utils/event-stream.ts",
     validation: "packages/llm-core/src/validation.ts",
+    "llm-format": "packages/llm-core/src/llm-format.ts",
   };
 }
 

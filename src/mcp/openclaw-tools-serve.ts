@@ -1,9 +1,3 @@
-/**
- * Standalone MCP server for selected built-in OpenClaw tools.
- *
- * Run via: node --import tsx src/mcp/openclaw-tools-serve.ts
- * Or: bun src/mcp/openclaw-tools-serve.ts
- */
 import { pathToFileURL } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
@@ -11,6 +5,13 @@ import { createCrestodianTool } from "../agents/tools/crestodian-tool.js";
 import type { CrestodianToolOptions } from "../agents/tools/crestodian-tool.js";
 import { createCronTool } from "../agents/tools/cron-tool.js";
 import { formatErrorMessage } from "../infra/errors.js";
+/**
+ * Standalone MCP server for selected built-in OpenClaw tools.
+ *
+ * Run via: node --import tsx src/mcp/openclaw-tools-serve.ts
+ * Or: bun src/mcp/openclaw-tools-serve.ts
+ */
+import { shutdown } from "../infra/graceful-shutdown.js";
 import {
   resolveOpenClawToolsMcpCrestodianApproval,
   resolveOpenClawToolsMcpCrestodianSurface,
@@ -74,6 +75,6 @@ async function serveOpenClawToolsMcp(): Promise<void> {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   serveOpenClawToolsMcp().catch((err: unknown) => {
     process.stderr.write(`openclaw-tools-serve: ${formatErrorMessage(err)}\n`);
-    process.exit(1);
+    shutdown(1);
   });
 }

@@ -1,4 +1,3 @@
-// Main update implementation for source checkouts, package installs, finalization, and restart handoff.
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
@@ -61,6 +60,8 @@ import {
 import type { ClawHubRiskAcknowledgementRequest } from "../../infra/clawhub-install-trust.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import { pathExists } from "../../infra/fs-safe.js";
+// Main update implementation for source checkouts, package installs, finalization, and restart handoff.
+import { shutdown } from "../../infra/graceful-shutdown.js";
 import { readJsonIfExists, writeJson } from "../../infra/json-files.js";
 import {
   markPackagePostInstallDoctorAdvisory,
@@ -1019,7 +1020,7 @@ function armWindowsTaskAutoStartRecovery(
         defaultRuntime.error(`Failed to complete update shutdown cleanup: ${String(err)}`);
       })
       .finally(() => {
-        process.exit(exitCode);
+        shutdown(exitCode);
       });
   };
   const onSigint = () => onSignal(130);

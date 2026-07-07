@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/native-core",
+  "version": "0.1.0",
+  "private": true,
+  "napi": {
+    "name": "openclaw-native-core",
+    "triples": {
+      "defaults": true,
+      "additional": []
+    }
+  },
+  "scripts": {
+    "build": "napi build --platform --release --cargo-cwd crates/native-core",
+    "build:debug": "napi build --platform --cargo-cwd crates/native-core"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^3.4.1"
+  }
+}

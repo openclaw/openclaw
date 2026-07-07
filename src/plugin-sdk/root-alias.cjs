@@ -3,11 +3,9 @@
 
 const path = require("node:path");
 const fs = require("node:fs");
-const os = require("node:os");
 
 let monolithicSdk = null;
 let diagnosticEventsModule = null;
-const moduleLoaders = new Map();
 const pluginSdkSubpathsCache = new Map();
 const pluginSdkPackageNames = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"];
 const pluginSdkSourceExtensions = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"];
@@ -455,112 +453,20 @@ function buildPluginSdkAliasMap(useDist) {
   return aliasMap;
 }
 
-function sanitizeJitiCachePathSegment(value) {
-  const normalized = String(value)
-    .replace(/[^A-Za-z0-9._-]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-  return normalized.length > 0 ? normalized : "unknown";
-}
-
-function resolveJitiFsCacheTmpDir() {
-  let tmpDir = os.tmpdir();
-  if (process.env.TMPDIR && tmpDir === process.cwd() && !process.env.JITI_RESPECT_TMPDIR_ENV) {
-    const originalTmpDir = process.env.TMPDIR;
-    delete process.env.TMPDIR;
-    try {
-      tmpDir = os.tmpdir();
-    } finally {
-      process.env.TMPDIR = originalTmpDir;
-    }
-  }
-  return tmpDir;
-}
-
-function readJitiBooleanEnv(name, defaultValue) {
-  if (!(name in process.env)) {
-    return defaultValue;
-  }
-  try {
-    return Boolean(JSON.parse(process.env[name] ?? ""));
-  } catch {
-    return defaultValue;
-  }
-}
-
-function shouldUseJitiFsCache() {
-  return readJitiBooleanEnv("JITI_FS_CACHE", readJitiBooleanEnv("JITI_CACHE", true));
-}
-
-function resolvePluginSdkJitiFsCacheDir() {
-  const packageRoot = getPackageRoot();
-  const packageJsonPath = path.join(packageRoot, "package.json");
-  let version = "unknown";
-  let installMarker = "no-package-json";
-  try {
-    const parsed = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8"));
-    if (typeof parsed.version === "string" && parsed.version.trim().length > 0) {
-      version = parsed.version;
-    }
-  } catch {
-    // Keep the root alias load path best-effort when package metadata is unavailable.
-  }
-  try {
-    const stat = fs.statSync(packageJsonPath);
-    installMarker = `${Math.trunc(stat.mtimeMs)}-${stat.size}`;
-  } catch {
-    // Package installs should have package.json, but source/test graphs may stub it.
-  }
-  return path.join(
-    resolveJitiFsCacheTmpDir(),
-    "jiti",
-    "openclaw",
-    sanitizeJitiCachePathSegment(version),
-    sanitizeJitiCachePathSegment(installMarker),
-  );
-}
-
-function resolvePluginSdkJitiFsCacheOption() {
-  return shouldUseJitiFsCache() ? resolvePluginSdkJitiFsCacheDir() : false;
-}
-
-function getModuleLoader(tryNative) {
-  if (moduleLoaders.has(tryNative)) {
-    return moduleLoaders.get(tryNative);
-  }
-
-  const { createJiti } = require("jiti");
-  const moduleLoader = createJiti(__filename, {
-    alias: buildPluginSdkAliasMap(tryNative),
-    interopDefault: true,
-    fsCache: resolvePluginSdkJitiFsCacheOption(),
-    // Prefer Node's native sync ESM loader for built dist/plugin-sdk/*.js files
-    // so local plugins do not create a second transpiled OpenClaw core graph.
-    tryNative,
-    extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
-  });
-  moduleLoaders.set(tryNative, moduleLoader);
-  return moduleLoader;
-}
-
 function loadMonolithicSdk() {
   if (monolithicSdk) {
     return monolithicSdk;
   }
 
   const distCandidate = path.resolve(__dirname, "..", "..", "dist", "plugin-sdk", "compat.js");
-  if (!shouldPreferSourceGraph && fs.existsSync(distCandidate)) {
-    try {
-      monolithicSdk = getModuleLoader(true)(distCandidate);
-      return monolithicSdk;
-    } catch {
-      // Fall through to source alias if dist is unavailable or stale.
-    }
+  if (fs.existsSync(distCandidate)) {
+    monolithicSdk = require(distCandidate);
+    return monolithicSdk;
   }
 
-  monolithicSdk = getModuleLoader(false)(
-    path.join(getPackageRoot(), "src", "plugin-sdk", "compat.ts"),
+  throw new Error(
+    "Plugin SDK not found. Expected pre-compiled dist/plugin-sdk/compat.js. All plugin modules must be pre-compiled to JavaScript at build time.",
   );
-  return monolithicSdk;
 }
 
 function loadDiagnosticEventsModule() {
@@ -576,26 +482,17 @@ function loadDiagnosticEventsModule() {
     "infra",
     "diagnostic-events.js",
   );
-  if (!shouldPreferSourceGraph) {
-    const distCandidate =
-      (fs.existsSync(directDistCandidate) && directDistCandidate) ||
-      findDistChunkByPrefix("diagnostic-events");
-    if (distCandidate) {
-      try {
-        diagnosticEventsModule = normalizeDiagnosticEventsModule(
-          getModuleLoader(true)(distCandidate),
-        );
-        return diagnosticEventsModule;
-      } catch {
-        // Fall through to source path if dist is unavailable or stale.
-      }
-    }
+  const distCandidate =
+    (fs.existsSync(directDistCandidate) && directDistCandidate) ||
+    findDistChunkByPrefix("diagnostic-events");
+  if (distCandidate) {
+    diagnosticEventsModule = normalizeDiagnosticEventsModule(require(distCandidate));
+    return diagnosticEventsModule;
   }
 
-  diagnosticEventsModule = normalizeDiagnosticEventsModule(
-    getModuleLoader(false)(path.join(getPackageRoot(), "src", "infra", "diagnostic-events.ts")),
+  throw new Error(
+    "Diagnostic events module not found. Expected pre-compiled dist/infra/diagnostic-events.js. All modules must be pre-compiled to JavaScript at build time.",
   );
-  return diagnosticEventsModule;
 }
 
 function normalizeDiagnosticEventsModule(mod) {

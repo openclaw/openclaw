@@ -1,6 +1,7 @@
-// Handles fast version output before the full CLI graph loads.
 import { isRootVersionInvocation } from "./cli/argv.js";
 import { resolveCliContainerTarget } from "./cli/container-target.js";
+// Handles fast version output before the full CLI graph loads.
+import { shutdown } from "./infra/graceful-shutdown.js";
 
 export function tryHandleRootVersionFastPath(
   argv: string[],
@@ -23,7 +24,7 @@ export function tryHandleRootVersionFastPath(
     return false;
   }
   const output = deps.output ?? ((message: string) => console.log(message));
-  const exit = deps.exit ?? ((code?: number) => process.exit(code));
+  const exit = deps.exit ?? ((code?: number) => shutdown(code));
   const onError =
     deps.onError ??
     ((error: unknown) => {

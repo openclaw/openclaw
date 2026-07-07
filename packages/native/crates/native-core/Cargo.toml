@@ -1,0 +1,26 @@
+[package]
+name = "openclaw-native-core"
+version = "0.1.0"
+edition = "2021"
+description = "OpenClaw native napi-rs core utilities + SQLite session store"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = { version = "3", features = ["napi6"] }
+napi-derive = "3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+once_cell = "1"
+
+[build-dependencies]
+napi-build = "2"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

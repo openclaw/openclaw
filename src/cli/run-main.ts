@@ -9,6 +9,7 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.opencla
 import { isLoopbackAddress, isSecureWebSocketUrl } from "../gateway/net.js";
 import { FLAG_TERMINATOR, isValueToken } from "../infra/cli-root-options.js";
 import { isTruthyEnvValue, normalizeEnv } from "../infra/env.js";
+import { shutdown as gracefulShutdown } from "../infra/graceful-shutdown.js";
 import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
@@ -957,7 +958,7 @@ export async function runCli(argv: string[] = process.argv) {
     unregisterProxySignalExitBarrier = registerSignalExitBarrier(stopStartedProxy);
     const shutdown = (exitCode: number) => {
       void waitForSignalExitBarriers().finally(() => {
-        process.exit(exitCode);
+        gracefulShutdown(exitCode);
       });
     };
     onSigterm = () => shutdown(143);
@@ -1259,7 +1260,7 @@ export async function runCli(argv: string[] = process.argv) {
           console.error("[openclaw]", message);
         }
         restoreTerminalState("uncaught exception", { resumeStdinIfPaused: false });
-        process.exit(1);
+        gracefulShutdown(1);
       });
 
       const invocation = resolveCliArgvInvocation(parseArgv);

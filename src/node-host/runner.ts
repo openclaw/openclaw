@@ -1,5 +1,6 @@
-/** CLI runner for node-host stdin/stdout command dispatch. */
 import fs from "node:fs";
+/** CLI runner for node-host stdin/stdout command dispatch. */
+import { shutdown } from "../../infra/graceful-shutdown.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -112,7 +113,7 @@ export function handleNodeHostReconnectPaused(
   if (!shouldExit) {
     return;
   }
-  const exit = deps.exit ?? ((code: number): never => process.exit(code));
+  const exit = deps.exit ?? ((code: number): never => shutdown(code));
   exit(1);
 }
 

@@ -19,6 +19,7 @@ import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { shutdown } from "../infra/graceful-shutdown.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
@@ -459,7 +460,7 @@ export function scheduleProcessExitAfterTuiReturn(
   const setTimeoutFn =
     params.setTimeoutFn ??
     ((callback, timeoutMs) => setTimeout(callback, timeoutMs) as unknown as TuiProcessExitTimer);
-  const exit = params.exit ?? ((code?: number) => process.exit(code));
+  const exit = params.exit ?? ((code?: number) => shutdown(code));
   const writeStderr =
     params.writeStderr ??
     ((text: string) => {
@@ -1356,7 +1357,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     } catch {
       // Best effort only; force exit must not depend on stderr.
     }
-    process.exit(130);
+    shutdown(130);
   };
   const requestExit = (result?: Partial<TuiResult>) => {
     if (exitRequested) {

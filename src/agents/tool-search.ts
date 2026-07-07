@@ -13,6 +13,7 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { scheduleExit } from "../infra/graceful-shutdown.js";
 import { getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
@@ -408,7 +409,7 @@ process.on("message", (message) => {
       error: error instanceof Error ? error.message : String(error),
     });
   }).finally(() => {
-    setTimeout(() => process.exit(0), 100);
+    scheduleExit(0, 100);
   });
 });
 `;

@@ -51,6 +51,21 @@ export const BUILD_ALL_STEPS = [
     args: ["scripts/runtime-postbuild-stamp.mjs"],
   },
   {
+    label: "native:build",
+    kind: "node",
+    args: ["scripts/native-build.mjs"],
+  },
+  {
+    label: "plugin-registry-cache",
+    kind: "node",
+    args: ["scripts/generate-plugin-registry-cache.mjs"],
+  },
+  {
+    label: "config-cache",
+    kind: "node",
+    args: ["scripts/generate-config-cache.mjs"],
+  },
+  {
     label: "write-plugin-sdk-entry-dts",
     kind: "node",
     args: ["--import", "tsx", "scripts/write-plugin-sdk-entry-dts.ts"],
@@ -124,6 +139,9 @@ export const BUILD_ALL_PROFILES = {
   ciArtifacts: [
     "plugins:assets:build",
     "tsdown",
+    "native:build",
+    "plugin-registry-cache",
+    "config-cache",
     "check-cli-bootstrap-imports",
     "runtime-postbuild",
     "build-stamp",

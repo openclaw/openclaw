@@ -13,6 +13,7 @@ import {
   type SessionNotification,
 } from "@agentclientprotocol/sdk";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { shutdown } from "../infra/graceful-shutdown.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import {
   buildAcpClientStripKeys,
@@ -214,7 +215,7 @@ export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Prom
         if (text === "exit" || text === "quit") {
           agent.kill();
           rl.close();
-          process.exit(0);
+          shutdown(0);
         }
 
         try {
@@ -237,6 +238,6 @@ export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Prom
   agent.on("exit", (code) => {
     console.log(`\nAgent exited with code ${code ?? 0}`);
     rl.close();
-    process.exit(code ?? 0);
+    shutdown(code ?? 0);
   });
 }

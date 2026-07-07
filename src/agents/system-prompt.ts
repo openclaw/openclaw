@@ -57,6 +57,7 @@ import type {
   ProviderSystemPromptSectionId,
 } from "./system-prompt-contribution.js";
 import type { PromptMode, SilentReplyPromptMode } from "./system-prompt.types.js";
+import { toolsToLlmFormat } from "./tool-llm-format.js";
 
 /**
  * Controls which hardcoded sections are included in the system prompt.
@@ -1043,14 +1044,23 @@ export function buildAgentSystemPrompt(params: {
       "## Tooling",
       "Available tools are policy-filtered. Names are case-sensitive; call exactly as listed.",
       toolLines.length > 0
-        ? toolLines.join("\n")
+        ? process.env.OPENCLAW_USE_LLM_FORMAT === "1"
+          ? toolsToLlmFormat(
+              enabledTools.map((tool) => ({
+                name: resolveToolName(tool),
+                description: coreToolSummaries[tool] ?? externalToolSummaries.get(tool) ?? "",
+              })),
+            )
+          : toolLines.join("\n")
         : buildOpenClawToolFallbackText({
             surface: promptSurface,
             execToolName,
             processToolName,
           }),
       ...(toolSchemaDirectoryPrompt
-        ? ["", "### Deferred Tool Schemas", toolSchemaDirectoryPrompt]
+        ? process.env.OPENCLAW_USE_LLM_FORMAT === "1"
+          ? ["", "### Deferred Tool Schemas", toolsToLlmFormat([]), "", toolSchemaDirectoryPrompt]
+          : ["", "### Deferred Tool Schemas", toolSchemaDirectoryPrompt]
         : []),
       "TOOLS.md is usage guidance, not availability.",
       ...(renderOpenClawToolWorkflowHints

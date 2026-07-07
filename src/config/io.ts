@@ -17,6 +17,7 @@ import {
   formatErrorMessage,
 } from "../infra/errors.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { replaceFileAtomic, replaceFileAtomicSync } from "../infra/replace-file.js";
 import {
   loadShellEnvFallback,
@@ -1731,6 +1732,29 @@ export function createConfigIO(
     }
   }
 
+  function tryReadConfigCache(): OpenClawConfig | null {
+    if (deps.env.OPENCLAW_USE_CONFIG_CACHE === "0") return null;
+    try {
+      const packageRoot = resolveOpenClawPackageRootSync();
+      if (!packageRoot) return null;
+      const cachePath = path.join(packageRoot, "dist", ".config-cache.json");
+      if (!deps.fs.existsSync(cachePath)) return null;
+      const raw = deps.fs.readFileSync(cachePath, "utf-8");
+      const cache = JSON5.parse(raw);
+      if (cache?.version !== 2) return null;
+      // Staleness check: verify source hashes match
+      if (cache.sourceHashes?.packageJson) {
+        const currentHash = hashConfigRaw(
+          deps.fs.readFileSync(path.join(packageRoot, "package.json"), "utf-8"),
+        );
+        if (currentHash !== cache.sourceHashes.packageJson) return null;
+      }
+      return {};
+    } catch {
+      return null;
+    }
+  }
+
   function loadConfigLocal(options: { skipSuspiciousRecovery?: boolean } = {}): OpenClawConfig {
     try {
       maybeLoadDotEnvForConfig(deps.env);
@@ -1750,6 +1774,9 @@ export function createConfigIO(
             timeoutMs: resolveShellEnvFallbackTimeoutMs(deps.env),
           });
         }
+        // Phase 3: try pre-built config cache when no openclaw.json exists
+        const cached = tryReadConfigCache();
+        if (cached) return cached;
         return {};
       }
       const raw = deps.fs.readFileSync(configPath, "utf-8");

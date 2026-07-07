@@ -1,4 +1,5 @@
 /** Process-wide registry for ACP runtime backends contributed by plugins. */
+import { EventEmitter } from "node:events";
 import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -13,6 +14,7 @@ export type AcpRuntimeBackend = {
 
 type AcpRuntimeRegistryGlobalState = {
   backendsById: Map<string, AcpRuntimeBackend>;
+  readyEmitter: EventEmitter;
 };
 
 const ACP_RUNTIME_REGISTRY_STATE_KEY = Symbol.for("openclaw.acpRuntimeRegistryState");
@@ -27,6 +29,7 @@ function resolveAcpRuntimeRegistryGlobalState(): AcpRuntimeRegistryGlobalState {
     ACP_RUNTIME_REGISTRY_STATE_KEY,
     () => ({
       backendsById: new Map<string, AcpRuntimeBackend>(),
+      readyEmitter: new EventEmitter(),
     }),
   );
   // ACP runtime backends are registered from bundled plugin code and read from
@@ -62,6 +65,10 @@ export function registerAcpRuntimeBackend(backend: AcpRuntimeBackend): void {
     ...backend,
     id,
   });
+  // If backend is already healthy, emit ready event immediately
+  if (isBackendHealthy(backend)) {
+    signalAcpBackendReady(id);
+  }
 }
 
 /** Removes a registered ACP runtime backend by id. */
@@ -88,6 +95,52 @@ export function getAcpRuntimeBackend(id?: string): AcpRuntimeBackend | null {
     }
   }
   return ACP_BACKENDS_BY_ID.values().next().value ?? null;
+}
+
+const ACP_BACKENDS_READY_EVENT = "backend_ready";
+
+/** Returns a Promise that resolves when the backend becomes healthy.
+ *  Replaces polling-based waitForAcpRuntimeBackendReady. Phase 8. */
+export function whenAcpBackendReady(
+  backendId?: string,
+  timeoutMs = 10_000,
+): Promise<AcpRuntimeBackend> {
+  return new Promise((resolve, reject) => {
+    const normalized = normalizeOptionalLowercaseString(backendId) || "";
+    const { readyEmitter } = resolveAcpRuntimeRegistryGlobalState();
+    const timeout = setTimeout(() => {
+      readyEmitter.off(ACP_BACKENDS_READY_EVENT, onReady);
+      reject(
+        new AcpRuntimeError("ACP_BACKEND_TIMEOUT", "ACP runtime backend not ready within timeout"),
+      );
+    }, timeoutMs).unref();
+
+    function onReady(id: string) {
+      if (normalized && id !== normalized) return;
+      const backend = ACP_BACKENDS_BY_ID.get(normalized || id);
+      if (backend && isBackendHealthy(backend)) {
+        clearTimeout(timeout);
+        readyEmitter.off(ACP_BACKENDS_READY_EVENT, onReady);
+        resolve(backend);
+      }
+    }
+
+    // Check if already ready
+    const existing = normalized ? ACP_BACKENDS_BY_ID.get(normalized) : null;
+    if (existing && isBackendHealthy(existing)) {
+      clearTimeout(timeout);
+      resolve(existing);
+      return;
+    }
+
+    readyEmitter.on(ACP_BACKENDS_READY_EVENT, onReady);
+  });
+}
+
+/** Signal that a backend is ready. Called by the backend implementation when healthy. */
+export function signalAcpBackendReady(id: string): void {
+  const { readyEmitter } = resolveAcpRuntimeRegistryGlobalState();
+  readyEmitter.emit(ACP_BACKENDS_READY_EVENT, id);
 }
 
 /** Resolves a healthy backend or throws a typed ACP runtime error. */

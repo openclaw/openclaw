@@ -119,6 +119,7 @@ import {
   refreshGatewayHealthSnapshot,
 } from "./server/health-state.js";
 import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
+import { markGatewayReady } from "./server/http-listen.js";
 import { createReadinessChecker } from "./server/readiness.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
@@ -1731,6 +1732,7 @@ export async function startGatewayServer(
       log.info("gateway ready");
     }
     finishGatewayRestartTrace("restart.ready", collectGatewayProcessMemoryUsageMb());
+    markGatewayReady();
     postAttachRuntimeReturned = true;
     activateScheduledServicesWhenReady();
 
