@@ -194,6 +194,14 @@ class StdioCodexJsonRpcConnection extends BaseCodexJsonRpcConnection {
       this.stderrTail.push(...chunk.split(/\r?\n/).filter(Boolean));
       this.stderrTail.splice(0, Math.max(0, this.stderrTail.length - 40));
     });
+    this.proc.stdout.once("error", (error) => {
+      this.fail(error);
+      void this.close();
+    });
+    this.proc.stderr.once("error", (error) => {
+      this.fail(error);
+      void this.close();
+    });
     this.proc.stdin.once("error", (error) => this.fail(error));
     this.proc.once("error", (error) => this.fail(error));
     this.proc.once("close", () =>
