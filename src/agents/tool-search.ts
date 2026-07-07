@@ -897,6 +897,7 @@ export function applyToolSearchCatalog(params: {
   runId?: string;
   catalogRef?: ToolSearchCatalogRef;
   toolHookContext?: HookContext;
+  shouldCatalogTool?: (tool: AnyAgentTool) => boolean;
 }): {
   tools: AnyAgentTool[];
   compacted: boolean;
