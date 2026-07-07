@@ -283,9 +283,9 @@ The terminal is also available as a full-screen, terminal-only document at `/?vi
 ## Connection loss and reconnect
 
 Once a session is established, a dropped Gateway connection does not log you out. The dashboard
-stays visible with an amber "Gateway connection lost — reconnecting…" banner while the client
-retries automatically with backoff (800 ms up to 15 s). Live updates and actions pause until the
-connection returns; **Retry now** in the banner forces an immediate attempt.
+stays visible with a floating amber "Gateway connection lost — Reconnecting…" pill under the top
+bar while the client retries automatically with backoff (800 ms up to 15 s). Live updates and
+actions pause until the connection returns; **Retry now** in the pill forces an immediate attempt.
 
 The login gate only appears when there is no established session yet (first open, page reload
 before connect) or when the Gateway actively rejects the credentials (bad token/password, revoked
