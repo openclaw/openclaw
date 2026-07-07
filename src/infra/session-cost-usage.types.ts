@@ -1,19 +1,12 @@
 // Shared session cost and usage accounting type contracts.
-import type { NormalizedUsage, UsageCostTotalOrigin } from "../agents/usage.js";
+import type { NormalizedUsage } from "../agents/usage.js";
+import type { Usage } from "../llm/types.js";
 import type {
   SessionUsageTimePoint as SharedSessionUsageTimePoint,
   SessionUsageTimeSeries as SharedSessionUsageTimeSeries,
 } from "../shared/session-usage-timeseries-types.js";
 
-export type CostBreakdown = {
-  total?: number;
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  /** Provenance for the recorded total cost; provider-billed totals are authoritative. */
-  totalOrigin?: UsageCostTotalOrigin;
-};
+export type CostBreakdown = Partial<Usage["cost"]>;
 
 export type ParsedUsageEntry = {
   usage: NormalizedUsage;

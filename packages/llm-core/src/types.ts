@@ -275,7 +275,7 @@ export interface Usage {
     cacheWrite: number;
     total: number;
     /** Provenance for the recorded total cost; provider-billed totals are authoritative. */
-    totalOrigin?: "provider-billed" | "estimated";
+    totalOrigin?: "provider-billed";
   };
 }
 

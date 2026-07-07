@@ -836,7 +836,7 @@ function buildSessionCostSummaryFromCacheEntry(params: {
 }
 
 const normalizeUsageCostTotalOrigin = (value: unknown): CostBreakdown["totalOrigin"] =>
-  value === "provider-billed" || value === "estimated" ? value : undefined;
+  value === "provider-billed" ? value : undefined;
 
 const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | undefined => {
   if (!usageRaw || typeof usageRaw !== "object") {

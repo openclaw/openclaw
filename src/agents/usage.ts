@@ -4,12 +4,9 @@
  * output, cache, reasoning, and total token accounting fields.
  */
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import type { Usage } from "../llm/types.js";
 
-export type ContextUsage =
-  | { state: "available"; promptTokens: number; totalTokens: number }
-  | { state: "unavailable" };
-
-export type UsageCostTotalOrigin = "provider-billed" | "estimated";
+export type ContextUsage = NonNullable<Usage["contextUsage"]>;
 
 /** Provider/SDK usage payload variants accepted by usage normalization. */
 export type UsageLike = {
@@ -53,15 +50,7 @@ export type UsageLike = {
     predicted_n?: number;
   };
   // Optional cost metadata carried through transcripts for downstream cost accounting.
-  cost?: {
-    input?: number;
-    output?: number;
-    cacheRead?: number;
-    cacheWrite?: number;
-    total?: number;
-    /** Provenance for the recorded total cost; provider-billed totals are authoritative. */
-    totalOrigin?: UsageCostTotalOrigin;
-  };
+  cost?: Partial<Usage["cost"]>;
 };
 
 /** Normalized token counts used by runtime accounting. */
@@ -85,23 +74,7 @@ export type OpenAiChatCompletionsUsage = {
 };
 
 /** Assistant usage snapshot with token counts and computed cost buckets. */
-export type AssistantUsageSnapshot = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  contextUsage?: ContextUsage;
-  totalTokens: number;
-  cost: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    total: number;
-    /** Provenance for the recorded total cost; provider-billed totals are authoritative. */
-    totalOrigin?: UsageCostTotalOrigin;
-  };
-};
+export type AssistantUsageSnapshot = Usage;
 
 /** Build a zeroed assistant usage snapshot. */
 export function makeZeroUsageSnapshot(): AssistantUsageSnapshot {
