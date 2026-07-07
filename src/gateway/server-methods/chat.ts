@@ -2044,10 +2044,9 @@ async function rewriteSourceReplyTranscriptMirrors(params: {
       rewrittenEvents,
       target.request.idempotencyKey,
     );
-    return {
-      ...(rewritten?.messageId ? { messageId: rewritten.messageId } : {}),
-      request: target.request,
-    };
+    return rewritten?.messageId
+      ? { messageId: rewritten.messageId, request: target.request }
+      : { request: target.request };
   });
 }
 
