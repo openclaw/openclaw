@@ -215,13 +215,6 @@
   stroke-linejoin: round;
 }
 
-/* Drawer toggle only exists on drawer viewports (layout.mobile.css swaps the
-   pair); the collapse toggle is the desktop default. Keep this after the
-   .topbar-icon-btn display rule it overrides. */
-.topbar-nav-toggle {
-  display: none;
-}
-
 /* ===========================================
    Navigation Sidebar
    =========================================== */

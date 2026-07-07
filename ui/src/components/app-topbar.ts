@@ -6,6 +6,10 @@ import "./tooltip.ts";
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.ts";
 
+// Mirrors the layout.mobile.css breakpoint where the sidebar becomes a
+// slide-over drawer; the one topbar toggle switches behavior there.
+const NAV_DRAWER_MEDIA_QUERY = "(max-width: 1100px)";
+
 export class AppTopbar extends LitElement {
   override createRenderRoot() {
     return this;
@@ -24,21 +28,60 @@ export class AppTopbar extends LitElement {
   @property({ attribute: false }) overviewHref = "";
   @property({ attribute: false }) terminalAvailable = false;
 
+  private drawerMedia?: MediaQueryList;
+  private drawerMediaCleanup?: () => void;
+
   override connectedCallback() {
     super.connectedCallback();
     this.style.display = "contents";
+    if (typeof globalThis.matchMedia === "function") {
+      const media = globalThis.matchMedia(NAV_DRAWER_MEDIA_QUERY);
+      this.drawerMedia = media;
+      // Older WebViews expose only the legacy addListener API (see the same
+      // pattern in app/bootstrap.ts).
+      if (typeof media.addEventListener === "function") {
+        media.addEventListener("change", this.handleDrawerMediaChange);
+        this.drawerMediaCleanup = () =>
+          media.removeEventListener("change", this.handleDrawerMediaChange);
+      } else if (typeof media.addListener === "function") {
+        media.addListener(this.handleDrawerMediaChange);
+        this.drawerMediaCleanup = () => media.removeListener(this.handleDrawerMediaChange);
+      }
+    }
+  }
+
+  override disconnectedCallback() {
+    this.drawerMediaCleanup?.();
+    this.drawerMediaCleanup = undefined;
+    this.drawerMedia = undefined;
+    super.disconnectedCallback();
+  }
+
+  private readonly handleDrawerMediaChange = () => {
+    this.requestUpdate();
+  };
+
+  private get drawerMode(): boolean {
+    return this.drawerMedia?.matches ?? false;
   }
 
   private readonly handleNavigate = (event: CustomEvent<NavigationRouteId>) => {
     this.onNavigate?.(event.detail);
   };
 
+  private readonly handleToggleSidebar = (event: MouseEvent) => {
+    if (this.drawerMode) {
+      this.onToggleDrawer?.(event.currentTarget as HTMLElement);
+    } else {
+      this.onToggleCollapse?.();
+    }
+  };
+
   override render() {
-    // Two sidebar toggles share one slot: the collapse toggle drives the
-    // persistent desktop rail, the drawer toggle drives the ≤1100px slide-over.
-    // CSS shows exactly one of them per viewport (layout.mobile.css).
-    const collapseLabel = this.navCollapsed ? t("nav.expand") : t("nav.collapse");
-    const drawerLabel = this.navDrawerOpen ? t("nav.collapse") : t("nav.expand");
+    // One toggle, viewport-dependent behavior: it drives the persistent rail
+    // collapse on desktop and the slide-over drawer at drawer breakpoints.
+    const sidebarOpen = this.drawerMode ? this.navDrawerOpen : !this.navCollapsed;
+    const toggleLabel = sidebarOpen ? t("nav.collapse") : t("nav.expand");
     return html`
       <header
         class="topbar"
@@ -46,25 +89,13 @@ export class AppTopbar extends LitElement {
         aria-hidden=${this.onboarding ? "true" : nothing}
       >
         <div class="topnav-shell">
-          <openclaw-tooltip .content=${collapseLabel}>
-            <button
-              type="button"
-              class="topbar-icon-btn topbar-sidebar-toggle"
-              @click=${() => this.onToggleCollapse?.()}
-              aria-label=${collapseLabel}
-              aria-expanded=${String(!this.navCollapsed)}
-            >
-              ${icons.panelLeft}
-            </button>
-          </openclaw-tooltip>
-          <openclaw-tooltip .content=${drawerLabel}>
+          <openclaw-tooltip .content=${toggleLabel}>
             <button
               type="button"
               class="topbar-icon-btn topbar-nav-toggle"
-              @click=${(event: MouseEvent) =>
-                this.onToggleDrawer?.(event.currentTarget as HTMLElement)}
-              aria-label=${drawerLabel}
-              aria-expanded=${String(this.navDrawerOpen)}
+              @click=${this.handleToggleSidebar}
+              aria-label=${toggleLabel}
+              aria-expanded=${String(sidebarOpen)}
             >
               ${icons.panelLeft}
             </button>

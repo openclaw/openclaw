@@ -147,17 +147,6 @@
     pointer-events: auto;
   }
 
-  /* Swap the topbar sidebar toggles at the same breakpoint where the drawer
-     takes over; the desktop rail toggle makes no sense once the sidebar is a
-     drawer. */
-  .topbar-nav-toggle {
-    display: inline-flex;
-  }
-
-  .topbar-sidebar-toggle {
-    display: none;
-  }
-
   .sidebar,
   .sidebar--collapsed {
     width: 100%;
@@ -264,10 +253,6 @@
   .topnav-shell__content {
     display: none;
     width: 100%;
-  }
-
-  .topbar-nav-toggle {
-    display: inline-flex;
   }
 
   .shell-nav,
@@ -660,7 +645,6 @@
     border-radius: var(--radius-md);
     font-size: 12px; /* was 11px */
   }
-
 }
 
 /* Small mobile */
@@ -707,7 +691,6 @@
     padding: 6px 10px;
     font-size: 12px; /* was 11px */
   }
-
 }
 
 /* ===========================================
