@@ -263,4 +263,47 @@ describe("prepareCliBundleMcpConfig", () => {
 
     await prepared.cleanup?.();
   });
+
+  it("respects argv boundary: resumeArgs does not leak into fresh args", async () => {
+    const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
+      "openclaw-cli-bundle-mcp-resume-boundary-",
+    );
+
+    // Write a user MCP config file for resume.
+    const resumeConfig = path.join(workspaceDir, "resume.json");
+    await fs.writeFile(
+      resumeConfig,
+      JSON.stringify({
+        mcpServers: { resumeServer: { command: "node", args: ["./resume.mjs"] } },
+      }),
+      "utf-8",
+    );
+
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: {
+        command: "node",
+        // resumeArgs contains --mcp-config, and args contains the fresh-run command
+        resumeArgs: ["./fake-claude.mjs", "--mcp-config", "resume.json"],
+        args: ["--another-flag", "some-value"],
+      },
+      workspaceDir,
+      config: { plugins: { enabled: false } },
+    });
+
+    // Only resume config should be merged; fresh args should not be consumed.
+    const generatedConfigPath = requireMcpConfigPath(prepared.backend.args);
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
+      mcpServers?: Record<string, unknown>;
+    };
+    expect(raw.mcpServers).toHaveProperty("resumeServer");
+    expect(raw.mcpServers).not.toHaveProperty("some-value");
+
+    // Fresh args should remain intact and not be stripped.
+    expect(prepared.backend.args).toContain("--another-flag");
+    expect(prepared.backend.args).toContain("some-value");
+
+    await prepared.cleanup?.();
+  });
 });

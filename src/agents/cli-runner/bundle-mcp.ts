@@ -191,10 +191,13 @@ export async function prepareCliBundleMcpConfig(params: {
   const mode = resolveBundleMcpMode(params.mode);
   const existingMcpConfigPaths =
     mode === "claude-config-file"
-      ? findAllClaudeMcpConfigPaths([
-          ...(params.backend.resumeArgs ?? []),
-          ...(params.backend.args ?? []),
-        ])
+      ? findAllClaudeMcpConfigPaths(
+          // Prioritize resumeArgs if they exist (they replace args on resume),
+          // otherwise fall back to fresh args. Do not merge them.
+          params.backend.resumeArgs && params.backend.resumeArgs.length > 0
+            ? params.backend.resumeArgs
+            : (params.backend.args ?? []),
+        )
       : [];
   let mergedConfig: BundleMcpConfig = { mcpServers: {} };
 
