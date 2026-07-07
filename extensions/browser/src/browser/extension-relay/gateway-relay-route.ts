@@ -9,23 +9,27 @@
  * The gateway route is registered with `auth: "plugin"` and no nodeCapability,
  * so the gateway does NOT pre-enforce gateway-token auth (browser WebSockets
  * cannot send an Authorization header anyway). This handler self-validates the
- * host-local relay secret from the `?token=` query, then attaches the socket to
- * the same ExtensionRelayBridge the loopback relay uses — so all CDP synthesis,
- * tab-group scoping, and the in-process Playwright /cdp client are unchanged.
+ * host-local relay secret from the WebSocket subprotocol list, then attaches
+ * the socket to the same ExtensionRelayBridge the loopback relay uses — so all
+ * CDP synthesis, tab-group scoping, and the in-process Playwright /cdp client
+ * are unchanged.
  */
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer } from "ws";
-import { getBrowserControlState } from "../../browser-control-state.js";
+import {
+  getBrowserControlState,
+  startBrowserControlServiceFromConfig,
+} from "../../control-service.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveProfile } from "../config.js";
-import { extensionRelayTokenMatches } from "./relay-auth.js";
+import { extensionRelayTokenMatches, readExtensionRelayToken } from "./relay-auth.js";
 import { ensureExtensionRelayForProfile } from "./relay-lifecycle.js";
 import {
   attachExtensionWebSocket,
   EXTENSION_RELAY_MAX_PAYLOAD_BYTES,
   isAllowedExtensionOrigin,
-  requestToken,
+  requestExtensionProtocolToken,
 } from "./relay-server.js";
 
 const log = createSubsystemLogger("browser").child("extension-relay-gateway");
@@ -82,17 +86,37 @@ export async function handleGatewayExtensionUpgrade(
     return false;
   }
 
-  const state = getBrowserControlState();
-  if (!state) {
-    destroy(socket, "503 Service Unavailable");
-    return true;
-  }
-
   // chrome-extension:// origin hygiene (not a security boundary on its own —
   // the relay secret is the gate — but rejects obvious cross-site sockets).
   if (!isAllowedExtensionOrigin(req)) {
     destroy(socket, "403 Forbidden");
     return true;
+  }
+
+  // Authenticate before lazy-starting Browser control. A valid pairing secret
+  // may start the service; an arbitrary public WebSocket request may not.
+  let state = getBrowserControlState();
+  const expectedToken = state?.resolved.extensionRelayToken ?? readExtensionRelayToken();
+  const candidate = requestExtensionProtocolToken(req);
+  if (
+    !expectedToken ||
+    candidate.length === 0 ||
+    !extensionRelayTokenMatches(expectedToken, candidate)
+  ) {
+    destroy(socket, "401 Unauthorized");
+    return true;
+  }
+
+  if (!state) {
+    try {
+      state = await startBrowserControlServiceFromConfig();
+    } catch (err) {
+      log.warn(`failed to start Browser control for extension relay: ${String(err)}`);
+    }
+    if (!state) {
+      destroy(socket, "503 Service Unavailable");
+      return true;
+    }
   }
 
   const profileName = requestedProfileName(
@@ -102,17 +126,6 @@ export async function handleGatewayExtensionUpgrade(
   const resolved = resolveProfile(state.resolved, profileName);
   if (!resolved || resolved.driver !== "extension") {
     destroy(socket, "404 Not Found");
-    return true;
-  }
-
-  const expectedToken = state.resolved.extensionRelayToken;
-  const candidate = requestToken(req);
-  if (
-    !expectedToken ||
-    candidate.length === 0 ||
-    !extensionRelayTokenMatches(expectedToken, candidate)
-  ) {
-    destroy(socket, "401 Unauthorized");
     return true;
   }
 

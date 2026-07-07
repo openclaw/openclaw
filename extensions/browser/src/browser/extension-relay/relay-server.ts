@@ -8,7 +8,7 @@
  *   WS  /extension     -> the Chrome extension's relay transport
  * Both sides authenticate with the derived relay token: CDP clients send it as
  * Basic auth (flows from the profile cdpUrl userinfo via getHeadersWithAuth),
- * the extension sends `Authorization: Bearer` or `?token=`.
+ * the extension sends the token in its WebSocket subprotocol list.
  */
 import http, { type IncomingMessage, type Server } from "node:http";
 import type { Duplex } from "node:stream";
@@ -19,6 +19,8 @@ import { extensionRelayTokenMatches } from "./relay-auth.js";
 import { ExtensionRelayBridge } from "./relay-bridge.js";
 
 const log = createSubsystemLogger("browser").child("extension-relay");
+const EXTENSION_RELAY_PROTOCOL = "openclaw-extension-relay";
+const EXTENSION_RELAY_TOKEN_PROTOCOL_PREFIX = "openclaw-extension-token.";
 
 /**
  * Cap relay frame size to bound memory from a hostile/buggy peer while leaving
@@ -44,7 +46,21 @@ function firstHeader(value: string | string[] | undefined): string {
   return Array.isArray(value) ? (value[0] ?? "") : (value ?? "");
 }
 
-/** Extract the relay token from a request (Bearer/Basic header or ?token= query). */
+/** Extract a relay token carried by the extension's WebSocket subprotocol list. */
+export function requestExtensionProtocolToken(req: IncomingMessage): string {
+  const protocols = firstHeader(req.headers["sec-websocket-protocol"])
+    .split(",")
+    .map((value) => value.trim());
+  if (!protocols.includes(EXTENSION_RELAY_PROTOCOL)) {
+    return "";
+  }
+  const tokenProtocol = protocols.find((value) =>
+    value.startsWith(EXTENSION_RELAY_TOKEN_PROTOCOL_PREFIX),
+  );
+  return tokenProtocol?.slice(EXTENSION_RELAY_TOKEN_PROTOCOL_PREFIX.length) ?? "";
+}
+
+/** Extract relay auth from a CDP header, extension subprotocol, or legacy query. */
 export function requestToken(req: IncomingMessage): string {
   const auth = firstHeader(req.headers.authorization);
   if (auth.startsWith("Bearer ")) {
@@ -54,6 +70,10 @@ export function requestToken(req: IncomingMessage): string {
     const decoded = Buffer.from(auth.slice("Basic ".length), "base64").toString("utf8");
     const separator = decoded.indexOf(":");
     return separator >= 0 ? decoded.slice(separator + 1) : decoded;
+  }
+  const protocolToken = requestExtensionProtocolToken(req);
+  if (protocolToken) {
+    return protocolToken;
   }
   try {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");

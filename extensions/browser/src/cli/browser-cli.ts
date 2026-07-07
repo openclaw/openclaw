@@ -24,6 +24,7 @@ import {
 type BrowserCommandRegistrar = (args: {
   browser: Command;
   parentOpts: (cmd: Command) => BrowserParentOpts;
+  pluginRoot?: string;
 }) => Promise<void> | void;
 
 type BrowserCommandGroupDefinition = {
@@ -149,7 +150,7 @@ const browserCommandGroupDefinitions: readonly BrowserCommandGroupDefinition[] =
     placeholders: [command("extension", "Chrome extension load path and pairing")],
     register: async (args) => {
       const module = await import("./browser-cli-extension.js");
-      module.registerBrowserExtensionCommands(args.browser, args.parentOpts);
+      module.registerBrowserExtensionCommands(args.browser, args.parentOpts, args.pluginRoot);
     },
   },
 ];
@@ -157,6 +158,7 @@ const browserCommandGroupDefinitions: readonly BrowserCommandGroupDefinition[] =
 function buildBrowserCommandGroups(params: {
   browser: Command;
   parentOpts: (cmd: Command) => BrowserParentOpts;
+  pluginRoot?: string;
 }): CommandGroupEntry[] {
   return browserCommandGroupDefinitions.map((entry) => ({
     placeholders: entry.placeholders,
@@ -248,9 +250,10 @@ function registerLazyBrowserCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
   argv: string[],
+  pluginRoot?: string,
 ) {
   const subcommand = resolveBrowserLazySubcommand(argv);
-  registerCommandGroups(browser, buildBrowserCommandGroups({ browser, parentOpts }), {
+  registerCommandGroups(browser, buildBrowserCommandGroups({ browser, parentOpts, pluginRoot }), {
     eager: shouldEagerRegisterSubcommands(),
     primary: subcommand,
     registerPrimaryOnly: subcommand !== null,
@@ -258,7 +261,11 @@ function registerLazyBrowserCommands(
 }
 
 /** Registers the Browser CLI command and its lazy-loaded subcommand groups. */
-export function registerBrowserCli(program: Command, argv: string[] = process.argv) {
+export function registerBrowserCli(
+  program: Command,
+  argv: string[] = process.argv,
+  pluginRoot?: string,
+) {
   const browser = program
     .command("browser")
     .description("Manage OpenClaw's dedicated browser (Chrome/Chromium)")
@@ -287,5 +294,5 @@ export function registerBrowserCli(program: Command, argv: string[] = process.ar
 
   const parentOpts = resolveBrowserParentOpts;
 
-  registerLazyBrowserCommands(browser, parentOpts, argv);
+  registerLazyBrowserCommands(browser, parentOpts, argv, pluginRoot);
 }

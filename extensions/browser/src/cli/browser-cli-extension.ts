@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Command } from "commander";
 import { ensureExtensionRelayToken } from "../browser/extension-relay/relay-auth.js";
+import { isLoopbackHost } from "../gateway/net.js";
 import type { BrowserParentOpts } from "./browser-cli-shared.js";
 import {
   danger,
@@ -18,7 +19,10 @@ import {
 } from "./core-api.js";
 
 /** Absolute path to the bundled unpacked Chrome extension directory. */
-function resolveChromeExtensionDir(): string {
+function resolveChromeExtensionDir(pluginRoot?: string): string {
+  if (pluginRoot) {
+    return path.join(pluginRoot, "chrome-extension");
+  }
   // extensions/browser/dist/cli/ -> extensions/browser/chrome-extension
   const here = path.dirname(fileURLToPath(import.meta.url));
   return path.resolve(here, "..", "..", "chrome-extension");
@@ -37,6 +41,27 @@ function firstExtensionProfile(): { name: string; relayPort: number } | null {
 
 /** Gateway route path for the remote extension relay (see gateway-relay-route.ts). */
 const GATEWAY_EXTENSION_RELAY_PATH = "/browser/extension";
+
+/** Resolve a safe direct-Gateway relay URL, preserving an optional proxy base path. */
+export function buildRemoteGatewayRelayUrl(raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw.trim());
+  } catch {
+    throw new Error("--gateway-url must be a valid ws:// or wss:// URL");
+  }
+  const secure = url.protocol === "wss:";
+  const localPlaintext = url.protocol === "ws:" && isLoopbackHost(url.hostname);
+  if (!secure && !localPlaintext) {
+    throw new Error("--gateway-url must use wss:// (ws:// is allowed only for loopback)");
+  }
+  if (url.username || url.password || url.search || url.hash) {
+    throw new Error("--gateway-url must not include credentials, a query, or a fragment");
+  }
+  const basePath = url.pathname.replace(/\/+$/, "");
+  url.pathname = `${basePath}${GATEWAY_EXTENSION_RELAY_PATH}`;
+  return url.toString();
+}
 
 function buildPairingString(gatewayUrl?: string): {
   pairing: string;
@@ -57,8 +82,11 @@ function buildPairingString(gatewayUrl?: string): {
     // Remote: the extension connects straight to this gateway over wss:// — no
     // node host on the browser machine. The gateway route self-validates the
     // same host-local secret.
-    const base = gateway.replace(/\/+$/, "");
-    return { pairing: `${base}${GATEWAY_EXTENSION_RELAY_PATH}#${token}`, relayPort, remote: true };
+    return {
+      pairing: `${buildRemoteGatewayRelayUrl(gateway)}#${token}`,
+      relayPort,
+      remote: true,
+    };
   }
   return {
     pairing: `ws://127.0.0.1:${relayPort}/extension#${token}`,
@@ -71,6 +99,7 @@ function buildPairingString(gatewayUrl?: string): {
 export function registerBrowserExtensionCommands(
   browser: Command,
   _parentOpts: (cmd: Command) => BrowserParentOpts,
+  pluginRoot?: string,
 ) {
   const extension = browser
     .command("extension")
@@ -80,7 +109,7 @@ export function registerBrowserExtensionCommands(
     .command("path")
     .description("Print the unpacked Chrome extension directory (Load unpacked)")
     .action(() => {
-      defaultRuntime.log(resolveChromeExtensionDir());
+      defaultRuntime.log(resolveChromeExtensionDir(pluginRoot));
     });
 
   extension
@@ -117,7 +146,7 @@ export function registerBrowserExtensionCommands(
             [
               setupLine,
               info("1. Load the extension: chrome://extensions → Developer mode → Load unpacked →"),
-              `   ${resolveChromeExtensionDir()}`,
+              `   ${resolveChromeExtensionDir(pluginRoot)}`,
               info("2. Open the OpenClaw popup and paste this pairing string:"),
               "",
               theme.heading(result.pairing),
