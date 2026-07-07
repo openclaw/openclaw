@@ -21,6 +21,12 @@ class ChatSheetContentTest {
   }
 
   @Test
+  fun agentSelectorUsesCanonicalMainSession() {
+    assertEquals("scout", selectedChatAgentId("agent:scout:node-phone", "main"))
+    assertEquals("main", selectedChatAgentId("main", "main"))
+  }
+
+  @Test
   fun resolvesPendingAssistantAutoSendOnlyWhenChatIsReady() {
     assertNull(
       resolvePendingAssistantAutoSend(

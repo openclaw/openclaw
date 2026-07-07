@@ -152,8 +152,9 @@ fun ChatScreen(
   val gatewayProblemMessage = gatewayConnectionDisplay.problem?.message?.takeIf { it.isNotBlank() }
   val offlineStatus = gatewayStatusForDisplay(gatewayProblemMessage ?: gatewayConnectionDisplay.statusText)
   val gatewayOffline = !gatewayConnectionDisplay.isConnected
-  val activeAgentId = resolveAgentIdFromMainSessionKey(sessionKey) ?: gatewayDefaultAgentId ?: "main"
-  val workspaceGit = gatewayAgents.firstOrNull { it.id == activeAgentId }?.workspaceGit == true
+  val sessionAgentId = resolveAgentIdFromMainSessionKey(sessionKey) ?: gatewayDefaultAgentId ?: "main"
+  val activeAgentId = selectedChatAgentId(mainSessionKey, gatewayDefaultAgentId)
+  val workspaceGit = gatewayAgents.firstOrNull { it.id == sessionAgentId }?.workspaceGit == true
   val context = LocalContext.current
   val resolver = context.contentResolver
   val scope = rememberCoroutineScope()
@@ -1613,6 +1614,11 @@ internal fun chatAgentChipText(agent: GatewayAgentSummary): String {
   val emoji = agent.emoji?.trim()?.takeIf { it.isNotEmpty() } ?: return name
   return "$emoji $name"
 }
+
+internal fun selectedChatAgentId(
+  mainSessionKey: String,
+  gatewayDefaultAgentId: String?,
+): String = resolveAgentIdFromMainSessionKey(mainSessionKey) ?: gatewayDefaultAgentId ?: "main"
 
 private fun isActiveSessionChoice(
   choiceKey: String,
