@@ -23,6 +23,7 @@ describe("mattermost session route", () => {
     expect(directRoute.peer.id).toBe("user123");
     expect(directRoute.from).toBe("mattermost:user123");
     expect(directRoute.to).toBe("user:user123");
+    expect(directRoute.recipientSessionExact).toBe(false);
   });
 
   it("builds threaded channel routes for channel targets", () => {
@@ -41,6 +42,32 @@ describe("mattermost session route", () => {
     expect(channelRoute.to).toBe("channel:chan123");
     expect(channelRoute.threadId).toBe("thread456");
     expect(channelRoute.sessionKey).toContain("thread456");
+    expect(channelRoute.recipientSessionExact).toBe(false);
+  });
+
+  it("requires both a canonical id and an explicit peer kind", () => {
+    const id = "abcdefghijklmnopqrstuvwxyz";
+    const bareRoute = expectRoute(
+      resolveMattermostOutboundSessionRoute({ cfg: {}, agentId: "main", target: id }),
+    );
+    const userRoute = expectRoute(
+      resolveMattermostOutboundSessionRoute({
+        cfg: {},
+        agentId: "main",
+        target: `user:${id}`,
+      }),
+    );
+    const channelRoute = expectRoute(
+      resolveMattermostOutboundSessionRoute({
+        cfg: {},
+        agentId: "main",
+        target: `channel:${id}`,
+      }),
+    );
+
+    expect(bareRoute.recipientSessionExact).toBe(false);
+    expect(userRoute.recipientSessionExact).toBe(true);
+    expect(channelRoute.recipientSessionExact).toBe(true);
   });
 
   it("recovers channel thread routes from currentSessionKey", () => {

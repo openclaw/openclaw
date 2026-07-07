@@ -26,6 +26,7 @@ describe("irc normalize", () => {
       sessionKey: "agent:main:irc:group:#openclaw",
       peer: { kind: "group", id: "#openclaw" },
       chatType: "group",
+      recipientSessionExact: false,
       to: "#openclaw",
     });
     expect(
@@ -34,6 +35,7 @@ describe("irc normalize", () => {
       sessionKey: "agent:main:irc:direct:alice",
       peer: { kind: "direct", id: "alice" },
       chatType: "direct",
+      recipientSessionExact: false,
       to: "alice",
     });
     expect(resolveIrcOutboundSessionRoute({ cfg, agentId: "main", target: "\n" })).toBeNull();

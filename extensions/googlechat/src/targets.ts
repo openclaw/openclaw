@@ -123,6 +123,7 @@ export async function resolveGoogleChatOutboundSessionRoute(params: {
     agentId: params.agentId,
     channel: "googlechat",
     accountId: params.accountId,
+    recipientSessionExact: true,
     peer: { kind: chatType, id: spaceName },
     chatType,
     from: `googlechat:${spaceName}`,

@@ -1,5 +1,8 @@
 // Line plugin module implements channel behavior.
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import {
+  buildChannelOutboundSessionRoute,
+  createChatChannelPlugin,
+} from "openclaw/plugin-sdk/channel-core";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channel-policy";
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
@@ -47,6 +50,30 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
       targetPrefixes: ["line"],
       normalizeTarget: normalizeLineMessagingTarget,
       inferTargetChatType: ({ to }) => inferLineTargetChatType(to),
+      resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target }) => {
+        const peerId = normalizeLineMessagingTarget(target);
+        const chatType = inferLineTargetChatType(target);
+        if (!peerId || !chatType) {
+          return null;
+        }
+        const isRoom = peerId.startsWith("R");
+        return buildChannelOutboundSessionRoute({
+          cfg,
+          agentId,
+          channel: "line",
+          accountId,
+          recipientSessionExact: true,
+          peer: { kind: chatType, id: peerId },
+          chatType,
+          from:
+            chatType === "direct"
+              ? `line:${peerId}`
+              : isRoom
+                ? `line:room:${peerId}`
+                : `line:group:${peerId}`,
+          to: peerId,
+        });
+      },
       resolveInboundConversation: lineBindingsAdapter.resolveInboundConversation,
       transformReplyPayload: ({ payload }) => {
         if (!payload.text || !hasLineDirectives(payload.text)) {

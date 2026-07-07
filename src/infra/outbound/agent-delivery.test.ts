@@ -98,7 +98,7 @@ vi.mock("./target-resolver.js", () => ({
 vi.mock("../../utils/message-channel.js", () => ({
   INTERNAL_MESSAGE_CHANNEL: "webchat",
   isDeliverableMessageChannel: (channel: string) =>
-    ["directchat", "line", "workspace", "telegram", "whatsapp"].includes(channel),
+    ["directchat", "line", "provider", "workspace", "telegram", "whatsapp"].includes(channel),
   isGatewayMessageChannel: (channel: string) =>
     ["directchat", "workspace", "telegram", "whatsapp", "webchat"].includes(channel),
   normalizeMessageChannel: (value: string) => value.trim().toLowerCase(),
@@ -333,6 +333,7 @@ describe("agent delivery helpers", () => {
     mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
       sessionKey: "agent:ops:whatsapp:group:120363040000000000@g.us",
       baseSessionKey: "agent:ops:whatsapp:group:120363040000000000@g.us",
+      recipientSessionExact: true,
       peer: { kind: "group", id: "120363040000000000@g.us" },
       chatType: "group",
       from: "120363040000000000@g.us",
@@ -368,7 +369,57 @@ describe("agent delivery helpers", () => {
     });
   });
 
-  it("keeps provider-normalized delivery targets when recipient sessions use fallback routing", async () => {
+  it("rejects best-effort plugin routes for explicit recipient sessions", async () => {
+    mocks.resolveOutboundChannelPlugin.mockReturnValue({
+      config: { listAccountIds: () => [] },
+      messaging: { resolveOutboundSessionRoute: vi.fn() },
+    });
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
+      sessionKey: "agent:main:main",
+      baseSessionKey: "agent:main:main",
+      recipientSessionExact: false,
+      peer: { kind: "direct", id: "@ambiguous" },
+      chatType: "direct",
+      from: "provider:@ambiguous",
+      to: "@ambiguous",
+    });
+
+    const result = await resolveAgentExplicitRecipientSession({
+      cfg: {} as OpenClawConfig,
+      agentId: "main",
+      channel: "provider",
+      to: "@ambiguous",
+    });
+
+    expect(result.sessionKey).toBeUndefined();
+    expect(result.error?.message).toBe('Unable to resolve a session route for channel "provider"');
+  });
+
+  it("preserves authoritative routes from legacy plugin hooks", async () => {
+    mocks.resolveOutboundChannelPlugin.mockReturnValue({
+      config: { listAccountIds: () => [] },
+      messaging: { resolveOutboundSessionRoute: vi.fn() },
+    });
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
+      sessionKey: "agent:main:provider:direct:user-1",
+      baseSessionKey: "agent:main:provider:direct:user-1",
+      peer: { kind: "direct", id: "user-1" },
+      chatType: "direct",
+      from: "provider:user-1",
+      to: "user-1",
+    });
+
+    const result = await resolveAgentExplicitRecipientSession({
+      cfg: {} as OpenClawConfig,
+      agentId: "main",
+      channel: "provider",
+      to: "user-1",
+    });
+
+    expect(result.sessionKey).toBe("agent:main:provider:direct:user-1");
+  });
+
+  it("rejects inferred fallback routes for explicit recipient sessions", async () => {
     const plugin = {
       capabilities: { chatTypes: ["direct", "group"] },
       config: {
@@ -382,6 +433,7 @@ describe("agent delivery helpers", () => {
     mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
       sessionKey: `agent:ops:line:direct:${lineUserId.toLowerCase()}`,
       baseSessionKey: `agent:ops:line:direct:${lineUserId.toLowerCase()}`,
+      recipientSessionExact: false,
       peer: { kind: "direct", id: lineUserId },
       chatType: "direct",
       from: `line:${lineUserId}`,
@@ -403,11 +455,10 @@ describe("agent delivery helpers", () => {
       accountId: "default",
       target: lineUserId,
       currentSessionKey: undefined,
-      requireExactPeerKind: true,
       threadId: undefined,
     });
-    expect(result.sessionKey).toBe(`agent:ops:line:direct:${lineUserId.toLowerCase()}`);
-    expect(result.to).toBe(lineUserId);
+    expect(result.sessionKey).toBeUndefined();
+    expect(result.error?.message).toBe('Unable to resolve a session route for channel "line"');
   });
 
   it("uses the channel default account when recipient routing omits an account", async () => {
@@ -422,6 +473,7 @@ describe("agent delivery helpers", () => {
     mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
       sessionKey: "agent:ops:whatsapp:work:direct:+15551234567",
       baseSessionKey: "agent:ops:whatsapp:work:direct:+15551234567",
+      recipientSessionExact: true,
       peer: { kind: "direct", id: "+15551234567" },
       chatType: "direct",
       from: "+15551234567",

@@ -79,6 +79,7 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
           agentId,
           channel: QA_CHANNEL_ID,
           accountId,
+          recipientSessionExact: true,
           peer: {
             kind:
               parsed.chatType === "direct"

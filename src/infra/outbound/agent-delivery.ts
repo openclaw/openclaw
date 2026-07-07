@@ -213,9 +213,6 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
         target: sessionRouteTarget,
         ...(resolvedSessionRouteTarget ? { resolvedTarget: resolvedSessionRouteTarget } : {}),
         currentSessionKey: params.currentSessionKey,
-        ...(!hasPluginSessionRoute && params.sessionRouteMode === "allow-fallback"
-          ? { requireExactPeerKind: true }
-          : {}),
         threadId:
           routedPlan.deliveryTargetMode === "explicit"
             ? explicitThreadId
@@ -225,7 +222,13 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
       return null;
     }
   })();
-  if (!route) {
+  // Explicit recipient selection must not attach a run to a known best-effort route.
+  // An omitted marker preserves the pre-existing contract for external plugin hooks.
+  const exactRoute =
+    params.sessionRouteMode !== "allow-fallback" || route?.recipientSessionExact !== false
+      ? route
+      : null;
+  if (!exactRoute) {
     if (resolvedSessionRouteTarget) {
       return {
         ...routedPlan,
@@ -240,14 +243,14 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
   }
   return {
     ...routedPlan,
-    resolvedSessionKey: route.sessionKey,
+    resolvedSessionKey: exactRoute.sessionKey,
     // Generic routes use portable user/channel prefixes. Delivery still needs the
     // plugin-normalized target; only provider-owned route hooks may replace it.
     resolvedTo: hasPluginSessionRoute
-      ? route.to
+      ? exactRoute.to
       : (resolvedSessionRouteTarget?.to ?? sessionRouteTarget),
     resolvedThreadId:
-      route.threadId ??
+      exactRoute.threadId ??
       (routedPlan.deliveryTargetMode === "explicit"
         ? explicitThreadId
         : routedPlan.resolvedThreadId),

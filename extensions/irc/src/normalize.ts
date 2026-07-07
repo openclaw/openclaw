@@ -50,11 +50,14 @@ export function resolveIrcOutboundSessionRoute(params: {
     return null;
   }
   const chatType = isChannelTarget(target) ? "group" : "direct";
+  // Server-specific casemapping and nick changes mean the outbound spelling is
+  // not a stable inbound peer identity, even when delivery succeeds.
   return buildChannelOutboundSessionRoute({
     cfg: params.cfg,
     agentId: params.agentId,
     channel: "irc",
     accountId: params.accountId,
+    recipientSessionExact: false,
     peer: { kind: chatType, id: target },
     chatType,
     from: `irc:${target}`,

@@ -78,6 +78,7 @@ function resolveQQBotOutboundSessionRoute(params: {
     agentId: params.agentId,
     channel: "qqbot",
     accountId: params.accountId,
+    recipientSessionExact: true,
     peer: { kind: chatType, id: target.id },
     chatType,
     from: qualifiedTarget,

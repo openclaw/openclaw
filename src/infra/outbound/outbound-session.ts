@@ -21,6 +21,8 @@ import type { ResolvedMessagingTarget } from "./target-resolver.js";
 export type OutboundSessionRoute = {
   sessionKey: string;
   baseSessionKey: string;
+  /** False when this route is best-effort; omission preserves legacy plugin-hook behavior. */
+  recipientSessionExact?: boolean;
   peer: RoutePeer;
   chatType: "direct" | "group" | "channel";
   from: string;
@@ -40,7 +42,6 @@ export type ResolveOutboundSessionRouteParams = {
   resolvedTarget?: ResolvedMessagingTarget;
   replyToId?: string | null;
   threadId?: string | number | null;
-  requireExactPeerKind?: boolean;
 };
 
 function resolveOutboundChannelPlugin(channel: ChannelId) {
@@ -131,7 +132,6 @@ function inferPeerKind(params: {
   plugin?: ChannelPlugin;
   target: string;
   resolvedTarget?: ResolvedMessagingTarget;
-  requireExactPeerKind?: boolean;
 }): ChatType | undefined {
   const resolvedKind = params.resolvedTarget?.kind;
   if (resolvedKind === "user") {
@@ -158,7 +158,7 @@ function inferPeerKind(params: {
     inferPeerKindFromLegacyParser({ plugin, targets }) ??
     inferPeerKindFromFallbackPrefixes(targets) ??
     inferPeerKindFromCapabilities(plugin) ??
-    (params.requireExactPeerKind ? undefined : "direct")
+    "direct"
   );
 }
 
@@ -174,7 +174,6 @@ function resolveFallbackSession(
     plugin: params.plugin,
     target: params.target,
     resolvedTarget: params.resolvedTarget,
-    requireExactPeerKind: params.requireExactPeerKind,
   });
   if (!peerKind) {
     return null;
@@ -200,6 +199,7 @@ function resolveFallbackSession(
   return {
     sessionKey: baseSessionKey,
     baseSessionKey,
+    recipientSessionExact: false,
     peer,
     chatType,
     from,
