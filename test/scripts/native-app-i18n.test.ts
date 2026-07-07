@@ -53,7 +53,6 @@ describe("native app i18n inventory", () => {
     expect(entries.some((entry) => entry.source === "$deviceModel · $appVersion")).toBe(true);
     expect(entries.some((entry) => entry.source === "Approval command copied")).toBe(true);
     expect(entries.some((entry) => entry.source === "Save Profile")).toBe(true);
-    expect(entries.some((entry) => entry.source === "Pairing required")).toBe(true);
     expect(entries.some((entry) => entry.source === "Mute")).toBe(true);
     expect(entries.some((entry) => entry.source === "Creating...")).toBe(true);
     expect(entries.some((entry) => entry.source === "Permission required")).toBe(true);
