@@ -111,9 +111,16 @@ type CreateMattermostConnectOnceOpts = {
   pongTimeoutMs?: number;
 };
 
+// Bound ws payloads before JSON parsing to prevent a single oversized server
+// frame from buffering up to the 100 MiB ws default in memory (Discord #99998).
+const MATTERMOST_WS_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
+
 const defaultMattermostWebSocketFactory: MattermostWebSocketFactory = (url) => {
   const agent = createDebugProxyWebSocketAgent(resolveDebugProxySettings());
-  return new WebSocket(url, agent ? { agent } : undefined) as MattermostWebSocketLike;
+  return new WebSocket(url, {
+    ...(agent ? { agent } : {}),
+    maxPayload: MATTERMOST_WS_MAX_PAYLOAD_BYTES,
+  }) as MattermostWebSocketLike;
 };
 
 function parsePostedPayload(
