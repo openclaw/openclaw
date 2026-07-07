@@ -1,5 +1,7 @@
 // Markdown Core module implements ir behavior.
 import MarkdownIt from "markdown-it";
+import type StateInline from "markdown-it/lib/rules_inline/state_inline.mjs";
+import type { Scanned as DelimiterScanResult } from "markdown-it/lib/rules_inline/state_inline.mjs";
 import { chunkText } from "./chunk-text.js";
 import type { MarkdownTableMode } from "./types.js";
 
@@ -34,11 +36,9 @@ type MarkdownToken = {
 
 type MarkdownItWithInlineState = MarkdownIt & {
   inline: MarkdownIt["inline"] & {
-    State: typeof MarkdownIt.StateInline;
+    State: typeof StateInline;
   };
 };
-
-type DelimiterScanResult = MarkdownIt.StateInline.Scanned;
 
 export type MarkdownStyle =
   | "bold"
