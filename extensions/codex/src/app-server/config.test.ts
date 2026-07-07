@@ -353,6 +353,16 @@ describe("Codex app-server config", () => {
     ).toStrictEqual({});
   });
 
+  it("accepts configured Codex app-server provider ids", () => {
+    expect(
+      readCodexPluginConfig({
+        appServer: {
+          providerIds: ["codex", "openai", "llm_proxy"],
+        },
+      }).appServer?.providerIds,
+    ).toStrictEqual(["codex", "openai", "llm_proxy"]);
+  });
+
   it("rejects unknown app-server fields", () => {
     expect(
       readCodexPluginConfig({

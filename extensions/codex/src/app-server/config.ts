@@ -229,6 +229,7 @@ export type CodexPluginConfig = {
     remoteWorkspaceRoot?: string;
     codeModeOnly?: boolean;
     requestTimeoutMs?: number;
+    providerIds?: string[];
     turnCompletionIdleTimeoutMs?: number;
     postToolRawAssistantCompletionIdleTimeoutMs?: number;
     approvalPolicy?: CodexAppServerApprovalPolicy;
@@ -264,6 +265,7 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "remoteWorkspaceRoot",
   "codeModeOnly",
   "requestTimeoutMs",
+  "providerIds",
   "turnCompletionIdleTimeoutMs",
   "postToolRawAssistantCompletionIdleTimeoutMs",
   "approvalPolicy",
@@ -337,6 +339,7 @@ const codexAppServerExperimentalSchema = z
   })
   .strict();
 const codexAppServerRemoteWorkspaceRootSchema = z.string().trim().min(1);
+const codexAppServerProviderIdsSchema = z.array(z.string().trim().min(1)).min(1);
 const codexAppServerNetworkProxyDomainPermissionSchema = z.enum(["allow", "deny"]);
 const codexAppServerNetworkProxyUnixSocketPermissionSchema = z.enum(["allow", "none"]);
 const codexAppServerNetworkProxySchema = z
@@ -417,6 +420,7 @@ const codexPluginConfigSchema = z
         remoteWorkspaceRoot: codexAppServerRemoteWorkspaceRootSchema.optional(),
         codeModeOnly: z.boolean().optional(),
         requestTimeoutMs: z.number().positive().optional(),
+        providerIds: codexAppServerProviderIdsSchema.optional(),
         turnCompletionIdleTimeoutMs: z.number().positive().optional(),
         postToolRawAssistantCompletionIdleTimeoutMs: z.number().positive().optional(),
         approvalPolicy: codexAppServerApprovalPolicySchema.optional(),
