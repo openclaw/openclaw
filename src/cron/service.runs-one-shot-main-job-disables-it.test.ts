@@ -503,11 +503,14 @@ describe("CronService", () => {
     await cron.run(job.id, "force");
 
     // The system event was enqueued but the heartbeat could not wake the session.
-    // Instead of removing the event and retrying, the event stays queued and a
-    // background heartbeat is requested. The one-shot job is then deleted (ok
-    // status + deleteAfterRun=true).
+    // The event stays queued and a background heartbeat is requested. The job
+    // keeps its skipped status so one-shot retry/backoff is preserved.
     const jobs = await cron.list({ includeDisabled: true });
-    expect(jobs.find((j) => j.id === job.id)).toBeUndefined();
+    const updated = jobs.find((j) => j.id === job.id);
+    expect(updated).toBeDefined();
+    expect(updated?.state.lastStatus).toBe("skipped");
+    expect(updated?.state.lastError).toBe("disabled");
+    expect(updated?.enabled).toBe(true);
     expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
     expect(requestHeartbeat).toHaveBeenCalledTimes(1);
 
@@ -521,7 +524,7 @@ describe("CronService", () => {
     await stopCronAndCleanup(cron, store);
   });
 
-  it("keeps system event queued when disabled-heartbeat one-shot is exhausted", async () => {
+  it("disables one-shot when disabled-heartbeat retry is exhausted", async () => {
     resetSystemEventsForTest();
     const atMs = Date.parse("2025-12-13T00:00:02.000Z");
     const runHeartbeatOnce = vi.fn(async () => ({
@@ -542,11 +545,16 @@ describe("CronService", () => {
 
     await cron.run(job.id, "force");
 
-    // With a disabled heartbeat, the system event stays queued and the job is
-    // deleted (ok status + deleteAfterRun=true for one-shots). The event will be
-    // delivered on the next heartbeat cycle or when the user interacts.
+    // With a disabled heartbeat and maxAttempts=0, the system event stays queued
+    // and the job is disabled (not deleted). The event will be delivered on the
+    // next heartbeat cycle or when the user interacts.
     const jobs = await cron.list({ includeDisabled: true });
-    expect(jobs.find((j) => j.id === job.id)).toBeUndefined();
+    const updated = jobs.find((j) => j.id === job.id);
+    expect(updated).toBeDefined();
+    expect(updated?.state.lastStatus).toBe("skipped");
+    expect(updated?.state.lastError).toBe("disabled");
+    expect(updated?.enabled).toBe(false);
+    expect(updated?.state.nextRunAtMs).toBeUndefined();
     expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
     expect(requestHeartbeat).toHaveBeenCalledTimes(1);
 
@@ -636,6 +644,51 @@ describe("CronService", () => {
 
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
     expect(requestHeartbeat).not.toHaveBeenCalled();
+    await stopCronAndCleanup(cron, store);
+  });
+
+  it("keeps system event queued for recurring main job when heartbeat is disabled", async () => {
+    resetSystemEventsForTest();
+    const runHeartbeatOnce = vi.fn(async () => ({
+      status: "skipped" as const,
+      reason: "disabled",
+    }));
+    const { store, cron, enqueueSystemEvent, requestHeartbeat } = await createCronHarness({
+      runHeartbeatOnce,
+      useRemovableSystemEventQueue: true,
+      withEvents: false,
+    });
+
+    // Create a recurring (every-N-ms) main-session job with a systemEvent payload.
+    const job = await cron.add({
+      name: "recurring disabled heartbeat keeps event",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "hello" },
+    });
+
+    await cron.run(job.id, "force");
+
+    // The system event stays queued and a background heartbeat is requested.
+    // The job remains enabled (recurring) with its schedule intact.
+    const jobs = await cron.list({ includeDisabled: true });
+    const updated = jobs.find((j) => j.id === job.id);
+    expect(updated).toBeDefined();
+    expect(updated?.enabled).toBe(true);
+    expect(updated?.state.lastStatus).toBe("skipped");
+    expect(updated?.state.lastError).toBe("disabled");
+    expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
+    expect(requestHeartbeat).toHaveBeenCalledTimes(1);
+
+    // The system event should remain in the queue.
+    const sessionKeys = getPostedSystemEventSessionKeys(enqueueSystemEvent);
+    for (const sessionKey of sessionKeys) {
+      const entries = peekSystemEventEntries(sessionKey);
+      expect(entries).not.toHaveLength(0);
+    }
+
     await stopCronAndCleanup(cron, store);
   });
 

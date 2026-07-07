@@ -2062,10 +2062,11 @@ async function executeMainSessionCronJob(
       return { status: "ok", summary: text, sessionKey: cronRunSessionKey };
     }
     // Heartbeat was skipped (non-retryable reason) or errored — the system event
-    // was already enqueued above.  Instead of removing it and marking the run as
-    // skipped/errored (which would mean the event is never delivered), keep the
-    // event queued and request a background heartbeat.  The event will be picked
-    // up on the next heartbeat cycle or when the user next interacts.
+    // was already enqueued above.  Keep it queued and request a background
+    // heartbeat so the event can still be delivered on the next heartbeat cycle
+    // or when the user interacts.  The non-ok status preserves job visibility
+    // and one-shot retry/backoff behavior so the job stays visible until
+    // delivery succeeds.
     state.deps.requestHeartbeat({
       source: "cron",
       intent: "immediate",
@@ -2074,7 +2075,12 @@ async function executeMainSessionCronJob(
       sessionKey: cronRunSessionKey,
       heartbeat: { target: "last" },
     });
-    return { status: "ok", summary: text, sessionKey: cronRunSessionKey };
+    return {
+      status: heartbeatResult.status === "skipped" ? "skipped" : "error",
+      error: heartbeatResult.reason,
+      summary: text,
+      sessionKey: cronRunSessionKey,
+    };
   }
 
   if (abortSignal?.aborted) {
