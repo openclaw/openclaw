@@ -57,12 +57,12 @@ export function classifyCompactionReason(reason?: string): string {
   if (text.includes("timed out") || text.includes("timeout")) {
     return "timeout";
   }
-  if (
-    text.includes("400") ||
-    text.includes("401") ||
-    text.includes("403") ||
-    text.includes("429")
-  ) {
+  // 429 (rate limiting) is a retryable transient failure distinct from
+  // non-retryable 400/401/403 auth and request-shape errors.
+  if (text.includes("429")) {
+    return "provider_error_429";
+  }
+  if (text.includes("400") || text.includes("401") || text.includes("403")) {
     return "provider_error_4xx";
   }
   if (

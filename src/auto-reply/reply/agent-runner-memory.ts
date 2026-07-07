@@ -204,12 +204,21 @@ function resolveEffectivePromptTokens(
 function isPreflightCompactionSkipReason(reason?: string): boolean {
   const classification = classifyCompactionReason(reason);
   // Preflight compaction is a guardrail, not a hard dependency. These classes
-  // mean the context engine found nothing useful to compact, so the reply should
-  // continue instead of surfacing a generic user-facing failure.
+  // mean the context engine found nothing useful to compact or the compaction
+  // LLM call hit a retryable transient failure, so the reply should continue
+  // instead of surfacing a generic user-facing failure.
+  //
+  // Non-retryable failures (provider_error_4xx for 400/401/403 auth and
+  // request-shape errors, guard_blocked, summary_failed, thread-not-found)
+  // remain terminal so they surface the real credential or config problem
+  // rather than hiding it behind a later over-budget agent turn.
   return (
     classification === "below_threshold" ||
     classification === "no_compactable_entries" ||
-    classification === "already_compacted_recently"
+    classification === "already_compacted_recently" ||
+    classification === "timeout" ||
+    classification === "provider_error_429" ||
+    classification === "provider_error_5xx"
   );
 }
 

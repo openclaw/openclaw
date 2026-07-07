@@ -1113,6 +1113,184 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "skipped");
   });
 
+  it.each([
+    ["timeout", "Compaction timed out"],
+    ["provider 429 rate limit", "HTTP 429 Too Many Requests"],
+    ["provider 5xx error", "HTTP 503 Service Unavailable"],
+  ])(
+    "skips preflight compaction on retryable transient %s failure (ok: false)",
+    async (_label, reason) => {
+      const sessionFile = path.join(rootDir, "session.jsonl");
+      await fs.writeFile(
+        sessionFile,
+        `${JSON.stringify({ message: { role: "user", content: "x".repeat(5_000) } })}\n`,
+        "utf8",
+      );
+      registerMemoryFlushPlanResolverForTest(() => ({
+        softThresholdTokens: 1,
+        forceFlushTranscriptBytes: 1_000_000_000,
+        reserveTokensFloor: 0,
+        prompt: "Pre-compaction memory flush.\nNO_REPLY",
+        systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+        relativePath: "memory/2023-11-14.md",
+      }));
+      compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
+        ok: false,
+        compacted: false,
+        reason,
+      });
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        sessionFile,
+        updatedAt: Date.now(),
+        totalTokens: 120,
+        totalTokensFresh: true,
+      };
+      const onCompactionNotice = vi.fn();
+
+      const entry = await runPreflightCompactionIfNeeded({
+        cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+        followupRun: createTestFollowupRun({
+          sessionId: "session",
+          sessionFile,
+          sessionKey: "agent:main:main",
+        }),
+        defaultModel: "anthropic/claude-opus-4-6",
+        agentCfgContextTokens: 100,
+        sessionEntry,
+        sessionStore: { "agent:main:main": sessionEntry },
+        sessionKey: "agent:main:main",
+        storePath: path.join(rootDir, "sessions.json"),
+        isHeartbeat: false,
+        replyOperation: createReplyOperation(),
+        onCompactionNotice,
+      });
+
+      expect(entry).toBe(sessionEntry);
+      expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
+      expect(incrementCompactionCountMock).not.toHaveBeenCalled();
+      expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
+      expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "skipped");
+    },
+  );
+
+  it.each([
+    ["timeout", "request timeout after 30s"],
+    ["provider 429 rate limit", "429"],
+    ["provider 5xx error", "Internal Server Error 500"],
+  ])(
+    "skips preflight compaction on retryable transient %s failure (ok: true, compacted: false)",
+    async (_label, reason) => {
+      const sessionFile = path.join(rootDir, "session.jsonl");
+      await fs.writeFile(
+        sessionFile,
+        `${JSON.stringify({ message: { role: "user", content: "x".repeat(5_000) } })}\n`,
+        "utf8",
+      );
+      registerMemoryFlushPlanResolverForTest(() => ({
+        softThresholdTokens: 1,
+        forceFlushTranscriptBytes: 1_000_000_000,
+        reserveTokensFloor: 0,
+        prompt: "Pre-compaction memory flush.\nNO_REPLY",
+        systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+        relativePath: "memory/2023-11-14.md",
+      }));
+      compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
+        ok: true,
+        compacted: false,
+        reason,
+      });
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        sessionFile,
+        updatedAt: Date.now(),
+        totalTokens: 120,
+        totalTokensFresh: true,
+      };
+      const onCompactionNotice = vi.fn();
+
+      const entry = await runPreflightCompactionIfNeeded({
+        cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+        followupRun: createTestFollowupRun({
+          sessionId: "session",
+          sessionFile,
+          sessionKey: "agent:main:main",
+        }),
+        defaultModel: "anthropic/claude-opus-4-6",
+        agentCfgContextTokens: 100,
+        sessionEntry,
+        sessionStore: { "agent:main:main": sessionEntry },
+        sessionKey: "agent:main:main",
+        storePath: path.join(rootDir, "sessions.json"),
+        isHeartbeat: false,
+        replyOperation: createReplyOperation(),
+        onCompactionNotice,
+      });
+
+      expect(entry).toBe(sessionEntry);
+      expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
+      expect(incrementCompactionCountMock).not.toHaveBeenCalled();
+      expect(onCompactionNotice).toHaveBeenNthCalledWith(1, "start");
+      expect(onCompactionNotice).toHaveBeenNthCalledWith(2, "skipped");
+    },
+  );
+
+  it.each([
+    ["400 Bad Request", "provider_error_4xx"],
+    ["401 Unauthorized", "provider_error_4xx"],
+    ["403 Forbidden", "provider_error_4xx"],
+  ])("still throws on non-retryable %s compaction failure instead of skipping", async (reason) => {
+    const sessionFile = path.join(rootDir, "session.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({ message: { role: "user", content: "x".repeat(5_000) } })}\n`,
+      "utf8",
+    );
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 1,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 0,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      reason,
+    });
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokens: 120,
+      totalTokensFresh: true,
+    };
+    const sessionStore = { "agent:main:main": sessionEntry };
+
+    await expect(
+      runPreflightCompactionIfNeeded({
+        cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+        followupRun: createTestFollowupRun({
+          sessionId: "session",
+          sessionFile,
+          sessionKey: "agent:main:main",
+        }),
+        defaultModel: "anthropic/claude-opus-4-6",
+        agentCfgContextTokens: 100,
+        sessionEntry,
+        sessionStore,
+        sessionKey: "agent:main:main",
+        storePath: path.join(rootDir, "sessions.json"),
+        isHeartbeat: false,
+        replyOperation: createReplyOperation(),
+      }),
+    ).rejects.toThrow(`Preflight compaction required but failed: ${reason}`);
+
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
+    expect(incrementCompactionCountMock).not.toHaveBeenCalled();
+  });
+
   it("fails when required preflight context-engine compaction is deferred to background maintenance", async () => {
     const sessionFile = path.join(rootDir, "session.jsonl");
     await fs.writeFile(
