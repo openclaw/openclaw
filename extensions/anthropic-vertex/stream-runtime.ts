@@ -200,12 +200,17 @@ export function createAnthropicVertexStreamFn(
           contractModelId,
         ) as AnthropicVertexEffort;
       } else {
-        opts.thinkingEnabled = true;
         const budgets = options?.thinkingBudgets;
-        opts.thinkingBudgetTokens =
+        const thinkingBudgetTokens =
           (budgets && reasoning in budgets
             ? budgets[reasoning as keyof typeof budgets]
             : undefined) ?? 10000;
+        const requestMaxTokens = opts.maxTokens ?? transportModel.maxTokens;
+        opts.thinkingEnabled =
+          thinkingBudgetTokens >= 1024 && thinkingBudgetTokens < requestMaxTokens;
+        if (opts.thinkingEnabled) {
+          opts.thinkingBudgetTokens = thinkingBudgetTokens;
+        }
       }
     } else if (mandatoryAdaptiveThinking) {
       opts.thinkingEnabled = true;

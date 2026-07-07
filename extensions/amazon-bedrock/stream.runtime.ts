@@ -438,6 +438,14 @@ function resolveSimpleBedrockOptions(
       options.thinkingBudgets,
     );
 
+    if (adjusted.thinkingBudget < 1024) {
+      return {
+        ...base,
+        maxTokens: adjusted.maxTokens,
+        reasoning: "off",
+      } satisfies BedrockOptions;
+    }
+
     return {
       ...base,
       maxTokens: adjusted.maxTokens,
