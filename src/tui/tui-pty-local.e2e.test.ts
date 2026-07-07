@@ -40,6 +40,24 @@ async function waitForOutputAfter(run: PtyRun, needle: string, offset: number) {
   });
 }
 
+async function waitForGatewaySessionIdle(
+  client: Awaited<ReturnType<typeof connectGatewayClient>>,
+  sessionKey: string,
+) {
+  const deadline = Date.now() + LOCAL_OUTPUT_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const result = await client.request<{
+      sessions: Array<{ key: string; hasActiveRun?: boolean }>;
+    }>("sessions.list", { limit: 100 });
+    const session = result.sessions.find((entry) => entry.key === sessionKey);
+    if (session?.hasActiveRun === false) {
+      return;
+    }
+    await sleep(50);
+  }
+  throw new Error(`Gateway still reports ${sessionKey} as active`);
+}
+
 async function readRequestBody(req: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
@@ -608,6 +626,7 @@ describe("TUI PTY real backends", () => {
         queueMode: "followup",
         firstResponseDelayMs: 0,
       });
+      let sessionClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
       try {
         await fixture.run.waitForOutput("gateway connected", LOCAL_STARTUP_TIMEOUT_MS);
         await fixture.run.write("seed gateway session\r");
@@ -615,6 +634,12 @@ describe("TUI PTY real backends", () => {
 
         const responseOffset = fixture.run.output().lastIndexOf("FIRST_RUN_ACTIVE");
         await waitForOutputAfter(fixture.run, "| idle", responseOffset);
+        sessionClient = await connectGatewayClient({
+          url: fixture.gateway.url,
+          token: fixture.gateway.gatewayToken,
+          clientDisplayName: "new-session-active-run-probe",
+        });
+        await waitForGatewaySessionIdle(sessionClient, "agent:main:main");
 
         await fixture.run.write("/new\r", { delay: false });
         await fixture.run.waitForOutput("new session: agent:main:tui-");
@@ -634,6 +659,7 @@ describe("TUI PTY real backends", () => {
         await fixture.run.write("/exit\r", { delay: false });
         expect((await fixture.run.waitForExit()).exitCode).toBe(0);
       } finally {
+        sessionClient?.stop();
         await fixture.cleanup();
       }
     },

@@ -1084,19 +1084,21 @@ describe("tui-event-handlers: handleAgentEvent", () => {
   });
 
   it("coalesces overlapping session.message history reloads", async () => {
-    let resolveFirstHistory!: () => void;
+    let resolveFirstHistory!: (result: TuiHistoryLoadResult) => void;
     const { state, loadHistory, handleSessionMessageEvent } = createHandlersHarness({
       state: {
         activeChatRunId: null,
       },
     });
-    const firstHistory = new Promise<void>((resolve) => {
+    const firstHistory = new Promise<TuiHistoryLoadResult>((resolve) => {
       resolveFirstHistory = resolve;
     });
     let historyCalls = 0;
     loadHistory.mockImplementation(() => {
       historyCalls += 1;
-      return historyCalls === 1 ? firstHistory : Promise.resolve();
+      return historyCalls === 1
+        ? firstHistory
+        : Promise.resolve({ loaded: true, inFlightRunId: null });
     });
 
     handleSessionMessageEvent({
@@ -1110,7 +1112,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
     expect(loadHistory).toHaveBeenCalledTimes(1);
 
-    resolveFirstHistory();
+    resolveFirstHistory({ loaded: true, inFlightRunId: null });
     await Promise.resolve();
     await Promise.resolve();
 
