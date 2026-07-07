@@ -135,6 +135,7 @@ function removeThreadFromDeliveryContext(context?: DeliveryContext): DeliveryCon
   }
   const next: DeliveryContext = { ...context };
   delete next.threadId;
+  delete next.threadParentId;
   return next;
 }
 

@@ -296,6 +296,52 @@ describe("session accessor file-backed seam", () => {
     expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
   });
 
+  it("clears stale thread parent metadata when last-route updates leave a thread", async () => {
+    const sessionKey = "agent:main:discord:channel:parent-1";
+    await upsertSessionEntry(
+      { sessionKey, storePath },
+      {
+        deliveryContext: {
+          channel: "discord",
+          to: "channel:parent-1",
+          threadId: "thread-1",
+          threadParentId: "parent-1",
+        },
+        lastAccountId: "default",
+        lastChannel: "discord",
+        lastThreadId: "thread-1",
+        lastTo: "channel:parent-1",
+        route: {
+          channel: "discord",
+          target: { to: "channel:parent-1" },
+          thread: { id: "thread-1" },
+        },
+        sessionId: "session-1",
+        updatedAt: 10,
+      },
+    );
+
+    const routed = await updateSessionLastRoute({
+      storePath,
+      sessionKey,
+      channel: "discord",
+      to: "channel:parent-1",
+      accountId: "default",
+    });
+
+    expect(routed?.deliveryContext).toEqual({
+      channel: "discord",
+      to: "channel:parent-1",
+      accountId: "default",
+    });
+    expect(routed?.lastThreadId).toBeUndefined();
+    expect(routed?.route).toEqual({
+      channel: "discord",
+      target: { to: "channel:parent-1" },
+      accountId: "default",
+    });
+  });
+
   it("marks abort targets while canonicalizing legacy session keys", async () => {
     fs.writeFileSync(
       storePath,
