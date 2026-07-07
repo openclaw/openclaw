@@ -1739,6 +1739,64 @@ describe("registerPolicyDoctorChecks", () => {
     });
   });
 
+  it("repairs denied gateway HTTP endpoint findings", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy({ workspaceRepairs: true }),
+      gateway: {
+        http: {
+          endpoints: {
+            chatCompletions: {
+              enabled: true,
+              images: { allowUrl: true },
+            },
+            responses: {
+              enabled: true,
+              files: { allowUrl: true },
+              images: { allowUrl: true, urlAllowlist: ["images.example.test"] },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        gateway: {
+          http: {
+            denyEndpoints: ["chatCompletions", "responses"],
+            requireUrlAllowlists: true,
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await runPolicyRepairCheck(
+      "policy/gateway-http-endpoint-enabled",
+      repairCtx(configPath, cfg),
+    );
+
+    expect(result.status).toBe("repaired");
+    expect(result.changes).toEqual([
+      "Set gateway.http.endpoints.chatCompletions.enabled=false for policy conformance.",
+      "Set gateway.http.endpoints.responses.enabled=false for policy conformance.",
+    ]);
+    expect(result.remainingFindings).toEqual([]);
+    expect(result.config.gateway?.http?.endpoints).toMatchObject({
+      chatCompletions: {
+        enabled: false,
+        images: { allowUrl: true },
+      },
+      responses: {
+        enabled: false,
+        files: { allowUrl: true },
+        images: { allowUrl: true, urlAllowlist: ["images.example.test"] },
+      },
+    });
+  });
+
   it("repairs automatic channel ingress narrowing findings", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
