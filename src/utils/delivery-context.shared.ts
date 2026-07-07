@@ -49,6 +49,9 @@ export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryCon
   if (threadId != null) {
     normalized.threadId = threadId;
   }
+  if (context.threadParentId != null && String(context.threadParentId).trim()) {
+    normalized.threadParentId = String(context.threadParentId).trim();
+  }
   return normalized;
 }
 
@@ -136,6 +139,7 @@ function mergeExternalDeliveryContextOverInternalRoute(
     to: deliveryContext?.to,
     accountId: deliveryContext?.accountId ?? internalContext?.accountId,
     threadId: deliveryContext?.threadId ?? internalContext?.threadId,
+    threadParentId: deliveryContext?.threadParentId ?? internalContext?.threadParentId,
   });
 }
 
@@ -166,6 +170,7 @@ export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSo
     to: source.lastTo,
     accountId: source.lastAccountId,
     threadId: source.lastThreadId,
+    threadParentId: source.deliveryContext?.threadParentId ?? source.origin?.threadParentId,
   });
   const deliveryContext = normalizeDeliveryContext(source.deliveryContext);
   // Legacy webchat `last*` fields can outlive the external channel that should
@@ -259,6 +264,9 @@ export function mergeDeliveryContext(
     threadId: routesConflict
       ? normalizedPrimary?.threadId
       : (normalizedPrimary?.threadId ?? normalizedFallback?.threadId),
+    threadParentId: routesConflict
+      ? normalizedPrimary?.threadParentId
+      : (normalizedPrimary?.threadParentId ?? normalizedFallback?.threadParentId),
   });
 }
 

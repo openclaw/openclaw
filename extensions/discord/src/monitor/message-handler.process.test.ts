@@ -1951,11 +1951,12 @@ describe("processDiscordMessage session routing", () => {
       SessionKey: "agent:main:subagent:child",
       MessageThreadId: "thread-1",
     });
-    expect(getLastRouteUpdate()).toEqual({
+    expect(getLastRouteUpdate()).toMatchObject({
       sessionKey: "agent:main:subagent:child",
       channel: "discord",
       to: "channel:thread-1",
       accountId: "default",
+      threadId: "thread-1",
     });
   });
 
@@ -1987,6 +1988,14 @@ describe("processDiscordMessage session routing", () => {
       ModelParentSessionKey: "agent:main:discord:channel:parent-1",
     });
     expect(getLastDispatchCtx()?.ParentSessionKey).toBeUndefined();
+    expect(getLastRouteUpdate()).toMatchObject({
+      sessionKey: "agent:main:discord:channel:thread-1",
+      channel: "discord",
+      to: "channel:thread-1",
+      accountId: "default",
+      threadId: "thread-1",
+      threadParentId: "parent-1",
+    });
   });
 
   it("omits thread starter context when the effective thread session already exists", async () => {
