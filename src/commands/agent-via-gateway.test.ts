@@ -438,6 +438,42 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("follows a symlinked message file to a regular file", async () => {
+    await withTempStore(async ({ dir }) => {
+      const realFile = path.join(dir, "real.md");
+      const messageFile = path.join(dir, "link.md");
+      fs.writeFileSync(realFile, "hello from symlink target", "utf-8");
+      fs.symlinkSync(realFile, messageFile);
+
+      await agentCliCommand({ messageFile, sessionKey: "agent:main:incident-42" }, runtime);
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
+      const params = requireRecord(request.params, "gateway request params");
+      expect(params.message).toBe("hello from symlink target");
+    });
+  });
+
+  it("follows a chain of symlinks to the final regular message file", async () => {
+    await withTempStore(async ({ dir }) => {
+      const realFile = path.join(dir, "real.md");
+      const linkA = path.join(dir, "link-a.md");
+      const linkB = path.join(dir, "link-b.md");
+      const messageFile = path.join(dir, "link-c.md");
+      fs.writeFileSync(realFile, "hello from chained symlink target", "utf-8");
+      fs.symlinkSync(realFile, linkA);
+      fs.symlinkSync(linkA, linkB);
+      fs.symlinkSync(linkB, messageFile);
+
+      await agentCliCommand({ messageFile, sessionKey: "agent:main:incident-42" }, runtime);
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
+      const params = requireRecord(request.params, "gateway request params");
+      expect(params.message).toBe("hello from chained symlink target");
+    });
+  });
+
   it.each(["/new", "/RESET", "/reset check status"] as const)(
     "uses backend admin authority for %s gateway commands",
     async (message) => {

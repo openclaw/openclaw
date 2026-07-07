@@ -202,10 +202,19 @@ function formatMessageFileReadFailure(messageFile: string, err: unknown): string
 const AGENT_MESSAGE_FILE_MAX_BYTES = 4 * 1024 * 1024;
 
 async function readAgentMessageFile(messageFile: string): Promise<string> {
+  // readRegularFile rejects symlink final paths. Preserve the legacy behavior
+  // of following symlinks for message files by resolving the full chain first,
+  // then applying the same byte cap on the final regular target.
+  let resolvedPath: string;
+  try {
+    resolvedPath = await fs.realpath(messageFile);
+  } catch (err) {
+    throw new Error(formatMessageFileReadFailure(messageFile, err), { cause: err });
+  }
   let buffer: Buffer;
   try {
     ({ buffer } = await readRegularFile({
-      filePath: messageFile,
+      filePath: resolvedPath,
       maxBytes: AGENT_MESSAGE_FILE_MAX_BYTES,
     }));
   } catch (err) {
@@ -217,7 +226,7 @@ async function readAgentMessageFile(messageFile: string): Promise<string> {
       (err.message.includes("not a regular file") ||
         err.message.includes("must be a regular file")) &&
       (await fs
-        .stat(messageFile)
+        .stat(resolvedPath)
         .then((s) => s.isDirectory())
         .catch(() => false))
     ) {
