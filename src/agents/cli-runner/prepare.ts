@@ -390,6 +390,7 @@ export async function prepareCliRunContext(
       store: writableAuthStore,
       profileId: authProfileId,
       agentDir,
+      workspaceDir,
     });
     const resolvedAuthProfileId = resolvedAuth?.profileId ?? authProfileId;
     const resolvedAuthCredential = resolvedAuth?.credential;

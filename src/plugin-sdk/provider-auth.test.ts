@@ -176,11 +176,12 @@ describe("provider auth profile helpers", () => {
       resolveProviderAuthProfileApiKey({
         provider: "openai",
         profileTypes: ["api_key"],
+        workspaceDir: "/tmp/workspace",
       }),
     ).resolves.toBe("sk-profile");
     expect(resolveApiKeyForProfile).toHaveBeenCalledTimes(1);
     expect(resolveApiKeyForProfile).toHaveBeenCalledWith(
-      expect.objectContaining({ profileId: "openai:key" }),
+      expect.objectContaining({ profileId: "openai:key", workspaceDir: "/tmp/workspace" }),
     );
   });
 

@@ -423,6 +423,8 @@ export async function resolveProviderAuthProfileApiKey(params: {
   allowKeychainPrompt?: boolean;
   /** Whether external CLI auth profiles may be discovered and included. */
   includeExternalCliAuth?: boolean;
+  /** Optional workspace directory for scoped settings. */
+  workspaceDir?: string;
 }): Promise<string | undefined> {
   const { agentDir, profileIds, store } = resolveUsableProviderAuthProfiles(params);
   if (!agentDir || profileIds.length === 0) {
@@ -434,6 +436,7 @@ export async function resolveProviderAuthProfileApiKey(params: {
       store,
       agentDir,
       profileId,
+      workspaceDir: params.workspaceDir,
     });
     if (resolved?.apiKey) {
       return resolved.apiKey;
