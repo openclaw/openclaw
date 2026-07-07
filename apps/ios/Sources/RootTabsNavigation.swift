@@ -243,13 +243,18 @@ extension RootTabs {
         if gatewayConnected {
             return .none
         }
-        if shouldPresentOnLaunch || !hasConnectedOnce || !onboardingComplete {
+        if shouldPresentOnLaunch {
             return .onboarding
         }
-        if !hasExistingGatewayConfig {
-            return .settings
+        // Saved gateway state survives independently of the onboarding markers.
+        // Only an explicit presentation request should cover a configured app.
+        if hasExistingGatewayConfig {
+            return .none
         }
-        return .none
+        if !hasConnectedOnce || !onboardingComplete {
+            return .onboarding
+        }
+        return .settings
     }
 
     static func shouldPresentQuickSetup(
