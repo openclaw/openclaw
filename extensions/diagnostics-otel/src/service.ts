@@ -40,6 +40,7 @@ import { waitForDiagnosticEventsDrained } from "openclaw/plugin-sdk/diagnostic-r
 import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
 import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
@@ -682,7 +683,7 @@ function addUpstreamRequestIdSpanEvent(
 }
 
 function clampOtelLogText(value: string, maxChars: number): string {
-  return value.length > maxChars ? `${value.slice(0, maxChars)}...(truncated)` : value;
+  return value.length > maxChars ? `${truncateUtf16Safe(value, maxChars)}...(truncated)` : value;
 }
 
 function normalizeOtelLogString(value: string, maxChars: number): string {

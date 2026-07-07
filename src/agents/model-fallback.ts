@@ -176,7 +176,7 @@ export function isFallbackSummaryError(err: unknown): err is FallbackSummaryErro
   return err instanceof FallbackSummaryError;
 }
 
-export type ModelFallbackRunOptions = {
+type ModelFallbackRunOptions = {
   allowTransientCooldownProbe?: boolean;
   isFinalFallbackAttempt?: boolean;
 };

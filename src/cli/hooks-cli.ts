@@ -42,7 +42,7 @@ export type HooksCheckOptions = {
   json?: boolean;
 };
 
-export type HooksUpdateOptions = {
+type HooksUpdateOptions = {
   all?: boolean;
   dryRun?: boolean;
 };

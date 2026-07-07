@@ -1,4 +1,6 @@
 // Control UI view renders workboard screen content.
+
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -206,7 +208,9 @@ function formatAge(value: number | undefined): string {
 
 function truncateBadgeText(value: string, maxLength = 64): string {
   const trimmed = value.trim();
-  return trimmed.length <= maxLength ? trimmed : `${trimmed.slice(0, maxLength - 1)}…`;
+  return trimmed.length <= maxLength
+    ? trimmed
+    : `${truncateUtf16Safe(trimmed, Math.max(0, maxLength - 1))}…`;
 }
 
 function canMutate(props: WorkboardProps): boolean {
