@@ -213,6 +213,7 @@ describe("activateSetupInference", () => {
       expect.objectContaining({
         runId: expect.stringMatching(/^probe-setup-inference-/),
         sessionId: expect.stringMatching(/^probe-setup-inference-.*-session$/),
+        sessionKey: expect.stringMatching(/^temp:setup-inference:probe-setup-inference-/),
         lane: "session:probe-setup-inference:anthropic",
       }),
     );
