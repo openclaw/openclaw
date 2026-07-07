@@ -1,6 +1,5 @@
 // Discord helper module supports message utils behavior.
 export {
-  DISCORD_CHANNEL_INFO_CACHE_MAX_ENTRIES,
   resetDiscordChannelInfoCacheForTest,
   resolveDiscordChannelInfo,
   resolveDiscordMessageChannelId,

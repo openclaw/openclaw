@@ -47,7 +47,6 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
 });
 
 let resetDiscordChannelInfoCacheForTest: typeof import("./message-utils.js").resetDiscordChannelInfoCacheForTest;
-let DISCORD_CHANNEL_INFO_CACHE_MAX_ENTRIES: typeof import("./message-utils.js").DISCORD_CHANNEL_INFO_CACHE_MAX_ENTRIES;
 let resolveDiscordChannelInfo: typeof import("./message-utils.js").resolveDiscordChannelInfo;
 let resolveDiscordMessageChannelId: typeof import("./message-utils.js").resolveDiscordMessageChannelId;
 let resolveDiscordMessageText: typeof import("./message-utils.js").resolveDiscordMessageText;
@@ -57,7 +56,6 @@ let resolveReferencedReplyMediaList: typeof import("./message-utils.js").resolve
 
 beforeAll(async () => {
   ({
-    DISCORD_CHANNEL_INFO_CACHE_MAX_ENTRIES,
     resetDiscordChannelInfoCacheForTest,
     resolveDiscordChannelInfo,
     resolveDiscordMessageChannelId,
@@ -1228,23 +1226,21 @@ describe("resolveDiscordChannelInfo", () => {
   });
 
   it("caps cached channel info entries", async () => {
+    const cacheEntryLimit = 1000;
     const fetchChannel = vi.fn(async (channelId: string) => ({
       type: ChannelType.GuildText,
       name: `name-${channelId}`,
     }));
     const client = { fetchChannel } as unknown as Client;
 
-    for (let index = 0; index <= DISCORD_CHANNEL_INFO_CACHE_MAX_ENTRIES; index += 1) {
+    for (let index = 0; index <= cacheEntryLimit; index += 1) {
       await resolveDiscordChannelInfo(client, `channel-${index}`);
     }
     await resolveDiscordChannelInfo(client, "channel-0");
-    await resolveDiscordChannelInfo(client, `channel-${DISCORD_CHANNEL_INFO_CACHE_MAX_ENTRIES}`);
+    await resolveDiscordChannelInfo(client, `channel-${cacheEntryLimit}`);
 
-    expect(fetchChannel).toHaveBeenCalledTimes(DISCORD_CHANNEL_INFO_CACHE_MAX_ENTRIES + 2);
-    expect(fetchChannel).toHaveBeenNthCalledWith(
-      DISCORD_CHANNEL_INFO_CACHE_MAX_ENTRIES + 2,
-      "channel-0",
-    );
+    expect(fetchChannel).toHaveBeenCalledTimes(cacheEntryLimit + 2);
+    expect(fetchChannel).toHaveBeenNthCalledWith(cacheEntryLimit + 2, "channel-0");
   });
 
   it("negative-caches missing channels", async () => {
