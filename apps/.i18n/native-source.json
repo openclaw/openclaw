@@ -203,7 +203,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2705,
+      "line": 2706,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: this host requires wss:// or Tailscale Serve. No TLS endpoint detected.",
       "surface": "android",
@@ -211,7 +211,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2707,
+      "line": 2708,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.",
       "surface": "android",
@@ -219,7 +219,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 2709,
+      "line": 2710,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Failed: couldn't reach the secure gateway endpoint for this host.",
       "surface": "android",
@@ -5787,7 +5787,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 223,
+      "line": 248,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatComposer.kt",
       "source": "Type a message…",
       "surface": "android",
@@ -5795,7 +5795,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 236,
+      "line": 261,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatComposer.kt",
       "source": "Gateway is offline. Text messages are queued and sent after reconnecting.",
       "surface": "android",
@@ -5803,7 +5803,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 266,
+      "line": 291,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatComposer.kt",
       "source": "Select thinking level",
       "surface": "android",
@@ -5811,7 +5811,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 291,
+      "line": 316,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatComposer.kt",
       "source": "Attach",
       "surface": "android",
@@ -5819,7 +5819,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 306,
+      "line": 331,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatComposer.kt",
       "source": "Refresh",
       "surface": "android",
@@ -5827,7 +5827,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 314,
+      "line": 339,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatComposer.kt",
       "source": "Abort",
       "surface": "android",
@@ -5835,7 +5835,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 363,
+      "line": 374,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatComposer.kt",
       "source": "Send",
       "surface": "android",
@@ -5843,7 +5843,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 389,
+      "line": 400,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatComposer.kt",
       "source": "No commands found",
       "surface": "android",
