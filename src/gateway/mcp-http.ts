@@ -95,7 +95,17 @@ function isJsonRpcRequest(message: unknown): message is JsonRpcRequest {
 }
 
 function isJsonRpcNotification(message: JsonRpcRequest): boolean {
-  return !Object.prototype.hasOwnProperty.call(message, "id");
+  return !Object.hasOwn(message, "id");
+}
+
+function isResponseOnlyJsonRpcNotification(message: unknown): message is JsonRpcRequest {
+  return (
+    isJsonRpcRequest(message) && isJsonRpcNotification(message) && message.method === "tools/list"
+  );
+}
+
+function isResponseOnlyJsonRpcNotificationBatch(messages: unknown[]): boolean {
+  return messages.every(isResponseOnlyJsonRpcNotification);
 }
 
 function jsonRpcInternalError(parsed: JsonRpcRequest | JsonRpcRequest[] | undefined) {
@@ -211,6 +221,12 @@ async function startMcpLoopbackServer(port = 0): Promise<{
         const body = await readMcpHttpBody(req, { timeoutMs: resolveMcpHttpBodyTimeoutMs() });
         parsed = parseMcpJsonBody(body);
         const messages = Array.isArray(parsed) ? parsed : [parsed];
+        if (isResponseOnlyJsonRpcNotificationBatch(messages)) {
+          markMcpLoopbackRequestClassified(cliRequestCaptureHandle);
+          res.writeHead(202);
+          res.end();
+          return;
+        }
         cliCaptureHandles = messages.map((message) => {
           if (
             !cliRequestCaptureHandle ||

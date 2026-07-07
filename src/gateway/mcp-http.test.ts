@@ -2885,6 +2885,48 @@ describe("mcp loopback server", () => {
     await expect(response.text()).resolves.toBe("");
   });
 
+  it("does not resolve tools for tools/list notification-only requests", async () => {
+    resolveGatewayScopedToolsMock.mockImplementation(() => {
+      throw new Error("tool resolution exploded");
+    });
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime?.ownerToken,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", method: "tools/list" }),
+    });
+
+    expect(response.status).toBe(202);
+    await expect(response.text()).resolves.toBe("");
+    expect(resolveGatewayScopedToolsMock).not.toHaveBeenCalled();
+  });
+
+  it("dispatches tools/call notifications without returning a response", async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text", text: "ok" }],
+    }));
+    mockScopedTools([makeMessageTool({ execute })]);
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime?.ownerToken,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        method: "tools/call",
+        params: { name: "message", arguments: { body: "hello" } },
+      }),
+    });
+
+    expect(response.status).toBe(202);
+    await expect(response.text()).resolves.toBe("");
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(1);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
   it("returns 413 instead of resetting oversized request bodies", async () => {
     server = await ensureMcpLoopbackServer(0);
     const runtime = getActiveMcpLoopbackRuntime();
