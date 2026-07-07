@@ -11,6 +11,7 @@ import {
   uniqueStrings,
   uniqueValues,
 } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
@@ -897,6 +898,7 @@ export function applyToolSearchCatalog(params: {
   runId?: string;
   catalogRef?: ToolSearchCatalogRef;
   toolHookContext?: HookContext;
+  shouldCatalogTool?: (tool: AnyAgentTool) => boolean;
 }): {
   tools: AnyAgentTool[];
   compacted: boolean;
@@ -1131,7 +1133,7 @@ function compactDirectoryDescription(description: string): string {
   if (normalized.length <= 180) {
     return normalized;
   }
-  return `${normalized.slice(0, 177).trimEnd()}...`;
+  return `${truncateUtf16Safe(normalized, 177).trimEnd()}...`;
 }
 
 function formatToolDirectoryIdentifier(value: string | undefined): string | undefined {

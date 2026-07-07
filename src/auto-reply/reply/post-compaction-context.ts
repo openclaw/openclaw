@@ -47,7 +47,7 @@ function matchesSectionSet(sectionNames: string[], expectedSections: string[]): 
  * Substitutes YYYY-MM-DD placeholders with the real date so agents read the correct
  * daily memory files instead of guessing based on training cutoff.
  */
-export type PostCompactionContextOptions = {
+type PostCompactionContextOptions = {
   cfg?: OpenClawConfig;
   agentId?: string;
   nowMs?: number;

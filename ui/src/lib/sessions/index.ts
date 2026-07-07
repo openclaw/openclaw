@@ -309,7 +309,7 @@ function requestSessionPatch(
   });
 }
 
-export function requestSessionDelete(
+function requestSessionDelete(
   client: SessionRequestClient,
   key: string,
   options: SessionDeleteOptions = {},

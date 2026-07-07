@@ -12,7 +12,7 @@
 // chrome-mcp path keeps its own inline overlay (renderChromeMcpLabels) for now.
 
 export const ANNOTATION_OVERLAY_ATTR = "data-openclaw-labels";
-export const ANNOTATION_OVERLAY_ROOT_ID = "__openclaw-annotations__";
+const ANNOTATION_OVERLAY_ROOT_ID = "__openclaw-annotations__";
 export const ANNOTATION_MAX_LABELS_DEFAULT = 150;
 
 export type CoordinateSpace = "viewport" | "fullpage" | "element";
@@ -48,7 +48,7 @@ export interface OverlayItem {
   h: number;
 }
 
-export interface AnnotationPlan {
+interface AnnotationPlan {
   /** Always document-space items, fed to buildOverlayInjectionScript. */
   overlayItems: OverlayItem[];
   /** Items projected into the capture mode's image-space coordinates. */

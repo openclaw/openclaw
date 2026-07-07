@@ -2721,6 +2721,39 @@ describe("session cost usage", () => {
     });
   });
 
+  it("keeps discovered first-message text on a UTF-16 boundary", async () => {
+    const root = await makeSessionCostRoot("discover-utf16-first-message");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const content = `${"a".repeat(99)}🚀tail`;
+    const fixtures = [
+      { sessionId: "sess-string", content },
+      { sessionId: "sess-block", content: [{ type: "text", text: content }] },
+    ];
+    for (const fixture of fixtures) {
+      await fs.writeFile(
+        path.join(sessionsDir, `${fixture.sessionId}.jsonl`),
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-02-21T17:47:00.000Z",
+          message: { role: "user", content: fixture.content },
+        }),
+        "utf-8",
+      );
+    }
+
+    await withStateDir(root, async () => {
+      const messages = new Map(
+        (await discoverAllSessions()).map((session) => [
+          session.sessionId,
+          session.firstUserMessage,
+        ]),
+      );
+      expect(messages.get("sess-string")).toBe("a".repeat(99));
+      expect(messages.get("sess-block")).toBe("a".repeat(99));
+    });
+  });
+
   it("falls back to archived reset transcripts for per-session detail queries", async () => {
     const root = await makeSessionCostRoot("session-archive-fallback");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
@@ -2991,6 +3024,25 @@ example
     expect(logs).toHaveLength(1);
     expect(logs?.[0]?.role).toBe("user");
     expect(logs?.[0]?.content).toBe("hello there");
+  });
+
+  it("does not split surrogate pairs when truncating session log content", async () => {
+    const root = await makeSessionCostRoot("logs-utf16");
+    const sessionFile = path.join(root, "session.jsonl");
+    const content = "x".repeat(1999) + "🚀tail";
+    await fs.writeFile(
+      sessionFile,
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-21T17:47:00.000Z",
+        message: { role: "assistant", content },
+      }),
+      "utf-8",
+    );
+
+    const logs = await loadSessionLogs({ sessionFile });
+
+    expect(logs?.[0]?.content).toBe(`${"x".repeat(1999)}…`);
   });
 
   it("normalizes malformed log timestamps with the transcript timestamp rules", async () => {

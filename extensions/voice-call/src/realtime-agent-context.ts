@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { buildRealtimeVoiceAgentConsultPolicyInstructions } from "openclaw/plugin-sdk/realtime-voice";
 import { root } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString as normalizeString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { VoiceCallConfig } from "./config.js";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 
@@ -22,7 +23,7 @@ function limitText(text: string, maxChars: number): string {
   if (text.length <= maxChars) {
     return text;
   }
-  return `${text.slice(0, Math.max(0, maxChars - 32)).trimEnd()}\n[truncated]`;
+  return `${truncateUtf16Safe(text, Math.max(0, maxChars - 32)).trimEnd()}\n[truncated]`;
 }
 
 /** Read configured workspace context files through the safe workspace root. */

@@ -678,17 +678,18 @@ describe("RealtimeCallHandler path routing", () => {
     let callbacks:
       | {
           onClose?: (reason: "completed" | "error") => void;
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
         }
       | undefined;
     const processEvent = vi.fn();
+    const close = vi.fn(() => {
+      callbacks?.onTranscript?.("user", "last words", true);
+      throw new Error("provider close failed");
+    });
     const createBridge = vi.fn(
       (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
         callbacks = request;
-        return makeBridge({
-          close: () => {
-            callbacks?.onClose?.("completed");
-          },
-        });
+        return makeBridge({ close });
       },
     );
     const getCallByProviderCallId = vi.fn(
@@ -739,7 +740,16 @@ describe("RealtimeCallHandler path routing", () => {
           expect(ended.callId).toBe("call-1");
           expect(ended.providerCallId).toBe("CA-complete");
           expect(ended.reason).toBe("completed");
+          const speechIndex = events.findIndex((event) => event.type === "call.speech");
+          const endedIndex = events.findIndex((event) => event.type === "call.ended");
+          expect(speechIndex).toBeGreaterThanOrEqual(0);
+          expect(speechIndex).toBeLessThan(endedIndex);
         });
+
+        const wsClosed = waitForClose(ws);
+        ws.close();
+        await wsClosed;
+        expect(close).toHaveBeenCalledTimes(1);
       } finally {
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
           ws.close();
@@ -764,6 +774,7 @@ describe("RealtimeCallHandler path routing", () => {
         }
       | undefined;
     const sendAudio = vi.fn();
+    const processEvent = vi.fn();
     const call: CallRecord = {
       callId: "call-1",
       providerCallId: "CA-talk-events",
@@ -785,6 +796,7 @@ describe("RealtimeCallHandler path routing", () => {
     );
     const handler = makeHandler(undefined, {
       manager: {
+        processEvent,
         getCallByProviderCallId: vi.fn((): CallRecord => call),
       },
       realtimeProvider: makeRealtimeProvider(createBridge),
@@ -845,6 +857,14 @@ describe("RealtimeCallHandler path routing", () => {
         expect(recent?.[0]?.sessionId).toBe("voice-call:call-1:realtime");
         expect(recent?.[0]?.transport).toBe("gateway-relay");
         expect(call.metadata?.lastTalkEventType).toBe("turn.ended");
+        expect(
+          processEvent.mock.calls
+            .map(([event]) => event as NormalizedEvent)
+            .find((event) => event.type === "call.assistant-speech"),
+        ).toMatchObject({
+          type: "call.assistant-speech",
+          transcript: "hi there",
+        });
       } finally {
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
           ws.close();
@@ -1262,8 +1282,18 @@ describe("RealtimeCallHandler path routing", () => {
           expect(createBridge).toHaveBeenCalled();
         });
 
+        callbacks?.onTranscript?.("user", "Hel", false);
+        callbacks?.onTranscript?.("user", "lo there.", false);
         callbacks?.onTranscript?.("user", "Hello there.", true);
         callbacks?.onTranscript?.("user", "How are you?", true);
+        callbacks?.onTranscript?.("user", "Hel", false);
+        callbacks?.onTranscript?.("user", "lo", true);
+        callbacks?.onTranscript?.("user", "hello", false);
+        callbacks?.onTranscript?.("user", "hello", false);
+        callbacks?.onTranscript?.("user", "hello", true);
+        const longTranscript = `${"prefix ".repeat(200)}final words.`;
+        callbacks?.onTranscript?.("user", longTranscript, false);
+        callbacks?.onTranscript?.("user", longTranscript, true);
 
         const speechTranscripts = processEvent.mock.calls
           .map(([event]) => event as NormalizedEvent)
@@ -1272,9 +1302,13 @@ describe("RealtimeCallHandler path routing", () => {
               event.type === "call.speech",
           )
           .map((event) => event.transcript);
-        expect(speechTranscripts).toContain("Hello there.");
-        expect(speechTranscripts).toContain("How are you?");
-        expect(speechTranscripts).not.toContain("Hello there. How are you?");
+        expect(speechTranscripts).toEqual([
+          "Hello there.",
+          "How are you?",
+          "Hello",
+          "hello",
+          longTranscript,
+        ]);
       } finally {
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
           ws.close();

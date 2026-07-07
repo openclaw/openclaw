@@ -5,7 +5,6 @@ import { formatRelativeTimestamp } from "../../../src/infra/format-time/format-r
 import { t } from "../i18n/index.ts";
 
 export { formatRelativeTimestamp, formatDurationHuman };
-export { stripThinkingTags } from "../lib/strip-thinking-tags.ts";
 
 export function formatUnknownText(
   value: unknown,

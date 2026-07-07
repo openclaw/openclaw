@@ -1,6 +1,7 @@
 /**
  * Predicates and readers for Codex app-server notification envelopes.
  */
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   isJsonObject,
   type CodexServerNotification,
@@ -317,7 +318,7 @@ function readRawAssistantTextPreview(item: JsonObject): string | undefined {
   if (!text) {
     return undefined;
   }
-  return text.length > 240 ? `${text.slice(0, 237)}...` : text;
+  return text.length > 240 ? `${truncateUtf16Safe(text, 237)}...` : text;
 }
 
 /** Returns true for app-server error notifications that will retry. */
@@ -336,7 +337,10 @@ export function isTerminalTurnStatus(status: string | undefined): boolean {
  */
 export function isCodexTurnAbortMarkerNotification(
   notification: CodexServerNotification,
-  options: { currentPromptText?: string; currentPromptTexts?: readonly string[] } = {},
+  options: {
+    currentPromptText?: string;
+    currentPromptTexts?: readonly string[];
+  } = {},
 ): boolean {
   if (notification.method !== "rawResponseItem/completed" || !isJsonObject(notification.params)) {
     return false;
