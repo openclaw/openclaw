@@ -170,7 +170,7 @@ describe("restartGatewayProcessWithFreshPid", () => {
     setPlatform("linux");
     process.execArgv = ["--import", "tsx"];
     process.argv = ["/usr/local/bin/node", "/repo/dist/index.js", "gateway", "run"];
-    spawnMock.mockReturnValue({ pid: 4242, unref: vi.fn() });
+    spawnMock.mockReturnValue({ pid: 4242, on: vi.fn(), unref: vi.fn() });
 
     const result = restartGatewayProcessWithFreshPid();
 
@@ -302,7 +302,7 @@ describe("respawnGatewayProcessForUpdate", () => {
       "gateway",
       "run",
     ];
-    spawnMock.mockReturnValue({ pid: 5151, unref: vi.fn(), kill: vi.fn() });
+    spawnMock.mockReturnValue({ pid: 5151, on: vi.fn(), unref: vi.fn(), kill: vi.fn() });
 
     const result = respawnGatewayProcessForUpdate();
 
@@ -329,7 +329,7 @@ describe("respawnGatewayProcessForUpdate", () => {
       "gateway",
       "run",
     ];
-    spawnMock.mockReturnValue({ pid: 7171, unref: vi.fn(), kill: vi.fn() });
+    spawnMock.mockReturnValue({ pid: 7171, on: vi.fn(), unref: vi.fn(), kill: vi.fn() });
 
     const result = respawnGatewayProcessForUpdate();
 
@@ -352,7 +352,7 @@ describe("respawnGatewayProcessForUpdate", () => {
     const entry =
       "/app/node_modules/.pnpm/@anthropic+sdk@1.0.0/node_modules/@anthropic/sdk/dist/index.js";
     process.argv = ["/usr/local/bin/node", entry, "gateway", "run"];
-    spawnMock.mockReturnValue({ pid: 8181, unref: vi.fn(), kill: vi.fn() });
+    spawnMock.mockReturnValue({ pid: 8181, on: vi.fn(), unref: vi.fn(), kill: vi.fn() });
 
     respawnGatewayProcessForUpdate();
 
@@ -369,7 +369,7 @@ describe("respawnGatewayProcessForUpdate", () => {
     process.env.XPC_SERVICE_NAME = "ai.openclaw.mac";
     process.execArgv = [];
     process.argv = ["/usr/local/bin/node", "/repo/dist/index.js", "gateway", "run"];
-    spawnMock.mockReturnValue({ pid: 6161, unref: vi.fn(), kill: vi.fn() });
+    spawnMock.mockReturnValue({ pid: 6161, on: vi.fn(), unref: vi.fn(), kill: vi.fn() });
 
     const result = respawnGatewayProcessForUpdate();
 
