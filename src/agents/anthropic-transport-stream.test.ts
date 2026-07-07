@@ -3401,6 +3401,75 @@ describe("anthropic transport stream", () => {
     expect(payload).not.toHaveProperty("temperature");
   });
 
+  it("omits enabled thinking in transport payload when budget is zero", async () => {
+    const model = makeAnthropicTransportModel({
+      id: "claude-opus-4-1",
+      name: "Claude Opus 4.1",
+      reasoning: true,
+      maxTokens: 1024,
+    });
+
+    await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "Think if you must." }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+        reasoning: "high",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequest().payload.thinking).toBeUndefined();
+  });
+
+  it("omits enabled thinking in transport payload when budget is sub-minimum", async () => {
+    const model = makeAnthropicTransportModel({
+      id: "claude-opus-4-1",
+      name: "Claude Opus 4.1",
+      reasoning: true,
+      maxTokens: 1500,
+    });
+
+    await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "Think if you must." }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+        reasoning: "high",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequest().payload.thinking).toBeUndefined();
+  });
+
+  it("emits enabled thinking in transport payload with a valid budget", async () => {
+    const model = makeAnthropicTransportModel({
+      id: "claude-opus-4-1",
+      name: "Claude Opus 4.1",
+      reasoning: true,
+      maxTokens: 8192,
+    });
+
+    await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "Think deeply." }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+        reasoning: "high",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequest().payload.thinking).toEqual({
+      type: "enabled",
+      budget_tokens: 7168,
+    });
+  });
+
   it.each([
     { canonicalModelId: "claude-opus-4-8", expectedTemperature: undefined },
     { canonicalModelId: "claude-opus-4-6", expectedTemperature: 0.2 },
