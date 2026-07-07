@@ -59,6 +59,38 @@ function readNumber(record: Record<string, unknown> | null, key: string): number
   return asFiniteNumber(record?.[key]);
 }
 
+export function waitForTlonAuthRetryDelay(
+  delay: number,
+  abortSignal?: AbortSignal,
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    if (abortSignal?.aborted) {
+      reject(new Error("Aborted"));
+      return;
+    }
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const cleanup = () => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+      abortSignal?.removeEventListener("abort", onAbort);
+    };
+    const onDelay = () => {
+      cleanup();
+      resolve();
+    };
+    const onAbort = () => {
+      cleanup();
+      reject(new Error("Aborted"));
+    };
+
+    timer = setTimeout(onDelay, delay);
+    abortSignal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<void> {
   const core = getTlonRuntime();
   const cfg = core.config.current() as OpenClawConfig;
@@ -113,16 +145,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         }
         const delay = Math.min(30000, 1000 * 2 ** (attempt - 1));
         runtime.log?.(`[tlon] Retrying authentication in ${delay}ms...`);
-        await new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(resolve, delay);
-          if (opts.abortSignal) {
-            const onAbort = () => {
-              clearTimeout(timer);
-              reject(new Error("Aborted"));
-            };
-            opts.abortSignal.addEventListener("abort", onAbort, { once: true });
-          }
-        });
+        await waitForTlonAuthRetryDelay(delay, opts.abortSignal);
       }
     }
     throw new Error("unreachable Tlon authentication retry loop exit");
