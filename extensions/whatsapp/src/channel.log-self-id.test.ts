@@ -49,7 +49,7 @@ describe("logSelfId rejects safely", () => {
 
     logSelfId!({
       account: { authDir: "/tmp/test", isLegacyAuthDir: false, name: "test" },
-      runtime: { log: () => {}, error: () => {}, warn: () => {}, info: () => {} } as RuntimeEnv,
+      runtime: { log: () => {}, error: () => {}, exit: () => {} } as RuntimeEnv,
       cfg: {} as OpenClawConfig,
       includeChannelPrefix: false,
     });

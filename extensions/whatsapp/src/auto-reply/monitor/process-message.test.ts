@@ -24,7 +24,7 @@ const {
   runMessageReceivedMock: vi.fn(async () => undefined),
   shouldComputeCommandAuthorizedMock: vi.fn(() => false),
   trackBackgroundTaskMock: vi.fn(),
-  createStatusReactionControllerMock: vi.fn(async () => null),
+  createStatusReactionControllerMock: vi.fn(),
 }));
 
 vi.mock("../../inbound-policy.js", async (importOriginal) => {
