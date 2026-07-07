@@ -315,6 +315,53 @@ async function createEmbeddingHttpError(response: Response): Promise<Error> {
   );
 }
 
+// Self-hosted embedding servers (llama.cpp, Ollama, vLLM, TGI, Alibaba, etc.)
+// may reject or reset on unknown parameters such as OpenAI's `dimensions`.
+// When outputDimensionality is configured we try with dimensions first to
+// preserve compatible-endpoint behavior, then retry without dimensions only
+// after a clear rejection or connection reset. A per-client WeakSet circuit
+// breaker avoids repeated failing attempts on known-incompatible servers.
+
+const dimensionsRejectedClients = new WeakSet<OpenAICompatibleEmbeddingClient>();
+
+const DIMENSIONS_REJECTION_RE =
+  /\b(?:dimensions|unknown[ _]parameter|unrecognized[ _](?:field|parameter|option|request)|invalid[ _](?:request[ _])?field|bad[ _]request)\b/i;
+
+const DIMENSIONS_RESET_RE =
+  /(?:other side closed|ECONNRESET|UND_ERR_SOCKET|socket hang up|socket terminated|read ECONN|connection[ _](?:reset|aborted))/i;
+
+function isDimensionsRejectionOrReset(err: unknown): boolean {
+  // Node.js fetch wraps undici errors as TypeError("fetch failed") with
+  // the real error in cause. Check both the top-level error and cause.
+  const cause = err && typeof err === "object" && "cause" in err
+    ? (err as Record<string, unknown>).cause
+    : undefined;
+  for (const candidate of [err, cause]) {
+    if (!candidate) {
+      continue;
+    }
+    const msg =
+      candidate instanceof Error
+        ? candidate.message
+        : typeof candidate === "string"
+          ? candidate
+          : "";
+    const maybeCode =
+      candidate && typeof candidate === "object" && "code" in candidate
+        ? (candidate as Record<string, unknown>).code
+        : undefined;
+    const code = typeof maybeCode === "string" ? maybeCode : "";
+    if (
+      DIMENSIONS_REJECTION_RE.test(msg) ||
+      DIMENSIONS_RESET_RE.test(msg) ||
+      DIMENSIONS_RESET_RE.test(code)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 async function postEmbeddingRequest(params: {
   client: OpenAICompatibleEmbeddingClient;
   input: string[];
@@ -323,34 +370,89 @@ async function postEmbeddingRequest(params: {
 }): Promise<number[][]> {
   const { client, input } = params;
   const inputType = resolveRequestInputType(client, params.inputType);
-  const body = {
-    model: client.model,
-    input,
-    ...(typeof client.dimensions === "number" ? { dimensions: client.dimensions } : {}),
-    ...(inputType ? { input_type: inputType } : {}),
-  };
-  const { response, release } = await fetchWithSsrFGuard({
-    url: `${client.baseUrl}/embeddings`,
-    init: {
-      method: "POST",
-      headers: client.headers,
-      body: JSON.stringify(body),
-    },
-    signal: params.signal,
-    policy: client.ssrfPolicy,
-    auditContext: "embedding-provider:openai-compatible",
-  });
-  try {
-    if (!response.ok) {
-      throw await createEmbeddingHttpError(response);
+  const hasDimensions = typeof client.dimensions === "number";
+  const alreadyRejected = dimensionsRejectedClients.has(client);
+
+  let includeDimensions = hasDimensions && !alreadyRejected;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const body = {
+      model: client.model,
+      input,
+      ...(includeDimensions ? { dimensions: client.dimensions } : {}),
+      ...(inputType ? { input_type: inputType } : {}),
+    };
+    let response: Response;
+    let release: () => Promise<void>;
+    try {
+      const fetched = await fetchWithSsrFGuard({
+        url: `${client.baseUrl}/embeddings`,
+        init: {
+          method: "POST",
+          headers: client.headers,
+          body: JSON.stringify(body),
+        },
+        signal: params.signal,
+        policy: client.ssrfPolicy,
+        auditContext: "embedding-provider:openai-compatible",
+      });
+      response = fetched.response;
+      release = fetched.release;
+    } catch (err) {
+      // Connection resets and socket hang-ups thrown before a Response
+      // exists can also be caused by servers that reject `dimensions`.
+      if (
+        includeDimensions &&
+        hasDimensions &&
+        isDimensionsRejectionOrReset(err) &&
+        !params.signal?.aborted
+      ) {
+        dimensionsRejectedClients.add(client);
+        includeDimensions = false;
+        continue;
+      }
+      throw err;
     }
-    return readEmbeddingVectors(
-      (await readJsonResponse(response)) as OpenAICompatibleEmbeddingResponse,
-      input.length,
-    );
-  } finally {
-    await release();
+    try {
+      if (!response.ok) {
+        const httpErr = await createEmbeddingHttpError(response);
+        if (
+          includeDimensions &&
+          hasDimensions &&
+          isDimensionsRejectionOrReset(httpErr) &&
+          !params.signal?.aborted
+        ) {
+          dimensionsRejectedClients.add(client);
+          includeDimensions = false;
+          continue;
+        }
+        throw httpErr;
+      }
+      const vectors = readEmbeddingVectors(
+        (await readJsonResponse(response)) as OpenAICompatibleEmbeddingResponse,
+        input.length,
+      );
+      // When fallback (without dimensions) returns provider-default-width
+      // vectors that differ from the configured outputDimensionality,
+      // reject so callers do not persist mismatched embeddings under
+      // the configured identity.
+      if (
+        hasDimensions &&
+        !includeDimensions &&
+        vectors.length > 0 &&
+        vectors[0]!.length !== client.dimensions
+      ) {
+        throw new Error(
+          `openai-compatible embeddings: fallback vectors have dimension ${vectors[0]!.length} ` +
+            `but outputDimensionality is configured as ${client.dimensions}`,
+        );
+      }
+      return vectors;
+    } finally {
+      await release();
+    }
   }
+  // Second attempt without dimensions failed — let it throw naturally above
+  throw new Error("unreachable");
 }
 
 /** Creates a normalized OpenAI-compatible embedding client from runtime config. */

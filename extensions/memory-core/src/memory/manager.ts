@@ -514,30 +514,58 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   protected markLocalEmbeddingProviderDegraded(err: unknown): void {
-    if (this.provider?.id !== "local") {
+    if (this.provider?.id === "local") {
+      if (!isLocalEmbeddingWorkerFailure(err)) {
+        return;
+      }
+      const message = formatErrorMessage(err);
+      const degradedProvider = this.provider;
+      this.provider = null;
+      this.providerRuntime = undefined;
+      this.providerUnavailableReason = `Local embeddings degraded: ${message}`;
+      this.providerLifecycle = createDegradedMemoryProviderLifecycle({
+        providerId: degradedProvider.id,
+        reason: message,
+        code: err.code,
+      });
+      EMBEDDING_PROBE_CACHE.delete(this.cacheKey);
+      this.providerKey = this.computeProviderKey();
+      this.batch = this.resolveBatchConfig();
+      this.vector.semanticAvailable = false;
+      void Promise.resolve(degradedProvider.close?.()).catch((errLocal: unknown) => {
+        log.debug(`memory embeddings: failed to close degraded local provider: ${String(errLocal)}`);
+      });
+      log.warn("memory embeddings: local provider degraded after worker failure", {
+        error: message,
+      });
       return;
     }
-    if (!isLocalEmbeddingWorkerFailure(err)) {
+
+    // Non-local providers in optional mode (auto, unconfigured, local transport)
+    // can degrade to FTS-only fallback after persistent failures.
+    // Required providers (explicitly configured non-local) preserve fail-closed
+    // semantics per memory-config contract.
+    if (!this.provider || this.providerRequirement.mode !== "optional") {
       return;
     }
     const message = formatErrorMessage(err);
     const degradedProvider = this.provider;
     this.provider = null;
     this.providerRuntime = undefined;
-    this.providerUnavailableReason = `Local embeddings degraded: ${message}`;
+    this.providerUnavailableReason = `Embedding provider degraded: ${message}`;
     this.providerLifecycle = createDegradedMemoryProviderLifecycle({
       providerId: degradedProvider.id,
       reason: message,
-      code: err.code,
     });
     EMBEDDING_PROBE_CACHE.delete(this.cacheKey);
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
     this.vector.semanticAvailable = false;
     void Promise.resolve(degradedProvider.close?.()).catch((errLocal: unknown) => {
-      log.debug(`memory embeddings: failed to close degraded local provider: ${String(errLocal)}`);
+      log.debug(`memory embeddings: failed to close degraded provider: ${String(errLocal)}`);
     });
-    log.warn("memory embeddings: local provider degraded after worker failure", {
+    log.warn("memory embeddings: provider degraded after persistent failures", {
+      provider: degradedProvider.id,
       error: message,
     });
   }

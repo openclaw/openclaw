@@ -63,7 +63,7 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
 async function startEmbeddingServer(params?: {
   token?: string;
   respond?: (request: CapturedRequest) => FixtureResponse | Record<string, unknown>;
-  status?: number;
+  status?: number | ((request: CapturedRequest) => number);
 }): Promise<{ baseUrl: string; requests: CapturedRequest[] }> {
   const requests: CapturedRequest[] = [];
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -84,7 +84,9 @@ async function startEmbeddingServer(params?: {
           expect(req.headers.authorization).toBeUndefined();
         }
 
-        res.writeHead(params?.status ?? 200, { "content-type": "application/json" });
+        const statusCode =
+          typeof params?.status === "function" ? params.status(captured) : (params?.status ?? 200);
+        res.writeHead(statusCode, { "content-type": "application/json" });
         res.end(
           JSON.stringify(
             params?.respond?.(captured) ?? {
@@ -397,6 +399,166 @@ describe("openai-compatible generic embedding provider", () => {
       input: ["a", "abcd"],
       dimensions: 1024,
     });
+  });
+
+  it("retries without dimensions when the server rejects the parameter", async () => {
+    let requestCount = 0;
+    const server = await startEmbeddingServer({
+      token: "test-token",
+      respond: ({ body }) => {
+        requestCount += 1;
+        const input = body.input;
+        const texts = Array.isArray(input) ? input : [input];
+        if (typeof body.dimensions === "number") {
+          return {
+            error: {
+              message: "Unrecognized request parameter: dimensions",
+              type: "invalid_request_error",
+              code: "unrecognized_parameter",
+            },
+          } as unknown as FixtureResponse;
+        }
+        return {
+          object: "list",
+          data: texts.map((text, index) => ({
+            object: "embedding",
+            embedding: [String(text).length, index + 0.25, 2],
+            index,
+          })),
+          model: String(body.model),
+        };
+      },
+      status: ({ body }) => (typeof body.dimensions === "number" ? 400 : 200),
+    });
+
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({
+        model: "text-embedding-bge-m3",
+        dimensions: 3,
+        remote: {
+          baseUrl: `  ${server.baseUrl}/  `,
+          apiKey: "test-token",
+          headers: { "x-backend": "llama.cpp" },
+        },
+      }),
+    );
+
+    await expect(provider.embed("hello")).resolves.toEqual([5, 0.25, 2]);
+    // First request with dimensions → 400, second request without → 200
+    expect(requestCount).toBe(2);
+    expect(server.requests[0]?.body).toHaveProperty("dimensions", 3);
+    expect(server.requests[1]?.body).not.toHaveProperty("dimensions");
+    // Provider identity still reports the configured dimensions
+    expect(provider.dimensions).toBe(3);
+  });
+
+  it("retries without dimensions on connection reset thrown before response", async () => {
+    // Raw server that destroys the socket on requests carrying `dimensions`,
+    // producing a connection-level error before any HTTP response is written.
+    const requests: Array<{ body: Record<string, unknown> }> = [];
+    const rawServer = createServer((req, res) => {
+      void (async () => {
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        }
+        const body = JSON.parse(
+          Buffer.concat(chunks).toString("utf8"),
+        ) as Record<string, unknown>;
+        requests.push({ body });
+        if (typeof body.dimensions === "number") {
+          req.socket?.destroy();
+          return;
+        }
+        const input = body.input;
+        const texts = Array.isArray(input) ? input : [input];
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            object: "list",
+            data: texts.map((text: string, index: number) => ({
+              object: "embedding",
+              embedding: [text.length, index + 0.25, 2],
+              index,
+            })),
+            model: String(body.model),
+          }),
+        );
+      })();
+    });
+    await new Promise<void>((resolve, reject) => {
+      rawServer.once("error", reject);
+      rawServer.listen(0, "127.0.0.1", () => {
+        rawServer.off("error", reject);
+        resolve();
+      });
+    });
+    const address = rawServer.address() as AddressInfo;
+    const baseUrl = `http://127.0.0.1:${address.port}/v1`;
+
+    try {
+      const { provider } = await createOpenAICompatibleEmbeddingProvider(
+        createOptions({
+          model: "text-embedding-bge-m3",
+          dimensions: 3,
+          remote: { baseUrl, apiKey: "test-token" },
+        }),
+      );
+
+      // Should succeed: first request resets → retry without dims → success
+      await expect(provider.embed("hello")).resolves.toEqual([5, 0.25, 2]);
+      expect(requests).toHaveLength(2);
+      expect(requests[0]?.body).toHaveProperty("dimensions", 3);
+      expect(requests[1]?.body).not.toHaveProperty("dimensions");
+      expect(provider.dimensions).toBe(3);
+    } finally {
+      rawServer.close();
+    }
+  });
+
+  it("rejects fallback vectors when dimension width does not match configured outputDimensionality", async () => {
+    const server = await startEmbeddingServer({
+      token: "test-token",
+      respond: ({ body }) => {
+        const input = body.input;
+        const texts = Array.isArray(input) ? input : [input];
+        if (typeof body.dimensions === "number") {
+          return {
+            error: {
+              message: "Unrecognized request parameter: dimensions",
+              type: "invalid_request_error",
+              code: "unrecognized_parameter",
+            },
+          } as unknown as FixtureResponse;
+        }
+        // Fallback returns 4-dim vectors but configured outputDimensionality is 3
+        return {
+          object: "list",
+          data: texts.map((text, index) => ({
+            object: "embedding",
+            embedding: [String(text).length, index + 0.25, 2, 3],
+            index,
+          })),
+          model: String(body.model),
+        };
+      },
+      status: ({ body }) => (typeof body.dimensions === "number" ? 400 : 200),
+    });
+
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({
+        model: "text-embedding-bge-m3",
+        dimensions: 3,
+        remote: {
+          baseUrl: `  ${server.baseUrl}/  `,
+          apiKey: "test-token",
+        },
+      }),
+    );
+
+    await expect(provider.embed("hello")).rejects.toThrow(
+      /fallback vectors have dimension 4 but outputDimensionality is configured as 3/,
+    );
   });
 
   it("bounds exact-limit embedding errors without splitting UTF-16 and cancels", async () => {
