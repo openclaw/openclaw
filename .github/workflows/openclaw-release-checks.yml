@@ -98,6 +98,8 @@ env:
   NODE_VERSION: "24.15.0"
   OPENCLAW_CI_OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL || 'openai/gpt-5.5' }}
 
+permissions: {}
+
 jobs:
   resolve_target:
     runs-on: ubuntu-24.04
