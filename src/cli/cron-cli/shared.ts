@@ -397,12 +397,13 @@ const formatRelative = (ms: number | null | undefined, nowMs: number) => {
   return delta >= 0 ? `in ${label}` : `${label} ago`;
 };
 
-const formatSchedule = (schedule: CronSchedule | undefined) => {
+const formatSchedule = (schedule: CronSchedule | undefined, hasTrigger = false) => {
+  const suffix = hasTrigger ? "+trigger" : "";
   if (schedule?.kind === "at") {
-    return `at ${formatIsoMinute(schedule.at)}`;
+    return `at ${formatIsoMinute(schedule.at)}${suffix}`;
   }
   if (schedule?.kind === "every") {
-    return `every ${formatDurationHuman(schedule.everyMs)}`;
+    return `every ${formatDurationHuman(schedule.everyMs)}${suffix}`;
   }
   if (schedule?.kind === "on-exit") {
     const cwd = schedule.cwd ? ` @ ${schedule.cwd}` : "";
@@ -411,7 +412,9 @@ const formatSchedule = (schedule: CronSchedule | undefined) => {
   if (schedule?.kind !== "cron") {
     return "-";
   }
-  const base = schedule.tz ? `cron ${schedule.expr} @ ${schedule.tz}` : `cron ${schedule.expr}`;
+  const base = schedule.tz
+    ? `cron ${schedule.expr} @ ${schedule.tz}${suffix}`
+    : `cron ${schedule.expr}${suffix}`;
   const staggerMs = resolveCronStaggerMs(schedule);
   if (staggerMs <= 0) {
     return `${base} (exact)`;
@@ -482,7 +485,7 @@ export function printCronList(
       CRON_NAME_PAD,
     );
     const scheduleLabel = pad(
-      truncate(formatSchedule(job.schedule), CRON_SCHEDULE_PAD),
+      truncate(formatSchedule(job.schedule, job.trigger !== undefined), CRON_SCHEDULE_PAD),
       CRON_SCHEDULE_PAD,
     );
     const nextLabel = pad(
@@ -571,7 +574,10 @@ export function printCronShow(
   runtime.log(`owner agent: ${job.owner?.agentId ?? "-"}`);
   runtime.log(`owner session: ${job.owner?.sessionKey ?? "-"}`);
   runtime.log(`enabled: ${job.enabled ? "yes" : "no"}`);
-  runtime.log(`schedule: ${formatSchedule(job.schedule)}`);
+  runtime.log(`schedule: ${formatSchedule(job.schedule, job.trigger !== undefined)}`);
+  runtime.log(
+    `trigger: ${job.trigger ? `once=${job.trigger.once === true ? "yes" : "no"}; evals=${job.state.triggerEvalCount ?? 0}; last eval=${formatRelative(job.state.lastTriggerEvalAtMs, Date.now())}; last fire=${formatRelative(job.state.lastTriggerFireAtMs, Date.now())}` : "-"}`,
+  );
   runtime.log(`session: ${job.sessionTarget ?? "-"}`);
   runtime.log(`agent: ${job.agentId ?? "-"}`);
   runtime.log(`model: ${job.payload.kind === "agentTurn" ? (job.payload.model ?? "-") : "-"}`);

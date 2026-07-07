@@ -193,6 +193,7 @@ export const migratedSessionAccessorWriteFiles = new Set([
   "src/config/sessions/cleanup-service.ts",
   "src/config/sessions/goals.ts",
   "src/gateway/boot.ts",
+  "src/gateway/server-methods/chat.ts",
   "src/gateway/server-methods/sessions.ts",
   "src/gateway/server-node-events.ts",
   "src/gateway/session-compaction-checkpoints.ts",
@@ -733,7 +734,7 @@ function sortRecordByKey(record) {
 }
 
 /** Counts legacy call sites per unmigrated file for every debt concern. */
-export async function collectSessionAccessorDebtCounts(repoRoot) {
+async function collectSessionAccessorDebtCounts(repoRoot) {
   const counts = {};
   for (const concern of sessionAccessorDebtConcerns) {
     const violations = await collectFileViolations({

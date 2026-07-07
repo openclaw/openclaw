@@ -247,6 +247,15 @@ export const CronScheduleSchema = Type.Union([
   ),
 ]);
 
+/** Headless condition script evaluated before a recurring cron payload runs. */
+export const CronTriggerSchema = Type.Object(
+  {
+    script: Type.String({ minLength: 1, maxLength: 65_536 }),
+    once: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
 /** Full cron payload for new jobs. */
 export const CronPayloadSchema = Type.Union([
   Type.Object(
@@ -431,6 +440,10 @@ export const CronJobStateSchema = Type.Object(
     lastFailureNotificationDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
     lastFailureNotificationDeliveryError: Type.Optional(Type.String()),
     lastFailureAlertAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastTriggerEvalAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    triggerEvalCount: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastTriggerFireAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    triggerState: Type.Optional(Type.Unknown()),
   },
   { additionalProperties: false },
 );
@@ -454,6 +467,10 @@ const CronJobStatePatchSchema = Type.Object(
     lastFailureNotificationDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
     lastFailureNotificationDeliveryError: Type.Optional(Type.String()),
     lastFailureAlertAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastTriggerEvalAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    triggerEvalCount: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastTriggerFireAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    triggerState: Type.Optional(Type.Unknown()),
   },
   { additionalProperties: false },
 );
@@ -474,6 +491,7 @@ export const CronJobSchema = Type.Object(
     createdAtMs: Type.Integer({ minimum: 0 }),
     updatedAtMs: Type.Integer({ minimum: 0 }),
     schedule: CronScheduleSchema,
+    trigger: Type.Optional(CronTriggerSchema),
     sessionTarget: CronSessionTargetSchema,
     wakeMode: CronWakeModeSchema,
     payload: CronPayloadSchema,
@@ -527,6 +545,7 @@ export const CronAddParamsSchema = Type.Object(
     owner: Type.Optional(CronOwnerSchema),
     ...CronCommonOptionalFields,
     schedule: CronScheduleSchema,
+    trigger: Type.Optional(CronTriggerSchema),
     sessionTarget: CronSessionTargetSchema,
     wakeMode: CronWakeModeSchema,
     payload: CronPayloadSchema,
@@ -556,6 +575,7 @@ export const CronJobPatchSchema = Type.Object(
     displayName: Type.Optional(Type.Union([CronDisplayNameSchema, Type.Null()])),
     ...CronCommonOptionalFields,
     schedule: Type.Optional(CronScheduleSchema),
+    trigger: Type.Optional(Type.Union([CronTriggerSchema, Type.Null()])),
     sessionTarget: Type.Optional(CronSessionTargetSchema),
     wakeMode: Type.Optional(CronWakeModeSchema),
     payload: Type.Optional(CronPayloadPatchSchema),
@@ -621,6 +641,7 @@ export const CronRunLogEntrySchema = Type.Object(
     runAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     durationMs: Type.Optional(Type.Integer({ minimum: 0 })),
     nextRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    triggerFired: Type.Optional(Type.Boolean()),
     model: Type.Optional(Type.String()),
     provider: Type.Optional(Type.String()),
     usage: Type.Optional(

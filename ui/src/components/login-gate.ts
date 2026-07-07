@@ -108,7 +108,7 @@ function buildFeedback(params: {
   };
 }
 
-export function resolveLoginFailureFeedback(
+function resolveLoginFailureFeedback(
   params: LoginFailureFeedbackParams,
 ): LoginFailureFeedback | null {
   if (params.connected || !params.lastError) {
@@ -431,7 +431,7 @@ function renderLoginGate(props: LoginGateProps) {
   `;
 }
 
-export class LoginGate extends LitElement {
+class LoginGate extends LitElement {
   override createRenderRoot() {
     return this;
   }

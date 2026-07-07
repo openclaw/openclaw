@@ -218,11 +218,11 @@ function assertRootDir(rootDir: string): void {
   }
 }
 
-export function resolveCommitSha(sha: string, rootDir: string, deps: GitDeps = {}): string {
+function resolveCommitSha(sha: string, rootDir: string, deps: GitDeps = {}): string {
   return git(["rev-parse", "--verify", `${sha}^{commit}`], rootDir, deps).trim();
 }
 
-export function readRemoteRef(
+function readRemoteRef(
   remote: string,
   ref: string,
   rootDir: string,

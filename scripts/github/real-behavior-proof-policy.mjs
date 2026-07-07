@@ -66,7 +66,7 @@ function createTooLargeGitHubApiBodyError(label, maxBytes) {
   return error;
 }
 
-export async function withGitHubApiTimeout(label, timeoutMs, run) {
+async function withGitHubApiTimeout(label, timeoutMs, run) {
   const boundedTimeoutMs = Math.max(1, timeoutMs);
   const controller = new AbortController();
   const timeoutError = createTimeoutError(label, boundedTimeoutMs);
@@ -168,7 +168,7 @@ function isAutomationUser(user = {}, fallbackLogin = "") {
   return user?.type === "Bot" || /\[bot\]$/i.test(login) || login.startsWith("app/");
 }
 
-export function isExternalPullRequest(pullRequest) {
+function isExternalPullRequest(pullRequest) {
   if (!pullRequest) {
     return false;
   }

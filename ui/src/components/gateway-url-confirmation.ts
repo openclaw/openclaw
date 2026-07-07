@@ -45,7 +45,7 @@ function renderGatewayUrlConfirmation(props: GatewayUrlConfirmationProps) {
   `;
 }
 
-export class GatewayUrlConfirmation extends LitElement {
+class GatewayUrlConfirmation extends LitElement {
   override createRenderRoot() {
     return this;
   }

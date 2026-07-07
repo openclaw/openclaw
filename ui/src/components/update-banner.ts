@@ -67,7 +67,7 @@ export type UpdateBannerProps = {
   onDismiss: () => void;
 };
 
-export class UpdateBanner extends LitElement {
+class UpdateBanner extends LitElement {
   override createRenderRoot() {
     return this;
   }

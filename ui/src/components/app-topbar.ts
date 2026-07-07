@@ -10,7 +10,7 @@ import { icons } from "./icons.ts";
 // slide-over drawer; the one topbar toggle switches behavior there.
 const NAV_DRAWER_MEDIA_QUERY = "(max-width: 1100px)";
 
-export class AppTopbar extends LitElement {
+class AppTopbar extends LitElement {
   override createRenderRoot() {
     return this;
   }
