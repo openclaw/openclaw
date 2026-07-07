@@ -9,11 +9,11 @@ interface PrlctlVmListItem {
   status?: string;
 }
 
-export interface WaitForVmStatusOptions {
+interface WaitForVmStatusOptions {
   probeTimeoutMs?: () => number | undefined;
 }
 
-export interface EnsureVmRunningOptions extends WaitForVmStatusOptions {
+interface EnsureVmRunningOptions extends WaitForVmStatusOptions {
   transitionTimeoutMs?: () => number | undefined;
 }
 
