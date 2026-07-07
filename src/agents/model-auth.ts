@@ -44,6 +44,7 @@ import {
   resolveAuthProfileOrder,
   resolveAuthStorePathForDisplay,
 } from "./auth-profiles.js";
+import { OAuthRefreshFailureError } from "./auth-profiles/oauth-refresh-failure.js";
 import * as cliCredentials from "./cli-credentials.js";
 import { resolveProviderEnvAuthLookupMaps } from "./model-auth-env-vars.js";
 import {
@@ -1039,6 +1040,15 @@ export async function resolveApiKeyForProvider(params: {
         profileId,
         preferredProfile,
       });
+    const configuredProfileType = store.profiles[profileId]?.type;
+    if (configuredProfileType) {
+      assertAuthModeAllowedForModel({
+        provider,
+        modelApi: params.modelApi,
+        profileId,
+        mode: profileTypeToAuthMode(configuredProfileType),
+      });
+    }
     const resolved = await resolveApiKeyForProfile({
       cfg,
       store,
@@ -1236,7 +1246,9 @@ export async function resolveApiKeyForProvider(params: {
     preferredProfile,
   });
   let deferredAuthProfileResult: ResolvedProviderAuth | null = null;
+  let refreshFailure: OAuthRefreshFailureError | undefined;
   for (const candidate of order) {
+    let candidateMode: ResolvedProviderAuth["mode"] | undefined;
     try {
       const awsSdkProfileAuth = resolveConfiguredAwsSdkProfileAuth({
         cfg,
@@ -1245,6 +1257,18 @@ export async function resolveApiKeyForProvider(params: {
       });
       if (awsSdkProfileAuth) {
         return awsSdkProfileAuth;
+      }
+      const candidateType = store.profiles[candidate]?.type;
+      candidateMode = candidateType ? profileTypeToAuthMode(candidateType) : undefined;
+      if (
+        candidateMode &&
+        !isAuthModeAllowedForModel({
+          provider,
+          modelApi: params.modelApi,
+          mode: candidateMode,
+        })
+      ) {
+        continue;
       }
       const resolved = await resolveApiKeyForProfile({
         cfg,
@@ -1288,6 +1312,18 @@ export async function resolveApiKeyForProvider(params: {
         return result;
       }
     } catch (err) {
+      if (
+        !refreshFailure &&
+        err instanceof OAuthRefreshFailureError &&
+        (!candidateMode ||
+          isAuthModeAllowedForModel({
+            provider,
+            modelApi: params.modelApi,
+            mode: candidateMode,
+          }))
+      ) {
+        refreshFailure = err;
+      }
       log.debug?.(`auth profile "${candidate}" failed for provider "${provider}": ${String(err)}`);
     }
   }
@@ -1330,6 +1366,10 @@ export async function resolveApiKeyForProvider(params: {
   });
   if (syntheticLocalAuth) {
     return syntheticLocalAuth;
+  }
+
+  if (refreshFailure) {
+    throw refreshFailure;
   }
 
   const hasInlineConfiguredModels =
@@ -1492,6 +1532,17 @@ export async function hasAvailableAuthForProvider(params: {
     try {
       if (resolveConfiguredAwsSdkProfileAuth({ cfg, provider, profileId: candidate })) {
         return true;
+      }
+      const candidateType = store.profiles[candidate]?.type;
+      if (
+        candidateType &&
+        !isAuthModeAllowedForModel({
+          provider,
+          modelApi: params.modelApi,
+          mode: profileTypeToAuthMode(candidateType),
+        })
+      ) {
+        continue;
       }
       const resolved = await resolveApiKeyForProfile({
         cfg,

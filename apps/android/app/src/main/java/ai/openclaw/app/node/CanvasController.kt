@@ -82,8 +82,7 @@ class CanvasController {
 
   /** Navigates the canvas to a remote URL or back to the bundled scaffold for blank/root input. */
   fun navigate(url: String) {
-    val trimmed = url.trim()
-    this.url = if (trimmed.isBlank() || trimmed == "/") null else trimmed
+    this.url = CanvasNavigationPolicy.normalize(url).ifBlank { null }
     _currentUrl.value = this.url
     reload()
   }

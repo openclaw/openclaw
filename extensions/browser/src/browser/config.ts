@@ -36,6 +36,7 @@ import {
   DEFAULT_OPENCLAW_BROWSER_ENABLED,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
+import { resolveExtensionRelayToken } from "./extension-relay/relay-auth.js";
 import { DEFAULT_UPLOAD_DIR } from "./paths.js";
 
 export {
@@ -86,6 +87,12 @@ export type ResolvedBrowserConfig = {
   tabCleanup: ResolvedBrowserTabCleanupConfig;
   ssrfPolicy?: SsrFPolicy;
   extraArgs: string[];
+  /** Default loopback port for extension-driver relay servers. */
+  extensionRelayDefaultPort: number;
+  /** Assigned loopback relay port per extension-driver profile (no explicit cdpPort). */
+  extensionRelayPorts: Record<string, number>;
+  /** Derived bearer token for extension relay auth (absent until gateway auth exists). */
+  extensionRelayToken?: string;
 };
 
 /** Normalized tab-cleanup settings for session-owned browser tabs. */
@@ -107,7 +114,7 @@ export type ResolvedBrowserProfile = {
   mcpCommand?: string;
   mcpArgs?: string[];
   color: string;
-  driver: "openclaw" | "existing-session";
+  driver: "openclaw" | "existing-session" | "extension";
   executablePath?: string;
   headless: boolean;
   headlessSource?: "profile" | "config" | "default";
@@ -115,6 +122,14 @@ export type ResolvedBrowserProfile = {
 };
 
 const DEFAULT_BROWSER_CDP_PORT_RANGE_START = 18800;
+/**
+ * Default extension relay port offset from the browser control port. Sits just
+ * below the CDP allocation range (controlPort+9..) so profile port allocation
+ * can never hand this port to a managed profile.
+ */
+const EXTENSION_RELAY_PORT_OFFSET = 8;
+/** Username half of the relay's Basic credential; the password is the derived token. */
+const EXTENSION_RELAY_CDP_USER = "openclaw";
 const MAX_BROWSER_STARTUP_TIMEOUT_MS = 120_000;
 /** Environment variable that overrides managed Chrome headless mode. */
 export const OPENCLAW_BROWSER_HEADLESS_ENV = "OPENCLAW_BROWSER_HEADLESS";
@@ -345,6 +360,43 @@ function ensureDefaultUserBrowserProfile(
   return result;
 }
 
+/** Built-in profile for the Chrome extension relay (user's signed-in browser). */
+function ensureDefaultChromeExtensionProfile(
+  profiles: Record<string, BrowserProfileConfig>,
+): Record<string, BrowserProfileConfig> {
+  const result = { ...profiles };
+  if (result.chrome) {
+    return result;
+  }
+  result.chrome = {
+    driver: "extension",
+    color: DEFAULT_OPENCLAW_BROWSER_COLOR,
+  };
+  return result;
+}
+
+/**
+ * Assign a distinct loopback relay port to each extension-driver profile that
+ * does not pin its own cdpPort. Ports count down from the default (controlPort+8)
+ * — below the managed CDP allocation band (controlPort+9..) — so extension
+ * relays and managed Chrome never contend, and two extension profiles never
+ * share one port. Deterministic (sorted names) so restarts keep the same URLs.
+ */
+function resolveExtensionRelayPorts(
+  profiles: Record<string, BrowserProfileConfig>,
+  defaultPort: number,
+): Record<string, number> {
+  const names = Object.entries(profiles)
+    .filter(([, profile]) => profile.driver === "extension" && profile.cdpPort == null)
+    .map(([name]) => name)
+    .toSorted();
+  const ports: Record<string, number> = {};
+  names.forEach((name, index) => {
+    ports[name] = defaultPort - index;
+  });
+  return ports;
+}
+
 function applyLegacyCdpUrlToExistingSessionDefaultProfile(
   profiles: Record<string, BrowserProfileConfig>,
   defaultProfile: string,
@@ -434,6 +486,9 @@ export function resolveBrowserConfig(
 
   const headless = cfg?.headless === true;
   const headlessSource = typeof cfg?.headless === "boolean" ? "config" : "default";
+  // Host-local relay secret (created lazily by relay startup / pairing). Null
+  // here just means the extension driver has not been used on this host yet.
+  const extensionRelayToken = resolveExtensionRelayToken() ?? undefined;
   const noSandbox = cfg?.noSandbox === true;
   const attachOnly = cfg?.attachOnly === true;
   const executablePath = normalizeExecutablePath(cfg?.executablePath);
@@ -442,13 +497,15 @@ export function resolveBrowserConfig(
   const legacyCdpPort = rawCdpUrl ? cdpInfo.port : undefined;
   const isWsUrl = cdpInfo.parsed.protocol === "ws:" || cdpInfo.parsed.protocol === "wss:";
   const legacyCdpUrl = rawCdpUrl && isWsUrl ? cdpInfo.normalized : undefined;
-  let profiles = ensureDefaultUserBrowserProfile(
-    ensureDefaultProfile(
-      cfg?.profiles,
-      defaultColor,
-      legacyCdpPort,
-      cdpPortRangeStart,
-      legacyCdpUrl,
+  let profiles = ensureDefaultChromeExtensionProfile(
+    ensureDefaultUserBrowserProfile(
+      ensureDefaultProfile(
+        cfg?.profiles,
+        defaultColor,
+        legacyCdpPort,
+        cdpPortRangeStart,
+        legacyCdpUrl,
+      ),
     ),
   );
   const cdpProtocol = cdpInfo.parsed.protocol === "https:" ? "https" : "http";
@@ -497,6 +554,12 @@ export function resolveBrowserConfig(
     tabCleanup: resolveBrowserTabCleanupConfig(cfg),
     ssrfPolicy: resolveBrowserSsrFPolicy(cfg),
     extraArgs,
+    extensionRelayDefaultPort: controlPort + EXTENSION_RELAY_PORT_OFFSET,
+    extensionRelayPorts: resolveExtensionRelayPorts(
+      profiles,
+      controlPort + EXTENSION_RELAY_PORT_OFFSET,
+    ),
+    ...(extensionRelayToken ? { extensionRelayToken } : {}),
   };
 }
 
@@ -514,11 +577,44 @@ export function resolveProfile(
   let cdpHost = resolved.cdpHost;
   let cdpPort = profile.cdpPort ?? 0;
   let cdpUrl;
-  const driver = profile.driver === "existing-session" ? "existing-session" : "openclaw";
+  const driver =
+    profile.driver === "existing-session" || profile.driver === "extension"
+      ? profile.driver
+      : "openclaw";
   const headless = profile.headless ?? resolved.headless;
   const headlessSource =
     typeof profile.headless === "boolean" ? "profile" : resolved.headlessSource;
   const executablePath = normalizeExecutablePath(profile.executablePath) ?? resolved.executablePath;
+
+  if (driver === "extension") {
+    // Each extension profile needs its own loopback relay port. Explicit
+    // profile.cdpPort wins; otherwise a distinct port is assigned per profile
+    // (see resolveExtensionRelayPorts) so multiple extension profiles never
+    // collide on the same port and silently fail to bind.
+    const relayPort =
+      profile.cdpPort ??
+      resolved.extensionRelayPorts[profileName] ??
+      resolved.extensionRelayDefaultPort;
+    const token = resolved.extensionRelayToken;
+    // Userinfo credentials flow through getHeadersWithAuth into /json/version
+    // and /cdp requests, so the relay is authenticated with zero extra plumbing.
+    const relayCdpUrl = token
+      ? `http://${EXTENSION_RELAY_CDP_USER}:${encodeURIComponent(token)}@127.0.0.1:${relayPort}`
+      : `http://127.0.0.1:${relayPort}`;
+    return {
+      name: profileName,
+      cdpPort: relayPort,
+      cdpUrl: relayCdpUrl,
+      cdpHost: "127.0.0.1",
+      cdpIsLoopback: true,
+      color: profile.color,
+      driver,
+      executablePath,
+      headless: false,
+      headlessSource: "default",
+      attachOnly: true,
+    };
+  }
 
   if (driver === "existing-session") {
     const existingSessionCdp = normalizeExistingSessionCdpUrl(rawProfileUrl, profileName);

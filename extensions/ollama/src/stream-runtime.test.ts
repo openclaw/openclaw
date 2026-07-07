@@ -10,6 +10,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 }));
 
 import {
+  OLLAMA_INCOMPLETE_STREAM_ERROR,
   buildOllamaChatRequest,
   createConfiguredOllamaCompatStreamWrapper,
   createConfiguredOllamaStreamFn,
@@ -1932,6 +1933,9 @@ describe("createOllamaStreamFn streaming events", () => {
         expect(types).toEqual(["start", "text_start", "text_delta", "error"]);
         const errorEvent = events.at(-1);
         expect(errorEvent?.type).toBe("error");
+        if (errorEvent?.type === "error") {
+          expect(errorEvent.error.errorMessage).toBe(OLLAMA_INCOMPLETE_STREAM_ERROR);
+        }
       },
     );
   });

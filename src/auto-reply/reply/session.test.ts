@@ -25,6 +25,11 @@ import {
 } from "../../infra/system-events.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
+  beginSessionWorkAdmission,
+  isSessionLifecycleMutationActive,
+  runExclusiveSessionLifecycleMutation,
+} from "../../sessions/session-lifecycle-admission.js";
+import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
@@ -472,6 +477,31 @@ afterEach(async () => {
   await sessionMcpTesting.resetSessionMcpRuntimeManager();
 });
 describe("initSessionState guarded initialization", () => {
+  it("rejects inbound work for an archived session", async () => {
+    const storePath = await createStorePath("openclaw-session-init-archived-");
+    const sessionKey = "agent:main:telegram:chat:archived";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "archived-session",
+        archivedAt: Date.now(),
+        updatedAt: 100,
+      },
+    });
+
+    await expect(
+      initSessionState({
+        ctx: {
+          Body: "blocked while archived",
+          SessionKey: sessionKey,
+        },
+        cfg: { session: { store: storePath } } as OpenClawConfig,
+        commandAuthorized: true,
+      }),
+    ).rejects.toThrow(
+      'Session "agent:main:telegram:chat:archived" is archived. Restore it before starting new work.',
+    );
+  });
+
   it("serializes concurrent initializers before reading the guarded snapshot", async () => {
     const storePath = await createStorePath("openclaw-session-init-race-");
     const sessionKey = "agent:main:telegram:chat:42";
@@ -966,6 +996,13 @@ describe("initSessionState RawBody", () => {
           messageCount: 8,
           unwindowedMessageCount: 8,
         },
+        compactionCount: 3,
+        memoryFlushAt: 123,
+        memoryFlushCompactionCount: 2,
+        memoryFlushContextHash: "stale-context",
+        memoryFlushFailureCount: 3,
+        memoryFlushLastFailedAt: 456,
+        memoryFlushLastFailureError: "provider crashed",
         skillsSnapshot: {
           prompt: "<available_skills><skill><name>stale</name></skill></available_skills>",
           skills: [{ name: "stale" }],
@@ -999,6 +1036,13 @@ describe("initSessionState RawBody", () => {
     expect(result.sessionEntry.totalTokensFresh).toBe(true);
     expect(result.sessionEntry.contextTokens).toBeUndefined();
     expect(result.sessionEntry.contextBudgetStatus).toBeUndefined();
+    expect(result.sessionEntry.compactionCount).toBe(0);
+    expect(result.sessionEntry.memoryFlushAt).toBeUndefined();
+    expect(result.sessionEntry.memoryFlushCompactionCount).toBeUndefined();
+    expect(result.sessionEntry.memoryFlushContextHash).toBeUndefined();
+    expect(result.sessionEntry.memoryFlushFailureCount).toBeUndefined();
+    expect(result.sessionEntry.memoryFlushLastFailedAt).toBeUndefined();
+    expect(result.sessionEntry.memoryFlushLastFailureError).toBeUndefined();
 
     const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
       string,
@@ -1008,6 +1052,13 @@ describe("initSessionState RawBody", () => {
         totalTokensFresh?: boolean;
         contextTokens?: number;
         contextBudgetStatus?: unknown;
+        compactionCount?: number;
+        memoryFlushAt?: number;
+        memoryFlushCompactionCount?: number;
+        memoryFlushContextHash?: string;
+        memoryFlushFailureCount?: number;
+        memoryFlushLastFailedAt?: number;
+        memoryFlushLastFailureError?: string;
       }
     >;
     expect(store[sessionKey]?.skillsSnapshot).toBeUndefined();
@@ -1015,6 +1066,13 @@ describe("initSessionState RawBody", () => {
     expect(store[sessionKey]?.totalTokensFresh).toBe(true);
     expect(store[sessionKey]?.contextTokens).toBeUndefined();
     expect(store[sessionKey]?.contextBudgetStatus).toBeUndefined();
+    expect(store[sessionKey]?.compactionCount).toBe(0);
+    expect(store[sessionKey]?.memoryFlushAt).toBeUndefined();
+    expect(store[sessionKey]?.memoryFlushCompactionCount).toBeUndefined();
+    expect(store[sessionKey]?.memoryFlushContextHash).toBeUndefined();
+    expect(store[sessionKey]?.memoryFlushFailureCount).toBeUndefined();
+    expect(store[sessionKey]?.memoryFlushLastFailedAt).toBeUndefined();
+    expect(store[sessionKey]?.memoryFlushLastFailureError).toBeUndefined();
   });
 
   it("drains stale system events when /new rotates an existing session", async () => {
@@ -1124,7 +1182,7 @@ describe("initSessionState RawBody", () => {
     expect(store[sessionKey]?.modelOverrideSource).toBe("user");
   });
 
-  it("preserves user-set behavior overrides across an implicit daily stale rollover (#92562)", async () => {
+  it("preserves user-set behavior and pinned state across an implicit daily stale rollover (#92562)", async () => {
     // Regression: session-level behavior overrides (/think, /verbose, /reasoning,
     // /trace, ttsAuto) survive an explicit /new but were dropped after the
     // automatic daily/idle reset, because the carryover was gated on
@@ -1151,6 +1209,7 @@ describe("initSessionState RawBody", () => {
         traceLevel: "high",
         reasoningLevel: "low",
         ttsAuto: "always",
+        pinnedAt: 123,
       },
     });
 
@@ -1179,6 +1238,7 @@ describe("initSessionState RawBody", () => {
     expect(result.sessionEntry.traceLevel).toBe("high");
     expect(result.sessionEntry.reasoningLevel).toBe("low");
     expect(result.sessionEntry.ttsAuto).toBe("always");
+    expect(result.sessionEntry.pinnedAt).toBe(123);
 
     const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
       string,
@@ -1188,6 +1248,7 @@ describe("initSessionState RawBody", () => {
         traceLevel?: string;
         reasoningLevel?: string;
         ttsAuto?: string;
+        pinnedAt?: number;
       }
     >;
     expect(store[sessionKey]?.thinkingLevel).toBe("medium");
@@ -1195,6 +1256,7 @@ describe("initSessionState RawBody", () => {
     expect(store[sessionKey]?.traceLevel).toBe("high");
     expect(store[sessionKey]?.reasoningLevel).toBe("low");
     expect(store[sessionKey]?.ttsAuto).toBe("always");
+    expect(store[sessionKey]?.pinnedAt).toBe(123);
   });
 
   it("preserves usage footer mode across daily rollover", async () => {
@@ -2141,8 +2203,17 @@ describe("initSessionState reset policy", () => {
       expectNewSession: false,
     },
     {
-      name: "main terminal rows rotate when transcript is newer than updatedAt",
+      name: "main status-done terminal rows reuse when transcript is newer than updatedAt",
       sessionKey: "agent:main:main",
+      updatedAtOffsetMs: -10_000,
+      endedAtOffsetMs: -11_000,
+      transcriptMtimeOffsetMs: 0,
+      expectNewSession: false,
+    },
+    {
+      name: "main killed terminal rows rotate when transcript is newer than updatedAt",
+      sessionKey: "agent:main:main",
+      status: "killed" as const,
       updatedAtOffsetMs: -10_000,
       endedAtOffsetMs: -11_000,
       transcriptMtimeOffsetMs: 0,
@@ -2758,6 +2829,43 @@ describe("initSessionState browser tab cleanup", () => {
 
     expect(result.isNewSession).toBe(true);
     expect(browserMaintenanceMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
+  });
+
+  it("includes the peer-scoped runtime key for direct-message cleanup", async () => {
+    const storePath = await createStorePath("openclaw-tab-cleanup-peer-key-");
+    const canonicalKey = "agent:main:main";
+    const existingSessionId = "tab-peer-key-session-id";
+    await writeSessionStoreFast(storePath, {
+      [canonicalKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now(),
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "/new",
+        RawBody: "/new",
+        CommandBody: "/new",
+        From: "12345",
+        Provider: "telegram",
+        ChatType: "direct",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    const cleanupParams = requireMockCallArg(
+      browserMaintenanceMocks.closeTrackedBrowserTabsForSessions,
+      "closeTrackedBrowserTabsForSessions",
+    );
+    expect(cleanupParams.sessionKeys).toEqual([
+      existingSessionId,
+      canonicalKey,
+      "agent:main:telegram:default:direct:12345",
+    ]);
   });
 });
 
@@ -3717,6 +3825,328 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     expect(archived).toHaveLength(1);
   });
 
+  it("drains foreign work before replacing a reply session", async () => {
+    const storePath = await createStorePath("openclaw-rollover-admission-");
+    const sessionKey = "agent:main:telegram:dm:rollover-admission";
+    const existingSessionId = "session-before-admitted-rollover";
+    const transcriptPath = path.join(path.dirname(storePath), `${existingSessionId}.jsonl`);
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: { sessionId: existingSessionId, updatedAt: Date.now() },
+    });
+    await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf8");
+
+    let signalInterrupted = () => {};
+    const interrupted = new Promise<void>((resolve) => {
+      signalInterrupted = resolve;
+    });
+    const admission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [sessionKey, existingSessionId],
+      assertAllowed: () => {},
+      onInterrupt: signalInterrupted,
+    });
+    const initialization = initSessionState({
+      ctx: {
+        Body: "/new",
+        RawBody: "/new",
+        CommandBody: "/new",
+        From: "user-rollover-admission",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg: { session: { store: storePath, idleMinutes: 999 } } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    try {
+      await interrupted;
+      // Foreign owners may need the writer lane to finalize before releasing.
+      // The rollover must not hold that lane while it drains them.
+      await runExclusiveSessionStoreWrite(storePath, async () => {});
+      expect(readSessionStoreForTest(storePath)[sessionKey]?.sessionId).toBe(existingSessionId);
+      expect(await fs.stat(transcriptPath).catch(() => null)).not.toBeNull();
+
+      admission.release();
+      const result = await initialization;
+      expect(result.sessionId).not.toBe(existingSessionId);
+      expect(await fs.stat(transcriptPath).catch(() => null)).toBeNull();
+    } finally {
+      admission.release();
+      await initialization.catch(() => {});
+    }
+  });
+
+  it("keeps the initiating reply admission during an in-band rollover", async () => {
+    const storePath = await createStorePath("openclaw-rollover-initiator-");
+    const sessionKey = "agent:main:telegram:dm:rollover-initiator";
+    const existingSessionId = "session-before-initiating-rollover";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: { sessionId: existingSessionId, updatedAt: Date.now() },
+    });
+    const onInterrupt = vi.fn();
+    const admission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [sessionKey, existingSessionId],
+      assertAllowed: () => {},
+      onInterrupt,
+    });
+
+    try {
+      const result = await admission.run(
+        async () =>
+          await initSessionState({
+            ctx: {
+              Body: "/reset",
+              RawBody: "/reset",
+              CommandBody: "/reset",
+              From: "user-rollover-initiator",
+              To: "bot",
+              ChatType: "direct",
+              SessionKey: sessionKey,
+              Provider: "telegram",
+              Surface: "telegram",
+            },
+            cfg: { session: { store: storePath, idleMinutes: 999 } } as OpenClawConfig,
+            commandAuthorized: true,
+          }),
+      );
+      expect(result.sessionId).not.toBe(existingSessionId);
+      expect(onInterrupt).not.toHaveBeenCalled();
+    } finally {
+      admission.release();
+    }
+  });
+
+  it("cancels a competing admitted rollover without deadlocking the session", async () => {
+    const storePath = await createStorePath("openclaw-rollover-contenders-");
+    const sessionKey = "agent:main:telegram:dm:rollover-contenders";
+    const existingSessionId = "session-before-competing-rollovers";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: { sessionId: existingSessionId, updatedAt: Date.now() },
+    });
+    const controllers = [new AbortController(), new AbortController()];
+    const admissions = await Promise.all(
+      controllers.map(
+        async (controller) =>
+          await beginSessionWorkAdmission({
+            scope: storePath,
+            identities: [sessionKey, existingSessionId],
+            assertAllowed: () => {},
+            onInterrupt: () => controller.abort(new Error("competing rollover interrupted")),
+          }),
+      ),
+    );
+    const runRollover = async (index: number) => {
+      const admission = admissions[index];
+      const controller = controllers[index];
+      try {
+        return await admission.run(
+          async () =>
+            await initSessionState({
+              ctx: {
+                Body: "/new",
+                RawBody: "/new",
+                CommandBody: "/new",
+                From: `user-rollover-contender-${index}`,
+                To: "bot",
+                ChatType: "direct",
+                SessionKey: sessionKey,
+                Provider: "telegram",
+                Surface: "telegram",
+              },
+              cfg: { session: { store: storePath, idleMinutes: 999 } } as OpenClawConfig,
+              commandAuthorized: true,
+              signal: controller.signal,
+            }),
+        );
+      } finally {
+        admission.release();
+      }
+    };
+
+    const outcomes = await Promise.allSettled([runRollover(0), runRollover(1)]);
+    expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
+    expect(outcomes.filter((outcome) => outcome.status === "rejected")).toHaveLength(1);
+    expect(readSessionStoreForTest(storePath)[sessionKey]?.sessionId).not.toBe(existingSessionId);
+  });
+
+  it.each([
+    {
+      name: "reuses a fresh replacement without interrupting its work",
+      body: "continue",
+      expectedInterruption: false,
+    },
+    {
+      name: "reacquires a changed identity before an explicit reset",
+      body: "/new",
+      expectedInterruption: true,
+    },
+  ])("$name", async ({ body, expectedInterruption }) => {
+    const storePath = await createStorePath("openclaw-rollover-revalidation-");
+    const sessionKey = "agent:main:telegram:dm:rollover-revalidation";
+    const staleSessionId = "stale-session-before-revalidation";
+    const replacementSessionId = "fresh-replacement-before-revalidation";
+    const postDrainSessionId = "replacement-created-during-drain";
+    const finalGapSessionId = "replacement-created-before-destructive-write";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: staleSessionId,
+        updatedAt: Date.now() - 10 * 60_000,
+      },
+    });
+
+    let replacementInterrupted = false;
+    let replacementIdentityFenced = false;
+    let postDrainIdentityFenced = false;
+    let finalGapIdentityFenced = false;
+    let postDrainAdmission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+    let finalGapAdmission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+    let postDrainFinalization = Promise.resolve();
+    let finalGapRebind = Promise.resolve();
+    let releaseReplacementAdmission = () => {};
+    const replacementAdmission = await beginSessionWorkAdmission({
+      scope: storePath,
+      identities: [replacementSessionId],
+      assertAllowed: () => {},
+      onInterrupt: () => {
+        replacementInterrupted = true;
+        replacementIdentityFenced = isSessionLifecycleMutationActive(storePath, [
+          replacementSessionId,
+        ]);
+        if (!expectedInterruption) {
+          releaseReplacementAdmission();
+          return;
+        }
+        postDrainFinalization = runExclusiveSessionStoreWrite(storePath, async () => {
+          await writeSessionStoreFast(storePath, {
+            [sessionKey]: { sessionId: postDrainSessionId, updatedAt: Date.now() },
+          });
+        })
+          .then(async () => {
+            let releasePostDrainAdmission = () => {};
+            postDrainAdmission = await beginSessionWorkAdmission({
+              scope: storePath,
+              identities: [postDrainSessionId],
+              assertAllowed: () => {},
+              onInterrupt: () => {
+                postDrainIdentityFenced = isSessionLifecycleMutationActive(storePath, [
+                  postDrainSessionId,
+                ]);
+                releasePostDrainAdmission();
+                finalGapRebind = runExclusiveSessionStoreWrite(storePath, async () => {
+                  await writeSessionStoreFast(storePath, {
+                    [sessionKey]: { sessionId: finalGapSessionId, updatedAt: Date.now() },
+                  });
+                  let releaseFinalGapAdmission = () => {};
+                  finalGapAdmission = await beginSessionWorkAdmission({
+                    scope: storePath,
+                    identities: [finalGapSessionId],
+                    assertAllowed: () => {},
+                    onInterrupt: () => {
+                      finalGapIdentityFenced = isSessionLifecycleMutationActive(storePath, [
+                        finalGapSessionId,
+                      ]);
+                      releaseFinalGapAdmission();
+                    },
+                  });
+                  releaseFinalGapAdmission = finalGapAdmission.release;
+                });
+              },
+            });
+            releasePostDrainAdmission = postDrainAdmission.release;
+          })
+          .finally(releaseReplacementAdmission);
+      },
+    });
+    releaseReplacementAdmission = replacementAdmission.release;
+
+    let signalMutationStarted = () => {};
+    const mutationStarted = new Promise<void>((resolve) => {
+      signalMutationStarted = resolve;
+    });
+    let releaseMutation = () => {};
+    const mutationGate = new Promise<void>((resolve) => {
+      releaseMutation = resolve;
+    });
+    const blockingMutation = runExclusiveSessionLifecycleMutation({
+      scope: storePath,
+      identities: [sessionKey, staleSessionId],
+      run: async () => {
+        signalMutationStarted();
+        await mutationGate;
+      },
+    });
+    await mutationStarted;
+
+    let signalWriterStarted = () => {};
+    const writerStarted = new Promise<void>((resolve) => {
+      signalWriterStarted = resolve;
+    });
+    let releaseWriter = () => {};
+    const writerGate = new Promise<void>((resolve) => {
+      releaseWriter = resolve;
+    });
+    const blockingWriter = runExclusiveSessionStoreWrite(storePath, async () => {
+      signalWriterStarted();
+      await writerGate;
+    });
+    await writerStarted;
+
+    const initialization = initSessionState({
+      ctx: {
+        Body: body,
+        RawBody: body,
+        CommandBody: body,
+        From: "user-rollover-revalidation",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg: { session: { store: storePath, idleMinutes: 1 } } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+    const replaceSession = runExclusiveSessionStoreWrite(storePath, async () => {
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: { sessionId: replacementSessionId, updatedAt: Date.now() },
+      });
+    });
+
+    try {
+      releaseWriter();
+      await blockingWriter;
+      await replaceSession;
+      releaseMutation();
+      await blockingMutation;
+
+      const result = await initialization;
+      await postDrainFinalization;
+      await finalGapRebind;
+      expect(replacementInterrupted).toBe(expectedInterruption);
+      if (expectedInterruption) {
+        expect(replacementIdentityFenced).toBe(true);
+        expect(postDrainIdentityFenced).toBe(true);
+        expect(finalGapIdentityFenced).toBe(true);
+        expect(result.sessionId).not.toBe(finalGapSessionId);
+      } else {
+        expect(result.sessionId).toBe(replacementSessionId);
+      }
+    } finally {
+      releaseWriter();
+      releaseMutation();
+      replacementAdmission.release();
+      postDrainAdmission?.release();
+      finalGapAdmission?.release();
+      await Promise.allSettled([blockingWriter, replaceSession, blockingMutation, initialization]);
+      await postDrainFinalization.catch(() => {});
+      await finalGapRebind.catch(() => {});
+    }
+  });
+
   it("archives the old session transcript on daily/scheduled reset (stale session)", async () => {
     // Daily resets occur when the session becomes stale (not via /new or /reset command).
     // Previously, previousSessionEntry was only set when resetTriggered=true, leaving
@@ -4258,6 +4688,42 @@ describe("persistSessionUsageUpdate", () => {
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
     expect(stored[sessionKey].inputTokens).toBe(180_000);
     expect(stored[sessionKey].outputTokens).toBe(10_000);
+  });
+
+  it("keeps the prior total stale when last-call context is unavailable", async () => {
+    const storePath = await createStorePath("openclaw-usage-unavailable-context-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        totalTokens: 148_874,
+        totalTokensFresh: true,
+      },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      usage: { input: 12, output: 15_104, cacheRead: 819_661, cacheWrite: 93_130 },
+      lastCallUsage: {
+        input: 12,
+        output: 15_104,
+        cacheRead: 819_661,
+        cacheWrite: 93_130,
+        contextUsage: { state: "unavailable" },
+        total: 927_907,
+      },
+      contextTokensUsed: 200_000,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].totalTokens).toBe(148_874);
+    expect(stored[sessionKey].totalTokensFresh).toBe(false);
+    expect(stored[sessionKey].inputTokens).toBe(12);
+    expect(stored[sessionKey].cacheRead).toBe(819_661);
   });
 
   it("marks a fresh zero stale when a completed run has no context snapshot", async () => {

@@ -930,7 +930,10 @@ function resolveExecApprovalAlertBody(): string {
   return EXEC_APPROVAL_GENERIC_ALERT_BODY;
 }
 
-function createExecApprovalAlertPayload(params: { nodeId: string; approvalId: string }): object {
+function createExecApprovalAlertPayload(params: {
+  approvalId: string;
+  gatewayDeviceId: string;
+}): object {
   return {
     aps: {
       alert: {
@@ -944,12 +947,16 @@ function createExecApprovalAlertPayload(params: { nodeId: string; approvalId: st
     openclaw: {
       kind: "exec.approval.requested",
       approvalId: params.approvalId,
+      gatewayDeviceId: params.gatewayDeviceId,
       ts: Date.now(),
     },
   };
 }
 
-function createExecApprovalResolvedPayload(params: { nodeId: string; approvalId: string }): object {
+function createExecApprovalResolvedPayload(params: {
+  approvalId: string;
+  gatewayDeviceId: string;
+}): object {
   return {
     aps: {
       "content-available": 1,
@@ -957,6 +964,7 @@ function createExecApprovalResolvedPayload(params: { nodeId: string; approvalId:
     openclaw: {
       kind: "exec.approval.resolved",
       approvalId: params.approvalId,
+      gatewayDeviceId: params.gatewayDeviceId,
       ts: Date.now(),
     },
   };
@@ -1012,6 +1020,7 @@ type RelayApnsBackgroundWakeParams = ApnsBackgroundWakeCommonParams & {
 type ApnsExecApprovalAlertCommonParams = {
   nodeId: string;
   approvalId: string;
+  gatewayDeviceId: string;
   timeoutMs?: number;
 };
 
@@ -1035,6 +1044,7 @@ type RelayApnsExecApprovalAlertParams = ApnsExecApprovalAlertCommonParams & {
 type ApnsExecApprovalResolvedCommonParams = {
   nodeId: string;
   approvalId: string;
+  gatewayDeviceId: string;
   timeoutMs?: number;
 };
 
@@ -1127,8 +1137,8 @@ export async function sendApnsExecApprovalAlert(
   params: DirectApnsExecApprovalAlertParams | RelayApnsExecApprovalAlertParams,
 ): Promise<ApnsPushAlertResult> {
   const payload = createExecApprovalAlertPayload({
-    nodeId: params.nodeId,
     approvalId: params.approvalId,
+    gatewayDeviceId: params.gatewayDeviceId,
   });
 
   if (params.registration.transport === "relay") {
@@ -1160,8 +1170,8 @@ export async function sendApnsExecApprovalResolvedWake(
   params: DirectApnsExecApprovalResolvedParams | RelayApnsExecApprovalResolvedParams,
 ): Promise<ApnsPushWakeResult> {
   const payload = createExecApprovalResolvedPayload({
-    nodeId: params.nodeId,
     approvalId: params.approvalId,
+    gatewayDeviceId: params.gatewayDeviceId,
   });
 
   if (params.registration.transport === "relay") {

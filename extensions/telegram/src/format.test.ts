@@ -5,8 +5,8 @@ import {
   markdownToTelegramHtml,
   markdownToTelegramRichHtml,
   materializeTelegramRichHtmlLineBreaks,
+  normalizeTelegramOutboundRichHtml,
   renderTelegramHtmlText,
-  sanitizeTelegramRichHtml,
   splitTelegramHtmlChunks,
   telegramHtmlToPlainTextFallback,
 } from "./format.js";
@@ -199,11 +199,51 @@ describe("markdownToTelegramHtml", () => {
     );
   });
 
-  it("preserves supported raw rich HTML tables during sanitization", () => {
+  it("normalizes supported raw rich HTML tables during sanitization", () => {
     const input =
-      '<table bordered><caption>Scores</caption><tbody><tr><td>A</td><td align="right">1</td></tr></tbody></table>';
+      '<table class="model"><tr data-row="head"><td>Rank</td><td>Model</td><td>Score</td></tr><tr><td>4</td><td>Claude Opus</td><td>78.16%</td></tr></table>';
 
-    expect(sanitizeTelegramRichHtml(input)).toBe(input);
+    expect(normalizeTelegramOutboundRichHtml(input).html).toBe(
+      "<table bordered striped><thead><tr><th>Rank</th><th>Model</th><th>Score</th></tr></thead><tbody><tr><td>4</td><td>Claude Opus</td><td>78.16%</td></tr></tbody></table>",
+    );
+  });
+
+  it("preserves raw rich HTML table captions and alignment during normalization", () => {
+    const input =
+      '<table bordered><caption>Scores</caption><tbody><tr><td align="right">Rank</td><td>Model</td></tr><tr><td align="right">4</td><td>Claude Opus</td></tr></tbody></table>';
+
+    expect(normalizeTelegramOutboundRichHtml(input).html).toBe(
+      '<table bordered striped><caption>Scores</caption><thead><tr><th align="right">Rank</th><th>Model</th></tr></thead><tbody><tr><td align="right">4</td><td>Claude Opus</td></tr></tbody></table>',
+    );
+  });
+
+  it("preserves raw rich HTML table colspans during normalization", () => {
+    const input =
+      '<table><tr><th>Name</th><th colspan="2" align="right">Total</th></tr><tr><td>A</td><td>1</td><td>2</td></tr></table>';
+
+    expect(normalizeTelegramOutboundRichHtml(input).html).toBe(
+      '<table bordered striped><thead><tr><th>Name</th><th align="right" colspan="2">Total</th></tr></thead><tbody><tr><td>A</td><td>1</td><td>2</td></tr></tbody></table>',
+    );
+  });
+
+  it("keeps canonical rich tables idempotent during outbound normalization", () => {
+    const html = markdownToTelegramRichHtml(
+      "| Feature | Link |\n| --- | --- |\n| **API** | [docs](https://example.com) |",
+    );
+
+    expect(normalizeTelegramOutboundRichHtml(html).html).toBe(html.trim());
+  });
+
+  it("materializes literal rich HTML newline escapes outside code", () => {
+    expect(normalizeTelegramOutboundRichHtml("Alpha\\tBeta\\nGamma").html).toBe(
+      "Alpha\tBeta<br>Gamma",
+    );
+  });
+
+  it("keeps literal rich HTML newline escapes inside code and pre", () => {
+    const html = "<code>Alpha\\nBeta\\tGamma</code><pre>One\\nTwo\\tThree</pre>";
+
+    expect(normalizeTelegramOutboundRichHtml(html).html).toBe(html);
   });
 
   it("isolates rich media tags as blocks", () => {
@@ -268,19 +308,28 @@ describe("markdownToTelegramHtml", () => {
   it("falls back over-wide raw rich HTML tables", () => {
     const cells = Array.from({ length: 21 }, (_, index) => `<td>C${index + 1}</td>`).join("");
     const html = `<table><caption>Wide</caption><tbody><tr>${cells}</tr></tbody></table>`;
-    const sanitized = sanitizeTelegramRichHtml(html);
+    const sanitized = normalizeTelegramOutboundRichHtml(html);
 
-    expect(sanitized).toContain("<pre><code>Wide");
-    expect(sanitized).toContain("C21");
-    expect(sanitized).not.toContain("<table>");
+    expect(sanitized.html).toContain("<pre><code>Wide");
+    expect(sanitized.html).toContain("C21");
+    expect(sanitized.html).not.toContain("<table>");
+    expect(sanitized.degradationReasons).toEqual(["table-ascii"]);
+  });
+
+  it("falls back malformed raw rich HTML tables", () => {
+    const sanitized = normalizeTelegramOutboundRichHtml("<table><caption>Broken</caption></table>");
+
+    expect(sanitized.html).toContain("<pre><code>Broken</code></pre>");
+    expect(sanitized.degradationReasons).toEqual(["table-ascii"]);
   });
 
   it("clamps raw rich HTML table colspans before fallback", () => {
     const html = '<table><tbody><tr><td colspan="1000000000">x</td></tr></tbody></table>';
-    const sanitized = sanitizeTelegramRichHtml(html);
+    const sanitized = normalizeTelegramOutboundRichHtml(html);
 
-    expect(sanitized).toContain("<pre><code>");
-    expect(sanitized.length).toBeLessThan(300);
+    expect(sanitized.html).toContain("<pre><code>");
+    expect(sanitized.html.length).toBeLessThan(300);
+    expect(sanitized.degradationReasons).toEqual(["table-ascii"]);
   });
 
   it("renders block-mode tables as code in legacy Telegram HTML", () => {

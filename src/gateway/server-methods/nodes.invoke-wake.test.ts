@@ -46,6 +46,7 @@ vi.mock("../../config/io.js", () => ({
 }));
 
 vi.mock("../node-command-policy.js", () => ({
+  DEFAULT_DANGEROUS_NODE_COMMANDS: ["sms.send", "sms.search"],
   resolveNodeCommandAllowlist: mocks.resolveNodeCommandAllowlist,
   isNodeCommandAllowed: mocks.isNodeCommandAllowed,
   isForegroundRestrictedPluginNodeCommand: mocks.isForegroundRestrictedPluginNodeCommand,
@@ -605,6 +606,69 @@ describe("node.invoke APNs wake path", () => {
     const call = firstRespondCall(respond);
     expect(call[0]).toBe(false);
     expect(call[2]?.message).toContain("missing scope: operator.admin");
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+  });
+
+  it("explains the explicit opt-in required for dangerous commands", async () => {
+    mocks.isNodeCommandAllowed.mockReturnValue({
+      ok: false,
+      reason: "command not allowlisted",
+    });
+    const nodeRegistry = {
+      get: vi.fn(() => ({
+        nodeId: "android-sms-node",
+        commands: ["sms.search"],
+        platform: "android",
+      })),
+      invoke: vi.fn(),
+    };
+
+    const respond = await invokeNode({
+      nodeRegistry,
+      requestParams: {
+        nodeId: "android-sms-node",
+        command: "sms.search",
+      },
+    });
+
+    const call = firstRespondCall(respond);
+    expect(call[0]).toBe(false);
+    expect(call[2]?.message).toBe(
+      'node command not allowed: "sms.search" requires explicit gateway.nodes.allowCommands opt-in',
+    );
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+  });
+
+  it("distinguishes explicit command denials from missing opt-ins", async () => {
+    mocks.getRuntimeConfig.mockReturnValue({
+      gateway: { nodes: { denyCommands: ["sms.search"] } },
+    });
+    mocks.isNodeCommandAllowed.mockReturnValue({
+      ok: false,
+      reason: "command not allowlisted",
+    });
+    const nodeRegistry = {
+      get: vi.fn(() => ({
+        nodeId: "android-sms-node",
+        commands: ["sms.search"],
+        platform: "android",
+      })),
+      invoke: vi.fn(),
+    };
+
+    const respond = await invokeNode({
+      nodeRegistry,
+      requestParams: {
+        nodeId: "android-sms-node",
+        command: "sms.search",
+      },
+    });
+
+    const call = firstRespondCall(respond);
+    expect(call[0]).toBe(false);
+    expect(call[2]?.message).toBe(
+      'node command not allowed: "sms.search" is blocked by gateway.nodes.denyCommands',
+    );
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
   });
 

@@ -10,8 +10,15 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexThreadStartParams } from "./protocol.js";
+import { testCodexAppServerBindingStore } from "./session-binding.test-helpers.js";
 import { createCodexTestModel } from "./test-support.js";
-import { startOrResumeThread } from "./thread-lifecycle.js";
+import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle.js";
+
+function startOrResumeThread(
+  params: Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore">,
+) {
+  return startOrResumeThreadImpl({ ...params, bindingStore: testCodexAppServerBindingStore });
+}
 
 let tempDir: string;
 

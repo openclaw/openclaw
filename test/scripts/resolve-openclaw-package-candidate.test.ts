@@ -8,7 +8,6 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import {
-  ARTIFACT_TARBALL_SCAN_MAX_ENTRIES,
   assertExpectedSha256ForTest,
   cleanupPackageSourceWorktreeForTest,
   cleanPackedOpenClawTarballsForTest,
@@ -114,6 +113,7 @@ describe("resolve-openclaw-package-candidate", () => {
     for (const spec of [
       "openclaw@beta",
       "openclaw@alpha",
+      "openclaw@extended-stable",
       "openclaw@latest",
       "openclaw@2026.4.27",
       "openclaw@2026.4.27-1",
@@ -219,7 +219,14 @@ describe("resolve-openclaw-package-candidate", () => {
       ["--package-sha256", [...requiredArgs, "--package-sha256", "", "--package-sha256", "abc123"]],
       [
         "--source",
-        ["--source", "npm", "--source", "artifact", "--output-dir", ".artifacts/docker-e2e-package"],
+        [
+          "--source",
+          "npm",
+          "--source",
+          "artifact",
+          "--output-dir",
+          ".artifacts/docker-e2e-package",
+        ],
       ],
       [
         "--trusted-source-id",
@@ -227,7 +234,13 @@ describe("resolve-openclaw-package-candidate", () => {
       ],
       [
         "--trusted-source-policy",
-        [...requiredArgs, "--trusted-source-policy", "one.json", "--trusted-source-policy", "two.json"],
+        [
+          ...requiredArgs,
+          "--trusted-source-policy",
+          "one.json",
+          "--trusted-source-policy",
+          "two.json",
+        ],
       ],
     ] satisfies Array<[string, string[]]>;
 
@@ -551,7 +564,7 @@ describe("resolve-openclaw-package-candidate", () => {
       "const fs = require('node:fs');",
       "process.on('SIGTERM', () => {",
       "  fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_CLEANUP, 'clean');",
-      "  setTimeout(() => process.exit(0), 75);",
+      "  setTimeout(() => process.exit(0), 25);",
       "});",
       "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_READY, 'ready');",
       "setInterval(() => {}, 1000);",
@@ -581,16 +594,16 @@ describe("resolve-openclaw-package-candidate", () => {
           OPENCLAW_TEST_CHILD_PID: childPidPath,
           OPENCLAW_TEST_CHILD_READY: readyPath,
         },
-        killAfterMs: 1000,
-        timeoutMs: 1000,
+        killAfterMs: 250,
+        timeoutMs: 250,
       }),
-    ).rejects.toThrow(/timed out after 1000ms/u);
+    ).rejects.toThrow(/timed out after 250ms/u);
 
     await waitForFile(readyPath, 2_000);
     await timeoutAssertion;
 
     expect(readFileSync(cleanupPath, "utf8")).toBe("clean");
-    expect(Date.now() - startedAt).toBeLessThan(1_700);
+    expect(Date.now() - startedAt).toBeLessThan(900);
   });
 
   it("forwards external termination to package runner process groups", async () => {
@@ -616,8 +629,12 @@ describe("resolve-openclaw-package-candidate", () => {
         "fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID, String(child.pid));",
         "setInterval(() => {}, 1000);",
       ].join("");
+      // Accelerate only the module-level 5s forwarded-signal failsafe in this disposable runner.
       const runnerScript = [
-        `import { runCommandForTest } from ${JSON.stringify(scriptUrl)};`,
+        "const realSetTimeout = globalThis.setTimeout;",
+        "globalThis.setTimeout = (callback, delay, ...args) =>",
+        "  realSetTimeout(callback, delay === 5000 ? 25 : delay, ...args);",
+        `const { runCommandForTest } = await import(${JSON.stringify(scriptUrl)});`,
         `await runCommandForTest(process.execPath, ['-e', ${JSON.stringify(parentScript)}], { timeoutMs: 60000 });`,
       ].join("\n");
       const runner = spawn(process.execPath, ["--input-type=module", "-e", runnerScript], {
@@ -1335,13 +1352,14 @@ describe("resolve-openclaw-package-candidate", () => {
   it("rejects source artifact scans that exceed the filesystem entry limit", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-artifact-scan-"));
     tempDirs.push(dir);
+    const maxEntries = 3;
 
-    for (let index = 0; index <= ARTIFACT_TARBALL_SCAN_MAX_ENTRIES; index += 1) {
+    for (let index = 0; index <= maxEntries; index += 1) {
       await writeFile(path.join(dir, `not-a-package-${index}.txt`), "x");
     }
 
-    await expect(findSingleTarballForTest(dir)).rejects.toThrow(
-      `source=artifact scan exceeded ${ARTIFACT_TARBALL_SCAN_MAX_ENTRIES} filesystem entries`,
+    await expect(findSingleTarballForTest(dir, maxEntries)).rejects.toThrow(
+      `source=artifact scan exceeded ${maxEntries} filesystem entries`,
     );
   });
 

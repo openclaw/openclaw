@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
@@ -80,5 +83,110 @@ describe("resolveConversationCapabilityProfile", () => {
     expect(profile.policy.trustedGroup).toEqual({ groupId: "team", dropped: false });
     expect(profile.policy.groupPolicy).toEqual({ allow: ["read", "exec"] });
     expect(profile.policy.explicitToolAllowlist).toEqual(["read", "exec"]);
+  });
+
+  it("keeps built-in profile grants out of explicit overrides", () => {
+    const profile = resolveConversationCapabilityProfile({
+      config: {
+        tools: {
+          profile: "coding",
+          allow: ["pdf"],
+        },
+      },
+      modelProvider: "ollama",
+      modelId: "qwen3.5:9b",
+    });
+
+    expect(profile.policy.explicitToolAllowlist).toContain("image_generate");
+    expect(profile.policy.explicitToolOverrideAllowlist).toEqual(["pdf"]);
+  });
+
+  it("keeps inherited subagent grants out of explicit overrides", () => {
+    const storePath = path.join(
+      os.tmpdir(),
+      `openclaw-capability-profile-inherited-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+    );
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:main:subagent:limited": {
+          sessionId: "limited-session",
+          updatedAt: Date.now(),
+          spawnDepth: 1,
+          subagentRole: "orchestrator",
+          subagentControlScope: "children",
+          inheritedToolAllow: ["image_generate"],
+        },
+      }),
+    );
+
+    try {
+      const profile = resolveConversationCapabilityProfile({
+        config: { session: { store: storePath } },
+        sessionKey: "agent:main:subagent:limited",
+        agentId: "main",
+        modelProvider: "ollama",
+        modelId: "qwen3.5:9b",
+      });
+
+      expect(profile.policy.explicitToolAllowlist).toContain("image_generate");
+      expect(profile.policy.explicitToolOverrideAllowlist).not.toContain("image_generate");
+    } finally {
+      fs.rmSync(storePath, { force: true });
+    }
+  });
+
+  it("does not classify the conversation as shared from a dropped caller group id", () => {
+    // Non-group session key cannot vouch for the caller-supplied group facts:
+    // the trust check drops them, so scope must stay unknown instead of
+    // reflecting untrusted input that the profile itself publishes as null.
+    const profile = resolveConversationCapabilityProfile({
+      sessionKey: "agent:main:discord:dm:guest",
+      agentId: "main",
+      messageProvider: "discord",
+      groupId: "team",
+      groupChannel: "#general",
+      groupSpace: "guild-1",
+      senderId: "guest",
+    });
+
+    expect(profile.policy.trustedGroup).toEqual({ groupId: null, dropped: true });
+    expect(profile.conversation.groupId).toBeNull();
+    expect(profile.conversation.groupChannel).toBeNull();
+    expect(profile.conversation.groupSpace).toBeNull();
+    expect(profile.conversation.scope).toBe("unknown");
+  });
+
+  it("classifies group-scoped session keys as shared without a live chat type", () => {
+    const profile = resolveConversationCapabilityProfile({
+      sessionKey: "agent:main:whatsapp:group:team",
+      agentId: "main",
+      messageProvider: "whatsapp",
+    });
+
+    expect(profile.conversation.scope).toBe("shared");
+  });
+
+  it("classifies shared scope from the live run session key behind a sandbox policy key", () => {
+    const profile = resolveConversationCapabilityProfile({
+      sessionKey: "agent:main:main",
+      runSessionKey: "agent:main:telegram:group:ops",
+      agentId: "main",
+      messageProvider: "telegram",
+    });
+
+    expect(profile.conversation.scope).toBe("shared");
+  });
+
+  it("keeps trusted caller group facts shared when the session key vouches for them", () => {
+    const profile = resolveConversationCapabilityProfile({
+      sessionKey: "agent:main:whatsapp:group:team",
+      agentId: "main",
+      messageProvider: "whatsapp",
+      groupId: "team",
+    });
+
+    expect(profile.policy.trustedGroup).toEqual({ groupId: "team", dropped: false });
+    expect(profile.conversation.scope).toBe("shared");
   });
 });

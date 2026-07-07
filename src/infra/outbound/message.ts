@@ -2,11 +2,17 @@
 // requirements, payload plans, gateway fallback, and optional mirroring.
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { deriveDurableFinalDeliveryRequirements } from "../../channels/message/capabilities.js";
-import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
+import {
+  sendDurableMessageBatch,
+  serializeDurableMessagePayloadOutcomes,
+  type SerializedDurableMessagePayloadOutcome,
+} from "../../channels/message/runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
 import { normalizePollInput } from "../../polls.js";
+import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import { formatErrorMessage } from "../errors.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { resolveMessageChannelSelection } from "./channel-selection.js";
 import {
@@ -29,23 +35,17 @@ import {
 import { buildOutboundSessionContext } from "./session-context.js";
 import { resolveOutboundTarget } from "./targets.js";
 
-let messageConfigRuntimePromise: Promise<typeof import("./message.config.runtime.js")> | null =
-  null;
-let messageGatewayRuntimePromise: Promise<typeof import("./message.gateway.runtime.js")> | null =
-  null;
 const SEND_BUFFER_MEDIA_URL = "buffer://message-send/attachment";
 
-function loadMessageConfigRuntime() {
-  // Keep config/runtime loading lazy so importing message helpers does not
-  // bootstrap plugin registries or gateway clients.
-  messageConfigRuntimePromise ??= import("./message.config.runtime.js");
-  return messageConfigRuntimePromise;
-}
+const loadMessageConfigRuntime = createLazyRuntimeModule(
+  () => import("./message.config.runtime.js"),
+);
 
-function loadMessageGatewayRuntime() {
-  messageGatewayRuntimePromise ??= import("./message.gateway.runtime.js");
-  return messageGatewayRuntimePromise;
-}
+// Keep config/runtime loading lazy so importing message helpers does not
+// bootstrap plugin registries or gateway clients.
+const loadMessageGatewayRuntime = createLazyRuntimeModule(
+  () => import("./message.gateway.runtime.js"),
+);
 
 export type MessageGatewayOptions = OutboundMessageGatewayOptionsInput;
 
@@ -100,7 +100,11 @@ export type MessageSendResult = {
   mediaUrl: string | null;
   mediaUrls?: string[];
   result?: OutboundDeliveryResult | { messageId: string };
-  deliveryStatus?: "suppressed";
+  deliveryStatus?: "sent" | "suppressed" | "partial_failed" | "failed";
+  /** Formatted send error when deliveryStatus is "failed" or "partial_failed". */
+  error?: string;
+  sentBeforeError?: boolean;
+  payloadOutcomes?: SerializedDurableMessagePayloadOutcome[];
   dryRun?: boolean;
 };
 
@@ -364,7 +368,10 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       requesterSenderUsername: params.requesterSenderUsername,
       requesterSenderE164: params.requesterSenderE164,
     });
-    if (params.queuePolicy === "required") {
+    // Public queuePolicy:"required" is the exact-delivery contract preflighted below.
+    // Lower-level queue-required callers must leave this internal opt-in unset.
+    const requireUnknownSendReconciliation = params.queuePolicy === "required";
+    if (requireUnknownSendReconciliation) {
       await assertRequiredMessageSendDurability({
         cfg,
         channel: outboundChannel,
@@ -387,6 +394,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       forceDocument: params.forceDocument,
       deps: params.deps,
       bestEffort: params.bestEffort,
+      ...(requireUnknownSendReconciliation ? { requireUnknownSendReconciliation: true } : {}),
       durability:
         params.bestEffort || params.queuePolicy === "best_effort" ? "best_effort" : "required",
       signal: params.abortSignal,
@@ -406,6 +414,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       throw send.error;
     }
     const results = send.status === "sent" || send.status === "partial_failed" ? send.results : [];
+    const payloadOutcomes = serializeDurableMessagePayloadOutcomes(send.payloadOutcomes);
 
     return {
       channel,
@@ -414,7 +423,12 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       mediaUrl: primaryMediaUrl,
       mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
       result: results.at(-1),
-      ...(send.status === "suppressed" ? { deliveryStatus: "suppressed" as const } : {}),
+      deliveryStatus: send.status,
+      ...(send.status === "failed" || send.status === "partial_failed"
+        ? { error: formatErrorMessage(send.error) }
+        : {}),
+      ...(send.status === "partial_failed" ? { sentBeforeError: true as const } : {}),
+      ...(payloadOutcomes ? { payloadOutcomes } : {}),
     };
   }
 

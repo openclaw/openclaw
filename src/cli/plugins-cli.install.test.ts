@@ -1984,6 +1984,7 @@ describe("plugins cli install", () => {
     installHooksFromNpmSpec.mockResolvedValue({
       ok: false,
       error: "package.json missing openclaw.hooks",
+      code: "missing_openclaw_hooks",
     });
 
     await expect(runPluginsCommand(["plugins", "install", "npm:demo"])).rejects.toThrow(
@@ -1992,6 +1993,28 @@ describe("plugins cli install", () => {
 
     expect(installPluginFromClawHub).not.toHaveBeenCalled();
     expect(runtimeErrors.at(-1)).toContain("npm install failed");
+    expect(runtimeErrors.at(-1)).not.toContain("Also not a valid hook pack");
+  });
+
+  it("keeps actionable hook-pack fallback details", async () => {
+    loadConfig.mockReturnValue({} as OpenClawConfig);
+    installPluginFromNpmSpec.mockResolvedValue({
+      ok: false,
+      error: "npm install failed",
+    });
+    installHooksFromNpmSpec.mockResolvedValue({
+      ok: false,
+      error: "HOOK.md missing in /tmp/demo-hook",
+    });
+
+    await expect(runPluginsCommand(["plugins", "install", "npm:demo-hook"])).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(runtimeErrors.at(-1)).toContain("npm install failed");
+    expect(runtimeErrors.at(-1)).toContain(
+      "Also not a valid hook pack: HOOK.md missing in /tmp/demo-hook",
+    );
   });
 
   it("adds a Git PATH hint when npm plugin dependency install cannot spawn git", async () => {
@@ -2008,6 +2031,7 @@ describe("plugins cli install", () => {
     installHooksFromNpmSpec.mockResolvedValue({
       ok: false,
       error: "package.json missing openclaw.hooks",
+      code: "missing_openclaw_hooks",
     });
 
     await expect(
@@ -2019,7 +2043,7 @@ describe("plugins cli install", () => {
       "one of this plugin's npm dependencies is fetched from a git URL",
     );
     expect(runtimeErrors.at(-1)).toContain("winget install --id Git.Git -e");
-    expect(runtimeErrors.at(-1)).toContain("Also not a valid hook pack");
+    expect(runtimeErrors.at(-1)).not.toContain("Also not a valid hook pack");
   });
 
   it("does not resolve npm: prefixed bundled plugin ids through bundled installs", async () => {
@@ -2032,6 +2056,7 @@ describe("plugins cli install", () => {
     installHooksFromNpmSpec.mockResolvedValue({
       ok: false,
       error: "package.json missing openclaw.hooks",
+      code: "missing_openclaw_hooks",
     });
 
     await expect(runPluginsCommand(["plugins", "install", "npm:memory-lancedb"])).rejects.toThrow(
@@ -2042,6 +2067,7 @@ describe("plugins cli install", () => {
     expect(installPluginFromClawHub).not.toHaveBeenCalled();
     expect(writeConfigFile).not.toHaveBeenCalled();
     expect(runtimeErrors.at(-1)).toContain("Package not found on npm: memory-lancedb.");
+    expect(runtimeErrors.at(-1)).not.toContain("Also not a valid hook pack");
   });
 
   it("rejects empty npm: prefix installs before resolver lookup", async () => {
