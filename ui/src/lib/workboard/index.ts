@@ -64,7 +64,7 @@ export const WORKBOARD_PROOF_STATUSES = ["passed", "failed", "skipped", "unknown
 export const WORKBOARD_TEMPLATE_IDS = ["bugfix", "docs", "release", "pr_review", "plugin"] as const;
 export const WORKBOARD_DIAGNOSTIC_SEVERITIES = ["warning", "error", "critical"] as const;
 
-export const WORKBOARD_ENGINE_MODELS = {
+const WORKBOARD_ENGINE_MODELS = {
   codex: "openai/gpt-5.5",
   claude: "anthropic/claude-sonnet-4-6",
 } as const;
