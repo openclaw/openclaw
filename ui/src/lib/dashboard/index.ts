@@ -701,13 +701,13 @@ export async function resolveBinding(
       const value = await client.request(binding.method, binding.params ?? {});
       return { value: applyPointer(value, binding.pointer) };
     }
-    // file
-    const payload = await client.request("dashboard.data.read", {
-      path: binding.path,
-      ...(binding.pointer ? { pointer: binding.pointer } : {}),
-    });
-    const document = isRecord(payload) && "data" in payload ? payload.data : payload;
-    return { value: applyPointer(document, binding.pointer) };
+    // file: `dashboard.data.read` accepts ONLY a `binding` param (its readParams
+    // whitelist rejects anything else), and it resolves the file AND applies the
+    // JSON pointer server-side, returning the final value under `data`. So we send
+    // the whole binding and must NOT re-apply the pointer here (that would
+    // double-resolve it).
+    const payload = await client.request("dashboard.data.read", { binding });
+    return { value: isRecord(payload) && "data" in payload ? payload.data : payload };
   } catch (err) {
     return { error: formatError(err) };
   }

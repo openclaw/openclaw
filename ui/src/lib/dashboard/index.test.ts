@@ -285,8 +285,15 @@ describe("binding resolution", () => {
     expect(result).toEqual({ value: 1000 });
   });
 
-  it("resolves file bindings through dashboard.data.read", async () => {
-    const request = vi.fn(async () => ({ data: { q3: { total: 7 } } }));
+  it("resolves file bindings via dashboard.data.read matching the real gateway contract", async () => {
+    // Contract with the gateway (extensions/dashboard gateway.ts + data-read.ts):
+    //   - dashboard.data.read's readParams whitelist accepts ONLY `binding` and
+    //     rejects any other top-level key, so the client MUST send the whole binding.
+    //   - the server resolves the file AND applies the JSON pointer, returning the
+    //     final value under `data`; the client MUST NOT re-apply the pointer.
+    // This mirrors the server's real response shape (already-pointed `data`), so a
+    // regression to the old `{ path, pointer }` + client-side re-apply would fail here.
+    const request = vi.fn(async () => ({ data: 7 }));
     const client = mockClient({ request: request as never });
     const result = await resolveBinding(client, {
       source: "file",
@@ -294,8 +301,7 @@ describe("binding resolution", () => {
       pointer: "/q3/total",
     });
     expect(request).toHaveBeenCalledWith("dashboard.data.read", {
-      path: "q3.json",
-      pointer: "/q3/total",
+      binding: { source: "file", path: "q3.json", pointer: "/q3/total" },
     });
     expect(result).toEqual({ value: 7 });
   });
