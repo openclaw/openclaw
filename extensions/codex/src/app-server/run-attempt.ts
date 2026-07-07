@@ -748,6 +748,13 @@ export async function runCodexAppServerAttempt(
             config: params.config,
           }).modelProvider,
           signal: runAbortController.signal,
+      onPreToolUseFailure: (failure) => {
+        const projector = projectorRef.current;
+        if (projector) {
+          projector.recordNativeToolPreToolUseFailure(failure);
+        }
+      },
+
         })
       : "unsupported";
   preDynamicStartupStages.mark("provider-capabilities");
@@ -1481,6 +1488,7 @@ export async function runCodexAppServerAttempt(
     timeoutMs: params.timeoutMs,
     timeoutFloorMs: options.startupTimeoutFloorMs,
   });
+  const projectorRef: { current?: CodexAppServerEventProjector } = {};
   const buildNativeHookRelayFinalConfigPatch = (
     decision: { action: "resume"; binding: CodexAppServerThreadBinding } | { action: "start" },
   ) => {
@@ -1697,7 +1705,7 @@ export async function runCodexAppServerAttempt(
   let terminalDynamicToolReleaseCheckScheduled = false;
   let currentTurnHadNonTerminalDynamicToolResult = false;
   const turnIdRef: { current?: string } = {};
-  const projectorRef: { current?: CodexAppServerEventProjector } = {};
+
   const userInputBridgeRef: {
     current?: ReturnType<typeof createCodexUserInputBridge>;
   } = {};
