@@ -1,5 +1,6 @@
 // Qqbot tests cover api-client plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { createStreamingResponse } from "../../../../test-support/streaming-error-response.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -119,5 +120,49 @@ describe("ApiClient", () => {
     expect(streamed.wasCanceled()).toBe(true);
     expect(textSpy).not.toHaveBeenCalled();
     expect(release).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Pin the same UTF-16 boundary behavior that the production error-message
+// sites in the api surface (api-client.ts, media-chunked.ts, retry.ts)
+// rely on.
+describe("api UTF-16-safe truncation helper", () => {
+  const hasLoneSurrogate = (value: string): boolean => {
+    for (let i = 0; i < value.length; i++) {
+      const code = value.charCodeAt(i);
+      if (code >= 0xd800 && code <= 0xdbff) {
+        const next = value.charCodeAt(i + 1);
+        if (!(next >= 0xdc00 && next <= 0xdfff)) {
+          return true;
+        }
+        i++;
+      } else if (code >= 0xdc00 && code <= 0xdfff) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  it("truncates API error rawBody on UTF-16 boundary without splitting emoji", () => {
+    // Mirrors the call shape at api-client.ts:218
+    //   `API Error [${path}] HTTP ${res.status}: ${truncateUtf16Safe(rawBody, 200)}`,
+    const rawBody = "测试API错误响应体🎉🎉剩余内容超过200字符限制被截断的部分JSON";
+    const truncated = truncateUtf16Safe(rawBody, 200);
+    expect(truncated.length).toBeLessThanOrEqual(200);
+    expect(hasLoneSurrogate(truncated)).toBe(false);
+  });
+
+  it("truncates COS PUT body preview on UTF-16 boundary", () => {
+    // Mirrors the call shape at media-chunked.ts:583
+    //   `COS PUT failed: ${response.status} ${response.statusText} - ${truncateUtf16Safe(body, 120)}`,
+    const body = "COS返回的错误信息🎉🎉包含emoji的响应体剩余超过120字符限制";
+    const truncated = truncateUtf16Safe(body, 120);
+    expect(truncated.length).toBeLessThanOrEqual(120);
+    expect(hasLoneSurrogate(truncated)).toBe(false);
+  });
+
+  it("passes plain ASCII through unchanged (negative control)", () => {
+    const ascii = '{"error":"invalid_request","message":"missing field"}';
+    expect(truncateUtf16Safe(ascii, 200)).toBe(ascii);
   });
 });
