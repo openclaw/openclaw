@@ -369,13 +369,32 @@ public final class OpenClawChatViewModel {
         Task { await self.performAbort() }
     }
 
-    public func refreshSessions(limit: Int? = nil) {
-        let context = self.currentSessionSnapshot()
-        Task { await self.fetchSessions(limit: limit, sessionSnapshot: context) }
-    }
-
-    public func startNewSession(worktree: Bool = false) async {
-        await self.performStartNewSession(worktree: worktree)
+    public func deleteSession(_ sessionKey: String) {
+        Task {
+            do {
+                try await self.transport.deleteSession(key: sessionKey)
+            } catch {
+                self.errorText = error.localizedDescription
+                return
+            }
+            self.sessions.removeAll { $0.key == sessionKey }
+            if self.matchesCurrentSessionKey(incoming: sessionKey, current: self.sessionKey) {
+                // The active transcript just disappeared server-side; fall
+                // back to the main session instead of a dead key.
+                let fallback = self.resolvedMainSessionKey
+                if fallback != self.sessionKey {
+                    self.applySessionSwitch(to: fallback, intent: .userInitiated)
+                } else {
+                    // Deleting the active main session: the key stays the
+                    // address, so clear local state and re-bootstrap in place.
+                    self.advanceSessionGeneration()
+                    self.clearSessionOwnedState()
+                    self.errorText = nil
+                    self.startBootstrap()
+                }
+            }
+            await self.fetchSessions(limit: nil, sessionSnapshot: self.currentSessionSnapshot())
+        }
     }
 
     public func switchSession(to sessionKey: String) {
@@ -1511,7 +1530,7 @@ public final class OpenClawChatViewModel {
         }
     }
 
-    private func fetchSessions(limit: Int?, sessionSnapshot: SessionSnapshot? = nil) async {
+    func fetchSessions(limit: Int?, sessionSnapshot: SessionSnapshot? = nil) async {
         do {
             let res = try await transport.listSessions(limit: limit, search: nil, archived: false)
             if let sessionSnapshot, !self.isCurrentSession(sessionSnapshot) { return }
@@ -1711,7 +1730,7 @@ public final class OpenClawChatViewModel {
         self.applySessionSwitch(to: sessionKey, intent: .externalSync)
     }
 
-    private func performStartNewSession(worktree: Bool) async {
+    func performStartNewSession(worktree: Bool) async {
         guard !self.blocksAttachmentOwnerChange else {
             self.errorText = String(
                 localized: "Remove attachments or wait for delivery to resolve before starting a new chat.")
@@ -1774,7 +1793,7 @@ public final class OpenClawChatViewModel {
             && nsError.localizedDescription == "sessions.create not supported by this transport"
     }
 
-    private func performReset() async {
+    func performReset() async {
         self.isLoading = true
         self.errorText = nil
 
@@ -1792,7 +1811,7 @@ public final class OpenClawChatViewModel {
         self.startBootstrap()
     }
 
-    private func performCompact() async {
+    func performCompact() async {
         guard !self.isCompacting else { return }
         guard !self.isSending, self.pendingRuns.isEmpty, !self.isAborting else {
             self.errorText = "Wait for the current response before compacting the session."

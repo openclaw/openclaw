@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -428,6 +431,7 @@ public struct OpenClawChatView: View {
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
             .contextMenu {
+                self.copyMessageButton(for: msg)
                 if outboxState.isFailed {
                     Button {
                         self.viewModel.retryOutboxMessage(msg.id)
@@ -490,7 +494,14 @@ public struct OpenClawChatView: View {
                 }
             }
         } else {
+            #if os(macOS)
             bubble
+                .contextMenu {
+                    self.copyMessageButton(for: msg)
+                }
+            #else
+            bubble
+            #endif
         }
     }
 
@@ -511,6 +522,32 @@ public struct OpenClawChatView: View {
         default:
             nil
         }
+    }
+
+    @ViewBuilder
+    private func copyMessageButton(for message: OpenClawChatMessage) -> some View {
+        let text = self.primaryText(in: message)
+        if !text.isEmpty {
+            Button {
+                Self.copyToClipboard(text)
+            } label: {
+                Label {
+                    Text("Copy Message")
+                        .font(OpenClawChatTypography.body)
+                } icon: {
+                    Image(systemName: "doc.on.doc")
+                }
+            }
+        }
+    }
+
+    private static func copyToClipboard(_ text: String) {
+        #if os(macOS)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        #else
+        UIPasteboard.general.string = text
+        #endif
     }
 
     private var visibleMessages: [OpenClawChatMessage] {
@@ -685,7 +722,7 @@ public struct OpenClawChatView: View {
 
     private var emptyStateTitle: String {
         #if os(macOS)
-        "Web Chat"
+        "Start a Conversation"
         #else
         "Chat"
         #endif
@@ -693,7 +730,7 @@ public struct OpenClawChatView: View {
 
     private var emptyStateMessage: String {
         #if os(macOS)
-        "Type a message below to start.\nReturn sends • Shift-Return adds a line break."
+        "Message your agent to get started.\nReturn sends • Shift-Return adds a line break • / shows commands."
         #else
         "Type a message below to start."
         #endif
