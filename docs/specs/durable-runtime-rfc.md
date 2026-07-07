@@ -1,3 +1,12 @@
+---
+title: Durable Core Runtime Boundary
+summary: "RFC for the generic durable runtime boundary, recovery semantics, and operator inspection surface."
+read_when:
+  - Designing durable runtime recovery for OpenClaw
+  - Reviewing the durable core architecture boundary
+  - Separating runtime primitives from Workboard or TaskFlow product behavior
+---
+
 # RFC: Durable Core Runtime Boundary
 
 ## Status and stack context

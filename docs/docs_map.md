@@ -8634,6 +8634,31 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Acceptance Tests
   - H2: Open Questions
 
+## specs/durable-runtime-rfc.md
+
+- Route: /specs/durable-runtime-rfc
+- Headings:
+  - H1: RFC: Durable Core Runtime Boundary
+  - H2: Status and stack context
+  - H2: Goals
+  - H2: Non-goals
+  - H2: Proposed boundary
+  - H2: Rollout and rollback
+  - H2: Deferred proof
+
+## specs/durable-runtime-root-cause-and-test-plan.md
+
+- Route: /specs/durable-runtime-root-cause-and-test-plan
+- Headings:
+  - H1: Durable Runtime Root Cause and Validation Plan
+  - H2: Stack context
+  - H2: Root-cause classes
+  - H2: Issue classes the implementation must address
+  - H2: Validation plan for later PRs
+  - H2: Not tested in this PR
+  - H2: Non-goals and exclusions
+  - H2: Rollout and rollback expectations
+
 ## start/bootstrapping.md
 
 - Route: /start/bootstrapping

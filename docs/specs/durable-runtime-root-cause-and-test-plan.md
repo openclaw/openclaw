@@ -1,3 +1,12 @@
+---
+title: Durable Runtime Root Cause and Validation Plan
+summary: "Root-cause classes and staged validation plan for the durable runtime recovery stack."
+read_when:
+  - Planning durable runtime validation
+  - Reviewing recovery risks before implementation PRs
+  - Auditing which runtime proof is deferred from the docs-only RFC
+---
+
 # Durable Runtime Root Cause and Validation Plan
 
 ## Stack context
