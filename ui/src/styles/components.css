@@ -312,31 +312,69 @@
    Connection Banner (gateway offline / reconnecting)
    =========================================== */
 
+/* Fixed overlay lane under the topbar: connection flaps must not reflow the
+   page the way the old in-flow banner did, so the pill floats over content. */
 .connection-banner {
-  position: sticky;
-  top: 0;
-  z-index: 11;
+  position: fixed;
+  top: calc(var(--shell-topbar-height, 44px) + 10px);
+  left: var(--shell-nav-width, 0px);
+  right: 0;
+  /* Above content, below the mobile nav drawer/backdrop (65+). */
+  z-index: 50;
   display: flex;
-  align-items: center;
   justify-content: center;
+  padding: 0 16px;
+  pointer-events: none;
+}
+
+.connection-banner__pill {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
   gap: 10px;
-  flex-wrap: wrap;
-  margin: 0 calc(-1 * var(--shell-pad)) 0;
-  border-radius: 0;
-  border-left: none;
-  border-right: none;
-  font-weight: 500;
-  padding: 10px 16px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 6px 6px 6px 14px;
+  border-radius: var(--radius-full);
+  border: 1px solid color-mix(in srgb, var(--warn) 36%, var(--border));
+  background: color-mix(
+    in srgb,
+    var(--warn) 10%,
+    color-mix(in srgb, var(--bg-elevated) 86%, transparent)
+  );
+  backdrop-filter: blur(12px) saturate(1.4);
+  -webkit-backdrop-filter: blur(12px) saturate(1.4);
+  box-shadow: var(--shadow-md);
+  font-size: 13px;
+  animation: connection-banner-enter 0.25s var(--ease-out);
+}
+
+@keyframes connection-banner-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .connection-banner__pill {
+    animation: none;
+  }
 }
 
 .connection-banner__spinner {
   display: inline-flex;
   align-items: center;
+  color: var(--warn);
 }
 
 .connection-banner__spinner svg {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   fill: none;
   stroke: currentColor;
   stroke-width: 2;
@@ -350,22 +388,49 @@
   }
 }
 
-.connection-banner__hint {
-  margin-left: 6px;
-  font-weight: 400;
-  opacity: 0.75;
+.connection-banner__title {
+  color: var(--text-strong);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.connection-banner__state {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* Announced by the role="status" region and mirrored in the pill tooltip;
+   too long to keep visible in the compact pill. */
+.connection-banner__sr-hint {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 .connection-banner .connection-banner__retry {
-  border-color: currentColor;
-  color: currentColor;
+  border-radius: var(--radius-full);
+  border-color: color-mix(in srgb, var(--warn) 42%, var(--border));
+  background: transparent;
+  color: var(--text-strong);
   font-size: 12px;
   padding: 4px 12px;
+  white-space: nowrap;
 }
 
 .connection-banner .connection-banner__retry:hover:not(:disabled) {
-  border-color: currentColor;
-  background: color-mix(in srgb, currentColor 14%, transparent);
+  border-color: color-mix(in srgb, var(--warn) 60%, var(--border));
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+
+@media (max-width: 640px) {
+  .connection-banner__state {
+    display: none;
+  }
 }
 
 /* ===========================================

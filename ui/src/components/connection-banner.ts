@@ -13,19 +13,18 @@ export type ConnectionBannerProps = {
 
 function renderConnectionBanner(props: ConnectionBannerProps) {
   const detail = props.lastError ? redactLoginFailureError(props.lastError) : null;
+  const hint = t("connection.offlineHint");
   return html`
-    <div class="connection-banner callout warn" role="status" aria-live="polite">
-      <span class="connection-banner__spinner" aria-hidden="true">${icons.loader}</span>
-      <span class="connection-banner__text">
-        <strong>${t("connection.lostTitle")}</strong>
-        ${t("connection.reconnecting")}
-        <span class="connection-banner__hint" title=${detail ?? ""}
-          >${t("connection.offlineHint")}</span
-        >
-      </span>
-      <button class="btn btn--sm connection-banner__retry" type="button" @click=${props.onRetry}>
-        ${t("connection.retryNow")}
-      </button>
+    <div class="connection-banner" role="status" aria-live="polite">
+      <div class="connection-banner__pill" title=${detail ? `${hint}\n${detail}` : hint}>
+        <span class="connection-banner__spinner" aria-hidden="true">${icons.loader}</span>
+        <strong class="connection-banner__title">${t("connection.lostTitle")}</strong>
+        <span class="connection-banner__state">${t("connection.reconnecting")}</span>
+        <span class="connection-banner__sr-hint">${hint}</span>
+        <button class="btn btn--sm connection-banner__retry" type="button" @click=${props.onRetry}>
+          ${t("connection.retryNow")}
+        </button>
+      </div>
     </div>
   `;
 }
