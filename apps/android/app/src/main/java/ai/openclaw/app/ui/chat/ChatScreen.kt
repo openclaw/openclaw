@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.R
@@ -275,6 +276,12 @@ fun ChatScreen(
       },
     )
 
+    ChatAgentSelector(
+      activeAgentId = activeAgentId,
+      agents = gatewayAgents,
+      onSelectAgent = viewModel::selectChatAgent,
+    )
+
     ChatSessionSwitcher(
       sessionKey = sessionKey,
       sessions = sessions,
@@ -383,6 +390,29 @@ fun ChatScreen(
       },
       onToggleFavorite = viewModel::toggleModelFavorite,
     )
+  }
+}
+
+@Composable
+private fun ChatAgentSelector(
+  activeAgentId: String,
+  agents: List<GatewayAgentSummary>,
+  onSelectAgent: (String) -> Unit,
+) {
+  if (agents.size <= 1) return
+
+  Row(
+    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(6.dp),
+  ) {
+    agents.forEach { agent ->
+      ChatSessionChip(
+        text = chatAgentChipText(agent),
+        active = agent.id == activeAgentId,
+        onClick = { onSelectAgent(agent.id) },
+      )
+    }
   }
 }
 
@@ -1576,6 +1606,12 @@ private fun chatSessionChipText(
   if (entry.key == mainKey || (entry.key == "main" && mainKey == "main")) return "Main"
   val name = entry.displayName?.takeIf { it.isNotBlank() } ?: entry.key.takeIf { entry.updatedAtMs != null } ?: "Current"
   return friendlySessionName(name)
+}
+
+internal fun chatAgentChipText(agent: GatewayAgentSummary): String {
+  val name = agent.name?.trim()?.takeIf { it.isNotEmpty() } ?: agent.id
+  val emoji = agent.emoji?.trim()?.takeIf { it.isNotEmpty() } ?: return name
+  return "$emoji $name"
 }
 
 private fun isActiveSessionChoice(
