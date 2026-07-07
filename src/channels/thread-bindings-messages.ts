@@ -3,8 +3,8 @@
  * Keep text system-prefixed and compact because callers post it directly into user-visible threads.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { prefixSystemMessage } from "../infra/system-message.js";
-import { truncateUtf16Safe } from "../utils.js";
 
 const DEFAULT_THREAD_BINDING_FAREWELL_TEXT =
   "Session ended. Messages here will no longer be routed.";
