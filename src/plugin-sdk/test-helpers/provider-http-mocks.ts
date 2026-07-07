@@ -128,9 +128,9 @@ const providerHttpMocks = vi.hoisted(() => ({
   resolveProviderRequestHeadersMock: vi.fn((params: ResolveProviderRequestHeadersParams) => {
     if (params.provider === "google") {
       return {
-        ...(params.defaultHeaders ?? {}),
+        ...params.defaultHeaders,
         "x-goog-api-client": "openclaw/test",
-        ...(params.callerHeaders ?? {}),
+        ...params.callerHeaders,
       };
     }
     return params.callerHeaders ?? params.defaultHeaders;
