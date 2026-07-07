@@ -23,7 +23,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **TUI external-run history:** wait for persisted terminal session state before rebuilding history so channel-triggered assistant replies render once, while preserving reset recovery and in-flight run adoption. (#96980, #96967) Thanks @xialonglee.
 - **Android hardware keyboard chat:** send with unmodified Enter on physical keyboards while preserving Shift+Enter and other modified Enter combinations for multiline input. (#101239) Thanks @3ninyt3nin-creator.
 - **Codex yielded native subagents:** keep the parent app-server subscription and shared client alive until yielded native subagent completion delivery settles, preventing lost wakeups and leaked one-shot cleanup.
 - **Discord streamed finals:** send completion replies as fresh messages so inactive channels become unread, while preserving targeted mentions without escalating `@everyone` or `@here`. (#99711, #99662) Thanks @davelutztx.
