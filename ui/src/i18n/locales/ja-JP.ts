@@ -305,6 +305,12 @@ export const ja_JP: TranslationMap = {
     moveToGroup: "セッションをグループに移動",
     moveToGroupMenu: "Move to group",
     removeFromGroup: "Remove from group",
+    groupMenu: "{group} のグループオプション",
+    renameGroupMenu: "グループ名を変更…",
+    renameGroupPrompt: "グループ名を変更",
+    deleteGroupMenu: "グループを削除…",
+    deleteGroupConfirm:
+      "グループ「{group}」を削除しますか？そのセッションは未グループに移動します。",
     dragSessionHint: "ドラッグしてグループ間を移動",
     dateToday: "今日",
     dateYesterday: "昨日",
@@ -1592,10 +1598,13 @@ export const ja_JP: TranslationMap = {
       splitDown: "下に分割",
       closePane: "ペインを閉じる",
       sessionSelect: "ペインのセッション",
+      dropSplit: "分割",
+      dropOpenHere: "ここで開く",
     },
     sidebar: {
       allSessions: "すべてのセッション",
       openSessionMenu: "Open session menu",
+      sortBy: "並べ替え",
       sortCreated: "作成日時",
       sortSessions: "セッションを並べ替え",
       sortUpdated: "最終更新",
@@ -1669,7 +1678,8 @@ export const ja_JP: TranslationMap = {
       microphonePageInactive: "このページが非アクティブな間は、マイク入力を利用できません。",
       microphonePermissionBlocked:
         "マイクへのアクセスがブロックされています。入力を一覧表示するには、ブラウザのサイト設定で許可してください。",
-      realtimeTalkRequiresMicrophone: "Realtime voice input requires browser microphone access.",
+      realtimeTalkRequiresMicrophone:
+        "リアルタイム音声入力にはブラウザのマイクへのアクセスが必要です。",
       selectedMicrophoneUnavailable:
         "選択したマイクは利用できません。別の入力またはシステムデフォルトを選択してください。",
       startVoiceInput: "音声入力を開始",

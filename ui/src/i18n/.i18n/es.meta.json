@@ -1,13 +1,11 @@
 {
-  "fallbackKeys": [
-    "chat.composer.realtimeTalkRequiresMicrophone"
-  ],
-  "generatedAt": "2026-07-06T20:52:38.233Z",
+  "fallbackKeys": [],
+  "generatedAt": "2026-07-07T02:26:51.695Z",
   "locale": "es",
-  "model": "claude-opus-4-8",
-  "provider": "anthropic",
-  "sourceHash": "58d418bf7ef74b9e9b6aa796125d4822ec9a11d16851499661923d442370b6a9",
-  "totalKeys": 1660,
-  "translatedKeys": 1659,
+  "model": "gpt-5.5",
+  "provider": "openai",
+  "sourceHash": "378b4e5380384a33d9e31a49a5483cdb991245705193e067d5fb8c5311bc20fb",
+  "totalKeys": 1668,
+  "translatedKeys": 1668,
   "workflow": 1
 }

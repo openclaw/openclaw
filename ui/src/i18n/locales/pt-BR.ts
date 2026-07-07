@@ -300,6 +300,11 @@ export const pt_BR: TranslationMap = {
     moveToGroup: "Mover sessão para um grupo",
     moveToGroupMenu: "Move to group",
     removeFromGroup: "Remove from group",
+    groupMenu: "Opções do grupo para {group}",
+    renameGroupMenu: "Renomear grupo…",
+    renameGroupPrompt: "Renomear grupo",
+    deleteGroupMenu: "Excluir grupo…",
+    deleteGroupConfirm: 'Excluir grupo "{group}"? Suas sessões serão movidas para Sem grupo.',
     dragSessionHint: "Arraste para mover entre grupos",
     dateToday: "Hoje",
     dateYesterday: "Ontem",
@@ -1588,10 +1593,13 @@ export const pt_BR: TranslationMap = {
       splitDown: "Dividir para baixo",
       closePane: "Fechar painel",
       sessionSelect: "Sessão do painel",
+      dropSplit: "Dividir",
+      dropOpenHere: "Abrir aqui",
     },
     sidebar: {
       allSessions: "Todas as sessões",
       openSessionMenu: "Open session menu",
+      sortBy: "Ordenar por",
       sortCreated: "Criado",
       sortSessions: "Ordenar sessões",
       sortUpdated: "Última atualização",
@@ -1666,7 +1674,8 @@ export const pt_BR: TranslationMap = {
         "As entradas de microfone ficam indisponíveis enquanto esta página está inativa.",
       microphonePermissionBlocked:
         "O acesso ao microfone está bloqueado. Permita-o nas configurações de site do navegador para listar as entradas.",
-      realtimeTalkRequiresMicrophone: "Realtime voice input requires browser microphone access.",
+      realtimeTalkRequiresMicrophone:
+        "A entrada de voz em tempo real requer acesso ao microfone do navegador.",
       selectedMicrophoneUnavailable:
         "O microfone selecionado está indisponível. Escolha outra entrada ou o padrão do sistema.",
       startVoiceInput: "Iniciar entrada de voz",

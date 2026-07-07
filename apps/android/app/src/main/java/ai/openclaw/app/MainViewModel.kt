@@ -17,10 +17,12 @@ import ai.openclaw.app.node.SmsManager
 import ai.openclaw.app.ui.GatewayConnectPlan
 import ai.openclaw.app.ui.GatewaySavedAuthAction
 import ai.openclaw.app.voice.VoiceConversationEntry
+import android.Manifest
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -56,6 +58,8 @@ class MainViewModel(
   private val runtimeRef = MutableStateFlow<NodeRuntime?>(null)
   private val gatewayConfigOperationSeq = AtomicLong()
   private val gatewayConfigOperationMutex = Mutex()
+
+  @Volatile private var permissionRequester: PermissionRequester? = null
 
   @Volatile private var foreground = false
 
@@ -151,6 +155,7 @@ class MainViewModel(
   val modelCatalogErrorText: StateFlow<String?> = runtimeState(initial = null) { it.modelCatalogErrorText }
   val modelFavorites: StateFlow<List<String>> = prefs.modelFavorites
   val modelRecents: StateFlow<List<String>> = prefs.modelRecents
+  val sessionCustomGroups: StateFlow<List<String>> = prefs.sessionCustomGroups
   val talkSetupReadiness: StateFlow<GatewayTalkSetupReadiness> =
     runtimeState(initial = GatewayTalkSetupReadiness.unverified()) { it.talkSetupReadiness }
   val gatewayDefaultAgentId: StateFlow<String?> = runtimeState(initial = null) { it.gatewayDefaultAgentId }
@@ -264,6 +269,7 @@ class MainViewModel(
     runtime.camera.attachLifecycleOwner(owner)
     runtime.camera.attachPermissionRequester(permissionRequester)
     runtime.sms.attachPermissionRequester(permissionRequester)
+    this.permissionRequester = permissionRequester
   }
 
   /**
@@ -536,6 +542,23 @@ class MainViewModel(
     ensureRuntime().setTalkModeEnabled(enabled)
   }
 
+  suspend fun requestVoiceNotePermission(): Boolean {
+    val requester = permissionRequester ?: return false
+    return try {
+      requester.requestIfMissing(listOf(Manifest.permission.RECORD_AUDIO))[Manifest.permission.RECORD_AUDIO] == true
+    } catch (error: CancellationException) {
+      throw error
+    } catch (_: Throwable) {
+      false
+    }
+  }
+
+  internal fun tryAcquireVoiceNoteMic(): Boolean = runtimeRef.value?.tryAcquireVoiceNoteMic() == true
+
+  internal fun releaseVoiceNoteMic() {
+    runtimeRef.value?.releaseVoiceNoteMic()
+  }
+
   fun setSpeakerEnabled(enabled: Boolean) {
     ensureRuntime().setSpeakerEnabled(enabled)
   }
@@ -743,6 +766,28 @@ class MainViewModel(
     ensureRuntime().deleteChatSession(key)
   }
 
+  /** Remembers a custom session group locally so it renders as an empty section. */
+  fun addChatSessionGroup(name: String) {
+    val trimmed = name.trim()
+    if (trimmed.isEmpty()) return
+    prefs.setSessionCustomGroups(prefs.sessionCustomGroups.value + trimmed)
+  }
+
+  suspend fun renameChatSessionGroup(
+    from: String,
+    to: String,
+  ) {
+    val stored = prefs.sessionCustomGroups.value
+    // Web semantics: replace a stored name in place, otherwise remember the new name.
+    prefs.setSessionCustomGroups(if (from in stored) stored.map { if (it == from) to else it } else stored + to)
+    ensureRuntime().renameChatSessionGroup(from = from, to = to)
+  }
+
+  suspend fun deleteChatSessionGroup(group: String) {
+    prefs.setSessionCustomGroups(prefs.sessionCustomGroups.value.filterNot { it == group })
+    ensureRuntime().dissolveChatSessionGroup(group)
+  }
+
   suspend fun forkChatSession(parentKey: String): String? = ensureRuntime().forkChatSession(parentKey)
 
   suspend fun listWorkspaceFiles(
@@ -781,6 +826,15 @@ class MainViewModel(
   fun switchChatSession(sessionKey: String) {
     ensureRuntime().switchChatSession(sessionKey)
   }
+
+  fun selectChatAgent(agentId: String) {
+    ensureRuntime().selectChatAgent(agentId)
+  }
+
+  suspend fun fetchChatSessionList(
+    search: String?,
+    archived: Boolean,
+  ): List<ChatSessionEntry> = ensureRuntime().fetchChatSessionList(search = search, archived = archived)
 
   fun abortChat() {
     ensureRuntime().abortChat()

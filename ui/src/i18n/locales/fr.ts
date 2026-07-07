@@ -304,6 +304,12 @@ export const fr: TranslationMap = {
     moveToGroup: "Déplacer la session vers un groupe",
     moveToGroupMenu: "Move to group",
     removeFromGroup: "Remove from group",
+    groupMenu: "Options du groupe {group}",
+    renameGroupMenu: "Renommer le groupe…",
+    renameGroupPrompt: "Renommer le groupe",
+    deleteGroupMenu: "Supprimer le groupe…",
+    deleteGroupConfirm:
+      "Supprimer le groupe « {group} » ? Ses sessions seront déplacées vers Non groupé.",
     dragSessionHint: "Faites glisser pour déplacer entre les groupes",
     dateToday: "Aujourd’hui",
     dateYesterday: "Hier",
@@ -1604,10 +1610,13 @@ export const fr: TranslationMap = {
       splitDown: "Fractionner vers le bas",
       closePane: "Fermer le volet",
       sessionSelect: "Session du volet",
+      dropSplit: "Scinder",
+      dropOpenHere: "Ouvrir ici",
     },
     sidebar: {
       allSessions: "Toutes les sessions",
       openSessionMenu: "Open session menu",
+      sortBy: "Trier par",
       sortCreated: "Créé",
       sortSessions: "Trier les sessions",
       sortUpdated: "Dernière mise à jour",
@@ -1682,7 +1691,8 @@ export const fr: TranslationMap = {
         "Les entrées microphone sont indisponibles lorsque cette page est inactive.",
       microphonePermissionBlocked:
         "L’accès au microphone est bloqué. Autorisez-le dans les paramètres de site du navigateur pour lister les entrées.",
-      realtimeTalkRequiresMicrophone: "Realtime voice input requires browser microphone access.",
+      realtimeTalkRequiresMicrophone:
+        "La saisie vocale en temps réel nécessite l'accès au microphone du navigateur.",
       selectedMicrophoneUnavailable:
         "Le microphone sélectionné est indisponible. Choisissez une autre entrée ou l’option par défaut du système.",
       startVoiceInput: "Démarrer la saisie vocale",

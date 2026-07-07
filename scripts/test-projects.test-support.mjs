@@ -527,6 +527,7 @@ const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
     ".github/workflows/npm-telegram-beta-e2e.yml",
     ["test/scripts/package-acceptance-workflow.test.ts"],
   ],
+  [".github/workflows/android-release.yml", ["test/scripts/package-acceptance-workflow.test.ts"]],
   [
     ".github/workflows/openclaw-cross-os-release-checks-reusable.yml",
     [
@@ -998,6 +999,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/android-release.sh", ["test/scripts/android-release-wrapper-args.test.ts"]],
   ["scripts/android-release-signing.mjs", ["test/scripts/android-release-signing.test.ts"]],
   ["scripts/android-release-upload.sh", ["test/scripts/android-release-wrapper-args.test.ts"]],
+  [
+    "apps/android/scripts/build-release-artifacts.ts",
+    ["test/scripts/android-release-artifacts.test.ts"],
+  ],
   ["apps/android/fastlane/Fastfile", ["test/scripts/android-release-fastlane-gates.test.ts"]],
   ["scripts/ios-release-archive.sh", ["test/scripts/ios-release-wrapper-args.test.ts"]],
   ["scripts/ios-release-prepare.sh", ["test/scripts/ios-release-wrapper-args.test.ts"]],

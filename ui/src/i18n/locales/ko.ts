@@ -299,6 +299,11 @@ export const ko: TranslationMap = {
     moveToGroup: "세션을 그룹으로 이동",
     moveToGroupMenu: "Move to group",
     removeFromGroup: "Remove from group",
+    groupMenu: "{group}의 그룹 옵션",
+    renameGroupMenu: "그룹 이름 변경…",
+    renameGroupPrompt: "그룹 이름 변경",
+    deleteGroupMenu: "그룹 삭제…",
+    deleteGroupConfirm: '"{group}" 그룹을 삭제하시겠습니까? 해당 세션은 그룹 없음으로 이동됩니다.',
     dragSessionHint: "드래그하여 그룹 간 이동",
     dateToday: "오늘",
     dateYesterday: "어제",
@@ -1575,10 +1580,13 @@ export const ko: TranslationMap = {
       splitDown: "아래쪽으로 분할",
       closePane: "창 닫기",
       sessionSelect: "창 세션",
+      dropSplit: "분할",
+      dropOpenHere: "여기에서 열기",
     },
     sidebar: {
       allSessions: "모든 세션",
       openSessionMenu: "Open session menu",
+      sortBy: "정렬 기준",
       sortCreated: "생성일",
       sortSessions: "세션 정렬",
       sortUpdated: "마지막 업데이트",
@@ -1653,7 +1661,8 @@ export const ko: TranslationMap = {
         "이 페이지가 비활성 상태인 동안에는 마이크 입력을 사용할 수 없습니다.",
       microphonePermissionBlocked:
         "마이크 액세스가 차단되었습니다. 입력 목록을 표시하려면 브라우저 사이트 설정에서 허용하세요.",
-      realtimeTalkRequiresMicrophone: "Realtime voice input requires browser microphone access.",
+      realtimeTalkRequiresMicrophone:
+        "실시간 음성 입력을 사용하려면 브라우저 마이크 접근 권한이 필요합니다.",
       selectedMicrophoneUnavailable:
         "선택한 마이크를 사용할 수 없습니다. 다른 입력 또는 시스템 기본값을 선택하세요.",
       startVoiceInput: "음성 입력 시작",

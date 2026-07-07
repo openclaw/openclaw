@@ -388,14 +388,20 @@ export function buildStatusModelSelectionLines(params: {
     const key = params.shortenText(sess.key, 48);
     const configured = sess.configuredModel ?? "unknown";
     const selected = sess.selectedModel ?? "unknown";
+    const isFallback = sess.modelSelectionReason === "fallback selected";
+    const intro = isFallback
+      ? `Session ${key} is running ${selected} (auto fallback); config primary is ${configured}.`
+      : `Session ${key} is pinned to ${selected}; config primary ${configured} will apply to new/unpinned sessions.`;
+    const reasonLine = `  Reason: ${sess.modelSelectionReason ?? "session override"}`;
+    const clearLine = isFallback
+      ? "  Action: check provider availability or retry with /model"
+      : "  Clear with: /model default";
     lines.push(
-      params.warn(
-        `Session ${key} is pinned to ${selected}; config primary ${configured} will apply to new/unpinned sessions.`,
-      ),
+      params.warn(intro),
       `  Configured default: ${configured}`,
       `  Session selected: ${selected}`,
-      `  Reason: ${sess.modelSelectionReason ?? "session override"}`,
-      "  Clear with: /model default",
+      reasonLine,
+      clearLine,
       "  Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-behavior",
     );
   }

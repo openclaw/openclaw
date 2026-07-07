@@ -63,23 +63,35 @@ Matrix QA does not accept `--credential-source` or `--credential-role`. The lane
 
 ## Profiles
 
-| Profile         | Use it for                                                                                                                                                                                                                           |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `all` (default) | Full catalog. Slow but exhaustive.                                                                                                                                                                                                   |
-| `fast`          | Release-gate subset that exercises the live transport contract: canary, mention gating, allowlist block, reply shape, restart resume, thread follow-up, thread isolation, reaction observation, and exec approval metadata delivery. |
-| `transport`     | Transport-level threading, DM, room, autojoin, mention/allowlist, approval, and reaction scenarios.                                                                                                                                  |
-| `media`         | Image, audio, video, PDF, EPUB attachment coverage.                                                                                                                                                                                  |
-| `e2ee-smoke`    | Minimum E2EE coverage: basic encrypted reply, thread follow-up, bootstrap success.                                                                                                                                                   |
-| `e2ee-deep`     | Exhaustive E2EE state-loss, backup, key, and recovery scenarios.                                                                                                                                                                     |
-| `e2ee-cli`      | `openclaw matrix encryption setup` and `verify *` CLI scenarios driven through the QA harness.                                                                                                                                       |
+| Profile         | Use it for                                                                                                                                                                                                            |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `all` (default) | Full catalog. Slow but exhaustive.                                                                                                                                                                                    |
+| `fast`          | Release-gate subset that exercises the imperative live transport contract: mention gating, allowlist block, reply shape, restart resume, reaction observation, exec approval metadata delivery, and E2EE basic reply. |
+| `transport`     | Transport-level threading, DM, room, autojoin, mention/allowlist, approval, and reaction scenarios.                                                                                                                   |
+| `media`         | Image, audio, video, PDF, EPUB attachment coverage.                                                                                                                                                                   |
+| `e2ee-smoke`    | Minimum E2EE coverage: basic encrypted reply, thread follow-up, bootstrap success.                                                                                                                                    |
+| `e2ee-deep`     | Exhaustive E2EE state-loss, backup, key, and recovery scenarios.                                                                                                                                                      |
+| `e2ee-cli`      | `openclaw matrix encryption setup` and `verify *` CLI scenarios driven through the QA harness.                                                                                                                        |
 
 The exact mapping lives in `extensions/qa-matrix/src/runners/contract/scenario-catalog.ts`.
 
 ## Scenarios
 
-The full scenario id list is the `MatrixQaScenarioId` union in `extensions/qa-matrix/src/runners/contract/scenario-catalog.ts`. Categories:
+The shared Matrix adapter exposes these canonical YAML scenarios through `openclaw qa suite --channel-driver live --channel matrix`:
 
-- threading: `matrix-thread-*`, `matrix-subagent-thread-spawn`
+- `channel-chat-baseline`
+- `thread-follow-up`
+- `thread-isolation`
+- `thread-reply-override`
+- `dm-shared-session`
+- `dm-per-room-session`
+
+`subagent-thread-spawn` remains available through explicit `--scenario subagent-thread-spawn`
+selection, but is not part of the default shared Matrix set until live child-completion proof is stable.
+
+The remaining imperative scenario id list is the `MatrixQaScenarioId` union in `extensions/qa-matrix/src/runners/contract/scenario-catalog.ts`. Categories:
+
+- threading: `matrix-thread-root-preservation`, `matrix-thread-nested-reply-shape`
 - top-level / DM / room: `matrix-top-level-reply-shape`, `matrix-room-*`, `matrix-dm-*`
 - streaming and tool progress: `matrix-room-partial-streaming-preview`, `matrix-room-quiet-streaming-preview`, `matrix-room-tool-progress-*`, `matrix-room-block-streaming`
 - media: `matrix-media-type-coverage`, `matrix-room-image-understanding-attachment`, `matrix-attachment-only-ignored`, `matrix-unsupported-media-safe`

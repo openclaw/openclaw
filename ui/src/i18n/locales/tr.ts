@@ -303,6 +303,11 @@ export const tr: TranslationMap = {
     moveToGroup: "Oturumu bir gruba taşı",
     moveToGroupMenu: "Move to group",
     removeFromGroup: "Remove from group",
+    groupMenu: "{group} için grup seçenekleri",
+    renameGroupMenu: "Grubu yeniden adlandır…",
+    renameGroupPrompt: "Grubu yeniden adlandır",
+    deleteGroupMenu: "Grubu sil…",
+    deleteGroupConfirm: '"{group}" grubu silinsin mi? Oturumları Gruplandırılmamış\'a taşınacak.',
     dragSessionHint: "Gruplar arasında taşımak için sürükleyin",
     dateToday: "Bugün",
     dateYesterday: "Dün",
@@ -1592,10 +1597,13 @@ export const tr: TranslationMap = {
       splitDown: "Aşağı böl",
       closePane: "Bölmeyi kapat",
       sessionSelect: "Bölme oturumu",
+      dropSplit: "Böl",
+      dropOpenHere: "Burada aç",
     },
     sidebar: {
       allSessions: "Tüm oturumlar",
       openSessionMenu: "Open session menu",
+      sortBy: "Sıralama ölçütü",
       sortCreated: "Oluşturulma",
       sortSessions: "Oturumları sırala",
       sortUpdated: "Son güncelleme",
@@ -1669,7 +1677,8 @@ export const tr: TranslationMap = {
       microphonePageInactive: "Bu sayfa etkin değilken mikrofon girişleri kullanılamaz.",
       microphonePermissionBlocked:
         "Mikrofon erişimi engellenmiş. Girişleri listelemek için tarayıcı site ayarlarında erişime izin verin.",
-      realtimeTalkRequiresMicrophone: "Realtime voice input requires browser microphone access.",
+      realtimeTalkRequiresMicrophone:
+        "Gerçek zamanlı sesli giriş, tarayıcı mikrofon erişimi gerektirir.",
       selectedMicrophoneUnavailable:
         "Seçili mikrofon kullanılamıyor. Başka bir giriş veya Sistem varsayılanını seçin.",
       startVoiceInput: "Ses girişini başlat",

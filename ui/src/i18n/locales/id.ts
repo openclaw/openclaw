@@ -300,6 +300,12 @@ export const id: TranslationMap = {
     moveToGroup: "Pindahkan sesi ke grup",
     moveToGroupMenu: "Move to group",
     removeFromGroup: "Remove from group",
+    groupMenu: "Opsi grup untuk {group}",
+    renameGroupMenu: "Ganti nama grup…",
+    renameGroupPrompt: "Ganti nama grup",
+    deleteGroupMenu: "Hapus grup…",
+    deleteGroupConfirm:
+      'Hapus grup "{group}"? Sesi-sesinya akan dipindahkan ke Tidak dikelompokkan.',
     dragSessionHint: "Seret untuk memindahkan antargrup",
     dateToday: "Hari ini",
     dateYesterday: "Kemarin",
@@ -1586,10 +1592,13 @@ export const id: TranslationMap = {
       splitDown: "Bagi ke bawah",
       closePane: "Tutup panel",
       sessionSelect: "Sesi panel",
+      dropSplit: "Bagi",
+      dropOpenHere: "Buka di sini",
     },
     sidebar: {
       allSessions: "Semua sesi",
       openSessionMenu: "Open session menu",
+      sortBy: "Urutkan berdasarkan",
       sortCreated: "Dibuat",
       sortSessions: "Urutkan sesi",
       sortUpdated: "Terakhir diperbarui",
@@ -1663,7 +1672,7 @@ export const id: TranslationMap = {
       microphonePageInactive: "Input mikrofon tidak tersedia saat halaman ini tidak aktif.",
       microphonePermissionBlocked:
         "Akses mikrofon diblokir. Izinkan di pengaturan situs browser untuk menampilkan daftar input.",
-      realtimeTalkRequiresMicrophone: "Realtime voice input requires browser microphone access.",
+      realtimeTalkRequiresMicrophone: "Input suara realtime memerlukan akses mikrofon browser.",
       selectedMicrophoneUnavailable:
         "Mikrofon yang dipilih tidak tersedia. Pilih input lain atau default Sistem.",
       startVoiceInput: "Mulai input suara",

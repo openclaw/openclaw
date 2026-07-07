@@ -299,6 +299,11 @@ export const ar: TranslationMap = {
     moveToGroup: "نقل الجلسة إلى مجموعة",
     moveToGroupMenu: "Move to group",
     removeFromGroup: "Remove from group",
+    groupMenu: "خيارات المجموعة لـ {group}",
+    renameGroupMenu: "إعادة تسمية المجموعة…",
+    renameGroupPrompt: "إعادة تسمية المجموعة",
+    deleteGroupMenu: "حذف المجموعة…",
+    deleteGroupConfirm: 'حذف المجموعة "{group}"؟ ستُنقل جلساتها إلى غير مصنفة.',
     dragSessionHint: "اسحب للنقل بين المجموعات",
     dateToday: "اليوم",
     dateYesterday: "أمس",
@@ -1568,10 +1573,13 @@ export const ar: TranslationMap = {
       splitDown: "تقسيم إلى الأسفل",
       closePane: "إغلاق الجزء",
       sessionSelect: "جلسة الجزء",
+      dropSplit: "تقسيم",
+      dropOpenHere: "افتح هنا",
     },
     sidebar: {
       allSessions: "كل الجلسات",
       openSessionMenu: "Open session menu",
+      sortBy: "ترتيب حسب",
       sortCreated: "تاريخ الإنشاء",
       sortSessions: "ترتيب الجلسات",
       sortUpdated: "آخر تحديث",
@@ -1645,7 +1653,8 @@ export const ar: TranslationMap = {
       microphonePageInactive: "مدخلات الميكروفون غير متاحة أثناء عدم نشاط هذه الصفحة.",
       microphonePermissionBlocked:
         "تم حظر الوصول إلى الميكروفون. اسمح به في إعدادات موقع المتصفح لعرض المدخلات.",
-      realtimeTalkRequiresMicrophone: "Realtime voice input requires browser microphone access.",
+      realtimeTalkRequiresMicrophone:
+        "يتطلب الإدخال الصوتي في الوقت الفعلي الوصول إلى ميكروفون المتصفح.",
       selectedMicrophoneUnavailable:
         "الميكروفون المحدد غير متاح. اختر مدخلاً آخر أو الإعداد الافتراضي للنظام.",
       startVoiceInput: "بدء الإدخال الصوتي",

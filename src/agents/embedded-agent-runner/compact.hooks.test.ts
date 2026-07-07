@@ -1218,6 +1218,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
   });
 
   it("emits post-compaction side effects once for a rotated successor transcript", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
     const listener = vi.fn();
     const cleanup = onSessionTranscriptUpdate(listener);
     const sync = vi.fn(async () => {});
@@ -1258,6 +1259,13 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       expect(sync).toHaveBeenCalledWith({
         reason: "post-compaction",
         sessionFiles: ["/tmp/rotated-session.jsonl"],
+      });
+      expectRecordFields(mockCallArg(hookRunner.runAfterCompaction), {
+        previousSessionId: "session-1",
+        sessionFile: "/tmp/rotated-session.jsonl",
+      });
+      expectRecordFields(mockCallArg(hookRunner.runAfterCompaction, 0, 1), {
+        sessionId: "rotated-session",
       });
     } finally {
       cleanup();
@@ -1701,6 +1709,7 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(result.ok).toBe(true);
     expectRecordFields(mockCallArg(hookRunner.runAfterCompaction), {
       sessionFile: rotatedSessionFile,
+      previousSessionId: TEST_SESSION_ID,
     });
     expectRecordFields(mockCallArg(hookRunner.runAfterCompaction, 0, 1), {
       sessionId: rotatedSessionId,

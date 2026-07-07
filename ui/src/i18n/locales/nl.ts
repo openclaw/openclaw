@@ -302,6 +302,12 @@ export const nl: TranslationMap = {
     moveToGroup: "Sessie naar een groep verplaatsen",
     moveToGroupMenu: "Move to group",
     removeFromGroup: "Remove from group",
+    groupMenu: "Groepsopties voor {group}",
+    renameGroupMenu: "Groep hernoemen…",
+    renameGroupPrompt: "Groep hernoemen",
+    deleteGroupMenu: "Groep verwijderen…",
+    deleteGroupConfirm:
+      'Groep "{group}" verwijderen? De sessies worden verplaatst naar Niet gegroepeerd.',
     dragSessionHint: "Sleep om tussen groepen te verplaatsen",
     dateToday: "Vandaag",
     dateYesterday: "Gisteren",
@@ -1591,10 +1597,13 @@ export const nl: TranslationMap = {
       splitDown: "Omlaag splitsen",
       closePane: "Deelvenster sluiten",
       sessionSelect: "Deelvenstersessie",
+      dropSplit: "Splitsen",
+      dropOpenHere: "Hier openen",
     },
     sidebar: {
       allSessions: "Alle sessies",
       openSessionMenu: "Open session menu",
+      sortBy: "Sorteren op",
       sortCreated: "Aangemaakt",
       sortSessions: "Sessies sorteren",
       sortUpdated: "Laatst bijgewerkt",
@@ -1669,7 +1678,8 @@ export const nl: TranslationMap = {
         "Microfooningangen zijn niet beschikbaar terwijl deze pagina inactief is.",
       microphonePermissionBlocked:
         "Microfoontoegang is geblokkeerd. Sta dit toe in de site-instellingen van de browser om ingangen weer te geven.",
-      realtimeTalkRequiresMicrophone: "Realtime voice input requires browser microphone access.",
+      realtimeTalkRequiresMicrophone:
+        "Realtime spraakinvoer vereist toegang tot de microfoon van de browser.",
       selectedMicrophoneUnavailable:
         "De geselecteerde microfoon is niet beschikbaar. Kies een andere ingang of System default.",
       startVoiceInput: "Spraakinvoer starten",

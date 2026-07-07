@@ -2218,6 +2218,9 @@
 .chat-side-result__body {
   font-size: 14px;
   line-height: 1.55;
+  max-height: min(55vh, 480px);
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
 }
 
 .chat-side-result__body > :first-child {
@@ -2251,6 +2254,12 @@
     width: 44px;
     min-width: 44px;
     height: 44px;
+  }
+
+  .chat-side-result__body {
+    max-height: none;
+    overflow-y: visible;
+    overscroll-behavior-y: auto;
   }
 }
 

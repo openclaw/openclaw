@@ -255,6 +255,7 @@ final class NodeAppModel {
     private var gatewayHealthMonitorDisabled = false
     private let notificationCenter: NotificationCentering
     let voiceWake = VoiceWakeManager()
+    let voiceNoteRecorder: OpenClawVoiceNoteRecorder
     let talkMode: TalkModeManager
     private let locationService: any LocationServicing
     private let deviceStatusService: any DeviceStatusServicing
@@ -309,6 +310,12 @@ final class NodeAppModel {
 
     var operatorSession: GatewayNodeSession {
         self.operatorGateway
+    }
+
+    var isTalkCaptureActive: Bool {
+        // PTT owns its Voice Wake lease before permission and audio setup.
+        // Count that pending interval so Chat cannot race another mic owner.
+        self.talkMode.isEnabled || self.talkMode.isPushToTalkActive || self.pttVoiceWakeLeaseCount > 0
     }
 
     var localChatFixture: LocalChatFixture? {
@@ -500,7 +507,8 @@ final class NodeAppModel {
         remindersService: any RemindersServicing = RemindersService(),
         motionService: any MotionServicing = MotionService(),
         watchMessagingService: any WatchMessagingServicing = WatchMessagingService(),
-        talkMode: TalkModeManager = TalkModeManager())
+        talkMode: TalkModeManager = TalkModeManager(),
+        voiceNoteRecorder: OpenClawVoiceNoteRecorder = OpenClawVoiceNoteRecorder())
     {
         self.screen = screen
         self.camera = camera
@@ -515,6 +523,10 @@ final class NodeAppModel {
         self.motionService = motionService
         self.watchMessagingService = watchMessagingService
         self.talkMode = talkMode
+        self.voiceNoteRecorder = voiceNoteRecorder
+        self.voiceNoteRecorder.setCaptureAdmissionHandler { [weak self] in
+            self?.isTalkCaptureActive == false
+        }
         self.apnsDeviceTokenHex = UserDefaults.standard.string(forKey: Self.apnsDeviceTokenUserDefaultsKey)
         restorePersistedWatchExecApprovalBridgeState()
         GatewayDiagnostics.bootstrap()
@@ -574,6 +586,9 @@ final class NodeAppModel {
             } catch {
                 // Best-effort only.
             }
+        }
+        self.voiceNoteRecorder.onRecordingActiveChanged = { [weak self] isActive in
+            self?.voiceWake.setSuppressedByVoiceNote(isActive)
         }
 
         let enabled = UserDefaults.standard.bool(forKey: "voiceWake.enabled")
@@ -694,6 +709,11 @@ final class NodeAppModel {
             self.backgroundedAt = Date()
             self.reconnectAfterBackgroundArmed = true
             self.beginBackgroundConnectionGracePeriod()
+            if self.voiceNoteRecorder.isRecording || self.voiceNoteRecorder.isRequestingPermission {
+                // Cancel first: releasing the voice-note suppression reason can
+                // schedule Voice Wake, which the background suspension must catch.
+                self.voiceNoteRecorder.cancel()
+            }
             // Release voice wake mic in background.
             self.backgroundVoiceWakeSuspended = self.voiceWake.suspendForExternalAudioCapture()
             let shouldKeepTalkActive = keepTalkActive && self.talkMode.isEnabled
@@ -881,6 +901,9 @@ final class NodeAppModel {
         }
         UserDefaults.standard.set(enabled, forKey: "talk.enabled")
         if enabled {
+            if self.voiceNoteRecorder.isRecording || self.voiceNoteRecorder.isRequestingPermission {
+                self.voiceNoteRecorder.cancel()
+            }
             // Voice wake holds the microphone continuously; talk mode needs exclusive access for STT.
             // When talk is enabled from the UI, prioritize talk and pause voice wake.
             self.voiceWake.setSuppressedByTalk(true)
@@ -1974,6 +1997,7 @@ final class NodeAppModel {
 
     private func handleTalkInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         if req.command == OpenClawTalkCommand.pttOnce.rawValue {
+            try self.rejectTalkCaptureWhileVoiceNoteActive()
             self.acquirePttVoiceWakeLease()
             defer { self.releasePttVoiceWakeLease() }
             let payload = try await talkMode.runPushToTalkOnce()
@@ -1986,6 +2010,7 @@ final class NodeAppModel {
 
         switch req.command {
         case OpenClawTalkCommand.pttStart.rawValue:
+            try self.rejectTalkCaptureWhileVoiceNoteActive()
             let acquiredLease = !self.pttSessionOwnsVoiceWakeLease
             if acquiredLease {
                 self.acquirePttVoiceWakeLease()
@@ -2025,6 +2050,15 @@ final class NodeAppModel {
                 ok: false,
                 error: OpenClawNodeError(code: .invalidRequest, message: "INVALID_REQUEST: unknown command"))
         }
+    }
+
+    private func rejectTalkCaptureWhileVoiceNoteActive() throws {
+        // Remote PTT bypasses the Chat Talk toggle. Preserve the user's draft;
+        // Talk must not reconfigure AVAudioSession while its recorder owns it.
+        guard self.voiceNoteRecorder.isRecording || self.voiceNoteRecorder.isRequestingPermission else { return }
+        throw NSError(domain: "TalkMode", code: 8, userInfo: [
+            NSLocalizedDescriptionKey: "Finish or cancel the active voice note before starting push-to-talk.",
+        ])
     }
 
     private func acquirePttVoiceWakeLease() {

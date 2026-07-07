@@ -35,6 +35,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -49,6 +50,16 @@ import java.util.concurrent.atomic.AtomicLong
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class GatewayBootstrapAuthTest {
+  @Before
+  fun clearPlainPrefs() {
+    RuntimeEnvironment
+      .getApplication()
+      .getSharedPreferences("openclaw.node", android.content.Context.MODE_PRIVATE)
+      .edit()
+      .clear()
+      .commit()
+  }
+
   @Test
   fun standaloneStatusPreservesLiveOperatorConnection() {
     val runtime = createTestRuntime(RuntimeEnvironment.getApplication())
@@ -846,6 +857,32 @@ class GatewayBootstrapAuthTest {
     assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
     assertFalse(runtime.prefs.voiceMicEnabled.value)
   }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun voiceNoteMicOwnershipBlocksLocalVoiceAndGatewayPtt() =
+    runBlocking {
+      val app = RuntimeEnvironment.getApplication()
+      shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+      val runtime = createTestRuntime(app)
+      val dispatcher = readField<InvokeDispatcher>(runtime, "invokeDispatcher")
+      Dispatchers.setMain(Dispatchers.Unconfined)
+      try {
+        assertTrue(runtime.tryAcquireVoiceNoteMic())
+
+        runtime.setMicEnabled(true)
+        runtime.setTalkModeEnabled(true)
+        val ptt = dispatcher.handleInvoke(OpenClawTalkCommand.PttStart.rawValue, null)
+
+        assertEquals(VoiceCaptureMode.Off, runtime.voiceCaptureMode.value)
+        assertEquals("MIC_BUSY", ptt.error?.code)
+        assertEquals("MIC_BUSY: voice note recording is active", ptt.error?.message)
+        assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
+      } finally {
+        runtime.releaseVoiceNoteMic()
+        Dispatchers.resetMain()
+      }
+    }
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)

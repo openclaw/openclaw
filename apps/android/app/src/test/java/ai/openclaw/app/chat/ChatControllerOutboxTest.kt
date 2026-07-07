@@ -131,11 +131,6 @@ class ChatControllerOutboxTest {
         }
       }
     }
-
-    override suspend fun clearAll() {
-      rows.clear()
-      gatewayIds.clear()
-    }
   }
 
   /** Toggleable gateway seam: records chat.send idempotency keys and echoes them as run ids. */
@@ -148,6 +143,7 @@ class ChatControllerOutboxTest {
     val sentSessionKeys = mutableListOf<String>()
     val sentThinkingLevels = mutableListOf<String>()
     var historyMessagesJson = "[]"
+    var metadataModelsJson = "[]"
 
     suspend fun request(
       method: String,
@@ -166,6 +162,7 @@ class ChatControllerOutboxTest {
           sendResponse(key)
         }
         "chat.history" -> """{"sessionId":"session-1","messages":$historyMessagesJson}"""
+        "chat.metadata" -> """{"commands":[],"models":$metadataModelsJson}"""
         else -> "{}"
       }
     }
@@ -253,6 +250,65 @@ class ChatControllerOutboxTest {
       assertEquals(queuedIds, gateway.sentIdempotencyKeys)
       assertEquals(listOf("main", "main", "main"), gateway.sentSessionKeys)
       assertEquals(listOf("high", "off", "off"), gateway.sentThinkingLevels)
+      assertTrue(chat.outboxItems.value.isEmpty())
+    }
+
+  @Test
+  fun reconnectGatesActiveSessionThinkingAndFailsOpenForOtherSessions() =
+    runTest {
+      val gateway = FakeGateway()
+      val outbox = FakeCommandOutbox()
+      val now = System.currentTimeMillis()
+      // Gating reads the controller-owned agent-scoped catalog hydrated from chat.metadata,
+      // so hydrate first (empty queue) and seed the rows afterwards; the flush loop re-reads
+      // the outbox on each health transition.
+      gateway.metadataModelsJson =
+        """[{"id":"plain","name":"Plain","provider":"openai","available":true,"input":["text"],"reasoning":false}]"""
+      val chat = controller(this, gateway, outbox)
+      gateway.online = true
+      chat.load("main")
+      advanceUntilIdle()
+
+      outbox.seed(
+        ChatOutboxItem(
+          id = "active",
+          sessionKey = "main",
+          text = "active session",
+          thinkingLevel = "high",
+          createdAtMs = now,
+          status = ChatOutboxStatus.Queued,
+          retryCount = 0,
+          lastError = null,
+        ),
+      )
+      outbox.seed(
+        ChatOutboxItem(
+          id = "other",
+          sessionKey = "other-session",
+          text = "unknown session",
+          thinkingLevel = "medium",
+          createdAtMs = now + 1,
+          status = ChatOutboxStatus.Queued,
+          retryCount = 0,
+          lastError = null,
+        ),
+      )
+      assertTrue(chat.setSessionModelAwait("main", "openai/plain"))
+      // Drop health via a transport failure mid-flush: unlike a disconnect this keeps the
+      // hydrated catalog, which is the state where the flush gate has data to act on.
+      gateway.failSendsWithTransportError = true
+      chat.retryOutboxCommand("active")
+      advanceUntilIdle()
+      assertFalse(chat.healthOk.value)
+
+      gateway.failSendsWithTransportError = false
+      chat.handleGatewayEvent("health", null)
+      advanceUntilIdle()
+
+      // retryOutboxCommand refreshes the active row's createdAt, so the untouched
+      // unknown-session row flushes first in createdAt order.
+      assertEquals(listOf("unknown session", "active session"), gateway.sentMessages)
+      assertEquals(listOf("medium", "off"), gateway.sentThinkingLevels)
       assertTrue(chat.outboxItems.value.isEmpty())
     }
 

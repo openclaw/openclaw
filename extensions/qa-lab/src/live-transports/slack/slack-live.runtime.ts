@@ -85,8 +85,6 @@ type SlackQaScenarioId =
   | "slack-codex-approval-plugin-native"
   | "slack-mention-gating"
   | "slack-reaction-glyph-native"
-  | "slack-thread-follow-up"
-  | "slack-thread-isolation"
   | "slack-top-level-reply-shape";
 
 type SlackQaApprovalKind = "exec" | "plugin";
@@ -505,72 +503,6 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
       kind: "codex-approval",
       token: `SLACK_QA_CODEX_FILE_APPROVAL_${randomUUID().slice(0, 8).toUpperCase()}`,
     }),
-  },
-  {
-    id: "slack-thread-follow-up",
-    standardId: "thread-follow-up",
-    title: "Slack threaded prompt receives threaded reply",
-    timeoutMs: 45_000,
-    configOverrides: { replyToMode: "all" },
-    buildRun: (sutUserId) => {
-      const token = `SLACK_QA_THREAD_${randomUUID().slice(0, 8).toUpperCase()}`;
-      return {
-        expectReply: true,
-        input: `<@${sutUserId}> reply with only this exact marker: ${token}`,
-        matchText: token,
-        beforeRun: async (context) => {
-          const parent = await context.postSlackMessage({
-            text: `thread-follow-up root for ${token}`,
-          });
-          return {
-            details: `created thread root ${parent.ts}`,
-            inputThreadTs: parent.ts,
-          };
-        },
-        verify: (message, context) => {
-          if (message.thread_ts !== context.requestThreadTs) {
-            throw new Error(
-              `expected threaded Slack reply thread_ts=${context.requestThreadTs}; got ${
-                message.thread_ts ?? "<none>"
-              }`,
-            );
-          }
-        },
-      };
-    },
-  },
-  {
-    id: "slack-thread-isolation",
-    standardId: "thread-isolation",
-    title: "Slack fresh top-level prompt stays out of previous thread",
-    timeoutMs: 45_000,
-    configOverrides: { replyToMode: "off" },
-    buildRun: (sutUserId) => {
-      const token = `SLACK_QA_ISOLATION_${randomUUID().slice(0, 8).toUpperCase()}`;
-      return {
-        expectReply: true,
-        input: `<@${sutUserId}> reply with only this exact marker: ${token}`,
-        matchText: token,
-        beforeRun: async (context) => {
-          const priorThreadToken = `SLACK_QA_PRIOR_THREAD_${randomUUID().slice(0, 8).toUpperCase()}`;
-          const parent = await context.postSlackMessage({
-            text: `prior thread root for ${priorThreadToken}`,
-          });
-          await context.postSlackMessage({
-            text: `prior thread child for ${priorThreadToken}`,
-            threadTs: parent.ts,
-          });
-          return `created unrelated prior thread ${parent.ts}`;
-        },
-        verify: (message) => {
-          if (message.thread_ts) {
-            throw new Error(
-              `expected isolated top-level Slack reply; got thread_ts=${message.thread_ts}`,
-            );
-          }
-        },
-      };
-    },
   },
 ];
 
@@ -2934,6 +2866,7 @@ export const testing = {
   resolveSlackQaRuntimeEnv,
   sendSlackChannelMessage,
   listSlackMessages,
+  listSlackThreadMessages,
   SLACK_QA_STANDARD_SCENARIO_IDS,
   toSlackQaScenarioArtifactResults,
   waitForSlackNoReply,

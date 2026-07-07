@@ -301,6 +301,11 @@ export const uk: TranslationMap = {
     moveToGroup: "Перемістити сеанс до групи",
     moveToGroupMenu: "Move to group",
     removeFromGroup: "Remove from group",
+    groupMenu: "Параметри групи {group}",
+    renameGroupMenu: "Перейменувати групу…",
+    renameGroupPrompt: "Перейменувати групу",
+    deleteGroupMenu: "Видалити групу…",
+    deleteGroupConfirm: 'Видалити групу "{group}"? Її сеанси буде переміщено до Ungrouped.',
     dragSessionHint: "Перетягніть, щоб перемістити між групами",
     dateToday: "Сьогодні",
     dateYesterday: "Учора",
@@ -1588,10 +1593,13 @@ export const uk: TranslationMap = {
       splitDown: "Розділити вниз",
       closePane: "Закрити панель",
       sessionSelect: "Сеанс панелі",
+      dropSplit: "Розділити",
+      dropOpenHere: "Відкрити тут",
     },
     sidebar: {
       allSessions: "Усі сеанси",
       openSessionMenu: "Open session menu",
+      sortBy: "Сортувати за",
       sortCreated: "Створено",
       sortSessions: "Сортувати сеанси",
       sortUpdated: "Останнє оновлення",
@@ -1665,7 +1673,8 @@ export const uk: TranslationMap = {
       microphonePageInactive: "Входи мікрофона недоступні, поки ця сторінка неактивна.",
       microphonePermissionBlocked:
         "Доступ до мікрофона заблоковано. Дозвольте його в налаштуваннях сайту браузера, щоб показати список входів.",
-      realtimeTalkRequiresMicrophone: "Realtime voice input requires browser microphone access.",
+      realtimeTalkRequiresMicrophone:
+        "Голосовий ввід у реальному часі потребує доступу до мікрофона браузера.",
       selectedMicrophoneUnavailable:
         "Вибраний мікрофон недоступний. Виберіть інший вхід або System default.",
       startVoiceInput: "Почати голосове введення",

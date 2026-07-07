@@ -47,6 +47,8 @@ const WINDOWS_SCOPE_RE =
   /^(src\/process\/|src\/infra\/windows-install-roots\.ts$|src\/shared\/(?:import-specifier|runtime-import)(?:\.test)?\.ts$|scripts\/(?:install\.ps1|(?:npm-runner|pnpm-runner|ui|vitest-process-group)\.(?:mjs|js)|lib\/format-generated-module\.mjs)$|test\/scripts\/(?:format-generated-module|install-ps1|npm-runner|pnpm-runner|ui|vitest-process-group)\.test\.ts$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.github\/workflows\/ci\.yml$|\.github\/actions\/setup-node-env\/action\.yml$|\.github\/actions\/setup-pnpm-store-cache\/action\.yml$)/;
 const WINDOWS_TEST_SCOPE_RE =
   /^(src\/process\/(?:exec\.windows|windows-command)\.test\.ts$|src\/infra\/windows-install-roots\.test\.ts$|src\/shared\/runtime-import\.test\.ts$|test\/scripts\/(?:format-generated-module|npm-runner|pnpm-runner|ui|vitest-process-group)\.test\.ts$)/;
+const WINDOWS_DAEMON_SCOPE_RE =
+  /^src\/daemon\/(?:schtasks(?:[-.][^/]+)?|runtime-hints\.windows-paths(?:\.test)?|test-helpers\/schtasks-(?:base-mocks|fixtures))\.ts$/;
 const TEST_ONLY_PATH_RE =
   /(^test\/|\/test\/|\/tests\/|(?:^|\/)[^/]+\.(?:test|spec|test-utils|test-support|test-harness|e2e-harness)\.[cm]?[jt]sx?$)/;
 const CONTROL_UI_I18N_SCOPE_RE =
@@ -132,8 +134,10 @@ export function detectChangedScope(changedPaths) {
     }
 
     if (
-      WINDOWS_SCOPE_RE.test(path) &&
-      (!TEST_ONLY_PATH_RE.test(path) || WINDOWS_TEST_SCOPE_RE.test(path))
+      (WINDOWS_SCOPE_RE.test(path) || WINDOWS_DAEMON_SCOPE_RE.test(path)) &&
+      (!TEST_ONLY_PATH_RE.test(path) ||
+        WINDOWS_TEST_SCOPE_RE.test(path) ||
+        WINDOWS_DAEMON_SCOPE_RE.test(path))
     ) {
       runWindows = true;
     }

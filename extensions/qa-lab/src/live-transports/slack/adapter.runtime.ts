@@ -90,6 +90,7 @@ export async function createSlackQaTransportAdapter(
   const observedText = new Map<string, string>();
   const nativeMessageIds = new Map<string, string>();
   const busMessageIds = new Map<string, string>();
+  const activeThreadRoots = new Set<string>();
   const polling = (async () => {
     for (;;) {
       if (stopped) {
@@ -112,6 +113,24 @@ export async function createSlackQaTransportAdapter(
         });
         if (observedTs) {
           oldestTs = observedTs;
+        }
+      }
+      for (const threadTs of activeThreadRoots) {
+        const threadMessages = await slackLive.listSlackThreadMessages({
+          channelId: runtimeEnv.channelId,
+          client: sutClient,
+          threadTs,
+        });
+        for (const message of threadMessages) {
+          await recordSlackObservedMessage({
+            accountId,
+            busMessageIds,
+            logicalConversationId,
+            message,
+            messages: context.messages,
+            observedText,
+            sutUserId: sutIdentity.userId,
+          });
         }
       }
       await new Promise<void>((resolve) => {
@@ -154,12 +173,14 @@ export async function createSlackQaTransportAdapter(
       });
       nativeMessageIds.set(message.id, sent.ts);
       busMessageIds.set(sent.ts, message.id);
+      activeThreadRoots.add(nativeThreadTs ?? sent.ts);
       return message;
     },
     resetTransport: () => {
       logicalConversationId = runtimeEnv.channelId;
       nativeMessageIds.clear();
       busMessageIds.clear();
+      activeThreadRoots.clear();
     },
     createGatewayConfig: () =>
       slackLive.buildSlackQaConfig({} as OpenClawConfig, {

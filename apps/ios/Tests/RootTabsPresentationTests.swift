@@ -5,6 +5,39 @@ import UIKit
 
 @MainActor
 struct RootTabsPresentationTests {
+    @Test func `configured gateway bypasses launch request and stale onboarding markers`() {
+        let route = RootTabs.startupPresentationRoute(
+            gatewayConnected: false,
+            hasConnectedOnce: false,
+            onboardingComplete: false,
+            hasExistingGatewayConfig: true,
+            shouldPresentOnLaunch: true)
+
+        #expect(route == .none)
+    }
+
+    @Test func `fresh install presents onboarding`() {
+        let route = RootTabs.startupPresentationRoute(
+            gatewayConnected: false,
+            hasConnectedOnce: false,
+            onboardingComplete: false,
+            hasExistingGatewayConfig: false,
+            shouldPresentOnLaunch: false)
+
+        #expect(route == .onboarding)
+    }
+
+    @Test func `completed setup without gateway opens settings`() {
+        let route = RootTabs.startupPresentationRoute(
+            gatewayConnected: false,
+            hasConnectedOnce: true,
+            onboardingComplete: true,
+            hasExistingGatewayConfig: false,
+            shouldPresentOnLaunch: false)
+
+        #expect(route == .settings)
+    }
+
     @Test func `quick setup does not present when gateway already configured`() {
         let shouldPresent = RootTabs.shouldPresentQuickSetup(
             quickSetupDismissed: false,

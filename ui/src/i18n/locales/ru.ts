@@ -302,6 +302,12 @@ export const ru: TranslationMap = {
     moveToGroup: "Переместить сеанс в группу",
     moveToGroupMenu: "Move to group",
     removeFromGroup: "Remove from group",
+    groupMenu: "Параметры группы {group}",
+    renameGroupMenu: "Переименовать группу…",
+    renameGroupPrompt: "Переименовать группу",
+    deleteGroupMenu: "Удалить группу…",
+    deleteGroupConfirm:
+      "Удалить группу «{group}»? Ее сеансы будут перемещены в раздел «Без группы».",
     dragSessionHint: "Перетащите, чтобы переместить между группами",
     dateToday: "Сегодня",
     dateYesterday: "Вчера",
@@ -1598,10 +1604,13 @@ export const ru: TranslationMap = {
       splitDown: "Разделить вниз",
       closePane: "Закрыть панель",
       sessionSelect: "Сессия панели",
+      dropSplit: "Разделить",
+      dropOpenHere: "Открыть здесь",
     },
     sidebar: {
       allSessions: "Все сеансы",
       openSessionMenu: "Open session menu",
+      sortBy: "Сортировать по",
       sortCreated: "Создано",
       sortSessions: "Сортировать сеансы",
       sortUpdated: "Последнее обновление",
@@ -1675,7 +1684,8 @@ export const ru: TranslationMap = {
       microphonePageInactive: "Входы микрофона недоступны, пока эта страница неактивна.",
       microphonePermissionBlocked:
         "Доступ к микрофону заблокирован. Разрешите его в настройках сайта браузера, чтобы отобразить список входов.",
-      realtimeTalkRequiresMicrophone: "Realtime voice input requires browser microphone access.",
+      realtimeTalkRequiresMicrophone:
+        "Для голосового ввода в реальном времени требуется доступ к микрофону браузера.",
       selectedMicrophoneUnavailable:
         "Выбранный микрофон недоступен. Выберите другой вход или System default.",
       startVoiceInput: "Начать голосовой ввод",

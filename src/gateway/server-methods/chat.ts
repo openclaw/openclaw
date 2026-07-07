@@ -99,12 +99,7 @@ import { parseInboundMediaUri } from "../../media/media-reference.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { renderQrPngDataUrl } from "../../media/qr-image.js";
 import { renderQrTerminal } from "../../media/qr-terminal.js";
-import {
-  deleteMediaBuffer,
-  MEDIA_MAX_BYTES,
-  type SavedMedia,
-  saveMediaBuffer,
-} from "../../media/store.js";
+import { deleteMediaBuffer, MEDIA_MAX_BYTES, type SavedMedia } from "../../media/store.js";
 import { createChannelMessageReplyPipeline } from "../../plugin-sdk/channel-outbound.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding.js";
@@ -148,6 +143,7 @@ import {
   MediaOffloadError,
   type OffloadedRef,
   parseMessageWithAttachments,
+  persistInboundImagesForTranscript,
   resolveChatAttachmentMaxBytes,
   UnsupportedAttachmentError,
 } from "../chat-attachments.js";
@@ -1333,73 +1329,13 @@ async function persistChatSendImages(params: {
   ) {
     return [];
   }
-  const inlineSaved: SavedMedia[] = [];
-  for (const img of params.images) {
-    try {
-      inlineSaved.push(
-        await saveMediaBuffer(Buffer.from(img.data, "base64"), img.mimeType, "inbound"),
-      );
-    } catch (err) {
-      params.logGateway.warn(
-        `chat.send: failed to persist inbound image (${img.mimeType}): ${formatForLog(err)}`,
-      );
-    }
-  }
-  // imageOrder now only tracks image slots (see chat-attachments.ts), so split
-  // offloaded refs by mime: image offloads interleave with inline images via
-  // imageOrder, and non-image offloads append to the transcript tail. Without
-  // this split a non-image file would consume the next image slot whenever
-  // both kinds appear in the same request.
-  const imageOffloadedSaved: SavedMedia[] = [];
-  const nonImageOffloadedSaved: SavedMedia[] = [];
-  for (const ref of params.offloadedRefs) {
-    const entry: SavedMedia = {
-      id: ref.id,
-      path: ref.path,
-      size: 0,
-      contentType: ref.mimeType,
-    };
-    if (ref.mimeType.startsWith("image/")) {
-      imageOffloadedSaved.push(entry);
-    } else {
-      nonImageOffloadedSaved.push(entry);
-    }
-  }
-  if (params.imageOrder.length === 0) {
-    return [...inlineSaved, ...imageOffloadedSaved, ...nonImageOffloadedSaved];
-  }
-  const saved: SavedMedia[] = [];
-  let inlineIndex = 0;
-  let offloadedIndex = 0;
-  for (const entry of params.imageOrder) {
-    if (entry === "inline") {
-      const inline = inlineSaved[inlineIndex++];
-      if (inline) {
-        saved.push(inline);
-      }
-      continue;
-    }
-    const offloaded = imageOffloadedSaved[offloadedIndex++];
-    if (offloaded) {
-      saved.push(offloaded);
-    }
-  }
-  for (; inlineIndex < inlineSaved.length; inlineIndex++) {
-    const inline = inlineSaved[inlineIndex];
-    if (inline) {
-      saved.push(inline);
-    }
-  }
-  for (; offloadedIndex < imageOffloadedSaved.length; offloadedIndex++) {
-    const offloaded = imageOffloadedSaved[offloadedIndex];
-    if (offloaded) {
-      saved.push(offloaded);
-    }
-  }
-  for (const offloaded of nonImageOffloadedSaved) {
-    saved.push(offloaded);
-  }
-  return saved;
+  return await persistInboundImagesForTranscript({
+    images: params.images,
+    imageOrder: params.imageOrder,
+    offloadedRefs: params.offloadedRefs,
+    log: params.logGateway,
+    logContext: "chat.send",
+  });
 }
 
 function stripTrailingOffloadedMediaMarkers(message: string, refs: OffloadedRef[]): string {
@@ -2214,7 +2150,11 @@ function readPreRegisteredAgentDedupePayloadForSession(params: {
       ? payload.sessionKeyAliases.map(normalizeUnknownText)
       : []),
   ]);
-  if (!payloadSessionKeys.has(params.sessionKey)) {
+  const hasPayloadSessionKey = [...payloadSessionKeys].some(Boolean);
+  if (
+    (hasPayloadSessionKey && !payloadSessionKeys.has(params.sessionKey)) ||
+    (!hasPayloadSessionKey && payloadRunId !== params.runId)
+  ) {
     return undefined;
   }
   const agentId = normalizeOptionalText(params.agentId)?.toLowerCase();
@@ -2306,7 +2246,7 @@ function resolveStoredGlobalRunAgentId(
 function writePreRegisteredAgentAbort(params: {
   context: GatewayRequestContext;
   runId: string;
-  sessionKey: string;
+  sessionKey?: string;
   payload: PreRegisteredAgentDedupePayload;
   stopReason: string;
   endedAt?: number;
@@ -2322,7 +2262,7 @@ function writePreRegisteredAgentAbort(params: {
         ok: true,
         payload: {
           runId: params.runId,
-          sessionKey: params.sessionKey,
+          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
           ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
           ...(params.payload.controlUiVisible === false ? { controlUiVisible: false } : {}),
           status: "timeout" as const,
@@ -3438,12 +3378,15 @@ export const chatHandlers: GatewayRequestHandlers = {
     const requester = resolveChatAbortRequester(client);
 
     if (!runId) {
+      const sessionLoadOptions = abortAgentId ? { agentId: abortAgentId } : undefined;
+      const { entry } = loadSessionEntry(rawSessionKey, sessionLoadOptions);
       const res = await abortChatRunsForSessionKeyWithPartials({
         context,
         ops,
         sessionKey: canonicalAbortSessionKey,
         sessionKeyAliases: canonicalAbortSessionKey === rawSessionKey ? undefined : [rawSessionKey],
         agentId: abortAgentId,
+        sessionId: entry?.sessionId,
         defaultAgentId,
         abortOrigin: "rpc",
         stopReason: "rpc",
@@ -3473,7 +3416,12 @@ export const chatHandlers: GatewayRequestHandlers = {
           includeHidden: true,
         });
         if (canonicalMatch) {
-          return { sessionKey: canonicalAbortSessionKey, payload: canonicalMatch };
+          return {
+            sessionKey: normalizeUnknownText(canonicalMatch.sessionKey)
+              ? canonicalAbortSessionKey
+              : undefined,
+            payload: canonicalMatch,
+          };
         }
         if (rawSessionKey === canonicalAbortSessionKey) {
           return undefined;
@@ -3486,7 +3434,12 @@ export const chatHandlers: GatewayRequestHandlers = {
           defaultAgentId,
           includeHidden: true,
         });
-        return aliasMatch ? { sessionKey: rawSessionKey, payload: aliasMatch } : undefined;
+        return aliasMatch
+          ? {
+              sessionKey: normalizeUnknownText(aliasMatch.sessionKey) ? rawSessionKey : undefined,
+              payload: aliasMatch,
+            }
+          : undefined;
       };
       const pendingChatMatch = readPendingRunForAbort(
         context.dedupe.get(pendingChatSendDedupeKey(runId)),

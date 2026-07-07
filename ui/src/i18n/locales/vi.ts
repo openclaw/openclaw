@@ -300,6 +300,11 @@ export const vi: TranslationMap = {
     moveToGroup: "Di chuyển phiên vào một nhóm",
     moveToGroupMenu: "Move to group",
     removeFromGroup: "Remove from group",
+    groupMenu: "Tùy chọn nhóm cho {group}",
+    renameGroupMenu: "Đổi tên nhóm…",
+    renameGroupPrompt: "Đổi tên nhóm",
+    deleteGroupMenu: "Xóa nhóm…",
+    deleteGroupConfirm: 'Xóa nhóm "{group}"? Các phiên của nhóm sẽ chuyển sang Chưa nhóm.',
     dragSessionHint: "Kéo để di chuyển giữa các nhóm",
     dateToday: "Hôm nay",
     dateYesterday: "Hôm qua",
@@ -1577,10 +1582,13 @@ export const vi: TranslationMap = {
       splitDown: "Chia xuống dưới",
       closePane: "Đóng khung",
       sessionSelect: "Phiên trong khung",
+      dropSplit: "Chia đôi",
+      dropOpenHere: "Mở tại đây",
     },
     sidebar: {
       allSessions: "Tất cả phiên",
       openSessionMenu: "Open session menu",
+      sortBy: "Sắp xếp theo",
       sortCreated: "Đã tạo",
       sortSessions: "Sắp xếp phiên",
       sortUpdated: "Cập nhật lần cuối",
@@ -1654,7 +1662,8 @@ export const vi: TranslationMap = {
       microphonePageInactive: "Đầu vào micrô không khả dụng khi trang này không hoạt động.",
       microphonePermissionBlocked:
         "Quyền truy cập micrô bị chặn. Hãy cho phép trong phần cài đặt trang web của trình duyệt để liệt kê các đầu vào.",
-      realtimeTalkRequiresMicrophone: "Realtime voice input requires browser microphone access.",
+      realtimeTalkRequiresMicrophone:
+        "Nhập giọng nói thời gian thực yêu cầu quyền truy cập micrô của trình duyệt.",
       selectedMicrophoneUnavailable:
         "Micrô đã chọn không khả dụng. Chọn một đầu vào khác hoặc mặc định hệ thống.",
       startVoiceInput: "Bắt đầu nhập bằng giọng nói",

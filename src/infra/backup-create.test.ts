@@ -223,6 +223,70 @@ describe("writeTarArchiveWithRetry", () => {
     expect(log).toHaveBeenCalledTimes(2);
   });
 
+  it("uses a fresh temp archive path when cleanup cannot remove a failed attempt", async () => {
+    const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
+      path: "/state/sessions/s-abc/transcript.jsonl",
+    });
+    const tempArchivePath = "/tmp/backup.tar.gz.tmp";
+    const runTar = vi
+      .fn<(attemptTempArchivePath: string) => Promise<void>>()
+      .mockRejectedValueOnce(eofErr)
+      .mockResolvedValueOnce(undefined);
+    const log = vi.fn();
+    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+    const rmSpy = vi.spyOn(fs, "rm").mockImplementation(async () => {
+      throw Object.assign(new Error("resource busy"), { code: "EBUSY" });
+    });
+
+    try {
+      const completedTempArchivePath = await backupCreateInternals.writeTarArchiveWithRetry({
+        tempArchivePath,
+        runTar,
+        log,
+        sleepMs: sleep,
+      });
+
+      expect(runTar).toHaveBeenNthCalledWith(1, tempArchivePath);
+      expect(runTar).toHaveBeenNthCalledWith(2, `${tempArchivePath}.retry-2`);
+      expect(completedTempArchivePath).toBe(`${tempArchivePath}.retry-2`);
+      expect(rmSpy).toHaveBeenCalledWith(tempArchivePath, { force: true });
+      expect(log).toHaveBeenCalledWith(
+        `Backup archiver could not remove temp archive ${tempArchivePath} between retries: EBUSY. Continuing.`,
+      );
+    } finally {
+      rmSpy.mockRestore();
+    }
+  });
+
+  it("cleans retry temp archive paths when a later attempt fails", async () => {
+    const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
+      path: "/state/sessions/s-abc/transcript.jsonl",
+    });
+    const tempArchivePath = "/tmp/backup.tar.gz.tmp";
+    const runTar = vi
+      .fn<(attemptTempArchivePath: string) => Promise<void>>()
+      .mockRejectedValueOnce(eofErr)
+      .mockRejectedValueOnce(new Error("permission denied"));
+    const sleep = vi.fn<(ms: number) => Promise<void>>().mockResolvedValue(undefined);
+    const rmSpy = vi.spyOn(fs, "rm").mockResolvedValue(undefined);
+
+    try {
+      await expect(
+        backupCreateInternals.writeTarArchiveWithRetry({
+          tempArchivePath,
+          runTar,
+          sleepMs: sleep,
+        }),
+      ).rejects.toThrow(/permission denied/);
+
+      expect(runTar).toHaveBeenNthCalledWith(1, tempArchivePath);
+      expect(runTar).toHaveBeenNthCalledWith(2, `${tempArchivePath}.retry-2`);
+      expect(rmSpy).toHaveBeenCalledWith(`${tempArchivePath}.retry-2`, { force: true });
+    } finally {
+      rmSpy.mockRestore();
+    }
+  });
+
   it("surfaces the offending path and attempt count after exhausting retries", async () => {
     const eofErr = Object.assign(new Error("did not encounter expected EOF"), {
       path: "/state/logs/gateway.jsonl",

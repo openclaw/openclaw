@@ -39,4 +39,40 @@ describe("Slack live adapter reconciliation", () => {
       "message-edited",
     ]);
   });
+
+  it("maps observed thread replies to the root bus message", async () => {
+    const state = createQaBusState();
+    const root = state.addInboundMessage({
+      accountId: "sut",
+      conversation: { id: "C123", kind: "channel" },
+      senderId: "U456",
+      text: "root",
+    });
+    const busMessageIds = new Map([["123.000001", root.id]]);
+
+    await testing.recordSlackObservedMessage({
+      accountId: "sut",
+      busMessageIds,
+      logicalConversationId: "C123",
+      message: {
+        text: "thread reply",
+        thread_ts: "123.000001",
+        ts: "123.000002",
+        user: "U123",
+      },
+      messages: {
+        addInboundMessage: (input) => state.addInboundMessage(input),
+        addOutboundMessage: (input) => state.addOutboundMessage(input),
+        editMessage: (input) => state.editMessage(input),
+      },
+      observedText: new Map(),
+      sutUserId: "U123",
+    });
+
+    expect(state.getSnapshot().messages.at(-1)).toMatchObject({
+      direction: "outbound",
+      text: "thread reply",
+      threadId: root.id,
+    });
+  });
 });
