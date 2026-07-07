@@ -236,6 +236,7 @@ describe("voice-call tunnels", () => {
     const result = startNgrokTunnel({ port: 3334, path: "/hook" });
     proc.stdout.emit("error", new Error("EPIPE"));
     await expect(result).rejects.toThrow("ngrok stdout error: EPIPE");
+    expect(proc.killedWith).toBe("SIGKILL");
   });
 
   it("rejects when ngrok stderr emits an error before the tunnel is ready", async () => {
@@ -243,6 +244,15 @@ describe("voice-call tunnels", () => {
     const result = startNgrokTunnel({ port: 3334, path: "/hook" });
     proc.stderr.emit("error", new Error("EIO"));
     await expect(result).rejects.toThrow("ngrok stderr error: EIO");
+    expect(proc.killedWith).toBe("SIGKILL");
+  });
+
+  it("rejects and stops the ngrok auth command on stream errors", async () => {
+    const proc = nextProcess();
+    const result = startNgrokTunnel({ port: 3334, path: "/hook", authToken: "token" });
+    proc.stdout.emit("error", new Error("EPIPE"));
+    await expect(result).rejects.toThrow("ngrok command stdout error: EPIPE");
+    expect(proc.killedWith).toBe("SIGKILL");
   });
 
   it("stops immediately when the ngrok process already exited", async () => {
@@ -251,9 +261,8 @@ describe("voice-call tunnels", () => {
     emitNgrokUrl(proc, "https://early-exit.ngrok.io");
     const tunnel = await result;
     proc.emit("close", 0);
-    const start = Date.now();
-    await tunnel.stop();
-    expect(Date.now() - start).toBeLessThan(500);
+    await expect(tunnel.stop()).resolves.toBeUndefined();
+    expect(proc.killedWith).toBeNull();
   });
 
   it("rejects when Tailscale stdout emits an error before the tunnel is ready", async () => {
@@ -263,5 +272,16 @@ describe("voice-call tunnels", () => {
     await vi.waitFor(() => expect(mocks.spawn).toHaveBeenCalled());
     proc.stdout.emit("error", new Error("EPIPE"));
     await expect(result).rejects.toThrow("Tailscale serve stdout error: EPIPE");
+    expect(proc.killedWith).toBe("SIGKILL");
+  });
+
+  it("rejects and stops Tailscale when stderr emits an error before readiness", async () => {
+    mocks.getTailscaleDnsName.mockResolvedValue("host.tailnet.ts.net");
+    const proc = nextProcess();
+    const result = startTailscaleTunnel({ mode: "funnel", port: 3334, path: "/hook" });
+    await vi.waitFor(() => expect(mocks.spawn).toHaveBeenCalled());
+    proc.stderr.emit("error", new Error("EIO"));
+    await expect(result).rejects.toThrow("Tailscale funnel stderr error: EIO");
+    expect(proc.killedWith).toBe("SIGKILL");
   });
 });

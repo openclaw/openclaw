@@ -42,14 +42,22 @@ function runTailscaleCommand(
 
     let stdout: TailscaleCommandStdout = { bytes: 0, exceeded: false, text: "" };
     let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const finish = (result: { code: number; stdout: string }) => {
       if (settled) {
         return;
       }
       settled = true;
-      clearTimeout(timer);
+      if (timer) {
+        clearTimeout(timer);
+      }
       resolve(result);
     };
+
+    timer = setTimeout(() => {
+      proc.kill("SIGKILL");
+      finish({ code: -1, stdout: "" });
+    }, timeoutMs);
 
     proc.stdout.on("data", (data) => {
       stdout = appendTailscaleCommandStdout(stdout, data);
@@ -58,11 +66,10 @@ function runTailscaleCommand(
         finish({ code: -1, stdout: "" });
       }
     });
-
-    const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
+    proc.stdout.on("error", () => {
       proc.kill("SIGKILL");
       finish({ code: -1, stdout: "" });
-    }, timeoutMs);
+    });
 
     proc.on("error", () => {
       finish({ code: -1, stdout: "" });
