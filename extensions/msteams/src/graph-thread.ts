@@ -128,7 +128,10 @@ export async function fetchChatMessageText(
   chatId: string,
   messageId: string,
 ): Promise<string | undefined> {
-  const path = `/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}?$select=id,body`;
+  // The get-chatMessage endpoint does not support OData query params (e.g.
+  // `$select`); tenants that enforce the documented contract reject the request,
+  // which would silently fall back to the truncated preview. Request it plainly.
+  const path = `/chats/${encodeURIComponent(chatId)}/messages/${encodeURIComponent(messageId)}`;
   try {
     const msg = await fetchGraphJson<GraphThreadMessage>({ token, path });
     const raw = msg.body?.content ?? "";

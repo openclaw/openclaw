@@ -181,7 +181,7 @@ describe("fetchChatMessageText", () => {
     expect(result).toBe("San Francisco right now: @Bot full text");
     expect(fetchGraphJson).toHaveBeenCalledWith({
       token: "tok",
-      path: "/chats/19%3Achat%40thread.v2/messages/1783379480258?$select=id,body",
+      path: "/chats/19%3Achat%40thread.v2/messages/1783379480258",
     });
   });
 

@@ -593,12 +593,14 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     // The inbound Teams blockquote only carries a truncated `preview` snippet for
     // quote replies. When we have the quoted message id, fetch the complete text
     // via the app-only `GET /chats/{chatId}/messages/{id}` endpoint (allowed with
-    // Chat.Read.All). Restricted to chats (DMs + group chats) whose Graph chat id
-    // is a `19:` id — channel quote context is covered by the thread-parent path
-    // below. Any failure degrades to the truncated preview from fix 1, so message
-    // handling never breaks.
+    // Chat.Read.All). Restricted to 1:1 DMs on purpose: in a group chat an
+    // allowlisted sender could quote a non-allowlisted member, and the fetched
+    // full body would bypass the supplemental-quote visibility allowlist applied
+    // below. DMs have only two participants, so there is no third-party exposure.
+    // Group/channel quotes keep the (now-surfaced) truncated preview from fix 1.
+    // Any failure degrades to that preview, so message handling never breaks.
     let quoteBodyFull: string | undefined;
-    if (quoteInfo?.id && !isChannel && graphConversationId.startsWith("19:")) {
+    if (quoteInfo?.id && isDirectMessage && graphConversationId.startsWith("19:")) {
       try {
         const graphToken = await tokenProvider.getAccessToken("https://graph.microsoft.com");
         quoteBodyFull = await fetchChatMessageText(graphToken, graphConversationId, quoteInfo.id);

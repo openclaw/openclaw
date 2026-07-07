@@ -39,6 +39,9 @@ const graphThreadMockState = vi.hoisted(() => ({
       limit?: number,
     ) => Promise<GraphThreadMessage[]>
   >(async () => []),
+  fetchChatMessageText: vi.fn<
+    (token: string, chatId: string, messageId: string) => Promise<string | undefined>
+  >(async () => undefined),
 }));
 
 vi.mock("../graph-thread.js", () => {
@@ -78,6 +81,7 @@ vi.mock("../graph-thread.js", () => {
     resolveTeamGroupId: graphThreadMockState.resolveTeamGroupId,
     fetchChannelMessage: graphThreadMockState.fetchChannelMessage,
     fetchThreadReplies: graphThreadMockState.fetchThreadReplies,
+    fetchChatMessageText: graphThreadMockState.fetchChatMessageText,
   };
 });
 
@@ -120,6 +124,7 @@ describe("msteams monitor handler authz", () => {
     graphThreadMockState.resolveTeamGroupId.mockClear();
     graphThreadMockState.fetchChannelMessage.mockReset();
     graphThreadMockState.fetchThreadReplies.mockReset();
+    graphThreadMockState.fetchChatMessageText.mockClear();
     // Parent-context LRU + per-session dedupe are module-level; clear between
     // cases so stale parent fetches from earlier tests don't bleed in.
     resetThreadParentContextCachesForTest();
@@ -990,5 +995,38 @@ describe("msteams monitor handler authz", () => {
     const ctx = recordFromMockCall(ctxPayload);
     expect(ctx.SupplementalContext).toEqual({});
     expect(ctx.BodyForAgent).toBe("Current message");
+  });
+
+  it("does not fetch full quote text via Graph for group-chat quote replies", async () => {
+    resetThreadMocks();
+    const { deps } = createDeps({
+      channels: { msteams: { groupPolicy: "open", requireMention: false } },
+    } as OpenClawConfig);
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler(
+      createMessageActivity({
+        id: "grp-quote-1",
+        text: "what about this?",
+        from: { id: "attacker-id", aadObjectId: "attacker-aad", name: "Attacker" },
+        conversation: { id: "19:group@thread.tacv2", conversationType: "groupChat" },
+        attachments: [
+          {
+            contentType: "text/html",
+            content:
+              '<blockquote itemscope itemtype="http://schema.skype.com/Reply" itemid="1783379480258">' +
+              '<strong itemprop="mri">Victim</strong>' +
+              '<p itemprop="preview">secret snippet…</p></blockquote>',
+          },
+        ],
+      }),
+    );
+
+    // The group quote IS surfaced from the inbound preview (fix 1), proving the
+    // quote path ran — but the app-only Graph full-text fetch must NOT fire in a
+    // group chat: the fetched body would bypass the supplemental-quote visibility
+    // allowlist. Only 1:1 DMs may fetch full text.
+    const ctx = recordFromMockCall(firstSettledDispatch().ctxPayload);
+    expect(ctx.SupplementalContext).toMatchObject({ quote: { body: "secret snippet…" } });
+    expect(graphThreadMockState.fetchChatMessageText).not.toHaveBeenCalled();
   });
 });
