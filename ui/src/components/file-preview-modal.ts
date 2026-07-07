@@ -1,6 +1,6 @@
 // Control UI component implements the file preview modal element.
 import { LitElement, css, html, type PropertyValues } from "lit";
-import { property, query } from "lit/decorators.js";
+import { property, query, state } from "lit/decorators.js";
 import { icons } from "./icons.ts";
 
 export type FilePreviewModalFile = {
@@ -21,6 +21,16 @@ export class OpenClawFilePreviewModal extends LitElement {
   @property() emptyTitle = "No files match";
   @property() emptySubtitle = "Try another file name or content search.";
   @query(".search") private searchInput?: HTMLInputElement;
+  @query(".detail-body") private detailBody?: HTMLElement;
+
+  private static readonly LINE_HEIGHT = 22;
+  private static readonly OVERSCAN = 30;
+
+  @state() private visibleStart = 0;
+  @state() private visibleEnd = 0;
+  private codeLines: string[] = [];
+  private scrollRafId = 0;
+  private resizeObserver?: ResizeObserver;
 
   static override styles = css`
     :host {
@@ -297,16 +307,20 @@ export class OpenClawFilePreviewModal extends LitElement {
       padding: 20px 24px 24px;
     }
 
-    .pre {
-      margin: 0;
+    .code-vscroll {
+      min-width: 100%;
+      width: max-content;
+    }
+
+    .code-line {
+      height: 22px;
+      line-height: 22px;
       font-family: var(--mono);
       font-size: 13px;
-      line-height: 1.7;
       color: var(--text);
-      background: transparent;
-      border: none;
-      white-space: pre-wrap;
-      word-break: break-word;
+      white-space: pre;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     .foot {
@@ -432,6 +446,18 @@ export class OpenClawFilePreviewModal extends LitElement {
   }
 
   private renderFile(file: FilePreviewModalFile) {
+    this.codeLines = file.contents.split("\n");
+    const totalLines = this.codeLines.length;
+    const totalHeight = totalLines * OpenClawFilePreviewModal.LINE_HEIGHT;
+
+    const start = this.visibleStart;
+    const end = this.visibleEnd > 0 ? this.visibleEnd : Math.min(totalLines, 100);
+
+    const visible: string[] = [];
+    for (let i = start; i < end && i < totalLines; i++) {
+      visible.push(this.codeLines[i]);
+    }
+
     return html`
       <section class="detail">
         <div class="detail-head">
@@ -443,8 +469,14 @@ export class OpenClawFilePreviewModal extends LitElement {
             ${this.contextLabel ? html`<span class="chip ok">${this.contextLabel}</span>` : ""}
           </div>
         </div>
-        <div class="detail-body">
-          <pre class="pre">${file.contents}</pre>
+        <div class="detail-body" @scroll=${this.handleCodeScroll}>
+          <div class="code-vscroll" style="height:${totalHeight}px;">
+            <div style="height:${start * OpenClawFilePreviewModal.LINE_HEIGHT}px;"></div>
+            ${visible.map((line) => html`<div class="code-line">${line || " "}</div>`)}
+            <div
+              style="height:${(totalLines - end) * OpenClawFilePreviewModal.LINE_HEIGHT}px;"
+            ></div>
+          </div>
         </div>
       </section>
     `;
@@ -476,10 +508,32 @@ export class OpenClawFilePreviewModal extends LitElement {
 
   protected override firstUpdated() {
     this.focusModal();
+    if (typeof ResizeObserver !== "undefined") {
+      this.resizeObserver = new ResizeObserver(() => {
+        this.recalcVisibleRange();
+      });
+      const body = this.detailBody;
+      if (body) {
+        this.resizeObserver.observe(body);
+      }
+    }
+  }
+
+  override connectedCallback() {
+    super.connectedCallback();
+    this.visibleStart = 0;
+    this.visibleEnd = 0;
+  }
+
+  override disconnectedCallback() {
+    super.disconnectedCallback();
+    cancelAnimationFrame(this.scrollRafId);
+    this.resizeObserver?.disconnect();
   }
 
   protected override updated(changed: PropertyValues<this>) {
     if (changed.has("activePath") || changed.has("query") || changed.has("files")) {
+      this.resetCodeScroll();
       this.scrollActiveFileIntoView();
     }
   }
@@ -514,6 +568,40 @@ export class OpenClawFilePreviewModal extends LitElement {
       default:
     }
   };
+
+  private resetCodeScroll() {
+    cancelAnimationFrame(this.scrollRafId);
+    this.scrollRafId = 0;
+    this.visibleStart = 0;
+    this.visibleEnd = 0;
+  }
+
+  private handleCodeScroll = () => {
+    if (this.scrollRafId) {
+      return;
+    }
+    this.scrollRafId = requestAnimationFrame(() => {
+      this.scrollRafId = 0;
+      this.recalcVisibleRange();
+    });
+  };
+
+  private recalcVisibleRange() {
+    const container = this.detailBody;
+    if (!container || this.codeLines.length === 0) {
+      return;
+    }
+
+    const { LINE_HEIGHT, OVERSCAN } = OpenClawFilePreviewModal;
+    const start = Math.max(0, Math.floor(container.scrollTop / LINE_HEIGHT) - OVERSCAN);
+    const visibleCount = Math.ceil(container.clientHeight / LINE_HEIGHT);
+    const end = Math.min(this.codeLines.length, start + visibleCount + OVERSCAN * 2);
+
+    if (start !== this.visibleStart || end !== this.visibleEnd) {
+      this.visibleStart = start;
+      this.visibleEnd = end;
+    }
+  }
 
   private focusModal() {
     const target = this.searchInput ?? this.shadowRoot?.querySelector<HTMLElement>(".modal");
