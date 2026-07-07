@@ -43,6 +43,7 @@ import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { getSafeLocalStorage, getSafeSessionStorage } from "../local-storage.ts";
 import { normalizeChatSplitLayout, type ChatSplitLayout } from "../pages/chat/split-layout.ts";
 import { parseImportedCustomTheme, type ImportedCustomTheme } from "./custom-theme.ts";
+import { normalizeGatewayTokenScope } from "./gateway-scope.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
 import {
   hasLocalUserIdentity,
@@ -349,25 +350,6 @@ function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
 
 function getSessionStorage(): Storage | null {
   return getSafeSessionStorage();
-}
-
-function normalizeGatewayTokenScope(gatewayUrl: string): string {
-  const trimmed = normalizeOptionalString(gatewayUrl) ?? "";
-  if (!trimmed) {
-    return "default";
-  }
-  try {
-    const base =
-      typeof location !== "undefined"
-        ? `${location.protocol}//${location.host}${location.pathname || "/"}`
-        : undefined;
-    const parsed = base ? new URL(trimmed, base) : new URL(trimmed);
-    const pathname =
-      parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/+$/, "") || parsed.pathname;
-    return `${parsed.protocol}//${parsed.host}${pathname}`;
-  } catch {
-    return trimmed;
-  }
 }
 
 type PersistedSettingsSource = {

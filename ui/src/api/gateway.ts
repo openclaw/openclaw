@@ -817,7 +817,7 @@ export class GatewayBrowserClient {
     this.deviceTokenRetryBudgetUsed = false;
     this.pendingStartupReconnectDelayMs = null;
     if (hello?.auth?.deviceToken && plan.deviceIdentity) {
-      storeDeviceAuthToken({
+      this.storeDeviceAuthToken({
         deviceId: plan.deviceIdentity.deviceId,
         role: hello.auth.role ?? plan.role,
         token: hello.auth.deviceToken,
@@ -882,7 +882,11 @@ export class GatewayBrowserClient {
       plan.deviceIdentity &&
       connectErrorCode === ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH
     ) {
-      clearDeviceAuthToken({ deviceId: plan.deviceIdentity.deviceId, role: plan.role });
+      clearDeviceAuthToken({
+        deviceId: plan.deviceIdentity.deviceId,
+        gatewayUrl: this.opts.url,
+        role: plan.role,
+      });
     }
     const startupRetryAfterMs = resolveGatewayStartupRetryAfterMs(err);
     if (startupRetryAfterMs !== null) {
@@ -897,6 +901,18 @@ export class GatewayBrowserClient {
 
   private isActiveSocket(ws: WebSocket, generation: number): boolean {
     return !this.closed && this.ws === ws && this.connectGeneration === generation;
+  }
+
+  private storeDeviceAuthToken(params: {
+    deviceId: string;
+    role: string;
+    token: string;
+    scopes?: string[];
+  }): void {
+    storeDeviceAuthToken({
+      ...params,
+      gatewayUrl: this.opts.url,
+    });
   }
 
   private async sendConnect(ws: WebSocket, generation: number) {
@@ -1029,6 +1045,7 @@ export class GatewayBrowserClient {
     const authPassword = this.opts.password?.trim() || undefined;
     const storedEntry = loadDeviceAuthToken({
       deviceId: params.deviceId,
+      gatewayUrl: this.opts.url,
       role: params.role,
     });
     const storedScopes = storedEntry?.scopes ?? [];
