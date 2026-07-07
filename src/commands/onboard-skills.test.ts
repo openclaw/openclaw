@@ -1,4 +1,5 @@
 // Onboard skills tests cover skill setup prompts, package manager config, and skip behavior.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -508,5 +509,13 @@ describe("setupSkills", () => {
     expect(prompter.confirm).not.toHaveBeenCalled();
     expect(prompter.text).not.toHaveBeenCalled();
     expect(prompter.multiselect).not.toHaveBeenCalled();
+  });
+
+  it("does not split surrogate pairs when truncating skill install failure text", () => {
+    const suffix = "🚀tail";
+    const content = "x".repeat(139) + suffix;
+    const result = truncateUtf16Safe(content, 139) + "…";
+    expect(result).toBe("x".repeat(139) + "…");
+    expect(result).not.toContain(suffix.slice(0, 1));
   });
 });

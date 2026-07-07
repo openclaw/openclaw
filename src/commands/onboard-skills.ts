@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 /**
  * Interactive skill dependency setup for onboarding.
  *
@@ -47,7 +48,7 @@ function summarizeInstallFailure(message: string): string | undefined {
     return undefined;
   }
   const maxLen = 140;
-  return cleaned.length > maxLen ? `${cleaned.slice(0, maxLen - 1)}…` : cleaned;
+  return cleaned.length > maxLen ? `${truncateUtf16Safe(cleaned, maxLen - 1)}…` : cleaned;
 }
 
 function formatSkillHint(skill: {
@@ -61,7 +62,7 @@ function formatSkillHint(skill: {
     return "install";
   }
   const maxLen = 90;
-  return combined.length > maxLen ? `${combined.slice(0, maxLen - 1)}…` : combined;
+  return combined.length > maxLen ? `${truncateUtf16Safe(combined, maxLen - 1)}…` : combined;
 }
 
 const SKIP_REASON_LABELS = {
