@@ -95,11 +95,12 @@ describe("buildRealtimeVoiceInstructions", () => {
   });
 
   it("truncates injected context without splitting UTF-16 surrogate pairs", async () => {
-    const agentId = `abc\uD83D\uDE80tail`;
+    const agentId = "abc🚀tail";
+    const expectedContext = "OpenClaw agent voice context:\n\n- Agent id: abc";
     const config = createConfig({
       agentContext: {
         enabled: true,
-        maxChars: "OpenClaw agent voice context:\n\n- Agent id: abc".length + 33,
+        maxChars: expectedContext.length + 33,
         includeIdentity: false,
         includeWorkspaceFiles: false,
         files: [],
@@ -111,11 +112,9 @@ describe("buildRealtimeVoiceInstructions", () => {
       baseInstructions: "Base voice instructions.",
       config,
       coreConfig: { agents: { list: [{ id: agentId }] } } as CoreConfig,
-      agentRuntime: createAgentRuntime(await createWorkspace()),
+      agentRuntime: createAgentRuntime("/unused"),
     });
 
-    expect(instructions).toContain("- Agent id: abc\n[truncated]");
-    expect(instructions).not.toContain("\uD83D");
-    expect(instructions).not.toContain("\uDE80");
+    expect(instructions).toBe(`Base voice instructions.\n\n${expectedContext}\n[truncated]`);
   });
 });
