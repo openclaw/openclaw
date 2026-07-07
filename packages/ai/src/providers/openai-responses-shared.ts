@@ -1243,21 +1243,7 @@ export async function processResponsesStream<TApi extends Api>(
         output.responseId = response.id;
       }
       if (response?.usage) {
-        const inputTokenDetails = response.usage.input_tokens_details as
-          | ResponsesInputTokensDetails
-          | null
-          | undefined;
-        const cachedTokens = inputTokenDetails?.cached_tokens || 0;
-        const cacheWriteTokens = inputTokenDetails?.cache_write_tokens || 0;
-        output.usage = {
-          // OpenAI includes cache reads and writes in input_tokens, so split both priced buckets.
-          input: Math.max(0, (response.usage.input_tokens || 0) - cachedTokens - cacheWriteTokens),
-          output: response.usage.output_tokens || 0,
-          cacheRead: cachedTokens,
-          cacheWrite: cacheWriteTokens,
-          totalTokens: response.usage.total_tokens || 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        };
+        output.usage = mapResponsesUsage(response.usage);
       }
       calculateCost(model, output.usage);
       if (options?.applyServiceTierPricing) {
@@ -1270,6 +1256,19 @@ export async function processResponsesStream<TApi extends Api>(
       output.stopReason = mapStopReason(response?.status);
       if (output.content.some((b) => b.type === "toolCall") && output.stopReason === "stop") {
         output.stopReason = "toolUse";
+      }
+    } else if (event.type === "response.incomplete") {
+      // Early abort (e.g. max_output_tokens reached, content filter): the server
+      // ends the stream with response.incomplete and never sends response.completed.
+      // Record the partial usage it reports so cache-hit and other billed tokens
+      // are not dropped from telemetry (#100954). Cost/service-tier/stop-reason
+      // mapping stays specific to response.completed.
+      const response = event.response;
+      if (response?.id) {
+        output.responseId = response.id;
+      }
+      if (response?.usage) {
+        output.usage = mapResponsesUsage(response.usage);
       }
     } else if (event.type === "error") {
       throw new Error(
@@ -1289,6 +1288,24 @@ export async function processResponsesStream<TApi extends Api>(
   if (hasActiveStreamingToolCall()) {
     throw new Error("Responses stream ended with unresolved tool calls");
   }
+}
+
+function mapResponsesUsage(usage: NonNullable<OpenAI.Responses.Response["usage"]>): Usage {
+  const inputTokenDetails = usage.input_tokens_details as
+    | ResponsesInputTokensDetails
+    | null
+    | undefined;
+  const cachedTokens = inputTokenDetails?.cached_tokens || 0;
+  const cacheWriteTokens = inputTokenDetails?.cache_write_tokens || 0;
+  return {
+    // OpenAI includes cache reads and writes in input_tokens, so split both priced buckets.
+    input: Math.max(0, (usage.input_tokens || 0) - cachedTokens - cacheWriteTokens),
+    output: usage.output_tokens || 0,
+    cacheRead: cachedTokens,
+    cacheWrite: cacheWriteTokens,
+    totalTokens: usage.total_tokens || 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
 }
 
 function mapStopReason(status: OpenAI.Responses.ResponseStatus | undefined): StopReason {

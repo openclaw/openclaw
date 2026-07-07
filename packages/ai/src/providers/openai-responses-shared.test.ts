@@ -1926,6 +1926,49 @@ describe("processResponsesStream", () => {
     expect(output.usage.cost.total).toBeCloseTo(0.0007475);
   });
 
+  it("records usage on early-abort response.incomplete without response.completed (#100954)", async () => {
+    const model = {
+      ...gpt56SolModel,
+      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+    } satisfies Model<"openai-responses">;
+    const output = createResponsesAssistantOutput(model, model.api);
+    const stream = new AssistantMessageEventStream();
+
+    // Server ends the stream with response.incomplete (e.g. max_output_tokens
+    // reached) and never sends response.completed. Usage must still be recorded.
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.incomplete",
+          response: {
+            id: "resp_incomplete",
+            status: "incomplete",
+            incomplete_details: { reason: "max_output_tokens" },
+            usage: {
+              input_tokens: 100,
+              input_tokens_details: { cached_tokens: 20, cache_write_tokens: 30 },
+              output_tokens: 10,
+              output_tokens_details: { reasoning_tokens: 0 },
+              total_tokens: 110,
+            },
+          },
+        },
+      ]),
+      output,
+      stream,
+      model,
+    );
+
+    expect(output.responseId).toBe("resp_incomplete");
+    expect(output.usage).toMatchObject({
+      input: 50,
+      output: 10,
+      cacheRead: 20,
+      cacheWrite: 30,
+      totalTokens: 110,
+    });
+  });
+
   it("collapses cumulative message snapshot items into one text block (#91959)", async () => {
     const output = createAssistantOutput();
     const stream = new AssistantMessageEventStream();
