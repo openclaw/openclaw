@@ -153,6 +153,53 @@ describe("agentLoop continuation guards", () => {
       role: "assistant",
     });
   });
+
+  it("suppresses failure events for control-flow errors carrying the sentinel", async () => {
+    // Control-flow signals like MidTurnPrecheckSignal should not produce
+    // visible error events. handleRunFailure emits clean turn_end + agent_end
+    // lifecycle settlement but skips error-message forwarding for errors
+    // carrying the agent-core.controlFlowError sentinel.
+    const signalError = new Error(
+      "Context overflow: prompt too large for the model (mid-turn precheck).",
+    );
+    signalError.name = "MidTurnPrecheckSignal";
+    (signalError as unknown as Record<symbol, unknown>)[Symbol.for("agent-core.controlFlowError")] =
+      true;
+
+    const agent = new Agent({
+      initialState: {
+        messages: [{ role: "user", content: "test", timestamp: 1 }],
+        model,
+      },
+      streamFn: () => {
+        throw signalError;
+      },
+    });
+
+    // Must not throw — handleRunFailure settles cleanly for sentinel errors.
+    await agent.continue();
+    // No error message leaked to UI-visible state.
+    // Lifecycle events (turn_end + agent_end) are still emitted for callers
+    // that depend on consistent terminal settlement.
+    expect(agent.state.errorMessage).toBeUndefined();
+  });
+
+  it("still forwards real errors through handleRunFailure", async () => {
+    const agent = new Agent({
+      initialState: {
+        messages: [{ role: "user", content: "test2", timestamp: 1 }],
+        model,
+      },
+      streamFn: () => {
+        throw new Error("provider exploded");
+      },
+    });
+
+    // Real errors are swallowed by handleRunFailure (existing behavior).
+    await agent.continue();
+    // Error message must be visible in agent state.
+    expect(agent.state.errorMessage).toBe("provider exploded");
+  });
 });
 
 describe("agentLoop streaming updates", () => {

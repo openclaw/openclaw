@@ -31,6 +31,13 @@ import type {
 
 export type { QueueMode } from "./types.js";
 
+/**
+ * Errors carrying this sentinel are control-flow signals (not user-facing
+ * failures). HandleRunFailure skips error-event forwarding for them so the
+ * caller's dedicated recovery path can run without a visible error flash.
+ */
+export const CONTROL_FLOW_ERROR = Symbol.for("agent-core.controlFlowError");
+
 function defaultConvertToLlm(messages: AgentMessage[]): Message[] {
   return messages.filter(
     (message) =>
@@ -534,6 +541,33 @@ export class Agent {
   }
 
   private async handleRunFailure(error: unknown, aborted: boolean): Promise<void> {
+    // Control-flow signals (e.g. MidTurnPrecheckSignal) are not user-facing
+    // errors. Skip error-event forwarding so the caller's dedicated recovery
+    // path can handle truncation + retry without a visible error flash.
+    // Still emit a clean turn_end + agent_end settlement so terminal lifecycle
+    // stays consistent for callers that depend on those events.
+    if (
+      !aborted &&
+      error instanceof Error &&
+      (error as Error & { [CONTROL_FLOW_ERROR]?: unknown })[CONTROL_FLOW_ERROR]
+    ) {
+      // Emit clean lifecycle settlement so subscribers see matching pairs
+      // of turn_start/turn_end and agent_start/agent_end events.
+      const settlementMessage = {
+        role: "assistant" as const,
+        content: [{ type: "text" as const, text: "" }],
+        api: this.mutableState.model.api,
+        provider: this.mutableState.model.provider,
+        model: this.mutableState.model.id,
+        usage: EMPTY_USAGE,
+        stopReason: "stop" as const,
+        timestamp: Date.now(),
+      } satisfies AgentMessage;
+      await this.processEvents({ type: "turn_end", message: settlementMessage, toolResults: [] });
+      await this.processEvents({ type: "agent_end", messages: [settlementMessage] });
+      return;
+    }
+
     const failureMessage = {
       role: "assistant",
       content: [{ type: "text", text: "" }],

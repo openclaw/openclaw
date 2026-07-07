@@ -32,6 +32,10 @@ export class MidTurnPrecheckSignal extends Error {
     super(MID_TURN_PRECHECK_ERROR_MESSAGE);
     this.name = "MidTurnPrecheckSignal";
     this.request = request;
+    // Mark as a control-flow signal so Agent.handleRunFailure skips
+    // failure-event forwarding. The attempt runner's dedicated recovery
+    // path handles truncation + retry without a visible error flash.
+    (this as Record<symbol, unknown>)[Symbol.for("agent-core.controlFlowError")] = true;
   }
 }
 
