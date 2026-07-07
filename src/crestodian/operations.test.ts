@@ -232,6 +232,19 @@ describe("parseCrestodianOperation", () => {
     });
   });
 
+  it("parses interactive model provider setup", () => {
+    expect(parseCrestodianOperation("configure model provider")).toEqual({
+      kind: "model-setup",
+    });
+    expect(parseCrestodianOperation("setup model provider")).toEqual({
+      kind: "model-setup",
+    });
+    expect(parseCrestodianOperation("model setup workspace /tmp/work")).toEqual({
+      kind: "model-setup",
+      workspace: "/tmp/work",
+    });
+  });
+
   it("parses verbal agent switching", () => {
     expect(parseCrestodianOperation("talk to work agent")).toEqual({
       kind: "open-tui",
@@ -673,6 +686,34 @@ describe("parseCrestodianOperation", () => {
         modelSource: "OPENAI_API_KEY",
       },
     );
+  });
+
+  it("offers provider setup after a providerless bootstrap", async () => {
+    const tempDir = makeTempDir(opTempDirs, "crestodian-providerless-setup-");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    const { runtime, lines } = createCrestodianTestRuntime();
+    const applySetup = vi.fn(async () => ({
+      configPath: path.join(tempDir, "openclaw.json"),
+      lines: ["Workspace: /tmp/work"],
+    }));
+
+    const result = await executeCrestodianOperation(
+      { kind: "setup", workspace: "/tmp/work" },
+      runtime,
+      {
+        approved: true,
+        deps: {
+          applySetup,
+          detectInferenceBackends: async () => [],
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      applied: true,
+      followUp: { kind: "model-setup", workspace: "/tmp/work" },
+    });
+    expect(lines.join("\n")).toContain("Default model: not configured yet");
   });
 
   it("runs doctor repairs only after approval and audits them", async () => {
