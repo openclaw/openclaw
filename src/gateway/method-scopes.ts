@@ -69,7 +69,7 @@ export function isNodeRoleMethod(method: string): boolean {
 }
 
 /** Resolves the required static operator scope for a gateway method, if one exists. */
-export function resolveRequiredOperatorScopeForMethod(method: string): OperatorScope | undefined {
+function resolveRequiredOperatorScopeForMethod(method: string): OperatorScope | undefined {
   return resolveScopedMethod(method);
 }
 

@@ -123,7 +123,7 @@ function getVoiceCallRealtimeConfig(config: OpenClawConfig): {
   return getVoiceCallProviderConfig(config, "realtime");
 }
 
-export function getVoiceCallStreamingConfig(config: OpenClawConfig): {
+function getVoiceCallStreamingConfig(config: OpenClawConfig): {
   provider?: string;
   providers?: Record<string, RealtimeTranscriptionProviderConfig>;
 } {

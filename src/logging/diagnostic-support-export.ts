@@ -670,7 +670,7 @@ function resolveOutputPath(options: {
   return resolved;
 }
 
-export async function buildDiagnosticSupportExport(
+async function buildDiagnosticSupportExport(
   options: DiagnosticSupportExportOptions = {},
 ): Promise<DiagnosticSupportExportArtifact> {
   const env = options.env ?? process.env;
