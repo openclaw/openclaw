@@ -156,8 +156,34 @@ describe("openrouter media understanding provider", () => {
     });
   });
 
+  it("accepts string temperature via provider query options", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: new Response(JSON.stringify({ text: "ok" }), { status: 200 }),
+      release,
+    });
+
+    await transcribeOpenRouterAudio({
+      buffer: Buffer.from("audio"),
+      fileName: "voice.webm",
+      apiKey: "sk-openrouter",
+      timeoutMs: 5_000,
+      query: { temperature: "0.2" },
+      fetchFn: fetch,
+    });
+
+    expect(firstPostJsonRequest().body).toEqual({
+      model: "openai/whisper-large-v3-turbo",
+      input_audio: {
+        data: Buffer.from("audio").toString("base64"),
+        format: "webm",
+      },
+      temperature: 0.2,
+    });
+  });
+
   it("drops malformed temperature query options", async () => {
-    for (const temperature of [Number.NaN, Number.POSITIVE_INFINITY]) {
+    for (const temperature of [Number.NaN, Number.POSITIVE_INFINITY, "", "abc", "0x10"]) {
       const release = vi.fn(async () => {});
       postJsonRequestMock.mockResolvedValueOnce({
         response: new Response(JSON.stringify({ text: "ok" }), { status: 200 }),

@@ -100,6 +100,21 @@ type OpenRouterSttResponse = {
   text?: string;
 };
 
+function resolveOpenRouterSttTemperature(value: unknown) {
+  const temperature = asFiniteNumber(value);
+  if (temperature !== undefined) {
+    return temperature;
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!/^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/iu.test(trimmed)) {
+    return undefined;
+  }
+  return asFiniteNumber(Number(trimmed));
+}
+
 export async function transcribeOpenRouterAudio(
   params: AudioTranscriptionRequest,
 ): Promise<AudioTranscriptionResult> {
@@ -126,7 +141,7 @@ export async function transcribeOpenRouterAudio(
       capability: "audio",
       transport: "media-understanding",
     });
-  const temperature = asFiniteNumber(params.query?.temperature);
+  const temperature = resolveOpenRouterSttTemperature(params.query?.temperature);
 
   const { response, release } = await postJsonRequest({
     url: `${baseUrl}/audio/transcriptions`,
