@@ -1,6 +1,7 @@
 // Control UI component implements the file preview modal element.
 import { LitElement, css, html, type PropertyValues } from "lit";
 import { property, query, state } from "lit/decorators.js";
+import { renderCopyButton } from "./copy-button.ts";
 import { icons } from "./icons.ts";
 
 export type FilePreviewModalFile = {
@@ -20,6 +21,7 @@ export class OpenClawFilePreviewModal extends LitElement {
   @property() readOnlyLabel = "read-only";
   @property() emptyTitle = "No files match";
   @property() emptySubtitle = "Try another file name or content search.";
+  @property() copyLabel = "Copy file";
   @query(".search") private searchInput?: HTMLInputElement;
   @query(".detail-body") private detailBody?: HTMLElement;
 
@@ -28,9 +30,15 @@ export class OpenClawFilePreviewModal extends LitElement {
 
   @state() private visibleStart = 0;
   @state() private visibleEnd = 0;
+  private filteredFiles: FilePreviewModalFile[] = [];
+  private activeFile?: FilePreviewModalFile;
+  private derivedInputsReady = false;
+  private codeSource?: string;
   private codeLines: string[] = [];
   private scrollRafId = 0;
   private resizeObserver?: ResizeObserver;
+  private resizeObserverTarget?: HTMLElement;
+  private resetScrollAfterUpdate = true;
 
   static override styles = css`
     :host {
@@ -260,8 +268,17 @@ export class OpenClawFilePreviewModal extends LitElement {
       border-bottom: 1px solid var(--border);
     }
 
+    .detail-title-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+
     .title {
-      margin: 0 0 10px;
+      flex: 1;
+      min-width: 0;
+      margin: 0;
       font-family: var(--mono);
       font-size: 22px;
       color: var(--text-strong);
@@ -270,6 +287,84 @@ export class OpenClawFilePreviewModal extends LitElement {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+
+    .chat-copy-btn {
+      width: 32px;
+      height: 32px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
+      padding: 0;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: var(--bg-elevated);
+      color: var(--muted);
+      cursor: pointer;
+    }
+
+    .chat-copy-btn:hover {
+      border-color: var(--border-strong);
+      color: var(--text-strong);
+    }
+
+    .chat-copy-btn:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    .chat-copy-btn__icon {
+      display: inline-flex;
+      width: 16px;
+      height: 16px;
+      position: relative;
+    }
+
+    .chat-copy-btn__icon-copy,
+    .chat-copy-btn__icon-check {
+      position: absolute;
+      inset: 0;
+      transition: opacity 150ms ease;
+    }
+
+    .chat-copy-btn__icon-check {
+      opacity: 0;
+    }
+
+    .chat-copy-btn[data-copied="1"] .chat-copy-btn__icon-copy {
+      opacity: 0;
+    }
+
+    .chat-copy-btn[data-copied="1"] .chat-copy-btn__icon-check {
+      opacity: 1;
+    }
+
+    .chat-copy-btn[data-copying="1"] {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .chat-copy-btn[data-error="1"] {
+      border-color: var(--danger-subtle);
+      background: var(--danger-subtle);
+      color: var(--danger);
+    }
+
+    .chat-copy-btn[data-copied="1"] {
+      border-color: var(--ok-subtle);
+      background: var(--ok-subtle);
+      color: var(--ok);
+    }
+
+    .chat-copy-btn svg {
+      width: 16px;
+      height: 16px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 1.5px;
+      stroke-linecap: round;
+      stroke-linejoin: round;
     }
 
     .chips {
@@ -383,9 +478,34 @@ export class OpenClawFilePreviewModal extends LitElement {
     }
   `;
 
+  protected override willUpdate(changed: PropertyValues<this>) {
+    const inputsChanged =
+      !this.derivedInputsReady ||
+      changed.has("activePath") ||
+      changed.has("query") ||
+      changed.has("files");
+    if (!inputsChanged) {
+      return;
+    }
+
+    this.derivedInputsReady = true;
+    this.filteredFiles = this.filterFiles();
+    const nextActiveFile = this.resolveActiveFile(this.filteredFiles);
+    this.activeFile = nextActiveFile;
+
+    const nextCodeSource = nextActiveFile?.contents;
+    if (nextCodeSource !== this.codeSource) {
+      this.codeSource = nextCodeSource;
+      this.codeLines = nextCodeSource?.split("\n") ?? [];
+    }
+
+    this.resetVirtualRange();
+    this.resetScrollAfterUpdate = true;
+  }
+
   override render() {
-    const filteredFiles = this.filterFiles();
-    const activeFile = this.resolveActiveFile(filteredFiles);
+    const filteredFiles = this.filteredFiles;
+    const activeFile = this.activeFile;
     const fileCount =
       filteredFiles.length === this.files.length
         ? `${this.files.length} files`
@@ -446,22 +566,20 @@ export class OpenClawFilePreviewModal extends LitElement {
   }
 
   private renderFile(file: FilePreviewModalFile) {
-    this.codeLines = file.contents.split("\n");
     const totalLines = this.codeLines.length;
     const totalHeight = totalLines * OpenClawFilePreviewModal.LINE_HEIGHT;
-
-    const start = this.visibleStart;
-    const end = this.visibleEnd > 0 ? this.visibleEnd : Math.min(totalLines, 100);
-
-    const visible: string[] = [];
-    for (let i = start; i < end && i < totalLines; i++) {
-      visible.push(this.codeLines[i]);
-    }
+    const start = Math.min(this.visibleStart, totalLines);
+    const fallbackEnd = Math.min(totalLines, 100);
+    const end = Math.max(start, Math.min(this.visibleEnd || fallbackEnd, totalLines));
+    const visible = this.codeLines.slice(start, end);
 
     return html`
       <section class="detail">
         <div class="detail-head">
-          <h2 class="title">${file.path}</h2>
+          <div class="detail-title-row">
+            <h2 class="title">${file.path}</h2>
+            ${file.contents ? renderCopyButton(file.contents, this.copyLabel) : ""}
+          </div>
           <div class="chips">
             <span class="chip accent">${fileKind(file.path)}</span>
             <span class="chip">${file.size}</span>
@@ -470,10 +588,17 @@ export class OpenClawFilePreviewModal extends LitElement {
           </div>
         </div>
         <div class="detail-body" @scroll=${this.handleCodeScroll}>
-          <div class="code-vscroll" style="height:${totalHeight}px;">
-            <div style="height:${start * OpenClawFilePreviewModal.LINE_HEIGHT}px;"></div>
-            ${visible.map((line) => html`<div class="code-line">${line || " "}</div>`)}
+          <div class="code-vscroll" role="presentation" style="height:${totalHeight}px;">
             <div
+              aria-hidden="true"
+              style="height:${start * OpenClawFilePreviewModal.LINE_HEIGHT}px;"
+            ></div>
+            ${visible.map(
+              (line, index) =>
+                html`<div class="code-line" data-line=${start + index}>${line || " "}</div>`,
+            )}
+            <div
+              aria-hidden="true"
               style="height:${(totalLines - end) * OpenClawFilePreviewModal.LINE_HEIGHT}px;"
             ></div>
           </div>
@@ -508,32 +633,33 @@ export class OpenClawFilePreviewModal extends LitElement {
 
   protected override firstUpdated() {
     this.focusModal();
-    if (typeof ResizeObserver !== "undefined") {
-      this.resizeObserver = new ResizeObserver(() => {
-        this.recalcVisibleRange();
-      });
-      const body = this.detailBody;
-      if (body) {
-        this.resizeObserver.observe(body);
-      }
-    }
   }
 
   override connectedCallback() {
     super.connectedCallback();
-    this.visibleStart = 0;
-    this.visibleEnd = 0;
+    this.resetVirtualRange();
+    this.resetScrollAfterUpdate = true;
+    this.requestUpdate();
   }
 
   override disconnectedCallback() {
     super.disconnectedCallback();
-    cancelAnimationFrame(this.scrollRafId);
+    this.cancelScrollFrame();
     this.resizeObserver?.disconnect();
+    this.resizeObserverTarget = undefined;
   }
 
   protected override updated(changed: PropertyValues<this>) {
+    this.syncResizeObserver();
+    if (this.resetScrollAfterUpdate) {
+      this.resetScrollAfterUpdate = false;
+      const body = this.detailBody;
+      if (body) {
+        body.scrollTop = 0;
+        body.scrollLeft = 0;
+      }
+    }
     if (changed.has("activePath") || changed.has("query") || changed.has("files")) {
-      this.resetCodeScroll();
       this.scrollActiveFileIntoView();
     }
   }
@@ -569,11 +695,17 @@ export class OpenClawFilePreviewModal extends LitElement {
     }
   };
 
-  private resetCodeScroll() {
-    cancelAnimationFrame(this.scrollRafId);
-    this.scrollRafId = 0;
+  private resetVirtualRange() {
+    this.cancelScrollFrame();
     this.visibleStart = 0;
     this.visibleEnd = 0;
+  }
+
+  private cancelScrollFrame() {
+    if (this.scrollRafId) {
+      cancelAnimationFrame(this.scrollRafId);
+      this.scrollRafId = 0;
+    }
   }
 
   private handleCodeScroll = () => {
@@ -601,6 +733,25 @@ export class OpenClawFilePreviewModal extends LitElement {
       this.visibleStart = start;
       this.visibleEnd = end;
     }
+  }
+
+  private syncResizeObserver() {
+    const target = this.detailBody;
+    if (target === this.resizeObserverTarget) {
+      return;
+    }
+
+    this.resizeObserver?.disconnect();
+    this.resizeObserverTarget = undefined;
+    if (!target || typeof ResizeObserver !== "function") {
+      return;
+    }
+
+    this.resizeObserver ??= new ResizeObserver(() => {
+      this.recalcVisibleRange();
+    });
+    this.resizeObserver.observe(target);
+    this.resizeObserverTarget = target;
   }
 
   private focusModal() {
