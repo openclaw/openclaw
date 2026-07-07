@@ -117,7 +117,7 @@ describe("authorization-backed exec allowlist", () => {
     const dir = makeTempDir();
     const pythonPath = makeExecutable(dir, "python3");
     const env = makePathEnv(dir);
-    const command = "python3 -cprint";
+    const command = "python3 -xcprint";
 
     const result = await evaluateShellAllowlistWithAuthorization({
       command,
@@ -130,7 +130,7 @@ describe("authorization-backed exec allowlist", () => {
 
     expect(result.analysisOk).toBe(true);
     expect(result.allowlistSatisfied).toBe(true);
-    expect(result.segments.map((segment) => segment.argv)).toEqual([["python3", "-cprint"]]);
+    expect(result.segments.map((segment) => segment.argv)).toEqual([["python3", "-xcprint"]]);
     expect(detectPolicyInlineEval(result.segments)).toEqual(
       expect.objectContaining({
         executable: "python3",

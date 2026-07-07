@@ -21,6 +21,7 @@ describe("exec inline eval detection", () => {
     { argv: ["python3", "-cprint('hi')"], expected: "python3 -c" },
     { argv: ["python3", "-bc", "print('hi')"], expected: "python3 -c" },
     { argv: ["python3", "-Sc", "print('hi')"], expected: "python3 -c" },
+    { argv: ["python3", "-xc", "print('hi')"], expected: "python3 -c" },
     { argv: ["python3.13", "-c", "print('hi')"], expected: "python3.13 -c" },
     { argv: ["/usr/bin/pypy3.10", "-c", "print('hi')"], expected: "pypy3.10 -c" },
     { argv: ["/usr/bin/node", "--eval", "console.log('hi')"], expected: "node --eval" },
@@ -94,6 +95,8 @@ describe("exec inline eval detection", () => {
     expect(detectInterpreterInlineEvalArgv(["python3.13", "script.py"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["node", "script.js"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["node", "--evalish=console.log(1)"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["python3", "-Wc", "print('hi')"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["python3", "-Xc", "print('hi')"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["find", ".", "-execute", "id"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["ruby", "-EUTF-8", "script.rb"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["ruby", "-Itest", "script.rb"])).toBeNull();

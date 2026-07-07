@@ -66,6 +66,7 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
           "s",
           "u",
           "v",
+          "x",
         ]),
       },
     ],
