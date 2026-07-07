@@ -337,10 +337,7 @@ describe("update-startup", () => {
     };
   }
 
-  function createExtendedStableConfig(params?: {
-    checkOnStart?: boolean;
-    autoEnabled?: boolean;
-  }) {
+  function createExtendedStableConfig(params?: { checkOnStart?: boolean; autoEnabled?: boolean }) {
     return {
       update: {
         ...(params?.checkOnStart === false ? { checkOnStart: false } : {}),
@@ -533,6 +530,9 @@ describe("update-startup", () => {
         lastAvailableVersion: "2.0.0",
         lastAvailableTag: persistedTag,
       });
+      if (preflightsInstallKind) {
+        mockPackageInstallStatus();
+      }
       const onUpdateAvailableChange = vi.fn();
 
       await runGatewayUpdateCheck({

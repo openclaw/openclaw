@@ -789,6 +789,30 @@ describe("web outbound", () => {
     });
   });
 
+  it("checks send readiness before sending direct polls", async () => {
+    const assertSendReady = vi.fn(async () => {
+      throw new Error("WhatsApp reachout timelock is active");
+    });
+    hoisted.controllerListeners.set("default", {
+      assertSendReady,
+      sendComposingTo,
+      sendMessage,
+      sendPoll,
+      sendReaction,
+    });
+
+    await expect(
+      sendPollWhatsApp(
+        "+1555",
+        { question: "Lunch?", options: ["Pizza", "Sushi"] },
+        { verbose: false, cfg: WHATSAPP_TEST_CFG },
+      ),
+    ).rejects.toThrow("WhatsApp reachout timelock is active");
+
+    expect(assertSendReady).toHaveBeenCalledWith("+1555");
+    expect(sendPoll).not.toHaveBeenCalled();
+  });
+
   it("redacts recipients and poll text in outbound logs", async () => {
     const logPath = path.join(os.tmpdir(), `openclaw-outbound-${crypto.randomUUID()}.log`);
     setLoggerOverride({ level: "trace", file: logPath });

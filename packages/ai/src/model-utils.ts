@@ -16,6 +16,15 @@ export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage
   return usage.cost;
 }
 
+/** Replaces the catalog estimate when the provider reports an authoritative billed total. */
+export function applyProviderReportedUsageCost(usage: Usage, reportedCost: unknown): void {
+  if (typeof reportedCost !== "number" || !Number.isFinite(reportedCost) || reportedCost < 0) {
+    return;
+  }
+  usage.cost.total = reportedCost;
+  usage.cost.totalOrigin = "provider-billed";
+}
+
 const EXTENDED_THINKING_LEVELS: ModelThinkingLevel[] = [
   "off",
   "minimal",

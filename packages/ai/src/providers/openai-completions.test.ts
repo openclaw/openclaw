@@ -12,8 +12,12 @@ type OpenAICompatibleDelta = DeepPartial<ChatCompletionChunk["choices"][number][
 type OpenAICompatibleChoice = Omit<DeepPartial<ChatCompletionChunk["choices"][number]>, "delta"> & {
   delta?: OpenAICompatibleDelta;
 };
-type OpenAICompatibleChatCompletionChunk = Omit<DeepPartial<ChatCompletionChunk>, "choices"> & {
+type OpenAICompatibleChatCompletionChunk = Omit<
+  DeepPartial<ChatCompletionChunk>,
+  "choices" | "usage"
+> & {
   choices?: OpenAICompatibleChoice[];
+  usage?: DeepPartial<ChatCompletionChunk["usage"]> & { cost?: unknown };
 };
 type FirstEventSimpleStreamOptions = SimpleStreamOptions & {
   firstEventTimeoutMs?: number;
@@ -142,7 +146,12 @@ function makeToolCallChunk(
 
 function makeFinishChunk(
   finishReason: string,
-  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number },
+  usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+    cost?: unknown;
+  },
 ): OpenAICompatibleChatCompletionChunk {
   return {
     id: "chatcmpl-test",
@@ -210,6 +219,52 @@ describe("OpenAI-compatible completions params", () => {
     } finally {
       configureAiTransportHost({});
     }
+  });
+
+  it("preserves a valid provider-reported usage cost", async () => {
+    mockChunksRef.chunks = [
+      makeTextChunk("ok"),
+      makeFinishChunk("stop", {
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        total_tokens: 15,
+        cost: 0,
+      }),
+    ];
+    const pricedModel = {
+      ...model,
+      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+    } satisfies Model<"openai-completions">;
+
+    const result = await streamOpenAICompletions(pricedModel, context, {
+      apiKey: "sk-test",
+    }).result();
+
+    expect(result.usage.cost.total).toBe(0);
+    expect(result.usage.cost.totalOrigin).toBe("provider-billed");
+  });
+
+  it("keeps the catalog estimate for an invalid provider-reported usage cost", async () => {
+    mockChunksRef.chunks = [
+      makeTextChunk("ok"),
+      makeFinishChunk("stop", {
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        total_tokens: 15,
+        cost: -1,
+      }),
+    ];
+    const pricedModel = {
+      ...model,
+      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+    } satisfies Model<"openai-completions">;
+
+    const result = await streamOpenAICompletions(pricedModel, context, {
+      apiKey: "sk-test",
+    }).result();
+
+    expect(result.usage.cost.total).toBeCloseTo(0.00002);
+    expect(result.usage.cost.totalOrigin).toBeUndefined();
   });
 
   it("fails when streaming headers arrive but no first SSE event follows", async () => {

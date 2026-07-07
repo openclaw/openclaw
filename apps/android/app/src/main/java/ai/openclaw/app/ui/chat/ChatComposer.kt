@@ -61,7 +61,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.onPreInterceptKeyBeforeSoftKeyboard
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -192,6 +192,7 @@ internal fun ChatComposer(
   val sendBusy = pendingRunCount > 0
   val recordingVoiceNote = voiceNoteState is VoiceNoteRecorderState.Recording
   val preparingVoiceNote = voiceNoteState is VoiceNoteRecorderState.Preparing
+  val hardwareEnterHandler = remember { PhysicalChatSendKeyHandler() }
   val sendCurrentInput = {
     val message = input.trim()
     val action = resolveSheetComposerSendAction(input = message)
@@ -232,26 +233,34 @@ internal fun ChatComposer(
     } else if (preparingVoiceNote) {
       VoiceNotePreparing()
     } else {
-      OutlinedTextField(
+      ChatTextFieldValueAdapter(
         value = input,
         onValueChange = { input = it },
-        modifier =
-          Modifier
-            .fillMaxWidth()
-            .onPreviewKeyEvent { event ->
-              handlePhysicalChatSend(
-                event = event,
-                sendEnabled = canSend,
-                onSend = sendCurrentInput,
-              )
-            },
-        placeholder = { Text("Type a message…", style = mobileBodyStyle(), color = mobileTextTertiary) },
-        minLines = 2,
-        maxLines = 5,
-        textStyle = mobileBodyStyle().copy(color = mobileText),
-        shape = RoundedCornerShape(14.dp),
-        colors = chatTextFieldColors(),
-      )
+        keyHandler = hardwareEnterHandler,
+      ) { textFieldValue, updateTextFieldValue ->
+        OutlinedTextField(
+          value = textFieldValue,
+          onValueChange = updateTextFieldValue,
+          modifier =
+            Modifier
+              .fillMaxWidth()
+              .onPreInterceptKeyBeforeSoftKeyboard { event ->
+                hardwareEnterHandler.handle(
+                  event = event,
+                  sendEnabled = canSend,
+                  textEmpty = textFieldValue.text.isEmpty(),
+                  compositionActive = textFieldValue.composition != null,
+                  onSend = sendCurrentInput,
+                )
+              },
+          placeholder = { Text("Type a message…", style = mobileBodyStyle(), color = mobileTextTertiary) },
+          minLines = 2,
+          maxLines = 5,
+          textStyle = mobileBodyStyle().copy(color = mobileText),
+          shape = RoundedCornerShape(14.dp),
+          colors = chatTextFieldColors(),
+        )
+      }
     }
 
     VoiceNoteRecorderError(voiceNoteState)

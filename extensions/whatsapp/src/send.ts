@@ -378,6 +378,9 @@ export async function sendPollWhatsApp(
       },
       "sending poll",
     );
+    if (!isWhatsAppNewsletterJid(jid)) {
+      await active.assertSendReady?.(to);
+    }
     const result = await active.sendPoll(to, normalized);
     const messageId = (result as { messageId?: string })?.messageId ?? "unknown";
     const durationMs = Date.now() - startedAt;

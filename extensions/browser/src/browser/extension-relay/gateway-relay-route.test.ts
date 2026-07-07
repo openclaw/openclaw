@@ -43,6 +43,7 @@ import { handleGatewayExtensionUpgrade } from "./gateway-relay-route.js";
 import { extensionRelayTokenMatches } from "./relay-auth.js";
 
 const TOKEN = "a".repeat(64);
+const ROTATED_TOKEN = "b".repeat(64);
 
 function fakeSocket() {
   const writes: string[] = [];
@@ -204,6 +205,35 @@ describe("handleGatewayExtensionUpgrade", () => {
       socket,
       Buffer.alloc(0),
     );
+    expect(handled).toBe(true);
+    expect(ensureExtensionRelayForProfileMock).toHaveBeenCalledOnce();
+    expect(attachExtensionWebSocketMock).toHaveBeenCalledWith(bridge, { readyState: 1 });
+  });
+
+  it("authenticates against the live relay secret when Browser state is stale", async () => {
+    readExtensionRelayTokenMock.mockReturnValue(ROTATED_TOKEN);
+    getBrowserControlStateMock.mockReturnValue(stateWithExtensionProfile());
+    primeProfile();
+    const bridge = { id: "rotated-bridge" };
+    ensureExtensionRelayForProfileMock.mockResolvedValue({ bridge });
+    await mockSuccessfulUpgrade();
+
+    const stale = fakeSocket();
+    await handleGatewayExtensionUpgrade(
+      relayReq("/browser/extension", TOKEN),
+      stale.socket,
+      Buffer.alloc(0),
+    );
+    expect(stale.writes.join("")).toContain("401");
+    expect(ensureExtensionRelayForProfileMock).not.toHaveBeenCalled();
+
+    const rotated = fakeSocket();
+    const handled = await handleGatewayExtensionUpgrade(
+      relayReq("/browser/extension", ROTATED_TOKEN),
+      rotated.socket,
+      Buffer.alloc(0),
+    );
+
     expect(handled).toBe(true);
     expect(ensureExtensionRelayForProfileMock).toHaveBeenCalledOnce();
     expect(attachExtensionWebSocketMock).toHaveBeenCalledWith(bridge, { readyState: 1 });

@@ -96,7 +96,7 @@ export async function handleGatewayExtensionUpgrade(
   // Authenticate before lazy-starting Browser control. A valid pairing secret
   // may start the service; an arbitrary public WebSocket request may not.
   let state = getBrowserControlState();
-  const expectedToken = state?.resolved.extensionRelayToken ?? readExtensionRelayToken();
+  const expectedToken = readExtensionRelayToken();
   const candidate = requestExtensionProtocolToken(req);
   if (
     !expectedToken ||
