@@ -3,31 +3,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HookRunner } from "../../plugins/hooks.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
-const fsMocks = vi.hoisted(() => ({
-  readdir: vi.fn(),
-}));
-
-const readRegularFileMock = vi.hoisted(() => vi.fn());
+const readSessionMessagesAsyncMock = vi.hoisted(() => vi.fn());
 
 const hookRunnerMocks = vi.hoisted(() => ({
   hasHooks: vi.fn<HookRunner["hasHooks"]>(),
   runBeforeReset: vi.fn<HookRunner["runBeforeReset"]>(),
 }));
 
-vi.mock("node:fs/promises", async () => {
-  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-  return {
-    ...actual,
-    default: {
-      ...actual,
-      readdir: fsMocks.readdir,
-    },
-    readdir: fsMocks.readdir,
-  };
-});
-
-vi.mock("../../infra/regular-file.js", () => ({
-  readRegularFile: readRegularFileMock,
+vi.mock("../../gateway/session-transcript-readers.js", () => ({
+  readSessionMessagesAsync: readSessionMessagesAsyncMock,
 }));
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
@@ -69,24 +53,23 @@ describe("emitResetCommandHooks", () => {
       sessionKey,
       previousSessionEntry: {
         sessionId: "prev-session",
+        sessionFile: "/tmp/prev-session.jsonl",
       } as HandleCommandsParams["previousSessionEntry"],
       workspaceDir: "/tmp/openclaw-workspace",
     });
 
-    expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledTimes(1));
     const [, ctx] = firstBeforeResetCall();
     return ctx;
   }
 
   beforeEach(() => {
-    readRegularFileMock.mockReset();
-    fsMocks.readdir.mockReset();
+    readSessionMessagesAsyncMock.mockReset();
     hookRunnerMocks.hasHooks.mockReset();
     hookRunnerMocks.runBeforeReset.mockReset();
     hookRunnerMocks.hasHooks.mockImplementation((hookName) => hookName === "before_reset");
     hookRunnerMocks.runBeforeReset.mockResolvedValue(undefined);
-    readRegularFileMock.mockResolvedValue({ buffer: Buffer.from("", "utf-8") });
-    fsMocks.readdir.mockResolvedValue([]);
+    readSessionMessagesAsyncMock.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -117,21 +100,10 @@ describe("emitResetCommandHooks", () => {
     expect(ctx?.workspaceDir).toBe("/tmp/openclaw-workspace");
   });
 
-  it("recovers the archived transcript when the original reset transcript path is gone", async () => {
-    readRegularFileMock.mockRejectedValueOnce(
-      Object.assign(new Error("ENOENT"), { code: "ENOENT" }),
-    );
-    fsMocks.readdir.mockResolvedValueOnce(["prev-session.jsonl.reset.2026-02-16T22-26-33.000Z"]);
-    readRegularFileMock.mockResolvedValueOnce({
-      buffer: Buffer.from(
-        `${JSON.stringify({
-          type: "message",
-          id: "m1",
-          message: { role: "user", content: "Recovered from archive" },
-        })}\n`,
-        "utf-8",
-      ),
-    });
+  it("uses the session transcript reader with reset-archive fallback", async () => {
+    readSessionMessagesAsyncMock.mockResolvedValueOnce([
+      { role: "user", content: "Recovered from archive" },
+    ]);
     const command = {
       surface: "telegram",
       senderId: "vac",
@@ -155,52 +127,27 @@ describe("emitResetCommandHooks", () => {
     });
 
     await vi.waitFor(() => expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledTimes(1));
+    expect(readSessionMessagesAsyncMock).toHaveBeenCalledTimes(1);
+    const [scope, opts] = readSessionMessagesAsyncMock.mock.calls[0] as [
+      Record<string, unknown>,
+      Record<string, unknown>,
+    ];
+    expect(scope.sessionId).toBe("prev-session");
+    expect(scope.sessionFile).toBe("/tmp/prev-session.jsonl");
+    expect(scope.sessionKey).toBe("agent:main:telegram:group:-1003826723328:topic:8428");
+    expect(opts.mode).toBe("full");
+    expect(opts.allowResetArchiveFallback).toBe(true);
     const [event, ctx] = firstBeforeResetCall();
-    expect(event.sessionFile).toBe("/tmp/prev-session.jsonl.reset.2026-02-16T22-26-33.000Z");
     expect(event.messages).toEqual([{ role: "user", content: "Recovered from archive" }]);
     expect(event.reason).toBe("new");
     expect(ctx.sessionId).toBe("prev-session");
   });
 
-  it("keeps leaf-controlled side branches out of before_reset hooks", async () => {
-    readRegularFileMock.mockResolvedValueOnce({
-      buffer: Buffer.from(
-        [
-          {
-            type: "message",
-            id: "active-root",
-            parentId: null,
-            message: { role: "user", content: "active root" },
-          },
-          {
-            type: "message",
-            id: "side-entry",
-            parentId: "active-root",
-            message: { role: "assistant", content: "side delivery" },
-          },
-          {
-            type: "leaf",
-            id: "active-leaf",
-            parentId: "side-entry",
-            targetId: "active-root",
-          },
-          {
-            type: "message",
-            id: "active-tail",
-            parentId: "active-root",
-            message: { role: "assistant", content: "active tail" },
-          },
-          {
-            type: "metadata",
-            id: "opaque-after-active-tail",
-            parentId: "side-entry",
-          },
-        ]
-          .map((entry) => JSON.stringify(entry))
-          .join("\n"),
-        "utf-8",
-      ),
-    });
+  it("passes through messages returned by the transcript reader", async () => {
+    readSessionMessagesAsyncMock.mockResolvedValueOnce([
+      { role: "user", content: "active root" },
+      { role: "assistant", content: "active tail" },
+    ]);
 
     await emitResetCommandHooks({
       action: "new",

@@ -1,18 +1,11 @@
+import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 // Emits reset hooks and cleanup work around session reset commands.
-import fs from "node:fs/promises";
-import path from "node:path";
-import { selectSessionTranscriptLeafControlledPath } from "../../config/sessions/transcript-tree.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
-import { readRegularFile } from "../../infra/regular-file.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { HandleCommandsParams } from "./commands-types.js";
-
-// Reset-hook transcripts are JSONL files; cap reads so a runaway transcript
-// cannot OOM the reset hook path.
-const RESET_HOOK_TRANSCRIPT_MAX_BYTES = 16 * 1024 * 1024;
 
 const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-reply.runtime.js"));
 
@@ -22,124 +15,42 @@ function loadRouteReplyRuntime() {
 
 export type ResetCommandAction = "new" | "reset";
 
-function parseTranscriptMessages(content: string): unknown[] {
-  const entries: unknown[] = [];
-  for (const line of content.split("\n")) {
-    if (!line.trim()) {
-      continue;
-    }
-    try {
-      const entry = JSON.parse(line);
-      entries.push(entry);
-    } catch {
-      // Skip malformed lines from partially-written transcripts.
-    }
-  }
-  const selectedEntries = selectSessionTranscriptLeafControlledPath(entries) ?? entries;
-  return selectedEntries.flatMap((entry) => {
-    if (
-      entry &&
-      typeof entry === "object" &&
-      !Array.isArray(entry) &&
-      (entry as { type?: unknown }).type === "message" &&
-      (entry as { message?: unknown }).message
-    ) {
-      return [(entry as { message: unknown }).message];
-    }
-    return [];
-  });
-}
-
-async function readTranscriptForReset(sessionFilePath: string): Promise<string | null> {
-  try {
-    const { buffer } = await readRegularFile({
-      filePath: sessionFilePath,
-      maxBytes: RESET_HOOK_TRANSCRIPT_MAX_BYTES,
-    });
-    return buffer.toString("utf-8");
-  } catch (err) {
-    // Preserve the archived-transcript fallback for missing original files;
-    // only swallow non-ENOENT errors so unrelated read failures do not crash
-    // the reset hook.
-    if ((err as { code?: unknown })?.code === "ENOENT") {
-      throw err;
-    }
-    return null;
-  }
-}
-
-async function findLatestArchivedTranscript(sessionFile: string): Promise<string | undefined> {
-  try {
-    const dir = path.dirname(sessionFile);
-    const base = path.basename(sessionFile);
-    const resetPrefix = `${base}.reset.`;
-    const archived = (await fs.readdir(dir))
-      .filter((name) => name.startsWith(resetPrefix))
-      .toSorted();
-    const latest = archived[archived.length - 1];
-    return latest ? path.join(dir, latest) : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 async function loadBeforeResetTranscript(params: {
   sessionFile?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  storePath?: string;
+  agentId?: string;
 }): Promise<{ sessionFile?: string; messages: unknown[] }> {
   const sessionFile = params.sessionFile;
-  if (!sessionFile) {
-    logVerbose("before_reset: no session file available, firing hook with empty messages");
+  const sessionId = params.sessionId;
+  if (!sessionFile || !sessionId) {
+    logVerbose("before_reset: no session file/id available, firing hook with empty messages");
     return { sessionFile, messages: [] };
   }
 
   try {
-    const content = await readTranscriptForReset(sessionFile);
-    if (content === null) {
-      logVerbose(
-        `before_reset: failed to read session file ${sessionFile}; firing hook with empty messages`,
-      );
-      return { sessionFile, messages: [] };
-    }
-    return {
-      sessionFile,
-      messages: parseTranscriptMessages(content),
-    };
+    const messages = await readSessionMessagesAsync(
+      {
+        // Only bind to an agent when we have a storePath; otherwise the reader
+        // should honor the explicit sessionFile path (e.g. absolute temp paths).
+        agentId: params.storePath ? params.agentId : undefined,
+        sessionFile,
+        sessionId,
+        sessionKey: params.sessionKey,
+      },
+      {
+        mode: "full",
+        reason: "before_reset hook payload",
+        allowResetArchiveFallback: true,
+      },
+    );
+    return { sessionFile, messages };
   } catch (err: unknown) {
-    if ((err as { code?: unknown })?.code === "ENOENT") {
-      // Original transcript is missing; fall through to archived transcript recovery.
-    } else {
-      logVerbose(
-        `before_reset: failed to read session file ${sessionFile}; firing hook with empty messages (${String(err)})`,
-      );
-      return { sessionFile, messages: [] };
-    }
-  }
-
-  const archivedSessionFile = await findLatestArchivedTranscript(sessionFile);
-  if (!archivedSessionFile) {
     logVerbose(
-      `before_reset: failed to find archived transcript for ${sessionFile}; firing hook with empty messages`,
+      `before_reset: failed to read session messages for ${sessionId}; firing hook with empty messages (${String(err)})`,
     );
     return { sessionFile, messages: [] };
-  }
-
-  try {
-    const content = await readTranscriptForReset(archivedSessionFile);
-    if (content === null) {
-      logVerbose(
-        `before_reset: failed to read archived session file ${archivedSessionFile}; firing hook with empty messages`,
-      );
-      return { sessionFile: archivedSessionFile, messages: [] };
-    }
-    return {
-      sessionFile: archivedSessionFile,
-      messages: parseTranscriptMessages(content),
-    };
-  } catch (err: unknown) {
-    logVerbose(
-      `before_reset: failed to read archived session file ${archivedSessionFile}; firing hook with empty messages (${String(err)})`,
-    );
-    return { sessionFile: archivedSessionFile, messages: [] };
   }
 }
 
@@ -154,6 +65,7 @@ export async function emitResetCommandHooks(params: {
   sessionKey?: string;
   sessionEntry?: HandleCommandsParams["sessionEntry"];
   previousSessionEntry?: HandleCommandsParams["previousSessionEntry"];
+  storePath?: string;
   workspaceDir: string;
 }): Promise<{ routedReply: boolean }> {
   const hookEvent = createInternalHookEvent("command", params.action, params.sessionKey ?? "", {
@@ -194,16 +106,21 @@ export async function emitResetCommandHooks(params: {
   const hookRunner = getGlobalHookRunner();
   if (hookRunner?.hasHooks("before_reset")) {
     const prevEntry = params.previousSessionEntry;
+    const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
     void (async () => {
       const { sessionFile, messages } = await loadBeforeResetTranscript({
         sessionFile: prevEntry?.sessionFile,
+        sessionId: prevEntry?.sessionId,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+        agentId,
       });
 
       try {
         await hookRunner.runBeforeReset(
           { sessionFile, messages, reason: params.action },
           {
-            agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+            agentId,
             sessionKey: params.sessionKey,
             sessionId: prevEntry?.sessionId,
             workspaceDir: params.workspaceDir,

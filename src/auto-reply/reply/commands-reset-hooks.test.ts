@@ -1,7 +1,4 @@
 // Tests reset hook emission and cleanup around reset commands.
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -516,35 +513,5 @@ describe("handleCommands reset hooks", () => {
 
     expect(result).toBeNull();
     expectObjectFields(firstHookEvent(), { type: "command", action: "reset" }, "hook event");
-  });
-
-  it("fires before_reset hook with empty messages when transcript exceeds safe read cap", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reset-hooks-"));
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    fs.writeFileSync(sessionFile, "x".repeat(16 * 1024 * 1024 + 1), "utf8");
-
-    const runBeforeResetMock = vi.fn().mockResolvedValue(undefined);
-    vi.mocked(getGlobalHookRunner).mockReturnValue({
-      hasHooks: (name: string) => name === "before_reset",
-      runBeforeReset: runBeforeResetMock,
-    } as unknown as ReturnType<typeof getGlobalHookRunner>);
-
-    const params = buildResetParams("/reset", {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig);
-    params.previousSessionEntry = {
-      sessionId: "session-to-reset",
-      sessionFile,
-    } as HandleCommandsParams["previousSessionEntry"];
-
-    await maybeHandleResetCommand(params);
-
-    await vi.waitFor(() => expect(runBeforeResetMock).toHaveBeenCalledOnce());
-    const callArgs = runBeforeResetMock.mock.calls[0] as [unknown, unknown];
-    const payload = callArgs[0] as { messages: unknown[] };
-    expect(payload.messages).toEqual([]);
-
-    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 });
