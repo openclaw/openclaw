@@ -3,8 +3,7 @@ import { html } from "lit";
 
 export const page = definePage({
   id: "logs",
-  path: "/settings/logs",
-  aliases: ["/logs"],
+  path: "/logs",
   component: () =>
     import("./logs-page.ts").then(() => ({
       header: true,

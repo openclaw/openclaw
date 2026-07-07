@@ -41,8 +41,6 @@ const SETTINGS_ROUTE_PATHS = [
   },
   { routeId: "worktrees", path: "/settings/worktrees", alias: "/worktrees" },
   { routeId: "ai-agents", path: "/settings/ai-agents", alias: "/ai-agents" },
-  { routeId: "debug", path: "/settings/debug", alias: "/debug" },
-  { routeId: "logs", path: "/settings/logs", alias: "/logs" },
 ] as const satisfies readonly { routeId: RouteId; path: string; alias: string }[];
 
 const leadingSlashNormalizerCases = [
@@ -200,6 +198,8 @@ describe("pathForRoute", () => {
   it("returns correct path without base", () => {
     expect(pathForRoute("chat")).toBe("/chat");
     expect(pathForRoute("overview")).toBe("/overview");
+    expect(pathForRoute("debug")).toBe("/debug");
+    expect(pathForRoute("logs")).toBe("/logs");
   });
 
   it("prepends base path", () => {
@@ -214,6 +214,8 @@ describe("routeIdFromPath", () => {
     expect(routeIdFromPath("/overview")).toBe("overview");
     expect(routeIdFromPath("/activity")).toBe("activity");
     expect(routeIdFromPath("/sessions")).toBe("sessions");
+    expect(routeIdFromPath("/debug")).toBe("debug");
+    expect(routeIdFromPath("/logs")).toBe("logs");
     expect(routeIdFromPath("/dreaming")).toBe("dreams");
     expect(routeIdFromPath("/dreams")).toBe("dreams");
   });
