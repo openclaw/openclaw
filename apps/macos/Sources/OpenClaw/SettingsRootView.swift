@@ -26,20 +26,30 @@ struct SettingsRootView: View {
 
     var body: some View {
         NavigationSplitView(columnVisibility: self.animatedColumnVisibility) {
-            List(selection: self.sidebarSelection) {
+            List {
                 ForEach(self.visibleGroups) { group in
                     Section(group.title) {
                         ForEach(group.tabs) { tab in
-                            Label(tab.title, systemImage: tab.systemImage)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 4)
-                                .overlay {
-                                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                        .stroke(
-                                            tab == self.selectedTab ? Self.lobsterColor : .clear,
-                                            lineWidth: 3)
-                                }
-                                .tag(tab as SettingsTab?)
+                            Button {
+                                self.selectedTab = self.validTab(for: tab)
+                            } label: {
+                                Label(tab.title, systemImage: tab.systemImage)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 4)
+                                    .foregroundStyle(tab == self.selectedTab ? .white : .primary)
+                                    .background {
+                                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                            .fill(tab == self.selectedTab ? Self.lobsterColor : .clear)
+                                    }
+                                    .overlay {
+                                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                            .stroke(
+                                                tab == self.selectedTab ? Self.lobsterColor : .clear,
+                                                lineWidth: 3)
+                                    }
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
                 }
@@ -94,15 +104,6 @@ struct SettingsRootView: View {
 
     private var visibleGroups: [SettingsTabGroup] {
         SettingsTabGroup.defaultGroups(showDebug: self.state.debugPaneEnabled)
-    }
-
-    private var sidebarSelection: Binding<SettingsTab?> {
-        Binding(
-            get: { self.selectedTab },
-            set: { tab in
-                guard let tab else { return }
-                self.selectedTab = self.validTab(for: tab)
-            })
     }
 
     private var animatedColumnVisibility: Binding<NavigationSplitViewVisibility> {
