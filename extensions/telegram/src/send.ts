@@ -1029,55 +1029,9 @@ export async function sendMessageTelegram(
       let result: TelegramMessageLike;
       let recordedParams: TelegramThreadScopedParams | TelegramRichMessageContextParams | undefined;
       if (!chunk.text?.trim()) {
-        if (!chunk.plainText?.trim()) {
-          sendLogger.warn(
-            "telegram richMessage chunk rendered empty HTML and has no plain text; skipping",
-          );
-          continue;
-        }
-        sendLogger.warn(
-          "telegram richMessage chunk rendered empty HTML; falling back to plain text",
-        );
-        const emptyFallbackText = chunk.plainText;
-        const emptyFallbackParams = buildTextParams(
-          index,
-          chunks.length,
-          index === chunks.length - 1,
-          options.replyToAlreadyUsed === true,
-        );
-        const emptyFallbackResult = await sendTelegramTextChunk(
-          { plainText: emptyFallbackText },
-          emptyFallbackParams,
-        );
-        const emptyFallbackMessageId = resolveTelegramMessageIdOrThrow(
-          emptyFallbackResult.result,
-          context,
-        );
-        recordSentMessage(chatId, emptyFallbackMessageId, cfg);
-        await reportDelivery(
-          emptyFallbackMessageId,
-          emptyFallbackResult.result?.chat?.id ?? chatId,
-        );
-        await recordOutboundMessageForPromptContext({
-          cfg,
-          account,
-          chatId,
-          message: emptyFallbackResult.result,
-          messageId: emptyFallbackMessageId,
-          text: emptyFallbackText,
-          promptContextTimestampMs: opts.promptContextTimestampMs,
-          ...(emptyFallbackResult.acceptedParams?.message_thread_id !== undefined
-            ? { messageThreadId: emptyFallbackResult.acceptedParams.message_thread_id }
-            : {}),
-        });
-        lastMessageId = String(emptyFallbackMessageId);
-        lastChatId = String(emptyFallbackResult.result?.chat?.id ?? chatId);
-        lastAcceptedParams = emptyFallbackResult.acceptedParams;
-        acceptedReplyToMessageId ??= resolveAcceptedReplyToMessageId(
-          emptyFallbackResult.acceptedParams,
-        );
-        messageIds.push(lastMessageId);
-        sentChunkCount += 1;
+        // plainText derives from text via telegramHtmlToPlainTextFallback, so
+        // an empty rich render has no sendable fallback.
+        sendLogger.warn("telegram richMessage chunk rendered empty HTML; skipping");
         continue;
       }
       try {
