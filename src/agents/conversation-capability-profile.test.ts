@@ -71,6 +71,46 @@ describe("resolveConversationCapabilityProfile", () => {
     expect(profile.policy.explicitToolDenylist).toEqual([]);
   });
 
+  it("exempts owner WebChat identified through the message channel", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        toolsBySender: {
+          "*": { deny: ["exec", "process"] },
+        },
+      },
+    };
+
+    const profile = resolveConversationCapabilityProfile({
+      config: cfg,
+      messageChannel: INTERNAL_MESSAGE_CHANNEL,
+      chatType: "direct",
+      senderIsOwner: true,
+    });
+
+    expect(profile.policy.senderPolicy).toBeUndefined();
+    expect(profile.policy.explicitToolDenylist).toEqual([]);
+  });
+
+  it("keeps wildcard sender tool restrictions for non-owner WebChat", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        toolsBySender: {
+          "*": { deny: ["exec", "process"] },
+        },
+      },
+    };
+
+    const profile = resolveConversationCapabilityProfile({
+      config: cfg,
+      messageProvider: INTERNAL_MESSAGE_CHANNEL,
+      chatType: "direct",
+      senderIsOwner: false,
+    });
+
+    expect(profile.policy.senderPolicy).toEqual({ deny: ["exec", "process"] });
+    expect(profile.policy.explicitToolDenylist).toEqual(["exec", "process"]);
+  });
+
   it("keeps wildcard sender tool restrictions for owners on external channels", () => {
     const cfg: OpenClawConfig = {
       tools: {

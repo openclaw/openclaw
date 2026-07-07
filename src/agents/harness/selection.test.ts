@@ -556,6 +556,24 @@ describe("runAgentHarnessAttempt", () => {
     ).toBeUndefined();
   });
 
+  it("keeps non-owner WebChat restricted by wildcard sender policy for plugin harnesses", () => {
+    const config = {
+      tools: {
+        toolsBySender: {
+          "*": { deny: ["*"] },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolvePluginHarnessPolicyToolsAllow({
+        ...createAttemptParams(config),
+        messageProvider: "webchat",
+        senderIsOwner: false,
+      }),
+    ).toEqual([]);
+  });
+
   it("leaves OpenClaw harness params unchanged for channel group sender deny-all policy", async () => {
     await runAgentHarnessAttempt({
       ...createAttemptParams(groupSenderDenyAllConfig()),
