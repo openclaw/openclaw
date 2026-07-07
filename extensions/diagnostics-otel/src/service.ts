@@ -920,6 +920,48 @@ function toolCallResponsePart(part: Record<string, unknown>): Record<string, unk
   };
 }
 
+function toolCallResponseResultText(result: unknown): string | undefined {
+  if (typeof result === "string") {
+    return normalizeOtelLogString(result, MAX_OTEL_CONTENT_ATTRIBUTE_CHARS);
+  }
+  if (Array.isArray(result)) {
+    const textItems: string[] = [];
+    for (const item of result.slice(0, MAX_OTEL_CONTENT_ARRAY_ITEMS)) {
+      if (typeof item === "string" && item.length > 0) {
+        textItems.push(item);
+      } else if (isRecord(item)) {
+        const text =
+          typeof item.text === "string"
+            ? item.text
+            : typeof item.content === "string"
+              ? item.content
+              : undefined;
+        if (text && text.length > 0) {
+          textItems.push(text);
+        }
+      }
+    }
+    if (textItems.length > 0) {
+      return normalizeOtelLogString(textItems.join("\n"), MAX_OTEL_CONTENT_ATTRIBUTE_CHARS);
+    }
+  }
+  return normalizeOtelContentValue(result);
+}
+
+function phoenixToolMessageFields(
+  parts: readonly Record<string, unknown>[],
+): Record<string, unknown> {
+  const toolResponse = parts.find((part) => part.type === "tool_call_response");
+  if (!toolResponse) {
+    return {};
+  }
+  const content = toolCallResponseResultText(toolResponse.result);
+  return {
+    ...(typeof toolResponse.id === "string" ? { tool_call_id: toolResponse.id } : {}),
+    ...(content ? { content } : {}),
+  };
+}
+
 function contentParts(value: unknown): Record<string, unknown>[] {
   if (typeof value === "string") {
     return value.length > 0 ? [textPart(value)] : [];
@@ -1013,6 +1055,7 @@ function normalizeGenAiMessage(
   }
   return {
     role,
+    ...(role === "tool" ? phoenixToolMessageFields(parts) : {}),
     parts,
     ...(typeof value.name === "string" ? { name: value.name } : {}),
     ...(typeof value.finish_reason === "string" ? { finish_reason: value.finish_reason } : {}),
@@ -1113,6 +1156,16 @@ function assignOtelContentAttribute(
   }
 }
 
+function assignOtelToolIdentityAttributes(
+  attributes: Record<string, string | number | boolean>,
+  evt: { toolCallId?: string },
+): void {
+  const toolCallId = evt.toolCallId?.trim();
+  if (toolCallId) {
+    attributes["gen_ai.tool.call.id"] = toolCallId;
+  }
+}
+
 function assignOtelModelContentAttributes(
   attributes: Record<string, string | number | boolean>,
   content: OtelModelCallContent | undefined,
@@ -1151,9 +1204,11 @@ function assignOtelToolContentAttributes(
   policy: OtelContentCapturePolicy,
 ): void {
   if (policy.toolInputs) {
+    assignOtelContentAttribute(attributes, "gen_ai.tool.call.arguments", content?.toolInput);
     assignOtelContentAttribute(attributes, "openclaw.content.tool_input", content?.toolInput);
   }
   if (policy.toolOutputs) {
+    assignOtelContentAttribute(attributes, "gen_ai.tool.call.result", content?.toolOutput);
     assignOtelContentAttribute(attributes, "openclaw.content.tool_output", content?.toolOutput);
   }
 }
@@ -3556,10 +3611,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         if (!tracesEnabled || !metadata.trusted) {
           return;
         }
+        const spanAttrs = toolExecutionBaseAttrs(evt);
+        assignOtelToolIdentityAttributes(spanAttrs, evt);
         trackTrustedSpan(
           evt,
           metadata,
-          spanWithDuration("openclaw.tool.execution", toolExecutionBaseAttrs(evt), undefined, {
+          spanWithDuration("openclaw.tool.execution", spanAttrs, undefined, {
             parentContext: activeTrustedParentContext(evt, metadata),
             startTimeMs: evt.ts,
           }),
@@ -3580,6 +3637,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           ...toolExecutionBaseAttrs(evt),
         };
         addRunAttrs(spanAttrs, evt);
+        assignOtelToolIdentityAttributes(spanAttrs, evt);
         assignOtelToolContentAttributes(spanAttrs, toolContent, contentCapturePolicy);
         const span =
           takeTrackedTrustedSpan(evt, metadata) ??
@@ -3609,6 +3667,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           "openclaw.errorCategory": lowCardinalityAttr(evt.errorCategory, "other"),
         };
         addRunAttrs(spanAttrs, evt);
+        assignOtelToolIdentityAttributes(spanAttrs, evt);
         if (evt.errorCode) {
           spanAttrs["openclaw.errorCode"] = lowCardinalityAttr(evt.errorCode, "other");
         }
@@ -3644,6 +3703,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           "openclaw.deniedReason": lowCardinalityAttr(evt.deniedReason, "other"),
         };
         addRunAttrs(spanAttrs, evt);
+        assignOtelToolIdentityAttributes(spanAttrs, evt);
         const span = spanWithDuration("openclaw.tool.execution", spanAttrs, 0, {
           parentContext: activeTrustedParentContext(evt, metadata),
           endTimeMs: evt.ts,

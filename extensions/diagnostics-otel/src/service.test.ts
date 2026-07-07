@@ -4827,6 +4827,9 @@ describe("diagnostics-otel service", () => {
     expect(Object.hasOwn(toolOptions?.attributes ?? {}, "openclaw.content.tool_output")).toBe(
       false,
     );
+    expect(Object.hasOwn(toolOptions?.attributes ?? {}, "gen_ai.tool.call.arguments")).toBe(false);
+    expect(Object.hasOwn(toolOptions?.attributes ?? {}, "gen_ai.tool.call.result")).toBe(false);
+    expect(toolOptions?.attributes?.["gen_ai.tool.call.id"]).toBe("tool-1");
     expect(toolOptions?.startTime).toBeTypeOf("number");
     await service.stop?.(ctx);
   });
@@ -4892,10 +4895,16 @@ describe("diagnostics-otel service", () => {
       "sk-1234567890abcdef1234567890abcdef", // pragma: allowlist secret
     );
     expect(toolAttrs?.["openclaw.content.tool_input"]).toBe("tool input");
+    expect(toolAttrs?.["gen_ai.tool.call.id"]).toBe("tool-1");
+    expect(toolAttrs?.["gen_ai.tool.call.arguments"]).toBe("tool input");
     expect(String(toolAttrs?.["openclaw.content.tool_output"]).length).toBeLessThanOrEqual(
       MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS + OTEL_TRUNCATED_SUFFIX_MAX_CHARS,
     );
     expect(String(toolAttrs?.["openclaw.content.tool_output"])).not.toContain("a".repeat(11));
+    expect(String(toolAttrs?.["gen_ai.tool.call.result"]).length).toBeLessThanOrEqual(
+      MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS + OTEL_TRUNCATED_SUFFIX_MAX_CHARS,
+    );
+    expect(String(toolAttrs?.["gen_ai.tool.call.result"])).not.toContain("a".repeat(11));
     await service.stop?.(ctx);
   });
 
@@ -5011,6 +5020,8 @@ describe("diagnostics-otel service", () => {
       },
       {
         role: "tool",
+        content: '{"rows":1}',
+        tool_call_id: "call-1",
         parts: [{ type: "tool_call_response", id: "call-1", result: { rows: 1 } }],
       },
     ]);
@@ -5031,6 +5042,71 @@ describe("diagnostics-otel service", () => {
     ]);
     expect(attrs?.["input.mime_type"]).toBe("application/json");
     expect(attrs?.["output.mime_type"]).toBe("application/json");
+    await service.stop?.(ctx);
+  });
+
+  test("adds Phoenix-readable content to explicit tool response parts", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      traces: true,
+      captureContent: {
+        enabled: true,
+        inputMessages: true,
+        outputMessages: false,
+      },
+    });
+    await service.start(ctx);
+
+    emitTrustedModelCallCompletedWithContent(
+      {
+        runId: "run-1",
+        callId: "call-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        durationMs: 80,
+      },
+      {
+        inputMessages: [
+          {
+            role: "tool",
+            parts: [
+              {
+                type: "tool_call_response",
+                id: "call-1",
+                result: [
+                  { type: "text", text: "first line" },
+                  { type: "text", text: "second line" },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    );
+    await flushDiagnosticEvents();
+
+    const modelCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.model.call",
+    );
+    const attrs = (modelCall?.[1] as { attributes?: Record<string, unknown> } | undefined)
+      ?.attributes;
+    expect(JSON.parse(stringAttribute(attrs, "gen_ai.input.messages"))).toEqual([
+      {
+        role: "tool",
+        content: "first line\nsecond line",
+        tool_call_id: "call-1",
+        parts: [
+          {
+            type: "tool_call_response",
+            id: "call-1",
+            result: [
+              { type: "text", text: "first line" },
+              { type: "text", text: "second line" },
+            ],
+          },
+        ],
+      },
+    ]);
     await service.stop?.(ctx);
   });
 

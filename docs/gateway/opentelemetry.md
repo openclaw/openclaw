@@ -162,11 +162,13 @@ Boolean `captureContent: true` enables `inputMessages`, `outputMessages`, `toolI
 </Note>
 
 `toolInputs`/`toolOutputs` content is captured for the built-in agent
-runtime's tool executions (`openclaw.content.tool_input` on
-completed/error spans, `openclaw.content.tool_output` on completed spans).
-External harness tool calls (Codex, Claude CLI) emit `tool.execution.*` spans
-without content payloads. Captured content travels on a trusted,
-listener-only channel and is never placed on the public diagnostic event bus.
+runtime's tool executions (`openclaw.content.tool_input` and
+`gen_ai.tool.call.arguments` on completed/error spans;
+`openclaw.content.tool_output` and `gen_ai.tool.call.result` on completed
+spans). External harness tool calls (Codex, Claude CLI) emit
+`tool.execution.*` spans without content payloads. Captured content travels on a
+trusted, listener-only channel and is never placed on the public diagnostic event
+bus.
 
 ## Sampling and flushing
 
