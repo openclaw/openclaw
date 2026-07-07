@@ -195,4 +195,42 @@ describe("buildStatusMessage context window", () => {
     expect(text).toContain("check provider");
     expect(text).not.toContain("pinned session");
   });
+
+  it("does not label a configured subagent model as auto fallback", () => {
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            "ollama-cloud": {
+              baseUrl: "https://ollama.com",
+              models: [
+                statusTestModel("deepseek-v4-pro", "DeepSeek V4 Pro", 1_000_000),
+                statusTestModel("qwen3.6-blue", "Qwen 3.6 Blue", 128_000),
+              ],
+            },
+          },
+        },
+      },
+      agent: { model: "ollama-cloud/deepseek-v4-pro" },
+      configuredDefaultModelLabel: "ollama-cloud/deepseek-v4-pro",
+      sessionEntry: {
+        sessionId: "configured-subagent",
+        updatedAt: 0,
+        providerOverride: "ollama-cloud",
+        modelOverride: "qwen3.6-blue",
+        modelOverrideSource: "auto",
+        modelOverrideFallbackOriginProvider: "ollama-cloud",
+        modelOverrideFallbackOriginModel: "qwen3.6-blue",
+      },
+      sessionKey: "agent:worker:subagent:configured",
+      sessionScope: "per-sender",
+      queue: { mode: "steer", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    expect(text).toContain("Model: ollama-cloud/qwen3.6-blue");
+    expect(text).not.toContain("auto fallback");
+    expect(text).not.toContain("check provider");
+    expect(text).not.toContain("pinned session");
+  });
 });
