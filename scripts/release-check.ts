@@ -431,21 +431,35 @@ export function resolveReleaseCheckLocalPackageTarballs(
   return tarballs;
 }
 
-export function createPackedTarballInstallArgs(
+export function createPackedTarballInstallArgs(prefixDir: string): string[] {
+  return ["install", "--prefix", prefixDir, "--ignore-scripts", "--no-audit", "--no-fund"];
+}
+
+export function writePackedTarballInstallManifest(
   prefixDir: string,
   tarballPath: string,
-  localPackageTarballs: string[] = [],
-): string[] {
-  return [
-    "install",
-    "--prefix",
-    prefixDir,
-    "--ignore-scripts",
-    "--no-audit",
-    "--no-fund",
-    ...localPackageTarballs,
-    tarballPath,
-  ];
+  localPackageTarballs: string[],
+): void {
+  if (localPackageTarballs.length !== 1) {
+    throw new Error(
+      `release-check: packed install requires exactly one @openclaw/ai tarball; found ${localPackageTarballs.length}.`,
+    );
+  }
+  mkdirSync(prefixDir, { recursive: true });
+  writeFileSync(
+    join(prefixDir, "package.json"),
+    `${JSON.stringify(
+      {
+        private: true,
+        dependencies: {
+          "@openclaw/ai": pathToFileURL(localPackageTarballs[0]).href,
+          openclaw: pathToFileURL(tarballPath).href,
+        },
+      },
+      null,
+      2,
+    )}\n`,
+  );
 }
 
 function installPackedTarball(
@@ -454,7 +468,8 @@ function installPackedTarball(
   cwd: string,
   localPackageTarballs: string[] = [],
 ): void {
-  execNpm(createPackedTarballInstallArgs(prefixDir, tarballPath, localPackageTarballs), {
+  writePackedTarballInstallManifest(prefixDir, tarballPath, localPackageTarballs);
+  execNpm(createPackedTarballInstallArgs(prefixDir), {
     cwd,
     encoding: "utf8",
     stdio: "inherit",

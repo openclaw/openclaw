@@ -7,6 +7,7 @@ import {
   createPackedTarballInstallArgs,
   RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV,
   resolveReleaseCheckLocalPackageTarballs,
+  writePackedTarballInstallManifest,
   writePackedBundledPluginActivationConfig,
 } from "../../scripts/release-check.ts";
 
@@ -19,17 +20,13 @@ function requirePluginEntries(config: { plugins?: { entries?: Record<string, unk
 
 describe("release-check", () => {
   it("installs the packed core and local sibling package tarballs together", () => {
-    expect(
-      createPackedTarballInstallArgs("/tmp/prefix", "/tmp/openclaw.tgz", ["/tmp/openclaw-ai.tgz"]),
-    ).toEqual([
+    expect(createPackedTarballInstallArgs("/tmp/prefix")).toEqual([
       "install",
       "--prefix",
       "/tmp/prefix",
       "--ignore-scripts",
       "--no-audit",
       "--no-fund",
-      "/tmp/openclaw-ai.tgz",
-      "/tmp/openclaw.tgz",
     ]);
   });
 
@@ -42,6 +39,24 @@ describe("release-check", () => {
         join(root, "openclaw-ai-2026.6.33.tgz"),
       ]);
       expect(resolveReleaseCheckLocalPackageTarballs(undefined)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("writes an explicit local project for unpublished core and AI tarballs", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-install-test-"));
+    try {
+      writePackedTarballInstallManifest(root, "/tmp/openclaw.tgz", ["/tmp/openclaw-ai.tgz"]);
+      const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
+        dependencies?: Record<string, string>;
+        private?: boolean;
+      };
+      expect(manifest.private).toBe(true);
+      expect(manifest.dependencies).toEqual({
+        "@openclaw/ai": "file:///tmp/openclaw-ai.tgz",
+        openclaw: "file:///tmp/openclaw.tgz",
+      });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

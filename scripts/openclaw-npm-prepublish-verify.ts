@@ -1,7 +1,7 @@
 #!/usr/bin/env -S node --import tsx
 // Openclaw Npm Prepublish Verify script supports OpenClaw repository automation.
 
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -90,18 +90,27 @@ function main(argv = process.argv.slice(2)): void {
   const workingDir = mkdtempSync(join(tmpdir(), "openclaw-prepublish-"));
   const prefixDir = join(workingDir, "prefix");
   try {
-    npmExec(
-      [
-        "install",
-        "--prefix",
-        prefixDir,
-        ...args.dependencyTarballPaths.map((dependency) => realpathSync(dependency)),
-        realpathSync(args.tarballPath),
-        "--no-fund",
-        "--no-audit",
-      ],
-      workingDir,
+    if (args.dependencyTarballPaths.length !== 1) {
+      throw new Error(
+        `prepared tarball install requires exactly one @openclaw/ai tarball; found ${args.dependencyTarballPaths.length}.`,
+      );
+    }
+    mkdirSync(prefixDir, { recursive: true });
+    writeFileSync(
+      join(prefixDir, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            "@openclaw/ai": pathToFileURL(realpathSync(args.dependencyTarballPaths[0])).href,
+            openclaw: pathToFileURL(realpathSync(args.tarballPath)).href,
+          },
+        },
+        null,
+        2,
+      )}\n`,
     );
+    npmExec(["install", "--prefix", prefixDir, "--no-fund", "--no-audit"], workingDir);
     const packageRoot = join(prefixDir, "node_modules", "openclaw");
     const pkg = JSON.parse(
       readFileSync(join(packageRoot, "package.json"), "utf8"),
