@@ -243,8 +243,28 @@ async function runIMessageCliJson(
       }
       stdout = appended.value;
     });
+    child.stdout.on("error", (error) => {
+      if (settled) {
+        return;
+      }
+      fail(
+        new Error(
+          `iMessage CLI stdout stream error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
+    });
     child.stderr.on("data", (chunk) => {
       stderr = appendIMessageCliStderrTail(stderr, chunk);
+    });
+    child.stderr.on("error", (error) => {
+      if (settled) {
+        return;
+      }
+      fail(
+        new Error(
+          `iMessage CLI stderr stream error: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
     });
     child.on("error", (error) => {
       if (settled) {

@@ -41,6 +41,23 @@ function mockSpawnJsonResponse(payload: Record<string, unknown> = { success: tru
   });
 }
 
+function mockSpawnWithStreamError(stream: "stdout" | "stderr", error: Error) {
+  spawnMock.mockImplementationOnce(() => {
+    const child = new EventEmitter() as EventEmitter & {
+      stdout: EventEmitter & { setEncoding: (encoding: string) => void };
+      stderr: EventEmitter & { setEncoding: (encoding: string) => void };
+      kill: (signal: string) => void;
+    };
+    child.stdout = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
+    child.stderr = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
+    child.kill = vi.fn();
+    queueMicrotask(() => {
+      child[stream].emit("error", error);
+    });
+    return child;
+  });
+}
+
 function mockRpcChatList(chats: Array<Record<string, unknown>>) {
   const request = vi.fn().mockResolvedValue({ chats });
   const stop = vi.fn().mockResolvedValue(undefined);
@@ -81,6 +98,38 @@ describe("imessage actions runtime", () => {
       ],
       { stdio: ["ignore", "pipe", "pipe"] },
     );
+  });
+
+  it("rejects on stdout stream error", async () => {
+    mockSpawnWithStreamError("stdout", new Error("stdout pipe broken"));
+
+    await expect(
+      imessageActionsRuntime.sendReaction({
+        chatGuid: "iMessage;+;chat0000",
+        messageId: "message-guid",
+        reaction: "like",
+        options: {
+          cliPath: "imsg",
+          chatGuid: "iMessage;+;chat0000",
+        },
+      }),
+    ).rejects.toThrow("iMessage CLI stdout stream error: stdout pipe broken");
+  });
+
+  it("rejects on stderr stream error", async () => {
+    mockSpawnWithStreamError("stderr", new Error("stderr pipe broken"));
+
+    await expect(
+      imessageActionsRuntime.sendReaction({
+        chatGuid: "iMessage;+;chat0000",
+        messageId: "message-guid",
+        reaction: "like",
+        options: {
+          cliPath: "imsg",
+          chatGuid: "iMessage;+;chat0000",
+        },
+      }),
+    ).rejects.toThrow("iMessage CLI stderr stream error: stderr pipe broken");
   });
 
   it("drops cached chats.list entries when the current clock is not a valid date timestamp", async () => {
