@@ -135,14 +135,22 @@ async function runAnnounceAgentCall(params: {
   expectFinal?: boolean;
   timeoutMs?: number;
 }): Promise<unknown> {
+  const forceSyntheticClient = shouldPreserveUserFacingSessionStateForInputProvenance(
+    params.agentParams.inputProvenance,
+  );
+  // Internal cron completion wakes restore provider/model from the session
+  // entry to continue the original multi-step task under the configured
+  // model instead of falling back to account defaults (#99919). The
+  // in-process dispatch must authorize the model override on the synthetic
+  // client so the gateway does not reject the provider/model fields.
+  const hasModelOverride = Boolean(params.agentParams.provider || params.agentParams.model);
   return await subagentAnnounceDeliveryDeps.dispatchGatewayMethodInProcess(
     "agent",
     params.agentParams,
     {
       expectFinal: params.expectFinal,
-      forceSyntheticClient: shouldPreserveUserFacingSessionStateForInputProvenance(
-        params.agentParams.inputProvenance,
-      ),
+      forceSyntheticClient,
+      allowSyntheticModelOverride: hasModelOverride,
       timeoutMs: params.timeoutMs,
     },
   );

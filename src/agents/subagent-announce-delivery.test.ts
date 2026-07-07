@@ -5302,4 +5302,81 @@ describe("Issue #99919: cron async completion wake carries session context", () 
     expect(params.thinking).toBeUndefined();
     expect(params.bootstrapContextRunKind).toBeUndefined();
   });
+
+  it("authorizes model override on in-process dispatch when cron context includes provider/model", async () => {
+    // Use direct dispatchGatewayMethodInProcess mock (not the callGateway
+    // adaptation) so the test verifies allowSyntheticModelOverride reaches
+    // the real dispatch path (#99919).
+    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+      payloads: [{ text: "image done and article published" }],
+      messagingToolSentTargets: [],
+    });
+    const sendMessage = createSendMessageMock();
+
+    testing.setDepsForTest({
+      dispatchGatewayMethodInProcess,
+      getRequesterSessionActivity: () => ({
+        sessionId: "cron-session-authz",
+        isActive: false,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+      sendMessage,
+      loadRequesterSessionEntry: () => ({
+        cfg: {} as never,
+        canonicalKey: "agent:main:cron:daily-media:run:run-authz",
+        entry: {
+          sessionId: "cron-session-authz",
+          updatedAt: Date.now(),
+          modelProvider: "claude-cli",
+          model: "claude-opus-4-8",
+          thinkingLevel: "high",
+          bootstrapContextRunKind: "cron",
+        } as never,
+      }),
+    });
+
+    await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:cron:daily-media:run:run-authz",
+      targetRequesterSessionKey: "agent:main:cron:daily-media:run:run-authz",
+      triggerMessage: "An image generation task finished.",
+      steerMessage: "An image generation task finished.",
+      requesterOrigin: { channel: "slack", to: "channel:C123", accountId: "acct-1" },
+      requesterSessionOrigin: { channel: "slack", to: "channel:C123", accountId: "acct-1" },
+      completionDirectOrigin: { channel: "slack", to: "channel:C123", accountId: "acct-1" },
+      directOrigin: { channel: "slack", to: "channel:C123", accountId: "acct-1" },
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "ctx-cron-authz",
+      sourceTool: "image_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "image_generation",
+          childSessionKey: "image_generate:task-456",
+          childSessionId: "task-456",
+          announceType: "image generation task",
+          taskLabel: "article header image",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 image.\nMEDIA:/tmp/article-header.png",
+          mediaUrls: ["/tmp/article-header.png"],
+          replyInstruction: "Deliver the image and continue the article publish flow.",
+        },
+      ],
+    });
+
+    // Verify the in-process dispatch options authorize the model override.
+    const dispatchOptions = mockCallArg(dispatchGatewayMethodInProcess, 0, 2);
+    expect(dispatchOptions).toMatchObject({
+      forceSyntheticClient: true,
+      allowSyntheticModelOverride: true,
+    });
+
+    // Also verify the agent params carry the cron context.
+    const agentParams = mockCallArg(dispatchGatewayMethodInProcess, 0, 1);
+    expect(agentParams.provider).toBe("claude-cli");
+    expect(agentParams.model).toBe("claude-opus-4-8");
+    expect(agentParams.bootstrapContextRunKind).toBe("cron");
+  });
 });
