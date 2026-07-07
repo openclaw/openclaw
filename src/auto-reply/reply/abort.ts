@@ -138,10 +138,6 @@ export function abortSessionRunTargetWithOutcome(params: { key?: string; session
   return { active, aborted };
 }
 
-export function abortSessionRunTarget(params: { key?: string; sessionId?: string }): boolean {
-  return abortSessionRunTargetWithOutcome(params).aborted;
-}
-
 export function formatAbortReplyText(
   stoppedSubagents?: number,
   rejectionReason?: "finalizing",

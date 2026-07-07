@@ -116,7 +116,13 @@ vi.mock("../utils/with-timeout.js", () => ({
   withTimeout,
 }));
 
-import { ensureOnboardingPluginInstalled } from "./onboarding-plugin-install.js";
+import { ensureOnboardingPluginInstalled, testing } from "./onboarding-plugin-install.js";
+
+describe("plugin install error summaries", () => {
+  it("keeps bounded terminal text UTF-16 well-formed", () => {
+    expect(testing.summarizeInstallError(`${"x".repeat(178)}🚀tail`)).toBe(`${"x".repeat(178)}…`);
+  });
+});
 
 function requireCapturedPrompt<T>(captured: T | undefined): T {
   if (!captured) {

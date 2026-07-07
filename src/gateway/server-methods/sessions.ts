@@ -2,6 +2,7 @@
 // restore/preview/send flows over session stores, transcripts, and active runs.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
 import {
   normalizeOptionalString,
   readStringValue,
@@ -40,6 +41,8 @@ import {
   waitForEmbeddedAgentRunEnd,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { compactEmbeddedAgentSession } from "../../agents/embedded-agent.js";
+import { insideGitCheckout } from "../../agents/worktrees/git.js";
+import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
 import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/thinking.js";
@@ -52,7 +55,6 @@ import {
   listConfiguredSessionStoreAgentIds,
   deleteSessionEntryLifecycle,
   type SessionEntry,
-  updateSessionStore,
 } from "../../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import {
@@ -66,6 +68,7 @@ import {
   measureDiagnosticsTimelineSpanSync,
 } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
@@ -138,6 +141,8 @@ import type {
   RespondFn,
 } from "./types.js";
 import { assertValidParams } from "./validation.js";
+
+const log = createSubsystemLogger("gateway/sessions");
 
 const compactionCheckpointStore = createFileBackedCompactionCheckpointStore();
 
@@ -1187,17 +1192,128 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const p = params;
     const cfg = context.getRuntimeConfig();
     const initialMessage = resolveOptionalInitialSessionMessage(p);
+    let sessionKey = p.key;
+    let sessionAgentId = p.agentId;
+    let sessionWorktree: Awaited<ReturnType<typeof managedWorktrees.create>> | undefined;
+    let sessionCwd: string | undefined;
+    let provisionedSessionWorktree = false;
+    if (p.worktree === true) {
+      // Session worktrees stay at the method's operator.write bar: unlike worktrees.create,
+      // this path never takes an arbitrary repoRoot — it only checks out the agent's own
+      // configured workspace, the same repo chat runs already mutate for write-scope clients.
+      const explicitKey = normalizeOptionalString(p.key);
+      const requestedKey = explicitKey ?? "global";
+      const requestedAgent = resolveRequestedGlobalAgentId(cfg, requestedKey, p.agentId);
+      if (!requestedAgent.ok) {
+        respond(false, undefined, requestedAgent.error);
+        return;
+      }
+      const agentId = normalizeAgentId(
+        requestedAgent.agentId ??
+          normalizeOptionalString(p.agentId) ??
+          parseAgentSessionKey(requestedKey)?.agentId ??
+          resolveDefaultAgentId(cfg),
+      );
+      let targetKey = explicitKey;
+      let preservesUnspecifiedKey = false;
+      const parentSessionKey = normalizeOptionalString(p.parentSessionKey);
+      if (
+        !targetKey &&
+        parentSessionKey &&
+        p.emitCommandHooks === true &&
+        !initialMessage &&
+        cfg.session?.dmScope === "main"
+      ) {
+        const parent = loadSessionEntry(
+          parentSessionKey,
+          requestedAgent.agentId ? { agentId: requestedAgent.agentId } : undefined,
+        );
+        const parentAgentId = normalizeAgentId(
+          requestedAgent.agentId ?? resolveSessionStoreAgentId(cfg, parent.canonicalKey),
+        );
+        if (
+          parent.entry?.sessionId &&
+          parent.canonicalKey === resolveAgentMainSessionKey({ cfg, agentId: parentAgentId })
+        ) {
+          targetKey = parent.canonicalKey;
+          preservesUnspecifiedKey = true;
+        }
+      }
+      targetKey ??= buildDashboardSessionKey(agentId);
+      const target = resolveGatewaySessionStoreTarget({ cfg, key: targetKey, agentId });
+      sessionKey = preservesUnspecifiedKey ? undefined : targetKey;
+      sessionAgentId = target.agentId;
+      const workspace = resolveAgentWorkspaceDir(cfg, target.agentId);
+      // Subdirectory workspaces are valid: the worktree service resolves the repo root
+      // via git discovery, so the preflight must accept ancestor .git entries too.
+      if (!insideGitCheckout(workspace)) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "agent workspace is not a git checkout"),
+        );
+        return;
+      }
+      try {
+        const existing = managedWorktrees.findLiveByOwner("session", target.canonicalKey);
+        let existingDirectory = false;
+        if (existing) {
+          try {
+            existingDirectory = fs.lstatSync(existing.path).isDirectory();
+          } catch {
+            // Missing registry targets are replaced; periodic GC retires their stale rows.
+          }
+        }
+        if (existing && existingDirectory) {
+          sessionWorktree = existing;
+        } else {
+          const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
+          sessionWorktree = await managedWorktrees.create({
+            repoRoot: workspace,
+            ownerKind: "session",
+            ownerId: target.canonicalKey,
+            // .openclaw/worktree-setup.sh runs repo code; keep it admin-only so this
+            // write-scoped path cannot execute a repo script the admin RPC gates.
+            runSetupScript: scopes.includes(ADMIN_SCOPE),
+          });
+          provisionedSessionWorktree = true;
+        }
+      } catch (error) {
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+        return;
+      }
+      // Nested workspaces run from the matching subdirectory inside the worktree, mirroring
+      // how the session would have run in the source checkout; the worktree root would
+      // silently change tool/file scope for subdirectory-configured agents.
+      sessionCwd = sessionWorktree.path;
+      try {
+        const relative = path.relative(
+          fs.realpathSync(sessionWorktree.repoRoot),
+          fs.realpathSync(workspace),
+        );
+        if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
+          sessionCwd = path.join(sessionWorktree.path, relative);
+          fs.mkdirSync(sessionCwd, { recursive: true });
+        }
+      } catch {
+        sessionCwd = sessionWorktree.path;
+      }
+    }
     let runPayload: Record<string, unknown> | undefined;
     let runError: unknown;
     let runMeta: Record<string, unknown> | undefined;
     let messageSeq: number | undefined;
     const created = await createGatewaySession({
       cfg,
-      key: p.key,
-      agentId: p.agentId,
+      key: sessionKey,
+      agentId: sessionAgentId,
       label: p.label,
       model: p.model,
       parentSessionKey: p.parentSessionKey,
+      spawnedCwd: sessionCwd,
+      // A plain New Chat that resets an existing session must not inherit its prior worktree cwd.
+      clearSpawnedCwd: p.worktree !== true,
+      fork: p.fork,
       emitCommandHooks: p.emitCommandHooks,
       resetMainWhenUnspecified: !initialMessage,
       commandSource: "webchat",
@@ -1236,9 +1352,43 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         : undefined,
     });
     if (!created.ok) {
+      if (sessionWorktree && provisionedSessionWorktree) {
+        try {
+          await managedWorktrees.remove({
+            id: sessionWorktree.id,
+            reason: "session-create-failed",
+            force: true,
+          });
+        } catch (error) {
+          log.warn(
+            `failed to clean up worktree after session creation failed: ${formatErrorMessage(error)}`,
+          );
+        }
+      }
       respond(false, undefined, created.error);
       return;
     }
+    // Leaving an isolated checkout via a plain New Chat detaches the session from its
+    // worktree; remove it when lossless so the reset does not orphan a protected worktree.
+    if (p.worktree !== true) {
+      try {
+        const owned = managedWorktrees.findLiveByOwner("session", created.key);
+        if (owned) {
+          await managedWorktrees.removeIfLossless(owned.id);
+        }
+      } catch (error) {
+        log.warn(
+          `failed to release worktree for reset session ${created.key}: ${formatErrorMessage(error)}`,
+        );
+      }
+    }
+    const createdWorktree = sessionWorktree
+      ? {
+          id: sessionWorktree.id,
+          path: sessionWorktree.path,
+          branch: sessionWorktree.branch,
+        }
+      : undefined;
     if (created.resetExisting) {
       respond(
         true,
@@ -1248,6 +1398,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           sessionId: created.entry.sessionId,
           entry: created.entry,
           runStarted: false,
+          ...(createdWorktree ? { worktree: createdWorktree } : {}),
         },
         undefined,
       );
@@ -1277,6 +1428,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         ...(runPayload ? runPayload : {}),
         ...(runStarted && typeof messageSeq === "number" ? { messageSeq } : {}),
         ...(runError ? { runError } : {}),
+        ...(createdWorktree ? { worktree: createdWorktree } : {}),
       },
       undefined,
     );
@@ -2126,6 +2278,19 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const initialDeleteEntry = loadSessionEntry(key, {
       agentId: requestedAgentId,
     }).entry;
+    // archivedOnly is the archive-then-delete contract: the dispatcher grants
+    // it to write-scope operators, so the target must actually be archived.
+    if (p.archivedOnly === true && initialDeleteEntry?.archivedAt === undefined) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `Session ${key} is not archived. Archive it first, then delete it.`,
+        ),
+      );
+      return;
+    }
     const expectedSessionId = p.expectedSessionId?.trim();
     const expectedLifecycleRevision = p.expectedLifecycleRevision?.trim();
     const expectedSessionUpdatedAt = p.expectedSessionUpdatedAt;
@@ -2218,6 +2383,19 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         if (rejectExpectedSessionMismatch(entry)) {
           return undefined;
         }
+        // Recheck under the lifecycle lock: an unarchive racing the pre-lock
+        // check must not let an archive-gated delete remove an active session.
+        if (p.archivedOnly === true && entry?.archivedAt === undefined) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `Session ${key} is not archived. Archive it first, then delete it.`,
+            ),
+          );
+          return undefined;
+        }
         if (
           rejectPluginRuntimeDeleteMismatch({
             client,
@@ -2294,6 +2472,19 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const deleted = deletion.deleted;
     const archivedTranscripts = deletion.archivedTranscripts;
     const archived = archivedTranscripts.map((entryLocal) => entryLocal.archivedPath);
+
+    if (deleted) {
+      try {
+        const worktree = managedWorktrees.findLiveByOwner("session", target.canonicalKey);
+        if (worktree) {
+          await managedWorktrees.removeIfLossless(worktree.id);
+        }
+      } catch (error) {
+        log.warn(
+          `failed to clean up worktree for deleted session ${target.canonicalKey}: ${formatErrorMessage(error)}`,
+        );
+      }
+    }
 
     respond(true, { ok: true, key: target.canonicalKey, deleted, archived }, undefined);
     if (deleted) {
@@ -2386,15 +2577,33 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       agentId: requestedAgentId,
     });
     // Lock + read in a short critical section; transcript work happens outside.
-    const compactTarget = await updateSessionStore(storePath, (store) => {
-      const { entry, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
-        cfg,
-        key,
-        store,
-        agentId: requestedAgentId,
-      });
-      return { entry, primaryKey };
+    // The projection resolver re-runs gateway key migration on the writer
+    // snapshot so alias promotion/pruning persists through the accessor.
+    let compactPrimaryKey = target.canonicalKey;
+    const compactRead = await applySessionPatchProjection({
+      storePath,
+      resolveTarget: ({ entries }) => {
+        const snapshot = Object.fromEntries(
+          entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
+        );
+        const { target: migratedTarget, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+          cfg,
+          key,
+          store: snapshot,
+          agentId: requestedAgentId,
+        });
+        compactPrimaryKey = primaryKey;
+        return { primaryKey, candidateKeys: migratedTarget.storeKeys };
+      },
+      // Read-only projection: persist the resolved row unchanged so the alias
+      // migration above is saved even when compaction bails out below.
+      project: ({ existingEntry }) =>
+        existingEntry ? { ok: true, entry: existingEntry } : { ok: false },
     });
+    const compactTarget = {
+      entry: compactRead.ok ? compactRead.entry : undefined,
+      primaryKey: compactPrimaryKey,
+    };
     const entry = compactTarget.entry;
     const sessionId = entry?.sessionId;
     if (!sessionId) {
@@ -2663,42 +2872,50 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           if (result.ok && result.compacted) {
             let persisted: boolean;
             try {
-              persisted = await updateSessionStore(storePath, (store) => {
-                const entryToUpdate = store[compactTarget.primaryKey];
-                if (
-                  !entryToUpdate ||
-                  entryToUpdate.sessionId !== sessionId ||
-                  entryToUpdate.lifecycleRevision !== lifecycleRevision ||
-                  resolveSessionWorkStartError(target.canonicalKey, entryToUpdate)
-                ) {
-                  return false;
-                }
-                entryToUpdate.updatedAt = Date.now();
-                entryToUpdate.compactionCount = Math.max(0, entryToUpdate.compactionCount ?? 0) + 1;
-                if (
-                  result.result?.sessionId &&
-                  result.result.sessionId !== entryToUpdate.sessionId
-                ) {
-                  entryToUpdate.sessionId = result.result.sessionId;
-                }
-                if (result.result?.sessionFile) {
-                  entryToUpdate.sessionFile = result.result.sessionFile;
-                }
-                delete entryToUpdate.inputTokens;
-                delete entryToUpdate.outputTokens;
-                delete entryToUpdate.contextBudgetStatus;
-                if (
-                  typeof result.result?.tokensAfter === "number" &&
-                  Number.isFinite(result.result.tokensAfter)
-                ) {
-                  entryToUpdate.totalTokens = result.result.tokensAfter;
-                  entryToUpdate.totalTokensFresh = true;
-                } else {
-                  delete entryToUpdate.totalTokens;
-                  delete entryToUpdate.totalTokensFresh;
-                }
-                return true;
+              // Guarded terminal persist: skip when session ownership rotated
+              // while compaction ran (sessionId/lifecycleRevision/work-start).
+              const persistProjection = await applySessionPatchProjection({
+                storePath,
+                resolveTarget: () => ({ primaryKey: compactTarget.primaryKey }),
+                project: ({ existingEntry }) => {
+                  if (
+                    !existingEntry ||
+                    existingEntry.sessionId !== sessionId ||
+                    existingEntry.lifecycleRevision !== lifecycleRevision ||
+                    resolveSessionWorkStartError(target.canonicalKey, existingEntry)
+                  ) {
+                    return { ok: false };
+                  }
+                  const entryToUpdate = existingEntry;
+                  entryToUpdate.updatedAt = Date.now();
+                  entryToUpdate.compactionCount =
+                    Math.max(0, entryToUpdate.compactionCount ?? 0) + 1;
+                  if (
+                    result.result?.sessionId &&
+                    result.result.sessionId !== entryToUpdate.sessionId
+                  ) {
+                    entryToUpdate.sessionId = result.result.sessionId;
+                  }
+                  if (result.result?.sessionFile) {
+                    entryToUpdate.sessionFile = result.result.sessionFile;
+                  }
+                  delete entryToUpdate.inputTokens;
+                  delete entryToUpdate.outputTokens;
+                  delete entryToUpdate.contextBudgetStatus;
+                  if (
+                    typeof result.result?.tokensAfter === "number" &&
+                    Number.isFinite(result.result.tokensAfter)
+                  ) {
+                    entryToUpdate.totalTokens = result.result.tokensAfter;
+                    entryToUpdate.totalTokensFresh = true;
+                  } else {
+                    delete entryToUpdate.totalTokens;
+                    delete entryToUpdate.totalTokensFresh;
+                  }
+                  return { ok: true, entry: entryToUpdate };
+                },
               });
+              persisted = persistProjection.ok;
             } catch (err) {
               emitCompactionEnd(false, formatErrorMessage(err));
               throw err;

@@ -292,6 +292,12 @@ function createRichEntityInvalidError(entity = "EMAIL", operation = "sendRichMes
   );
 }
 
+function createRichContentRequiredError(operation = "sendRichMessage"): Error {
+  return new Error(
+    `GrammyError: Call to '${operation}' failed! (400: Bad Request: RICH_MESSAGE_CONTENT_REQUIRED)`,
+  );
+}
+
 function createHtmlParseError(operation = "sendMessage"): Error {
   return new Error(
     `GrammyError: Call to '${operation}' failed! (400: Bad Request: can't parse entities: Can't find end of the entity)`,
@@ -636,6 +642,28 @@ describe("sendMessageTelegram", () => {
     expect(botApi.sendChatAction).toHaveBeenCalledWith("-1001234567890", "typing", {
       message_thread_id: 271,
     });
+  });
+
+  it("retries snippet-only network errors when sending typing", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          botToken: "tok",
+        },
+      },
+    });
+    botApi.sendChatAction
+      .mockRejectedValueOnce(new Error("socket hang up"))
+      .mockResolvedValue(true);
+
+    await sendTypingTelegram("telegram:group:-1001234567890", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      accountId: "default",
+      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+    });
+
+    expect(botApi.sendChatAction).toHaveBeenCalledTimes(2);
   });
 
   it("pins and unpins Telegram messages", async () => {
@@ -1093,6 +1121,21 @@ describe("sendMessageTelegram", () => {
     expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
     expect(botApi.sendMessage).toHaveBeenCalledWith("123", text);
     expect(result).toEqual({ messageId: "46", chatId: "123" });
+  });
+
+  it("falls back to plain text when durable rich sends require nonempty content", async () => {
+    const text = "still visible after rich content rejection";
+    botRawApi.sendRichMessage.mockRejectedValueOnce(createRichContentRequiredError());
+    botApi.sendMessage.mockResolvedValueOnce({ message_id: 55, chat: { id: "123" } });
+
+    const result = await sendMessageTelegram("123", text, {
+      cfg: { channels: { telegram: { richMessages: true } } },
+      token: "tok",
+    });
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(botApi.sendMessage).toHaveBeenCalledWith("123", text);
+    expect(result).toEqual({ messageId: "55", chatId: "123" });
   });
 
   it("uses table-aware plain text when durable rich sends fall back", async () => {
@@ -2379,11 +2422,12 @@ describe("sendMessageTelegram", () => {
     vi.useRealTimers();
   });
 
-  it("retries wrapped pre-connect HttpError sends", async () => {
+  it("retries wrapped Undici connect timeout sends", async () => {
     vi.useFakeTimers();
     const chatId = "123";
-    const root = Object.assign(new Error("connect ECONNREFUSED api.telegram.org"), {
-      code: "ECONNREFUSED",
+    const root = Object.assign(new Error("Connect Timeout Error"), {
+      name: "ConnectTimeoutError",
+      code: "UND_ERR_CONNECT_TIMEOUT",
     });
     const fetchError = Object.assign(new TypeError("fetch failed"), { cause: root });
     const err = Object.assign(new Error("Network request for 'sendMessage' failed!"), {

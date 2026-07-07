@@ -7,6 +7,7 @@
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
+import { resolveCdpControlPolicy } from "../cdp-reachability-policy.js";
 import { withCdpSocket } from "../cdp.helpers.js";
 import { getChromeWebSocketUrl } from "../chrome.js";
 import { getPwAiModule } from "../pw-ai-module.js";
@@ -178,11 +179,11 @@ export function registerBrowserPermissionRoutes(
 
       try {
         await profileCtx.ensureBrowserAvailable();
-        const wsUrl = await getChromeWebSocketUrl(
-          profileCtx.profile.cdpUrl,
-          timeoutMs,
+        const cdpPolicy = resolveCdpControlPolicy(
+          profileCtx.profile,
           ctx.state().resolved.ssrfPolicy,
         );
+        const wsUrl = await getChromeWebSocketUrl(profileCtx.profile.cdpUrl, timeoutMs, cdpPolicy);
         if (!wsUrl) {
           return jsonError(res, 409, "browser CDP WebSocket unavailable");
         }
@@ -194,7 +195,7 @@ export function registerBrowserPermissionRoutes(
           requiredPermissions,
           optionalPermissions,
           timeoutMs,
-          ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+          ssrfPolicy: cdpPolicy,
         });
         return res.json({ ok: true, origin, ...granted });
       } catch (error) {

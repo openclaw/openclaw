@@ -4,7 +4,9 @@ import { render } from "lit";
 import { describe, expect, it } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
-import { renderOverview, type OverviewProps } from "./view.ts";
+import { renderOverview } from "./view.ts";
+
+type OverviewProps = Parameters<typeof renderOverview>[0];
 
 function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewProps {
   return {

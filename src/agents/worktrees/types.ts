@@ -22,6 +22,9 @@ export type CreateManagedWorktreeParams = {
   baseRef?: string;
   ownerKind?: ManagedWorktreeOwnerKind;
   ownerId?: string;
+  // Running .openclaw/worktree-setup.sh executes repo-local code, so callers reachable from
+  // less-privileged surfaces (write-scoped session worktrees) opt out; admin paths keep it on.
+  runSetupScript?: boolean;
 };
 
 export type RemoveManagedWorktreeResult = {

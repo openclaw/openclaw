@@ -49,6 +49,7 @@ describe("AgentsListResultSchema", () => {
         {
           id: "investment-master",
           name: "Investment Master",
+          workspaceGit: true,
           model: { primary: "deepseek/deepseek-v4-flash" },
           thinkingLevels: [
             { id: "off", label: "off" },

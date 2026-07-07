@@ -192,3 +192,35 @@ describe("nodes devices pending rendering", () => {
     expect(details[1]).toBe("requested: roles: node, operator \u00b7 scopes: operator.read");
   });
 });
+
+describe("nodes exec approvals rendering", () => {
+  it("renders host-native Windows policies as read-only", () => {
+    const container = renderNodesContainer({
+      nodes: [
+        {
+          id: "windows-node",
+          label: "Windows node",
+          commands: ["system.execApprovals.get", "system.execApprovals.set"],
+        },
+      ],
+      execApprovalsTarget: "node",
+      execApprovalsTargetNodeId: "windows-node",
+      execApprovalsSnapshot: {
+        enabled: true,
+        hash: "sha256:current",
+        defaultAction: "deny",
+        rules: [{ pattern: "hostname", action: "allow" }],
+      },
+    });
+    const card = Array.from(container.querySelectorAll(".card")).find(
+      (candidate) =>
+        candidate.querySelector(".card-title")?.textContent?.trim() === "Exec approvals",
+    );
+
+    expect(card?.textContent).toContain("Host-native policy");
+    expect(card?.textContent).toContain("Read-only here");
+    expect(card?.textContent).toContain("hostname");
+    expect(card?.textContent).toContain("deny");
+    expect(card?.querySelector("button")?.hasAttribute("disabled")).toBe(true);
+  });
+});

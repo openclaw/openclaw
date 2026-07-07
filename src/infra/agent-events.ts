@@ -130,6 +130,8 @@ export type AgentEventPayload = {
 /** Per-run metadata used to stamp events and gate Control UI visibility. */
 export type AgentRunContext = {
   sessionKey?: string;
+  /** Resolved agent owner, including for unscoped session keys. */
+  agentId?: string;
   /** Owning run's sessionId; stamped onto lifecycle events (see AgentEventPayload.sessionId). */
   sessionId?: string;
   /** Gateway lifecycle generation captured when the run was registered. */
@@ -147,6 +149,7 @@ export type AgentRunContext = {
 type AgentEventState = {
   seqByRun: Map<string, number>;
   listeners: Set<(evt: AgentEventPayload) => void>;
+  auditListeners: Set<(evt: AgentEventPayload) => void>;
   runContextById: Map<string, AgentRunContext>;
   runContextOwnersById?: Map<
     string,
@@ -171,6 +174,7 @@ function getAgentEventState(): AgentEventState {
   return resolveGlobalSingleton<AgentEventState>(AGENT_EVENT_STATE_KEY, () => ({
     seqByRun: new Map<string, number>(),
     listeners: new Set<(evt: AgentEventPayload) => void>(),
+    auditListeners: new Set<(evt: AgentEventPayload) => void>(),
     runContextById: new Map<string, AgentRunContext>(),
     lifecycleGeneration: randomUUID(),
   }));
@@ -243,6 +247,9 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
   }
   if (context.sessionId && existing.sessionId !== context.sessionId) {
     existing.sessionId = context.sessionId;
+  }
+  if (context.agentId && existing.agentId !== context.agentId) {
+    existing.agentId = context.agentId;
   }
   if (context.verboseLevel && existing.verboseLevel !== context.verboseLevel) {
     existing.verboseLevel = context.verboseLevel;
@@ -414,8 +421,9 @@ export function resetAgentRunContextForTest() {
   getAgentRunContextOwners(state).clear();
 }
 
-/** Emits an agent event after assigning per-run sequence, timestamp, and context metadata. */
-export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
+function enrichAgentEvent(
+  event: Omit<AgentEventPayload, "seq" | "ts">,
+): AgentEventPayload | undefined {
   const state = getAgentEventState();
   const context = state.runContextById.get(event.runId);
   const executionLifecycleGeneration =
@@ -426,10 +434,10 @@ export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
     context?.lifecycleGeneration &&
     executionLifecycleGeneration !== context.lifecycleGeneration
   ) {
-    return;
+    return undefined;
   }
   if (ownedLifecycleGeneration && ownedLifecycleGeneration !== state.lifecycleGeneration) {
-    return;
+    return undefined;
   }
   const nextSeq = (state.seqByRun.get(event.runId) ?? 0) + 1;
   state.seqByRun.set(event.runId, nextSeq);
@@ -455,10 +463,12 @@ export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
     event.stream === "lifecycle"
       ? (ownedLifecycleGeneration ?? state.lifecycleGeneration)
       : ownedLifecycleGeneration;
+  const agentId = event.agentId ?? context?.agentId;
   const enriched: AgentEventPayload = {
     ...event,
     sessionKey,
     ...(sessionId ? { sessionId } : {}),
+    ...(agentId ? { agentId } : {}),
     seq: nextSeq,
     ts: Date.now(),
   };
@@ -470,7 +480,30 @@ export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
       enumerable: false,
     });
   }
-  notifyListeners(state.listeners, enriched);
+  return enriched;
+}
+
+/** Emits an agent event after assigning per-run sequence, timestamp, and context metadata. */
+export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
+  const enriched = enrichAgentEvent(event);
+  if (enriched) {
+    notifyListeners(getAgentEventState().listeners, enriched);
+  }
+}
+
+/** Emits run metadata only to the Gateway-owned durable audit projection. */
+export function emitAgentAuditEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
+  const state = getAgentEventState();
+  const enriched = enrichAgentEvent(event);
+  if (enriched) {
+    notifyListeners(state.auditListeners, enriched);
+    const phase = event.stream === "lifecycle" ? event.data.phase : undefined;
+    if ((phase === "end" || phase === "error") && !state.runContextById.has(event.runId)) {
+      // Private synthetic runs bypass public terminal cleanup. Release sequence state only
+      // after synchronous audit listeners consume the terminal event and its final ordering.
+      state.seqByRun.delete(event.runId);
+    }
+  }
 }
 
 /** Emits an item activity event on the shared agent event bus. */
@@ -535,11 +568,17 @@ export function onAgentEvent(listener: (evt: AgentEventPayload) => void) {
   return registerListener(state.listeners, listener);
 }
 
+/** Subscribes to private audit-only agent events; returns an unsubscribe callback. */
+export function onAgentAuditEvent(listener: (evt: AgentEventPayload) => void) {
+  return registerListener(getAgentEventState().auditListeners, listener);
+}
+
 /** Clears all agent event state, including listeners; test-only helper. */
 export function resetAgentEventsForTest() {
   const state = getAgentEventState();
   state.seqByRun.clear();
   state.listeners.clear();
+  state.auditListeners.clear();
   state.runContextById.clear();
   getAgentRunContextOwners(state).clear();
 }

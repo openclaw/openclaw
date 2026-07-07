@@ -40,7 +40,7 @@ export type QuickSettingsChannel = {
   detail?: string;
 };
 
-export type QuickSettingsAutomation = {
+type QuickSettingsAutomation = {
   cronJobCount: number;
   skillCount: number;
   mcpServerCount: number;

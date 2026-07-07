@@ -129,8 +129,16 @@ export function mergeUsageSummaries(
       providersById.set(provider.provider, provider);
       continue;
     }
+    const providerRank = usageSnapshotRank(provider);
+    const existingRank = usageSnapshotRank(existing);
+    // Synthetic errors must not hide the concrete provider endpoint's error.
+    // Synthetic data still wins equal displayable ranks so its live windows stay authoritative.
     const preferred =
-      usageSnapshotRank(provider) >= usageSnapshotRank(existing) ? provider : existing;
+      providerRank === 0 && existingRank === 0
+        ? existing
+        : providerRank >= existingRank
+          ? provider
+          : existing;
     const secondary = preferred === provider ? existing : provider;
     providersById.set(provider.provider, mergeUsageSnapshots(preferred, secondary));
   }

@@ -202,6 +202,23 @@ describe("chat-model-ref helpers", () => {
     ).toBe("nvidia/moonshotai/kimi-k2.5");
   });
 
+  it("uses the recorded provider when a slash-containing id exists under multiple providers", () => {
+    expect(
+      resolvePreferredServerChatModelValue("google/gemma-4-26b-a4b-it", "openrouter", [
+        {
+          id: "google/gemma-4-26b-a4b-it",
+          name: "Gemma 4",
+          provider: "google",
+        },
+        {
+          id: "google/gemma-4-26b-a4b-it",
+          name: "Gemma 4",
+          provider: "openrouter",
+        },
+      ]),
+    ).toBe("openrouter/google/gemma-4-26b-a4b-it");
+  });
+
   it("uses the catalog-backed provider for slash-containing nested ids before stale provider fallback", () => {
     expect(
       resolvePreferredServerChatModelValue("moonshotai/kimi-k2.5", "zai", [

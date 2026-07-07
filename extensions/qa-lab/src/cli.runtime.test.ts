@@ -10,6 +10,8 @@ const {
   runQaSuite,
   runQaCharacterEval,
   runQaMultipass,
+  runCanonicalLiveScenarios,
+  listLiveTransportQaAdapterFactories,
   listTelegramQaScenarioCatalog,
   runTelegramQaLive,
   startQaLabServer,
@@ -23,6 +25,8 @@ const {
   runQaSuite: vi.fn(),
   runQaCharacterEval: vi.fn(),
   runQaMultipass: vi.fn(),
+  runCanonicalLiveScenarios: vi.fn(),
+  listLiveTransportQaAdapterFactories: vi.fn(),
   listTelegramQaScenarioCatalog: vi.fn(),
   runTelegramQaLive: vi.fn(),
   startQaLabServer: vi.fn(),
@@ -48,6 +52,19 @@ vi.mock("./character-eval.js", () => ({
 
 vi.mock("./multipass.runtime.js", () => ({
   runQaMultipass,
+}));
+
+vi.mock("./live-transports/cli.js", () => ({
+  listLiveTransportQaAdapterFactories,
+}));
+
+vi.mock("./live-transports/shared/canonical-scenarios.js", async (importOriginal) => ({
+  ...(await importOriginal()),
+  runCanonicalLiveScenarios,
+}));
+
+vi.mock("./live-transports/telegram/adapter.runtime.js", () => ({
+  createTelegramQaTransportAdapter: vi.fn(),
 }));
 
 vi.mock("./live-transports/telegram/telegram-live.runtime.js", () => ({
@@ -222,6 +239,8 @@ describe("qa cli runtime", () => {
     runQaCharacterEval.mockReset();
     runQaManualLane.mockReset();
     runQaMultipass.mockReset();
+    runCanonicalLiveScenarios.mockReset();
+    listLiveTransportQaAdapterFactories.mockReset();
     listTelegramQaScenarioCatalog.mockReset();
     runTelegramQaLive.mockReset();
     startQaLabServer.mockReset();
@@ -273,13 +292,27 @@ describe("qa cli runtime", () => {
       observedMessagesPath: path.join(telegramArtifactsDir, "observed.json"),
       scenarios: [],
     });
+    runCanonicalLiveScenarios.mockResolvedValue({
+      outputDir: telegramArtifactsDir,
+      reportPath: path.join(telegramArtifactsDir, "canonical-report.md"),
+      summaryPath: telegramSummaryPath,
+      scenarios: [],
+    });
     listTelegramQaScenarioCatalog.mockReturnValue([
       {
-        id: "telegram-status-command",
-        title: "Telegram status command reply",
-        defaultEnabled: true,
-        rationale: "status rationale",
-        regressionRefs: ["openclaw/openclaw#74698"],
+        id: "telegram-stream-final-single-message",
+        title: "Telegram streamed final reply",
+        defaultEnabled: false,
+        rationale: "stream rationale",
+        regressionRefs: [],
+      },
+    ]);
+    listLiveTransportQaAdapterFactories.mockReturnValue([
+      {
+        id: "telegram",
+        scenarioIds: ["channel-chat-baseline"],
+        matches: vi.fn(),
+        create: vi.fn(),
       },
     ]);
     startQaLabServer.mockResolvedValue({
@@ -545,11 +578,14 @@ describe("qa cli runtime", () => {
     await runQaProfileCommand({
       repoRoot: "/tmp/openclaw-repo",
       profile: "smoke-ci",
+      scenarioIds: ["dm-chat-baseline", "instruction-followthrough-repo-contract"],
     });
 
     const suiteArgs = mockFirstObjectArg(runQaSuite);
     expect(suiteArgs.channelDriver).toBe("crabline");
-    expect(suiteArgs.scenarioIds).toEqual(expect.arrayContaining(["dm-chat-baseline"]));
+    expect(suiteArgs.scenarioIds).toEqual(
+      expect.arrayContaining(["dm-chat-baseline", "thread-follow-up", "thread-isolation"]),
+    );
     expect(suiteArgs.scenarioIds).not.toEqual(
       expect.arrayContaining([
         "instruction-followthrough-repo-contract",
@@ -558,7 +594,6 @@ describe("qa cli runtime", () => {
         "group-message-tool-unavailable-fallback",
         "qa-channel-reconnect-dedupe",
         "reaction-edit-delete",
-        "thread-follow-up",
         "claude-cli-provider-capabilities",
         "claude-cli-provider-capabilities-subscription",
         "image-generation-roundtrip",
@@ -642,6 +677,77 @@ describe("qa cli runtime", () => {
       thinkingDefault: "medium",
       scenarioIds: ["approval-turn-tool-followthrough"],
     });
+  });
+
+  it("runs canonical scenarios through a discovered live adapter factory", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      outputDir: ".artifacts/qa/telegram-live",
+      channelDriver: "live",
+      channel: "telegram",
+      providerMode: "mock-openai",
+      scenarioIds: ["channel-chat-baseline"],
+    });
+
+    expect(runQaSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        adapterFactories: listLiveTransportQaAdapterFactories.mock.results[0]?.value,
+        channelDriver: "live",
+        channelId: "telegram",
+        concurrency: 1,
+        adapterOptions: expect.objectContaining({
+          repoRoot: path.resolve("/tmp/openclaw-repo"),
+        }),
+        scenarioIds: ["channel-chat-baseline"],
+      }),
+    );
+  });
+
+  it("uses the selected live adapter's declared scenarios by default", async () => {
+    await runQaSuiteCommand({
+      channelDriver: "live",
+      channel: "telegram",
+    });
+
+    expect(runQaSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scenarioIds: ["channel-chat-baseline"],
+      }),
+    );
+  });
+
+  it("rejects live adapter selection under Multipass", async () => {
+    await expect(
+      runQaSuiteCommand({
+        runner: "multipass",
+        channelDriver: "live",
+        channel: "telegram",
+        scenarioIds: ["channel-chat-baseline"],
+      }),
+    ).rejects.toThrow("--channel-driver live with --channel requires --runner host.");
+    expect(runQaMultipass).not.toHaveBeenCalled();
+  });
+
+  it("rejects runtime-pair execution for live adapters", async () => {
+    await expect(
+      runQaSuiteCommand({
+        channelDriver: "live",
+        channel: "telegram",
+        runtimePair: "openclaw,codex",
+      }),
+    ).rejects.toThrow("--runtime-pair is not supported with a live QA adapter.");
+    expect(runQaSuite).not.toHaveBeenCalled();
+  });
+
+  it("keeps live taxonomy metadata unchanged without an explicit adapter channel", async () => {
+    await runQaSuiteCommand({
+      channelDriver: "live",
+      scenarioIds: ["channel-chat-baseline"],
+    });
+
+    expect(runQaSuite).toHaveBeenCalledWith(
+      expect.not.objectContaining({ adapterFactories: expect.anything() }),
+    );
   });
 
   it("uses the Crabline default channel when selected scenarios do not request one", async () => {
@@ -823,17 +929,22 @@ describe("qa cli runtime", () => {
       sutAccountId: "sut-live",
     });
 
-    expect(runTelegramQaLive).toHaveBeenCalledWith({
-      repoRoot: path.resolve("/tmp/openclaw-repo"),
-      outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa/telegram"),
-      providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5",
-      fastMode: true,
-      allowFailures: undefined,
-      scenarioIds: ["telegram-help-command"],
-      sutAccountId: "sut-live",
-    });
+    expect(runCanonicalLiveScenarios).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelId: "telegram",
+        options: expect.objectContaining({
+          repoRoot: path.resolve("/tmp/openclaw-repo"),
+          outputDir: path.resolve("/tmp/openclaw-repo", ".artifacts/qa/telegram"),
+          providerMode: "live-frontier",
+          primaryModel: "openai/gpt-5.5",
+          alternateModel: "openai/gpt-5.5",
+          fastMode: true,
+          sutAccountId: "sut-live",
+        }),
+        scenarioIds: ["telegram-help-command"],
+      }),
+    );
+    expect(runTelegramQaLive).not.toHaveBeenCalled();
   });
 
   it("rejects output dirs that escape the repo root", () => {
@@ -851,11 +962,40 @@ describe("qa cli runtime", () => {
       scenarioIds: ["telegram-help-command"],
     });
 
-    expectFields(mockFirstObjectArg(runTelegramQaLive), {
-      repoRoot: path.resolve("/tmp/openclaw-repo"),
-      providerMode: "live-frontier",
-      allowFailures: undefined,
+    expect(runCanonicalLiveScenarios).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({
+          repoRoot: path.resolve("/tmp/openclaw-repo"),
+          providerMode: "live-frontier",
+          allowFailures: undefined,
+        }),
+      }),
+    );
+    expect(runTelegramQaLive).not.toHaveBeenCalled();
+  });
+
+  it("keeps remaining Telegram defaults when Commander supplies an empty scenario list", async () => {
+    await runQaTelegramCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      scenarioIds: [],
     });
+
+    expect(runCanonicalLiveScenarios).toHaveBeenCalled();
+    expect(runTelegramQaLive).toHaveBeenCalledWith(
+      expect.objectContaining({ scenarioIds: undefined }),
+    );
+  });
+
+  it("rejects unknown mixed Telegram selections before starting canonical scenarios", async () => {
+    await expect(
+      runQaTelegramCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        scenarioIds: ["telegram-help-command", "missing-telegram-scenario"],
+      }),
+    ).rejects.toThrow("unknown Telegram QA scenario id(s): missing-telegram-scenario");
+
+    expect(runCanonicalLiveScenarios).not.toHaveBeenCalled();
+    expect(runTelegramQaLive).not.toHaveBeenCalled();
   });
 
   it("prints telegram scenario catalog without starting the live lane", async () => {
@@ -866,10 +1006,11 @@ describe("qa cli runtime", () => {
     });
 
     expect(listTelegramQaScenarioCatalog).toHaveBeenCalledWith("mock-openai");
+    expect(runCanonicalLiveScenarios).not.toHaveBeenCalled();
     expect(runTelegramQaLive).not.toHaveBeenCalled();
     expectWriteContains(
       stdoutWrite,
-      "telegram-status-command\tdefault\tTelegram status command reply\tstatus rationale refs=openclaw/openclaw#74698",
+      "telegram-status-command\tdefault\tTelegram status command reply\tVerify Telegram status returns model, session, and activation details. refs=openclaw/openclaw#74698",
     );
   });
 

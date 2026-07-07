@@ -1641,6 +1641,25 @@ describe("callGateway error details", () => {
     });
   });
 
+  it("does not over-claim a gateway crash on a 1006 abnormal close", async () => {
+    startMode = "close";
+    closeCode = 1006;
+    closeReason = "";
+    setLocalLoopbackGatewayConfig();
+
+    let err: unknown;
+    await callGateway({ method: "health" }).catch((caught: unknown) => {
+      err = caught;
+    });
+
+    const message = (err as { message: string }).message;
+    expect(message).toContain(
+      "Connection dropped without a close frame (retry; check network and gateway load)",
+    );
+    expect(message).not.toContain("crashed or was terminated unexpectedly");
+    expect(message).toContain("Run `openclaw doctor`");
+  });
+
   it("formats typed request errors for CLI JSON output", () => {
     const error = Object.assign(new Error("unauthorized role: operator"), {
       name: "GatewayClientRequestError",

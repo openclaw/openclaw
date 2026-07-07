@@ -3,7 +3,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SkillStatusReport } from "../../api/types.ts";
 import { loadSkillStatusReport } from "../../lib/skills/index.ts";
 
-export type AgentSkillsState = {
+type AgentSkillsState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   agentSkillsLoading: boolean;

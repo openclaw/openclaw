@@ -206,25 +206,23 @@ private fun cronDeliveryLabel(delivery: JsonObject?): String {
   val value = delivery ?: return "Default"
   val mode = value.string("mode") ?: return "Default"
   return listOfNotNull(
-      mode.replaceFirstChar { it.uppercaseChar() },
-      value.string("channel"),
-      value.string("to"),
-      value.string("accountId")?.let { "Account $it" },
-    )
-    .joinToString(" · ")
+    mode.replaceFirstChar { it.uppercaseChar() },
+    value.string("channel"),
+    value.string("to"),
+    value.string("accountId")?.let { "Account $it" },
+  ).joinToString(" · ")
 }
 
 private fun cronFailureAlertLabel(failureAlert: JsonElement?): String {
   if ((failureAlert as? JsonPrimitive)?.booleanOrNull == false) return "Off"
   val alert = failureAlert.asObjectOrNull() ?: return "Default"
   return listOfNotNull(
-      alert.long("after")?.let { "After $it" },
-      alert.string("mode")?.replaceFirstChar { it.uppercaseChar() },
-      alert.string("channel"),
-      alert.string("to"),
-      alert.long("cooldownMs")?.takeIf { it > 0L }?.let { "Cooldown ${formatCronInterval(it)}" },
-    )
-    .joinToString(" · ")
+    alert.long("after")?.let { "After $it" },
+    alert.string("mode")?.replaceFirstChar { it.uppercaseChar() },
+    alert.string("channel"),
+    alert.string("to"),
+    alert.long("cooldownMs")?.takeIf { it > 0L }?.let { "Cooldown ${formatCronInterval(it)}" },
+  ).joinToString(" · ")
     .ifBlank { "On" }
 }
 

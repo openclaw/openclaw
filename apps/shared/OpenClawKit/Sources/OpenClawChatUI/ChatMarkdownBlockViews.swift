@@ -1,4 +1,10 @@
+import SwiftMath
 import SwiftUI
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
 
 @MainActor
 struct ChatCodeBlockView: View {
@@ -38,6 +44,92 @@ struct ChatCodeBlockView: View {
             languageId: self.block.language)
     }
 }
+
+@MainActor
+struct ChatMathBlockView: View {
+    let block: ChatMathBlock
+    let textColor: Color
+
+    @ScaledMetric(relativeTo: .body) private var fontSize: CGFloat = OpenClawChatTypography.bodySize
+
+    var body: some View {
+        if self.block.isComplete,
+           ChatMathParseCache.mathList(latex: self.block.latex) != nil
+        {
+            ScrollView(.horizontal, showsIndicators: false) {
+                ChatMathPlatformView(
+                    latex: self.block.latex,
+                    fontSize: self.fontSize,
+                    textColor: self.textColor)
+                    .fixedSize()
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(Text(self.block.latex))
+            }
+            .defaultScrollAnchor(.center)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 4)
+        } else {
+            ChatCodeBlockView(block: ChatCodeBlock(
+                language: nil,
+                code: self.block.latex,
+                isComplete: false))
+        }
+    }
+}
+
+#if os(macOS)
+@MainActor
+private struct ChatMathPlatformView: NSViewRepresentable {
+    let latex: String
+    let fontSize: CGFloat
+    let textColor: Color
+
+    func makeNSView(context: Context) -> MTMathUILabel {
+        MTMathUILabel()
+    }
+
+    func updateNSView(_ view: MTMathUILabel, context: Context) {
+        self.configure(view)
+    }
+
+    private func configure(_ view: MTMathUILabel) {
+        view.displayErrorInline = false
+        view.labelMode = .display
+        view.textAlignment = .center
+        view.fontSize = self.fontSize
+        view.textColor = NSColor(self.textColor)
+        if view.latex != self.latex {
+            view.latex = self.latex
+        }
+    }
+}
+#else
+@MainActor
+private struct ChatMathPlatformView: UIViewRepresentable {
+    let latex: String
+    let fontSize: CGFloat
+    let textColor: Color
+
+    func makeUIView(context: Context) -> MTMathUILabel {
+        MTMathUILabel()
+    }
+
+    func updateUIView(_ view: MTMathUILabel, context: Context) {
+        self.configure(view)
+    }
+
+    private func configure(_ view: MTMathUILabel) {
+        view.displayErrorInline = false
+        view.labelMode = .display
+        view.textAlignment = .center
+        view.fontSize = self.fontSize
+        view.textColor = UIColor(self.textColor)
+        if view.latex != self.latex {
+            view.latex = self.latex
+        }
+    }
+}
+#endif
 
 @MainActor
 struct ChatMarkdownTableView: View {

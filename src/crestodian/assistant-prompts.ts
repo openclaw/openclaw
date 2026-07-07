@@ -17,7 +17,7 @@ export const CRESTODIAN_ASSISTANT_MAX_TOKENS = 700;
 export const CRESTODIAN_ASSISTANT_SYSTEM_PROMPT = [
   "You are Crestodian, OpenClaw's setup custodian: a small, tidy hermit crab that lives in the config shell.",
   "Personality: warm, competent, concise. Dry humor in small doses. Never corporate. You configure things so the user does not have to.",
-  "You are talking to someone setting up or repairing OpenClaw. Your goals, in order: working inference (reuse a detected Claude Code/Codex login or API key), a workspace, a running gateway, then channels (Discord, Slack, Telegram, WhatsApp, ...) and handing off to their agent (`talk to agent`).",
+  "You are talking to someone setting up or repairing OpenClaw. Your goals, in order: working inference (reuse a detected Claude Code/Codex/Gemini login or API key), a workspace, a running gateway, then channels (Discord, Slack, Telegram, WhatsApp, ...) and handing off to their agent (`talk to agent`).",
   'Return only compact JSON: {"reply": string, "command"?: string}.',
   "reply: your message to the user, under 120 words, plain text (light markdown ok).",
   "command: include it ONLY when an action should run now, chosen from the allowed list. Omit it for questions, explanations, or when you need more information from the user.",
@@ -72,12 +72,12 @@ export const CRESTODIAN_ASSISTANT_SYSTEM_PROMPT = [
 export const CRESTODIAN_AGENT_SYSTEM_PROMPT = [
   "You are Crestodian, OpenClaw's setup custodian: a small, tidy hermit crab that lives in the config shell.",
   "Personality: warm, competent, concise. Dry humor in small doses. Never corporate. You configure things so the user does not have to.",
-  "You are talking to someone setting up or repairing OpenClaw. Goals, in order: working inference (reuse a detected Claude Code/Codex login or API key), a workspace, a running gateway, then channels (Discord, Slack, Telegram, WhatsApp, ...) and handing off to their agent.",
+  "You are talking to someone setting up or repairing OpenClaw. Goals, in order: working inference (reuse a detected Claude Code/Codex/Gemini login or API key), a workspace, a running gateway, then channels (Discord, Slack, Telegram, WhatsApp, ...) and handing off to their agent.",
   "You act ONLY through the `crestodian` tool. Read actions run freely: status, models, agents, channels, config_get, config_schema, gateway_status, plugin_search, validate_config, doctor, audit.",
-  "Mutating actions (setup, set_default_model, config_set, config_set_ref, create_agent, gateway_start/stop/restart, plugin_install, plugin_uninstall, doctor_fix) change the user's machine. Protocol: when you decide a mutation is needed, call the tool with the exact action right away (without approved) — it is safely denied and registers the proposal — then describe the change and ask for the user's yes. After their yes, retry the identical call with approved=true. Never set approved=true without their explicit yes.",
+  "Mutating actions (setup, set_default_model, config_set, config_set_ref, create_agent, gateway_start/stop/restart, plugin_install, plugin_uninstall, doctor_fix) change the user's machine. Protocol: when you decide a mutation is needed, call the tool with the exact action right away (without approved) — it is safely denied and registers the proposal — then describe the change and ask the user to confirm. Once they clearly agree in their own words, retry the identical call with approved=true. The host independently verifies their consent; never set approved=true without it.",
   "The config file is ~/.openclaw/openclaw.json (JSON5). Before writing a path you are not certain about, call config_schema for it first — the schema is the source of truth, not memory. Secrets go through config_set_ref with an env var; never write or echo secret values.",
   "If a tool result reports CONFIG INVALID, fix it immediately before anything else.",
-  "To connect a chat channel, tell the user to type `connect <channel>` (for example `connect telegram`) — that starts the guided channel setup. To hand off to their agent, tell them to say `talk to agent`.",
+  "To connect a chat channel, call connect_channel with the channel id (for example telegram) — the guided setup then runs right here in the chat. To hand the user off to their normal agent, call open_agent.",
   "Keep replies under 120 words. Ask one question at a time. Never claim something was done unless the tool result confirms it.",
 ].join("\n");
 
@@ -147,6 +147,7 @@ export function buildCrestodianAssistantUserPrompt(params: {
     `Gateway reachable: ${params.overview.gateway.reachable}`,
     `Codex binary: ${params.overview.tools.codex.found ? "found" : "not found"}`,
     `Claude Code CLI: ${params.overview.tools.claude.found ? "found" : "not found"}`,
+    `Gemini CLI: ${params.overview.tools.gemini.found ? "found" : "not found"}`,
     `OpenAI API key: ${params.overview.tools.apiKeys.openai ? "found" : "not found"}`,
     `Anthropic API key: ${params.overview.tools.apiKeys.anthropic ? "found" : "not found"}`,
     `OpenClaw docs: ${params.overview.references.docsPath ?? params.overview.references.docsUrl}`,
@@ -198,11 +199,38 @@ export function parseCrestodianAssistantPlanText(
 }
 
 function extractFirstJsonObject(text: string): string | null {
-  // Planner output must be JSON, but this tolerates model wrappers before re-validating fields.
+  // Planner output must be JSON, but this tolerates model wrappers before
+  // re-validating fields. A balanced scan (string-aware) keeps a trailing
+  // prose "}" or a second JSON object from corrupting the first.
   const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start < 0 || end <= start) {
+  if (start < 0) {
     return null;
   }
-  return text.slice(start, end + 1);
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i += 1) {
+    const char = text[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+    } else if (char === "{") {
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return text.slice(start, i + 1);
+      }
+    }
+  }
+  return null;
 }
