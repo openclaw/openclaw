@@ -26,6 +26,47 @@ function normalizeQaConfigString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function describeQaProviderLaneMismatches(params: {
+  scenario: QaSeedScenario;
+  primaryModel: string;
+  providerMode: QaProviderMode;
+  channelDriver?: QaScorecardChannelDriver | null;
+  claudeCliAuthMode?: QaCliBackendAuthMode;
+}) {
+  const mismatches: string[] = [];
+  const provider = getQaProvider(params.providerMode);
+  if (params.scenario.runtimeParityTier === "live-only" && provider.kind !== "live") {
+    mismatches.push("live provider mode");
+  }
+  const config = params.scenario.execution.config ?? {};
+  const requiredProviderMode = normalizeQaConfigString(config.requiredProviderMode);
+  if (requiredProviderMode && params.providerMode !== requiredProviderMode) {
+    mismatches.push(`providerMode=${requiredProviderMode}`);
+  }
+  const requiredChannelDriver = normalizeQaConfigString(config.requiredChannelDriver);
+  const effectiveChannelDriver = params.channelDriver ?? "qa-channel";
+  if (requiredChannelDriver && effectiveChannelDriver !== requiredChannelDriver) {
+    mismatches.push(`channelDriver=${requiredChannelDriver}`);
+  }
+  if (provider.kind !== "live") {
+    return mismatches;
+  }
+  const selected = splitModelRef(params.primaryModel);
+  const requiredProvider = normalizeQaConfigString(config.requiredProvider);
+  if (requiredProvider && selected?.provider !== requiredProvider) {
+    mismatches.push(`provider=${requiredProvider}`);
+  }
+  const requiredModel = normalizeQaConfigString(config.requiredModel);
+  if (requiredModel && selected?.model !== requiredModel) {
+    mismatches.push(`model=${requiredModel}`);
+  }
+  const requiredAuthMode = normalizeQaConfigString(config.authMode);
+  if (requiredAuthMode && params.claudeCliAuthMode !== requiredAuthMode) {
+    mismatches.push(`authMode=${requiredAuthMode}`);
+  }
+  return mismatches;
+}
+
 function scenarioMatchesQaProviderLane(params: {
   scenario: QaSeedScenario;
   primaryModel: string;
@@ -33,37 +74,7 @@ function scenarioMatchesQaProviderLane(params: {
   channelDriver?: QaScorecardChannelDriver | null;
   claudeCliAuthMode?: QaCliBackendAuthMode;
 }) {
-  const provider = getQaProvider(params.providerMode);
-  if (params.scenario.runtimeParityTier === "live-only" && provider.kind !== "live") {
-    return false;
-  }
-  const config = params.scenario.execution.config ?? {};
-  const requiredProviderMode = normalizeQaConfigString(config.requiredProviderMode);
-  if (requiredProviderMode && params.providerMode !== requiredProviderMode) {
-    return false;
-  }
-  const requiredChannelDriver = normalizeQaConfigString(config.requiredChannelDriver);
-  const effectiveChannelDriver = params.channelDriver ?? "qa-channel";
-  if (requiredChannelDriver && effectiveChannelDriver !== requiredChannelDriver) {
-    return false;
-  }
-  if (provider.kind !== "live") {
-    return true;
-  }
-  const selected = splitModelRef(params.primaryModel);
-  const requiredProvider = normalizeQaConfigString(config.requiredProvider);
-  if (requiredProvider && selected?.provider !== requiredProvider) {
-    return false;
-  }
-  const requiredModel = normalizeQaConfigString(config.requiredModel);
-  if (requiredModel && selected?.model !== requiredModel) {
-    return false;
-  }
-  const requiredAuthMode = normalizeQaConfigString(config.authMode);
-  if (requiredAuthMode && params.claudeCliAuthMode !== requiredAuthMode) {
-    return false;
-  }
-  return true;
+  return describeQaProviderLaneMismatches(params).length === 0;
 }
 
 function selectQaFlowSuiteScenarios(params: {
@@ -96,6 +107,21 @@ function selectQaFlowSuiteScenarios(params: {
         .join(", ");
       throw new Error(
         `flow execution requires execution.kind: flow; unsupported scenario(s): ${scenarioList}`,
+      );
+    }
+    const channelDriverMismatches = selectedScenarios.flatMap((scenario) => {
+      const mismatches = describeQaProviderLaneMismatches({
+        scenario,
+        providerMode: params.providerMode,
+        primaryModel: params.primaryModel,
+        channelDriver: params.channelDriver,
+        claudeCliAuthMode: params.claudeCliAuthMode,
+      }).filter((mismatch) => mismatch.startsWith("channelDriver="));
+      return mismatches.length > 0 ? [`${scenario.id} (${mismatches.join(", ")})`] : [];
+    });
+    if (channelDriverMismatches.length > 0) {
+      throw new Error(
+        `selected QA scenario(s) do not match the current QA lane: ${channelDriverMismatches.join(", ")}`,
       );
     }
     return selectedScenarios;
@@ -168,18 +194,50 @@ function collectQaSuitePluginIds(
   ];
 }
 
+const QA_GATEWAY_CONFIG_SELECTED_ACCOUNT_KEY = "$selectedAccount";
+
+// Scenario patches resolve this reserved object key against the adapter's selected account before
+// merging, so CLI account overrides cannot leave configuration on an inactive default account.
+function resolveQaGatewayConfigPatchSelectedAccount(
+  patch: unknown,
+  selectedAccountId: string,
+): unknown {
+  if (Array.isArray(patch)) {
+    return patch.map((entry) =>
+      resolveQaGatewayConfigPatchSelectedAccount(entry, selectedAccountId),
+    );
+  }
+  if (!isQaMergePatchObject(patch)) {
+    return patch;
+  }
+  const resolved: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(patch)) {
+    const resolvedKey = key === QA_GATEWAY_CONFIG_SELECTED_ACCOUNT_KEY ? selectedAccountId : key;
+    Object.defineProperty(resolved, resolvedKey, {
+      configurable: true,
+      enumerable: true,
+      value: resolveQaGatewayConfigPatchSelectedAccount(value, selectedAccountId),
+      writable: true,
+    });
+  }
+  return resolved;
+}
+
 function collectQaSuiteGatewayConfigPatch(
   scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"],
+  selectedAccountId = "sut",
 ): Record<string, unknown> | undefined {
+  const resolvedSelectedAccountId = selectedAccountId.trim() || "sut";
   let merged: Record<string, unknown> | undefined;
   for (const scenario of scenarios) {
     if (!isQaMergePatchObject(scenario.gatewayConfigPatch)) {
       continue;
     }
-    merged = applyQaMergePatch(merged ?? {}, scenario.gatewayConfigPatch) as Record<
-      string,
-      unknown
-    >;
+    const resolvedPatch = resolveQaGatewayConfigPatchSelectedAccount(
+      scenario.gatewayConfigPatch,
+      resolvedSelectedAccountId,
+    );
+    merged = applyQaMergePatch(merged ?? {}, resolvedPatch) as Record<string, unknown>;
   }
   return merged;
 }

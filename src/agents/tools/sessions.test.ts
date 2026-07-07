@@ -3,16 +3,52 @@
 import os from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
+import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { extractAssistantText, sanitizeTextContent } from "./chat-history-text.js";
 
 const callGatewayMock = vi.fn();
+const facadeRuntimeMock = vi.hoisted(() => ({
+  sessionKeyResolvers: new Map<
+    string,
+    (params: { kind: "group" | "channel"; rawId: string }) => {
+      id: string;
+      threadId?: string | null;
+      baseConversationId?: string | null;
+      parentConversationCandidates?: string[];
+    } | null
+  >(),
+}));
+
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
+vi.mock("../../plugin-sdk/facade-runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../../plugin-sdk/facade-runtime.js")>(
+    "../../plugin-sdk/facade-runtime.js",
+  );
+  return {
+    ...actual,
+    tryLoadActivatedBundledPluginPublicSurfaceModuleSync: (params: {
+      dirName: string;
+      artifactBasename: string;
+    }) => {
+      if (params.artifactBasename === "session-key-api.js") {
+        const resolveSessionConversation = facadeRuntimeMock.sessionKeyResolvers.get(
+          params.dirName,
+        );
+        if (resolveSessionConversation) {
+          return { resolveSessionConversation };
+        }
+      }
+      return actual.tryLoadActivatedBundledPluginPublicSurfaceModuleSync(params);
+    },
+  };
+});
 
 type SessionsToolTestConfig = {
   session: { scope: "per-sender"; mainKey: string; agentToAgent?: { maxPingPongTurns: number } };
@@ -305,12 +341,17 @@ describe("sanitizeTextContent", () => {
 });
 
 beforeEach(() => {
+  facadeRuntimeMock.sessionKeyResolvers.clear();
   loadConfigMock.mockReset();
   loadConfigMock.mockReturnValue({
     session: { scope: "per-sender", mainKey: "main" },
     tools: { agentToAgent: { enabled: false } },
   });
   setActivePluginRegistry(createTestRegistry([]));
+});
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
 });
 
 describe("extractAssistantText", () => {
@@ -973,6 +1014,41 @@ describe("sessions_send gating", () => {
     const details = requireDetails(result);
     expect(details.status).toBe("error");
     expect(details.sessionKey).toBe(threadSessionKey);
+    expect((result.details as { error?: string } | undefined)?.error ?? "").toContain(
+      "cannot target a thread session",
+    );
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects Telegram topic session targets before dispatching an agent run", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: false },
+        sessions: { visibility: "all" },
+      },
+    });
+    const topicSessionKey = "agent:main:telegram:group:-100123:topic:77";
+    facadeRuntimeMock.sessionKeyResolvers.set("telegram", ({ kind, rawId }) => {
+      if (kind !== "group") {
+        return null;
+      }
+      const [id, threadId] = rawId.split(":topic:");
+      return threadId ? { id, threadId, baseConversationId: id } : null;
+    });
+    setRuntimeConfigSnapshot({ plugins: { entries: { telegram: { enabled: true } } } });
+    expect(parseSessionThreadInfo(topicSessionKey).threadId).toBe("77");
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-telegram-topic-target", {
+      sessionKey: topicSessionKey,
+      message: "hi",
+      timeoutSeconds: 0,
+    });
+
+    const details = requireDetails(result);
+    expect(details.status).toBe("error");
+    expect(details.sessionKey).toBe(topicSessionKey);
     expect((result.details as { error?: string } | undefined)?.error ?? "").toContain(
       "cannot target a thread session",
     );

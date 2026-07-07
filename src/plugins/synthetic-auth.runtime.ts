@@ -84,7 +84,7 @@ export function resolveRuntimeSyntheticAuthProviderRefState(
               typeof entry.provider.resolveSyntheticAuth === "function",
           )
           .map((entry) => entry.provider.id),
-        ...(registry.cliBackends ?? [])
+        ...registry.cliBackends
           .filter(
             (entry) =>
               "resolveSyntheticAuth" in entry.backend &&
@@ -115,7 +115,7 @@ export function resolveRuntimeExternalAuthProviderRefs(
               typeof entry.provider.resolveExternalOAuthProfiles === "function"),
         )
         .map((entry) => entry.provider.id),
-      ...(registry.cliBackends ?? [])
+      ...registry.cliBackends
         .filter(
           (entry) =>
             ("resolveExternalAuthProfiles" in entry.backend &&

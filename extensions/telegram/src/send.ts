@@ -1438,7 +1438,7 @@ export async function sendTypingTelegram(
     account,
     retry: opts.retry,
     verbose: opts.verbose,
-    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
+    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "action" }),
   });
   const threadParams = buildTypingThreadParams(target.messageThreadId ?? opts.messageThreadId);
   await requestWithDiag(
@@ -2195,7 +2195,7 @@ type TelegramCreateForumTopicOpts = {
   iconCustomEmojiId?: string;
 };
 
-export type TelegramCreateForumTopicResult = {
+type TelegramCreateForumTopicResult = {
   topicId: number;
   name: string;
   chatId: string;

@@ -661,6 +661,7 @@ describe("isPrioritizedHighSignalLiveModelRef", () => {
   it("lists priority refs as provider/id pairs", () => {
     expect(listPrioritizedHighSignalLiveModelRefs()).toStrictEqual([
       { provider: "anthropic", id: "claude-opus-4-8" },
+      { provider: "anthropic", id: "claude-sonnet-5" },
       { provider: "anthropic", id: "claude-sonnet-4-6" },
       { provider: "anthropic", id: "claude-opus-4-7" },
       { provider: "google", id: "gemini-3.1-pro-preview" },

@@ -38,7 +38,7 @@ export type GatewayEventFrame = {
   stateVersion?: { presence: number; health: number };
 };
 
-export type GatewayResponseFrame = {
+type GatewayResponseFrame = {
   type: "res";
   id: string;
   ok: boolean;
@@ -251,7 +251,7 @@ export type GatewayConnectClientInfo = {
   instanceId?: string;
 };
 
-export type GatewayConnectParams = {
+type GatewayConnectParams = {
   minProtocol: typeof MIN_CLIENT_PROTOCOL_VERSION;
   maxProtocol: typeof PROTOCOL_VERSION;
   client: GatewayConnectClientInfo;
@@ -309,7 +309,7 @@ export type GatewayBrowserClientOptions = {
 
 export type GatewayEventListener = (evt: GatewayEventFrame) => void;
 
-export type GatewayRequestTiming = {
+type GatewayRequestTiming = {
   id: string;
   method: string;
   ok: boolean;

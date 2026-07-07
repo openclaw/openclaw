@@ -23,11 +23,6 @@ import {
   runApprovalThreadTargetScenario,
 } from "./scenario-runtime-approval.js";
 import {
-  runDmPerRoomSessionOverrideScenario,
-  runDmSharedSessionNoticeScenario,
-  runDmThreadReplyOverrideScenario,
-} from "./scenario-runtime-dm.js";
-import {
   runMatrixQaE2eeCorruptCryptoIdbSnapshotScenario,
   runMatrixQaE2eeHistoryExistsBackupEmptyScenario,
   runMatrixQaE2eeServerBackupDeletedLocalStateIntactScenario,
@@ -87,13 +82,9 @@ import {
 import {
   runHomeserverRestartResumeScenario,
   runInitialCatchupThenIncrementalScenario,
-  runPostRestartRoomContinueScenario,
-  runRestartReplayDedupeScenario,
-  runRestartResumeScenario,
   runStaleSyncReplayDedupeScenario,
 } from "./scenario-runtime-restart.js";
 import {
-  runAllowlistHotReloadScenario,
   runBlockStreamingScenario,
   runMatrixQaCanary,
   runMembershipLossScenario,
@@ -102,10 +93,6 @@ import {
   runQuietStreamingPreviewScenario,
   runReactionThreadedScenario,
   runRoomAutoJoinInviteScenario,
-  runRoomThreadReplyOverrideScenario,
-  runSubagentThreadSpawnScenario,
-  runThreadFollowUpScenario,
-  runThreadIsolationScenario,
   runThreadNestedReplyShapeScenario,
   runThreadRootPreservationScenario,
   runToolProgressErrorScenario,
@@ -216,20 +203,12 @@ export async function runMatrixQaScenario(
   context: MatrixQaScenarioContext,
 ): Promise<MatrixQaScenarioExecution> {
   switch (scenario.id) {
-    case "matrix-thread-follow-up":
-      return await runThreadFollowUpScenario(context);
     case "matrix-thread-root-preservation":
       return await runThreadRootPreservationScenario(context);
     case "matrix-thread-nested-reply-shape":
       return await runThreadNestedReplyShapeScenario(context);
-    case "matrix-thread-isolation":
-      return await runThreadIsolationScenario(context);
-    case "matrix-subagent-thread-spawn":
-      return await runSubagentThreadSpawnScenario(context);
     case "matrix-top-level-reply-shape":
       return await runTopLevelReplyShapeScenario(context);
-    case "matrix-room-thread-reply-override":
-      return await runRoomThreadReplyOverrideScenario(context);
     case "matrix-room-partial-streaming-preview":
       return await runPartialStreamingPreviewScenario(context);
     case "matrix-room-quiet-streaming-preview":
@@ -265,12 +244,6 @@ export async function runMatrixQaScenario(
         tokenPrefix: "MATRIX_QA_DM",
         withMention: false,
       });
-    case "matrix-dm-shared-session-notice":
-      return await runDmSharedSessionNoticeScenario(context);
-    case "matrix-dm-thread-reply-override":
-      return await runDmThreadReplyOverrideScenario(context);
-    case "matrix-dm-per-room-session-override":
-      return await runDmPerRoomSessionOverrideScenario(context);
     case "matrix-room-autojoin-invite":
       return await runRoomAutoJoinInviteScenario(context);
     case "matrix-secondary-room-reply":
@@ -306,14 +279,8 @@ export async function runMatrixQaScenario(
       return await runApprovalThreadTargetScenario(context);
     case "matrix-approval-channel-target-both":
       return await runApprovalChannelTargetBothScenario(context);
-    case "matrix-restart-resume":
-      return await runRestartResumeScenario(context);
-    case "matrix-post-restart-room-continue":
-      return await runPostRestartRoomContinueScenario(context);
     case "matrix-initial-catchup-then-incremental":
       return await runInitialCatchupThenIncrementalScenario(context);
-    case "matrix-restart-replay-dedupe":
-      return await runRestartReplayDedupeScenario(context);
     case "matrix-stale-sync-replay-dedupe":
       return await runStaleSyncReplayDedupeScenario(context);
     case "matrix-room-membership-loss":
@@ -385,8 +352,6 @@ export async function runMatrixQaScenario(
         token,
       });
     }
-    case "matrix-allowlist-hot-reload":
-      return await runAllowlistHotReloadScenario(context);
     case "matrix-multi-actor-ordering":
       return await runMultiActorOrderingScenario(context);
     case "matrix-inbound-edit-ignored":

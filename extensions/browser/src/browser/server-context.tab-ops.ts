@@ -254,7 +254,7 @@ export function createProfileTabOps({
         continue;
       }
       if (tab.wsUrl) {
-        await assertCdpEndpointAllowed(tab.wsUrl, cdpControlPolicy);
+        await assertCdpEndpointAllowed(tab.wsUrl, cdpControlPolicy, { source: "discovered" });
       }
       tabs.push(tab);
     }
@@ -323,6 +323,7 @@ export function createProfileTabOps({
         const page = await createPageViaPlaywright({
           cdpUrl: profile.cdpUrl,
           url,
+          cdpPolicy: getCdpControlPolicy(),
           ...ssrfPolicyOpts,
         });
         const profileState = getProfileState();
@@ -421,7 +422,7 @@ export function createProfileTabOps({
     await assertBrowserNavigationResultAllowed({ url: resolvedUrl, ...ssrfPolicyOpts });
     const wsUrl = normalizeWsUrl(created.webSocketDebuggerUrl, profile.cdpUrl);
     if (wsUrl) {
-      await assertCdpEndpointAllowed(wsUrl, getCdpControlPolicy());
+      await assertCdpEndpointAllowed(wsUrl, getCdpControlPolicy(), { source: "discovered" });
     }
     triggerManagedTabLimit(created.id);
     return assignTabAlias({

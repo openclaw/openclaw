@@ -3023,7 +3023,13 @@ describe("runEmbeddedAttempt context engine mid-turn precheck integration", () =
     });
 
     expect(result.promptErrorSource).toBe("precheck");
-    expect(result.preflightRecovery).toEqual({ route: "compact_only", source: "mid-turn" });
+    expect(result.preflightRecovery).toEqual({
+      route: "compact_only",
+      source: "mid-turn",
+      estimatedPromptTokens: 9000,
+      promptBudgetBeforeReserve: 7000,
+      overflowTokens: 2000,
+    });
     expect(result.messagesSnapshot).toEqual([seedMessage]);
   });
 });
@@ -3064,6 +3070,34 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
       mockParams(hoisted.installToolResultContextGuardMock, 0, "tool-result guard params")
         .contextWindowTokens,
     ).toBe(1_000_000);
+  });
+
+  it("passes context engines the message budget after reserve and rendered prompt pressure", async () => {
+    const contextEngine = createContextEngineBootstrapAndAssemble();
+    hoisted.compactionReserveTokens = 20_000;
+
+    await createContextEngineAttemptRunner({
+      contextEngine,
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        contextTokenBudget: 100_000,
+        prompt: "current prompt",
+        transcriptPrompt: "current prompt",
+      },
+    });
+
+    const assembleParams = mockParams(
+      contextEngine.assemble as MockCallSource,
+      0,
+      "assemble params",
+    );
+    expect(assembleParams.tokenBudget).toBeLessThan(80_000);
+    expect(assembleParams.runtimeSettings).toMatchObject({
+      limits: {
+        maxOutputTokens: 20_000,
+      },
+    });
   });
 
   it("preserves the cacheable prefix while bounding current prompt results", async () => {

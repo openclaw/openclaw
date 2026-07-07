@@ -164,6 +164,18 @@ enum OpenClawChatTheme {
         #endif
     }
 
+    static var muted: Color {
+        .secondary
+    }
+
+    static var warning: Color {
+        #if os(macOS)
+        Color(nsColor: .systemOrange)
+        #else
+        Color(uiColor: .systemOrange)
+        #endif
+    }
+
     static var assistantBubble: Color {
         #if os(macOS)
         Color(nsColor: self.assistantBubbleDynamicNSColor)

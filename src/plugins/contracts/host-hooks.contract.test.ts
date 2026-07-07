@@ -36,7 +36,6 @@ import {
   drainPluginNextTurnInjections,
   enqueuePluginNextTurnInjection,
   patchPluginSessionExtension,
-  projectPluginSessionExtensions,
   projectPluginSessionExtensionsSync,
 } from "../host-hook-state.js";
 import { buildPluginAgentTurnPrepareContext, isPluginJsonValue } from "../host-hooks.js";
@@ -141,12 +140,12 @@ describe("host-hook fixture plugin contract", () => {
       register: registerHostHookFixture,
     });
 
-    expect(registry.registry.sessionExtensions ?? []).toHaveLength(1);
-    expect(registry.registry.toolMetadata ?? []).toHaveLength(1);
-    expect(registry.registry.controlUiDescriptors ?? []).toHaveLength(1);
-    expect(registry.registry.runtimeLifecycles ?? []).toHaveLength(1);
-    expect(registry.registry.agentEventSubscriptions ?? []).toHaveLength(1);
-    expect(registry.registry.sessionSchedulerJobs ?? []).toHaveLength(1);
+    expect(registry.registry.sessionExtensions).toHaveLength(1);
+    expect(registry.registry.toolMetadata).toHaveLength(1);
+    expect(registry.registry.controlUiDescriptors).toHaveLength(1);
+    expect(registry.registry.runtimeLifecycles).toHaveLength(1);
+    expect(registry.registry.agentEventSubscriptions).toHaveLength(1);
+    expect(registry.registry.sessionSchedulerJobs).toHaveLength(1);
     expect(registry.registry.commands.map((entry) => entry.command.name)).toEqual([
       "host-hook-fixture",
     ]);
@@ -181,7 +180,7 @@ describe("host-hook fixture plugin contract", () => {
       },
     });
 
-    expect(registry.registry.trustedToolPolicies ?? []).toHaveLength(0);
+    expect(registry.registry.trustedToolPolicies).toHaveLength(0);
     expect(registry.registry.commands).toHaveLength(0);
     const diagnostics = diagnosticSummaries(registry.registry.diagnostics);
     expect(diagnostics).toHaveLength(2);
@@ -215,7 +214,7 @@ describe("host-hook fixture plugin contract", () => {
       },
     });
 
-    expect(registry.registry.trustedToolPolicies ?? []).toHaveLength(0);
+    expect(registry.registry.trustedToolPolicies).toHaveLength(0);
     expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
       {
         pluginId: "external-policy",
@@ -250,8 +249,8 @@ describe("host-hook fixture plugin contract", () => {
       },
     });
 
-    expect(registry.registry.trustedToolPolicies ?? []).toHaveLength(1);
-    expect(registry.registry.trustedToolPolicies?.[0]?.policy.id).toBe("deny");
+    expect(registry.registry.trustedToolPolicies).toHaveLength(1);
+    expect(registry.registry.trustedToolPolicies[0]?.policy.id).toBe("deny");
     expect(registry.registry.commands).toHaveLength(0);
     const diagnostics = diagnosticSummaries(registry.registry.diagnostics);
     expect(diagnostics).toHaveLength(1);
@@ -304,7 +303,7 @@ describe("host-hook fixture plugin contract", () => {
       },
     });
 
-    expect(registry.registry.trustedToolPolicies ?? []).toHaveLength(0);
+    expect(registry.registry.trustedToolPolicies).toHaveLength(0);
     expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
       {
         pluginId: "malformed-policy",
@@ -340,10 +339,7 @@ describe("host-hook fixture plugin contract", () => {
     }
 
     expect(
-      (registry.registry.trustedToolPolicies ?? []).map((entry) => [
-        entry.pluginId,
-        entry.policy.id,
-      ]),
+      registry.registry.trustedToolPolicies.map((entry) => [entry.pluginId, entry.policy.id]),
     ).toEqual([
       ["budget-policy-a", "workflow-budget"],
       ["budget-policy-b", "workflow-budget"],
@@ -376,7 +372,7 @@ describe("host-hook fixture plugin contract", () => {
       },
     });
 
-    expect(registry.registry.trustedToolPolicies ?? []).toHaveLength(1);
+    expect(registry.registry.trustedToolPolicies).toHaveLength(1);
     expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
       {
         pluginId: "duplicate-policy",
@@ -468,7 +464,7 @@ describe("host-hook fixture plugin contract", () => {
     setActivePluginRegistry(registry.registry);
 
     expect(
-      registry.registry.trustedToolPolicies?.map((entry) => [entry.pluginId, entry.policy.id]),
+      registry.registry.trustedToolPolicies.map((entry) => [entry.pluginId, entry.policy.id]),
     ).toEqual([
       ["bundled-policy", "shared-deny"],
       ["external-policy", "shared-deny"],
@@ -1112,7 +1108,7 @@ describe("host-hook fixture plugin contract", () => {
       },
     });
 
-    expect(registry.registry.controlUiDescriptors ?? []).toHaveLength(0);
+    expect(registry.registry.controlUiDescriptors).toHaveLength(0);
     expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
       {
         pluginId: "descriptor-fixture",
@@ -1235,7 +1231,7 @@ describe("host-hook fixture plugin contract", () => {
       },
     });
 
-    expect(registry.registry.sessionExtensions ?? []).toHaveLength(0);
+    expect(registry.registry.sessionExtensions).toHaveLength(0);
     expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
       {
         pluginId: "async-projector-fixture",
@@ -1267,7 +1263,7 @@ describe("host-hook fixture plugin contract", () => {
       },
     });
 
-    expect(registry.registry.sessionExtensions ?? []).toHaveLength(0);
+    expect(registry.registry.sessionExtensions).toHaveLength(0);
     expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
       {
         pluginId: "bad-session-extension-fixture",
@@ -1325,8 +1321,8 @@ describe("host-hook fixture plugin contract", () => {
       },
     });
 
-    expect(registry.registry.runtimeLifecycles ?? []).toHaveLength(1);
-    expect(registry.registry.agentEventSubscriptions ?? []).toHaveLength(1);
+    expect(registry.registry.runtimeLifecycles).toHaveLength(1);
+    expect(registry.registry.agentEventSubscriptions).toHaveLength(1);
     expect(diagnosticSummaries(registry.registry.diagnostics)).toEqual([
       {
         pluginId: "duplicate-host-hook-fixture",
@@ -1389,9 +1385,6 @@ describe("host-hook fixture plugin contract", () => {
     expect(projectPluginSessionExtensionsSync({ sessionKey: "agent:main:main", entry })).toEqual(
       [],
     );
-    await expect(
-      projectPluginSessionExtensions({ sessionKey: "agent:main:main", entry }),
-    ).resolves.toStrictEqual([]);
   });
 
   it("skips throwing session extension projectors without losing other projections", () => {
@@ -1940,7 +1933,7 @@ describe("host-hook fixture plugin contract", () => {
         });
       },
     });
-    const descriptorEntry = registry.registry.controlUiDescriptors?.[0];
+    const descriptorEntry = registry.registry.controlUiDescriptors[0];
     if (!descriptorEntry) {
       throw new Error("expected control UI descriptor registration");
     }
@@ -2789,7 +2782,7 @@ describe("host-hook fixture plugin contract", () => {
       sessionKey: "agent:main:main",
       kind: "monitor",
     });
-    const schedulerJobs = registry.registry.sessionSchedulerJobs ?? [];
+    const schedulerJobs = registry.registry.sessionSchedulerJobs;
     expect(schedulerJobs).toHaveLength(1);
     const schedulerJob = schedulerJobs[0];
     expect(schedulerJob?.pluginId).toBe("snapshot-fixture");

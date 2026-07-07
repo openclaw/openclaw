@@ -54,6 +54,7 @@ import { invokeRegisteredNodeHostCommand } from "./plugin-node-host.js";
 
 const OUTPUT_CAP = 200_000;
 const OUTPUT_EVENT_TAIL = 20_000;
+const STREAM_ERROR_KILL_GRACE_MS = 1_000;
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 const execHostEnforced =
@@ -313,6 +314,8 @@ async function runCommand(
     child.stderr?.on("data", (chunk) => onChunk(chunk as Buffer, "stderr"));
 
     let timer: NodeJS.Timeout | undefined;
+    let streamError: Error | undefined;
+    let streamKillTimer: NodeJS.Timeout | undefined;
     if (timeoutMs && timeoutMs > 0) {
       timer = setTimeout(() => {
         timedOut = true;
@@ -331,6 +334,9 @@ async function runCommand(
       settled = true;
       if (timer) {
         clearTimeout(timer);
+      }
+      if (streamKillTimer) {
+        clearTimeout(streamKillTimer);
       }
       const stdout = decodeCapturedOutputBuffer({
         buffer: Buffer.concat(stdoutChunks),
@@ -351,11 +357,37 @@ async function runCommand(
       });
     };
 
+    const onStreamError = (err: Error) => {
+      if (settled || streamError) {
+        return;
+      }
+      streamError = err;
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // ignore
+      }
+      // A reported system.run completion must not outlive its command. Escalate
+      // a pipe-failure shutdown, then let the child exit settle the result.
+      streamKillTimer = setTimeout(() => {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // ignore
+        }
+      }, STREAM_ERROR_KILL_GRACE_MS);
+      streamKillTimer.unref?.();
+    };
+
+    child.stdout?.on("error", onStreamError);
+    child.stderr?.on("error", onStreamError);
     child.on("error", (err) => {
-      finalize(undefined, err.message);
+      if (!streamError) {
+        finalize(undefined, err.message);
+      }
     });
     child.on("exit", (code) => {
-      finalize(code === null ? undefined : code, null);
+      finalize(code === null ? undefined : code, streamError?.message ?? null);
     });
   });
 }
@@ -783,3 +815,8 @@ async function sendNodeEvent(client: GatewayClient, event: string, payload: unkn
     // ignore: node events are best-effort
   }
 }
+
+export const testing = {
+  STREAM_ERROR_KILL_GRACE_MS,
+  runCommand,
+} as const;

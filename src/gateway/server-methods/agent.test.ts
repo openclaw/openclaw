@@ -1286,72 +1286,75 @@ describe("gateway agent handler", () => {
   });
 
   it.each([
-    { name: "status terminal row", status: "done" as const },
-    { name: "endedAt-only terminal row" },
+    { name: "status-done row", status: "done" as const, expectReuse: true },
+    { name: "status-killed row", status: "killed" as const, expectReuse: false },
+    { name: "endedAt-only row", status: undefined, expectReuse: false },
   ])(
-    "rotates a terminal main session from a $name when its transcript is newer",
+    "handles a terminal main session from a $name when its transcript is newer",
     async (scenario) => {
       const now = Date.parse("2026-05-18T09:47:00.000Z");
       vi.useFakeTimers({ toFake: ["Date"] });
       dateOnlyFakeClockActive = true;
       vi.setSystemTime(now);
 
-      await withTempDir(
-        { prefix: "openclaw-gateway-terminal-main-newer-transcript-" },
-        async (root) => {
-          const sessionsDir = `${root}/sessions`;
-          await fs.mkdir(sessionsDir, { recursive: true });
-          const sessionFile = "terminal-main-session.jsonl";
-          const transcriptPath = `${sessionsDir}/${sessionFile}`;
-          await fs.writeFile(
-            transcriptPath,
-            `${JSON.stringify({ type: "session", id: "terminal-main-session" })}\n`,
-            "utf8",
-          );
-          await fs.utimes(transcriptPath, new Date(now - 1_000), new Date(now - 1_000));
-          mocks.loadSessionEntry.mockReturnValue({
-            cfg: {},
-            storePath: `${sessionsDir}/sessions.json`,
-            entry: {
-              sessionId: "terminal-main-session",
-              sessionFile,
-              ...(scenario.status ? { status: scenario.status } : {}),
-              updatedAt: now - 10_000,
-              sessionStartedAt: now - 60_000,
-              lastInteractionAt: now - 10_000,
-              startedAt: now - 20_000,
-              endedAt: now - 15_000,
-              runtimeMs: 5_000,
-              cliSessionBindings: {
-                "claude-cli": { sessionId: "old-claude-cli-session" },
-                "codex-cli": { sessionId: "old-codex-cli-session" },
-              },
-              cliSessionIds: {
-                "claude-cli": "old-claude-cli-session",
-                "codex-cli": "old-codex-cli-session",
-              },
-              claudeCliSessionId: "old-claude-cli-session",
+      await withTempDir({ prefix: "openclaw-gateway-terminal-main-newer-" }, async (root) => {
+        const sessionsDir = `${root}/sessions`;
+        await fs.mkdir(sessionsDir, { recursive: true });
+        const sessionFile = "terminal-main-session.jsonl";
+        const transcriptPath = `${sessionsDir}/${sessionFile}`;
+        await fs.writeFile(
+          transcriptPath,
+          `${JSON.stringify({ type: "session", id: "terminal-main-session" })}\n`,
+          "utf8",
+        );
+        await fs.utimes(transcriptPath, new Date(now - 1_000), new Date(now - 1_000));
+        mocks.loadSessionEntry.mockReturnValue({
+          cfg: {},
+          storePath: `${sessionsDir}/sessions.json`,
+          entry: {
+            sessionId: "terminal-main-session",
+            sessionFile,
+            ...(scenario.status ? { status: scenario.status } : {}),
+            updatedAt: now - 10_000,
+            sessionStartedAt: now - 60_000,
+            lastInteractionAt: now - 10_000,
+            startedAt: now - 20_000,
+            endedAt: now - 15_000,
+            runtimeMs: 5_000,
+            cliSessionBindings: {
+              "claude-cli": { sessionId: "old-claude-cli-session" },
+              "codex-cli": { sessionId: "old-codex-cli-session" },
             },
-            canonicalKey: "agent:main:main",
-          });
+            cliSessionIds: {
+              "claude-cli": "old-claude-cli-session",
+              "codex-cli": "old-codex-cli-session",
+            },
+            claudeCliSessionId: "old-claude-cli-session",
+          },
+          canonicalKey: "agent:main:main",
+        });
 
-          const capturedEntry = await runMainAgentAndCaptureEntry(
-            "test-idem-terminal-main-newer-transcript",
-          );
+        const capturedEntry = await runMainAgentAndCaptureEntry(
+          "test-idem-terminal-main-newer-transcript",
+        );
 
-          const call = await waitForAgentCommandCall<{ sessionId?: string }>();
-          expect(call.sessionId).not.toBe("terminal-main-session");
-          expect(capturedEntry?.sessionId).not.toBe("terminal-main-session");
-          expect(capturedEntry?.status).toBeUndefined();
-          expect(capturedEntry?.startedAt).toBeUndefined();
-          expect(capturedEntry?.endedAt).toBeUndefined();
-          expect(capturedEntry?.runtimeMs).toBeUndefined();
-          expect(capturedEntry?.sessionFile).toBeUndefined();
-          expect(capturedEntry?.cliSessionBindings).toBeUndefined();
-          expect(capturedEntry?.cliSessionIds).toBeUndefined();
-          expect(capturedEntry?.claudeCliSessionId).toBeUndefined();
-        },
-      );
+        const call = await waitForAgentCommandCall<{ sessionId?: string }>();
+        if (scenario.expectReuse) {
+          expect(call.sessionId).toBe("terminal-main-session");
+          expect(capturedEntry?.sessionId).toBe("terminal-main-session");
+          return;
+        }
+        expect(call.sessionId).not.toBe("terminal-main-session");
+        expect(capturedEntry?.sessionId).not.toBe("terminal-main-session");
+        expect(capturedEntry?.status).toBeUndefined();
+        expect(capturedEntry?.startedAt).toBeUndefined();
+        expect(capturedEntry?.endedAt).toBeUndefined();
+        expect(capturedEntry?.runtimeMs).toBeUndefined();
+        expect(capturedEntry?.sessionFile).toBeUndefined();
+        expect(capturedEntry?.cliSessionBindings).toBeUndefined();
+        expect(capturedEntry?.cliSessionIds).toBeUndefined();
+        expect(capturedEntry?.claudeCliSessionId).toBeUndefined();
+      });
     },
   );
 

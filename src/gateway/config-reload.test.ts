@@ -12,6 +12,7 @@ import type {
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
   pinActivePluginChannelRegistry,
+  pinActivePluginHttpRouteRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
@@ -172,7 +173,7 @@ describe("buildGatewayReloadPlan", () => {
     {
       pluginId: "browser",
       pluginName: "Browser",
-      registration: { restartPrefixes: ["browser"] },
+      registration: { restartPrefixes: ["browser"], hotPrefixes: ["browser.profiles"] },
       source: "test",
     },
     {
@@ -212,6 +213,28 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartGateway).toBe(true);
     expect(plan.restartReasons).toContain("browser.enabled");
     expect(plan.hotReasons).toStrictEqual([]);
+  });
+
+  it("hot-reloads browser profile config under the broad browser restart rule", () => {
+    const path = "browser.profiles.sandbox.cdpUrl";
+    const plan = buildGatewayReloadPlan([path]);
+
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartReasons).toStrictEqual([]);
+    expect(plan.hotReasons).toEqual([path]);
+    expect(plan.noopPaths).toStrictEqual([]);
+    expect(resolveConfigReloadMetadata(path).kind).toBe("hot");
+  });
+
+  it("keeps Gateway reload policy when an agent activates a scoped registry", () => {
+    pinActivePluginHttpRouteRegistry(registry);
+    setActivePluginRegistry(emptyRegistry);
+
+    const path = "browser.profiles.sandbox.cdpUrl";
+    expect(buildGatewayReloadPlan([path])).toMatchObject({
+      restartGateway: false,
+      hotReasons: [path],
+    });
   });
 
   it("restarts the Gmail watcher for hooks.gmail changes", () => {
@@ -512,6 +535,16 @@ describe("buildGatewayReloadPlan", () => {
       path: "browser.enabled",
       expectRestartGateway: true,
       expectRestartReason: "browser.enabled",
+    },
+    {
+      path: "browser.defaultProfile",
+      expectRestartGateway: true,
+      expectRestartReason: "browser.defaultProfile",
+    },
+    {
+      path: "browser.profiles.sandbox.cdpUrl",
+      expectRestartGateway: false,
+      expectHotPath: "browser.profiles.sandbox.cdpUrl",
     },
     {
       path: "gateway.channelHealthCheckMinutes",

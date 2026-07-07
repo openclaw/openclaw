@@ -783,6 +783,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/featherless:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/firecrawl:
     dependencies:
       typebox:
@@ -969,6 +975,12 @@ importers:
 
   extensions/lmstudio: {}
 
+  extensions/longcat:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/lobster:
     dependencies:
       '@clawdbot/lobster':
@@ -1087,6 +1099,9 @@ importers:
 
   extensions/memory-wiki:
     dependencies:
+      mdast-util-from-markdown:
+        specifier: 2.0.3
+        version: 2.0.3
       typebox:
         specifier: 1.3.3
         version: 1.3.3

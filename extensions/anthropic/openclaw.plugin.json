@@ -6,12 +6,26 @@
   },
   "enabledByDefault": true,
   "providers": ["anthropic"],
+  "providerUsageAuthEnvVars": {
+    "anthropic": ["ANTHROPIC_ADMIN_KEY", "ANTHROPIC_ADMIN_API_KEY"]
+  },
   "providerCatalogEntry": "./provider-discovery.ts",
   "modelCatalog": {
     "runtimeAugment": true,
         "providers": {
       "claude-cli": {
         "models": [
+          {
+            "id": "claude-sonnet-5",
+            "name": "Claude Sonnet 5 (Claude CLI)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "mediaInput": {
+              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
+            },
+            "contextWindow": 1000000,
+            "maxTokens": 128000
+          },
           {
             "id": "claude-opus-4-8",
             "name": "Claude Opus 4.8 (Claude CLI)",
@@ -65,6 +79,40 @@
           {
             "id": "claude-fable-5",
             "name": "Claude Fable 5",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "mediaInput": {
+              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
+            },
+            "cost": { "input": 10, "output": 50, "cacheRead": 1, "cacheWrite": 12.5 },
+            "contextWindow": 1000000,
+            "maxTokens": 128000,
+            "thinkingLevelMap": {
+              "off": "low",
+              "minimal": "low",
+              "xhigh": "xhigh",
+              "max": "max"
+            }
+          },
+          {
+            "id": "claude-sonnet-5",
+            "name": "Claude Sonnet 5",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "mediaInput": {
+              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
+            },
+            "cost": { "input": 2, "output": 10, "cacheRead": 0.2, "cacheWrite": 2.5 },
+            "contextWindow": 1000000,
+            "maxTokens": 128000,
+            "thinkingLevelMap": {
+              "xhigh": "xhigh",
+              "max": "max"
+            }
+          },
+          {
+            "id": "claude-mythos-5",
+            "name": "Claude Mythos 5",
             "reasoning": true,
             "input": ["text", "image"],
             "mediaInput": {
@@ -164,6 +212,9 @@
           "opus-4.8": "claude-opus-4-8",
           "opus": "claude-opus-4-8",
           "opus-4.6": "claude-opus-4-6",
+          "mythos-5": "claude-mythos-5",
+          "sonnet-5": "claude-sonnet-5",
+          "sonnet": "claude-sonnet-5",
           "sonnet-4.6": "claude-sonnet-4-6"
         }
       }
@@ -219,6 +270,7 @@
       "provider": "anthropic",
       "method": "setup-token",
       "choiceId": "setup-token",
+      "appGuidedSecret": true,
       "choiceLabel": "Anthropic setup-token",
       "choiceHint": "Manual token path",
       "assistantPriority": 40,
@@ -231,6 +283,7 @@
       "provider": "anthropic",
       "method": "api-key",
       "choiceId": "apiKey",
+      "appGuidedSecret": true,
       "choiceLabel": "Anthropic API key",
       "groupId": "anthropic",
       "groupLabel": "Anthropic",

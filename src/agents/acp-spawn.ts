@@ -118,12 +118,12 @@ const ACP_RUNTIME_TIMEOUT_MAX_SECONDS = 24 * 60 * 60;
 
 export const ACP_SPAWN_MODES = ["run", "session"] as const;
 export type SpawnAcpMode = (typeof ACP_SPAWN_MODES)[number];
-export const ACP_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
+const ACP_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
 export type SpawnAcpSandboxMode = (typeof ACP_SPAWN_SANDBOX_MODES)[number];
 export const ACP_SPAWN_STREAM_TARGETS = ["parent"] as const;
-export type SpawnAcpStreamTarget = (typeof ACP_SPAWN_STREAM_TARGETS)[number];
+type SpawnAcpStreamTarget = (typeof ACP_SPAWN_STREAM_TARGETS)[number];
 
-export type SpawnAcpParams = {
+type SpawnAcpParams = {
   task: string;
   label?: string;
   agentId?: string;
@@ -182,7 +182,7 @@ export type SpawnAcpContext = {
   inheritedToolDenylist?: string[];
 };
 
-export const ACP_SPAWN_ERROR_CODES = [
+const ACP_SPAWN_ERROR_CODES = [
   "acp_disabled",
   "requester_session_required",
   "runtime_policy",

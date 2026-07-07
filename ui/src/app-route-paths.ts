@@ -24,6 +24,7 @@ export const APP_ROUTE_DEFINITIONS = {
   "skill-workshop": { path: "/skills/workshop" },
   skills: { path: "/skills" },
   cron: { path: "/cron" },
+  tasks: { path: "/tasks" },
   nodes: { path: "/nodes" },
   plugin: { path: "/plugin" },
   dreams: { path: "/dreaming", aliases: ["/dreams"] },

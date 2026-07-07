@@ -24,12 +24,12 @@ export type TelegramCachedMessageNode = Omit<TelegramReplyChainEntry, "messageId
   sourceMessage: Message;
 };
 
-export type TelegramConversationContextNode = {
+type TelegramConversationContextNode = {
   node: TelegramCachedMessageNode;
   isReplyTarget?: boolean;
 };
 
-export type TelegramMessageCache = {
+type TelegramMessageCache = {
   record: (params: {
     accountId: string;
     chatId: string | number;
@@ -96,7 +96,7 @@ export const TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE = "telegram.message-cac
 const PERSISTENT_BUCKET_KEY = `plugin-state:${TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE}`;
 const persistedMessageCacheBuckets = new Map<string, TelegramMessageCacheBucket>();
 
-export type PersistedTelegramMessageCacheValue = {
+type PersistedTelegramMessageCacheValue = {
   sourceMessage: Message;
   threadId?: string;
 };
