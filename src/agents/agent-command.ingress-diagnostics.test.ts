@@ -299,3 +299,52 @@ describe("emitIngressModelUsageDiagnostic", () => {
     expect(event.context).toEqual({ limit: 128000 });
   });
 });
+
+// ---------------------------------------------------------------------------
+// resolveAgentRunLifecycleEndLogLevel
+// ---------------------------------------------------------------------------
+describe("resolveAgentRunLifecycleEndLogLevel", () => {
+  /**
+   * Constructs a minimal AgentRunTerminalOutcome for log-level testing.
+   * All fields beyond `reason` and `status` are optional at the type level;
+   * omitting them keeps each case focused on the reason.
+   */
+  function outcome(reason: string, status: "ok" | "error" | "timeout" = "error") {
+    return testing.resolveAgentRunLifecycleEndLogLevel({
+      reason,
+      status,
+    } as Parameters<typeof testing.resolveAgentRunLifecycleEndLogLevel>[0]);
+  }
+
+  it("returns info for completed", () => {
+    expect(outcome("completed", "ok")).toBe("info");
+  });
+
+  it("returns warn for cancelled", () => {
+    expect(outcome("cancelled")).toBe("warn");
+  });
+
+  it("returns warn for timed_out", () => {
+    expect(outcome("timed_out", "timeout")).toBe("warn");
+  });
+
+  it("returns warn for hard_timeout", () => {
+    expect(outcome("hard_timeout", "timeout")).toBe("warn");
+  });
+
+  it("returns error for failed", () => {
+    expect(outcome("failed")).toBe("error");
+  });
+
+  it("returns error for aborted", () => {
+    expect(outcome("aborted")).toBe("error");
+  });
+
+  it("returns error for blocked", () => {
+    expect(outcome("blocked")).toBe("error");
+  });
+
+  it("returns error for abandoned", () => {
+    expect(outcome("abandoned")).toBe("error");
+  });
+});

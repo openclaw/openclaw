@@ -73,7 +73,10 @@ import {
   resolveMessageChannel,
 } from "../utils/message-channel.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
-import { buildAgentRunTerminalOutcome } from "./agent-run-terminal-outcome.js";
+import {
+  buildAgentRunTerminalOutcome,
+  type AgentRunTerminalOutcome,
+} from "./agent-run-terminal-outcome.js";
 import { resolveAgentRuntimeConfig } from "./agent-runtime-config.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
@@ -153,6 +156,27 @@ import { hasNonzeroUsage } from "./usage.js";
 import { ensureAgentWorkspace } from "./workspace.js";
 
 const log = createSubsystemLogger("agents/agent-command");
+
+/**
+ * Maps a normalized terminal outcome to a lifecycle-end log level.
+ *
+ * Completed runs are informational; timeouts and cancellations are warnings;
+ * hard failures (including aborted, blocked, and abandoned liveness states)
+ * remain at error level so they surface in monitoring.
+ */
+function resolveAgentRunLifecycleEndLogLevel(
+  outcome: AgentRunTerminalOutcome,
+): "info" | "warn" | "error" {
+  if (outcome.reason === "completed") return "info";
+  if (
+    outcome.reason === "cancelled" ||
+    outcome.reason === "timed_out" ||
+    outcome.reason === "hard_timeout"
+  ) {
+    return "warn";
+  }
+  return "error";
+}
 
 function hasExactConfiguredProviderModel(params: {
   cfg: OpenClawConfig;
@@ -1888,12 +1912,13 @@ async function agentCommandInternal(
               ? { providerStarted: runResult.meta.providerStarted }
               : {}),
           });
-          const logMsg = `[agent] run ${runId} ended with stopReason=${stopReason}`;
-          if (outcome.reason === "completed" || outcome.reason === "cancelled") {
-            console.info(logMsg);
-          } else {
-            console.warn(logMsg);
-          }
+          const level = resolveAgentRunLifecycleEndLogLevel(outcome);
+          log[level](`run ${runId} ended with stopReason=${stopReason}`, {
+            runId,
+            stopReason,
+            reason: outcome.reason,
+            status: outcome.status,
+          });
         }
         emitAgentEvent({
           runId,
@@ -2756,6 +2781,7 @@ export const testing = {
   resolveExplicitAgentCommandSessionKey,
   ingressDiagnosticChannel,
   emitIngressModelUsageDiagnostic,
+  resolveAgentRunLifecycleEndLogLevel,
 };
 
 /** @deprecated Use `testing`. */
