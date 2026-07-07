@@ -778,6 +778,110 @@ describe("runReplyAgent pending final delivery capture", () => {
     ).toBe(true);
   });
 
+  it("marks final replies as undelivered after a different message-tool send", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "openclaw-agent-runner-undelivered-route-"));
+    const sessionFile = join(dir, "session.jsonl");
+    const storePath = join(dir, "sessions.json");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    await writeFile(
+      sessionFile,
+      [
+        {
+          type: "session",
+          id: "session",
+          timestamp: new Date().toISOString(),
+          cwd: dir,
+        },
+        {
+          type: "message",
+          id: "assistant-final",
+          parentId: null,
+          timestamp: new Date().toISOString(),
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "private final answer" }],
+            api: "anthropic-messages",
+            provider: "anthropic",
+            model: "claude",
+            stopReason: "stop",
+            timestamp: Date.now(),
+          },
+        },
+      ]
+        .map((entry) => `${JSON.stringify(entry)}\n`)
+        .join(""),
+      "utf-8",
+    );
+    await saveSessionStore(storePath, sessionStore, { skipMaintenance: true });
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "private final answer" }],
+      messagingToolSentTexts: ["different message"],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "whatsapp",
+          to: "chat-1",
+          text: "different message",
+        },
+      ],
+      meta: { finalAssistantRawText: "private final answer" },
+    });
+
+    const { run } = createMinimalRun({
+      opts: { sourceReplyDeliveryMode: "message_tool_only" },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+      sessionCtx: {
+        Provider: "whatsapp",
+        OriginatingChannel: "whatsapp",
+        OriginatingTo: "chat-1",
+        To: "chat-1",
+      },
+    });
+
+    await run();
+
+    const stored = await readStoredMainSession(storePath);
+    expect(stored.pendingFinalDelivery).toBeUndefined();
+    expect(stored.pendingFinalDeliveryText).toBeUndefined();
+
+    const entries = (await readFile(sessionFile, "utf-8"))
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => JSON.parse(line) as { message?: Record<string, unknown> });
+    const notices = entries.filter(
+      (entry) => entry.message?.customType === MESSAGE_TOOL_ONLY_UNDELIVERED_FINAL_CUSTOM_TYPE,
+    );
+    expect(notices).toHaveLength(1);
+    expect(notices[0]?.message).toEqual(
+      expect.objectContaining({
+        role: "custom",
+        content: MESSAGE_TOOL_ONLY_UNDELIVERED_FINAL_NOTICE,
+        details: {
+          sourceReplyDeliveryMode: "message_tool_only",
+          delivered: false,
+          finalTextLength: "private final answer".length,
+        },
+      }),
+    );
+    expect(
+      SessionManager.open(sessionFile)
+        .buildSessionContext()
+        .messages.some(
+          (message) =>
+            message.role === "custom" &&
+            message.customType === MESSAGE_TOOL_ONLY_UNDELIVERED_FINAL_CUSTOM_TYPE,
+        ),
+    ).toBe(true);
+  });
+
   it("does not persist sendPolicy-denied final replies for heartbeat replay", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",

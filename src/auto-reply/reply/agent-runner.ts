@@ -10,7 +10,12 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { isMessagingToolDuplicate } from "../../agents/embedded-agent-helpers.js";
 import { isLikelyContextOverflowError } from "../../agents/embedded-agent-helpers/errors.js";
+import type {
+  MessagingToolSend,
+  MessagingToolSourceReplyPayload,
+} from "../../agents/embedded-agent-messaging.types.js";
 import {
   hasCommittedSourceReplyDeliveryEvidence,
   hasVisibleCommittedMessagingToolDeliveryEvidence,
@@ -233,6 +238,63 @@ function resolveSourceReplyPolicy(params: {
   });
 }
 
+function hasDeliveredFinalText(params: { finalText: string; sentTexts: string[] }): boolean {
+  const finalText = params.finalText.trim();
+  if (!finalText) {
+    return false;
+  }
+  return (
+    params.sentTexts.some((sentText) => sentText.trim() === finalText) ||
+    isMessagingToolDuplicate(finalText, params.sentTexts)
+  );
+}
+
+function hasSourceReplyPayloadDeliveredFinalText(params: {
+  finalText: string;
+  sourceReplyPayloads?: MessagingToolSourceReplyPayload[];
+}): boolean {
+  const sentTexts =
+    params.sourceReplyPayloads?.flatMap((payload) =>
+      typeof payload.text === "string" && payload.text.trim() ? [payload.text] : [],
+    ) ?? [];
+  return hasDeliveredFinalText({ finalText: params.finalText, sentTexts });
+}
+
+async function hasMessagingToolDeliveredFinalTextToCurrentSourceRoute(params: {
+  cfg: OpenClawConfig;
+  messageProvider?: string;
+  messagingToolSentTexts?: string[];
+  messagingToolSentTargets?: MessagingToolSend[];
+  originatingTo?: string;
+  originatingThreadId?: string | number;
+  accountId?: string;
+  finalText: string;
+}): Promise<boolean> {
+  const sentTargets = params.messagingToolSentTargets ?? [];
+  const sentTexts = params.messagingToolSentTexts ?? [];
+  if (sentTargets.length === 0) {
+    return hasDeliveredFinalText({ finalText: params.finalText, sentTexts });
+  }
+
+  const dedupeRuntime = await import("./reply-payloads-dedupe.runtime.js");
+  const decision = dedupeRuntime.resolveMessagingToolPayloadDedupe({
+    config: params.cfg,
+    messageProvider: params.messageProvider,
+    messagingToolSentTargets: sentTargets,
+    originatingTo: params.originatingTo,
+    originatingThreadId: params.originatingThreadId,
+    accountId: params.accountId,
+  });
+  if (!decision.shouldDedupePayloads) {
+    return false;
+  }
+  const routeSentTexts =
+    decision.matchingRoute && !decision.useGlobalSentTextEvidenceFallback
+      ? decision.routeSentTexts
+      : sentTexts;
+  return hasDeliveredFinalText({ finalText: params.finalText, sentTexts: routeSentTexts });
+}
+
 async function persistMessageToolOnlyUndeliveredFinalNotice(params: {
   cfg: OpenClawConfig;
   sessionEntry?: SessionEntry;
@@ -245,13 +307,13 @@ async function persistMessageToolOnlyUndeliveredFinalNotice(params: {
   workspaceDir: string;
   sourceReplyDeliveryMode?: string;
   sendPolicyDenied: boolean;
-  successfulSourceReplyDelivery: boolean;
+  finalTextDeliveredToCurrentSourceRoute: boolean;
   finalText: string;
 }): Promise<void> {
   if (
     params.sourceReplyDeliveryMode !== "message_tool_only" ||
     params.sendPolicyDenied ||
-    params.successfulSourceReplyDelivery
+    params.finalTextDeliveredToCurrentSourceRoute
   ) {
     return;
   }
@@ -2728,6 +2790,24 @@ export async function runReplyAgent(params: {
           ? runResult.meta.finalAssistantVisibleText
           : (rawAssistantText ?? ""),
       );
+      const finalTextDeliveredToCurrentSourceRoute =
+        hasSourceReplyPayloadDeliveredFinalText({
+          finalText: assistantFinalText,
+          sourceReplyPayloads: runResult.messagingToolSourceReplyPayloads,
+        }) ||
+        (await hasMessagingToolDeliveredFinalTextToCurrentSourceRoute({
+          cfg,
+          messageProvider: followupRun.run.messageProvider,
+          messagingToolSentTexts: runResult.messagingToolSentTexts,
+          messagingToolSentTargets: runResult.messagingToolSentTargets,
+          originatingTo: resolveOriginMessageTo({
+            originatingTo: sessionCtx.OriginatingTo,
+            to: sessionCtx.To,
+          }),
+          originatingThreadId: replyRouteThreadId,
+          accountId: sessionCtx.AccountId,
+          finalText: assistantFinalText,
+        }));
       const isRoomEvent = sessionCtx.InboundEventKind === "room_event";
       // Heartbeats already deliver fallback finals via sendDurableMessageBatch;
       // recovering here would duplicate that message.
@@ -2791,7 +2871,7 @@ export async function runReplyAgent(params: {
         workspaceDir: followupRun.run.workspaceDir,
         sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
         sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
-        successfulSourceReplyDelivery,
+        finalTextDeliveredToCurrentSourceRoute,
         finalText: assistantFinalText,
       });
       const pendingText = sourceReplyPolicy.suppressDelivery ? "" : finalDeliveryText;
