@@ -89,6 +89,12 @@ export type OpenAiCompatibleImageProviderOptions = {
     generate?: string;
     edit?: string;
   };
+  /**
+   * Overrides the default OpenAI-style `/images/generations` and `/images/edits`
+   * paths. The path is appended to the resolved base URL; leading and duplicate
+   * slashes are normalized (e.g. both `"images"` and `"/images"` resolve to
+   * `<baseUrl>/images`).
+   */
   endpointPath?: string | ((mode: OpenAiCompatibleImageRequestMode) => string);
 };
 
@@ -107,6 +113,10 @@ function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/u, "");
 }
 
+function trimLeadingSlash(value: string): string {
+  return value.replace(/^\/+/u, "");
+}
+
 function appendImagesPath(baseUrl: string, mode: OpenAiCompatibleImageRequestMode): string {
   return `${trimTrailingSlash(baseUrl)}/images/${mode === "edit" ? "edits" : "generations"}`;
 }
@@ -120,7 +130,7 @@ function resolveEndpointUrl(
     return appendImagesPath(baseUrl, mode);
   }
   const path = typeof endpointPath === "function" ? endpointPath(mode) : endpointPath;
-  return `${trimTrailingSlash(baseUrl)}/${path}`;
+  return `${trimTrailingSlash(baseUrl)}/${trimLeadingSlash(path)}`;
 }
 
 function resolveRequestTimeoutMs(params: {

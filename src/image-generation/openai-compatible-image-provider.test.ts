@@ -330,6 +330,54 @@ describe("OpenAI-compatible image provider helper", () => {
     expect(headers.has("Content-Type")).toBe(false);
   });
 
+  it("overrides the endpoint with a flat endpointPath string", async () => {
+    mockGeneratedResponse();
+    const provider = createProvider({ endpointPath: "images" });
+
+    await provider.generateImage({
+      provider: "sample",
+      model: "sample-image",
+      prompt: "flat endpoint",
+      cfg: {} as never,
+    });
+
+    const jsonRequest = requireFirstCallArg(postJsonRequestMock) as { url?: string };
+    expect(jsonRequest.url).toBe("https://sample.example/v1/images");
+  });
+
+  it("normalizes leading slashes in endpointPath", async () => {
+    mockGeneratedResponse();
+    const provider = createProvider({ endpointPath: "/images" });
+
+    await provider.generateImage({
+      provider: "sample",
+      model: "sample-image",
+      prompt: "leading slash",
+      cfg: {} as never,
+    });
+
+    const jsonRequest = requireFirstCallArg(postJsonRequestMock) as { url?: string };
+    expect(jsonRequest.url).toBe("https://sample.example/v1/images");
+  });
+
+  it("resolves per-mode endpointPath functions for edit requests", async () => {
+    mockGeneratedResponse();
+    const provider = createProvider({
+      endpointPath: (mode) => (mode === "edit" ? "images/custom-edits" : "images"),
+    });
+
+    await provider.generateImage({
+      provider: "sample",
+      model: "sample-image",
+      prompt: "edit it",
+      inputImages: [{ buffer: Buffer.from("source"), mimeType: "image/png" }],
+      cfg: {} as never,
+    });
+
+    const multipartRequest = requireFirstCallArg(postMultipartRequestMock) as { url?: string };
+    expect(multipartRequest.url).toBe("https://sample.example/v1/images/custom-edits");
+  });
+
   it("honors default operation timeouts and empty-response errors", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: jsonResponse({ data: [] }),

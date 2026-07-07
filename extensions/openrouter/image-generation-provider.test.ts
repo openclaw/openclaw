@@ -13,7 +13,9 @@ const {
   resolveProviderOperationTimeoutMsMock,
   sanitizeConfiguredModelProviderRequestMock,
 } = vi.hoisted(() => ({
-  resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "openrouter-key" })),
+  resolveApiKeyForProviderMock: vi.fn(
+    async (): Promise<{ apiKey: string | undefined }> => ({ apiKey: "openrouter-key" }),
+  ),
   isProviderApiKeyConfiguredMock: vi.fn(() => true),
   postJsonRequestMock: vi.fn(),
   postMultipartRequestMock: vi.fn(),
