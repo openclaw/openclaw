@@ -14,6 +14,7 @@ import type { AcpTurnAttachment } from "../../acp/control-plane/manager.types.js
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../../acp/policy.js";
 import { AcpRuntimeError, toAcpRuntimeError } from "../../acp/runtime/errors.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { isRestrictiveRuntimeToolsAllow } from "../../agents/runtime-tools-allow.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
@@ -166,13 +167,6 @@ function resolveAcpTurnText(params: {
     ].join(" "),
   );
   return params.promptText ? `${guidance}\n\n${params.promptText}` : guidance;
-}
-
-function isRestrictiveRuntimeToolsAllow(toolsAllow: string[] | undefined): boolean {
-  if (toolsAllow === undefined) {
-    return false;
-  }
-  return !toolsAllow.some((entry) => normalizeLowercaseStringOrEmpty(entry) === "*");
 }
 
 async function hasBoundConversationForSession(params: {

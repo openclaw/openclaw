@@ -80,6 +80,7 @@ import {
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
+import { isRestrictiveRuntimeToolsAllow } from "../runtime-tools-allow.js";
 import { ensureSandboxWorkspaceForSession } from "../sandbox.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
@@ -324,9 +325,13 @@ export async function prepareCliRunContext(
   if (!backendResolved) {
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }
-  if (params.toolsAllow !== undefined) {
+  // A non-restrictive policy (undefined, or a wildcard that allows all tools) is
+  // a no-op this backend can safely ignore. Only a genuinely restrictive policy
+  // is rejected, since a CLI backend cannot mediate individual tool calls. This
+  // mirrors the ACP dispatch path so both backends agree on what they accept.
+  if (isRestrictiveRuntimeToolsAllow(params.toolsAllow)) {
     throw new Error(
-      `CLI backend ${backendResolved.id} cannot enforce runtime toolsAllow; use an embedded runtime for restricted tool policy`,
+      `CLI backend ${backendResolved.id} cannot enforce runtime toolsAllow; use an embedded runtime for restricted tool policy, or remove the tool allow-list to run on this backend`,
     );
   }
   const sideQuestionDisablesNativeTools =
