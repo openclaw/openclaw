@@ -205,7 +205,7 @@ function resolveSignalOutboundSessionRoute(params: {
     return null;
   }
   const normalizedTarget = target.replace(/^signal:/i, "").trim();
-  const recipientSessionExact =
+  const recipientSessionExact: true | "direct-alias" =
     resolved.chatType === "group" || /^\+?\d{3,15}$/.test(normalizedTarget) ? true : "direct-alias";
   const baseSessionKey = buildSignalBaseSessionKey({
     cfg: params.cfg,
