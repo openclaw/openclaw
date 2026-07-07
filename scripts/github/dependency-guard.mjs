@@ -253,7 +253,7 @@ export function isDependencyGuardMarkerComment(comment, marker, trustedAuthors) 
   return Boolean(login && trustedAuthors.has(login) && comment.body?.includes(marker));
 }
 
-export function renderDependencyAwarenessComment(dependencyFiles) {
+function renderDependencyAwarenessComment(dependencyFiles) {
   const listedFiles = dependencyFiles.slice(0, maxListedFiles);
   const omittedCount = dependencyFiles.length - listedFiles.length;
   const fileLines = listedFiles.map((filename) => `- ${markdownCode(filename)}`);
