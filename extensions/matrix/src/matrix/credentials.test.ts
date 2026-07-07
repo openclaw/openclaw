@@ -272,6 +272,37 @@ describe("matrix credentials storage", () => {
     expect(fs.existsSync(currentPath)).toBe(true);
   });
 
+  it("migrates legacy credentials using copy + unlink when renameSync throws EXDEV", () => {
+    const { legacyPath, currentPath } = setupLegacyCredentialsFile({
+      cfg: {
+        channels: {
+          matrix: {
+            accounts: {
+              ops: {},
+            },
+          },
+        },
+      },
+      accountId: "ops",
+    });
+
+    const renameSpy = vi.spyOn(fs, "renameSync").mockImplementation(() => {
+      const err = new Error("Cross-device link") as any;
+      err.code = "EXDEV";
+      throw err;
+    });
+
+    try {
+      const loaded = loadMatrixCredentials({}, "ops");
+
+      expect(loaded?.accessToken).toBe("legacy-token");
+      expect(fs.existsSync(legacyPath)).toBe(false);
+      expect(fs.existsSync(currentPath)).toBe(true);
+    } finally {
+      renameSpy.mockRestore();
+    }
+  });
+
   it("returns migrated credentials when another process moves the legacy file mid-read", () => {
     const { legacyPath, currentPath } = setupLegacyCredentialsFile({
       cfg: {
