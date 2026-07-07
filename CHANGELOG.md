@@ -23,7 +23,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Windows scheduled-task restart:** replace the locale-sensitive `findstr` process-state probe with a direct PowerShell task-state exit code, preventing hidden restart helpers from hanging or flashing a console window. (#84600, #91273) Thanks @deepujain and @andyk-ms.
 - **Android hardware keyboard chat:** send with unmodified Enter on physical keyboards while preserving Shift+Enter and other modified Enter combinations for multiline input. (#101239) Thanks @3ninyt3nin-creator.
 - **CJK Markdown emphasis:** render adjacent Chinese, Japanese, and Korean emphasis punctuation through the shared Markdown pipeline instead of leaking literal markers across channels. (#101230, #101120) Thanks @nicknmorty.
 - **Codex yielded native subagents:** keep the parent app-server subscription and shared client alive until yielded native subagent completion delivery settles, preventing lost wakeups and leaked one-shot cleanup.
