@@ -70,6 +70,7 @@ export async function mergeHybridResults(params: {
     endLine: number;
     score: number;
     scoreBeforeTemporalDecay: number;
+    temporalDecayMultiplier: number;
     vectorScore: number;
     textScore: number;
     snippet: string;
@@ -132,6 +133,7 @@ export async function mergeHybridResults(params: {
       endLine: entry.endLine,
       score,
       scoreBeforeTemporalDecay: score,
+      temporalDecayMultiplier: 1,
       vectorScore: entry.vectorScore,
       textScore: entry.textScore,
       snippet: entry.snippet,
@@ -148,7 +150,12 @@ export async function mergeHybridResults(params: {
     workspaceDir: params.workspaceDir,
     nowMs: params.nowMs,
   });
-  const sorted = decayed.toSorted((a, b) => b.score - a.score);
+  const withDecayDiagnostics = decayed.map((entry) => ({
+    ...entry,
+    temporalDecayMultiplier:
+      entry.scoreBeforeTemporalDecay === 0 ? 1 : entry.score / entry.scoreBeforeTemporalDecay,
+  }));
+  const sorted = withDecayDiagnostics.toSorted((a, b) => b.score - a.score);
 
   // Apply MMR re-ranking if enabled
   const mmrConfig = { ...DEFAULT_MMR_CONFIG, ...params.mmr };
