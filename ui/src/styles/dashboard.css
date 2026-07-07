@@ -696,6 +696,67 @@
   background: var(--bg-muted);
 }
 
+/* preview widget — a sandboxed frame with a reload + viewport-preset toolbar. */
+.dashboard-preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2, 8px);
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.dashboard-preview__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2, 8px);
+  flex-wrap: wrap;
+}
+
+.dashboard-preview__viewports {
+  display: inline-flex;
+  gap: var(--space-1, 4px);
+}
+
+.dashboard-preview__viewport,
+.dashboard-preview__reload {
+  padding: 2px 8px;
+  font-size: var(--font-size-xs, 12px);
+  color: var(--text-muted, var(--text));
+  background: var(--bg-muted);
+  border: 1px solid var(--border, var(--bg-muted));
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.dashboard-preview__viewport:hover,
+.dashboard-preview__reload:hover {
+  color: var(--text);
+}
+
+/* Wrapper centers the frame so tablet/mobile presets read as a device shell. */
+.dashboard-preview__frame-wrap {
+  flex: 1 1 auto;
+  display: flex;
+  justify-content: center;
+  min-height: 120px;
+}
+
+.dashboard-preview__frame-wrap--desktop {
+  /* Full width — no constraint. */
+}
+
+.dashboard-preview__frame-wrap--tablet .dashboard-preview__frame {
+  width: 768px;
+  max-width: 100%;
+}
+
+.dashboard-preview__frame-wrap--mobile .dashboard-preview__frame {
+  width: 375px;
+  max-width: 100%;
+}
+
 /* --- Responsive: single column below ~900px ------------------------------ */
 
 @media (max-width: 900px) {

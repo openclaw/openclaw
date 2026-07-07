@@ -52,7 +52,7 @@ const TAB_SLUG_PATTERN = /^[a-z0-9-]{1,40}$/;
 const ACTOR_PATTERN = /^(user|system|agent:[A-Za-z0-9._-]{1,64})$/;
 const WIDGET_ID_PATTERN = /^[A-Za-z0-9_-]{1,48}$/;
 const BUILTIN_KIND_PATTERN =
-  /^builtin:(stat-card|markdown|table|iframe-embed|sessions|usage|cron|instances|activity)$/;
+  /^builtin:(stat-card|markdown|table|iframe-embed|preview|sessions|usage|cron|instances|activity)$/;
 const CUSTOM_KIND_PATTERN = /^custom:[A-Za-z0-9._-]{1,64}$/;
 const CUSTOM_WIDGET_NAME_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
 const MAX_STATIC_BINDING_BYTES = 8 * 1024;

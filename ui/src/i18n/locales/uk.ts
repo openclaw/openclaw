@@ -796,6 +796,17 @@ export const uk: TranslationMap = {
         blockedExternal: "Зовнішні вбудовування вимкнено політикою вашого Gateway.",
         blockedScheme: "URL цього вбудовування використовує непідтримувану схему.",
       },
+      preview: {
+        missing: "This preview has no URL yet.",
+        blockedExternal: "External previews are disabled by your gateway policy.",
+        blockedScheme: "This preview URL uses an unsupported scheme.",
+        reload: "Reload preview",
+        viewport: {
+          desktop: "Desktop",
+          tablet: "Tablet",
+          mobile: "Mobile",
+        },
+      },
     },
   },
   workboard: {

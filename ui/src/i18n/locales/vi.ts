@@ -794,6 +794,17 @@ export const vi: TranslationMap = {
         blockedExternal: "Các embed bên ngoài bị vô hiệu hóa theo chính sách Gateway của bạn.",
         blockedScheme: "URL embed này sử dụng giao thức không được hỗ trợ.",
       },
+      preview: {
+        missing: "This preview has no URL yet.",
+        blockedExternal: "External previews are disabled by your gateway policy.",
+        blockedScheme: "This preview URL uses an unsupported scheme.",
+        reload: "Reload preview",
+        viewport: {
+          desktop: "Desktop",
+          tablet: "Tablet",
+          mobile: "Mobile",
+        },
+      },
     },
   },
   workboard: {

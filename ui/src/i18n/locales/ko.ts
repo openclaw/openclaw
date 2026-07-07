@@ -789,6 +789,17 @@ export const ko: TranslationMap = {
         blockedExternal: "외부 임베드는 Gateway 정책에 의해 비활성화되었습니다.",
         blockedScheme: "이 임베드 URL은 지원되지 않는 스킴을 사용합니다.",
       },
+      preview: {
+        missing: "This preview has no URL yet.",
+        blockedExternal: "External previews are disabled by your gateway policy.",
+        blockedScheme: "This preview URL uses an unsupported scheme.",
+        reload: "Reload preview",
+        viewport: {
+          desktop: "Desktop",
+          tablet: "Tablet",
+          mobile: "Mobile",
+        },
+      },
     },
   },
   workboard: {

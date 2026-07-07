@@ -10,6 +10,7 @@ import { mapCron, renderCron } from "./cron.ts";
 import { evaluateEmbedUrl, renderIframeEmbed } from "./iframe-embed.ts";
 import { mapInstances, renderInstances } from "./instances.ts";
 import { mapMarkdownSource, renderMarkdown } from "./markdown.ts";
+import { mapPreviewViewport, renderPreview } from "./preview.ts";
 import { mapSessions, renderSessions } from "./sessions.ts";
 import { mapStatCard, renderStatCard } from "./stat-card.ts";
 import { mapTable, renderTable } from "./table.ts";
@@ -269,6 +270,110 @@ describe("iframe-embed URL policy", () => {
     expect(evaluateEmbedUrl(undefined, { allowExternalEmbedUrls: true }, origin)).toEqual({
       status: "missing",
     });
+  });
+});
+
+describe("preview widget", () => {
+  it("renders the bound URL inside a sandboxed frame", () => {
+    const container = renderToContainer(
+      renderPreview(widget({ props: { url: "/preview" } }), null, STRICT_EMBED),
+    );
+    const frame = container.querySelector<HTMLIFrameElement>(
+      '[data-test-id="dashboard-preview-frame"]',
+    );
+    expect(frame).not.toBeNull();
+    expect(frame?.getAttribute("src")).toBe("/preview");
+    // strict sandbox mode → empty sandbox attribute (no allow-* tokens).
+    expect(frame?.getAttribute("sandbox")).toBe("");
+  });
+
+  it("carries the sandbox tokens from the embed policy (scripts mode)", () => {
+    const container = renderToContainer(
+      renderPreview(widget({ props: { url: "/preview" } }), null, {
+        embed: { embedSandboxMode: "scripts", allowExternalEmbedUrls: false },
+      }),
+    );
+    const frame = container.querySelector<HTMLIFrameElement>(
+      '[data-test-id="dashboard-preview-frame"]',
+    );
+    expect(frame?.getAttribute("sandbox")).toBe("allow-scripts");
+  });
+
+  it("exposes a reload button that reloads the frame by reassigning its src", () => {
+    const container = renderToContainer(
+      renderPreview(widget({ props: { url: "/preview" } }), null, STRICT_EMBED),
+    );
+    const reload = container.querySelector<HTMLButtonElement>(
+      '[data-test-id="dashboard-preview-reload"]',
+    );
+    const frame = container.querySelector<HTMLIFrameElement>(
+      '[data-test-id="dashboard-preview-frame"]',
+    );
+    expect(reload).not.toBeNull();
+    expect(reload?.getAttribute("type")).toBe("button");
+    // Reloading re-sets the src attribute to the same value; the resolved src
+    // round-trips and the frame element stays mounted (jsdom never fetches, so
+    // this is DOM-level only).
+    const before = frame?.src;
+    reload?.click();
+    expect(frame?.src).toBe(before);
+    expect(frame).not.toBeNull();
+  });
+
+  it("switches the wrapper preset class when a viewport button is clicked", () => {
+    const container = renderToContainer(
+      renderPreview(widget({ props: { url: "/preview" } }), null, STRICT_EMBED),
+    );
+    const wrap = container.querySelector<HTMLDivElement>(".dashboard-preview__frame-wrap");
+    expect(wrap?.className).toContain("dashboard-preview__frame-wrap--desktop");
+    container
+      .querySelector<HTMLButtonElement>('[data-test-id="dashboard-preview-viewport-tablet"]')
+      ?.click();
+    expect(wrap?.className).toContain("dashboard-preview__frame-wrap--tablet");
+    expect(wrap?.className).not.toContain("dashboard-preview__frame-wrap--desktop");
+    container
+      .querySelector<HTMLButtonElement>('[data-test-id="dashboard-preview-viewport-mobile"]')
+      ?.click();
+    expect(wrap?.className).toContain("dashboard-preview__frame-wrap--mobile");
+  });
+
+  it("honors props.defaultViewport for the initial preset", () => {
+    expect(mapPreviewViewport(widget({ props: { defaultViewport: "mobile" } }))).toBe("mobile");
+    expect(mapPreviewViewport(widget({ props: { defaultViewport: "bogus" } }))).toBe("desktop");
+    expect(mapPreviewViewport(widget())).toBe("desktop");
+    const container = renderToContainer(
+      renderPreview(
+        widget({ props: { url: "/preview", defaultViewport: "tablet" } }),
+        null,
+        STRICT_EMBED,
+      ),
+    );
+    expect(container.querySelector(".dashboard-preview__frame-wrap")?.className).toContain(
+      "dashboard-preview__frame-wrap--tablet",
+    );
+  });
+
+  it("matches the iframe-embed URL policy exactly (no weakening)", () => {
+    // missing url → placeholder, no frame.
+    const missing = renderToContainer(renderPreview(widget(), null, STRICT_EMBED));
+    expect(missing.querySelector(".dashboard-widget__placeholder")).not.toBeNull();
+    expect(missing.querySelector('[data-test-id="dashboard-preview-frame"]')).toBeNull();
+
+    // external url under strict policy → blocked placeholder, no frame.
+    const external = renderToContainer(
+      renderPreview(widget({ props: { url: "https://evil.example" } }), null, STRICT_EMBED),
+    );
+    expect(external.querySelector('[data-test-id="dashboard-preview-blocked"]')).not.toBeNull();
+    expect(external.querySelector('[data-test-id="dashboard-preview-frame"]')).toBeNull();
+
+    // non-http(s) scheme → blocked regardless of external policy.
+    const scheme = renderToContainer(
+      renderPreview(widget({ props: { url: "javascript:alert(1)" } }), null, {
+        embed: { embedSandboxMode: "strict", allowExternalEmbedUrls: true },
+      }),
+    );
+    expect(scheme.querySelector('[data-test-id="dashboard-preview-blocked"]')).not.toBeNull();
+    expect(scheme.querySelector('[data-test-id="dashboard-preview-frame"]')).toBeNull();
   });
 });
 

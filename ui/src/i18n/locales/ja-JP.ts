@@ -798,6 +798,17 @@ export const ja_JP: TranslationMap = {
         blockedExternal: "Gatewayポリシーにより、外部埋め込みは無効になっています。",
         blockedScheme: "この埋め込みURLは、サポートされていないスキームを使用しています。",
       },
+      preview: {
+        missing: "This preview has no URL yet.",
+        blockedExternal: "External previews are disabled by your gateway policy.",
+        blockedScheme: "This preview URL uses an unsupported scheme.",
+        reload: "Reload preview",
+        viewport: {
+          desktop: "Desktop",
+          tablet: "Tablet",
+          mobile: "Mobile",
+        },
+      },
     },
   },
   workboard: {

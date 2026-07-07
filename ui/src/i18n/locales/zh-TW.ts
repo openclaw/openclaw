@@ -786,6 +786,17 @@ export const zh_TW: TranslationMap = {
         blockedExternal: "外部嵌入已透過您的 Gateway 原則停用。",
         blockedScheme: "此嵌入 URL 使用不支援的通訊協定。",
       },
+      preview: {
+        missing: "This preview has no URL yet.",
+        blockedExternal: "External previews are disabled by your gateway policy.",
+        blockedScheme: "This preview URL uses an unsupported scheme.",
+        reload: "Reload preview",
+        viewport: {
+          desktop: "Desktop",
+          tablet: "Tablet",
+          mobile: "Mobile",
+        },
+      },
     },
   },
   workboard: {

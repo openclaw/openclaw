@@ -792,6 +792,17 @@ export const pl: TranslationMap = {
         blockedExternal: "Zewnętrzne osadzenia są wyłączone przez politykę Gateway.",
         blockedScheme: "Ten URL osadzenia używa nieobsługiwanego schematu.",
       },
+      preview: {
+        missing: "This preview has no URL yet.",
+        blockedExternal: "External previews are disabled by your gateway policy.",
+        blockedScheme: "This preview URL uses an unsupported scheme.",
+        reload: "Reload preview",
+        viewport: {
+          desktop: "Desktop",
+          tablet: "Tablet",
+          mobile: "Mobile",
+        },
+      },
     },
   },
   workboard: {

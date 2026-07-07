@@ -797,6 +797,17 @@ export const ru: TranslationMap = {
         blockedExternal: "Внешние встраивания отключены политикой вашего Gateway.",
         blockedScheme: "URL этого встраивания использует неподдерживаемую схему.",
       },
+      preview: {
+        missing: "This preview has no URL yet.",
+        blockedExternal: "External previews are disabled by your gateway policy.",
+        blockedScheme: "This preview URL uses an unsupported scheme.",
+        reload: "Reload preview",
+        viewport: {
+          desktop: "Desktop",
+          tablet: "Tablet",
+          mobile: "Mobile",
+        },
+      },
     },
   },
   workboard: {
