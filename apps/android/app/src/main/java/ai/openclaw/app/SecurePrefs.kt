@@ -46,7 +46,6 @@ class SecurePrefs(
     private const val displayNameKey = "node.displayName"
     private const val locationModeKey = "location.enabledMode"
     private const val voiceWakeModeKey = "voiceWake.mode"
-    private const val plainPrefsName = "openclaw.node"
     private const val securePrefsName = "openclaw.node.secure"
     private const val notificationsForwardingEnabledKey = "notifications.forwarding.enabled"
     private const val defaultNotificationForwardingEnabled = false
@@ -75,7 +74,7 @@ class SecurePrefs(
 
   // Non-secret UI/runtime preferences stay readable for migration and backup behavior.
   private val plainPrefs: SharedPreferences =
-    appContext.getSharedPreferences(plainPrefsName, Context.MODE_PRIVATE)
+    appContext.getSharedPreferences(openClawPlainPrefsName, Context.MODE_PRIVATE)
   private val hadPlainPrefsBeforeInit = plainPrefs.all.isNotEmpty()
 
   // Gateway credentials and arbitrary secret strings are isolated behind EncryptedSharedPreferences.
@@ -209,6 +208,10 @@ class SecurePrefs(
   private val _appearanceThemeMode =
     MutableStateFlow(AppearanceThemeMode.fromRawValue(plainPrefs.getString(appearanceThemeModeKey, null)))
   val appearanceThemeMode: StateFlow<AppearanceThemeMode> = _appearanceThemeMode
+
+  private val _appLanguageMode =
+    MutableStateFlow(AppLanguageMode.fromRawValue(plainPrefs.getString(appLanguageModePreferenceKey, null)))
+  val appLanguageMode: StateFlow<AppLanguageMode> = _appLanguageMode
 
   private val _modelFavorites = MutableStateFlow(loadChatModelRefs(chatModelFavoritesKey))
   val modelFavorites: StateFlow<List<String>> = _modelFavorites
@@ -621,6 +624,17 @@ class SecurePrefs(
   fun setAppearanceThemeMode(mode: AppearanceThemeMode) {
     plainPrefs.edit { putString(appearanceThemeModeKey, mode.rawValue) }
     _appearanceThemeMode.value = mode
+  }
+
+  fun setAppLanguageMode(mode: AppLanguageMode) {
+    plainPrefs.edit {
+      if (mode == AppLanguageMode.System) {
+        remove(appLanguageModePreferenceKey)
+      } else {
+        putString(appLanguageModePreferenceKey, mode.rawValue)
+      }
+    }
+    _appLanguageMode.value = mode
   }
 
   fun toggleModelFavorite(ref: String) {

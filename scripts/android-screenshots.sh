@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/android-screenshots.sh [--device <adb-serial>] [--avd <name>] [--locale en-US] [--skip-build] [--skip-install] [--keep-emulator] [--dry-run]
+  scripts/android-screenshots.sh [--device <adb-serial>] [--avd <name>] [--locale en-US] [--scene <id>] [--app-language <mode>] [--skip-build] [--skip-install] [--keep-emulator] [--dry-run]
 
 Builds and installs the Play debug app, launches deterministic screenshot scenes,
 and writes raw Google Play screenshots under:
@@ -18,13 +18,15 @@ EOF
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ANDROID_DIR="${ROOT_DIR}/apps/android"
 LOCALE="en-US"
+APP_LANGUAGE="system"
 DEVICE="${ANDROID_SCREENSHOT_DEVICE:-}"
 AVD="${ANDROID_SCREENSHOT_AVD:-}"
 KEEP_EMULATOR="${ANDROID_SCREENSHOT_KEEP_EMULATOR:-0}"
 SKIP_BUILD=0
 SKIP_INSTALL=0
 DRY_RUN=0
-SCENES=(connect chat voice screen settings)
+SCENES=(connect chat voice screen settings language)
+CUSTOM_SCENES=0
 EMULATOR_PID=""
 EMULATOR_LOG=""
 STARTED_EMULATOR=0
@@ -44,6 +46,18 @@ while [[ $# -gt 0 ]]; do
       ;;
     --locale)
       LOCALE="${2:-}"
+      shift 2
+      ;;
+    --scene)
+      if [[ "$CUSTOM_SCENES" != "1" ]]; then
+        SCENES=()
+        CUSTOM_SCENES=1
+      fi
+      SCENES+=("${2:-}")
+      shift 2
+      ;;
+    --app-language)
+      APP_LANGUAGE="${2:-}"
       shift 2
       ;;
     --skip-build)
@@ -86,6 +100,35 @@ validate_locale() {
 
 validate_locale "$LOCALE"
 
+validate_scene() {
+  local scene="$1"
+  case "$scene" in
+    connect|chat|voice|screen|settings|language)
+      return 0
+      ;;
+  esac
+  echo "Invalid Android screenshot scene: ${scene}" >&2
+  echo "Expected one of: connect, chat, voice, screen, settings, language." >&2
+  exit 1
+}
+
+validate_app_language() {
+  local mode="$1"
+  case "$mode" in
+    system|en|zh-CN|zh-TW|pt-BR|de|es|ja-JP|ko|fr|hi|ar|it|tr|uk|id|pl|th|vi|nl|fa|ru|sv)
+      return 0
+      ;;
+  esac
+  echo "Invalid Android screenshot app language: ${mode}" >&2
+  echo "Expected system or one of the app locale tags." >&2
+  exit 1
+}
+
+for scene in "${SCENES[@]}"; do
+  validate_scene "$scene"
+done
+validate_app_language "$APP_LANGUAGE"
+
 cleanup_started_emulator() {
   local stopped=0
 
@@ -105,6 +148,14 @@ cleanup_started_emulator() {
 cleanup_emulator_log() {
   if [[ -n "$EMULATOR_LOG" && -f "$EMULATOR_LOG" ]]; then
     rm -f "$EMULATOR_LOG"
+  fi
+}
+
+print_emulator_log_tail() {
+  if [[ -n "$EMULATOR_LOG" && -f "$EMULATOR_LOG" ]]; then
+    echo "--- emulator log tail ---" >&2
+    tail -120 "$EMULATOR_LOG" >&2 || true
+    echo "--- end emulator log tail ---" >&2
   fi
 }
 
@@ -258,8 +309,14 @@ boot_emulator() {
   EMULATOR_PID="$!"
   STARTED_EMULATOR=1
 
-  serial="$(wait_for_single_device "$adb")"
-  wait_for_boot_completed "$adb" "$serial"
+  if ! serial="$(wait_for_single_device "$adb")"; then
+    print_emulator_log_tail
+    return 1
+  fi
+  if ! wait_for_boot_completed "$adb" "$serial"; then
+    print_emulator_log_tail
+    return 1
+  fi
   stabilize_device_for_screenshots "$adb" "$serial"
   ADB_SERIAL="$serial"
 }
@@ -308,6 +365,7 @@ ADB_DISPLAY="${DEVICE:-<auto>}"
 
 echo "Android screenshot output: ${OUTPUT_DIR}"
 echo "Scenes: ${SCENES[*]}"
+echo "App language: ${APP_LANGUAGE}"
 echo "ADB device: ${ADB_DISPLAY}"
 if [[ -n "$AVD" ]]; then
   echo "Fallback AVD: ${AVD}"
@@ -349,7 +407,8 @@ for scene in "${SCENES[@]}"; do
   "$ADB_BIN" -s "$ADB_SERIAL" shell am start -W \
     -n ai.openclaw.app/.MainActivity \
     --ez openclaw.screenshotMode true \
-    --es openclaw.screenshotScene "$scene" >/dev/null
+    --es openclaw.screenshotScene "$scene" \
+    --es openclaw.screenshotAppLanguage "$APP_LANGUAGE" >/dev/null
   sleep "${ANDROID_SCREENSHOT_SETTLE_SECONDS:-1.5}"
   "$ADB_BIN" -s "$ADB_SERIAL" exec-out screencap -p >"$output_path"
   echo "Captured ${output_path}"

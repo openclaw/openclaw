@@ -13,6 +13,7 @@ import ai.openclaw.app.HomeDestination
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.R
+import ai.openclaw.app.appLanguageSummary
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.ui.chat.ChatScreen
 import ai.openclaw.app.ui.design.ClawBottomNav
@@ -64,10 +65,10 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Security
@@ -1442,6 +1443,7 @@ private fun SettingsShellScreen(
   val channelsSummary by viewModel.channelsSummary.collectAsState()
   val dreamingSummary by viewModel.dreamingSummary.collectAsState()
   val appearanceThemeMode by viewModel.appearanceThemeMode.collectAsState()
+  val appLanguageMode by viewModel.appLanguageMode.collectAsState()
   val readyProviderCount = providerRows(providers = providers, models = models).count { it.ready }
   val pendingApprovalsCount = execApprovals.size + pendingToolCalls.size
 
@@ -1525,7 +1527,12 @@ private fun SettingsShellScreen(
           SettingsRow("Canvas", "Screen surface", Icons.AutoMirrored.Filled.ScreenShare, status = isConnected, route = SettingsRoute.Canvas),
           SettingsRow("Notifications", if (notificationForwardingEnabled) "Smart delivery" else "Off", Icons.Default.Notifications, route = SettingsRoute.Notifications),
           SettingsRow("Phone Capabilities", if (cameraEnabled) "Camera enabled" else "Locked", Icons.Default.Lock, status = !cameraEnabled, route = SettingsRoute.PhoneCapabilities),
-          SettingsRow("Appearance", appearanceThemeSummary(appearanceThemeMode), Icons.Default.Palette, route = SettingsRoute.Appearance),
+          SettingsRow(
+            "Appearance",
+            "${appearanceThemeSummary(appearanceThemeMode)} · ${appLanguageSummary(appLanguageMode)}",
+            Icons.Default.Language,
+            route = SettingsRoute.Appearance,
+          ),
           SettingsRow("About", "Version and update", Icons.Default.Storage, route = SettingsRoute.About),
           SettingsRow("Health", "Diagnostics", Icons.Default.Settings, status = isConnected, route = SettingsRoute.Health),
         )

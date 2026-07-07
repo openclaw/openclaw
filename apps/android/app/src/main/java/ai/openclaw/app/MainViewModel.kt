@@ -210,6 +210,7 @@ class MainViewModel(
   val installedAppsSharingEnabled: StateFlow<Boolean> = prefs.installedAppsSharingEnabled
   val speakerEnabled: StateFlow<Boolean> = prefs.speakerEnabled
   val appearanceThemeMode: StateFlow<AppearanceThemeMode> = prefs.appearanceThemeMode
+  val appLanguageMode: StateFlow<AppLanguageMode> = prefs.appLanguageMode
   val voiceCaptureMode: StateFlow<VoiceCaptureMode> = runtimeState(initial = VoiceCaptureMode.Off) { it.voiceCaptureMode }
   val micEnabled: StateFlow<Boolean> = runtimeState(initial = false) { it.micEnabled }
 
@@ -565,6 +566,10 @@ class MainViewModel(
 
   fun setAppearanceThemeMode(mode: AppearanceThemeMode) {
     prefs.setAppearanceThemeMode(mode)
+  }
+
+  fun setAppLanguageMode(mode: AppLanguageMode) {
+    prefs.setAppLanguageMode(mode)
   }
 
   fun refreshGatewayConnection() {

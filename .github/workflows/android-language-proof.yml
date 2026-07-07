@@ -1,0 +1,179 @@
+name: Android language proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: Branch, tag, or SHA to test
+        required: true
+        default: main
+      app_language:
+        description: OpenClaw app language mode for screenshot proof
+        required: true
+        default: zh-CN
+      screenshot_locale:
+        description: Fastlane screenshot output locale folder
+        required: true
+        default: zh-CN
+      screenshot_scene:
+        description: Android screenshot scene to capture
+        required: true
+        default: language
+
+concurrency:
+  group: android-language-proof-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  android-language-proof:
+    name: Android language proof
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      ANDROID_AVD_HOME: ${{ github.workspace }}/.android/avd
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ inputs.target_ref }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Java
+        uses: actions/setup-java@ad2b38190b15e4d6bdf0c97fb4fca8412226d287 # v5
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+          cache-dependency-path: |
+            apps/android/**/*.gradle*
+            apps/android/**/gradle-wrapper.properties
+            apps/android/gradle/libs.versions.toml
+
+      - name: Cache Android SDK
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: ~/.android-sdk
+          key: ${{ runner.os }}-android-language-proof-sdk-v1-cmdline-14742923-api35-api37-buildtools-36.0.0
+          restore-keys: |
+            ${{ runner.os }}-android-language-proof-sdk-v1-
+
+      - name: Setup Android SDK cmdline-tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          ANDROID_SDK_ROOT="$HOME/.android-sdk"
+          CMDLINE_TOOLS_VERSION="14742923"
+          ARCHIVE="commandlinetools-linux-${CMDLINE_TOOLS_VERSION}_latest.zip"
+          URL="https://dl.google.com/android/repository/${ARCHIVE}"
+
+          if [ ! -x "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
+            mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
+            curl -fsSL "$URL" -o "/tmp/${ARCHIVE}"
+            rm -rf "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+            unzip -q "/tmp/${ARCHIVE}" -d "$ANDROID_SDK_ROOT/cmdline-tools"
+            mv "$ANDROID_SDK_ROOT/cmdline-tools/cmdline-tools" "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+          fi
+
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+          echo "$ANDROID_SDK_ROOT/emulator" >> "$GITHUB_PATH"
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null || true
+          sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --install \
+            "platform-tools" \
+            "emulator" \
+            "platforms;android-37.0" \
+            "build-tools;36.0.0" \
+            "system-images;android-35;google_apis;x86_64"
+
+      - name: Create Android proof AVD
+        shell: bash
+        env:
+          AVD_NAME: OpenClaw_Language_API35
+        run: |
+          set -euo pipefail
+          mkdir -p "$ANDROID_AVD_HOME"
+          echo "no" | avdmanager create avd \
+            --force \
+            --name "$AVD_NAME" \
+            --package "system-images;android-35;google_apis;x86_64" \
+            --device "pixel_6"
+          find "$ANDROID_AVD_HOME" -maxdepth 2 -type f -print | sort
+
+      - name: Enable Android emulator KVM access
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -e /dev/kvm ]; then
+            sudo sh -c 'echo KERNEL==\"kvm\", GROUP=\"kvm\", MODE=\"0666\", OPTIONS+=\"static_node=kvm\" > /etc/udev/rules.d/99-kvm4all.rules'
+            sudo udevadm control --reload-rules
+            sudo udevadm trigger --name-match=kvm
+            ls -l /dev/kvm
+          else
+            echo "KVM is not available on this runner; the emulator will use its default fallback."
+          fi
+
+      - name: Build app and capture language screenshot
+        shell: bash
+        env:
+          ANDROID_SCREENSHOT_AVD: OpenClaw_Language_API35
+          ANDROID_SCREENSHOT_EMULATOR_ARGS: -no-snapshot -no-snapshot-save -gpu swiftshader_indirect -memory 2048 -cores 2
+          ANDROID_SCREENSHOT_EMULATOR_TIMEOUT_SECONDS: "360"
+          ANDROID_SCREENSHOT_SETTLE_SECONDS: "2.0"
+          APP_LANGUAGE: ${{ inputs.app_language }}
+          SCREENSHOT_LOCALE: ${{ inputs.screenshot_locale }}
+          SCREENSHOT_SCENE: ${{ inputs.screenshot_scene }}
+        run: |
+          set -euo pipefail
+          bash scripts/android-screenshots.sh \
+            --avd "$ANDROID_SCREENSHOT_AVD" \
+            --locale "$SCREENSHOT_LOCALE" \
+            --scene "$SCREENSHOT_SCENE" \
+            --app-language "$APP_LANGUAGE"
+
+      - name: Summarize proof
+        shell: bash
+        env:
+          TARGET_REF: ${{ inputs.target_ref }}
+          APP_LANGUAGE: ${{ inputs.app_language }}
+          SCREENSHOT_LOCALE: ${{ inputs.screenshot_locale }}
+          SCREENSHOT_SCENE: ${{ inputs.screenshot_scene }}
+        run: |
+          set -euo pipefail
+          screenshot_dir="apps/android/fastlane/metadata/android/${SCREENSHOT_LOCALE}/images/phoneScreenshots"
+          {
+            echo "## Android language proof"
+            echo
+            echo "- Target ref: \`${TARGET_REF}\`"
+            echo "- App language mode: \`${APP_LANGUAGE}\`"
+            echo "- Screenshot scene: \`${SCREENSHOT_SCENE}\`"
+            echo "- Screenshot artifact path: \`openclaw-${SCREENSHOT_SCENE}.png\`"
+            echo
+            echo "### Captured files"
+            find "$screenshot_dir" -maxdepth 1 -type f -name '*.png' -printf '- `%f`\n' | sort
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Android language proof artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: android-language-proof-${{ inputs.app_language }}
+          path: |
+            apps/android/fastlane/metadata/android/${{ inputs.screenshot_locale }}/images/phoneScreenshots/*.png
+            apps/android/app/build/outputs/apk/play/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14

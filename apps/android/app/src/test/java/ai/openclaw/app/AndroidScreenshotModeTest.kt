@@ -22,10 +22,12 @@ class AndroidScreenshotModeTest {
       parseAndroidScreenshotModeIntent(
         Intent(Intent.ACTION_MAIN)
           .putExtra(extraAndroidScreenshotMode, true)
-          .putExtra(extraAndroidScreenshotScene, "voice"),
+          .putExtra(extraAndroidScreenshotScene, "voice")
+          .putExtra(extraAndroidScreenshotAppLanguage, "zh-CN"),
       )
 
-    assertEquals(AndroidScreenshotScene.Voice, parsed)
+    assertEquals(AndroidScreenshotScene.Voice, parsed?.scene)
+    assertEquals(AppLanguageMode.ChineseSimplified, parsed?.appLanguageMode)
   }
 
   @Test
@@ -37,6 +39,7 @@ class AndroidScreenshotModeTest {
           .putExtra(extraAndroidScreenshotScene, "unknown"),
       )
 
-    assertEquals(AndroidScreenshotScene.Connect, parsed)
+    assertEquals(AndroidScreenshotScene.Connect, parsed?.scene)
+    assertEquals(AppLanguageMode.System, parsed?.appLanguageMode)
   }
 }

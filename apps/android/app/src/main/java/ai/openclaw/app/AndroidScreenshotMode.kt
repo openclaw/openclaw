@@ -4,6 +4,7 @@ import android.content.Intent
 
 const val extraAndroidScreenshotMode = "openclaw.screenshotMode"
 const val extraAndroidScreenshotScene = "openclaw.screenshotScene"
+const val extraAndroidScreenshotAppLanguage = "openclaw.screenshotAppLanguage"
 
 enum class AndroidScreenshotScene(
   val rawValue: String,
@@ -13,6 +14,7 @@ enum class AndroidScreenshotScene(
   Voice("voice"),
   Screen("screen"),
   Settings("settings"),
+  Language("language"),
   ;
 
   companion object {
@@ -20,9 +22,17 @@ enum class AndroidScreenshotScene(
   }
 }
 
-fun parseAndroidScreenshotModeIntent(intent: Intent?): AndroidScreenshotScene? {
+data class AndroidScreenshotModeRequest(
+  val scene: AndroidScreenshotScene,
+  val appLanguageMode: AppLanguageMode,
+)
+
+fun parseAndroidScreenshotModeIntent(intent: Intent?): AndroidScreenshotModeRequest? {
   if (intent?.getBooleanExtra(extraAndroidScreenshotMode, false) != true) {
     return null
   }
-  return AndroidScreenshotScene.fromRawValue(intent.getStringExtra(extraAndroidScreenshotScene))
+  return AndroidScreenshotModeRequest(
+    scene = AndroidScreenshotScene.fromRawValue(intent.getStringExtra(extraAndroidScreenshotScene)),
+    appLanguageMode = AppLanguageMode.fromRawValue(intent.getStringExtra(extraAndroidScreenshotAppLanguage)),
+  )
 }

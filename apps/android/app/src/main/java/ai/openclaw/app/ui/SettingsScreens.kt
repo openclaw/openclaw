@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.AndroidLicenseNotice
+import ai.openclaw.app.AppLanguageMode
 import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.GatewayAgentSummary
@@ -17,7 +18,11 @@ import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NotificationPackageFilterMode
 import ai.openclaw.app.SensitiveFeatureConfig
+import ai.openclaw.app.appLanguageOptionLabel
+import ai.openclaw.app.appLanguageOptions
+import ai.openclaw.app.appLanguageSummary
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.currentDeviceLanguageTag
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gatewayTalkSetupDescription
 import ai.openclaw.app.gatewayTalkSetupStatusText
@@ -96,6 +101,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
@@ -1383,12 +1389,18 @@ private fun AppearanceSettingsScreen(
   onBack: () -> Unit,
 ) {
   val themeMode by viewModel.appearanceThemeMode.collectAsState()
+  val languageMode by viewModel.appLanguageMode.collectAsState()
+  val deviceLanguage = currentDeviceLanguageTag()
 
   SettingsDetailFrame(title = "Appearance", subtitle = "A calm, high-contrast OpenClaw interface.", icon = Icons.Default.Palette, onBack = onBack) {
     SettingsMetricPanel(
       rows =
         listOf(
           SettingsMetric("Theme", appearanceThemeSummary(themeMode)),
+          SettingsMetric(
+            "Language",
+            appLanguageMetric(languageMode = languageMode, deviceLanguage = deviceLanguage),
+          ),
           SettingsMetric("Contrast", "High"),
           SettingsMetric("Typography", "Readable"),
         ),
@@ -1403,6 +1415,33 @@ private fun AppearanceSettingsScreen(
         )
       }
     }
+    ClawPanel {
+      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(text = "Language", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        Text(
+          text =
+            "System follows this device language ($deviceLanguage). " +
+              "Choose a language to override OpenClaw without changing Android settings.",
+          style = ClawTheme.type.body,
+          color = ClawTheme.colors.textMuted,
+        )
+        ClawSeparatedColumn(items = appLanguageOptions()) { mode ->
+          val selectedIndicator: (@Composable () -> Unit)? =
+            if (mode == languageMode) {
+              { ClawIconBadge(Icons.Default.Check) }
+            } else {
+              null
+            }
+          ClawListItem(
+            title = appLanguageOptionLabel(mode),
+            subtitle = appLanguageRowSubtitle(mode = mode, deviceLanguage = deviceLanguage),
+            leading = { ClawIconBadge(Icons.Default.Language) },
+            trailing = selectedIndicator,
+            onClick = { viewModel.setAppLanguageMode(mode) },
+          )
+        }
+      }
+    }
   }
 }
 
@@ -1411,6 +1450,26 @@ internal fun appearanceThemeSummary(mode: AppearanceThemeMode): String = mode.di
 internal fun appearanceThemeOptions(): List<String> = AppearanceThemeMode.entries.map { it.displayLabel }
 
 internal fun appearanceThemeModeForLabel(label: String): AppearanceThemeMode = AppearanceThemeMode.fromDisplayLabel(label)
+
+internal fun appLanguageMetric(
+  languageMode: AppLanguageMode,
+  deviceLanguage: String,
+): String =
+  if (languageMode == AppLanguageMode.System) {
+    "System ($deviceLanguage)"
+  } else {
+    appLanguageSummary(languageMode)
+  }
+
+internal fun appLanguageRowSubtitle(
+  mode: AppLanguageMode,
+  deviceLanguage: String,
+): String =
+  if (mode == AppLanguageMode.System) {
+    "Follow Android device language: $deviceLanguage"
+  } else {
+    "Use ${mode.localeTag} inside OpenClaw"
+  }
 
 internal fun locationModeLabels(backgroundLocationAvailable: Boolean): List<String> =
   if (backgroundLocationAvailable) {

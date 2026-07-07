@@ -18,6 +18,7 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 - [x] Authenticated background presence beacons
 - [x] Voice tab full functionality
 - [x] Screen tab full functionality
+- [x] App language selector that defaults to the Android device language; explicit language choices override OpenClaw resources per app, and `System` clears the override
 
 ## Open in Android Studio
 
@@ -69,6 +70,12 @@ Generate raw Google Play screenshots:
 pnpm android:screenshots
 ```
 
+Capture only the language-switch proof scene and force an in-app language:
+
+```bash
+pnpm android:screenshots -- --scene language --app-language zh-CN --locale zh-CN
+```
+
 To make screenshot capture own emulator startup, pass a named AVD:
 
 ```bash
@@ -79,6 +86,10 @@ The screenshot script uses one connected ADB device when available. If none is
 connected and `ANDROID_SCREENSHOT_AVD` is set, it boots that emulator
 headlessly, waits for Android to finish booting, disables animations, captures
 the screenshots, then shuts down the emulator it started.
+
+For PR evidence, `.github/workflows/android-language-proof.yml` can build the
+Play debug APK on GitHub Actions, run the same screenshot script against a
+managed AVD, and upload the language screenshot plus debug APK as artifacts.
 
 `pnpm android:release:archive` builds signed release artifacts into `apps/android/build/release-artifacts/` and writes `.sha256` checksum files:
 

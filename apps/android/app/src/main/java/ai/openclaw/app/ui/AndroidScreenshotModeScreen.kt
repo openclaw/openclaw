@@ -1,6 +1,10 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.AndroidScreenshotScene
+import ai.openclaw.app.AppLanguageMode
+import ai.openclaw.app.R
+import ai.openclaw.app.appLanguageOptionLabel
+import ai.openclaw.app.openClawLocalizedContext
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import ai.openclaw.app.ui.design.ClawTheme
 import androidx.compose.foundation.BorderStroke
@@ -25,6 +29,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ScreenShare
 import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.WifiTethering
@@ -32,11 +37,15 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -44,22 +53,36 @@ import androidx.compose.ui.unit.dp
 private val ScreenshotIconBoxSize = 44.dp
 
 @Composable
-fun AndroidScreenshotModeScreen(scene: AndroidScreenshotScene) {
-  ClawDesignTheme(dark = true) {
-    Column(
-      modifier =
-        Modifier
-          .fillMaxSize()
-          .background(ClawTheme.colors.canvas)
-          .padding(
-            horizontal = ClawTheme.spacing.md,
-            vertical = 26.dp,
-          ),
-      verticalArrangement = Arrangement.SpaceBetween,
-    ) {
-      ScreenshotHeader(scene)
-      ScreenshotSceneBody(scene = scene, modifier = Modifier.weight(1f))
-      ScreenshotTabBar(activeScene = scene)
+fun AndroidScreenshotModeScreen(
+  scene: AndroidScreenshotScene,
+  languageMode: AppLanguageMode = AppLanguageMode.System,
+) {
+  val baseContext = LocalContext.current
+  val localizedContext =
+    remember(baseContext, languageMode) {
+      openClawLocalizedContext(base = baseContext, mode = languageMode)
+    }
+  CompositionLocalProvider(LocalContext provides localizedContext) {
+    ClawDesignTheme(dark = true) {
+      Column(
+        modifier =
+          Modifier
+            .fillMaxSize()
+            .background(ClawTheme.colors.canvas)
+            .padding(
+              horizontal = ClawTheme.spacing.md,
+              vertical = 26.dp,
+            ),
+        verticalArrangement = Arrangement.SpaceBetween,
+      ) {
+        ScreenshotHeader(scene)
+        ScreenshotSceneBody(
+          scene = scene,
+          languageMode = languageMode,
+          modifier = Modifier.weight(1f),
+        )
+        ScreenshotTabBar(activeScene = scene)
+      }
     }
   }
 }
@@ -86,6 +109,7 @@ private fun ScreenshotHeader(scene: AndroidScreenshotScene) {
 @Composable
 private fun ScreenshotSceneBody(
   scene: AndroidScreenshotScene,
+  languageMode: AppLanguageMode,
   modifier: Modifier = Modifier,
 ) {
   Column(
@@ -98,6 +122,7 @@ private fun ScreenshotSceneBody(
       AndroidScreenshotScene.Voice -> VoiceScene()
       AndroidScreenshotScene.Screen -> ScreenScene()
       AndroidScreenshotScene.Settings -> SettingsScene()
+      AndroidScreenshotScene.Language -> LanguageScene(languageMode)
     }
   }
 }
@@ -190,6 +215,27 @@ private fun SettingsScene() {
   CompactList(
     title = "Notifications",
     rows = listOf("Gateway status", "Approval requests", "Background presence"),
+  )
+}
+
+@Composable
+private fun LanguageScene(languageMode: AppLanguageMode) {
+  FeaturePanel(
+    icon = Icons.Default.Language,
+    title = "Language switch",
+    subtitle = appLanguageOptionLabel(languageMode),
+  ) {
+    MetricRow(label = "Mode", value = languageMode.rawValue)
+    MetricRow(label = "Resource", value = stringResource(R.string.trust_this_gateway))
+    MetricRow(label = "Action", value = stringResource(R.string.trust_and_continue))
+  }
+  CompactList(
+    title = "Localized resources",
+    rows =
+      listOf(
+        stringResource(R.string.cancel),
+        stringResource(R.string.new_chat_in_worktree),
+      ),
   )
 }
 
@@ -322,6 +368,7 @@ private fun ScreenshotTabBar(activeScene: AndroidScreenshotScene) {
       TabIcon(icon = Icons.Default.Mic, active = activeScene == AndroidScreenshotScene.Voice)
       TabIcon(icon = Icons.AutoMirrored.Filled.ScreenShare, active = activeScene == AndroidScreenshotScene.Screen)
       TabIcon(icon = Icons.Default.Settings, active = activeScene == AndroidScreenshotScene.Settings)
+      TabIcon(icon = Icons.Default.Language, active = activeScene == AndroidScreenshotScene.Language)
     }
   }
 }
@@ -399,4 +446,5 @@ private fun sceneTitle(scene: AndroidScreenshotScene): String =
     AndroidScreenshotScene.Voice -> "Talk"
     AndroidScreenshotScene.Screen -> "Device tools"
     AndroidScreenshotScene.Settings -> "Settings"
+    AndroidScreenshotScene.Language -> "Language"
   }

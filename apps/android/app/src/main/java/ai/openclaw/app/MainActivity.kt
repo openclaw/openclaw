@@ -3,6 +3,7 @@ package ai.openclaw.app
 import ai.openclaw.app.ui.AndroidScreenshotModeScreen
 import ai.openclaw.app.ui.OpenClawTheme
 import ai.openclaw.app.ui.RootScreen
+import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.view.WindowManager
@@ -49,14 +50,18 @@ class MainActivity : ComponentActivity() {
   private var foreground = false
   private var pendingIntent: Intent? = null
 
+  override fun attachBaseContext(newBase: Context) {
+    super.attachBaseContext(openClawLocalizedContextFromPrefs(newBase))
+  }
+
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     pendingIntent = intent
     WindowCompat.setDecorFitsSystemWindows(window, false)
     permissionRequester = PermissionRequester(this)
     if (BuildConfig.DEBUG) {
-      parseAndroidScreenshotModeIntent(intent)?.let { scene ->
-        enterScreenshotMode(scene)
+      parseAndroidScreenshotModeIntent(intent)?.let { request ->
+        enterScreenshotMode(request)
         return
       }
     }
@@ -81,6 +86,17 @@ class MainActivity : ComponentActivity() {
         }
       } else {
         val appearanceThemeMode by currentViewModel.appearanceThemeMode.collectAsState()
+        val appLanguageMode by currentViewModel.appLanguageMode.collectAsState()
+        var activeLanguageMode by remember { mutableStateOf<AppLanguageMode?>(null) }
+
+        LaunchedEffect(appLanguageMode) {
+          val previous = activeLanguageMode
+          activeLanguageMode = appLanguageMode
+          if (previous != null && previous != appLanguageMode) {
+            recreate()
+          }
+        }
+
         OpenClawTheme(themeMode = appearanceThemeMode) {
           RootScreen(viewModel = currentViewModel)
         }
@@ -88,10 +104,10 @@ class MainActivity : ComponentActivity() {
     }
   }
 
-  private fun enterScreenshotMode(scene: AndroidScreenshotScene) {
+  private fun enterScreenshotMode(request: AndroidScreenshotModeRequest) {
     hideScreenshotModeStatusBar()
     setContent {
-      AndroidScreenshotModeScreen(scene = scene)
+      AndroidScreenshotModeScreen(scene = request.scene, languageMode = request.appLanguageMode)
     }
   }
 

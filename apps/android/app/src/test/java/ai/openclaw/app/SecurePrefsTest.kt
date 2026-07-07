@@ -159,6 +159,38 @@ class SecurePrefsTest {
   }
 
   @Test
+  fun appLanguageMode_defaultsToSystemWithoutWritingPreference() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs.edit().clear().commit()
+    val prefs = testPrefs(context)
+
+    assertEquals(AppLanguageMode.System, prefs.appLanguageMode.value)
+    assertFalse(plainPrefs.contains("appearance.languageMode"))
+  }
+
+  @Test
+  fun setAppLanguageMode_persistsSelectedMode() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs.edit().clear().commit()
+    val securePrefs = context.getSharedPreferences("secure-prefs-test-${UUID.randomUUID()}", Context.MODE_PRIVATE)
+    val prefs = SecurePrefs(context, securePrefs)
+
+    prefs.setAppLanguageMode(AppLanguageMode.ChineseSimplified)
+
+    assertEquals(AppLanguageMode.ChineseSimplified, prefs.appLanguageMode.value)
+    assertEquals("zh-CN", plainPrefs.getString("appearance.languageMode", null))
+    assertEquals(AppLanguageMode.ChineseSimplified, SecurePrefs(context, securePrefs).appLanguageMode.value)
+
+    prefs.setAppLanguageMode(AppLanguageMode.System)
+
+    assertEquals(AppLanguageMode.System, prefs.appLanguageMode.value)
+    assertFalse(plainPrefs.contains("appearance.languageMode"))
+    assertEquals(AppLanguageMode.System, SecurePrefs(context, securePrefs).appLanguageMode.value)
+  }
+
+  @Test
   fun gatewayCredentials_areIndependentAcrossGateways() {
     val context = RuntimeEnvironment.getApplication()
     val securePrefs = context.getSharedPreferences("openclaw.node.secure.test", Context.MODE_PRIVATE)
