@@ -328,7 +328,9 @@ describe("qa credential admin runtime", () => {
       await vi.waitFor(() => expect(responseClosed).toBe(true));
       expect(chunksSent).toBeLessThan(totalChunks);
     } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     }
   });
 
