@@ -3534,6 +3534,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Quick start
   - H2: Signals exported
+  - H2: Which processes export
   - H2: Configuration reference
   - H3: Environment variables
   - H2: Privacy and content capture
