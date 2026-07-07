@@ -235,6 +235,7 @@ describe("memory host SDK package internals", () => {
 
     const chunks = chunkMarkdown(text, { tokens: 10, overlap: 0 });
 
+    expect(chunks.length).toBeGreaterThan(1);
     expect(chunks.map((chunk) => chunk.text).join("")).toBe(text);
     for (const chunk of chunks) {
       expect(() => encodeURIComponent(chunk.text)).not.toThrow();
