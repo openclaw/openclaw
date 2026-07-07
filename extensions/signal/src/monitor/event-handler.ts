@@ -33,6 +33,7 @@ import {
 } from "openclaw/plugin-sdk/channel-policy";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth-native";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
+import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createInternalHookEvent,
   fireAndForgetHook,
@@ -107,6 +108,33 @@ function formatAttachmentSummaryPlaceholder(contentTypes: Array<string | undefin
     formatAttachmentKindCount(kind, count),
   );
   return `[${parts.join(" + ")} attached]`;
+}
+
+const SIGNAL_REPLY_SESSION_INIT_CONFLICT_RETRY_DELAYS_MS = [250, 1000, 2500] as const;
+const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
+
+function isReplySessionInitConflictError(error: unknown): boolean {
+  return collectErrorGraphCandidates(error, (current) => [current.cause, current.error]).some(
+    (candidate) => REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(formatErrorMessage(candidate)),
+  );
+}
+
+async function withReplySessionInitConflictRetry(run: () => Promise<void>): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await run();
+      return;
+    } catch (err) {
+      const retryDelayMs = SIGNAL_REPLY_SESSION_INIT_CONFLICT_RETRY_DELAYS_MS[attempt];
+      if (!isReplySessionInitConflictError(err) || retryDelayMs === undefined) {
+        throw err;
+      }
+      logVerbose(
+        `signal debounce flush hit active reply session; retrying in ${retryDelayMs}ms`,
+      );
+      await delay(retryDelayMs);
+    }
+  }
 }
 
 function resolveSignalInboundRoute(params: {
@@ -675,35 +703,37 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       });
     },
     onFlush: async (entries) => {
-      const last = entries.at(-1);
-      if (!last) {
-        return;
-      }
-      if (entries.length === 1) {
-        await handleSignalInboundMessage(last);
-        return;
-      }
-      const combinedText = entries
-        .map((entry) => entry.bodyText)
-        .filter(Boolean)
-        .join("\\n");
-      const combinedCommandBody = entries
-        .map((entry) => entry.commandBody)
-        .filter(Boolean)
-        .join("\\n");
-      if (!combinedText.trim()) {
-        return;
-      }
-      await handleSignalInboundMessage({
-        ...last,
-        bodyText: combinedText,
-        commandBody: combinedCommandBody,
-        isBatched: true,
-        nativeReplyBody: last.nativeReplyBody ?? last.bodyText,
-        mediaPath: undefined,
-        mediaType: undefined,
-        mediaPaths: undefined,
-        mediaTypes: undefined,
+      await withReplySessionInitConflictRetry(async () => {
+        const last = entries.at(-1);
+        if (!last) {
+          return;
+        }
+        if (entries.length === 1) {
+          await handleSignalInboundMessage(last);
+          return;
+        }
+        const combinedText = entries
+          .map((entry) => entry.bodyText)
+          .filter(Boolean)
+          .join("\\n");
+        const combinedCommandBody = entries
+          .map((entry) => entry.commandBody)
+          .filter(Boolean)
+          .join("\\n");
+        if (!combinedText.trim()) {
+          return;
+        }
+        await handleSignalInboundMessage({
+          ...last,
+          bodyText: combinedText,
+          commandBody: combinedCommandBody,
+          isBatched: true,
+          nativeReplyBody: last.nativeReplyBody ?? last.bodyText,
+          mediaPath: undefined,
+          mediaType: undefined,
+          mediaPaths: undefined,
+          mediaTypes: undefined,
+        });
       });
     },
     onError: (err) => {

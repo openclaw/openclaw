@@ -354,6 +354,52 @@ describe("signal createSignalEventHandler inbound context", () => {
     }
   });
 
+  it("retries reply session initialization conflicts from debounce flush", async () => {
+    vi.useFakeTimers();
+    dispatchInboundMessageMock.mockRejectedValueOnce(
+      new Error("Signal dispatch failed", {
+        cause: new Error(
+          "reply session initialization conflicted for agent:main:signal:direct:+15550001111",
+        ),
+      }),
+    );
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 10 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    try {
+      await handler(
+        createSignalReceiveEvent({
+          timestamp: 1700000000001,
+          dataMessage: {
+            message: "retry this message",
+            attachments: [],
+          },
+        }),
+      );
+
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(10);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(250);
+      await vi.waitFor(() => {
+        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+      });
+      const context = requireCapturedContext();
+      expect(context.Body).toContain("retry this message");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps per-channel-peer direct-message last-route writes on the isolated session", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
