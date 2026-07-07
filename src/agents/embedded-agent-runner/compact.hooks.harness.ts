@@ -176,7 +176,7 @@ export const maybeCompactAgentHarnessSessionMock: Mock<
 async function runCompactWithSafetyTimeoutMock(
   compact: () => Promise<unknown>,
   _timeoutMs?: number,
-  opts?: { abortSignal?: AbortSignal; onCancel?: () => void },
+  opts?: { abortSignal?: AbortSignal; onCancel?: () => void; label?: string },
 ): Promise<unknown> {
   const abortSignal = opts?.abortSignal;
   if (!abortSignal) {
