@@ -1071,7 +1071,7 @@ export async function resolveApiKeyForProvider(params: {
     preferredProfile,
   });
 
-  if (!params.lockedProfile) {
+  if (!params.profileId && !params.lockedProfile) {
     const resolvedExplicit = await resolveExplicitModelsJsonApiKey(
       cfg,
       provider,

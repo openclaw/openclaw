@@ -18,6 +18,7 @@ import {
   resolveUsableCustomProviderApiKey,
 } from "../../agents/model-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { coerceSecretRef } from "../../config/types.secrets.js";
 import type { ProviderAuthEvidence } from "../../secrets/provider-env-vars.js";
 import { maskApiKey } from "../../security/secret-mask.js";
 import { shortenHomePath } from "../../utils.js";
@@ -153,12 +154,16 @@ export function resolveProviderAuthOverview(params: {
   const isLiteral =
     typeof customProviderConfig?.apiKey === "string" &&
     !isNonSecretApiKeyMarker(customProviderConfig.apiKey);
+  const isSecretRef = coerceSecretRef(customProviderConfig?.apiKey) !== null;
 
   const effective: ProviderAuthOverview["effective"] = (() => {
     if (isLiteral) {
-      return { kind: "models.json", detail: formatMarkerOrSecret(customProviderConfig.apiKey) };
+      return {
+        kind: "models.json",
+        detail: formatMarkerOrSecret(customProviderConfig.apiKey as string),
+      };
     }
-    if (usableCustomKey) {
+    if (isSecretRef && usableCustomKey) {
       return { kind: "models.json", detail: formatMarkerOrSecret(usableCustomKey.apiKey) };
     }
     if (profiles.length > 0) {
