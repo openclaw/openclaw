@@ -85,6 +85,30 @@ Welcome to the lobster tank! 🦞
 4. **Test/CI-only PRs for known `main` failures** → Don't open a PR. The Maintainer team is already tracking those failures, and PRs that only tweak tests or CI to chase them will be closed unless they are required to validate a new fix.
 5. **Questions** → Discord [#help](https://discord.com/channels/1456350064065904867/1459642797895319552) / [#users-helping-users](https://discord.com/channels/1456350064065904867/1459007081603403828)
 
+## Quick PR Checklist
+
+For contributors who want a fast reference before opening a PR:
+
+```bash
+# 1. Sync and branch
+git checkout main && git pull --ff-only origin main
+git checkout -b fix/your-description
+
+# 2. Make changes, then verify
+pnpm build                  # ensure it compiles
+pnpm lint                   # check for lint errors
+pnpm format                 # auto-format with oxfmt
+pnpm test:fast              # run fast unit tests
+pnpm check                  # full architecture + type checks
+
+# 3. Commit (use the repo safe wrapper)
+scripts/committer "fix: your description" src/changed-file.ts tests/changed-file.test.ts
+
+# 4. Push and create PR
+git push -u origin HEAD
+gh pr create                # opens interactive PR creation with the template
+```
+
 ## Before You PR
 
 - Test locally with your OpenClaw instance
