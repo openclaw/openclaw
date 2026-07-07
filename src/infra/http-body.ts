@@ -186,7 +186,7 @@ function validateMaxBytes(maxBytes: number): void {
   }
 }
 
-async function readResponsePrefix(
+export async function readResponsePrefix(
   response: Response,
   maxBytes: number,
   options?: {
