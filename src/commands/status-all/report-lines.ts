@@ -4,6 +4,7 @@
 import { getTerminalTableWidth, renderTable } from "../../../packages/terminal-core/src/table.js";
 import { isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import type { ProgressReporter } from "../../cli/progress.js";
+import { truncateUtf16Safe } from "../../utils.js";
 import { appendStatusAllDiagnosis } from "./diagnosis.js";
 import {
   buildStatusAgentsSection,
@@ -88,7 +89,7 @@ export async function buildStatusAllReportLines(params: {
         warn,
         muted,
         accentDim: theme.accentDim,
-        formatIssueMessage: (message) => message.slice(0, 90),
+        formatIssueMessage: (message) => truncateUtf16Safe(message, 90),
       }),
       ...buildStatusChannelDetailsSections({
         details: params.channels.details,
