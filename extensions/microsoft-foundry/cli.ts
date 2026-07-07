@@ -171,6 +171,7 @@ export async function azLoginDeviceCodeWithOptions(params: {
     const stderrChunks: string[] = [];
     let stdoutLen = 0;
     let stderrLen = 0;
+    let settled = false;
     const appendBoundedChunk = (chunks: string[], text: string, len: number): number => {
       if (!text) {
         return len;
@@ -183,17 +184,38 @@ export async function azLoginDeviceCodeWithOptions(params: {
       }
       return total;
     };
+    const rejectOnce = (error: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      reject(error);
+    };
+    const rejectStreamError = (streamName: "stdout" | "stderr") => (error: Error) => {
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // Ignore kill failures; the stream error is already the actionable failure.
+      }
+      rejectOnce(new Error(`az login ${streamName} stream failed: ${error.message}`));
+    };
     child.stdout?.on("data", (chunk) => {
       const text = String(chunk);
       stdoutLen = appendBoundedChunk(stdoutChunks, text, stdoutLen);
       process.stdout.write(text);
     });
+    child.stdout?.on("error", rejectStreamError("stdout"));
     child.stderr?.on("data", (chunk) => {
       const text = String(chunk);
       stderrLen = appendBoundedChunk(stderrChunks, text, stderrLen);
       process.stderr.write(text);
     });
+    child.stderr?.on("error", rejectStreamError("stderr"));
     child.on("close", (code) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
       if (code === 0) {
         resolve();
         return;
@@ -207,6 +229,6 @@ export async function azLoginDeviceCodeWithOptions(params: {
         ),
       );
     });
-    child.on("error", reject);
+    child.on("error", rejectOnce);
   });
 }
