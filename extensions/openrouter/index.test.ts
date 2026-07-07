@@ -852,10 +852,16 @@ describe("openrouter provider hooks", () => {
     }
   });
 
-  it("marks OpenRouter zero generation metadata cost as provider-billed", async () => {
+  it("retries an unavailable OpenRouter generation before marking zero cost", async () => {
     const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const cancelBody = vi.fn();
+    let attempt = 0;
     const fetchMock = vi.fn(async (url: string) => {
       expect(url).toBe("https://openrouter.ai/api/v1/generation?id=gen-free-1");
+      attempt += 1;
+      if (attempt === 1) {
+        return new Response(new ReadableStream({ cancel: cancelBody }), { status: 404 });
+      }
       return new Response(JSON.stringify({ data: { total_cost: 0 } }), {
         headers: { "Content-Type": "application/json" },
         status: 200,
@@ -888,7 +894,8 @@ describe("openrouter provider hooks", () => {
       );
       const message = await stream.result();
 
-      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(cancelBody).toHaveBeenCalledOnce();
       expect(message.usage.cost.total).toBe(0);
       expect(message.usage.cost.totalOrigin).toBe("provider-billed");
     } finally {

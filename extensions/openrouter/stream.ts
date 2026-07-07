@@ -23,6 +23,7 @@ import {
 
 const log = createSubsystemLogger("openrouter-stream");
 const OPENROUTER_GENERATION_LOOKUP_TIMEOUT_MS = 2_000;
+const OPENROUTER_GENERATION_RETRY_DELAYS_MS = [0, 250, 500] as const;
 
 type OpenRouterGenerationResponse = {
   data?: {
@@ -104,31 +105,45 @@ async function fetchOpenRouterGenerationTotalCost(params: {
   responseId: string;
 }): Promise<number | undefined> {
   const url = resolveOpenRouterGenerationUrl(params.model, params.responseId);
-  const { response, release } = await fetchWithTimeoutGuarded(
-    url,
-    {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${params.apiKey}`,
-        "HTTP-Referer": "https://openclaw.ai",
-        "X-OpenRouter-Title": "OpenClaw",
+  for (const retryDelayMs of OPENROUTER_GENERATION_RETRY_DELAYS_MS) {
+    if (retryDelayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    }
+    const { response, release } = await fetchWithTimeoutGuarded(
+      url,
+      {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${params.apiKey}`,
+          "HTTP-Referer": "https://openclaw.ai",
+          "X-OpenRouter-Title": "OpenClaw",
+        },
       },
-    },
-    OPENROUTER_GENERATION_LOOKUP_TIMEOUT_MS,
-    fetch,
-    { auditContext: "openrouter-generation-cost" },
-  );
-  try {
-    await assertOkOrThrowHttpError(response, "OpenRouter generation metadata request failed");
-    return readOpenRouterTotalCost(
-      await readProviderJsonResponse<OpenRouterGenerationResponse>(
-        response,
-        "openrouter.generation-cost",
-      ),
+      OPENROUTER_GENERATION_LOOKUP_TIMEOUT_MS,
+      fetch,
+      { auditContext: "openrouter-generation-cost" },
     );
-  } finally {
-    await release();
+    try {
+      // Generation stats materialize asynchronously; retry a brief post-stream 404.
+      const isLastAttempt =
+        retryDelayMs ===
+        OPENROUTER_GENERATION_RETRY_DELAYS_MS[OPENROUTER_GENERATION_RETRY_DELAYS_MS.length - 1];
+      if (response.status === 404 && !isLastAttempt) {
+        await response.body?.cancel().catch(() => undefined);
+        continue;
+      }
+      await assertOkOrThrowHttpError(response, "OpenRouter generation metadata request failed");
+      return readOpenRouterTotalCost(
+        await readProviderJsonResponse<OpenRouterGenerationResponse>(
+          response,
+          "openrouter.generation-cost",
+        ),
+      );
+    } finally {
+      await release();
+    }
   }
+  return undefined;
 }
 
 async function applyOpenRouterBilledCost(params: {
