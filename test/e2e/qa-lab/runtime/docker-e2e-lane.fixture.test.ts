@@ -59,6 +59,21 @@ describe("QA Docker E2E lane fixture", () => {
     expect(updateRestartAuth.env.OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT).toBe("1500s");
   });
 
+  it("defaults the web search smoke lane to reuse the cached Docker image", () => {
+    const lane = resolveQaDockerE2eLane("openai-web-search-minimal", {});
+
+    expect(lane.script).toBe("scripts/e2e/openai-web-search-minimal-docker.sh");
+    expect(lane.env.OPENCLAW_SKIP_DOCKER_BUILD).toBe("1");
+  });
+
+  it("allows callers to override the web search smoke lane Docker build policy", () => {
+    const lane = resolveQaDockerE2eLane("openai-web-search-minimal", {
+      OPENCLAW_SKIP_DOCKER_BUILD: "0",
+    });
+
+    expect(lane.env.OPENCLAW_SKIP_DOCKER_BUILD).toBe("0");
+  });
+
   it("dispatches through bash without running Docker in fixture tests", () => {
     const spawn = vi.fn(() => ({ signal: null, status: 0 }));
 

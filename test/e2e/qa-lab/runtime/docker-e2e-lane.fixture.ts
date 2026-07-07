@@ -44,6 +44,9 @@ export const QA_DOCKER_E2E_LANES = {
     script: "scripts/e2e/openai-chat-tools-docker.sh",
   },
   "openai-web-search-minimal": {
+    env: (env) => ({
+      OPENCLAW_SKIP_DOCKER_BUILD: env.OPENCLAW_SKIP_DOCKER_BUILD ?? "1",
+    }),
     script: "scripts/e2e/openai-web-search-minimal-docker.sh",
   },
   openwebui: {
