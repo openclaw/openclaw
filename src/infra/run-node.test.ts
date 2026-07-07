@@ -505,6 +505,7 @@ describe("run-node script", () => {
         args: ["status"],
         env: {
           ...process.env,
+          npm_execpath: "/tmp/corepack/pnpm/11.10.0/bin/pnpm.cjs",
           OPENCLAW_FORCE_BUILD: "1",
           OPENCLAW_RUNNER_LOG: "0",
         },
@@ -526,6 +527,9 @@ describe("run-node script", () => {
       expect(spawnCalls[0]?.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBeUndefined();
       expect(spawnCalls[1]?.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe("1");
       expect(spawnCalls[2]?.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBeUndefined();
+      expect(spawnCalls[0]?.env.npm_execpath).toBeUndefined();
+      expect(spawnCalls[1]?.env.npm_execpath).toBeUndefined();
+      expect(spawnCalls[2]?.env.npm_execpath).toBe("/tmp/corepack/pnpm/11.10.0/bin/pnpm.cjs");
     });
   });
 

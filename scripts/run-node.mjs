@@ -1042,6 +1042,12 @@ const runOpenClaw = async (deps) => {
   return res.exitCode ?? 1;
 };
 
+const createLocalBuildEnv = (deps, overrides = {}) => {
+  const env = { ...deps.env, ...overrides };
+  delete env.npm_execpath;
+  return env;
+};
+
 const pipeSpawnedOutput = (childProcess, deps, options = {}) => {
   const stdoutTarget = options.stdoutTarget ?? "stdout";
   if (!shouldPipeSpawnedOutput(deps) && stdoutTarget !== "stderr") {
@@ -1533,7 +1539,7 @@ export async function runNodeMain(params = {}) {
           const assetBuild = deps.spawn(buildCmd, bundledPluginAssetBuildArgs, {
             cwd: deps.cwd,
             detached: shouldUseRunNodeChildProcessGroup(deps),
-            env: deps.env,
+            env: createLocalBuildEnv(deps),
             stdio: ["inherit", "pipe", "pipe"],
           });
           pipeSpawnedOutput(assetBuild, deps, { stdoutTarget: "stderr" });
@@ -1549,10 +1555,9 @@ export async function runNodeMain(params = {}) {
           const build = deps.spawn(buildCmd, compilerArgs, {
             cwd: deps.cwd,
             detached: shouldUseRunNodeChildProcessGroup(deps),
-            env: {
-              ...deps.env,
+            env: createLocalBuildEnv(deps, {
               [RUN_NODE_SKIP_DTS_BUILD_ENV]: deps.env[RUN_NODE_SKIP_DTS_BUILD_ENV] ?? "1",
-            },
+            }),
             stdio: ["inherit", "pipe", "pipe"],
           });
           pipeSpawnedOutput(build, deps, { stdoutTarget: "stderr" });
