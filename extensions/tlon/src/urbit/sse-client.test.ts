@@ -253,6 +253,22 @@ describe("UrbitSSEClient", () => {
         );
       });
 
+      it("rejects a single oversized chunk before concatenating it into the buffer", async () => {
+        const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
+        // Single chunk above the 16 MiB cap — guard must fire before buffer += chunkStr.
+        const oversized = "x".repeat(17 * 1024 * 1024);
+
+        const stream = Readable.from(
+          (async function* () {
+            yield oversized;
+          })(),
+        );
+
+        await expect(client.processStream(stream)).rejects.toThrow(
+          "Tlon Urbit SSE stream buffer exceeded 16 MiB limit",
+        );
+      });
+
       it("processes normal SSE events through the stream path", async () => {
         const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
         const handler = vi.fn();

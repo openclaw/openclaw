@@ -246,11 +246,14 @@ export class UrbitSSEClient {
           break;
         }
         const chunkStr = chunk.toString();
-        buffer += chunkStr;
-        bufferBytes += Buffer.byteLength(chunkStr, "utf8");
-        if (bufferBytes > MAX_SSE_PAYLOAD_BYTES) {
+        const chunkBytes = Buffer.byteLength(chunkStr, "utf8");
+        // Reject before concatenating so an oversized chunk never lands in the
+        // pending buffer — the guard protects memory, not just the byte counter.
+        if (bufferBytes + chunkBytes > MAX_SSE_PAYLOAD_BYTES) {
           throw new Error("Tlon Urbit SSE stream buffer exceeded 16 MiB limit");
         }
+        buffer += chunkStr;
+        bufferBytes += chunkBytes;
         let eventEnd;
         while ((eventEnd = buffer.indexOf("\n\n")) !== -1) {
           const eventData = buffer.slice(0, eventEnd);
