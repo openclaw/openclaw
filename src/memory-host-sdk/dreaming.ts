@@ -523,6 +523,7 @@ export function resolveMemoryDeepDreamingConfig(params: {
   cfg?: OpenClawConfig;
 }): MemoryDeepDreamingConfig & {
   timezone?: string;
+  language?: string;
   verboseLogging: boolean;
   storage: MemoryDreamingStorageConfig;
 } {
@@ -531,6 +532,7 @@ export function resolveMemoryDeepDreamingConfig(params: {
     ...resolved.phases.deep,
     enabled: resolved.enabled && resolved.phases.deep.enabled,
     ...(resolved.timezone ? { timezone: resolved.timezone } : {}),
+    ...(resolved.language ? { language: resolved.language } : {}),
     verboseLogging: resolved.verboseLogging,
     storage: resolved.storage,
   };
@@ -541,6 +543,7 @@ export function resolveMemoryLightDreamingConfig(params: {
   cfg?: OpenClawConfig;
 }): MemoryLightDreamingConfig & {
   timezone?: string;
+  language?: string;
   verboseLogging: boolean;
   storage: MemoryDreamingStorageConfig;
 } {
@@ -549,6 +552,7 @@ export function resolveMemoryLightDreamingConfig(params: {
     ...resolved.phases.light,
     enabled: resolved.enabled && resolved.phases.light.enabled,
     ...(resolved.timezone ? { timezone: resolved.timezone } : {}),
+    ...(resolved.language ? { language: resolved.language } : {}),
     verboseLogging: resolved.verboseLogging,
     storage: resolved.storage,
   };
@@ -559,6 +563,7 @@ export function resolveMemoryRemDreamingConfig(params: {
   cfg?: OpenClawConfig;
 }): MemoryRemDreamingConfig & {
   timezone?: string;
+  language?: string;
   verboseLogging: boolean;
   storage: MemoryDreamingStorageConfig;
 } {
@@ -567,6 +572,7 @@ export function resolveMemoryRemDreamingConfig(params: {
     ...resolved.phases.rem,
     enabled: resolved.enabled && resolved.phases.rem.enabled,
     ...(resolved.timezone ? { timezone: resolved.timezone } : {}),
+    ...(resolved.language ? { language: resolved.language } : {}),
     verboseLogging: resolved.verboseLogging,
     storage: resolved.storage,
   };

@@ -107,6 +107,7 @@ type ShortTermPromotionDreamingConfig = {
   enabled: boolean;
   cron: string;
   timezone?: string;
+  language?: string;
   limit: number;
   minScore: number;
   minRecallCount: number;
@@ -395,6 +396,7 @@ export function resolveShortTermPromotionDreamingConfig(params: {
     enabled: resolved.enabled,
     cron: resolved.cron,
     ...(resolved.timezone ? { timezone: resolved.timezone } : {}),
+    ...(resolved.language ? { language: resolved.language } : {}),
     limit: resolved.limit,
     minScore: resolved.minScore,
     minRecallCount: resolved.minRecallCount,
@@ -673,6 +675,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
             data,
             nowMs: sweepNowMs,
             timezone: params.config.timezone,
+            language: params.config.language,
             logger: params.logger,
             reason: "subagent runtime is unavailable",
           });
@@ -683,6 +686,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
             data,
             nowMs: sweepNowMs,
             timezone: params.config.timezone,
+            language: params.config.language,
             model: params.config.execution?.model,
             logger: params.logger,
           });
@@ -693,6 +697,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
             data,
             nowMs: sweepNowMs,
             timezone: params.config.timezone,
+            language: params.config.language,
             model: params.config.execution?.model,
             logger: params.logger,
           });

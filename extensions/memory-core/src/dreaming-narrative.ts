@@ -154,6 +154,7 @@ export async function appendFallbackNarrativeEntry(params: {
   data: NarrativePhaseData;
   nowMs: number;
   timezone?: string;
+  language?: DreamingLanguage;
   logger: Logger;
   reason: string;
 }): Promise<void> {
@@ -165,6 +166,7 @@ export async function appendFallbackNarrativeEntry(params: {
       narrative: REQUEST_SCOPED_FALLBACK_NARRATIVE,
       nowMs: params.nowMs,
       timezone: params.timezone,
+      language: params.language,
     });
     params.logger.info(
       `memory-core: narrative generation used fallback for ${params.data.phase} phase because ${params.reason}.`,
@@ -234,6 +236,7 @@ async function startNarrativeRunOrFallback(params: {
   workspaceDir: string;
   nowMs: number;
   timezone?: string;
+  language?: DreamingLanguage;
   model?: string;
   logger: Logger;
 }): Promise<string | null> {
@@ -258,6 +261,7 @@ async function startNarrativeRunOrFallback(params: {
       data: params.data,
       nowMs: params.nowMs,
       timezone: params.timezone,
+      language: params.language,
       logger: params.logger,
       reason: "subagent runtime is request-scoped",
     });
@@ -742,6 +746,7 @@ export async function appendNarrativeEntry(params: {
   narrative: string;
   nowMs: number;
   timezone?: string;
+  language?: DreamingLanguage;
 }): Promise<string> {
   const dateStr = formatNarrativeDate(params.nowMs, params.timezone);
   const entry = buildDiaryEntry(params.narrative, dateStr);
@@ -762,7 +767,8 @@ export async function appendNarrativeEntry(params: {
           "\n" +
           existing.slice(startIdx);
       } else {
-        const diarySection = `# Dream Diary\n\n${DIARY_START_MARKER}${entry}\n${DIARY_END_MARKER}\n`;
+        const t = getDreamingTranslations(params.language);
+        const diarySection = `# ${t.dreamDiary}\n\n${DIARY_START_MARKER}${entry}\n${DIARY_END_MARKER}\n`;
         updated = existing.trim().length === 0 ? diarySection : `${diarySection}\n${existing}`;
       }
       return { content: updated, result: dreamsPath };
@@ -819,6 +825,7 @@ export async function generateAndAppendDreamNarrative(params: {
   data: NarrativePhaseData;
   nowMs?: number;
   timezone?: string;
+  language?: DreamingLanguage;
   model?: string;
   logger: Logger;
 }): Promise<void> {
@@ -864,6 +871,7 @@ export async function generateAndAppendDreamNarrative(params: {
             workspaceDir: params.workspaceDir,
             nowMs,
             timezone: params.timezone,
+            language: params.language,
             model: attemptModel,
             logger: params.logger,
           });
@@ -907,6 +915,7 @@ export async function generateAndAppendDreamNarrative(params: {
             data: params.data,
             nowMs,
             timezone: params.timezone,
+            language: params.language,
             logger: params.logger,
             reason: `the narrative run ended with ${formatNarrativeTerminalStatus({
               status: result.status,
@@ -942,6 +951,7 @@ export async function generateAndAppendDreamNarrative(params: {
           data: params.data,
           nowMs,
           timezone: params.timezone,
+          language: params.language,
           logger: params.logger,
           reason: "the narrative run produced no text",
         });
@@ -953,6 +963,7 @@ export async function generateAndAppendDreamNarrative(params: {
         narrative,
         nowMs,
         timezone: params.timezone,
+        language: params.language,
       });
 
       params.logger.info(

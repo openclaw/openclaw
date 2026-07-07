@@ -20,6 +20,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { appendFailedDreamingEvent } from "./dreaming-events.js";
+import type { DreamingLanguage } from "./dreaming-i18n.js";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import {
   generateAndAppendDreamNarrative,
@@ -53,6 +54,7 @@ type Logger = Pick<OpenClawPluginApi["logger"], "info" | "warn" | "error">;
 type DreamingHostConfig = unknown;
 type DreamingPhaseStorageConfig = {
   timezone?: string;
+  language?: string;
   storage: { mode: "inline" | "separate" | "both"; separateReports: boolean };
   execution?: { model?: string };
 };
@@ -1754,6 +1756,7 @@ async function runLightDreaming(params: {
         data,
         nowMs,
         timezone: params.config.timezone,
+        language: params.config.language,
         model: params.config.execution?.model,
         logger: params.logger,
       });
@@ -1764,6 +1767,7 @@ async function runLightDreaming(params: {
         data,
         nowMs,
         timezone: params.config.timezone,
+        language: params.config.language,
         model: params.config.execution?.model,
         logger: params.logger,
       });
@@ -1869,6 +1873,7 @@ async function runRemDreaming(params: {
         data,
         nowMs,
         timezone: params.config.timezone,
+        language: params.config.language,
         model: params.config.execution?.model,
         logger: params.logger,
       });
@@ -1879,6 +1884,7 @@ async function runRemDreaming(params: {
         data,
         nowMs,
         timezone: params.config.timezone,
+        language: params.config.language,
         model: params.config.execution?.model,
         logger: params.logger,
       });
