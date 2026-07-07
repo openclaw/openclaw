@@ -211,7 +211,7 @@ function parseProcessList(stdout: string): AcpxProcessInfo[] {
 }
 
 /** List host processes in the compact shape needed by ACPX cleanup. */
-export async function listPlatformProcesses(): Promise<AcpxProcessInfo[]> {
+async function listPlatformProcesses(): Promise<AcpxProcessInfo[]> {
   if (process.platform === "win32") {
     return [];
   }

@@ -173,7 +173,7 @@ const CONTROL_UI_ROOT_PUBLIC_ASSETS = new Set([
 ]);
 
 /** Rewrites root-absolute Control UI public asset hrefs for configured base paths. */
-export function rewriteControlUiIndexHtmlPublicAssetHrefs(html: string, basePath: string): string {
+function rewriteControlUiIndexHtmlPublicAssetHrefs(html: string, basePath: string): string {
   const normalized = normalizeControlUiBasePath(basePath);
   if (!normalized) {
     return html;

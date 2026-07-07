@@ -46,7 +46,7 @@ export function resolveTransientProviderRetryOptions(
   return options;
 }
 
-export function defaultTransientProviderRetryForStage(
+function defaultTransientProviderRetryForStage(
   stage: ProviderOperationRetryStage,
 ): TransientProviderRetryConfig | undefined {
   return stage === "create" ? undefined : true;
@@ -143,7 +143,7 @@ function hasTimeoutSignal(error: unknown, message: string): boolean {
   );
 }
 
-export function isTransientProviderOperationError(error: unknown, message: string): boolean {
+function isTransientProviderOperationError(error: unknown, message: string): boolean {
   const status = readErrorStatus(error);
   if (status !== undefined) {
     return status === 500 || status === 502 || status === 503 || status === 504;
