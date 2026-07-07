@@ -328,6 +328,19 @@ describe("cron store", () => {
     );
   });
 
+  it("rejects writing a quarantine sidecar that would exceed the byte cap", async () => {
+    const { storePath } = await makeStorePath();
+    const bigEntry = {
+      sourceIndex: 0,
+      reason: "oversized-raw",
+      raw: "x".repeat(8 * 1024 * 1024 + 100),
+    };
+
+    await expect(
+      saveCronQuarantineFile({ storePath, nowMs: 1, entries: [bigEntry] }),
+    ).rejects.toThrow(/Cron quarantine file exceeds 8388608 bytes/);
+  });
+
   it("does not rewrite quarantine files when every entry is already present", async () => {
     const { storePath } = await makeStorePath();
     const quarantinePath = resolveCronQuarantinePath(storePath);

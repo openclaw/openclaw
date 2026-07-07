@@ -331,6 +331,9 @@ export async function saveCronQuarantineFile(params: {
     return quarantinePath;
   }
   const payload = JSON.stringify({ version: 1, jobs: nextJobs }, null, 2);
+  if (Buffer.byteLength(payload, "utf-8") > CRON_QUARANTINE_MAX_BYTES) {
+    throw new Error(`Cron quarantine file exceeds ${CRON_QUARANTINE_MAX_BYTES} bytes`);
+  }
   await atomicWrite(quarantinePath, payload);
   return quarantinePath;
 }
