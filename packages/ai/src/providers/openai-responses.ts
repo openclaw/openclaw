@@ -12,10 +12,11 @@ import type {
   StreamOptions,
   Usage,
 } from "../types.js";
-import { AssistantMessageEventStream, createMissingApiKeyStream } from "../utils/event-stream.js";
+import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { resolveCacheRetention } from "./cache-retention.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
+import { createMissingApiKeyStream } from "./missing-api-key-stream.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import {
   applyCommonResponsesParams,

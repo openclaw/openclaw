@@ -10,9 +10,10 @@ import type {
   StreamFunction,
   StreamOptions,
 } from "../types.js";
-import { AssistantMessageEventStream, createMissingApiKeyStream } from "../utils/event-stream.js";
+import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { resolveAzureDeploymentNameFromMap } from "./azure-deployment-map.js";
 import { isOpenAICompatibleAzureResponsesBaseUrl } from "./azure-openai-responses-client-compat.js";
+import { createMissingApiKeyStream } from "./missing-api-key-stream.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import {
   applyCommonResponsesParams,

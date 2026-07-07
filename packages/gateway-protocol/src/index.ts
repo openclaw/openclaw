@@ -12,6 +12,12 @@ import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
 import {
   type AgentEvent,
   AgentEventSchema,
+  type AuditEvent,
+  AuditEventSchema,
+  type AuditListParams,
+  AuditListParamsSchema,
+  type AuditListResult,
+  AuditListResultSchema,
   type AgentIdentityParams,
   AgentIdentityParamsSchema,
   type AgentIdentityResult,
@@ -47,6 +53,18 @@ import {
   AgentsFilesSetParamsSchema,
   type AgentsFilesSetResult,
   AgentsFilesSetResultSchema,
+  type AgentsWorkspaceEntry,
+  AgentsWorkspaceEntrySchema,
+  type AgentsWorkspaceFile,
+  AgentsWorkspaceFileSchema,
+  type AgentsWorkspaceGetParams,
+  AgentsWorkspaceGetParamsSchema,
+  type AgentsWorkspaceGetResult,
+  AgentsWorkspaceGetResultSchema,
+  type AgentsWorkspaceListParams,
+  AgentsWorkspaceListParamsSchema,
+  type AgentsWorkspaceListResult,
+  AgentsWorkspaceListResultSchema,
   type ArtifactsDownloadParams,
   ArtifactsDownloadParamsSchema,
   type ArtifactsDownloadResult,
@@ -122,6 +140,10 @@ import {
   TalkSpeakParamsSchema,
   type TalkSpeakResult,
   TalkSpeakResultSchema,
+  type TtsSpeakParams,
+  TtsSpeakParamsSchema,
+  type TtsSpeakResult,
+  TtsSpeakResultSchema,
   type ChannelsStatusParams,
   ChannelsStatusParamsSchema,
   type ChannelsStatusResult,
@@ -252,6 +274,7 @@ import {
   errorShape,
   type GatewayFrame,
   GatewayFrameSchema,
+  GATEWAY_SERVER_CAPS,
   type HelloOk,
   HelloOkSchema,
   type LogsTailParams,
@@ -637,6 +660,7 @@ export const validateMessageActionParams =
 export const validateSendParams = lazyCompile(SendParamsSchema);
 export const validatePollParams = lazyCompile<PollParams>(PollParamsSchema);
 export const validateAgentParams = lazyCompile(AgentParamsSchema);
+export const validateAuditListParams = lazyCompile<AuditListParams>(AuditListParamsSchema);
 export const validateAgentIdentityParams =
   lazyCompile<AgentIdentityParams>(AgentIdentityParamsSchema);
 export const validateAgentWaitParams = lazyCompile<AgentWaitParams>(AgentWaitParamsSchema);
@@ -665,6 +689,12 @@ export const validateAgentsFilesGetParams = lazyCompile<AgentsFilesGetParams>(
 );
 export const validateAgentsFilesSetParams = lazyCompile<AgentsFilesSetParams>(
   AgentsFilesSetParamsSchema,
+);
+export const validateAgentsWorkspaceListParams = lazyCompile<AgentsWorkspaceListParams>(
+  AgentsWorkspaceListParamsSchema,
+);
+export const validateAgentsWorkspaceGetParams = lazyCompile<AgentsWorkspaceGetParams>(
+  AgentsWorkspaceGetParamsSchema,
 );
 export const validateArtifactsListParams =
   lazyCompile<ArtifactsListParams>(ArtifactsListParamsSchema);
@@ -881,6 +911,8 @@ export const validateTalkSessionOkResult =
   lazyCompile<TalkSessionOkResult>(TalkSessionOkResultSchema);
 export const validateTalkSpeakParams = lazyCompile<TalkSpeakParams>(TalkSpeakParamsSchema);
 export const validateTalkSpeakResult = lazyCompile<TalkSpeakResult>(TalkSpeakResultSchema);
+export const validateTtsSpeakParams = lazyCompile<TtsSpeakParams>(TtsSpeakParamsSchema);
+export const validateTtsSpeakResult = lazyCompile<TtsSpeakResult>(TtsSpeakResultSchema);
 export const validateChannelsStatusParams = lazyCompile<ChannelsStatusParams>(
   ChannelsStatusParamsSchema,
 );
@@ -1105,6 +1137,7 @@ export function formatValidationErrors(errors: ValidationError[] | null | undefi
 // protocol surface changes.
 export {
   ConnectParamsSchema,
+  GATEWAY_SERVER_CAPS,
   HelloOkSchema,
   RequestFrameSchema,
   ResponseFrameSchema,
@@ -1186,6 +1219,9 @@ export {
   ArtifactsListParamsSchema,
   ArtifactsGetParamsSchema,
   ArtifactsDownloadParamsSchema,
+  AuditEventSchema,
+  AuditListParamsSchema,
+  AuditListResultSchema,
   TaskSummarySchema,
   TasksListParamsSchema,
   TasksListResultSchema,
@@ -1242,6 +1278,8 @@ export {
   TalkSessionOkResultSchema,
   TalkSpeakParamsSchema,
   TalkSpeakResultSchema,
+  TtsSpeakParamsSchema,
+  TtsSpeakResultSchema,
   ChannelsStatusParamsSchema,
   ChannelsStatusResultSchema,
   ChannelsStartParamsSchema,
@@ -1263,6 +1301,12 @@ export {
   AgentsFilesGetResultSchema,
   AgentsFilesSetParamsSchema,
   AgentsFilesSetResultSchema,
+  AgentsWorkspaceEntrySchema,
+  AgentsWorkspaceFileSchema,
+  AgentsWorkspaceListParamsSchema,
+  AgentsWorkspaceListResultSchema,
+  AgentsWorkspaceGetParamsSchema,
+  AgentsWorkspaceGetResultSchema,
   AgentsListParamsSchema,
   AgentsListResultSchema,
   CommandsListParamsSchema,
@@ -1431,6 +1475,8 @@ export type {
   TalkSessionOkResult,
   TalkSpeakParams,
   TalkSpeakResult,
+  TtsSpeakParams,
+  TtsSpeakResult,
   TalkModeParams,
   ChannelsStatusParams,
   ChannelsStatusResult,
@@ -1453,6 +1499,12 @@ export type {
   AgentsFilesGetResult,
   AgentsFilesSetParams,
   AgentsFilesSetResult,
+  AgentsWorkspaceEntry,
+  AgentsWorkspaceFile,
+  AgentsWorkspaceListParams,
+  AgentsWorkspaceListResult,
+  AgentsWorkspaceGetParams,
+  AgentsWorkspaceGetResult,
   SessionFileBrowserEntry,
   SessionFileBrowserResult,
   SessionFileEntry,
@@ -1547,6 +1599,9 @@ export type {
   SessionsDeleteParams,
   SessionsCompactParams,
   SessionsUsageParams,
+  AuditEvent,
+  AuditListParams,
+  AuditListResult,
   TaskSummary,
   TasksListParams,
   TasksListResult,

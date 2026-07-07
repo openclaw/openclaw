@@ -32,7 +32,7 @@ import type {
   ToolResultMessage,
 } from "../types.js";
 import { createDeferredEventBuffer } from "../utils/deferred-event-buffer.js";
-import { AssistantMessageEventStream, createMissingApiKeyStream } from "../utils/event-stream.js";
+import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.js";
 import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
@@ -81,6 +81,7 @@ import {
 import { resolveCacheRetention } from "./cache-retention.js";
 import { resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
+import { createMissingApiKeyStream } from "./missing-api-key-stream.js";
 import { adjustMaxTokensForThinking, buildBaseOptions } from "./simple-options.js";
 import {
   describeToolResultMediaPlaceholder,

@@ -145,7 +145,6 @@ Skills own workflows; root owns hard policy and routing.
 
 ## GitHub / PRs
 
-- If the `gh` command is blocked by the terminal sandbox with a `Permission denied for gh command` message, run it wrapped in a subshell via `bash -c` (e.g. `bash -c "gh pr view ..."`).
 - Fresh GitHub items: read `CONTRIBUTING.md`, the issue chooser/form, PR template, and `.github/CODEOWNERS`; blank issues are disabled; preserve templates and evidence requirements.
 - Agent-authored/non-trivial work: create or reuse the issue first; tiny fixes may go direct. PRs use the template, link context, and keep durable problem/impact/evidence sections.
 - Route support to Discord and security through `SECURITY.md`. Use listed maintainer areas/`CODEOWNERS`; never guess mentions.
@@ -182,9 +181,7 @@ Skills own workflows; root owns hard policy and routing.
 
 ## Code
 
-- TS ESM, strict. Avoid `any`; prefer real types, `unknown`, narrow adapters. For catch blocks, catch `unknown` (or omit annotation) and narrow system errors via `(err as NodeJS.ErrnoException | undefined)?.code` checks.
-- Catch Binding: In catch blocks where the error variable is not referenced, omit the catch binding parameter entirely (use `catch {` instead of `catch (err) {`) to satisfy eslint `no-unused-vars` and `prefer-optional-catch-binding` rules.
-- Test Mock Types: In unit tests (especially AI provider and LLM core tests), ensure that mock conversation history message objects fully satisfy their strictly typed interfaces (e.g. `AssistantMessage`, `ToolResultMessage`). In particular, `AssistantMessage` requires `api`, `provider`, `model`, `usage` (with nested `totalTokens` and structured `cost: { input, output, cacheRead, cacheWrite, total }`), and `stopReason` fields. `ToolResultMessage` requires `role: "toolResult"`, `toolCallId`, `toolName`, `isError`, `content`, and `timestamp`. The role `tool` is invalid.
+- TS ESM, strict. Avoid `any`; prefer real types, `unknown`, narrow adapters.
 - No `@ts-nocheck`. Lint suppressions only intentional + explained.
 - External boundaries: prefer `zod` or existing schema helpers.
 - Runtime branching: discriminated unions/closed codes over freeform strings. Avoid semantic sentinels (`?? 0`, empty object/string).

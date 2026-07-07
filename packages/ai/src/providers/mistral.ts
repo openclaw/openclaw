@@ -23,12 +23,13 @@ import type {
   Tool,
   ToolCall,
 } from "../types.js";
-import { AssistantMessageEventStream, createMissingApiKeyStream } from "../utils/event-stream.js";
+import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { shortHash } from "../utils/hash.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { createSseByteGuard } from "../utils/streaming-byte-guard.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
+import { createMissingApiKeyStream } from "./missing-api-key-stream.js";
 import { buildBaseOptions } from "./simple-options.js";
 import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";

@@ -2,7 +2,7 @@
 import { type GenerateContentParameters, GoogleGenAI } from "@google/genai";
 import { getEnvApiKey } from "../env-api-keys.js";
 import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
-import { AssistantMessageEventStream, createMissingApiKeyStream } from "../utils/event-stream.js";
+import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import {
   buildGoogleGenerateContentParams,
   buildGoogleSimpleThinking,
@@ -11,6 +11,7 @@ import {
   type GoogleProviderOptions,
   runGoogleGenerateContentLifecycle,
 } from "./google-shared.js";
+import { createMissingApiKeyStream } from "./missing-api-key-stream.js";
 import { buildBaseOptions } from "./simple-options.js";
 
 export type GoogleOptions = GoogleProviderOptions;

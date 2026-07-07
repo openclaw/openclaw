@@ -47,7 +47,7 @@ import {
   createAssistantMessageDiagnostic,
   formatThrownValue,
 } from "../utils/diagnostics.js";
-import { AssistantMessageEventStream, createMissingApiKeyStream } from "../utils/event-stream.js";
+import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { resolveOpenAICodexAccountId } from "../utils/oauth/openai-chatgpt-jwt.js";
 import {
@@ -57,6 +57,7 @@ import {
 } from "../utils/stream-first-event-timeout.js";
 import { createSseByteGuard } from "../utils/streaming-byte-guard.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
+import { createMissingApiKeyStream } from "./missing-api-key-stream.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import {
   convertResponsesMessages,

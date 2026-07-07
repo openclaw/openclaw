@@ -31,7 +31,7 @@ import type {
   ToolCall,
   ToolResultMessage,
 } from "../types.js";
-import { AssistantMessageEventStream, createMissingApiKeyStream } from "../utils/event-stream.js";
+import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { createReasoningTagTextPartitioner } from "../utils/reasoning-tag-text-partitioner.js";
@@ -49,6 +49,7 @@ import {
 import { resolveCacheRetention } from "./cache-retention.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
+import { createMissingApiKeyStream } from "./missing-api-key-stream.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import { mapOpenAIStopReason } from "./openai-stop-reason.js";
 import {
