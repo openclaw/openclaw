@@ -3057,6 +3057,17 @@ class NodeRuntime private constructor(
     )
   }
 
+  suspend fun renameChatSessionGroup(
+    from: String,
+    to: String,
+  ) {
+    chat.renameSessionGroup(from = from, to = to)
+  }
+
+  suspend fun dissolveChatSessionGroup(group: String) {
+    chat.dissolveSessionGroup(group)
+  }
+
   suspend fun deleteChatSession(key: String) {
     chat.deleteSession(key)
   }

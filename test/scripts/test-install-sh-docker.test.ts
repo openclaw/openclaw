@@ -612,6 +612,7 @@ describe("test-install-sh-docker", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
 
     expect(script).toContain("read_pack_tarball_filename()");
+    expect(script).toContain('UPDATE_TGZ_FILE="$(basename "$package_tgz")"');
     expect(script).toContain('UPDATE_TGZ_FILE="$(read_pack_tarball_filename "$pack_json_file")"');
     expect(script).toContain(
       'BASELINE_TGZ_FILE="$(read_pack_tarball_filename "$baseline_pack_json_file")"',
@@ -644,13 +645,16 @@ describe("test-install-sh-docker", () => {
     }
   });
 
-  it("writes the package dist inventory before packing ignore-scripts tarballs", () => {
+  it("uses the package artifact helper for local update tarballs", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
 
-    expect(script).toContain("node --import tsx scripts/write-package-dist-inventory.ts");
-    expect(script).toContain('node scripts/check-package-dist-imports.mjs "$ROOT_DIR"');
-    expect(script).toContain("quiet_npm pack --ignore-scripts");
+    expect(script).toContain("node scripts/package-openclaw-for-docker.mjs");
+    expect(script).toContain('--pack-json "$pack_json_file"');
+    expect(script).toContain("--skip-build");
+    expect(script).not.toContain("node --import tsx scripts/write-package-dist-inventory.ts");
+    expect(script).not.toContain("quiet_npm pack --ignore-scripts --json");
     expect(script).toContain("node scripts/check-openclaw-package-tarball.mjs");
+    expect(script).toContain("--require-bundled-workspace-deps");
   });
 
   it("runs candidate tarballs through the installer script instead of direct npm", () => {

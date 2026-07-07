@@ -29,8 +29,11 @@ export type {
 export {
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
+  resolveClaudeMythos5ModelIdentity,
   resolveClaudeNativeThinkingLevelMap,
   resolveClaudeSonnet5ModelIdentity,
+  requiresClaudeDefaultSampling,
+  requiresClaudeMandatoryAdaptiveThinking,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,

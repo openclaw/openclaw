@@ -142,6 +142,7 @@ const mocks = vi.hoisted(() => ({
   readSystemdUserLingerStatus: vi.fn(async () => ({ user: "alice", linger: "no" as const })),
   gatewayServiceIsLoaded: vi.fn(async () => true),
   resolveGatewayService: vi.fn(),
+  getSkillCuratorDoctorWarning: vi.fn(),
 }));
 
 const DOCTOR_GATEWAY_HEALTH_ID = "doctor:gateway-health";
@@ -157,6 +158,10 @@ vi.mock("../commands/doctor/shared/plugin-runtime-symlinks.js", () => ({
 
 vi.mock("./bundled-health-checks.js", () => ({
   registerBundledHealthChecks: mocks.registerBundledHealthChecks,
+}));
+
+vi.mock("../skills/workshop/curator.js", () => ({
+  getSkillCuratorDoctorWarning: mocks.getSkillCuratorDoctorWarning,
 }));
 
 vi.mock("./doctor-repair-flow.js", () => ({
@@ -962,6 +967,27 @@ describe("doctor health contributions", () => {
 
     expect(ids.indexOf("doctor:skills")).toBeGreaterThan(-1);
     expect(ids.indexOf("doctor:skills")).toBeLessThan(ids.indexOf("doctor:write-config"));
+  });
+
+  it("reports a wedged skill curator as a warning finding", async () => {
+    mocks.getSkillCuratorDoctorWarning.mockReturnValueOnce(
+      "skill curator has not completed a sweep since 2026-01-01 — check gateway logs",
+    );
+    const contribution = requireDoctorContribution("doctor:skill-curator");
+    const check = contribution.healthChecks[0] as HealthCheck;
+    const findings = await check.detect({
+      cfg: {},
+      mode: "doctor",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/skill-curator",
+        severity: "warning",
+        target: "skill-curator",
+      }),
+    ]);
   });
 
   it("keeps workspace status opt-in for structured lint selection", async () => {

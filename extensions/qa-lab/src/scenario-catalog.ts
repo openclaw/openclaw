@@ -66,12 +66,19 @@ const qaScenarioChannelSchema = z
     message: "scenario execution channel ids must use lowercase dotted or dashed tokens",
   });
 
+const qaScenarioTransportPolicySchema = z.object({
+  requireGroupMention: z.literal(true).optional(),
+  senderAllowlist: z.array(z.string().trim().min(1)).min(1).optional(),
+  topLevelReplies: z.literal(true).optional(),
+});
+
 const qaFlowScenarioExecutionSchema = z.object({
   kind: z.literal("flow").default("flow"),
   summary: z.string().trim().min(1).optional(),
   channel: qaScenarioChannelSchema.optional(),
   suiteIsolation: z.literal("isolated").optional(),
   isolationReason: z.string().trim().min(1).optional(),
+  transportPolicy: qaScenarioTransportPolicySchema.optional(),
   config: qaScenarioConfigSchema.optional(),
 });
 

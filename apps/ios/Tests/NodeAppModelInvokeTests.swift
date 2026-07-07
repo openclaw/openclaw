@@ -1,11 +1,33 @@
 import Foundation
-import OpenClawChatUI
 import OpenClawKit
 import OpenClawProtocol
 import Testing
 import UIKit
 import UserNotifications
 @testable import OpenClaw
+@testable import OpenClawChatUI
+
+@MainActor
+private final class MockVoiceNoteAudioCapture: VoiceNoteAudioCapture {
+    private(set) var cancelCallCount = 0
+    private(set) var permissionRequestCount = 0
+
+    func requestPermission() async -> Bool {
+        self.permissionRequestCount += 1
+        return true
+    }
+
+    func start(url _: URL) throws {}
+    func stop() -> TimeInterval {
+        1
+    }
+
+    func cancel() {
+        self.cancelCallCount += 1
+    }
+
+    func setFailureHandler(_: @escaping @MainActor () -> Void) {}
+}
 
 private func makeAgentDeepLinkURL(
     message: String,
@@ -77,21 +99,6 @@ private func makeProjectedWatchChatRawMessage(
     }
     let data = try JSONSerialization.data(withJSONObject: object)
     return try JSONDecoder().decode(AnyCodable.self, from: data)
-}
-
-@MainActor
-private final class VoiceNoteCaptureStub: VoiceNoteAudioCapture {
-    func requestPermission() async -> Bool {
-        true
-    }
-
-    func start(url _: URL) throws {}
-
-    func stop() -> TimeInterval {
-        1
-    }
-
-    func cancel() {}
 }
 
 @MainActor
@@ -739,21 +746,24 @@ private actor WatchSnapshotSendGate {
         appModel.voiceWake.stop()
     }
 
-    @Test @MainActor func `PTT start is refused while a voice note owns the microphone`() async {
-        let voiceNoteRecorder = OpenClawVoiceNoteRecorder(capture: VoiceNoteCaptureStub())
-        let talkMode = TalkModeManager(allowSimulatorCapture: true)
-        let appModel = NodeAppModel(talkMode: talkMode, voiceNoteRecorder: voiceNoteRecorder)
-        #expect(await voiceNoteRecorder.start())
-        defer { voiceNoteRecorder.cancel() }
+    @Test @MainActor func `PTT start preserves an active voice note`() async {
+        let capture = MockVoiceNoteAudioCapture()
+        let recorder = OpenClawVoiceNoteRecorder(capture: capture)
+        #expect(await recorder.start())
+        let appModel = NodeAppModel(
+            talkMode: TalkModeManager(allowSimulatorCapture: true),
+            voiceNoteRecorder: recorder)
 
         let request = BridgeInvokeRequest(
-            id: "ptt-start-during-voice-note",
+            id: "ptt-start-with-voice-note",
             command: OpenClawTalkCommand.pttStart.rawValue)
         let response = await appModel._test_handleInvoke(request)
 
         #expect(response.ok == false)
-        #expect(response.error?.message.contains("Voice note recording is active") == true)
-        #expect(talkMode.isPushToTalkActive == false)
+        #expect(response.error?.message.contains("active voice note") == true)
+        #expect(recorder.isRecording)
+        #expect(capture.cancelCallCount == 0)
+        recorder.cancel()
     }
 
     @Test @MainActor func `overlapping PTT owners keep voice wake suspended until final release`() {
@@ -763,6 +773,7 @@ private actor WatchSnapshotSendGate {
         appModel.voiceWake.statusText = "Listening"
 
         appModel._test_acquirePttVoiceWakeLease()
+        #expect(appModel.isTalkCaptureActive == true)
         appModel._test_acquirePttVoiceWakeLease()
         #expect(appModel.voiceWake._test_isSuspendedForExternalAudio() == true)
 
@@ -771,7 +782,23 @@ private actor WatchSnapshotSendGate {
 
         appModel._test_releasePttVoiceWakeLease()
         #expect(appModel.voiceWake._test_isSuspendedForExternalAudio() == false)
+        #expect(appModel.isTalkCaptureActive == false)
         appModel.voiceWake.stop()
+    }
+
+    @Test @MainActor func `voice note start cannot race an acquired PTT lease`() async {
+        let capture = MockVoiceNoteAudioCapture()
+        let recorder = OpenClawVoiceNoteRecorder(capture: capture)
+        let appModel = NodeAppModel(
+            talkMode: TalkModeManager(allowSimulatorCapture: true),
+            voiceNoteRecorder: recorder)
+        appModel._test_acquirePttVoiceWakeLease()
+
+        #expect(await recorder.start() == false)
+        #expect(recorder.isRecording == false)
+        #expect(capture.permissionRequestCount == 0)
+
+        appModel._test_releasePttVoiceWakeLease()
     }
 
     @Test @MainActor func `late watch snapshot is repaired after gateway switch`() async throws {

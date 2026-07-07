@@ -10,8 +10,12 @@ import UIKit
 
 extension OpenClawChatViewModel {
     /// Stages a recorded m4a voice note and removes its temporary file.
-    func addVoiceNoteAttachment(fileURL: URL, durationSeconds: Double) async {
-        defer { try? FileManager.default.removeItem(at: fileURL) }
+    public func addVoiceNoteAttachment(fileURL: URL, durationSeconds: Double) async {
+        self.beginAttachmentStaging()
+        defer {
+            try? FileManager.default.removeItem(at: fileURL)
+            self.endAttachmentStaging()
+        }
 
         let data: Data
         do {
@@ -28,6 +32,9 @@ extension OpenClawChatViewModel {
             return
         }
 
+        let normalizedDuration = durationSeconds.isFinite
+            ? min(max(0, durationSeconds), OpenClawVoiceNoteRecorder.maximumDurationSeconds)
+            : 0
         self.attachments.append(
             OpenClawPendingAttachment(
                 url: nil,
@@ -35,7 +42,7 @@ extension OpenClawChatViewModel {
                 fileName: fileURL.lastPathComponent,
                 mimeType: "audio/mp4",
                 preview: nil,
-                durationSeconds: max(0, durationSeconds)))
+                durationSeconds: normalizedDuration))
     }
 
     func loadAttachments(urls: [URL]) async {

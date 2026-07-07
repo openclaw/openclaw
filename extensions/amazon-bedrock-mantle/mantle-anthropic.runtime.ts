@@ -10,7 +10,11 @@ import {
   type SimpleStreamOptions,
   type ThinkingLevel,
 } from "openclaw/plugin-sdk/llm";
-import { resolveClaudeSonnet5ModelIdentity } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  requiresClaudeDefaultSampling,
+  resolveClaudeMythos5ModelIdentity,
+  resolveClaudeSonnet5ModelIdentity,
+} from "openclaw/plugin-sdk/provider-model-shared";
 
 const MANTLE_ANTHROPIC_BETA = "fine-grained-tool-streaming-2025-05-14";
 type AnthropicOptions = ConstructorParameters<typeof Anthropic>[0];
@@ -33,7 +37,7 @@ function isClaudeSonnet5Model(model: Model): boolean {
 }
 
 function requiresDefaultSampling(model: Model): boolean {
-  return model.id.includes("claude-opus-4-7") || isClaudeSonnet5Model(model);
+  return requiresClaudeDefaultSampling(model);
 }
 
 function isClaudeMythosPreviewModel(model: Model): boolean {
@@ -49,6 +53,14 @@ function isClaudeMythosPreviewModel(model: Model): boolean {
     );
 }
 
+function isClaudeMythos5Model(model: Model): boolean {
+  return resolveClaudeMythos5ModelIdentity(model) !== undefined;
+}
+
+function requiresClaudeMythosAdaptiveThinking(model: Model): boolean {
+  return isClaudeMythos5Model(model) || isClaudeMythosPreviewModel(model);
+}
+
 function resolveMantleReasoning(
   model: Model,
   options: SimpleStreamOptions | undefined,
@@ -57,21 +69,19 @@ function resolveMantleReasoning(
     return undefined;
   }
   const sonnet5 = isClaudeSonnet5Model(model);
-  const reasoning =
-    options?.reasoning ?? (isClaudeMythosPreviewModel(model) || sonnet5 ? "high" : undefined);
+  const mythosPreview = isClaudeMythosPreviewModel(model);
+  const mandatoryMythos = isClaudeMythos5Model(model) || mythosPreview;
+  const reasoning = options?.reasoning ?? (mandatoryMythos || sonnet5 ? "high" : undefined);
   if (sonnet5) {
     return reasoning === "off" || reasoning === "minimal" ? "low" : reasoning;
   }
-  if (!isClaudeMythosPreviewModel(model)) {
+  if (!mandatoryMythos) {
     return reasoning;
   }
-  if (reasoning === "off") {
-    return "high";
-  }
-  if (reasoning === "minimal") {
+  if (reasoning === "off" || reasoning === "minimal") {
     return "low";
   }
-  return reasoning === "xhigh" || reasoning === "max" ? "high" : reasoning;
+  return mythosPreview && (reasoning === "xhigh" || reasoning === "max") ? "high" : reasoning;
 }
 
 function mapSonnet5Effort(
@@ -107,7 +117,9 @@ function buildMantleAnthropicBaseOptions(
     ...(requiresDefaultSampling(model) ? {} : { temperature: options?.temperature }),
     maxTokens:
       options?.maxTokens ||
-      (isClaudeSonnet5Model(model) ? model.maxTokens : Math.min(model.maxTokens, 32_000)),
+      (isClaudeSonnet5Model(model) || isClaudeMythos5Model(model)
+        ? model.maxTokens
+        : Math.min(model.maxTokens, 32_000)),
     signal: options?.signal,
     apiKey,
     cacheRetention: options?.cacheRetention,
@@ -172,6 +184,7 @@ export function createMantleAnthropicStreamFn(deps?: {
     const streamClient = client as unknown as Anthropic;
     const reasoning = resolveMantleReasoning(model, options);
     const sonnet5 = isClaudeSonnet5Model(model);
+    const mythos5 = isClaudeMythos5Model(model);
     if (!reasoning || reasoning === "off") {
       return streamFn(model as Model<"anthropic-messages">, context, {
         ...base,
@@ -180,12 +193,12 @@ export function createMantleAnthropicStreamFn(deps?: {
       });
     }
 
-    if (sonnet5) {
+    if (sonnet5 || mythos5) {
       return streamFn(model as Model<"anthropic-messages">, context, {
         ...base,
         client: streamClient,
         thinkingEnabled: true,
-        effort: mapSonnet5Effort(reasoning),
+        effort: sonnet5 ? mapSonnet5Effort(reasoning) : reasoning,
       });
     }
 
@@ -200,7 +213,7 @@ export function createMantleAnthropicStreamFn(deps?: {
       client: streamClient,
       maxTokens: adjusted.maxTokens,
       thinkingEnabled: true,
-      ...(isClaudeMythosPreviewModel(model) ? { effort: reasoning } : {}),
+      ...(requiresClaudeMythosAdaptiveThinking(model) ? { effort: reasoning } : {}),
       thinkingBudgetTokens: adjusted.thinkingBudget,
     });
   };

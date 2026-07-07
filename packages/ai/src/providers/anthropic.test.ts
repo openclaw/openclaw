@@ -862,6 +862,8 @@ describe("Anthropic provider", () => {
 
   it.each([
     ["claude-fable-5", "Claude Fable 5", "anthropic", "sk-ant-provider"],
+    ["claude-mythos-5", "Claude Mythos 5", "anthropic", "sk-ant-provider"],
+    ["claude-mythos-5", "Claude Mythos 5", "anthropic-vertex", "vertex-token"],
     ["claude-sonnet-5", "Claude Sonnet 5", "anthropic", "sk-ant-provider"],
     ["claude-sonnet-5", "Claude Sonnet 5", "anthropic-vertex", "vertex-token"],
   ])("surfaces structured %s streaming refusals for %s", async (id, name, provider, apiKey) => {
@@ -1424,6 +1426,47 @@ describe("Anthropic provider", () => {
     expect(capturedPayload).not.toHaveProperty("temperature");
   });
 
+  it("uses mandatory adaptive thinking and default sampling for Claude Mythos 5", async () => {
+    let capturedPayload: unknown;
+    const stream = streamSimpleAnthropic(
+      makeAnthropicModel({
+        id: "prod-mythos",
+        name: "Production Claude",
+        provider: "microsoft-foundry",
+        params: { canonicalModelId: "claude-mythos-5" },
+        reasoning: false,
+        baseUrl: "https://example.services.ai.azure.com/anthropic",
+        maxTokens: 128_000,
+      }),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      },
+      {
+        apiKey: "sk-ant-provider",
+        reasoning: "off",
+        temperature: 0.2,
+        onPayload: (payload) => {
+          capturedPayload = {
+            ...(payload as Record<string, unknown>),
+            top_p: 0.9,
+            top_k: 40,
+          };
+          return capturedPayload;
+        },
+      },
+    );
+
+    await stream.result();
+
+    expect(capturedPayload).toMatchObject({
+      thinking: { type: "adaptive", display: "summarized" },
+      output_config: { effort: "low" },
+    });
+    expect(capturedPayload).not.toHaveProperty("temperature");
+    expect(capturedPayload).not.toHaveProperty("top_p");
+    expect(capturedPayload).not.toHaveProperty("top_k");
+  });
+
   it("preserves native max effort for Claude Mythos Preview", async () => {
     let capturedPayload: unknown;
     const stream = streamSimpleAnthropic(
@@ -1545,6 +1588,41 @@ describe("Anthropic provider", () => {
     });
     expect((capturedPayload as { output_config?: unknown }).output_config).toBeUndefined();
   });
+
+  it.each(["claude-opus-4-8", "claude-mythos-preview"])(
+    "restores default sampling for %s after payload hooks",
+    async (modelId) => {
+      let capturedPayload: unknown;
+      const stream = streamSimpleAnthropic(
+        makeAnthropicModel({
+          id: modelId,
+          name: modelId,
+          maxTokens: 128_000,
+        }),
+        { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+        {
+          apiKey: "sk-ant-provider",
+          reasoning: "high",
+          temperature: 0.2,
+          onPayload: (payload) => {
+            capturedPayload = {
+              ...(payload as Record<string, unknown>),
+              temperature: 0.2,
+              top_p: 0.9,
+              top_k: 40,
+            };
+            return capturedPayload;
+          },
+        },
+      );
+
+      await stream.result();
+
+      expect(capturedPayload).not.toHaveProperty("temperature");
+      expect(capturedPayload).not.toHaveProperty("top_p");
+      expect(capturedPayload).not.toHaveProperty("top_k");
+    },
+  );
 
   it.each([
     {

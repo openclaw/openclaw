@@ -520,7 +520,7 @@ describe("bedrock mantle discovery", () => {
     expect(provider?.api).toBe("openai-completions");
     expect(provider?.auth).toBe("api-key");
     expect(provider?.apiKey).toBe("env:AWS_BEARER_TOKEN_BEDROCK");
-    expect(provider?.models).toHaveLength(4);
+    expect(provider?.models).toHaveLength(5);
     const sonnet = provider?.models?.find((model) => model.id === "anthropic.claude-sonnet-5");
     expect(sonnet).toMatchObject({
       api: "anthropic-messages",
@@ -536,10 +536,20 @@ describe("bedrock mantle discovery", () => {
     expect(opus?.api).toBe("anthropic-messages");
     expect(opus?.reasoning).toBe(false);
     expect(opus).not.toHaveProperty("baseUrl");
-    const mythos = provider?.models?.find(
+    const mythos = provider?.models?.find((model) => model.id === "anthropic.claude-mythos-5");
+    expect(mythos).toMatchObject({
+      api: "anthropic-messages",
+      reasoning: true,
+      params: { canonicalModelId: "claude-mythos-5" },
+      cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
+    });
+    const mythosPreview = provider?.models?.find(
       (model) => model.id === "anthropic.claude-mythos-preview",
     );
-    expect(mythos).toMatchObject({
+    expect(mythosPreview).toMatchObject({
       api: "anthropic-messages",
       reasoning: true,
       params: { canonicalModelId: "claude-mythos-preview" },

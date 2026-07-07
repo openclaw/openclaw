@@ -111,6 +111,24 @@
             }
           },
           {
+            "id": "claude-mythos-5",
+            "name": "Claude Mythos 5",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "mediaInput": {
+              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
+            },
+            "cost": { "input": 10, "output": 50, "cacheRead": 1, "cacheWrite": 12.5 },
+            "contextWindow": 1000000,
+            "maxTokens": 128000,
+            "thinkingLevelMap": {
+              "off": "low",
+              "minimal": "low",
+              "xhigh": "xhigh",
+              "max": "max"
+            }
+          },
+          {
             "id": "claude-opus-4-8",
             "name": "Claude Opus 4.8",
             "reasoning": true,
@@ -194,6 +212,7 @@
           "opus-4.8": "claude-opus-4-8",
           "opus": "claude-opus-4-8",
           "opus-4.6": "claude-opus-4-6",
+          "mythos-5": "claude-mythos-5",
           "sonnet-5": "claude-sonnet-5",
           "sonnet": "claude-sonnet-5",
           "sonnet-4.6": "claude-sonnet-4-6"

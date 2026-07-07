@@ -10,6 +10,10 @@ Android notification forwarding now excludes native WhatsApp, Telegram, Telegram
 
 Assistant messages now offer a long-press Listen action with gateway TTS playback, on-device fallback, and tap-to-stop status.
 
+Android command-palette rows now align icon and navigation affordances consistently and truncate long session details cleanly. Thanks @IWhatsskill.
+
+Android screenshot-mode voice and screen proof scenes now scale cleanly on compact capture widths. Thanks @IWhatsskill.
+
 The Settings About screen now shows the animated mascot with the app tagline plus Website, Docs, GitHub, and Discord links.
 
 Adds a read-only Files browser for agent workspaces with directory navigation, text and image previews, and system share export.

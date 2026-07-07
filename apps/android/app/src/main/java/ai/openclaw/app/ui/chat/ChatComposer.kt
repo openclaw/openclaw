@@ -136,6 +136,7 @@ internal fun ChatComposer(
   draftText: ChatDraft?,
   healthOk: Boolean,
   thinkingLevel: String,
+  thinkingSupported: Boolean,
   pendingRunCount: Int,
   commands: List<ChatCommandEntry>,
   attachments: List<PendingAttachment>,
@@ -172,6 +173,10 @@ internal fun ChatComposer(
       // recomposition cannot reapply it over user edits.
       onDraftApplied()
     }
+  }
+
+  LaunchedEffect(thinkingSupported) {
+    if (!thinkingSupported) showThinkingMenu = false
   }
 
   // One in-flight run owns the composer actions; attachments alone are enough to send when the
@@ -239,44 +244,46 @@ internal fun ChatComposer(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-      Box {
-        Surface(
-          onClick = { showThinkingMenu = true },
-          shape = RoundedCornerShape(14.dp),
-          color = mobileCardSurface,
-          border = BorderStroke(1.dp, mobileBorderStrong),
-        ) {
-          Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
+      if (thinkingSupported) {
+        Box {
+          Surface(
+            onClick = { showThinkingMenu = true },
+            shape = RoundedCornerShape(14.dp),
+            color = mobileCardSurface,
+            border = BorderStroke(1.dp, mobileBorderStrong),
           ) {
-            Text(
-              text = thinkingLabel(thinkingLevel),
-              style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
-              color = mobileTextSecondary,
-            )
-            Icon(
-              Icons.Default.ArrowDropDown,
-              contentDescription = "Select thinking level",
-              modifier = Modifier.size(18.dp),
-              tint = mobileTextTertiary,
-            )
+            Row(
+              modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Text(
+                text = thinkingLabel(thinkingLevel),
+                style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
+                color = mobileTextSecondary,
+              )
+              Icon(
+                Icons.Default.ArrowDropDown,
+                contentDescription = "Select thinking level",
+                modifier = Modifier.size(18.dp),
+                tint = mobileTextTertiary,
+              )
+            }
           }
-        }
 
-        DropdownMenu(
-          expanded = showThinkingMenu,
-          onDismissRequest = { showThinkingMenu = false },
-          shape = RoundedCornerShape(16.dp),
-          containerColor = mobileCardSurface,
-          tonalElevation = 0.dp,
-          shadowElevation = 8.dp,
-          border = BorderStroke(1.dp, mobileBorder),
-        ) {
-          ThinkingMenuItem("off", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
-          ThinkingMenuItem("low", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
-          ThinkingMenuItem("medium", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
-          ThinkingMenuItem("high", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
+          DropdownMenu(
+            expanded = showThinkingMenu,
+            onDismissRequest = { showThinkingMenu = false },
+            shape = RoundedCornerShape(16.dp),
+            containerColor = mobileCardSurface,
+            tonalElevation = 0.dp,
+            shadowElevation = 8.dp,
+            border = BorderStroke(1.dp, mobileBorder),
+          ) {
+            ThinkingMenuItem("off", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
+            ThinkingMenuItem("low", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
+            ThinkingMenuItem("medium", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
+            ThinkingMenuItem("high", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
+          }
         }
       }
 

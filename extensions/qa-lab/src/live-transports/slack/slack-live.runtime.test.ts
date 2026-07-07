@@ -65,8 +65,6 @@ describe("Slack live QA runtime helpers", () => {
       "mention-gating",
       "allowlist-block",
       "top-level-reply-shape",
-      "thread-follow-up",
-      "thread-isolation",
     ]);
   });
 

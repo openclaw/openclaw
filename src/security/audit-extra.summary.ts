@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 // Summarizes extra security audit findings for user-facing output.
 import {
   resolveConfiguredToolPolicies,
@@ -10,6 +11,8 @@ import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { hasConfiguredInternalHooks } from "../hooks/configured.js";
+import { normalizePluginsConfigWithResolver } from "../plugins/config-normalization-shared.js";
+import { passesManifestOwnerBasePolicy } from "../plugins/manifest-owner-policy.js";
 import { hasConfiguredWebSearchCredential } from "../plugins/web-search-credential-presence.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 import { collectAuditModelRefs } from "./audit-model-refs.js";
@@ -114,7 +117,17 @@ function isWebFetchEnabled(cfg: OpenClawConfig): boolean {
 }
 
 function isBrowserEnabled(cfg: OpenClawConfig): boolean {
-  return cfg.browser?.enabled !== false;
+  if (cfg.browser?.enabled === false) {
+    return false;
+  }
+  return passesManifestOwnerBasePolicy({
+    plugin: { id: "browser" },
+    normalizedConfig: normalizePluginsConfigWithResolver(
+      cfg.plugins,
+      (pluginId) => normalizeOptionalLowercaseString(pluginId) ?? "",
+    ),
+    // Browser config selects behavior; it must not weaken global plugin policy.
+  });
 }
 
 /** Produce a concise inventory of major security-relevant surfaces. */
@@ -123,7 +136,7 @@ export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): Securi
   const elevated = cfg.tools?.elevated?.enabled !== false;
   const webhooksEnabled = cfg.hooks?.enabled === true;
   const internalHooksEnabled = hasConfiguredInternalHooks(cfg);
-  const browserEnabled = cfg.browser?.enabled ?? true;
+  const browserEnabled = isBrowserEnabled(cfg);
 
   const detail =
     `groups: open=${group.open}, allowlist=${group.allowlist}` +

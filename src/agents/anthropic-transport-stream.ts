@@ -2,6 +2,7 @@ import {
   ANTHROPIC_OMITTED_REASONING_TEXT,
   ANTHROPIC_SERVER_SIDE_FALLBACK_BETA,
   CLAUDE_FABLE_5_FALLBACK_MODEL_COST,
+  applyClaudeRequestContract,
   applyAnthropicFallbackBoundary,
   buildAnthropicServerSideFallbacks,
   defaultsClaudeAdaptiveThinking,
@@ -979,8 +980,8 @@ function buildAnthropicParams(
   params: Record<string, unknown>;
   toolProjection?: AnthropicToolProjection;
 } {
-  const fable5 = usesClaudeFable5MessagesContract(model);
-  const replayThinkingEnabled = fable5 || options?.thinkingEnabled === true;
+  const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
+  const replayThinkingEnabled = mandatoryAdaptiveThinking || options?.thinkingEnabled === true;
   const maxTokens = resolveAnthropicMessagesMaxTokens({
     modelMaxTokens: model.maxTokens,
     requestedMaxTokens: options?.maxTokens,
@@ -1060,8 +1061,8 @@ function buildAnthropicParams(
       params.tools = convertedTools.tools;
     }
   }
-  if (fable5 || model.reasoning || supportsAdaptiveThinking(model)) {
-    if (fable5 || options?.thinkingEnabled) {
+  if (mandatoryAdaptiveThinking || model.reasoning || supportsAdaptiveThinking(model)) {
+    if (mandatoryAdaptiveThinking || options?.thinkingEnabled) {
       if (supportsAdaptiveThinking(model)) {
         // Default display to "summarized" so Opus 4.7+/Fable 5 return a thinking
         // summary like older Claude 4 models — mirrors the provider path
@@ -1070,7 +1071,7 @@ function buildAnthropicParams(
         // blank (the live agent transport previously sent this for opus-4-8).
         const display: AnthropicThinkingDisplay = options?.thinkingDisplay ?? "summarized";
         params.thinking = { type: "adaptive", display };
-        const effort = options?.effort ?? (fable5 ? "high" : undefined);
+        const effort = options?.effort ?? (mandatoryAdaptiveThinking ? "high" : undefined);
         if (effort) {
           params.output_config = { effort };
         }
@@ -1121,13 +1122,8 @@ function resolveAnthropicTransportOptions(
   const reasoningModelMaxTokens =
     resolvePositiveAnthropicMaxTokens(model.maxTokens) ?? baseMaxTokens;
   const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
-  const fable5 = usesClaudeFable5MessagesContract(model);
   const reasoning =
-    options?.reasoning === "off" && mandatoryAdaptiveThinking
-      ? fable5
-        ? "low"
-        : "high"
-      : options?.reasoning;
+    options?.reasoning === "off" && mandatoryAdaptiveThinking ? "low" : options?.reasoning;
   const resolved: AnthropicTransportOptions = {
     temperature: options?.temperature,
     stop: options?.stop,
@@ -1229,6 +1225,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         if (nextParams !== undefined) {
           params = nextParams as Record<string, unknown>;
         }
+        applyClaudeRequestContract(params, model);
         const anthropicStream = client.messages.stream(
           { ...params, stream: true },
           transportOptions.signal ? { signal: transportOptions.signal } : undefined,

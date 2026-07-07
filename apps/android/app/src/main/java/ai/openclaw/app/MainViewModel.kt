@@ -155,6 +155,7 @@ class MainViewModel(
   val modelCatalogErrorText: StateFlow<String?> = runtimeState(initial = null) { it.modelCatalogErrorText }
   val modelFavorites: StateFlow<List<String>> = prefs.modelFavorites
   val modelRecents: StateFlow<List<String>> = prefs.modelRecents
+  val sessionCustomGroups: StateFlow<List<String>> = prefs.sessionCustomGroups
   val talkSetupReadiness: StateFlow<GatewayTalkSetupReadiness> =
     runtimeState(initial = GatewayTalkSetupReadiness.unverified()) { it.talkSetupReadiness }
   val gatewayDefaultAgentId: StateFlow<String?> = runtimeState(initial = null) { it.gatewayDefaultAgentId }
@@ -763,6 +764,28 @@ class MainViewModel(
 
   suspend fun deleteChatSession(key: String) {
     ensureRuntime().deleteChatSession(key)
+  }
+
+  /** Remembers a custom session group locally so it renders as an empty section. */
+  fun addChatSessionGroup(name: String) {
+    val trimmed = name.trim()
+    if (trimmed.isEmpty()) return
+    prefs.setSessionCustomGroups(prefs.sessionCustomGroups.value + trimmed)
+  }
+
+  suspend fun renameChatSessionGroup(
+    from: String,
+    to: String,
+  ) {
+    val stored = prefs.sessionCustomGroups.value
+    // Web semantics: replace a stored name in place, otherwise remember the new name.
+    prefs.setSessionCustomGroups(if (from in stored) stored.map { if (it == from) to else it } else stored + to)
+    ensureRuntime().renameChatSessionGroup(from = from, to = to)
+  }
+
+  suspend fun deleteChatSessionGroup(group: String) {
+    prefs.setSessionCustomGroups(prefs.sessionCustomGroups.value.filterNot { it == group })
+    ensureRuntime().dissolveChatSessionGroup(group)
   }
 
   suspend fun forkChatSession(parentKey: String): String? = ensureRuntime().forkChatSession(parentKey)

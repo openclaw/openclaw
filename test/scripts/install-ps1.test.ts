@@ -177,6 +177,93 @@ describe("install.ps1 failure handling", () => {
           "",
         ].join("\n"),
       },
+      {
+        name: "scriptblock-failure",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          "function Write-Banner { }",
+          "function Ensure-ExecutionPolicy { return $true }",
+          "function Check-Node { return $false }",
+          "function Install-Node { return $false }",
+          "$caught = $false",
+          "try {",
+          ...ENTRYPOINT_LINES.map((line) => `  ${line}`),
+          "} catch {",
+          "  if ($_.Exception.Message -ne 'OpenClaw installation failed with exit code 1.') { throw }",
+          "  $caught = $true",
+          "}",
+          "if (-not $caught) { throw 'Install failure did not reach the caller' }",
+          "",
+        ].join("\n"),
+      },
+      {
+        name: "noisy-git-failure",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          "function Write-Banner { }",
+          "function Ensure-ExecutionPolicy { return $true }",
+          "function Check-Node { return $true }",
+          "function Check-ExistingOpenClaw { return $false }",
+          "function Get-NpmCommandPath { return $null }",
+          "function Install-OpenClawFromGit {",
+          "  Write-Output 'pnpm stdout before failure'",
+          "  return $false",
+          "}",
+          "function Ensure-OpenClawOnPath { throw 'should not continue after failed git install' }",
+          "$InstallMethod = 'git'",
+          "$GitDir = 'C:\\\\openclaw-test'",
+          "$NoOnboard = $true",
+          "$result = Main",
+          'if ($result -ne $false) { throw "Main returned $result" }',
+          'if ($script:InstallExitCode -ne 1) { throw "InstallExitCode=$script:InstallExitCode" }',
+          "",
+        ].join("\n"),
+      },
+      {
+        name: "quiet-main-success",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          "function Write-Banner { }",
+          "function Ensure-ExecutionPolicy { return $true }",
+          "function Check-Node { return $true }",
+          "function Check-ExistingOpenClaw { return $false }",
+          "function Add-ToPath { param([string]$Path) }",
+          "function Install-OpenClaw { Write-Output 'npm stdout'; return $true }",
+          "function Ensure-OpenClawOnPath { return $true }",
+          "function Refresh-GatewayServiceIfLoaded { }",
+          "function Invoke-OpenClawCommand { return 'OpenClaw test-version' }",
+          "$NoOnboard = $true",
+          "$result = Main",
+          "if ($result -is [array]) { throw 'Main returned an array' }",
+          'if ($result -ne $true) { throw "Main returned $result" }',
+          "",
+        ].join("\n"),
+      },
+      {
+        name: "final-boolean-success",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          "function Write-Banner { }",
+          "function Ensure-ExecutionPolicy { return $true }",
+          "function Check-Node { return $true }",
+          "function Check-ExistingOpenClaw { return $false }",
+          "function Add-ToPath { param([string]$Path) }",
+          "function Install-OpenClaw {",
+          "  Write-Output 'native chatter'",
+          "  return $true",
+          "}",
+          "function Ensure-OpenClawOnPath { return $true }",
+          "function Refresh-GatewayServiceIfLoaded { }",
+          "function Invoke-OpenClawCommand { return 'OpenClaw test-version' }",
+          "$NoOnboard = $true",
+          ...ENTRYPOINT_LINES,
+          "",
+        ].join("\n"),
+      },
     ];
     const tempDir = harness.createTempDir("openclaw-install-ps1-batch-");
     const fixtures = cases.map((testCase, index) => {
@@ -618,65 +705,11 @@ describe("install.ps1 failure handling", () => {
   });
 
   runIfPowerShell("throws without killing the caller when run as a scriptblock", () => {
-    const tempDir = harness.createTempDir("openclaw-install-ps1-");
-    const scriptPath = join(tempDir, "install.ps1");
-    writeFileSync(scriptPath, createFailingNodeFixture(source));
-    chmodSync(scriptPath, 0o755);
-
-    const command = [
-      "try {",
-      `  & ([scriptblock]::Create((Get-Content -LiteralPath ${toPowerShellSingleQuotedLiteral(scriptPath)} -Raw)))`,
-      "} catch {",
-      '  Write-Output "caught=$($_.Exception.Message)"',
-      "}",
-      'Write-Output "alive-after-install"',
-    ].join("\n");
-    const result = runPowerShell(["-NoLogo", "-NoProfile", "-Command", command]);
-
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("caught=OpenClaw installation failed with exit code 1.");
-    expect(result.stdout).toContain("alive-after-install");
+    expectBatchedPowerShellCase("scriptblock-failure");
   });
 
   runIfPowerShell("treats noisy Git install false as failure", () => {
-    const tempDir = harness.createTempDir("openclaw-install-ps1-");
-    const scriptPath = join(tempDir, "install.ps1");
-    const scriptWithoutEntryPoint = source.replace(ENTRYPOINT_RE, "");
-    writeFileSync(
-      scriptPath,
-      [
-        scriptWithoutEntryPoint,
-        "",
-        "function Write-Banner { }",
-        "function Ensure-ExecutionPolicy { return $true }",
-        "function Check-Node { return $true }",
-        "function Check-ExistingOpenClaw { return $false }",
-        "function Get-NpmCommandPath { return $null }",
-        "function Install-OpenClawFromGit {",
-        "  Write-Output 'pnpm stdout before failure'",
-        "  return $false",
-        "}",
-        "function Ensure-OpenClawOnPath { throw 'should not continue after failed git install' }",
-        "$InstallMethod = 'git'",
-        "$GitDir = 'C:\\\\openclaw-test'",
-        "$NoOnboard = $true",
-        "$result = Main",
-        'if ($result -ne $false) { throw "Main returned $result" }',
-        'if ($script:InstallExitCode -ne 1) { throw "InstallExitCode=$script:InstallExitCode" }',
-        "",
-      ].join("\n"),
-    );
-    chmodSync(scriptPath, 0o755);
-
-    const result = runPowerShell([
-      "-NoLogo",
-      "-NoProfile",
-      "-Command",
-      `. ${toPowerShellSingleQuotedLiteral(scriptPath)}`,
-    ]);
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
+    expectBatchedPowerShellCase("noisy-git-failure");
   });
 
   runIfPowerShell("preserves larger old-space NODE_OPTIONS aliases", () => {
@@ -684,83 +717,10 @@ describe("install.ps1 failure handling", () => {
   });
 
   runIfPowerShell("keeps npm chatter out of Main's success return value", () => {
-    const tempDir = harness.createTempDir("openclaw-install-ps1-");
-    const scriptPath = join(tempDir, "install.ps1");
-    const scriptWithoutEntryPoint = source.replace(ENTRYPOINT_RE, "");
-    writeFileSync(
-      scriptPath,
-      [
-        scriptWithoutEntryPoint,
-        "",
-        "function Write-Banner { }",
-        "function Ensure-ExecutionPolicy { return $true }",
-        "function Check-Node { return $true }",
-        "function Check-ExistingOpenClaw { return $false }",
-        "function Add-ToPath { param([string]$Path) }",
-        "function Install-OpenClaw { Write-Output 'npm stdout'; return $true }",
-        "function Ensure-OpenClawOnPath { return $true }",
-        "function Refresh-GatewayServiceIfLoaded { }",
-        "function Invoke-OpenClawCommand { return 'OpenClaw test-version' }",
-        "$NoOnboard = $true",
-        "$result = Main",
-        "if ($result -is [array]) { throw 'Main returned an array' }",
-        'if ($result -ne $true) { throw "Main returned $result" }',
-        "",
-      ].join("\n"),
-    );
-    chmodSync(scriptPath, 0o755);
-
-    const result = runPowerShell([
-      "-NoLogo",
-      "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-File",
-      scriptPath,
-    ]);
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
+    expectBatchedPowerShellCase("quiet-main-success");
   });
 
   runIfPowerShell("uses Main's final boolean result when helper output precedes success", () => {
-    const tempDir = harness.createTempDir("openclaw-install-ps1-");
-    const scriptPath = join(tempDir, "install.ps1");
-    const scriptWithoutEntryPoint = source.replace(ENTRYPOINT_RE, "");
-    writeFileSync(
-      scriptPath,
-      [
-        scriptWithoutEntryPoint,
-        "",
-        "function Write-Banner { }",
-        "function Ensure-ExecutionPolicy { return $true }",
-        "function Check-Node { return $true }",
-        "function Check-ExistingOpenClaw { return $false }",
-        "function Add-ToPath { param([string]$Path) }",
-        "function Install-OpenClaw {",
-        "  Write-Output 'native chatter'",
-        "  return $true",
-        "}",
-        "function Ensure-OpenClawOnPath { return $true }",
-        "function Refresh-GatewayServiceIfLoaded { }",
-        "function Invoke-OpenClawCommand { return 'OpenClaw test-version' }",
-        "$NoOnboard = $true",
-        ...ENTRYPOINT_LINES,
-        "",
-      ].join("\n"),
-    );
-    chmodSync(scriptPath, 0o755);
-
-    const result = runPowerShell([
-      "-NoLogo",
-      "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-File",
-      scriptPath,
-    ]);
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
+    expectBatchedPowerShellCase("final-boolean-success");
   });
 });
