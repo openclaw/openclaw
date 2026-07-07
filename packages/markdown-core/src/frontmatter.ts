@@ -181,30 +181,51 @@ function shouldPreferInlineLineValue(params: {
   return lineEntry.value.includes(":");
 }
 
-function extractFrontmatterBlock(content: string): string | undefined {
-  const normalized = content
+type ExtractedFrontmatterBlock = {
+  block: string;
+  body: string;
+};
+
+const FRONTMATTER_DELIMITER_LINE = /(?:^|\n)---(?:\n|$)/u;
+
+function normalizeFrontmatterContent(content: string): string {
+  return content
     .replace(/^\uFEFF/, "")
     .replace(/\r\n/g, "\n")
     .replace(/\r/g, "\n");
-  if (!normalized.startsWith("---")) {
+}
+
+function extractFrontmatterBlock(content: string): ExtractedFrontmatterBlock | undefined {
+  const normalized = normalizeFrontmatterContent(content);
+  if (!normalized.startsWith("---\n")) {
     return undefined;
   }
-  const endIndex = normalized.indexOf("\n---", 3);
-  if (endIndex === -1) {
+  const blockAndBody = normalized.slice(4);
+  const closingDelimiter = FRONTMATTER_DELIMITER_LINE.exec(blockAndBody);
+  if (!closingDelimiter) {
     return undefined;
   }
-  return normalized.slice(4, endIndex);
+  return {
+    block: blockAndBody.slice(0, closingDelimiter.index),
+    body: blockAndBody.slice(closingDelimiter.index + closingDelimiter[0].length),
+  };
+}
+
+/** Removes a leading YAML frontmatter block and returns the remaining Markdown body. */
+export function stripFrontmatterBlock(content: string): string {
+  const normalized = normalizeFrontmatterContent(content);
+  return (extractFrontmatterBlock(normalized)?.body ?? normalized).trim();
 }
 
 /** Parses leading YAML frontmatter into string values used by skill and metadata loaders. */
 export function parseFrontmatterBlock(content: string): ParsedFrontmatter {
-  const block = extractFrontmatterBlock(content);
-  if (!block) {
+  const extracted = extractFrontmatterBlock(content);
+  if (!extracted?.block) {
     return {};
   }
 
-  const lineParsed = parseLineFrontmatter(block);
-  const yamlParsed = parseYamlFrontmatter(block);
+  const lineParsed = parseLineFrontmatter(extracted.block);
+  const yamlParsed = parseYamlFrontmatter(extracted.block);
   if (yamlParsed === null) {
     return lineFrontmatterToPlain(lineParsed);
   }

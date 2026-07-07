@@ -1,7 +1,7 @@
 // Markdown Core tests cover frontmatter behavior.
 import JSON5 from "json5";
 import { describe, expect, it } from "vitest";
-import { parseFrontmatterBlock } from "./frontmatter.js";
+import { parseFrontmatterBlock, stripFrontmatterBlock } from "./frontmatter.js";
 
 describe("parseFrontmatterBlock", () => {
   it("parses YAML block scalars", () => {
@@ -101,6 +101,23 @@ metadata:
   it("returns empty when frontmatter is missing", () => {
     const content = "# No frontmatter";
     expect(parseFrontmatterBlock(content)).toStrictEqual({});
+  });
+
+  it("requires exact opening frontmatter delimiter lines", () => {
+    expect(parseFrontmatterBlock("---not\nname: nope\n---not\nbody")).toStrictEqual({});
+    expect(parseFrontmatterBlock("----\nname: nope\n----\nbody")).toStrictEqual({});
+  });
+
+  it("requires exact closing frontmatter delimiter lines", () => {
+    expect(parseFrontmatterBlock("---\nname: nope\n---not\nbody")).toStrictEqual({});
+    expect(parseFrontmatterBlock("---\nname: nope\n----\nbody")).toStrictEqual({});
+  });
+
+  it("strips only exact frontmatter delimiter blocks", () => {
+    expect(stripFrontmatterBlock("---\nname: valid\n---\nBody text")).toBe("Body text");
+    expect(stripFrontmatterBlock("---not\nname: nope\n---not\nBody text")).toBe(
+      "---not\nname: nope\n---not\nBody text",
+    );
   });
 
   it("preserves prototype-named keys when YAML value is null", () => {

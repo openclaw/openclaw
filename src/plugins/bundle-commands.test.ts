@@ -174,4 +174,52 @@ describe("loadEnabledClaudeBundleCommands", () => {
       },
     );
   });
+
+  it("does not treat dash-prefixed markdown text as command frontmatter", async () => {
+    const homeDir = await createTempDir("openclaw-bundle-commands-home-");
+    const workspaceDir = await createTempDir("openclaw-bundle-commands-workspace-");
+    await withEnvAsync(
+      {
+        HOME: homeDir,
+        USERPROFILE: homeDir,
+        OPENCLAW_HOME: undefined,
+        OPENCLAW_STATE_DIR: undefined,
+      },
+      async () => {
+        await writeClaudeBundleCommandFixture({
+          homeDir,
+          pluginId: "dash-prefix-bundle",
+          commands: [
+            {
+              relativePath: "commands/dash-prefix.md",
+              contents: ["---not", "name: nope", "---not", "Actual prompt body."],
+            },
+          ],
+        });
+
+        const commands = loadEnabledClaudeBundleCommands({
+          workspaceDir,
+          cfg: {
+            plugins: {
+              entries: { "dash-prefix-bundle": { enabled: true } },
+            },
+          },
+        });
+
+        expectEnabledClaudeBundleCommands(commands, [
+          {
+            pluginId: "dash-prefix-bundle",
+            rawName: "dash-prefix",
+            description: "---not",
+            promptTemplate: "---not\nname: nope\n---not\nActual prompt body.",
+            sourceFilePath: path.join(
+              resolveBundlePluginRoot(homeDir, "dash-prefix-bundle"),
+              "commands",
+              "dash-prefix.md",
+            ),
+          },
+        ]);
+      },
+    );
+  });
 });
