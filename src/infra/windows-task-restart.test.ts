@@ -97,11 +97,7 @@ describe("relaunchGatewayScheduledTask", () => {
     spawnMock.mockImplementation((_file: string, args: string[]) => {
       seenCommandArg = args[3];
       createdScriptPaths.add(decodeCmdPathArg(args[3]));
-      return { unref };
-    });
-
-    const result = relaunchGatewayScheduledTask({ OPENCLAW_PROFILE: "work" });
-    const cmdExePath = getWindowsCmdExePath();
+      return { on: vi.fn(), unref };
 
     expect(result.ok).toBe(true);
     expect(result.method).toBe("schtasks");
@@ -142,7 +138,7 @@ describe("relaunchGatewayScheduledTask", () => {
   it("prefers OPENCLAW_WINDOWS_TASK_NAME overrides", () => {
     spawnMock.mockImplementation((_file: string, args: string[]) => {
       createdScriptPaths.add(decodeCmdPathArg(args[3]));
-      return { unref: vi.fn() };
+      return { on: vi.fn(), unref: vi.fn() };
     });
 
     relaunchGatewayScheduledTask({
@@ -158,7 +154,7 @@ describe("relaunchGatewayScheduledTask", () => {
   it("escapes custom task names in the PowerShell running-task probe", () => {
     spawnMock.mockImplementation((_file: string, args: string[]) => {
       createdScriptPaths.add(decodeCmdPathArg(args[3]));
-      return { unref: vi.fn() };
+      return { on: vi.fn(), unref: vi.fn() };
     });
 
     relaunchGatewayScheduledTask({
@@ -190,7 +186,7 @@ describe("relaunchGatewayScheduledTask", () => {
     const metacharTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw&(restart)-"));
     createdTmpDirs.add(metacharTmpDir);
     resolvePreferredOpenClawTmpDirMock.mockReturnValue(metacharTmpDir);
-    spawnMock.mockReturnValue({ unref });
+    spawnMock.mockReturnValue({ on: vi.fn(), unref });
 
     relaunchGatewayScheduledTask({ OPENCLAW_PROFILE: "work" });
 
@@ -225,7 +221,7 @@ describe("relaunchGatewayScheduledTask", () => {
 
     spawnMock.mockImplementation((_file: string, args: string[]) => {
       createdScriptPaths.add(decodeCmdPathArg(args[3]));
-      return { unref: vi.fn() };
+      return { on: vi.fn(), unref: vi.fn() };
     });
 
     const result = relaunchGatewayScheduledTask({ OPENCLAW_PROFILE: "work" });

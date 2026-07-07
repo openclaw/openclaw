@@ -105,6 +105,7 @@ export function relaunchGatewayScheduledTask(env: NodeJS.ProcessEnv = process.en
       stdio: "ignore",
       windowsHide: true,
     });
+    child.on("error", () => {});
     child.unref();
     return {
       ok: true,
