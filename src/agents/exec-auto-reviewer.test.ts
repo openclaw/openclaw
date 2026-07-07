@@ -1,7 +1,6 @@
 // Exec auto-reviewer tests cover model response parsing, low-risk allow gates,
 // reviewer prompt isolation, and timeout resolution.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { describe, expect, it, vi } from "vitest";
 import {
   createModelExecAutoReviewer,
@@ -118,6 +117,24 @@ describe("parseExecAutoReviewResponse", () => {
         rationale: "exec reviewer returned a non-low allow decision",
       });
     }
+  });
+
+  it("does not split surrogate pairs when truncating rationale", () => {
+    const rationale = "x".repeat(499) + "🚀tail";
+
+    expect(
+      parseExecAutoReviewResponse(
+        JSON.stringify({
+          decision: "ask",
+          risk: "medium",
+          rationale,
+        }),
+      ),
+    ).toEqual({
+      decision: "ask",
+      risk: "medium",
+      rationale: "x".repeat(499),
+    });
   });
 });
 
@@ -390,41 +407,5 @@ describe("createModelExecAutoReviewer", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-});
-
-describe("normalizeRationale truncation", () => {
-  it("does not cut rationale text with an emoji straddling the 500-char boundary", () => {
-    // "🚀" is a surrogate pair (2 UTF-16 code units). A rationale with 499
-    // 'x' + the emoji has 501 code units. Raw slice(0,500) splits the pair
-    // leaving a lone high surrogate (U+FFFD). truncateUtf16Safe backs out.
-    const text = "x".repeat(499) + "🚀";
-    // slice splits the surrogate pair
-    const sliced = text.slice(0, 500);
-    expect(sliced.charCodeAt(499)).toBe(0xd83d); // lone high surrogate
-    // truncateUtf16Safe drops the incomplete pair
-    expect(truncateUtf16Safe(text, 500)).toBe("x".repeat(499));
-  });
-
-  it("preserves rationale text shorter than the limit unchanged", () => {
-    expect(truncateUtf16Safe("safe read-only command", 500)).toBe("safe read-only command");
-    expect(truncateUtf16Safe("", 500)).toBe("");
-  });
-});
-
-describe("prompt template description truncation", () => {
-  it("does not cut session description with an emoji straddling the 60-char boundary", () => {
-    // "🚀" is a surrogate pair (2 UTF-16 code units). A first line with 59
-    // 'y' + the emoji has 61 code units. Raw slice(0,60) splits the pair.
-    const text = "y".repeat(59) + "🚀";
-    // slice splits the surrogate pair
-    const sliced = text.slice(0, 60);
-    expect(sliced.charCodeAt(59)).toBe(0xd83d); // lone high surrogate
-    // truncateUtf16Safe drops the incomplete pair
-    expect(truncateUtf16Safe(text, 60)).toBe("y".repeat(59));
-  });
-
-  it("preserves description text shorter than the limit unchanged", () => {
-    expect(truncateUtf16Safe("Team onboarding guide", 60)).toBe("Team onboarding guide");
   });
 });
