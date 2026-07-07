@@ -125,6 +125,11 @@ async function runStreamingSandboxHttpRequest(
     env: execSpec.env,
     stdio: ["pipe", "pipe", "pipe"],
   });
+
+  const ignoreOutputStreamError = () => {};
+  child.stdout.on("error", ignoreOutputStreamError);
+  child.stderr.on("error", ignoreOutputStreamError);
+
   const abortOnSocketClose = () => child.kill("SIGTERM");
   socket.once("close", abortOnSocketClose);
   child.once("close", () => {
