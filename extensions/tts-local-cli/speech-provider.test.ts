@@ -305,4 +305,49 @@ copyFileSync(${JSON.stringify(wavPath)}, process.argv[outIndex + 1]);
       rmSync(fixture.dir, { recursive: true, force: true });
     }
   });
+
+  it("suppresses stdout/stderr stream errors during abnormal child exit", async () => {
+    const fixture = createCliFixture();
+    try {
+      writeFileSync(
+        fixture.script,
+        `
+process.stdout.write("partial audio data");
+process.stderr.write("error: CLI crashed");
+process.exit(1);
+`,
+      );
+
+      await expect(
+        synthesize({
+          providerConfig: baseProviderConfig(fixture.script, {
+            args: [fixture.script, "--text", "{{Text}}"],
+            outputFormat: "wav",
+          }),
+          text: "crash test",
+        }),
+      ).rejects.toThrow("CLI TTS exit 1");
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("suppresses stdout/stderr stream errors for normal cleanup after child exits", async () => {
+    const fixture = createCliFixture();
+    try {
+      const result = await synthesize({
+        providerConfig: baseProviderConfig(fixture.script, {
+          args: [fixture.script, "--text", "{{Text}}"],
+          outputFormat: "wav",
+        }),
+        text: "stream error cleanup test",
+      });
+
+      // Normal operation still works with error listeners in place
+      expect(result.outputFormat).toBe("wav");
+      expect(result.fileExtension).toBe(".wav");
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
 });
