@@ -302,7 +302,7 @@ describe("respawnGatewayProcessForUpdate", () => {
       "gateway",
       "run",
     ];
-    spawnMock.mockReturnValue({ pid: 5151, unref: vi.fn(), kill: vi.fn() });
+    spawnMock.mockReturnValue({ pid: 5151, unref: vi.fn(), kill: vi.fn(), on: vi.fn() });
 
     const result = respawnGatewayProcessForUpdate();
 
@@ -329,7 +329,7 @@ describe("respawnGatewayProcessForUpdate", () => {
       "gateway",
       "run",
     ];
-    spawnMock.mockReturnValue({ pid: 7171, unref: vi.fn(), kill: vi.fn() });
+    spawnMock.mockReturnValue({ pid: 7171, unref: vi.fn(), kill: vi.fn(), on: vi.fn() });
 
     const result = respawnGatewayProcessForUpdate();
 
@@ -352,7 +352,7 @@ describe("respawnGatewayProcessForUpdate", () => {
     const entry =
       "/app/node_modules/.pnpm/@anthropic+sdk@1.0.0/node_modules/@anthropic/sdk/dist/index.js";
     process.argv = ["/usr/local/bin/node", entry, "gateway", "run"];
-    spawnMock.mockReturnValue({ pid: 8181, unref: vi.fn(), kill: vi.fn() });
+    spawnMock.mockReturnValue({ pid: 8181, unref: vi.fn(), kill: vi.fn(), on: vi.fn() });
 
     respawnGatewayProcessForUpdate();
 
@@ -369,7 +369,7 @@ describe("respawnGatewayProcessForUpdate", () => {
     process.env.XPC_SERVICE_NAME = "ai.openclaw.mac";
     process.execArgv = [];
     process.argv = ["/usr/local/bin/node", "/repo/dist/index.js", "gateway", "run"];
-    spawnMock.mockReturnValue({ pid: 6161, unref: vi.fn(), kill: vi.fn() });
+    spawnMock.mockReturnValue({ pid: 6161, unref: vi.fn(), kill: vi.fn(), on: vi.fn() });
 
     const result = respawnGatewayProcessForUpdate();
 
@@ -412,5 +412,28 @@ describe("respawnGatewayProcessForUpdate", () => {
 
     expect(result.mode).toBe("failed");
     expect(result.detail).toContain("spawn failed");
+  });
+
+  it("registers a no-op error listener on the detached child to prevent unhandled async errors", () => {
+    delete process.env.OPENCLAW_NO_RESPAWN;
+    clearSupervisorHints();
+    setPlatform("linux");
+
+    const onMock = vi.fn();
+    spawnMock.mockReturnValue({
+      pid: 9091,
+      unref: vi.fn(),
+      kill: vi.fn(),
+      on: onMock,
+    });
+
+    const result = respawnGatewayProcessForUpdate();
+
+    expect(result.mode).toBe("spawned");
+    expect(onMock).toHaveBeenCalledWith("error", expect.any(Function));
+
+    const errorHandler = onMock.mock.calls[0]?.[1] as (...args: unknown[]) => void;
+    expect(() => errorHandler(new Error("ENOMEM"))).not.toThrow();
+    expect(() => errorHandler(new Error("spawn EBADF"))).not.toThrow();
   });
 });
