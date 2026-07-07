@@ -14,6 +14,7 @@ import {
   computeBackoffMs,
   createRecoveryReplayPacer,
   getErrnoCode,
+  isPreConnectNetworkError,
   releaseRecoveryEntry as releaseSharedRecoveryEntry,
 } from "../delivery-recovery.shared.js";
 import { formatErrorMessage } from "../errors.js";
@@ -31,6 +32,7 @@ import {
   ackDelivery,
   failDelivery,
   failDeliveryAfterPlatformSend,
+  failDeliveryBeforePlatformSend,
   loadPendingDelivery,
   loadPendingDeliveries,
   markDeliveryPlatformOutcomeUnknown,
@@ -506,11 +508,12 @@ async function drainQueuedEntry(opts: {
     if (results.length > 0) {
       deliveredResults = [...results];
     }
-    const failedOutcome = payloadOutcomes.find((outcome) => outcome.status === "failed");
+    const failedOutcomes = payloadOutcomes.filter((outcome) => outcome.status === "failed");
+    const failedOutcome = failedOutcomes[0];
     if (failedOutcome) {
       const errMsg = formatErrorMessage(failedOutcome.error);
       opts.onFailed?.(entry, errMsg);
-      if (results.length > 0 || failedOutcome.sentBeforeError) {
+      if (results.length > 0 || failedOutcomes.some((outcome) => outcome.sentBeforeError)) {
         postSendState ??= await persistRecoveredPostSendState({
           entry,
           log: opts.log,
@@ -523,7 +526,12 @@ async function drainQueuedEntry(opts: {
           await runCommitHooksAfterAck();
         }
       } else {
-        await failDelivery(entry.id, errMsg, opts.stateDir);
+        const recordFailure = failedOutcomes.every((outcome) =>
+          isPreConnectNetworkError(outcome.error),
+        )
+          ? failDeliveryBeforePlatformSend
+          : failDelivery;
+        await recordFailure(entry.id, errMsg, opts.stateDir);
       }
       return "failed";
     }
@@ -601,7 +609,10 @@ async function drainQueuedEntry(opts: {
       }
     } else {
       try {
-        await failDelivery(entry.id, errMsg, opts.stateDir);
+        const recordFailure = isPreConnectNetworkError(err)
+          ? failDeliveryBeforePlatformSend
+          : failDelivery;
+        await recordFailure(entry.id, errMsg, opts.stateDir);
         return "failed";
       } catch (failErr) {
         if (getErrnoCode(failErr) === "ENOENT") {
