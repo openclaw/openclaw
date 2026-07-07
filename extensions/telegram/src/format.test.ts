@@ -46,6 +46,14 @@ describe("markdownToTelegramHtml", () => {
     }
   });
 
+  it("renders CJK bold labels that end with full-width punctuation", () => {
+    const input = "边界：**社区显示：**Fable 与 **有效**。";
+    const expected = "边界：<b>社区显示：</b>Fable 与 <b>有效</b>。";
+
+    expect(markdownToTelegramHtml(input)).toBe(expected);
+    expect(markdownToTelegramRichHtml(input)).toBe(expected);
+  });
+
   it("preserves supported Telegram HTML in stream markdown rendering", () => {
     const input = [
       "✉️ <b>Morning Email Rollup</b>",
