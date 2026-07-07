@@ -898,6 +898,11 @@ describe("resolvePackedTarballPath", () => {
     expect(
       resolvePackedTarballPath("/tmp/openclaw-pack", [{ filename: "openclaw-2026.6.17.tgz" }]),
     ).toBe(resolvePath("/tmp/openclaw-pack", "openclaw-2026.6.17.tgz"));
+    expect(
+      resolvePackedTarballPath("/tmp/openclaw-pack", [
+        { filename: "/tmp/openclaw-pack/openclaw-2026.6.17.tgz" },
+      ]),
+    ).toBe(resolvePath("/tmp/openclaw-pack", "openclaw-2026.6.17.tgz"));
   });
 
   it("rejects path-like npm pack tarball filenames", () => {

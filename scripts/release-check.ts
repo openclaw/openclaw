@@ -409,17 +409,22 @@ export function resolvePackedTarballPath(packDestination: string, results: PackR
     );
   }
   const filename = filenames[0];
+  const filenameBasename = basename(filename);
+  const resolvedDestination = resolve(packDestination);
+  const resolvedTarball = resolve(resolvedDestination, filenameBasename);
+  const isLocalFilename = filename === filenameBasename;
+  const isAbsolutePathInDestination = resolve(filename) === resolvedTarball;
   if (
-    !filename.endsWith(".tgz") ||
+    !filenameBasename.endsWith(".tgz") ||
     filename.includes("\0") ||
-    filename !== basename(filename) ||
-    filename !== win32.basename(filename)
+    filenameBasename !== win32.basename(filename) ||
+    (!isLocalFilename && !isAbsolutePathInDestination)
   ) {
     throw new Error(
       `release-check: npm pack reported unsafe tarball filename ${JSON.stringify(filename)}.`,
     );
   }
-  return resolve(packDestination, filename);
+  return resolvedTarball;
 }
 
 export function resolveReleaseCheckLocalPackageTarballs(
