@@ -1,10 +1,11 @@
 // Creates backup archives while filtering volatile runtime state.
 import { randomUUID } from "node:crypto";
-import { constants as fsConstants, type Stats } from "node:fs";
+import { constants as fsConstants, createWriteStream, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { pipeline } from "node:stream/promises";
 import { resolveDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
 import {
@@ -170,6 +171,15 @@ function isTarEofRaceError(err: unknown): boolean {
 
 export type BackupTarRetryLogger = (message: string) => void;
 
+async function writeArchiveStreamToFile(params: {
+  archivePath: string;
+  archiveStream: AsyncIterable<Uint8Array> | NodeJS.ReadableStream;
+}): Promise<void> {
+  // Own both stream lifecycles so a tar read error closes the output handle
+  // before retry cleanup touches the partial archive.
+  await pipeline(params.archiveStream, createWriteStream(params.archivePath));
+}
+
 async function writeTarArchiveWithRetry(params: {
   tempArchivePath: string;
   runTar: () => Promise<void>;
@@ -187,24 +197,14 @@ async function writeTarArchiveWithRetry(params: {
       if (!isTarEofRaceError(err) || attempt === BACKUP_TAR_MAX_ATTEMPTS) {
         break;
       }
-      // Retry rm on EBUSY (Windows) so the next tar attempt does not
-      // fail immediately because the file is still locked.
-      for (let rmAttempt = 0; rmAttempt < 3; rmAttempt += 1) {
-        try {
-          await fs.rm(params.tempArchivePath, { force: true });
-          break;
-        } catch (cleanupErr) {
-          const code = (cleanupErr as NodeJS.ErrnoException).code;
-          if (code === "EBUSY" && rmAttempt < 2) {
-            await sleepFn(100);
-            continue;
-          }
-          if (code && code !== "ENOENT") {
-            params.log?.(
-              `Backup archiver could not remove temp archive ${params.tempArchivePath} between retries: ${code}. Continuing.`,
-            );
-          }
-          break;
+      try {
+        await fs.rm(params.tempArchivePath, { force: true });
+      } catch (cleanupErr) {
+        const code = (cleanupErr as NodeJS.ErrnoException).code;
+        if (code && code !== "ENOENT") {
+          params.log?.(
+            `Backup archiver could not remove temp archive ${params.tempArchivePath} between retries: ${code}. Continuing.`,
+          );
         }
       }
       const backoff = BACKUP_TAR_BACKOFF_MS[attempt - 1] ?? 0;
@@ -226,6 +226,7 @@ async function writeTarArchiveWithRetry(params: {
 }
 
 export const testApi = {
+  writeArchiveStreamToFile,
   writeTarArchiveWithRetry,
   isTarEofRaceError,
   createBackupVolatileStatCache,
@@ -874,30 +875,32 @@ export async function createBackupArchive(
         // cumulative skip counts across attempts instead of the final one.
         skippedVolatileCount = 0;
         unexpectedSqliteSourcePaths.length = 0;
-        await tar.c(
-          {
-            file: tempArchivePath,
-            gzip: true,
-            portable: true,
-            preservePaths: true,
-            linkCache: new BackupLinkCache(),
-            statCache: createBackupVolatileStatCache(volatilePlan),
-            filter: tarFilter,
-            onWriteEntry: (entry) => {
-              entry.path = remapArchiveEntryPath({
-                entryPath: entry.path,
-                manifestPath,
-                archiveRoot,
-                sourcePathRemaps,
-              });
+        await writeArchiveStreamToFile({
+          archivePath: tempArchivePath,
+          archiveStream: tar.c(
+            {
+              gzip: true,
+              portable: true,
+              preservePaths: true,
+              linkCache: new BackupLinkCache(),
+              statCache: createBackupVolatileStatCache(volatilePlan),
+              filter: tarFilter,
+              onWriteEntry: (entry) => {
+                entry.path = remapArchiveEntryPath({
+                  entryPath: entry.path,
+                  manifestPath,
+                  archiveRoot,
+                  sourcePathRemaps,
+                });
+              },
             },
-          },
-          [
-            manifestPath,
-            ...stateSqliteBackup.snapshots.map((snapshot) => snapshot.sourcePath),
-            ...result.assets.map((asset) => asset.sourcePath),
-          ],
-        );
+            [
+              manifestPath,
+              ...stateSqliteBackup.snapshots.map((snapshot) => snapshot.sourcePath),
+              ...result.assets.map((asset) => asset.sourcePath),
+            ],
+          ),
+        });
         const unexpectedSqliteSourcePath = unexpectedSqliteSourcePaths[0];
         if (unexpectedSqliteSourcePath) {
           throw new Error(

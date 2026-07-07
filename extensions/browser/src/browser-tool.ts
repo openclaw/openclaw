@@ -8,6 +8,7 @@ import crypto from "node:crypto";
 import {
   executeActAction,
   executeConsoleAction,
+  executeDownloadAction,
   executeSnapshotAction,
   executeTabsAction,
 } from "./browser-tool.actions.js";
@@ -949,6 +950,16 @@ export function createBrowserTool(opts?: {
             details: result,
           };
         }
+        case "download":
+        case "waitfordownload":
+          return await executeDownloadAction({
+            action,
+            input: params,
+            baseUrl,
+            profile,
+            proxyRequest,
+            onTabActivity: touchTrackedTab,
+          });
         case "upload": {
           const paths = Array.isArray(params.paths) ? params.paths.map((p) => String(p)) : [];
           if (paths.length === 0) {

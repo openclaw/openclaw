@@ -94,6 +94,7 @@ import {
 import { transformMessages } from "./transform-messages.js";
 
 const ANTHROPIC_CACHE_CONTROL_LIMIT = 4;
+const EMPTY_ERROR_TOOL_RESULT_TEXT = "[tool error with no output]";
 
 function getCacheControl(
   model: Model<"anthropic-messages">,
@@ -146,7 +147,10 @@ const toClaudeCodeName = (name: string) => ccToolLookup.get(name.toLowerCase()) 
 /**
  * Convert content blocks to Anthropic API format
  */
-function convertContentBlocks(content: readonly unknown[]):
+function convertContentBlocks(
+  content: readonly unknown[],
+  isError: boolean,
+):
   | string
   | Array<
       | { type: "text"; text: string }
@@ -170,7 +174,9 @@ function convertContentBlocks(content: readonly unknown[]):
 
   if (!hasImages) {
     const sanitized = sanitizeSurrogates(text);
-    return sanitized.trim().length > 0 ? sanitized : (mediaPlaceholder ?? "");
+    return sanitized.trim().length > 0
+      ? sanitized
+      : (mediaPlaceholder ?? (isError ? EMPTY_ERROR_TOOL_RESULT_TEXT : ""));
   }
 
   const blocks: Array<
@@ -559,6 +565,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         const created = createClient(
           model,
           apiKey,
+          options?.thinkingEnabled === true,
           options?.interleavedThinking ?? true,
           shouldUseFineGrainedToolStreamingBeta(model, requestContext),
           options?.headers,
@@ -1101,6 +1108,7 @@ function supportsAnthropicServerSideFallback(model: Model<"anthropic-messages">)
 function createClient(
   model: Model<"anthropic-messages">,
   apiKey: string,
+  thinkingEnabled: boolean,
   interleavedThinking: boolean,
   useFineGrainedToolStreamingBeta: boolean,
   optionsHeaders?: Record<string, string>,
@@ -1117,6 +1125,11 @@ function createClient(
   if (needsInterleavedBeta) {
     betaFeatures.push(INTERLEAVED_THINKING_BETA);
   }
+  const fetchOptions =
+    /^kimi(?:-|$)/.test(model.provider) && thinkingEnabled
+      ? { sanitizeSse: false as const }
+      : undefined;
+  const fetch = getAiTransportHost().buildModelFetch(model, undefined, fetchOptions);
 
   if (model.provider === "cloudflare-ai-gateway") {
     const client = new Anthropic({
@@ -1134,7 +1147,7 @@ function createClient(
         model.headers,
         optionsHeaders,
       ),
-      fetch: getAiTransportHost().buildModelFetch(model),
+      fetch,
     });
 
     return { client, isOAuthToken: false, serverSideFallback: false };
@@ -1157,6 +1170,7 @@ function createClient(
         dynamicHeaders,
         optionsHeaders,
       ),
+      fetch,
     });
 
     return { client, isOAuthToken: false, serverSideFallback: false };
@@ -1178,6 +1192,7 @@ function createClient(
         dynamicHeaders,
         optionsHeaders,
       ),
+      fetch,
     });
 
     return { client, isOAuthToken: false, serverSideFallback: false };
@@ -1201,6 +1216,7 @@ function createClient(
         model.headers,
         optionsHeaders,
       ),
+      fetch,
     });
 
     return { client, isOAuthToken: true, serverSideFallback: false };
@@ -1230,6 +1246,7 @@ function createClient(
       model.headers,
       optionsHeaders,
     ),
+    fetch,
   });
 
   return { client, isOAuthToken: false, serverSideFallback };
@@ -1381,6 +1398,10 @@ function convertMessages(
   replayThinkingEnabled = true,
 ): MessageParam[] {
   const params: MessageParam[] = [];
+  // Param indexes for transient runtime-context carriers — excluded from
+  // cache_control breakpoint selection so the deepest breakpoint anchors on the
+  // last stable user turn, not the volatile carrier appended after it.
+  const cacheBreakpointOptOutParamIndexes = new Set<number>();
 
   // Transform messages for cross-provider compatibility
   const transformedMessages = transformMessages(messages, model, normalizeToolCallId);
@@ -1392,8 +1413,12 @@ function convertMessages(
     const msg = transformedMessages[i];
 
     if (msg.role === "user") {
+      const isRuntimeContextCarrier = msg.runtimeContextCarrier === true;
       if (typeof msg.content === "string") {
         if (msg.content.trim().length > 0) {
+          if (isRuntimeContextCarrier) {
+            cacheBreakpointOptOutParamIndexes.add(params.length);
+          }
           params.push({
             role: "user",
             content: sanitizeSurrogates(msg.content),
@@ -1424,6 +1449,9 @@ function convertMessages(
         });
         if (filteredBlocks.length === 0) {
           continue;
+        }
+        if (isRuntimeContextCarrier) {
+          cacheBreakpointOptOutParamIndexes.add(params.length);
         }
         params.push({
           role: "user",
@@ -1507,7 +1535,7 @@ function convertMessages(
       toolResults.push({
         type: "tool_result",
         tool_use_id: msg.toolCallId,
-        content: convertContentBlocks(msg.content),
+        content: convertContentBlocks(msg.content, msg.isError),
         is_error: msg.isError,
       });
 
@@ -1517,7 +1545,7 @@ function convertMessages(
         toolResults.push({
           type: "tool_result",
           tool_use_id: nextMsg.toolCallId,
-          content: convertContentBlocks(nextMsg.content),
+          content: convertContentBlocks(nextMsg.content, nextMsg.isError),
           is_error: nextMsg.isError,
         });
         j++;
@@ -1536,7 +1564,7 @@ function convertMessages(
 
     for (let i = params.length - 1; i >= 0; i--) {
       const message = params[i];
-      if (message.role !== "user") {
+      if (message.role !== "user" || cacheBreakpointOptOutParamIndexes.has(i)) {
         continue;
       }
 

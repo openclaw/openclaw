@@ -7,7 +7,6 @@ import {
   type HarnessContextEngine as ContextEngine,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CodexAppServerClientFactory } from "./client-factory.js";
 import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
 import { maybeCompactCodexAppServerSession as maybeCompactCodexAppServerSessionImpl } from "./compact.js";
 import type { CodexServerNotification } from "./protocol.js";
@@ -21,6 +20,7 @@ import {
   testCodexAppServerBindingStore,
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
+import type { CodexAppServerClientFactory } from "./shared-client.js";
 
 let tempDir: string;
 let codexAppServerClientFactoryForTest: CodexAppServerClientFactory | undefined;
@@ -1157,8 +1157,8 @@ describe("maybeCompactCodexAppServerSession", () => {
   it("reuses the bound auth profile for native compaction", async () => {
     const fake = createFakeCodexClient();
     let seenAuthProfileId: string | undefined;
-    setCodexAppServerClientFactoryForTest(async (_startOptions, authProfileId) => {
-      seenAuthProfileId = authProfileId;
+    setCodexAppServerClientFactoryForTest(async (options) => {
+      seenAuthProfileId = options?.authProfileId ?? undefined;
       return fake.client;
     });
     const sessionFile = await writeTestBinding({ authProfileId: "openai:work" });
