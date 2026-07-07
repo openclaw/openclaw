@@ -24,6 +24,11 @@ import {
   testing,
 } from "./run-attempt.js";
 import { closeCodexSandboxExecServersForTests } from "./sandbox-exec-server.js";
+import {
+  registerCodexTestSessionIdentity,
+  resetCodexTestBindingStore,
+  testCodexAppServerBindingStore,
+} from "./session-binding.test-helpers.js";
 import { createCodexTestModel } from "./test-support.js";
 
 export let tempDir: string;
@@ -37,9 +42,12 @@ const activeAppServerAttemptsForTest = new Set<{
   sessionKey?: string;
 }>();
 
-type RunCodexAppServerAttemptOptions = NonNullable<
-  Parameters<typeof runCodexAppServerAttemptImpl>[1]
->;
+type RunCodexAppServerAttemptOptions = Omit<
+  NonNullable<Parameters<typeof runCodexAppServerAttemptImpl>[1]>,
+  "bindingStore"
+> & {
+  bindingStore?: NonNullable<Parameters<typeof runCodexAppServerAttemptImpl>[1]>["bindingStore"];
+};
 
 export function queueActiveRunMessageForTest(
   ...args: Parameters<typeof queueAgentHarnessMessage>
@@ -59,6 +67,7 @@ export function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParams,
   options: RunCodexAppServerAttemptOptions = {},
 ) {
+  registerCodexTestSessionIdentity(params.sessionFile, params.sessionId, params.sessionKey);
   const clientFactory = options.clientFactory ?? codexAppServerClientFactoryForTest;
   const abortController = params.abortSignal ? undefined : new AbortController();
   const trackedParams = abortController
@@ -70,10 +79,11 @@ export function runCodexAppServerAttempt(
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
   };
-  const promise = runCodexAppServerAttemptImpl(
-    trackedParams,
-    clientFactory ? { ...options, clientFactory } : options,
-  ).finally(() => {
+  const promise = runCodexAppServerAttemptImpl(trackedParams, {
+    ...options,
+    bindingStore: options.bindingStore ?? testCodexAppServerBindingStore,
+    ...(clientFactory ? { clientFactory } : {}),
+  }).finally(() => {
     activeAppServerAttemptsForTest.delete(entry);
   });
   entry.promise = promise;
@@ -509,6 +519,7 @@ export function createRuntimeDynamicTool(name: string): RuntimeDynamicToolForTes
 
 export function setupRunAttemptTestHooks(): void {
   beforeEach(async () => {
+    resetCodexTestBindingStore();
     vi.useRealTimers();
     clearInternalHooks();
     clearMemoryPluginState();

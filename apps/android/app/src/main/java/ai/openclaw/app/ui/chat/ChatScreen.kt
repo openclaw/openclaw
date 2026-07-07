@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.R
@@ -89,6 +90,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -145,13 +156,15 @@ fun ChatScreen(
   val micCooldown by viewModel.micCooldown.collectAsState()
   val talkModeEnabled by viewModel.talkModeEnabled.collectAsState()
   val talkModeListening by viewModel.talkModeListening.collectAsState()
+  val thinkingSupported = thinkingSupportedForSelection(selectedModelRef, modelCatalog)
   val contextUsage = resolveChatContextUsage(sessionKey = sessionKey, mainSessionKey = mainSessionKey, sessions = sessions)
   val gatewayAddress = gatewayDiagnosticsEndpoint(remoteAddress = remoteAddress, manualHost = manualHost, manualPort = manualPort, manualTls = manualTls)
   val gatewayProblemMessage = gatewayConnectionDisplay.problem?.message?.takeIf { it.isNotBlank() }
   val offlineStatus = gatewayStatusForDisplay(gatewayProblemMessage ?: gatewayConnectionDisplay.statusText)
   val gatewayOffline = !gatewayConnectionDisplay.isConnected
-  val activeAgentId = resolveAgentIdFromMainSessionKey(sessionKey) ?: gatewayDefaultAgentId ?: "main"
-  val workspaceGit = gatewayAgents.firstOrNull { it.id == activeAgentId }?.workspaceGit == true
+  val sessionAgentId = resolveAgentIdFromMainSessionKey(sessionKey) ?: gatewayDefaultAgentId ?: "main"
+  val activeAgentId = selectedChatAgentId(mainSessionKey, gatewayDefaultAgentId)
+  val workspaceGit = gatewayAgents.firstOrNull { it.id == sessionAgentId }?.workspaceGit == true
   val context = LocalContext.current
   val resolver = context.contentResolver
   val scope = rememberCoroutineScope()
@@ -274,6 +287,12 @@ fun ChatScreen(
       },
     )
 
+    ChatAgentSelector(
+      activeAgentId = activeAgentId,
+      agents = gatewayAgents,
+      onSelectAgent = viewModel::selectChatAgent,
+    )
+
     ChatSessionSwitcher(
       sessionKey = sessionKey,
       sessions = sessions,
@@ -321,6 +340,7 @@ fun ChatScreen(
       onValueChange = { input = it },
       attachments = attachments,
       thinkingLevel = thinkingLevel,
+      thinkingSupported = thinkingSupported,
       contextUsage = contextUsage,
       selectedModelLabel = selectedModelLabel,
       modelPickerEnabled = gatewayConnectionDisplay.isConnected,
@@ -381,6 +401,29 @@ fun ChatScreen(
       },
       onToggleFavorite = viewModel::toggleModelFavorite,
     )
+  }
+}
+
+@Composable
+private fun ChatAgentSelector(
+  activeAgentId: String,
+  agents: List<GatewayAgentSummary>,
+  onSelectAgent: (String) -> Unit,
+) {
+  if (agents.size <= 1) return
+
+  Row(
+    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(6.dp),
+  ) {
+    agents.forEach { agent ->
+      ChatSessionChip(
+        text = chatAgentChipText(agent),
+        active = agent.id == activeAgentId,
+        onClick = { onSelectAgent(agent.id) },
+      )
+    }
   }
 }
 
@@ -1038,6 +1081,7 @@ private fun ChatComposer(
   onValueChange: (String) -> Unit,
   attachments: List<PendingAttachment>,
   thinkingLevel: String,
+  thinkingSupported: Boolean,
   contextUsage: ChatContextUsage,
   selectedModelLabel: String,
   modelPickerEnabled: Boolean,
@@ -1066,6 +1110,15 @@ private fun ChatComposer(
     remember(value, commands) {
       matchingSlashCommands(input = value, commands = commands)
     }
+  val sendEnabled =
+    voiceNoteState !is VoiceNoteRecorderState.Recording &&
+      voiceNoteState !is VoiceNoteRecorderState.Preparing &&
+      pendingRunCount == 0 &&
+      if (healthOk) {
+        value.trim().isNotEmpty() || attachments.isNotEmpty()
+      } else {
+        value.trim().isNotEmpty() && attachments.isEmpty()
+      }
 
   Column(modifier = Modifier.fillMaxWidth().imePadding(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
     if (attachments.isNotEmpty()) {
@@ -1085,6 +1138,7 @@ private fun ChatComposer(
       )
       ChatContextMeter(
         thinkingLevel = thinkingLevel,
+        thinkingSupported = thinkingSupported,
         contextUsage = contextUsage,
         onClick = { onThinkingLevelChange(nextThinkingValue(thinkingLevel)) },
       )
@@ -1115,20 +1169,14 @@ private fun ChatComposer(
           onStartVoiceNote = onStartVoiceNote,
           recordVoiceNoteEnabled = recordVoiceNoteEnabled,
           onVoice = onVoice,
+          sendEnabled = sendEnabled,
+          onSend = onSend,
           modifier = Modifier.weight(1f),
         )
       }
       SendButton(
         // Offline, only text sends are enabled: they queue durably (text-only v1).
-        enabled =
-          voiceNoteState !is VoiceNoteRecorderState.Recording &&
-            voiceNoteState !is VoiceNoteRecorderState.Preparing &&
-            pendingRunCount == 0 &&
-            if (healthOk) {
-              value.trim().isNotEmpty() || attachments.isNotEmpty()
-            } else {
-              value.trim().isNotEmpty() && attachments.isEmpty()
-            },
+        enabled = sendEnabled,
         onClick = onSend,
       )
     }
@@ -1388,6 +1436,7 @@ private fun ChatOfflineNotice(
 @Composable
 private fun ChatContextMeter(
   thinkingLevel: String,
+  thinkingSupported: Boolean,
   contextUsage: ChatContextUsage,
   onClick: () -> Unit,
 ) {
@@ -1399,6 +1448,7 @@ private fun ChatContextMeter(
   ) {
     Surface(
       onClick = onClick,
+      enabled = thinkingSupported,
       modifier = Modifier.heightIn(min = ClawTheme.spacing.touchTarget),
       shape = RoundedCornerShape(ClawTheme.radii.pill),
       color = ClawTheme.colors.canvas,
@@ -1409,9 +1459,11 @@ private fun ChatContextMeter(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
       ) {
-        Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(13.dp), tint = ClawTheme.colors.textSubtle)
+        if (thinkingSupported) {
+          Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(13.dp), tint = ClawTheme.colors.textSubtle)
+        }
         Text(
-          text = contextMeterLabel(contextUsage, thinkingLevel),
+          text = contextMeterLabel(contextUsage, thinkingLevel, thinkingSupported),
           style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
           color = ClawTheme.colors.textMuted,
           maxLines = 1,
@@ -1445,6 +1497,8 @@ private fun ChatInputPill(
   onStartVoiceNote: () -> Unit,
   recordVoiceNoteEnabled: Boolean,
   onVoice: () -> Unit,
+  sendEnabled: Boolean,
+  onSend: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
   Surface(
@@ -1476,7 +1530,12 @@ private fun ChatInputPill(
           cursorBrush = SolidColor(ClawTheme.colors.primary),
           minLines = 1,
           maxLines = 4,
-          modifier = Modifier.fillMaxWidth(),
+          modifier =
+            Modifier
+              .fillMaxWidth()
+              .onPreviewKeyEvent { event ->
+                handlePhysicalChatSend(event = event, sendEnabled = sendEnabled, onSend = onSend)
+              },
           decorationBox = { innerTextField ->
             Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
               if (value.isEmpty()) {
@@ -1500,6 +1559,19 @@ private fun ChatInputPill(
       }
     }
   }
+}
+
+/** Intercepts one unmodified hardware Enter before BasicTextField inserts a newline. */
+internal fun handlePhysicalChatSend(
+  event: KeyEvent,
+  sendEnabled: Boolean,
+  onSend: () -> Unit,
+): Boolean {
+  val enterKey = event.key == Key.Enter || event.key == Key.NumPadEnter
+  val modified = event.isShiftPressed || event.isCtrlPressed || event.isAltPressed || event.isMetaPressed
+  if (event.type != KeyEventType.KeyDown || event.nativeKeyEvent.repeatCount != 0 || !enterKey || modified) return false
+  if (sendEnabled) onSend()
+  return true
 }
 
 @Composable
@@ -1569,6 +1641,17 @@ private fun chatSessionChipText(
   val name = entry.displayName?.takeIf { it.isNotBlank() } ?: entry.key.takeIf { entry.updatedAtMs != null } ?: "Current"
   return friendlySessionName(name)
 }
+
+internal fun chatAgentChipText(agent: GatewayAgentSummary): String {
+  val name = agent.name?.trim()?.takeIf { it.isNotEmpty() } ?: agent.id
+  val emoji = agent.emoji?.trim()?.takeIf { it.isNotEmpty() } ?: return name
+  return "$emoji $name"
+}
+
+internal fun selectedChatAgentId(
+  mainSessionKey: String,
+  gatewayDefaultAgentId: String?,
+): String = resolveAgentIdFromMainSessionKey(mainSessionKey) ?: gatewayDefaultAgentId ?: "main"
 
 private fun isActiveSessionChoice(
   choiceKey: String,
@@ -1658,9 +1741,10 @@ internal fun contextMeterWidth(usage: ChatContextUsage): Float? {
 internal fun contextMeterLabel(
   usage: ChatContextUsage,
   thinkingLevel: String,
+  thinkingSupported: Boolean = true,
 ): String {
   val contextLabel = contextMeterWidth(usage)?.let { "Context ${(it * 100).roundToInt()}%" } ?: "Context --"
-  return "$contextLabel · ${contextMeterThinkingLabel(thinkingLevel)}"
+  return if (thinkingSupported) "$contextLabel · ${contextMeterThinkingLabel(thinkingLevel)}" else contextLabel
 }
 
 internal fun contextMeterThinkingLabel(value: String): String =

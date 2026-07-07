@@ -87,7 +87,11 @@ import { resolveCodexProviderWebSearchSupportForClient } from "./provider-capabi
 import { rememberCodexRateLimits, readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
 import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
-import { isCodexAppServerNativeAuthProfile, readCodexAppServerBinding } from "./session-binding.js";
+import {
+  isCodexAppServerNativeAuthProfile,
+  sessionBindingIdentity,
+  type CodexAppServerBindingStore,
+} from "./session-binding.js";
 import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
@@ -145,6 +149,7 @@ Do not modify files, source, git state, permissions, configuration, workspace st
 export async function runCodexAppServerSideQuestion(
   params: AgentHarnessSideQuestionParams,
   options: {
+    bindingStore: CodexAppServerBindingStore;
     pluginConfig?: unknown;
     nativeHookRelay?: {
       enabled?: boolean;
@@ -153,12 +158,16 @@ export async function runCodexAppServerSideQuestion(
       gatewayTimeoutMs?: number;
       hookTimeoutSec?: number;
     };
-  } = {},
+  },
 ): Promise<AgentHarnessSideQuestionResult> {
-  const binding = await readCodexAppServerBinding(params.sessionFile, {
-    agentDir: params.agentDir,
-    config: params.cfg,
-  });
+  const binding = await options.bindingStore.read(
+    sessionBindingIdentity({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      config: params.cfg,
+    }),
+  );
   if (!binding?.threadId) {
     throw new Error(
       "Codex /btw needs an active Codex thread. Send a normal message first, then try /btw again.",
