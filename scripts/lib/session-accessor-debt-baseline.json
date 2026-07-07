@@ -58,7 +58,6 @@
     "src/config/sessions/session-file.ts": 2,
     "src/config/sessions/session-registry-maintenance.ts": 2,
     "src/gateway/server-methods/agent.ts": 2,
-    "src/gateway/server-methods/chat.ts": 2,
     "src/gateway/session-lifecycle-state.ts": 2,
     "src/gateway/test-helpers.mocks.ts": 1,
     "src/infra/heartbeat-runner.ts": 5,

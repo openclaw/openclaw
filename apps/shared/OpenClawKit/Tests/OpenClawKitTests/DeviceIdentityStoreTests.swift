@@ -32,7 +32,7 @@ struct DeviceIdentityStoreTests {
     }
 
     @Test(.stateDirectoryIsolated)
-    func `device auth tokens are isolated by gateway owner`() throws {
+    func `device auth tokens are isolated by gateway owner`() {
         let deviceID = "test-device"
         _ = DeviceAuthStore.storeToken(deviceId: deviceID, role: "node", token: "legacy-token")
         #expect(DeviceAuthStore.loadToken(deviceId: deviceID, role: "node", gatewayID: "gateway-a") == nil)
@@ -71,7 +71,7 @@ struct DeviceIdentityStoreTests {
     }
 
     @Test(.stateDirectoryIsolated)
-    func `legacy device auth migration claims only the proven role`() throws {
+    func `legacy device auth migration claims only the proven role`() {
         let deviceID = "legacy-device"
         _ = DeviceAuthStore.storeToken(
             deviceId: deviceID,
