@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   claimRecoveryEntry as claimSharedRecoveryEntry,
   computeBackoffMs,
+  createRecoveryReplayPacer,
   getErrnoCode,
   releaseRecoveryEntry as releaseSharedRecoveryEntry,
 } from "../delivery-recovery.shared.js";
@@ -93,6 +94,7 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
 
 const drainInProgress = new Map<string, boolean>();
 const entriesInProgress = new Set<string>();
+const recoveryReplayPacer = createRecoveryReplayPacer();
 
 function resolveRecoveryDeadlineMs(maxRecoveryMs: number | undefined): number {
   const durationMs =
@@ -686,6 +688,8 @@ export async function drainPendingDeliveries(opts: {
           }
         }
 
+        await recoveryReplayPacer.wait();
+
         const result = await drainQueuedEntry({
           entry: currentEntry,
           cfg: opts.cfg,
@@ -776,6 +780,12 @@ export async function recoverPendingDeliveries(opts: {
           `Delivery ${currentEntry.id} not ready for retry yet — backoff ${currentRetryEligibility.remainingBackoffMs}ms remaining`,
         );
         continue;
+      }
+
+      const paceResult = await recoveryReplayPacer.wait(deadline);
+      if (paceResult === "deadline-exceeded") {
+        opts.log.warn(`Recovery time budget exceeded — remaining entries deferred to next startup`);
+        break;
       }
 
       const result = await drainQueuedEntry({
