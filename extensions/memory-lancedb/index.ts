@@ -994,7 +994,10 @@ function stripLeadingMessageToolDeliveryHints(text: string): string {
 
 function findFirstInboundEnvelopeIndex(
   text: string,
-  options?: { allowAmbiguousMarkerFree?: boolean; skipReplyQuoteLine?: boolean },
+  options?: {
+    allowAmbiguousMarkerFree?: boolean;
+    skipReplyQuoteLine?: boolean;
+  },
 ) {
   for (const match of text.matchAll(BRACKETED_PREFIX_RE)) {
     const index = match.index;
@@ -1498,7 +1501,9 @@ export default definePluginEntry({
           "Search through long-term memories. Use when you need context about user preferences, past decisions, or previously discussed topics.",
         parameters: Type.Object({
           query: Type.String({ description: "Search query" }),
-          limit: optionalPositiveIntegerSchema({ description: "Max results (default: 5)" }),
+          limit: optionalPositiveIntegerSchema({
+            description: "Max results (default: 5)",
+          }),
         }),
         async execute(_toolCallId, params) {
           const rawParams = params as Record<string, unknown>;
@@ -1658,7 +1663,12 @@ export default definePluginEntry({
           });
 
           return {
-            content: [{ type: "text", text: `Stored: "${text.slice(0, 100)}..."` }],
+            content: [
+              {
+                type: "text",
+                text: `Stored: "${truncateUtf16Safe(text, 100)}..."`,
+              },
+            ],
             details: { action: "created", id: entry.id },
           };
         },
@@ -1676,7 +1686,10 @@ export default definePluginEntry({
           memoryId: Type.Optional(Type.String({ description: "Specific memory ID" })),
         }),
         async execute(_toolCallId, params) {
-          const { query, memoryId } = params as { query?: string; memoryId?: string };
+          const { query, memoryId } = params as {
+            query?: string;
+            memoryId?: string;
+          };
 
           if (memoryId) {
             await db.delete(memoryId);
@@ -1703,13 +1716,18 @@ export default definePluginEntry({
             if (results.length === 1 && results[0].score > 0.9) {
               await db.delete(results[0].entry.id);
               return {
-                content: [{ type: "text", text: `Forgotten: "${results[0].entry.text}"` }],
+                content: [
+                  {
+                    type: "text",
+                    text: `Forgotten: "${results[0].entry.text}"`,
+                  },
+                ],
                 details: { action: "deleted", id: results[0].entry.id },
               };
             }
 
             const list = results
-              .map((r) => `- [${r.entry.id}] ${r.entry.text.slice(0, 60)}...`)
+              .map((r) => `- [${r.entry.id}] ${truncateUtf16Safe(r.entry.text, 60)}...`)
               .join("\n");
 
             // Strip vector data for serialization
@@ -1727,7 +1745,10 @@ export default definePluginEntry({
                   text: `Found ${results.length} candidates. Specify memoryId:\n${list}`,
                 },
               ],
-              details: { action: "candidates", candidates: sanitizedCandidates },
+              details: {
+                action: "candidates",
+                candidates: sanitizedCandidates,
+              },
             };
           }
 
@@ -1897,7 +1918,10 @@ export default definePluginEntry({
 
         // Filter contaminated memories, then cap at the prompt-budget bound.
         const cleanResults = cleanMemorySearchResults(recall.value)
-          .map(({ result, text }) => ({ category: result.entry.category, text }))
+          .map(({ result, text }) => ({
+            category: result.entry.category,
+            text,
+          }))
           .slice(0, DEFAULT_AUTO_RECALL_RESULT_CAP);
 
         if (cleanResults.length === 0) {
