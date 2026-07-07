@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { parse } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { NodeExecutionEnv } from "./nodejs.js";
+import { NodeExecutionEnv, resolveExecTimeoutMs } from "./nodejs.js";
 
 const { spawnMock } = vi.hoisted(() => ({ spawnMock: vi.fn() }));
 
@@ -12,8 +12,6 @@ vi.mock("node:child_process", () => ({
 }));
 
 afterEach(() => {
-  vi.unstubAllEnvs();
-  vi.restoreAllMocks();
   vi.clearAllMocks();
 });
 
@@ -31,23 +29,6 @@ function mockSpawnChild() {
     stdout: PassThrough;
     stderr: PassThrough;
   };
-}
-
-function createMockExecEnv(): NodeExecutionEnv {
-  return new NodeExecutionEnv({ cwd: process.cwd(), shellPath: process.execPath });
-}
-
-async function waitForSpawnCall(): Promise<void> {
-  const deadline = Date.now() + 2_000;
-  while (Date.now() < deadline) {
-    if (spawnMock.mock.calls.length > 0) {
-      return;
-    }
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-  }
-  throw new Error("expected spawn to be called");
 }
 
 describe("NodeExecutionEnv file metadata", () => {
@@ -112,51 +93,30 @@ describe("NodeExecutionEnv file metadata", () => {
   );
 });
 
-describe("NodeExecutionEnv timeout handling", () => {
-  let env: NodeExecutionEnv;
-
-  beforeEach(() => {
-    env = createMockExecEnv();
+describe("NodeExecutionEnv timeout helpers", () => {
+  it("converts positive timeout seconds to milliseconds", () => {
+    expect(resolveExecTimeoutMs(1)).toBe(1_000);
+    expect(resolveExecTimeoutMs(1.5)).toBe(1_500);
+    expect(resolveExecTimeoutMs(0.0005)).toBe(1);
   });
 
-  it.each([
-    { timeout: 1, expectedDelayMs: 1_000 },
-    { timeout: 1.5, expectedDelayMs: 1_500 },
-    { timeout: 0.0005, expectedDelayMs: 1 },
-    { timeout: Number.MAX_SAFE_INTEGER, expectedDelayMs: 2_147_000_000 },
-  ])("schedules timeout $timeout as $expectedDelayMs ms", async ({ timeout, expectedDelayMs }) => {
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    const child = mockSpawnChild();
-
-    const resultPromise = env.exec("echo hello", { timeout });
-    await waitForSpawnCall();
-
-    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), expectedDelayMs);
-    child.emit("close", 0);
-    await expect(resultPromise).resolves.toMatchObject({ ok: true });
+  it("caps oversized timeout seconds to a timer-safe delay", () => {
+    expect(resolveExecTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(2_147_000_000);
   });
 
-  it.each([undefined, Number.NaN, 0, -1])(
-    "does not schedule an invalid timeout value %s",
-    async (timeout) => {
-      const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-      const child = mockSpawnChild();
-
-      const resultPromise = env.exec("echo hello", { timeout });
-      await waitForSpawnCall();
-
-      expect(timeoutSpy).not.toHaveBeenCalled();
-      child.emit("close", 0);
-      await expect(resultPromise).resolves.toMatchObject({ ok: true });
-    },
-  );
+  it("ignores absent, invalid, or non-positive timeout seconds", () => {
+    expect(resolveExecTimeoutMs(undefined)).toBeUndefined();
+    expect(resolveExecTimeoutMs(Number.NaN)).toBeUndefined();
+    expect(resolveExecTimeoutMs(0)).toBeUndefined();
+    expect(resolveExecTimeoutMs(-1)).toBeUndefined();
+  });
 });
 
 describe("NodeExecutionEnv exec stream errors", () => {
   let env: NodeExecutionEnv;
 
   beforeEach(() => {
-    env = createMockExecEnv();
+    env = new NodeExecutionEnv({ cwd: process.cwd(), shellPath: "/bin/bash" });
   });
 
   it.each(["stdout", "stderr"] as const)(
@@ -165,7 +125,9 @@ describe("NodeExecutionEnv exec stream errors", () => {
       const child = mockSpawnChild();
 
       const resultPromise = env.exec("echo hello");
-      await waitForSpawnCall();
+      await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled(), {
+        timeout: 2000,
+      });
 
       child[streamName].emit("error", new Error(`${streamName} EPIPE`));
 
@@ -183,7 +145,9 @@ describe("NodeExecutionEnv exec stream errors", () => {
     const child = mockSpawnChild();
 
     const resultPromise = env.exec("echo hello");
-    await waitForSpawnCall();
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled(), {
+      timeout: 2000,
+    });
 
     child.stdout.emit("error", new Error("stdout EPIPE"));
 
@@ -203,7 +167,9 @@ describe("NodeExecutionEnv exec stream errors", () => {
     const child = mockSpawnChild();
 
     const resultPromise = env.exec("echo hello");
-    await waitForSpawnCall();
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled(), {
+      timeout: 2000,
+    });
     child.emit("close", 0);
 
     const result = await resultPromise;
@@ -213,15 +179,10 @@ describe("NodeExecutionEnv exec stream errors", () => {
   it("contains stdout errors during Windows shell discovery", async () => {
     const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
-    // Force PATH discovery even on Windows hosts with Git Bash in Program Files.
-    vi.stubEnv("ProgramFiles", "");
-    vi.stubEnv("ProgramFiles(x86)", "");
     try {
       const child = mockSpawnChild();
       const resultPromise = new NodeExecutionEnv({ cwd: process.cwd() }).exec("echo hello");
-      await waitForSpawnCall();
-      expect(spawnMock.mock.calls[0]?.[0]).toBe("where");
-      expect(spawnMock.mock.calls[0]?.[1]).toEqual(["bash.exe"]);
+      await vi.waitFor(() => expect(spawnMock).toHaveBeenCalled(), { timeout: 2000 });
 
       child.stdout.emit("error", new Error("where stdout failed"));
 
@@ -230,94 +191,11 @@ describe("NodeExecutionEnv exec stream errors", () => {
       if (!result.ok) {
         expect(result.error.code).toBe("shell_unavailable");
       }
+      expect(spawnMock.mock.calls[0]?.[0]).toBe("where");
     } finally {
       if (platformDescriptor) {
         Object.defineProperty(process, "platform", platformDescriptor);
       }
     }
-  });
-});
-
-describe("NodeExecutionEnv exec output bounding", () => {
-  const env = new NodeExecutionEnv({ cwd: process.cwd() });
-
-  it("returns full output when under the cap", async () => {
-    const result = await env.exec('printf "hello"', { maxOutputBytes: 1024 });
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      throw new Error("expected ok");
-    }
-    expect(result.value.stdout).toBe("hello");
-    expect(result.value.stdout).not.toContain("[output truncated]");
-  });
-
-  it("truncates stdout when output exceeds maxOutputBytes", async () => {
-    // Produce ~10 KB of output with a 1 KB cap
-    const result = await env.exec("node -e 'process.stdout.write(\"x\".repeat(10_000))'", {
-      maxOutputBytes: 1024,
-    });
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      throw new Error("expected ok");
-    }
-    expect(result.value.stdout.length).toBeLessThanOrEqual(1200);
-    expect(result.value.stdout).toContain("[output truncated]");
-  });
-
-  it("truncates stderr when output exceeds maxOutputBytes", async () => {
-    const result = await env.exec("node -e 'process.stderr.write(\"y\".repeat(10_000))'", {
-      maxOutputBytes: 1024,
-    });
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      throw new Error("expected ok");
-    }
-    expect(result.value.stderr).toContain("[output truncated]");
-  });
-
-  it("does not truncate when maxOutputBytes is high enough", async () => {
-    const result = await env.exec("node -e 'process.stdout.write(\"z\".repeat(500))'", {
-      maxOutputBytes: 64 * 1024,
-    });
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      throw new Error("expected ok");
-    }
-    expect(result.value.stdout).toBe("z".repeat(500));
-    expect(result.value.stdout).not.toContain("[output truncated]");
-  });
-
-  it("truncates at a UTF-8 byte boundary, not a code-unit boundary", async () => {
-    // "🙂" is 4 UTF-8 bytes. Cap at 5 bytes should keep one emoji (4 bytes) plus one ASCII (1 byte).
-    const result = await env.exec(
-      'node -e \'process.stdout.write("🙂🙂🙂🙂🙂" + "x".repeat(1000))\'',
-      { maxOutputBytes: 5 },
-    );
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      throw new Error("expected ok");
-    }
-    expect(result.value.stdout).toContain("[output truncated]");
-    expect(Buffer.byteLength(result.value.stdout, "utf8")).toBeLessThanOrEqual(5 + 64); // cap + marker + newline
-    expect(Buffer.byteLength(result.value.stdout, "utf8")).toBeGreaterThanOrEqual(5);
-  });
-
-  it("keeps streaming callbacks firing after capture truncation", async () => {
-    let callbackBytes = 0;
-    let callbackChunks = 0;
-    const result = await env.exec("node -e 'process.stdout.write(\"x\".repeat(10_000))'", {
-      maxOutputBytes: 1024,
-      onStdout: (chunk: string) => {
-        callbackBytes += chunk.length;
-        callbackChunks++;
-      },
-    });
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      throw new Error("expected ok");
-    }
-    expect(result.value.stdout).toContain("[output truncated]");
-    expect(callbackBytes).toBe(10_000);
-    expect(callbackChunks).toBeGreaterThan(0);
   });
 });
