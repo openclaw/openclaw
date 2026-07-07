@@ -103,7 +103,7 @@ describe("session-delivery queue recovery", () => {
     }
   });
 
-  it("does not let replay pacing consume the session recovery budget", async () => {
+  it("counts replay pacing against the session recovery budget", async () => {
     vi.useFakeTimers();
     const startedAt = new Date("2026-04-23T00:00:00.000Z");
     vi.setSystemTime(startedAt);
@@ -144,19 +144,13 @@ describe("session-delivery queue recovery", () => {
         });
         await firstDeliveredPromise;
 
-        await vi.advanceTimersByTimeAsync(RECOVERY_REPLAY_SPACING_MS);
-        expect(deliver).toHaveBeenCalledTimes(2);
-
-        await vi.advanceTimersByTimeAsync(RECOVERY_REPLAY_SPACING_MS);
+        await vi.advanceTimersByTimeAsync(1);
         const summary = await recovery;
 
-        expect(deliver).toHaveBeenCalledTimes(3);
-        expect(deliveryTimes).toEqual([
-          startedAt.getTime(),
-          startedAt.getTime() + RECOVERY_REPLAY_SPACING_MS,
-          startedAt.getTime() + RECOVERY_REPLAY_SPACING_MS * 2,
-        ]);
-        expect(summary.recovered).toBe(3);
+        expect(deliver).toHaveBeenCalledTimes(1);
+        expect(deliveryTimes).toEqual([startedAt.getTime()]);
+        expect(summary.recovered).toBe(1);
+        expect(await loadPendingSessionDeliveries(tempDir)).toHaveLength(2);
       });
     } finally {
       vi.useRealTimers();
