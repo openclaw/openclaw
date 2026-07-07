@@ -2278,6 +2278,19 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const initialDeleteEntry = loadSessionEntry(key, {
       agentId: requestedAgentId,
     }).entry;
+    // archivedOnly is the archive-then-delete contract: the dispatcher grants
+    // it to write-scope operators, so the target must actually be archived.
+    if (p.archivedOnly === true && initialDeleteEntry?.archivedAt === undefined) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `Session ${key} is not archived. Archive it first, then delete it.`,
+        ),
+      );
+      return;
+    }
     const expectedSessionId = p.expectedSessionId?.trim();
     const expectedLifecycleRevision = p.expectedLifecycleRevision?.trim();
     const expectedSessionUpdatedAt = p.expectedSessionUpdatedAt;
@@ -2368,6 +2381,19 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           agentId: requestedAgentId,
         });
         if (rejectExpectedSessionMismatch(entry)) {
+          return undefined;
+        }
+        // Recheck under the lifecycle lock: an unarchive racing the pre-lock
+        // check must not let an archive-gated delete remove an active session.
+        if (p.archivedOnly === true && entry?.archivedAt === undefined) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `Session ${key} is not archived. Archive it first, then delete it.`,
+            ),
+          );
           return undefined;
         }
         if (
