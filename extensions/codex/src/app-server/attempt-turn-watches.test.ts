@@ -285,6 +285,96 @@ describe("Codex app-server attempt turn watches", () => {
     ]);
     expect(harness.abortController.signal.reason).toBe("turn_progress_idle_timeout");
   });
+
+  it("waits for active completion blocker items before firing attempt idle timeout", () => {
+    const harness = createController();
+    harness.activeCompletionBlockers = 1;
+
+    harness.controller.armAttemptIdleWatch();
+    vi.advanceTimersByTime(10);
+
+    expect(harness.timeouts).toEqual([]);
+    expect(harness.abortController.signal.aborted).toBe(false);
+
+    harness.activeCompletionBlockers = 0;
+    harness.controller.touchActivity("notification:item/completed");
+    vi.advanceTimersByTime(10);
+
+    expect(harness.timeouts).toMatchObject([
+      {
+        kind: "progress",
+        timeoutMs: 10,
+      },
+    ]);
+  });
+
+  it("waits for active turn requests before firing attempt idle timeout", () => {
+    const harness = createController();
+    harness.activeRequests = 1;
+
+    harness.controller.armAttemptIdleWatch();
+    vi.advanceTimersByTime(10);
+
+    expect(harness.timeouts).toEqual([]);
+    expect(harness.abortController.signal.aborted).toBe(false);
+
+    harness.activeRequests = 0;
+    harness.controller.touchActivity("notification:item/completed");
+    vi.advanceTimersByTime(10);
+
+    expect(harness.timeouts).toMatchObject([{ kind: "progress" }]);
+  });
+
+  it("fires wall-clock ceiling after absolute timeout regardless of activity", () => {
+    const harness = createController();
+
+    harness.controller.armWallClockCeiling();
+    // Keep touching activity — the wall-clock ceiling should still fire
+    for (let i = 0; i < 60; i++) {
+      vi.advanceTimersByTime(60_000);
+      harness.controller.touchActivity(`notification:item/delta-${i}`);
+    }
+
+    expect(harness.timeouts).toMatchObject([
+      {
+        kind: "wall_clock_ceiling",
+        timeoutMs: 2 * 30 * 60_000,
+      },
+    ]);
+    expect(harness.abortController.signal.reason).toBe("turn_wall_clock_ceiling");
+  });
+
+  it("disarming wall-clock ceiling prevents it from firing", () => {
+    const harness = createController();
+
+    harness.controller.armWallClockCeiling();
+    harness.controller.disarmWallClockCeiling();
+    vi.advanceTimersByTime(2 * 30 * 60_000);
+
+    expect(harness.timeouts).toEqual([]);
+    expect(harness.abortController.signal.aborted).toBe(false);
+  });
+
+  it("fires attempt idle timeout after the last blocker item completes", () => {
+    // Regression: when item/completed clears the final blocker, the reordering
+    // of state updates before touchActivity ensures scheduling sees count=0.
+    const harness = createController();
+    harness.activeCompletionBlockers = 1;
+
+    harness.controller.armAttemptIdleWatch();
+    // With blocker active, no timer is set
+    vi.advanceTimersByTime(100);
+    expect(harness.timeouts).toEqual([]);
+
+    // Simulate the sequence from applyCodexTurnNotificationState:
+    // state updates happen before touchActivity.
+    harness.activeCompletionBlockers = 0;
+    harness.controller.touchActivity("notification:item/completed");
+
+    // Now the attempt-idle watch should fire after the timeout
+    vi.advanceTimersByTime(10);
+    expect(harness.timeouts).toMatchObject([{ kind: "progress" }]);
+  });
 });
 
 describe("Codex completion blocker item tracking", () => {
@@ -323,4 +413,27 @@ describe("Codex completion blocker item tracking", () => {
       expect(activeItemIds).toEqual(new Set());
     },
   );
+
+  it("ignores late item/started for an already-completed blocker item", () => {
+    const activeItemIds = new Set<string>();
+    const completedItemIds = new Set<string>();
+
+    // completed arrives first
+    updateActiveCompletionBlockerItemIds(
+      { method: "item/completed", params: { item: { id: "item-1", type: "commandExecution" } } },
+      activeItemIds,
+      completedItemIds,
+    );
+    expect(activeItemIds).toEqual(new Set());
+    expect(completedItemIds).toEqual(new Set(["item-1"]));
+
+    // late started arrives — should be ignored
+    updateActiveCompletionBlockerItemIds(
+      { method: "item/started", params: { item: { id: "item-1", type: "commandExecution" } } },
+      activeItemIds,
+      completedItemIds,
+    );
+    expect(activeItemIds).toEqual(new Set());
+    expect(completedItemIds).toEqual(new Set(["item-1"]));
+  });
 });

@@ -4,11 +4,16 @@
  */
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { CODEX_TURN_WALL_CLOCK_CEILING_MS } from "./attempt-timeouts.js";
 
 type Timer = ReturnType<typeof setTimeout>;
 
 /** Timeout bucket reported by the turn watch controller. */
-export type CodexAttemptTurnWatchTimeoutKind = "progress" | "completion" | "terminal";
+export type CodexAttemptTurnWatchTimeoutKind =
+  | "progress"
+  | "completion"
+  | "terminal"
+  | "wall_clock_ceiling";
 
 /** Structured timeout event emitted when a watch fires. */
 export type CodexAttemptTurnWatchTimeout = {
@@ -66,6 +71,9 @@ export function createCodexAttemptTurnWatchController(params: {
   let attemptIdleWatchArmed = false;
   let terminalIdleTimer: Timer | undefined;
   let terminalIdleWatchArmed = false;
+  let wallClockCeilingTimer: Timer | undefined;
+  let wallClockCeilingArmed = false;
+  let wallClockCeilingArmedAt: number | undefined;
   let completionLastActivityAt = Date.now();
   let completionLastActivityReason = "startup";
   let completionLastActivityDetails: Record<string, unknown> | undefined;
@@ -116,6 +124,14 @@ export function createCodexAttemptTurnWatchController(params: {
     clearCompletionIdleTimer();
     clearAssistantCompletionIdleTimer();
     clearTerminalIdleTimer();
+    clearWallClockCeilingTimer();
+  };
+
+  const clearWallClockCeilingTimer = () => {
+    if (wallClockCeilingTimer) {
+      clearTimeout(wallClockCeilingTimer);
+      wallClockCeilingTimer = undefined;
+    }
   };
 
   function scheduleCompletionIdleWatch() {
@@ -154,7 +170,13 @@ export function createCodexAttemptTurnWatchController(params: {
 
   function scheduleAttemptIdleWatch() {
     clearAttemptIdleTimer();
-    if (params.isCompleted() || params.signal.aborted || !attemptIdleWatchArmed) {
+    if (
+      params.isCompleted() ||
+      params.signal.aborted ||
+      !attemptIdleWatchArmed ||
+      params.getActiveAppServerTurnRequests() > 0 ||
+      params.getActiveCompletionBlockerItemCount() > 0
+    ) {
       return;
     }
     const elapsedMs = Math.max(0, Date.now() - attemptLastProgressAt);
@@ -170,7 +192,8 @@ export function createCodexAttemptTurnWatchController(params: {
       params.isCompleted() ||
       params.signal.aborted ||
       !terminalIdleWatchArmed ||
-      params.getActiveAppServerTurnRequests() > 0
+      params.getActiveAppServerTurnRequests() > 0 ||
+      params.getActiveCompletionBlockerItemCount() > 0
     ) {
       return;
     }
@@ -278,6 +301,14 @@ export function createCodexAttemptTurnWatchController(params: {
     if (params.isCompleted() || params.signal.aborted || !attemptIdleWatchArmed) {
       return;
     }
+    // Defer while a native tool item or in-flight server request is open.
+    if (
+      params.getActiveAppServerTurnRequests() > 0 ||
+      params.getActiveCompletionBlockerItemCount() > 0
+    ) {
+      scheduleAttemptIdleWatch();
+      return;
+    }
     const idleMs = Math.max(0, Date.now() - attemptLastProgressAt);
     const timeoutMs = attemptIdleTimeoutOverrideMs ?? turnAttemptIdleTimeoutMs;
     if (idleMs < timeoutMs) {
@@ -376,7 +407,8 @@ export function createCodexAttemptTurnWatchController(params: {
       params.isTerminalTurnNotificationQueued() ||
       params.signal.aborted ||
       !terminalIdleWatchArmed ||
-      params.getActiveAppServerTurnRequests() > 0
+      params.getActiveAppServerTurnRequests() > 0 ||
+      params.getActiveCompletionBlockerItemCount() > 0
     ) {
       return;
     }
@@ -411,6 +443,38 @@ export function createCodexAttemptTurnWatchController(params: {
       ...timeout.details,
     });
     params.onAbort("turn_terminal_idle_timeout");
+  }
+
+  function fireWallClockCeiling() {
+    if (params.isCompleted() || params.signal.aborted || !wallClockCeilingArmed) {
+      return;
+    }
+    const elapsedMs = wallClockCeilingArmedAt
+      ? Math.max(0, Date.now() - wallClockCeilingArmedAt)
+      : 0;
+    wallClockCeilingArmed = false;
+    clearAllTimers();
+    const timeout = {
+      kind: "wall_clock_ceiling" as const,
+      idleMs: elapsedMs,
+      timeoutMs: CODEX_TURN_WALL_CLOCK_CEILING_MS,
+      lastActivityReason: "wall_clock_ceiling",
+    };
+    params.onTimeout(timeout);
+    params.onMarkTimedOut();
+    params.onRecordEvent("turn.wall_clock_ceiling_timeout", {
+      threadId: params.threadId,
+      turnId: params.getTurnId(),
+      elapsedMs,
+      timeoutMs: CODEX_TURN_WALL_CLOCK_CEILING_MS,
+    });
+    embeddedAgentLog.warn("codex app-server turn hit absolute wall-clock ceiling", {
+      threadId: params.threadId,
+      turnId: params.getTurnId(),
+      elapsedMs,
+      timeoutMs: CODEX_TURN_WALL_CLOCK_CEILING_MS,
+    });
+    params.onAbort("turn_wall_clock_ceiling");
   }
 
   return {
@@ -507,5 +571,17 @@ export function createCodexAttemptTurnWatchController(params: {
     clearTerminalIdleTimer,
     clearAttemptIdleTimer,
     clearAllTimers,
+    armWallClockCeiling: () => {
+      wallClockCeilingArmed = true;
+      wallClockCeilingArmedAt = Date.now();
+      clearWallClockCeilingTimer();
+      wallClockCeilingTimer = setTimeout(fireWallClockCeiling, CODEX_TURN_WALL_CLOCK_CEILING_MS);
+      wallClockCeilingTimer.unref?.();
+    },
+    disarmWallClockCeiling: () => {
+      wallClockCeilingArmed = false;
+      wallClockCeilingArmedAt = undefined;
+      clearWallClockCeilingTimer();
+    },
   };
 }
