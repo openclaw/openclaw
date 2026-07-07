@@ -869,6 +869,7 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
     }
   });
   ensureColumn(db, "subagent_runs", "task_name TEXT");
+  ensureColumn(db, "subagent_runs", "announce_target TEXT");
 }
 
 function ensureSchema(db: DatabaseSync, pathname: string): void {
