@@ -393,6 +393,39 @@ describe("OpenClaw Codex sandbox exec-server filesystem", () => {
     socket.close();
   });
 
+  it("rejects oversized file copies before buffering through the fs bridge", async () => {
+    const readFile = vi.fn(async () => Buffer.from("too-large"));
+    const writeFile = vi.fn(async () => undefined);
+    const sandbox = createSandboxContext({
+      readFile,
+      stat: async () => ({
+        type: "file",
+        size: 512 * 1024 * 1024 + 1,
+        mtimeMs: 1,
+      }),
+      writeFile,
+    });
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({
+      client: client as never,
+      sandbox,
+    });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    await rpc(socket, "initialize", { clientName: "test" });
+    socket.send(JSON.stringify({ method: "initialized" }));
+
+    await expect(
+      rpc(socket, "fs/copy", {
+        sourcePath: "/workspace/huge.bin",
+        destinationPath: "/workspace/huge-copy.bin",
+      }),
+    ).rejects.toThrow("file is too large to read through Codex sandbox exec-server");
+
+    expect(readFile).not.toHaveBeenCalled();
+    expect(writeFile).not.toHaveBeenCalled();
+    socket.close();
+  });
+
   it("rejects recursive directory copies into their own subtree", async () => {
     const mkdirp = vi.fn(async () => undefined);
     const sandbox = createSandboxContext({
