@@ -68,13 +68,13 @@ import {
   turnStartResult,
   userMessage,
 } from "./run-attempt-test-harness.js";
-import { resetCodexTestBindingStore } from "./session-binding.test-helpers.js";
 import { testing } from "./run-attempt.js";
 import {
   ensureCodexSandboxExecServerEnvironment,
   releaseCodexSandboxExecServerEnvironment,
 } from "./sandbox-exec-server.js";
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
+import { resetCodexTestBindingStore } from "./session-binding.test-helpers.js";
 import {
   readCodexAppServerBinding,
   registerCodexTestSessionIdentity,
@@ -1327,6 +1327,7 @@ describe("runCodexAppServerAttempt", () => {
         { type: "inputText", text: `lookup result: ${rawToolSecret}` },
         { type: "inputImage", imageUrl: "data:image/png;base64,abc" },
         { type: "unsupportedCodexOutput", imageUrl: "data:image/png;base64,ignored" },
+        { type: `${"x".repeat(79)}🚀tail` },
       ],
     });
     const content = result.content as Array<{ text?: string; type?: string; url?: string }>;
@@ -1340,6 +1341,10 @@ describe("runCodexAppServerAttempt", () => {
     expect(content[2]).toEqual({
       type: "text",
       text: "[Unsupported Codex dynamic tool output: unsupportedCodexOutput]",
+    });
+    expect(content[3]).toEqual({
+      type: "text",
+      text: `[Unsupported Codex dynamic tool output: ${"x".repeat(79)}...]`,
     });
     expect(JSON.stringify(result)).not.toContain(rawToolSecret);
   });

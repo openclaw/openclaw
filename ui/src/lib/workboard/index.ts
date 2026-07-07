@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { requestSessionCreate } from "../sessions/index.ts";
@@ -3712,7 +3713,7 @@ function buildCardSessionLabel(card: WorkboardCard): string {
     return `${title}${suffixText}`;
   }
   const titleMax = WORKBOARD_SESSION_LABEL_MAX_CHARS - suffixText.length;
-  return `${title.slice(0, titleMax - 3).trimEnd()}...${suffixText}`;
+  return `${truncateUtf16Safe(title, titleMax - 3).trimEnd()}...${suffixText}`;
 }
 
 function sanitizeSessionSegment(value: string | undefined, fallback: string): string {
