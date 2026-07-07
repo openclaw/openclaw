@@ -7,14 +7,18 @@ import {
   DASHBOARD_POLL_INTERVAL_MS,
   getDashboardState,
   hiddenTabs,
+  hideWidget,
   loadWorkspace,
   moveWidget,
+  moveWidgetToTab,
   normalizeWorkspace,
   orderedTabs,
   registerActiveDrag,
+  removeWidgetFromTab,
   resolveActiveSlug,
   resolveBinding,
   setWidgetCollapsed,
+  updateWidgetTitle,
   startBindingPolling,
   stopBindingPolling,
   stopDashboard,
@@ -147,10 +151,61 @@ describe("optimistic mutations", () => {
     const client = mockClient({ request: request as never });
     await setWidgetCollapsed(state, client, { slug: "main", widgetId: "w1", collapsed: true });
     expect(state.workspace?.tabs[0].widgets[0].collapsed).toBe(true);
+    // Wire contract: the gateway's dashboard.widget.update reads { tab, id, patch }.
     expect(request).toHaveBeenCalledWith("dashboard.widget.update", {
+      tab: "main",
+      id: "w1",
+      patch: { collapsed: true },
+    });
+  });
+
+  it("sends every widget mutation in the gateway's { tab, id, ... } param contract", async () => {
+    // Regression guard for the UI↔gateway seam: the gateway readParams whitelists
+    // are { tab, id, patch } (update), { tab, id, grid|toTab } (move), { tab, id }
+    // (remove) — NOT the UI's internal { slug, widgetId }. These are asserted at the
+    // wire so a drift back to { slug, widgetId, <field> } fails here rather than only
+    // at runtime against the real gateway.
+    const host = {};
+    const state = getDashboardState(host);
+    state.workspace = normalizeWorkspace(sampleDoc);
+    const request = vi.fn(async () => ({}));
+    const client = mockClient({ request: request as never });
+
+    await moveWidget(state, client, {
       slug: "main",
       widgetId: "w1",
-      collapsed: true,
+      grid: { x: 8, y: 0, w: 4, h: 2 },
+    });
+    expect(request).toHaveBeenLastCalledWith("dashboard.widget.move", {
+      tab: "main",
+      id: "w1",
+      grid: { x: 8, y: 0, w: 4, h: 2 },
+    });
+
+    await updateWidgetTitle(state, client, { slug: "main", widgetId: "w1", title: "Renamed" });
+    expect(request).toHaveBeenLastCalledWith("dashboard.widget.update", {
+      tab: "main",
+      id: "w1",
+      patch: { title: "Renamed" },
+    });
+
+    await hideWidget(state, client, { slug: "main", widgetId: "w1" });
+    expect(request).toHaveBeenLastCalledWith("dashboard.widget.update", {
+      tab: "main",
+      id: "w1",
+      patch: { hidden: true },
+    });
+
+    state.workspace = normalizeWorkspace(sampleDoc);
+    await removeWidgetFromTab(state, client, { slug: "main", widgetId: "w1" });
+    expect(request).toHaveBeenLastCalledWith("dashboard.widget.remove", { tab: "main", id: "w1" });
+
+    state.workspace = normalizeWorkspace(sampleDoc);
+    await moveWidgetToTab(state, client, { fromSlug: "main", toSlug: "archive", widgetId: "w1" });
+    expect(request).toHaveBeenLastCalledWith("dashboard.widget.move", {
+      tab: "main",
+      id: "w1",
+      toTab: "archive",
     });
   });
 

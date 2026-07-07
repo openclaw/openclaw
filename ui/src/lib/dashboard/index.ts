@@ -543,7 +543,7 @@ export function moveWidget(
   return optimisticMutation(state, client, {
     widgetId: params.widgetId,
     method: "dashboard.widget.move",
-    rpcParams: { slug: params.slug, widgetId: params.widgetId, grid: params.grid },
+    rpcParams: { tab: params.slug, id: params.widgetId, grid: params.grid },
     optimistic: (workspace) =>
       replaceWidget(workspace, params.slug, params.widgetId, (widget) => ({
         ...widget,
@@ -560,7 +560,7 @@ export function setWidgetCollapsed(
   return optimisticMutation(state, client, {
     widgetId: params.widgetId,
     method: "dashboard.widget.update",
-    rpcParams: { slug: params.slug, widgetId: params.widgetId, collapsed: params.collapsed },
+    rpcParams: { tab: params.slug, id: params.widgetId, patch: { collapsed: params.collapsed } },
     optimistic: (workspace) =>
       replaceWidget(workspace, params.slug, params.widgetId, (widget) => ({
         ...widget,
@@ -577,7 +577,7 @@ export function updateWidgetTitle(
   return optimisticMutation(state, client, {
     widgetId: params.widgetId,
     method: "dashboard.widget.update",
-    rpcParams: { slug: params.slug, widgetId: params.widgetId, title: params.title },
+    rpcParams: { tab: params.slug, id: params.widgetId, patch: { title: params.title } },
     optimistic: (workspace) =>
       replaceWidget(workspace, params.slug, params.widgetId, (widget) => ({
         ...widget,
@@ -594,7 +594,7 @@ export function hideWidget(
   return optimisticMutation(state, client, {
     widgetId: params.widgetId,
     method: "dashboard.widget.update",
-    rpcParams: { slug: params.slug, widgetId: params.widgetId, hidden: true },
+    rpcParams: { tab: params.slug, id: params.widgetId, patch: { hidden: true } },
     optimistic: (workspace) => removeWidget(workspace, params.slug, params.widgetId),
   });
 }
@@ -607,7 +607,7 @@ export function removeWidgetFromTab(
   return optimisticMutation(state, client, {
     widgetId: params.widgetId,
     method: "dashboard.widget.remove",
-    rpcParams: { slug: params.slug, widgetId: params.widgetId },
+    rpcParams: { tab: params.slug, id: params.widgetId },
     optimistic: (workspace) => removeWidget(workspace, params.slug, params.widgetId),
   });
 }
@@ -620,7 +620,7 @@ export function moveWidgetToTab(
   return optimisticMutation(state, client, {
     widgetId: params.widgetId,
     method: "dashboard.widget.move",
-    rpcParams: { slug: params.fromSlug, toSlug: params.toSlug, widgetId: params.widgetId },
+    rpcParams: { tab: params.fromSlug, id: params.widgetId, toTab: params.toSlug },
     optimistic: (workspace) => {
       const source = workspace.tabs.find((tab) => tab.slug === params.fromSlug);
       const widget = source?.widgets.find((w) => w.id === params.widgetId);
