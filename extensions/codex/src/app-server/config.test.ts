@@ -1,6 +1,8 @@
 // Codex tests cover config plugin behavior.
 import fs from "node:fs/promises";
+import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import {
   CODEX_APP_SERVER_CONFIG_KEYS,
@@ -13,6 +15,7 @@ import {
   fingerprintCodexAppServerNetworkProxyConfigPatch,
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
+  resolveCodexAppServerUserHomeDir,
   resolveCodexComputerUseConfig,
   resolveCodexModelBackedReviewerPolicyContext,
   resolveOpenClawExecModeForCodexAppServer,
@@ -520,6 +523,55 @@ describe("Codex app-server config", () => {
     expectFields(runtime.start, "runtime start", {
       command: "codex",
       commandSource: "managed",
+      homeScope: "agent",
+    });
+  });
+
+  it("resolves opt-in user-home coexistence only for local stdio", () => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: { appServer: { homeScope: "user" } },
+    });
+
+    expect(runtime.start.homeScope).toBe("user");
+    expect(() =>
+      resolveRuntimeForTest({
+        pluginConfig: {
+          appServer: {
+            transport: "websocket",
+            url: "ws://127.0.0.1:39175",
+            homeScope: "user",
+          },
+        },
+      }),
+    ).toThrow(
+      "plugins.entries.codex.config.appServer.homeScope=user requires appServer.transport=stdio",
+    );
+  });
+
+  it("resolves the native user Codex home from CODEX_HOME or the OS home", () => {
+    expect(resolveCodexAppServerUserHomeDir({ CODEX_HOME: "/tmp/custom-codex" })).toBe(
+      "/tmp/custom-codex",
+    );
+    expect(resolveCodexAppServerUserHomeDir({}, () => "/Users/tester")).toBe(
+      "/Users/tester/.codex",
+    );
+  });
+
+  it("checks shared user config before enabling model-backed approval review", async () => {
+    await withTempDir("openclaw-codex-user-home-", async (codexHome) => {
+      await fs.writeFile(
+        path.join(codexHome, "config.toml"),
+        'openai_base_url = "http://localhost:8080/v1"\n',
+      );
+
+      expect(
+        canUseCodexModelBackedApprovalsReviewerForModel({
+          modelProvider: "openai",
+          model: "gpt-5.5",
+          env: { CODEX_HOME: codexHome },
+          homeScope: "user",
+        }),
+      ).toBe(false);
     });
   });
 
@@ -942,8 +994,8 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
       env: {},
       modelProvider: "openai",
       requirementsPath: "/custom/codex/requirements.toml",
-      readRequirementsFile: (path) => {
-        readPaths.push(path);
+      readRequirementsFile: (requirementsPath) => {
+        readPaths.push(requirementsPath);
         return 'allowed_sandbox_modes = ["read-only", "workspace-write"]\n';
       },
     });
@@ -963,8 +1015,8 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
       env: { ProgramData: "D:\\ManagedData" },
       modelProvider: "openai",
       platform: "win32",
-      readRequirementsFile: (path) => {
-        readPaths.push(path);
+      readRequirementsFile: (requirementsPath) => {
+        readPaths.push(requirementsPath);
         return 'allowed_sandbox_modes = ["read-only", "workspace-write"]\n';
       },
     });
@@ -1110,6 +1162,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(policy).toEqual({
       configured: true,
       enabled: true,
+      allowAllPlugins: false,
       allowDestructiveActions: false,
       destructiveApprovalMode: "deny",
       pluginPolicies: [
@@ -1161,6 +1214,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(resolveCodexPluginsPolicy(config)).toEqual({
       configured: true,
       enabled: true,
+      allowAllPlugins: false,
       allowDestructiveActions: true,
       destructiveApprovalMode: "auto",
       pluginPolicies: [
@@ -1192,11 +1246,12 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     });
   });
 
-  it("parses always native Codex plugin destructive policy", () => {
+  it("parses ask native Codex plugin destructive policy", () => {
     const config = readCodexPluginConfig({
+      appServer: { mode: "guardian" },
       codexPlugins: {
         enabled: true,
-        allow_destructive_actions: "always",
+        allow_destructive_actions: "ask",
         plugins: {
           "google-calendar": {
             marketplaceName: "openai-curated",
@@ -1211,12 +1266,14 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
       },
     });
 
-    expect(config.codexPlugins?.allow_destructive_actions).toBe("always");
+    expect(config.appServer?.mode).toBe("guardian");
+    expect(config.codexPlugins?.allow_destructive_actions).toBe("ask");
     expect(resolveCodexPluginsPolicy(config)).toEqual({
       configured: true,
       enabled: true,
+      allowAllPlugins: false,
       allowDestructiveActions: true,
-      destructiveApprovalMode: "always",
+      destructiveApprovalMode: "ask",
       pluginPolicies: [
         {
           configKey: "google-calendar",
@@ -1224,7 +1281,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
           pluginName: "google-calendar",
           enabled: true,
           allowDestructiveActions: true,
-          destructiveApprovalMode: "always",
+          destructiveApprovalMode: "ask",
         },
         {
           configKey: "slack",
@@ -1242,7 +1299,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     const config = readCodexPluginConfig({
       codexPlugins: {
         enabled: true,
-        allow_destructive_actions: "ask",
+        allow_destructive_actions: "always",
         plugins: {
           slack: {
             marketplaceName: "openai-curated",
@@ -1271,6 +1328,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(policy).toEqual({
       configured: true,
       enabled: true,
+      allowAllPlugins: false,
       allowDestructiveActions: true,
       destructiveApprovalMode: "allow",
       pluginPolicies: [
@@ -1301,6 +1359,44 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
 
     expect(config.codexPlugins).toBeUndefined();
     expect(resolveCodexPluginsPolicy(config).pluginPolicies).toStrictEqual([]);
+  });
+
+  it("parses opt-in access to all connected account apps", () => {
+    const config = readCodexPluginConfig({
+      codexPlugins: {
+        enabled: true,
+        allow_all_plugins: true,
+        allow_destructive_actions: "auto",
+      },
+    });
+
+    expect(config.codexPlugins).toEqual({
+      enabled: true,
+      allow_all_plugins: true,
+      allow_destructive_actions: "auto",
+    });
+    expect(resolveCodexPluginsPolicy(config)).toEqual({
+      configured: true,
+      enabled: true,
+      allowAllPlugins: true,
+      allowDestructiveActions: true,
+      destructiveApprovalMode: "auto",
+      pluginPolicies: [],
+    });
+  });
+
+  it("requires native plugin support before exposing all connected account apps", () => {
+    expect(resolveCodexPluginsPolicy({ codexPlugins: { allow_all_plugins: true } })).toEqual({
+      configured: true,
+      enabled: false,
+      allowAllPlugins: false,
+      allowDestructiveActions: true,
+      destructiveApprovalMode: "allow",
+      pluginPolicies: [],
+    });
+    expect(
+      readCodexPluginConfig({ codexPlugins: { enabled: true, allow_all_plugins: "yes" } }),
+    ).toEqual({});
   });
 
   it("treats configured and environment commands as explicit overrides", () => {
@@ -1824,6 +1920,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
         commandSource: "config",
         args: ["app-server", "--listen", "stdio://"],
         headers: {},
+        homeScope: "agent",
       },
     });
   });

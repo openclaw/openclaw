@@ -1,3 +1,4 @@
+import { isHttpsUrl, isHttpUrl } from "@openclaw/net-policy/url-protocol";
 // Assembles the canonical Zod schema for OpenClaw config parsing.
 import {
   normalizeLowercaseStringOrEmpty,
@@ -67,6 +68,7 @@ const GatewayRemoteSchemaShape = {
   tlsFingerprint: z.string().optional(),
   sshTarget: z.string().optional(),
   sshIdentity: z.string().optional(),
+  sshHostKeyPolicy: z.union([z.literal("strict"), z.literal("openssh")]).optional(),
 } satisfies ConfigSchemaShape<GatewayRemoteConfig>;
 
 const GatewayRemoteConfigSchema = z.object(GatewayRemoteSchemaShape).strict().optional();
@@ -240,20 +242,14 @@ const MemorySchema = z
   .strict()
   .optional();
 
-const HttpUrlSchema = z
-  .string()
-  .url()
-  .refine((value) => {
-    const protocol = new URL(value).protocol;
-    return protocol === "http:" || protocol === "https:";
-  }, "Expected http:// or https:// URL");
+const HttpUrlSchema = z.string().url().refine(isHttpUrl, "Expected http:// or https:// URL");
 
 const McpOAuthClientMetadataUrlSchema = z
   .string()
   .url()
   .refine((value) => {
     const url = new URL(value);
-    return url.protocol === "https:" && url.pathname !== "/";
+    return isHttpsUrl(url) && url.pathname !== "/";
   }, "Expected https:// URL with a non-root pathname");
 
 const ResponsesEndpointUrlFetchShape = {
@@ -322,6 +318,10 @@ const TalkRealtimeSchema = z
     instructions: z.string().optional(),
     mode: z.enum(["realtime", "stt-tts", "transcription"]).optional(),
     transport: z.enum(["webrtc", "provider-websocket", "gateway-relay", "managed-room"]).optional(),
+    vadThreshold: z.number().min(0).max(1).optional(),
+    silenceDurationMs: z.number().int().positive().optional(),
+    prefixPaddingMs: z.number().int().nonnegative().optional(),
+    reasoningEffort: z.string().min(1).optional(),
     brain: z.enum(["agent-consult", "direct-tools", "none"]).optional(),
     consultRouting: z.enum(["provider-direct", "force-agent-consult"]).optional(),
   })
@@ -330,7 +330,7 @@ const TalkRealtimeSchema = z
     const provider = normalizeLowercaseStringOrEmpty(realtime.provider ?? "");
     const providers = realtime.providers ? Object.keys(realtime.providers) : [];
 
-    if (provider && providers.length > 0 && !(provider in realtime.providers!)) {
+    if (provider && providers.length > 0 && !Object.hasOwn(realtime.providers!, provider)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["provider"],
@@ -366,7 +366,7 @@ const TalkSchema = z
     const provider = normalizeLowercaseStringOrEmpty(talk.provider ?? "");
     const providers = talk.providers ? Object.keys(talk.providers) : [];
 
-    if (provider && providers.length > 0 && !(provider in talk.providers!)) {
+    if (provider && providers.length > 0 && !Object.hasOwn(talk.providers!, provider)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["provider"],
@@ -642,6 +642,12 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    audit: z
+      .object({
+        enabled: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     logging: z
       .object({
         level: LoggingLevelSchema.optional(),
@@ -672,7 +678,14 @@ export const OpenClawSchema = z
     crestodian: CrestodianSchema,
     update: z
       .object({
-        channel: z.union([z.literal("stable"), z.literal("beta"), z.literal("dev")]).optional(),
+        channel: z
+          .union([
+            z.literal("stable"),
+            z.literal("extended-stable"),
+            z.literal("beta"),
+            z.literal("dev"),
+          ])
+          .optional(),
         checkOnStart: z.boolean().optional(),
         auto: z
           .object({
@@ -725,7 +738,12 @@ export const OpenClawSchema = z
                 mcpCommand: z.string().optional(),
                 mcpArgs: z.array(z.string()).optional(),
                 driver: z
-                  .union([z.literal("openclaw"), z.literal("clawd"), z.literal("existing-session")])
+                  .union([
+                    z.literal("openclaw"),
+                    z.literal("clawd"),
+                    z.literal("existing-session"),
+                    z.literal("extension"),
+                  ])
                   .optional(),
                 headless: z.boolean().optional(),
                 executablePath: z.string().optional(),
@@ -734,13 +752,21 @@ export const OpenClawSchema = z
               })
               .strict()
               .refine(
-                (value) => value.driver === "existing-session" || value.cdpPort || value.cdpUrl,
+                (value) =>
+                  value.driver === "existing-session" ||
+                  value.driver === "extension" ||
+                  value.cdpPort ||
+                  value.cdpUrl,
                 {
                   message: "Profile must set cdpPort or cdpUrl",
                 },
               )
               .refine((value) => value.driver === "existing-session" || !value.userDataDir, {
                 message: 'Profile userDataDir is only supported with driver="existing-session"',
+              })
+              .refine((value) => value.driver !== "extension" || !value.cdpUrl, {
+                message:
+                  'Profile cdpUrl is not supported with driver="extension" (the relay owns the endpoint)',
               }),
           )
           .optional(),
@@ -1088,6 +1114,14 @@ export const OpenClawSchema = z
             dangerouslyAllowHostHeaderOriginFallback: z.boolean().optional(),
             allowInsecureAuth: z.boolean().optional(),
             dangerouslyDisableDeviceAuth: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
+        terminal: z
+          .object({
+            enabled: z.boolean().optional(),
+            shell: z.string().optional(),
+            detachedSessionTimeoutSeconds: z.number().int().min(0).optional(),
           })
           .strict()
           .optional(),

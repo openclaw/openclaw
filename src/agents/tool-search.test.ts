@@ -7,6 +7,7 @@ import {
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
+import { SESSION_TOOL_STDERR_TAIL_BYTES } from "./sessions/tools/limits.js";
 import {
   testing,
   addClientToolsToToolSearchCatalog,
@@ -1522,6 +1523,7 @@ describe("Tool Search", () => {
   }, 5_000);
 
   it("aborts already-started bridged calls when code mode times out", async () => {
+    testing.setToolSearchMinCodeTimeoutMsForTest(50);
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     const target = pluginTool("fake_abort_on_timeout", "Long-running target tool");
     let observedSignal: AbortSignal | undefined;
@@ -1554,7 +1556,7 @@ describe("Tool Search", () => {
 
     const config = {
       tools: {
-        toolSearch: { enabled: true, mode: "code", codeTimeoutMs: 1_000 },
+        toolSearch: { enabled: true, mode: "code", codeTimeoutMs: 100 },
       },
     } as never;
     applyToolSearchCatalog({
@@ -1724,5 +1726,19 @@ describe("Tool Search", () => {
       sessionId,
     });
     expect(second.catalogReused).toBe(false);
+  });
+
+  it("bounds tool_search_code stderr accumulation to the session tool tail limit", () => {
+    let stderrTail = "";
+    stderrTail = testing.appendToolSearchCodeStderrTail(
+      stderrTail,
+      `HEAD_OVERFLOW_${"x".repeat(SESSION_TOOL_STDERR_TAIL_BYTES + 10_000)}TAIL`,
+    );
+
+    expect(stderrTail).not.toContain("HEAD_OVERFLOW_");
+    expect(stderrTail.endsWith("TAIL")).toBe(true);
+    expect(Buffer.byteLength(stderrTail, "utf8")).toBeLessThanOrEqual(
+      SESSION_TOOL_STDERR_TAIL_BYTES,
+    );
   });
 });

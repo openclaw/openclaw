@@ -1,4 +1,5 @@
 /** Cron timer loop, execution, catch-up, and run-result state transitions. */
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
@@ -388,11 +389,7 @@ export function maybeNotifyIsolatedAgentSetupTimeout(
 }
 
 function resolveRunConcurrency(state: CronServiceState): number {
-  const raw = state.deps.cronConfig?.maxConcurrentRuns;
-  if (typeof raw !== "number" || !Number.isFinite(raw)) {
-    return 1;
-  }
-  return Math.max(1, Math.floor(raw));
+  return resolveIntegerOption(state.deps.cronConfig?.maxConcurrentRuns, 1, { min: 1 });
 }
 
 function resolveMainSessionCronDeliveryContext(
@@ -1043,6 +1040,7 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
     startedAt: result.startedAt,
     endedAt: result.endedAt,
   });
+  state.pendingCatchupDeferralJobIds.delete(job.id);
 
   emitJobFinished(state, job, result, result.startedAt);
 
@@ -1639,13 +1637,13 @@ function deferPendingBackoffMissedCronSlots(
 export async function runMissedJobs(
   state: CronServiceState,
   opts?: { skipJobIds?: ReadonlySet<string>; deferAgentTurnJobs?: boolean },
-): Promise<ReadonlySet<string>> {
+): Promise<void> {
   if (state.stopped) {
-    return new Set();
+    return;
   }
   const plan = await planStartupCatchup(state, opts);
   if (plan.candidates.length === 0 && plan.deferredJobs.length === 0) {
-    return new Set();
+    return;
   }
 
   const outcomes = await executeStartupCatchupPlan(state, plan);
@@ -1653,7 +1651,6 @@ export async function runMissedJobs(
   for (const outcome of finalizedOutcomes) {
     maybeNotifyIsolatedAgentSetupTimeout(state, outcome);
   }
-  return new Set(plan.deferredJobs.map((deferred) => deferred.jobId));
 }
 
 async function planStartupCatchup(
@@ -1884,10 +1881,12 @@ async function applyStartupCatchupOutcomes(
           }
           if (typeof deferred.delayMs === "number") {
             job.state.nextRunAtMs = baseNow + deferred.delayMs + offset - staggerMs;
+            state.pendingCatchupDeferralJobIds.add(jobId);
             offset += staggerMs;
             continue;
           }
           job.state.nextRunAtMs = baseNow + offset;
+          state.pendingCatchupDeferralJobIds.add(jobId);
           offset += staggerMs;
         }
       }

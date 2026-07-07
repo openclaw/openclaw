@@ -829,11 +829,17 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       }
       // The poll being voted on is an inbound message; the agent references it
       // by the shared `pollId` param or a message id, which we resolve to the
-      // poll's full GUID through the same reply cache the react path uses.
+      // poll's full GUID through the same reply cache the react path uses. When
+      // the model omits an explicit reference, default to the current inbound
+      // message id — the poll it is replying to — mirroring how reaction-like
+      // actions default their target (resolveReactionMessageId). Without this a
+      // vote that names only the option index fails the required-reference
+      // check below even though the intended poll is unambiguous.
       const pollRef =
         readStringParam(params, "pollId") ??
         readStringParam(params, "pollGuid") ??
-        readStringParam(params, "messageId");
+        readStringParam(params, "messageId") ??
+        (toolContext?.currentMessageId != null ? String(toolContext.currentMessageId) : undefined);
       if (!pollRef) {
         throw new Error("iMessage poll-vote requires the poll message id (pollId or messageId).");
       }

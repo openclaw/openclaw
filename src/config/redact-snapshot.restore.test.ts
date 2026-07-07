@@ -100,6 +100,16 @@ describe("restoreRedactedValues", () => {
     expect(restoreRedactedValues_orig(incoming, original).ok).toBe(false);
   });
 
+  it.each(["toString", "constructor", "valueOf", "hasOwnProperty"])(
+    "rejects inherited %s values when the original key is missing",
+    (key) => {
+      const hints = { [key]: { sensitive: true } };
+      const result = restoreRedactedValues_orig({ [key]: REDACTED_SENTINEL }, {}, hints);
+
+      expect(result.ok).toBe(false);
+    },
+  );
+
   it("rejects invalid restore inputs", () => {
     const invalidInputs = [null, undefined, "token-value"] as const;
     for (const input of invalidInputs) {

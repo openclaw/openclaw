@@ -33,11 +33,14 @@ export function renderIMessagePollBody(poll: IMessagePoll): string | null {
     tally.set(vote.option_id, (tally.get(vote.option_id) ?? 0) + 1);
   }
 
-  // Present the poll as a flat notification, not a question header with a
-  // call-to-action. Rendering it as "Poll: <question>?" + "to vote, use…" made
-  // the model treat it as a question to answer AND vote on (redundant echo).
-  // A notification-style line lets it vote (options + indices retained) without
-  // being nudged to also verbalize an answer.
+  // Cue the vote action explicitly. The agent has the poll-vote tool, but given
+  // a flat notification it tends to answer the poll with a prose text reply
+  // instead of casting a vote. Naming the action + index makes voting the
+  // obvious path. An earlier version dropped the call-to-action to stop the
+  // model from also verbalizing its pick, but that suppressed voting entirely;
+  // the poll_vote_echo guard now drops any redundant spoken answer, so the
+  // call-to-action is safe. The `📊 Poll:` prefix also matches the trigger
+  // phrasing agents key their vote instructions on.
   const optionList = options
     .map((option, index) => {
       const count = tally.get(option.id) ?? 0;
@@ -45,5 +48,5 @@ export function renderIMessagePollBody(poll: IMessagePoll): string | null {
     })
     .join("  ");
   const question = poll.question?.trim();
-  return `[poll shared]${question ? ` ${question}` : ""} — options: ${optionList}`;
+  return `\u{1F4CA} Poll${question ? `: ${question}` : ""} — options: ${optionList}. Cast your vote on this poll with the poll-vote action (pollOptionIndex = the option number); do not answer in a text reply.`;
 }

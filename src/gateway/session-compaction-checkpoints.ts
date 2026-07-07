@@ -542,6 +542,7 @@ function cloneCheckpointSessionEntry(params: {
   parentSessionKey?: string;
   totalTokens?: number;
   preserveCompactionCheckpoints?: boolean;
+  preserveManagementState?: boolean;
 }): SessionEntry {
   return {
     ...params.currentEntry,
@@ -569,6 +570,8 @@ function cloneCheckpointSessionEntry(params: {
         : undefined,
     label: params.label ?? params.currentEntry.label,
     parentSessionKey: params.parentSessionKey ?? params.currentEntry.parentSessionKey,
+    archivedAt: params.preserveManagementState ? params.currentEntry.archivedAt : undefined,
+    pinnedAt: params.preserveManagementState ? params.currentEntry.pinnedAt : undefined,
     compactionCheckpoints: params.preserveCompactionCheckpoints
       ? params.currentEntry.compactionCheckpoints
       : undefined,
@@ -619,6 +622,7 @@ async function restoreCheckpointSessionFromStoredBoundary(
         nextSessionFile: forkedTranscript.sessionFile,
         totalTokens: forkedTranscript.totalTokens,
         preserveCompactionCheckpoints: true,
+        preserveManagementState: true,
       }),
   });
 }

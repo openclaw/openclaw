@@ -439,6 +439,19 @@ describe("gateway broadcaster", () => {
     expectSentEvents(adminSocket, expectedEvents);
   });
 
+  it("requires operator.read for task ledger broadcast events", () => {
+    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcast } =
+      makeScopedBroadcastContext();
+
+    broadcast("task", { action: "deleted", taskId: "task-1" });
+
+    expect(pairingSocket.send).not.toHaveBeenCalled();
+    expect(nodeSocket.send).not.toHaveBeenCalled();
+    expectSentEvents(readSocket, ["task"]);
+    expectSentEvents(writeSocket, ["task"]);
+    expectSentEvents(adminSocket, ["task"]);
+  });
+
   it("allows plugin.* broadcast events for operator.write and operator.admin", () => {
     const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, broadcast } =
       makeScopedBroadcastContext();

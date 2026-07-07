@@ -172,6 +172,11 @@ export async function execCommand(
       }, options.timeout);
     }
 
+    // Output pipes may fail independently; process termination remains authoritative.
+    const ignoreOutputStreamError = () => {};
+    proc.stdout?.on("error", ignoreOutputStreamError);
+    proc.stderr?.on("error", ignoreOutputStreamError);
+
     proc.stdout?.on("data", (data) => {
       const before = stdout.truncatedChars;
       stdout = appendCapturedOutput(stdout, data, maxOutputChars, truncateOutput);

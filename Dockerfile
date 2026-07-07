@@ -153,6 +153,14 @@ RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/sto
     OPENCLAW_EXTENSIONS="$OPENCLAW_EXTENSIONS" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs && \
     node scripts/postinstall-bundled-plugins.mjs && \
     find dist -type f \( -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -name '*.map' \) -delete && \
+    if [ -L /app/node_modules/@openclaw/ai ]; then \
+      ai_runtime_target="$(readlink -f /app/node_modules/@openclaw/ai)" && \
+      ai_runtime_tmp="$(mktemp -d)" && \
+      cp -a "$ai_runtime_target" "$ai_runtime_tmp/ai" && \
+      rm /app/node_modules/@openclaw/ai && \
+      mv "$ai_runtime_tmp/ai" /app/node_modules/@openclaw/ai && \
+      rmdir "$ai_runtime_tmp"; \
+    fi && \
     rm -rf \
       /app/node_modules/openclaw \
       /app/node_modules/.bin/openclaw \

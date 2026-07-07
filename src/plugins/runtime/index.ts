@@ -223,6 +223,26 @@ function createLateBindingNodes(allowGatewayBinding = false): PluginRuntime["nod
   });
 }
 
+function createRuntimeWorktrees(): PluginRuntime["worktrees"] {
+  const loadService = () => import("../../agents/worktrees/service.js");
+  return {
+    async create(params) {
+      const { managedWorktrees } = await loadService();
+      const record = await managedWorktrees.create(params);
+      await managedWorktrees.acquire(record.id);
+      return { id: record.id, path: record.path, branch: record.branch };
+    },
+    async release(params) {
+      const { managedWorktrees } = await loadService();
+      await managedWorktrees.releaseByPath(params.path);
+    },
+    async removeIfLossless(params) {
+      const { managedWorktrees } = await loadService();
+      return managedWorktrees.removeIfLosslessByPath(params.path);
+    },
+  };
+}
+
 export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): PluginRuntime {
   const mediaUnderstanding = createRuntimeMediaUnderstandingFacade();
   const taskFlow = createRuntimeTaskFlow();
@@ -240,6 +260,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
       _options.allowGatewaySubagentBinding === true,
     ),
     nodes: _options.nodes ?? createLateBindingNodes(_options.allowGatewaySubagentBinding === true),
+    worktrees: createRuntimeWorktrees(),
     system: createRuntimeSystem(),
     media: createRuntimeMedia(),
     webSearch: {

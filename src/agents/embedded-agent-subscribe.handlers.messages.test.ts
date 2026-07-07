@@ -1028,6 +1028,77 @@ describe("handleMessageUpdate commentary phase", () => {
 });
 
 describe("handleMessageEnd", () => {
+  it("persists streamed usage when the final assistant snapshot is zeroed", () => {
+    const ctx = createMessageEndContext({
+      state: {
+        pendingAssistantUsage: { input: 7, output: 5, reasoningTokens: 2, total: 12 },
+      },
+    });
+    const message = {
+      role: "assistant",
+      api: "openai-completions",
+      content: [{ type: "text", text: "Done." }],
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+      },
+    };
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message,
+    } as never);
+
+    expect(firstMockArg(ctx.noteLastAssistant as never, "last assistant")).toMatchObject({
+      usage: {
+        input: 7,
+        output: 5,
+        cacheRead: 0,
+        cacheWrite: 0,
+        reasoningTokens: 2,
+        totalTokens: 12,
+      },
+    });
+    expect(ctx.recordAssistantUsage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: 7,
+        output: 5,
+        reasoningTokens: 2,
+        totalTokens: 12,
+      }),
+    );
+  });
+
+  it("keeps authoritative final usage instead of pending stream usage", () => {
+    const ctx = createMessageEndContext({
+      state: {
+        pendingAssistantUsage: { input: 7, output: 5, total: 12 },
+      },
+    });
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "Done." }],
+      usage: {
+        input: 11,
+        output: 3,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 14,
+      },
+    };
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message,
+    } as never);
+
+    expect(firstMockArg(ctx.noteLastAssistant as never, "last assistant")).toBe(message);
+    expect(ctx.recordAssistantUsage).toHaveBeenCalledWith(message.usage);
+  });
+
   it("warns when assistant text only pretends to call a registered tool", () => {
     const warn = vi.fn();
     const ctx = createMessageEndContext({
@@ -1220,6 +1291,34 @@ describe("handleMessageEnd", () => {
     // consumeReplyDirectives is called once with "" (the final flush for
     // text_end channels) but returns null, so emitBlockReply is never called.
     expect(emitBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("tags message-end safety replies with the current assistant message", () => {
+    const emitBlockReply = vi.fn();
+    const ctx = createMessageEndContext({
+      onBlockReply: vi.fn(),
+      emitBlockReply,
+      consumeReplyDirectives: vi.fn((text: string) => (text ? { text } : null)),
+      state: {
+        assistantMessageIndex: 7,
+        blockReplyBreak: "text_end",
+        lastBlockReplyText: null,
+      },
+    });
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Final answer" }],
+        usage: { input: 10, output: 5, total: 15 },
+      },
+    } as never);
+
+    expect(emitBlockReply).toHaveBeenCalledWith(
+      { text: "Final answer" },
+      { assistantMessageIndex: 7 },
+    );
   });
 
   it("does not duplicate block reply for text_end channels even when stripping differs", () => {

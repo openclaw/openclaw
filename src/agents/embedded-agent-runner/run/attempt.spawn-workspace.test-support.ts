@@ -19,6 +19,7 @@ import type {
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { Model } from "../../../llm/types.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
+import { createLazyPromise } from "../../../shared/lazy-runtime.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers.js";
 import type {
   MessagingToolSend,
@@ -95,6 +96,7 @@ type AttemptSpawnWorkspaceHoisted = {
   >;
   limitHistoryTurnsMock: Mock<<T>(messages: T, limit: number | undefined) => T>;
   preemptiveCompactionCalls: Parameters<ShouldPreemptivelyCompactBeforePromptFn>[0][];
+  compactionReserveTokens: number;
   systemPromptTexts: string[];
   embeddedSystemPromptInputs: unknown[];
   sessionManager: SessionManagerMocks;
@@ -200,6 +202,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     (messages) => messages,
   );
   const preemptiveCompactionCalls: Parameters<ShouldPreemptivelyCompactBeforePromptFn>[0][] = [];
+  const compactionReserveTokens = 0;
   const systemPromptTexts: string[] = [];
   const embeddedSystemPromptInputs: unknown[] = [];
   const sessionManager = {
@@ -244,6 +247,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     getHistoryLimitFromSessionKeyMock,
     limitHistoryTurnsMock,
     preemptiveCompactionCalls,
+    compactionReserveTokens,
     systemPromptTexts,
     embeddedSystemPromptInputs,
     sessionManager,
@@ -298,6 +302,15 @@ vi.mock("../../../plugins/plugin-metadata-snapshot.js", () => ({
   listPluginOriginsFromMetadataSnapshot: () => new Map(),
   loadPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
   resolvePluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
+}));
+
+vi.mock("../../../plugins/provider-hook-runtime.js", () => ({
+  ensureProviderRuntimePluginHandle: (params: Record<string, unknown>) =>
+    params.runtimeHandle ?? params,
+  prepareProviderExtraParams: () => undefined,
+  resolveProviderExtraParamsForTransport: () => undefined,
+  resolveProviderRuntimePluginHandle: (params: Record<string, unknown>) => params,
+  wrapProviderStreamFn: () => undefined,
 }));
 
 vi.mock("../../../trajectory/metadata.js", () => ({
@@ -427,7 +440,7 @@ vi.mock("../../docs-path.js", () => ({
 vi.mock("../../agent-project-settings.js", () => ({
   createPreparedEmbeddedAgentSettingsManager: () => ({
     reload: async () => {},
-    getCompactionReserveTokens: () => 0,
+    getCompactionReserveTokens: () => hoisted.compactionReserveTokens,
     getCompactionKeepRecentTokens: () => 40_000,
     getDefaultProvider: () => undefined,
     getDefaultModel: () => undefined,
@@ -924,18 +937,15 @@ function createCompletedAssistantStream(): TestAgentStream {
     },
   };
 }
-
-let runEmbeddedAttemptPromise:
-  | Promise<typeof import("./attempt.js").runEmbeddedAttempt>
-  | undefined;
 const ATTEMPT_SPAWN_WORKSPACE_TEST_SPECIFIER = "./attempt.ts?spawn-workspace-test";
 
-async function loadRunEmbeddedAttempt() {
-  runEmbeddedAttemptPromise ??= (
-    import(ATTEMPT_SPAWN_WORKSPACE_TEST_SPECIFIER) as Promise<typeof import("./attempt.js")>
-  ).then((mod) => mod.runEmbeddedAttempt);
-  return await runEmbeddedAttemptPromise;
-}
+const loadRunEmbeddedAttempt = createLazyPromise(
+  () =>
+    (import(ATTEMPT_SPAWN_WORKSPACE_TEST_SPECIFIER) as Promise<typeof import("./attempt.js")>).then(
+      (mod) => mod.runEmbeddedAttempt,
+    ),
+  { cacheRejections: true },
+);
 
 export async function preloadRunEmbeddedAttemptForTests(): Promise<void> {
   await loadRunEmbeddedAttempt();
@@ -1026,6 +1036,7 @@ export function resetEmbeddedAttemptHarness(
   hoisted.getHistoryLimitFromSessionKeyMock.mockReset().mockReturnValue(undefined);
   hoisted.limitHistoryTurnsMock.mockReset().mockImplementation((messages) => messages);
   hoisted.preemptiveCompactionCalls.length = 0;
+  hoisted.compactionReserveTokens = 0;
   hoisted.systemPromptTexts.length = 0;
   hoisted.embeddedSystemPromptInputs.length = 0;
   hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);

@@ -497,6 +497,7 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "stepfun-plan",
   "synthetic",
   "tencent-tokenhub",
+  "tencent-tokenplan",
   "together",
   "venice",
   "vercel-ai-gateway",

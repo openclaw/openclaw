@@ -62,6 +62,7 @@ describe("cron run log errorReason", () => {
       "timeout",
       "model_not_found",
       "session_expired",
+      "context_overflow",
       "empty_response",
       "no_error_details",
       "unclassified",

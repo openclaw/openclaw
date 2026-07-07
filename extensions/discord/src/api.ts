@@ -203,7 +203,14 @@ export async function requestDiscord<T>(
       if (!text.trim()) {
         return undefined as T;
       }
-      return JSON.parse(text) as T;
+      try {
+        return JSON.parse(text) as T;
+      } catch {
+        throw new DiscordApiError(
+          `Discord API ${path} returned malformed JSON`,
+          0,
+        );
+      }
     },
     {
       ...retryConfig,

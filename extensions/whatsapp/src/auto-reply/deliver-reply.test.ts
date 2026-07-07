@@ -811,14 +811,19 @@ describe("deliverWebReply", () => {
     });
 
     expect(sendWhatsApp).toHaveBeenCalledTimes(1);
-    expect(sendWhatsApp).toHaveBeenCalledWith("5511999999999@c.us", "caption", {
-      verbose: false,
-      cfg: {},
-      mediaUrl: "/tmp/voice.ogg",
-      mediaLocalRoots: undefined,
-      accountId: undefined,
-      gifPlayback: undefined,
-    });
+    expect(sendWhatsApp).toHaveBeenCalledWith(
+      "5511999999999@c.us",
+      "caption",
+      expect.objectContaining({
+        verbose: false,
+        cfg: {},
+        mediaUrl: "/tmp/voice.ogg",
+        mediaLocalRoots: undefined,
+        accountId: undefined,
+        gifPlayback: undefined,
+        onDeliveryResult: expect.any(Function),
+      }),
+    );
     expect(loadWebMedia).toHaveBeenCalledWith("/tmp/voice.ogg", {
       maxBytes: 1024 * 1024,
       localRoots: undefined,

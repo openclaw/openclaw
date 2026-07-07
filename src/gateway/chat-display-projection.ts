@@ -398,13 +398,19 @@ function toFiniteNumber(x: unknown): number | undefined {
   return asFiniteNumber(x);
 }
 
-function sanitizeCost(raw: unknown): { total?: number } | undefined {
+function sanitizeCost(raw: unknown): Record<string, number> | undefined {
   if (!raw || typeof raw !== "object") {
     return undefined;
   }
   const c = raw as Record<string, unknown>;
-  const total = toFiniteNumber(c.total);
-  return total !== undefined ? { total } : undefined;
+  const out: Record<string, number> = {};
+  for (const key of ["input", "output", "cacheRead", "cacheWrite", "total"] as const) {
+    const value = toFiniteNumber(c[key]);
+    if (value !== undefined) {
+      out[key] = value;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function sanitizeUsage(raw: unknown): Record<string, number> | undefined {
@@ -1494,6 +1500,38 @@ function isDuplicateAcpGatewayInjectedMessage(
   return Boolean(previousText && currentText && previousText === currentText);
 }
 
+function isDuplicateChannelFinalDeliveryMirror(
+  current: Record<string, unknown>,
+  previousVisible: Record<string, unknown> | undefined,
+): boolean {
+  if (!previousVisible || !isOpenClawDeliveryMirrorAssistantMessage(current)) {
+    return false;
+  }
+  const deliveryMirror = readRecord(current.openclawDeliveryMirror);
+  if (deliveryMirror?.kind !== "channel-final") {
+    return false;
+  }
+  if (asRoleContentMessage(previousVisible)?.role !== "assistant") {
+    return false;
+  }
+  if (isOpenClawDeliveryMirrorAssistantMessage(previousVisible)) {
+    return false;
+  }
+  if (isProjectedSessionsSendForwardedMessage(previousVisible)) {
+    return false;
+  }
+  const previousMeta = readRecord(previousVisible["__openclaw"]);
+  if (typeof previousMeta?.mirrorIdentity !== "string" || !previousMeta.mirrorIdentity.trim()) {
+    return false;
+  }
+  if (hasAssistantNonTextContent(previousVisible) || hasAssistantNonTextContent(current)) {
+    return false;
+  }
+  const previousText = displayTextForDuplicateCheck(previousVisible);
+  const currentText = displayTextForDuplicateCheck(current);
+  return Boolean(previousText && currentText && previousText === currentText);
+}
+
 function toProjectedMessages(messages: unknown[]): Array<Record<string, unknown>> {
   return messages.filter(
     (message): message is Record<string, unknown> =>
@@ -1532,7 +1570,10 @@ function filterVisibleProjectedHistoryMessages(
       changed = true;
       continue;
     }
-    if (isDuplicateAcpGatewayInjectedMessage(current, visible.at(-1))) {
+    if (
+      isDuplicateAcpGatewayInjectedMessage(current, visible.at(-1)) ||
+      isDuplicateChannelFinalDeliveryMirror(current, messages[i - 1])
+    ) {
       changed = true;
       continue;
     }

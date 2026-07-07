@@ -36,4 +36,88 @@ describe("plugin registry Control UI descriptors", () => {
       }),
     ]);
   });
+
+  it("accepts tab descriptors and normalizes their placement fields", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({ id: "tab-fixture", name: "Tab Fixture" }),
+      register(api) {
+        api.registerControlUiDescriptor({
+          surface: "tab",
+          id: "journal",
+          label: "Journal",
+          icon: "sun",
+          group: "control",
+          order: 5,
+          requiredScopes: ["operator.read"],
+        });
+      },
+    });
+
+    expect(registry.registry.controlUiDescriptors).toEqual([
+      expect.objectContaining({
+        pluginId: "tab-fixture",
+        descriptor: expect.objectContaining({
+          id: "journal",
+          surface: "tab",
+          label: "Journal",
+          icon: "sun",
+          group: "control",
+          order: 5,
+          requiredScopes: ["operator.read"],
+        }),
+      }),
+    ]);
+  });
+
+  it("rejects protocol-relative tab paths that would iframe external content", () => {
+    for (const path of ["//attacker.example/panel", "/\\attacker.example/panel"]) {
+      const { config, registry } = createPluginRegistryFixture();
+      registerTestPlugin({
+        registry,
+        config,
+        record: createPluginRecord({ id: "external-tab", name: "External Tab" }),
+        register(api) {
+          api.registerControlUiDescriptor({
+            surface: "tab",
+            id: "journal",
+            label: "Journal",
+            path,
+          });
+        },
+      });
+      expect(registry.registry.controlUiDescriptors).toEqual([]);
+      expect(registry.registry.diagnostics).toContainEqual(
+        expect.objectContaining({ level: "error", pluginId: "external-tab" }),
+      );
+    }
+  });
+
+  it("rejects tab descriptors whose path is not absolute", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({ id: "bad-tab-fixture", name: "Bad Tab Fixture" }),
+      register(api) {
+        api.registerControlUiDescriptor({
+          surface: "tab",
+          id: "journal",
+          label: "Journal",
+          path: "relative/frame.html",
+        });
+      },
+    });
+
+    expect(registry.registry.controlUiDescriptors).toEqual([]);
+    expect(registry.registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        pluginId: "bad-tab-fixture",
+        message: expect.stringContaining("gateway-local absolute path"),
+      }),
+    );
+  });
 });

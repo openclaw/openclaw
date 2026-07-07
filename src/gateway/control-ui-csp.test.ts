@@ -65,6 +65,30 @@ describe("buildControlUiCspHeader", () => {
     const csp = buildControlUiCspHeader({ inlineScriptHashes: [] });
     expect(csp).toMatch(/script-src 'self'(?:;|$)/);
   });
+
+  it("does not relax the policy for the terminal unless allowWasm is set", () => {
+    const csp = buildControlUiCspHeader();
+    expect(csp).not.toContain("wasm-unsafe-eval");
+    expect(csp).not.toMatch(/connect-src[^;]*data:/);
+  });
+
+  it("relaxes script-src and connect-src for the terminal's ghostty-web WASM engine", () => {
+    const csp = buildControlUiCspHeader({ allowWasm: true });
+    // Narrow WASM compilation permission — never full unsafe-eval.
+    expect(csp).toMatch(/script-src[^;]*'wasm-unsafe-eval'/);
+    expect(csp).not.toMatch(/script-src[^;]*'unsafe-eval'(?!-)/);
+    // ghostty-web fetches its inlined WASM from a data: URL.
+    expect(csp).toMatch(/connect-src[^;]*\bdata:/);
+  });
+
+  it("keeps inline script hashes alongside the wasm relaxation", () => {
+    const csp = buildControlUiCspHeader({
+      inlineScriptHashes: ["sha256-abc123"],
+      allowWasm: true,
+    });
+    expect(csp).toContain("'sha256-abc123'");
+    expect(csp).toContain("'wasm-unsafe-eval'");
+  });
 });
 
 describe("computeInlineScriptHashes", () => {

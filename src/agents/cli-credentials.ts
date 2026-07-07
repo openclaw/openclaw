@@ -344,15 +344,9 @@ function readCodexKeychainCredentials(options?: {
   }
 }
 
-function readPortalCliOauthCredentials<TProvider extends string>(
-  credPath: string,
-  provider: TProvider,
-): { type: "oauth"; provider: TProvider; access: string; refresh: string; expires: number } | null {
-  const raw = loadJsonFile(credPath);
-  if (!raw || typeof raw !== "object") {
-    return null;
-  }
-  const data = raw as Record<string, unknown>;
+function readCliOauthTokenFields(
+  data: Record<string, unknown>,
+): { access: string; refresh: string; expires: number } | null {
   const accessToken = data.access_token;
   const refreshToken = data.refresh_token;
   const expiresAt = data.expiry_date;
@@ -367,13 +361,19 @@ function readPortalCliOauthCredentials<TProvider extends string>(
     return null;
   }
 
-  return {
-    type: "oauth",
-    provider,
-    access: accessToken,
-    refresh: refreshToken,
-    expires: expiresAt,
-  };
+  return { access: accessToken, refresh: refreshToken, expires: expiresAt };
+}
+
+function readPortalCliOauthCredentials<TProvider extends string>(
+  credPath: string,
+  provider: TProvider,
+): { type: "oauth"; provider: TProvider; access: string; refresh: string; expires: number } | null {
+  const raw = loadJsonFile(credPath);
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const tokens = readCliOauthTokenFields(raw as Record<string, unknown>);
+  return tokens ? { type: "oauth", provider, ...tokens } : null;
 }
 
 function readMiniMaxCliCredentials(options?: { homeDir?: string }): MiniMaxCliCredential | null {
@@ -388,17 +388,8 @@ function readGeminiCliCredentials(options?: { homeDir?: string }): GeminiCliCred
     return null;
   }
   const data = raw as Record<string, unknown>;
-  const accessToken = data.access_token;
-  const refreshToken = data.refresh_token;
-  const expiresAt = data.expiry_date;
-
-  if (typeof accessToken !== "string" || !accessToken) {
-    return null;
-  }
-  if (typeof refreshToken !== "string" || !refreshToken) {
-    return null;
-  }
-  if (typeof expiresAt !== "number" || !Number.isFinite(expiresAt)) {
+  const tokens = readCliOauthTokenFields(data);
+  if (!tokens) {
     return null;
   }
 
@@ -416,9 +407,7 @@ function readGeminiCliCredentials(options?: { homeDir?: string }): GeminiCliCred
   return {
     type: "oauth",
     provider: "google-gemini-cli",
-    access: accessToken,
-    refresh: refreshToken,
-    expires: expiresAt,
+    ...tokens,
     ...(identity.email ? { email: identity.email } : {}),
     ...(identity.sub ? { accountId: identity.sub } : {}),
   };

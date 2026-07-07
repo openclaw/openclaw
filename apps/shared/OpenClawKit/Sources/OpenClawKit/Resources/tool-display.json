@@ -418,6 +418,15 @@
         "proposal_id"
       ]
     },
+    "crestodian": {
+      "emoji": "🦀",
+      "title": "Crestodian",
+      "detailKeys": [
+        "action",
+        "path",
+        "model"
+      ]
+    },
     "gateway": {
       "emoji": "🔌",
       "title": "Gateway",

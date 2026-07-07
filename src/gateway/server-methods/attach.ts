@@ -3,7 +3,7 @@ import { resolveMainSessionKey } from "../../config/sessions.js";
 import { mintAttachGrant, revokeAttachGrant } from "../mcp-grant-store.js";
 import { ensureMcpLoopbackServer } from "../mcp-http.js";
 import {
-  createMcpLoopbackServerConfig,
+  createMcpAttachGrantServerConfig,
   getActiveMcpLoopbackRuntime,
 } from "../mcp-http.loopback-runtime.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -42,10 +42,9 @@ export const attachHandlers: GatewayRequestHandlers = {
       sessionKey: grant.sessionKey,
       token: grant.token,
       expiresAtMs: grant.expiresAtMs,
-      mcpConfig: createMcpLoopbackServerConfig(runtime.port),
+      mcpConfig: createMcpAttachGrantServerConfig(runtime.port),
       env: {
         OPENCLAW_MCP_TOKEN: grant.token,
-        OPENCLAW_MCP_SESSION_KEY: grant.sessionKey,
       },
     });
   },

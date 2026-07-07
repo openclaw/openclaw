@@ -13,6 +13,7 @@ import {
   nameFromAnyPath,
 } from "@openclaw/media-core/file-name";
 import { detectMime, extensionForMime } from "@openclaw/media-core/mime";
+import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { toErrorObject } from "../infra/errors.js";
 import { fileStore } from "../infra/file-store.js";
@@ -216,7 +217,7 @@ export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS, options: CleanOldMed
 }
 
 function looksLikeUrl(src: string) {
-  return /^https?:\/\//i.test(src);
+  return hasHttpUrlPrefix(src);
 }
 
 function discardIgnoredHttpResponse(res: NodeJS.ReadableStream): void {

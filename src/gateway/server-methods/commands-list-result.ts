@@ -64,6 +64,18 @@ function resolveNativeName(cmd: ChatCommandDefinition, provider?: string): strin
   );
 }
 
+function supportsNativeProvider(cmd: ChatCommandDefinition, provider?: string): boolean {
+  if (!cmd.nativeProviders?.length) {
+    return true;
+  }
+  if (!provider) {
+    return true;
+  }
+  return cmd.nativeProviders.some(
+    (candidate) => normalizeOptionalLowercaseString(candidate) === provider,
+  );
+}
+
 function stripLeadingSlash(value: string): string {
   return value.startsWith("/") ? value.slice(1) : value;
 }
@@ -212,6 +224,13 @@ export function buildCommandsListResult(params: {
 
   for (const cmd of chatCommands) {
     if (scopeFilter !== "both" && cmd.scope !== "both" && cmd.scope !== scopeFilter) {
+      continue;
+    }
+    if (
+      nameSurface === "native" &&
+      cmd.scope !== "text" &&
+      !supportsNativeProvider(cmd, provider)
+    ) {
       continue;
     }
     commands.push(

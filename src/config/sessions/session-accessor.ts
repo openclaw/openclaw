@@ -2,11 +2,13 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   acquireSessionWriteLock,
   resolveSessionWriteLockOptions,
 } from "../../agents/session-write-lock.js";
+import type { MsgContext } from "../../auto-reply/templating.js";
 import {
   resolveSessionStoreAgentId,
   resolveSessionStoreKey,
@@ -19,6 +21,8 @@ import type {
   SessionTranscriptUpdate,
   SessionTranscriptUpdateTarget,
 } from "../../sessions/transcript-events.js";
+import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { formatSessionArchiveTimestamp } from "./artifacts.js";
 import { extractGeneratedTranscriptSessionId } from "./generated-transcript-session-id.js";
@@ -54,8 +58,10 @@ import {
   purgeDeletedAgentSessionEntries as purgeFileDeletedAgentSessionEntries,
   projectSessionEntryForPersistenceRevision,
   readSessionUpdatedAt as readFileSessionUpdatedAt,
+  recordSessionMetaFromInbound as recordFileSessionMetaFromInbound,
   resolveSessionStoreEntry,
   resetSessionEntryLifecycle as resetFileSessionEntryLifecycle,
+  updateLastRoute as updateFileSessionLastRoute,
   updateSessionStore,
   updateSessionStoreEntry as updateFileSessionStoreEntry,
   type DeleteSessionEntryLifecycleResult,
@@ -88,7 +94,7 @@ import {
 } from "./transcript-append.js";
 import { resolveSessionTranscriptFile } from "./transcript-file-resolve.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
-import { writeJsonlLines } from "./transcript-jsonl.js";
+import { serializeJsonlLine, writeJsonlLines } from "./transcript-jsonl.js";
 import { replayRecentUserAssistantMessages } from "./transcript-replay.js";
 import { streamSessionTranscriptLines } from "./transcript-stream.js";
 import {
@@ -100,7 +106,7 @@ import {
   resolveOwnedSessionTranscriptWriteLockRunner,
   withOwnedSessionTranscriptWrites,
 } from "./transcript-write-context.js";
-import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
+import type { GroupKeyResolution, SessionCompactionCheckpoint, SessionEntry } from "./types.js";
 
 /**
  * Session access API for callers that need entries or transcripts without
@@ -255,6 +261,13 @@ export type SessionEntrySummary = {
   entry: SessionEntry;
 };
 
+export type SessionEntryReadView = {
+  /** Row stored under the exact persisted key; no alias or canonical-key resolution. */
+  get(sessionKey: string): SessionEntry | undefined;
+  /** Every persisted row; call only when exact-key probes cannot settle the lookup. */
+  entries(): SessionEntrySummary[];
+};
+
 /** Raw transcript record for non-message events; message records use appendTranscriptMessage. */
 export type TranscriptEvent = unknown;
 
@@ -316,6 +329,8 @@ export type SessionTranscriptTurnPersistOptions = {
    * the same write transaction as the transcript append and metadata touch.
    */
   expectedSessionId?: string;
+  /** Rejects the turn when lifecycle ownership changed without rotating the session id. */
+  expectedLifecycleRevision?: string;
   /** Message rows to append under one transcript write lock. */
   messages: readonly SessionTranscriptTurnMessageAppend[];
   /** Controls whether the update event includes the last appended message. */
@@ -404,11 +419,6 @@ export type SessionLifecycleTranscriptInfo = {
   transcriptArchived?: boolean;
 };
 
-export type SessionLifecycleRolloverResult = {
-  previousSessionTranscript: SessionLifecycleTranscriptInfo;
-  sessionEntry: SessionEntry;
-};
-
 export type ReplySessionInitializationSnapshot = {
   currentEntry?: SessionEntry;
   readEntry: (sessionKey: string) => SessionEntry | undefined;
@@ -440,14 +450,9 @@ type SessionEntryRetirement = {
   key: string;
 };
 
-let sessionArchiveRuntimePromise: Promise<
-  typeof import("../../gateway/session-archive.runtime.js")
-> | null = null;
-
-function loadSessionArchiveRuntime() {
-  sessionArchiveRuntimePromise ??= import("../../gateway/session-archive.runtime.js");
-  return sessionArchiveRuntimePromise;
-}
+const loadSessionArchiveRuntime = createLazyRuntimeModule(
+  () => import("../../gateway/session-archive.runtime.js"),
+);
 
 export type SessionEntryPatchOptions = {
   /** Entry to synthesize when a patch operation is allowed to create. */
@@ -679,6 +684,14 @@ export type DeleteSessionEntryLifecycleParams = {
   agentId?: string;
   /** Whether transcript artifacts should be archived/deleted with the entry. */
   archiveTranscript: boolean;
+  /** Optional exact row guard checked under the storage writer lock. */
+  expectedEntry?: SessionEntry;
+  /** Optional provider-run identity guard checked under the storage writer lock. */
+  expectedSessionId?: string;
+  /** Optional owner revision guard checked under the storage writer lock. */
+  expectedLifecycleRevision?: string;
+  /** Optional persisted revision guard checked under the storage writer lock. */
+  expectedUpdatedAt?: number;
   /** Explicit store target for file-backed stores and SQLite migration adapters. */
   storePath: string;
   /** Canonical key plus aliases that identify the logical entry. */
@@ -922,14 +935,29 @@ export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | unde
 /** Lists entries from the resolved store, preserving the persisted key for each row. */
 export function listSessionEntries(scope: SessionEntryListScope = {}): SessionEntrySummary[] {
   if (scope.clone === false) {
-    return Object.entries(
-      loadSessionStore(resolveSessionStorePathForScope({ ...scope, sessionKey: "" }), {
-        clone: false,
-        ...(scope.hydrateSkillPromptRefs === false ? { hydrateSkillPromptRefs: false } : {}),
-      }),
-    ).map(([sessionKey, entry]) => ({ sessionKey, entry }));
+    return openSessionEntryReadView(scope).entries();
   }
   return listFileSessionEntries(scope);
+}
+
+/**
+ * Borrowed keyed view over one resolved store for synchronous read-only hot paths.
+ * Unlike loadSessionEntry, `get` is a raw exact persisted-key probe with no alias
+ * or canonical-key resolution and no row scans, so large stores stay cheap until
+ * `entries` is called. Rows are borrowed, not cloned: callers must not mutate them
+ * and must drop the view before any await.
+ */
+export function openSessionEntryReadView(
+  scope: Omit<SessionEntryListScope, "clone" | "readConsistency"> = {},
+): SessionEntryReadView {
+  const store = loadSessionStore(resolveSessionStorePathForScope({ ...scope, sessionKey: "" }), {
+    clone: false,
+    ...(scope.hydrateSkillPromptRefs === false ? { hydrateSkillPromptRefs: false } : {}),
+  });
+  return {
+    get: (sessionKey) => (Object.hasOwn(store, sessionKey) ? store[sessionKey] : undefined),
+    entries: () => Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry })),
+  };
 }
 
 /** Reads the last activity timestamp for one session entry, or undefined when absent. */
@@ -1156,17 +1184,113 @@ function cloneSessionEntries(store: Record<string, SessionEntry>): Record<string
   );
 }
 
+function collectSessionEntryKeys(...entries: SessionEntry[]): Array<keyof SessionEntry> {
+  const keys = new Set<keyof SessionEntry>();
+  for (const entry of entries) {
+    for (const key of Object.keys(entry) as Array<keyof SessionEntry>) {
+      keys.add(key);
+    }
+  }
+  return [...keys];
+}
+
+function sessionEntryFieldEqual(
+  left: SessionEntry[keyof SessionEntry],
+  right: SessionEntry[keyof SessionEntry],
+): boolean {
+  return Object.is(left, right) || isDeepStrictEqual(left, right);
+}
+
+function sessionEntryFieldUnset(
+  hasValue: boolean,
+  value: SessionEntry[keyof SessionEntry],
+): boolean {
+  return !hasValue || value === undefined;
+}
+
+function sessionEntryFieldUnchanged(params: {
+  leftHasValue: boolean;
+  leftValue: SessionEntry[keyof SessionEntry];
+  rightHasValue: boolean;
+  rightValue: SessionEntry[keyof SessionEntry];
+}): boolean {
+  const { leftHasValue, leftValue, rightHasValue, rightValue } = params;
+  if (
+    sessionEntryFieldUnset(leftHasValue, leftValue) &&
+    sessionEntryFieldUnset(rightHasValue, rightValue)
+  ) {
+    return true;
+  }
+  return leftHasValue === rightHasValue && sessionEntryFieldEqual(leftValue, rightValue);
+}
+
+// Background activity can mutate non-identity fields after the initialization
+// snapshot. Carry forward only same-session changes; the prepared entry still
+// wins for any field it explicitly modified relative to the snapshot. This
+// preserves heartbeat/delivery/context metadata without resurrecting fields that
+// a reset intentionally cleared or carrying old-session metadata into /new.
+function mergeConcurrentReplySessionMetadata(params: {
+  currentEntry: SessionEntry;
+  preparedEntry: SessionEntry;
+  snapshotEntry?: SessionEntry;
+}): SessionEntry {
+  const { currentEntry, preparedEntry, snapshotEntry } = params;
+  if (!snapshotEntry || preparedEntry.sessionId !== snapshotEntry.sessionId) {
+    return preparedEntry;
+  }
+  const merged: SessionEntry = { ...preparedEntry };
+  const mergedFields = merged as Partial<
+    Record<keyof SessionEntry, SessionEntry[keyof SessionEntry]>
+  >;
+  for (const key of collectSessionEntryKeys(currentEntry, preparedEntry, snapshotEntry)) {
+    const currentHasValue = Object.hasOwn(currentEntry, key);
+    const snapshotHasValue = Object.hasOwn(snapshotEntry, key);
+    const preparedHasValue = Object.hasOwn(preparedEntry, key);
+    const currentValue = currentEntry[key];
+    const snapshotValue = snapshotEntry[key];
+    const preparedValue = preparedEntry[key];
+    const currentChanged = !sessionEntryFieldUnchanged({
+      leftHasValue: currentHasValue,
+      leftValue: currentValue,
+      rightHasValue: snapshotHasValue,
+      rightValue: snapshotValue,
+    });
+    const preparedKeptSnapshot = sessionEntryFieldUnchanged({
+      leftHasValue: preparedHasValue,
+      leftValue: preparedValue,
+      rightHasValue: snapshotHasValue,
+      rightValue: snapshotValue,
+    });
+    if (currentChanged && preparedKeptSnapshot) {
+      if (currentHasValue) {
+        mergedFields[key] = currentValue;
+      } else {
+        delete mergedFields[key];
+      }
+    }
+  }
+  return merged;
+}
+
 function createReplySessionInitializationRevision(params: {
   entry: SessionEntry | undefined;
   storePath: string;
 }): string {
   const { entry, storePath } = params;
-  // Snapshot reads may see promptRef-only disk entries while commit reads can
-  // see hydrated prompt text and runtime-only resolvedSkills cache entries.
-  // Compare the canonical persisted shape so cache hydration is not a conflict.
-  return JSON.stringify(
-    entry ? projectSessionEntryForPersistenceRevision({ storePath, entry }) : null,
-  );
+  if (!entry) {
+    return JSON.stringify(null);
+  }
+  // The guard only rejects a true session-identity rebind. Same-session
+  // activity/context writes are merged below; comparing them here would reject
+  // before the merge can preserve the concurrent metadata.
+  const projected = projectSessionEntryForPersistenceRevision({ storePath, entry });
+  const revisionEntry: Pick<SessionEntry, "sessionFile" | "sessionId"> = {
+    sessionId: projected.sessionId,
+  };
+  if (projected.sessionFile !== undefined) {
+    revisionEntry.sessionFile = projected.sessionFile;
+  }
+  return JSON.stringify(revisionEntry);
 }
 
 function resolveInitializedReplySessionEntry(params: {
@@ -1236,6 +1360,57 @@ function ensureCreatedSessionTranscript(params: {
   }
 }
 
+/** Fork target identity generated by createForkedSessionTranscript. */
+export type ForkedSessionTranscriptTarget = {
+  sessionFile: string;
+  sessionId: string;
+};
+
+export type CreateForkedSessionTranscriptParams = {
+  /** Working directory recorded in the forked transcript header. */
+  cwd: string;
+  /** Source transcript recorded as the fork's parentSession lineage. */
+  parentSessionFile: string;
+  /** Directory that owns the forked transcript artifact. */
+  sessionsDir: string;
+  /**
+   * Builds the non-header records copied into the fork, in transcript order.
+   * Receives the generated fork identity so records can share its timestamp.
+   */
+  buildEntries?: (fork: { sessionId: string; timestamp: string }) => readonly unknown[];
+};
+
+/**
+ * Creates a forked transcript artifact under a fresh session id as one storage
+ * operation. File-backed storage writes header plus copied records as a new
+ * JSONL artifact; SQLite implements the same fork as transcript row copies
+ * inside one write transaction (#88838).
+ */
+export async function createForkedSessionTranscript(
+  params: CreateForkedSessionTranscriptParams,
+): Promise<ForkedSessionTranscriptTarget> {
+  const sessionId = randomUUID();
+  const timestamp = new Date().toISOString();
+  // Fork artifacts keep the timestamp-prefixed file name so sibling transcripts
+  // in one sessions dir sort by creation time.
+  const fileTimestamp = timestamp.replace(/[:.]/g, "-");
+  const sessionFile = path.join(params.sessionsDir, `${fileTimestamp}_${sessionId}.jsonl`);
+  const header = createSessionTranscriptHeader({
+    sessionId,
+    cwd: params.cwd,
+    parentSession: params.parentSessionFile,
+    timestamp,
+  });
+  const entries = params.buildEntries?.({ sessionId, timestamp }) ?? [];
+  fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+  // "wx" keeps create-only semantics: a fork must never clobber an existing transcript.
+  await writeJsonlLines(sessionFile, [header, ...entries].map(serializeJsonlLine), {
+    flag: "wx",
+    mode: 0o600,
+  });
+  return { sessionFile, sessionId };
+}
+
 /** Updates an existing entry only; returns null when the session is absent. */
 export async function updateSessionEntry(
   scope: SessionAccessScope,
@@ -1252,6 +1427,69 @@ export async function updateSessionEntry(
     requireWriteSuccess: options.requireWriteSuccess,
     update,
   });
+}
+
+export type RecordInboundSessionMetaParams = {
+  /** Set false to only patch existing entries; missing sessions stay absent. */
+  createIfMissing?: boolean;
+  /** Inbound message context whose stable metadata is derived and persisted. */
+  ctx: MsgContext;
+  /** Group routing resolution for group-owned session keys. */
+  groupResolution?: GroupKeyResolution | null;
+  /** Canonical or alias session key for the inbound conversation. */
+  sessionKey: string;
+  /** Explicit store target for file-backed stores and SQLite migration adapters. */
+  storePath: string;
+};
+
+export type UpdateSessionLastRouteParams = {
+  /** Account owning the delivery route when the channel is multi-account. */
+  accountId?: string;
+  /** Delivery channel id persisted as the last route channel. */
+  channel?: SessionEntry["lastChannel"];
+  /** Set false to only patch existing entries; missing sessions stay absent. */
+  createIfMissing?: boolean;
+  /** Optional inbound context whose session metadata is derived alongside the route. */
+  ctx?: MsgContext;
+  /** Explicit delivery context merged over the persisted session fallback. */
+  deliveryContext?: DeliveryContext;
+  /** Group routing resolution for group-owned session keys. */
+  groupResolution?: GroupKeyResolution | null;
+  /** Canonical channel route persisted as the session route slot. */
+  route?: SessionEntry["route"];
+  /** Canonical or alias session key for the routed conversation. */
+  sessionKey: string;
+  /** Explicit store target for file-backed stores and SQLite migration adapters. */
+  storePath: string;
+  /** Thread/topic id for the delivery route, when the transport has one. */
+  threadId?: string | number;
+  /** Delivery target persisted as the last route recipient. */
+  to?: string;
+};
+
+/**
+ * Records stable conversation metadata derived from one inbound message as a
+ * single storage-sized upsert (createIfMissing by default). Inbound metadata
+ * must not refresh activity timestamps — idle reset relies on updatedAt from
+ * real session turns — so existing rows merge with preserve-activity
+ * semantics while legacy alias keys collapse onto the canonical row.
+ */
+export async function recordInboundSessionMeta(
+  params: RecordInboundSessionMetaParams,
+): Promise<SessionEntry | null> {
+  return await recordFileSessionMetaFromInbound(params);
+}
+
+/**
+ * Persists the last known delivery route for one session as a single
+ * storage-sized patch. Route updates preserve activity timestamps (#49515)
+ * and merge explicit route/delivery input over the persisted session
+ * fallback before normalizing the derived last* fields.
+ */
+export async function updateSessionLastRoute(
+  params: UpdateSessionLastRouteParams,
+): Promise<SessionEntry | null> {
+  return await updateFileSessionLastRoute(params);
 }
 
 /** Resolves one abort target identity without exposing the mutable store. */
@@ -1658,54 +1896,6 @@ export async function persistSessionResetLifecycle(params: {
   return { replayedMessages };
 }
 
-/**
- * Persists a reply session rollover and returns stable previous-transcript
- * data for lifecycle hooks. Non-storage runtime cleanup remains with callers.
- */
-export async function persistSessionRolloverLifecycle(params: {
-  activeSessionKey: string;
-  agentId: string;
-  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
-  onArchiveError?: (error: unknown, sourcePath: string) => void;
-  onMaintenanceWarning?: (warning: SessionMaintenanceWarning) => void | Promise<void>;
-  previousEntry?: SessionEntry;
-  retiredEntry?: SessionEntryRetirement;
-  sessionEntry: SessionEntry;
-  sessionKey: string;
-  storePath: string;
-}): Promise<SessionLifecycleRolloverResult> {
-  await updateSessionStore(
-    params.storePath,
-    (store) => {
-      store[params.sessionKey] = {
-        ...store[params.sessionKey],
-        ...params.sessionEntry,
-      };
-      if (params.retiredEntry) {
-        store[params.retiredEntry.key] = params.retiredEntry.entry;
-      }
-      return store[params.sessionKey] ?? params.sessionEntry;
-    },
-    {
-      activeSessionKey: params.activeSessionKey,
-      maintenanceConfig: params.maintenanceConfig,
-      onWarn: params.onMaintenanceWarning,
-    },
-  );
-
-  const previousSessionTranscript = await archivePreviousSessionTranscript({
-    agentId: params.agentId,
-    onArchiveError: params.onArchiveError,
-    previousEntry: params.previousEntry,
-    storePath: params.storePath,
-  });
-
-  return {
-    previousSessionTranscript,
-    sessionEntry: params.sessionEntry,
-  };
-}
-
 /** Loads the reply-session initialization rows without exposing a mutable store. */
 export function loadReplySessionInitializationSnapshot(params: {
   storePath: string;
@@ -1748,6 +1938,7 @@ export async function commitReplySessionInitialization(params: {
   retiredEntry?: SessionEntryRetirement;
   sessionEntry: SessionEntry;
   sessionKey: string;
+  snapshotEntry?: SessionEntry;
   storePath: string;
 }): Promise<ReplySessionInitializationCommitResult> {
   const committed = await updateSessionStore(
@@ -1786,7 +1977,18 @@ export async function commitReplySessionInitialization(params: {
         sessionEntry: preparedSessionEntry,
         storePath: params.storePath,
       });
-      store[resolved.normalizedKey] = sessionEntry;
+      // The identity-only guard allows commits when background activity touched
+      // non-identity metadata after the snapshot. Merge only the fields that
+      // actually changed since the snapshot so heartbeat/delivery/context
+      // metadata is not rolled back, while reset-cleared fields (e.g. provider
+      // or model overrides on /new) stay cleared.
+      store[resolved.normalizedKey] = currentEntry
+        ? mergeConcurrentReplySessionMetadata({
+            currentEntry,
+            preparedEntry: sessionEntry,
+            snapshotEntry: params.snapshotEntry ?? params.previousEntry,
+          })
+        : sessionEntry;
       if (params.retiredEntry) {
         store[params.retiredEntry.key] = params.retiredEntry.entry;
       }
@@ -2397,7 +2599,11 @@ async function persistExpectedSessionTranscriptTurn(
       storePath: scope.storePath,
     },
     async (currentEntry) => {
-      if (currentEntry.sessionId !== expectedSessionId) {
+      if (
+        currentEntry.sessionId !== expectedSessionId ||
+        (options.expectedLifecycleRevision !== undefined &&
+          currentEntry.lifecycleRevision !== options.expectedLifecycleRevision)
+      ) {
         rejectedEntry = currentEntry;
         return null;
       }
@@ -2433,7 +2639,12 @@ async function persistExpectedSessionTranscriptTurn(
     { skipMaintenance: true },
   );
 
-  if (rejectedEntry || updated?.sessionId !== expectedSessionId) {
+  if (
+    rejectedEntry ||
+    updated?.sessionId !== expectedSessionId ||
+    (options.expectedLifecycleRevision !== undefined &&
+      updated.lifecycleRevision !== options.expectedLifecycleRevision)
+  ) {
     return {
       appendedCount: 0,
       messages: [],

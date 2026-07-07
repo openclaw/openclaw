@@ -163,6 +163,7 @@ object InvokeCommandRegistry {
       ),
       InvokeCommandSpec(
         name = OpenClawTalkCommand.PttOnce.rawValue,
+        requiresForeground = true,
       ),
       InvokeCommandSpec(
         name = OpenClawCameraCommand.List.rawValue,

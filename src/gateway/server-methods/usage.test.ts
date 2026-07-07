@@ -89,6 +89,20 @@ describe("gateway usage helpers", () => {
     return result.value;
   }
 
+  function withTimeZone<T>(timeZone: string, run: () => T): T {
+    const previous = process.env.TZ;
+    process.env.TZ = timeZone;
+    try {
+      return run();
+    } finally {
+      if (previous === undefined) {
+        delete process.env.TZ;
+      } else {
+        process.env.TZ = previous;
+      }
+    }
+  }
+
   beforeEach(() => {
     testApi.costUsageCache.clear();
     vi.useRealTimers();
@@ -262,6 +276,35 @@ describe("gateway usage helpers", () => {
     expect(range.endMs).toBe(expectedStart + dayMs - 1);
   });
 
+  it("resolveDateRange uses gateway calendar end boundaries for explicit DST-short days", () => {
+    withTimeZone("America/New_York", () => {
+      const range = expectDateRange(
+        testApi.resolveDateRange({
+          startDate: "2026-03-08",
+          endDate: "2026-03-08",
+          mode: "gateway",
+        }),
+      );
+      expect(range.startMs).toBe(new Date(2026, 2, 8).getTime());
+      expect(range.endMs).toBe(new Date(2026, 2, 9).getTime() - 1);
+    });
+  });
+
+  it("resolveDateRange keeps trailing gateway ranges on calendar days across DST", () => {
+    withTimeZone("America/New_York", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-03-09T12:00:00.000Z"));
+      const range = expectDateRange(
+        testApi.resolveDateRange({
+          days: 2,
+          mode: "gateway",
+        }),
+      );
+      expect(range.startMs).toBe(new Date(2026, 2, 8).getTime());
+      expect(range.endMs).toBe(new Date(2026, 2, 10).getTime() - 1);
+    });
+  });
+
   it("resolveDateRange clamps days to at least 1 and defaults to 30 days", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-02-05T12:34:56.000Z"));
@@ -329,6 +372,31 @@ describe("gateway usage helpers", () => {
     });
   });
 
+  it("keeps cost usage cache entries scoped by daily timezone offset", async () => {
+    const config = {} as OpenClawConfig;
+
+    await testApi.loadCostUsageSummaryCached({
+      startMs: 1,
+      endMs: 2,
+      dailyUtcOffsetMinutes: 0,
+      config,
+    });
+    await testApi.loadCostUsageSummaryCached({
+      startMs: 1,
+      endMs: 2,
+      dailyUtcOffsetMinutes: -300,
+      config,
+    });
+    await testApi.loadCostUsageSummaryCached({
+      startMs: 1,
+      endMs: 2,
+      dailyUtcOffsetMinutes: 0,
+      config,
+    });
+
+    expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(2);
+  });
+
   it("passes usage.cost agentId through to the cost summary loader", async () => {
     const respond = vi.fn();
 
@@ -341,6 +409,25 @@ describe("gateway usage helpers", () => {
     expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
     expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "research" }),
+    );
+  });
+
+  it("buckets usage.cost daily rows with the requested UTC offset", async () => {
+    const respond = vi.fn();
+
+    await usageHandlers["usage.cost"]({
+      respond,
+      params: {
+        startDate: "2026-02-01",
+        endDate: "2026-02-02",
+        mode: "specific",
+        utcOffset: "UTC-5",
+      },
+      context: { getRuntimeConfig: () => ({}) },
+    } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
+
+    expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledWith(
+      expect.objectContaining({ dailyUtcOffsetMinutes: -300 }),
     );
   });
 

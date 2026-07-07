@@ -50,7 +50,12 @@ import {
 } from "./client-fetch.js";
 import { resolveTelegramTransport } from "./fetch.js";
 import { resolveTelegramScopedGroupConfig } from "./group-config-helpers.js";
+import {
+  buildTelegramGroupHistorySelfSender,
+  recordTelegramGroupHistoryEntry,
+} from "./group-history-window.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
+import { registerTelegramOutboundGroupHistoryRecorder } from "./outbound-message-context.js";
 import { stringifyTelegramRawUpdateForLog } from "./raw-update-log.js";
 import { TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
@@ -259,6 +264,28 @@ export function createTelegramBotCore(
       DEFAULT_GROUP_HISTORY_LIMIT,
   );
   const groupHistories = new Map<string, HistoryEntry[]>();
+  const botHistorySender = buildTelegramGroupHistorySelfSender(
+    account.name ?? opts.botInfo?.first_name ?? opts.botInfo?.username ?? "OpenClaw",
+  );
+  const unregisterOutboundGroupHistoryRecorder = registerTelegramOutboundGroupHistoryRecorder({
+    accountId: account.accountId,
+    recorder: (record) => {
+      if (!String(record.chatId).startsWith("-")) {
+        return;
+      }
+      recordTelegramGroupHistoryEntry({
+        historyMap: groupHistories,
+        historyKey: buildTelegramGroupPeerId(record.chatId, record.messageThreadId),
+        limit: historyLimit,
+        entry: {
+          sender: botHistorySender,
+          body: record.text?.trim() || "<media>",
+          timestamp: record.timestamp,
+          messageId: String(record.messageId),
+        },
+      });
+    },
+  });
   const telegramTextLimit =
     telegramCfg.richMessages === true ? TELEGRAM_RICH_TEXT_LIMIT : TELEGRAM_TEXT_CHUNK_LIMIT;
   const textLimit = Math.min(
@@ -435,6 +462,7 @@ export function createTelegramBotCore(
   const originalStop = bot.stop.bind(bot);
   bot.stop = ((...args: Parameters<typeof originalStop>) => {
     threadBindingManager?.stop();
+    unregisterOutboundGroupHistoryRecorder();
     return originalStop(...args);
   }) as typeof bot.stop;
 

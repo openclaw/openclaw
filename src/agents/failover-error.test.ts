@@ -607,13 +607,13 @@ describe("failover-error", () => {
     ).toBe("rate_limit");
   });
 
-  it("does not misclassify structured HTTP 400 context overflow payloads as format", () => {
+  it("classifies structured HTTP 400 context overflow payloads without using format", () => {
     expect(
       resolveFailoverReasonFromError({
         status: 400,
         message: "INVALID_ARGUMENT: input exceeds the maximum number of tokens",
       }),
-    ).toBeNull();
+    ).toBe("context_overflow");
   });
 
   it("keeps context overflow first-class in the shared signal classifier", () => {

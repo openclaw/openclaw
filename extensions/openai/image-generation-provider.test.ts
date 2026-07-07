@@ -50,7 +50,8 @@ const {
   logInfoMock: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
+vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>()),
   ensureAuthProfileStore: ensureAuthProfileStoreMock,
   isProviderApiKeyConfigured: isProviderApiKeyConfiguredMock,
   listProfilesForProvider: listProfilesForProviderMock,
@@ -400,6 +401,61 @@ describe("openai image generation provider", () => {
             providers: {
               openai: {
                 baseUrl: "https://openai-compatible.example.test/v1",
+                models: [],
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("reports configured from a config apiKey (gateway-routed openai) with no env/profile creds", () => {
+    const provider = buildOpenAIImageGenerationProvider();
+
+    // Config-only auth: a provider apiKey in config, with no env var and no
+    // auth profile.
+    isProviderApiKeyConfiguredMock.mockReturnValue(false);
+    ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
+
+    expect(
+      provider.isConfigured?.({
+        agentDir: "/tmp/agent",
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://gateway.example.test/openai/v1",
+                apiKey: "gateway-token",
+                models: [],
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it.each([
+    ["empty", ""],
+    ["whitespace-only", "   "],
+  ])("treats a %s config apiKey as not configured", (_label, apiKey) => {
+    const provider = buildOpenAIImageGenerationProvider();
+
+    // Blank placeholders resolve to no usable credential in the generate
+    // path, so readiness must not count them either.
+    isProviderApiKeyConfiguredMock.mockReturnValue(false);
+    ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
+
+    expect(
+      provider.isConfigured?.({
+        agentDir: "/tmp/agent",
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://gateway.example.test/openai/v1",
+                apiKey,
                 models: [],
               },
             },

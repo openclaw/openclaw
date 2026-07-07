@@ -15,6 +15,20 @@ export type CronSchedule =
       tz?: string;
       /** Optional deterministic stagger window in milliseconds (0 keeps exact schedule). */
       staggerMs?: number;
+    }
+  | {
+      /**
+       * Event-driven (non-time) trigger: the job fires once when a gateway-owned
+       * watcher process running `command` exits. The watcher lives under the
+       * gateway ProcessSupervisor, NOT inside any agent turn's process tree, so
+       * it survives the per-turn spawn-and-kill teardown that CLI backends apply
+       * (#71662). On exit the job runs through the normal cron run pipeline, so
+       * delivery to the bound session works exactly like a scheduled main job.
+       * `computeNextRunAtMs` returns undefined for this kind (never time-due).
+       */
+      kind: "on-exit";
+      command: string;
+      cwd?: string;
     };
 
 /** Runtime target that decides whether a job joins main, isolated, or a named session. */
@@ -329,6 +343,12 @@ export type CronJob = CronJobBase<
   CronDelivery,
   CronFailureAlert | false
 > & {
+  declarationKey?: string;
+  displayName?: string;
+  owner?: {
+    agentId?: string;
+    sessionKey?: string;
+  };
   state: CronJobState;
 };
 
@@ -340,13 +360,26 @@ export type CronStoreFile = {
 
 /** Create input accepted by cron APIs before id/timestamps/state are assigned. */
 export type CronJobCreate = Omit<CronJob, "id" | "createdAtMs" | "updatedAtMs" | "state"> & {
+  /** Internal callers can reserve a durable id before creation; public cron.add omits this. */
+  id?: string;
   state?: Partial<CronJobState>;
 };
 
 /** Patch input accepted by cron APIs without allowing immutable identity fields. */
 export type CronJobPatch = Partial<
-  Omit<CronJob, "id" | "createdAtMs" | "state" | "payload" | "delivery">
+  Omit<
+    CronJob,
+    | "id"
+    | "createdAtMs"
+    | "state"
+    | "payload"
+    | "delivery"
+    | "declarationKey"
+    | "displayName"
+    | "owner"
+  >
 > & {
+  displayName?: string | null;
   payload?: CronPayloadPatch;
   delivery?: CronDeliveryPatch;
   state?: Partial<CronJobState>;

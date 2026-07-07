@@ -36,6 +36,7 @@ const mocks = vi.hoisted(() => {
     resolveAdvertisedControlUiLinks: vi.fn(),
     resolveControlUiLinks: vi.fn(),
     resolveLocalControlUiProbeLinks: vi.fn(),
+    inspectWindowsGatewayFirewall: vi.fn(),
     summarizeExistingConfig: vi.fn(),
     promptAuthConfig: vi.fn(),
     promptGatewayConfig: vi.fn(),
@@ -89,6 +90,16 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("../infra/control-ui-assets.js", () => ({
   ensureControlUiAssetsBuilt: mocks.ensureControlUiAssetsBuilt,
+}));
+
+vi.mock("../infra/windows-gateway-firewall-diagnostics.js", () => ({
+  inspectWindowsGatewayFirewall: mocks.inspectWindowsGatewayFirewall,
+  formatWindowsGatewayFirewallGuidance: (params: { bind?: string }) =>
+    params.bind === "lan"
+      ? [
+          "Windows firewall: if another device cannot connect to the LAN URL, run `openclaw gateway status --deep` from this Windows host.",
+        ]
+      : [],
 }));
 
 vi.mock("../wizard/clack-prompter.js", () => ({
@@ -231,6 +242,13 @@ function setupBaseWizardState(config: OpenClawConfig = {}) {
   mocks.resolveAdvertisedControlUiLinks.mockResolvedValue({
     httpUrl: "http://127.0.0.1:18789/",
     wsUrl: "ws://127.0.0.1:18789",
+  });
+  mocks.inspectWindowsGatewayFirewall.mockResolvedValue({
+    applies: false,
+    severity: "info",
+    code: "windows_firewall_not_applicable",
+    message: "Windows LAN firewall diagnostics do not apply.",
+    details: [],
   });
   mocks.summarizeExistingConfig.mockReturnValue("");
   mocks.createClackPrompter.mockReturnValue({
@@ -405,6 +423,24 @@ describe("runConfigureWizard", () => {
     );
     expect(mocks.note).toHaveBeenCalledWith(
       expect.stringContaining("Gateway WS: ws://10.211.55.3:18789"),
+      "Control UI",
+    );
+  });
+
+  it("shows static Windows Firewall guidance for LAN Gateway links without inspection", async () => {
+    setupBaseWizardState({
+      gateway: {
+        mode: "local",
+        bind: "lan",
+        auth: { token: "token" },
+      },
+    });
+
+    await runConfigureWizard({ command: "configure", sections: ["gateway"] }, createRuntime());
+
+    expect(mocks.inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Windows firewall: if another device cannot connect to the LAN URL"),
       "Control UI",
     );
   });

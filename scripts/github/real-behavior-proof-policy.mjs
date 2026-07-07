@@ -1,5 +1,6 @@
 // Shared PR context and evidence policy for GitHub checks and label decisions.
 import { readBoundedResponseText } from "../lib/bounded-response.mjs";
+import { escapeRegExp } from "../lib/regexp.mjs";
 
 /** ClawSweeper-owned labels that OpenClaw preserves but does not mutate. */
 export const PROOF_OVERRIDE_LABEL = "proof: override";
@@ -52,10 +53,6 @@ const legacyProofFieldNames = [
 
 const missingValueRegex =
   /^(?:n\/?a|none|not applicable|tbd|todo|unknown|unsure|none provided|no evidence|not tested|untested|did not test|didn't test|could not test|couldn't test|-|(?:-{3,}|\*{3,}|_{3,})|\[[^\]]*\])\.?$/i;
-
-function escapeRegex(text) {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 function createTimeoutError(label, timeoutMs) {
   const error = new Error(`${label} timed out after ${timeoutMs}ms`);
@@ -290,7 +287,7 @@ function extractMarkdownSections(headingRegex, body = "") {
 }
 
 export function hasAuthoredPullRequestSection(heading, body = "") {
-  const headingPattern = new RegExp(`^#{2,6}\\s+${escapeRegex(heading)}\\b[^\\n]*$`, "im");
+  const headingPattern = new RegExp(`^#{2,6}\\s+${escapeRegExp(heading)}\\b[^\\n]*$`, "im");
   return !isMissingValue(extractMarkdownSections(headingPattern, body).at(-1) ?? "");
 }
 
@@ -300,7 +297,7 @@ function extractLegacyProofSections(body = "") {
 
 function fieldLineRegex(name) {
   return new RegExp(
-    `^\\s*(?:[-*]\\s*)?(?:\\*\\*)?${escapeRegex(name)}(?:\\s*\\([^)]*\\))?(?:\\*\\*)?\\s*:\\s*(.*)$`,
+    `^\\s*(?:[-*]\\s*)?(?:\\*\\*)?${escapeRegExp(name)}(?:\\s*\\([^)]*\\))?(?:\\*\\*)?\\s*:\\s*(.*)$`,
     "i",
   );
 }
@@ -375,7 +372,7 @@ function result(status, reason, details = {}) {
 }
 
 function extractMarkerField(marker, name) {
-  const match = marker.match(new RegExp(`\\b${escapeRegex(name)}=([^\\s>]+)`, "i"));
+  const match = marker.match(new RegExp(`\\b${escapeRegExp(name)}=([^\\s>]+)`, "i"));
   return match?.[1] ?? "";
 }
 

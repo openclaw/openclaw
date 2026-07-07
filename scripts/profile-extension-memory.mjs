@@ -15,6 +15,7 @@ import { formatErrorMessage } from "./lib/error-format.mjs";
 const DEFAULT_CONCURRENCY = 6;
 const DEFAULT_TIMEOUT_MS = 90_000;
 const DEFAULT_COMBINED_TIMEOUT_MS = 180_000;
+const DEFAULT_CHILD_SHUTDOWN_GRACE_MS = 1_000;
 const DEFAULT_TOP = 10;
 const OUTPUT_CAPTURE_MAX_CHARS = 128 * 1024;
 const STDERR_PREVIEW_MAX_CHARS = 8 * 1024;
@@ -24,7 +25,7 @@ const PARENT_SIGNAL_EXIT_CODES = new Map([
   ["SIGINT", 130],
   ["SIGTERM", 143],
 ]);
-const activeCaseChildren = new Set();
+const activeCaseChildren = new Map();
 const parentSignalHandlers = new Map();
 let parentSignalHandlersInstalled = false;
 let parentSignalShutdownStarted = false;
@@ -203,6 +204,7 @@ export async function runCase({
   name,
   body,
   timeoutMs,
+  shutdownGraceMs = DEFAULT_CHILD_SHUTDOWN_GRACE_MS,
   spawnImpl = spawn,
 }) {
   return await new Promise((resolve) => {
@@ -216,7 +218,7 @@ export async function runCase({
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
-    trackActiveCaseChild(child);
+    trackActiveCaseChild(child, shutdownGraceMs);
 
     let stdout = createOutputCapture();
     let stderr = createOutputCapture();
@@ -265,7 +267,7 @@ export async function runCase({
     child.on("close", (code, signal) => {
       void (async () => {
         if (timedOut) {
-          await waitForChildProcessTreeExit(child, 1_000);
+          await waitForChildProcessTreeExit(child, shutdownGraceMs);
         }
         const stderrText = formatCapturedOutput(stderr);
         settle({
@@ -321,8 +323,8 @@ function childProcessTreeIsAlive(child) {
   }
 }
 
-function trackActiveCaseChild(child) {
-  activeCaseChildren.add(child);
+function trackActiveCaseChild(child, shutdownGraceMs) {
+  activeCaseChildren.set(child, shutdownGraceMs);
   installParentSignalHandlers();
 }
 
@@ -365,7 +367,7 @@ function removeInstalledParentSignalHandlers() {
 
 function handleParentSignal(signal) {
   if (parentSignalShutdownStarted) {
-    for (const child of activeCaseChildren) {
+    for (const child of activeCaseChildren.keys()) {
       signalChildProcessTree(child, "SIGKILL");
     }
     return;
@@ -375,17 +377,21 @@ function handleParentSignal(signal) {
 }
 
 async function cleanupActiveCaseChildrenForParentSignal(signal) {
-  const children = [...activeCaseChildren];
-  for (const child of children) {
+  const children = [...activeCaseChildren.entries()];
+  for (const [child] of children) {
     signalChildProcessTree(child, signal);
   }
-  await Promise.all(children.map((child) => waitForChildProcessTreeExit(child, 1_000)));
-  for (const child of children) {
+  await Promise.all(
+    children.map(([child, shutdownGraceMs]) => waitForChildProcessTreeExit(child, shutdownGraceMs)),
+  );
+  for (const [child] of children) {
     if (childProcessTreeIsAlive(child)) {
       signalChildProcessTree(child, "SIGKILL");
     }
   }
-  await Promise.all(children.map((child) => waitForChildProcessTreeExit(child, 1_000)));
+  await Promise.all(
+    children.map(([child, shutdownGraceMs]) => waitForChildProcessTreeExit(child, shutdownGraceMs)),
+  );
   removeInstalledParentSignalHandlers();
   process.exit(PARENT_SIGNAL_EXIT_CODES.get(signal) ?? 1);
 }

@@ -1119,9 +1119,16 @@ describe("memory-core dreaming phases", () => {
 
     const sessionIngestion = await testing.readSessionIngestionState(workspaceDir);
     expect(Object.keys(sessionIngestion.files)).toContain("main:sessions/main/dreaming-main.jsonl");
-    await expect(
-      fs.access(path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt")),
-    ).resolves.toBeUndefined();
+    const corpusPath = path.join(
+      workspaceDir,
+      "memory",
+      ".dreams",
+      "session-corpus",
+      "2026-04-05.txt",
+    );
+    const corpus = await fs.readFile(corpusPath, "utf-8");
+    expect(corpus).toContain("Move backups to S3 Glacier.");
+    expect(corpus).toContain("Set retention to 365 days.");
 
     const ranked = await rankShortTermPromotionCandidates({
       workspaceDir,
@@ -1130,12 +1137,12 @@ describe("memory-core dreaming phases", () => {
       minUniqueQueries: 0,
       nowMs: Date.parse("2026-04-05T19:00:00.000Z"),
     });
-    expect(ranked.map((candidate) => candidate.path)).toContain(
+    expect(ranked.map((candidate) => candidate.path)).not.toContain(
       "memory/.dreams/session-corpus/2026-04-05.txt",
     );
     const snippets = ranked.map((candidate) => candidate.snippet);
-    expectIncludesSubstring(snippets, "Move backups to S3 Glacier.");
-    expectIncludesSubstring(snippets, "Set retention to 365 days.");
+    expectNotIncludesSubstring(snippets, "Move backups to S3 Glacier.");
+    expectNotIncludesSubstring(snippets, "Set retention to 365 days.");
   });
 
   it("keeps primary session transcripts out of configured subagent workspaces", async () => {
@@ -2042,18 +2049,6 @@ describe("memory-core dreaming phases", () => {
       restoreDreamingTestEnv();
     }
 
-    const ranked = await rankShortTermPromotionCandidates({
-      workspaceDir,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
-      nowMs: Date.parse("2026-04-06T02:00:00.000Z"),
-    });
-    const oldCandidate = ranked.find((candidate) => candidate.snippet.includes(oldMessage));
-    const newCandidate = ranked.find((candidate) => candidate.snippet.includes("retention at 365"));
-    expect(oldCandidate?.dailyCount).toBe(1);
-    expect(newCandidate?.dailyCount).toBe(1);
-
     const sessionCorpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
     const corpusFiles = (await fs.readdir(sessionCorpusDir)).filter((name) =>
       name.endsWith(".txt"),
@@ -2380,16 +2375,16 @@ describe("memory-core dreaming phases", () => {
       restoreDreamingTestEnv();
     }
 
-    const ranked = await rankShortTermPromotionCandidates({
-      workspaceDir,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
-      nowMs: Date.parse("2026-04-06T02:00:00.000Z"),
-    });
-    const snippets = ranked.map((candidate) => candidate.snippet);
-    expectIncludesSubstring(snippets, "Move backups to S3 Glacier.");
-    expectIncludesSubstring(snippets, "Retention policy stays at 365 days.");
+    const sessionCorpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
+    const corpusFiles = (await fs.readdir(sessionCorpusDir)).filter((name) =>
+      name.endsWith(".txt"),
+    );
+    let combinedCorpus = "";
+    for (const fileName of corpusFiles) {
+      combinedCorpus += `${await fs.readFile(path.join(sessionCorpusDir, fileName), "utf-8")}\n`;
+    }
+    expect(combinedCorpus).toContain("Move backups to S3 Glacier.");
+    expect(combinedCorpus).toContain("Retention policy stays at 365 days.");
   });
 
   it("ingests sessions when dreaming is enabled even if memorySearch is disabled", async () => {
@@ -2455,17 +2450,11 @@ describe("memory-core dreaming phases", () => {
       restoreDreamingTestEnv();
     }
 
-    const ranked = await rankShortTermPromotionCandidates({
-      workspaceDir,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
-      nowMs: Date.parse("2026-04-05T19:00:00.000Z"),
-    });
-    expectIncludesSubstring(
-      ranked.map((candidate) => candidate.snippet),
-      "Glacier archive migration is now complete.",
+    const corpus = await fs.readFile(
+      path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
+      "utf-8",
     );
+    expect(corpus).toContain("Glacier archive migration is now complete.");
   });
 
   it("keeps section context when chunking durable daily notes", async () => {
@@ -2801,7 +2790,7 @@ describe("memory-core dreaming phases", () => {
           startLine: 2,
           endLine: 2,
           score: 0.88,
-          snippet: "Assistant: Documented Ollama provider setup.",
+          snippet: "Documented Ollama provider setup.",
           source: "memory",
         },
       ],

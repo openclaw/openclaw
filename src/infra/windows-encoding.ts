@@ -161,6 +161,7 @@ export function createWindowsOutputDecoder(params?: {
       : null;
   const utf8Decoder =
     platform === "win32" && legacyDecoder ? new TextDecoder("utf-8", { fatal: true }) : null;
+  const streamingUtf8Decoder = legacyDecoder ? null : new TextDecoder("utf-8");
   let useLegacyDecoder = false;
   let pendingUtf8Bytes = Buffer.alloc(0);
 
@@ -168,7 +169,7 @@ export function createWindowsOutputDecoder(params?: {
     decode(chunk) {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       if (!legacyDecoder || !utf8Decoder) {
-        return buffer.toString("utf8");
+        return streamingUtf8Decoder?.decode(buffer, { stream: true }) ?? "";
       }
       if (useLegacyDecoder) {
         return legacyDecoder.decode(buffer, { stream: true });
@@ -189,7 +190,7 @@ export function createWindowsOutputDecoder(params?: {
     },
     flush() {
       if (!legacyDecoder || !utf8Decoder) {
-        return "";
+        return streamingUtf8Decoder?.decode() ?? "";
       }
       if (useLegacyDecoder) {
         return legacyDecoder.decode();
