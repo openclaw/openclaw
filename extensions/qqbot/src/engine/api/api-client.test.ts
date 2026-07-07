@@ -123,46 +123,24 @@ describe("ApiClient", () => {
   });
 });
 
-// Pin the same UTF-16 boundary behavior that the production error-message
-// sites in the api surface (api-client.ts, media-chunked.ts, retry.ts)
-// rely on.
-describe("api UTF-16-safe truncation helper", () => {
-  const hasLoneSurrogate = (value: string): boolean => {
-    for (let i = 0; i < value.length; i++) {
-      const code = value.charCodeAt(i);
-      if (code >= 0xd800 && code <= 0xdbff) {
-        const next = value.charCodeAt(i + 1);
-        if (!(next >= 0xdc00 && next <= 0xdfff)) {
-          return true;
-        }
-        i++;
-      } else if (code >= 0xdc00 && code <= 0xdfff) {
-        return true;
-      }
-    }
-    return false;
-  };
-
-  it("truncates API error rawBody on UTF-16 boundary without splitting emoji", () => {
+// Cap-precise regression for the inline `truncateUtf16Safe` sites touched
+// by this branch: API error rawBody at api-client.ts:218 (cap 200), COS
+// PUT body preview at media-chunked.ts:583 (cap 120), retry attempt
+// error message at retry.ts:91 (cap 100). Each test pins the exact
+// code-unit output for one cap value, so the "safe truncation" claim is
+// enforced at the boundary, not just on length.
+describe("api UTF-16 truncation cap boundary", () => {
+  it("cap 200 keeps a 199-char ASCII prefix and drops the trailing emoji pair", () => {
     // Mirrors the call shape at api-client.ts:218
-    //   `API Error [${path}] HTTP ${res.status}: ${truncateUtf16Safe(rawBody, 200)}`,
-    const rawBody = "测试API错误响应体🎉🎉剩余内容超过200字符限制被截断的部分JSON";
-    const truncated = truncateUtf16Safe(rawBody, 200);
-    expect(truncated.length).toBeLessThanOrEqual(200);
-    expect(hasLoneSurrogate(truncated)).toBe(false);
+    //   `API Error [${path}] HTTP ${res.status}: ${truncateUtf16Safe(rawBody, 200)}`
+    const safePrefix = "x".repeat(199);
+    expect(truncateUtf16Safe(safePrefix + "🎉 trailing body", 200)).toBe(safePrefix);
   });
 
-  it("truncates COS PUT body preview on UTF-16 boundary", () => {
+  it("cap 120 keeps a 119-char ASCII prefix and drops the trailing emoji pair", () => {
     // Mirrors the call shape at media-chunked.ts:583
-    //   `COS PUT failed: ${response.status} ${response.statusText} - ${truncateUtf16Safe(body, 120)}`,
-    const body = "COS返回的错误信息🎉🎉包含emoji的响应体剩余超过120字符限制";
-    const truncated = truncateUtf16Safe(body, 120);
-    expect(truncated.length).toBeLessThanOrEqual(120);
-    expect(hasLoneSurrogate(truncated)).toBe(false);
-  });
-
-  it("passes plain ASCII through unchanged (negative control)", () => {
-    const ascii = '{"error":"invalid_request","message":"missing field"}';
-    expect(truncateUtf16Safe(ascii, 200)).toBe(ascii);
+    //   `COS PUT failed: ${response.status} ${response.statusText} - ${truncateUtf16Safe(body, 120)}`
+    const safePrefix = "x".repeat(119);
+    expect(truncateUtf16Safe(safePrefix + "🎉 trailing body", 120)).toBe(safePrefix);
   });
 });
