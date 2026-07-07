@@ -125,7 +125,7 @@ export async function dispatchWithRetryOnConflict(
       if (!isConflict || attempt >= maxRetries) {
         throw err;
       }
-      await new Promise((resolve) => setTimeout(resolve, baseDelayMs * Math.pow(2, attempt)));
+      await new Promise((resolve) => setTimeout(resolve, baseDelayMs * 2 ** attempt));
     }
   }
 }
