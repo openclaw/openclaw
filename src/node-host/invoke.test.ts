@@ -155,6 +155,33 @@ describe("node host invoke", () => {
     );
   });
 
+  it("wraps malformed paramsJSON for system.run.prepare command", async () => {
+    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+    const skillBins: SkillBinsProvider = { current: async () => [] };
+
+    await handleInvoke(
+      {
+        id: "invoke-2",
+        nodeId: "node-2",
+        command: "system.run.prepare",
+        paramsJSON: "{missing colon}",
+      },
+      { request } as unknown as GatewayClient,
+      skillBins,
+    );
+
+    expect(request).toHaveBeenCalledWith(
+      "node.invoke.result",
+      expect.objectContaining({
+        error: expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message: expect.stringContaining("paramsJSON malformed JSON"),
+          cause: expect.stringContaining("in JSON at position"),
+        }),
+      }),
+    );
+  });
+
   it("includes effective exec policy in system.run.prepare responses", async () => {
     const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
     const skillBins: SkillBinsProvider = { current: async () => [] };

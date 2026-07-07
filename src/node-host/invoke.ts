@@ -513,6 +513,20 @@ async function sendRawPayloadResult(
   });
 }
 
+/**
+ * Resolves an Error.cause value into a non-empty string suitable for
+ * serialization. Error.cause can be an Error, a string, or any other value.
+ */
+function resolveErrorMessage(cause: unknown): string | undefined {
+  if (cause instanceof Error) {
+    return cause.message || undefined;
+  }
+  if (typeof cause === "string" && cause.length > 0) {
+    return cause;
+  }
+  return undefined;
+}
+
 async function sendErrorResult(
   client: GatewayClient,
   frame: NodeInvokeRequestPayload,
@@ -531,7 +545,7 @@ async function sendInvalidRequestResult(
   frame: NodeInvokeRequestPayload,
   err: unknown,
 ) {
-  const cause = err instanceof Error ? (err.cause as Error)?.message : undefined;
+  const cause = resolveErrorMessage(err instanceof Error ? err.cause : undefined);
   await sendErrorResult(client, frame, "INVALID_REQUEST", String(err), cause);
 }
 
