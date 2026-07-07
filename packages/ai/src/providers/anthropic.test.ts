@@ -2193,3 +2193,105 @@ describe("Anthropic provider", () => {
     }
   });
 });
+
+// A model that supports reasoning (non-adaptive, legacy budget path).
+function makeLegacyBudgetModel(overrides: Partial<Model<"anthropic-messages">> = {}) {
+  return makeAnthropicModel({
+    id: "claude-opus-4-1",
+    name: "Claude Opus 4.1",
+    ...overrides,
+  });
+}
+
+describe("thinking budget guard", () => {
+  it("emits enabled thinking with a valid budget (>= 1024)", async () => {
+    let captured: Record<string, unknown> | undefined;
+    const stream = streamAnthropic(
+      makeLegacyBudgetModel({ reasoning: true }),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      },
+      {
+        apiKey: "sk-test",
+        thinkingEnabled: true,
+        thinkingBudgetTokens: 2048,
+        onPayload: (p) => {
+          captured = p as Record<string, unknown>;
+          throw new Error("stop before network");
+        },
+      },
+    );
+    await stream.result();
+    expect(captured?.thinking).toEqual({
+      type: "enabled",
+      budget_tokens: 2048,
+      display: "summarized",
+    });
+  });
+
+  it("omits thinking when budget is zero", async () => {
+    let captured: Record<string, unknown> | undefined;
+    const stream = streamAnthropic(
+      makeLegacyBudgetModel({ reasoning: true }),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      },
+      {
+        apiKey: "sk-test",
+        thinkingEnabled: true,
+        thinkingBudgetTokens: 0,
+        onPayload: (p) => {
+          captured = p as Record<string, unknown>;
+          throw new Error("stop before network");
+        },
+      },
+    );
+    await stream.result();
+    expect(captured?.thinking).toBeUndefined();
+  });
+
+  it("omits thinking when budget is sub-minimum (< 1024)", async () => {
+    let captured: Record<string, unknown> | undefined;
+    const stream = streamAnthropic(
+      makeLegacyBudgetModel({ reasoning: true }),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      },
+      {
+        apiKey: "sk-test",
+        thinkingEnabled: true,
+        thinkingBudgetTokens: 512,
+        onPayload: (p) => {
+          captured = p as Record<string, unknown>;
+          throw new Error("stop before network");
+        },
+      },
+    );
+    await stream.result();
+    expect(captured?.thinking).toBeUndefined();
+  });
+
+  it("defaults to 1024 when thinkingBudgetTokens is undefined", async () => {
+    let captured: Record<string, unknown> | undefined;
+    const stream = streamAnthropic(
+      makeLegacyBudgetModel({ reasoning: true }),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      },
+      {
+        apiKey: "sk-test",
+        thinkingEnabled: true,
+        onPayload: (p) => {
+          captured = p as Record<string, unknown>;
+          throw new Error("stop before network");
+        },
+      },
+    );
+    await stream.result();
+    expect(captured?.thinking).toEqual({
+      type: "enabled",
+      budget_tokens: 1024,
+      display: "summarized",
+    });
+  });
+});

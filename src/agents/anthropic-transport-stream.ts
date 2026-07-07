@@ -1089,10 +1089,16 @@ function buildAnthropicParams(
           params.output_config = { effort };
         }
       } else {
-        params.thinking = {
-          type: "enabled",
-          budget_tokens: options?.thinkingBudgetTokens ?? 1024,
-        };
+        // Anthropic SDK requires enabled budget_tokens >= 1024 and < max_tokens.
+        // Sub-minimum budgets (including explicit zero) skip the thinking block
+        // instead of producing a request the API would reject.
+        const budgetTokens = options?.thinkingBudgetTokens ?? 1024;
+        if (budgetTokens >= 1024) {
+          params.thinking = {
+            type: "enabled",
+            budget_tokens: budgetTokens,
+          };
+        }
       }
     } else if (options?.thinkingEnabled === false) {
       params.thinking = { type: "disabled" };
