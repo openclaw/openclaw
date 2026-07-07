@@ -4,13 +4,13 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 export type Action = messagingApi.Action;
 export const LINE_ACTION_LABEL_LIMIT = 20;
-export const LINE_ACTION_DATA_LIMIT = 300;
+const LINE_ACTION_DATA_LIMIT = 300;
 
 export function truncateLineActionLabel(label: string, limit = LINE_ACTION_LABEL_LIMIT): string {
   return truncateUtf16Safe(label, limit);
 }
 
-export function truncateLineActionData(data: string): string {
+function truncateLineActionData(data: string): string {
   return truncateUtf16Safe(data, LINE_ACTION_DATA_LIMIT);
 }
 

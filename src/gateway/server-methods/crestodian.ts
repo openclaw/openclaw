@@ -90,7 +90,7 @@ export const crestodianHandlers: GatewayRequestHandlers = {
     };
     const result = await activateSetupInference({
       kind: params.kind,
-      ...(params.provider !== undefined ? { provider: params.provider } : {}),
+      ...(params.authChoice !== undefined ? { authChoice: params.authChoice } : {}),
       ...(params.apiKey !== undefined ? { apiKey: params.apiKey } : {}),
       ...(params.workspace !== undefined ? { workspace: params.workspace } : {}),
       surface: "gateway",

@@ -49,8 +49,18 @@ import java.util.concurrent.Executors
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
+private fun createDnsResolver(context: Context): DnsResolver =
+  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.CINNAMON_BUN) {
+    createContextDnsResolver(context)
+  } else {
+    createLegacyDnsResolver()
+  }
+
+@RequiresApi(Build.VERSION_CODES.CINNAMON_BUN)
+private fun createContextDnsResolver(context: Context): DnsResolver = DnsResolver(context, null)
+
 @Suppress("DEPRECATION")
-private fun createDnsResolver(): DnsResolver = DnsResolver.getInstance()
+private fun createLegacyDnsResolver(): DnsResolver = DnsResolver.getInstance()
 
 /**
  * Watches local DNS-SD and optional wide-area DNS-SD for reachable OpenClaw gateways.
@@ -61,7 +71,7 @@ class GatewayDiscovery(
 ) {
   private val nsd = context.getSystemService(NsdManager::class.java)
   private val connectivity = context.getSystemService(ConnectivityManager::class.java)
-  private val dns = createDnsResolver()
+  private val dns = createDnsResolver(context)
   private val serviceType = "_openclaw-gw._tcp."
   private val wideAreaDomain = System.getenv("OPENCLAW_WIDE_AREA_DOMAIN")
   private val logTag = "OpenClaw/GatewayDiscovery"

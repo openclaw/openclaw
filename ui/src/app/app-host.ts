@@ -2,7 +2,7 @@ import { consume, ContextProvider } from "@lit/context";
 import type { RouteLocation, RouterState } from "@openclaw/uirouter";
 import { html, LitElement, nothing } from "lit";
 import { property, query, state } from "lit/decorators.js";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { hasStoredGatewayAuth, type GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
 import "../components/app-sidebar.ts";
 import "../components/app-topbar.ts";
@@ -25,6 +25,7 @@ import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { t } from "../i18n/index.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
 import { resolveAgentIdFromSessionKey } from "../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../lib/string-coerce.ts";
@@ -38,12 +39,17 @@ import {
 } from "./context.ts";
 import { hasOperatorAdminAccess } from "./operator-access.ts";
 import type { ApplicationOverlaySnapshot } from "./overlays.ts";
+import { controlUiPublicAssetPath } from "./public-assets.ts";
 import { selectRenderedRouteMatch } from "./router-outlet.ts";
 
 type ShellRouteState = {
   routeId?: RouteId;
   location?: RouteLocation;
 };
+
+// Stable references so the sidebar's enabledRouteIds property does not churn
+// on every shell render.
+const ROUTE_IDS_WITHOUT_WORKBOARD = APP_ROUTE_IDS.filter((routeId) => routeId !== "workboard");
 
 function selectShellRouteState(routerState: RouterState<RouteId>): ShellRouteState {
   const match = selectRenderedRouteMatch(routerState.matches[0], routerState.pendingMatches[0]);
@@ -94,6 +100,20 @@ function resolveTerminalThemeMode(): "dark" | "light" {
   return document.documentElement.dataset.themeMode === "light" ? "light" : "dark";
 }
 
+// The mascot SVG animates via SMIL, so it must load through <img src> —
+// inlining the markup would freeze it (see ui/public/favicon.svg).
+function renderConnectingSplash(basePath: string) {
+  return html`
+    <main class="connect-splash" role="status" aria-live="polite" aria-label=${t("common.loading")}>
+      <img
+        class="connect-splash__logo"
+        src=${controlUiPublicAssetPath("favicon.svg", basePath)}
+        alt=""
+      />
+    </main>
+  `;
+}
+
 function isTerminalAvailable(
   snapshot: ApplicationContext["gateway"]["snapshot"],
   terminalEnabled: boolean,
@@ -107,7 +127,7 @@ function isTerminalAvailable(
   );
 }
 
-export class OpenClawApp extends LitElement {
+class OpenClawApp extends LitElement {
   @state() private gatewayConnected = false;
   @state() private gatewayReconnecting = false;
   @state() private gatewayLastError: string | null = null;
@@ -126,6 +146,10 @@ export class OpenClawApp extends LitElement {
   @state() private terminalClient: GatewayBrowserClient | null = null;
 
   private readonly terminalOnly = isTerminalOnlyView();
+  // Fixed at page load: whether this browser held credentials (token,
+  // password, or stored device token) before the first connect attempt.
+  // Later manual gate submissions are covered by loginGatePinned instead.
+  private initialAuthPresent = false;
   private runtime: ApplicationRuntime | undefined;
   private context: ApplicationContext<RouteId> | undefined;
   private readonly contextProvider = new ContextProvider(this, {
@@ -142,6 +166,7 @@ export class OpenClawApp extends LitElement {
     super.connectedCallback();
     this.runtime = bootstrapApplication();
     this.context = this.runtime.context;
+    this.initialAuthPresent = hasStoredGatewayAuth(this.context.gateway.connection);
     this.pendingGatewayUrl = this.runtime.pendingGatewayConnection?.gatewayUrl ?? null;
     this.contextProvider.setValue(this.context);
     this.syncLoginConnection();
@@ -257,7 +282,24 @@ export class OpenClawApp extends LitElement {
     }
     // Transport drops after an established session keep the shell mounted
     // (offline banner + client auto-retry); the login gate is reserved for
-    // first connects, credential rejections, and manual gate submissions.
+    // credential-less first connects, credential rejections, and manual gate
+    // submissions. A first connect backed by stored credentials paints the
+    // connecting splash instead of flashing the login gate; the gate returns
+    // the moment the attempt fails (lastError set on every close).
+    const initialConnectPending =
+      this.initialAuthPresent &&
+      !this.gatewayConnected &&
+      !this.gatewayReconnecting &&
+      !this.loginGatePinned &&
+      this.gatewayLastError === null &&
+      context.gateway.snapshot.client !== null;
+    if (initialConnectPending) {
+      return html`
+        <openclaw-tooltip-provider>
+          ${renderConnectingSplash(context.basePath)} ${gatewayUrlConfirmation}
+        </openclaw-tooltip-provider>
+      `;
+    }
     const showLoginGate =
       !this.gatewayConnected && (this.loginGatePinned || !this.gatewayReconnecting);
     if (showLoginGate) {
@@ -360,6 +402,7 @@ class OpenClawShell extends LitElement {
   private stopNavigationSubscription: (() => void) | undefined;
   private stopRouteSubscription: (() => void) | undefined;
   private stopOverlaySubscription: (() => void) | undefined;
+  private stopRuntimeConfigSubscription: (() => void) | undefined;
   private stopThemeSubscription: (() => void) | undefined;
 
   override createRenderRoot() {
@@ -388,6 +431,7 @@ class OpenClawShell extends LitElement {
       this.stopNavigationSubscription ||
       this.stopRouteSubscription ||
       this.stopOverlaySubscription ||
+      this.stopRuntimeConfigSubscription ||
       this.stopThemeSubscription
     ) {
       return;
@@ -400,12 +444,14 @@ class OpenClawShell extends LitElement {
     this.updateGatewayStatus(context.gateway.snapshot);
     this.updateTerminalSurface(context.gateway.snapshot);
     this.updateAgentLabel();
+    this.ensureRuntimeConfig(context.gateway.snapshot);
     this.stopGatewaySubscription = context.gateway.subscribe((snapshot) => {
       this.updateGatewaySessionKey(snapshot);
       this.updateGatewayStatus(snapshot);
       this.updateTerminalSurface(snapshot);
       this.updateAgentLabel();
       this.ensureAgentsList(snapshot);
+      this.ensureRuntimeConfig(snapshot);
     });
     this.stopConfigSubscription = context.config.subscribe(() => {
       this.updateTerminalSurface(context.gateway.snapshot);
@@ -426,6 +472,10 @@ class OpenClawShell extends LitElement {
     this.stopOverlaySubscription = context.overlays.subscribe((snapshot) => {
       this.overlaySnapshot = snapshot;
     });
+    this.stopRuntimeConfigSubscription = context.runtimeConfig.subscribe(() => {
+      // Route enablement (e.g. Workboard) derives from the config snapshot.
+      this.requestUpdate();
+    });
   }
 
   override disconnectedCallback() {
@@ -442,6 +492,8 @@ class OpenClawShell extends LitElement {
     this.stopRouteSubscription = undefined;
     this.stopOverlaySubscription?.();
     this.stopOverlaySubscription = undefined;
+    this.stopRuntimeConfigSubscription?.();
+    this.stopRuntimeConfigSubscription = undefined;
     this.stopThemeSubscription?.();
     this.stopThemeSubscription = undefined;
     this.agentsListClient = null;
@@ -565,6 +617,23 @@ class OpenClawShell extends LitElement {
     );
   }
 
+  private ensureRuntimeConfig(snapshot: {
+    client: GatewayBrowserClient | null;
+    connected: boolean;
+  }) {
+    // The sidebar hides config-gated routes (Workboard), so the snapshot must
+    // load eagerly instead of waiting for a page that happens to fetch it.
+    if (snapshot.connected && snapshot.client) {
+      void this.context?.runtimeConfig.ensureLoaded();
+    }
+  }
+
+  private enabledRouteIds(): readonly RouteId[] {
+    return isWorkboardEnabledInConfigSnapshot(this.context?.runtimeConfig.state.configSnapshot)
+      ? APP_ROUTE_IDS
+      : ROUTE_IDS_WITHOUT_WORKBOARD;
+  }
+
   private ensureAgentsList(snapshot: { client: GatewayBrowserClient | null; connected: boolean }) {
     if (!snapshot.connected || !snapshot.client) {
       this.agentsListClient = null;
@@ -675,20 +744,17 @@ class OpenClawShell extends LitElement {
           .basePath=${context.basePath}
           .agentLabel=${this.agentLabel}
           .overviewHref=${pathForRoute("overview", context.basePath)}
-          .searchDisabled=${false}
           .navDrawerOpen=${navDrawerOpen}
-          .themeMode=${context.theme.mode}
-          .onboarding=${this.onboarding}
-          .onOpenPalette=${this.openPalette}
           .navCollapsed=${navCollapsed}
-          .onToggleSidebar=${() =>
-            context.navigation.update({
-              navCollapsed: !navCollapsed,
-            })}
+          .onboarding=${this.onboarding}
           .terminalAvailable=${this.terminalAvailable}
           .onToggleTerminal=${() =>
             window.dispatchEvent(new CustomEvent("openclaw:terminal-toggle"))}
           .onToggleDrawer=${(trigger: HTMLElement) => this.toggleNavDrawer(trigger)}
+          .onToggleCollapse=${() =>
+            context.navigation.update({
+              navCollapsed: !navCollapsed,
+            })}
           .onNavigate=${(routeId: string, options?: ApplicationNavigationOptions) =>
             this.navigate(routeId, options)}
         ></openclaw-app-topbar>
@@ -697,7 +763,7 @@ class OpenClawShell extends LitElement {
             .basePath=${context.basePath}
             .activeRouteId=${activeRoute}
             .activePluginTabId=${activePluginTabId}
-            .enabledRouteIds=${APP_ROUTE_IDS}
+            .enabledRouteIds=${this.enabledRouteIds()}
             .sessionKey=${this.activeSessionKey}
             .collapsed=${navCollapsed}
             .connected=${this.gatewayConnected}
@@ -706,6 +772,7 @@ class OpenClawShell extends LitElement {
             .sidebarPinnedRoutes=${this.sidebarPinnedRoutes}
             .sidebarMoreExpanded=${this.sidebarMoreExpanded}
             .themeMode=${context.theme.mode}
+            .onOpenPalette=${this.openPalette}
             .onToggleMore=${() =>
               context.navigation.update({
                 sidebarMoreExpanded: !context.navigation.snapshot.sidebarMoreExpanded,

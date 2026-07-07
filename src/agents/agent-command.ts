@@ -31,6 +31,7 @@ import { isDiagnosticsEnabled, emitTrustedDiagnosticEvent } from "../infra/diagn
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   resolveAgentDeliveryPlan,
+  resolveAgentExplicitRecipientSession,
   resolveAgentOutboundTarget,
 } from "../infra/outbound/agent-delivery.js";
 import { resolveMessageChannelSelection } from "../infra/outbound/channel-selection.js";
@@ -607,6 +608,16 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
     !rawExplicitSessionKey && !requestedSessionId && classifySessionKeyShape(rawTo) === "agent"
       ? rawTo
       : undefined;
+  const recipientChannel = resolveMessageChannel(opts.channel);
+  const shouldResolveExplicitRecipientSession = Boolean(
+    !rawExplicitSessionKey &&
+    !requestedSessionId &&
+    !toSessionKey &&
+    opts.agentId?.trim() &&
+    recipientChannel &&
+    isDeliverableMessageChannel(recipientChannel) &&
+    rawTo,
+  );
   if (!opts.to && !requestedSessionId && !rawExplicitSessionKey && !opts.agentId) {
     throw new Error(
       "Pass --to <E.164>, --session-key, --session-id, or --agent to choose a session",
@@ -615,6 +626,10 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
 
   const { cfg } = await resolveAgentRuntimeConfig(runtime, {
     runtimeTargetsChannelSecrets: opts.deliver === true,
+    runtimeChannelSecretScope:
+      opts.deliver !== true && shouldResolveExplicitRecipientSession && recipientChannel
+        ? { channel: recipientChannel, accountId: opts.accountId }
+        : undefined,
   });
   const normalizedSpawned = normalizeSpawnedRunMetadata({
     spawnedBy: opts.spawnedBy,
@@ -692,14 +707,37 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
   });
   const runTimeoutOverrideMs = hasExplicitTimeoutOption ? timeoutMs : undefined;
 
-  const commandOpts = toSessionKey
+  const selectedCommandOpts = toSessionKey
     ? { ...opts, to: undefined, sessionKey: explicitSessionKey }
     : opts;
+  const explicitRecipientSession =
+    shouldResolveExplicitRecipientSession && agentIdOverride && recipientChannel && rawTo
+      ? await resolveAgentExplicitRecipientSession({
+          cfg,
+          agentId: agentIdOverride,
+          channel: recipientChannel,
+          to: rawTo,
+          accountId: selectedCommandOpts.accountId,
+          threadId: selectedCommandOpts.threadId,
+        })
+      : undefined;
+  if (explicitRecipientSession?.error) {
+    throw explicitRecipientSession.error;
+  }
+  const commandOpts = explicitRecipientSession?.sessionKey
+    ? {
+        ...selectedCommandOpts,
+        channel: explicitRecipientSession.channel,
+        to: explicitRecipientSession.to,
+        accountId: explicitRecipientSession.accountId,
+        threadId: explicitRecipientSession.threadId,
+      }
+    : selectedCommandOpts;
   const sessionResolution = resolveSession({
     cfg,
     to: commandOpts.to,
     sessionId: commandOpts.sessionId,
-    sessionKey: explicitSessionKey,
+    sessionKey: explicitSessionKey ?? explicitRecipientSession?.sessionKey,
     agentId: agentIdOverride,
     clone: false,
   });
@@ -1155,6 +1193,15 @@ async function agentCommandInternal(
           const transcriptResult = await attemptExecutionRuntime.persistAcpTurnTranscript({
             body,
             transcriptBody,
+            ...(opts.suppressPromptPersistence !== true && opts.transcriptMedia?.length
+              ? {
+                  userInput: {
+                    text: transcriptBody,
+                    media: opts.transcriptMedia,
+                    mediaOnlyText: "[User sent media without caption]",
+                  },
+                }
+              : {}),
             finalText: finalTextRaw,
             sessionId,
             sessionKey,
@@ -1762,12 +1809,25 @@ async function agentCommandInternal(
         lifecycleEnded: false,
       };
       const attemptLifecycleCallbacks = createAgentAttemptLifecycleCallbacks(attemptLifecycleState);
+      const transcriptMedia = opts.transcriptMedia ?? [];
+      const hasTranscriptMedia = transcriptMedia.length > 0;
       const suppressUserTurnPersistence =
-        opts.suppressPromptPersistence === true || opts.transcriptMessage === "";
+        opts.suppressPromptPersistence === true ||
+        (opts.transcriptMessage === "" && !hasTranscriptMedia);
       const recorderTranscriptText = transcriptBody || undefined;
       const userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
-        ...(!suppressUserTurnPersistence && recorderTranscriptText
-          ? { input: { text: recorderTranscriptText } }
+        ...(!suppressUserTurnPersistence && (recorderTranscriptText || hasTranscriptMedia)
+          ? {
+              input: {
+                text: recorderTranscriptText,
+                ...(hasTranscriptMedia
+                  ? {
+                      media: transcriptMedia,
+                      mediaOnlyText: "[User sent media without caption]",
+                    }
+                  : {}),
+              },
+            }
           : {}),
         target: {
           transcriptPath: attemptSessionFile,

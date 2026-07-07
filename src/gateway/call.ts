@@ -819,9 +819,10 @@ function formatGatewayCloseError(
   if (code === 1006) {
     message +=
       "\n\nPossible causes:" +
+      "\n- Connection dropped without a close frame (retry; check network and gateway load)" +
       "\n- Gateway not yet ready to accept connections (retry after a moment)" +
       "\n- TLS mismatch (connecting with ws:// to a wss:// gateway, or vice versa)" +
-      "\n- Gateway crashed or was terminated unexpectedly" +
+      "\n- Gateway process stopped or became unreachable (confirm it is still running)" +
       "\nRun `openclaw doctor` for diagnostics.";
   }
   return message;

@@ -18,6 +18,7 @@ import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NotificationPackageFilterMode
 import ai.openclaw.app.SensitiveFeatureConfig
 import ai.openclaw.app.chat.ChatPendingToolCall
+import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gatewayTalkSetupDescription
 import ai.openclaw.app.gatewayTalkSetupStatusText
 import ai.openclaw.app.hasPhotoReadPermission
@@ -89,6 +90,7 @@ import androidx.compose.material.icons.automirrored.filled.ScreenShare
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.GraphicEq
@@ -1141,6 +1143,8 @@ private fun GatewaySettingsScreen(
   val manualHost by viewModel.manualHost.collectAsState()
   val manualPort by viewModel.manualPort.collectAsState()
   val manualTls by viewModel.manualTls.collectAsState()
+  val pairedGateways by viewModel.pairedGateways.collectAsState()
+  val activeGatewayStableId by viewModel.activeGatewayStableId.collectAsState()
   var setupCode by remember { mutableStateOf("") }
   var hostInput by remember(manualHost) { mutableStateOf(manualHost.ifBlank { "127.0.0.1" }) }
   var portInput by remember(manualPort) { mutableStateOf(manualPort.toString()) }
@@ -1151,6 +1155,14 @@ private fun GatewaySettingsScreen(
   var validationText by remember { mutableStateOf<String?>(null) }
   var showSetupCodeHelp by remember { mutableStateOf(false) }
   var pendingSetupResetPlan by remember { mutableStateOf<GatewayConnectPlan?>(null) }
+  var pendingForgetStableId by remember { mutableStateOf<String?>(null) }
+  val transport =
+    remember(hostInput, tlsInput) {
+      gatewayManualTransportPresentation(
+        hostInput = hostInput,
+        requestedTls = tlsInput,
+      )
+    }
 
   fun saveAndConnect(plan: GatewayConnectPlan) {
     validationText = null
@@ -1187,6 +1199,29 @@ private fun GatewaySettingsScreen(
     )
   }
 
+  pendingForgetStableId?.let { stableId ->
+    val entry = pairedGateways.firstOrNull { it.stableId == stableId }
+    AlertDialog(
+      onDismissRequest = { pendingForgetStableId = null },
+      title = { Text("Forget gateway?") },
+      text = { Text("Remove ${entry?.name ?: "this gateway"} and its saved credentials from this phone?") },
+      confirmButton = {
+        TextButton(
+          onClick = {
+            pendingForgetStableId = null
+            viewModel.forgetGateway(stableId)
+          },
+        ) {
+          Text("Forget")
+        }
+      },
+      dismissButton = {
+        TextButton(onClick = { pendingForgetStableId = null }) { Text("Cancel") }
+      },
+      containerColor = ClawTheme.colors.surface,
+    )
+  }
+
   SettingsDetailFrame(title = "Gateway", subtitle = "Connection between this phone and OpenClaw.", icon = Icons.Default.Cloud, onBack = onBack) {
     SettingsMetricPanel(
       rows =
@@ -1206,17 +1241,61 @@ private fun GatewaySettingsScreen(
       ClawSecondaryButton(text = "Disconnect", onClick = viewModel::disconnect, modifier = Modifier.weight(1f))
     }
     ClawPanel {
+      Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(text = "Gateways", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        if (pairedGateways.isEmpty()) {
+          Text(text = "No paired gateways.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+        } else {
+          pairedGateways.forEachIndexed { index, entry ->
+            if (index > 0) HorizontalDivider(color = ClawTheme.colors.border)
+            ClawListItem(
+              title = entry.name,
+              subtitle =
+                when (entry.kind) {
+                  GatewayRegistryEntryKind.MANUAL -> "${entry.host}:${entry.port}"
+                  GatewayRegistryEntryKind.DISCOVERED -> entry.stableId
+                },
+              leading = {
+                if (entry.stableId == activeGatewayStableId) {
+                  ClawIconBadge(Icons.Default.Check)
+                } else {
+                  ClawIconBadge(Icons.Default.Cloud)
+                }
+              },
+              trailing = {
+                TextButton(onClick = { pendingForgetStableId = entry.stableId }) {
+                  Text("Forget")
+                }
+              },
+              onClick =
+                if (entry.stableId == activeGatewayStableId) {
+                  null
+                } else {
+                  { viewModel.switchToGateway(entry.stableId) }
+                },
+            )
+          }
+        }
+        ClawSecondaryButton(
+          text = "Add gateway",
+          onClick = viewModel::pairNewGateway,
+          modifier = Modifier.fillMaxWidth(),
+          icon = Icons.Default.QrCode2,
+        )
+      }
+    }
+    ClawPanel {
       Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(text = "Pair New Gateway", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        Text(text = "Gateway setup", style = ClawTheme.type.section, color = ClawTheme.colors.text)
         Text(
-          text = "Clear this phone's saved gateway access and scan a fresh setup code.",
+          text = "Scan or paste a setup code to add another gateway.",
           style = ClawTheme.type.body,
           color = ClawTheme.colors.textMuted,
           maxLines = 2,
           overflow = TextOverflow.Ellipsis,
         )
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-          ClawSecondaryButton(text = "Pair New Gateway", onClick = viewModel::pairNewGateway, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.QrCode2)
+          ClawSecondaryButton(text = "Add gateway", onClick = viewModel::pairNewGateway, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.QrCode2)
           ClawSecondaryButton(text = "Setup Code", onClick = { showSetupCodeHelp = !showSetupCodeHelp }, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.Info)
         }
         if (showSetupCodeHelp) {
@@ -1236,11 +1315,26 @@ private fun GatewaySettingsScreen(
           ClawTextField(value = hostInput, onValueChange = { hostInput = it }, placeholder = "Host", modifier = Modifier.weight(1f))
           ClawTextField(value = portInput, onValueChange = { portInput = it }, placeholder = "Port", modifier = Modifier.weight(0.62f))
         }
+        Text(text = "Connection security", style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+        val securityOptions = listOf("Unencrypted", "Secure (TLS)")
         ClawSegmentedControl(
-          options = listOf("Local", "TLS"),
-          selected = if (tlsInput) "TLS" else "Local",
-          onSelect = { selected -> tlsInput = selected == "TLS" },
+          options = securityOptions,
+          selected = if (transport.effectiveTls) "Secure (TLS)" else "Unencrypted",
+          onSelect = { selected -> tlsInput = selected == "Secure (TLS)" },
+          enabledOptions =
+            if (transport.requiresTls) {
+              setOf("Secure (TLS)")
+            } else {
+              securityOptions.toSet()
+            },
         )
+        transport.helperText?.let { helperText ->
+          Text(
+            text = helperText,
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted,
+          )
+        }
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
           ClawTextField(value = tokenInput, onValueChange = { tokenInput = it }, placeholder = "Token", modifier = Modifier.weight(1f))
           ClawTextField(value = bootstrapTokenInput, onValueChange = { bootstrapTokenInput = it }, placeholder = "Bootstrap", modifier = Modifier.weight(1.05f))
@@ -1261,7 +1355,7 @@ private fun GatewaySettingsScreen(
                 savedManualTls = manualTls,
                 manualHostInput = hostInput,
                 manualPortInput = portInput,
-                manualTlsInput = tlsInput,
+                manualTlsInput = transport.effectiveTls,
                 tokenInput = tokenInput,
                 bootstrapTokenInput = bootstrapTokenInput,
                 passwordInput = passwordInput,

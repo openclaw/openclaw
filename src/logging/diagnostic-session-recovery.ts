@@ -29,6 +29,11 @@ export type StuckSessionRecoveryRequest = {
    * reclaimed. Honors an operator-raised threshold; falls back to a safe floor.
    */
   staleActiveProgressAbortMs?: number;
+  /**
+   * Resolved compaction safety timeout. Ownerless lane recovery waits at least
+   * this long plus settle grace so queued compaction cannot be double-run.
+   */
+  compactionSafetyTimeoutMs?: number;
 };
 
 export function resolveStuckSessionRecoveryRef(
@@ -60,7 +65,9 @@ export type StuckSessionRecoveryOutcome =
   | (DiagnosticSessionRecoveryBaseOutcome & {
       status: "released";
       action: "release_lane";
+      reason?: "stale_lane_task";
       released: number;
+      queuedCount?: number;
     })
   | (DiagnosticSessionRecoveryBaseOutcome & {
       status: "skipped";
@@ -137,7 +144,10 @@ export function formatRecoveryOutcome(outcome: StuckSessionRecoveryOutcome): str
   if ("released" in outcome) {
     fields.push(`released=${outcome.released}`);
   }
-  if (outcome.status === "aborted" && outcome.queuedCount !== undefined) {
+  if (
+    (outcome.status === "aborted" || outcome.status === "released") &&
+    outcome.queuedCount !== undefined
+  ) {
     fields.push(`queuedCount=${outcome.queuedCount}`);
   }
   if ("activeCount" in outcome && outcome.activeCount !== undefined) {

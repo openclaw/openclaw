@@ -40,6 +40,10 @@ export type QaTransportReportParams = {
 
 export type QaTransportGatewayConfig = Pick<OpenClawConfig, "channels" | "messages">;
 
+export type QaTransportPolicy = NonNullable<
+  Parameters<NonNullable<QaRunnerCliRegistration["adapterFactory"]>["create"]>[0]["adapterOptions"]
+>["transportPolicy"];
+
 export type QaTransportState = {
   reset: () => void | Promise<void>;
   getSnapshot: () => QaBusStateSnapshot;

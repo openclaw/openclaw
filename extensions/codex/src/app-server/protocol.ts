@@ -2,6 +2,23 @@
 export type JsonValue = null | boolean | number | string | JsonValue[] | JsonObject;
 export type JsonObject = { [key: string]: JsonValue };
 export type CodexServiceTier = string;
+export type CodexApprovalPolicy =
+  | "untrusted"
+  | "on-failure"
+  | "on-request"
+  | {
+      granular: {
+        sandbox_approval: boolean;
+        rules: boolean;
+        skill_approval: boolean;
+        request_permissions: boolean;
+        mcp_elicitations: boolean;
+      };
+    }
+  | "never";
+export type CodexApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
+export type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
+export type CodexPersonality = "none" | "friendly" | "pragmatic";
 
 export type CodexAppServerRequestMethod = keyof CodexAppServerRequestResultMap | (string & {});
 export type CodexAppServerRequestParams<M extends CodexAppServerRequestMethod> =
@@ -57,7 +74,10 @@ export type CodexUserInput =
   | {
       type: "text";
       text: string;
-      text_elements?: JsonValue[];
+      text_elements: Array<{
+        byteRange: { start: number; end: number };
+        placeholder: string | null;
+      }>;
     }
   | {
       type: "image";
@@ -87,18 +107,6 @@ export type CodexDynamicToolNamespaceSpec = JsonObject & {
 
 export type CodexDynamicToolSpec = CodexDynamicToolFunctionSpec | CodexDynamicToolNamespaceSpec;
 
-export type CodexLegacyDynamicToolFunctionSpec = JsonObject & {
-  name: string;
-  description: string;
-  inputSchema: JsonValue;
-  deferLoading?: boolean;
-  namespace?: string;
-};
-
-export type CodexThreadStartDynamicToolSpec =
-  | CodexDynamicToolSpec
-  | CodexLegacyDynamicToolFunctionSpec;
-
 export function flattenCodexDynamicToolFunctions(
   tools: readonly CodexDynamicToolSpec[] | undefined,
 ): CodexDynamicToolFunctionSpec[] {
@@ -115,32 +123,28 @@ export type CodexThreadStartParams = JsonObject & {
   cwd?: string;
   model?: string;
   modelProvider?: string | null;
-  personality?: string | null;
-  approvalPolicy?: string | JsonObject;
-  approvalsReviewer?: string | null;
-  sandbox?: string;
+  personality?: CodexPersonality | null;
+  approvalPolicy?: CodexApprovalPolicy | null;
+  approvalsReviewer?: CodexApprovalsReviewer | null;
+  sandbox?: CodexSandboxMode | null;
   serviceTier?: CodexServiceTier | null;
-  dynamicTools?: CodexThreadStartDynamicToolSpec[] | null;
+  dynamicTools?: CodexDynamicToolSpec[] | null;
   developerInstructions?: string;
   experimentalRawEvents?: boolean;
   environments?: CodexTurnEnvironmentParams[] | null;
-  /** Retired by Codex 0.137, but still sent for supported custom app-server 0.125-0.136. */
-  persistExtendedHistory?: boolean;
 };
 
 export type CodexThreadResumeParams = JsonObject & {
   threadId: string;
   model?: string;
   modelProvider?: string | null;
-  personality?: string | null;
-  approvalPolicy?: string | JsonObject;
-  approvalsReviewer?: string | null;
-  sandbox?: string;
+  personality?: CodexPersonality | null;
+  approvalPolicy?: CodexApprovalPolicy | null;
+  approvalsReviewer?: CodexApprovalsReviewer | null;
+  sandbox?: CodexSandboxMode | null;
   serviceTier?: CodexServiceTier | null;
   config?: JsonObject;
   developerInstructions?: string;
-  /** Retired by Codex 0.137, but still sent for supported custom app-server 0.125-0.136. */
-  persistExtendedHistory?: boolean;
 };
 
 export type CodexThreadStartResponse = {
@@ -153,7 +157,7 @@ export type CodexThreadForkParams = CodexThreadStartParams & {
   threadId: string;
   baseInstructions?: string;
   ephemeral?: boolean;
-  threadSource?: string | JsonObject;
+  threadSource?: string | null;
   excludeTurns?: boolean;
 };
 
@@ -233,25 +237,37 @@ export type CodexTurnInterruptParams = JsonObject & {
 
 export type CodexTurnStartParams = JsonObject & {
   threadId: string;
-  input?: CodexUserInput[];
+  input: CodexUserInput[];
   cwd?: string;
   model?: string;
-  approvalPolicy?: string | JsonObject;
-  approvalsReviewer?: string | null;
+  approvalPolicy?: CodexApprovalPolicy | null;
+  approvalsReviewer?: CodexApprovalsReviewer | null;
   sandboxPolicy?: CodexSandboxPolicy;
   serviceTier?: CodexServiceTier | null;
   effort?: string | null;
-  personality?: string | null;
+  personality?: CodexPersonality | null;
   environments?: CodexTurnEnvironmentParams[] | null;
   collaborationMode?: {
-    mode: string;
-    settings: JsonObject & {
+    mode: "plan" | "default";
+    settings: {
+      model: string;
+      reasoning_effort: string | null;
       developer_instructions: string | null;
     };
   } | null;
 };
 
-export type CodexSandboxPolicy = string | JsonObject;
+export type CodexSandboxPolicy =
+  | { type: "dangerFullAccess" }
+  | { type: "readOnly"; networkAccess: boolean }
+  | { type: "externalSandbox"; networkAccess: "restricted" | "enabled" }
+  | {
+      type: "workspaceWrite";
+      writableRoots: string[];
+      networkAccess: boolean;
+      excludeTmpdirEnvVar: boolean;
+      excludeSlashTmp: boolean;
+    };
 
 export type CodexTurnStartResponse = {
   turn: CodexTurn;
@@ -259,11 +275,11 @@ export type CodexTurnStartResponse = {
 
 export type CodexTurn = {
   id: string;
-  threadId: string;
+  threadId?: string;
   status?: string;
-  error?: CodexErrorNotification["error"];
-  startedAt?: string | null;
-  completedAt?: string | null;
+  error?: CodexErrorNotification["error"] | null;
+  startedAt?: number | null;
+  completedAt?: number | null;
   durationMs?: number | null;
   items: CodexThreadItem[];
 };
@@ -384,16 +400,19 @@ export type CodexDynamicToolCallOutputContentItem =
     }
   | JsonObject;
 
+// Mirrors v2 ErrorNotification/TurnError (codex-rs app-server-protocol
+// notification.rs + thread_data.rs). `message` is required upstream; other
+// TurnError fields stay open because CodexErrorInfo is a wide enum.
 export type CodexErrorNotification = {
   error: {
     message?: string;
-    codexErrorInfo?: {
-      message?: string;
-      [key: string]: unknown;
-    };
+    codexErrorInfo?: string | JsonObject | null;
+    additionalDetails?: string | null;
     [key: string]: unknown;
   };
-  message?: string;
+  willRetry?: boolean;
+  threadId?: string;
+  turnId?: string;
 };
 
 export type CodexTurnCompletedNotification = {

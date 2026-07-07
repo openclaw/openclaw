@@ -77,10 +77,10 @@ export const SETTINGS_NAVIGATION_ROUTES = [
 ] as const satisfies readonly NavigationRouteId[];
 
 const NAVIGATION_ICONS: NavigationItem = {
-  agents: "folder",
+  agents: "bot",
   activity: "activity",
   overview: "barChart",
-  workboard: "folder",
+  workboard: "kanban",
   worktrees: "folder",
   channels: "link",
   instances: "radio",

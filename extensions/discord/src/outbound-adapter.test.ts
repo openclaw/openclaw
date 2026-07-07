@@ -162,35 +162,35 @@ describe("discordOutbound", () => {
     expect(options.chunkMode).toBe("newline");
   });
 
-  it.each([500, 429])("retries transient Discord text send status %i", async (status) => {
-    hoisted.sendMessageDiscordMock
-      .mockRejectedValueOnce(Object.assign(new Error(`discord ${status}`), { status }))
-      .mockResolvedValueOnce({
-        messageId: "msg-retry-ok",
-        channelId: "ch-1",
-      });
+  it.each([500, 429])(
+    "does not replay an injected Discord delivery after status %i",
+    async (status) => {
+      hoisted.sendMessageDiscordMock
+        .mockRejectedValueOnce(Object.assign(new Error(`discord ${status}`), { status }))
+        .mockResolvedValueOnce({
+          messageId: "msg-retry-ok",
+          channelId: "ch-1",
+        });
 
-    const result = await discordOutbound.sendText?.({
-      cfg: {
-        channels: {
-          discord: {
-            token: "test-token",
-            retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+      await expect(
+        discordOutbound.sendText?.({
+          cfg: {
+            channels: {
+              discord: {
+                token: "test-token",
+                retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+              },
+            },
           },
-        },
-      },
-      to: "channel:123456",
-      text: "retry me",
-      accountId: "default",
-    });
+          to: "channel:123456",
+          text: "do not replay me",
+          accountId: "default",
+        }),
+      ).rejects.toThrow(`discord ${status}`);
 
-    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledTimes(2);
-    expect(result).toEqual({
-      channel: "discord",
-      messageId: "msg-retry-ok",
-      channelId: "ch-1",
-    });
-  });
+      expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("uses webhook persona delivery for bound thread text replies", async () => {
     mockDiscordBoundThreadManager(hoisted);
@@ -237,6 +237,27 @@ describe("discordOutbound", () => {
       messageId: "msg-webhook-1",
       channelId: "thread-1",
     });
+  });
+
+  it("keeps webhook persona usernames on a UTF-16 boundary", async () => {
+    mockDiscordBoundThreadManager(hoisted);
+
+    await discordOutbound.sendText?.({
+      cfg: {},
+      to: "channel:parent-1",
+      text: "hello from persona",
+      accountId: "default",
+      threadId: "thread-1",
+      identity: { name: `${"a".repeat(79)}🚀tail` },
+    });
+
+    const options = mockObjectArg(
+      hoisted.sendWebhookMessageDiscordMock,
+      "sendWebhookMessageDiscord",
+      0,
+      1,
+    );
+    expect(options.username).toBe("a".repeat(79));
   });
 
   it("falls back to bot send for silent delivery on bound threads", async () => {

@@ -242,7 +242,7 @@ describe("discord channel message adapter", () => {
           expect(adapter.live?.finalizer?.capabilities?.discardPending).toBe(true);
         },
         previewFinalization: () => {
-          expect(adapter.live?.finalizer?.capabilities?.finalEdit).toBe(true);
+          expect(adapter.live?.finalizer?.capabilities?.normalFallback).toBe(true);
         },
         progressUpdates: () => {
           expect(adapter.live?.capabilities?.draftPreview).toBe(true);
@@ -255,7 +255,7 @@ describe("discord channel message adapter", () => {
       adapter,
       proofs: {
         finalEdit: () => {
-          expect(adapter.live?.capabilities?.previewFinalization).toBe(true);
+          expect(adapter.live?.finalizer?.capabilities?.finalEdit).toBe(false);
         },
         normalFallback: () => {
           expect(sendText).toBeTypeOf("function");

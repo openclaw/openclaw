@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+Adds multi-gateway support: the app remembers every paired gateway, lists them in Settings with a quick switcher on the Connect tab, and switches between them without pairing again. Credentials, device tokens, TLS trust, notification routing, chat history, and queued offline messages stay scoped to their gateway, and forgetting a gateway removes all of its stored state.
+
+Stable GitHub Releases now include a signed standalone Android APK with checksums and verifiable GitHub Actions provenance. (#9443)
+
+Android notification forwarding now excludes native WhatsApp, Telegram, Telegram X, Discord, and Signal channel apps to prevent duplicate cross-session replies. (#48516)
+
+Assistant messages now offer a long-press Listen action with gateway TTS playback, on-device fallback, and tap-to-stop status.
+
+Android command-palette rows now align icon and navigation affordances consistently and truncate long session details cleanly. Thanks @IWhatsskill.
+
+Android screenshot-mode voice and screen proof scenes now scale cleanly on compact capture widths. Thanks @IWhatsskill.
+
 The Settings About screen now shows the animated mascot with the app tagline plus Website, Docs, GitHub, and Discord links.
 
 Adds a read-only Files browser for agent workspaces with directory navigation, text and image previews, and system share export.
@@ -9,6 +21,8 @@ Adds a read-only Files browser for agent workspaces with directory navigation, t
 Android onboarding now completes after permission-triggered node approval and keeps Back navigation from cycling between permissions and approval.
 
 Third-party Android builds can now opt into Always location through Android settings, with requested background checks disclosed in the persistent node notification while Play builds remain foreground-only. (#68581) Thanks @ioridev.
+
+Android SMS permission guidance now explains the separate Gateway `allowCommands` opt-in required for SMS search and sending. (#91781) Thanks @narcissus0702.
 
 Android system notifications now open OpenClaw when tapped without accepting arbitrary external deeplinks.
 

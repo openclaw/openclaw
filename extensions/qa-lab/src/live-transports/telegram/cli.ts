@@ -1,3 +1,4 @@
+import { TELEGRAM_DEFAULT_CANONICAL_SCENARIO_IDS } from "../shared/canonical-scenarios.js";
 // Qa Lab plugin module implements cli behavior.
 import {
   createLazyCliRuntimeLoader,
@@ -24,7 +25,7 @@ export const telegramQaAdapterFactory: NonNullable<
   LiveTransportQaCliRegistration["adapterFactory"]
 > = {
   id: "telegram",
-  scenarioIds: ["channel-chat-baseline"],
+  scenarioIds: ["channel-chat-baseline", ...TELEGRAM_DEFAULT_CANONICAL_SCENARIO_IDS],
   matches: ({ channelId, driver }) => driver === "live" && channelId === "telegram",
   async create(context) {
     return await (await loadTelegramQaAdapterRuntime()).createTelegramQaTransportAdapter(context);

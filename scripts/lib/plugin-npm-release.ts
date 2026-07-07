@@ -654,7 +654,7 @@ function runNpmView(args: string[]): string {
   }
 }
 
-export function resolveNpmLatestVersion(packageName: string): string {
+function resolveNpmLatestVersion(packageName: string): string {
   const raw = runNpmView([packageName, "dist-tags.latest", "--json"]);
   const parsed = JSON.parse(raw) as unknown;
   if (typeof parsed !== "string" || !parsed.trim()) {

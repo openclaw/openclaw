@@ -277,7 +277,12 @@ struct CommandSessionActionsModifier: ViewModifier {
         case .rename:
             self.onRename(value)
         case .newGroup:
-            if let value { self.onMoveToGroup(value) }
+            if let value {
+                // Web parity: only prompt-created groups join the stored list,
+                // so they survive as empty sections after members leave.
+                SessionGroupStore.remember(value)
+                self.onMoveToGroup(value)
+            }
         case nil:
             break
         }

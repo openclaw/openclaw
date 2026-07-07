@@ -86,7 +86,7 @@ type ClampedGoogleThinkingLevel = Exclude<AgentThinkingLevel, "xhigh" | "max">;
  *
  * See: https://ai.google.dev/gemini-api/docs/thought-signatures
  */
-export function isThinkingPart(part: Pick<Part, "thought" | "thoughtSignature">): boolean {
+function isThinkingPart(part: Pick<Part, "thought" | "thoughtSignature">): boolean {
   return part.thought === true;
 }
 
@@ -552,7 +552,7 @@ export function buildGoogleSimpleThinking<T extends GoogleApiType>(
     useFlashLiteBudgets?: boolean;
   },
 ): GoogleThinkingOptions {
-  if (!options?.reasoning) {
+  if (!options?.reasoning || options.reasoning === "off") {
     return { enabled: false };
   }
 
@@ -615,11 +615,11 @@ export function isGemma4Model<T extends GoogleApiType>(model: Model<T>): boolean
   return /gemma-?4/.test(model.id.toLowerCase());
 }
 
-export function isGemini3ProModel<T extends GoogleApiType>(model: Model<T>): boolean {
+function isGemini3ProModel<T extends GoogleApiType>(model: Model<T>): boolean {
   return /gemini-3(?:\.\d+)?-pro/.test(model.id.toLowerCase());
 }
 
-export function isGemini3FlashModel<T extends GoogleApiType>(model: Model<T>): boolean {
+function isGemini3FlashModel<T extends GoogleApiType>(model: Model<T>): boolean {
   return /gemini-3(?:\.\d+)?-flash/.test(model.id.toLowerCase());
 }
 

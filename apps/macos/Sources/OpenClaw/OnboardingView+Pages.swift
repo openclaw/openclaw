@@ -983,10 +983,18 @@ extension OnboardingView {
             }
         }
         .task { await self.maybeLoadOnboardingSkills() }
+        .onChange(of: self.currentPage) { _, newValue in
+            // The pager builds every page up front, so the initial load above
+            // can run before the local gateway is configured and fail. Retry
+            // when the user actually lands here instead of latching the error.
+            guard self.activePageIndex(for: newValue) == self.pageOrder.last else { return }
+            Task { await self.maybeLoadOnboardingSkills() }
+        }
     }
 
     private func maybeLoadOnboardingSkills() async {
-        guard !self.didLoadOnboardingSkills else { return }
+        if self.onboardingSkillsModel.isLoading { return }
+        if self.didLoadOnboardingSkills, self.onboardingSkillsModel.error == nil { return }
         self.didLoadOnboardingSkills = true
         await self.onboardingSkillsModel.refresh()
     }

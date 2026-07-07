@@ -227,6 +227,8 @@ import {
   ExecApprovalsGetParamsSchema,
   type ExecApprovalsNodeGetParams,
   ExecApprovalsNodeGetParamsSchema,
+  type ExecApprovalsNodeSnapshot,
+  ExecApprovalsNodeSnapshotSchema,
   type ExecApprovalsNodeSetParams,
   ExecApprovalsNodeSetParamsSchema,
   type ExecApprovalsSetParams,
@@ -356,6 +358,7 @@ import {
   type PollParams,
   PollParamsSchema,
   MIN_CLIENT_PROTOCOL_VERSION,
+  MIN_NODE_PROTOCOL_VERSION,
   MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   type PushTestParams,
@@ -469,6 +472,14 @@ import {
   SkillsDetailResultSchema,
   type SkillsInstallParams,
   SkillsInstallParamsSchema,
+  type SkillsCuratorActionParams,
+  SkillsCuratorActionParamsSchema,
+  type SkillsCuratorActionResult,
+  SkillsCuratorActionResultSchema,
+  type SkillsCuratorStatusParams,
+  SkillsCuratorStatusParamsSchema,
+  type SkillsCuratorStatusResult,
+  SkillsCuratorStatusResultSchema,
   type SkillsProposalActionParams,
   SkillsProposalActionParamsSchema,
   type SkillsProposalApplyResult,
@@ -944,6 +955,12 @@ export const validateSkillsUploadCommitParams = lazyCompile<SkillsUploadCommitPa
 export const validateSkillsUpdateParams = lazyCompile<SkillsUpdateParams>(SkillsUpdateParamsSchema);
 export const validateSkillsSearchParams = lazyCompile<SkillsSearchParams>(SkillsSearchParamsSchema);
 export const validateSkillsDetailParams = lazyCompile<SkillsDetailParams>(SkillsDetailParamsSchema);
+export const validateSkillsCuratorStatusParams = lazyCompile<SkillsCuratorStatusParams>(
+  SkillsCuratorStatusParamsSchema,
+);
+export const validateSkillsCuratorActionParams = lazyCompile<SkillsCuratorActionParams>(
+  SkillsCuratorActionParamsSchema,
+);
 export const validateSkillsProposalsListParams = lazyCompile<SkillsProposalsListParams>(
   SkillsProposalsListParamsSchema,
 );
@@ -1037,6 +1054,9 @@ export const validateExecApprovalsNodeGetParams = lazyCompile<ExecApprovalsNodeG
 );
 export const validateExecApprovalsNodeSetParams = lazyCompile<ExecApprovalsNodeSetParams>(
   ExecApprovalsNodeSetParamsSchema,
+);
+export const validateExecApprovalsNodeSnapshot = lazyCompile<ExecApprovalsNodeSnapshot>(
+  ExecApprovalsNodeSnapshotSchema,
 );
 export const validateLogsTailParams = lazyCompile<LogsTailParams>(LogsTailParamsSchema);
 export const validateTerminalOpenParams = lazyCompile<TerminalOpenParams>(TerminalOpenParamsSchema);
@@ -1321,6 +1341,10 @@ export {
   ToolsEffectiveParamsSchema,
   ToolsInvokeParamsSchema,
   SkillsInstallParamsSchema,
+  SkillsCuratorActionParamsSchema,
+  SkillsCuratorActionResultSchema,
+  SkillsCuratorStatusParamsSchema,
+  SkillsCuratorStatusResultSchema,
   SkillsSearchParamsSchema,
   SkillsSearchResultSchema,
   SkillsDetailParamsSchema,
@@ -1396,6 +1420,7 @@ export {
   WorktreesGcResultSchema,
   ProtocolSchemas,
   MIN_CLIENT_PROTOCOL_VERSION,
+  MIN_NODE_PROTOCOL_VERSION,
   MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   ErrorCodes,
@@ -1538,6 +1563,10 @@ export type {
   ToolsInvokeResult,
   SkillsBinsParams,
   SkillsBinsResult,
+  SkillsCuratorActionParams,
+  SkillsCuratorActionResult,
+  SkillsCuratorStatusParams,
+  SkillsCuratorStatusResult,
   SkillsSearchParams,
   SkillsSearchResult,
   SkillsDetailParams,
@@ -1622,6 +1651,7 @@ export type {
   CronRunsParams,
   CronRunLogEntry,
   ExecApprovalsGetParams,
+  ExecApprovalsNodeSnapshot,
   ExecApprovalsSetParams,
   ExecApprovalsSnapshot,
   ExecApprovalGetParams,

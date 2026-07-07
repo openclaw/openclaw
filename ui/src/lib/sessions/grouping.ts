@@ -24,7 +24,7 @@ export type SessionRowGroup = {
   rows: GatewaySessionRow[];
 };
 
-export type SidebarSessionSection<Row> = {
+type SidebarSessionSection<Row> = {
   id: "pinned" | "ungrouped" | `category:${string}`;
   category?: string;
   rows: Row[];
@@ -106,19 +106,40 @@ export function groupSessionRows(params: {
   return ids.map((id) => ({ id, rows: byId.get(id) ?? [] }));
 }
 
-/** Pinned first, named categories alphabetically, then uncategorized rows. */
+/** How the sidebar buckets non-pinned rows: category sections or one flat list. */
+export type SidebarSessionsGrouping = "category" | "none";
+
+export function normalizeSidebarSessionsGrouping(raw: unknown): SidebarSessionsGrouping {
+  return raw === "none" ? "none" : "category";
+}
+
+/**
+ * Pinned first, named categories alphabetically, then uncategorized rows.
+ * `knownGroups` keeps stored-but-empty groups visible as move targets;
+ * `grouping: "none"` collapses categories into the ungrouped list (pinned stays).
+ */
 export function groupSidebarSessionRows<Row extends { pinned?: boolean; category?: string | null }>(
   rows: readonly Row[],
+  options: { knownGroups?: readonly string[]; grouping?: SidebarSessionsGrouping } = {},
 ): SidebarSessionSection<Row>[] {
+  const grouping = options.grouping ?? "category";
   const pinned: Row[] = [];
   const ungrouped: Row[] = [];
   const categories = new Map<string, Row[]>();
+  if (grouping === "category") {
+    for (const name of options.knownGroups ?? []) {
+      const trimmed = name.trim();
+      if (trimmed && !categories.has(trimmed)) {
+        categories.set(trimmed, []);
+      }
+    }
+  }
   for (const row of rows) {
     if (row.pinned === true) {
       pinned.push(row);
       continue;
     }
-    const category = row.category?.trim();
+    const category = grouping === "category" ? row.category?.trim() : undefined;
     if (!category) {
       ungrouped.push(row);
       continue;

@@ -11,8 +11,8 @@ import {
   formatUnknownText,
   parseSessionKeyParts,
   setUiTimeFormatPreference,
-  stripThinkingTags,
 } from "./format.ts";
+import { stripThinkingTags } from "./strip-thinking-tags.ts";
 
 describe("formatAgo", () => {
   it("returns 'in <1m' for timestamps less than 60s in the future", () => {

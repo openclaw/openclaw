@@ -43,6 +43,7 @@ import {
   resolveOutboundTarget,
   resolveSessionAgentId,
   resolveSessionModelRef,
+  persistInboundImagesForTranscript,
   sanitizeInboundSystemTags,
   sendDurableMessageBatch,
   canonicalizeSessionEntryAliases,
@@ -478,11 +479,14 @@ export const handleNodeEvent = async (
       const { storePath, entry, canonicalKey, storeKeys } = loadSessionEntry(sessionKey);
 
       let message = (link?.message ?? "").trim();
+      const transcriptMessage = message;
       const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(
         link?.attachments ?? undefined,
       );
       let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
       let imageOrder: PromptImageOrderEntry[] = [];
+      let offloadedRefs: Awaited<ReturnType<typeof parseMessageWithAttachments>>["offloadedRefs"] =
+        [];
       if (!message && normalizedAttachments.length === 0) {
         return undefined;
       }
@@ -510,6 +514,7 @@ export const handleNodeEvent = async (
           message = parsed.message.trim();
           images = parsed.images;
           imageOrder = parsed.imageOrder;
+          offloadedRefs = parsed.offloadedRefs;
           if (message.length > 20_000) {
             ctx.logGateway.warn(
               `agent.request message exceeds limit after attachment parsing (length=${message.length})`,
@@ -596,11 +601,22 @@ export const handleNodeEvent = async (
         );
       }
 
+      const transcriptMedia = (
+        await persistInboundImagesForTranscript({
+          images,
+          imageOrder,
+          offloadedRefs,
+          log: ctx.logGateway,
+          logContext: "agent.request",
+        })
+      ).map((media) => ({ path: media.path, contentType: media.contentType }));
+
       dispatchNodeAgentCommand(ctx, nodeId, {
         runId: sessionId,
         message,
         images,
         imageOrder,
+        ...(transcriptMedia.length > 0 ? { transcriptMessage, transcriptMedia } : {}),
         sessionId,
         sessionKey: canonicalKey,
         thinking: link?.thinking ?? undefined,

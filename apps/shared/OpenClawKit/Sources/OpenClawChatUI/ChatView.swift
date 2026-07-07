@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -98,6 +101,8 @@ public struct OpenClawChatView: View {
     private let emptyAssistantIntro: String?
     private let emptyAssistantPrompts: [StarterPrompt]
     private let talkControl: OpenClawChatTalkControl?
+    private let voiceNoteControl: OpenClawChatVoiceNoteControl?
+    private let speech: OpenClawChatSpeechController?
 
     private enum ScrollFollowTarget: Equatable {
         case latest
@@ -148,7 +153,9 @@ public struct OpenClawChatView: View {
         messagePlaceholder: String? = nil,
         emptyAssistantIntro: String? = nil,
         emptyAssistantPrompts: [StarterPrompt] = [],
-        talkControl: OpenClawChatTalkControl? = nil)
+        talkControl: OpenClawChatTalkControl? = nil,
+        voiceNoteControl: OpenClawChatVoiceNoteControl? = nil,
+        speech: OpenClawChatSpeechController? = nil)
     {
         _viewModel = State(initialValue: viewModel)
         self.drawsBackground = drawsBackground
@@ -168,6 +175,8 @@ public struct OpenClawChatView: View {
         self.emptyAssistantIntro = emptyAssistantIntro
         self.emptyAssistantPrompts = emptyAssistantPrompts
         self.talkControl = talkControl
+        self.voiceNoteControl = voiceNoteControl
+        self.speech = speech
     }
 
     public var body: some View {
@@ -225,10 +234,13 @@ public struct OpenClawChatView: View {
             assistantAvatarText: self.assistantAvatarText,
             assistantAvatarTint: self.assistantAvatarTint,
             composerChrome: self.composerChrome,
-            isComposerEnabled: self.isComposerEnabled,
-            isAttachmentInputEnabled: self.isAttachmentInputEnabled,
+            isComposerEnabled: self.isComposerEnabled
+                && !self.viewModel.isSendingAttachmentDraft,
+            isAttachmentInputEnabled: self.isAttachmentInputEnabled
+                && !self.viewModel.isSendingAttachmentDraft,
             messagePlaceholder: self.messagePlaceholder,
-            talkControl: self.talkControl)
+            talkControl: self.talkControl,
+            voiceNoteControl: self.voiceNoteControl)
     }
 
     private var messageList: some View {
@@ -313,6 +325,7 @@ public struct OpenClawChatView: View {
             self.lastUserMessageID = self.latestVisibleUserMessageID
         }
         .onChange(of: self.viewModel.sessionKey) { _, _ in
+            self.speech?.stop()
             self.hasPerformedInitialScroll = false
             self.followTarget = .latest
             self.isAtLiveEdge = true
@@ -321,8 +334,14 @@ public struct OpenClawChatView: View {
             self.lastUserMessageID = nil
         }
         .onChange(of: self.scenePhase) { _, newValue in
+            if newValue == .background {
+                self.speech?.stop()
+            }
             guard newValue == .active else { return }
             self.viewModel.resumeFromForeground()
+        }
+        .onDisappear {
+            self.speech?.stop()
         }
         .onChange(of: self.viewModel.timelineRevision) { _, _ in
             self.handleTimelineChange()
@@ -412,6 +431,7 @@ public struct OpenClawChatView: View {
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
             .contextMenu {
+                self.copyMessageButton(for: msg)
                 if outboxState.isFailed {
                     Button {
                         self.viewModel.retryOutboxMessage(msg.id)
@@ -439,9 +459,95 @@ public struct OpenClawChatView: View {
                     }
                 }
             }
+        } else if let speech = self.speech, self.isListenable(msg) {
+            VStack(alignment: .leading, spacing: 3) {
+                bubble
+                if let isPreparing = self.speechChipIsPreparing(speech, messageID: msg.id) {
+                    ChatSpeechStatusChip(isPreparing: isPreparing) {
+                        speech.stop()
+                    }
+                    .padding(.leading, 8)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contextMenu {
+                Button {
+                    if speech.isActive(msg.id) {
+                        speech.stop()
+                    } else {
+                        speech.toggle(
+                            messageID: msg.id,
+                            text: ChatMessageVisibleText.visibleText(in: msg))
+                    }
+                } label: {
+                    Label {
+                        if speech.isActive(msg.id) {
+                            Text("Stop Listening")
+                                .font(OpenClawChatTypography.body)
+                        } else {
+                            Text("Listen")
+                                .font(OpenClawChatTypography.body)
+                        }
+                    } icon: {
+                        Image(systemName: speech.isActive(msg.id) ? "stop.circle" : "speaker.wave.2")
+                    }
+                }
+            }
         } else {
+            #if os(macOS)
             bubble
+                .contextMenu {
+                    self.copyMessageButton(for: msg)
+                }
+            #else
+            bubble
+            #endif
         }
+    }
+
+    private func isListenable(_ msg: OpenClawChatMessage) -> Bool {
+        msg.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "assistant"
+            && ChatMessageVisibleText.hasVisibleText(in: msg)
+    }
+
+    private func speechChipIsPreparing(
+        _ speech: OpenClawChatSpeechController,
+        messageID: UUID) -> Bool?
+    {
+        switch speech.phase {
+        case let .preparing(id) where id == messageID:
+            true
+        case let .speaking(id) where id == messageID:
+            false
+        default:
+            nil
+        }
+    }
+
+    @ViewBuilder
+    private func copyMessageButton(for message: OpenClawChatMessage) -> some View {
+        let text = self.primaryText(in: message)
+        if !text.isEmpty {
+            Button {
+                Self.copyToClipboard(text)
+            } label: {
+                Label {
+                    Text("Copy Message")
+                        .font(OpenClawChatTypography.body)
+                } icon: {
+                    Image(systemName: "doc.on.doc")
+                }
+            }
+        }
+    }
+
+    private static func copyToClipboard(_ text: String) {
+        #if os(macOS)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        #else
+        UIPasteboard.general.string = text
+        #endif
     }
 
     private var visibleMessages: [OpenClawChatMessage] {
@@ -616,7 +722,7 @@ public struct OpenClawChatView: View {
 
     private var emptyStateTitle: String {
         #if os(macOS)
-        "Web Chat"
+        "Start a Conversation"
         #else
         "Chat"
         #endif
@@ -624,7 +730,7 @@ public struct OpenClawChatView: View {
 
     private var emptyStateMessage: String {
         #if os(macOS)
-        "Type a message below to start.\nReturn sends • Shift-Return adds a line break."
+        "Message your agent to get started.\nReturn sends • Shift-Return adds a line break • / shows commands."
         #else
         "Type a message below to start."
         #endif

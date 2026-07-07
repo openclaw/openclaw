@@ -28,7 +28,6 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
 import { refreshChatAvatar } from "./chat-avatar.ts";
-import { refreshSlashCommands } from "./chat-commands.ts";
 import {
   applyChatAgentsList,
   clearChatHistory,
@@ -52,6 +51,7 @@ import {
   handleChatManualRefresh,
   handlePageGatewayEvent,
   refreshChatCommands,
+  refreshChatMetadata,
   refreshChatModelAuthStatus,
   refreshPageChat,
   refreshRouteSessionOptions,
@@ -86,7 +86,7 @@ type ChatPageContext = ApplicationContext;
 type PaneSessionChangeOptions = { replace?: boolean };
 
 const CHAT_OPEN_DETAILS_SELECTOR =
-  ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__talk-select[open]";
+  ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__talk-select[open], .agent-chat__attach-menu[open]";
 
 const NEW_SESSION_ACTIVE_RUN_MESSAGE =
   "Start a new session after the active run or queued messages finish.";
@@ -95,7 +95,7 @@ const NEW_SESSION_LIST_LOADING_MESSAGE =
 const NEW_SESSION_CREATE_FAILED_MESSAGE =
   "New Chat could not create a new session. Try again in a moment.";
 
-export class ChatPane extends LitElement {
+class ChatPane extends LitElement {
   @consume({ context: applicationContext, subscribe: false })
   private context!: ChatPageContext;
   @property({ attribute: false }) paneId = "single";
@@ -189,10 +189,7 @@ export class ChatPane extends LitElement {
     }
     void state.loadAssistantIdentity();
     void refreshChatAvatar(state);
-    void refreshSlashCommands({
-      client: state.client,
-      agentId: parseAgentSessionKey(nextSessionKey)?.agentId,
-    });
+    void refreshChatMetadata(state).finally(() => state.requestUpdate?.());
     const subscriptionSync = syncSelectedSessionMessageSubscription(state);
     const historyLoad = loadChatHistory(state);
     state.requestUpdate();
@@ -358,12 +355,6 @@ export class ChatPane extends LitElement {
       });
       return;
     }
-    if (state.realtimeTalkOptionsOpen) {
-      event.preventDefault();
-      state.realtimeTalkOptionsOpen = false;
-      state.requestUpdate();
-      return;
-    }
     if (!state.chatMobileControlsOpen) {
       return;
     }
@@ -384,17 +375,6 @@ export class ChatPane extends LitElement {
         changed = true;
       }
     });
-    if (state.realtimeTalkOptionsOpen) {
-      const insideTalkOptions = Array.from(
-        this.querySelectorAll(
-          ".agent-chat__talk-options, [aria-label='Talk settings'], [aria-label='Talk options']",
-        ),
-      ).some((node) => path.includes(node));
-      if (!insideTalkOptions) {
-        state.realtimeTalkOptionsOpen = false;
-        changed = true;
-      }
-    }
     if (changed) {
       state.requestUpdate();
     }
@@ -443,6 +423,14 @@ export class ChatPane extends LitElement {
     };
     this.state = pageState;
     chatState.attach(pageState);
+    const mediaDevices = globalThis.navigator?.mediaDevices;
+    if (mediaDevices?.addEventListener) {
+      const handleDeviceChange = () => void pageState.refreshRealtimeTalkInputs();
+      mediaDevices.addEventListener("devicechange", handleDeviceChange);
+      chatState.addCleanup(() =>
+        mediaDevices.removeEventListener("devicechange", handleDeviceChange),
+      );
+    }
     if (this.sessionKey) {
       this.setPaneSessionKey(this.sessionKey);
     }
@@ -819,16 +807,16 @@ export class ChatPane extends LitElement {
       realtimeTalkActive: state.realtimeTalkActive,
       realtimeTalkStatus: state.realtimeTalkStatus,
       realtimeTalkDetail: state.realtimeTalkDetail,
-      realtimeTalkTranscript: state.realtimeTalkTranscript,
       realtimeTalkConversation: state.realtimeTalkConversation,
-      realtimeTalkOptionsOpen: state.realtimeTalkOptionsOpen,
-      realtimeTalkOptions: state.realtimeTalkOptions,
-      canOpenRealtimeTalkSettings,
       connected: state.connected,
       canSend: state.connected && !selectedSessionArchived,
       disabledReason,
       error: state.lastError,
       sessions: state.sessionsResult,
+      providerQuota: {
+        basePath: state.basePath,
+        modelAuthStatusResult: state.modelAuthStatusResult,
+      },
       composerControls: renderChatControls({
         paneId: this.paneId,
         agentsList: state.agentsList,
@@ -840,6 +828,7 @@ export class ChatPane extends LitElement {
           activeRunId: state.chatRunId,
           agentDefaultModel,
           connected: state.connected,
+          draftScope: state,
           gatewayAvailable: Boolean(state.client),
           loading: state.chatLoading,
           modelCatalog: state.chatModelCatalog,
@@ -850,15 +839,14 @@ export class ChatPane extends LitElement {
           sessionKey: state.sessionKey,
           sessionsResult: state.sessionsResult,
           stream: state.chatStream,
-          onFastModeSelect: (next) => switchChatFastMode(state, next),
-          onModelSelect: (next) => switchChatModel(state, next),
-          onThinkingSelect: (next) => switchChatThinkingLevel(state, next),
+          onRequestUpdate: () => state.requestUpdate?.(),
+          onFastModeSelect: (next, targetSessionKey) =>
+            switchChatFastMode(state, next, targetSessionKey),
+          onModelSelect: (next, targetSessionKey) => switchChatModel(state, next, targetSessionKey),
+          onThinkingSelect: (next, targetSessionKey) =>
+            switchChatThinkingLevel(state, next, targetSessionKey),
         },
         onboarding: state.onboarding,
-        quota: {
-          basePath: state.basePath,
-          modelAuthStatusResult: state.modelAuthStatusResult,
-        },
         runId: state.chatRunId,
         sending: state.chatSending,
         settings: state.settings,
@@ -866,9 +854,29 @@ export class ChatPane extends LitElement {
         sessionKey: state.sessionKey,
         sessionsResult: state.sessionsResult,
         stream: state.chatStream,
+        realtimeTalkOptions: state.realtimeTalkOptions,
+        realtimeTalkInputDevices: state.realtimeTalkInputDevices,
+        realtimeTalkInputDeviceId: state.realtimeTalkInputDeviceId,
+        realtimeTalkInputLoading: state.realtimeTalkInputLoading,
+        realtimeTalkInputError: state.realtimeTalkInputError,
+        canOpenRealtimeTalkSettings,
         onRefresh: () => handleChatManualRefresh(state),
+        onRealtimeTalkInputRefresh: () => void state.refreshRealtimeTalkInputs(true),
+        onRealtimeTalkInputSelect: state.selectRealtimeTalkInput,
+        onRealtimeTalkOptionsChange: state.updateRealtimeTalkOptions,
+        onOpenRealtimeTalkSettings: () => {
+          if (!canOpenRealtimeTalkSettings) {
+            return;
+          }
+          this.context.navigate("communications", { search: "?section=talk" });
+        },
         onSettingsChange: state.applySettings,
-        onSettingsOpenChange: state.setChatMobileControlsOpen,
+        onSettingsOpenChange: (open, options) => {
+          state.setChatMobileControlsOpen(open, options);
+          if (open) {
+            void state.refreshRealtimeTalkInputs(false);
+          }
+        },
         onToggleCronSessions: () => {
           state.sessionsHideCron = !state.sessionsHideCron;
           state.requestUpdate?.();
@@ -906,18 +914,6 @@ export class ChatPane extends LitElement {
         this.context.navigate("sessions", { search: `?${search.toString()}` });
       },
       onToggleRealtimeTalk: () => void state.toggleRealtimeTalk(),
-      onToggleRealtimeTalkOptions: () => {
-        state.realtimeTalkOptionsOpen = !state.realtimeTalkOptionsOpen;
-        state.requestUpdate?.();
-      },
-      onRealtimeTalkOptionsChange: state.updateRealtimeTalkOptions,
-      onOpenRealtimeTalkSettings: () => {
-        if (!canOpenRealtimeTalkSettings) {
-          return;
-        }
-        state.realtimeTalkOptionsOpen = false;
-        this.context.navigate("communications", { search: "?section=talk" });
-      },
       onDismissError: () => {
         dismissChatError(state as never);
         state.requestUpdate?.();

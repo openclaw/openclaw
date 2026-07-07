@@ -28,6 +28,7 @@ import {
   errorShape,
   formatValidationErrors,
   GATEWAY_SERVER_CAPS,
+  MIN_NODE_PROTOCOL_VERSION,
   MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   validateConnectParams,
@@ -120,6 +121,7 @@ import {
   isTrustedProxyAddress,
   resolveClientIp,
 } from "../../net.js";
+import { filterLegacyNodeProtocolFeatures } from "../../node-command-policy.js";
 import { reconcileNodePairingOnConnect } from "../../node-connect-reconcile.js";
 import {
   resolveNodePairingClientIpSource,
@@ -814,7 +816,19 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           connectParams.client.mode === GATEWAY_CLIENT_MODES.PROBE &&
           maxProtocol >= MIN_PROBE_PROTOCOL_VERSION &&
           minProtocol <= PROTOCOL_VERSION;
-        if (!supportsCurrentProtocol && !supportsProbeRestartProtocol) {
+        // Protocol v4 changed chat deltas, not node RPC frames. Keep N-1 limited to
+        // the node role+mode so stale operator/UI clients cannot enter the v4 surface.
+        const supportsPreviousNodeProtocol =
+          connectParams.role === "node" &&
+          connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE &&
+          maxProtocol >= MIN_NODE_PROTOCOL_VERSION &&
+          minProtocol <= MIN_NODE_PROTOCOL_VERSION;
+        const usesLegacyNodeProtocol = !supportsCurrentProtocol && supportsPreviousNodeProtocol;
+        if (
+          !supportsCurrentProtocol &&
+          !supportsProbeRestartProtocol &&
+          !supportsPreviousNodeProtocol
+        ) {
           markHandshakeFailure("protocol-mismatch", {
             minProtocol,
             maxProtocol,
@@ -1842,12 +1856,34 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             declaredCaps?: string[];
             declaredCommands?: string[];
             declaredPermissions?: Record<string, boolean>;
+            sessionCapsCeiling?: string[];
+            sessionCommandsCeiling?: string[];
           };
           nodeConnectParams.declaredCaps = reconciliation.declaredCaps;
           nodeConnectParams.declaredCommands = reconciliation.declaredCommands;
           nodeConnectParams.declaredPermissions = reconciliation.declaredPermissions;
-          connectParams.caps = reconciliation.effectiveCaps;
-          connectParams.commands = reconciliation.effectiveCommands;
+          const pluginSurfaces = pluginNodeCapabilities.map((surface) => surface.surface);
+          if (usesLegacyNodeProtocol) {
+            const sessionCeiling = filterLegacyNodeProtocolFeatures({
+              caps: reconciliation.declaredCaps,
+              commands: reconciliation.declaredCommands,
+              pluginSurfaces,
+            });
+            nodeConnectParams.sessionCapsCeiling = sessionCeiling.caps;
+            nodeConnectParams.sessionCommandsCeiling = sessionCeiling.commands;
+          }
+          const effectiveFeatures = usesLegacyNodeProtocol
+            ? filterLegacyNodeProtocolFeatures({
+                caps: reconciliation.effectiveCaps,
+                commands: reconciliation.effectiveCommands,
+                pluginSurfaces,
+              })
+            : {
+                caps: reconciliation.effectiveCaps,
+                commands: reconciliation.effectiveCommands,
+              };
+          connectParams.caps = effectiveFeatures.caps;
+          connectParams.commands = effectiveFeatures.commands;
           connectParams.permissions = reconciliation.effectivePermissions;
         }
 
@@ -1873,7 +1909,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           capability: string;
           expiresAtMs: number;
         }> = [];
-        if (pluginSurfaceBaseUrl) {
+        if (pluginSurfaceBaseUrl && !usesLegacyNodeProtocol) {
           for (const pluginCapabilitySurface of Object.values(pluginNodeCapabilitySurfaces)) {
             const capability = mintPluginNodeCapabilityToken();
             const expiresAtMs = resolvePluginNodeCapabilityExpiresAtMs(pluginCapabilitySurface);
@@ -1940,6 +1976,11 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                   : {}),
               }
             : undefined;
+        if (usesLegacyNodeProtocol) {
+          logWsControl.warn(
+            `legacy node protocol accepted conn=${connId} client=${formatForLog(clientLabel)} v${formatForLog(connectParams.client.version)} min=${minProtocol} max=${maxProtocol} current=${PROTOCOL_VERSION}; upgrade recommended`,
+          );
+        }
         clearHandshakeTimer();
         const nextClient: GatewayWsClient = {
           socket,

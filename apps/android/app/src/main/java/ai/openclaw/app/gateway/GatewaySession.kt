@@ -5,6 +5,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -358,11 +359,25 @@ class GatewaySession(
     payloadJson: String?,
   ): Boolean = sendNodeEventWithOutcome(event, payloadJson) == NodeEventSendOutcome.COMPLETED
 
+  internal suspend fun sendNodeEventForEndpoint(
+    expectedEndpointStableId: String?,
+    event: String,
+    payloadJson: String?,
+  ): Boolean =
+    sendNodeEventWithOutcomeForEndpoint(expectedEndpointStableId, event, payloadJson) ==
+      NodeEventSendOutcome.COMPLETED
+
   internal suspend fun sendNodeEventWithOutcome(
     event: String,
     payloadJson: String?,
+  ): NodeEventSendOutcome = sendNodeEventWithOutcomeForEndpoint(expectedEndpointStableId = null, event, payloadJson)
+
+  internal suspend fun sendNodeEventWithOutcomeForEndpoint(
+    expectedEndpointStableId: String?,
+    event: String,
+    payloadJson: String?,
   ): NodeEventSendOutcome {
-    val conn = readyConnection() ?: return NodeEventSendOutcome.DISCONNECTED
+    val conn = readyConnection(expectedEndpointStableId) ?: return NodeEventSendOutcome.DISCONNECTED
     return try {
       conn.request(
         "node.event",
@@ -383,9 +398,16 @@ class GatewaySession(
     event: String,
     payloadJson: String?,
     timeoutMs: Long = 8_000,
+  ): RpcResult = sendNodeEventDetailedForEndpoint(null, event, payloadJson, timeoutMs)
+
+  internal suspend fun sendNodeEventDetailedForEndpoint(
+    expectedEndpointStableId: String?,
+    event: String,
+    payloadJson: String?,
+    timeoutMs: Long = 8_000,
   ): RpcResult {
     val conn =
-      readyConnection()
+      readyConnection(expectedEndpointStableId)
         ?: return RpcResult(
           ok = false,
           payloadJson = null,
@@ -426,13 +448,31 @@ class GatewaySession(
     throw GatewayRequestRejected(res.error ?: ErrorShape("UNAVAILABLE", "request failed"))
   }
 
+  internal suspend fun requestForEndpoint(
+    expectedEndpointStableId: String,
+    method: String,
+    paramsJson: String?,
+    timeoutMs: Long = 15_000,
+  ): String {
+    val res = requestDetailed(expectedEndpointStableId, method, paramsJson, timeoutMs)
+    if (res.ok) return res.payloadJson ?: ""
+    throw GatewayRequestRejected(res.error ?: ErrorShape("UNAVAILABLE", "request failed"))
+  }
+
   /** Sends an RPC request and returns the structured success/error payload. */
   suspend fun requestDetailed(
     method: String,
     paramsJson: String?,
     timeoutMs: Long = 15_000,
+  ): RpcResult = requestDetailed(expectedEndpointStableId = null, method, paramsJson, timeoutMs)
+
+  private suspend fun requestDetailed(
+    expectedEndpointStableId: String?,
+    method: String,
+    paramsJson: String?,
+    timeoutMs: Long,
   ): RpcResult {
-    val conn = readyConnection() ?: throw GatewayRequestNotEnqueued("not connected")
+    val conn = readyConnection(expectedEndpointStableId) ?: throw GatewayRequestNotEnqueued("not connected")
     val params =
       if (paramsJson.isNullOrBlank()) {
         null
@@ -443,14 +483,27 @@ class GatewaySession(
     return RpcResult(ok = res.ok, payloadJson = res.payloadJson, error = res.error)
   }
 
+  private fun readyConnection(expectedEndpointStableId: String?): Connection? =
+    readyConnection()?.takeIf { connection ->
+      expectedEndpointStableId == null || connection.endpoint.stableId == expectedEndpointStableId
+    }
+
   /** Sends an RPC request frame and reports errors asynchronously through [onError]. */
   suspend fun sendRequestFrame(
     method: String,
     paramsJson: String?,
     timeoutMs: Long = 15_000,
     onError: (ErrorShape) -> Unit = {},
+  ) = sendRequestFrameForEndpoint(null, method, paramsJson, timeoutMs, onError)
+
+  internal suspend fun sendRequestFrameForEndpoint(
+    expectedEndpointStableId: String?,
+    method: String,
+    paramsJson: String?,
+    timeoutMs: Long = 15_000,
+    onError: (ErrorShape) -> Unit = {},
   ) {
-    val conn = readyConnection() ?: throw IllegalStateException("not connected")
+    val conn = readyConnection(expectedEndpointStableId) ?: throw IllegalStateException("not connected")
     val params =
       if (paramsJson.isNullOrBlank()) {
         null
@@ -559,6 +612,7 @@ class GatewaySession(
       }
     }
 
+    @OptIn(DelicateCoroutinesApi::class)
     suspend fun sendRequestFrame(
       method: String,
       params: JsonElement?,
@@ -573,7 +627,12 @@ class GatewaySession(
         pending.remove(id)
         throw err
       }
-      connectionScope.launch(Dispatchers.IO) {
+      // ATOMIC start: joinOwnedWork() cancels connectionJob right after failPending(); a
+      // DEFAULT-start watcher still queued for dispatch would be cancelled without ever running
+      // and silently drop the terminal onError owed to fire-and-forget callers. ATOMIC
+      // guarantees this block runs; await() on the already-failed deferred then surfaces the
+      // disconnect outcome without suspending.
+      connectionScope.launch(Dispatchers.IO, start = CoroutineStart.ATOMIC) {
         try {
           val response =
             try {
@@ -767,7 +826,7 @@ class GatewaySession(
 
     private suspend fun sendConnect(connectNonce: String) {
       val identity = identityStore.loadOrCreate()
-      val storedEntry = deviceAuthStore.loadEntry(identity.deviceId, options.role)
+      val storedEntry = deviceAuthStore.loadEntry(endpoint.stableId, identity.deviceId, options.role)
       val storedToken = storedEntry?.token?.trim()
       val selectedAuth =
         selectConnectAuth(
@@ -808,7 +867,7 @@ class GatewaySession(
           selectedAuth.attemptedDeviceTokenRetry &&
           shouldClearStoredDeviceTokenAfterRetry(error)
         ) {
-          deviceAuthStore.clearToken(identity.deviceId, options.role)
+          deviceAuthStore.clearToken(endpoint.stableId, identity.deviceId, options.role)
         }
         throw GatewayConnectFailure(error)
       }
@@ -848,7 +907,7 @@ class GatewaySession(
       scopes: List<String>,
     ) {
       val filteredScopes = filteredBootstrapHandoffScopes(role, scopes) ?: return
-      deviceAuthStore.saveToken(deviceId, role, token, filteredScopes)
+      deviceAuthStore.saveToken(endpoint.stableId, deviceId, role, token, filteredScopes)
     }
 
     private fun persistIssuedDeviceToken(
@@ -863,7 +922,7 @@ class GatewaySession(
         persistBootstrapHandoffToken(deviceId, role, token, scopes)
         return
       }
-      deviceAuthStore.saveToken(deviceId, role, token, scopes)
+      deviceAuthStore.saveToken(endpoint.stableId, deviceId, role, token, scopes)
     }
 
     private fun parseConnectSuccess(

@@ -6,7 +6,6 @@ import {
   loadGatewaySessionSelection,
   loadLocalUserIdentity,
   loadSettings,
-  saveLocalUserIdentity,
   saveSettings,
   type UiSettings,
 } from "./settings.ts";
@@ -436,6 +435,27 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(loadSettings().chatSendShortcut).toBe("enter");
   });
 
+  it("persists only a normalized realtime Talk microphone id", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    const gwUrl = expectedGatewayUrl("");
+    const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
+    saveSettings({ ...loadSettings(), realtimeTalkInputDeviceId: " usb-mic " });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}").realtimeTalkInputDeviceId).toBe(
+      "usb-mic",
+    );
+    expect(loadSettings().realtimeTalkInputDeviceId).toBe("usb-mic");
+
+    saveSettings({ ...loadSettings(), realtimeTalkInputDeviceId: "" });
+    expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(
+      "realtimeTalkInputDeviceId",
+    );
+  });
+
   it("clears the current-tab token when saving an empty token", () => {
     setTestLocation({
       protocol: "https:",
@@ -816,14 +836,16 @@ describe("loadSettings default gateway URL derivation", () => {
     });
   });
 
-  it("persists local user identity separately from gateway settings", () => {
+  it("loads local user identity separately from gateway settings", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
       pathname: "/",
     });
-
-    saveLocalUserIdentity({ name: "Buns", avatar: "🦞" });
+    localStorage.setItem(
+      "openclaw.control.user.v1",
+      JSON.stringify({ name: "Buns", avatar: "🦞" }),
+    );
 
     expect(loadLocalUserIdentity()).toEqual({
       name: "Buns",
@@ -848,16 +870,5 @@ describe("loadSettings default gateway URL derivation", () => {
       name: null,
       avatar: null,
     });
-  });
-
-  it("removes the persisted local user identity when cleared", () => {
-    saveLocalUserIdentity({ name: "Buns", avatar: "data:image/png;base64,AAA" });
-    saveLocalUserIdentity({ name: null, avatar: null });
-
-    expect(loadLocalUserIdentity()).toEqual({
-      name: null,
-      avatar: null,
-    });
-    expect(localStorage.getItem("openclaw.control.user.v1")).toBeNull();
   });
 });

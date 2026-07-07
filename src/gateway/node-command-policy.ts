@@ -270,6 +270,32 @@ export function isForegroundRestrictedPluginNodeCommand(command: string): boolea
   );
 }
 
+export function filterLegacyNodeProtocolFeatures(params: {
+  caps: readonly string[];
+  commands: readonly string[];
+  pluginSurfaces: readonly string[];
+}): { caps: string[]; commands: string[] } {
+  // N-1 nodes predate plugin-hosted surfaces. Preserve their durable pairing
+  // declarations elsewhere, but hide unusable plugin features from this session.
+  const registry = getActivePluginGatewayNodePolicyRegistry();
+  if (!registry) {
+    return { caps: [...params.caps], commands: [...params.commands] };
+  }
+  const pluginIds = new Set([
+    ...registry.nodeHostCommands.map((entry) => entry.pluginId),
+    ...registry.nodeInvokePolicies.map((entry) => entry.pluginId),
+  ]);
+  const pluginCaps = new Set([...params.pluginSurfaces, ...pluginIds]);
+  const pluginCommands = new Set([
+    ...registry.nodeHostCommands.map((entry) => entry.command.command),
+    ...registry.nodeInvokePolicies.flatMap((entry) => entry.policy.commands),
+  ]);
+  return {
+    caps: params.caps.filter((cap) => !pluginCaps.has(cap)),
+    commands: params.commands.filter((command) => !pluginCommands.has(command)),
+  };
+}
+
 type NodeCommandPolicyNode = Pick<NodeSession, "platform" | "deviceFamily"> &
   Partial<Pick<NodeSession, "caps" | "commands" | "connId" | "nodeId">> & {
     approvedCommands?: readonly string[];

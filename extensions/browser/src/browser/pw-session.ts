@@ -84,7 +84,7 @@ export type BrowserNetworkRequest = {
 };
 
 /** Observed browser dialog record tracked for agent-visible state. */
-export type BrowserObservedDialogRecord = {
+type BrowserObservedDialogRecord = {
   id: string;
   type: string;
   message: string;
@@ -95,13 +95,13 @@ export type BrowserObservedDialogRecord = {
 };
 
 /** Pending and recent dialog state for a page. */
-export type BrowserObservedDialogState = {
+type BrowserObservedDialogState = {
   pending: BrowserObservedDialogRecord[];
   recent: BrowserObservedDialogRecord[];
 };
 
 /** Browser state currently observable by agent responses. */
-export type BrowserObservedState = {
+type BrowserObservedState = {
   dialogs: BrowserObservedDialogState;
 };
 
@@ -1669,7 +1669,7 @@ async function tryTerminateExecutionViaCdp(opts: {
     return;
   }
   const wsUrl = normalizeCdpWsUrl(wsUrlRaw, cdpHttpBase);
-  await assertCdpEndpointAllowed(wsUrl, opts.ssrfPolicy);
+  await assertCdpEndpointAllowed(wsUrl, opts.ssrfPolicy, { source: "discovered" });
   const needsAttach = cdpSocketNeedsAttach(wsUrl);
 
   const runWithTimeout = async <T>(work: Promise<T>, ms: number): Promise<T> => {
@@ -1911,6 +1911,7 @@ export async function createPageViaPlaywright(
   opts: {
     cdpUrl: string;
     url: string;
+    cdpPolicy?: SsrFPolicy;
   } & BrowserNavigationPolicyOptions,
 ): Promise<{
   targetId: string;
@@ -1918,7 +1919,7 @@ export async function createPageViaPlaywright(
   url: string;
   type: string;
 }> {
-  const { browser } = await connectBrowser(opts.cdpUrl, opts.ssrfPolicy);
+  const { browser } = await connectBrowser(opts.cdpUrl, opts.cdpPolicy ?? opts.ssrfPolicy);
   const context = browser.contexts()[0] ?? (await browser.newContext());
   ensureContextState(context);
 

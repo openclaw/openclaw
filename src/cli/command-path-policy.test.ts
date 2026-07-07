@@ -13,6 +13,7 @@ const DEFAULT_EXPECTED_POLICY: CliCommandPathPolicy = {
   routeConfigGuard: "never",
   loadPlugins: "never",
   pluginRegistry: { scope: "all" },
+  ownsProtocolStdout: false,
   hideBanner: false,
   ensureCliPath: true,
   networkProxy: "default",

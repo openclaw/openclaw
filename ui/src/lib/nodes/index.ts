@@ -7,6 +7,7 @@ import {
   storeDeviceAuthTokenInStore,
 } from "../../../../src/shared/device-auth-store.js";
 import type { DeviceAuthStore } from "../../../../src/shared/device-auth.js";
+import { normalizeGatewayCredentialScope } from "../../app/gateway-scope.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { cloneConfigObject, removePathValue, setPathValue } from "../config-form-utils.ts";
 
@@ -87,16 +88,37 @@ export type ExecApprovalsFile = {
   agents?: Record<string, ExecApprovalsAgent>;
 };
 
-export type ExecApprovalsSnapshot = {
+export type FileExecApprovalsSnapshot = {
   path: string;
   exists: boolean;
   hash: string;
   file: ExecApprovalsFile;
 };
 
+export type NativeExecApprovalRule = {
+  pattern: string;
+  action: "allow" | "deny" | "prompt";
+  shells?: string[];
+  description?: string;
+  enabled?: boolean;
+};
+
+export type NativeExecApprovalsSnapshot =
+  | {
+      enabled: true;
+      hash: string;
+      baseHash?: string;
+      defaultAction: "allow" | "deny" | "prompt";
+      rules: NativeExecApprovalRule[];
+      constraints?: Record<string, boolean>;
+    }
+  | { enabled: false; message?: string };
+
+export type ExecApprovalsSnapshot = FileExecApprovalsSnapshot | NativeExecApprovalsSnapshot;
+
 export type ExecApprovalsTarget = { kind: "gateway" } | { kind: "node"; nodeId: string };
 
-export type NodesState = {
+type NodesState = {
   client: GatewayRequestClient | null;
   connected: boolean;
   nodesLoading: boolean;
@@ -105,7 +127,7 @@ export type NodesState = {
   chatError?: string | null;
 };
 
-export type DevicesState = {
+type DevicesState = {
   client: GatewayRequestClient | null;
   connected: boolean;
   devicesLoading: boolean;
@@ -142,7 +164,8 @@ export type DeviceIdentity = {
   privateKey: string;
 };
 
-const DEVICE_AUTH_STORAGE_KEY = "openclaw.device.auth.v1";
+const LEGACY_DEVICE_AUTH_STORAGE_KEY = "openclaw.device.auth.v1";
+const DEVICE_AUTH_STORAGE_KEY_PREFIX = `${LEGACY_DEVICE_AUTH_STORAGE_KEY}:`;
 const DEVICE_IDENTITY_STORAGE_KEY = "openclaw-device-identity-v1";
 
 export function createInitialNodesState(
@@ -253,24 +276,26 @@ export async function rejectDevicePairing(state: DevicesState, requestId: string
 
 export async function rotateDeviceToken(
   state: DevicesState,
-  params: { deviceId: string; role: string; scopes?: string[] },
+  params: { deviceId: string; gatewayUrl: string; role: string; scopes?: string[] },
 ) {
   if (!state.client || !state.connected) {
     return;
   }
   try {
+    const { gatewayUrl, ...requestParams } = params;
     const res = await state.client.request<{
       token?: string;
       role?: string;
       deviceId?: string;
       scopes?: Array<string>;
-    }>("device.token.rotate", params);
+    }>("device.token.rotate", requestParams);
     if (res?.token) {
       const identity = await loadOrCreateDeviceIdentity();
       const role = res.role ?? params.role;
       if (res.deviceId === identity.deviceId || params.deviceId === identity.deviceId) {
         storeDeviceAuthToken({
           deviceId: identity.deviceId,
+          gatewayUrl,
           role,
           token: res.token,
           scopes: res.scopes ?? params.scopes ?? [],
@@ -286,7 +311,7 @@ export async function rotateDeviceToken(
 
 export async function revokeDeviceToken(
   state: DevicesState,
-  params: { deviceId: string; role: string },
+  params: { deviceId: string; gatewayUrl: string; role: string },
 ) {
   if (!state.client || !state.connected) {
     return;
@@ -296,10 +321,15 @@ export async function revokeDeviceToken(
     return;
   }
   try {
-    await state.client.request("device.token.revoke", params);
+    const { gatewayUrl, ...requestParams } = params;
+    await state.client.request("device.token.revoke", requestParams);
     const identity = await loadOrCreateDeviceIdentity();
     if (params.deviceId === identity.deviceId) {
-      clearDeviceAuthToken({ deviceId: identity.deviceId, role: params.role });
+      clearDeviceAuthToken({
+        deviceId: identity.deviceId,
+        gatewayUrl,
+        role: params.role,
+      });
     }
     await loadDevices(state);
   } catch (err) {
@@ -363,9 +393,20 @@ export async function loadExecApprovals(
 
 function applyExecApprovalsSnapshot(state: ExecApprovalsState, snapshot: ExecApprovalsSnapshot) {
   state.execApprovalsSnapshot = snapshot;
-  if (!state.execApprovalsDirty) {
-    state.execApprovalsForm = cloneConfigObject(snapshot.file ?? {});
+  if (isNativeExecApprovalsSnapshot(snapshot)) {
+    state.execApprovalsForm = null;
+    state.execApprovalsDirty = false;
+    return;
   }
+  if (!state.execApprovalsDirty) {
+    state.execApprovalsForm = cloneConfigObject(snapshot.file);
+  }
+}
+
+export function isNativeExecApprovalsSnapshot(
+  snapshot: ExecApprovalsSnapshot | null | undefined,
+): snapshot is NativeExecApprovalsSnapshot {
+  return Boolean(snapshot && "enabled" in snapshot);
 }
 
 export async function saveExecApprovals(
@@ -380,6 +421,11 @@ export async function saveExecApprovals(
   state.lastError = null;
   state.chatError = null;
   try {
+    if (isNativeExecApprovalsSnapshot(state.execApprovalsSnapshot)) {
+      state.lastError =
+        "Host-native node approvals are read-only here; use the companion app or approvals set --node.";
+      return;
+    }
     const baseHash = state.execApprovalsSnapshot?.hash;
     if (!baseHash) {
       state.lastError = "Exec approvals hash missing; reload and retry.";
@@ -413,6 +459,10 @@ export function updateExecApprovalsFormValue(
   path: Array<string | number>,
   value: unknown,
 ) {
+  if (isNativeExecApprovalsSnapshot(state.execApprovalsSnapshot)) {
+    state.lastError = "Host-native node approvals are read-only here.";
+    return;
+  }
   const base = cloneConfigObject(
     state.execApprovalsForm ?? state.execApprovalsSnapshot?.file ?? {},
   );
@@ -425,6 +475,10 @@ export function removeExecApprovalsFormValue(
   state: ExecApprovalsState,
   path: Array<string | number>,
 ) {
+  if (isNativeExecApprovalsSnapshot(state.execApprovalsSnapshot)) {
+    state.lastError = "Host-native node approvals are read-only here.";
+    return;
+  }
   const base = cloneConfigObject(
     state.execApprovalsForm ?? state.execApprovalsSnapshot?.file ?? {},
   );
@@ -433,12 +487,23 @@ export function removeExecApprovalsFormValue(
   state.execApprovalsDirty = true;
 }
 
-function readStore(): DeviceAuthStore | null {
+function deviceAuthStorageKey(gatewayUrl: string): string {
+  return `${DEVICE_AUTH_STORAGE_KEY_PREFIX}${normalizeGatewayCredentialScope(gatewayUrl)}`;
+}
+
+function removeLegacyDeviceAuthStore(storage: Storage | null) {
   try {
-    const raw = getSafeLocalStorage()?.getItem(DEVICE_AUTH_STORAGE_KEY);
-    if (!raw) {
-      return null;
-    }
+    storage?.removeItem(LEGACY_DEVICE_AUTH_STORAGE_KEY);
+  } catch {
+    // Legacy cleanup must not make an otherwise usable device token unreadable.
+  }
+}
+
+function parseDeviceAuthStore(raw: string | null): DeviceAuthStore | null {
+  if (!raw) {
+    return null;
+  }
+  try {
     const parsed = JSON.parse(raw) as DeviceAuthStore;
     if (!parsed || parsed.version !== 1) {
       return null;
@@ -455,9 +520,42 @@ function readStore(): DeviceAuthStore | null {
   }
 }
 
-function writeStore(store: DeviceAuthStore) {
+function readStore(gatewayUrl: string): DeviceAuthStore | null {
   try {
-    getSafeLocalStorage()?.setItem(DEVICE_AUTH_STORAGE_KEY, JSON.stringify(store));
+    const storage = getSafeLocalStorage();
+    const scopedKey = deviceAuthStorageKey(gatewayUrl);
+    const scopedStore = parseDeviceAuthStore(storage?.getItem(scopedKey) ?? null);
+    if (scopedStore) {
+      removeLegacyDeviceAuthStore(storage);
+      return scopedStore;
+    }
+
+    const legacyStore = parseDeviceAuthStore(
+      storage?.getItem(LEGACY_DEVICE_AUTH_STORAGE_KEY) ?? null,
+    );
+    if (!legacyStore) {
+      return null;
+    }
+
+    // Older releases stored one origin-wide token. Claim it for the first gateway
+    // opened after upgrade, then remove the ambiguous key before sibling routes use it.
+    try {
+      storage?.setItem(scopedKey, JSON.stringify(legacyStore));
+      removeLegacyDeviceAuthStore(storage);
+    } catch {
+      // Keep the usable in-memory result when browser storage rejects the migration.
+    }
+    return legacyStore;
+  } catch {
+    return null;
+  }
+}
+
+function writeStore(gatewayUrl: string, store: DeviceAuthStore) {
+  try {
+    const storage = getSafeLocalStorage();
+    storage?.setItem(deviceAuthStorageKey(gatewayUrl), JSON.stringify(store));
+    removeLegacyDeviceAuthStore(storage);
   } catch {
     // localStorage can be unavailable in private or embedded contexts.
   }
@@ -465,10 +563,14 @@ function writeStore(store: DeviceAuthStore) {
 
 export function loadDeviceAuthToken(params: {
   deviceId: string;
+  gatewayUrl: string;
   role: string;
 }): DeviceAuthEntry | null {
   return loadDeviceAuthTokenFromStore({
-    adapter: { readStore, writeStore },
+    adapter: {
+      readStore: () => readStore(params.gatewayUrl),
+      writeStore: (store) => writeStore(params.gatewayUrl, store),
+    },
     deviceId: params.deviceId,
     role: params.role,
   });
@@ -476,12 +578,16 @@ export function loadDeviceAuthToken(params: {
 
 export function storeDeviceAuthToken(params: {
   deviceId: string;
+  gatewayUrl: string;
   role: string;
   token: string;
   scopes?: string[];
 }): DeviceAuthEntry {
   return storeDeviceAuthTokenInStore({
-    adapter: { readStore, writeStore },
+    adapter: {
+      readStore: () => readStore(params.gatewayUrl),
+      writeStore: (store) => writeStore(params.gatewayUrl, store),
+    },
     deviceId: params.deviceId,
     role: params.role,
     token: params.token,
@@ -489,9 +595,16 @@ export function storeDeviceAuthToken(params: {
   });
 }
 
-export function clearDeviceAuthToken(params: { deviceId: string; role: string }) {
+export function clearDeviceAuthToken(params: {
+  deviceId: string;
+  gatewayUrl: string;
+  role: string;
+}) {
   clearDeviceAuthTokenFromStore({
-    adapter: { readStore, writeStore },
+    adapter: {
+      readStore: () => readStore(params.gatewayUrl),
+      writeStore: (store) => writeStore(params.gatewayUrl, store),
+    },
     deviceId: params.deviceId,
     role: params.role,
   });
@@ -536,6 +649,26 @@ async function generateIdentity(): Promise<DeviceIdentity> {
     publicKey: base64UrlEncode(publicKey),
     privateKey: base64UrlEncode(privateKey),
   };
+}
+
+/**
+ * Synchronous identity probe for render gating: reads the stored device id
+ * without creating, repairing, or fingerprint-verifying an identity, so a
+ * "do we hold credentials?" check stays side-effect free before connect().
+ */
+export function peekStoredDeviceIdentityId(): string | null {
+  try {
+    const raw = getSafeLocalStorage()?.getItem(DEVICE_IDENTITY_STORAGE_KEY);
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw) as StoredIdentity;
+    return parsed?.version === 1 && typeof parsed.deviceId === "string" && parsed.deviceId
+      ? parsed.deviceId
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function loadOrCreateDeviceIdentity(): Promise<DeviceIdentity> {

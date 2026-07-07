@@ -1,6 +1,7 @@
 // Feishu plugin module implements drive behavior.
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
@@ -325,11 +326,27 @@ async function getRootFolderToken(client: Lark.Client): Promise<string> {
   return token;
 }
 
-async function listFolder(client: Lark.Client, folderToken?: string) {
-  // Filter out invalid folder_token values (empty, "0", etc.)
+async function listFolder(client: Lark.Client, params: Record<string, unknown> = {}) {
+  const folderToken =
+    typeof params.folder_token === "string" ? params.folder_token.trim() : undefined;
   const validFolderToken = folderToken && folderToken !== "0" ? folderToken : undefined;
+  const pageSize = readPositiveIntegerParam(params, "page_size", {
+    max: 200,
+    message: "page_size must be a positive integer between 1 and 200",
+  });
+  const pageToken = typeof params.page_token === "string" ? params.page_token.trim() : undefined;
+
+  // Bot credentials have no browsable root. A continuation cursor is only valid with the
+  // same concrete folder token that produced it, so do not forward pagination for root.
+  const listParams = validFolderToken
+    ? {
+        folder_token: validFolderToken,
+        ...(pageSize ? { page_size: pageSize } : {}),
+        ...(pageToken ? { page_token: pageToken } : {}),
+      }
+    : {};
   const res = await client.drive.file.list({
-    params: validFolderToken ? { folder_token: validFolderToken } : {},
+    params: listParams,
   });
   if (res.code !== 0) {
     throw new Error(res.msg);
@@ -766,7 +783,13 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
             });
             switch (p.action) {
               case "list":
-                return jsonResult(await listFolder(client, p.folder_token));
+                return jsonResult(
+                  await listFolder(client, {
+                    folder_token: p.folder_token,
+                    page_size: p.page_size,
+                    page_token: p.page_token,
+                  }),
+                );
               case "info":
                 return jsonResult(await getFileInfo(client, p.file_token));
               case "create_folder":

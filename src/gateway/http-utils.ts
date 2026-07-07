@@ -45,7 +45,7 @@ export const OPENCLAW_MODEL_ID = "openclaw";
 /** Default OpenAI-compatible model alias that targets the default OpenClaw agent. */
 export const OPENCLAW_DEFAULT_MODEL_ID = "openclaw/default";
 
-export class UnknownGatewayAgentError extends Error {
+class UnknownGatewayAgentError extends Error {
   constructor(readonly agentId: string) {
     super(`Unknown agent '${agentId}'.`);
     this.name = "UnknownGatewayAgentError";

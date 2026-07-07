@@ -20,6 +20,7 @@
    (it is display:none <=1120px, where the gutter should stay). */
 @media (min-width: 1121px) {
   .content--chat:has(.chat-workbench) {
+    padding-left: 0;
     padding-right: 0;
   }
 

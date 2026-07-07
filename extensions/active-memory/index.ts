@@ -2735,11 +2735,10 @@ function buildSearchQuery(params: {
   if (!previousUser) {
     return latest || clampSearchQuery(params.latestUserMessage);
   }
-  const context = clampSearchQuery(
-    normalizeSearchQueryText(stripRecalledContextNoise(previousUser.text)),
-  )
-    .slice(0, 120)
-    .trim();
+  const context = truncateUtf16Safe(
+    clampSearchQuery(normalizeSearchQueryText(stripRecalledContextNoise(previousUser.text))),
+    120,
+  ).trim();
   return clampSearchQuery(context ? `${context} ${latest}` : latest);
 }
 
@@ -3755,6 +3754,7 @@ export default definePluginEntry({
 });
 
 const testing = {
+  buildSearchQuery,
   buildCacheKey,
   buildCircuitBreakerKey,
   buildMetadata,

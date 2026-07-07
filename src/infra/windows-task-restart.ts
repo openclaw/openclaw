@@ -35,9 +35,11 @@ function buildScheduledTaskRestartScript(params: {
 }): string {
   const { quotedLogPath, setupLines, taskName, taskScriptPath } = params;
   const quotedTaskName = quoteCmdScriptArg(taskName);
-  const queryTaskStateCommand = `(Get-ScheduledTask -TaskName ${quotePowerShellSingleQuotedLiteral(
-    taskName,
-  )} -ErrorAction SilentlyContinue).State`;
+  const queryTaskStateCommand = [
+    `$task = Get-ScheduledTask -TaskName ${quotePowerShellSingleQuotedLiteral(taskName)} -ErrorAction SilentlyContinue`,
+    "if ($null -ne $task -and $task.State -eq 'Running') { exit 0 }",
+    "exit 1",
+  ].join("; ");
   const quotedQueryTaskStateCommand = quoteCmdScriptArg(queryTaskStateCommand);
   const lines = [
     "@echo off",
@@ -51,7 +53,7 @@ function buildScheduledTaskRestartScript(params: {
     `timeout /t ${TASK_RESTART_RETRY_DELAY_SEC} /nobreak >nul`,
     "set /a attempts+=1",
     // Avoid racing with another restart path that already started the scheduled task.
-    `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ${quotedQueryTaskStateCommand} 2>nul | findstr /I /C:"Running" >nul 2>&1`,
+    `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ${quotedQueryTaskStateCommand} >nul 2>&1`,
     "if not errorlevel 1 goto cleanup",
     `schtasks /Run /TN ${quotedTaskName} >> ${quotedLogPath} 2>&1`,
     "if not errorlevel 1 goto cleanup",
