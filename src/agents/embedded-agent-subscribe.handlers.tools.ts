@@ -579,6 +579,7 @@ function readExecApprovalPendingDetails(result: unknown): {
   approvalSlug: string;
   expiresAtMs?: number;
   allowedDecisions?: readonly ExecApprovalDecision[];
+  nonPersistableCommand?: boolean;
   host: "gateway" | "node";
   command: string;
   cwd?: string;
@@ -613,6 +614,7 @@ function readExecApprovalPendingDetails(result: unknown): {
             decision === "allow-once" || decision === "allow-always" || decision === "deny",
         )
       : undefined,
+    nonPersistableCommand: details.nonPersistableCommand === true ? true : undefined,
     host,
     command,
     cwd: readStringValue(details.cwd),
