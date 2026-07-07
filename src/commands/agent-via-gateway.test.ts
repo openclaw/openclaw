@@ -1797,6 +1797,9 @@ describe("agentCliCommand", () => {
       expect(resultMetaOverrides.fallbackSessionKey).toBe(fallbackSessionKey);
       expect(startOneShotDiagnosticsExporters).toHaveBeenCalledTimes(1);
       expect(stop).toHaveBeenCalledTimes(1);
+      const runOrder = requireFirstCallOrder(agentCommand, "embedded agent");
+      const stopOrder = requireFirstCallOrder(stop, "exporter stop");
+      expect(runOrder).toBeLessThan(stopOrder);
       expect(
         mockMessages(runtime.error).some((message) =>
           message.includes("Gateway agent timed out; running embedded agent with fresh session"),
