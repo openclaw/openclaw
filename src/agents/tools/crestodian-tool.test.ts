@@ -3,7 +3,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createCrestodianTool,
   hashCrestodianOperation,
+  resolveCrestodianDirectiveTransition,
   resolveCrestodianProposalTransition,
+  type CrestodianToolDirective,
 } from "./crestodian-tool.js";
 
 const mocks = vi.hoisted(() => ({
@@ -223,6 +225,47 @@ describe("crestodian tool", () => {
   it("rejects unknown or underspecified actions as input errors", async () => {
     const tool = createCrestodianTool({ surface: "cli" });
     await expect(tool.execute("t5", { action: "config_get" })).rejects.toThrow(/path/);
+  });
+
+  it("records interactive directives for the host without executing operations", async () => {
+    const directiveRef: { current?: CrestodianToolDirective } = {};
+    const tool = createCrestodianTool({ surface: "cli", directiveRef });
+
+    const connect = await tool.execute("t5", { action: "connect_channel", channel: "Telegram" });
+    expect(toolText(connect)).toContain("directive:");
+    expect(directiveRef.current).toEqual({ kind: "channel-setup", channel: "telegram" });
+
+    const open = await tool.execute("t6", { action: "open_agent", agentId: "work" });
+    expect(toolText(open)).toContain("directive:");
+    expect(directiveRef.current).toEqual({ kind: "open-tui", agentId: "work" });
+
+    // Directives are host handoffs, never operation executions.
+    expect(mocks.executeCrestodianOperation).not.toHaveBeenCalled();
+  });
+
+  it("mirrors directive transitions for out-of-process (CLI MCP) hosts", () => {
+    expect(
+      resolveCrestodianDirectiveTransition({
+        args: { action: "connect_channel", channel: "telegram" },
+        resultText: "directive: the host chat now starts the guided telegram setup.",
+      }),
+    ).toEqual({ kind: "channel-setup", channel: "telegram" });
+    expect(
+      resolveCrestodianDirectiveTransition({
+        args: { action: "open_agent" },
+        resultText: "directive: the host now hands the user over.",
+      }),
+    ).toEqual({ kind: "open-tui" });
+    // Non-directive results and other actions never mirror.
+    expect(
+      resolveCrestodianDirectiveTransition({ args: { action: "status" }, resultText: "ok" }),
+    ).toBeNull();
+    expect(
+      resolveCrestodianDirectiveTransition({
+        args: { action: "connect_channel", channel: "telegram" },
+        resultText: "error: boom",
+      }),
+    ).toBeNull();
   });
 
   it("mirrors proposal transitions for out-of-process (CLI MCP) hosts", () => {

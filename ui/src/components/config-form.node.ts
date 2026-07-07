@@ -163,7 +163,7 @@ type SensitiveRenderState = {
   canReveal: boolean;
 };
 
-export type ConfigSearchCriteria = {
+type ConfigSearchCriteria = {
   text: string;
   tags: string[];
 };

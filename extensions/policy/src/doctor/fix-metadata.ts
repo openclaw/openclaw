@@ -145,7 +145,7 @@ export const POLICY_FIX_METADATA = [
   ),
   m(
     CHECK_IDS.policyGatewayHttpEndpointEnabled,
-    "reviewRequired",
+    "automatic",
     "Disable denied Gateway HTTP endpoints.",
     { policyPath: ["gateway", "http", "denyEndpoints"], configTargets: ["gateway.http"] },
   ),
@@ -229,7 +229,10 @@ export const POLICY_FIX_METADATA = [
     CHECK_IDS.policyToolsRequiredDenyMissing,
     "automatic",
     "Merge required built-in deny tool classes.",
-    { policyPath: ["tools", "denyTools"], configTargets: ["tools.denyTools"] },
+    {
+      policyPath: ["tools", "denyTools"],
+      configTargets: ["tools.deny", "agents.list[].tools.deny"],
+    },
   ),
   m(
     CHECK_IDS.policySandboxModeUnapproved,

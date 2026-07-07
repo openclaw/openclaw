@@ -11,7 +11,7 @@ export type GitResult = {
   code: number | null;
 };
 
-export type WorktreeListEntry = {
+type WorktreeListEntry = {
   path: string;
   lockedReason?: string;
 };
@@ -53,7 +53,7 @@ export async function requireGitRaw(cwd: string, args: string[]): Promise<string
   return result.stdout;
 }
 
-export function parseWorktreeList(output: string): WorktreeListEntry[] {
+function parseWorktreeList(output: string): WorktreeListEntry[] {
   const entries: WorktreeListEntry[] = [];
   let current: WorktreeListEntry | undefined;
   for (const field of output.split("\0")) {

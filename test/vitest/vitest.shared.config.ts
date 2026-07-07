@@ -10,6 +10,10 @@ import {
   resolveLocalVitestMaxWorkers as resolveLocalVitestMaxWorkersImpl,
   resolveLocalVitestScheduling as resolveLocalVitestSchedulingImpl,
 } from "../../scripts/lib/vitest-local-scheduling.mjs";
+import type {
+  LocalVitestScheduling,
+  VitestHostInfo,
+} from "../../scripts/lib/vitest-local-scheduling.mjs";
 import {
   BUNDLED_PLUGIN_ROOT_DIR,
   BUNDLED_PLUGIN_TEST_GLOB,
@@ -17,19 +21,9 @@ import {
 import { loadVitestExperimentalConfig } from "./vitest.performance-config.ts";
 import { shouldPrintVitestThrottle } from "./vitest.system-load.ts";
 
-type VitestHostInfo = {
-  cpuCount?: number;
-  loadAverage1m?: number;
-  totalMemoryBytes?: number;
-};
-
 export type OpenClawVitestPool = "forks" | "threads";
 
-export type LocalVitestScheduling = {
-  maxWorkers: number;
-  fileParallelism: boolean;
-  throttledBySystem: boolean;
-};
+export type { LocalVitestScheduling };
 
 export const jsdomOptimizedDeps = {
   optimizer: {
@@ -41,7 +35,7 @@ export const jsdomOptimizedDeps = {
 };
 
 function detectVitestHostInfo(): Required<VitestHostInfo> {
-  return detectVitestHostInfoImpl() as Required<VitestHostInfo>;
+  return detectVitestHostInfoImpl();
 }
 
 export function resolveLocalVitestMaxWorkers(
@@ -57,7 +51,7 @@ export function resolveLocalVitestScheduling(
   system: VitestHostInfo = detectVitestHostInfo(),
   pool: OpenClawVitestPool = resolveDefaultVitestPool(env),
 ): LocalVitestScheduling {
-  return resolveLocalVitestSchedulingImpl(env, system, pool) as LocalVitestScheduling;
+  return resolveLocalVitestSchedulingImpl(env, system, pool);
 }
 
 export function resolveDefaultVitestPool(

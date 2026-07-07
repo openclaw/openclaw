@@ -100,7 +100,7 @@ function isDefaultLocalIMessageCliPath(cliPath: string): boolean {
   return trimmed === "imsg" || (!trimmed.includes("/") && path.basename(trimmed) === "imsg");
 }
 
-export function resolveIMessageNonMacHostError(
+function resolveIMessageNonMacHostError(
   cliPath: string,
   platform: NodeJS.Platform = process.platform,
 ): string | undefined {

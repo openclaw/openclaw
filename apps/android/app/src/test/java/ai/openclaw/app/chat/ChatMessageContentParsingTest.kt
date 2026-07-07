@@ -1,6 +1,7 @@
 package ai.openclaw.app.chat
 
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -44,6 +45,44 @@ class ChatMessageContentParsingTest {
     assertEquals(
       ChatMessageContent(type = "image", mimeType = "image/png", fileName = "chart.png", base64 = null),
       parseChatMessageContent(managedImage),
+    )
+  }
+
+  @Test
+  fun parsesDirectAndAttachmentAudioBlocks() {
+    val direct =
+      Json.parseToJsonElement(
+        """{"type":"audio","mimeType":"audio/mp4","fileName":"voice.m4a"}""",
+      )
+    val attachment =
+      Json.parseToJsonElement(
+        """{"type":"attachment","attachment":{"kind":"audio","mimeType":"audio/mpeg","label":"reply.mp3"}}""",
+      )
+
+    assertEquals(
+      ChatMessageContent(type = "audio", mimeType = "audio/mp4", fileName = "voice.m4a"),
+      parseChatMessageContent(direct),
+    )
+    assertEquals(
+      ChatMessageContent(type = "audio", mimeType = "audio/mpeg", fileName = "reply.mp3"),
+      parseChatMessageContent(attachment),
+    )
+  }
+
+  @Test
+  fun parsesTranscriptAudioMediaFieldsAlongsideCaption() {
+    val message =
+      Json
+        .parseToJsonElement(
+          """{"content":[{"type":"text","text":"See attached."}],"MediaPaths":["media/inbound/voice.m4a"],"MediaTypes":["audio/x-m4a"]}""",
+        ).jsonObject
+
+    assertEquals(
+      listOf(
+        ChatMessageContent(type = "text", text = "See attached."),
+        ChatMessageContent(type = "audio", mimeType = "audio/x-m4a", fileName = "voice.m4a"),
+      ),
+      parseChatMessageContents(message),
     )
   }
 }

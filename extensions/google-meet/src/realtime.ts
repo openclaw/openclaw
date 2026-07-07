@@ -127,8 +127,8 @@ export function getGoogleMeetRealtimeTranscriptHealth(
 export type GoogleMeetRealtimeEventEntry = RealtimeVoiceBridgeEventLogEntry;
 
 export const GOOGLE_MEET_AGENT_TRANSCRIPT_DEBOUNCE_MS = 900;
-export const GOOGLE_MEET_OUTPUT_ECHO_SUPPRESSION_TAIL_MS = 3_000;
-export const GOOGLE_MEET_TRANSCRIPT_ECHO_LOOKBACK_MS = 45_000;
+const GOOGLE_MEET_OUTPUT_ECHO_SUPPRESSION_TAIL_MS = 3_000;
+const GOOGLE_MEET_TRANSCRIPT_ECHO_LOOKBACK_MS = 45_000;
 
 export function recordGoogleMeetRealtimeEvent(
   events: GoogleMeetRealtimeEventEntry[],

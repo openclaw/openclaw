@@ -673,6 +673,15 @@ export async function resolveModelRuntimeApiKey(params: {
     cfg: params.cfg,
     agentDir: params.agentDir,
   });
+  // Bedrock's runtime client owns AWS credential-chain resolution. Keep the
+  // empty sentinel out of auth storage and pass it through to the stream.
+  if (
+    !apiKeyInfo.apiKey?.trim() &&
+    apiKeyInfo.mode === "aws-sdk" &&
+    params.model.api === "bedrock-converse-stream"
+  ) {
+    return "";
+  }
   const apiKey = requireApiKey(apiKeyInfo, params.model.provider);
   params.authStorage.setRuntimeApiKey(params.model.provider, apiKey);
   return apiKey;

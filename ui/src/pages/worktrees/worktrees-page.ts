@@ -5,6 +5,7 @@ import type { WorktreeRecord } from "../../../../packages/gateway-protocol/src/i
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 
@@ -14,7 +15,7 @@ function repoName(repoRoot: string): string {
   return repoRoot.split(/[\\/]/).findLast(Boolean) ?? repoRoot;
 }
 
-export class WorktreesPage extends LitElement {
+class WorktreesPage extends LitElement {
   override createRenderRoot() {
     return this;
   }
@@ -143,13 +144,7 @@ export class WorktreesPage extends LitElement {
   }
 
   override render() {
-    return html`
-      <section class="content-header content-header--page">
-        <div>
-          <div class="page-title">${titleForRoute("worktrees")}</div>
-          <div class="page-sub">${subtitleForRoute("worktrees")}</div>
-        </div>
-      </section>
+    const body = html`
       <section class="card">
         <div class="row" style="justify-content: space-between;">
           <div>
@@ -204,6 +199,21 @@ export class WorktreesPage extends LitElement {
               )}
         </div>
       </section>
+    `;
+    return html`
+      <section class="content-header">
+        <div>
+          <div class="page-title">${titleForRoute("worktrees")}</div>
+          <div class="page-sub">${subtitleForRoute("worktrees")}</div>
+        </div>
+      </section>
+      ${renderSettingsWorkspace(
+        this.context.basePath,
+        body,
+        "worktrees",
+        (routeId) => this.context.navigate(routeId),
+        (routeId) => this.context.preload(routeId),
+      )}
     `;
   }
 }

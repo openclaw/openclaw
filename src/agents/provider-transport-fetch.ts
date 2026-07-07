@@ -293,10 +293,6 @@ function isJsonContentType(contentType: string): boolean {
   return /\bapplication\/json\b/i.test(contentType) || /\+json\b/i.test(contentType);
 }
 
-function isOpenAISdkStreamContentType(contentType: string): boolean {
-  return /\btext\/event-stream\b/i.test(contentType) || isJsonContentType(contentType);
-}
-
 type OpenAISdkStreamBodyKind = "html" | "json" | "sse" | "unknown";
 
 function classifyOpenAISdkStreamBodyPrefix(text: string): OpenAISdkStreamBodyKind {
@@ -371,7 +367,20 @@ async function normalizeOpenAISdkStreamContentType(params: {
   localServiceLease?: ProviderLocalServiceLease;
 }): Promise<Response> {
   const contentType = params.response.headers.get("content-type") ?? "";
-  if (!params.response.ok || !params.response.body || isOpenAISdkStreamContentType(contentType)) {
+  if (!params.response.ok || !params.response.body) {
+    return params.response;
+  }
+  if (/\btext\/event-stream\b/i.test(contentType)) {
+    return params.response;
+  }
+  if (isJsonContentType(contentType)) {
+    // Some OpenAI-compatible gateways stream real SSE (`data: {...}`) but mislabel
+    // the response as JSON. Without relabeling, the JSON-wrap fallback below would
+    // re-prefix each frame as `data: data: {...}`, breaking JSON.parse in the SDK.
+    const kind = await classifyOpenAISdkStreamBody(params.response).catch(() => "unknown" as const);
+    if (kind === "sse") {
+      return withOpenAISdkStreamContentType(params.response, "text/event-stream; charset=utf-8");
+    }
     return params.response;
   }
   if (!contentType.trim()) {

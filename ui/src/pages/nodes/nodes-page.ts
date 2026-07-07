@@ -32,7 +32,7 @@ export type NodesRouteData = {
 
 const NODES_ACTIVE_POLL_INTERVAL_MS = 30_000;
 
-export class NodesPage extends LitElement implements NodesPageDataState {
+class NodesPage extends LitElement implements NodesPageDataState {
   override createRenderRoot() {
     return this;
   }
@@ -246,8 +246,18 @@ export class NodesPage extends LitElement implements NodesPageDataState {
           onDeviceApprove: (requestId) => void approveDevicePairing(this, requestId),
           onDeviceReject: (requestId) => void rejectDevicePairing(this, requestId),
           onDeviceRotate: (deviceId, role, scopes) =>
-            void rotateDeviceToken(this, { deviceId, role, scopes }),
-          onDeviceRevoke: (deviceId, role) => void revokeDeviceToken(this, { deviceId, role }),
+            void rotateDeviceToken(this, {
+              deviceId,
+              gatewayUrl: this.context.gateway.connection.gatewayUrl,
+              role,
+              scopes,
+            }),
+          onDeviceRevoke: (deviceId, role) =>
+            void revokeDeviceToken(this, {
+              deviceId,
+              gatewayUrl: this.context.gateway.connection.gatewayUrl,
+              role,
+            }),
           onLoadConfig: () =>
             void this.context.runtimeConfig.refresh({ discardPendingChanges: true }),
           onLoadExecApprovals: () =>

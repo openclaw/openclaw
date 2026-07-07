@@ -9,7 +9,11 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { appendIMessageCliStderrTail, appendIMessageCliStdout } from "./cli-output.js";
+import {
+  appendIMessageCliStderrTail,
+  appendIMessageCliStdout,
+  listenForIMessageCliStreamErrors,
+} from "./cli-output.js";
 import { createIMessageRpcClient } from "./client.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
 import {
@@ -245,6 +249,11 @@ async function runIMessageCliJson(
     });
     child.stderr.on("data", (chunk) => {
       stderr = appendIMessageCliStderrTail(stderr, chunk);
+    });
+    listenForIMessageCliStreamErrors({
+      child,
+      isSettled: () => settled,
+      fail,
     });
     child.on("error", (error) => {
       if (settled) {

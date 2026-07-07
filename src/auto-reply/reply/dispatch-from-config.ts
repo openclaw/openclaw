@@ -206,6 +206,45 @@ type InternalReplyResolverOptions = {
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
 };
 
+function createFinalDispatchPayloadDedupeKey(payload: ReplyPayload): string {
+  const metadata = getReplyPayloadMetadata(payload);
+  return JSON.stringify({
+    payload: {
+      text: payload.text,
+      mediaUrl: payload.mediaUrl,
+      mediaUrls: payload.mediaUrls,
+      trustedLocalMedia: payload.trustedLocalMedia,
+      sensitiveMedia: payload.sensitiveMedia,
+      presentation: payload.presentation,
+      delivery: payload.delivery,
+      interactive: payload.interactive,
+      btw: payload.btw,
+      replyToId: payload.replyToId,
+      replyToTag: payload.replyToTag,
+      replyToCurrent: payload.replyToCurrent,
+      audioAsVoice: payload.audioAsVoice,
+      spokenText: payload.spokenText,
+      ttsSupplement: payload.ttsSupplement,
+      isError: payload.isError,
+      isReasoning: payload.isReasoning,
+      isCommentary: payload.isCommentary,
+      isReasoningSnapshot: payload.isReasoningSnapshot,
+      isCompactionNotice: payload.isCompactionNotice,
+      isFallbackNotice: payload.isFallbackNotice,
+      isStatusNotice: payload.isStatusNotice,
+      channelData: payload.channelData,
+    },
+    identity: {
+      assistantMessageIndex: metadata?.assistantMessageIndex,
+      assistantTranscriptOwned: metadata?.assistantTranscriptOwned,
+      replyToIdExplicit: metadata?.replyToIdExplicit,
+      replyDelivery: metadata?.replyDelivery,
+      replyDeliverySource: metadata?.replyDeliverySource,
+      sourceReplyTranscriptMirror: metadata?.sourceReplyTranscriptMirror,
+    },
+  });
+}
+
 class DispatchReplyOperationAbortedError extends Error {
   constructor() {
     super("Dispatch reply operation aborted");
@@ -338,7 +377,7 @@ function loadReplyMediaPathsRuntime() {
 function formatSuppressedReplyPayloadForLog(reply: ReplyPayload): string {
   const metadata = getReplyPayloadMetadata(reply);
   const text = normalizeOptionalString(reply.text);
-  const textPreview = text ? text.replace(/\s+/g, " ").slice(0, 160) : undefined;
+  const textPreview = text ? truncateUtf16Safe(text.replace(/\s+/g, " "), 160) : undefined;
   const sendableParts = resolveSendableOutboundReplyParts(reply);
   const richParts = [
     reply.presentation ? "presentation" : undefined,
@@ -1423,6 +1462,8 @@ export async function dispatchReplyFromConfig(
   let dispatchLifecycleAbortController: AbortController | undefined;
   let preDispatchLifecycleInterrupted = false;
   const dispatchLifecycleWork = new Set<Promise<void>>();
+  const hasInboundAudioForTts = () =>
+    inboundAudio || dispatchReplyOperation?.acceptedSteeredInboundAudio === true;
   const trackDispatchLifecycleWork = (work: Promise<unknown>) => {
     if (!dispatchReplyOperation && !preDispatchLifecycleAdmission) {
       return;
@@ -2761,7 +2802,7 @@ export async function dispatchReplyFromConfig(
               cfg,
               channel: deliveryChannel,
               kind: "final",
-              inboundAudio,
+              inboundAudio: hasInboundAudioForTts(),
               ttsAuto: sessionTtsAuto,
               agentId: sessionAgentId,
               accountId: replyRoute.accountId,
@@ -3486,7 +3527,7 @@ export async function dispatchReplyFromConfig(
                         cfg,
                         channel: deliveryChannel,
                         kind: "tool",
-                        inboundAudio,
+                        inboundAudio: hasInboundAudioForTts(),
                         ttsAuto: sessionTtsAuto,
                         agentId: sessionAgentId,
                         accountId: replyRoute.accountId,
@@ -3735,7 +3776,7 @@ export async function dispatchReplyFromConfig(
                               cfg,
                               channel: deliveryChannel,
                               kind: "block",
-                              inboundAudio,
+                              inboundAudio: hasInboundAudioForTts(),
                               ttsAuto: sessionTtsAuto,
                               agentId: sessionAgentId,
                               accountId: replyRoute.accountId,
@@ -3865,6 +3906,7 @@ export async function dispatchReplyFromConfig(
       !sendPolicyDenied &&
       getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true &&
       (ctx.InboundEventKind !== "room_event" || explicitCommandTurnCtx);
+    const sentFinalPayloadDedupeKeys = new Set<string>();
     for (const [replyIndex, reply] of replies.entries()) {
       throwIfDispatchOperationAborted();
       // Durable reasoning is a channel-owned lane; generic channels keep the
@@ -3892,6 +3934,11 @@ export async function dispatchReplyFromConfig(
         }
         continue;
       }
+      const finalPayloadDedupeKey = createFinalDispatchPayloadDedupeKey(reply);
+      if (sentFinalPayloadDedupeKeys.has(finalPayloadDedupeKey)) {
+        continue;
+      }
+      sentFinalPayloadDedupeKeys.add(finalPayloadDedupeKey);
       attemptedFinalDelivery = true;
       const finalReply = await sendFinalPayload(reply, { deliveryId: String(replyIndex) });
       queuedFinal = finalReply.queuedFinal || queuedFinal;
@@ -3936,7 +3983,7 @@ export async function dispatchReplyFromConfig(
             cfg,
             channel: deliveryChannel,
             kind: "final",
-            inboundAudio,
+            inboundAudio: hasInboundAudioForTts(),
             ttsAuto: sessionTtsAuto,
             agentId: sessionAgentId,
             accountId: replyRoute.accountId,

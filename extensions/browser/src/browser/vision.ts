@@ -42,7 +42,7 @@ export type BrowserScreenshotDescriptionDeps = {
 };
 
 /** Result returned from browser screenshot description. */
-export type BrowserScreenshotDescriptionResult = {
+type BrowserScreenshotDescriptionResult = {
   text: string;
   provider?: string;
   model?: string;

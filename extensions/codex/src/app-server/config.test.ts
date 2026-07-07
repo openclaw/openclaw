@@ -23,6 +23,7 @@ import {
   resolveOpenClawExecPolicyForCodexAppServer,
   resolveCodexPluginsPolicy,
   shouldAutoApproveCodexAppServerApprovals,
+  withMcpElicitationsApprovalPolicy,
 } from "./config.js";
 
 type RuntimeOptionsParams = NonNullable<Parameters<typeof resolveCodexAppServerRuntimeOptions>[0]>;
@@ -30,6 +31,20 @@ type RuntimeOptionsParams = NonNullable<Parameters<typeof resolveCodexAppServerR
 function resolveRuntimeForTest(params: RuntimeOptionsParams = {}) {
   return resolveCodexAppServerRuntimeOptions({ env: {}, requirementsToml: null, ...params });
 }
+
+describe("withMcpElicitationsApprovalPolicy", () => {
+  it("returns every field required by Codex granular approval policy", () => {
+    expect(withMcpElicitationsApprovalPolicy("never")).toEqual({
+      granular: {
+        mcp_elicitations: true,
+        request_permissions: false,
+        rules: false,
+        sandbox_approval: false,
+        skill_approval: false,
+      },
+    });
+  });
+});
 
 function envRef(id: string) {
   return { source: "env" as const, provider: "default", id };
@@ -1162,6 +1177,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(policy).toEqual({
       configured: true,
       enabled: true,
+      allowAllPlugins: false,
       allowDestructiveActions: false,
       destructiveApprovalMode: "deny",
       pluginPolicies: [
@@ -1213,6 +1229,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(resolveCodexPluginsPolicy(config)).toEqual({
       configured: true,
       enabled: true,
+      allowAllPlugins: false,
       allowDestructiveActions: true,
       destructiveApprovalMode: "auto",
       pluginPolicies: [
@@ -1269,6 +1286,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(resolveCodexPluginsPolicy(config)).toEqual({
       configured: true,
       enabled: true,
+      allowAllPlugins: false,
       allowDestructiveActions: true,
       destructiveApprovalMode: "ask",
       pluginPolicies: [
@@ -1325,6 +1343,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     expect(policy).toEqual({
       configured: true,
       enabled: true,
+      allowAllPlugins: false,
       allowDestructiveActions: true,
       destructiveApprovalMode: "allow",
       pluginPolicies: [
@@ -1355,6 +1374,44 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
 
     expect(config.codexPlugins).toBeUndefined();
     expect(resolveCodexPluginsPolicy(config).pluginPolicies).toStrictEqual([]);
+  });
+
+  it("parses opt-in access to all connected account apps", () => {
+    const config = readCodexPluginConfig({
+      codexPlugins: {
+        enabled: true,
+        allow_all_plugins: true,
+        allow_destructive_actions: "auto",
+      },
+    });
+
+    expect(config.codexPlugins).toEqual({
+      enabled: true,
+      allow_all_plugins: true,
+      allow_destructive_actions: "auto",
+    });
+    expect(resolveCodexPluginsPolicy(config)).toEqual({
+      configured: true,
+      enabled: true,
+      allowAllPlugins: true,
+      allowDestructiveActions: true,
+      destructiveApprovalMode: "auto",
+      pluginPolicies: [],
+    });
+  });
+
+  it("requires native plugin support before exposing all connected account apps", () => {
+    expect(resolveCodexPluginsPolicy({ codexPlugins: { allow_all_plugins: true } })).toEqual({
+      configured: true,
+      enabled: false,
+      allowAllPlugins: false,
+      allowDestructiveActions: true,
+      destructiveApprovalMode: "allow",
+      pluginPolicies: [],
+    });
+    expect(
+      readCodexPluginConfig({ codexPlugins: { enabled: true, allow_all_plugins: "yes" } }),
+    ).toEqual({});
   });
 
   it("treats configured and environment commands as explicit overrides", () => {

@@ -466,7 +466,10 @@ function normalizeAssistantUsageCost(usage: unknown): AssistantUsageSnapshot["co
   const cacheRead = cacheReadRaw ?? base.cacheRead;
   const cacheWrite = cacheWriteRaw ?? base.cacheWrite;
   const total = totalRaw ?? input + output + cacheRead + cacheWrite;
-  return { input, output, cacheRead, cacheWrite, total };
+  // Keep authoritative provider billing provenance through replay repair. Dropping it
+  // turns a real zero-dollar total back into a local estimate during later accounting.
+  const totalOrigin = cost.totalOrigin === "provider-billed" ? cost.totalOrigin : undefined;
+  return { input, output, cacheRead, cacheWrite, total, ...(totalOrigin ? { totalOrigin } : {}) };
 }
 
 function toFiniteCostNumber(value: unknown): number | undefined {

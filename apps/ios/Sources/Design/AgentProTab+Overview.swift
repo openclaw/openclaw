@@ -187,6 +187,13 @@ extension AgentProTab {
                     detail: self.usageDetail,
                     color: self.gatewayConnected ? OpenClawBrand.accent : .secondary,
                     route: .usage)
+                self.metricTile(
+                    icon: "folder",
+                    title: "Files",
+                    value: self.activeAgentID,
+                    detail: "Workspace files",
+                    color: self.gatewayConnected ? OpenClawBrand.accent : .secondary,
+                    route: .files)
             }
             .padding(.horizontal, OpenClawProMetric.pagePadding)
 

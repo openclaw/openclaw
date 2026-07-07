@@ -69,6 +69,7 @@ export type IrcClientOptions = {
   onPrivmsg?: (event: IrcPrivmsgEvent) => void | Promise<void>;
   onNotice?: (text: string, target?: string) => void;
   onError?: (error: Error) => void;
+  onDisconnect?: () => void;
   onLine?: (line: string) => void;
 };
 
@@ -430,8 +431,12 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
   socket.once("close", () => {
     if (!closed) {
       closed = true;
+      removeAbortListener?.();
+      removeAbortListener = null;
       if (!ready) {
         fail(new Error("IRC connection closed before ready"));
+      } else {
+        options.onDisconnect?.();
       }
     }
   });
@@ -452,7 +457,12 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
     }
   }
 
-  await withTimeout(readyPromise, timeoutMs, "IRC connect");
+  try {
+    await withTimeout(readyPromise, timeoutMs, "IRC connect");
+  } catch (error) {
+    close();
+    throw error;
+  }
 
   return {
     get nick() {

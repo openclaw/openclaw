@@ -62,6 +62,7 @@ function routeContextForTab(
     forProfile: () => profileCtx,
     state: () => ({
       resolved: {
+        actionTimeoutMs: 60_000,
         ssrfPolicy: {},
       },
     }),
@@ -153,6 +154,8 @@ describe("browser route shared helpers", () => {
 
       expect(ensureTabAvailable).toHaveBeenCalledWith(undefined, {
         allowPlaywrightFallback: true,
+        signal: undefined,
+        timeoutMs: 60_000,
       });
     });
 

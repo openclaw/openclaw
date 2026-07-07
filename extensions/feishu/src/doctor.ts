@@ -71,7 +71,7 @@ export type FeishuDoctorInspection = {
   sessionEntries: FeishuDoctorSessionEntry[];
 };
 
-export type FeishuDoctorRepairReport = {
+type FeishuDoctorRepairReport = {
   backupDir: string;
   stateDirRepairAttempted: boolean;
   rebuiltStateDir: boolean;
@@ -544,7 +544,7 @@ function collectRepairSessionEntries(
   );
 }
 
-export function inspectFeishuDoctorState(params: {
+function inspectFeishuDoctorState(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): FeishuDoctorInspection {

@@ -49,7 +49,7 @@ export type AgentsRouteData = {
   error: string | null;
 };
 
-export class AgentsPage extends LitElement implements AgentsState {
+class AgentsPage extends LitElement implements AgentsState {
   override createRenderRoot() {
     return this;
   }
