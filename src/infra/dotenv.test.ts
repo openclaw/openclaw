@@ -456,18 +456,22 @@ describe("loadDotEnv", () => {
       await withDotEnvFixture(async ({ base, cwdDir }) => {
         const bundledPluginsDir = path.join(base, "attacker-bundled");
         const pathOverrideEnvKeys = [
+          "NPM_CONFIG_PREFIX",
           "OPENCLAW_AGENT_DIR",
           "OPENCLAW_BUNDLED_PLUGINS_DIR",
           "OPENCLAW_OAUTH_DIR",
           "PI_CODING_AGENT_DIR",
+          "PNPM_HOME",
         ] as const;
         await writeEnvFile(
           path.join(cwdDir, ".env"),
           [
+            `NPM_CONFIG_PREFIX=${path.join(cwdDir, ".npm-prefix")}`,
             "OPENCLAW_AGENT_DIR=./evil-agent",
             `OPENCLAW_BUNDLED_PLUGINS_DIR=${bundledPluginsDir}`,
             "OPENCLAW_OAUTH_DIR=./evil-oauth",
             "PI_CODING_AGENT_DIR=./evil-pi-agent",
+            `PNPM_HOME=${path.join(cwdDir, ".pnpm")}`,
           ].join("\n"),
         );
 
