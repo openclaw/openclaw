@@ -19,6 +19,7 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { RequestClient } from "../internal/discord.js";
 import { sendMessageDiscord, sendVoiceMessageDiscord } from "../send.js";
+import type { DiscordAllowedMentions } from "../send.shared.js";
 import { sanitizeDiscordFrontChannelReplyPayloads } from "./reply-safety.js";
 
 export type DiscordThreadBindingLookupRecord = {
@@ -88,14 +89,18 @@ function createDiscordDeliveryDeps(params: {
   cfg: OpenClawConfig;
   token: string;
   rest?: RequestClient;
+  allowedMentions?: DiscordAllowedMentions;
 }): OutboundSendDeps {
   return {
+    // Discord webhooks default to user-only parsing; bot messages need this
+    // explicit policy to prevent a fresh preview final from broadcasting.
     discord: (to: string, text: string, opts?: Parameters<typeof sendMessageDiscord>[2]) =>
       sendMessageDiscord(to, text, {
         ...opts,
         cfg: opts?.cfg ?? params.cfg,
         token: params.token,
         rest: params.rest,
+        ...(params.allowedMentions ? { allowedMentions: params.allowedMentions } : {}),
       }),
     discordVoice: (
       to: string,
@@ -186,6 +191,7 @@ export async function deliverDiscordReply(params: {
   sessionKey?: string;
   threadBindings?: DiscordThreadBindingLookup;
   mediaLocalRoots?: readonly string[];
+  allowedMentions?: DiscordAllowedMentions;
   kind: "tool" | "block" | "final";
 }) {
   void params.runtime;
@@ -213,6 +219,7 @@ export async function deliverDiscordReply(params: {
       cfg: params.cfg,
       token: params.token,
       rest: params.rest,
+      allowedMentions: params.allowedMentions,
     }),
     mediaAccess: delivery.mediaAccess,
     session: buildOutboundSessionContext({

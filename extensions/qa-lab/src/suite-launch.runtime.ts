@@ -74,7 +74,7 @@ type QaSuiteExecutionPlan =
 
 const MAX_SHARED_FLOW_PARTITIONS = 4;
 const MAX_ISOLATED_FLOW_CONCURRENCY = 8;
-const ISOLATED_FLOW_WORKER_START_STAGGER_MS = 500;
+const ISOLATED_FLOW_WORKER_START_STAGGER_MS = 1_500;
 
 type QaUnifiedPartitionResult = {
   evidenceSummaries: QaEvidenceSummaryJson[];
@@ -175,6 +175,7 @@ async function runQaTestFileSuiteFromRuntime(params: {
     providerMode,
     primaryModel,
     scenarios: params.scenarios,
+    writeEvidenceFile: runParams?.writeEvidenceFile,
   });
 }
 
@@ -290,6 +291,13 @@ async function runWeightedUnifiedPartitionTasks(
 
 async function readQaSuiteEvidenceSummary(evidencePath: string) {
   return validateQaEvidenceSummaryJson(JSON.parse(await fs.readFile(evidencePath, "utf8")));
+}
+
+async function resolveQaSuiteResultEvidenceSummary(result: {
+  evidence?: QaEvidenceSummaryJson;
+  evidencePath: string;
+}) {
+  return result.evidence ?? (await readQaSuiteEvidenceSummary(result.evidencePath));
 }
 
 function mergeQaEvidenceSummaries(params: {
@@ -440,7 +448,10 @@ async function runUnifiedQaSuite(params: {
   );
   const evidenceSummaries: QaEvidenceSummaryJson[] = [];
   const scenarioResultsById = new Map<string, QaSuiteScenarioResult>();
-  const partitionTasks: QaUnifiedPartitionTask[] = [];
+  const sharedFlowPartitionTasks: QaUnifiedPartitionTask[] = [];
+  const isolatedFlowPartitionTasks: QaUnifiedPartitionTask[] = [];
+  const testFilePartitionTasks: QaUnifiedPartitionTask[] = [];
+  const scriptPartitionTasks: QaUnifiedPartitionTask[] = [];
   if (params.plan.flowScenarios.length > 0) {
     const sharedFlowScenarios = params.plan.flowScenarios.filter(
       (scenario) => !scenarioRequiresIsolatedQaSuiteWorker(scenario),
@@ -449,9 +460,18 @@ async function runUnifiedQaSuite(params: {
       scenarioRequiresIsolatedQaSuiteWorker,
     );
     const sharedFlowPartitions = partitionSharedFlowScenarios(sharedFlowScenarios, concurrency);
+    // Channel-driver flow workers each launch a gateway plus transport harness.
+    // Serializing their isolated workers keeps state-mutating smoke checks from
+    // flaking under concurrent child gateways while preserving non-driver speed.
+    const channelDriverFlowRequiresExclusiveWorkers = Boolean(
+      params.runParams?.channelDriverSelection,
+    );
+    const isolatedFlowConcurrencyLimit = channelDriverFlowRequiresExclusiveWorkers
+      ? 1
+      : MAX_ISOLATED_FLOW_CONCURRENCY;
     const isolatedFlowConcurrency = Math.min(
       concurrency,
-      MAX_ISOLATED_FLOW_CONCURRENCY,
+      isolatedFlowConcurrencyLimit,
       isolatedFlowScenarios.length,
     );
     const isolatedFlowPartitions =
@@ -480,8 +500,11 @@ async function runUnifiedQaSuite(params: {
     for (const partition of flowPartitions) {
       const isolatedPartition =
         partition.kind === "isolated" || partition.kind.startsWith("isolated-");
-      partitionTasks.push({
-        weight: partition.concurrency,
+      const task = {
+        weight:
+          isolatedPartition && channelDriverFlowRequiresExclusiveWorkers
+            ? concurrency
+            : partition.concurrency,
         run: async () => {
           const result = await runFlowSuite({
             ...params.runParams,
@@ -489,6 +512,7 @@ async function runUnifiedQaSuite(params: {
               flowPartitions.length === 1
                 ? suitePartitionOutputDir(outputDir, "flow")
                 : flowSuitePartitionOutputDir(outputDir, partition.kind),
+            writeEvidenceFile: false,
             providerMode,
             primaryModel,
             alternateModel,
@@ -512,31 +536,39 @@ async function runUnifiedQaSuite(params: {
             }
           }
           return {
-            evidenceSummaries: [await readQaSuiteEvidenceSummary(result.evidencePath)],
+            evidenceSummaries: [await resolveQaSuiteResultEvidenceSummary(result)],
             scenarioResults,
           };
         },
-      });
+      } satisfies QaUnifiedPartitionTask;
+      if (isolatedPartition) {
+        isolatedFlowPartitionTasks.push(task);
+      } else {
+        sharedFlowPartitionTasks.push(task);
+      }
     }
   }
-  if (params.plan.testFileScenariosByKind.size > 0) {
-    partitionTasks.push({
+  const createTestFilePartitionTask = (
+    scenariosByKind: ReadonlyMap<QaTestFileExecutionKind, QaTestFileScenario[]>,
+  ) =>
+    ({
       weight: 1,
       run: async () => {
         const testFileEvidenceSummaries: QaEvidenceSummaryJson[] = [];
         const testFileScenarioResults: QaUnifiedPartitionResult["scenarioResults"] = [];
-        for (const [kind, testFileScenarios] of params.plan.testFileScenariosByKind) {
+        for (const [kind, testFileScenarios] of scenariosByKind) {
           const result = await runQaTestFileSuiteFromRuntime({
             runParams: {
               ...params.runParams,
               outputDir: suitePartitionOutputDir(outputDir, kind),
+              writeEvidenceFile: false,
               providerMode,
               primaryModel,
               scenarioIds: testFileScenarios.map((scenario) => scenario.id),
             },
             scenarios: testFileScenarios,
           });
-          testFileEvidenceSummaries.push(await readQaSuiteEvidenceSummary(result.evidencePath));
+          testFileEvidenceSummaries.push(await resolveQaSuiteResultEvidenceSummary(result));
           testFileScenarioResults.push(
             ...result.results.map((scenarioResult) => ({
               scenarioId: scenarioResult.scenario.id,
@@ -549,9 +581,30 @@ async function runUnifiedQaSuite(params: {
           scenarioResults: testFileScenarioResults,
         };
       },
-    });
+    }) satisfies QaUnifiedPartitionTask;
+  const concurrentTestFileScenariosByKind = new Map(
+    [...params.plan.testFileScenariosByKind].filter(([kind]) => kind !== "script"),
+  );
+  if (concurrentTestFileScenariosByKind.size > 0) {
+    testFilePartitionTasks.push(createTestFilePartitionTask(concurrentTestFileScenariosByKind));
   }
-  const partitionResults = await runWeightedUnifiedPartitionTasks(partitionTasks, concurrency);
+  const scriptScenarios = params.plan.testFileScenariosByKind.get("script");
+  if (scriptScenarios?.length) {
+    scriptPartitionTasks.push(createTestFilePartitionTask(new Map([["script", scriptScenarios]])));
+  }
+  const concurrentPartitionTasks = [
+    ...sharedFlowPartitionTasks,
+    ...testFilePartitionTasks,
+    ...isolatedFlowPartitionTasks,
+  ];
+  const concurrentPartitionResults = await runWeightedUnifiedPartitionTasks(
+    concurrentPartitionTasks,
+    concurrency,
+  );
+  // Script scenarios may rebuild the checkout's shared dist tree. Wait until every
+  // flow Gateway has stopped so package postbuild cannot invalidate its loaded chunks.
+  const scriptPartitionResults = await runWeightedUnifiedPartitionTasks(scriptPartitionTasks, 1);
+  const partitionResults = [...concurrentPartitionResults, ...scriptPartitionResults];
   for (const partitionResult of partitionResults) {
     for (const scenarioResult of partitionResult.scenarioResults) {
       scenarioResultsById.set(scenarioResult.scenarioId, scenarioResult.result);

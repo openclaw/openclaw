@@ -112,7 +112,7 @@ describe("normalizeCompatibilityConfigValues preview streaming aliases", () => {
 });
 
 describe("normalizeCompatibilityConfigValues browser compatibility aliases", () => {
-  it("removes legacy browser relay bind host and migrates extension profiles", () => {
+  it("removes legacy browser relay bind host and stale extension relay cdpUrl", () => {
     const changes: string[] = [];
     const config = normalizeLegacyBrowserConfig(
       asLegacyConfig({
@@ -121,6 +121,7 @@ describe("normalizeCompatibilityConfigValues browser compatibility aliases", () 
           profiles: {
             work: {
               driver: "extension",
+              cdpUrl: "http://127.0.0.1:18792",
             },
             keep: {
               driver: "existing-session",
@@ -134,11 +135,14 @@ describe("normalizeCompatibilityConfigValues browser compatibility aliases", () 
     expect(
       (config.browser as { relayBindHost?: string } | undefined)?.relayBindHost,
     ).toBeUndefined();
-    expect(config.browser?.profiles?.work?.driver).toBe("existing-session");
+    // driver "extension" is the live Chrome extension relay driver again; only
+    // the retired relay endpoint URL gets stripped.
+    expect(config.browser?.profiles?.work?.driver).toBe("extension");
+    expect(config.browser?.profiles?.work?.cdpUrl).toBeUndefined();
     expect(config.browser?.profiles?.keep?.driver).toBe("existing-session");
     expect(changes).toEqual([
-      "Removed browser.relayBindHost (legacy Chrome extension relay setting; host-local Chrome now uses Chrome MCP existing-session attach).",
-      'Moved browser.profiles.work.driver "extension" → "existing-session" (Chrome MCP attach).',
+      "Removed browser.relayBindHost (legacy Chrome extension relay setting; the extension relay binds loopback on the profile cdpPort).",
+      "Removed browser.profiles.work.cdpUrl (extension driver profiles own their relay endpoint).",
     ]);
   });
 });

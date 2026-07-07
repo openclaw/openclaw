@@ -331,7 +331,7 @@ class LinuxSmoke extends SmokeRunController<LinuxOptions> {
     );
     this.status.freshVersion = await this.extractLastVersion("fresh.install-main");
     await this.phase("fresh.verify-main-version", 90, () => this.verifyTargetVersion());
-    await this.phase("fresh.onboard-ref", 180, () => this.runRefOnboard());
+    await this.phase("fresh.onboard-ref", 420, () => this.runRefOnboard());
     await this.phase("fresh.inject-bad-plugin", 90, () =>
       this.maybeInjectBadPluginFixture("fresh"),
     );
@@ -366,7 +366,7 @@ class LinuxSmoke extends SmokeRunController<LinuxOptions> {
     await this.phase("upgrade.inject-bad-plugin", 90, () =>
       this.maybeInjectBadPluginFixture("upgrade"),
     );
-    await this.phase("upgrade.onboard-ref", 180, () => this.runRefOnboard());
+    await this.phase("upgrade.onboard-ref", 420, () => this.runRefOnboard());
     await this.phase("upgrade.gateway-start", 240, () => this.startGatewayBackground());
     await this.phase("upgrade.bad-plugin-diagnostic", 90, () =>
       this.maybeVerifyBadPluginDiagnostic("upgrade"),
@@ -514,9 +514,7 @@ if command -v curl >/dev/null 2>&1; then
     url,
   )} -o ${shellQuote(outputPath)}
 else
-  wget -q --timeout=10 --read-timeout=120 --tries=3 -O ${shellQuote(outputPath)} ${shellQuote(
-    url,
-  )}
+  wget -q --timeout=10 --read-timeout=120 --tries=3 -O ${shellQuote(outputPath)} ${shellQuote(url)}
 fi`);
   }
 

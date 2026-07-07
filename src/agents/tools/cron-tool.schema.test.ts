@@ -1,8 +1,8 @@
+import { normalizeToolParameterSchema } from "@openclaw/ai/internal/openai";
 // Cron tool schema tests cover the provider-facing parameter shape and runtime
 // validation compatibility for cron jobs.
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
-import { normalizeToolParameterSchema } from "../agent-tools-parameter-schema.js";
 import { createCronToolSchema } from "./cron-tool.js";
 
 /** Walk a TypeBox schema by dot-separated property path and return sorted keys. */
@@ -45,12 +45,15 @@ describe("createCronToolSchema", () => {
     expect(keysAt(schemaRecord, "job")).toEqual(
       [
         "agentId",
+        "declarationKey",
         "deleteAfterRun",
         "delivery",
         "description",
+        "displayName",
         "enabled",
         "failureAlert",
         "name",
+        "owner",
         "payload",
         "schedule",
         "sessionKey",
@@ -67,6 +70,7 @@ describe("createCronToolSchema", () => {
         "deleteAfterRun",
         "delivery",
         "description",
+        "displayName",
         "enabled",
         "failureAlert",
         "name",
@@ -217,9 +221,25 @@ describe("createCronToolSchema", () => {
         jobId: "job-1",
         patch: {
           agentId: null,
+          displayName: null,
           sessionKey: null,
           payload: {
             toolsAllow: null,
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts payload.model and payload.fallbacks null in patch (clear-to-inherit)", () => {
+    expect(
+      Value.Check(createCronToolSchema(), {
+        action: "update",
+        jobId: "job-1",
+        patch: {
+          payload: {
+            model: null,
+            fallbacks: null,
           },
         },
       }),

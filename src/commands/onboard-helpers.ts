@@ -23,7 +23,11 @@ import { resolveConfigPath } from "../config/paths.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveControlUiLinks } from "../gateway/control-ui-links.js";
+import {
+  resolveAdvertisedControlUiLinks,
+  resolveControlUiLinks,
+  resolveLocalControlUiProbeLinks,
+} from "../gateway/control-ui-links.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { probeGateway } from "../gateway/probe.js";
 import {
@@ -41,13 +45,13 @@ export { randomToken } from "./random-token.js";
 
 export { detectBinary };
 export { detectBrowserOpenSupport, openUrl, resolveBrowserOpenCommand };
-export { resolveControlUiLinks };
+export { resolveAdvertisedControlUiLinks, resolveControlUiLinks, resolveLocalControlUiProbeLinks };
 
 /** Handles Clack cancellation by exiting through the runtime. */
-export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
+export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv, exitCode = 0): T {
   if (isCancel(value)) {
     cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
-    runtime.exit(0);
+    runtime.exit(exitCode);
     throw new Error("unreachable");
   }
   return value;

@@ -176,7 +176,7 @@ export function parseArgs(argv) {
     const arg = args[i];
     const next = args[i + 1];
     const readValue = () => {
-      if (!next) {
+      if (!next || next.startsWith("-")) {
         throw new Error(`Missing value for ${arg}`);
       }
       i += 1;
@@ -331,7 +331,6 @@ export function writeConfig({ homeDir, workspaceDir, port, token }) {
   const configDir = path.join(homeDir, ".openclaw");
   fs.mkdirSync(configDir, { recursive: true });
   const configPath = path.join(configDir, "openclaw.json");
-  const indexPath = path.join(configDir, "memory", "main.sqlite");
   const config = {
     agents: {
       defaults: {
@@ -340,7 +339,6 @@ export function writeConfig({ homeDir, workspaceDir, port, token }) {
           provider: "none",
           model: "",
           store: {
-            path: indexPath,
             vector: { enabled: false },
           },
           sync: {

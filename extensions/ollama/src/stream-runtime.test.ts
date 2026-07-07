@@ -10,6 +10,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 }));
 
 import {
+  OLLAMA_INCOMPLETE_STREAM_ERROR,
   buildOllamaChatRequest,
   createConfiguredOllamaCompatStreamWrapper,
   createConfiguredOllamaStreamFn,
@@ -115,6 +116,26 @@ describe("buildOllamaChatRequest", () => {
     });
     expect(request.model).toBe("library/qwen3:32b");
   });
+
+  it("keeps native Ollama replay tool arguments as objects", () => {
+    const messages = convertToOllamaMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            name: "gateway",
+            arguments: '{"action":"config.get","path":"gateway.port"}',
+          },
+        ],
+      },
+    ]);
+
+    expect(messages[0]?.tool_calls?.[0]?.function.arguments).toEqual({
+      action: "config.get",
+      path: "gateway.port",
+    });
+  });
 });
 
 describe("createConfiguredOllamaCompatStreamWrapper", () => {
@@ -154,6 +175,67 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
     const payload = requireRecord(patchedPayload, "patched payload");
     expect(payload.thinking).toEqual({ type: "enabled" });
     expect(payload.options).toEqual({ num_ctx: 65536 });
+  });
+
+  it("preserves OpenAI-compatible replay tool arguments as strings", async () => {
+    let patchedPayload: Record<string, unknown> | undefined;
+    const baseStreamFn = vi.fn((_model, _context, options) => {
+      options?.onPayload?.({
+        messages: [
+          {
+            role: "assistant",
+            function_call: {
+              name: "legacy_gateway",
+              arguments: '{"action":"config.get"}',
+            },
+            tool_calls: [
+              {
+                id: "call_gateway",
+                type: "function",
+                function: {
+                  name: "gateway",
+                  arguments: '{"action":"config.get","path":"gateway.port"}',
+                },
+              },
+            ],
+          },
+        ],
+      });
+      return (async function* () {})();
+    });
+    const model = {
+      api: "openai-completions",
+      provider: "ollama",
+      id: "glm-5.2:cloud",
+      contextWindow: 262144,
+    };
+
+    const wrapped = createConfiguredOllamaCompatStreamWrapper({
+      provider: "ollama",
+      modelId: "glm-5.2:cloud",
+      model,
+      streamFn: baseStreamFn,
+    } as never);
+
+    await wrapped?.(
+      model as never,
+      { messages: [] } as never,
+      {
+        onPayload: (payload: unknown) => {
+          patchedPayload = payload as Record<string, unknown>;
+        },
+      } as never,
+    );
+
+    const payload = requireRecord(patchedPayload, "patched payload");
+    const messages = payload.messages as Array<Record<string, unknown>>;
+    const assistantMessage = requireRecord(messages[0], "assistant message");
+    const functionCall = requireRecord(assistantMessage.function_call, "function call");
+    const toolCalls = assistantMessage.tool_calls as Array<Record<string, unknown>>;
+    const toolCallFunction = requireRecord(toolCalls[0]?.function, "tool call function");
+    expect(functionCall.arguments).toBe('{"action":"config.get"}');
+    expect(toolCallFunction.arguments).toBe('{"action":"config.get","path":"gateway.port"}');
+    expect(payload.options).toEqual({ num_ctx: 262144 });
   });
 
   it("falls back to contextWindow when configured num_ctx is invalid", async () => {
@@ -1851,6 +1933,9 @@ describe("createOllamaStreamFn streaming events", () => {
         expect(types).toEqual(["start", "text_start", "text_delta", "error"]);
         const errorEvent = events.at(-1);
         expect(errorEvent?.type).toBe("error");
+        if (errorEvent?.type === "error") {
+          expect(errorEvent.error.errorMessage).toBe(OLLAMA_INCOMPLETE_STREAM_ERROR);
+        }
       },
     );
   });

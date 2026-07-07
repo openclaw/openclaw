@@ -691,6 +691,32 @@ describe("readSessionMessages", () => {
     });
   });
 
+  test("surfaces persisted user idempotency keys in __openclaw metadata (#79844)", async () => {
+    const sessionId = "test-session-idempotency-key";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        id: "entry-user-1",
+        message: {
+          role: "user",
+          content: "pending optimistic turn",
+          idempotencyKey: "client-turn-1",
+        },
+      },
+    ]);
+
+    const result = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+      maxMessages: 5,
+      maxBytes: 2048,
+    });
+
+    expect(result).toHaveLength(1);
+    expectMessageFields(result[0], {
+      content: "pending optimistic turn",
+      openclaw: { id: "entry-user-1", idempotencyKey: "client-turn-1" },
+    });
+  });
+
   test("honors byte caps for async recent-message reads", async () => {
     const sessionId = "test-session-recent-async-byte-cap";
     const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
@@ -1411,7 +1437,17 @@ describe("readSessionMessages", () => {
     writeTranscript(tmpDir, sessionId, [
       { type: "session", version: 1, id: sessionId },
       { message: { role: "assistant", content: "older", usage: { input: 50, output: 5 } } },
-      { message: { role: "assistant", content: "latest", usage: { input: 70, output: 9 } } },
+      {
+        message: {
+          role: "assistant",
+          content: "latest",
+          usage: {
+            input: 70,
+            output: 9,
+            contextUsage: { state: "unavailable" },
+          },
+        },
+      },
     ]);
 
     const aggregate = await readRecentSessionUsageFromTranscriptAsync(
@@ -1429,8 +1465,89 @@ describe("readSessionMessages", () => {
       2048,
     );
 
+    expectUsageFields(aggregate, {
+      inputTokens: 120,
+      outputTokens: 14,
+      contextUsage: { state: "unavailable" },
+    });
+    expect(aggregate).not.toHaveProperty("totalTokens");
+    expect(aggregate).not.toHaveProperty("totalTokensFresh");
+    expectUsageFields(latest, {
+      inputTokens: 70,
+      outputTokens: 9,
+      contextUsage: { state: "unavailable" },
+      trailingBytes: 0,
+    });
+  });
+
+  test("counts transcript bytes appended after the latest usage snapshot", async () => {
+    const sessionId = "test-session-latest-usage-trailing-bytes";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        message: {
+          role: "assistant",
+          content: "latest",
+          usage: {
+            input: 70,
+            output: 9,
+            contextUsage: {
+              state: "available",
+              promptTokens: 70,
+              totalTokens: 79,
+            },
+          },
+        },
+      },
+      { message: { role: "tool", content: "appended tool result" } },
+    ]);
+
+    const latest = await readLatestRecentSessionUsageFromTranscriptAsync(
+      sessionId,
+      storePath,
+      undefined,
+      undefined,
+      2048,
+    );
+
+    expectUsageFields(latest, {
+      contextUsage: {
+        state: "available",
+        promptTokens: 70,
+        totalTokens: 79,
+      },
+    });
+    expect(latest?.trailingBytes).toBeGreaterThan(0);
+  });
+
+  test("clears an older context marker when aggregate usage has a newer plain snapshot", async () => {
+    const sessionId = "test-session-aggregate-clears-context-marker";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        message: {
+          role: "assistant",
+          content: "older",
+          usage: {
+            input: 50,
+            output: 5,
+            contextUsage: { state: "unavailable" },
+          },
+        },
+      },
+      { message: { role: "assistant", content: "latest", usage: { input: 70, output: 9 } } },
+    ]);
+
+    const aggregate = await readRecentSessionUsageFromTranscriptAsync(
+      sessionId,
+      storePath,
+      undefined,
+      undefined,
+      2048,
+    );
+
     expectUsageFields(aggregate, { inputTokens: 120, outputTokens: 14 });
-    expectUsageFields(latest, { inputTokens: 70, outputTokens: 9 });
+    expect(aggregate).not.toHaveProperty("contextUsage");
   });
 
   test("tails transcript lines for manual compaction without loading the whole file", () => {
@@ -1762,7 +1879,7 @@ describe("readSessionMessages", () => {
       })),
     ).toEqual([
       { role: "user", text: "hello" },
-      { role: "assistant", text: "hi" },
+      { role: "assistant", text: [{ type: "text", text: "hi" }] },
       { role: "user", text: [{ type: "text", text: "Blocked by HITL test hook." }] },
     ]);
     expect(JSON.stringify(out)).not.toContain("[hitl:block] hello");
@@ -2651,7 +2768,11 @@ describe("oversized transcript line guards", () => {
         timestamp,
         id: "oversized-child",
         parentId: "root-msg",
-        message: { role: "assistant", content: oversizedContent },
+        message: {
+          role: "assistant",
+          content: oversizedContent,
+          idempotencyKey: "oversized-key",
+        },
       }),
     ];
     fs.writeFileSync(transcriptPath, `${lines.join("\n")}\n`, "utf-8");
@@ -2670,6 +2791,7 @@ describe("oversized transcript line guards", () => {
     // id is preserved in __openclaw transcript metadata
     const meta = (oversized as Record<string, Record<string, unknown>>)["__openclaw"];
     expect(meta?.id).toBe("oversized-child");
+    expect(meta?.idempotencyKey).toBe("oversized-key");
     expect(meta?.recordTimestampMs).toBe(Date.parse(timestamp));
     // parentId extraction is proven by the record being included:
     // if parentId was not extracted, the tree would orphan this node.

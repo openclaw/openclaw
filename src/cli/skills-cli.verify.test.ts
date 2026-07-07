@@ -194,6 +194,80 @@ describe("skills verify CLI", () => {
     expect(mocks.runtimeErrors).toStrictEqual([]);
   });
 
+  it("verifies owner-qualified registry refs with explicit versions", async () => {
+    mocks.fetchClawHubSkillVerificationMock.mockResolvedValueOnce({
+      schema: "clawhub.skill.verify.v1",
+      ok: true,
+      decision: "pass",
+      reasons: [],
+      skill: { slug: "weather" },
+      publisher: { handle: "demo-owner" },
+      version: { version: "2.0.0" },
+      card: { available: true },
+      artifact: { sourceFingerprint: "source-fp" },
+      provenance: null,
+      security: { status: "clean" },
+      signature: { status: "unsigned" },
+    });
+
+    await runCommand(["skills", "verify", "@demo-owner/weather", "--version", "2.0.0"]);
+
+    expect(mocks.fetchClawHubSkillVerificationMock).toHaveBeenCalledWith({
+      slug: "weather",
+      ownerHandle: "demo-owner",
+      version: "2.0.0",
+      tag: undefined,
+      baseUrl: "https://clawhub.ai",
+    });
+    const payload = JSON.parse(mocks.runtimeStdout.at(-1) ?? "{}") as {
+      openclaw?: { resolution?: { source?: string; selector?: string } };
+    };
+    expect(payload.openclaw?.resolution).toMatchObject({
+      source: "registry",
+      selector: "version",
+    });
+    expect(mocks.defaultRuntime.exit).not.toHaveBeenCalled();
+    expect(mocks.runtimeErrors).toStrictEqual([]);
+  });
+
+  it("prints cards for owner-qualified tag verification", async () => {
+    mocks.fetchClawHubSkillVerificationMock.mockResolvedValueOnce({
+      schema: "clawhub.skill.verify.v1",
+      ok: true,
+      decision: "pass",
+      reasons: [],
+      skill: { slug: "weather" },
+      publisher: { handle: "demo-owner" },
+      version: { version: "2.0.0" },
+      card: {
+        available: true,
+        url: "https://cards.example.test/generated/weather.md",
+      },
+      artifact: { sourceFingerprint: "source-fp" },
+      provenance: null,
+      security: { status: "clean" },
+      signature: { status: "unsigned" },
+    });
+    mocks.fetchClawHubSkillCardMock.mockResolvedValueOnce("# Weather\n");
+
+    await runCommand(["skills", "verify", "@demo-owner/weather", "--tag", "latest", "--card"]);
+
+    expect(mocks.fetchClawHubSkillVerificationMock).toHaveBeenCalledWith({
+      slug: "weather",
+      ownerHandle: "demo-owner",
+      version: undefined,
+      tag: "latest",
+      baseUrl: "https://clawhub.ai",
+    });
+    expect(mocks.fetchClawHubSkillCardMock).toHaveBeenCalledWith({
+      url: "https://cards.example.test/generated/weather.md",
+      baseUrl: "https://clawhub.ai",
+    });
+    expect(mocks.runtimeStdout.at(-1)).toBe("# Weather");
+    expect(mocks.defaultRuntime.exit).not.toHaveBeenCalled();
+    expect(mocks.runtimeErrors).toStrictEqual([]);
+  });
+
   it("surfaces only server-verified source provenance in verify JSON", async () => {
     const sourceUrl = "https://github.com/openclaw/skills/tree/main/agentreceipt";
     const verifiedSourceUrl =

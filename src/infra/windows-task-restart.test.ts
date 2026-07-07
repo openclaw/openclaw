@@ -129,8 +129,9 @@ describe("relaunchGatewayScheduledTask", () => {
       'openclaw restart attempt source=windows-task-handoff target="OpenClaw Gateway (work)"',
     );
     expect(script).toContain(
-      `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "(Get-ScheduledTask -TaskName 'OpenClaw Gateway (work)' -ErrorAction SilentlyContinue).State" 2>nul | findstr /I /C:"Running" >nul 2>&1`,
+      `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$task = Get-ScheduledTask -TaskName 'OpenClaw Gateway (work)' -ErrorAction SilentlyContinue; if ($null -ne $task -and $task.State -eq 'Running') { exit 0 }; exit 1" >nul 2>&1`,
     );
+    expect(script).not.toContain("findstr");
     expect(script).toContain('schtasks /Run /TN "OpenClaw Gateway (work)" >>');
     expect(script.indexOf("powershell.exe -NoProfile")).toBeLessThan(
       script.indexOf('schtasks /Run /TN "OpenClaw Gateway (work)"'),
@@ -167,8 +168,9 @@ describe("relaunchGatewayScheduledTask", () => {
     const scriptPath = [...createdScriptPaths][0];
     const script = fs.readFileSync(scriptPath, "utf8");
     expect(script).toContain(
-      "-Command \"(Get-ScheduledTask -TaskName 'OpenClaw Gateway (Bob''s work)' -ErrorAction SilentlyContinue).State\"",
+      `-Command "$task = Get-ScheduledTask -TaskName 'OpenClaw Gateway (Bob''s work)' -ErrorAction SilentlyContinue; if ($null -ne $task -and $task.State -eq 'Running') { exit 0 }; exit 1"`,
     );
+    expect(script).not.toContain("findstr");
   });
 
   it("returns failed when the helper cannot be spawned", () => {

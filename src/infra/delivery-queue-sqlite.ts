@@ -57,9 +57,15 @@ function enoent(queueName: string, id: string): Error & { code: string } {
   return err;
 }
 
-function inflate(row: QueueRow): DeliveryQueueEntryState {
+function inflate(row: QueueRow): DeliveryQueueEntryState | null {
+  let parsed: DeliveryQueueEntryState;
+  try {
+    parsed = JSON.parse(row.entry_json) as DeliveryQueueEntryState;
+  } catch {
+    return null;
+  }
   return {
-    ...(JSON.parse(row.entry_json) as DeliveryQueueEntryState),
+    ...parsed,
     id: row.id,
     enqueuedAt: Number(row.enqueued_at),
     retryCount: Number(row.retry_count),
@@ -205,7 +211,7 @@ export function loadDeliveryQueueEntries(
       .orderBy("enqueued_at", "asc")
       .orderBy("id", "asc"),
   ).rows as QueueRow[];
-  return rows.map(inflate);
+  return rows.map(inflate).filter((entry): entry is DeliveryQueueEntryState => entry != null);
 }
 
 /** Delete a pending delivery queue entry after successful delivery. */
@@ -234,6 +240,41 @@ export function updateDeliveryQueueEntry(
     throw enoent(queueName, id);
   }
   upsertDeliveryQueueEntry({ queueName, entry: update(current), stateDir });
+}
+
+/** Dead-lettered entry counts for one queue namespace. */
+export type FailedDeliveryQueueCount = {
+  queueName: string;
+  count: number;
+  oldestFailedAt: number | null;
+};
+
+/** Count dead-lettered (failed) entries per queue namespace for health reporting. */
+export function countFailedDeliveryQueueEntries(stateDir?: string): FailedDeliveryQueueCount[] {
+  const database = openStateDatabase(stateDir);
+  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
+  const rows = executeSqliteQuerySync(
+    database.db,
+    queueDb
+      .selectFrom("delivery_queue_entries")
+      .select((eb) => [
+        "queue_name",
+        eb.fn.countAll().as("failed_count"),
+        eb.fn.min("failed_at").as("oldest_failed_at"),
+      ])
+      .where("status", "=", "failed")
+      .groupBy("queue_name")
+      .orderBy("queue_name", "asc"),
+  ).rows as Array<{
+    queue_name: string;
+    failed_count: number | bigint;
+    oldest_failed_at: number | bigint | null;
+  }>;
+  return rows.map((row) => ({
+    queueName: row.queue_name,
+    count: Number(row.failed_count),
+    oldestFailedAt: row.oldest_failed_at == null ? null : Number(row.oldest_failed_at),
+  }));
 }
 
 /** Mark a pending delivery queue entry as failed for later diagnostics. */

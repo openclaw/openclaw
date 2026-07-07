@@ -175,6 +175,7 @@ describe("plugin contract registry", () => {
       {
         provider: "github-copilot",
         method: "device",
+        appGuidedSecret: true,
         choiceId: "github-copilot",
         choiceLabel: "GitHub Copilot",
         choiceHint: "Device login with your GitHub account",

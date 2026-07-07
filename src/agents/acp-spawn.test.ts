@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcpInitializeSessionInput } from "../acp/control-plane/manager.types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -13,6 +13,7 @@ import {
   type SessionBindingPlacement,
   type SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
+import { resolveThinkingDefault } from "./model-selection.js";
 
 function createDefaultSpawnConfig(): OpenClawConfig {
   return {
@@ -71,6 +72,68 @@ const hoisted = vi.hoisted(() => {
   const countActiveRunsForSessionMock = vi.fn();
   const getSubagentRunByChildSessionKeyMock = vi.fn();
   const listTasksForOwnerKeyMock = vi.fn();
+  const createSessionAccessorMock = () => {
+    const resolveMockStorePath = (scope: {
+      agentId?: string;
+      env?: NodeJS.ProcessEnv;
+      storePath?: string;
+    }): string =>
+      scope.storePath ??
+      resolveStorePathMock(undefined, {
+        agentId: scope.agentId,
+        env: scope.env,
+      });
+    const loadMockEntry = (scope: {
+      agentId?: string;
+      env?: NodeJS.ProcessEnv;
+      sessionKey: string;
+      storePath?: string;
+    }): SessionEntry | undefined => {
+      const store = loadSessionStoreMock(resolveMockStorePath(scope)) as Record<
+        string,
+        SessionEntry
+      >;
+      return store[scope.sessionKey];
+    };
+    return {
+      listSessionEntries: (
+        scope: {
+          agentId?: string;
+          env?: NodeJS.ProcessEnv;
+          storePath?: string;
+        } = {},
+      ) => {
+        const store = loadSessionStoreMock(resolveMockStorePath(scope)) as Record<
+          string,
+          SessionEntry
+        >;
+        return Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry }));
+      },
+      loadSessionEntry: loadMockEntry,
+      resolveSessionTranscriptRuntimeTarget: async (scope: {
+        agentId: string;
+        sessionId: string;
+        sessionKey: string;
+        storePath?: string;
+        threadId?: string | number;
+      }) => {
+        const store = scope.storePath
+          ? (loadSessionStoreMock(scope.storePath) as Record<string, SessionEntry>)
+          : undefined;
+        const resolved = await resolveSessionTranscriptFileMock({
+          ...scope,
+          ...(store ? { sessionStore: store } : {}),
+          sessionEntry: loadMockEntry(scope),
+        });
+        return {
+          agentId: scope.agentId,
+          sessionFile: resolved.sessionFile,
+          sessionId: scope.sessionId,
+          sessionKey: scope.sessionKey,
+        };
+      },
+    };
+  };
   const state = {
     cfg: createDefaultSpawnConfig(),
   };
@@ -98,6 +161,7 @@ const hoisted = vi.hoisted(() => {
     countActiveRunsForSessionMock,
     getSubagentRunByChildSessionKeyMock,
     listTasksForOwnerKeyMock,
+    createSessionAccessorMock,
     state,
   };
 });
@@ -133,6 +197,8 @@ vi.mock("../config/sessions/paths.js", () => ({
 vi.mock("../config/sessions/store.js", () => ({
   loadSessionStore: hoisted.loadSessionStoreMock,
 }));
+
+vi.mock("../config/sessions/session-accessor.js", () => hoisted.createSessionAccessorMock());
 
 vi.mock("../config/sessions.js", () => ({
   loadSessionStore: hoisted.loadSessionStoreMock,
@@ -621,6 +687,16 @@ function enableTelegramCurrentConversationBindings(): void {
 }
 
 describe("spawnAcpDirect", () => {
+  beforeAll(() => {
+    resolveThinkingDefault({
+      cfg: {
+        agents: { defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } } },
+      },
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+    });
+  });
+
   beforeEach(() => {
     replaceSpawnConfig(createDefaultSpawnConfig());
     hoisted.areHeartbeatsEnabledMock.mockReset().mockReturnValue(true);

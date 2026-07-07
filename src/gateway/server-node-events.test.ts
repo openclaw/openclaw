@@ -40,12 +40,13 @@ const buildSessionLookup = (
     parentSessionKey: entry.parentSessionKey,
   },
   canonicalKey: sessionKey,
+  storeKeys: [sessionKey],
   legacyKey: undefined,
 });
 
 const ingressAgentCommandMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const registerApnsRegistrationMock = vi.hoisted(() => vi.fn());
-const loadOrCreateDeviceIdentityMock = vi.hoisted(() =>
+const loadOrCreateProcessDeviceIdentityMock = vi.hoisted(() =>
   vi.fn(() => ({
     deviceId: "gateway-device-1",
     publicKeyPem: "public",
@@ -82,15 +83,9 @@ const runtimeMocks = vi.hoisted(() => ({
   enqueueSystemEvent: vi.fn(),
   formatForLog: vi.fn((err: unknown) => (err instanceof Error ? err.message : String(err))),
   getRuntimeConfig: vi.fn(() => ({ session: { mainKey: "agent:main:main" } })),
-  loadOrCreateDeviceIdentity: loadOrCreateDeviceIdentityMock,
+  loadOrCreateProcessDeviceIdentity: loadOrCreateProcessDeviceIdentityMock,
   loadSessionEntry: vi.fn((sessionKey: string) => buildSessionLookup(sessionKey)),
-  migrateAndPruneGatewaySessionStoreKey: vi.fn(
-    ({ key, store }: { key: string; store: Record<string, unknown> }) => ({
-      target: { canonicalKey: key, storeKeys: [key] },
-      primaryKey: key,
-      entry: store[key],
-    }),
-  ),
+  canonicalizeSessionEntryAliases: vi.fn(),
   normalizeChannelId: normalizeChannelIdMock,
   normalizeMainKey: vi.fn((key?: string | null) => key?.trim() || "agent:main:main"),
   normalizeRpcAttachmentsToChatAttachments: vi.fn((attachments?: unknown[]) => attachments ?? []),
@@ -135,7 +130,6 @@ const runtimeMocks = vi.hoisted(() => ({
       ? { ...wakeOptions, sessionKey: sessionKey as string }
       : wakeOptions;
   }),
-  updateSessionStore: vi.fn(),
 }));
 
 vi.mock("./server-node-events.runtime.js", () => runtimeMocks);
@@ -159,7 +153,7 @@ const enqueueSystemEventMock = runtimeMocks.enqueueSystemEvent;
 const requestHeartbeatMock = runtimeMocks.requestHeartbeat;
 const loadConfigMock = runtimeMocks.getRuntimeConfig;
 const agentCommandMock = runtimeMocks.agentCommandFromIngress;
-const updateSessionStoreMock = runtimeMocks.updateSessionStore;
+const canonicalizeSessionEntryAliasesMock = runtimeMocks.canonicalizeSessionEntryAliases;
 const loadSessionEntryMock = runtimeMocks.loadSessionEntry;
 const registerApnsRegistrationVi = runtimeMocks.registerApnsRegistration;
 const normalizeChannelIdVi = runtimeMocks.normalizeChannelId;
@@ -271,7 +265,7 @@ describe("node exec events", () => {
     enqueueSystemEventMock.mockReturnValue(true);
     requestHeartbeatMock.mockClear();
     registerApnsRegistrationVi.mockClear();
-    loadOrCreateDeviceIdentityMock.mockClear();
+    loadOrCreateProcessDeviceIdentityMock.mockClear();
     normalizeChannelIdVi.mockClear();
     normalizeChannelIdVi.mockImplementation((channel?: string | null) => channel ?? null);
     sanitizeInboundSystemTagsMock.mockClear();
@@ -563,6 +557,28 @@ describe("node exec events", () => {
     expect(requestHeartbeatMock).toHaveBeenCalledWith(execEventHeartbeatOptions());
   });
 
+  it("does not split surrogate pairs when truncating exec.finished output", async () => {
+    // 178 ASCII chars + emoji (🫠 = 2 UTF-16 code units at pos 178-179) = 180+ total.
+    // safe = 179 → old slice(0,179) would land on a lone high surrogate at pos 178.
+    const emoji = "🫠";
+    const padded = "A".repeat(178) + emoji + "tail";
+    const ctx = buildExecCtx();
+    await handleNodeEvent(ctx, "node-2", {
+      event: "exec.finished",
+      payloadJSON: JSON.stringify({
+        runId: "run-surrogate",
+        exitCode: 0,
+        timedOut: false,
+        output: padded,
+      }),
+    });
+
+    const [[text]] = enqueueSystemEventMock.mock.calls;
+    // Must not contain a lone high surrogate (U+D800–U+DBFF).
+    expect(text).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    expect(text.endsWith("…")).toBe(true);
+  });
+
   it("does not enqueue or wake agent work for exec.denied events", async () => {
     const ctx = buildExecCtx();
     await handleNodeEvent(ctx, "node-3", {
@@ -773,10 +789,11 @@ describe("node exec events", () => {
 describe("voice transcript events", () => {
   beforeEach(() => {
     agentCommandMock.mockClear();
-    updateSessionStoreMock.mockClear();
+    canonicalizeSessionEntryAliasesMock.mockClear();
     agentCommandMock.mockResolvedValue({ status: "ok" } as never);
-    updateSessionStoreMock.mockImplementation(async (_storePath, update) => {
-      update({});
+    canonicalizeSessionEntryAliasesMock.mockImplementation(async ({ target, update }) => {
+      const entry = update ? await update(undefined) : undefined;
+      return { canonicalKey: target.canonicalKey, entry };
     });
   });
 
@@ -801,7 +818,7 @@ describe("voice transcript events", () => {
 
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
     expect(addChatRun).toHaveBeenCalledTimes(1);
-    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
+    expect(canonicalizeSessionEntryAliasesMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not dedupe identical text when source event IDs differ", async () => {
@@ -825,7 +842,7 @@ describe("voice transcript events", () => {
     });
 
     expect(agentCommandMock).toHaveBeenCalledTimes(2);
-    expect(updateSessionStoreMock).toHaveBeenCalledTimes(2);
+    expect(canonicalizeSessionEntryAliasesMock).toHaveBeenCalledTimes(2);
   });
 
   it("forwards transcript with voice provenance", async () => {
@@ -868,7 +885,7 @@ describe("voice transcript events", () => {
     const warn = vi.fn();
     const ctx = buildCtx();
     ctx.logGateway = { warn };
-    updateSessionStoreMock.mockRejectedValueOnce(new Error("disk down"));
+    canonicalizeSessionEntryAliasesMock.mockRejectedValueOnce(new Error("disk down"));
 
     await handleNodeEvent(ctx, "node-v3", {
       event: "voice.transcript",
@@ -900,23 +917,24 @@ describe("voice transcript events", () => {
       }),
     );
 
-    let updatedStore: Record<string, unknown> | undefined;
-    updateSessionStoreMock.mockImplementationOnce(async (_storePath, update) => {
-      const store = {
-        "voice-preserve-session": {
-          sessionId: "sess-preserve",
-          updatedAt: 10,
-          label: "existing label",
-          spawnedBy: "agent:main:parent",
-          parentSessionKey: "agent:main:parent",
-          lastChannel: "discord",
-          lastTo: "thread-1",
-          lastAccountId: "acct-1",
-          lastThreadId: 42,
-        },
+    let updatedEntry: Record<string, unknown> | undefined;
+    canonicalizeSessionEntryAliasesMock.mockImplementationOnce(async ({ target, update }) => {
+      const existing = {
+        sessionId: "sess-preserve",
+        updatedAt: 10,
+        label: "existing label",
+        spawnedBy: "agent:main:parent",
+        parentSessionKey: "agent:main:parent",
+        lastChannel: "discord",
+        lastTo: "thread-1",
+        lastAccountId: "acct-1",
+        lastThreadId: 42,
       };
-      update(store);
-      updatedStore = structuredClone(store);
+      updatedEntry = {
+        ...existing,
+        ...(update ? await update(existing) : {}),
+      };
+      return { canonicalKey: target.canonicalKey, entry: updatedEntry };
     });
 
     await handleNodeEvent(ctx, "node-v4", {
@@ -928,7 +946,7 @@ describe("voice transcript events", () => {
     });
     await Promise.resolve();
 
-    expectFields(updatedStore?.["voice-preserve-session"], {
+    expectFields(updatedEntry, {
       sessionId: "sess-preserve",
       label: "existing label",
       spawnedBy: "agent:main:parent",
@@ -1136,7 +1154,7 @@ describe("agent request events", () => {
   beforeEach(() => {
     agentCommandMock.mockClear();
     parseMessageWithAttachmentsMock.mockReset();
-    updateSessionStoreMock.mockClear();
+    canonicalizeSessionEntryAliasesMock.mockClear();
     loadSessionEntryMock.mockClear();
     normalizeChannelIdVi.mockClear();
     normalizeChannelIdVi.mockImplementation((channel?: string | null) => channel ?? null);
@@ -1147,8 +1165,9 @@ describe("agent request events", () => {
       offloadedRefs: [],
     });
     agentCommandMock.mockResolvedValue({ status: "ok" } as never);
-    updateSessionStoreMock.mockImplementation(async (_storePath, update) => {
-      update({});
+    canonicalizeSessionEntryAliasesMock.mockImplementation(async ({ target, update }) => {
+      const entry = update ? await update(undefined) : undefined;
+      return { canonicalKey: target.canonicalKey, entry };
     });
     loadSessionEntryMock.mockImplementation((sessionKey: string) => buildSessionLookup(sessionKey));
   });

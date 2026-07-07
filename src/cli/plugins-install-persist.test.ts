@@ -1,6 +1,10 @@
 // Plugin install persist tests cover saving installed plugin records after install.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { hasRetainedManagedNpmInstallMarker } from "../plugins/managed-npm-retention.js";
 import {
   applyExclusiveSlotSelection,
   buildPluginDiagnosticsReport,
@@ -289,6 +293,108 @@ describe("persistPluginInstall", () => {
 
     expect(planPluginUninstall).not.toHaveBeenCalled();
     expect(applyPluginUninstallDirectoryRemoval).not.toHaveBeenCalled();
+  });
+
+  it("preserves replaced npm install directories across generation updates", async () => {
+    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const baseConfig = {
+      plugins: {
+        entries: {},
+      },
+    } as OpenClawConfig;
+    const enabledConfig = {
+      plugins: {
+        entries: {
+          codex: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    enablePluginInConfig.mockReturnValue({ config: enabledConfig });
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-persist-"));
+    const previousProjectRoot = path.join(tempRoot, "npm", "projects", "codex-v1");
+    const previousInstallPath = path.join(
+      previousProjectRoot,
+      "node_modules",
+      "@openclaw",
+      "codex",
+    );
+    const nextInstallPath = path.join(
+      tempRoot,
+      "npm",
+      "projects",
+      "codex-v2",
+      "node_modules",
+      "@openclaw",
+      "codex",
+    );
+    fs.mkdirSync(previousInstallPath, { recursive: true });
+    setInstalledPluginIndexInstallRecords({
+      codex: {
+        source: "npm",
+        spec: "@openclaw/codex@1.0.0",
+        installPath: previousInstallPath,
+      },
+    });
+    planPluginUninstall.mockReturnValueOnce({
+      ok: true,
+      config: {} as OpenClawConfig,
+      pluginId: "codex",
+      actions: {
+        entry: false,
+        install: true,
+        allowlist: false,
+        denylist: false,
+        loadPath: false,
+        memorySlot: false,
+        contextEngineSlot: false,
+        channelConfig: false,
+        directory: false,
+      },
+      directoryRemoval: {
+        target: previousInstallPath,
+        cleanup: {
+          kind: "npm",
+          npmRoot: previousProjectRoot,
+          packageName: "@openclaw/codex",
+        },
+      },
+    });
+
+    try {
+      await persistPluginInstall({
+        snapshot: {
+          config: baseConfig,
+          baseHash: "config-1",
+          writeOptions: installWriteOptions,
+        },
+        pluginId: "codex",
+        install: {
+          source: "npm",
+          spec: "@openclaw/codex@2.0.0",
+          installPath: nextInstallPath,
+        },
+      });
+
+      expect(planPluginUninstall).toHaveBeenCalledWith({
+        config: {
+          plugins: {
+            installs: {
+              codex: {
+                source: "npm",
+                spec: "@openclaw/codex@1.0.0",
+                installPath: previousInstallPath,
+              },
+            },
+          },
+        },
+        pluginId: "codex",
+        deleteFiles: true,
+      });
+      expect(applyPluginUninstallDirectoryRemoval).not.toHaveBeenCalled();
+      expect(hasRetainedManagedNpmInstallMarker(previousInstallPath)).toBe(true);
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it("warns when an installed npm plugin remains shadowed by a config-selected source", async () => {

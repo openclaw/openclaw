@@ -13,6 +13,7 @@ import {
   ensureAuthProfileStore,
   upsertAuthProfileWithLock,
 } from "openclaw/plugin-sdk/provider-auth";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 
@@ -147,7 +148,9 @@ async function postGitHubDeviceFlowForm(params: {
     if (!response.ok) {
       throw new Error(`${params.failureLabel}: HTTP ${response.status}`);
     }
-    return parseJsonResponse(await response.json());
+    return parseJsonResponse(
+      await readProviderJsonResponse(response, "github-copilot.device-flow"),
+    );
   } finally {
     await release();
   }
@@ -257,12 +260,12 @@ function normalizeGitHubDeviceUserCode(raw: string): string {
   return userCode;
 }
 
-export type GitHubCopilotDeviceFlowResult =
+type GitHubCopilotDeviceFlowResult =
   | { status: "authorized"; accessToken: string }
   | { status: "access_denied" }
   | { status: "expired" };
 
-export type GitHubCopilotDeviceFlowIO = {
+type GitHubCopilotDeviceFlowIO = {
   showCode(args: { verificationUrl: string; userCode: string; expiresInMs: number }): Promise<void>;
   openUrl?: (url: string) => Promise<void>;
 };

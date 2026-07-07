@@ -2,9 +2,9 @@
  * Summarization and fallback helpers for transcript compaction.
  */
 import type { AgentCompactionIdentifierPolicy } from "../config/types.agent-defaults.js";
+import { isAbortError } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { retryAsync } from "../infra/retry.js";
-import { isAbortError } from "../infra/unhandled-rejections.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildOversizedFallbackPlanWithWorker,
@@ -175,13 +175,31 @@ async function summarizeChunks(params: {
           maxDelayMs: 5000,
           jitter: 0.2,
           label: "compaction/generateSummary",
-          shouldRetry: (err) => !isAbortError(err) && !isTimeoutError(err),
+          shouldRetry: (err) => {
+            // Stop retrying when the caller explicitly cancelled.
+            if (params.signal.aborted) {
+              return false;
+            }
+            // Preserve existing non-retry policy for real network/transport
+            // timeouts (e.g. "fetch failed", ETIMEDOUT) that are not AbortErrors.
+            if (!isAbortError(err) && isTimeoutError(err)) {
+              return false;
+            }
+            // Provider-side AbortErrors with signal not yet aborted are
+            // transient disconnects — retrying is correct.
+            return true;
+          },
         },
       );
       hasGeneratedChunk = true;
     } catch (err) {
-      // Abort and timeout errors always propagate immediately.
-      if (isAbortError(err) || isTimeoutError(err)) {
+      // Propagate only when the caller explicitly cancelled. Provider-side
+      // AbortErrors (signal not aborted) fall through to partial/fallback paths.
+      if (params.signal.aborted) {
+        throw err;
+      }
+      // Real non-abort transport timeouts still propagate immediately.
+      if (!isAbortError(err) && isTimeoutError(err)) {
         throw err;
       }
       // No chunk has succeeded yet — rethrow so summarizeWithFallback
@@ -270,6 +288,9 @@ export async function summarizeWithFallback(params: {
   try {
     return await summarizeChunks(params);
   } catch (fullError) {
+    if (params.signal.aborted) {
+      throw fullError;
+    }
     log.warn(`Full summarization failed: ${formatErrorMessage(fullError)}`);
     partialSummaryFallback = (fullError as PartialSummaryError).partialSummary;
   }
@@ -292,6 +313,9 @@ export async function summarizeWithFallback(params: {
       const notes = oversizedNotes.length > 0 ? `\n\n${oversizedNotes.join("\n")}` : "";
       return partialSummary + notes;
     } catch (partialError) {
+      if (params.signal.aborted) {
+        throw partialError;
+      }
       log.warn(`Partial summarization also failed: ${formatErrorMessage(partialError)}`);
       // Prefer the oversized retry's partial summary over the full attempt's,
       // since it covers the non-oversized transcript. Append oversized notes
@@ -312,6 +336,31 @@ export async function summarizeWithFallback(params: {
     `Context contained ${messages.length} messages (${oversizedNotes.length} oversized). ` +
     `Summary unavailable due to size limits.`
   );
+}
+
+/** Extracts a compact timestamp range from a chunk of messages for merge metadata. */
+function extractChunkTimeRange(chunk: AgentMessage[]): string {
+  let earliest: number | undefined;
+  let latest: number | undefined;
+  for (const message of chunk) {
+    const timestamp = message.timestamp;
+    if (
+      typeof timestamp !== "number" ||
+      timestamp <= 0 ||
+      !Number.isFinite(new Date(timestamp).getTime())
+    ) {
+      continue;
+    }
+    earliest = earliest === undefined ? timestamp : Math.min(earliest, timestamp);
+    latest = latest === undefined ? timestamp : Math.max(latest, timestamp);
+  }
+  if (earliest === undefined || latest === undefined) {
+    return "";
+  }
+  const format = (timestamp: number) =>
+    new Date(timestamp).toISOString().replace("T", " ").slice(0, 16);
+  const range = earliest === latest ? format(earliest) : `${format(earliest)} — ${format(latest)}`;
+  return ` [${range} UTC]`;
 }
 
 /** Summarizes history in multiple stages when a single pass would be too large. */
@@ -362,11 +411,28 @@ export async function summarizeInStages(params: {
     return partialSummaries[0];
   }
 
-  const summaryMessages: AgentMessage[] = partialSummaries.map((summary) => ({
-    role: "user",
-    content: summary,
-    timestamp: Date.now(),
-  }));
+  // Capture once so timestamps are strictly monotonic across
+  // all synthetic messages regardless of how long the map iteration takes.
+  const now = Date.now();
+  const summaryMessages: AgentMessage[] = partialSummaries.map((summary, index) => {
+    // serializeConversation preserves content but not timestamps, so chronology
+    // must be explicit in the text consumed by the merge model.
+    const chunk = plan.chunks[index];
+    const timeRange = extractChunkTimeRange(chunk);
+    const label =
+      index === 0
+        ? `[Chunk 1 — oldest messages${timeRange}]`
+        : index === partialSummaries.length - 1
+          ? `[Chunk ${partialSummaries.length} — most recent messages${timeRange}]`
+          : `[Chunk ${index + 1}/${partialSummaries.length}${timeRange}]`;
+    return {
+      role: "user",
+      content: `${label}\n${summary}`,
+      // Ascending timestamps preserve chronological order for any code
+      // path that reads the AgentMessage timestamp field directly.
+      timestamp: now - (partialSummaries.length - 1 - index),
+    };
+  });
 
   const custom = params.customInstructions?.trim();
   const mergeInstructions = custom

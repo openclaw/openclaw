@@ -154,6 +154,20 @@ describe("normalizeCronJobCreate", () => {
     expect(normalized.payload?.model).toBeNull();
   });
 
+  it("preserves explicit null thinking clear in payload patches", () => {
+    const normalized = normalizeCronJobPatch({
+      payload: {
+        kind: "agentTurn",
+        thinking: null,
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.kind).toBe("agentTurn");
+    expect(payload.thinking).toBeNull();
+    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
+  });
+
   it("coerces ISO schedule.at to normalized ISO (UTC)", () => {
     expectNormalizedAtSchedule({ kind: "at", at: "2026-01-12T18:00:00" });
   });
@@ -1023,5 +1037,39 @@ describe("normalizeCronJobPatch", () => {
       everyMs: 60_000,
     });
     expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
+  });
+});
+
+describe("on-exit schedule normalization", () => {
+  it("keeps command/cwd and strips time fields for on-exit jobs", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "watch build",
+      schedule: {
+        kind: "on-exit",
+        command: "make build",
+        cwd: "/repo",
+        // stale fields from a prior kind that must be dropped
+        everyMs: 1000,
+        expr: "* * * * *",
+        at: "2026-01-01T00:00:00Z",
+      },
+      payload: { kind: "systemEvent", text: "build done" },
+      sessionTarget: "main",
+    });
+    expect(normalized).not.toBeNull();
+    expect(normalized?.schedule).toEqual({ kind: "on-exit", command: "make build", cwd: "/repo" });
+    expect(validateCronAddParams(normalized)).toBe(true);
+  });
+
+  it("drops command/cwd when normalizing a non-on-exit schedule", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "interval",
+      schedule: { kind: "every", everyMs: 5000, command: "leftover", cwd: "/x" },
+      payload: { kind: "systemEvent", text: "tick" },
+      sessionTarget: "main",
+    });
+    expect(normalized).not.toBeNull();
+    expect(normalized?.schedule).not.toHaveProperty("command");
+    expect(normalized?.schedule).not.toHaveProperty("cwd");
   });
 });
