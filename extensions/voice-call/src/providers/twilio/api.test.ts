@@ -126,6 +126,19 @@ describe("twilioApiRequest", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects unsupported API hosts before the SSRF guard", async () => {
+    await expect(
+      twilioApiRequest({
+        baseUrl: "https://metadata.google.internal/2010-04-01/Accounts/AC123",
+        accountSid: "AC123",
+        authToken: "secret",
+        endpoint: "/Calls.json",
+        body: {},
+      }),
+    ).rejects.toThrow("Unsupported Twilio API hostname: metadata.google.internal");
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
   it("maps AU1 to Twilio's Sydney regional hostname", () => {
     expect(resolveTwilioApiBaseUrl({ accountSid: "AC123", region: "au1" })).toBe(
       "https://api.sydney.au1.twilio.com/2010-04-01/Accounts/AC123",
