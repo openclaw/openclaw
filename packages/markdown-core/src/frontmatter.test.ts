@@ -103,6 +103,11 @@ metadata:
     expect(parseFrontmatterBlock(content)).toStrictEqual({});
   });
 
+  it("does not parse dash-prefixed text as frontmatter delimiters", () => {
+    expect(parseFrontmatterBlock("---not\nname: nope\n---not\nbody")).toStrictEqual({});
+    expect(parseFrontmatterBlock("----\nname: nope\n----\nbody")).toStrictEqual({});
+  });
+
   it("preserves prototype-named keys when YAML value is null", () => {
     const content = `---
 title: Hello

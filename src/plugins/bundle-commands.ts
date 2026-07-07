@@ -45,14 +45,20 @@ function parseFrontmatterBool(value: string | undefined, fallback: boolean): boo
 
 function stripFrontmatter(content: string): string {
   const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  if (!normalized.startsWith("---")) {
+  const lines = normalized.split("\n");
+  if (lines[0] !== "---") {
     return normalized.trim();
   }
-  const endIndex = normalized.indexOf("\n---", 3);
-  if (endIndex === -1) {
-    return normalized.trim();
+
+  for (let i = 1; i < lines.length; i += 1) {
+    if (lines[i] === "---") {
+      return lines
+        .slice(i + 1)
+        .join("\n")
+        .trim();
+    }
   }
-  return normalized.slice(endIndex + 4).trim();
+  return normalized.trim();
 }
 
 function readClaudeBundleManifest(rootDir: string): Record<string, unknown> {

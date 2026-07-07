@@ -186,14 +186,17 @@ function extractFrontmatterBlock(content: string): string | undefined {
     .replace(/^\uFEFF/, "")
     .replace(/\r\n/g, "\n")
     .replace(/\r/g, "\n");
-  if (!normalized.startsWith("---")) {
+  const lines = normalized.split("\n");
+  if (lines[0] !== "---") {
     return undefined;
   }
-  const endIndex = normalized.indexOf("\n---", 3);
-  if (endIndex === -1) {
-    return undefined;
+
+  for (let i = 1; i < lines.length; i += 1) {
+    if (lines[i] === "---") {
+      return lines.slice(1, i).join("\n");
+    }
   }
-  return normalized.slice(4, endIndex);
+  return undefined;
 }
 
 /** Parses leading YAML frontmatter into string values used by skill and metadata loaders. */
