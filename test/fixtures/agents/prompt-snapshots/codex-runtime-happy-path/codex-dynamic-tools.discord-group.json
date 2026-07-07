@@ -904,11 +904,18 @@
                       "type": "boolean"
                     },
                     "fallbacks": {
-                      "description": "Fallback models",
-                      "items": {
-                        "type": "string"
-                      },
-                      "type": "array"
+                      "anyOf": [
+                        {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Fallback models, or null to clear"
                     },
                     "kind": {
                       "description": "Payload kind",

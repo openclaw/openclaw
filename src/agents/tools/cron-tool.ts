@@ -109,7 +109,11 @@ function failureDestinationModeSchema(params: { nullableClears: boolean }) {
   return Type.Optional(Type.Union(variants));
 }
 
-function cronPayloadObjectSchema(params: { model: TSchema; toolsAllow: TSchema }) {
+function cronPayloadObjectSchema(params: {
+  model: TSchema;
+  toolsAllow: TSchema;
+  fallbacks: TSchema;
+}) {
   return Type.Object(
     {
       kind: optionalStringEnum(CRON_PAYLOAD_KINDS, { description: "Payload kind" }),
@@ -120,7 +124,7 @@ function cronPayloadObjectSchema(params: { model: TSchema; toolsAllow: TSchema }
       timeoutSeconds: optionalFiniteNumberSchema({ minimum: 0 }),
       lightContext: Type.Optional(Type.Boolean()),
       allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
-      fallbacks: Type.Optional(Type.Array(Type.String(), { description: "Fallback models" })),
+      fallbacks: params.fallbacks,
       toolsAllow: params.toolsAllow,
     },
     { additionalProperties: true },
@@ -161,6 +165,7 @@ function createCronPayloadSchema(): TSchema {
     cronPayloadObjectSchema({
       model: Type.Optional(Type.String({ description: "Model override" })),
       toolsAllow: Type.Optional(Type.Array(Type.String(), { description: "Allowed tools" })),
+      fallbacks: Type.Optional(Type.Array(Type.String(), { description: "Fallback models" })),
     }),
   );
 }
@@ -313,6 +318,7 @@ function createCronPatchObjectSchema(): TSchema {
           cronPayloadObjectSchema({
             model: nullableStringSchema("Model override, or null to clear"),
             toolsAllow: nullableStringArraySchema("Allowed tool ids, or null to clear"),
+            fallbacks: nullableStringArraySchema("Fallback models, or null to clear"),
           }),
         ),
         delivery: createCronDeliveryPatchSchema(),
@@ -438,7 +444,7 @@ function assertNoCronShellExecution(value: unknown): void {
     return;
   }
   const payload = isRecord(value.payload) ? value.payload : undefined;
-  if (payload?.kind === "command") {
+  if (normalizeLowercaseStringOrEmpty(payload?.kind) === "command") {
     throw new Error(
       "cron command payloads cannot be created or edited through the agent cron tool; use the CLI or Gateway API.",
     );

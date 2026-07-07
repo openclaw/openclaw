@@ -6,6 +6,8 @@ import {
 } from "./realtime-talk-shared.ts";
 import { WebRtcSdpRealtimeTalkTransport } from "./realtime-talk-webrtc.ts";
 
+let getUserMedia: ReturnType<typeof vi.fn>;
+
 class FakeDataChannel extends EventTarget {
   readyState: RTCDataChannelState = "open";
   send = vi.fn();
@@ -80,6 +82,7 @@ function stubAnswerSdpFetch(): void {
 function createOpenAiTransport(
   client: Record<string, unknown> = {},
   callbacks: Record<string, unknown> = {},
+  inputDeviceId?: string,
 ): WebRtcSdpRealtimeTalkTransport {
   return new WebRtcSdpRealtimeTalkTransport(
     {
@@ -91,6 +94,7 @@ function createOpenAiTransport(
       client: client as never,
       sessionKey: "main",
       callbacks: callbacks as never,
+      inputDeviceId,
     },
   );
 }
@@ -179,13 +183,26 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
       getAudioTracks: () => [track],
       getTracks: () => [track],
     } as unknown as MediaStream;
+    getUserMedia = vi.fn(async () => stream);
     Object.defineProperty(globalThis.navigator, "mediaDevices", {
       configurable: true,
       value: {
-        getUserMedia: vi.fn(async () => stream),
+        getUserMedia,
       },
     });
     vi.stubGlobal("RTCPeerConnection", FakePeerConnection as unknown as typeof RTCPeerConnection);
+  });
+
+  it("captures from the selected microphone with an exact constraint", async () => {
+    stubAnswerSdpFetch();
+    const transport = createOpenAiTransport({}, {}, "usb-mic");
+
+    await transport.start();
+
+    expect(getUserMedia).toHaveBeenCalledWith({
+      audio: { deviceId: { exact: "usb-mic" } },
+    });
+    transport.stop();
   });
 
   it("does not continue WebRTC setup when stopped while microphone access is pending", async () => {

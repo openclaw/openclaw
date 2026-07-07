@@ -376,6 +376,9 @@ export async function handleInlineActions(params: {
         groupId: extractExplicitGroupId(ctx.From),
         skillCommand: {
           name: skillInvocation.command.name,
+          ...(skillInvocation.command.skillFile
+            ? { skillFile: skillInvocation.command.skillFile }
+            : {}),
           skillName: skillInvocation.command.skillName,
           ...(skillInvocation.command.skillSource
             ? { skillSource: skillInvocation.command.skillSource }

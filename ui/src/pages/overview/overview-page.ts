@@ -56,7 +56,7 @@ function addNamedAttention(
   }
 }
 
-export class OverviewPage extends LitElement {
+class OverviewPage extends LitElement {
   readonly i18nController = new I18nController(this);
 
   override createRenderRoot() {

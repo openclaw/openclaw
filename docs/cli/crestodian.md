@@ -36,7 +36,7 @@ Interactive Crestodian opens the same TUI shell as `openclaw tui`, with a Cresto
 
 It does not dump secrets or load plugin CLI commands just to start.
 
-Use `status` for the detailed inventory: config path, docs/source paths, local CLI probes, API-key presence, agents, model, and Gateway details.
+Use `status` for the detailed inventory: config path, docs/source paths, local CLI probes, key/token presence, agents, model, and Gateway details.
 
 Crestodian uses the same reference discovery as regular agents: in a Git checkout it points at local `docs/` and the source tree; in an npm install it uses bundled docs and links to [https://github.com/openclaw/openclaw](https://github.com/openclaw/openclaw), with guidance to check source when docs are not enough.
 
@@ -85,9 +85,11 @@ quit
 
 Crestodian uses typed operations instead of editing config ad hoc.
 
-Read-only, run immediately: show overview, list agents, list installed plugins, search ClawHub plugins, show model/backend status, run status/health checks, check Gateway reachability, run doctor without interactive fixes, validate config, show the audit-log path.
+Read-only, run immediately: show overview, list agents, list installed plugins, search ClawHub plugins, show model/backend status, run status/health checks, check Gateway reachability, run doctor without interactive fixes, validate config, show the audit-log path. Starting the guided channel setup (`connect telegram`) also runs immediately — the wizard itself collects explicit answers and commits only at the end.
 
 Persistent, require conversational approval (or `--yes` for a direct command): write config, `config set`, `config set-ref`, setup/onboarding bootstrap, change the default model, start/stop/restart the Gateway, create agents, install or uninstall plugins, run doctor repairs that rewrite config or state.
+
+Approval is given in your own words: unambiguous replies ("yes", "sure", "go ahead", "not now") resolve from a closed deterministic list, and anything else is judged by a separate host-run model call that sees only your message and the pending proposal — never by the conversation model itself, which cannot self-approve. Ambiguous replies keep the proposal pending and the conversation asks again. When no model is usable, only the closed deterministic list applies.
 
 Applied writes are recorded in `~/.openclaw/audit/crestodian.jsonl`. Discovery is not audited; only applied operations and writes are.
 
@@ -117,16 +119,21 @@ When no model is configured, setup picks the first usable backend in this order 
 
 If none are available, setup still writes the default workspace and leaves the model unset. Install or log into Codex/Claude Code/Gemini CLI, or expose `OPENAI_API_KEY`/`ANTHROPIC_API_KEY`, then run setup again.
 
-The macOS app drives the same ladder through the `crestodian.setup.detect` and `crestodian.setup.activate` gateway methods: detect lists every reusable backend it finds, activate live-tests one candidate (a real "reply with OK" completion) and only persists the model, workspace, and gateway defaults after the test passes. A failing candidate never changes config; the app automatically walks down the ladder and finally offers a manual API-key step (Anthropic, OpenAI, or Google) that is verified the same way before it is saved.
+The macOS app drives the same ladder through the `crestodian.setup.detect` and `crestodian.setup.activate` gateway methods: detect lists every reusable backend it finds, activate live-tests one candidate (a real "reply with OK" completion) and only persists the model, workspace, and gateway defaults after the test passes. A failing candidate never changes config; the app automatically walks down the ladder and finally offers a manual key/token step populated from the Gateway's active text-inference provider plugins. The selected provider owns its starter model and config, and the credential is verified the same way before it is saved.
 
-## Model-assisted planner
+## AI conversation
 
-Interactive Crestodian is AI-first. Exact typed commands run instantly and deterministically. Every other message runs through the same embedded agent loop as regular OpenClaw agents, restricted to one ring-zero `crestodian` tool that wraps the typed operations: read actions run freely, mutations require your conversational yes for that exact operation, and every applied write is audited and re-validated. The agent session persists, so the custodian has real multi-turn memory. It first uses the configured OpenClaw model; with no usable model it falls back to a local runtime already present on the machine:
+Interactive Crestodian is AI-only: every message — including ones that look like typed commands — runs through the same embedded agent loop as regular OpenClaw agents, restricted to one ring-zero `crestodian` tool that wraps the typed operations. Read actions run freely, mutations require your conversational approval for that exact operation (see Operations and approval), and every applied write is audited and re-validated. The agent session persists, so the custodian has real multi-turn memory. It first uses the configured OpenClaw model; with no usable model it falls back to a local runtime already present on the machine, in setup-ladder order:
 
 - Claude Code CLI: `claude-cli/claude-opus-4-8` (agent loop; the ring-zero tool is served over MCP, see the trust model below)
 - Codex app-server harness: `openai/gpt-5.5` (agent loop with an enforced single-tool allow-list)
+- Gemini CLI: `google-gemini-cli/gemini-3.1-pro-preview` (agent loop; ring-zero tool over MCP)
 
-When the agent loop is unavailable, Crestodian degrades to a bounded single-turn planner, and without any model to deterministic typed commands. The planner cannot mutate config directly; it must translate the request into one of Crestodian's typed commands, and normal approval/audit rules apply. Crestodian prints the model it used and the interpreted command before running anything. Fallback planner turns are temporary, tool-disabled where the runtime supports it, and use a temporary workspace/session.
+When the agent loop is unavailable, Crestodian degrades to a bounded single-turn planner, and only without any usable model at all to deterministic typed commands. The planner cannot mutate config directly; it must translate the request into one of Crestodian's typed commands, and normal approval/audit rules apply. Crestodian prints the model it used and the interpreted command before running anything. Fallback planner turns are temporary, tool-disabled where the runtime supports it, and use a temporary workspace/session.
+
+The typed command grammar is anchored: a message either matches a command exactly or it is conversation. Questions and natural phrasing ("why did my gateway stop?") never trigger operations — they are answered by the AI.
+
+One secret-hygiene exception: an exact `config set` on a sensitive path (tokens, keys, passwords) never reaches a model. It runs on the deterministic path with a redacted proposal, and the value is masked in the AI-visible history. Prefer `config set-ref <path> env <ENV_VAR>` for secrets.
 
 Message-channel rescue mode never uses the model-assisted planner. Remote rescue stays deterministic so a broken or compromised normal agent path cannot be used as a config editor.
 
@@ -181,7 +188,7 @@ switch to main agent
 
 Message rescue mode is the message-channel entrypoint for Crestodian: use it when your normal agent is dead but a trusted channel (for example WhatsApp) still receives commands.
 
-Supported command: `/crestodian <request>`.
+Supported command: `/crestodian <request>`. Rescue accepts the exact typed command grammar only — natural language is rejected with a hint, never guessed into an operation, and no model is ever consulted.
 
 ```text
 You, in a trusted owner DM: /crestodian status

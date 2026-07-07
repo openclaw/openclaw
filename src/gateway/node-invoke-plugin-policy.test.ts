@@ -99,7 +99,7 @@ function createOperatorClient(): GatewayClient {
   });
 }
 
-type NodeInvokePolicyRegistration = NonNullable<PluginRegistry["nodeInvokePolicies"]>[number];
+type NodeInvokePolicyRegistration = PluginRegistry["nodeInvokePolicies"][number];
 type NodeInvokePolicyHandler = NodeInvokePolicyRegistration["policy"]["handle"];
 type PluginApprovalRecord = ReturnType<
   ExecApprovalManager<PluginApprovalRequestPayload>["listPendingRecords"]
@@ -119,11 +119,13 @@ function createDemoPolicy(handle: NodeInvokePolicyHandler): NodeInvokePolicyRegi
 
 function createApprovalRequestPolicy(params?: {
   timeoutMs?: number;
+  title?: string;
+  description?: string;
 }): NodeInvokePolicyRegistration {
   return createDemoPolicy(async (ctx: OpenClawPluginNodeInvokePolicyContext) => {
     const approval = await ctx.approvals?.request({
-      title: "Sensitive action",
-      description: "Needs approval",
+      title: params?.title ?? "Sensitive action",
+      description: params?.description ?? "Needs approval",
       ...(params?.timeoutMs === undefined ? {} : { timeoutMs: params.timeoutMs }),
     });
     return { ok: true, payload: approval ?? null };
@@ -132,7 +134,7 @@ function createApprovalRequestPolicy(params?: {
 
 function setDangerousDemoCommandRegistry(policies: NodeInvokePolicyRegistration[] = []) {
   const registry = createEmptyPluginRegistry();
-  (registry.nodeHostCommands ??= []).push({
+  registry.nodeHostCommands.push({
     pluginId: DEMO_PLUGIN_ID,
     command: {
       command: DEMO_COMMAND,
@@ -141,13 +143,13 @@ function setDangerousDemoCommandRegistry(policies: NodeInvokePolicyRegistration[
     },
     source: "test",
   });
-  (registry.nodeInvokePolicies ??= []).push(...policies);
+  registry.nodeInvokePolicies.push(...policies);
   setActivePluginRegistry(registry);
 }
 
 function createPolicyRegistry(handle: NodeInvokePolicyHandler): PluginRegistry {
   const registry = createEmptyPluginRegistry();
-  (registry.nodeInvokePolicies ??= []).push(createDemoPolicy(handle));
+  registry.nodeInvokePolicies.push(createDemoPolicy(handle));
   return registry;
 }
 async function invokeDemoPolicy(
@@ -324,5 +326,32 @@ describe("applyPluginNodeInvokePolicy", () => {
     });
 
     expect(result).toBeNull();
+  });
+
+  it("keeps approval payload fields on UTF-16 boundaries", async () => {
+    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
+    setDangerousDemoCommandRegistry([
+      createApprovalRequestPolicy({
+        title: `${"a".repeat(79)}🚀tail`,
+        description: `${"b".repeat(255)}🚀tail`,
+      }),
+    ]);
+    const { context } = createContext({
+      pluginApprovalManager: manager,
+      getApprovalClientConnIds: createApprovalClientLookup([
+        createApprovalClient({
+          connId: "conn-owner-approval",
+          clientId: "client-owner",
+          deviceId: "device-owner",
+        }),
+      ]),
+    });
+    const resultPromise = invokeDemoPolicy(context, createOperatorClient());
+
+    const record = await expectSinglePendingApproval(manager);
+    expect(record.request.title).toBe("a".repeat(79));
+    expect(record.request.description).toBe("b".repeat(255));
+
+    await expectApprovalResolution(resultPromise, manager, record);
   });
 });

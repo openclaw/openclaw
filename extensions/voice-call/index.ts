@@ -59,6 +59,7 @@ const voiceCallConfigSchema = {
     "telnyx.publicKey": { label: "Telnyx Public Key", sensitive: true },
     "twilio.accountSid": { label: "Twilio Account SID" },
     "twilio.authToken": { label: "Twilio Auth Token", sensitive: true },
+    "twilio.region": { label: "Twilio Region", advanced: true },
     "outbound.defaultMode": { label: "Default Call Mode" },
     "outbound.notifyHangupDelaySec": {
       label: "Notify Hangup Delay (sec)",

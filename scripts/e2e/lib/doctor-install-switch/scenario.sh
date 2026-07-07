@@ -54,6 +54,11 @@ fi
 git_cli="$git_root/openclaw.mjs"
 
 package_version="$(node -p "require(\"$npm_root/package.json\").version")"
+update_doctor_env="OPENCLAW_UPDATE_IN_PROGRESS=1"
+update_doctor_env+=" OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE=1"
+update_doctor_env+=" OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART=1"
+update_doctor_env+=" OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR=1"
+update_doctor_env+=" OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION=0"
 is_legacy_package_acceptance_compat() {
   [ "$(node scripts/e2e/lib/package-compat.mjs "$1")" = "1" ]
 }
@@ -162,14 +167,14 @@ run_flow \
   "npm-to-git" \
   "$npm_bin daemon install --force" \
   "$npm_entry" \
-  "OPENCLAW_UPDATE_IN_PROGRESS=1 node $git_cli doctor --repair --force --yes --non-interactive" \
+  "$update_doctor_env node $git_cli doctor --repair --force --yes --non-interactive" \
   "$git_entry"
 
 run_flow \
   "git-to-npm" \
   "node $git_cli daemon install --force" \
   "$git_entry" \
-  "OPENCLAW_UPDATE_IN_PROGRESS=1 $npm_bin doctor --repair --force --yes --non-interactive" \
+  "$update_doctor_env $npm_bin doctor --repair --force --yes --non-interactive" \
   "$npm_entry"
 
 run_proxy_env_flow() {
@@ -199,7 +204,12 @@ run_proxy_env_flow() {
     printf "%s\n" "Environment=HTTP_PROXY=http://stale-proxy.local:7890"
     printf "%s\n" "Environment=HTTPS_PROXY=https://stale-proxy.local:7890"
   } >>"$unit_path"
-  if ! openclaw_e2e_maybe_timeout "$command_timeout" env OPENCLAW_UPDATE_IN_PROGRESS=1 \
+  if ! openclaw_e2e_maybe_timeout "$command_timeout" env \
+    OPENCLAW_UPDATE_IN_PROGRESS=1 \
+    OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE=1 \
+    OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART=1 \
+    OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR=1 \
+    OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION=0 \
     node "$git_cli" doctor --repair --force --yes --non-interactive >"$doctor_log" 2>&1; then
     openclaw_e2e_print_log "$doctor_log"
     exit 1

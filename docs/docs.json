@@ -1469,6 +1469,7 @@
                   "providers/ds4",
                   "providers/elevenlabs",
                   "providers/fal",
+                  "providers/featherless",
                   "providers/fireworks",
                   "providers/github-copilot",
                   "providers/gmi",
@@ -1481,6 +1482,7 @@
                   "providers/kilocode",
                   "providers/litellm",
                   "providers/lmstudio",
+                  "providers/longcat",
                   "providers/minimax",
                   "providers/mistral",
                   "providers/moonshot",
@@ -1752,6 +1754,7 @@
                       "cli/commitments",
                       "cli/message",
                       "cli/models",
+                      "cli/promos",
                       "cli/sessions",
                       "cli/system",
                       "cli/tasks"

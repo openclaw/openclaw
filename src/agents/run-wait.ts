@@ -70,7 +70,7 @@ export type AgentWaitResult = {
 };
 
 /** Summary returned after waiting for a dynamic set of pending runs to drain. */
-export type AgentRunsDrainResult = {
+type AgentRunsDrainResult = {
   timedOut: boolean;
   pendingRunIds: string[];
   deadlineAtMs: number;

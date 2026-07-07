@@ -877,6 +877,7 @@ describe("loadPluginManifestRegistry", () => {
           choiceLabel: "OpenAI API key",
           assistantPriority: 10,
           assistantVisibility: "visible",
+          appGuidedSecret: true,
         },
       ],
       configSchema: { type: "object" },
@@ -944,6 +945,7 @@ describe("loadPluginManifestRegistry", () => {
         choiceLabel: "OpenAI API key",
         assistantPriority: 10,
         assistantVisibility: "visible",
+        appGuidedSecret: true,
       },
     ]);
   });

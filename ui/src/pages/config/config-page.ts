@@ -47,7 +47,7 @@ export type ConfigPageId =
   | "ai-agents";
 
 type ConfigFormMode = "form" | "raw";
-export type ConfigSelection = { activeSection: string | null; activeSubsection: string | null };
+type ConfigSelection = { activeSection: string | null; activeSubsection: string | null };
 
 const CONFIG_PAGE_I18N_KEYS = {
   config: "config",
@@ -216,7 +216,7 @@ function quickChannels(config: unknown): QuickSettingsChannel[] {
   });
 }
 
-export function extractQuickSettingsSecurity(config: unknown): QuickSettingsSecurity {
+function extractQuickSettingsSecurity(config: unknown): QuickSettingsSecurity {
   const root =
     asConfigRecord((config as { configForm?: unknown } | null)?.configForm) ??
     asConfigRecord(config);

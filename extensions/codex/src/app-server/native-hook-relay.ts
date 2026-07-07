@@ -34,6 +34,9 @@ const CODEX_NATIVE_HOOK_RELAY_MIN_TTL_MS = 30 * 60_000;
 export const CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS = 5 * 60_000;
 const CODEX_NATIVE_HOOK_RELAY_COMMAND_MIN_PARENT_MARGIN_MS = 250;
 const CODEX_NATIVE_HOOK_RELAY_COMMAND_MAX_PARENT_MARGIN_MS = 1_000;
+// The relay starts a niced Node subprocess, so busy hosts can exceed the former
+// five-second relay timeout before policy and task-mirroring work completes.
+const CODEX_NATIVE_HOOK_RELAY_DEFAULT_TIMEOUT_SEC = 10;
 const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_GRACE_MS = 10_000;
 const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_EXTRA_GRACE_MS = 5_000;
 
@@ -84,9 +87,7 @@ export function resolveCodexNativeHookRelayUnregisterGraceMs(
   hookTimeoutSec: number | undefined,
 ): number {
   const hookTimeoutMs =
-    typeof hookTimeoutSec === "number" && Number.isFinite(hookTimeoutSec) && hookTimeoutSec > 0
-      ? (finiteSecondsToTimerSafeMilliseconds(Math.ceil(hookTimeoutSec)) ?? 0)
-      : 0;
+    finiteSecondsToTimerSafeMilliseconds(normalizeHookTimeoutSec(hookTimeoutSec)) ?? 0;
   return Math.max(
     CODEX_NATIVE_HOOK_RELAY_UNREGISTER_GRACE_MS,
     addTimerTimeoutGraceMs(hookTimeoutMs, CODEX_NATIVE_HOOK_RELAY_UNREGISTER_EXTRA_GRACE_MS) ?? 0,
@@ -356,7 +357,9 @@ export function buildCodexNativeHookRelayDisabledConfig(): JsonObject {
 }
 
 function normalizeHookTimeoutSec(value: number | undefined): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.ceil(value) : 5;
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.ceil(value)
+    : CODEX_NATIVE_HOOK_RELAY_DEFAULT_TIMEOUT_SEC;
 }
 
 export function resolveCodexNativeHookRelayCommandTimeoutMs(

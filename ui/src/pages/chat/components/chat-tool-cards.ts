@@ -186,7 +186,7 @@ export function renderToolPreview(
   `;
 }
 
-export function buildSidebarContent(
+function buildSidebarContent(
   value: string,
   options?: {
     rawText?: string | null;
@@ -201,7 +201,7 @@ export function buildSidebarContent(
   };
 }
 
-export function buildPreviewSidebarContent(
+function buildPreviewSidebarContent(
   preview: ToolPreview,
   rawText?: string | null,
   options?: { fullMessageRequest?: FullMessageRequest },
@@ -308,7 +308,7 @@ export function resolveCollapsedToolDetail(card: ToolCard, displayDetail: string
   return formatCollapsedToolPreviewText(inputText);
 }
 
-export function resolveCollapsedToolSummaryParts(params: {
+function resolveCollapsedToolSummaryParts(params: {
   card: ToolCard;
   displayLabel: string;
   displayDetail: string | undefined;

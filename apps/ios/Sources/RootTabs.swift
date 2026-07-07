@@ -480,6 +480,13 @@ struct RootTabs: View {
             CommandSessionsScreen(
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
                 openChat: { self.selectSidebarDestination(.chat) })
+        case .files:
+            AgentProTab(
+                directRoute: .files,
+                headerLeadingAction: self.sidebarHeaderLeadingAction,
+                headerTitle: "Files",
+                openSettings: { self.selectSidebarDestination(.gateway) })
+                .id(self.selectedSidebarDestination.id)
         case .dreaming:
             AgentProTab(
                 directRoute: .dreaming,
@@ -1243,7 +1250,7 @@ extension RootTabs {
         } else if GatewayProblemPrimaryAction.openProtocolMismatchHelpIfNeeded(problem) {
             return
         } else if problem.retryable {
-            Task { await self.gatewayController.connectLastKnown() }
+            Task { await self.gatewayController.connectActiveGateway() }
         } else {
             self.selectSidebarDestination(.gateway)
         }
@@ -1279,7 +1286,7 @@ extension RootTabs {
 
     private func hasExistingGatewayConfig() -> Bool {
         if self.appModel.activeGatewayConnectConfig != nil { return true }
-        if GatewaySettingsStore.loadLastGatewayConnection() != nil { return true }
+        if GatewaySettingsStore.activeGatewayEntry() != nil { return true }
 
         let preferredStableID = self.preferredGatewayStableID.trimmingCharacters(in: .whitespacesAndNewlines)
         if !preferredStableID.isEmpty { return true }

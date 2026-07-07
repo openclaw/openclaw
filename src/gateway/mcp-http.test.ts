@@ -4,7 +4,7 @@ import { request } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
-import { buildMcpToolSchema } from "./mcp-http.schema.js";
+import { buildMcpToolSchema, clearMcpToolSchemaWarningsForTest } from "./mcp-http.schema.js";
 
 type MockGatewayTool = {
   name: string;
@@ -102,9 +102,19 @@ const resolveGatewayScopedToolsMock = vi.hoisted(() =>
   })),
 );
 
+const logWarnMock = vi.hoisted(() => vi.fn<(message: string) => void>());
+
 vi.mock("../config/io.js", () => ({
   getRuntimeConfig: () => ({ session: { mainKey: "main" } }),
 }));
+
+vi.mock("../logger.js", async () => {
+  const actual = await vi.importActual<typeof import("../logger.js")>("../logger.js");
+  return {
+    ...actual,
+    logWarn: (message: string) => logWarnMock(message),
+  };
+});
 
 vi.mock("../config/sessions.js", () => ({
   resolveMainSessionKey: () => "agent:main:main",
@@ -588,6 +598,8 @@ function buildMockMcpToolSchema(tools: MockGatewayTool[]) {
 }
 
 beforeEach(() => {
+  clearMcpToolSchemaWarningsForTest();
+  logWarnMock.mockClear();
   clearMcpLoopbackToolCallCapturesForTest();
   resolveGatewayScopedToolsMock.mockClear();
   runBeforeToolCallHookMock.mockClear();
@@ -692,6 +704,90 @@ describe("buildMcpToolSchema", () => {
         ])[0]?.inputSchema,
       ).toEqual(testCase.expected);
     }
+  });
+
+  it("warns once for repeated union schema conflicts across loopback schema rebuilds", () => {
+    const tool = makeMockTool({
+      name: "mcp_message_send",
+      parameters: {
+        anyOf: [
+          {
+            type: "object",
+            properties: {
+              action: { type: "string", description: "message action" },
+              callId: { type: "string", description: "voice call id" },
+            },
+          },
+          {
+            type: "object",
+            properties: {
+              action: { type: "number", description: "different server action" },
+              callId: { type: "number", description: "different call id" },
+            },
+          },
+        ],
+      },
+    });
+
+    for (let index = 0; index < 3; index += 1) {
+      expect(buildMockMcpToolSchema([tool])[0]?.inputSchema).toMatchObject({
+        type: "object",
+        properties: {
+          action: { type: "string", description: "message action" },
+          callId: { type: "string", description: "voice call id" },
+        },
+      });
+    }
+
+    expect(logWarnMock.mock.calls.map(([message]) => message)).toEqual([
+      'mcp loopback: conflicting schema definitions for "mcp_message_send.action", keeping the first variant',
+      'mcp loopback: conflicting schema definitions for "mcp_message_send.callId", keeping the first variant',
+    ]);
+  });
+
+  it("warns per tool for the same conflicting field name across different tools", () => {
+    const conflictingUnion = (label: string) => ({
+      anyOf: [
+        { type: "object", properties: { action: { type: "string", description: `${label} a` } } },
+        { type: "object", properties: { action: { type: "number", description: `${label} b` } } },
+      ],
+    });
+    const messageTool = makeMockTool({
+      name: "mcp_message_send",
+      parameters: conflictingUnion("message"),
+    });
+    const calendarTool = makeMockTool({
+      name: "mcp_calendar_create",
+      parameters: conflictingUnion("calendar"),
+    });
+
+    buildMockMcpToolSchema([messageTool, calendarTool]);
+    // Rebuild to prove per-(tool, field) dedupe survives repeated schema builds.
+    buildMockMcpToolSchema([messageTool, calendarTool]);
+
+    expect(logWarnMock.mock.calls.map(([message]) => message)).toEqual([
+      'mcp loopback: conflicting schema definitions for "mcp_message_send.action", keeping the first variant',
+      'mcp loopback: conflicting schema definitions for "mcp_calendar_create.action", keeping the first variant',
+    ]);
+  });
+
+  it("warns once per tool for repeated malformed variant schemas across rebuilds", () => {
+    const tool = makeMockTool({
+      name: "mcp_message_send",
+      parameters: {
+        anyOf: [
+          { type: "object", properties: { action: { type: "string" } } },
+          { type: "object", properties: { action: 123 } },
+        ],
+      },
+    });
+
+    buildMockMcpToolSchema([tool]);
+    buildMockMcpToolSchema([tool]);
+
+    expect(logWarnMock.mock.calls.map(([message]) => message)).toEqual([
+      'mcp loopback: malformed schema definition for "mcp_message_send.action", ignoring that variant',
+    ]);
   });
 });
 
@@ -1057,19 +1153,86 @@ describe("mcp loopback server", () => {
   });
 
   it("executes tools for loopback callers", async () => {
-    const cronExecute = vi.fn(async () => ({
+    const cronExecute = vi.fn<MockGatewayTool["execute"]>(async () => ({
       content: [{ type: "text", text: "CRON_EXECUTED" }],
     }));
+    const args = { action: "status" };
     mockScopedTools([makeMessageTool(), makeCronTool({ execute: cronExecute })]);
     const { runtime } = await startLoopbackServerForTest();
 
     const payload = await callMainSessionTool({
       token: runtime?.ownerToken,
       name: "cron",
+      args,
     });
 
     expect(cronExecute).toHaveBeenCalledTimes(1);
+    expect(getBeforeToolCallHookInput(0).params).toEqual(args);
+    expect(cronExecute.mock.calls[0]?.[1]).toEqual(args);
     expectMcpResultText(payload, "CRON_EXECUTED");
+  });
+
+  it.each([
+    ["null", null],
+    ["array", []],
+    ["string", "bad"],
+  ])("rejects %s tool call arguments before hooks or execution", async (_label, badArguments) => {
+    const execute = vi.fn<MockGatewayTool["execute"]>(async () => ({
+      content: [{ type: "text", text: "EXECUTED" }],
+    }));
+    mockScopedTools([makeMessageTool({ execute })]);
+    const { runtime, port } = await startLoopbackServerForTest();
+
+    const response = await sendRaw({
+      port,
+      token: runtime.ownerToken,
+      headers: jsonHeaders(),
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "message", arguments: badArguments },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await readMcpPayload(response)).toEqual({
+      jsonrpc: "2.0",
+      id: 1,
+      error: {
+        code: -32602,
+        message: "Invalid params: tools/call arguments must be an object",
+      },
+    });
+    expect(runBeforeToolCallHookMock).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("keeps omitted tool call arguments as an empty object", async () => {
+    const execute = vi.fn<MockGatewayTool["execute"]>(async () => ({
+      content: [{ type: "text", text: "EXECUTED" }],
+    }));
+    mockScopedTools([makeMessageTool({ execute })]);
+    const { runtime, port } = await startLoopbackServerForTest();
+
+    const response = await sendRaw({
+      port,
+      token: runtime.ownerToken,
+      headers: jsonHeaders(),
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "message" },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expectMcpResultText(await readMcpPayload(response), "EXECUTED");
+    expect(runBeforeToolCallHookMock).toHaveBeenCalledTimes(1);
+    expect(getBeforeToolCallHookInput(0).params).toEqual({});
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute.mock.calls[0]?.[1]).toEqual({});
   });
 
   it("preserves valid MCP content blocks returned by loopback tools", async () => {

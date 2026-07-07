@@ -30,6 +30,7 @@ import { buildActiveVideoGenerationTaskPromptContextForSession } from "../../vid
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { log } from "../logger.js";
+import { truncateUtf16Safe } from "../../../utils.js";
 import { shouldInjectHeartbeatPromptForTrigger } from "./trigger-policy.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -337,7 +338,7 @@ function summarizeStructuredMediaRef(label: string, value: unknown): string | un
     return `[${label}] inline data URI (${mimeType}, ${trimmed.length} chars)`;
   }
   if (trimmed.length > MAX_STRUCTURED_MEDIA_REF_CHARS) {
-    return `[${label}] ${trimmed.slice(0, MAX_STRUCTURED_MEDIA_REF_CHARS)}... (${trimmed.length} chars)`;
+    return `[${label}] ${truncateUtf16Safe(trimmed, MAX_STRUCTURED_MEDIA_REF_CHARS)}... (${trimmed.length} chars)`;
   }
   return `[${label}] ${trimmed}`;
 }
@@ -349,7 +350,7 @@ function summarizeStructuredJsonString(value: string): string {
   }
   const trimmed = value.trim();
   if (trimmed.length > MAX_STRUCTURED_JSON_STRING_CHARS) {
-    return `${trimmed.slice(0, MAX_STRUCTURED_JSON_STRING_CHARS)}... (${trimmed.length} chars)`;
+    return `${truncateUtf16Safe(trimmed, MAX_STRUCTURED_JSON_STRING_CHARS)}... (${trimmed.length} chars)`;
   }
   return value;
 }
@@ -418,7 +419,7 @@ function stringifyStructuredJsonFallback(part: unknown): string | undefined {
       (match) => `[inline data URI: ${match.length} chars]`,
     );
     return withoutInlineData.length > 1_000
-      ? `${withoutInlineData.slice(0, 1_000)}... (${withoutInlineData.length} chars)`
+      ? `${truncateUtf16Safe(withoutInlineData, 1_000)}... (${withoutInlineData.length} chars)`
       : withoutInlineData;
   } catch {
     return undefined;

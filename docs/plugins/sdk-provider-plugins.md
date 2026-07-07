@@ -805,6 +805,7 @@ catalog, API-key auth, and dynamic model resolution.
             inputAudioFormats: [{ encoding: "pcm16", sampleRateHz: 24000, channels: 1 }],
             outputAudioFormats: [{ encoding: "pcm16", sampleRateHz: 24000, channels: 1 }],
             supportsBargeIn: true,
+            handlesInputAudioBargeIn: true,
             supportsToolCalls: true,
           },
           isConfigured: ({ providerConfig }) => Boolean(providerConfig.apiKey),
@@ -830,6 +831,9 @@ catalog, API-key auth, and dynamic model resolution.
         clients. Implement `handleBargeIn` when a transport can detect that a
         human is interrupting assistant playback and the provider supports
         truncating or clearing the active audio response.
+        Set `handlesInputAudioBargeIn` only when provider VAD confirms an
+        interruption by calling `onClearAudio("barge-in")`. Providers that omit
+        the flag use OpenClaw's local input-audio fallback detection.
       </Tab>
       <Tab title="Media understanding">
         ```typescript

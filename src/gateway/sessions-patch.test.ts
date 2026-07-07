@@ -250,6 +250,24 @@ describe("gateway sessions patch", () => {
     );
   });
 
+  test("marks archived sessions unread and clears the marker when read", async () => {
+    const store = mainStoreEntry({ archivedAt: 10, lastReadAt: 20 });
+    const unread = expectPatchOk(
+      await runPatch({ store, patch: { key: MAIN_SESSION_KEY, unread: true } }),
+    );
+    expect(unread.archivedAt).toBe(10);
+    expect(unread.lastReadAt).toBe(20);
+    expect(unread.markedUnreadAt).toEqual(expect.any(Number));
+
+    const read = expectPatchOk(
+      await runPatch({ store, patch: { key: MAIN_SESSION_KEY, unread: false } }),
+    );
+    expect(read.archivedAt).toBe(10);
+    expect(read.lastReadAt).toEqual(expect.any(Number));
+    expect(read.lastReadAt).toBeGreaterThanOrEqual(unread.markedUnreadAt ?? 0);
+    expect(read.markedUnreadAt).toBeUndefined();
+  });
+
   test("persists thinkingLevel=off (does not clear)", async () => {
     const entry = expectPatchOk(
       await runPatch({

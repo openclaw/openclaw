@@ -70,7 +70,7 @@ interface DeepInfraAgentModelEntry {
   metadata: DeepInfraAgentModelMetadata | null;
 }
 
-export type DeepInfraSurface = "chat" | "vlm" | "embed" | "image-gen" | "video-gen" | "tts" | "stt";
+type DeepInfraSurface = "chat" | "vlm" | "embed" | "image-gen" | "video-gen" | "tts" | "stt";
 
 export interface DeepInfraSurfaceModel {
   id: string;
@@ -85,7 +85,7 @@ export interface DeepInfraSurfaceModel {
   defaultIterations?: number;
 }
 
-export interface DeepInfraDiscoveredCatalog {
+interface DeepInfraDiscoveredCatalog {
   chat: DeepInfraSurfaceModel[];
   vlm: DeepInfraSurfaceModel[];
   embed: DeepInfraSurfaceModel[];

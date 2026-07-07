@@ -48,14 +48,14 @@ export type AcpxProcessCleanupDeps = {
 };
 
 /** Result from cleaning up a single ACPX process tree. */
-export type AcpxProcessCleanupResult = {
+type AcpxProcessCleanupResult = {
   inspectedPids: number[];
   terminatedPids: number[];
   skippedReason?: "missing-root" | "not-openclaw-owned" | "unverified-root";
 };
 
 /** Result from startup orphan reaping. */
-export type AcpxStartupReapResult = {
+type AcpxStartupReapResult = {
   inspectedPids: number[];
   terminatedPids: number[];
   skippedReason?: "unsupported-platform" | "process-list-unavailable";

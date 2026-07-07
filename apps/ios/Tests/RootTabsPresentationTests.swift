@@ -5,6 +5,39 @@ import UIKit
 
 @MainActor
 struct RootTabsPresentationTests {
+    @Test func `configured gateway bypasses launch request and stale onboarding markers`() {
+        let route = RootTabs.startupPresentationRoute(
+            gatewayConnected: false,
+            hasConnectedOnce: false,
+            onboardingComplete: false,
+            hasExistingGatewayConfig: true,
+            shouldPresentOnLaunch: true)
+
+        #expect(route == .none)
+    }
+
+    @Test func `fresh install presents onboarding`() {
+        let route = RootTabs.startupPresentationRoute(
+            gatewayConnected: false,
+            hasConnectedOnce: false,
+            onboardingComplete: false,
+            hasExistingGatewayConfig: false,
+            shouldPresentOnLaunch: false)
+
+        #expect(route == .onboarding)
+    }
+
+    @Test func `completed setup without gateway opens settings`() {
+        let route = RootTabs.startupPresentationRoute(
+            gatewayConnected: false,
+            hasConnectedOnce: true,
+            onboardingComplete: true,
+            hasExistingGatewayConfig: false,
+            shouldPresentOnLaunch: false)
+
+        #expect(route == .settings)
+    }
+
     @Test func `quick setup does not present when gateway already configured`() {
         let shouldPresent = RootTabs.shouldPresentQuickSetup(
             quickSetupDismissed: false,
@@ -76,6 +109,7 @@ struct RootTabsPresentationTests {
             .skillWorkshop,
             .instances,
             .sessions,
+            .files,
             .dreaming,
             .usage,
             .cron,
@@ -93,6 +127,7 @@ struct RootTabsPresentationTests {
             "skillWorkshop",
             "instances",
             "sessions",
+            "files",
             "dreaming",
             "usage",
             "cron",
@@ -334,6 +369,24 @@ struct RootTabsPresentationTests {
         #expect(ChatProTab.transportAgentID(nil).isEmpty)
         #expect(ChatProTab.transportAgentID("   ").isEmpty)
         #expect(ChatProTab.transportAgentID(" Main ") == "main")
+    }
+
+    @Test func `chat view model rebuilds only when its transport owner changes`() {
+        #expect(!ChatProTab.requiresViewModelRebuild(
+            currentOwnerID: "gateway-a",
+            nextOwnerID: "gateway-a",
+            currentTransportAgentID: "main",
+            nextTransportAgentID: "main"))
+        #expect(ChatProTab.requiresViewModelRebuild(
+            currentOwnerID: "gateway-a",
+            nextOwnerID: "gateway-b",
+            currentTransportAgentID: "main",
+            nextTransportAgentID: "main"))
+        #expect(ChatProTab.requiresViewModelRebuild(
+            currentOwnerID: "gateway-a",
+            nextOwnerID: "gateway-a",
+            currentTransportAgentID: "main",
+            nextTransportAgentID: "work"))
     }
 
     @Test func `agent routes can open gateway settings from header pill`() {

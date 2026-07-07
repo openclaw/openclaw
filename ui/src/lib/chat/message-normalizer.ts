@@ -144,6 +144,7 @@ const MIME_BY_EXT: Record<string, string> = {
   aac: "audio/aac",
   opus: "audio/opus",
   m4a: "audio/mp4",
+  m2a: "audio/mpeg",
   mp4: "video/mp4",
   mov: "video/quicktime",
   pdf: "application/pdf",

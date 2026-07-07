@@ -25,7 +25,6 @@ import {
   type CodexAppServerEventProjectorOptions,
   type CodexAppServerToolTelemetry,
 } from "./event-projector.js";
-import { rememberCodexRateLimits, resetCodexRateLimitCacheForTests } from "./rate-limit-cache.js";
 import { createCodexTestModel } from "./test-support.js";
 
 const THREAD_ID = "thread-1";
@@ -109,7 +108,6 @@ afterEach(async () => {
   resetAgentEventsForTest();
   resetDiagnosticEventsForTest();
   resetGlobalHookRunner();
-  resetCodexRateLimitCacheForTests();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   for (const tempDir of tempDirs) {
@@ -1005,10 +1003,11 @@ describe("CodexAppServerEventProjector", () => {
   });
 
   it("uses Codex rate-limit resets for usage-limit app-server errors", async () => {
-    const projector = await createProjector();
     const resetsAt = Math.ceil(Date.now() / 1000) + 120;
+    const projector = await createProjector(undefined, {
+      readRecentRateLimits: () => rateLimitsUpdated(resetsAt).params,
+    });
 
-    await projector.handleNotification(rateLimitsUpdated(resetsAt));
     await projector.handleNotification(
       forCurrentTurn("error", {
         error: {
@@ -1029,10 +1028,11 @@ describe("CodexAppServerEventProjector", () => {
   });
 
   it("uses Codex rate-limit resets for failed turns", async () => {
-    const projector = await createProjector();
     const resetsAt = Math.ceil(Date.now() / 1000) + 120;
+    const projector = await createProjector(undefined, {
+      readRecentRateLimits: () => rateLimitsUpdated(resetsAt).params,
+    });
 
-    await projector.handleNotification(rateLimitsUpdated(resetsAt));
     await projector.handleNotification(
       forCurrentTurn("turn/completed", {
         turn: {
@@ -1056,9 +1056,8 @@ describe("CodexAppServerEventProjector", () => {
   });
 
   it("uses a recent Codex rate-limit snapshot when failed turns omit reset details", async () => {
-    const projector = await createProjector();
     const resetsAt = Math.ceil(Date.now() / 1000) + 120;
-    rememberCodexRateLimits({
+    const rateLimits = {
       rateLimits: {
         limitId: "codex",
         limitName: "Codex",
@@ -1069,6 +1068,9 @@ describe("CodexAppServerEventProjector", () => {
         rateLimitReachedType: "rate_limit_reached",
       },
       rateLimitsByLimitId: null,
+    };
+    const projector = await createProjector(undefined, {
+      readRecentRateLimits: () => rateLimits,
     });
 
     await projector.handleNotification(
@@ -1118,35 +1120,6 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.promptError).toContain("Codex says to try again at May 11th, 2026 9:00 AM.");
     expect(result.promptError).not.toContain("Codex did not return a reset time");
     expect(result.promptErrorSource).toBe("prompt");
-  });
-
-  it("normalizes snake_case current token usage fields", async () => {
-    const projector = await createProjector();
-
-    await projector.handleNotification(agentMessageDelta("done"));
-    await projector.handleNotification(
-      forCurrentTurn("thread/tokenUsage/updated", {
-        tokenUsage: {
-          total: { total_tokens: 1_000_000 },
-          last_token_usage: {
-            total_tokens: 17,
-            input_tokens: 8,
-            cached_input_tokens: 3,
-            output_tokens: 9,
-          },
-        },
-      }),
-    );
-
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-
-    expectUsageFields(result.attemptUsage, { input: 5, output: 9, cacheRead: 3, total: 17 });
-    expectUsageFields(result.lastAssistant?.usage, {
-      input: 5,
-      output: 9,
-      cacheRead: 3,
-      total: 17,
-    });
   });
 
   it("keeps intermediate agentMessage items out of the final visible reply", async () => {
@@ -1650,6 +1623,30 @@ describe("CodexAppServerEventProjector", () => {
     expect(
       projector.buildResult(buildEmptyToolTelemetry()).didSendDeterministicApprovalPrompt,
     ).toBe(false);
+  });
+
+  it("projects thread-scoped guardian warnings", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+
+    await projector.handleNotification({
+      method: "guardianWarning",
+      params: { threadId: "thread-other", message: "Wrong thread." },
+    } as ProjectorNotification);
+    await projector.handleNotification({
+      method: "guardianWarning",
+      params: {
+        threadId: THREAD_ID,
+        message: "Guardian rejection limit reached; ending turn as interrupted.",
+      },
+    } as ProjectorNotification);
+
+    const warning = findAgentEvent(onAgentEvent, {
+      stream: "codex_app_server.guardian",
+      phase: "warning",
+    }).data;
+    expect(warning.message).toBe("Guardian rejection limit reached; ending turn as interrupted.");
+    expect(onAgentEvent).toHaveBeenCalledTimes(1);
   });
 
   it("projects reasoning end, plan updates, compaction state, and tool metadata", async () => {

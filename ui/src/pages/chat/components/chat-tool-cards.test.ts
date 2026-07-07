@@ -142,10 +142,9 @@ describe("tool-cards", () => {
     );
 
     expect(container.textContent?.match(/Skill Workshop/g)).toHaveLength(1);
-    expect(container.querySelector(".chat-tool-msg-body")?.textContent).not.toContain(
-      "Skill Workshop",
-    );
-    expect(container.querySelector(".chat-tool-card__detail")?.textContent).toContain("create");
+    const bodyText = container.querySelector(".chat-tool-msg-body")?.textContent ?? "";
+    expect(bodyText).not.toContain("Skill Workshop");
+    expect(bodyText).toContain('"action": "create"');
     expect(container.querySelector(".chat-tool-card__action-btn")).toBeInstanceOf(
       HTMLButtonElement,
     );

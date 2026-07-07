@@ -28,6 +28,7 @@ import {
   resolveThinkingLevelInput,
 } from "../../lib/chat/thinking.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
+import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import type { SessionCapability, SessionPatch } from "../../lib/sessions/index.ts";
 import {
   DEFAULT_AGENT_ID,
@@ -60,6 +61,8 @@ export type SlashCommandContext = {
   chatModelCatalog?: ModelCatalogEntry[];
   modelCatalog?: ModelCatalogEntry[];
   sessionsResult?: SessionsListResult | null;
+  sessionsResultAgentId?: string | null;
+  defaultAgentId?: string;
   agentId?: string;
 };
 
@@ -193,12 +196,14 @@ async function executeModel(
   if (!args) {
     try {
       const [sessions, models] = await Promise.all([
-        listSessions(context),
+        listSessions(context, selectedAgentListScope(sessionKey, context)),
         modelCatalog ? Promise.resolve(modelCatalog) : loadModelCatalog(client),
       ]);
-      const session = resolveCurrentSession(sessions, sessionKey);
-      const model = session?.model || sessions?.defaults?.model || "default";
-      const available = models.map((m: ModelCatalogEntry) => m.id);
+      const { session, defaults } = resolveCommandSessionState(context, sessionKey, sessions);
+      const model = session?.model || defaults?.model || "default";
+      const available = models
+        .filter((entry: ModelCatalogEntry) => entry.available !== false)
+        .map((entry: ModelCatalogEntry) => entry.id);
       const lines = [`**Current model:** \`${model}\``];
       if (available.length > 0) {
         lines.push(
@@ -507,6 +512,29 @@ function selectedGlobalScope(
   return (normalizedSessionKey === "global" || aliasAgentId) && agentId ? { agentId } : {};
 }
 
+function selectedAgentListScope(
+  sessionKey: string,
+  context: SlashCommandContext,
+): { agentId?: string } {
+  const parsedAgentId = parseAgentSessionKey(normalizeSessionKey(sessionKey) ?? "")?.agentId;
+  const agentId = parsedAgentId ?? normalizeOptionalLowercaseString(context.agentId);
+  return agentId ? { agentId } : {};
+}
+
+function resolveSelectedAgentId(
+  sessionKey: string,
+  context: SlashCommandContext,
+): string | undefined {
+  const normalizedSessionKey = normalizeSessionKey(sessionKey);
+  return (
+    parseAgentSessionKey(normalizedSessionKey ?? "")?.agentId ??
+    normalizeOptionalLowercaseString(context.agentId) ??
+    (normalizedSessionKey === DEFAULT_MAIN_KEY
+      ? (normalizeOptionalLowercaseString(context.defaultAgentId) ?? DEFAULT_AGENT_ID)
+      : undefined)
+  );
+}
+
 function resolveEquivalentSessionKeys(
   currentSessionKey: string,
   currentAgentId: string | undefined,
@@ -575,10 +603,31 @@ async function loadCurrentSessionState(
   session: GatewaySessionRow | undefined;
   defaults: SessionsListResult["defaults"] | undefined;
 }> {
-  const sessions = await listSessions(context);
+  const sessions = await listSessions(context, selectedAgentListScope(sessionKey, context));
+  return resolveCommandSessionState(context, sessionKey, sessions);
+}
+
+function resolveCommandSessionState(
+  context: SlashCommandContext,
+  sessionKey: string,
+  sessions: SessionsListResult,
+): {
+  session: GatewaySessionRow | undefined;
+  defaults: SessionsListResult["defaults"] | undefined;
+} {
+  const selectedAgentId = resolveSelectedAgentId(sessionKey, context);
+  const defaultAgentId =
+    normalizeOptionalLowercaseString(context.defaultAgentId) ?? DEFAULT_AGENT_ID;
+  const cachedAgentId = normalizeOptionalLowercaseString(context.sessionsResultAgentId);
+  const cachedSession =
+    context.sessionsResult && selectedAgentId && cachedAgentId === selectedAgentId
+      ? resolveCurrentSession(context.sessionsResult, sessionKey)
+      : undefined;
   return {
-    session: resolveCurrentSession(sessions, sessionKey),
-    defaults: sessions?.defaults,
+    session: resolveCurrentSession(sessions, sessionKey) ?? cachedSession,
+    // sessions.list scopes rows by agent, but its defaults remain global.
+    defaults:
+      !selectedAgentId || selectedAgentId === defaultAgentId ? sessions.defaults : undefined,
   };
 }
 
@@ -604,10 +653,14 @@ async function loadThinkingCommandState(
   context: SlashCommandContext,
   sessionKey: string,
 ) {
-  const [sessions, models] = await Promise.all([listSessions(context), loadModelCatalog(client)]);
+  const modelCatalog = context.chatModelCatalog ?? context.modelCatalog;
+  const [sessions, models] = await Promise.all([
+    listSessions(context, selectedAgentListScope(sessionKey, context)),
+    modelCatalog ? Promise.resolve(modelCatalog) : loadModelCatalog(client),
+  ]);
+  const state = resolveCommandSessionState(context, sessionKey, sessions);
   return {
-    session: resolveCurrentSession(sessions, sessionKey),
-    defaults: sessions?.defaults,
+    ...state,
     models,
   };
 }
@@ -644,7 +697,7 @@ async function resolveSteerTarget(
 }
 
 function isActiveSteerSession(session: GatewaySessionRow | undefined): boolean {
-  return session?.status === "running" && session.endedAt == null;
+  return Boolean(session && isSessionRunActive(session));
 }
 
 type SteerChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";
