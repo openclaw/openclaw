@@ -1447,6 +1447,55 @@ describe("handleLineWebhookEvents", () => {
     await firstRun;
   });
 
+  it("does not download media for busy-skipped rapid messages", async () => {
+    // Guard must be acquired before media download so a busy-skipped message
+    // never persists private attachment data it will not dispatch.
+    let resolveFirst: (() => void) | undefined;
+    const firstDone = new Promise<void>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const processMessage = vi.fn(async () => {
+      await firstDone;
+    });
+    replyMessageLineMock.mockResolvedValue(undefined);
+
+    const textEvent = createTestMessageEvent({
+      message: { id: "m-media-1", type: "text", text: "first", quoteToken: "q-md-1" },
+      source: { type: "user", userId: "user-media" },
+      webhookEventId: "evt-media-1",
+    });
+    const imageEvent = createTestMessageEvent({
+      message: { id: "m-media-2", type: "image", quoteToken: "q-md-2" } as MessageEvent["message"],
+      source: { type: "user", userId: "user-media" },
+      webhookEventId: "evt-media-2",
+    });
+
+    const context = createLineWebhookTestContext({
+      processMessage,
+      dmPolicy: "open",
+    });
+    context.userInFlightGuard = createLineUserInFlightGuard();
+
+    const firstRun = handleLineWebhookEvents([textEvent], context);
+    await vi.waitFor(() => {
+      expect(processMessage).toHaveBeenCalledTimes(1);
+    });
+
+    await handleLineWebhookEvents([imageEvent], context);
+
+    expect(downloadLineMediaMock).not.toHaveBeenCalled();
+    expect(replyMessageLineMock).toHaveBeenCalledTimes(1);
+    const replyMessages = replyMessageLineMock.mock.calls[0]?.[1] as
+      | Array<{ text?: string }>
+      | undefined;
+    expect(replyMessages?.[0]?.text).toContain("still being processed");
+
+    resolveFirst?.();
+    await firstRun;
+
+    expect(processMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("does not guard group messages without sender identity", async () => {
     let resolveFirst: (() => void) | undefined;
     const firstDone = new Promise<void>((resolve) => {

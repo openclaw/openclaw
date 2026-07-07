@@ -550,50 +550,11 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     return;
   }
 
-  const allMedia: MediaRef[] = [];
-  let mediaUnavailable = false;
-
-  if (isDownloadableLineMessageType(message.type)) {
-    try {
-      const originalFilename =
-        message.type === "file" ? normalizeOptionalString(message.fileName) : undefined;
-      const media = await downloadLineMedia(message.id, account.channelAccessToken, mediaMaxBytes, {
-        originalFilename,
-      });
-      allMedia.push({
-        path: media.path,
-        contentType: media.contentType,
-      });
-    } catch (err) {
-      mediaUnavailable = true;
-      const errMsg = String(err);
-      if (errMsg.includes("exceeds") && errMsg.includes("limit")) {
-        logVerbose(`line: media exceeds size limit for message ${message.id}`);
-      } else {
-        runtime.error?.(danger(`line: failed to download media: ${errMsg}`));
-      }
-    }
-  }
-
-  const messageContext = await buildLineMessageContext({
-    event,
-    allMedia,
-    mediaUnavailable,
-    cfg,
-    account,
-    commandAuthorized: decision.commandAccess.authorized,
-    groupHistories: context.groupHistories,
-    historyLimit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
-  });
-
-  if (!messageContext) {
-    logVerbose("line: skipping empty message");
-    return;
-  }
-
   const sourceInfo = { userId, groupId, roomId, isGroup };
   const inFlightKey = buildLineInFlightKey(account.accountId, sourceInfo);
 
+  // Acquire before media download: a busy-skipped message must not persist
+  // private attachment data it will never dispatch.
   if (
     inFlightKey &&
     context.userInFlightGuard &&
@@ -605,6 +566,50 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   }
 
   try {
+    const allMedia: MediaRef[] = [];
+    let mediaUnavailable = false;
+
+    if (isDownloadableLineMessageType(message.type)) {
+      try {
+        const originalFilename =
+          message.type === "file" ? normalizeOptionalString(message.fileName) : undefined;
+        const media = await downloadLineMedia(
+          message.id,
+          account.channelAccessToken,
+          mediaMaxBytes,
+          { originalFilename },
+        );
+        allMedia.push({
+          path: media.path,
+          contentType: media.contentType,
+        });
+      } catch (err) {
+        mediaUnavailable = true;
+        const errMsg = String(err);
+        if (errMsg.includes("exceeds") && errMsg.includes("limit")) {
+          logVerbose(`line: media exceeds size limit for message ${message.id}`);
+        } else {
+          runtime.error?.(danger(`line: failed to download media: ${errMsg}`));
+        }
+      }
+    }
+
+    const messageContext = await buildLineMessageContext({
+      event,
+      allMedia,
+      mediaUnavailable,
+      cfg,
+      account,
+      commandAuthorized: decision.commandAccess.authorized,
+      groupHistories: context.groupHistories,
+      historyLimit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+    });
+
+    if (!messageContext) {
+      logVerbose("line: skipping empty message");
+      return;
+    }
+
     await processMessage(messageContext);
 
     if (isGroup && context.groupHistories) {
