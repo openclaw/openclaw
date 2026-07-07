@@ -272,6 +272,12 @@ describe("mmrRerank", () => {
       expect(result[0].id).toBe("1");
       expect(result[1].id).toBe("3");
     });
+
+    it("falls back to default lambda for non-finite values", () => {
+      const result = mmrRerank(diverseItems, { enabled: true, lambda: Number.NaN });
+      expect(result).toHaveLength(3);
+      expect(result[0].id).toBe("1");
+    });
   });
 
   describe("diversity behavior", () => {

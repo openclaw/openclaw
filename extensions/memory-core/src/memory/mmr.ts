@@ -88,7 +88,9 @@ export function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConf
   }
 
   // Clamp lambda to valid range
-  const clampedLambda = Math.max(0, Math.min(1, lambda));
+  const clampedLambda = Number.isFinite(lambda)
+    ? Math.max(0, Math.min(1, lambda))
+    : DEFAULT_MMR_CONFIG.lambda;
 
   // If lambda is 1, just return sorted by relevance (no diversity penalty)
   if (clampedLambda === 1) {
