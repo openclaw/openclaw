@@ -16,6 +16,7 @@ import {
   resolveAllowAlwaysPatternEntries,
 } from "./exec-approvals-allowlist.js";
 import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
+import { type ExecDenylistEntry, resolveEffectiveExecDenylist } from "./exec-approvals-denylist.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import type { ExecAuthorizationPlan } from "./exec-authorization-plan.js";
 import {
@@ -32,6 +33,7 @@ import {
 } from "./shell-inline-command.js";
 export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
+export * from "./exec-approvals-denylist.js";
 export type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 
 export type ExecHost = "sandbox" | "gateway" | "node";
@@ -252,6 +254,12 @@ export type ExecApprovalsDefaults = {
   ask?: ExecAsk;
   askFallback?: ExecSecurity;
   autoAllowSkills?: boolean;
+  /**
+   * Operator STOP list. Matching commands always require explicit approval,
+   * even at `security=full`/`ask=off` and even with a durable allowlist grant.
+   * Merged (union) with any `tools.exec.denylist` from openclaw.json.
+   */
+  denylist?: ExecDenylistEntry[];
 };
 
 export type ExecApprovalsAgent = ExecApprovalsDefaults & {
@@ -288,6 +296,8 @@ export type ExecApprovalsResolved = {
     askFallback: string | null;
   };
   allowlist: ExecAllowlistEntry[];
+  /** File-layer denylist (defaults + `*` + agent), de-duplicated union. */
+  denylist: ExecDenylistEntry[];
   file: ExecApprovalsFile;
 };
 
@@ -1198,6 +1208,12 @@ export function resolveExecApprovalsFromFile(params: {
     ...(Array.isArray(wildcard.allowlist) ? wildcard.allowlist : []),
     ...(Array.isArray(agent.allowlist) ? agent.allowlist : []),
   ];
+  // Resolve the file-layer denylist from the RAW file so sanitization is owned
+  // by normalizeExecDenylist and no policy-normalization pass can silently drop
+  // it. Union across defaults + wildcard + agent (deny anywhere = deny).
+  const denylist = resolveEffectiveExecDenylist({
+    layers: [rawFile.defaults?.denylist, rawWildcard.denylist, rawAgent.denylist],
+  });
   return {
     path: params.path ?? resolveExecApprovalsPath(),
     socketPath: expandHomePrefix(
@@ -1212,6 +1228,7 @@ export function resolveExecApprovalsFromFile(params: {
       askFallback: resolvedAgentAskFallback.source,
     },
     allowlist,
+    denylist,
     file,
   };
 }
@@ -1222,7 +1239,16 @@ export function requiresExecApproval(params: {
   analysisOk: boolean;
   allowlistSatisfied: boolean;
   durableApprovalSatisfied?: boolean;
+  /**
+   * True when the command matches the effective exec denylist. A denylist hit
+   * forces approval unconditionally: it wins over `ask=off`, `security=full`,
+   * and any durable allowlist grant. Checked first so deny beats allow.
+   */
+  denylisted?: boolean;
 }): boolean {
+  if (params.denylisted === true) {
+    return true;
+  }
   if (params.ask === "always") {
     return true;
   }

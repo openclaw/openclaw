@@ -11,6 +11,10 @@ import { emitTrustedSecurityEvent } from "../infra/diagnostic-events.js";
 import {
   type AllowAlwaysPersistenceDecision,
   commandRequiresSecurityAuditSuppressionApproval,
+  evaluateExecDenylist,
+  type ExecDenylistEntry,
+  formatExecDenylistWarning,
+  resolveEffectiveExecDenylist,
   type ExecAsk,
   resolveExecApprovalAllowedDecisions,
   type ExecCommandSegment,
@@ -110,6 +114,12 @@ type ProcessGatewayAllowlistParams = {
   maxOutput: number;
   pendingMaxOutput: number;
   trustedSafeBinDirs?: ReadonlySet<string>;
+  /**
+   * openclaw.json config-layer exec denylist (`tools.exec.denylist` and the
+   * per-agent `agents.list.<id>.tools.exec.denylist`). Unioned with the
+   * exec-approvals.json file-layer denylist; deny in either layer denies.
+   */
+  execConfigDenylist?: ExecDenylistEntry[];
 };
 
 /** Gateway allowlist outcome before command execution continues. */
@@ -562,6 +572,21 @@ export async function processGatewayAllowlist(
       env: params.env,
       segments: allowlistEval.segments,
     }) && !(hostSecurity === "full" && hostAsk === "off");
+  // Deny-over-allow: a denylist hit forces explicit human approval even at
+  // security=full/ask=off and even when the allowlist or a durable grant would
+  // auto-run the command. Unlike the audit-suppression gate there is NO
+  // full/off bypass — interrupting auto-allowed commands is the whole point.
+  const effectiveDenylist = resolveEffectiveExecDenylist({
+    layers: [approvals.denylist, params.execConfigDenylist],
+  });
+  const denylistEvaluation = evaluateExecDenylist({
+    command: params.command,
+    segments: allowlistEval.segments,
+    denylist: effectiveDenylist,
+    analysisOk,
+  });
+  const requiresDenylistApproval =
+    denylistEvaluation.match !== null || denylistEvaluation.conservativeApproval;
   const requiresAsk =
     requiresExecApproval({
       ask: hostAsk,
@@ -569,11 +594,19 @@ export async function processGatewayAllowlist(
       analysisOk,
       allowlistSatisfied,
       durableApprovalSatisfied,
+      denylisted: requiresDenylistApproval,
     }) ||
     requiresAllowlistPlanApproval ||
     requiresHeredocApproval ||
     requiresInlineEvalApproval ||
     requiresSecurityAuditSuppressionApproval;
+  if (requiresDenylistApproval) {
+    params.warnings.push(
+      denylistEvaluation.match
+        ? formatExecDenylistWarning(denylistEvaluation.match)
+        : "Warning: command could not be screened against the exec denylist; explicit approval is required.",
+    );
+  }
   if (requiresHeredocApproval) {
     params.warnings.push(
       "Warning: heredoc execution requires reviewer or explicit approval in allowlist mode.",
@@ -619,10 +652,12 @@ export async function processGatewayAllowlist(
       params.autoReview === true &&
       hostAsk !== "always" &&
       autoReviewHasBoundCommand &&
-      !requiresSecurityAuditSuppressionApproval;
+      !requiresSecurityAuditSuppressionApproval &&
+      !requiresDenylistApproval;
     let autoReviewRequiresHumanApproval =
       (params.autoReview === true && hostAsk !== "always" && !autoReviewHasBoundCommand) ||
-      requiresSecurityAuditSuppressionApproval;
+      requiresSecurityAuditSuppressionApproval ||
+      requiresDenylistApproval;
     if (canAutoReviewApprovalMiss) {
       const reviewer = params.autoReviewer ?? defaultExecAutoReviewer;
       const decision = await reviewer({
