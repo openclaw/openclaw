@@ -609,7 +609,7 @@ export const handleNodeEvent = async (
           log: ctx.logGateway,
           logContext: "agent.request",
         })
-      ).map((entry) => ({ path: entry.path, contentType: entry.contentType }));
+      ).map((media) => ({ path: media.path, contentType: media.contentType }));
 
       dispatchNodeAgentCommand(ctx, nodeId, {
         runId: sessionId,
