@@ -134,7 +134,7 @@ function resolveConfigAwareEnvApiKey(
   return resolveEnvApiKey(provider, process.env, { config: cfg, workspaceDir });
 }
 
-function resolveProviderConfig(
+export function resolveProviderConfig(
   cfg: OpenClawConfig | undefined,
   provider: string,
 ): ModelProviderConfig | undefined {
@@ -1175,6 +1175,21 @@ export async function resolveApiKeyForProvider(params: {
       source: providerEntryBinding.source,
       mode: "api-key",
     };
+  }
+  const explicitProviderConfig = resolveProviderConfig(cfg, provider);
+  if (explicitProviderConfig && coerceSecretRef(explicitProviderConfig.apiKey)) {
+    const runtimeCustomKey = resolveManagedSecretRefRuntimeProviderAuth({ cfg, provider });
+    if (runtimeCustomKey) {
+      return runtimeCustomKey;
+    }
+    const customKey = resolveUsableCustomProviderApiKey({ cfg, provider });
+    if (customKey) {
+      return {
+        apiKey: customKey.apiKey,
+        source: customKey.source,
+        mode: "api-key",
+      };
+    }
   }
   if (providerEntryBinding.kind === "profile-resolved") {
     assertAuthModeAllowedForModel({

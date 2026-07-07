@@ -4,6 +4,7 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { coerceSecretRef } from "../config/types.secrets.js";
 import {
   externalCliDiscoveryForProviderAuth,
   ensureAuthProfileStore,
@@ -18,6 +19,7 @@ import {
 } from "./cli-credentials.js";
 import {
   resolveEnvApiKey,
+  resolveProviderConfig,
   resolveProviderEntryApiKeyProfileReference,
   resolveUsableCustomProviderApiKey,
 } from "./model-auth.js";
@@ -102,6 +104,17 @@ export function resolveModelAuthLabel(params: {
 
   if (providerEntryProfileRef.kind === "literal") {
     return `api-key (models.json)`;
+  }
+
+  const providerConfig = resolveProviderConfig(params.cfg, providerKey);
+  if (providerConfig && coerceSecretRef(providerConfig.apiKey)) {
+    const customKey = resolveUsableCustomProviderApiKey({
+      cfg: params.cfg,
+      provider: providerKey,
+    });
+    if (customKey) {
+      return `api-key (models.json)`;
+    }
   }
   if (providerEntryProfileRef.kind === "profile") {
     const label = resolveAuthProfileDisplayLabel({
