@@ -35,7 +35,7 @@ describe("calculateContextTokens", () => {
         output: 20,
         cacheRead: 100,
         cacheWrite: 200,
-        totalTokens: NaN,
+        totalTokens: Number.NaN,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       }),
     ).toBe(330);
@@ -57,11 +57,11 @@ describe("calculateContextTokens", () => {
   it("returns 0 when all usage fields are degenerate (NaN)", () => {
     expect(
       calculateContextTokens({
-        input: NaN,
-        output: NaN,
-        cacheRead: NaN,
-        cacheWrite: NaN,
-        totalTokens: NaN,
+        input: Number.NaN,
+        output: Number.NaN,
+        cacheRead: Number.NaN,
+        cacheWrite: Number.NaN,
+        totalTokens: Number.NaN,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       }),
     ).toBe(0);
