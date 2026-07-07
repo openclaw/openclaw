@@ -81,7 +81,8 @@ flowchart LR
 - **Vector search** matches similar meaning ("gateway host" matches "the
   machine running OpenClaw").
 - **BM25 keyword search** matches exact terms (IDs, error strings, config
-  keys).
+  keys). Keyword tokenization is Unicode-aware and keeps diacritic-folded
+  variants, so queries like `Malmo cafe` can still match `Malmö café`.
 
 If only one path is available, the other runs alone.
 
@@ -109,6 +110,8 @@ Old notes gradually lose ranking weight so recent information surfaces first.
 With the default 30-day half-life, a note from last month scores at 50% of its
 original weight. `MEMORY.md` and other non-dated files under `memory/` are
 evergreen and never decayed; only dated `memory/YYYY-MM-DD.md` files decay.
+Set `minMultiplier` when you want very old dated notes to keep a small
+long-tail recall signal instead of decaying toward zero.
 
 <Tip>
 Enable this if your agent has months of daily notes and stale information
