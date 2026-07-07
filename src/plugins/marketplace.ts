@@ -13,6 +13,7 @@ import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
 import { tryReadJson } from "../infra/json-files.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { readRegularFile } from "../infra/regular-file.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { InstallPolicySource } from "../security/install-policy.js";
 import { resolveUserPath } from "../utils.js";
@@ -23,6 +24,7 @@ import { installPluginFromPath, type InstallPluginResult } from "./install.js";
 const DEFAULT_GIT_TIMEOUT_MS = 120_000;
 const DEFAULT_MARKETPLACE_DOWNLOAD_TIMEOUT_MS = 120_000;
 const MAX_MARKETPLACE_ARCHIVE_BYTES = 256 * 1024 * 1024;
+const MAX_MARKETPLACE_MANIFEST_BYTES = 16 * 1024 * 1024;
 const MARKETPLACE_MANIFEST_CANDIDATES = [
   path.join(".claude-plugin", "marketplace.json"),
   "marketplace.json",
@@ -597,7 +599,17 @@ async function loadMarketplace(params: {
     remoteRef?: string;
     cleanup?: () => Promise<void>;
   }): Promise<{ ok: true; marketplace: LoadedMarketplace } | { ok: false; error: string }> => {
-    const raw = await fs.readFile(paramsLocal.manifestPath, "utf-8");
+    let raw: string;
+    try {
+      const { buffer } = await readRegularFile({
+        filePath: paramsLocal.manifestPath,
+        maxBytes: MAX_MARKETPLACE_MANIFEST_BYTES,
+      });
+      raw = buffer.toString("utf-8");
+    } catch {
+      await paramsLocal.cleanup?.();
+      return { ok: false, error: "Marketplace manifest too large" };
+    }
     const parsed = parseMarketplaceManifest(raw, paramsLocal.manifestPath);
     if (!parsed.ok) {
       await paramsLocal.cleanup?.();
