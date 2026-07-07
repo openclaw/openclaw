@@ -1652,15 +1652,14 @@ describe("CodexAppServerEventProjector", () => {
     ).toBe(false);
   });
 
-  it("projects guardianWarning circuit-breaker notifications", async () => {
-    // Regression for #101207: when Codex's guardian review hits its rejection
-    // circuit-breaker, it emits a thread-scoped `guardianWarning` notification
-    // (only threadId + message, no turnId) right before ending the turn as
-    // interrupted. It must route through the thread-scoped filter and be
-    // projected on the guardian stream — not dropped by the turn-strict filter.
+  it("projects thread-scoped guardian warnings", async () => {
     const onAgentEvent = vi.fn();
     const projector = await createProjector({ ...(await createParams()), onAgentEvent });
 
+    await projector.handleNotification({
+      method: "guardianWarning",
+      params: { threadId: "thread-other", message: "Wrong thread." },
+    } as ProjectorNotification);
     await projector.handleNotification({
       method: "guardianWarning",
       params: {
@@ -1674,6 +1673,7 @@ describe("CodexAppServerEventProjector", () => {
       phase: "warning",
     }).data;
     expect(warning.message).toBe("Guardian rejection limit reached; ending turn as interrupted.");
+    expect(onAgentEvent).toHaveBeenCalledTimes(1);
   });
 
   it("projects reasoning end, plan updates, compaction state, and tool metadata", async () => {

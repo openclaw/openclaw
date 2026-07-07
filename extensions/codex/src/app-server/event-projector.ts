@@ -685,9 +685,7 @@ export class CodexAppServerEventProjector {
         return;
       }
     } else if (notification.method === "guardianWarning") {
-      // guardianWarning is thread-scoped: codex emits it with only a threadId
-      // (no turnId), so correlate it on the thread alone — otherwise the
-      // turn-strict filter below would drop it before it reaches the switch.
+      // Codex guardian warnings are thread-scoped and carry no turn id.
       if (readCodexNotificationThreadId(params) !== this.threadId) {
         return;
       }
@@ -1268,10 +1266,6 @@ export class CodexAppServerEventProjector {
   }
 
   private handleGuardianWarning(params: JsonObject): void {
-    // Codex emits `guardianWarning` from its rejection circuit-breaker (e.g. 3
-    // consecutive or 10 total denials in a turn) right before ending the turn
-    // as interrupted. Project it on the guardian stream so callers can see why
-    // the turn degraded instead of silently dropping the notification.
     this.emitAgentEvent({
       stream: "codex_app_server.guardian",
       data: {
@@ -2795,7 +2789,9 @@ function auditNativeToolTerminalStatus(item: CodexThreadItem): CodexNativeToolAu
   return "unknown";
 }
 
-function auditNativeToolUnfinishedStatus(item: CodexThreadItem): CodexNativeToolUnfinishedStatus {
+function auditNativeToolUnfinishedStatus(
+  item: CodexThreadItem,
+): CodexNativeToolUnfinishedStatus {
   // Search and image generation publish explicit terminal states. An enclosing
   // run outcome cannot substitute when that dependency-owned state is absent.
   return item.type === "webSearch" || item.type === "imageGeneration" ? "unknown" : "failed";
