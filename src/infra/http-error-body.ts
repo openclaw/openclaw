@@ -8,7 +8,9 @@ export async function readResponseBodySnippet(
     const body = response.body;
     if (!body || typeof body.getReader !== "function") {
       const { buffer } = await readResponsePrefix(response, limits.maxBytes);
-      if (buffer.length === 0) return "";
+      if (buffer.length === 0) {
+        return "";
+      }
       return new TextDecoder().decode(buffer).slice(0, limits.maxChars);
     }
 

@@ -197,6 +197,19 @@ export async function readResponsePrefix(
   validateMaxBytes(maxBytes);
   const body = response.body;
   if (!body || typeof body.getReader !== "function") {
+    // When body is null, there is nothing to read — return immediately.
+    if (!body) {
+      return { buffer: Buffer.alloc(0), size: 0, truncated: false };
+    }
+    // No ReadableStream reader available (e.g., synthetic Response).
+    // Check Content-Length to avoid materializing an oversized body.
+    const contentLength = response.headers?.get?.("content-length") ?? null;
+    if (contentLength !== null) {
+      const cl = parseInt(contentLength, 10);
+      if (!isNaN(cl) && cl > maxBytes) {
+        return { buffer: Buffer.alloc(0), size: cl, truncated: true };
+      }
+    }
     const fallback = Buffer.from(await response.arrayBuffer());
     if (fallback.length > maxBytes) {
       return {

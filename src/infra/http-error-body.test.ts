@@ -3,7 +3,7 @@ import { readResponseBodySnippet } from "./http-error-body.js";
 
 function bodyLessResponse(text: string): Response {
   return {
-    body: null,
+    body: {} as ReadableStream,
     text: async () => text,
     arrayBuffer: async () => new TextEncoder().encode(text).buffer,
   } as unknown as Response;
@@ -95,6 +95,41 @@ describe("readResponseBodySnippet", () => {
       maxBytes: 1024,
       maxChars: 50,
     });
+    expect(result).toBe("");
+  });
+
+  it("avoids arrayBuffer() when Content-Length exceeds maxBytes (body-less path)", async () => {
+    let arrayBufferCalled = false;
+    const bigResponse = {
+      body: {} as ReadableStream,
+      headers: { get: () => "1000" },
+      arrayBuffer: async () => {
+        arrayBufferCalled = true;
+        return new ArrayBuffer(0);
+      },
+    } as unknown as Response;
+    const result = await readResponseBodySnippet(bigResponse, {
+      maxBytes: 50,
+      maxChars: 100,
+    });
+    expect(arrayBufferCalled).toBe(false);
+    expect(result).toBe("");
+  });
+
+  it("returns empty immediately when body is null", async () => {
+    let arrayBufferCalled = false;
+    const nullBodyResponse = {
+      body: null,
+      arrayBuffer: async () => {
+        arrayBufferCalled = true;
+        return new ArrayBuffer(0);
+      },
+    } as unknown as Response;
+    const result = await readResponseBodySnippet(nullBodyResponse, {
+      maxBytes: 1024,
+      maxChars: 50,
+    });
+    expect(arrayBufferCalled).toBe(false);
     expect(result).toBe("");
   });
 });
