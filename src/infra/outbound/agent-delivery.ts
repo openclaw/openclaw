@@ -8,7 +8,8 @@ import { listRouteBindings } from "../../config/bindings.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeRouteBindingChannelId } from "../../routing/binding-scope.js";
-import { buildAgentMainSessionKey } from "../../routing/session-key.js";
+import { resolveAgentRoute } from "../../routing/resolve-route.js";
+import { buildAgentMainSessionKey, normalizeAgentId } from "../../routing/session-key.js";
 import { normalizeAccountId } from "../../utils/account-id.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -18,7 +19,7 @@ import {
   type GatewayMessageChannel,
 } from "../../utils/message-channel.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
-import { resolveOutboundSessionRoute } from "./outbound-session.js";
+import { resolveOutboundSessionRoute, type OutboundSessionRoute } from "./outbound-session.js";
 import { isReservedTargetLiteralError } from "./target-errors.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 import type { OutboundTargetResolution } from "./targets.js";
@@ -38,6 +39,27 @@ export type AgentDeliveryPlan = {
   resolvedSessionKey?: string;
   targetResolutionError?: Error;
 };
+
+function rebaseOutboundSessionRoute(
+  route: OutboundSessionRoute,
+  baseSessionKey: string,
+): OutboundSessionRoute | null {
+  if (route.baseSessionKey === baseSessionKey) {
+    return route;
+  }
+  if (route.sessionKey === route.baseSessionKey) {
+    return { ...route, sessionKey: baseSessionKey, baseSessionKey };
+  }
+  const basePrefix = `${route.baseSessionKey}:`;
+  if (!route.sessionKey.startsWith(basePrefix)) {
+    return null;
+  }
+  return {
+    ...route,
+    sessionKey: `${baseSessionKey}:${route.sessionKey.slice(basePrefix.length)}`,
+    baseSessionKey,
+  };
+}
 
 export function resolveAgentDeliveryPlan(params: {
   sessionEntry?: SessionEntry;
@@ -225,21 +247,43 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
       return null;
     }
   })();
+  const globalDmScope = params.cfg.session?.dmScope ?? "main";
+  const bindingRoute =
+    route?.recipientSessionExact === true &&
+    route.chatType === "direct" &&
+    route.peer.kind === "direct"
+      ? resolveAgentRoute({
+          cfg: params.cfg,
+          channel: resolvedChannel,
+          accountId: routedPlan.resolvedAccountId,
+          peer: route.peer,
+        })
+      : null;
+  // Exact provider identities can reproduce binding-level DM isolation. Keep
+  // deterministic thread suffixes, but fail closed for opaque custom keys.
+  const bindingAwareRoute =
+    route &&
+    bindingRoute?.dmScope !== undefined &&
+    bindingRoute.dmScope !== globalDmScope &&
+    normalizeAgentId(bindingRoute.agentId) === normalizeAgentId(params.agentId)
+      ? rebaseOutboundSessionRoute(route, bindingRoute.sessionKey)
+      : route;
   const knownNonExactRoute =
     params.sessionRouteMode === "allow-fallback" &&
-    (route?.recipientSessionExact === false || route?.recipientSessionExact === "direct-alias");
+    (bindingAwareRoute?.recipientSessionExact === false ||
+      bindingAwareRoute?.recipientSessionExact === "direct-alias");
   // A best-effort alias is safe only when every direct recipient on this channel
   // shares the selected agent's main session; binding overrides can isolate peers.
   const usesCanonicalMainSession =
-    route?.recipientSessionExact === "direct-alias" &&
-    route?.chatType === "direct" &&
-    route.sessionKey === route.baseSessionKey &&
-    route.sessionKey ===
+    bindingAwareRoute?.recipientSessionExact === "direct-alias" &&
+    bindingAwareRoute.chatType === "direct" &&
+    bindingAwareRoute.sessionKey === bindingAwareRoute.baseSessionKey &&
+    bindingAwareRoute.sessionKey ===
       buildAgentMainSessionKey({
         agentId: params.agentId,
         mainKey: params.cfg.session?.mainKey,
       }) &&
-    (params.cfg.session?.dmScope ?? "main") === "main" &&
+    globalDmScope === "main" &&
     !listRouteBindings(params.cfg).some(
       (binding) =>
         binding.session?.dmScope !== undefined &&
@@ -247,7 +291,10 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
         normalizeRouteBindingChannelId(binding.match.channel) === resolvedChannel,
     );
   // An omitted marker preserves the pre-existing contract for external plugin hooks.
-  const exactRoute = !knownNonExactRoute || usesCanonicalMainSession ? route : null;
+  const exactRoute =
+    bindingAwareRoute && (!knownNonExactRoute || usesCanonicalMainSession)
+      ? bindingAwareRoute
+      : null;
   if (!exactRoute) {
     if (resolvedSessionRouteTarget) {
       return {
