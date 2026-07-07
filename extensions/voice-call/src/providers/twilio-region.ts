@@ -8,24 +8,10 @@ const TWILIO_API_HOSTNAME_BY_REGION = {
   au1: "api.sydney.au1.twilio.com",
 } satisfies Record<TwilioRegion, string>;
 
-const TWILIO_API_HOSTNAMES = new Set(Object.values(TWILIO_API_HOSTNAME_BY_REGION));
-
-function resolveTwilioApiHostname(region?: TwilioRegion): string {
-  return TWILIO_API_HOSTNAME_BY_REGION[region ?? "us1"];
-}
-
 export function resolveTwilioApiBaseUrl(params: {
   accountSid: string;
   region?: TwilioRegion;
 }): string {
-  const hostname = resolveTwilioApiHostname(params.region);
+  const hostname = TWILIO_API_HOSTNAME_BY_REGION[params.region ?? "us1"];
   return `https://${hostname}/2010-04-01/Accounts/${params.accountSid}`;
-}
-
-export function requireSupportedTwilioApiHostname(baseUrl: string): string {
-  const hostname = new URL(baseUrl).hostname;
-  if (!TWILIO_API_HOSTNAMES.has(hostname)) {
-    throw new Error(`Unsupported Twilio API hostname: ${hostname}`);
-  }
-  return hostname;
 }
