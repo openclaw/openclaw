@@ -86,4 +86,26 @@ describe("scpFile", () => {
       expect.not.objectContaining({ signal: expect.anything() }),
     );
   });
+
+  it("defers AbortError until close so tmp dir is not removed early", async () => {
+    const { child } = createChild();
+
+    const abortErr = Object.assign(new Error("The operation was aborted"), {
+      name: "AbortError",
+    });
+
+    const resultPromise = testing.scpFile("host", "/remote/path", "/local/path");
+    child.emit("error", abortErr);
+
+    // AbortError must not settle the promise — close is authoritative
+    const settled = await Promise.race([
+      resultPromise.then(() => "resolved"),
+      new Promise((r) => setTimeout(() => r("timeout"), 100)),
+    ]);
+    expect(settled).toBe("timeout");
+
+    // close fires afterward — now it rejects with the stored abort error
+    child.emit("close", null);
+    await expect(resultPromise).rejects.toThrow("The operation was aborted");
+  });
 });

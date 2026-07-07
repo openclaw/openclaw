@@ -207,13 +207,14 @@ async function stageRemoteFileIntoRoot(params: {
   rootDir: string;
   relativeDestPath: string;
   maxBytes?: number;
+  signal?: AbortSignal;
 }): Promise<void> {
   const tmpRoot = resolvePreferredOpenClawTmpDir();
   await fs.mkdir(tmpRoot, { recursive: true });
   const tmpDir = await fs.mkdtemp(path.join(tmpRoot, "stage-sandbox-media-"));
   const tmpPath = path.join(tmpDir, "download");
   try {
-    await scpFile(params.remoteHost, params.remotePath, tmpPath);
+    await scpFile(params.remoteHost, params.remotePath, tmpPath, params.signal);
     await stageLocalFileIntoRoot({
       sourcePath: tmpPath,
       rootDir: params.rootDir,
@@ -392,6 +393,7 @@ async function scpFile(
 
     let stderr = "";
     let settled = false;
+    let aborted: Error | null = null;
     const finish = (error?: Error) => {
       if (settled) {
         return;
@@ -414,9 +416,20 @@ async function scpFile(
       stderr = appendScpStderrTail(stderr, formatErrorMessage(error));
     });
 
-    child.once("error", finish);
+    child.once("error", (err) => {
+      // AbortError fires before SIGTERM and child close. Defer rejection
+      // to the close handler so the caller does not remove the tmp dir
+      // while the SCP child is still shutting down.
+      if (err.name === "AbortError") {
+        aborted = err;
+      } else {
+        finish(err);
+      }
+    });
     child.once("close", (code) => {
-      if (code === 0) {
+      if (aborted) {
+        finish(aborted);
+      } else if (code === 0) {
         finish();
       } else {
         finish(new Error(`scp failed (${code}): ${stderr.trim()}`));
