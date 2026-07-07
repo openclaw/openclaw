@@ -1,20 +1,15 @@
 // Prompt template tests cover markdown discovery and fallback metadata.
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { loadPromptTemplates } from "./prompt-templates.js";
 
-const tempDirs: string[] = [];
-
-afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("loadPromptTemplates", () => {
   it("keeps fallback descriptions on a UTF-16 boundary", async () => {
-    const root = await mkdtemp(join(tmpdir(), "openclaw-prompt-templates-"));
-    tempDirs.push(root);
+    const root = tempDirs.make("openclaw-prompt-templates-");
     const promptsDir = join(root, "prompts");
     await mkdir(promptsDir, { recursive: true });
     await writeFile(join(promptsDir, "emoji.md"), `${"a".repeat(59)}🚀tail\n`, "utf-8");
