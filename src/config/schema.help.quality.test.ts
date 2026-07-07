@@ -113,6 +113,7 @@ const TARGET_KEYS = [
   "agents.defaults.memorySearch.query.hybrid.mmr.lambda",
   "agents.defaults.memorySearch.query.hybrid.temporalDecay.enabled",
   "agents.defaults.memorySearch.query.hybrid.temporalDecay.halfLifeDays",
+  "agents.defaults.memorySearch.query.hybrid.temporalDecay.minMultiplier",
   "agents.defaults.memorySearch.cache.enabled",
   "agents.defaults.memorySearch.cache.maxEntries",
   "agents.defaults.memorySearch.sync.onSearch",

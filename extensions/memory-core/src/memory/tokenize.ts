@@ -17,6 +17,8 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
  * - Hangul Syllables & Jamo (Korean)
  */
 const CJK_RE = /[\u3040-\u309f\u30a0-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\u1100-\u11ff]/;
+const CJK_GLOBAL_RE =
+  /[\u3040-\u309f\u30a0-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af\u1100-\u11ff]/gu;
 
 function foldDiacritics(token: string): string {
   return token.normalize("NFKD").replace(/\p{M}+/gu, "");
@@ -33,7 +35,7 @@ function foldDiacritics(token: string): string {
  */
 export function tokenize(text: string): Set<string> {
   const lower = normalizeLowercaseStringOrEmpty(text);
-  const words = (lower.match(/[\p{L}\p{N}_]+/gu) ?? []).filter((token) => !CJK_RE.test(token));
+  const words = lower.replace(CJK_GLOBAL_RE, " ").match(/[\p{L}\p{N}_]+/gu) ?? [];
   const foldedWords = words.map(foldDiacritics).filter((token, index) => token !== words[index]);
 
   // Track CJK characters with their original positions

@@ -976,7 +976,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     vectorWeight: number;
     textWeight: number;
     mmr?: { enabled: boolean; lambda: number };
-    temporalDecay?: { enabled: boolean; halfLifeDays: number };
+    temporalDecay?: { enabled: boolean; halfLifeDays: number; minMultiplier?: number };
   }): Promise<MemorySearchResult[]> {
     return mergeHybridResults({
       vector: params.vector.map((r) => ({

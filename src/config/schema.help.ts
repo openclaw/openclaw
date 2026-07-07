@@ -1295,6 +1295,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Applies recency decay so newer memory can outrank older memory when scores are close. Enable when timeliness matters; keep off for timeless reference knowledge.",
   "agents.defaults.memorySearch.query.hybrid.temporalDecay.halfLifeDays":
     "Controls how fast older memory loses rank when temporal decay is enabled (half-life in days, default: 30). Lower values prioritize recent context more aggressively.",
+  "agents.defaults.memorySearch.query.hybrid.temporalDecay.minMultiplier":
+    "Optional score floor for very old dated memory after temporal decay (0 to 1, default: 0). Use a small value such as 0.05 when old notes should remain weakly discoverable.",
   "agents.defaults.memorySearch.cache.enabled":
     "Caches computed chunk embeddings in SQLite so reindexing and incremental updates run faster (default: true). Keep this enabled unless investigating cache correctness or minimizing disk usage.",
   memory: "Memory backend configuration (global).",

@@ -580,6 +580,8 @@ export type MemorySearchConfig = {
         enabled?: boolean;
         /** Half-life in days for exponential decay (default: 30). */
         halfLifeDays?: number;
+        /** Optional lower bound for very old dated memory scores (default: 0). */
+        minMultiplier?: number;
       };
     };
   };
