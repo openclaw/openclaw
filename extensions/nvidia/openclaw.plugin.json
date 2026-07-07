@@ -46,7 +46,7 @@
             "id": "nvidia/nemotron-3-super-120b-a12b",
             "name": "Nemotron 3 Super 120B",
             "input": ["text"],
-            "contextWindow": 1048576,
+            "contextWindow": 1000000,
             "maxTokens": 8192,
             "cost": {
               "input": 0,
@@ -105,6 +105,57 @@
             "compat": {
               "requiresStringContent": true
             }
+          },
+          {
+            "id": "deepseek-ai/deepseek-v4-pro",
+            "name": "DeepSeek V4 Pro",
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 16384,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "requiresStringContent": true
+            }
+          },
+          {
+            "id": "qwen/qwen3.5-397b-a17b",
+            "name": "Qwen3.5 397B A17B",
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 16384,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "requiresStringContent": true
+            }
+          },
+          {
+            "id": "minimaxai/minimax-m2.7",
+            "name": "Minimax M2.7",
+            "input": ["text"],
+            "contextWindow": 196608,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "requiresStringContent": true
+            },
+            "status": "deprecated",
+            "statusReason": "Still available by exact reference; use minimaxai/minimax-m3 for new NVIDIA setups.",
+            "replacedBy": "minimaxai/minimax-m3"
           }
         ]
       }
