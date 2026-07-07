@@ -1,8 +1,13 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join, relative, sep } from "node:path";
+import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
 import ignore from "ignore";
 
 const IGNORE_FILE_NAMES = [".gitignore", ".ignore", ".fdignore"];
+// Ignore files are line-oriented pattern lists; a few MiB is generous headroom
+// for monorepos while preventing a malicious or runaway file from OOMing the
+// workspace scanner.
+const IGNORE_FILE_MAX_BYTES = 4 * 1024 * 1024;
 
 export type IgnoreMatcher = ReturnType<typeof ignore>;
 
@@ -19,8 +24,18 @@ export function addIgnoreRules(dir: string, rootDir: string, ig = ignore()) {
       continue;
     }
     try {
-      const content = readFileSync(ignorePath, "utf-8");
-      ig.add(content.split(/\r?\n/).map((line) => prefixIgnorePattern(line, prefix)));
+      const { buffer } = readRegularFileSync({
+        filePath: ignorePath,
+        maxBytes: IGNORE_FILE_MAX_BYTES,
+      });
+      const content = buffer.toString("utf-8");
+      const patterns = content
+        .split(/\r?\n/)
+        .map((line) => prefixIgnorePattern(line, prefix))
+        .filter((line): line is string => Boolean(line));
+      if (patterns.length > 0) {
+        ig.add(patterns);
+      }
     } catch {}
   }
   return ig;
