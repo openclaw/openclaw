@@ -110,6 +110,13 @@ export class LogbookService {
   // Nodes whose captures failed this rotation; skipped until every candidate
   // has failed once, then retried so transient outages self-heal.
   private failedNodeIds = new Set<string>();
+  // Rate limiting for expensive operations (token exhaustion protection)
+  private lastAnalyzeMs = 0;
+  private lastStandupMs = new Map<string, number>();
+  private lastAskMs = new Map<string, number>();
+  private static readonly ANALYZE_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+  private static readonly STANDUP_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes per day
+  private static readonly ASK_COOLDOWN_MS = 30_000; // 30 seconds per question
 
   constructor(
     private readonly config: LogbookConfig,
@@ -344,6 +351,12 @@ export class LogbookService {
   }
 
   async analyzeNow(): Promise<{ started: boolean; reason?: string }> {
+    const now = Date.now();
+    if (now - this.lastAnalyzeMs < LogbookService.ANALYZE_COOLDOWN_MS) {
+      return { started: false, reason: `analyze.now 最小间隔 ${LogbookService.ANALYZE_COOLDOWN_MS / 60000} 分钟` };
+    }
+    this.lastAnalyzeMs = now;
+
     const store = this.requireStore();
     if (this.analysisInFlight) {
       return { started: false, reason: "analysis already running" };
@@ -575,12 +588,34 @@ export class LogbookService {
     refresh: boolean,
   ): Promise<{ day: string; text: string; updatedMs: number }> {
     const store = this.requireStore();
+
+    // 限流检查：所有调用（包括 refresh）都受冷却期限制
+    const now = Date.now();
+    const last = this.lastStandupMs.get(day) ?? 0;
+    if (now - last < LogbookService.STANDUP_COOLDOWN_MS) {
+      // 冷却期内：如果未刷新且有缓存，可以返回缓存
+      if (!refresh) {
+        const cached = store.getStandup(day);
+        if (cached) {
+          this.deps.logger.info(`logbook.standup: returning cached (cooling down)`);
+          return cached;
+        }
+      }
+      // refresh 请求或没有缓存：拒绝调用
+      throw new Error(`standup 最小间隔 ${LogbookService.STANDUP_COOLDOWN_MS / 60000} 分钟`);
+    }
+
+    // 缓存优先（未刷新且缓存存在，且已通过限流检查）
     if (!refresh) {
       const cached = store.getStandup(day);
       if (cached) {
         return cached;
       }
     }
+
+    // 记录调用时间（在 LLM 调用前设置，防止并发重复）
+    this.lastStandupMs.set(day, now);
+
     const previousDay = dayKeyFor(new Date(`${day}T12:00:00`).getTime() - 24 * 60 * 60 * 1000);
     const result = await this.deps.runtime.llm.complete({
       messages: [
@@ -605,6 +640,15 @@ export class LogbookService {
   }
 
   async ask(day: string, question: string): Promise<string> {
+    // 限流：每个问题至少间隔 30 秒（ask 是交互式问答，比 analyze/standup 更频繁）
+    const now = Date.now();
+    const cacheKey = `ask:${day}:${question.trim().toLowerCase().slice(0, 80)}`;
+    const last = this.lastAskMs.get(cacheKey) ?? 0;
+    if (now - last < LogbookService.ASK_COOLDOWN_MS) {
+      throw new Error(`ask 调用过于频繁，请至少等待 ${LogbookService.ASK_COOLDOWN_MS / 1000} 秒`);
+    }
+    this.lastAskMs.set(cacheKey, now);
+
     const store = this.requireStore();
     const observations = store.observationsInRange(day, 0, Number.MAX_SAFE_INTEGER).slice(-200);
     const result = await this.deps.runtime.llm.complete({
