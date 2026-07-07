@@ -1,6 +1,7 @@
 // CLI for reading and mutating exec approval allowlists locally, via gateway, or via node.
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Command } from "commander";
 import JSON5 from "json5";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
@@ -180,7 +181,7 @@ function formatCliError(err: unknown): string {
   const msg = formatErrorMessage(err);
   const firstLine = msg.includes("\n") ? msg.split("\n")[0] : msg;
   const safe = sanitizeForLog(firstLine);
-  return safe.length > 300 ? `${safe.slice(0, 300)}...` : safe;
+  return safe.length > 300 ? `${truncateUtf16Safe(safe, 300)}...` : safe;
 }
 
 async function loadConfigForApprovalsTarget(params: {
@@ -306,8 +307,12 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
       : null,
   ].filter((part): part is string => part != null);
   const agents = file.agents ?? {};
-  const allowlistRows: Array<{ Target: string; Agent: string; Pattern: string; LastUsed: string }> =
-    [];
+  const allowlistRows: Array<{
+    Target: string;
+    Agent: string;
+    Pattern: string;
+    LastUsed: string;
+  }> = [];
   const now = Date.now();
   for (const [agentId, agent] of Object.entries(agents)) {
     const allowlist = Array.isArray(agent.allowlist) ? agent.allowlist : [];
@@ -333,7 +338,10 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
     { Field: "Hash", Value: snapshot.hash },
     { Field: "Version", Value: String(file.version ?? 1) },
     { Field: "Socket", Value: file.socket?.path ?? "default" },
-    { Field: "Defaults", Value: defaultsParts.length > 0 ? defaultsParts.join(", ") : "none" },
+    {
+      Field: "Defaults",
+      Value: defaultsParts.length > 0 ? defaultsParts.join(", ") : "none",
+    },
     { Field: "Agents", Value: String(Object.keys(agents).length) },
     { Field: "Allowlist", Value: String(allowlistRows.length) },
   ];
@@ -431,7 +439,16 @@ async function loadWritableAllowlistAgent(opts: ExecApprovalsCliOpts): Promise<{
   const agent = ensureAgent(file, agentKey);
   const allowlistEntries = Array.isArray(agent.allowlist) ? agent.allowlist : [];
 
-  return { nodeId, source, targetLabel, baseHash, file, agentKey, agent, allowlistEntries };
+  return {
+    nodeId,
+    source,
+    targetLabel,
+    baseHash,
+    file,
+    agentKey,
+    agent,
+    allowlistEntries,
+  };
 }
 
 type WritableAllowlistAgentContext = Awaited<ReturnType<typeof loadWritableAllowlistAgent>> & {
@@ -557,7 +574,14 @@ export function registerExecApprovalsCli(program: Command) {
           exitWithError(`Failed to parse approvals JSON: ${String(err)}`);
         }
         file.version = 1;
-        await saveSnapshotTargeted({ opts, source, nodeId, file, baseHash, targetLabel });
+        await saveSnapshotTargeted({
+          opts,
+          source,
+          nodeId,
+          file,
+          baseHash,
+          targetLabel,
+        });
       } catch (err) {
         defaultRuntime.error(formatCliError(err));
         defaultRuntime.exit(1);
@@ -595,7 +619,10 @@ export function registerExecApprovalsCli(program: Command) {
         defaultRuntime.log("Already allowlisted.");
         return false;
       }
-      allowlistEntries.push({ pattern: trimmedPattern, lastUsedAt: Date.now() });
+      allowlistEntries.push({
+        pattern: trimmedPattern,
+        lastUsedAt: Date.now(),
+      });
       agent.allowlist = allowlistEntries;
       file.agents = { ...file.agents, [agentKey]: agent };
       return true;

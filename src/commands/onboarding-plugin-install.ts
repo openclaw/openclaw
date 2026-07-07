@@ -7,6 +7,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveBundledInstallPlanForCatalogEntry } from "../cli/plugin-install-plan.js";
 import { invalidatePluginRuntimeDiscoveryAfterConfigMutation } from "../cli/plugins-registry-refresh.js";
@@ -302,7 +303,9 @@ function resolveBundledLocalPath(params: {
   entry: OnboardingPluginInstallEntry;
   workspaceDir?: string;
 }): string | null {
-  const bundledSources = resolveBundledPluginSources({ workspaceDir: params.workspaceDir });
+  const bundledSources = resolveBundledPluginSources({
+    workspaceDir: params.workspaceDir,
+  });
   const npmSpec = params.entry.install.npmSpec?.trim();
   if (npmSpec) {
     return (
@@ -498,10 +501,14 @@ async function promptInstallChoice(params: {
 function formatDurationLabel(timeoutMs: number): string {
   if (timeoutMs % 60_000 === 0) {
     const minutes = timeoutMs / 60_000;
-    return t(minutes === 1 ? "common.minute" : "common.minutes", { count: minutes });
+    return t(minutes === 1 ? "common.minute" : "common.minutes", {
+      count: minutes,
+    });
   }
   const seconds = Math.round(timeoutMs / 1000);
-  return t(seconds === 1 ? "common.second" : "common.seconds", { count: seconds });
+  return t(seconds === 1 ? "common.second" : "common.seconds", {
+    count: seconds,
+  });
 }
 
 function formatPluginInstallProgress(label: string): string {
@@ -537,7 +544,7 @@ function summarizeInstallError(message: string): string {
   if (!cleaned) {
     return "Unknown install failure";
   }
-  return cleaned.length > 180 ? `${cleaned.slice(0, 179)}…` : cleaned;
+  return cleaned.length > 180 ? `${truncateUtf16Safe(cleaned, 179)}…` : cleaned;
 }
 
 function isTimeoutError(error: unknown): boolean {
@@ -1099,7 +1106,9 @@ export async function ensureOnboardingPluginInstalled(params: {
 }): Promise<OnboardingPluginInstallResult> {
   const { entry, prompter, runtime, workspaceDir } = params;
   let next = params.cfg;
-  const installOverride = resolvePluginInstallOverride({ pluginId: entry.pluginId });
+  const installOverride = resolvePluginInstallOverride({
+    pluginId: entry.pluginId,
+  });
   if (installOverride) {
     // Any install override mutates config/install records, so guard it with the
     // same write-mode check as normal installs.
@@ -1211,7 +1220,13 @@ export async function ensureOnboardingPluginInstalled(params: {
       );
     }
     next = addPluginLoadPath(enableResult.config, localPath);
-    next = await recordLocalPluginInstall({ cfg: next, entry, localPath, npmSpec, workspaceDir });
+    next = await recordLocalPluginInstall({
+      cfg: next,
+      entry,
+      localPath,
+      npmSpec,
+      workspaceDir,
+    });
     return await markOnboardingPluginInstalled(
       {
         cfg: next,
@@ -1457,7 +1472,13 @@ export async function ensureOnboardingPluginInstalled(params: {
         );
       }
       next = addPluginLoadPath(enableResult.config, localPath);
-      next = await recordLocalPluginInstall({ cfg: next, entry, localPath, npmSpec, workspaceDir });
+      next = await recordLocalPluginInstall({
+        cfg: next,
+        entry,
+        localPath,
+        npmSpec,
+        workspaceDir,
+      });
       return await markOnboardingPluginInstalled(
         {
           cfg: next,
