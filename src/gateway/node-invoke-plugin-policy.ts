@@ -2,6 +2,7 @@
 // Lets plugin policies gate dangerous node commands before transport dispatch.
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { resolvePluginApprovalTimeoutMs } from "../infra/plugin-approvals.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
@@ -11,7 +12,6 @@ import type {
   OpenClawPluginNodeInvokePolicyResult,
   OpenClawPluginNodeInvokeTransportResult,
 } from "../plugins/types.js";
-import { truncateUtf16Safe } from "../utils.js";
 import type { NodeSession } from "./node-registry.js";
 import { resolveApprovalRequestRecipientConnIds } from "./server-methods/approval-shared.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
