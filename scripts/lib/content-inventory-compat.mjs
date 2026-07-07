@@ -20,9 +20,19 @@ const LEGACY_CONTENT_INVENTORY_TAGGED_VERSIONS = new Set([
   "2026.6.9-alpha.3",
   "2026.6.9-alpha.4",
   "2026.6.9-alpha.5",
+  "2026.6.9-beta.1",
+  "2026.6.9",
   "2026.6.10-alpha.1",
   "2026.6.10-alpha.2",
+  "2026.6.10-beta.1",
+  "2026.6.10-beta.2",
+  "2026.6.10",
+  "2026.6.11-beta.1",
+  "2026.6.11-beta.2",
+  "2026.6.11",
   "2026.6.15-alpha.1",
+  "2026.7.1-beta.1",
+  "2026.7.1-beta.2",
 ]);
 
 function parseCalver(version) {

@@ -355,7 +355,7 @@ describe("package dist inventory", () => {
     },
   );
 
-  it.each(["2026.6.7", "2026.6.8-beta.3", "2026.6.10-alpha.3"])(
+  it.each(["2026.6.7", "2026.6.8-beta.3", "2026.6.10-alpha.3", "2026.7.1"])(
     "requires content inventory for post-cutover package version %s",
     async (version) => {
       await withTempDir(
@@ -393,8 +393,18 @@ describe("package dist inventory", () => {
     "2026.6.8",
     "2026.6.9-alpha.4",
     "2026.6.9-alpha.5",
+    "2026.6.9-beta.1",
+    "2026.6.9",
     "2026.6.10-alpha.2",
+    "2026.6.10-beta.1",
+    "2026.6.10-beta.2",
+    "2026.6.10",
+    "2026.6.11-beta.1",
+    "2026.6.11-beta.2",
+    "2026.6.11",
     "2026.6.15-alpha.1",
+    "2026.7.1-beta.1",
+    "2026.7.1-beta.2",
   ])("allows already-published package version %s without content inventory", async (version) => {
     await withTempDir(
       { prefix: "openclaw-dist-content-inventory-legacy-" },
