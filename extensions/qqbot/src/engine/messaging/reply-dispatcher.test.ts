@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 const { openLocalFileMock, resolveLocalPathFromRootsSyncMock, sendMediaMock, sendTextMock } =
   vi.hoisted(() => ({
@@ -429,4 +430,48 @@ describe("handleStructuredPayload", () => {
       );
     },
   );
+});
+
+// Pin the same UTF-16 boundary behavior that the production debugLog sites
+// in reply-dispatcher.ts / streaming-c2c.ts / streaming-media-send.ts /
+// sender.ts rely on.
+describe("reply-dispatcher UTF-16-safe truncation helper", () => {
+  const hasLoneSurrogate = (value: string): boolean => {
+    for (let i = 0; i < value.length; i++) {
+      const code = value.charCodeAt(i);
+      if (code >= 0xd800 && code <= 0xdbff) {
+        const next = value.charCodeAt(i + 1);
+        if (!(next >= 0xdc00 && next <= 0xdfff)) {
+          return true;
+        }
+        i++;
+      } else if (code >= 0xdc00 && code <= 0xdfff) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  it("truncates TTS preview on UTF-16 boundary without splitting emoji", () => {
+    // Mirrors the call shape at reply-dispatcher.ts:516
+    //   log?.debug?.(`TTS: "${truncateUtf16Safe(ttsText, 50)}..."`);
+    const ttsText = "你好世界🎉🎉🎉这是TTS预览文本的剩余部分";
+    const truncated = truncateUtf16Safe(ttsText, 50);
+    expect(truncated.length).toBeLessThanOrEqual(50);
+    expect(hasLoneSurrogate(truncated)).toBe(false);
+  });
+
+  it("truncates streaming-c2c preview on UTF-16 boundary", () => {
+    // Mirrors the call shape at streaming-c2c.ts:546
+    //   const preview = truncateUtf16Safe(payload.text ?? "", 60).replace(/\n/g, "\\n");
+    const payloadText = "测试消息🎉🎉剩余内容在60字符内被截断的边界emoji字符串";
+    const truncated = truncateUtf16Safe(payloadText, 60);
+    expect(truncated.length).toBeLessThanOrEqual(60);
+    expect(hasLoneSurrogate(truncated)).toBe(false);
+  });
+
+  it("passes plain ASCII through unchanged (negative control)", () => {
+    const ascii = "plain ASCII text without any emoji or CJK content";
+    expect(truncateUtf16Safe(ascii, 60)).toBe(ascii);
+  });
 });

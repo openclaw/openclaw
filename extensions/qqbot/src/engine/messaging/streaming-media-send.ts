@@ -6,6 +6,7 @@
  */
 
 import type { GatewayAccount } from "../types.js";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizePath } from "../utils/platform.js";
 import type { OutboundMediaAccessContext } from "./outbound-types.js";
 import {
@@ -295,7 +296,7 @@ export async function executeSendQueue(
       }
 
       log?.info(
-        `${prefix} executeSendQueue: sending ${item.type}: ${item.content.slice(0, 80)}...`,
+        `${prefix} executeSendQueue: sending ${item.type}: ${truncateUtf16Safe(item.content, 80)}...`,
       );
 
       if (item.type === "image") {

@@ -41,6 +41,7 @@ import {
   type OutboundMeta,
   type UploadMediaResponse,
 } from "../types.js";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getMaxUploadSize, LARGE_FILE_THRESHOLD } from "../utils/file-utils.js";
 import { formatErrorMessage } from "../utils/format.js";
 import { debugLog, debugError, debugWarn } from "../utils/log.js";
@@ -349,7 +350,7 @@ export async function withTokenRetry<T>(
     if (looksLike401) {
       log?.warn?.(
         `Token retry triggered by string heuristic (err is not ApiError). ` +
-          `Consider propagating ApiError end-to-end. msg=${errMsg.slice(0, 120)}`,
+          `Consider propagating ApiError end-to-end. msg=${truncateUtf16Safe(errMsg, 120)}`,
       );
       clearTokenCache(creds.appId);
       const newToken = await getAccessToken(creds.appId, creds.clientSecret);
