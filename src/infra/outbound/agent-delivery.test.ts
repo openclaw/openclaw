@@ -98,21 +98,23 @@ vi.mock("./target-resolver.js", () => ({
 vi.mock("../../utils/message-channel.js", () => ({
   INTERNAL_MESSAGE_CHANNEL: "webchat",
   isDeliverableMessageChannel: (channel: string) =>
-    ["directchat", "workspace", "telegram"].includes(channel),
+    ["directchat", "workspace", "telegram", "whatsapp"].includes(channel),
   isGatewayMessageChannel: (channel: string) =>
-    ["directchat", "workspace", "telegram", "webchat"].includes(channel),
+    ["directchat", "workspace", "telegram", "whatsapp", "webchat"].includes(channel),
   normalizeMessageChannel: (value: string) => value.trim().toLowerCase(),
 }));
 
 import type { OpenClawConfig } from "../../config/config.js";
 let resolveAgentDeliveryPlan: typeof import("./agent-delivery.js").resolveAgentDeliveryPlan;
 let resolveAgentDeliveryPlanWithSessionRoute: typeof import("./agent-delivery.js").resolveAgentDeliveryPlanWithSessionRoute;
+let resolveAgentExplicitRecipientSession: typeof import("./agent-delivery.js").resolveAgentExplicitRecipientSession;
 let resolveAgentOutboundTarget: typeof import("./agent-delivery.js").resolveAgentOutboundTarget;
 
 beforeAll(async () => {
   ({
     resolveAgentDeliveryPlan,
     resolveAgentDeliveryPlanWithSessionRoute,
+    resolveAgentExplicitRecipientSession,
     resolveAgentOutboundTarget,
   } = await import("./agent-delivery.js"));
 });
@@ -305,6 +307,9 @@ describe("agent delivery helpers", () => {
     expect(mocks.resolveOutboundSessionRoute).toHaveBeenCalledWith({
       cfg: {},
       channel: "workspace",
+      plugin: {
+        messaging: { resolveOutboundSessionRoute: pluginRouteResolver },
+      },
       agentId: "agent",
       accountId: "work",
       target: "channel:C123",
@@ -312,7 +317,99 @@ describe("agent delivery helpers", () => {
       threadId: undefined,
     });
     expect(plan.resolvedTo).toBe("channel:C123");
+    expect(plan.resolvedSessionKey).toBe("agent:workspace:channel:C123");
     expect(plan.resolvedThreadId).toBe("1700000000.000100");
+  });
+
+  it("resolves recipient sessions through native target routing with account identity", async () => {
+    const plugin = {
+      messaging: { resolveOutboundSessionRoute: vi.fn() },
+    };
+    mocks.resolveOutboundChannelPlugin.mockReturnValue(plugin);
+    mocks.resolveOutboundTarget.mockReturnValueOnce({
+      ok: true,
+      to: "120363040000000000@g.us",
+    });
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
+      sessionKey: "agent:ops:whatsapp:group:120363040000000000@g.us",
+      baseSessionKey: "agent:ops:whatsapp:group:120363040000000000@g.us",
+      peer: { kind: "group", id: "120363040000000000@g.us" },
+      chatType: "group",
+      from: "120363040000000000@g.us",
+      to: "120363040000000000@g.us",
+      threadId: "topic-42",
+    });
+
+    const result = await resolveAgentExplicitRecipientSession({
+      cfg: {} as OpenClawConfig,
+      agentId: "ops",
+      channel: "whatsapp",
+      to: "120363040000000000@g.us",
+      accountId: "work",
+      threadId: "topic-42",
+    });
+
+    expect(mocks.resolveOutboundSessionRoute).toHaveBeenCalledWith({
+      cfg: {},
+      channel: "whatsapp",
+      plugin,
+      agentId: "ops",
+      accountId: "work",
+      target: "120363040000000000@g.us",
+      threadId: "topic-42",
+    });
+    expect(result).toEqual({
+      sessionKey: "agent:ops:whatsapp:group:120363040000000000@g.us",
+      channel: "whatsapp",
+      to: "120363040000000000@g.us",
+      accountId: "work",
+      threadId: "topic-42",
+      error: undefined,
+    });
+  });
+
+  it("uses the channel default account when recipient routing omits an account", async () => {
+    const plugin = {
+      config: {
+        listAccountIds: () => ["work"],
+        defaultAccountId: () => "work",
+      },
+      messaging: { resolveOutboundSessionRoute: vi.fn() },
+    };
+    mocks.resolveOutboundChannelPlugin.mockReturnValue(plugin);
+    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
+      sessionKey: "agent:ops:whatsapp:work:direct:+15551234567",
+      baseSessionKey: "agent:ops:whatsapp:work:direct:+15551234567",
+      peer: { kind: "direct", id: "+15551234567" },
+      chatType: "direct",
+      from: "+15551234567",
+      to: "+15551234567",
+    });
+
+    const result = await resolveAgentExplicitRecipientSession({
+      cfg: {} as OpenClawConfig,
+      agentId: "ops",
+      channel: "whatsapp",
+      to: "+15551234567",
+    });
+
+    expect(mocks.resolveOutboundTarget).toHaveBeenCalledWith({
+      channel: "whatsapp",
+      to: "+15551234567",
+      cfg: {},
+      accountId: "work",
+      mode: "explicit",
+    });
+    expect(mocks.resolveOutboundSessionRoute).toHaveBeenCalledWith({
+      cfg: {},
+      channel: "whatsapp",
+      plugin,
+      agentId: "ops",
+      accountId: "work",
+      target: "+1999",
+      threadId: undefined,
+    });
+    expect(result.sessionKey).toBe("agent:ops:whatsapp:work:direct:+15551234567");
   });
 
   it("does not session-route explicit targets before outbound normalization succeeds", async () => {
@@ -388,6 +485,9 @@ describe("agent delivery helpers", () => {
     expect(mocks.resolveOutboundSessionRoute).toHaveBeenCalledWith({
       cfg: {},
       channel: "telegram",
+      plugin: {
+        messaging: { resolveOutboundSessionRoute: expect.any(Function), targetResolver: {} },
+      },
       agentId: "agent",
       accountId: "work",
       target: "telegram:-1002458651455",
@@ -476,6 +576,9 @@ describe("agent delivery helpers", () => {
     expect(mocks.resolveOutboundSessionRoute).toHaveBeenCalledWith({
       cfg: {},
       channel: "telegram",
+      plugin: {
+        messaging: { resolveOutboundSessionRoute: expect.any(Function), targetResolver: {} },
+      },
       agentId: "agent",
       accountId: "work",
       target: "telegram:-1002458651455",

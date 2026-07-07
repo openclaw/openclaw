@@ -1,6 +1,7 @@
 // Agent delivery planning resolves final reply destinations from explicit
 // options, session history, turn source, bindings, and channel route hooks.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -31,6 +32,7 @@ export type AgentDeliveryPlan = {
   resolvedAccountId?: string;
   resolvedThreadId?: string | number;
   deliveryTargetMode?: ChannelOutboundTargetMode;
+  resolvedSessionKey?: string;
   targetResolutionError?: Error;
 };
 
@@ -143,6 +145,7 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
     cfg: OpenClawConfig;
     agentId: string;
     currentSessionKey?: string;
+    sessionRouteMode?: "plugin-only" | "allow-fallback";
   },
 ): Promise<AgentDeliveryPlan> {
   const plan = resolveAgentDeliveryPlan(params);
@@ -155,15 +158,25 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
     cfg: params.cfg,
     allowBootstrap: true,
   });
-  if (!plugin?.messaging?.resolveOutboundSessionRoute) {
+  if (
+    !plugin?.messaging?.resolveOutboundSessionRoute &&
+    params.sessionRouteMode !== "allow-fallback"
+  ) {
     return plan;
   }
+  const resolvedAccountId =
+    plan.resolvedAccountId ??
+    (plugin && params.sessionRouteMode === "allow-fallback"
+      ? resolveChannelDefaultAccountId({ plugin, cfg: params.cfg })
+      : undefined);
+  const routedPlan =
+    resolvedAccountId === plan.resolvedAccountId ? plan : { ...plan, resolvedAccountId };
   const normalizedTarget = resolveOutboundTarget({
     channel: resolvedChannel,
     to: resolvedTo,
     cfg: params.cfg,
-    accountId: plan.resolvedAccountId,
-    mode: plan.deliveryTargetMode ?? "explicit",
+    accountId: routedPlan.resolvedAccountId,
+    mode: routedPlan.deliveryTargetMode ?? "explicit",
   });
   let sessionRouteTarget: string;
   let resolvedSessionRouteTarget: ResolvedMessagingTarget | undefined;
@@ -171,18 +184,18 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
     sessionRouteTarget = normalizedTarget.to;
   } else {
     if (!isReservedTargetLiteralError(normalizedTarget.error)) {
-      return { ...plan, targetResolutionError: normalizedTarget.error };
+      return { ...routedPlan, targetResolutionError: normalizedTarget.error };
     }
     const resolvedTarget = await resolveChannelTarget({
       cfg: params.cfg,
       channel: resolvedChannel as ChannelId,
       input: resolvedTo,
-      accountId: plan.resolvedAccountId,
+      accountId: routedPlan.resolvedAccountId,
       unknownTargetMode: "normalized",
       plugin,
     });
     if (!resolvedTarget.ok) {
-      return { ...plan, targetResolutionError: resolvedTarget.error };
+      return { ...routedPlan, targetResolutionError: resolvedTarget.error };
     }
     sessionRouteTarget = resolvedTarget.target.to;
     resolvedSessionRouteTarget = resolvedTarget.target;
@@ -196,12 +209,16 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
       return await resolveOutboundSessionRoute({
         cfg: params.cfg,
         channel: resolvedChannel as ChannelId,
+        plugin,
         agentId: params.agentId,
-        accountId: plan.resolvedAccountId,
+        accountId: routedPlan.resolvedAccountId,
         target: sessionRouteTarget,
         ...(resolvedSessionRouteTarget ? { resolvedTarget: resolvedSessionRouteTarget } : {}),
         currentSessionKey: params.currentSessionKey,
-        threadId: plan.deliveryTargetMode === "explicit" ? explicitThreadId : plan.resolvedThreadId,
+        threadId:
+          routedPlan.deliveryTargetMode === "explicit"
+            ? explicitThreadId
+            : routedPlan.resolvedThreadId,
       });
     } catch {
       return null;
@@ -210,20 +227,66 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
   if (!route) {
     if (resolvedSessionRouteTarget) {
       return {
-        ...plan,
+        ...routedPlan,
         resolvedTo: resolvedSessionRouteTarget.to,
         resolvedThreadId:
-          plan.deliveryTargetMode === "explicit" ? explicitThreadId : plan.resolvedThreadId,
+          routedPlan.deliveryTargetMode === "explicit"
+            ? explicitThreadId
+            : routedPlan.resolvedThreadId,
       };
     }
-    return plan;
+    return routedPlan;
   }
   return {
-    ...plan,
+    ...routedPlan,
+    resolvedSessionKey: route.sessionKey,
     resolvedTo: route.to,
     resolvedThreadId:
       route.threadId ??
-      (plan.deliveryTargetMode === "explicit" ? explicitThreadId : plan.resolvedThreadId),
+      (routedPlan.deliveryTargetMode === "explicit"
+        ? explicitThreadId
+        : routedPlan.resolvedThreadId),
+  };
+}
+
+/** Resolves an explicit agent/channel/recipient into the same canonical session used by delivery. */
+export async function resolveAgentExplicitRecipientSession(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  channel: string;
+  to: string;
+  accountId?: string;
+  threadId?: string | number;
+}): Promise<{
+  sessionKey?: string;
+  channel?: string;
+  to?: string;
+  accountId?: string;
+  threadId?: string | number;
+  error?: Error;
+}> {
+  const plan = await resolveAgentDeliveryPlanWithSessionRoute({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    requestedChannel: params.channel,
+    explicitTo: params.to,
+    explicitThreadId: params.threadId,
+    accountId: params.accountId,
+    wantsDelivery: true,
+    sessionRouteMode: "allow-fallback",
+  });
+  if (!plan.resolvedSessionKey && !plan.targetResolutionError) {
+    return {
+      error: new Error(`Unable to resolve a session route for channel "${params.channel}"`),
+    };
+  }
+  return {
+    sessionKey: plan.resolvedSessionKey,
+    channel: plan.resolvedChannel,
+    to: plan.resolvedTo,
+    accountId: plan.resolvedAccountId,
+    threadId: plan.resolvedThreadId,
+    error: plan.targetResolutionError,
   };
 }
 

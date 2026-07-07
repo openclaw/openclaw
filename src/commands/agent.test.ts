@@ -1,6 +1,7 @@
 // Agent command tests cover local agent runs, session routing, and command runtime behavior.
 import fs from "node:fs";
 import path from "node:path";
+import { buildChannelOutboundSessionRoute } from "openclaw/plugin-sdk/core";
 import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import "./agent-command.test-mocks.js";
@@ -1527,6 +1528,79 @@ describe("agentCommand", () => {
       await expect(agentCommand({ message: "hi", agentId: "ghost" }, runtime)).rejects.toThrow(
         'Unknown agent id "ghost"',
       );
+    });
+  });
+
+  it("routes explicit agent recipients through channel session contracts", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const cfg = mockConfig(home, store, undefined, undefined, [{ id: "ops" }]);
+
+      installThinkingTestProviders([
+        {
+          pluginId: "whatsapp",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "whatsapp",
+            outbound: createDirectOutboundTestAdapter({ channel: "whatsapp" }),
+            messaging: {
+              resolveOutboundSessionRoute: (params) => {
+                const chatType = params.target.endsWith("@g.us") ? "group" : "direct";
+                return buildChannelOutboundSessionRoute({
+                  cfg: params.cfg,
+                  agentId: params.agentId,
+                  channel: "whatsapp",
+                  accountId: params.accountId,
+                  peer: { kind: chatType, id: params.target },
+                  chatType,
+                  from: params.target,
+                  to: params.target,
+                });
+              },
+            },
+          }),
+        },
+      ]);
+      cfg.session = { ...cfg.session, dmScope: "per-account-channel-peer" };
+      await agentCommand(
+        {
+          message: "hi",
+          agentId: "ops",
+          channel: "whatsapp",
+          to: "+15551234567",
+          accountId: "work",
+          thinking: "low",
+        },
+        runtime,
+      );
+      let callArgs = getLastEmbeddedCall();
+      expect(callArgs?.sessionKey).toBe("agent:ops:whatsapp:work:direct:+15551234567");
+
+      await agentCommand(
+        {
+          message: "hi",
+          agentId: "ops",
+          channel: "whatsapp",
+          to: "120363040000000000@g.us",
+          thinking: "low",
+        },
+        runtime,
+      );
+      callArgs = getLastEmbeddedCall();
+      expect(callArgs?.sessionKey).toBe("agent:ops:whatsapp:group:120363040000000000@g.us");
+
+      await agentCommand(
+        {
+          message: "hi",
+          agentId: "ops",
+          channel: "webchat",
+          to: "+15551234567",
+          thinking: "low",
+        },
+        runtime,
+      );
+      callArgs = getLastEmbeddedCall();
+      expect(callArgs?.sessionKey).toBe("agent:ops:main");
     });
   });
 
