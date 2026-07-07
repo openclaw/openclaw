@@ -204,6 +204,24 @@ describe("Bedrock thinking effort mapping", () => {
     expect(testing.buildAdditionalModelRequestFields(model, options)).toBeUndefined();
   });
 
+  it.each([
+    { reasoning: "minimal" as const, maxTokens: 1024 },
+    { reasoning: "low" as const, maxTokens: 1500 },
+  ])(
+    "disables legacy thinking when $reasoning exceeds the $maxTokens token cap",
+    ({ reasoning, maxTokens }) => {
+      const model = bedrockModel({
+        id: "anthropic.claude-haiku-4-5-v1:0",
+        name: "Claude Haiku 4.5",
+        maxTokens,
+      });
+      const options = testing.resolveSimpleBedrockOptions(model, { reasoning });
+
+      expect(options).toMatchObject({ maxTokens, reasoning: "off" });
+      expect(testing.buildAdditionalModelRequestFields(model, options)).toBeUndefined();
+    },
+  );
+
   it("uses the model maxTokens cap for adaptive Claude thinking requests", () => {
     const model = bedrockModel({
       id: "us.anthropic.claude-opus-4-8",

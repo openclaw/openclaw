@@ -72,7 +72,7 @@ async function readFirecrawlJsonResponse(
   return await readProviderJsonResponse<Record<string, unknown>>(response, label, opts);
 }
 
-export type FirecrawlSearchParams = {
+type FirecrawlSearchParams = {
   cfg?: OpenClawConfig;
   query: string;
   count?: number;
@@ -82,7 +82,7 @@ export type FirecrawlSearchParams = {
   scrapeResults?: boolean;
 };
 
-export type FirecrawlScrapeParams = {
+type FirecrawlScrapeParams = {
   cfg?: OpenClawConfig;
   url: string;
   extractMode: "markdown" | "text";

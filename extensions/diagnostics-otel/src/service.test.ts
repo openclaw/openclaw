@@ -4827,6 +4827,10 @@ describe("diagnostics-otel service", () => {
     expect(Object.hasOwn(toolOptions?.attributes ?? {}, "openclaw.content.tool_output")).toBe(
       false,
     );
+    expect(Object.hasOwn(toolOptions?.attributes ?? {}, "gen_ai.tool.call.arguments")).toBe(false);
+    expect(Object.hasOwn(toolOptions?.attributes ?? {}, "gen_ai.tool.call.result")).toBe(false);
+    expect(toolOptions?.attributes?.["gen_ai.tool.call.id"]).toBe("tool-1");
+    expect(toolOptions?.attributes?.["gen_ai.operation.name"]).toBe("execute_tool");
     expect(toolOptions?.startTime).toBeTypeOf("number");
     await service.stop?.(ctx);
   });
@@ -4892,10 +4896,19 @@ describe("diagnostics-otel service", () => {
       "sk-1234567890abcdef1234567890abcdef", // pragma: allowlist secret
     );
     expect(toolAttrs?.["openclaw.content.tool_input"]).toBe("tool input");
+    expect(toolAttrs?.["gen_ai.tool.call.id"]).toBe("tool-1");
+    expect(toolAttrs?.["gen_ai.operation.name"]).toBe("execute_tool");
+    expect(toolAttrs?.["gen_ai.tool.call.arguments"]).toBe(
+      toolAttrs?.["openclaw.content.tool_input"],
+    );
+    expect(typeof toolAttrs?.["openclaw.content.tool_output"]).toBe("string");
     expect(String(toolAttrs?.["openclaw.content.tool_output"]).length).toBeLessThanOrEqual(
       MAX_TEST_OTEL_CONTENT_ATTRIBUTE_CHARS + OTEL_TRUNCATED_SUFFIX_MAX_CHARS,
     );
     expect(String(toolAttrs?.["openclaw.content.tool_output"])).not.toContain("a".repeat(11));
+    expect(toolAttrs?.["gen_ai.tool.call.result"]).toBe(
+      toolAttrs?.["openclaw.content.tool_output"],
+    );
     await service.stop?.(ctx);
   });
 
@@ -5011,7 +5024,7 @@ describe("diagnostics-otel service", () => {
       },
       {
         role: "tool",
-        parts: [{ type: "tool_call_response", id: "call-1", result: { rows: 1 } }],
+        parts: [{ type: "tool_call_response", id: "call-1", response: { rows: 1 } }],
       },
     ]);
     expect(JSON.parse(stringAttribute(attrs, "gen_ai.output.messages"))).toEqual([
@@ -5031,6 +5044,130 @@ describe("diagnostics-otel service", () => {
     ]);
     expect(attrs?.["input.mime_type"]).toBe("application/json");
     expect(attrs?.["output.mime_type"]).toBe("application/json");
+    await service.stop?.(ctx);
+  });
+
+  test("emits semconv response text for tool response parts", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      traces: true,
+      captureContent: {
+        enabled: true,
+        inputMessages: true,
+        outputMessages: false,
+      },
+    });
+    await service.start(ctx);
+
+    emitTrustedModelCallCompletedWithContent(
+      {
+        runId: "run-1",
+        callId: "call-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        durationMs: 80,
+      },
+      {
+        inputMessages: [
+          {
+            role: "tool",
+            parts: [
+              {
+                type: "tool_call_response",
+                id: "call-1",
+                result: [
+                  { type: "text", text: "first line" },
+                  { type: "text", text: "second line" },
+                ],
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call-2",
+            content: [
+              { type: "text", text: "alpha" },
+              { type: "text", text: "beta" },
+            ],
+          },
+        ],
+      },
+    );
+    await flushDiagnosticEvents();
+
+    const modelCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.model.call",
+    );
+    const attrs = (modelCall?.[1] as { attributes?: Record<string, unknown> } | undefined)
+      ?.attributes;
+    expect(JSON.parse(stringAttribute(attrs, "gen_ai.input.messages"))).toEqual([
+      {
+        role: "tool",
+        parts: [
+          {
+            type: "tool_call_response",
+            id: "call-1",
+            response: "first line\nsecond line",
+          },
+        ],
+      },
+      {
+        role: "tool",
+        parts: [
+          {
+            type: "tool_call_response",
+            id: "call-2",
+            response: "alpha\nbeta",
+          },
+        ],
+      },
+    ]);
+    await service.stop?.(ctx);
+  });
+
+  test("flattens oversized pure-text tool results with a truncation marker", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      traces: true,
+      captureContent: {
+        enabled: true,
+        inputMessages: true,
+        outputMessages: false,
+      },
+    });
+    await service.start(ctx);
+
+    const textParts = Array.from({ length: 201 }, (_, index) => ({
+      type: "text",
+      text: `line-${index}`,
+    }));
+    emitTrustedModelCallCompletedWithContent(
+      {
+        runId: "run-1",
+        callId: "call-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        durationMs: 80,
+      },
+      {
+        inputMessages: [{ role: "toolResult", toolCallId: "call-1", content: textParts }],
+      },
+    );
+    await flushDiagnosticEvents();
+
+    const modelCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.model.call",
+    );
+    const attrs = (modelCall?.[1] as { attributes?: Record<string, unknown> } | undefined)
+      ?.attributes;
+    const messages = JSON.parse(stringAttribute(attrs, "gen_ai.input.messages")) as {
+      parts: { response?: unknown }[];
+    }[];
+    const expected = `${textParts
+      .slice(0, 200)
+      .map((part) => part.text)
+      .join("\n")}\n...(1 more text parts omitted)`;
+    expect(messages[0]?.parts[0]?.response).toBe(expected);
     await service.stop?.(ctx);
   });
 
